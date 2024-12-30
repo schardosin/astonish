@@ -1,5 +1,5 @@
-import configparser
 import os
+import astonish.globals as globals
 from gen_ai_hub.proxy.langchain.init_models import init_llm
 from gen_ai_hub.proxy.core.proxy_clients import get_proxy_client
 from astonish.providers.ai_provider_interface import AIProvider
@@ -12,9 +12,6 @@ class SAPAICoreProvider(AIProvider):
     def setup(self):
         print("Setting up SAP AI Core...")
         
-        config = configparser.ConfigParser()
-        config_path = os.path.expanduser('~/.astonish/config.ini')
-        
         # Default values and examples
         defaults = {
             'client_id': ('', 'your-client-id'),
@@ -25,25 +22,25 @@ class SAPAICoreProvider(AIProvider):
         }
 
         # Load existing configuration if it exists
-        if os.path.exists(config_path):
-            config.read(config_path)
+        if os.path.exists(globals.config_path):
+            globals.config.read(globals.config_path)
         else:
-            config['SAP_AI_CORE'] = {}
+            globals.config['SAP_AI_CORE'] = {}
 
         # Input new values
         for key, (default, example) in defaults.items():
-            current_value = config.get('SAP_AI_CORE', key, fallback='')
+            current_value = globals.config.get('SAP_AI_CORE', key, fallback='')
             if current_value:
                 new_value = input(f"Enter {key} (current: {current_value}): ").strip()
             else:
                 new_value = input(f"Enter {key} (example: {example}): ").strip()
-            config['SAP_AI_CORE'][key] = new_value if new_value else (current_value or default)
+            globals.config['SAP_AI_CORE'][key] = new_value if new_value else (current_value or default)
 
-        os.makedirs(os.path.dirname(config_path), exist_ok=True)
-        with open(config_path, 'w') as configfile:
-            config.write(configfile)
+        os.makedirs(os.path.dirname(globals.config_path), exist_ok=True)
+        with open(globals.config_path, 'w') as configfile:
+            globals.config.write(configfile)
 
-        config.read(config_path)
+        globals.config.read(globals.config_path)
         self._initialize_proxy_client()
 
         # Get supported models
@@ -66,33 +63,30 @@ class SAPAICoreProvider(AIProvider):
                 print("Invalid input. Please enter a number.")
 
         # Add general section with default provider and model
-        if 'GENERAL' not in config:
-            config['GENERAL'] = {}
-        config['GENERAL']['default_provider'] = 'sap_ai_core'
-        config['GENERAL']['default_model'] = default_model
+        if 'GENERAL' not in globals.config:
+            globals.config['GENERAL'] = {}
+        globals.config['GENERAL']['default_provider'] = 'sap_ai_core'
+        globals.config['GENERAL']['default_model'] = default_model
 
         # Write the configuration
-        with open(config_path, 'w') as configfile:
-            config.write(configfile)
+        with open(globals.config_path, 'w') as configfile:
+            globals.config.write(configfile)
 
         print(f"\nSAP AI Core configuration saved successfully.")
         print(f"Default model set to: {default_model}")
 
     def _initialize_proxy_client(self):
-        config = configparser.ConfigParser()
-        config_path = os.path.expanduser('~/.astonish/config.ini')
-        
-        if not os.path.exists(config_path):
+        if not os.path.exists(globals.config_path):
             raise FileNotFoundError("Configuration file not found. Please run setup() first.")
         
-        config.read(config_path)
+        globals.config.read(globals.config_path)
         
         # Set environment variables from the configuration
-        os.environ["AICORE_AUTH_URL"] = config.get('SAP_AI_CORE', 'auth_url')
-        os.environ["AICORE_CLIENT_ID"] = config.get('SAP_AI_CORE', 'client_id')
-        os.environ["AICORE_CLIENT_SECRET"] = config.get('SAP_AI_CORE', 'client_secret')
-        os.environ["AICORE_RESOURCE_GROUP"] = config.get('SAP_AI_CORE', 'resource_group')
-        os.environ["AICORE_BASE_URL"] = config.get('SAP_AI_CORE', 'base_url')
+        os.environ["AICORE_AUTH_URL"] = globals.config.get('SAP_AI_CORE', 'auth_url')
+        os.environ["AICORE_CLIENT_ID"] = globals.config.get('SAP_AI_CORE', 'client_id')
+        os.environ["AICORE_CLIENT_SECRET"] = globals.config.get('SAP_AI_CORE', 'client_secret')
+        os.environ["AICORE_RESOURCE_GROUP"] = globals.config.get('SAP_AI_CORE', 'resource_group')
+        os.environ["AICORE_BASE_URL"] = globals.config.get('SAP_AI_CORE', 'base_url')
 
         # Initialize the proxy client
         self.proxy_client = get_proxy_client("gen-ai-hub")

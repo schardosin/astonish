@@ -1,5 +1,5 @@
-import configparser
 import os
+import astonish.globals as globals
 from astonish.providers.ai_provider_interface import AIProvider
 from langchain_community.llms import Ollama
 from typing import List
@@ -11,37 +11,34 @@ class OllamaProvider(AIProvider):
     def setup(self):
         print("Setting up Ollama...")
         
-        config = configparser.ConfigParser()
-        config_path = os.path.expanduser('~/.astonish/config.ini')
-        
         # Default values and examples
         defaults = {
             'base_url': ('http://localhost:11434', 'http://localhost:11434')
         }
 
         # Load existing configuration if it exists
-        if os.path.exists(config_path):
-            config.read(config_path)
+        if os.path.exists(globals.config_path):
+            globals.config.read(globals.config_path)
 
         # Ensure the OLLAMA section exists
-        if 'OLLAMA' not in config:
-            config['OLLAMA'] = {}
+        if 'OLLAMA' not in globals.config:
+            globals.config['OLLAMA'] = {}
 
         # Input new values
         for key, (default, example) in defaults.items():
-            current_value = config.get('OLLAMA', key, fallback='')
+            current_value = globals.config.get('OLLAMA', key, fallback='')
             if current_value:
                 new_value = input(f"Enter {key} (current: {current_value}): ").strip()
             else:
                 new_value = input(f"Enter {key} (example: {example}): ").strip()
-            config['OLLAMA'][key] = new_value if new_value else (current_value or default)
+            globals.config['OLLAMA'][key] = new_value if new_value else (current_value or default)
 
-        os.makedirs(os.path.dirname(config_path), exist_ok=True)
-        with open(config_path, 'w') as configfile:
-            config.write(configfile)
+        os.makedirs(os.path.dirname(globals.config_path), exist_ok=True)
+        with open(globals.config_path, 'w') as configfile:
+            globals.config.write(configfile)
 
-        config.read(config_path)
-        self.base_url = config['OLLAMA']['base_url']
+        globals.config.read(globals.config_path)
+        self.base_url = globals.config['OLLAMA']['base_url']
 
         # Get supported models
         supported_models = self.get_supported_models()
@@ -63,14 +60,14 @@ class OllamaProvider(AIProvider):
                 print("Invalid input. Please enter a number.")
 
         # Add general section with default provider and model
-        if 'GENERAL' not in config:
-            config['GENERAL'] = {}
-        config['GENERAL']['default_provider'] = 'ollama'
-        config['GENERAL']['default_model'] = default_model
+        if 'GENERAL' not in globals.config:
+            globals.config['GENERAL'] = {}
+        globals.config['GENERAL']['default_provider'] = 'ollama'
+        globals.config['GENERAL']['default_model'] = default_model
 
         # Write the configuration
-        with open(config_path, 'w') as configfile:
-            config.write(configfile)
+        with open(globals.config_path, 'w') as configfile:
+            globals.config.write(configfile)
 
         print(f"\nOllama configuration saved successfully.")
         print(f"Default model set to: {default_model}")
@@ -88,15 +85,12 @@ class OllamaProvider(AIProvider):
             return []
 
     def get_llm(self, model_name: str, streaming: bool = True):
-        config = configparser.ConfigParser()
-        config_path = os.path.expanduser('~/.astonish/config.ini')
-        
-        if not os.path.exists(config_path):
+        if not os.path.exists(globals.config_path):
             raise FileNotFoundError("Configuration file not found. Please run setup() first.")
         
-        config.read(config_path)
+        globals.config.read(globals.config_path)
         
-        base_url = config.get('OLLAMA', 'base_url')
+        base_url = globals.config.get('OLLAMA', 'base_url')
 
         # Initialize and return the Ollama LLM
         llm = Ollama(

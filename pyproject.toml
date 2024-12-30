@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = [
+    "astonish",
+    "astonish.providers",
+    "astonish.factory"
+]
+
+[project]
+name = "astonish"
+version = "0.1"
+authors = [
+    {name = "Rafael Schardosin Silva", email = "rafael.rs@gmail.com"},
+]
+description = "Astonish AI Companion"
+readme = "README.md"
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "generative-ai-hub-sdk[all]",
+    "langchain",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/schardosin/astonish"
+
+[project.scripts]
+astonish = "astonish.main:main"

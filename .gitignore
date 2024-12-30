@@ -1,0 +1,103 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+astonish_env
+venv/
+ENV/
+env/
+.venv/
+.pyenv/
+pip-wheel-metadata/
+pip-log.txt
+
+# pytest cache
+.pytest_cache/
+
+# MyPy cache
+.mypy_cache/
+
+# Pyre type checker
+.pyre/
+
+# Coverage reports
+.coverage
+coverage.xml
+.cache/
+*.cover
+*.py,cover
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# PyInstaller
+# Usually contains platform-specific files
+*.manifest
+*.spec
+
+# macOS specific files
+.DS_Store
+
+# Windows specific files
+Thumbs.db
+desktop.ini
+
+# Editor and IDE backups/settings
+.vscode/
+.idea/
+*.swp
+*~
+*.sublime-project
+*.sublime-workspace
+
+# Logs and debug files
+*.log
+*.bak
+*.tmp
+*.orig
+
+# Local environment variables
+.env
+.env.*
+
+# Flask and Django stuff
+instance/
+.webassets-cache
+*.sqlite3
+db.sqlite3
+
+# Other cache files
+*.lock
+*.pkl
+*.tgz
+*.gz
+*.bz2
+*.zip
+*.tar
+*.log
+

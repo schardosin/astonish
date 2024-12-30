@@ -1,7 +1,7 @@
 import configparser
 import os
 from astonish.providers.ai_provider_interface import AIProvider
-from langchain.llms import Ollama
+from langchain_community.llms import Ollama
 from typing import List
 
 class OllamaProvider(AIProvider):

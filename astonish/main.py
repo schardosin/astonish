@@ -18,20 +18,32 @@ def main(args=None):
 
 def setup():
     print("Select a provider to configure:")
-    print("1. SAP AI Core")
     
-    choice = input("Enter the number of your choice: ")
+    # Get the list of registered providers
+    providers = AIProviderFactory.get_registered_providers()
     
-    if choice == '1':
-        provider_name = "sap_ai_core"
+    # Display the list of providers
+    for i, (provider_name, display_name) in enumerate(providers, 1):
+        print(f"{i}. {display_name}")
+    
+    while True:
+        choice = input("Enter the number of your choice: ")
         try:
-            provider = AIProviderFactory.get_provider(provider_name)
-            provider.setup()
-            print("LLM initialized successfully!")
-        except Exception as e:
-            print(f"Error: {e}") 
-    else:
-        print("Invalid choice or not implemented yet.")
+            choice_index = int(choice) - 1
+            if 0 <= choice_index < len(providers):
+                provider_name, display_name = providers[choice_index]
+                break
+            else:
+                print("Invalid choice. Please select a number from the list.")
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+    
+    try:
+        provider = AIProviderFactory.get_provider(provider_name)
+        provider.setup()
+        print(f"{display_name} configured successfully!")
+    except Exception as e:
+        print(f"Error: {e}")
 
 def parse_arguments():
     parser = argparse.ArgumentParser(

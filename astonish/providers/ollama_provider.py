@@ -1,50 +1,47 @@
 import configparser
 import os
-from gen_ai_hub.proxy.langchain.init_models import init_llm
-from gen_ai_hub.proxy.core.proxy_clients import get_proxy_client
 from astonish.providers.ai_provider_interface import AIProvider
+from langchain.llms import Ollama
 from typing import List
 
-class SAPAICoreProvider(AIProvider):
+class OllamaProvider(AIProvider):
     def __init__(self):
-        self.proxy_client = None
+        self.base_url = None
 
     def setup(self):
-        print("Setting up SAP AI Core...")
+        print("Setting up Ollama...")
         
         config = configparser.ConfigParser()
         config_path = os.path.expanduser('~/.astonish/config.ini')
         
         # Default values and examples
         defaults = {
-            'client_id': ('', 'your-client-id'),
-            'client_secret': ('', 'your-client-secret'),
-            'auth_url': ('', 'https://<tenant-id>.authentication.sap.hana.ondemand.com'),
-            'base_url': ('', 'https://api.ai.internalprod.eu-central-1.aws.ml.hana.ondemand.com/v2'),
-            'resource_group': ('default', 'default')
+            'base_url': ('http://localhost:11434', 'http://localhost:11434')
         }
 
         # Load existing configuration if it exists
         if os.path.exists(config_path):
             config.read(config_path)
-        else:
-            config['SAP_AI_CORE'] = {}
+
+        # Ensure the OLLAMA section exists
+        if 'OLLAMA' not in config:
+            config['OLLAMA'] = {}
 
         # Input new values
         for key, (default, example) in defaults.items():
-            current_value = config.get('SAP_AI_CORE', key, fallback='')
+            current_value = config.get('OLLAMA', key, fallback='')
             if current_value:
                 new_value = input(f"Enter {key} (current: {current_value}): ").strip()
             else:
                 new_value = input(f"Enter {key} (example: {example}): ").strip()
-            config['SAP_AI_CORE'][key] = new_value if new_value else (current_value or default)
+            config['OLLAMA'][key] = new_value if new_value else (current_value or default)
 
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
         with open(config_path, 'w') as configfile:
             config.write(configfile)
 
         config.read(config_path)
-        self._initialize_proxy_client()
+        self.base_url = config['OLLAMA']['base_url']
 
         # Get supported models
         supported_models = self.get_supported_models()
@@ -68,17 +65,29 @@ class SAPAICoreProvider(AIProvider):
         # Add general section with default provider and model
         if 'GENERAL' not in config:
             config['GENERAL'] = {}
-        config['GENERAL']['default_provider'] = 'sap_ai_core'
+        config['GENERAL']['default_provider'] = 'ollama'
         config['GENERAL']['default_model'] = default_model
 
         # Write the configuration
         with open(config_path, 'w') as configfile:
             config.write(configfile)
 
-        print(f"\nSAP AI Core configuration saved successfully.")
+        print(f"\nOllama configuration saved successfully.")
         print(f"Default model set to: {default_model}")
 
-    def _initialize_proxy_client(self):
+    def get_supported_models(self) -> List[str]:
+        import requests
+
+        try:
+            response = requests.get(f"{self.base_url}/api/tags")
+            response.raise_for_status()
+            models = response.json()['models']
+            return [model['name'] for model in models]
+        except requests.RequestException as e:
+            print(f"Error fetching models: {e}")
+            return []
+
+    def get_llm(self, model_name: str, streaming: bool = True):
         config = configparser.ConfigParser()
         config_path = os.path.expanduser('~/.astonish/config.ini')
         
@@ -87,30 +96,12 @@ class SAPAICoreProvider(AIProvider):
         
         config.read(config_path)
         
-        # Set environment variables from the configuration
-        os.environ["AICORE_AUTH_URL"] = config.get('SAP_AI_CORE', 'auth_url')
-        os.environ["AICORE_CLIENT_ID"] = config.get('SAP_AI_CORE', 'client_id')
-        os.environ["AICORE_CLIENT_SECRET"] = config.get('SAP_AI_CORE', 'client_secret')
-        os.environ["AICORE_RESOURCE_GROUP"] = config.get('SAP_AI_CORE', 'resource_group')
-        os.environ["AICORE_BASE_URL"] = config.get('SAP_AI_CORE', 'base_url')
+        base_url = config.get('OLLAMA', 'base_url')
 
-        # Initialize the proxy client
-        self.proxy_client = get_proxy_client("gen-ai-hub")
-        self.proxy_client.refresh_instance_cache()
-
-    def get_supported_models(self) -> List[str]:
-        if not self.proxy_client:
-            self._initialize_proxy_client()
-
-        model_names = [deployment.model_name for deployment in self.proxy_client.deployments]
-        
-        return sorted(list(set(model_names)))
-
-    def get_llm(self, model_name: str, streaming: bool = True):
-        if not self.proxy_client:
-            self._initialize_proxy_client()
-
-        # Initialize and return the LLM
-        llm = init_llm(model_name, proxy_client=self.proxy_client, streaming=streaming)
+        # Initialize and return the Ollama LLM
+        llm = Ollama(
+            base_url=base_url,
+            model=model_name,
+            streaming=streaming
+        )
         return llm
-    

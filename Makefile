@@ -19,8 +19,13 @@ build: clean
 	python -m build --wheel
 	@echo "Wheel built successfully!"
 
+installdev: uninstall
+	@echo "Installing in editable mode..."
+	pip install -e .
+	@echo "Package installed successfully!"
+
 # Install the package
-install: build
+install: build uninstall
 	@echo "Installing the wheel..."
 	pip install $(DIST_DIR)/$(PACKAGE_NAME)-*.whl
 	@echo "Package installed successfully!"

@@ -105,6 +105,6 @@ class SAPAICoreProvider(AIProvider):
             self._initialize_proxy_client()
 
         # Initialize and return the LLM
-        llm = init_llm(model_name, proxy_client=self.proxy_client, streaming=streaming)
+        llm = init_llm(model_name, proxy_client=self.proxy_client, streaming=streaming, max_tokens=4096)
         return llm
     

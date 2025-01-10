@@ -1,0 +1,206 @@
+state:
+  - name: destination
+    type: str
+    default: null
+  - name: travel_dates
+    type: str
+    default: null
+  - name: budget
+    type: str
+    default: null
+  - name: interests
+    type: str
+    default: null
+  - name: itinerary
+    type: str
+    default: null
+  - name: finalized_itinerary
+    type: str
+    default: null
+  - name: user_request
+    type: str
+    default: null
+  - name: research_results
+    type: str
+    default: null
+  - name: response
+    type: str
+    default: null
+  - name: feedback
+    type: str
+    default: null
+  - name: websearch_list
+    type: str
+    default: null
+  - name: websearch_results
+    type: str
+    default: null
+  - name: max_rev_create_itinerary
+    type: int
+    default: 0
+
+tools:
+  - name: tavily_search
+    type: SearchEngine
+
+nodes:
+  - name: user_interaction
+    type: input
+    prompt: "Welcome to the Travel Planner! Please provide details about your trip (destination, dates, budget, interests)."
+    is_initial: true
+
+  - name: gather_info
+    type: llm
+    system: |
+      You are a travel agent gathering information for a trip. Based on the user's input, determine what information is provided and what is still needed.
+      If this is the first interaction and no user input is provided, ask for all the necessary information.
+    prompt: |
+      new user input: {user_request}
+
+      Already collected information:
+      Destination: {destination}
+      Travel Dates: {travel_dates}
+      Budget: {budget}
+      Interests: {interests}
+
+      if all the required fields are provided (destination, dates, budget, interests), inform the user a summary of the information collected and that will be used to generate the itinerary.
+      Otherwise, ask for the missing information.
+    output_model:
+      response: str
+      destination: str | None
+      travel_dates: str | None
+      budget: str | None
+      interests: str | None
+    user_message:
+      - response
+
+  - name: search
+    type: llm
+    system: |
+      You are a travel researcher charged with providing information that can be used generate the itinerary. 
+      Generate a list of search queries that will gather any relevant information. Only generate 3 queries max.
+    prompt: |
+      Destination: {destination}
+      Travel Dates: {travel_dates}
+      Budget: {budget}
+      Interests: {interests}
+
+    output_model:
+      websearch_list: list
+    tools:
+      - name: tavily_search
+        input_field: websearch_list
+        output_field: websearch_results
+
+  - name: research
+    type: llm
+    system: |
+      You are a travel research assistant. Based on the following user's preferences and web search results, analyze the data to gather key information about the destination:
+      Please provide information about popular attractions, local cuisine, and any current events or festivals during the travel dates.
+    prompt: |
+      Destination: {destination}
+      Travel Dates: {travel_dates}
+      Budget: {budget}
+      Interests: {interests}
+      Web Search Results: {websearch_results}
+
+    output_model:
+      research_results: str
+
+  - name: create_itinerary
+    type: llm
+    limit: 1
+    limit_counter_field: max_rev_create_itinerary
+    system: |
+      You are an expert travel planner creating an itinerary for a family trip. Use the following research information and user preferences to create a detailed day-by-day itinerary:
+      Create a detailed day-by-day itinerary for their trip. Include specific activities,
+      estimated times, and brief descriptions. Ensure the plan fits within their budget and interests,
+      and incorporates the attractions and events mentioned in the research.
+
+      IMPORTANT: itinerary is a single column inside the json, with each day's activities separated by newlines.
+
+      Add an introduction sentence explaining how why this is the recommended proposal, what was the best option, and how it was created, before showing the detailed itinerary.
+
+      Add links from the web search results for the recommended attractions/events.
+    prompt: |
+      Destination: {destination}
+      Travel Dates: {travel_dates}
+      Budget: {budget}
+      Interests: {interests}
+      Web Search Results: {websearch_results}
+      max_rev_create_itinerary: {max_rev_create_itinerary}
+
+      This is the current itinerary:
+      {itinerary}
+
+      This is the current feedback from the reviewer about the current itinerary, take it in consideration for creating the itinerary
+      {feedback}
+
+      Research Results:
+      {research_results}
+    output_model:
+      itinerary: str
+
+  - name: review_itinerary
+    type: llm
+    system: |
+      You are a travel critic. Review the proposed itinerary and provide feedback. 
+      Consider factors such as pacing, variety of activities, and alignment with the user's interests and budget. 
+      Suggest specific improvements or alternatives if necessary.
+    prompt: |
+      Destination: {destination}
+      Travel Dates: {travel_dates}
+      Budget: {budget}
+      Interests: {interests}
+      Web Search Results: {websearch_results}
+
+      Current Itinerary:
+      {itinerary}
+    output_model:
+      feedback: str
+
+  - name: finalize_itinerary
+    type: llm
+    system: |
+      You are a travel agent expert in providing itinerary to clients. 
+      Your goal is to structure the provided itinerary in a way that is aligned with a common way of delivering information to clients, making it simple to read and providing additional comments to make the clients exceited.
+    prompt: |
+      Here is the itinerary for the traveler: {itinerary}
+
+      Please create a response by first introducing yourself as Lana, your virtual personal assistant, and say that your happy to and excited with the coming travel experience.
+
+      Add all the information to the finalized_itinerary field only
+    output_model:
+      finalized_itinerary: str
+    user_message:
+      - finalized_itinerary
+
+flow:
+  - from: START
+    to: user_interaction
+  - from: user_interaction
+    to: gather_info
+  - from: gather_info
+    edges:
+      - to: search
+        condition: "lambda x: all(x.get(field) for field in ['destination', 'travel_dates', 'budget', 'interests'])"
+      - to: user_interaction
+        condition: "lambda x: not all(x.get(field) for field in ['destination', 'travel_dates', 'budget', 'interests'])"
+  - from: search
+    to: research
+  - from: research
+    to: create_itinerary
+  - from: create_itinerary
+    edges:
+      - to: review_itinerary
+        condition: "lambda x, config: x['max_rev_create_itinerary'] < config['limit']"
+      - to: finalize_itinerary
+        condition: "lambda x, config: x['max_rev_create_itinerary'] >= config['limit']"
+  - from: review_itinerary
+    edges:
+      - to: create_itinerary
+        condition: "lambda x: x.get('feedback', '').strip() != ''"
+      - to: END
+        condition: "lambda x: x.get('feedback', '').strip() == ''"
+  - from: finalize_itinerary
+    to: END

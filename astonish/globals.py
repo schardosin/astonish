@@ -37,3 +37,8 @@ def setup_logger(verbose=False):
         logger.addHandler(console_handler)
 
     return logger
+
+def load_config():
+    # Load existing configuration if it exists
+    if os.path.exists(config_path):
+        config.read(config_path)

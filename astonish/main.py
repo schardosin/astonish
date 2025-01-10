@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import astonish.globals as globals
 from logging.handlers import RotatingFileHandler
+from astonish.core.agent_runner import run_agent
 
 def main(args=None):
     if args is None:
@@ -8,19 +9,17 @@ def main(args=None):
 
     # Set up logger based on verbose flag
     globals.setup_logger(verbose=args.verbose)
+    globals.load_config()
 
-    if args.setup:
+    if args.command == "setup":
         globals.logger.info("Starting setup process...")
         setup()
+    elif args.command == "run":
+        globals.logger.info(f"Running task: {args.task}")
+        run_agent(args.task)
     else:
-        # Your existing main application logic here
-        globals.logger.info(f"Hello, {args.name if args.name else 'User'}!")
-        print(f"Hello, {args.name if args.name else 'User'}!")
-        if args.verbose:
-            print("Verbose mode is on")
-            globals.logger.debug("Verbose mode enabled")
-        else:
-            globals.logger.debug("Verbose mode not enabled")
+        globals.logger.error(f"Unknown command: {args.command}")
+        print(f"Unknown command: {args.command}")
 
 def setup():
     from astonish.factory.ai_provider_factory import AIProviderFactory
@@ -70,19 +69,29 @@ def parse_arguments():
 
     parser = argparse.ArgumentParser(
         description="Astonish AI Companion.",
-        usage="astonish [OPTIONS]",
+        usage="astonish [OPTIONS] COMMAND",
         add_help=False
     )
     
-    app_options = parser.add_argument_group('Application Options')
-    app_options.add_argument("--setup", action="store_true", help="Configure the application")
-    
-    additional_args = parser.add_argument_group('Additional Arguments')
-    additional_args.add_argument("-h", "--help", action="help", help="Show this help message and exit")
-    additional_args.add_argument("--version", action="version", version="%(prog)s 1.0")
-    additional_args.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument("-h", "--help", action="help", help="Show this help message and exit")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument("--version", action="version", version="%(prog)s 1.0")
 
-    return parser.parse_args()
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # Setup command
+    setup_parser = subparsers.add_parser("setup", help="Configure the application")
+
+    # Run command
+    run_parser = subparsers.add_parser("run", help="Run a specific task or workflow")
+    run_parser.add_argument("task", help="Name of the task to run")
+
+    args = parser.parse_args()
+    if args.command is None:
+        parser.print_help()
+        exit(1)
+
+    return args
 
 if __name__ == "__main__":
     main()

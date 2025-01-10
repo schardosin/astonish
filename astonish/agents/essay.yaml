@@ -1,0 +1,98 @@
+state:
+  - name: topic
+    type: str
+    default: null
+  - name: essay
+    type: str
+    default: null
+  - name: generated_essay
+    type: str
+    default: null
+  - name: reflected_essay
+    type: str
+    default: null
+  - name: revision_number
+    type: int
+    default: 0
+  - name: max_generate
+    type: int
+    default: 0
+  - name: user_request
+    type: str
+    default: null
+
+tools:
+  - name: tavily_search
+    type: SearchEngine
+
+nodes:
+  - name: user_interaction
+    type: input
+    prompt: "I am your essay writer assistant, in what topic would like my help you today?"
+  - name: planner
+    type: llm
+    system: |
+      You are an expert writer tasked with writing a high level outline of an essay. 
+      Write such an outline for the user provided topic. Give an outline of the essay along with any relevant notes 
+      or instructions for the sections.
+    prompt: |
+      user topic: {user_request}
+
+      current state: {state}
+    output_model:
+      essay: str
+    user_message:
+      - essay
+  - name: generate
+    type: llm
+    limit: 2
+    limit_counter_field: max_generate
+    system: |
+      You are an essay assistant tasked with writing excellent 5-paragraph essays.
+    prompt: |
+      Generate the best essay possible for the user's request and the initial outline. 
+      Utilize all the information below as needed: 
+
+      ------
+
+      {essay}
+    output_model:
+      generated_essay: str
+  - name: reflect
+    type: llm
+    system: |
+      You are a teacher grading an essay submission.
+    prompt: |
+      Generate critique and recommendations for the user's submission. 
+      Provide detailed recommendations, including requests for length, depth, style, etc.
+    output_model:
+      reflected_essay: str
+
+  - name: output
+    type: llm
+    system: |
+      You are responsible for providing the user the essay content
+    prompt: |
+      essay: {generated_essay}
+    output_model:
+      reflected_essay: str
+    user_message:
+      - reflected_essay
+
+flow:
+  - from: START
+    to: user_interaction
+  - from: user_interaction
+    to: planner
+  - from: planner
+    to: generate
+  - from: generate
+    edges:
+      - to: reflect
+        condition: "lambda x, config: x['max_generate'] < config['limit']"
+      - to: output
+        condition: "lambda x, config: x['max_generate'] >= config['limit']"
+  - from: output
+    to: user_interaction
+  - from: reflect
+    to: generate

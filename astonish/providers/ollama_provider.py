@@ -1,7 +1,8 @@
 import os
 import astonish.globals as globals
 from astonish.providers.ai_provider_interface import AIProvider
-from langchain_community.llms import Ollama
+#from langchain_community.llms import Ollama
+from langchain_ollama import ChatOllama
 from typing import List
 
 class OllamaProvider(AIProvider):
@@ -15,10 +16,6 @@ class OllamaProvider(AIProvider):
         defaults = {
             'base_url': ('http://localhost:11434', 'http://localhost:11434')
         }
-
-        # Load existing configuration if it exists
-        if os.path.exists(globals.config_path):
-            globals.config.read(globals.config_path)
 
         # Ensure the OLLAMA section exists
         if 'OLLAMA' not in globals.config:
@@ -84,7 +81,7 @@ class OllamaProvider(AIProvider):
             print(f"Error fetching models: {e}")
             return []
 
-    def get_llm(self, model_name: str, streaming: bool = True):
+    def get_llm(self, model_name: str, streaming: bool = True, schema = None):
         if not os.path.exists(globals.config_path):
             raise FileNotFoundError("Configuration file not found. Please run setup() first.")
         
@@ -93,9 +90,12 @@ class OllamaProvider(AIProvider):
         base_url = globals.config.get('OLLAMA', 'base_url')
 
         # Initialize and return the Ollama LLM
-        llm = Ollama(
+        llm =  ChatOllama(
             base_url=base_url,
             model=model_name,
-            streaming=streaming
+            num_ctx=4096,
+            streaming=streaming,
+            format=schema
         )
+
         return llm

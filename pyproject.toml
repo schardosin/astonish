@@ -6,7 +6,8 @@ build-backend = "setuptools.build_meta"
 packages = [
     "astonish",
     "astonish.providers",
-    "astonish.factory"
+    "astonish.factory",
+    "astonish.tools"
 ]
 
 [project]
@@ -26,7 +27,14 @@ classifiers = [
 dependencies = [
     "appdirs",
     "generative-ai-hub-sdk[all]",
+    "langchain-ollama",
     "langchain",
+    "langgraph",
+    "langgraph-checkpoint-sqlite",
+    "pydantic",
+    "tavily-python",
+    "colorama",
+    "pygraphviz"
 ]
 
 [project.urls]

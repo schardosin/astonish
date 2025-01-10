@@ -3,8 +3,20 @@ from tavily import TavilyClient
 from typing import Union, List, Dict
 
 class Tool(ToolBase):
-    def __init__(self):
-        self.client = TavilyClient(api_key="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")
+    required_config = {
+        "api_key": {
+            "type": "string",
+            "description": "API key for TavilyClient"
+        }
+    }
+
+    def __init__(self, config):
+        api_key = config.get('api_key')
+
+        if not api_key:
+            raise ValueError("API key for Tavily Search is not set. Please run 'astonish setup tool tavily_search' to configure.")
+
+        self.client = TavilyClient(api_key=api_key)
 
     def execute(self, query: Union[str, List, Dict]) -> str:
         if isinstance(query, str):
@@ -23,6 +35,7 @@ class Tool(ToolBase):
     def _search_multiple(self, queries: List[str]) -> str:
         results = []
         for query in queries:
+            print(f"Searching for '{query}")
             result = self.client.search(query)
             results.append(f"Search Results for '{query}':\n{result}")
         return "\n\n".join(results)

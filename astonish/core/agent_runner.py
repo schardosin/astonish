@@ -58,11 +58,13 @@ def initialize_tools(config):
     for tool_config in config['tools']:
         tool_name = tool_config['name']
 
+        tool_config = dict(globals.config[tool_name]) if tool_name in globals.config else {}
+
         # Try to import from the default folder first
         try:
             module = importlib.import_module(f"{plugin_folder}.{tool_name}")
             tool_class = getattr(module, 'Tool')
-            tools[tool_name] = tool_class()
+            tools[tool_name] = tool_class(tool_config)
         except (ImportError, AttributeError) as e:
             print(f"Error loading tool from {plugin_folder}.{tool_name}: {e}")
 
@@ -72,7 +74,7 @@ def initialize_tools(config):
                 # Try importing from the custom folder using its name
                 module = importlib.import_module(f"{custom_tool_folder.replace(os.path.sep, '.')}.{tool_name}")
                 tool_class = getattr(module, 'Tool')
-                tools[tool_name] = tool_class()
+                tools[tool_name] = tool_class(tool_config)
             except (ImportError, AttributeError) as e:
                 print(f"Error loading tool from custom folder {custom_tool_folder}.{tool_name}: {e}")
 

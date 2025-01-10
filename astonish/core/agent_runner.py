@@ -67,6 +67,10 @@ def initialize_tools(config):
             tools[tool_name] = tool_class(tool_config)
         except (ImportError, AttributeError) as e:
             print(f"Error loading tool from {plugin_folder}.{tool_name}: {e}")
+            sys.exit(1)
+        except ValueError as e:
+            print(f"Configuration error for {tool_name}: {str(e)}")
+            sys.exit(1)
 
         # If tool wasn't found in default folder, try to load from the custom folder
         if custom_tool_folder:
@@ -135,7 +139,7 @@ def create_llm_node_function(node_config, tools):
         if default_provider == 'ollama':
             humanMessage = HumanMessage(content=f"{formatted_prompt}")
         else:
-            humanMessage = HumanMessage(content=f"{formatted_prompt} \n\n IMPORTANT: Respond ONLY with a JSON object that conforms to the following schema. Do not include any preamble, explanation, or extra text outside the JSON object.: {parser.get_format_instructions()} \n Do not return nested objects, arrays, or complex structures. Return list only if explicitly required.")
+            humanMessage = HumanMessage(content=f"{formatted_prompt} \n\n IMPORTANT: Respond ONLY with a JSON object that conforms to the following schema. Do not include any preamble, explanation, or extra text outside the JSON object.: {parser.get_format_instructions()} \n\n Do not return nested objects, arrays, or complex structures.")
 
         chat_prompt = ChatPromptTemplate.from_messages([
             SystemMessage(content=systemMessage),

@@ -41,8 +41,6 @@ nodes:
       current state: {state}
     output_model:
       essay: str
-    user_message:
-      - essay
   - name: generate
     type: llm
     limit: 2
@@ -56,8 +54,11 @@ nodes:
       ------
 
       {essay}
+
+      Write 5-paragraph essays
     output_model:
       generated_essay: str
+
   - name: reflect
     type: llm
     system: |
@@ -65,6 +66,7 @@ nodes:
     prompt: |
       Generate critique and recommendations for the user's submission. 
       Provide detailed recommendations, including requests for length, depth, style, etc.
+      The essay must have 5-paragraphs
     output_model:
       reflected_essay: str
 
@@ -73,6 +75,8 @@ nodes:
     system: |
       You are responsible for providing the user the essay content
     prompt: |
+      Format the essay below in an essay format, translate the paragraphs to portuguese br, but keep the meaning intac
+
       essay: {generated_essay}
     output_model:
       reflected_essay: str

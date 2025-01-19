@@ -37,10 +37,9 @@ nodes:
       or instructions for the sections.
     prompt: |
       user topic: {user_request}
-
-      current state: {state}
     output_model:
       essay: str
+    print_state: False
   - name: generate
     type: llm
     limit: 2
@@ -48,27 +47,39 @@ nodes:
     system: |
       You are an essay assistant tasked with writing excellent 5-paragraph essays.
     prompt: |
-      Generate the best essay possible for the user's request and the initial outline. 
+      Generate the best 5-paragraph essay possible for the user's request and the initial outline. 
+      Write 5-paragraph essays
       Utilize all the information below as needed: 
 
       ------
-
+      This is the essay instructions:
       {essay}
 
-      Write 5-paragraph essays
+      This is the current essay, if any below, use it as the start point and correct based on the teacher evaluation:
+      {generated_essay}
+
+      This is the teacher evaluation, consider it, if any below:
+      {reflected_essay}
     output_model:
       generated_essay: str
-
+    print_state: False
+    print_prompt: True
   - name: reflect
     type: llm
     system: |
       You are a teacher grading an essay submission.
     prompt: |
+      This is the essay:
+      {generated_essay}
+
       Generate critique and recommendations for the user's submission. 
       Provide detailed recommendations, including requests for length, depth, style, etc.
-      The essay must have 5-paragraphs
+      Verify if the essay has 5-paragraphs
+      Don't return the essay content, but only observations of what should be corrected in the essay, if details information of what made the grade being reduced
+
     output_model:
       reflected_essay: str
+    print_state: False
 
   - name: output
     type: llm
@@ -79,9 +90,9 @@ nodes:
 
       essay: {generated_essay}
     output_model:
-      reflected_essay: str
+      generated_essay: str
     user_message:
-      - reflected_essay
+      - generated_essay
 
 flow:
   - from: START

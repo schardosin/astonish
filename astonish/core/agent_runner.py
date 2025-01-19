@@ -15,6 +15,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langchain.output_parsers import PydanticOutputParser
 from langchain.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field, ValidationError, create_model
+from langchain.schema import OutputParserException
 from langchain.globals import set_debug
 #from IPython.display import Image
 
@@ -38,6 +39,10 @@ def print_section(title):
 
 def print_output(output):
     print(f"{Fore.CYAN}{output}{Style.RESET_ALL}")
+
+def print_dict(dictionary, key_color=Fore.MAGENTA, value_color=Fore.CYAN):
+    for key, value in dictionary.items():
+        print(f"{key_color}{key}: {Style.RESET_ALL}{value_color}{value}{Style.RESET_ALL}")
 
 def load_agents(path):
     with open('astonish/agents/' + path + '.yaml', 'r') as file:
@@ -148,10 +153,35 @@ def create_llm_node_function(node_config, tools):
 
         llm = LLMManager.get_llm(OutputModel.model_json_schema())
         chain = chat_prompt | llm | parser
-        parsed_output = chain.invoke({})
+
+        parsed_output = None
+        max_retries = 3
+        retry_count = 0
+
+        while retry_count < max_retries:
+            try:
+                parsed_output = chain.invoke({})
+                break
+            except OutputParserException as e:
+                # Handle validation error and retry
+                retry_count += 1
+                error_message = str(e)
+                # Recreate the chain with a feedback message
+                feedback_message = f"Your response did not conform to the required JSON schema. The following error was encountered: {error_message}. Please respond ONLY with a JSON object conforming to this schema."
+                humanMessage = HumanMessage(content=feedback_message)
+                chat_prompt = ChatPromptTemplate.from_messages([
+                    SystemMessage(content=systemMessage),
+                    humanMessage
+                ])
+                chain = chat_prompt | llm | parser
+
+        if parsed_output is None:
+            raise ValueError(f"LLM failed to provide valid output after {max_retries} attempts.")
 
         new_state = update_state(state, parsed_output, node_config, tools)
         print_user_messages(new_state, node_config)
+        print_chat_prompt(chat_prompt, node_config)
+        print_state(new_state, node_config)
 
         return new_state
     return node_function
@@ -193,7 +223,30 @@ def print_user_messages(state, node_config):
         if field in state and state[field] is not None:
             print_ai(f"{state[field]}")
 
-def build_graph(config, tools):
+def print_chat_prompt(chat_prompt, node_config):
+    print_prompt = node_config.get('print_prompt', False)
+    if print_prompt:
+        print(f"{Fore.BLUE}{Style.BRIGHT}ChatPromptTemplate:{Style.RESET_ALL}")
+        for i, message in enumerate(chat_prompt.messages, 1):
+            if isinstance(message, SystemMessage):
+                print(f"  {Fore.MAGENTA}SystemMessage {i}:{Style.RESET_ALL}")
+                print(f"    {Fore.CYAN}{message.content}{Style.RESET_ALL}")
+            elif isinstance(message, HumanMessage):
+                print(f"  {Fore.YELLOW}HumanMessage {i}:{Style.RESET_ALL}")
+                print(f"    {Fore.GREEN}{message.content}{Style.RESET_ALL}")
+            else:
+                print(f"  {Fore.RED}Unknown Message Type {i}:{Style.RESET_ALL}")
+                print(f"    {message}")
+        print()
+
+def print_state(state, node_config):
+    print_state = node_config.get('print_state', False)
+    if print_state:
+        print_output("Current State: \n")
+        print_dict(state, key_color=Fore.YELLOW, value_color=Fore.GREEN)
+        print("")
+
+def build_graph(config, tools, checkpointer):
     builder = StateGraph(TypedDict('AgentState', {item['name']: eval(item['type']) for item in config['state']}))
 
     for node in config['nodes']:
@@ -218,7 +271,7 @@ def build_graph(config, tools):
         else:
             builder.add_edge(edge['from'], END if edge['to'] == 'END' else edge['to'])
 
-    return builder.compile()
+    return builder.compile(checkpointer=checkpointer)
 
 def safe_eval_condition(condition: str, state: dict, node_config: dict) -> bool:
     try:
@@ -240,9 +293,9 @@ def create_combined_condition_function(conditions, default_state):
         return default_state
     return combined_condition_function
 
-def run_graph(graph, initial_state):
+def run_graph(graph, initial_state, thread):
     iteration = 0
-    for output in graph.stream(initial_state):
+    for output in graph.stream(initial_state, thread):
         globals.logger.debug(f"\nIteration: {iteration}")
         node_executed = list(output.keys())[0]
         globals.logger.debug(f"Node executed: {node_executed}")
@@ -250,6 +303,11 @@ def run_graph(graph, initial_state):
         if node_executed == END:
             print("Reached END node. Process completed.")
             break
+
+        state_history = graph.get_state_history(thread)
+        globals.logger.debug("State History: ")
+        for snapshot in state_history:
+            globals.logger.debug(snapshot)
         
         flat_state = {}
         for key, value in output.items():
@@ -271,12 +329,14 @@ def run_agent(agent):
     # Initialize tools
     tools = initialize_tools(config)
 
-    # Build graph
-    graph = build_graph(config, tools)
-    graph.get_graph().draw_png(GRAPH_OUTPUT_PATH)
-
     # Initialize state
     initial_state = {item['name']: item.get('default', None) for item in config['state']}
 
-    # Run graph
-    run_graph(graph, initial_state)
+    # Build graph
+    with SqliteSaver.from_conn_string(":memory:") as checkpointer:
+        graph = build_graph(config, tools, checkpointer)
+        graph.get_graph().draw_png(GRAPH_OUTPUT_PATH)
+
+        while True:
+            thread = {"configurable": {"thread_id": "1"}}
+            run_graph(graph, initial_state, thread)

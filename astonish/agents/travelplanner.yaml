@@ -39,10 +39,6 @@ state:
     type: int
     default: 0
 
-tools:
-  - name: tavily_search
-    type: SearchEngine
-
 nodes:
   - name: user_interaction
     type: input
@@ -87,10 +83,13 @@ nodes:
 
     output_model:
       websearch_list: list
-    tools:
-      - name: tavily_search
-        input_field: websearch_list
-        output_field: websearch_results
+    print_state: True
+
+  - name: execute_search
+    type: tool
+    tool: tavily_search
+    input_field: websearch_list
+    output_field: websearch_results
 
   - name: research
     type: llm
@@ -187,6 +186,8 @@ flow:
       - to: user_interaction
         condition: "lambda x: not all(x.get(field) for field in ['destination', 'travel_dates', 'budget', 'interests'])"
   - from: search
+    to: execute_search
+  - from: execute_search
     to: research
   - from: research
     to: create_itinerary

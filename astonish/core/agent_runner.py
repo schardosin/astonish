@@ -50,19 +50,21 @@ def load_agents(path):
 
 def initialize_tools(config):
     tools = {}
-    plugin_folder = "astonish.tools"  # Default tools folder
+    plugin_folder = "astonish.tools"
+    custom_tool_folder = os.getenv('ASTONISH_TOOLS_PATH')
 
-    # Check if the environment variable for additional tool folders is set
-    custom_tool_folder = os.getenv('ASTONISH_TOOLS_PATH')  # Updated variable name
+    # Add custom tool folder to sys.path if it exists
     if custom_tool_folder and os.path.isdir(custom_tool_folder):
-        # If the folder exists, add it to sys.path for dynamic imports
         if custom_tool_folder not in sys.path:
             sys.path.append(custom_tool_folder)
 
-    # Load tools from the standard plugin folder (astonish.tools) and any additional folders
-    for tool_config in config['tools']:
-        tool_name = tool_config['name']
+    # Get all tool names from node configurations
+    tool_names = set()
+    for node in config['nodes']:
+        if node['type'] == 'tool':
+            tool_names.add(node['tool'])
 
+    for tool_name in tool_names:
         tool_config = dict(globals.config[tool_name]) if tool_name in globals.config else {}
 
         # Try to import from the default folder first
@@ -72,23 +74,23 @@ def initialize_tools(config):
             tools[tool_name] = tool_class(tool_config)
         except (ImportError, AttributeError) as e:
             print(f"Error loading tool from {plugin_folder}.{tool_name}: {e}")
-            sys.exit(1)
+            
+            # If tool wasn't found in default folder, try to load from the custom folder
+            if custom_tool_folder:
+                try:
+                    module = importlib.import_module(f"{tool_name}")  # Changed this line
+                    tool_class = getattr(module, 'Tool')
+                    tools[tool_name] = tool_class(tool_config)
+                except (ImportError, AttributeError) as e:
+                    print(f"Error loading tool from custom folder {custom_tool_folder}.{tool_name}: {e}")
+                    sys.exit(1)
+            else:
+                sys.exit(1)
         except ValueError as e:
             print(f"Configuration error for {tool_name}: {str(e)}")
             sys.exit(1)
 
-        # If tool wasn't found in default folder, try to load from the custom folder
-        if custom_tool_folder:
-            try:
-                # Try importing from the custom folder using its name
-                module = importlib.import_module(f"{custom_tool_folder.replace(os.path.sep, '.')}.{tool_name}")
-                tool_class = getattr(module, 'Tool')
-                tools[tool_name] = tool_class(tool_config)
-            except (ImportError, AttributeError) as e:
-                print(f"Error loading tool from custom folder {custom_tool_folder}.{tool_name}: {e}")
-
     return tools
-
 
 def format_prompt(prompt: str, state: dict, node_config: dict):
     state_dict = dict(state)
@@ -115,6 +117,8 @@ def create_node_function(node_config, tools):
         return create_input_node_function(node_config)
     elif node_config['type'] == 'llm':
         return create_llm_node_function(node_config, tools)
+    elif node_config['type'] == 'tool':
+        return create_tool_node_function(node_config, tools)
 
 def create_input_node_function(node_config):
     def node_function(state: dict):
@@ -178,12 +182,28 @@ def create_llm_node_function(node_config, tools):
         if parsed_output is None:
             raise ValueError(f"LLM failed to provide valid output after {max_retries} attempts.")
 
-        new_state = update_state(state, parsed_output, node_config, tools)
+        new_state = update_state(state, parsed_output, node_config)
         print_user_messages(new_state, node_config)
         print_chat_prompt(chat_prompt, node_config)
         print_state(new_state, node_config)
 
         return new_state
+    return node_function
+
+def create_tool_node_function(node_config, tools):
+    tool_name = node_config['tool']
+    input_field = node_config['input_field']
+    output_field = node_config['output_field']
+    tool = tools.get(tool_name)
+
+    def node_function(state: dict):
+        print_output(f"Executing tool: {tool_name}")
+        input_data = state.get(input_field, '')
+        result = tool.execute(input_data)
+        new_state = state.copy()
+        new_state[output_field] = result
+        return new_state
+
     return node_function
 
 def create_output_model(output_model_config):
@@ -202,15 +222,11 @@ def create_output_model(output_model_config):
     
     return create_model('OutputModel', **fields)
 
-def update_state(state, parsed_output, node_config, tools):
+def update_state(state, parsed_output, node_config):
     new_state = state.copy()
     for field in parsed_output.model_fields:
         if getattr(parsed_output, field) is not None:
             new_state[field] = getattr(parsed_output, field)
-
-    if 'tools' in node_config:
-        tool_results = execute_tools(node_config['tools'], new_state, tools)
-        new_state.update(tool_results)
 
     if 'limit_counter_field' in node_config and node_config['limit_counter_field']:
         new_state[node_config['limit_counter_field']] = new_state.get(node_config['limit_counter_field'], 0) + 1

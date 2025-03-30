@@ -81,6 +81,8 @@ nodes:
       Budget: {budget}
       Interests: {interests}
 
+      Below is an example of the response to be generated:
+      ['Frankfurt cultural events September 2023', 'Best restaurants in Frankfurt', 'Frankfurt travel guide September 2023']
     output_model:
       websearch_list: list
     print_state: True
@@ -121,6 +123,39 @@ nodes:
       Add an introduction sentence explaining how why this is the recommended proposal, what was the best option, and how it was created, before showing the detailed itinerary.
 
       Add links from the web search results for the recommended attractions/events.
+
+      Below is an example of the response to be generated:
+      Day 1: [Destination Name]
+
+      Morning:
+      • 08:00 - Breakfast at [Restaurant Name]
+      • 09:30 - Visit [Attraction 1]
+      • 11:30 - Explore [Neighborhood/Area]
+
+      Afternoon:
+      • 13:00 - Lunch at [Restaurant Name]
+      • 14:30 - Tour [Attraction 2]
+      • 16:30 - Free time for shopping/relaxation
+
+      Evening:
+      • 19:00 - Dinner at [Restaurant Name]
+      • 21:00 - [Evening Activity] (e.g., night tour, show, or local experience)
+
+      Day 2: [Destination Name or Day Trip Location]
+
+      Morning:
+      • 07:30 - Breakfast at hotel
+      • 08:30 - Depart for [Day Trip Location]
+      • 10:00 - Guided tour of [Attraction 3]
+
+      Afternoon:
+      • 12:30 - Lunch at [Local Restaurant]
+      • 14:00 - [Outdoor Activity] (e.g., hiking, boating, or beach time)
+      • 16:30 - Visit [Local Market or Shop]
+
+      Evening:
+      • 18:30 - Return to [Original Destination]
+      • 20:00 - Dinner at [Restaurant Name]
     prompt: |
       Destination: {destination}
       Travel Dates: {travel_dates}

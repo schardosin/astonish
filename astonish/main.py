@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
+import asyncio
 import astonish.globals as globals
 
-def main(args=None):
+async def main(args=None):
     from astonish.core.agent_runner import run_agent
 
     if args is None:
@@ -26,7 +27,7 @@ def main(args=None):
             print(f"Unknown setup type: {args.type}")
     elif args.command == "run":
         globals.logger.info(f"Running task: {args.task}")
-        run_agent(args.task)
+        await run_agent(args.task)
     else:
         globals.logger.error(f"Unknown command: {args.command}")
         print(f"Unknown command: {args.command}")
@@ -156,4 +157,4 @@ def parse_arguments():
     return args
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

@@ -72,26 +72,26 @@ nodes:
 
   - name: search
     type: llm
+    tools: True
     system: |
-      You are a travel researcher charged with providing information that can be used generate the itinerary. 
-      Generate a list of search queries that will gather any relevant information. Only generate 3 queries max.
+      You are a travel researcher tasked with gathering information to generate an itinerary. 
+      You have access to internet search tools. Use these tools to find relevant information 
+      about the destination, including cultural events, best restaurants, and travel guides 
+      for the specified dates.
     prompt: |
       Destination: {destination}
       Travel Dates: {travel_dates}
       Budget: {budget}
       Interests: {interests}
 
-      Below is an example of the response to be generated:
-      ['Frankfurt cultural events September 2023', 'Best restaurants in Frankfurt', 'Frankfurt travel guide September 2023']
-    output_model:
-      websearch_list: list
-    print_state: True
+      Please use the available search tools to find information about {destination} during {travel_dates}, 
+      considering the budget of {budget} and interests in {interests}. 
+      Focus on popular attractions, local cuisine, current events, and festivals during the travel dates.
 
-  - name: execute_search
-    type: tool
-    tool: tavily_search
-    input_field: websearch_list
-    output_field: websearch_results
+      Compile the most relevant and useful information you find into a comprehensive summary.
+    output_model:
+      websearch_results: str
+    print_state: True
 
   - name: research
     type: llm
@@ -221,8 +221,6 @@ flow:
       - to: user_interaction
         condition: "lambda x: not all(x.get(field) for field in ['destination', 'travel_dates', 'budget', 'interests'])"
   - from: search
-    to: execute_search
-  - from: execute_search
     to: research
   - from: research
     to: create_itinerary

@@ -1,24 +1,19 @@
 import yaml
-import importlib
-import sys
-import os
+import json
 import astonish.globals as globals
-from astonish.tools.tool_base import ToolBase
 from astonish.core.llm_manager import LLMManager
-from typing import TypedDict, Callable, Any, Union, Optional, List, Dict, get_args, get_origin
-from pprint import pprint
+from typing import TypedDict, Union, Optional, get_args, get_origin
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import SystemMessage, HumanMessage
-from tavily import TavilyClient
 from colorama import Fore, Style, init as colorama_init
-from langgraph.checkpoint.sqlite import SqliteSaver
 from langchain.output_parsers import PydanticOutputParser
 from langchain.prompts import ChatPromptTemplate
-from pydantic import BaseModel, Field, ValidationError, create_model
+from pydantic import Field, ValidationError, create_model
 from langchain.schema import OutputParserException
 from langchain.globals import set_debug
-#from IPython.display import Image
-
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.prebuilt import create_react_agent
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 # Constants
 GRAPH_OUTPUT_PATH = 'graph_output.png'
 
@@ -48,49 +43,12 @@ def load_agents(path):
     with open('astonish/agents/' + path + '.yaml', 'r') as file:
         return yaml.safe_load(file)
 
-def initialize_tools(config):
-    tools = {}
-    plugin_folder = "astonish.tools"
-    custom_tool_folder = os.getenv('ASTONISH_TOOLS_PATH')
-
-    # Add custom tool folder to sys.path if it exists
-    if custom_tool_folder and os.path.isdir(custom_tool_folder):
-        if custom_tool_folder not in sys.path:
-            sys.path.append(custom_tool_folder)
-
-    # Get all tool names from node configurations
-    tool_names = set()
-    for node in config['nodes']:
-        if node['type'] == 'tool':
-            tool_names.add(node['tool'])
-
-    for tool_name in tool_names:
-        tool_config = dict(globals.config[tool_name]) if tool_name in globals.config else {}
-
-        # Try to import from the default folder first
-        try:
-            module = importlib.import_module(f"{plugin_folder}.{tool_name}")
-            tool_class = getattr(module, 'Tool')
-            tools[tool_name] = tool_class(tool_config)
-        except (ImportError, AttributeError) as e:
-            print(f"Error loading tool from {plugin_folder}.{tool_name}: {e}")
-            
-            # If tool wasn't found in default folder, try to load from the custom folder
-            if custom_tool_folder:
-                try:
-                    module = importlib.import_module(f"{tool_name}")  # Changed this line
-                    tool_class = getattr(module, 'Tool')
-                    tools[tool_name] = tool_class(tool_config)
-                except (ImportError, AttributeError) as e:
-                    print(f"Error loading tool from custom folder {custom_tool_folder}.{tool_name}: {e}")
-                    sys.exit(1)
-            else:
-                sys.exit(1)
-        except ValueError as e:
-            print(f"Configuration error for {tool_name}: {str(e)}")
-            sys.exit(1)
-
-    return tools
+async def initialize_mcp_tools():
+    with open('mcp_config.json', 'r') as config_file:
+        mcp_config = json.load(config_file)
+    
+    mcp_client = MultiServerMCPClient(mcp_config['mcpServers'])
+    return mcp_client
 
 def format_prompt(prompt: str, state: dict, node_config: dict):
     state_dict = dict(state)
@@ -98,27 +56,11 @@ def format_prompt(prompt: str, state: dict, node_config: dict):
     format_dict = {**state_dict, **node_config}
     return prompt.format(**format_dict)
 
-def execute_tools(tool_configs, state: dict, tools):
-    print_output("Executing tools...")
-    results = {}
-    for tool_config in tool_configs:
-        tool_name = tool_config['name']
-        tool = tools.get(tool_name)
-        if tool and isinstance(tool, ToolBase):
-            input_field = tool_config.get('input_field')
-            output_field = tool_config.get('output_field')
-            query = state.get(input_field, '')
-            result = tool.execute(query)
-            results[output_field] = result
-    return results
-
-def create_node_function(node_config, tools):
+def create_node_function(node_config, mcp_client):
     if node_config['type'] == 'input':
         return create_input_node_function(node_config)
     elif node_config['type'] == 'llm':
-        return create_llm_node_function(node_config, tools)
-    elif node_config['type'] == 'tool':
-        return create_tool_node_function(node_config, tools)
+        return create_llm_node_function(node_config, mcp_client, node_config.get('tools'))
 
 def create_input_node_function(node_config):
     def node_function(state: dict):
@@ -130,11 +72,11 @@ def create_input_node_function(node_config):
         return new_state
     return node_function
 
-def create_llm_node_function(node_config, tools):
+def create_llm_node_function(node_config, mcp_client, use_tools):
     OutputModel = create_output_model(node_config['output_model'])
     parser = PydanticOutputParser(pydantic_object=OutputModel)
 
-    def node_function(state: dict):
+    async def node_function(state: dict):
         if 'limit' in node_config and node_config['limit']:
             counter = state[node_config['limit_counter_field']] + 1
             print_output(f"Processing {node_config['name']} ({counter}/{node_config['limit']})")
@@ -143,12 +85,11 @@ def create_llm_node_function(node_config, tools):
 
         systemMessage = format_prompt(node_config['system'], state, node_config)
         formatted_prompt = format_prompt(node_config['prompt'], state, node_config)
-        humanMessage = ""
         default_provider = globals.config.get('GENERAL', 'default_provider', fallback='ollama')
-        if default_provider == 'ollama':
-            humanMessage = HumanMessage(content=f"{formatted_prompt}")
-        else:
-            humanMessage = HumanMessage(content=f"{formatted_prompt} \n\n IMPORTANT: Respond ONLY with a JSON object that conforms to the following schema. Do not include any preamble, explanation, or extra text outside the JSON object.: {parser.get_format_instructions()} \n\n Do not return nested objects, arrays, or complex structures.")
+        
+        human_content = formatted_prompt if default_provider == 'ollama' else f"{formatted_prompt} \n\n IMPORTANT: Respond ONLY with a JSON object that conforms to the following schema. Do not include any preamble, explanation, or extra text outside the JSON object.: {parser.get_format_instructions()} \n\n Do not return nested objects, arrays, or complex structures."
+        
+        humanMessage = HumanMessage(content=human_content)
 
         chat_prompt = ChatPromptTemplate.from_messages([
             SystemMessage(content=systemMessage),
@@ -156,28 +97,43 @@ def create_llm_node_function(node_config, tools):
         ])
 
         llm = LLMManager.get_llm(OutputModel.model_json_schema())
-        chain = chat_prompt | llm | parser
 
-        parsed_output = None
         max_retries = 3
         retry_count = 0
+        parsed_output = None
 
         while retry_count < max_retries:
             try:
-                parsed_output = chain.invoke({})
+                if use_tools:
+                    async with mcp_client as client:
+                        tools = client.get_tools()
+                        agent = create_react_agent(llm, tools)
+                        agent_output = await agent.ainvoke({
+                            "messages": [
+                                SystemMessage(content=systemMessage),
+                                humanMessage
+                            ]
+                        })
+                        parsed_output = parser.parse(agent_output['messages'][-1].content)
+                else:
+                    agent = create_react_agent(llm, [])
+                    agent_output = await agent.ainvoke({
+                        "messages": [
+                            SystemMessage(content=systemMessage),
+                            humanMessage
+                        ]
+                    })
+                    parsed_output = parser.parse(agent_output['messages'][-1].content)
                 break
             except OutputParserException as e:
-                # Handle validation error and retry
                 retry_count += 1
                 error_message = str(e)
-                # Recreate the chain with a feedback message
                 feedback_message = f"Your response did not conform to the required JSON schema. The following error was encountered: {error_message}. Please respond ONLY with a JSON object conforming to this schema."
                 humanMessage = HumanMessage(content=feedback_message)
                 chat_prompt = ChatPromptTemplate.from_messages([
                     SystemMessage(content=systemMessage),
                     humanMessage
                 ])
-                chain = chat_prompt | llm | parser
 
         if parsed_output is None:
             raise ValueError(f"LLM failed to provide valid output after {max_retries} attempts.")
@@ -188,23 +144,27 @@ def create_llm_node_function(node_config, tools):
         print_state(new_state, node_config)
 
         return new_state
-    return node_function
-
-def create_tool_node_function(node_config, tools):
-    tool_name = node_config['tool']
-    input_field = node_config['input_field']
-    output_field = node_config['output_field']
-    tool = tools.get(tool_name)
-
-    def node_function(state: dict):
-        print_output(f"Executing tool: {tool_name}")
-        input_data = state.get(input_field, '')
-        result = tool.execute(input_data)
-        new_state = state.copy()
-        new_state[output_field] = result
-        return new_state
 
     return node_function
+
+def parse_agent_output(output: str, OutputModel):
+    try:
+        # Attempt to parse the output as JSON
+        parsed_json = json.loads(output)
+        return OutputModel(**parsed_json)
+    except json.JSONDecodeError:
+        # If JSON parsing fails, attempt to extract a JSON object from the text
+        import re
+        json_match = re.search(r'\{.*\}', output, re.DOTALL)
+        if json_match:
+            try:
+                parsed_json = json.loads(json_match.group())
+                return OutputModel(**parsed_json)
+            except (json.JSONDecodeError, ValidationError):
+                pass
+        
+        # If all parsing attempts fail, raise an error
+        raise ValueError("Failed to parse agent output into the required format")
 
 def create_output_model(output_model_config):
     fields = {}
@@ -214,12 +174,12 @@ def create_output_model(output_model_config):
             field_type = Union[tuple(types)]
         else:
             field_type = eval(field_type)
-        
+
         if get_origin(field_type) is Union and type(None) in get_args(field_type):
             field_type = Optional[get_args(field_type)[0]]
-        
+
         fields[field_name] = (field_type, Field(description=f"{field_name} field"))
-    
+
     return create_model('OutputModel', **fields)
 
 def update_state(state, parsed_output, node_config):
@@ -262,11 +222,11 @@ def print_state(state, node_config):
         print_dict(state, key_color=Fore.YELLOW, value_color=Fore.GREEN)
         print("")
 
-def build_graph(config, tools, checkpointer):
+def build_graph(config, mcp_client, checkpointer):
     builder = StateGraph(TypedDict('AgentState', {item['name']: eval(item['type']) for item in config['state']}))
 
     for node in config['nodes']:
-        builder.add_node(node['name'], create_node_function(node, tools))
+        builder.add_node(node['name'], create_node_function(node, mcp_client))
 
     for edge in config['flow']:
         if edge['from'] == 'START':
@@ -309,32 +269,16 @@ def create_combined_condition_function(conditions, default_state):
         return default_state
     return combined_condition_function
 
-def run_graph(graph, initial_state, thread):
-    iteration = 0
-    for output in graph.stream(initial_state, thread):
-        globals.logger.debug(f"\nIteration: {iteration}")
-        node_executed = list(output.keys())[0]
-        globals.logger.debug(f"Node executed: {node_executed}")
-        
-        if node_executed == END:
-            print("Reached END node. Process completed.")
-            break
+async def run_graph(graph, initial_state, thread):
+    await graph.ainvoke(initial_state, thread)
 
-        state_history = graph.get_state_history(thread)
-        globals.logger.debug("State History: ")
-        for snapshot in state_history:
-            globals.logger.debug(snapshot)
-        
-        flat_state = {}
-        for key, value in output.items():
-            if isinstance(value, dict):
-                flat_state.update(value)
-            else:
-                flat_state[key] = value
-        globals.logger.debug("Current state")
-        globals.logger.debug(flat_state)
+def print_flow(agent):
+    config = load_agents(agent)
+    graph = build_graph(config, None, None)
+    graph_obj = graph.get_graph()
+    graph_obj.print_ascii()
 
-def run_agent(agent):
+async def run_agent(agent):
     # Setup
     setup_colorama()
     set_debug(False)
@@ -342,17 +286,17 @@ def run_agent(agent):
     # Load agents
     config = load_agents(agent)
 
-    # Initialize tools
-    tools = initialize_tools(config)
+    # Initialize MCP tools
+    mcp_client = await initialize_mcp_tools()
 
     # Initialize state
     initial_state = {item['name']: item.get('default', None) for item in config['state']}
 
     # Build graph
-    with SqliteSaver.from_conn_string(":memory:") as checkpointer:
-        graph = build_graph(config, tools, checkpointer)
-        graph.get_graph().draw_png(GRAPH_OUTPUT_PATH)
+    async with AsyncSqliteSaver.from_conn_string(":memory:") as checkpointer:
+        graph = build_graph(config, mcp_client, checkpointer)
+        #graph.get_graph().draw_png(GRAPH_OUTPUT_PATH)
 
         while True:
             thread = {"configurable": {"thread_id": "1"}}
-            run_graph(graph, initial_state, thread)
+            await run_graph(graph, initial_state, thread)

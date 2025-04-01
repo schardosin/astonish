@@ -17,13 +17,17 @@ class OllamaProvider(AIProvider):
             'base_url': ('http://localhost:11434', 'http://localhost:11434')
         }
 
+        # Load existing configuration if it exists
+        if os.path.exists(globals.config_path):
+            globals.config.read(globals.config_path)
+
         # Ensure the OLLAMA section exists
         if 'OLLAMA' not in globals.config:
             globals.config['OLLAMA'] = {}
 
         # Input new values
         for key, (default, example) in defaults.items():
-            current_value = globals.config.get('OLLAMA', key, fallback='')
+            current_value = globals.config['OLLAMA'].get(key, '')
             if current_value:
                 new_value = input(f"Enter {key} (current: {current_value}): ").strip()
             else:
@@ -56,9 +60,11 @@ class OllamaProvider(AIProvider):
             except ValueError:
                 print("Invalid input. Please enter a number.")
 
-        # Add general section with default provider and model
+        # Ensure GENERAL section exists
         if 'GENERAL' not in globals.config:
             globals.config['GENERAL'] = {}
+
+        # Add general section with default provider and model
         globals.config['GENERAL']['default_provider'] = 'ollama'
         globals.config['GENERAL']['default_model'] = default_model
 

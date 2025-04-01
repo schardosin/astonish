@@ -35,7 +35,9 @@ dependencies = [
     "tavily-python",
     "colorama",
     "pygraphviz",
-    "langchain-mcp-adapters"
+    "langchain-mcp-adapters",
+    "aiosqlite",
+    "grandalf"
 ]
 
 [project.urls]

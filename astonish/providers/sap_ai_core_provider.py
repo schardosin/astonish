@@ -24,12 +24,14 @@ class SAPAICoreProvider(AIProvider):
         # Load existing configuration if it exists
         if os.path.exists(globals.config_path):
             globals.config.read(globals.config_path)
-        else:
+        
+        # Ensure SAP_AI_CORE section exists
+        if 'SAP_AI_CORE' not in globals.config:
             globals.config['SAP_AI_CORE'] = {}
 
         # Input new values
         for key, (default, example) in defaults.items():
-            current_value = globals.config.get('SAP_AI_CORE', key, fallback='')
+            current_value = globals.config['SAP_AI_CORE'].get(key, '')
             if current_value:
                 new_value = input(f"Enter {key} (current: {current_value}): ").strip()
             else:
@@ -62,9 +64,11 @@ class SAPAICoreProvider(AIProvider):
             except ValueError:
                 print("Invalid input. Please enter a number.")
 
-        # Add general section with default provider and model
+        # Ensure GENERAL section exists
         if 'GENERAL' not in globals.config:
             globals.config['GENERAL'] = {}
+        
+        # Add general section with default provider and model
         globals.config['GENERAL']['default_provider'] = 'sap_ai_core'
         globals.config['GENERAL']['default_model'] = default_model
 

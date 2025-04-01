@@ -74,7 +74,6 @@ nodes:
     type: llm
     tools: True
     system: |
-      You are a travel researcher tasked with gathering information to generate an itinerary. 
       You have access to internet search tools. Use these tools to find relevant information 
       about the destination, including cultural events, best restaurants, and travel guides 
       for the specified dates.
@@ -84,14 +83,14 @@ nodes:
       Budget: {budget}
       Interests: {interests}
 
-      Please use the available search tools to find information about {destination} during {travel_dates}, 
+      Please use the available internet search tools to find information about {destination} during {travel_dates}, 
       considering the budget of {budget} and interests in {interests}. 
       Focus on popular attractions, local cuisine, current events, and festivals during the travel dates.
 
       Compile the most relevant and useful information you find into a comprehensive summary.
     output_model:
       websearch_results: str
-    print_state: True
+    print_state: False
 
   - name: research
     type: llm

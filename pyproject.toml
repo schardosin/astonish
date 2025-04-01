@@ -36,7 +36,8 @@ dependencies = [
     "colorama",
     "pygraphviz",
     "langchain-mcp-adapters",
-    "aiosqlite"
+    "aiosqlite",
+    "grandalf"
 ]
 
 [project.urls]

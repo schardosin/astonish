@@ -109,7 +109,7 @@ nodes:
 
   - name: create_itinerary
     type: llm
-    limit: 1
+    limit: 2
     limit_counter_field: max_rev_create_itinerary
     system: |
       You are an expert travel planner creating an itinerary for a family trip. Use the following research information and user preferences to create a detailed day-by-day itinerary:

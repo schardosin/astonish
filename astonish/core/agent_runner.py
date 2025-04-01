@@ -271,7 +271,12 @@ def create_combined_condition_function(conditions, default_state):
 
 async def run_graph(graph, initial_state, thread):
     await graph.ainvoke(initial_state, thread)
-       
+
+def print_flow(agent):
+    config = load_agents(agent)
+    graph = build_graph(config, None, None)
+    graph_obj = graph.get_graph()
+    graph_obj.print_ascii()
 
 async def run_agent(agent):
     # Setup

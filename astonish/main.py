@@ -3,7 +3,7 @@ import asyncio
 import astonish.globals as globals
 
 async def main(args=None):
-    from astonish.core.agent_runner import run_agent
+    from astonish.core.agent_runner import run_agent, print_flow
 
     if args is None:
         args = parse_arguments()
@@ -28,6 +28,9 @@ async def main(args=None):
     elif args.command == "run":
         globals.logger.info(f"Running task: {args.task}")
         await run_agent(args.task)
+    elif args.command == "flow":
+        globals.logger.info(f"Printing flow for task: {args.task}")
+        print_flow(args.task)
     else:
         globals.logger.error(f"Unknown command: {args.command}")
         print(f"Unknown command: {args.command}")
@@ -146,8 +149,12 @@ def parse_arguments():
     tool_setup_parser.add_argument("tool_name", help="Name of the tool to configure")
 
     # Run command
-    run_parser = subparsers.add_parser("run", help="Run a specific task or workflow")
-    run_parser.add_argument("task", help="Name of the task to run")
+    run_parser = subparsers.add_parser("run", help="Run a specific agentic workflow")
+    run_parser.add_argument("task", help="Name of the agentic workflow to run")
+
+    # Flow command
+    flow_parser = subparsers.add_parser("flow", help="Print the flow of a specific agentic workflow")
+    flow_parser.add_argument("task", help="Name of the agentic workflow to print flow for")
 
     args = parser.parse_args()
     if args.command is None:

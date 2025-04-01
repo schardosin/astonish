@@ -9,75 +9,75 @@ class SAPAICoreProvider(AIProvider):
     def __init__(self):
         self.proxy_client = None
 
-def setup(self):
-    print("Setting up SAP AI Core...")
-    
-    # Default values and examples
-    defaults = {
-        'client_id': ('', 'your-client-id'),
-        'client_secret': ('', 'your-client-secret'),
-        'auth_url': ('', 'https://<tenant-id>.authentication.sap.hana.ondemand.com'),
-        'base_url': ('', 'https://api.ai.internalprod.eu-central-1.aws.ml.hana.ondemand.com/v2'),
-        'resource_group': ('default', 'default')
-    }
+    def setup(self):
+        print("Setting up SAP AI Core...")
+        
+        # Default values and examples
+        defaults = {
+            'client_id': ('', 'your-client-id'),
+            'client_secret': ('', 'your-client-secret'),
+            'auth_url': ('', 'https://<tenant-id>.authentication.sap.hana.ondemand.com'),
+            'base_url': ('', 'https://api.ai.internalprod.eu-central-1.aws.ml.hana.ondemand.com/v2'),
+            'resource_group': ('default', 'default')
+        }
 
-    # Load existing configuration if it exists
-    if os.path.exists(globals.config_path):
-        globals.config.read(globals.config_path)
-    
-    # Ensure SAP_AI_CORE section exists
-    if 'SAP_AI_CORE' not in globals.config:
-        globals.config['SAP_AI_CORE'] = {}
+        # Load existing configuration if it exists
+        if os.path.exists(globals.config_path):
+            globals.config.read(globals.config_path)
+        
+        # Ensure SAP_AI_CORE section exists
+        if 'SAP_AI_CORE' not in globals.config:
+            globals.config['SAP_AI_CORE'] = {}
 
-    # Input new values
-    for key, (default, example) in defaults.items():
-        current_value = globals.config['SAP_AI_CORE'].get(key, '')
-        if current_value:
-            new_value = input(f"Enter {key} (current: {current_value}): ").strip()
-        else:
-            new_value = input(f"Enter {key} (example: {example}): ").strip()
-        globals.config['SAP_AI_CORE'][key] = new_value if new_value else (current_value or default)
-
-    os.makedirs(os.path.dirname(globals.config_path), exist_ok=True)
-    with open(globals.config_path, 'w') as configfile:
-        globals.config.write(configfile)
-
-    globals.config.read(globals.config_path)
-    self._initialize_proxy_client()
-
-    # Get supported models
-    supported_models = self.get_supported_models()
-
-    print("\nSupported models:")
-    for i, model in enumerate(supported_models, 1):
-        print(f"{i}. {model}")
-
-    # Ask user to select a default model
-    while True:
-        try:
-            selection = int(input("\nSelect the number of the model you want to use as default: "))
-            if 1 <= selection <= len(supported_models):
-                default_model = supported_models[selection - 1]
-                break
+        # Input new values
+        for key, (default, example) in defaults.items():
+            current_value = globals.config['SAP_AI_CORE'].get(key, '')
+            if current_value:
+                new_value = input(f"Enter {key} (current: {current_value}): ").strip()
             else:
-                print("Invalid selection. Please choose a number from the list.")
-        except ValueError:
-            print("Invalid input. Please enter a number.")
+                new_value = input(f"Enter {key} (example: {example}): ").strip()
+            globals.config['SAP_AI_CORE'][key] = new_value if new_value else (current_value or default)
 
-    # Ensure GENERAL section exists
-    if 'GENERAL' not in globals.config:
-        globals.config['GENERAL'] = {}
-    
-    # Add general section with default provider and model
-    globals.config['GENERAL']['default_provider'] = 'sap_ai_core'
-    globals.config['GENERAL']['default_model'] = default_model
+        os.makedirs(os.path.dirname(globals.config_path), exist_ok=True)
+        with open(globals.config_path, 'w') as configfile:
+            globals.config.write(configfile)
 
-    # Write the configuration
-    with open(globals.config_path, 'w') as configfile:
-        globals.config.write(configfile)
+        globals.config.read(globals.config_path)
+        self._initialize_proxy_client()
 
-    print(f"\nSAP AI Core configuration saved successfully.")
-    print(f"Default model set to: {default_model}")
+        # Get supported models
+        supported_models = self.get_supported_models()
+
+        print("\nSupported models:")
+        for i, model in enumerate(supported_models, 1):
+            print(f"{i}. {model}")
+
+        # Ask user to select a default model
+        while True:
+            try:
+                selection = int(input("\nSelect the number of the model you want to use as default: "))
+                if 1 <= selection <= len(supported_models):
+                    default_model = supported_models[selection - 1]
+                    break
+                else:
+                    print("Invalid selection. Please choose a number from the list.")
+            except ValueError:
+                print("Invalid input. Please enter a number.")
+
+        # Ensure GENERAL section exists
+        if 'GENERAL' not in globals.config:
+            globals.config['GENERAL'] = {}
+        
+        # Add general section with default provider and model
+        globals.config['GENERAL']['default_provider'] = 'sap_ai_core'
+        globals.config['GENERAL']['default_model'] = default_model
+
+        # Write the configuration
+        with open(globals.config_path, 'w') as configfile:
+            globals.config.write(configfile)
+
+        print(f"\nSAP AI Core configuration saved successfully.")
+        print(f"Default model set to: {default_model}")
 
     def _initialize_proxy_client(self):
         if not os.path.exists(globals.config_path):

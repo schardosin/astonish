@@ -38,6 +38,9 @@ state:
   - name: max_rev_create_itinerary
     type: int
     default: 0
+  - name: special_requests
+    type: str
+    default: null
 
 nodes:
   - name: user_interaction
@@ -58,6 +61,7 @@ nodes:
       Travel Dates: {travel_dates}
       Budget: {budget}
       Interests: {interests}
+      Special Requests: {special_requests}
 
       if all the required fields are provided (destination, dates, budget, interests), inform the user a summary of the information collected and that will be used to generate the itinerary.
       Otherwise, ask for the missing information.
@@ -67,6 +71,7 @@ nodes:
       travel_dates: str | None
       budget: str | None
       interests: str | None
+      special_requests: str | None
     user_message:
       - response
 
@@ -82,10 +87,12 @@ nodes:
       Travel Dates: {travel_dates}
       Budget: {budget}
       Interests: {interests}
+      Special Requests: {special_requests}
 
       Please use the available internet search tools to find information about {destination} during {travel_dates}, 
       considering the budget of {budget} and interests in {interests}. 
       Focus on popular attractions, local cuisine, current events, and festivals during the travel dates.
+      Also, consider any special requests: {special_requests}
 
       Compile the most relevant and useful information you find into a comprehensive summary.
     output_model:
@@ -102,6 +109,7 @@ nodes:
       Travel Dates: {travel_dates}
       Budget: {budget}
       Interests: {interests}
+      Special Requests: {special_requests}
       Web Search Results: {websearch_results}
 
     output_model:
@@ -160,6 +168,7 @@ nodes:
       Travel Dates: {travel_dates}
       Budget: {budget}
       Interests: {interests}
+      Special Requests: {special_requests}
       Web Search Results: {websearch_results}
       max_rev_create_itinerary: {max_rev_create_itinerary}
 
@@ -185,6 +194,7 @@ nodes:
       Travel Dates: {travel_dates}
       Budget: {budget}
       Interests: {interests}
+      Special Requests: {special_requests}
       Web Search Results: {websearch_results}
 
       Current Itinerary:
@@ -207,6 +217,36 @@ nodes:
       finalized_itinerary: str
     user_message:
       - finalized_itinerary
+
+  - name: user_itinerary_feedback
+    type: input
+    prompt: "Here's your itinerary. Would you like any modifications or have any special requests? If yes, please provide details. If not, just say 'No'."
+
+  - name: process_special_requests
+    type: llm
+    system: |
+      You are a travel agent processing special requests for a trip itinerary. 
+      Analyze the user's request and determine if any changes or additions are needed to the current itinerary.
+    prompt: |
+      Current itinerary:
+      {itinerary}
+
+      Current special requests:
+      {special_requests}
+
+      New user request:
+      {user_request}
+
+      Please analyze the new user request and determine if it should be added to the special requests.
+      If it should be added, combine it with any existing special requests.
+      If the user said 'No' or didn't provide any new requests, return empty to special_requests field.
+
+      If there is a special request, inform the user in the response field that you will add it to the itinerary.
+    output_model:
+      special_requests: str
+      response: str
+    user_message:
+      - response
 
 flow:
   - from: START
@@ -236,4 +276,12 @@ flow:
       - to: END
         condition: "lambda x: x.get('feedback', '').strip() == ''"
   - from: finalize_itinerary
-    to: END
+    to: user_itinerary_feedback
+  - from: user_itinerary_feedback
+    to: process_special_requests
+  - from: process_special_requests
+    edges:
+      - to: create_itinerary
+        condition: "lambda x: x.get('special_requests', '').strip() != ''"
+      - to: END
+        condition: "lambda x: x.get('special_requests', '').strip() == ''"

@@ -79,6 +79,9 @@ def create_llm_node_function(node_config, mcp_client, use_tools):
     async def node_function(state: dict):
         if 'limit' in node_config and node_config['limit']:
             counter = state[node_config['limit_counter_field']] + 1
+            if counter > node_config['limit']:
+                counter = 1
+
             print_output(f"Processing {node_config['name']} ({counter}/{node_config['limit']})")
         else:
             print_output(f"Processing {node_config['name']}")
@@ -190,13 +193,15 @@ def update_state(state, parsed_output, node_config):
 
     if 'limit_counter_field' in node_config and node_config['limit_counter_field']:
         new_state[node_config['limit_counter_field']] = new_state.get(node_config['limit_counter_field'], 0) + 1
+        if new_state[node_config['limit_counter_field']] > node_config['limit']:
+            new_state[node_config['limit_counter_field']] = 1
 
     return new_state
 
 def print_user_messages(state, node_config):
     user_message_fields = node_config.get('user_message', [])
     for field in user_message_fields:
-        if field in state and state[field] is not None:
+        if field in state and state[field]:
             print_ai(f"{state[field]}")
 
 def print_chat_prompt(chat_prompt, node_config):
@@ -297,6 +302,7 @@ async def run_agent(agent):
         graph = build_graph(config, mcp_client, checkpointer)
         #graph.get_graph().draw_png(GRAPH_OUTPUT_PATH)
 
-        while True:
-            thread = {"configurable": {"thread_id": "1"}}
-            await run_graph(graph, initial_state, thread)
+        thread = {"configurable": {"thread_id": "1"}}
+        await run_graph(graph, initial_state, thread)
+
+        print_ai("Bye! Bye!")

@@ -44,4 +44,4 @@ dependencies = [
 "Homepage" = "https://github.com/schardosin/astonish"
 
 [project.scripts]
-astonish = "astonish.main:main"
+astonish = "astonish.main:run"

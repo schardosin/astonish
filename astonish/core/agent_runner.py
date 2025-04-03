@@ -239,7 +239,14 @@ def print_state(state, node_config):
         print("")
 
 def build_graph(config, mcp_client, checkpointer):
-    builder = StateGraph(TypedDict('AgentState', {item['name']: eval(item['type']) for item in config['state']}))
+    # Create a dictionary to store all unique fields from output_models
+    all_fields = {}
+    for node in config['nodes']:
+        if 'output_model' in node:
+            all_fields.update(node['output_model'])
+
+    # Create TypedDict with all unique fields
+    builder = StateGraph(TypedDict('AgentState', {name: eval(type_) for name, type_ in all_fields.items()}))
 
     for node in config['nodes']:
         builder.add_node(node['name'], create_node_function(node, mcp_client))
@@ -306,7 +313,12 @@ async def run_agent(agent):
     mcp_client = await initialize_mcp_tools()
 
     # Initialize state
-    initial_state = {item['name']: item.get('default', None) for item in config['state']}
+    initial_state = {}
+    for node in config['nodes']:
+        if 'output_model' in node:
+            for field, type_ in node['output_model'].items():
+                if field not in initial_state:
+                    initial_state[field] = None
 
     # Build graph
     async with AsyncSqliteSaver.from_conn_string(":memory:") as checkpointer:

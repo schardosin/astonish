@@ -68,7 +68,11 @@ def create_input_node_function(node_config):
             print_ai(node_config['prompt'])
         user_input = input(f"{Fore.YELLOW}You: {Style.RESET_ALL}")
         new_state = state.copy()
-        new_state['user_request'] = user_input
+        
+        # Get the field name from the output_model
+        output_field = next(iter(node_config['output_model']))
+        new_state[output_field] = user_input
+        
         return new_state
     return node_function
 
@@ -110,7 +114,14 @@ def create_llm_node_function(node_config, mcp_client, use_tools):
                 if use_tools:
                     async with mcp_client as client:
                         tools = client.get_tools()
-                        agent = create_react_agent(llm, tools)
+
+                        # Filter tools based on node_config
+                        if 'tools_selection' in node_config and node_config['tools_selection']:
+                            filtered_tools = [tool for tool in tools if tool.name in node_config['tools_selection']]
+                        else:
+                            filtered_tools = tools
+
+                        agent = create_react_agent(llm, filtered_tools)
                         agent_output = await agent.ainvoke({
                             "messages": [
                                 SystemMessage(content=systemMessage),

@@ -47,6 +47,8 @@ nodes:
     type: input
     prompt: "Welcome to the Travel Planner! Please provide details about your trip (destination, dates, budget, interests)."
     is_initial: true
+    output_model:
+      user_request: str
 
   - name: gather_info
     type: llm

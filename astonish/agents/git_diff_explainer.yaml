@@ -1,0 +1,140 @@
+nodes:
+  - name: get_project_path
+    type: input
+    prompt: "Welcome to the Git Change Analyzer! Please provide the path to your project folder."
+    is_initial: true
+    output_model:
+      project_path: str
+
+  - name: run_git_status
+    type: llm
+    tools: True
+    system: |
+      You are a Git expert. Use the command line to run 'git status' in the specified project folder and analyze the output.
+    prompt: |
+      Project path: {project_path}
+
+      Run "cd <project path> && git status" to check the status of the repository.
+      Please summarize the output, focusing on the modified files and their status.
+      If there are no modified files, inform the user and prepare a farewell message.
+      If there are modified files, list them and ask the user which file they would like to see the changes for.
+
+      Format the content before displaying it to the user.
+    output_model:
+      modified_files: str
+      response: str
+    user_message:
+      - response
+
+  - name: ask_file_selection
+    type: input
+    prompt: "Which file would you like to see the changes for? (Type the file name or 'exit' to quit)"
+    output_model:
+      file_selected: str
+
+  - name: process_file_selection
+    type: llm
+    tools: True
+    system: |
+      You are a Git expert. Based on the user's file selection, run the appropriate git command to show the diff for the selected file.
+    prompt: |
+      Project path: {project_path}
+      Selected file: {file_selected}
+
+      If the user selected a file, run the 'git diff' command for that file.
+      If the file is not found or there's an error, set file_diff to "FILE_NOT_FOUND".
+      If the user typed 'exit', prepare a farewell message.
+      cd <project path> && before running the git command
+    output_model:
+      file_diff: str
+      response: str
+    user_message:
+      - response
+
+  - name: file_not_found
+    type: llm
+    system: |
+      You are a helpful assistant informing the user about an invalid file selection.
+    prompt: |
+      The selected file "{file_selected}" was not found or is not modified.
+      Please inform the user that their selection was invalid and ask them to choose another file or type 'exit' to quit.
+    output_model:
+      response: str
+
+  - name: explain_changes
+    type: llm
+    system: |
+      You are a code review expert. Analyze the git diff output and explain the changes in a clear, concise manner.
+    prompt: |
+      Git diff output:
+      {file_diff}
+
+      Please explain the changes made to this file in a way that's easy for the user to understand.
+    output_model:
+      explained_changes: str
+    user_message:
+      - explained_changes
+
+  - name: ask_save_explanation
+    type: input
+    prompt: "Would you like to save this explanation to a file? (yes/no)"
+    output_model:
+      save_explanation: str
+
+  - name: ask_file_path
+    type: input
+    prompt: "Please provide the path where you'd like to save the explanation:"
+    output_model:
+      explanation_file_path: str
+
+  - name: save_explanation_to_file
+    type: llm
+    tools: True
+    tools_selection:
+      - write_file
+    system: |
+      You are a system assistant capable of saving content to files. Use the provided file path to save the explanation.
+    prompt: |
+      You must use the tool FileWriteOrEdit
+      File path: {explanation_file_path}
+      Content to save:
+      {explained_changes}
+
+      Please save the content to the specified file path using a tool.
+
+      You must use the tool FileWriteOrEdit
+    output_model:
+      response: str
+    user_message:
+      - response
+    print_state: False
+
+flow:
+  - from: START
+    to: get_project_path
+  - from: get_project_path
+    to: run_git_status
+  - from: run_git_status
+    to: ask_file_selection
+  - from: ask_file_selection
+    to: process_file_selection
+  - from: process_file_selection
+    edges:
+      - to: explain_changes
+        condition: "lambda x: x['file_diff'] != 'FILE_NOT_FOUND' and x['file_selected'].lower() != 'exit'"
+      - to: file_not_found
+        condition: "lambda x: x['file_diff'] == 'FILE_NOT_FOUND'"
+      - to: END
+        condition: "lambda x: x['file_selected'].lower() == 'exit'"
+  - from: explain_changes
+    to: ask_save_explanation
+  - from: ask_save_explanation
+    edges:
+      - to: ask_file_path
+        condition: "lambda x: x['save_explanation'].lower() == 'yes'"
+      - to: ask_file_selection
+        condition: "lambda x: x['save_explanation'].lower() != 'yes'"
+  - from: ask_file_path
+    to: save_explanation_to_file
+  - from: save_explanation_to_file
+    to: END

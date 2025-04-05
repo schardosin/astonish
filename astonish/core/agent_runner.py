@@ -1,6 +1,7 @@
 import yaml
 import json
 import astonish.globals as globals
+from astonish.tools.internal_tools import tools
 from astonish.core.llm_manager import LLMManager
 from typing import TypedDict, Union, Optional, get_args, get_origin
 from langgraph.graph import StateGraph, END
@@ -14,6 +15,7 @@ from langchain.globals import set_debug
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.checkpoint.memory import MemorySaver
 # Constants
 GRAPH_OUTPUT_PATH = 'graph_output.png'
 
@@ -55,6 +57,49 @@ def format_prompt(prompt: str, state: dict, node_config: dict):
     state_dict['state'] = state
     format_dict = {**state_dict, **node_config}
     return prompt.format(**format_dict)
+
+from colorama import Fore, Style
+
+from colorama import Fore, Style
+
+def request_tool_execution(tool):
+    """
+    Prompt the user for approval before executing a tool command.
+    Accepts only 'yes', 'no', 'y', or 'n' as valid inputs (case-insensitive).
+    Keeps prompting until a valid response is received.
+
+    Parameters:
+    - tool (dict): Dictionary containing tool execution details.
+
+    Returns:
+    - bool: True if the user approves, False otherwise.
+    """
+    try:
+        tool_name = tool['name']
+        args = tool['args']
+
+        prompt_message = f"\nTool Execution Request:\n"
+        prompt_message += f"Tool Name: {tool_name}\n"
+        prompt_message += "Arguments:\n"
+        
+        for key, value in args.items():
+            prompt_message += f"  {key}: {value}\n"
+        
+        prompt_message += "Do you approve this execution? (yes/no): "
+
+        while True:
+            user_input = input(f"{Fore.YELLOW}{prompt_message}{Style.RESET_ALL}").strip().lower()
+            if user_input in ['yes', 'y']:
+                return True
+            elif user_input in ['no', 'n']:
+                return False
+            else:
+                print(f"{Fore.RED}Invalid input. Please enter 'yes' or 'no'.{Style.RESET_ALL}")
+
+    except KeyError as e:
+        print(f"{Fore.RED}Error: Missing required field in tool object: {e}{Style.RESET_ALL}")
+
+    return False
 
 def create_node_function(node_config, mcp_client):
     if node_config['type'] == 'input':
@@ -113,22 +158,51 @@ def create_llm_node_function(node_config, mcp_client, use_tools):
             try:
                 if use_tools:
                     async with mcp_client as client:
-                        tools = client.get_tools()
+                        all_tools = client.get_tools() + tools
 
                         # Filter tools based on node_config
                         if 'tools_selection' in node_config and node_config['tools_selection']:
-                            filtered_tools = [tool for tool in tools if tool.name in node_config['tools_selection']]
+                            filtered_tools = [tool for tool in all_tools if tool.name in node_config['tools_selection']]
                         else:
-                            filtered_tools = tools
+                            filtered_tools = all_tools
 
-                        agent = create_react_agent(llm, filtered_tools)
-                        agent_output = await agent.ainvoke({
-                            "messages": [
-                                SystemMessage(content=systemMessage),
-                                humanMessage
-                            ]
-                        })
-                        parsed_output = parser.parse(agent_output['messages'][-1].content)
+                        memory = MemorySaver()
+                        agent = create_react_agent(llm, filtered_tools, interrupt_before=["tools"], checkpointer=memory)
+
+                        first_run = True  # Flag to track if it's the first execution
+                        config_tools = {"configurable": {"thread_id": "45"}}
+                        processed_messages = 0
+                        completion_flag = False
+                        while True:
+                            input_data = {
+                                "messages": [
+                                    SystemMessage(content=systemMessage),
+                                    humanMessage
+                                ]
+                            } if first_run else None  # Empty input for subsequent runs
+
+                            first_run = False  # Update flag after first execution
+
+                            async for s in agent.astream(input_data, config_tools, stream_mode="values"):
+                                if processed_messages > 0:
+                                    processed_messages -= 1
+                                    continue
+
+                                message = s["messages"][-1]
+                                tool_calls = getattr(message, "tool_calls", None)
+                                if tool_calls:
+                                    approve = request_tool_execution(tool_calls[0])
+                                    if approve:
+                                        processed_messages += 1
+                                        break
+                                    else:
+                                        continue
+                            else:
+                                completion_flag = True
+                            
+                            if completion_flag:
+                                parsed_output = parser.parse(message.content)
+                                break
                 else:
                     agent = create_react_agent(llm, [])
                     agent_output = await agent.ainvoke({
@@ -238,26 +312,26 @@ def print_state(state, node_config):
         print_dict(state, key_color=Fore.YELLOW, value_color=Fore.GREEN)
         print("")
 
-def build_graph(config, mcp_client, checkpointer):
+def build_graph(node_config, mcp_client, checkpointer):
     # Create a dictionary to store all unique fields from output_models
     all_fields = {}
-    for node in config['nodes']:
+    for node in node_config['nodes']:
         if 'output_model' in node:
             all_fields.update(node['output_model'])
 
     # Create TypedDict with all unique fields
     builder = StateGraph(TypedDict('AgentState', {name: eval(type_) for name, type_ in all_fields.items()}))
 
-    for node in config['nodes']:
+    for node in node_config['nodes']:
         builder.add_node(node['name'], create_node_function(node, mcp_client))
 
-    for edge in config['flow']:
+    for edge in node_config['flow']:
         if edge['from'] == 'START':
             builder.set_entry_point(edge['to'])
         elif 'edges' in edge:
             conditions = {}
             for sub_edge in edge['edges']:
-                source_node_config = next(node for node in config['nodes'] if node['name'] == edge['from'])
+                source_node_config = next(node for node in node_config['nodes'] if node['name'] == edge['from'])
                 condition = create_condition_function(sub_edge['condition'], source_node_config)
                 conditions[END if sub_edge['to'] == 'END' else sub_edge['to']] = condition
 
@@ -322,10 +396,10 @@ async def run_agent(agent):
 
     # Build graph
     async with AsyncSqliteSaver.from_conn_string(":memory:") as checkpointer:
+        thread = {"configurable": {"thread_id": "1"}}
         graph = build_graph(config, mcp_client, checkpointer)
         #graph.get_graph().draw_png(GRAPH_OUTPUT_PATH)
 
-        thread = {"configurable": {"thread_id": "1"}}
         await run_graph(graph, initial_state, thread)
 
         print_ai("Bye! Bye!")

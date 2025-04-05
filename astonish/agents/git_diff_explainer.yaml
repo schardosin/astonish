@@ -1,20 +1,11 @@
 nodes:
-  - name: get_project_path
-    type: input
-    prompt: "Welcome to the Git Change Analyzer! Please provide the path to your project folder."
-    is_initial: true
-    output_model:
-      project_path: str
-
   - name: run_git_status
     type: llm
     tools: True
     system: |
       You are a Git expert. Use the command line to run 'git status' in the specified project folder and analyze the output.
     prompt: |
-      Project path: {project_path}
-
-      Run "cd <project path> && git status" to check the status of the repository.
+      Run "git status" to check the status of the repository.
       Please summarize the output, focusing on the modified files and their status.
       If there are no modified files, inform the user and prepare a farewell message.
       If there are modified files, list them and ask the user which file they would like to see the changes for.
@@ -38,13 +29,11 @@ nodes:
     system: |
       You are a Git expert. Based on the user's file selection, run the appropriate git command to show the diff for the selected file.
     prompt: |
-      Project path: {project_path}
       Selected file: {file_selected}
 
       If the user selected a file, run the 'git diff' command for that file.
       If the file is not found or there's an error, set file_diff to "FILE_NOT_FOUND".
       If the user typed 'exit', prepare a farewell message.
-      cd <project path> && before running the git command
     output_model:
       file_diff: str
       response: str
@@ -111,8 +100,6 @@ nodes:
 
 flow:
   - from: START
-    to: get_project_path
-  - from: get_project_path
     to: run_git_status
   - from: run_git_status
     to: ask_file_selection
@@ -132,7 +119,7 @@ flow:
     edges:
       - to: ask_file_path
         condition: "lambda x: x['save_explanation'].lower() == 'yes'"
-      - to: ask_file_selection
+      - to: END
         condition: "lambda x: x['save_explanation'].lower() != 'yes'"
   - from: ask_file_path
     to: save_explanation_to_file

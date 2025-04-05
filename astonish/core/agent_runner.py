@@ -1,6 +1,7 @@
 import yaml
 import json
 import astonish.globals as globals
+from importlib import resources
 from astonish.tools.internal_tools import tools
 from astonish.core.llm_manager import LLMManager
 from typing import TypedDict, Union, Optional, get_args, get_origin
@@ -12,7 +13,6 @@ from langchain.prompts import ChatPromptTemplate
 from pydantic import Field, ValidationError, create_model
 from langchain.schema import OutputParserException
 from langchain.globals import set_debug
-from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.checkpoint.memory import MemorySaver
@@ -41,16 +41,10 @@ def print_dict(dictionary, key_color=Fore.MAGENTA, value_color=Fore.CYAN):
     for key, value in dictionary.items():
         print(f"{key_color}{key}: {Style.RESET_ALL}{value_color}{value}{Style.RESET_ALL}")
 
-def load_agents(path):
-    with open('astonish/agents/' + path + '.yaml', 'r') as file:
-        return yaml.safe_load(file)
-
-async def initialize_mcp_tools():
-    with open('mcp_config.json', 'r') as config_file:
-        mcp_config = json.load(config_file)
-    
-    mcp_client = MultiServerMCPClient(mcp_config['mcpServers'])
-    return mcp_client
+def load_agents(agent_name):
+    with resources.path('astonish.agents', f"{agent_name}.yaml") as agent_path:
+        with open(agent_path, 'r') as file:
+            return yaml.safe_load(file)
 
 def format_prompt(prompt: str, state: dict, node_config: dict):
     state_dict = dict(state)
@@ -384,7 +378,7 @@ async def run_agent(agent):
     config = load_agents(agent)
 
     # Initialize MCP tools
-    mcp_client = await initialize_mcp_tools()
+    mcp_client = await globals.initialize_mcp_tools()
 
     # Initialize state
     initial_state = {}

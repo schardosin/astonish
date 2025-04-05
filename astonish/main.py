@@ -11,6 +11,7 @@ async def main(args=None):
     # Set up logger based on verbose flag
     globals.setup_logger(verbose=args.verbose)
     globals.load_config()
+    globals.load_mcp_config()
 
     if args.command == "setup":
         if args.type == "provider":

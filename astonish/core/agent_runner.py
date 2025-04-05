@@ -312,6 +312,8 @@ def build_graph(node_config, mcp_client, checkpointer):
     for node in node_config['nodes']:
         if 'output_model' in node:
             all_fields.update(node['output_model'])
+        if 'limit_counter_field' in node:
+            all_fields[node['limit_counter_field']] = 'int'
 
     # Create TypedDict with all unique fields
     builder = StateGraph(TypedDict('AgentState', {name: eval(type_) for name, type_ in all_fields.items()}))
@@ -387,6 +389,12 @@ async def run_agent(agent):
             for field, type_ in node['output_model'].items():
                 if field not in initial_state:
                     initial_state[field] = None
+        
+        # Add initialization for limit_counter_field
+        if 'limit_counter_field' in node:
+            limit_counter_field = node['limit_counter_field']
+            if limit_counter_field not in initial_state:
+                initial_state[limit_counter_field] = 0  # Initialize to 0
 
     # Build graph
     async with AsyncSqliteSaver.from_conn_string(":memory:") as checkpointer:

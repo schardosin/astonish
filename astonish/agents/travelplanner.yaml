@@ -219,10 +219,13 @@ nodes:
       finalized_itinerary: str
     user_message:
       - finalized_itinerary
+    print_state: False
 
   - name: user_itinerary_feedback
     type: input
     prompt: "Here's your itinerary. Would you like any modifications or have any special requests? If yes, please provide details. If not, just say 'No'."
+    output_model:
+      user_feedback: str
 
   - name: process_special_requests
     type: llm
@@ -234,7 +237,7 @@ nodes:
       {itinerary}
 
       Current special requests:
-      {special_requests}
+      {user_feedback}
 
       New user request:
       {user_request}
@@ -280,7 +283,11 @@ flow:
   - from: finalize_itinerary
     to: user_itinerary_feedback
   - from: user_itinerary_feedback
-    to: process_special_requests
+    edges:
+      - to: END
+        condition: "lambda x: x.get('user_feedback', '').strip() == 'No'"
+      - to: process_special_requests
+        condition: "lambda x: x.get('user_feedback', '').strip() != 'No'"
   - from: process_special_requests
     edges:
       - to: create_itinerary

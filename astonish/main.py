@@ -32,6 +32,13 @@ async def main(args=None):
     elif args.command == "flow":
         globals.logger.info(f"Printing flow for task: {args.task}")
         print_flow(args.task)
+    elif args.command == "tools":
+        if args.tools_command == "list":
+            globals.logger.info("Listing available tools...")
+            await list_tools()
+        else:
+            globals.logger.error(f"Unknown tools command: {args.tools_command}")
+            print(f"Unknown tools command: {args.tools_command}")
     else:
         globals.logger.error(f"Unknown command: {args.command}")
         print(f"Unknown command: {args.command}")
@@ -157,12 +164,45 @@ def parse_arguments():
     flow_parser = subparsers.add_parser("flow", help="Print the flow of a specific agentic workflow")
     flow_parser.add_argument("task", help="Name of the agentic workflow to print flow for")
 
+    # Tools command
+    tools_parser = subparsers.add_parser("tools", help="Manage tools")
+    tools_subparsers = tools_parser.add_subparsers(dest="tools_command", help="Tools management commands")
+    
+    # Tools list command
+    tools_list_parser = tools_subparsers.add_parser("list", help="List available tools")
+
     args = parser.parse_args()
     if args.command is None:
         parser.print_help()
         exit(1)
 
     return args
+
+async def list_tools():
+    from astonish.tools.internal_tools import tools
+    
+    print("Initializing MCP tools...")
+    mcp_client = await globals.initialize_mcp_tools()
+    
+    if mcp_client is None:
+        print("Failed to initialize MCP tools. Please check your configuration.")
+        print(f"MCP Config: {globals.mcp_config}")
+        return
+
+    try:
+        print("\nFetching tools...")
+        async with mcp_client as client:
+            all_tools = client.get_tools() + tools
+        
+        if not all_tools:
+            print("No tools available.")
+        else:
+            print("Available tools:")
+            for tool in all_tools:
+                print(f"  - {tool.name}: {tool.description}")
+    except Exception as e:
+        globals.logger.error(f"Error in list_tools: {str(e)}")
+        print(f"An error occurred in list_tools: {str(e)}")
 
 def run():
     asyncio.run(main())

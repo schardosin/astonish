@@ -1,8 +1,6 @@
 import configparser, os, appdirs
 import logging
-import json
 from logging.handlers import RotatingFileHandler
-from langchain_mcp_adapters.client import MultiServerMCPClient
 
 CONFIG_FILE = "config.ini"
 LOG_FILE = "astonish.log"
@@ -49,6 +47,8 @@ def load_config():
         config.read(config_path)
 
 def load_mcp_config():
+    import json
+
     global mcp_config
     # Load existing MCP configuration if it exists
     if os.path.exists(mcp_config_path):
@@ -59,10 +59,24 @@ def load_mcp_config():
         mcp_config = None
 
 async def initialize_mcp_tools():
+    from langchain_mcp_adapters.client import MultiServerMCPClient
+
     global mcp_config
     if mcp_config is None:
         logger.error("MCP config is not loaded. Cannot initialize MCP tools.")
         return None
     
+    logger.info("Initializing MCP client...")
     mcp_client = MultiServerMCPClient(mcp_config['mcpServers'])
+    
+    logger.info("Connecting to MCP servers...")
+    for server_name, server_config in mcp_config['mcpServers'].items():
+        try:
+            logger.info(f"Connecting to server: {server_name}")
+            await mcp_client.connect_to_server(server_name, server_config)
+            logger.info(f"Successfully connected to server: {server_name}")
+        except Exception as e:
+            logger.error(f"Failed to connect to server {server_name}: {str(e)}")
+    
+    logger.info("MCP client initialization complete")
     return mcp_client

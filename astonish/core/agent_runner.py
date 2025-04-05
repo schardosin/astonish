@@ -16,8 +16,6 @@ from langchain.globals import set_debug
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.checkpoint.memory import MemorySaver
-# Constants
-GRAPH_OUTPUT_PATH = 'graph_output.png'
 
 def setup_colorama():
     colorama_init(autoreset=True)
@@ -400,7 +398,6 @@ async def run_agent(agent):
     async with AsyncSqliteSaver.from_conn_string(":memory:") as checkpointer:
         thread = {"configurable": {"thread_id": "1"}}
         graph = build_graph(config, mcp_client, checkpointer)
-        #graph.get_graph().draw_png(GRAPH_OUTPUT_PATH)
 
         await run_graph(graph, initial_state, thread)
 

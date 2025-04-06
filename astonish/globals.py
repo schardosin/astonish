@@ -50,13 +50,33 @@ def load_mcp_config():
     import json
 
     global mcp_config
+    default_config = {
+        "mcpServers": {}
+    }
+
     # Load existing MCP configuration if it exists
     if os.path.exists(mcp_config_path):
-        with open(mcp_config_path, 'r') as mcp_config_file:
-            mcp_config = json.load(mcp_config_file)
+        try:
+            with open(mcp_config_path, 'r') as mcp_config_file:
+                loaded_config = json.load(mcp_config_file)
+            
+            # Check if 'mcpServers' key exists in the loaded config
+            if "mcpServers" not in loaded_config:
+                logger.warning(f"'mcpServers' key not found in {mcp_config_path}. Using default configuration.")
+                mcp_config = default_config
+            else:
+                mcp_config = loaded_config
+        except json.JSONDecodeError:
+            logger.warning(f"Error decoding JSON from {mcp_config_path}. Using default configuration.")
+            mcp_config = default_config
+        except Exception as e:
+            logger.warning(f"Error reading {mcp_config_path}: {str(e)}. Using default configuration.")
+            mcp_config = default_config
     else:
-        logger.warning(f"MCP config file not found at {mcp_config_path}")
-        mcp_config = None
+        logger.warning(f"MCP config file not found at {mcp_config_path}. Using default configuration.")
+        mcp_config = default_config
+
+    return mcp_config
 
 async def initialize_mcp_tools():
     from langchain_mcp_adapters.client import MultiServerMCPClient

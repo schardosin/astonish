@@ -33,8 +33,8 @@ def write_file(file_path: str, content: str) -> str:
         file.write(content)
     return f"Content successfully written to {file_path}"
 
-@tool("execute_command", args_schema=ExecuteCommandInput)
-def execute_command(command: str) -> Dict[str, str]:
+@tool("shell_command", args_schema=ExecuteCommandInput)
+def shell_command(command: str) -> Dict[str, str]:
     """
     Execute a shell command and return its output.
     """
@@ -42,4 +42,4 @@ def execute_command(command: str) -> Dict[str, str]:
     return {"stdout": result.stdout, "stderr": result.stderr}
 
 # Export the list of tools
-tools = [read_file, write_file, execute_command]
+tools = [read_file, write_file, shell_command]

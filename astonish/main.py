@@ -36,6 +36,11 @@ async def main(args=None):
         if args.tools_command == "list":
             globals.logger.info("Listing available tools...")
             await list_tools()
+        elif args.tools_command == "edit":
+            globals.logger.info("Editing MCP configuration...")
+            from astonish.tools.mcp_config_editor import edit_mcp_config
+            result = edit_mcp_config()
+            print(result)
         else:
             globals.logger.error(f"Unknown tools command: {args.tools_command}")
             print(f"Unknown tools command: {args.tools_command}")
@@ -170,6 +175,9 @@ def parse_arguments():
     
     # Tools list command
     tools_list_parser = tools_subparsers.add_parser("list", help="List available tools")
+    
+    # Tools edit command
+    tools_edit_parser = tools_subparsers.add_parser("edit", help="Edit MCP configuration")
 
     args = parser.parse_args()
     if args.command is None:

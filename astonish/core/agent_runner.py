@@ -102,13 +102,17 @@ def create_node_function(node_config, mcp_client):
 def create_input_node_function(node_config):
     def node_function(state: dict):
         if not (node_config.get('is_initial', False) and state.get('user_request') is not None):
-            print_ai(node_config['prompt'])
+            formatted_prompt = format_prompt(node_config['prompt'], state, node_config)
+
+            print_ai(formatted_prompt)
+
         user_input = input(f"{Fore.YELLOW}You: {Style.RESET_ALL}")
         new_state = state.copy()
         
         # Get the field name from the output_model
         output_field = next(iter(node_config['output_model']))
         new_state[output_field] = user_input
+        print_user_messages(new_state, node_config)
         
         return new_state
     return node_function
@@ -280,6 +284,8 @@ def print_user_messages(state, node_config):
     for field in user_message_fields:
         if field in state and state[field]:
             print_ai(f"{state[field]}")
+        else:
+            print_ai(field)
 
 def print_chat_prompt(chat_prompt, node_config):
     print_prompt = node_config.get('print_prompt', False)

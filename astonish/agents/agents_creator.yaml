@@ -1,0 +1,399 @@
+nodes:
+  - name: get_overall_idea
+    type: input
+    prompt: |
+      Welcome to the Agentic Flow Creator! I'm here to help you design a new agentic flow.
+      We are going to create the initial flow for your agentic flow, which you customize later.
+      Please provide an overall description of the flow you want to create. What's the main goal and what should it do?
+
+    output_model:
+      overall_idea: str
+    user_message:
+      - "Thank you for sharing your idea! Let's now check which tools you have currently available."
+
+  - name: fetch_available_tools
+    type: llm
+    tools: True
+    tools_selection:
+      - shell_command
+    system: |
+      You are a system assistant tasked with fetching the list of available tools.
+    prompt: |
+      Use the shell_command tool to run the following command:
+      astonish tools list
+
+      Parse the output and create a structured list of available tools with their descriptions.
+    output_model:
+      available_tools: list
+    user_message:
+      - "Available tools fetched successfully."
+
+  - name: process_idea
+    type: llm
+    system: |
+      You are an expert in designing agentic flows. Analyze the user's overall idea and create a base flow structure.
+    prompt: |
+      User's overall idea:
+      {overall_idea}
+
+      Available tools:
+      {available_tools}
+
+      Based on this idea and the available tools, please:
+      1. Create a base flow structure with necessary nodes and their purposes.
+      2. Identify which of the available tools might be required for this flow.
+      3. Highlight any potential challenges or areas that need further clarification.
+      4. If any required functionality is not available in the current tools, note it as a potential limitation.
+      5. Remember that input from the user can be collected directly from the application, so you don't need to require a tool for that.
+
+      Present this information in a clear, structured format.
+      Export the base_flow if line breaks between the items using \n
+
+      If the tools are not sufficient to implement the flow, please indicate that the user should provide the specific tools throug MCP servers to be able to create the agents.
+
+      add the the message for the user, detailing the base flow, required tools, challenges, and limitations, in the response message
+      Structure the message to the user as follows:
+
+      I've created a base flow structure based on your idea. Here it is, along with required tools, potential challenges, and limitations:
+
+      Base Flow:
+      {base_flow}
+
+      Required Tools:
+      {required_tools}
+
+      Potential Challenges:
+      {challenges}
+
+      Limitations:
+      {limitations}
+
+      For any item that has a list (eg.: ['item1','item2']), please break in multiple lines and put * before each item.
+      Do not use tools for analysis, format, or any other tasks that can be done by the LLM itself.
+    output_model:
+      base_flow: list
+      required_tools: list
+      challenges: str
+      limitations: str
+      have_tools: bool
+      response: str
+    user_message:
+      - response
+    print_state: False
+
+  - name: get_user_feedback
+    type: input
+    prompt: |
+      Do you have any feedback or changes you'd like to make? If you're satisfied, type 'CONTINUE'. Otherwise, provide your feedback:
+    output_model:
+      user_feedback: str
+
+  - name: refine_flow
+    type: llm
+    system: |
+      You are an agentic flow architect. Refine the flow based on user feedback.
+    prompt: |
+      Current base flow:
+      {base_flow}
+
+      User feedback:
+      {user_feedback}
+
+      Available tools:
+      {available_tools}
+
+      Please refine the flow, addressing the user's feedback. If the user typed asked to continue, keep the current flow as is.
+      Ensure that any changes still work within the constraints of the available tools.
+    output_model:
+      refined_flow: str
+      continue_flag: bool
+
+  - name: generate_yaml
+    type: llm
+    system: |
+      You are an expert in creating agentic flow YAML files. Follow the provided example and rules strictly.
+    prompt: |
+      Refined flow:
+      {refined_flow}
+
+      Available tools:
+      {available_tools}
+
+      Generate a complete YAML file for this agentic flow, following this specific format and rules:
+
+      Rules:
+      1. Node types can only be 'input' or 'llm'.
+      2. 'input' nodes have limited fields: name, type, prompt, and output_model.
+      3. 'llm' nodes can have all fields: name, type, system, prompt, output_model, user_message, tools, and tools_selection.
+      4. 'tools' field should be a boolean (True/False).
+      5. 'tools_selection' should only be included if 'tools' is True.
+      6. 'tools_selection' should only contain tools from the available_tools list and should only contain the tool name, not the description.
+      7. 'user_message' should only be included if we need to display something to the user, and should only contain fields defined in the output_model.
+      8. Ensure all node names are unique and descriptive.
+      9. The flow must cover all possible paths through the nodes, including conditional branches.
+      10. Conditions must be properly formatted as lambda functions.
+      11. Only use tools that are available in the {available_tools} list.
+      12. Ensure all variables used in prompts are defined in the output_model of a previous node.
+      13. Be careful with the content of the user_message, as it should only contain the fields defined in the output_model of the node.
+      14. When adding a variable to the user_message, we should ensure that we request in the prompt for the content to be displayed to be well-formatted.
+      15. Pay attention to not provided duplicate content to the user, as it can cause confusion.
+      16. Make sure all variables used in prompts are properly defined in the output_model of previous nodes.
+      17. Make sure variables in a node prompot are defined in the output_model of previous nodes.
+      18. Make sure the node use the required variables in the prompt
+
+      Example YAML structure (note: variables in this example are prefixed with 'example_' to distinguish them from actual state variables):
+
+      ```yaml
+      nodes:
+        - name: get_user_input
+          type: input
+          prompt: |
+            Please enter your question or type 'exit' to quit:
+          output_model:
+            example_user_input: str
+
+        - name: analyze_input
+          type: llm
+          system: |
+            You are an AI assistant analyzing user input.
+          prompt: |
+            Analyze the following user input: {{example_user_input}}
+            Determine if it's a question or an exit command.
+          output_model:
+            example_is_question: bool
+            example_input_type: str
+          
+        - name: process_question
+          type: llm
+          system: |
+            You are an AI assistant answering user questions.
+          prompt: |
+            User question: {{example_user_input}}
+            Please provide a detailed answer to the user's question.
+          output_model:
+            example_answer: str
+          user_message:
+            - example_answer
+          tools: True
+          tools_selection:
+            - web_search
+            - knowledge_base
+
+        - name: farewell
+          type: llm
+          system: |
+            You are a polite AI assistant saying goodbye.
+          prompt: |
+            Generate a polite farewell message for the user.
+          output_model:
+            example_farewell_message: str
+          user_message:
+            - example_farewell_message
+
+      flow:
+        - from: START
+          to: get_user_input
+        - from: get_user_input
+          to: analyze_input
+        - from: analyze_input
+          edges:
+            - to: process_question
+              condition: "lambda x: x['example_is_question']"
+            - to: farewell
+              condition: "lambda x: not x['example_is_question']"
+        - from: process_question
+          to: get_user_input
+        - from: farewell
+          to: END
+      ```
+
+      Now, generate the complete YAML for the agentic flow based on the refined flow structure we've discussed, following the example and rules provided. Make sure to include appropriate conditional flows, only use user_message when necessary, and ensure all variables used in prompts are properly defined in previous nodes' output_models.
+
+      After generating the YAML, show the content to the user.
+
+    output_model:
+      flow_yaml: str
+      save_confirmation: str
+    user_message:
+      - flow_yaml
+    print_state: False
+
+  - name: get_user_feedback_yaml
+    type: input
+    prompt: |
+      Do you have any feedback or changes you'd like to make? If you're satisfied, type 'CONTINUE'. Otherwise, provide your feedback:
+    output_model:
+      user_feedback_yaml: str
+
+  - name: refine_yaml
+    type: llm
+    system: |
+      You are an agentic flow architect. Refine the yaml flow based on user feedback.
+    prompt: |
+      Current yaml flow:
+      {refined_flow}
+
+      User feedback:
+      {user_feedback_yaml}
+
+      Available tools:
+      {available_tools}
+
+      Please refine the flow, addressing the user's feedback. If the user asked to continue, keep the current yaml flow as is.
+      Ensure that any changes still work within the constraints of the available tools.
+    output_model:
+      refined_flow: str
+      continue_yaml_flag: bool
+
+  - name: save_yaml
+    type: llm
+    tools: True
+    tools_selection:
+      - write_file
+    system: |
+      You are an expert in creating and saving files to disk. Follow the provided example and rules strictly.
+    prompt: |
+      flow_yaml:
+      {flow_yaml}
+
+      Save the content of the flow_yaml to disk using write_file tool, saving the content to:
+      /home/schardosin/projects/astonish/astonish/agents/new_flow.yaml
+
+      Confirm once the file has been saved.
+    output_model:
+      flow_yaml: str
+      save_confirmation: str
+    user_message:
+      - save_confirmation
+    print_state: False
+
+  - name: validate_flow
+    type: llm
+    tools: True
+    tools_selection:
+      - shell_command
+    system: |
+      You are a system tester for agentic flows. Run the validation command and interpret the results.
+    prompt: |
+      Refined flow:
+      {refined_flow}
+
+      The flow YAML has been saved to:
+      /home/schardosin/projects/astonish/astonish/agents/new_flow.yaml
+
+      Use the shell_command tool to run the following command:
+      astonish flow new_flow
+
+      Analyze the output and determine if there are any errors or warnings. If there are issues, summarize them clearly.
+      Format the content before displaying it to the user.
+
+      Verify that all the requirements in the Refined flow were met and that the flow is valid.
+      Store the shell command output in the shell_result variable.
+    output_model:
+      validation_result: str
+      has_errors: bool
+      shell_result: str
+    user_message:
+      - shell_result
+      - validation_result
+
+  - name: fix_errors
+    type: llm
+    tools: True
+    tools_selection:
+      - read_file
+      - write_file
+    system: |
+      You are an agentic flow debugger. Fix any errors found during validation.
+    prompt: |
+      Validation results:
+      {validation_result}
+
+      Available tools:
+      {available_tools}
+
+      Use the FileReadOrEdit tool to read the current flow YAML from:
+      /home/schardosin/projects/astonish/astonish/agents/new_flow.yaml
+
+      Please fix any errors found during validation. If no errors were found, return the current YAML unchanged.
+      Ensure that any fixes still use only the available tools.
+
+      After making any necessary changes, use the FileWriteOrEdit tool to save the updated YAML back to the same file.
+    output_model:
+      fixed_yaml: str
+      save_confirmation: str
+    user_message:
+      - save_confirmation
+
+  - name: show_final_flow
+    type: llm
+    system: |
+      You are a helpful assistant presenting the final agentic flow to the user.
+    prompt: |
+      Use the FileReadOrEdit tool to read the final flow YAML from:
+      /home/schardosin/projects/astonish/astonish/agents/new_flow.yaml
+
+      Please present a summary of the final flow to the user, highlighting its key components and functionality.
+      Also mention which of the available tools are used in this flow.
+    output_model:
+      flow_summary: str
+    user_message:
+      - flow_summary
+
+  - name: get_final_approval
+    type: input
+    prompt: |
+      This is the final version of your agentic flow. Do you approve saving this flow? (yes/no)
+    output_model:
+      final_approval: bool
+
+flow:
+  - from: START
+    to: get_overall_idea
+  - from: get_overall_idea
+    to: fetch_available_tools
+  - from: fetch_available_tools
+    to: process_idea
+  - from: process_idea
+    edges:
+      - to: get_user_feedback
+        condition: "lambda x: x['have_tools']"
+      - to: END
+        condition: "lambda x: not x['have_tools']"
+  - from: get_user_feedback
+    to: refine_flow
+  - from: refine_flow
+    edges:
+      - to: get_user_feedback_yaml
+        condition: "lambda x: not x['continue_flag']"
+      - to: generate_yaml
+        condition: "lambda x: x['continue_flag']"
+  - from: generate_yaml
+    to: get_user_feedback_yaml
+  - from: get_user_feedback_yaml
+    to: refine_yaml
+  - from: refine_yaml
+    edges:
+      - to: generate_yaml
+        condition: "lambda x: not x['continue_yaml_flag']"
+      - to: save_yaml
+        condition: "lambda x: x['continue_yaml_flag']"
+  - from: validate_flow
+    edges:
+      - to: fix_errors
+        condition: "lambda x: x['has_errors']"
+      - to: show_final_flow
+        condition: "lambda x: not x['has_errors']"
+
+  - from: fix_errors
+    to: validate_flow
+  - from: show_final_flow
+    to: get_final_approval
+  - from: get_final_approval
+    edges:
+      - to: save_yaml
+        condition: "lambda x: x['final_approval']"
+      - to: get_user_feedback_yaml
+        condition: "lambda x: not x['final_approval']"
+  - from: save_yaml
+    to: END

@@ -241,6 +241,7 @@ nodes:
 
       Please refine the flow, addressing the user's feedback. If the user asked to continue, keep the current yaml flow as is.
       Ensure that any changes still work within the constraints of the available tools.
+      Only change what is necessary to address the user's feedback, nothing else
     output_model:
       refined_flow: str
       continue_yaml_flag: bool
@@ -250,17 +251,22 @@ nodes:
     tools: True
     tools_selection:
       - write_file
+      - shell_command
     system: |
       You are an expert in creating and saving files to disk. Follow the provided example and rules strictly.
     prompt: |
+      Run following command with the shell_command tool to get the path to the user config directory:
+      python -c "import appdirs; print(appdirs.user_config_dir('astonish'))"
+
       flow_yaml:
       {flow_yaml}
 
-      Save the content of the flow_yaml to disk using write_file tool, saving the content to:
-      /home/schardosin/projects/astonish/astonish/agents/new_flow.yaml
+      Save the content of the flow_yaml to disk using write_file tool in the config directory.
+      The file name should be at 'agents/new_flow.yaml' inside the config_dir.
 
       Confirm once the file has been saved.
     output_model:
+      config_dir: str
       flow_yaml: str
       save_confirmation: str
     user_message:

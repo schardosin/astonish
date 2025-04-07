@@ -1,5 +1,12 @@
 import yaml
 import json
+import os
+import appdirs
+import astonish.globals as globals
+from importlib import resources
+
+import yaml
+import json
 import astonish.globals as globals
 from importlib import resources
 from astonish.tools.internal_tools import tools
@@ -40,9 +47,20 @@ def print_dict(dictionary, key_color=Fore.MAGENTA, value_color=Fore.CYAN):
         print(f"{key_color}{key}: {Style.RESET_ALL}{value_color}{value}{Style.RESET_ALL}")
 
 def load_agents(agent_name):
-    with resources.path('astonish.agents', f"{agent_name}.yaml") as agent_path:
-        with open(agent_path, 'r') as file:
-            return yaml.safe_load(file)
+    # Try to load from astonish.agents first
+    try:
+        with resources.path('astonish.agents', f"{agent_name}.yaml") as agent_path:
+            with open(agent_path, 'r') as file:
+                return yaml.safe_load(file)
+    except FileNotFoundError:
+        # If not found, try to load from config_path/agents
+        config_dir = appdirs.user_config_dir("astonish")
+        config_agents_path = os.path.join(config_dir, "agents", f"{agent_name}.yaml")
+        if os.path.exists(config_agents_path):
+            with open(config_agents_path, 'r') as file:
+                return yaml.safe_load(file)
+        else:
+            raise FileNotFoundError(f"Agent {agent_name} not found in astonish.agents or {config_agents_path}")
 
 def format_prompt(prompt: str, state: dict, node_config: dict):
     state_dict = dict(state)

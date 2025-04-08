@@ -162,6 +162,9 @@ def parse_arguments():
     if args.command is None:
         parser.print_help()
         exit(1)
+    elif args.command == "agents" and args.agents_command is None:
+        agents_parser.print_help()
+        exit(1)
 
     return args
 

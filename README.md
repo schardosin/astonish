@@ -1,22 +1,53 @@
 # Astonish AI Companion
 
-Astonish is a powerful, low-code AI companion tool that allows you to create and run agentic workflows, manage AI providers, and extend capabilities through the Model Context Protocol (MCP). It provides a flexible, YAML-based framework for configuring and executing AI-powered tasks without requiring extensive coding knowledge.
+Astonish is a low-code AI companion that empowers you to create and run sophisticated agentic workflows with unprecedented ease. By leveraging a flexible, YAML-based framework, Astonish allows you to configure and execute AI-powered tasks without extensive coding knowledge, democratizing the world of AI agent creation.
 
-## Features
+## Unleash the Power of AI in Your Workflow
 
-- Create and run customizable agentic workflows using a low-code, YAML-based approach
-- Create new agents using an AI-powered agent creator
-- Configure and manage multiple AI providers
-- Extend capabilities through Model Context Protocol (MCP) support
-- Integrate and use various tools within workflows, including embedded and custom tools
-- Extensible architecture for adding new providers and tools
-- Logging and configuration management
+Imagine having the ability to seamlessly integrate your favorite command-line tools—be it git, jq, cat, or any other—into an AI-driven workflow. Astonish turns this vision into reality, enabling you to extract information, process data, and perform actions with the combined power of AI and your trusted tools.
+
+Here's how Astonish revolutionizes your workflow:
+
+1. **AI-Powered Flow Creation**: Simply run `astonish agents run agents_creator` and describe your problem. Astonish's AI will craft a custom flow tailored to your needs, leveraging your existing tools.
+
+2. **Flexible Refinement**: Fine-tune your AI-generated flow by editing the YAML file, optimizing prompts, and adjusting the workflow to perfectly fit your requirements.
+
+3. **Endless Expandability**: Need additional capabilities like web searches, webpage content extraction, or PDF reading? Easily connect to thousands of available MCP (Model Context Protocol) servers to extend your toolset on demand.
+
+4. **Personalized AI Assistance**: Astonish adapts to your unique workflow, combining the familiarity of your go-to tools with the innovation of AI, creating a powerhouse of productivity.
+
+The possibilities are truly endless. Whether you're a developer streamlining your coding process, a data analyst automating complex data operations, or a content creator enhancing your research workflow, Astonish empowers you to achieve more with less effort.
+
+Embrace the future of workflow automation with Astonish, where your tools meet AI, and your productivity knows no bounds.
+
+## Key Features
+
+- **Low-Code Magic**: Create and run customizable agentic workflows using an intuitive, YAML-based approach
+- **AI-Powered Agent Creator**: Design new agents effortlessly with our intelligent agent creation assistant
+- **Flexible AI Provider Management**: Configure and manage multiple AI providers seamlessly
+- **Extensible Capabilities**: Leverage the Model Context Protocol (MCP) to expand your toolkit
+- **Rich Tool Integration**: Incorporate various tools within your workflows, including embedded and custom options
+
+## Agents Creator: Your AI Architect
+
+At the heart of Astonish lies the Agents Creator. This intelligent assistant guides you through the process of designing and implementing new AI agents:
+
+1. **Interactive Design**: Engage in a dynamic conversation to capture the essence of your desired agent
+2. **Automatic Flow Creation**: Watch as the Agents Creator designs an optimal agentic flow based on your requirements
+3. **YAML Generation**: Receive a complete, ready-to-use YAML configuration for your new agent
+4. **Instant Deployment**: Your new agent is immediately available for use within the Astonish ecosystem
+
+With the Agents Creator, you're not just using AI – you're using AI that creates AI, unlocking a new realm of possibilities.
 
 ## Key Concepts
 
-### Low-Code Agent Creation
+### Low-Code Revolution
 
-Astonish embraces a low-code philosophy, allowing users to create complex AI agents using YAML configuration files. This approach democratizes AI agent creation, making it accessible to both developers and non-developers alike.
+Astonish champions a low-code philosophy, enabling users of all technical backgrounds to create complex AI agents using simple YAML configuration files and integrating MCP servers. This approach breaks down barriers, making advanced AI agent creation accessible to developers and non-developers alike.
+
+### AI-Powered Agent Creation
+
+The Agents Creator feature represents a paradigm shift in how AI agents are designed and implemented. By leveraging AI to create AI, Astonish offers an unprecedented level of assistance and automation in the agent creation process.
 
 ### Model Context Protocol (MCP) Support
 
@@ -24,7 +55,7 @@ Astonish leverages the Model Context Protocol (MCP) to extend its capabilities. 
 
 ### Embedded Tools
 
-Astonish comes with several powerful tools embedded out-of-the-box:
+Astonish comes with several tools embedded out-of-the-box:
 
 - `read_file`: Read the contents of files
 - `write_file`: Write or modify file contents
@@ -34,7 +65,19 @@ These tools provide a solid foundation for creating versatile agents capable of 
 
 ## Installation
 
-To install Astonish, follow these steps:
+You can install Astonish using pip or from source code.
+
+### Install with pip (Recommended)
+
+To install Astonish using pip, run the following command:
+
+```
+pip install astonish
+```
+
+### Install from source code
+
+To install Astonish from source code, follow these steps:
 
 1. Clone the repository:
 
@@ -55,11 +98,6 @@ To install Astonish, follow these steps:
 
    ```
    make installdev
-   ```
-
-4. Set up the configuration:
-   ```
-   astonish setup
    ```
 
 ## Usage

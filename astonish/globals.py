@@ -1,6 +1,9 @@
 import configparser, os, appdirs
 import logging
 from logging.handlers import RotatingFileHandler
+import subprocess
+import platform
+
 
 CONFIG_FILE = "config.ini"
 LOG_FILE = "astonish.log"
@@ -100,3 +103,33 @@ async def initialize_mcp_tools():
     
     logger.info("MCP client initialization complete")
     return mcp_client
+
+def get_default_editor():
+    """
+    Get the default text editor based on the operating system.
+    """
+    system = platform.system()
+    
+    if system == "Windows":
+        return "notepad.exe"
+    elif system in ["Linux", "Darwin"]:  # Linux or macOS
+        return os.environ.get("EDITOR", "vi")
+    else:
+        logger.warning(f"Unsupported operating system: {system}. Defaulting to 'vi'.")
+        return "vi"
+
+def open_editor(file_path):
+    """
+    Open a file in the default text editor.
+    """
+    editor = get_default_editor()
+    try:
+        subprocess.run([editor, file_path], check=True)
+        logger.info(f"Successfully opened file for editing: {file_path}")
+        return f"Successfully opened file for editing: {file_path}"
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to open editor: {e}")
+        return f"Error: Failed to open editor: {e}"
+    except Exception as e:
+        logger.error(f"Unexpected error while opening file: {e}")
+        return f"Error: Unexpected error while opening file: {e}"

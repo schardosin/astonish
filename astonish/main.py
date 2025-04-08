@@ -11,7 +11,7 @@ def get_version():
 
 async def main(args=None):
     from astonish.core.agent_runner import run_agent, print_flow
-    from astonish.core.utils import list_agents
+    from astonish.core.utils import list_agents, edit_agent
 
     if args is None:
         args = parse_arguments()
@@ -41,6 +41,10 @@ async def main(args=None):
         elif args.agents_command == "list":
             globals.logger.info("Listing available agents...")
             await list_agents()
+        elif args.agents_command == "edit":
+            globals.logger.info(f"Editing agent: {args.agent}")
+            result = edit_agent(args.agent)
+            print(result)
         else:
             globals.logger.error(f"Unknown agents command: {args.agents_command}")
             print(f"Unknown agents command: {args.agents_command}")
@@ -139,6 +143,10 @@ def parse_arguments():
 
     # Agents list command
     agents_list_parser = agents_subparsers.add_parser("list", help="List all available agents")
+
+    # Agents edit command
+    agents_edit_parser = agents_subparsers.add_parser("edit", help="Edit a specific agent")
+    agents_edit_parser.add_argument("agent", help="Name of the agent to edit")
 
     # Tools command
     tools_parser = subparsers.add_parser("tools", help="Manage tools")

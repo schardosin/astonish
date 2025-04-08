@@ -1,6 +1,4 @@
 import os
-import subprocess
-import platform
 from astonish import globals
 
 def edit_mcp_config():
@@ -14,18 +12,7 @@ def edit_mcp_config():
         globals.logger.info(f"MCP config file not found at {config_path}. Creating a new one.")
         create_default_config(config_path)
 
-    editor = get_default_editor()
-    
-    try:
-        subprocess.run([editor, config_path], check=True)
-        globals.logger.info(f"Successfully opened MCP config file for editing: {config_path}")
-        return f"Successfully opened MCP config file for editing: {config_path}"
-    except subprocess.CalledProcessError as e:
-        globals.logger.error(f"Failed to open editor: {e}")
-        return f"Error: Failed to open editor: {e}"
-    except Exception as e:
-        globals.logger.error(f"Unexpected error while editing MCP config: {e}")
-        return f"Error: Unexpected error while editing MCP config: {e}"
+    return globals.open_editor(config_path)
 
 def create_default_config(config_path):
     """
@@ -44,17 +31,3 @@ def create_default_config(config_path):
     except Exception as e:
         globals.logger.error(f"Failed to create default MCP config file: {e}")
         raise
-
-def get_default_editor():
-    """
-    Get the default text editor based on the operating system.
-    """
-    system = platform.system()
-    
-    if system == "Windows":
-        return "notepad.exe"
-    elif system in ["Linux", "Darwin"]:  # Linux or macOS
-        return os.environ.get("EDITOR", "vi")
-    else:
-        globals.logger.warning(f"Unsupported operating system: {system}. Defaulting to 'vi'.")
-        return "vi"

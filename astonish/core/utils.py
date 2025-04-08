@@ -42,6 +42,26 @@ def load_agents(agent_name):
         else:
             raise FileNotFoundError(f"Agent {agent_name} not found in astonish.agents or {config_agents_path}")
 
+def edit_agent(agent_name):
+    """
+    Edit an agent configuration file in the user's config directory.
+    If the file doesn't exist, return an error message.
+    """
+    config_dir = appdirs.user_config_dir("astonish")
+    config_agents_path = os.path.join(config_dir, "agents", f"{agent_name}.yaml")
+
+    if os.path.exists(config_agents_path):
+        try:
+            return globals.open_editor(config_agents_path)
+        except Exception as e:
+            error_message = f"Error opening agent file: {str(e)}"
+            globals.logger.error(error_message)
+            return error_message
+    else:
+        error_message = f"Agent '{agent_name}' doesn't exist or is not editable."
+        globals.logger.warning(error_message)
+        return error_message
+
 def format_prompt(prompt: str, state: dict, node_config: dict):
     state_dict = dict(state)
     state_dict['state'] = state

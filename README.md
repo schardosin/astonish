@@ -39,7 +39,7 @@ To install Astonish, follow these steps:
 1. Clone the repository:
 
    ```
-   git clone https://github.com/yourusername/astonish.git
+   git clone https://github.com/schardosin/astonish.git
    cd astonish
    ```
 

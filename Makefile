@@ -16,24 +16,24 @@ help:
 # Build the wheel
 build: clean
 	@echo "Building the wheel..."
-	python -m build --wheel
+	python3 -m build --wheel
 	@echo "Wheel built successfully!"
 
 installdev: uninstall
 	@echo "Installing in editable mode..."
-	pip install -e .
+	pip3 install -e .
 	@echo "Package installed successfully!"
 
 # Install the package
 install: build uninstall
 	@echo "Installing the wheel..."
-	pip install $(DIST_DIR)/$(PACKAGE_NAME)-*.whl
+	pip3 install $(DIST_DIR)/$(PACKAGE_NAME)-*.whl
 	@echo "Package installed successfully!"
 
 # Uninstall the package
 uninstall:
 	@echo "Uninstalling the package..."
-	pip uninstall -y $(PACKAGE_NAME)
+	pip3 uninstall -y $(PACKAGE_NAME)
 	@echo "Package uninstalled successfully!"
 
 # Clean up build artifacts

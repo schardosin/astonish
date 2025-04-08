@@ -13,7 +13,7 @@ packages = [
 
 [project]
 name = "astonish"
-version = "0.1"
+version = "0.2"
 authors = [
     {name = "Rafael Schardosin Silva", email = "rafael.rs@gmail.com"},
 ]
@@ -35,7 +35,6 @@ dependencies = [
     "pydantic",
     "tavily-python",
     "colorama",
-    "pygraphviz",
     "langchain-mcp-adapters",
     "aiosqlite",
     "grandalf"

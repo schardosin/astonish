@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="images/astonish-logo-only.svg" width="300" height="300" alt="Astonish Logo">
+  <img src="https://raw.githubusercontent.com/schardosin/astonish/main/images/astonish-logo-only.svg" width="300" height="300" alt="Astonish Logo">
 
   # Astonish AI Companion
   *Empowering AI-driven workflows with low-code simplicity*
@@ -144,6 +144,18 @@ To view the flow of an agentic workflow:
 astonish agents flow <task_name>
 ```
 
+To list all available agents:
+
+```
+astonish agents list
+```
+
+To edit a specific agent:
+
+```
+astonish agents edit <agent_name>
+```
+
 ### Managing Tools
 
 To list available tools (including MCP-enabled tools):
@@ -252,7 +264,7 @@ The flow defines the sequence of operations, starting with user input for the fi
   - `factory/`: Factory classes for creating providers
   - `providers/`: AI provider implementations
   - `tools/`: Tool implementations (including embedded and MCP-enabled tools)
-  - `agents/`: Predefined and user-created agent configurations (YAML files)
+  - `agents/`: Predefined agents configurations (YAML files)
 
 ## Contributing
 

@@ -1,3 +1,4 @@
+description: An agentic flow designed to assist users in creating a new agentic flows.
 nodes:
   - name: get_overall_idea
     type: input

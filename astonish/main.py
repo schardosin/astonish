@@ -26,12 +26,16 @@ async def main(args=None):
         else:
             globals.logger.error(f"Unknown setup type: {args.type}")
             print(f"Unknown setup type: {args.type}")
-    elif args.command == "run":
-        globals.logger.info(f"Running task: {args.task}")
-        await run_agent(args.task)
-    elif args.command == "flow":
-        globals.logger.info(f"Printing flow for task: {args.task}")
-        print_flow(args.task)
+    elif args.command == "agents":
+        if args.agents_command == "run":
+            globals.logger.info(f"Running task: {args.task}")
+            await run_agent(args.task)
+        elif args.agents_command == "flow":
+            globals.logger.info(f"Printing flow for task: {args.task}")
+            print_flow(args.task)
+        else:
+            globals.logger.error(f"Unknown agents command: {args.agents_command}")
+            print(f"Unknown agents command: {args.agents_command}")
     elif args.command == "tools":
         if args.tools_command == "list":
             globals.logger.info("Listing available tools...")
@@ -161,13 +165,17 @@ def parse_arguments():
     tool_setup_parser = setup_subparsers.add_parser("tool", help="Configure a tool")
     tool_setup_parser.add_argument("tool_name", help="Name of the tool to configure")
 
-    # Run command
-    run_parser = subparsers.add_parser("run", help="Run a specific agentic workflow")
-    run_parser.add_argument("task", help="Name of the agentic workflow to run")
-
-    # Flow command
-    flow_parser = subparsers.add_parser("flow", help="Print the flow of a specific agentic workflow")
-    flow_parser.add_argument("task", help="Name of the agentic workflow to print flow for")
+    # Agents command
+    agents_parser = subparsers.add_parser("agents", help="Manage and run agents")
+    agents_subparsers = agents_parser.add_subparsers(dest="agents_command", help="Agents management commands")
+    
+    # Agents run command
+    agents_run_parser = agents_subparsers.add_parser("run", help="Run a specific agentic workflow")
+    agents_run_parser.add_argument("task", help="Name of the agentic workflow to run")
+    
+    # Agents flow command
+    agents_flow_parser = agents_subparsers.add_parser("flow", help="Print the flow of a specific agentic workflow")
+    agents_flow_parser.add_argument("task", help="Name of the agentic workflow to print flow for")
 
     # Tools command
     tools_parser = subparsers.add_parser("tools", help="Manage tools")

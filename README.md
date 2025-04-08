@@ -66,14 +66,11 @@ To install Astonish, follow these steps:
 
 ### Setup
 
-To configure Astonish, use the `setup` command:
+To configure Astonish providers, use the `setup` command:
 
 ```
-astonish setup [provider|tool]
+astonish setup
 ```
-
-- To configure an AI provider: `astonish setup provider`
-- To configure a specific tool: `astonish setup tool <tool_name>`
 
 ### Creating New Agents
 

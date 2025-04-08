@@ -17,9 +17,6 @@ async def main(args=None):
         if args.type == "provider":
             globals.logger.info("Starting provider setup process...")
             setup()
-        elif args.type == "tool":
-            globals.logger.info(f"Starting tool setup process for {args.tool_name}...")
-            setup_tool(args.tool_name)
         elif args.type == None:
             globals.logger.info("Starting provider setup process...")
             setup()
@@ -95,50 +92,6 @@ def setup():
         globals.logger.error("Error during provider setup", exc_info=True)
         print(f"Error: {e}")
 
-def setup_tool(tool_name):
-    import importlib
-    import configparser
-    import os
-    
-    try:
-        # Try to import the tool
-        module = importlib.import_module(f"astonish.tools.{tool_name}")
-        tool_class = getattr(module, 'Tool')
-        
-        # Get the required configuration
-        required_config = tool_class.required_config
-        
-        # Load existing configuration if it exists
-        if os.path.exists(globals.config_path):
-            globals.config.read(globals.config_path)
-        else:
-            globals.config = configparser.ConfigParser()
-
-        # Ensure there's a section for the tool
-        if tool_name not in globals.config:
-            globals.config[tool_name] = {}
-
-        # Prompt for each required configuration item
-        for key, details in required_config.items():
-            current_value = globals.config.get(tool_name, key, fallback='')
-            if current_value:
-                new_value = input(f"Enter {details['description']} (current: {current_value}): ").strip()
-            else:
-                new_value = input(f"Enter {details['description']}: ").strip()
-            globals.config[tool_name][key] = new_value if new_value else current_value
-
-        # Save the configuration
-        os.makedirs(os.path.dirname(globals.config_path), exist_ok=True)
-        with open(globals.config_path, 'w') as configfile:
-            globals.config.write(configfile)
-
-        print(f"{tool_name} configured successfully!")
-        globals.logger.info(f"{tool_name} configured successfully!")
-    except Exception as e:
-        globals.logger.error(f"Error during {tool_name} setup", exc_info=True)
-        print(f"Error: {e}")
-
-
 def parse_arguments():
     import argparse
 
@@ -161,10 +114,6 @@ def parse_arguments():
     # Provider setup
     provider_setup_parser = setup_subparsers.add_parser("provider", help="Configure a provider")
     
-    # Tool setup
-    tool_setup_parser = setup_subparsers.add_parser("tool", help="Configure a tool")
-    tool_setup_parser.add_argument("tool_name", help="Name of the tool to configure")
-
     # Agents command
     agents_parser = subparsers.add_parser("agents", help="Manage and run agents")
     agents_subparsers = agents_parser.add_subparsers(dest="agents_command", help="Agents management commands")

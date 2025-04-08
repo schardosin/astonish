@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 import asyncio
 import astonish.globals as globals
+import tomli
+from pathlib import Path
+
+def get_version():
+    toml_path = Path(__file__).parent.parent / "pyproject.toml"
+    with open(toml_path, "rb") as f:
+        toml_dict = tomli.load(f)
+    return toml_dict["project"]["version"]
 
 async def main(args=None):
     from astonish.core.agent_runner import run_agent, print_flow
@@ -103,7 +111,7 @@ def parse_arguments():
     
     parser.add_argument("-h", "--help", action="help", help="Show this help message and exit")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
-    parser.add_argument("--version", action="version", version="%(prog)s 1.0")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {get_version()}")
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 

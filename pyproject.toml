@@ -38,7 +38,8 @@ dependencies = [
     "colorama",
     "langchain-mcp-adapters",
     "aiosqlite",
-    "grandalf"
+    "grandalf",
+    "tomli"
 ]
 
 [project.urls]

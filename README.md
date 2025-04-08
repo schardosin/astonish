@@ -1,4 +1,12 @@
-# Astonish AI Companion
+<div align="center">
+  <img src="images/astonish-logo-only.svg" width="300" height="300" alt="Astonish Logo">
+
+  # Astonish AI Companion
+  *Empowering AI-driven workflows with low-code simplicity*
+
+</div>
+
+---
 
 Astonish is a low-code AI companion that empowers you to create and run sophisticated agentic workflows with unprecedented ease. By leveraging a flexible, YAML-based framework, Astonish allows you to configure and execute AI-powered tasks without extensive coding knowledge, democratizing the world of AI agent creation.
 

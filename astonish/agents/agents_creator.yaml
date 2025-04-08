@@ -42,10 +42,13 @@ nodes:
 
       Based on this idea and the available tools, please:
       1. Create a base flow structure with necessary nodes and their purposes.
-      2. Identify which of the available tools might be required for this flow.
-      3. Highlight any potential challenges or areas that need further clarification.
-      4. If any required functionality is not available in the current tools, note it as a potential limitation.
-      5. Remember that input from the user can be collected directly from the application, so you don't need to require a tool for that.
+      2. Refine the prompts of each flow node to ensure clarity and effectiveness.
+      3. Identify which of the available tools might be required for this flow.
+      4. Remember it is an LLM, so most requirements can be done with the LLM itself without the need of a tool.
+      5. Highlight any potential challenges or areas that need further clarification.
+      6. If any required functionality is not available in the current tools, note it as a potential limitation.
+      7. Remember that input from the user can be collected directly from the application, so you don't need to require a tool for that.
+      8. Only set have_tools to false if the user needs to provide specific tools through MCP servers to be able to create the agents, and it is not possible to create the flow only using LLM and the available tools.
 
       Present this information in a clear, structured format.
       Export the base_flow if line breaks between the items using \n
@@ -145,6 +148,7 @@ nodes:
       Example YAML structure (note: variables in this example are prefixed with 'example_' to distinguish them from actual state variables):
 
       ```yaml
+      description: A simple agentic flow example.
       nodes:
         - name: get_user_input
           type: input
@@ -247,6 +251,20 @@ nodes:
       refined_flow: str
       continue_yaml_flag: bool
 
+  - name: suggest_flow_name
+    type: llm
+    system: |
+      You are an assistant naming an agentic flow. Generate a short, descriptive name using snake_case (e.g., example_name) based on the content and purpose of the refined flow.
+    prompt: |
+      Refined flow:
+      {refined_flow}
+
+      Please generate a suitable name for this flow in snake_case. Only return the name, no extra text.
+    output_model:
+      suggested_flow_name: str
+    user_message:
+      - suggested_flow_name
+
   - name: save_yaml
     type: llm
     tools: True
@@ -263,7 +281,7 @@ nodes:
       {flow_yaml}
 
       Save the content of the flow_yaml to disk using write_file tool in the config directory.
-      The file name should be at 'agents/new_flow.yaml' inside the config_dir.
+      The file name should be at 'agents/{suggested_flow_name}.yaml' inside the config_dir.
 
       Confirm once the file has been saved.
     output_model:
@@ -273,64 +291,6 @@ nodes:
     user_message:
       - save_confirmation
     print_state: False
-
-  - name: validate_flow
-    type: llm
-    tools: True
-    tools_selection:
-      - shell_command
-    system: |
-      You are a system tester for agentic flows. Run the validation command and interpret the results.
-    prompt: |
-      Refined flow:
-      {refined_flow}
-
-      The flow YAML has been saved to:
-      /home/schardosin/projects/astonish/astonish/agents/new_flow.yaml
-
-      Use the shell_command tool to run the following command:
-      astonish flow new_flow
-
-      Analyze the output and determine if there are any errors or warnings. If there are issues, summarize them clearly.
-      Format the content before displaying it to the user.
-
-      Verify that all the requirements in the Refined flow were met and that the flow is valid.
-      Store the shell command output in the shell_result variable.
-    output_model:
-      validation_result: str
-      has_errors: bool
-      shell_result: str
-    user_message:
-      - shell_result
-      - validation_result
-
-  - name: fix_errors
-    type: llm
-    tools: True
-    tools_selection:
-      - read_file
-      - write_file
-    system: |
-      You are an agentic flow debugger. Fix any errors found during validation.
-    prompt: |
-      Validation results:
-      {validation_result}
-
-      Available tools:
-      {available_tools}
-
-      Use the FileReadOrEdit tool to read the current flow YAML from:
-      /home/schardosin/projects/astonish/astonish/agents/new_flow.yaml
-
-      Please fix any errors found during validation. If no errors were found, return the current YAML unchanged.
-      Ensure that any fixes still use only the available tools.
-
-      After making any necessary changes, use the FileWriteOrEdit tool to save the updated YAML back to the same file.
-    output_model:
-      fixed_yaml: str
-      save_confirmation: str
-    user_message:
-      - save_confirmation
 
   - name: show_final_flow
     type: llm
@@ -383,24 +343,9 @@ flow:
     edges:
       - to: generate_yaml
         condition: "lambda x: not x['continue_yaml_flag']"
-      - to: save_yaml
+      - to: suggest_flow_name
         condition: "lambda x: x['continue_yaml_flag']"
-  - from: validate_flow
-    edges:
-      - to: fix_errors
-        condition: "lambda x: x['has_errors']"
-      - to: show_final_flow
-        condition: "lambda x: not x['has_errors']"
-
-  - from: fix_errors
-    to: validate_flow
-  - from: show_final_flow
-    to: get_final_approval
-  - from: get_final_approval
-    edges:
-      - to: save_yaml
-        condition: "lambda x: x['final_approval']"
-      - to: get_user_feedback_yaml
-        condition: "lambda x: not x['final_approval']"
+  - from: suggest_flow_name
+    to: save_yaml
   - from: save_yaml
     to: END

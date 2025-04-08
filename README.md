@@ -126,41 +126,77 @@ These files are automatically created and managed by the application.
 
 ## Example YAML Configuration
 
-Here's a simple example of an agent configuration in YAML:
+Here's an example of an agent configuration in YAML that demonstrates tool usage:
 
 ```yaml
-description: A simple task that gets user input and responds
+description: An agent that reads a file, extracts key information, and summarizes it for the user
 nodes:
-  - name: get_user_input
+  - name: get_file_path
     type: input
     prompt: |
-      Please enter your question:
+      Please enter the path to the file you want to analyze:
     output_model:
-      user_question: str
+      file_path: str
 
-  - name: generate_response
+  - name: read_file_content
     type: llm
     system: |
-      You are a helpful AI assistant.
+      You are a file reading assistant.
     prompt: |
-      User question: {user_question}
-      Please provide a concise and informative answer to the user's question.
+      Read the contents of the file at path: {file_path}
     output_model:
-      ai_response: str
+      file_content: str
+    tools: true
+    tools_selection:
+      - read_file
+
+  - name: extract_key_info
+    type: llm
+    system: |
+      You are an AI assistant specialized in extracting and summarizing key information from text.
+    prompt: |
+      Analyze the following file content and extract the core information:
+
+      {file_content}
+
+      Provide a concise summary of the key points.
+    output_model:
+      summary: str
+
+  - name: present_summary
+    type: llm
+    system: |
+      You are a helpful AI assistant presenting information to users.
+    prompt: |
+      Present the following summary to the user in a clear and engaging manner:
+
+      {summary}
+    output_model:
+      final_response: str
     user_message:
-      - ai_response
-    tools: false
+      - final_response
 
 flow:
   - from: START
-    to: get_user_input
-  - from: get_user_input
-    to: generate_response
-  - from: generate_response
+    to: get_file_path
+  - from: get_file_path
+    to: read_file_content
+  - from: read_file_content
+    to: extract_key_info
+  - from: extract_key_info
+    to: present_summary
+  - from: present_summary
     to: END
 ```
 
-This agent gets a question from the user, generates a response using an LLM, and then displays the response to the user. The flow defines the sequence of operations, starting with user input, followed by the LLM response generation, and ending the process.
+This agent demonstrates the following capabilities:
+
+1. Gets a file path from the user
+2. Uses the `read_file` tool to read the content of the specified file
+3. Extracts and summarizes key information from the file content
+4. Presents the summarized information to the user
+
+The flow defines the sequence of operations, starting with user input for the file path, followed by file reading, information extraction, summary presentation, and ending the process.
 
 ## Project Structure
 

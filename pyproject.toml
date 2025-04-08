@@ -8,12 +8,13 @@ packages = [
     "astonish.providers",
     "astonish.factory",
     "astonish.tools",
-    "astonish.agents"
+    "astonish.agents",
+    "astonish.core"
 ]
 
 [project]
 name = "astonish"
-version = "0.2"
+version = "0.3.1"
 authors = [
     {name = "Rafael Schardosin Silva", email = "rafael.rs@gmail.com"},
 ]

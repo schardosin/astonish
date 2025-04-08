@@ -257,7 +257,7 @@ nodes:
       You are an expert in creating and saving files to disk. Follow the provided example and rules strictly.
     prompt: |
       Run following command with the shell_command tool to get the path to the user config directory:
-      python -c "import appdirs; print(appdirs.user_config_dir('astonish'))"
+      python3 -c "import appdirs; print(appdirs.user_config_dir('astonish'))"
 
       flow_yaml:
       {flow_yaml}

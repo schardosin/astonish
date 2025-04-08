@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 import asyncio
 import astonish.globals as globals
-import tomli
-from pathlib import Path
+from importlib.metadata import version, PackageNotFoundError
 
 def get_version():
-    toml_path = Path(__file__).parent.parent / "pyproject.toml"
-    with open(toml_path, "rb") as f:
-        toml_dict = tomli.load(f)
-    return toml_dict["project"]["version"]
+    try:
+        return version("astonish")
+    except PackageNotFoundError:
+        return "unknown"
 
 async def main(args=None):
     from astonish.core.agent_runner import run_agent, print_flow
+    from astonish.core.utils import list_agents
 
     if args is None:
         args = parse_arguments()
@@ -38,6 +38,9 @@ async def main(args=None):
         elif args.agents_command == "flow":
             globals.logger.info(f"Printing flow for task: {args.task}")
             print_flow(args.task)
+        elif args.agents_command == "list":
+            globals.logger.info("Listing available agents...")
+            await list_agents()
         else:
             globals.logger.error(f"Unknown agents command: {args.agents_command}")
             print(f"Unknown agents command: {args.agents_command}")
@@ -133,6 +136,9 @@ def parse_arguments():
     # Agents flow command
     agents_flow_parser = agents_subparsers.add_parser("flow", help="Print the flow of a specific agentic workflow")
     agents_flow_parser.add_argument("task", help="Name of the agentic workflow to print flow for")
+
+    # Agents list command
+    agents_list_parser = agents_subparsers.add_parser("list", help="List all available agents")
 
     # Tools command
     tools_parser = subparsers.add_parser("tools", help="Manage tools")

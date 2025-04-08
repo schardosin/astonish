@@ -34,12 +34,10 @@ dependencies = [
     "langgraph",
     "langgraph-checkpoint-sqlite",
     "pydantic",
-    "tavily-python",
     "colorama",
     "langchain-mcp-adapters",
     "aiosqlite",
-    "grandalf",
-    "tomli"
+    "grandalf"
 ]
 
 [project.urls]

@@ -86,3 +86,46 @@ def request_tool_execution(tool):
         print(f"{Fore.RED}Error: Missing required field in tool object: {e}{Style.RESET_ALL}")
 
     return False
+
+async def list_agents():
+    """
+    List all available agents, including their names and descriptions.
+    """
+    setup_colorama()
+    print_section("Available Agents")
+
+    agents_found = False
+
+    # List agents from astonish.agents
+    try:
+        agents_dir = resources.files('astonish.agents')
+        for agent_file in agents_dir.iterdir():
+            if agent_file.name.endswith('.yaml'):
+                agent_name = os.path.splitext(agent_file.name)[0]
+                try:
+                    agent_data = load_agents(agent_name)
+                    description = agent_data.get('description', 'No description available')
+                    print_dict({agent_name: description})
+                    agents_found = True
+                except Exception as e:
+                    print(f"{Fore.RED}Error loading agent {agent_name}: {e}{Style.RESET_ALL}")
+    except Exception as e:
+        print(f"{Fore.YELLOW}Error accessing astonish.agents: {e}{Style.RESET_ALL}")
+
+    # List agents from config_path/agents
+    config_dir = appdirs.user_config_dir("astonish")
+    config_agents_path = os.path.join(config_dir, "agents")
+    if os.path.exists(config_agents_path):
+        for agent_file in os.listdir(config_agents_path):
+            if agent_file.endswith('.yaml'):
+                agent_name = os.path.splitext(agent_file)[0]
+                try:
+                    agent_data = load_agents(agent_name)
+                    description = agent_data.get('description', 'No description available')
+                    print_dict({agent_name: description})
+                    agents_found = True
+                except Exception as e:
+                    print(f"{Fore.RED}Error loading agent {agent_name}: {e}{Style.RESET_ALL}")
+
+    if not agents_found:
+        print(f"{Fore.YELLOW}No agents found in astonish.agents or {config_agents_path}{Style.RESET_ALL}")

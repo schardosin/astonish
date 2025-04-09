@@ -1,13 +1,35 @@
 #!/usr/bin/env python3
 import asyncio
+import os
 import astonish.globals as globals
+from astonish import logo
 from importlib.metadata import version, PackageNotFoundError
+
+# Constants for version information
+AUTHOR = "Rafael Schardosin Silva"
+PROJECT_NAME = "Astonish AI companion"
+GITHUB_LINK = "https://github.com/schardosin/astonish"
 
 def get_version():
     try:
-        return version("astonish")
+        version_num = version("astonish")
     except PackageNotFoundError:
-        return "unknown"
+        version_num = "unknown"
+    
+    return {
+        "version": version_num,
+        "name": PROJECT_NAME,
+        "author": AUTHOR,
+        "github": GITHUB_LINK
+    }
+
+def version_info(version_info):
+    logo = logo.ASCII_LOGO
+    print(logo)
+    print(f"{version_info['name']}")
+    print(f"Author: {version_info['author']}")
+    print(f"GitHub: {version_info['github']}")
+    return "Version: " + version_info['version']
 
 async def main(args=None):
     from astonish.core.agent_runner import run_agent, print_flow
@@ -118,7 +140,7 @@ def parse_arguments():
     
     parser.add_argument("-h", "--help", action="help", help="Show this help message and exit")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
-    parser.add_argument("--version", action="version", version=f"%(prog)s {get_version()}")
+    parser.add_argument("--version", action="version", version=version_info(get_version()))
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 

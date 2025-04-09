@@ -10,18 +10,22 @@ import astonish.globals as globals
 
 class LLMManager:
     _instance = None
+    _provider = None
+    _model = None
 
-    @staticmethod
-    def get_llm(schema=None) -> AIProvider:
+    @classmethod
+    def get_llm(cls, schema=None) -> AIProvider:
         default_provider = globals.config.get('GENERAL', 'default_provider', fallback='ollama')
         default_model = globals.config.get('GENERAL', 'default_model', fallback='llama2:latest')
 
-        if LLMManager._instance is None or default_provider == 'ollama':
-            LLMManager._instance = LLMManager._create_llm(default_provider, default_model, schema)
-        return LLMManager._instance
+        if cls._instance is None or default_provider != cls._provider or default_model != cls._model:
+            cls._instance = cls._create_llm(default_provider, default_model, schema)
+            cls._provider = default_provider
+            cls._model = default_model
+        return cls._instance
 
-    @staticmethod
-    def _create_llm(default_provider, default_model, schema=None) -> AIProvider:
+    @classmethod
+    def _create_llm(cls, default_provider, default_model, schema=None) -> AIProvider:
         # Get the provider instance
         provider = AIProviderFactory.get_provider(default_provider)
 

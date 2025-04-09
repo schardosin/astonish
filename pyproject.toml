@@ -40,6 +40,18 @@ dependencies = [
     "grandalf"
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest"
+]
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = [
+    "tests",
+]
+
 [project.urls]
 "Homepage" = "https://github.com/schardosin/astonish"
 

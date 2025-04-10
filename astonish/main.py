@@ -24,8 +24,8 @@ def get_version():
     }
 
 def version_info(version_info):
-    logo = logo.ASCII_LOGO
-    print(logo)
+    astonish_logo = logo.ASCII_LOGO
+    print(astonish_logo)
     print(f"{version_info['name']}")
     print(f"Author: {version_info['author']}")
     print(f"GitHub: {version_info['github']}")

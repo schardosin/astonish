@@ -90,19 +90,14 @@ async def initialize_mcp_tools():
         return None
     
     logger.info("Initializing MCP client...")
-    mcp_client = MultiServerMCPClient(mcp_config['mcpServers'])
-    
-    logger.info("Connecting to MCP servers...")
-    for server_name, server_config in mcp_config['mcpServers'].items():
-        try:
-            logger.info(f"Connecting to server: {server_name}")
-            await mcp_client.connect_to_server(server_name, server_config)
-            logger.info(f"Successfully connected to server: {server_name}")
-        except Exception as e:
-            logger.error(f"Failed to connect to server {server_name}: {str(e)}")
-    
-    logger.info("MCP client initialization complete")
-    return mcp_client
+    try:
+        mcp_client = MultiServerMCPClient(mcp_config['mcpServers'])
+        logger.info("Successfully initialized MCP client")
+        
+        return mcp_client
+    except Exception as e:
+        logger.error(f"Failed to initialize MCP client: {str(e)}")
+        return None
 
 def get_default_editor():
     """

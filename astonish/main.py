@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import os
+import argparse
 import astonish.globals as globals
 from astonish import logo
 from importlib.metadata import version, PackageNotFoundError
@@ -23,13 +24,22 @@ def get_version():
         "github": GITHUB_LINK
     }
 
-def version_info(version_info):
-    astonish_logo = logo.ASCII_LOGO
-    print(astonish_logo)
-    print(f"{version_info['name']}")
-    print(f"Author: {version_info['author']}")
-    print(f"GitHub: {version_info['github']}")
-    return "Version: " + version_info['version']
+def version_info():
+    version_data = get_version()
+    print(logo.ASCII_LOGO)
+    print(f"{version_data['name']}")
+    print(f"Author: {version_data['author']}")
+    print(f"GitHub: {version_data['github']}")
+    print(f"Version: {version_data['version']}")
+    return ''
+
+class VersionAction(argparse.Action):
+    def __init__(self, option_strings, dest=None, default=argparse.SUPPRESS, help="show program's version number and exit"):
+        super().__init__(option_strings=option_strings, dest=dest, default=default, nargs=0, help=help)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        version_info()
+        parser.exit()
 
 async def main(args=None):
     from astonish.core.agent_runner import run_agent, print_flow
@@ -140,7 +150,7 @@ def parse_arguments():
     
     parser.add_argument("-h", "--help", action="help", help="Show this help message and exit")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
-    parser.add_argument("--version", action="version", version=version_info(get_version()))
+    parser.add_argument("--version", action=VersionAction)
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 

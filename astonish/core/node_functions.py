@@ -169,11 +169,12 @@ def update_state(state: Dict[str, Any], output: Union[BaseModel, str, Dict, None
         new_state[limit_counter_field] = counter
     return new_state
 
-# create_custom_react_prompt_template (Use version from Response #19 - escapes braces)
+# --- Function 1: Create Custom Prompt ---
+
 def create_custom_react_prompt_template(tools_definitions: List[ToolDefinition]) -> str:
     """
-    Generates a ReAct prompt string including tool input requirements,
-    using a textual description of schema properties instead of escaped JSON.
+    Generates a ReAct prompt string including detailed tool input requirements,
+    WITH property descriptions, enums, defaults, and escaping schema braces.
     Removes the problematic literal JSON example from instructions.
     """
     tool_strings = []
@@ -183,31 +184,68 @@ def create_custom_react_prompt_template(tools_definitions: List[ToolDefinition])
         if input_type == 'JSON_SCHEMA':
             schema_desc_str = "[Schema not provided or invalid]"
             properties = {}
+            required_list = []
             if schema_def:
                 try:
-                    # Extract properties dict
+                    # Extract properties dict and required list
                     if isinstance(schema_def, type) and issubclass(schema_def, BaseModel):
                         schema_json = schema_def.model_json_schema() if PYDANTIC_V2 else schema_def.schema() # type: ignore
                         properties = schema_json.get("properties", {})
-                    elif isinstance(schema_def, dict): properties = schema_def.get("properties", {})
+                        required_list = schema_json.get("required", [])
+                    elif isinstance(schema_def, dict): # Handle raw JSON schema dict
+                        properties = schema_def.get("properties", {})
+                        required_list = schema_def.get("required", [])
 
-                    # Create textual list of properties (escaped for f-string)
+                    # *** GENERATE DETAILED PROPERTY DESCRIPTIONS ***
                     if properties:
-                        prop_list = [f"{name} ({details.get('type', 'unknown')})" for name, details in properties.items()]
-                        schema_desc_str = ", ".join(prop_list).replace("{", "{{").replace("}", "}}") # Escape braces here too just in case
-                    else: schema_desc_str = "[No properties found]"
-                except Exception as e: schema_desc_str = f"[Error extracting schema: {e}]"
-            input_desc = f"Input Type: Requires a JSON object string with properties: {schema_desc_str}. IMPORTANT: Generate a valid JSON string containing these properties as keys."
+                        prop_details_list = []
+                        for name, details in properties.items():
+                            prop_type = details.get('type', 'unknown')
+                            prop_desc = details.get('description', '') # Get description
+                            prop_enum = details.get('enum') # Get allowed values
+                            prop_default = details.get('default') # Get default value
+
+                            is_required = name in required_list
+                            req_marker = " (required)" if is_required else ""
+
+                            # Construct the detail string for this property
+                            detail_str = f"'{name}' ({prop_type}{req_marker})"
+                            if prop_desc:
+                                detail_str += f": {prop_desc}" # Add description
+                            if prop_enum:
+                                # Ensure enum values are strings for join
+                                enum_strs = [f'"{v}"' if isinstance(v, str) else str(v) for v in prop_enum]
+                                detail_str += f" (must be one of: [{', '.join(enum_strs)}])" # List allowed values
+                            if prop_default is not None:
+                                 detail_str += f" (default: {json.dumps(prop_default)})" # Show default
+
+                            # Escape braces within the final detail string for f-string formatting
+                            prop_details_list.append(detail_str.replace("{", "{{").replace("}", "}}"))
+
+                        # Join property details, potentially with newlines for readability
+                        schema_desc_str = "; ".join(prop_details_list)
+                    else:
+                         schema_desc_str = "[No properties found in schema]"
+                    # *** END DETAILED PROPERTY DESCRIPTIONS ***
+
+                except Exception as e:
+                    schema_desc_str = f"[Error extracting schema details: {e}]"
+
+            # ** Update description to use the detailed textual list **
+            input_desc = f"Input Type: Requires a JSON object string with properties: {schema_desc_str}. IMPORTANT: Generate a valid JSON string containing required properties and only essential optional properties based on the user request."
 
         elif input_type == 'STRING':
+             # ... (as before, ensure escaping) ...
              input_desc = "Input Type: Plain String"
              if schema_def and isinstance(schema_def, str):
                   escaped_example = schema_def.replace("{", "{{").replace("}", "}}")
                   input_desc += f". Expected format/example: {escaped_example}"
         else: # Other types
+             # ... (as before, ensure escaping) ...
              input_desc = f"Input Type: {input_type}"
              if schema_def and isinstance(schema_def, str):
                  input_desc += f". Tool expects: {schema_def.replace('{','{{').replace('}','}}')}"
+
 
         tool_name = tool_def.get('name', 'UnnamedTool'); tool_description = tool_def.get('description', 'No description.')
         tool_strings.append(f"- {tool_name}: {tool_description} {input_desc}")
@@ -215,17 +253,16 @@ def create_custom_react_prompt_template(tools_definitions: List[ToolDefinition])
     formatted_tools = "\n".join(tool_strings) if tool_strings else "No tools available."
     tool_names = ", ".join([tool_def['name'] for tool_def in tools_definitions]) if tools_definitions else "N/A"
 
-    # Template using f-string requires escaping literal braces {{ }}
-    # *** REMOVED the literal JSON example from Action Input instruction ***
+    # Template instructions remain largely the same, but the LLM now has better context from formatted_tools
     template = f"""Answer the following questions as best you can. You have access to the following tools:
 {formatted_tools}
 
 Use the following format STRICTLY:
 
 Question: the input question you must answer
-Thought: you should always think about what to do, analyzing the question and available tools.
+Thought: Analyze the question and available tools. Determine the single best Action to take. Identify the essential arguments required by that Action's schema based on the Question and the tool description (especially paying attention to property descriptions, required fields, and allowed values like enums). Use sensible defaults for optional arguments unless the Question specifies otherwise.
 Action: the action to take, must be one of [{tool_names}]
-Action Input: Provide the exact input required for the selected Action. If Input Type requires a JSON object string, generate a *single, valid JSON object string* containing the required properties based on the tool's description. If Input Type is STRING, provide the plain string. Do NOT add explanations before or after the Action Input line. IMPORTANT: After writing the Action Input line, STOP generating immediately. Wait for the Observation.
+Action Input: Provide the exact input required for the selected Action. If Input Type requires a JSON object string, generate a *single, valid JSON object string* containing ONLY the essential properties identified in your Thought process, matching the required types and allowed values (enums) mentioned in the tool description. If Input Type is STRING, provide the plain string. Do NOT add explanations before or after the Action Input line. IMPORTANT: After writing the Action Input line, STOP generating immediately. Wait for the Observation.
 Observation: the result of the action
 ... (this Thought/Action/Action Input/Observation can repeat N times)
 Thought: I now know the final answer based on my thoughts and observations.
@@ -234,10 +271,9 @@ Final Answer: the final answer to the original input question
 Begin!
 
 Question: {{input}}
-Thought:{{agent_scratchpad}}""" # Ensure agent_scratchpad variable is handled correctly in invoke call
+Thought:{{agent_scratchpad}}"""
 
     return template
-
 
 # --- Node Creation Functions ---
 def create_node_function(node_config, mcp_client):

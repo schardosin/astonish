@@ -36,7 +36,7 @@ def write_file(file_path: str, content: str) -> str:
 @tool("shell_command", args_schema=ExecuteCommandInput)
 def shell_command(command: str) -> Dict[str, str]:
     """
-    Execute a shell command and return its output. Requires a single command string
+    Execute a shell command and return its output.
     """
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
     return {"stdout": result.stdout, "stderr": result.stderr}

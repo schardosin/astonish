@@ -265,32 +265,36 @@ nodes:
     user_message:
       - suggested_flow_name
 
-  - name: save_yaml
+  - name: get_config_directory # NEW NODE 1 (Replaces part of save_yaml)
+    type: llm
+    tools: True
+    tools_selection:
+      - shell_command
+    system: |
+      You are a system utility assistant. Execute the provided command to find a configuration directory.
+    prompt: |
+      Run the following command to get the user's astonish config directory path:
+      python3 -c "import appdirs; print(appdirs.user_config_dir('astonish'))"
+    # Output just the path string for easier use later
+    output_model:
+      config_dir: str # Node specifically outputs the directory path
+
+  - name: write_flow_to_file # NEW NODE 2 (Replaces part of save_yaml)
     type: llm
     tools: True
     tools_selection:
       - write_file
-      - shell_command
     system: |
-      You are an expert in creating and saving files to disk. Follow the provided example and rules strictly.
+      You are a system utility assistant that saves content to files.
     prompt: |
-      Run following command with the shell_command tool to get the path to the user config directory:
-      python3 -c "import appdirs; print(appdirs.user_config_dir('astonish'))"
-
-      flow_yaml:
+      Save the following YAML content to the specified file path.
+      File Path: {config_dir}/agents/{suggested_flow_name}.yaml
+      YAML Content:
       {flow_yaml}
-
-      Save the content of the flow_yaml to disk using write_file tool in the config directory.
-      The file name should be at 'agents/{suggested_flow_name}.yaml' inside the config_dir.
-
-      Confirm once the file has been saved.
     output_model:
-      config_dir: str
-      flow_yaml: str
-      save_confirmation: str
+      save_confirmation: str # e.g., "File saved successfully to ..."
     user_message:
       - save_confirmation
-    print_state: False
 
   - name: show_final_flow
     type: llm
@@ -346,6 +350,8 @@ flow:
       - to: suggest_flow_name
         condition: "lambda x: x['continue_yaml_flag']"
   - from: suggest_flow_name
-    to: save_yaml
-  - from: save_yaml
+    to: get_config_directory
+  - from: get_config_directory
+    to: write_flow_to_file
+  - from: write_flow_to_file
     to: END

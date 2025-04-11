@@ -60,39 +60,96 @@ class ToolDefinition(TypedDict):
     tool_executor: Callable[..., Coroutine[Any, Any, str]]
     tool_instance: Optional[BaseTool]
 
-# --- Helper Functions ---
-# create_output_model (Use version from Response #19 - robust type handling)
+# --- Updated Helper Function ---
+
 def create_output_model(output_model_config: Dict[str, str]) -> Optional[Type[BaseModel]]:
-    """Creates a Pydantic model dynamically if config provided."""
-    if not output_model_config or not isinstance(output_model_config, dict): return None
+    """
+    Creates a Pydantic model dynamically, handling lowercase type names from YAML
+    and complex/generic types using eval.
+    """
+    if not output_model_config or not isinstance(output_model_config, dict):
+        return None # No model needed if no config
+
     fields = {}
-    basic_types = {"str": str, "int": int, "float": float, "bool": bool, "Any": Any}
-    eval_context = {"Union": Union, "Optional": Optional, "List": List, "Dict": Dict, **basic_types, "BaseModel": BaseModel}
+    # Lowercase keys map YAML strings to Python types for direct lookup
+    type_lookup = {
+        "str": str,
+        "int": int,
+        "float": float,
+        "bool": bool,
+        "any": Any,
+        "list": List, # Map lowercase 'list' to typing.List
+        "dict": Dict, # Map lowercase 'dict' to typing.Dict
+        # Add other simple lowercase types used in YAML if needed
+    }
+    # Context for eval when dealing with generics like List[str], Optional[int]
+    # Uses standard Python type names as expected by eval
+    eval_context = {
+         "Union": Union, "Optional": Optional, "List": List, "Dict": Dict,
+         "str": str, "int": int, "float": float, "bool": bool, "Any": Any,
+         "BaseModel": BaseModel
+         # Add any custom Pydantic models or types used in generics here
+         }
+
     for field_name, field_type_str in output_model_config.items():
-        field_type = Any
+        field_type = Any # Default to Any on error
         try:
-            if field_type_str in basic_types: field_type = basic_types[field_type_str]
-            elif any(c in field_type_str for c in ['|', '[', '{', 'Optional', 'Union', 'List', 'Dict']):
-                 field_type = eval(field_type_str, globals(), eval_context)
+            # Normalize the input type string from YAML
+            normalized_type_str = field_type_str.strip()
+            normalized_type_lower = normalized_type_str.lower()
+
+            # 1. Try direct lookup for simple types (list, str, int...) using lowercase key
+            if normalized_type_lower in type_lookup:
+                field_type = type_lookup[normalized_type_lower]
+                # print(f"Debug: Found simple type '{normalized_type_lower}' -> {field_type}") # Optional debug
+            # 2. If not found directly, assume it might be a complex generic (List[str], Optional[int], etc.) or custom type and use eval
+            elif any(c in normalized_type_str for c in ['[', '|', 'Optional', 'Union']): # Check for indicators of complex types
+                try:
+                     # Eval needs the context with standard Python type names (List, str, etc.)
+                     # It evaluates the original string (e.g., "List[str]")
+                     field_type = eval(normalized_type_str, globals(), eval_context)
+                     # print(f"Debug: Evaluated complex type '{normalized_type_str}' -> {field_type}") # Optional debug
+                except NameError:
+                     print(f"{Fore.YELLOW}Warning: Eval failed to find type components within '{normalized_type_str}'. Defaulting field '{field_name}' to Any.{Style.RESET_ALL}")
+                     field_type = Any
+                except Exception as e_eval:
+                     print(f"{Fore.RED}Error evaluating complex type '{normalized_type_str}': {e_eval}{Style.RESET_ALL}")
+                     field_type = Any
             else:
-                 field_type = eval_context.get(field_type_str, Any)
-                 if field_type is Any: print(f"{Fore.YELLOW}Warning: Unknown type '{field_type_str}' for field '{field_name}', defaulting to Any.{Style.RESET_ALL}")
-            origin = get_origin(field_type); args = get_args(field_type)
-            if origin is Union and type(None) in args:
-                 non_none_args = tuple(arg for arg in args if arg is not type(None))
-                 if len(non_none_args) == 1: field_type = Optional[non_none_args[0]]
-                 elif len(non_none_args) > 1: field_type = Optional[Union[non_none_args]]
-                 else: field_type = Optional[type(None)]
+                # If it wasn't in direct lookup and doesn't look complex, treat as unknown
+                 print(f"{Fore.YELLOW}Warning: Unknown or non-generic type '{normalized_type_str}' for field '{field_name}', defaulting to Any.{Style.RESET_ALL}")
+                 field_type = Any
+
+
+            # --- Post-processing for Optional/Union ---
+            # This should run *after* field_type is determined by lookup or eval
+            if field_type is not Any: # Avoid processing Any
+                origin = get_origin(field_type)
+                args = get_args(field_type)
+                # Check specifically for Union containing NoneType
+                if origin is Union and type(None) in args:
+                    non_none_args = tuple(arg for arg in args if arg is not type(None))
+                    if len(non_none_args) == 1: field_type = Optional[non_none_args[0]]
+                    elif len(non_none_args) > 1: field_type = Optional[Union[non_none_args]]
+                    else: field_type = Optional[type(None)] # Only None was in Union
+
+            # Assign the determined (and potentially Optional/Union adjusted) type
             fields[field_name] = (field_type, Field(description=f"{field_name} field"))
-        except NameError as ne:
-             print(f"{Fore.RED}Error evaluating type string '{field_type_str}' for field '{field_name}': Name not found ({ne}). Defaulting to Any.{Style.RESET_ALL}")
-             fields[field_name] = (Any, Field(description=f"{field_name} field (name error)"))
+
         except Exception as e:
-            print(f"{Fore.RED}Error processing type string '{field_type_str}' for field '{field_name}': {e}{Style.RESET_ALL}")
+            # Catch errors during the processing of a single field
+            print(f"{Fore.RED}Error processing field '{field_name}' with type string '{field_type_str}': {e}{Style.RESET_ALL}")
             fields[field_name] = (Any, Field(description=f"{field_name} field (processing error)"))
+
+    # --- Create Model ---
     model_name = f"DynamicOutputModel_{abs(hash(json.dumps(output_model_config, sort_keys=True)))}"
-    try: return create_model(model_name, **fields)
-    except Exception as e: print(f"{Fore.RED}Failed to create Pydantic model '{model_name}': {e}{Style.RESET_ALL}"); return None
+    try:
+         Model = create_model(model_name, **fields)
+         print(f"Successfully created model '{model_name}' with fields: {fields}") # Debug print
+         return Model
+    except Exception as e:
+         print(f"{Fore.RED}Failed to create Pydantic model '{model_name}': {e}{Style.RESET_ALL}")
+         return None
 
 # update_state (Use version from Response #19 - handles dict['output'])
 def update_state(state: Dict[str, Any], output: Union[BaseModel, str, Dict, None], node_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -350,15 +407,30 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
 
                 # --- Parse Action/Input ---
                 # Use MULTILINE flag and match start of line (^) for robustness
+                # --- Parse Action/Input ---
                 action_match = re.search(r"^\s*Action:\s*([\w.-]+)", response_text, re.MULTILINE | re.IGNORECASE)
-                action_input_match = re.search(r"^\s*Action Input:\s*(.*)", response_text, re.MULTILINE | re.DOTALL | re.IGNORECASE)
 
-                if action_match: # Process Tool Call if Action is found
+                # More robust Action Input parsing: try to find JSON or just the line content
+                input_string_from_llm = ""
+                action_input_line_match = re.search(r"^\s*Action Input:\s*(.*)", response_text, re.MULTILINE | re.IGNORECASE)
+                if action_input_line_match:
+                    # Get the entire line content first
+                    raw_input_line = action_input_line_match.group(1).strip()
+                    # Try to extract just a JSON object if possible (non-greedy match)
+                    json_match = re.match(r"(\{.*?\})\s*$", raw_input_line) # Match {.*} at the start, maybe followed by whitespace
+                    if json_match:
+                        input_string_from_llm = json_match.group(1)
+                    else:
+                        # If no clear JSON object, take the first line as input, assuming hallucination followed
+                        input_string_from_llm = raw_input_line.split('\n')[0].strip()
+                        if raw_input_line != input_string_from_llm:
+                            print(f"{Fore.YELLOW}Warning: Truncated Action Input due to potential hallucination. Using: '{input_string_from_llm}'{Style.RESET_ALL}")
+
+
+                if action_match:
                     tool_name = action_match.group(1).strip()
-                    # Handle potentially missing Action Input gracefully
-                    input_string_from_llm = action_input_match.group(1).strip() if action_input_match else ""
                     print_output(f"LLM selected Action: {tool_name}")
-                    print_output(f"LLM provided Action Input string: '{input_string_from_llm}'")
+                    print_output(f"LLM provided Action Input string (parsed): '{input_string_from_llm}'")
 
                     if tool_name in tool_registry:
                         tool_definition = tool_registry[tool_name]

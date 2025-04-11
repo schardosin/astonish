@@ -19,7 +19,7 @@ class ExecuteCommandInput(BaseModel):
 @tool("read_file", args_schema=ReadFileInput)
 def read_file(file_path: str) -> str:
     """
-    Read the contents of a file.
+    Read the contents of a file. Requires 'file_path'
     """
     with open(file_path, 'r') as file:
         return file.read()
@@ -27,7 +27,7 @@ def read_file(file_path: str) -> str:
 @tool("write_file", args_schema=WriteFileInput)
 def write_file(file_path: str, content: str) -> str:
     """
-    Write content to a file.
+    Write content to a file. Requires 'file_path' and 'content'.
     """
     with open(file_path, 'w') as file:
         file.write(content)
@@ -36,7 +36,7 @@ def write_file(file_path: str, content: str) -> str:
 @tool("shell_command", args_schema=ExecuteCommandInput)
 def shell_command(command: str) -> Dict[str, str]:
     """
-    Execute a shell command and return its output.
+    Execute a shell command and return its output. Requires a single command string
     """
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
     return {"stdout": result.stdout, "stderr": result.stderr}

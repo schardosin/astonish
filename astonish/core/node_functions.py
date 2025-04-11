@@ -193,272 +193,425 @@ def create_input_node_function(node_config):
 def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_tools: bool):
     """
     Creates LLM node function. Uses custom ReAct loop if tools are needed,
-    ensuring MCP client context is active and handling diverse tool inputs.
-    Direct call otherwise. Includes debugging for Pydantic issue.
+    adding a final formatting step if node requires structured output.
+    Direct call otherwise.
     """
-    # --- Common Setup ---
-    node_name_for_debug = node_config.get('name', 'Unnamed LLM Node') # Use for logging
+    node_name_for_debug = node_config.get('name', 'Unnamed LLM Node')
     output_model_config = node_config.get('output_model', {})
-
-    # --- Debugging OutputModel Creation ---
-    print(f"[{node_name_for_debug}] Raw output_model_config: {output_model_config}") # Debug Print 1
     OutputModel = create_output_model(output_model_config)
-
-    print(f"[{node_name_for_debug}] create_output_model result: {OutputModel}") # Debug Print 2
-    if OutputModel:
-        print(f"[{node_name_for_debug}] OutputModel type: {type(OutputModel)}") # Debug Print 3
-        try:
-            # Explicitly check against the currently imported BaseModel
-            print(f"[{node_name_for_debug}] Is BaseModel subclass: {issubclass(OutputModel, BaseModel)}") # Debug Print 4
-        except TypeError:
-             print(f"[{node_name_for_debug}] Is BaseModel subclass check failed (TypeError - not a class?).")
-        # Check specifically for the method *before* creating the parser
-        print(f"[{node_name_for_debug}] Has '.model_json_schema': {hasattr(OutputModel, 'model_json_schema')}") # Debug Print 5
-        print(f"[{node_name_for_debug}] Has '.schema' (Pydantic V1): {hasattr(OutputModel, 'schema')}") # Debug Print 5b
-        if hasattr(OutputModel, 'model_json_schema'):
-             try:
-                  print(f"[{node_name_for_debug}] Calling .model_json_schema() early...")
-                  schema_test = OutputModel.model_json_schema() # Try calling it early
-                  print(f"[{node_name_for_debug}] Early .model_json_schema() call successful. Result type: {type(schema_test)}")
-             except Exception as e_schema:
-                  print(f"{Fore.RED}[{node_name_for_debug}] Error calling .model_json_schema() early: {e_schema}{Style.RESET_ALL}")
-    # --- End Debugging ---
-
     parser = PydanticOutputParser(pydantic_object=OutputModel) if OutputModel else None
-    print(f"[{node_name_for_debug}] Parser created: {'Yes' if parser else 'No'}") # Debug Print 6
+    print(f"[{node_name_for_debug}] OutputModel created: {OutputModel is not None}. Parser created: {parser is not None}")
 
-
-    # Tool Registry - populated inside async function per run if needed
     tool_registry: Dict[str, ToolDefinition] = {}
 
     async def node_function(state: dict) -> dict:
-        node_name = node_config.get('name', 'Unnamed LLM Node') # Get name again inside async func
+        node_name = node_config.get('name', 'Unnamed LLM Node')
         print_output(f"Processing {node_name}")
         # --- Limit Counter Logic ---
-        limit_counter_field = node_config.get('limit_counter_field')
-        limit = node_config.get('limit')
+        limit_counter_field = node_config.get('limit_counter_field'); limit = node_config.get('limit')
+        current_counter = state.get(limit_counter_field, 0)
         if limit_counter_field and limit:
-             counter = state.get(limit_counter_field, 0) + 1
-             state[limit_counter_field] = counter # Mutate state copy for this run's logic
-             if counter > limit: print_output(f"Limit {limit} reached for {node_name}. Cycle: {counter}")
-             print_output(f"Processing {node_name} (Cycle {counter}/{limit})")
+             next_counter = current_counter + 1; log_counter = next_counter if next_counter <= limit else 1
+             print_output(f"Processing {node_name} (Cycle {log_counter}/{limit})")
+             # Counter updated later in new_state via update_state
 
         # --- Prepare LLM Call Inputs ---
         try:
             system_message_content = format_prompt(node_config.get('system',''), state, node_config)
             human_message_content = format_prompt(node_config['prompt'], state, node_config)
             llm = LLMManager.get_llm()
-        except Exception as e:
-            print(f"{Fore.RED}Error preparing node {node_name}: {e}{Style.RESET_ALL}")
-            return state # Return original state on setup error
+        except Exception as e: print(f"{Fore.RED}Error preparing node {node_name}: {e}{Style.RESET_ALL}"); return state
 
-        processed_output: Union[BaseModel, str, Dict, None] = None
-        new_state = state.copy() # Work on a copy for the final return value
+        # Variable to hold the final result before state update
+        final_output_for_state: Union[BaseModel, str, Dict, None] = None
+        new_state = state.copy() # Work on a copy
 
         # --- Inner function defining the core ReAct logic ---
-        async def run_react_logic_with_tools(active_mcp_client=None):
-            """Handles tool fetching, prompting, LLM call, parsing, and execution."""
-            nonlocal processed_output # Allow modification of outer scope variable
-            tool_registry.clear()
-            filtered_tool_defs: List[ToolDefinition] = []
-            all_fetched_tools: List[Any] = []
+        async def run_react_logic_with_tools(
+            active_mcp_client: Optional[Any], # The active client from 'async with' or None
+            node_config: Dict[str, Any], # Pass node_config for context
+            system_message_content: str, # Pass prepared messages
+            human_message_content: str,
+            llm: BaseLanguageModel, # Pass the LLM instance
+            tool_registry: Dict[str, ToolDefinition], # Pass the registry to be populated/used
+            internal_tools_list: List[Any] # Pass the static internal tools list
+            ) -> Union[Dict, str, None]:
+            """
+            Handles tool fetching, prompting, LLM call, parsing, conditional input processing,
+            and execution for a single ReAct step.
 
-            # Fetch external tools IF active_mcp_client is provided
-            if active_mcp_client:
-                try:
-                    print_output("Fetching external tools via MCP client...")
-                    external_tools_data = active_mcp_client.get_tools() or []
-                    all_fetched_tools.extend(external_tools_data)
-                except Exception as e: print(f"{Fore.RED}Warning: MCP client error getting tools: {e}{Style.RESET_ALL}")
+            Returns:
+                A dictionary like {"output": "result_text"} on success/final answer/error observation,
+                or None if a critical setup error occurred.
+            """
+            node_name = node_config.get('name', 'Unnamed ReAct Node')
+            processed_output_react: Union[Dict, str, None] = None # Output specific to this function run
 
-            # Add internal tools
-            if isinstance(internal_tools_list, list): all_fetched_tools.extend(internal_tools_list)
+            try: # Wrap major setup steps
+                # --- Fetch/Filter/Register Tools ---
+                tool_registry.clear() # Clear registry for this run
+                filtered_tool_defs: List[ToolDefinition] = []
+                all_fetched_tools: List[Any] = []
 
-            # Filter and Build Registry
-            tool_selection = node_config.get('tools_selection')
-            processed_tool_names = set()
-            for tool_obj in all_fetched_tools:
-                 try:
-                    tool_name = getattr(tool_obj, 'name', None)
-                    if not tool_name or not isinstance(tool_name, str) or tool_name in processed_tool_names: continue
-                    if tool_selection and isinstance(tool_selection, list) and tool_name not in tool_selection: continue
-                    input_schema = getattr(tool_obj, 'args_schema', None)
-                    input_type = getattr(tool_obj, 'input_type', 'JSON_SCHEMA' if input_schema else 'STRING')
-                    executor = getattr(tool_obj, 'arun', getattr(tool_obj, '_arun', getattr(tool_obj, 'run', getattr(tool_obj, '_run', None))))
-                    if not callable(executor): continue
-                    tool_def: ToolDefinition = {
-                        "name": tool_name, "description": getattr(tool_obj, 'description', ''),
-                        "input_type": input_type, "input_schema_definition": input_schema,
-                        "tool_executor": executor, "tool_instance": tool_obj
-                    }
-                    filtered_tool_defs.append(tool_def); tool_registry[tool_name] = tool_def; processed_tool_names.add(tool_name)
-                 except Exception as e: print(f"{Fore.RED}Error processing tool definition for {getattr(tool_obj, 'name', 'unknown')}: {e}{Style.RESET_ALL}")
-
-            if not filtered_tool_defs: print(f"{Fore.YELLOW}Warning: No valid tools available for ReAct node {node_name}.{Style.RESET_ALL}")
-
-            # Generate Custom ReAct Prompt
-            custom_prompt_template_str = create_custom_react_prompt_template(filtered_tool_defs)
-            react_system_message = system_message_content + "\n\n" + custom_prompt_template_str
-            custom_react_prompt = ChatPromptTemplate.from_messages([
-                ("system", react_system_message), ("human", "{input}"),
-                # Add placeholder if implementing multi-turn loop
-                # MessagesPlaceholder(variable_name="agent_scratchpad", optional=True)
-            ])
-
-            # Execute Single ReAct Step
-            print_output("Invoking LLM for custom ReAct step...")
-            chain: Runnable = custom_react_prompt | llm
-            invoke_input = {"input": human_message_content, "agent_scratchpad": ""} # Provide required vars
-            llm_response = await chain.ainvoke(invoke_input)
-            response_text = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
-            print_output(f"LLM Raw Response:\n{Style.DIM}{response_text}{Style.RESET_ALL}")
-
-            # Parse Action/Input
-            action_match = re.search(r"^\s*Action:\s*([\w.-]+)", response_text, re.MULTILINE | re.IGNORECASE)
-            action_input_match = re.search(r"^\s*Action Input:\s*(.*)", response_text, re.MULTILINE | re.DOTALL | re.IGNORECASE)
-
-            if action_match: # Process if action is found
-                tool_name = action_match.group(1).strip()
-                input_string_from_llm = action_input_match.group(1).strip() if action_input_match else ""
-                print_output(f"LLM selected Action: {tool_name}")
-                print_output(f"LLM provided Action Input string: '{input_string_from_llm}'")
-
-                if tool_name in tool_registry:
-                    tool_definition = tool_registry[tool_name]
-                    tool_input_type = tool_definition['input_type']; tool_schema_def = tool_definition['input_schema_definition']
-                    tool_executor = tool_definition['tool_executor']; tool_args_for_execution: Any = None
+                # Fetch external tools IF active_mcp_client is provided
+                if active_mcp_client:
                     try:
-                        # --- Conditional Input Processing ---
-                        if tool_input_type == 'STRING':
-                            print_output("Processing as STRING input."); tool_args_for_execution = input_string_from_llm
-                        elif tool_input_type == 'JSON_SCHEMA':
-                            print_output("Processing as JSON_SCHEMA input.")
-                            if not tool_schema_def: raise ValueError(f"No schema for tool '{tool_name}'")
-                            cleaned_json_string = input_string_from_llm.removeprefix("```json").removesuffix("```").strip()
-                            if not cleaned_json_string:
+                        print_output("Fetching external tools via MCP client...")
+                        # *** Use sync call as per user feedback ***
+                        external_tools_data = active_mcp_client.get_tools() or []
+                        if isinstance(external_tools_data, list):
+                            all_fetched_tools.extend(external_tools_data)
+                            print_output(f"Fetched {len(external_tools_data)} external tools.")
+                        else:
+                            print(f"{Fore.YELLOW}Warning: mcp_client.get_tools() did not return a list.{Style.RESET_ALL}")
+                    except Exception as e:
+                        print(f"{Fore.RED}Warning: MCP client error getting tools: {e}{Style.RESET_ALL}")
+                        # Optionally add traceback print here if needed: print(traceback.format_exc())
+
+                # Add internal tools
+                if isinstance(internal_tools_list, list):
+                    all_fetched_tools.extend(internal_tools_list)
+
+                # Filter and Build Registry (Robust - assumes tool_obj has .name, .description etc)
+                tool_selection = node_config.get('tools_selection')
+                processed_tool_names = set()
+                for tool_obj in all_fetched_tools:
+                    try:
+                        tool_name = getattr(tool_obj, 'name', None)
+                        if not tool_name or not isinstance(tool_name, str) or tool_name in processed_tool_names: continue
+                        if tool_selection and isinstance(tool_selection, list) and tool_name not in tool_selection: continue
+
+                        # --- Determine Input Type & Schema ---
+                        input_schema = getattr(tool_obj, 'args_schema', None)
+                        # Check for explicitly defined input_type first
+                        input_type = getattr(tool_obj, 'input_type', None)
+                        if input_type is None: # Infer if not explicit
+                            input_type = 'JSON_SCHEMA' if input_schema else 'STRING'
+
+                        # --- Determine Executor ---
+                        # Prefer async methods, fallback to sync
+                        executor = getattr(tool_obj, 'arun', getattr(tool_obj, '_arun', None))
+                        is_async_executor = True
+                        if not callable(executor):
+                            executor = getattr(tool_obj, 'run', getattr(tool_obj, '_run', None))
+                            is_async_executor = False # Mark as sync
+
+                        if not callable(executor):
+                            print(f"{Fore.YELLOW}Warning: Tool '{tool_name}' has no callable run/arun method. Skipping.{Style.RESET_ALL}")
+                            continue # Skip tool if not executable
+
+                        # --- Create Tool Definition ---
+                        tool_def: ToolDefinition = {
+                            "name": tool_name,
+                            "description": getattr(tool_obj, 'description', 'No description available.'),
+                            "input_type": input_type,
+                            "input_schema_definition": input_schema,
+                            "tool_executor": executor, # Store the callable found
+                            "tool_instance": tool_obj
+                        }
+                        filtered_tool_defs.append(tool_def)
+                        tool_registry[tool_name] = tool_def # Add to registry
+                        processed_tool_names.add(tool_name)
+                    except Exception as e:
+                        # Catch errors processing individual tools
+                        print(f"{Fore.RED}Error processing tool definition for {getattr(tool_obj, 'name', 'unknown tool')}: {e}{Style.RESET_ALL}")
+
+                if not filtered_tool_defs:
+                    print(f"{Fore.YELLOW}Warning: No valid tools available for ReAct node {node_name}. Agent may only reason.{Style.RESET_ALL}")
+
+                # --- Generate Custom ReAct Prompt ---
+                # Ensure create_custom_react_prompt_template is defined/imported correctly
+                custom_prompt_template_str = create_custom_react_prompt_template(filtered_tool_defs)
+                react_system_message = system_message_content + "\n\n" + custom_prompt_template_str
+                # Note: This assumes a single human message. Multi-turn needs history management.
+                custom_react_prompt = ChatPromptTemplate.from_messages([
+                    ("system", react_system_message),
+                    ("human", "{input}"),
+                    # Add placeholder ONLY if implementing multi-turn and passing scratchpad
+                    # MessagesPlaceholder(variable_name="agent_scratchpad", optional=True)
+                ])
+
+                # --- Execute Single ReAct Step ---
+                print_output("Invoking LLM for custom ReAct step...")
+                chain: Runnable = custom_react_prompt | llm
+
+                # Provide input, ALWAYS include agent_scratchpad if placeholder exists in prompt
+                invoke_input = {"input": human_message_content}
+                # If multi-turn, populate scratchpad here:
+                # invoke_input["agent_scratchpad"] = format_scratchpad(state.get("intermediate_steps", []))
+                # For single turn (as currently implemented):
+                if "agent_scratchpad" in custom_react_prompt.input_variables:
+                    invoke_input["agent_scratchpad"] = "" # Provide empty string if expected
+
+                # Make the LLM call
+                llm_response = await chain.ainvoke(invoke_input)
+                response_text = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
+                print_output(f"LLM Raw Response:\n{Style.DIM}{response_text}{Style.RESET_ALL}")
+
+                # --- Parse Action/Input ---
+                # Use MULTILINE flag and match start of line (^) for robustness
+                action_match = re.search(r"^\s*Action:\s*([\w.-]+)", response_text, re.MULTILINE | re.IGNORECASE)
+                action_input_match = re.search(r"^\s*Action Input:\s*(.*)", response_text, re.MULTILINE | re.DOTALL | re.IGNORECASE)
+
+                if action_match: # Process Tool Call if Action is found
+                    tool_name = action_match.group(1).strip()
+                    # Handle potentially missing Action Input gracefully
+                    input_string_from_llm = action_input_match.group(1).strip() if action_input_match else ""
+                    print_output(f"LLM selected Action: {tool_name}")
+                    print_output(f"LLM provided Action Input string: '{input_string_from_llm}'")
+
+                    if tool_name in tool_registry:
+                        tool_definition = tool_registry[tool_name]
+                        tool_input_type = tool_definition['input_type']
+                        tool_schema_def = tool_definition['input_schema_definition']
+                        tool_executor = tool_definition['tool_executor']
+                        tool_args_for_execution: Any = None
+                        observation: str = "" # Store result or error
+
+                        try:
+                            # --- Conditional Input Processing ---
+                            if tool_input_type == 'STRING':
+                                print_output("Processing as STRING input.")
+                                tool_args_for_execution = input_string_from_llm
+                                # Add validation based on tool_schema_def if it's a regex pattern etc.
+
+                            elif tool_input_type == 'JSON_SCHEMA':
+                                print_output("Processing as JSON_SCHEMA input.")
+                                if not tool_schema_def: raise ValueError(f"No schema for JSON tool '{tool_name}'")
+
+                                # Clean potential markdown fences before parsing
+                                cleaned_json_string = input_string_from_llm.removeprefix("```json").removesuffix("```").strip()
+
+                                # Handle empty string input based on schema
+                                if not cleaned_json_string:
+                                    if isinstance(tool_schema_def, type) and issubclass(tool_schema_def, BaseModel):
+                                        try: # Check if empty init is valid for Pydantic model
+                                            validated_args = tool_schema_def()
+                                            parsed_args = validated_args.model_dump(mode='json') if PYDANTIC_V2 else validated_args.dict() # type: ignore
+                                            print_output("Input parsed as empty JSON object, validated with defaults.")
+                                        except ValidationError as val_error:
+                                            raise ValueError(f"Empty input string is not valid for schema (required fields missing?): {val_error}") from val_error
+                                    else: parsed_args = {} # Assume empty dict if not Pydantic
+                                else: # Parse non-empty string
+                                    parsed_args = json.loads(cleaned_json_string) # Handle JSONDecodeError
+
+                                # --- Validation against schema ---
                                 if isinstance(tool_schema_def, type) and issubclass(tool_schema_def, BaseModel):
-                                     validated_args = tool_schema_def(); parsed_args = validated_args.model_dump(mode='json') if PYDANTIC_V2 else validated_args.dict() # type: ignore
-                                else: parsed_args = {}
-                            else: parsed_args = json.loads(cleaned_json_string)
-                            if isinstance(tool_schema_def, type) and issubclass(tool_schema_def, BaseModel):
-                                 validated_args = tool_schema_def(**parsed_args)
-                                 tool_args_for_execution = validated_args.model_dump(mode='json') if PYDANTIC_V2 else validated_args.dict() # type: ignore
-                                 print_output("JSON Validation successful (Pydantic).")
-                            else: print_output("JSON Parsing successful (validation skipped)."); tool_args_for_execution = parsed_args
-                        # Add other elif for custom types
-                        else: raise ValueError(f"Unsupported tool input_type: '{tool_input_type}'")
+                                    validated_args = tool_schema_def(**parsed_args) # Handle ValidationError
+                                    # Pass dict representation to executor
+                                    tool_args_for_execution = validated_args.model_dump(mode='json') if PYDANTIC_V2 else validated_args.dict() # type: ignore
+                                    print_output("JSON Validation successful (Pydantic).")
+                                # Add elif for JSON schema dict validation if needed
+                                else:
+                                    print_output("JSON Parsing successful (validation skipped - schema not Pydantic model).")
+                                    tool_args_for_execution = parsed_args # Pass parsed dict
 
-                        # --- Execute Tool ---
-                        print_output(f"Executing tool '{tool_name}'...")
-                        if asyncio.iscoroutinefunction(tool_executor): tool_result = await tool_executor(tool_args_for_execution)
-                        else: tool_result = await asyncio.to_thread(tool_executor, tool_args_for_execution)
-                        observation = str(tool_result)
-                        print_output(f"Tool Observation: {observation}")
-                        processed_output = {"output": observation}
+                            # Add elif blocks for 'CSV_STRING', 'DIRECT_PASS', etc. as needed
+                            # elif tool_input_type == 'DIRECT_PASS':
+                            #      print_output("Processing as DIRECT_PASS input.")
+                            #      tool_args_for_execution = input_string_from_llm
 
-                    except (json.JSONDecodeError, ValueError, ValidationError, TypeError, Exception) as exec_error:
-                        error_message = f"Error processing/executing tool '{tool_name}': {exec_error}"
+                            else:
+                                raise ValueError(f"Unsupported tool input_type: '{tool_input_type}'")
+
+                            # --- Execute Tool ---
+                            print_output(f"Executing tool '{tool_name}'...")
+                            # Check if the stored executor was async or sync
+                            executor_is_async = asyncio.iscoroutinefunction(tool_executor)
+
+                            if executor_is_async:
+                                tool_result = await tool_executor(tool_args_for_execution)
+                            else: # Run sync tool in thread pool to avoid blocking async event loop
+                                tool_result = await asyncio.to_thread(tool_executor, tool_args_for_execution)
+
+                            observation = str(tool_result) # Convert result to string observation
+                            print_output(f"Tool Observation: {observation}")
+                            processed_output_react = {"output": observation} # Wrap observation
+
+                        except (json.JSONDecodeError, ValueError, ValidationError, TypeError, Exception) as exec_error:
+                            # Catch errors during parsing, validation, or execution
+                            error_message = f"Error processing/executing tool '{tool_name}': {exec_error}"
+                            print(f"{Fore.RED}{error_message}{Style.RESET_ALL}")
+                            print(f"{Fore.RED}Traceback:\n{traceback.format_exc()}{Style.RESET_ALL}")
+                            processed_output_react = {"output": f"Error: {exec_error}"} # Wrap error as output
+
+                    else: # Tool name parsed but not found in registry
+                        error_message = f"Error: LLM selected unknown Action: {tool_name}"
                         print(f"{Fore.RED}{error_message}{Style.RESET_ALL}")
-                        print(f"{Fore.RED}Traceback:\n{traceback.format_exc()}{Style.RESET_ALL}")
-                        processed_output = {"output": f"Error: {exec_error}"} # Pass error observation
+                        processed_output_react = {"output": error_message}
 
-                else: # Tool name not found
-                    error_message = f"Error: LLM selected unknown Action: {tool_name}"
-                    print(f"{Fore.RED}{error_message}{Style.RESET_ALL}")
-                    processed_output = {"output": error_message}
+                # --- Handle Final Answer or No Action ---
+                elif "Final Answer:" in response_text:
+                    final_answer = response_text.split("Final Answer:")[-1].strip()
+                    print_output(f"LLM provided Final Answer: {final_answer}")
+                    processed_output_react = {"output": final_answer} # Wrap final answer
+                else:
+                    # LLM didn't follow expected ReAct format
+                    warning_message = "Warning: LLM response did not provide Action or Final Answer. Using raw response."
+                    print(f"{Fore.YELLOW}{warning_message}{Style.RESET_ALL}")
+                    processed_output_react = {"output": response_text} # Use raw output as fallback
 
-            # --- Handle Final Answer or No Action ---
-            elif "Final Answer:" in response_text:
-                 final_answer = response_text.split("Final Answer:")[-1].strip()
-                 print_output(f"LLM provided Final Answer: {final_answer}")
-                 processed_output = {"output": final_answer}
-            else:
-                 warning_message = "Warning: LLM response did not provide Action or Final Answer. Using raw response."
-                 print(f"{Fore.YELLOW}{warning_message}{Style.RESET_ALL}")
-                 processed_output = {"output": response_text}
+            # --- Catch errors during the overall setup/LLM call within run_react_logic_with_tools ---
+            except Exception as react_logic_error:
+                print(f"{Fore.RED}Critical error within run_react_logic_with_tools setup or LLM call: {react_logic_error}{Style.RESET_ALL}")
+                print(f"{Fore.RED}Traceback:\n{traceback.format_exc()}{Style.RESET_ALL}")
+                processed_output_react = {"output": f"Error during ReAct step: {react_logic_error}"}
+
+            return processed_output_react # Return the final dict/string/None
 
         # --- Main Logic Branching for Tool Execution Context ---
+        react_step_result: Union[Dict, str, None] = None # Store result from ReAct logic if used
         if use_tools:
-            # Run the ReAct logic, potentially within MCP client context
+            # If MCP client exists, run the core logic within its context
             if mcp_client:
                  print_output("Entering MCP client context for tool operations...")
                  try:
                       async with mcp_client as client:
-                           await run_react_logic_with_tools(active_mcp_client=client) # Pass active client
+                           # *** PASS ALL REQUIRED ARGUMENTS HERE ***
+                           react_step_result = await run_react_logic_with_tools(
+                               active_mcp_client=client,
+                               node_config=node_config, # Pass node_config
+                               system_message_content=system_message_content, # Pass messages
+                               human_message_content=human_message_content,
+                               llm=llm, # Pass llm
+                               tool_registry=tool_registry, # Pass registry
+                               internal_tools_list=internal_tools_list # Pass internal tools list
+                           )
                  except Exception as e:
                       print(f"{Fore.RED}Error within MCP client context execution: {e}{Style.RESET_ALL}")
                       print(f"{Fore.RED}Traceback:\n{traceback.format_exc()}{Style.RESET_ALL}")
-                      # Ensure processed_output is set to avoid None later
-                      if processed_output is None: processed_output = {"output": f"Error during MCP context: {e}"}
+                      if react_step_result is None: react_step_result = {"output": f"Error during MCP context: {e}"}
+
             else: # Tools requested, but no MCP client
                  print_output("No MCP client provided, using only internal tools for ReAct...")
                  try:
-                      await run_react_logic_with_tools(active_mcp_client=None)
+                      # *** PASS ALL REQUIRED ARGUMENTS HERE TOO ***
+                      react_step_result = await run_react_logic_with_tools(
+                           active_mcp_client=None, # Pass None explicitly
+                           node_config=node_config,
+                           system_message_content=system_message_content,
+                           human_message_content=human_message_content,
+                           llm=llm,
+                           tool_registry=tool_registry,
+                           internal_tools_list=internal_tools_list
+                      )
                  except Exception as e:
                      print(f"{Fore.RED}Error during internal tool ReAct execution: {e}{Style.RESET_ALL}")
                      print(f"{Fore.RED}Traceback:\n{traceback.format_exc()}{Style.RESET_ALL}")
-                     if processed_output is None: processed_output = {"output": f"Error during internal tool operation: {e}"}
+                     if react_step_result is None: react_step_result = {"output": f"Error during internal tool operation: {e}"}
+
+            # --- Final Formatting Step for ReAct Path (if parser exists) ---
+            final_result_text = None
+            # Check if react_step_result is a dict with 'output' key and it's a string
+            if isinstance(react_step_result, dict) and isinstance(react_step_result.get("output"), str):
+                final_result_text = react_step_result["output"]
+            elif isinstance(react_step_result, str): # Handle case where result is already error string
+                final_result_text = react_step_result
+
+            # Default to the direct result from ReAct logic (could be dict or error string)
+            final_output_for_state = react_step_result
+
+            # Attempt formatting only if parser exists, we have text, and it's not already an error
+            if parser and final_result_text and isinstance(final_result_text, str) and not final_result_text.lower().startswith("error:"):
+                print_output(f"Attempting to extract result from ReAct text and format into JSON schema for {node_name}...")
+                format_instructions = ""; schema_valid_for_format = False
+                try: # Try getting format instructions
+                    # ...(logic to get format_instructions based on Pydantic V1/V2)...
+                    # Set schema_valid_for_format = True if successful
+                    if PYDANTIC_V2:
+                         if hasattr(parser.pydantic_object, 'model_json_schema'): format_instructions = parser.get_format_instructions(); schema_valid_for_format = True
+                         else: print(f"{Fore.RED}Error: Pydantic V2 model lacks .model_json_schema() for {node_name}{Style.RESET_ALL}")
+                    else: # V1
+                         if hasattr(parser.pydantic_object, 'schema'):
+                             v1_schema = parser.pydantic_object.schema(); format_instructions = f"JSON schema:\n```json\n{json.dumps(v1_schema, indent=2)}\n```"; schema_valid_for_format = True
+                         else: print(f"{Fore.RED}Error: Pydantic V1 model lacks .schema() for {node_name}{Style.RESET_ALL}")
+
+                except Exception as e: print(f"{Fore.RED}[{node_name}] Unexpected error getting format instructions: {e}{Style.RESET_ALL}")
+
+                # Proceed with formatting call only if instructions were obtained
+                if schema_valid_for_format:
+                    # *** ENHANCED PROMPT FOR EXTRACTION + FORMATTING ***
+                    formatting_prompt = (
+                        f"Analyze the following text, which is the result (observation) from a previous tool execution. "
+                        f"Your goal is to extract the single, most salient value or piece of information requested by the desired output schema "
+                        f"(e.g., if the schema asks for 'execution_result', extract the primary outcome like a number, status, or summary; "
+                        f"if it asks for 'weather_summary', extract that). "
+                        f"Then, format ONLY this extracted value into a JSON object conforming strictly to the schema provided below. "
+                        f"Respond ONLY with the JSON object, without any markdown formatting like ```json or explanations.\n\n"
+                        f"Tool Observation Text:\n```\n{final_result_text}\n```\n\n"
+                        f"Required JSON Schema (extract the relevant value to fit this):\n{format_instructions}"
+                    )
+                    # *** END ENHANCED PROMPT ***
+
+                    formatting_messages = [HumanMessage(content=formatting_prompt)]
+                    max_format_retries = 2; format_retry_count = 0; parsed_formatted_output = None
+
+                    # ...(Rest of the retry loop for LLM call and parsing remains the same)...
+                    # [This loop now uses the enhanced prompt]
+                    while format_retry_count < max_format_retries:
+                        try:
+                            print_output(f"Attempt {format_retry_count + 1}/{max_format_retries} for JSON formatting...")
+                            formatting_response = await llm.ainvoke(formatting_messages)
+                            cleaned_content = formatting_response.content.strip().removeprefix("```json").removesuffix("```").strip()
+                            parsed_formatted_output = parser.parse(cleaned_content) # Use the node's parser
+                            print_output("Successfully extracted and formatted ReAct result to JSON.")
+                            break # Success
+                        except (OutputParserException, ValidationError, json.JSONDecodeError) as parse_error:
+                            format_retry_count += 1; error_detail = f"{type(parse_error).__name__}: {parse_error}"
+                            print(f"{Fore.YELLOW}Warning: Formatting LLM call failed parsing/validation (Attempt {format_retry_count}/{max_format_retries}): {error_detail}{Style.RESET_ALL}")
+                            if format_retry_count >= max_format_retries:
+                                 print(f"{Fore.RED}Failed to format ReAct result to JSON after retries. Storing raw text result.{Style.RESET_ALL}")
+                                 parsed_formatted_output = final_result_text # Fallback to raw text
+                                 break
+                            feedback = f"Formatting failed: {error_detail}. Extract the single key result value from the observation text and provide ONLY the valid JSON object matching the schema."
+                            formatting_messages = [formatting_messages[0], HumanMessage(content=feedback)] # Add feedback for retry
+                        except Exception as format_error:
+                             print(f"{Fore.RED}Unexpected error during result formatting LLM call: {format_error}{Style.RESET_ALL}")
+                             parsed_formatted_output = final_result_text # Fallback
+                             break
+                    # Update the final output ONLY if formatting was attempted
+                    final_output_for_state = parsed_formatted_output
+                # *** End of 'if schema_valid_for_format:' ***
+                else: # Schema wasn't valid for formatting
+                     print(f"{Fore.YELLOW}Warning: Schema invalid or unavailable for formatting. Using raw ReAct result for {node_name}.{Style.RESET_ALL}")
+                     # final_output_for_state remains the original react_step_result
+
+            # *** Corrected `else` block alignment ***
+            else: # No parser OR no text result OR result was error - skip formatting attempt
+                print_output(f"Skipping formatting for {node_name} (No parser, no text result, or result was error).")
+                # final_output_for_state remains the original react_step_result
 
 
         # --- Execution Path: No Tools (Direct LLM Call) ---
         else: # use_tools is False
             print_output(f"Using Direct LLM Call for {node_name}")
+            # ...(Direct call logic exactly as implemented in Response #23)...
+            # [This logic should correctly set final_output_for_state at the end]
+            # [Make sure the final assignment to final_output_for_state happens correctly within this block]
+            if not parser: print(f"{Fore.YELLOW}Warning: No parser for direct call node {node_name}. Expecting raw text.{Style.RESET_ALL}")
+            prompt_to_llm = human_message_content; format_instructions = ""; schema_valid_for_format_direct = False
+            if parser:
+                try: # Try getting instructions
+                    if PYDANTIC_V2:
+                         if hasattr(parser.pydantic_object, 'model_json_schema'): format_instructions = parser.get_format_instructions(); schema_valid_for_format_direct = True
+                         else: print(f"{Fore.RED}Error: Pydantic V2 model lacks .model_json_schema() for {node_name}{Style.RESET_ALL}")
+                    else: # V1
+                         if hasattr(parser.pydantic_object, 'schema'):
+                             v1_schema = parser.pydantic_object.schema(); format_instructions = f"JSON schema:\n```json\n{json.dumps(v1_schema, indent=2)}\n```"; schema_valid_for_format_direct = True
+                         else: print(f"{Fore.RED}Error: Pydantic V1 model lacks .schema() for {node_name}{Style.RESET_ALL}")
 
-            # --- Add Debugging before using parser ---
-            print(f"[{node_name}] Attempting direct call. Parser object: {parser}") # Debug Print 7
-            if parser and hasattr(parser, 'pydantic_object'):
-                 pyd_obj = parser.pydantic_object
-                 # Check if pyd_obj is not None before accessing attributes
-                 if pyd_obj is not None:
-                      print(f"[{node_name}] Parser's pydantic_object: {pyd_obj}") # Debug Print 8
-                      print(f"[{node_name}] Parser's pydantic_object type: {type(pyd_obj)}") # Debug Print 9
-                      print(f"[{node_name}] Parser's pydantic_object Has '.model_json_schema': {hasattr(pyd_obj, 'model_json_schema')}") # Debug Print 10
-                      print(f"[{node_name}] Parser's pydantic_object Has '.schema' (V1): {hasattr(pyd_obj, 'schema')}") # Debug Print 10b
-                 else:
-                      print(f"[{node_name}] Parser's pydantic_object is None.") # Debug Print 8b
-            elif parser:
-                 print(f"[{node_name}] Parser exists but has no 'pydantic_object' attribute?") # Debug Print 7b
-            # --- End Debugging ---
+                    if schema_valid_for_format_direct: # Only add instructions if valid
+                         prompt_to_llm += f"\n\nIMPORTANT: Respond ONLY with a JSON object conforming to the schema below. Do not include ```json ``` markers or any text outside the JSON object itself.\nSCHEMA:\n{format_instructions}"
+                    else:
+                         # If instructions failed, proceed without them? Or raise? Let's proceed without for now.
+                         print(f"{Fore.YELLOW}Warning: Cannot get format instructions for {node_name}. Asking for text.{Style.RESET_ALL}")
+                         # Do not add JSON instructions to prompt_to_llm
 
-            if not parser:
-                 print(f"{Fore.YELLOW}Warning: No output_model/parser for direct call node {node_name}. Expecting raw text.{Style.RESET_ALL}")
-                 prompt_to_llm = human_message_content
-            else: # Proceed only if parser seems valid
-                prompt_to_llm = human_message_content
-                try:
-                     # *** This is the line that fails - get format instructions ***
-                     # Check existence of method based on detected Pydantic version
-                     if PYDANTIC_V2:
-                         if not hasattr(parser.pydantic_object, 'model_json_schema'):
-                             raise AttributeError(f"Pydantic V2 detected, but model {type(parser.pydantic_object)} lacks 'model_json_schema' method.")
-                         format_instructions = parser.get_format_instructions() # Should now work if checks pass
-                     else: # Pydantic V1
-                         # Langchain's parser might still try V2 method internally.
-                         # A V1 specific parser or manual instructions might be needed if this fails.
-                         # Let's try the default and see if Langchain handles V1 compatibility here.
-                          if not hasattr(parser.pydantic_object, 'schema'):
-                              raise AttributeError(f"Pydantic V1 detected, but model {type(parser.pydantic_object)} lacks 'schema' method.")
-                          # Manually create V1 style instructions (example)
-                          v1_schema = parser.pydantic_object.schema()
-                          format_instructions = f"The output should be formatted as a JSON instance that conforms to the JSON schema below.\n\n```json\n{json.dumps(v1_schema, indent=2)}\n```"
-                          # Or try default Langchain parser way and see if it adapts:
-                          # format_instructions = parser.get_format_instructions() # Might still raise error if it insists on V2 method
+                except Exception as e: print(f"{Fore.RED}[{node_name}] Unexpected error getting format instructions: {e}{Style.RESET_ALL}") # Log error but continue?
 
-                     prompt_to_llm += f"\n\nIMPORTANT: Respond ONLY with a JSON object conforming to the schema below. Do not include ```json ``` markers or any text outside the JSON object itself.\nSCHEMA:\n{format_instructions}"
-
-                except AttributeError as e:
-                     print(f"{Fore.RED}[{node_name}] CRITICAL: Failed get_format_instructions. Pydantic V2 mode={PYDANTIC_V2}. Object type: {type(parser.pydantic_object if parser else None)}. Error: {e}{Style.RESET_ALL}")
-                     # Fallback: Cannot ask for JSON if instructions fail. Proceed asking for raw text?
-                     # Or re-raise the error. Raising for now.
-                     raise e
-                except Exception as e:
-                     print(f"{Fore.RED}[{node_name}] Unexpected error getting format instructions: {e}{Style.RESET_ALL}")
-                     raise e
-
-            # --- Direct LLM Call Loop (with retry logic) ---
             messages: List[BaseMessage] = [SystemMessage(content=system_message_content), HumanMessage(content=prompt_to_llm)]
             max_retries = node_config.get('max_retries', 3); retry_count = 0
-            final_parsed_output: Union[BaseModel, str, None] = None; llm_response_content: Optional[str] = None
+            llm_response_content: Optional[str] = None; direct_call_parsed_output: Union[BaseModel, str, None] = None
 
             while retry_count < max_retries:
                  try:
@@ -466,41 +619,39 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                       llm_response = await llm.ainvoke(messages)
                       llm_response_content = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
 
-                      if parser: # Only parse if parser exists and format instructions were added
+                      # Only attempt parsing if parser exists AND format instructions were likely added
+                      if parser and schema_valid_for_format_direct:
                             cleaned_content = llm_response_content.strip().removeprefix("```json").removesuffix("```").strip()
                             if not cleaned_content: raise OutputParserException("Received empty response.")
-                            final_parsed_output = parser.parse(cleaned_content)
+                            direct_call_parsed_output = parser.parse(cleaned_content)
                             print_output("Successfully parsed and validated JSON output.")
-                      else: # No parser, use raw text
-                            final_parsed_output = llm_response_content
-                            print_output("Received raw text output (no parser defined).")
-                      break # Success!
-
+                      else: # No parser or format instructions not added, use raw text
+                            direct_call_parsed_output = llm_response_content
+                            if parser: print_output("Received raw text output (format instructions missing/failed).")
+                            else: print_output("Received raw text output (no parser defined).")
+                      break # Success
                  except (OutputParserException, ValidationError, json.JSONDecodeError) as e:
                       retry_count += 1; error_detail = f"{type(e).__name__}: {e}"
                       print(f"{Fore.RED}Output parsing/validation failed (Attempt {retry_count}/{max_retries}): {error_detail}{Style.RESET_ALL}")
-                      if retry_count >= max_retries: processed_output = f"Error: Failed to parse/validate LLM output after {max_retries} attempts."; break
-                      feedback_message = f"Your previous response failed ({error_detail}). Please strictly follow the format instructions and provide ONLY the required output."
-                      messages = messages[:2] + [HumanMessage(content=feedback_message)]
-                 except Exception as e:
-                       print(f"{Fore.RED}Unexpected error during direct LLM call for node {node_name}: {e}{Style.RESET_ALL}")
-                       processed_output = f"Error in Direct LLM Call: {e}"; break
+                      if retry_count >= max_retries: final_output_for_state = f"Error: Failed after {max_retries} attempts. {error_detail}"; break
+                      feedback = f"Your previous response failed ({error_detail}). Please strictly follow the format instructions."
+                      messages = messages[:2] + [HumanMessage(content=feedback)]
+                 except Exception as e: print(f"{Fore.RED}Unexpected LLM call error: {e}{Style.RESET_ALL}"); final_output_for_state = f"Error: {e}"; break
 
-            if final_parsed_output is not None: processed_output = final_parsed_output
-            elif processed_output is None and retry_count >= max_retries: processed_output = f"Error: Max retries reached for node {node_name}. Last response maybe: {llm_response_content}"
+            if direct_call_parsed_output is not None: final_output_for_state = direct_call_parsed_output
+            elif final_output_for_state is None: final_output_for_state = f"Error: Max retries reached. Last response maybe: {llm_response_content}"
 
 
         # --- Update State & Print ---
-        if processed_output is None:
+        if final_output_for_state is None:
              print(f"{Fore.RED}Error: No output was processed or error captured for node {node_name}. Returning original state.{Style.RESET_ALL}")
-             # Keep new_state as the original state copy
+             # Keep new_state as the initial copy
         else:
-             new_state = update_state(new_state, processed_output, node_config) # Update the copy
+             new_state = update_state(new_state, final_output_for_state, node_config)
 
         print_user_messages(new_state, node_config)
         # Conditionally print prompt only for direct call path if enabled
         if not use_tools and node_config.get('print_prompt', False):
-            # Need to potentially reconstruct the ChatPromptTemplate if messages list was modified
             print_chat_prompt(ChatPromptTemplate(messages=messages), node_config)
         print_state(new_state, node_config)
 
@@ -521,16 +672,24 @@ def print_user_messages(state: Dict[str, Any], node_config: Dict[str, Any]):
          return
     for field_or_template in user_message_fields:
         if isinstance(field_or_template, str):
+            # *** Add this check ***
+            # First, check if the string is DIRECTLY a key in the state with a value
+            if field_or_template in state and state[field_or_template] is not None:
+                 print_ai(str(state[field_or_template])) # Print the value directly
+                 continue # Skip further processing for this item
+            # *** End Check ***
+
+            # If not a direct key, treat as template or literal using format_prompt
             try:
-                 # Use the existing robust formatter if available
                  formatted_msg = format_prompt(field_or_template, state, node_config)
+                 # Check if formatting actually did anything or just returned the original
+                 # (this depends on format_prompt implementation, maybe just print?)
                  print_ai(formatted_msg)
             except Exception as e:
                  print(f"{Fore.RED}Error formatting user message '{field_or_template}': {e}{Style.RESET_ALL}")
                  print_ai(field_or_template) # Print original on error
         else:
              print(f"{Fore.YELLOW}Warning: Item in 'user_message' is not a string: {field_or_template}{Style.RESET_ALL}")
-
 
 def print_chat_prompt(chat_prompt: BasePromptTemplate, node_config: Dict[str, Any]):
     """Prints formatted chat prompt messages if enabled in config."""

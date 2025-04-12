@@ -84,9 +84,9 @@ def request_tool_execution(tool):
         tool_name = tool['name']
         args = tool['args']
 
-        prompt_message = f"\nTool Execution Request:\n"
-        prompt_message += f"Tool Name: {tool_name}\n"
-        prompt_message += "Arguments:\n"
+        prompt_message = f"\nTool Call Request:\n"
+        prompt_message += f"Name: {tool_name}\n"
+        prompt_message += "Args:\n"
         
         for key, value in args.items():
             prompt_message += f"  {key}: {value}\n"

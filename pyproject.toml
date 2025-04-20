@@ -14,7 +14,7 @@ packages = [
 
 [project]
 name = "astonish"
-version = "0.4.4"
+version = "0.4.5"
 authors = [
     {name = "Rafael Schardosin Silva", email = "rafael.rs@gmail.com"},
 ]
@@ -37,7 +37,8 @@ dependencies = [
     "colorama==0.4.6",
     "langchain-mcp-adapters==0.0.7",
     "aiosqlite==0.21.0",
-    "grandalf==0.8"
+    "grandalf==0.8",
+    "pykwalify==1.8.0"
 ]
 
 [project.optional-dependencies]

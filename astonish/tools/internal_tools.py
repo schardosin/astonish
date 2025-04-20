@@ -1,7 +1,9 @@
 import subprocess
-from typing import Dict, Type
+from typing import Dict, Type, Union, List
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
+from pykwalify.core import Core
+import tempfile
 
 # Define input schemas
 class ReadFileInput(BaseModel):
@@ -13,6 +15,10 @@ class WriteFileInput(BaseModel):
 
 class ExecuteCommandInput(BaseModel):
     command: str = Field(..., description="The shell command to execute.")
+
+class ValidateGenericYAMLInput(BaseModel):
+    schema_yaml: str = Field(..., description="YAML schema definition (as a string).")
+    content_yaml: str = Field(..., description="YAML content to validate (as a string).")
 
 # Define tools using args_schema
 
@@ -41,5 +47,29 @@ def shell_command(command: str) -> Dict[str, str]:
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
     return {"stdout": result.stdout, "stderr": result.stderr}
 
+@tool("validate_yaml_with_schema", args_schema=ValidateGenericYAMLInput)
+def validate_yaml_with_schema(schema_yaml: str, content_yaml: str) -> Dict[str, Union[str, List[str]]]:
+    """
+    Validate YAML content against a provided YAML schema using pykwalify.
+    Returns a success message or a list of validation errors.
+    """
+    try:
+        # Write schema and content to temp files
+        with tempfile.NamedTemporaryFile('w+', suffix=".yaml", delete=False) as schema_file, \
+             tempfile.NamedTemporaryFile('w+', suffix=".yaml", delete=False) as content_file:
+            schema_file.write(schema_yaml)
+            content_file.write(content_yaml)
+            schema_file.flush()
+            content_file.flush()
+
+            # Run pykwalify
+            core = Core(source_file=content_file.name, schema_files=[schema_file.name])
+            core.validate()
+
+        return {"message": "YAML is valid."}
+    
+    except Exception as e:
+        return {"errors": [str(e)]}
+
 # Export the list of tools
-tools = [read_file, write_file, shell_command]
+tools = [read_file, write_file, shell_command, validate_yaml_with_schema]

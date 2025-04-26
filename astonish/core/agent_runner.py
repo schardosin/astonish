@@ -32,7 +32,7 @@ async def run_agent(agent):
 
     # Build graph
     async with AsyncSqliteSaver.from_conn_string(":memory:") as checkpointer:
-        thread = {"configurable": {"thread_id": "1"}}
+        thread = {"configurable": {"thread_id": "1"}, "recursion_limit": 200}
         graph = build_graph(config, mcp_client, checkpointer)
 
         await run_graph(graph, initial_state, thread)

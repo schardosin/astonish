@@ -14,7 +14,7 @@ packages = [
 
 [project]
 name = "astonish"
-version = "0.4.4"
+version = "0.4.5"
 authors = [
     {name = "Rafael Schardosin Silva", email = "rafael.rs@gmail.com"},
 ]
@@ -30,14 +30,16 @@ dependencies = [
     "appdirs==1.4.4",
     "generative-ai-hub-sdk[all]==4.10.2",
     "langchain-ollama==0.3.1",
-    "langchain==0.3.23",
+    "langchain==0.3.24",
     "langgraph==0.3.27",
     "langgraph-checkpoint-sqlite==2.0.6",
     "pydantic==2.10.6",
     "colorama==0.4.6",
     "langchain-mcp-adapters==0.0.7",
     "aiosqlite==0.21.0",
-    "grandalf==0.8"
+    "grandalf==0.8",
+    "pykwalify==1.8.0",
+    "inquirer==3.4.0"
 ]
 
 [project.optional-dependencies]

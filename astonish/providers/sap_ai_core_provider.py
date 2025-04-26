@@ -108,7 +108,13 @@ class SAPAICoreProvider(AIProvider):
         if not self.proxy_client:
             self._initialize_proxy_client()
 
+        # o1 and o3-mini require temperature=1
+        if model_name in ["o1", "o3-mini"]:
+            temperature = 1
+        else:
+            temperature = 0
+
         # Initialize and return the LLM
-        llm = init_llm(model_name, proxy_client=self.proxy_client, streaming=streaming, max_tokens=4096)
+        llm = init_llm(model_name, proxy_client=self.proxy_client, streaming=streaming, max_tokens=4096, temperature=temperature)
         return llm
     

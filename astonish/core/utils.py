@@ -4,12 +4,21 @@ import appdirs
 import astonish.globals as globals
 from importlib import resources
 from colorama import Fore, Style, init as colorama_init
+import re
+import inquirer
 
 def setup_colorama():
     colorama_init(autoreset=True)
 
+def format_message(message):
+    # Apply bold (via Style.BRIGHT)
+    message = re.sub(r'\*\*(.*?)\*\*', Style.BRIGHT + r'\1' + Style.RESET_ALL, message)
+
+    return message
+
 def print_ai(message):
-    print(f"{Fore.GREEN}AI: {Style.RESET_ALL}{message}")
+    formatted = format_message(message)
+    print(f"{Fore.GREEN}AI: {Style.RESET_ALL}{formatted}")
 
 def print_user_prompt(message):
     print(f"{Fore.YELLOW}{message}{Style.RESET_ALL}", end="")
@@ -62,49 +71,138 @@ def edit_agent(agent_name):
         globals.logger.warning(error_message)
         return error_message
 
-def format_prompt(prompt: str, state: dict, node_config: dict):
-    state_dict = dict(state)
-    state_dict['state'] = state
-    format_dict = {**state_dict, **node_config}
-    return prompt.format(**format_dict)
+def _evaluate_placeholder(expr: str, context: dict) -> str:
+    """
+    Safely evaluates simple expressions found within {}.
+    Supports:
+        - Simple variable names: {variable}
+        - Dictionary key access (string keys): {variable['key']}
+        - Basic attribute access: {variable.attribute}
+    
+    Args:
+        expr: The string expression inside the braces (e.g., "variable", "variable['key']").
+        context: The dictionary ({**state, **node_config}) to look up variables in.
+
+    Returns:
+        The resolved string value, or the original placeholder string if resolution fails.
+    """
+    expr = expr.strip() # Remove leading/trailing whitespace
+
+    try:
+        if '.' not in expr and '[' not in expr:
+            if expr in context:
+                return str(context[expr])
+            else:
+                raise KeyError(f"Variable '{expr}' not found")
+
+        dict_match = re.fullmatch(r"(\w+)\[(['\"])(.*?)\2\]", expr)
+        if dict_match:
+            var_name, _, key = dict_match.groups()
+            if var_name in context:
+                target_dict = context[var_name]
+                if isinstance(target_dict, dict):
+                    if key in target_dict:
+                        return str(target_dict[key])
+                    else:
+                        raise KeyError(f"Key '{key}' not found in dict '{var_name}'")
+                else:
+                    raise TypeError(f"Variable '{var_name}' is not a dictionary")
+            else:
+                raise KeyError(f"Base variable '{var_name}' not found")
+
+        attr_match = re.fullmatch(r"(\w+)\.(\w+)", expr)
+        if attr_match:
+            var_name, attr_name = attr_match.groups()
+            if var_name in context:
+                target_obj = context[var_name]
+                if hasattr(target_obj, attr_name):
+                    return str(getattr(target_obj, attr_name))
+                else:
+                    raise AttributeError(f"Object '{var_name}' has no attribute '{attr_name}'")
+            else:
+                raise KeyError(f"Base variable '{var_name}' not found")
+
+        # If none of the patterns match, it's an unsupported expression
+        raise ValueError(f"Unsupported expression format: {expr}")
+
+    except (KeyError, AttributeError, IndexError, TypeError, ValueError) as e:
+        globals.logger.warning(f"Could not resolve placeholder '{{{expr}}}': {type(e).__name__}: {e}. Leaving placeholder unchanged.")
+        # Return the original placeholder string on any error
+        return f"{{{expr}}}"
+
+def format_prompt(prompt: str, state: dict, node_config: dict) -> str:
+    """
+    Formats the prompt string using custom logic to handle {var} and {var['key']} syntax.
+    It does NOT use str.format() directly to allow for dictionary access within braces.
+    
+    Args:
+        prompt: The template string (using {} delimiters).
+        state: The state dictionary.
+        node_config: The node configuration dictionary.
+
+    Returns:
+        The formatted string, with unresolved placeholders left intact.
+    """
+    # Combine state and node_config. node_config overwrites state on conflicts.
+    format_context = {**state, **node_config}
+
+    if not isinstance(prompt, str):
+         logger.warning(f"Prompt is not a string, returning as is. Type: {type(prompt)}")
+         return prompt
+
+    formatted_prompt = re.sub(
+        r"\{([^}]+)\}", 
+        lambda match: _evaluate_placeholder(match.group(1), format_context), 
+        prompt
+    )
+    
+    return formatted_prompt
 
 def request_tool_execution(tool):
     """
     Prompt the user for approval before executing a tool command.
-    Accepts only 'yes', 'no', 'y', or 'n' as valid inputs (case-insensitive).
-    Keeps prompting until a valid response is received.
-
     Parameters:
     - tool (dict): Dictionary containing tool execution details.
-
     Returns:
     - bool: True if the user approves, False otherwise.
     """
     try:
         tool_name = tool['name']
         args = tool['args']
+        auto_approve = tool['auto_approve']
 
-        prompt_message = f"\nTool Execution Request:\n"
-        prompt_message += f"Tool Name: {tool_name}\n"
-        prompt_message += "Arguments:\n"
+        if auto_approve:
+            print(f"{Fore.GREEN}Auto-approving tool '{tool_name}' execution.{Style.RESET_ALL}")
+            return True
+        
+        print(f"\n{Fore.YELLOW}Tool Call Request:{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}Name:{Style.RESET_ALL} {tool_name}")
+        print(f"{Fore.YELLOW}Args:{Style.RESET_ALL}")
         
         for key, value in args.items():
-            prompt_message += f"  {key}: {value}\n"
+            print(f"  {Fore.YELLOW}{key}:{Style.RESET_ALL}")
+            value_lines = str(value).split('\n')
+            for line in value_lines:
+                print(f"{Fore.YELLOW}    {line}{Style.RESET_ALL}")
+                
+        print()
+        questions = [
+            inquirer.List('approval',
+                          message=f"{Fore.YELLOW}Do you approve this execution?{Style.RESET_ALL}",
+                          choices=['Yes', 'No'],
+                          ),
+        ]
         
-        prompt_message += "Do you approve this execution? (yes/no): "
-
-        while True:
-            user_input = input(f"{Fore.YELLOW}{prompt_message}{Style.RESET_ALL}").strip().lower()
-            if user_input in ['yes', 'y']:
-                return True
-            elif user_input in ['no', 'n']:
-                return False
-            else:
-                print(f"{Fore.RED}Invalid input. Please enter 'yes' or 'no'.{Style.RESET_ALL}")
-
+        answers = inquirer.prompt(questions)
+        if answers['approval'] == 'Yes':
+            print(f"{Fore.GREEN}Tool execution approved.{Style.RESET_ALL}")
+            return True
+        else:
+            print(f"{Fore.RED}Tool execution denied.{Style.RESET_ALL}")
+            return False
+        
     except KeyError as e:
         print(f"{Fore.RED}Error: Missing required field in tool object: {e}{Style.RESET_ALL}")
-
     return False
 
 async def list_agents():

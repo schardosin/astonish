@@ -1,318 +1,353 @@
-description: An agentic flow designed to assist users in creating a new agentic flows.
+description: Agentic flow creator using Generate First, Refine Later approach (adapted from original).
 nodes:
   - name: get_overall_idea
     type: input
     prompt: |
       Welcome to the Agentic Flow Creator! I'm here to help you design a new agentic flow.
-      We are going to create the initial flow for your agentic flow, which you customize later.
       Please provide an overall description of the flow you want to create. What's the main goal and what should it do?
-
     output_model:
       overall_idea: str
-    user_message:
-      - "Thank you for sharing your idea! Let's now check which tools you have currently available."
 
   - name: fetch_available_tools
     type: llm
     tools: True
     tools_selection:
       - shell_command
+    tools_auto_approval: False
     system: |
       You are a system assistant tasked with fetching the list of available tools.
+      Run `astonish tools list` using shell_command.
+      Parse the output and create a structured list of available tools. Each item should be a dictionary with 'name' and 'description' keys.
     prompt: |
-      Use the shell_command tool to run the following command:
-      astonish tools list
-
-      Parse the output and create a structured list of available tools with their descriptions.
+      Use the shell_command tool to run: `astonish tools list`
+      Parse the output into a list of dictionaries, e.g., `[{{"name": "tool1", "description": "..."}}, {{"name": "tool2", "description": "..."}}]`.
     output_model:
       available_tools: list
-    user_message:
-      - "Available tools fetched successfully."
+    print_state: False
 
-  - name: process_idea
+  - name: generate_or_refine_yaml
     type: llm
     system: |
-      You are an expert in designing agentic flows. Analyze the user's overall idea and create a base flow structure.
+      You are an expert YAML agentic flow designer and refiner.
+      Your primary goal is to generate or refine a complete agentic flow YAML string based on user requirements, feedback, and strict framework rules.
+
+      **Framework Rules:** [Include rules 1-11 as before]
+
+      **Operational Modes:**
+      1. **Initial Generation:** If 'current_yaml' input is missing, null, or empty, generate a NEW, complete YAML based on 'overall_idea' and 'available_tools', using the rules and example. Set 'refinement_complete' to `false` (forcing at least one review cycle).
+      2. **Refinement:** If 'current_yaml' and 'yaml_feedback' are provided AND 'yaml_feedback' is NOT 'SAVE' (case-insensitive, ignore whitespace), carefully modify the 'current_yaml' string ONLY to address the specific feedback, ensuring the result is valid YAML respecting all rules. Do not regenerate unrelated parts. Set 'refinement_complete' to `false`.
+      3. **Finalization:** If 'yaml_feedback' IS 'SAVE' (case-insensitive, ignore whitespace), set 'refinement_complete' to `true` and pass the 'current_yaml' input through unchanged as the output 'current_yaml'.
     prompt: |
-      User's overall idea:
+      # --- Inputs ---
+      # User's overall idea (for initial generation):
       {overall_idea}
 
-      Available tools:
+      # Available tools (Name & Description):
       {available_tools}
 
-      Based on this idea and the available tools, please:
-      1. Create a base flow structure with necessary nodes and their purposes.
-      2. Refine the prompts of each flow node to ensure clarity and effectiveness.
-      3. Identify which of the available tools might be required for this flow.
-      4. Remember it is an LLM, so most requirements can be done with the LLM itself without the need of a tool.
-      5. Highlight any potential challenges or areas that need further clarification.
-      6. If any required functionality is not available in the current tools, note it as a potential limitation.
-      7. Remember that input from the user can be collected directly from the application, so you don't need to require a tool for that.
-      8. Only set have_tools to false if the user needs to provide specific tools through MCP servers to be able to create the agents, and it is not possible to create the flow only using LLM and the available tools.
+      # Previous YAML Version (if refining - will be absent on first run):
+      {current_yaml}
 
-      Present this information in a clear, structured format.
-      Export the base_flow if line breaks between the items using \n
+      # Validation Error (if refining - will be absent on first run):
+      {validation_error}
+      # If there is a validation error, the YAML is invalid. Fix it based on the error message.
 
-      If the tools are not sufficient to implement the flow, please indicate that the user should provide the specific tools throug MCP servers to be able to create the agents.
+      # User Feedback on Previous Version (if refining - will be absent on first run):
+      {yaml_feedback}
 
-      add the the message for the user, detailing the base flow, required tools, challenges, and limitations, in the response message
-      Structure the message to the user as follows:
+      **Framework Rules:**
+      1. Valid `type`: 'input', 'llm'.
+      2. `input`: Only for direct user interaction in the final agent. Fields: name, type, prompt, output_model, options.
+      3. `llm`: For logic, generation, tool calls. Fields: name, type, system, prompt, output_model, user_message (optional), tools (optional, bool), tools_selection (optional, list[str]).
+      4. Tools: 'tools: True' requires 'tools_selection' listing tools from 'Available Tools'. Tools are used BY 'llm' nodes.
+      5. `output_model`: Dictionary mapping string variable names to string types ("str", "list", "dict", "bool", "int"). Example: `{{"results": "list"}}`.
+      6. `options` is a variable from output_model of type list or a list of strings (e.g., ["option1", "option2"]), if options is not provided, it will accept any string. Whenever possible, use the 'options' field to limit user input to a specific set of choices, and use the options in the flow, reducing the amount of agent calls.
+      6.1. `options` is very helpful if the agent from previous node is a list of strings, and you want to limit the user input to one of the options. Example: `{"options": ["option1", "option2"]}`. If the options is a output_model variable, it should just mention the variable name. Example: `{"options": [options_list]}`, no curly braces around the list variable name.
+      6.2. `options` cannot be a complex expression like lamba, it should be a list of strings or a variable from output_model of type list.
+      6.3. `options` must be a list, it CANNOT be something like `{"options": "option1"}` or `{"options": "option1, option2"}`, instead it must use the dash (-) for each item, according to the YAML schema for lists.
+      7. `user_message`: Optional LIST of strings (variable names from output_model) for display. Omit if not needed. Example: `["final_summary"]`. It should be an output_model variable name, or a string. It must be used everytime the information is required to be displayed to the user.
+      8. Ensure unique node names, correct variable usage between nodes (`{{variable}}`), valid lambda functions for conditions (`"lambda x: x['var'] == True"`).
+      9. Structure: Top-level 'description', 'nodes' (list of node dicts), 'flow' (list of transition dicts like `{{'from': 'nodeA', 'to': 'nodeB'}}` or using 'edges').
+      10. Loops: If iteration is needed, implement using an index variable, conditional edges, and index increment nodes.
+      11. Conditions: Use 'edges' with lambda functions for branching.
+      12. All the conditional logic should be handled within the flow section, it should use lambda for checking conditions of the output_model variables.
+      13. When using the shell_command tool, make sure that the command to be run is in the prompt.
+      14. When working with items to be appended to a list, make sure to provide the list in the prompt before the item to be appended. For example, if you have a list called 'collected_summaries', make sure to provide it in the prompt before the item to be appended.
+      15. Always remember, to inject content use single curly braces, and to show as an example use double curly braces.
 
-      I've created a base flow structure based on your idea. Here it is, along with required tools, potential challenges, and limitations:
-
-      Base Flow:
-      {base_flow}
-
-      Required Tools:
-      {required_tools}
-
-      Potential Challenges:
-      {challenges}
-
-      Limitations:
-      {limitations}
-
-      For any item that has a list (eg.: ['item1','item2']), please break in multiple lines and put * before each item.
-      Do not use tools for analysis, format, or any other tasks that can be done by the LLM itself.
-    output_model:
-      base_flow: list
-      required_tools: list
-      challenges: str
-      limitations: str
-      have_tools: bool
-      response: str
-    user_message:
-      - response
-    print_state: False
-
-  - name: get_user_feedback
-    type: input
-    prompt: |
-      Do you have any feedback or changes you'd like to make? If you're satisfied, type 'CONTINUE'. Otherwise, provide your feedback:
-    output_model:
-      user_feedback: str
-
-  - name: refine_flow
-    type: llm
-    system: |
-      You are an agentic flow architect. Refine the flow based on user feedback.
-    prompt: |
-      Current base flow:
-      {base_flow}
-
-      User feedback:
-      {user_feedback}
-
-      Available tools:
-      {available_tools}
-
-      Please refine the flow, addressing the user's feedback. If the user typed asked to continue, keep the current flow as is.
-      Ensure that any changes still work within the constraints of the available tools.
-    output_model:
-      refined_flow: str
-      continue_flag: bool
-
-  - name: generate_yaml
-    type: llm
-    system: |
-      You are an expert in creating agentic flow YAML files. Follow the provided example and rules strictly.
-    prompt: |
-      Refined flow:
-      {refined_flow}
-
-      Available tools:
-      {available_tools}
-
-      Generate a complete YAML file for this agentic flow, following this specific format and rules:
-
-      Rules:
-      1. Node types can only be 'input' or 'llm'.
-      2. 'input' nodes have limited fields: name, type, prompt, and output_model.
-      3. 'llm' nodes can have all fields: name, type, system, prompt, output_model, user_message, tools, and tools_selection.
-      4. 'tools' field should be a boolean (True/False).
-      5. 'tools_selection' should only be included if 'tools' is True.
-      6. 'tools_selection' should only contain tools from the available_tools list and should only contain the tool name, not the description.
-      7. 'user_message' should only be included if we need to display something to the user, and should only contain fields defined in the output_model.
-      8. Ensure all node names are unique and descriptive.
-      9. The flow must cover all possible paths through the nodes, including conditional branches.
-      10. Conditions must be properly formatted as lambda functions.
-      11. Only use tools that are available in the {available_tools} list.
-      12. Ensure all variables used in prompts are defined in the output_model of a previous node.
-      13. Be careful with the content of the user_message, as it should only contain the fields defined in the output_model of the node.
-      14. When adding a variable to the user_message, we should ensure that we request in the prompt for the content to be displayed to be well-formatted.
-      15. Pay attention to not provided duplicate content to the user, as it can cause confusion.
-      16. Make sure all variables used in prompts are properly defined in the output_model of previous nodes.
-      17. Make sure variables in a node prompot are defined in the output_model of previous nodes.
-      18. Make sure the node use the required variables in the prompt
-
-      Example YAML structure (note: variables in this example are prefixed with 'example_' to distinguish them from actual state variables):
-
+      # --- Comprehensive Example Flow (Study this structure and apply principles) ---
       ```yaml
-      description: A simple agentic flow example.
+      description: Example Research Agent Flow
       nodes:
-        - name: get_user_input
+        - name: get_topic
           type: input
           prompt: |
-            Please enter your question or type 'exit' to quit:
-          output_model:
-            example_user_input: str
-
-        - name: analyze_input
+            What topic do you want to research?
+          output_model: 
+            research_topic: str
+        - name: search_web
           type: llm
           system: |
-            You are an AI assistant analyzing user input.
+            You are a research assistant that performs high-quality web searches on behalf of the user.
+            Your goal is to find relevant, trustworthy, and up-to-date information about a specific topic.
+            Use clear keywords and aim to retrieve results that would be genuinely helpful for someone doing research or looking for answers.
           prompt: |
-            Analyze the following user input: {{example_user_input}}
-            Determine if it's a question or an exit command.
+            Please perform a web search to gather useful and recent information on the following topic:
+            
+            Topic: "{research_topic}"
+            
+            Make sure to include credible sources and provide a variety of perspectives if relevant.
+            Set current_index to 0.
           output_model:
-            example_is_question: bool
-            example_input_type: str
-          
-        - name: process_question
-          type: llm
-          system: |
-            You are an AI assistant answering user questions.
-          prompt: |
-            User question: {{example_user_input}}
-            Please provide a detailed answer to the user's question.
-          output_model:
-            example_answer: str
-          user_message:
-            - example_answer
-          tools: True
+            search_results: list
+            current_index: int
+          tools: true
           tools_selection:
-            - web_search
-            - knowledge_base
+            - tavily-search  
 
-        - name: farewell
+        - name: process_one_result
           type: llm
           system: |
-            You are a polite AI assistant saying goodbye.
+            Extract key info from a search result.
           prompt: |
-            Generate a polite farewell message for the user.
-          output_model:
-            example_farewell_message: str
-          user_message:
-            - example_farewell_message
+            collected_summaries:
+            {collected_summaries}
 
+            search_results:
+            {search_results}
+
+            Process result at index {current_index} from search results and apprend to the collected_summaries.
+
+          output_model: 
+            collected_summaries: list
+          user_message:
+            - collected_summaries
+
+        - name: increment_index
+          type: llm
+          prompt: | 
+            Increment current_index: {current_index}. Output current_index + 1.
+          output_model: 
+            current_index: int
+          user_message:
+            - current_index
+
+        - name: final_report
+          type: llm
+          system: |
+            Generate a consolidated report from collected summaries.
+          prompt: |
+            Generate final report using collected summaries, one news per line with a nice format.
+            
+            collected_summaries:
+            {collected_summaries}
+          output_model: 
+            report: str
+          user_message:  
+            - report
+
+        - name: new_search
+          type: input
+          prompt: |
+            Do you want to search for another topic?
+          output_model: 
+            research_topic: str
+          options:
+            - "yes"
+            - "no"
+            - collected_summaries #example of using a variable from output_model as options
       flow:
         - from: START
-          to: get_user_input
-        - from: get_user_input
-          to: analyze_input
-        - from: analyze_input
+          to: get_topic
+        - from: get_topic
+          to: search_web
+        - from: search_web
+          to: process_one_result
+        - from: process_one_result
+          to: increment_index
+        - from: increment_index
           edges:
-            - to: process_question
-              condition: "lambda x: x['example_is_question']"
-            - to: farewell
-              condition: "lambda x: not x['example_is_question']"
-        - from: process_question
-          to: get_user_input
-        - from: farewell
-          to: END
+            - to: process_one_result
+              condition: "lambda x: x['current_index'] < len(x['search_results'])"
+            - to: final_report
+              condition: "lambda x: not x['current_index'] < len(x['search_results'])"
+        - from: final_report
+          to: new_search
+        - from: new_search
+          edges:
+            - to: get_topic
+              condition: "lambda x: x['research_topic'] == 'yes'"
+            - to: END
+              condition: "lambda x: x['research_topic'] == 'no'"
+      ```
+      # --- End Example ---
+
+      # --- Task ---
+      Execute ONE of the Operational Modes defined in the system prompt based on the presence and content of 'current_yaml' and 'yaml_feedback'.
+
+      Output the resulting YAML string (either newly generated, refined, or passed-through for saving) as 'current_yaml', and the boolean 'refinement_complete' flag. Output ONLY the required JSON object.
+    output_model:
+      current_yaml: str
+      refinement_complete: bool
+
+  - name: validate_yaml
+    type: llm
+    tools: True
+    tools_selection:
+      - validate_yaml_with_schema
+    tools_auto_approval: False
+    system: |
+      You are a YAML validation assistant using the 'validate_yaml_with_schema' tool.
+      Your task is to validate the provided 'content_yaml' against the predefined 'Agentic Flow Schema' defined below.
+      Analyze the tool's output dictionary to determine validity.
+    prompt: |
+      schema:
+      ```yaml
+      type: map
+      mapping:
+        description: {type: str, required: True}
+        nodes:
+          type: seq
+          required: True
+          sequence:
+            - type: map
+              mapping:
+                name: {type: str, required: True}
+                type: {type: str, required: True, enum: ['input', 'llm']}
+                options: {type: seq, required: False, sequence: [{type: str}]}
+                system: {type: str, required: False}
+                prompt: {type: str, required: True}
+                output_model: 
+                  type: map
+                  required: True
+                  mapping: 
+                    regex;(.+): 
+                      type: str
+                user_message: {type: seq, required: False, sequence: [{type: str}]}
+                tools: {type: bool, required: False}
+                tools_selection: {type: seq, required: False, sequence: [{type: str}]}
+                print_state: {type: bool, required: False}
+        flow:
+          type: seq
+          required: True
+          sequence:
+            - type: map
+              mapping:
+                from: {type: str, required: True}
+                to: {type: str, required: False}
+                edges:
+                  type: seq
+                  required: False
+                  sequence:
+                    - type: map
+                      mapping:
+                        to: {type: str, required: True}
+                        condition: {type: str, required: True}
       ```
 
-      Now, generate the complete YAML for the agentic flow based on the refined flow structure we've discussed, following the example and rules provided. Make sure to include appropriate conditional flows, only use user_message when necessary, and ensure all variables used in prompts are properly defined in previous nodes' output_models.
+      content_yaml:
+      {current_yaml}
 
-      After generating the YAML, show the content to the user.
-
+      # Task:
+      Call the 'validate_yaml_with_schema' tool with the content_yaml as input and the schema.
+      Provide in the validation_error full response from the tool in case of error.
     output_model:
-      flow_yaml: str
-      save_confirmation: str
-    user_message:
-      - flow_yaml
-    print_state: False
+      is_yaml_valid: bool
+      validation_error: list
 
-  - name: get_user_feedback_yaml
-    type: input
-    prompt: |
-      Do you have any feedback or changes you'd like to make? If you're satisfied, type 'CONTINUE'. Otherwise, provide your feedback:
-    output_model:
-      user_feedback_yaml: str
-
-  - name: refine_yaml
+  - name: summarize_and_display_yaml
     type: llm
     system: |
-      You are an agentic flow architect. Refine the yaml flow based on user feedback.
+      You are an assistant summarizing and presenting an agentic flow YAML.
+      1. Briefly summarize the purpose and main steps of the flow based on the YAML content.
+      2. Format the full YAML content within a markdown code block for display.
+      3. Prepare the text for the feedback prompt, instructing user to provide feedback or type 'SAVE'.
     prompt: |
-      Current yaml flow:
-      {refined_flow}
+      # Current Agentic Flow YAML:
+      {current_yaml} # Input from generate_or_refine_yaml
 
-      User feedback:
-      {user_feedback_yaml}
-
-      Available tools:
-      {available_tools}
-
-      Please refine the flow, addressing the user's feedback. If the user asked to continue, keep the current yaml flow as is.
-      Ensure that any changes still work within the constraints of the available tools.
-      Only change what is necessary to address the user's feedback, nothing else
+      # Task:
+      1. Analyze the YAML and write a brief summary in 'flow_summary'.
+      2. Create 'formatted_yaml_display' containing the full YAML in a markdown code block.
+      3. Create 'feedback_prompt_text'. Example: "{summary}\n---\n**Current YAML:**\n{yaml_display_block}\n---\nReview the YAML. Provide specific feedback for changes, or type 'SAVE' if satisfied and ready to finalize."
     output_model:
-      refined_flow: str
-      continue_yaml_flag: bool
+      flow_summary: str
+      formatted_yaml_display: str
+      feedback_prompt_text: str
+
+  - name: user_approval
+    type: input
+    prompt: |
+      {flow_summary}
+      ---
+      {formatted_yaml_display}
+
+      Please review the YAML above select 'approve' if you are satisfied with it, or 'refine' if you want to make changes.
+    output_model:
+      yaml_feedback: str
+    options:
+      - "approve"
+      - "refine"
+
+  - name: get_yaml_feedback
+    type: input
+    prompt: |
+      Sure, let's refine the YAML. Please provide specific feedback on what you would like to change or improve.
+      You can refer to the YAML structure, node names, or any specific part of the flow.
+    output_model:
+      yaml_feedback: str
 
   - name: suggest_flow_name
     type: llm
     system: |
-      You are an assistant naming an agentic flow. Generate a short, descriptive name using snake_case (e.g., example_name) based on the content and purpose of the refined flow.
+      Generate a short, descriptive snake_case name based on the flow's description or purpose found within the final YAML.
     prompt: |
-      Refined flow:
-      {refined_flow}
+      # Final Flow YAML:
+      {current_yaml} # The final YAML after refinement loop
 
-      Please generate a suitable name for this flow in snake_case. Only return the name, no extra text.
+      Generate a suitable snake_case name (e.g., example_flow_name). Only return the name string.
     output_model:
       suggested_flow_name: str
-    user_message:
-      - suggested_flow_name
+      final_yaml_to_save: str
 
-  - name: save_yaml
+  - name: get_config_directory
+    type: llm
+    tools: True
+    tools_selection:
+      - shell_command
+    tools_auto_approval: True
+    system: "Get the astonish config directory path."
+    prompt: |
+      Run: `python3 -c "import appdirs; print(appdirs.user_config_dir('astonish'))"`
+    output_model:
+      config_dir: str
+
+  - name: determine_save_path
+    type: llm
+    system: "Determine the final save path using the suggested name."
+    prompt: |
+      Config Directory: {config_dir}
+      Suggested Name: {suggested_flow_name}
+      Construct the full save path: {config_dir}/agents/{suggested_flow_name}.yaml
+    output_model:
+      final_save_path: str
+
+  - name: write_flow_to_file
     type: llm
     tools: True
     tools_selection:
       - write_file
-      - shell_command
-    system: |
-      You are an expert in creating and saving files to disk. Follow the provided example and rules strictly.
+    system: "Save the YAML content to the specified file path."
     prompt: |
-      Run following command with the shell_command tool to get the path to the user config directory:
-      python3 -c "import appdirs; print(appdirs.user_config_dir('astonish'))"
+      File Path: {final_save_path}
+      YAML Content:
+      {current_yaml}
 
-      flow_yaml:
-      {flow_yaml}
-
-      Save the content of the flow_yaml to disk using write_file tool in the config directory.
-      The file name should be at 'agents/{suggested_flow_name}.yaml' inside the config_dir.
-
-      Confirm once the file has been saved.
+      Save the content to the file. Output confirmation message.
     output_model:
-      config_dir: str
-      flow_yaml: str
       save_confirmation: str
     user_message:
       - save_confirmation
-    print_state: False
-
-  - name: show_final_flow
-    type: llm
-    system: |
-      You are a helpful assistant presenting the final agentic flow to the user.
-    prompt: |
-      Use the FileReadOrEdit tool to read the final flow YAML from:
-      /home/schardosin/projects/astonish/astonish/agents/new_flow.yaml
-
-      Please present a summary of the final flow to the user, highlighting its key components and functionality.
-      Also mention which of the available tools are used in this flow.
-    output_model:
-      flow_summary: str
-    user_message:
-      - flow_summary
-
-  - name: get_final_approval
-    type: input
-    prompt: |
-      This is the final version of your agentic flow. Do you approve saving this flow? (yes/no)
-    output_model:
-      final_approval: bool
 
 flow:
   - from: START
@@ -320,32 +355,32 @@ flow:
   - from: get_overall_idea
     to: fetch_available_tools
   - from: fetch_available_tools
-    to: process_idea
-  - from: process_idea
+    to: generate_or_refine_yaml
+  - from: generate_or_refine_yaml
+    to: validate_yaml
+  - from: validate_yaml
     edges:
-      - to: get_user_feedback
-        condition: "lambda x: x['have_tools']"
-      - to: END
-        condition: "lambda x: not x['have_tools']"
-  - from: get_user_feedback
-    to: refine_flow
-  - from: refine_flow
-    edges:
-      - to: get_user_feedback_yaml
-        condition: "lambda x: not x['continue_flag']"
-      - to: generate_yaml
-        condition: "lambda x: x['continue_flag']"
-  - from: generate_yaml
-    to: get_user_feedback_yaml
-  - from: get_user_feedback_yaml
-    to: refine_yaml
-  - from: refine_yaml
-    edges:
-      - to: generate_yaml
-        condition: "lambda x: not x['continue_yaml_flag']"
+      - to: generate_or_refine_yaml
+        condition: "lambda x: not x.get('is_yaml_valid', True)"
+      - to: summarize_and_display_yaml
+        condition: "lambda x: not x.get('refinement_complete', False)"
       - to: suggest_flow_name
-        condition: "lambda x: x['continue_yaml_flag']"
+        condition: "lambda x: x.get('refinement_complete', True)"
+  - from: summarize_and_display_yaml
+    to: user_approval
+  - from: user_approval
+    edges:
+      - to: get_yaml_feedback
+        condition: "lambda x: x['yaml_feedback'] == 'refine'"
+      - to: suggest_flow_name
+        condition: "lambda x: x['yaml_feedback'] == 'approve'"
+  - from: get_yaml_feedback
+    to: generate_or_refine_yaml
   - from: suggest_flow_name
-    to: save_yaml
-  - from: save_yaml
+    to: get_config_directory
+  - from: get_config_directory
+    to: determine_save_path
+  - from: determine_save_path
+    to: write_flow_to_file
+  - from: write_flow_to_file
     to: END

@@ -42,10 +42,20 @@ def write_file(file_path: str, content: str) -> str:
 @tool("shell_command", args_schema=ExecuteCommandInput)
 def shell_command(command: str) -> Dict[str, str]:
     """
-    Execute a shell command and return its output.
+    Execute a shell command safely without hanging.
     """
-    result = subprocess.run(command, shell=True, capture_output=True, text=True)
-    return {"stdout": result.stdout, "stderr": result.stderr}
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=10
+        )
+        return {"stdout": result.stdout, "stderr": result.stderr}
+    except subprocess.TimeoutExpired:
+        return {"stdout": "", "stderr": "Command timed out."}
 
 @tool("validate_yaml_with_schema", args_schema=ValidateGenericYAMLInput)
 def validate_yaml_with_schema(schema_yaml: str, content_yaml: str) -> Dict[str, Union[str, List[str]]]:

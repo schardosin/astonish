@@ -1,673 +1,385 @@
-description: An agentic flow designed to guide users step-by-step in creating new agentic flows, generating compliant YAML. (Version 1.3 - Added Prepare Node for Detailing)
-
+description: Agentic flow creator using Generate First, Refine Later approach (adapted from original).
 nodes:
-  - name: welcome_get_idea
+  - name: get_overall_idea
     type: input
     prompt: |
-      Welcome to the improved Agentic Flow Creator!
-      I will guide you step-by-step to design and generate the YAML for your new agentic flow.
-      First, please describe the overall goal of the flow you want to create. What should it achieve?
+      Welcome to the Agentic Flow Creator! I'm here to help you design a new agentic flow.
+      Please provide an overall description of the flow you want to create. What's the main goal and what should it do?
     output_model:
       overall_idea: str
-    user_message:
-      - "Thank you for sharing your idea! Let's check which tools are available."
 
   - name: fetch_available_tools
     type: llm
-    system: |
-      You are a system assistant responsible for retrieving the list of available tools using the shell command tool.
-    prompt: |
-      Use the shell_command tool to run the command: `astonish tools list`
-
-      Carefully parse the output of the command. Create a structured list where each item is a dictionary containing the 'name' and 'description' of a tool.
-      Example structure: [{{'name': 'shell_command', 'description': 'Executes shell commands.'}}, {{'name': 'web_search', 'description': 'Searches the web.'}}]
-    output_model:
-      available_tools: list
     tools: True
     tools_selection:
       - shell_command
+    tools_auto_approval: False
+    system: |
+      You are a system assistant tasked with fetching the list of available tools.
+      Run `astonish tools list` using shell_command.
+      Parse the output and create a structured list of available tools. Each item should be a dictionary with 'name' and 'description' keys.
+    prompt: |
+      Use the shell_command tool to run: `astonish tools list`
+      Parse the output into a list of dictionaries, e.g., `[{{"name": "tool1", "description": "..."}}, {{"name": "tool2", "description": "..."}}]`.
+    output_model:
+      available_tools: list
+    print_state: False
 
-  - name: propose_initial_structure
+  - name: generate_or_refine_yaml
     type: llm
     system: |
-      You are an expert agentic flow designer. Your task is to analyze the user's specific goal and the available tools to propose a tailored, meaningful initial node structure, flow logic, and provide a clearly formatted, multi-line explanation using a simple list format. Avoid generic placeholders.
+      You are an expert YAML agentic flow designer and refiner.
+      Your primary goal is to generate or refine a complete agentic flow YAML string based on user requirements, feedback, and strict framework rules.
+
+      **Framework Rules:** [Include rules 1-11 as before]
+
+      **Operational Modes:**
+      1. **Initial Generation:** If 'current_yaml' input is missing, null, or empty, generate a NEW, complete YAML based on 'overall_idea' and 'available_tools', using the rules and example. Set 'refinement_complete' to `false` (forcing at least one review cycle).
+      2. **Refinement:** If 'current_yaml' and 'yaml_feedback' are provided AND 'yaml_feedback' is NOT 'SAVE' (case-insensitive, ignore whitespace), carefully modify the 'current_yaml' string ONLY to address the specific feedback, ensuring the result is valid YAML respecting all rules. Do not regenerate unrelated parts. Set 'refinement_complete' to `false`.
+      3. **Finalization:** If 'yaml_feedback' IS 'SAVE' (case-insensitive, ignore whitespace), set 'refinement_complete' to `true` and pass the 'current_yaml' input through unchanged as the output 'current_yaml'.
     prompt: |
-      User's overall idea:
+      # --- Inputs ---
+      # User's overall idea (for initial generation):
       {overall_idea}
 
-      Available tools:
+      # Available tools (Name & Description):
       {available_tools}
 
-      **Your primary task is to design a high-level agentic flow structure tailored *specifically* to the user's `overall_idea`. Avoid generic nodes.**
+      # Previous YAML Version (if refining - will be absent on first run):
+      {current_yaml}
 
-      Based *specifically* on the user's idea and the available tools:
-      1.  **Analyze the `overall_idea`:** Break down the user's described process into distinct, logical steps/tasks.
-      2.  **Propose Specific Nodes:** Propose nodes with meaningful `name` (snake_case) and specific `purpose`. **Do not use generic purposes.**
-      3.  **Determine Flow Logic:** Determine the necessary flow logic (linear, conditional, loops).
-      4.  **Output 1: `proposed_nodes` List:** Represent the proposed nodes as a list of dictionaries: `[{{'name': 'get_criteria', 'purpose': 'Asks user for criteria.'}}, {{'name': 'fetch_data', 'purpose': 'Retrieves data.'}}, ...]]`.
-      5.  **Output 2: `proposed_connections` List:** Represent the connection logic structurally... [as before] ...
-      6.  **Output 3: `structure_explanation` String:** Create a **multi-line string** for the user including: a brief overview, a blank line (`\n`), and a Markdown bulleted list (`* name: purpose`).
-          * **Example `structure_explanation` format (Use this exact Markdown structure):**
-              ```markdown
-              This flow involves getting user criteria, searching based on it, and displaying results.
+      # Validation Error (if refining - will be absent on first run):
+      {validation_error}
+      # If there is a validation error, the YAML is invalid. Fix it based on the error message.
 
-              * get_search_criteria: Prompts the user for the keywords or parameters for the search.
-              * execute_search: Performs the search operation using the provided criteria.
-              * format_results: Organizes the search results into a readable format.
-              * display_search_results: Presents the formatted results to the user.
-              ```
+      # User Feedback on Previous Version (if refining - will be absent on first run):
+      {yaml_feedback}
 
-      Output the `proposed_nodes` list, the `proposed_connections` list, and the `structure_explanation` string. Ensure the `structure_explanation` string contains the required newline characters (`\n`) for proper formatting.
-    output_model:
-      proposed_nodes: list
-      proposed_connections: list
-      structure_explanation: str
-    user_message:
-      - structure_explanation
+      **Framework Rules:**
+      1. Valid `type`: 'input', 'llm'.
+      2. `input`: Only for direct user interaction in the final agent. Fields: name, type, prompt, output_model, options.
+      3. `llm`: For logic, generation, tool calls. Fields: name, type, system, prompt, output_model, user_message (optional), tools (optional, bool), tools_selection (optional, list[str]).
+      4. Tools: 'tools: True' requires 'tools_selection' listing tools from 'Available Tools'. Tools are used BY 'llm' nodes.
+      5. `output_model`: Dictionary mapping string variable names to string types ("str", "list", "dict", "bool", "int"). Example: `{{"results": "list"}}`.
+      6. `options` is a variable from output_model of type list or a list of strings (e.g., ["option1", "option2"]), if options is not provided, it will accept any string. Whenever possible, use the 'options' field to limit user input to a specific set of choices, and use the options in the flow, reducing the amount of agent calls.
+      6.1. `options` is very helpful if the agent from previous node is a list of strings, and you want to limit the user input to one of the options. Example: `{"options": ["option1", "option2"]}`. If the options is a output_model variable, it should just mention the variable name. Example: `{"options": [options_list]}`, no curly braces around the list variable name.
+      6.2. `options` cannot be a complex expression like lamba, it should be a list of strings or a variable from output_model of type list.
+      7. `user_message`: Optional LIST of strings (variable names from output_model) for display. Omit if not needed. Example: `["final_summary"]`. It should be an output_model variable name, or a string. It must be used everytime the information is required to be displayed to the user.
+      8. Ensure unique node names, correct variable usage between nodes (`{{variable}}`), valid lambda functions for conditions (`"lambda x: x['var'] == True"`).
+      9. Structure: Top-level 'description', 'nodes' (list of node dicts), 'flow' (list of transition dicts like `{{'from': 'nodeA', 'to': 'nodeB'}}` or using 'edges').
+      10. Loops: If iteration is needed, implement using an index variable, conditional edges, and index increment nodes.
+      11. Conditions: Use 'edges' with lambda functions for branching.
+      12. All the conditional logic should be handled within the flow section, it should use lambda for checking conditions of the output_model variables.
+      13. When using the shell_command tool, make sure that the command to be run is in the prompt.
+      14. When working with items to be appended to a list, make sure to provide the list in the prompt before the item to be appended. For example, if you have a list called 'collected_summaries', make sure to provide it in the prompt before the item to be appended.
+      15. Always remember, to inject content use single curly braces, and to show as an example use double curly braces.
 
-  - name: get_feedback_on_structure
-    type: input
-    prompt: |
-      Please review the proposed flow structure and logic described above.
+      # --- Comprehensive Example Flow (Study this structure and apply principles) ---
+      ```yaml
+      description: Example Research Agent Flow
+      nodes:
+        - name: get_topic
+          type: input
+          prompt: |
+            What topic do you want to research?
+          output_model: 
+            research_topic: str
+        - name: search_web
+          type: llm
+          system: |
+            You are a research assistant that performs high-quality web searches on behalf of the user.
+            Your goal is to find relevant, trustworthy, and up-to-date information about a specific topic.
+            Use clear keywords and aim to retrieve results that would be genuinely helpful for someone doing research or looking for answers.
+          prompt: |
+            Please perform a web search to gather useful and recent information on the following topic:
+            
+            Topic: "{research_topic}"
+            
+            Make sure to include credible sources and provide a variety of perspectives if relevant.
+            Set current_index to 0.
+          output_model:
+            search_results: list
+            current_index: int
+          tools: true
+          tools_selection:
+            - tavily-search  
 
-      Does this structure make sense for your goal?
-      Do you want to add, remove, reorder nodes, or change the connection logic?
+        - name: process_one_result
+          type: llm
+          system: |
+            Extract key info from a search result.
+          prompt: |
+            collected_summaries:
+            {collected_summaries}
 
-      Type your feedback, or type 'CONTINUE' if you approve this structure.
-    output_model:
-      structure_feedback: str
+            search_results:
+            {search_results}
 
-  - name: refine_structure
-    type: llm
-    system: |
-      You are an agentic flow architect. Your task is to analyze the user's feedback to determine if refinement is needed, perform refinements if requested, and explain the outcome using the required format.
-    prompt: |
-      Original proposed nodes:
-      {proposed_nodes}
+            Process result at index {current_index} from search results and apprend to the collected_summaries.
 
-      Original proposed connections:
-      {proposed_connections}
+          output_model: 
+            collected_summaries: list
+          user_message:
+            - collected_summaries
 
-      User feedback on structure:
-      {structure_feedback}
+        - name: increment_index
+          type: llm
+          prompt: | 
+            Increment current_index: {current_index}. Output current_index + 1.
+          output_model: 
+            current_index: int
+          user_message:
+            - current_index
 
-      1.  **Analyze the user's feedback (`{structure_feedback}`) sentiment and content:** Determine if the user approves of the current structure or wants changes.
-          * **Approval indicators:** Positive sentiment (e.g., "looks good", "perfect", "it works", "yes", "okay") OR explicit continuation words (e.g., "continue", "proceed", "next step") AND no specific change requests.
-          * **Change indicators:** Specific suggestions to add, remove, modify, or reorder nodes/connections OR expression of dissatisfaction/confusion.
-      2.  **If the user approves the structure (based on analysis in step 1):**
-          * Keep the original `proposed_nodes` and `proposed_connections`.
-          * Set the boolean flag `structure_needs_review` to `False`.
-          * Set the `refined_explanation` string to a confirmation message like "Structure approved. Proceeding to detail the nodes."
-      3.  **If the user requests changes or expresses dissatisfaction (based on analysis in step 1):**
-          * Carefully modify the `proposed_nodes` list and the `proposed_connections` list based *only* on the specific changes requested or implied in the feedback. Ensure consistency.
-          * Set the boolean flag `structure_needs_review` to `True`.
-          * Generate a *new* multi-line explanation string (`refined_explanation`) describing the *updated* structure and logic. Follow the *exact* formatting requirements specified in the 'propose_initial_structure' node's prompt (step 6): overview, blank line, single-line Markdown bulleted list (`* name: purpose`) with newlines.
-      4.  Ensure the `refined_nodes` and `refined_connections` lists are structurally valid after any modifications.
-      5.  Output the potentially modified nodes, connections, the boolean flag, and the explanation string.
+        - name: final_report
+          type: llm
+          system: |
+            Generate a consolidated report from collected summaries.
+          prompt: |
+            Generate final report using collected summaries, one news per line with a nice format.
+            
+            collected_summaries:
+            {collected_summaries}
+          output_model: 
+            report: str
+          user_message:  
+            - report
 
-      Present the refined nodes, refined connections, the boolean flag `needs_review`, and the formatted `refined_explanation` string.
-    output_model:
-      refined_nodes: list
-      refined_connections: list
-      structure_needs_review: bool
-      refined_explanation: str
-    user_message:
-      - refined_explanation
-
-  - name: initialize_node_detailing
-    type: llm
-    system: |
-      You are an assistant responsible for initializing loop variables for the node detailing phase.
-    prompt: |
-      The user has approved the following structure (list of nodes with names and purposes):
-      {refined_nodes} # This list contains the nodes we need to detail.
-
-      Initialize the state for detailing these nodes one by one:
-      1. Set `node_list_to_detail` = copy of `{refined_nodes}`.
-      2. Set `current_node_index` = 0.
-      3. Set `detailed_nodes_map` = empty dictionary `{{}}`. # Store snippets here
-      4. Generate `start_detailing_message` = "We will now generate and validate the YAML snippet for each node."
-
-      Output `node_list_to_detail`, `current_node_index`, `detailed_nodes_map`, `start_detailing_message`.
-    output_model:
-      node_list_to_detail: list
-      current_node_index: int
-      detailed_nodes_map: dict
-      start_detailing_message: str
-    user_message:
-      - start_detailing_message
-      
-  - name: prepare_node_for_detailing
-    type: llm
-    system: |
-      You are an assistant that extracts specific information from a list based on an index.
-    prompt: |
-      Given the list of nodes to be detailed:
-      {node_list_to_detail}
-
-      And the current index:
-      {current_node_index}
-
-      Extract the dictionary object representing the node at the specified `current_node_index` from the `node_list_to_detail`.
-      The output should be just the dictionary itself, containing the 'name' and 'purpose' of the current node.
-      For example, if index is 0 and the list starts with {{'name': 'read_file', 'purpose': 'Reads a file'}}, output {{'name': 'read_file', 'purpose': 'Reads a file'}}.
-    output_model:
-      current_node_info: dict
-
-  - name: generate_node_yaml_snippet
-    type: llm
-    system: |
-      You are an expert YAML generator for agentic flow nodes. Generate a valid YAML snippet string for one node, adhering strictly to the provided schema and incorporating feedback if given.
-    prompt: |
-      # Context
-      Node Info: {current_node_info} # Name and Purpose
-      Available Tools: {available_tools}
-      Overall Flow Context (Previously Detailed Nodes): {detailed_nodes_map} # Map name->snippet
-
-      validation_errors: 
-      {validation_errors}
-
-      If any validation errors are present, please ensure to address them in the output.
-
-      # --- Node Schema Definition (Must Adhere!) ---
-      **Common Required:** `name` (string), `type` ('input' or 'llm').
-      **Type 'input':** Required: `prompt`, `output_model`. Optional: `user_message`. Forbidden: `system`, `tools`, `tools_selection`.
-      **Type 'llm':** Required: `system`, `prompt`, `output_model`. Optional: `tools` (bool), `tools_selection` (list, REQUIRED if tools=True, check vs `{available_tools}`), `user_message` (list).
-      # --- End Schema ---
-
-      # --- Example Snippet ---
-      # --- Type: input ---
-      - name: receive_math_request
-      type: input
-      prompt: |
-        Please enter your math request:
-      output_model:
-        user_math_request: str
-      user_message:
-        - "Thank you for providing your math request! Let's parse it."
-      # --- End Type: input ---
-      # --- Type: llm ---
-      - name: process_item
-      type: llm
-      system: "You are an item processing assistant."
-      prompt: |
-        Item List: 
-        {item_list}
-        
-        Current item: {current_index}
-        
-        extract the from the list, the item based on the current_index
-      output_model:
-        process_result: str
-      user_message:
-        - process_result
-      # --- End Type: llm ---
-      # --- End Example Snippet ---
-
-      Only include the required fields and relevant optional fields. Do not include NOT specified fields.
+        - name: new_search
+          type: input
+          prompt: |
+            Do you want to search for another topic?
+          output_model: 
+            research_topic: str
+          options:
+            - "yes"
+            - "no"
+            - collected_summaries #example of using a variable from output_model as options
+      flow:
+        - from: START
+          to: get_topic
+        - from: get_topic
+          to: search_web
+        - from: search_web
+          to: process_one_result
+        - from: process_one_result
+          to: increment_index
+        - from: increment_index
+          edges:
+            - to: process_one_result
+              condition: "lambda x: x['current_index'] < len(x['search_results'])"
+            - to: final_report
+              condition: "lambda x: not x['current_index'] < len(x['search_results'])"
+        - from: final_report
+          to: new_search
+        - from: new_search
+          edges:
+            - to: get_topic
+              condition: "lambda x: x['research_topic'] == 'yes'"
+            - to: END
+              condition: "lambda x: x['research_topic'] == 'no'"
+      ```
+      # --- End Example ---
 
       # --- Task ---
-      Analyze the feedback for refinement: `{snippet_feedback}`.
+      Execute ONE of the Operational Modes defined in the system prompt based on the presence and content of 'current_yaml' and 'yaml_feedback'.
 
-      **IF feedback for refinement is empty:**
-      Perform **INITIAL GENERATION** for node `{current_node_info['name']}` based on its purpose.
-      1. Determine `type` strictly ('input' vs 'llm').
-      2. Include ALL REQUIRED fields for the type.
-      3. Include relevant optional fields ONLY if appropriate (default `user_message`=None).
-      4. Create specific, actionable prompts using `{var}` for variables.
-      5. Ensure correct YAML syntax (2-space indent, no leading `- `).
-      6. Set the result as `draft_yaml_snippet`.
-
-      **ELSE feedback for refinement contains feedback text):**
-      Perform **REFINEMENT** based **specifically** on the feedback
-      1. Start with the `{previous_attempt_snippet}` string.
-      2. Modify this string **only** to address the issues described in the feedback
-      3. Ensure the resulting YAML snippet string strictly follows the schema and has correct YAML syntax. **Do not change unmentioned parts.**
-      4. Set the refined string as `draft_yaml_snippet`.
-
-      # --- Output ---
-      Output the generated or refined YAML snippet string as `draft_yaml_snippet`.
+      Output the resulting YAML string (either newly generated, refined, or passed-through for saving) as 'current_yaml', and the boolean 'refinement_complete' flag. Output ONLY the required JSON object.
     output_model:
-      draft_yaml_snippet: str
+      current_yaml: str
+      refinement_complete: bool
 
-  - name: validate_node_yaml
+  - name: validate_yaml
     type: llm
     tools: True
-    tools_selection: ["validate_yaml_with_schema"]
+    tools_selection:
+      - validate_yaml_with_schema
+    tools_auto_approval: False
     system: |
-      You are a two-stage validator for agentic flow node YAML snippets.
-      First, use the 'validate_yaml_with_schema' tool for basic syntax and type checking.
-      Second, if the tool succeeds, perform stricter logical schema checks based on the node type and tool usage rules provided.
+      You are a YAML validation assistant using the 'validate_yaml_with_schema' tool.
+      Your task is to validate the provided 'content_yaml' against the predefined 'Agentic Flow Schema' defined below.
+      Analyze the tool's output dictionary to determine validity.
     prompt: |
-      YAML Snippet:
-      ```yaml
-      {draft_yaml_snippet}
-      ```
-
-      Available Tools List: 
-      {available_tools}
-
-      **Reference Schema (for logical checks):**
-      * **Common Required:** `name` (string), `type` ('input' or 'llm').
-      * **Type 'input':** Required: `prompt`, `output_model` (dict). Optional: `user_message`. Forbidden: `system`, `tools`, `tools_selection`.
-      * **Type 'llm':** Required: `system`, `prompt`, `output_model` (dict). Optional: `tools` (bool), `tools_selection` (list, REQUIRED if tools=True, subset of `{available_tools}`), `user_message` (list/None).
-      * **No other top-level keys allowed.**
-
-      **Basic Schema YAML String (for the tool):**
+      schema:
       ```yaml
       type: map
       mapping:
-        name: 
-          type: str
-          required: True
-        type: 
-          type: enum
-          enum: ['input', 'llm'] 
-          required: True
-        prompt: 
-          type: str
-          required: False
-        output_model: 
-          type: map
-          required: False
-          mapping:
-            regex;(.+):
-              type: str
-        user_message: 
+        description: {type: str, required: True}
+        nodes:
           type: seq
-          sequence:  
-            - type: str
-          required: False
-        system: 
-          type: str
-          required: False
-        tools: 
-          type: bool
-          required: False
-        tools_selection: 
+          required: True
+          sequence:
+            - type: map
+              mapping:
+                name: {type: str, required: True}
+                type: {type: str, required: True, enum: ['input', 'llm']}
+                options: {type: seq, required: False, sequence: [{type: str}]}
+                system: {type: str, required: False}
+                prompt: {type: str, required: True}
+                output_model: 
+                  type: map
+                  required: True
+                  mapping: 
+                    regex;(.+): 
+                      type: str
+                user_message: {type: seq, required: False, sequence: [{type: str}]}
+                tools: {type: bool, required: False}
+                tools_selection: {type: seq, required: False, sequence: [{type: str}]}
+                print_state: {type: bool, required: False}
+        flow:
           type: seq
-          sequence: 
-            - type: str
-          required: False
+          required: True
+          sequence:
+            - type: map
+              mapping:
+                from: {type: str, required: True}
+                to: {type: str, required: False}
+                edges:
+                  type: seq
+                  required: False
+                  sequence:
+                    - type: map
+                      mapping:
+                        to: {type: str, required: True}
+                        condition: {type: str, required: True}
       ```
 
-      **Validation Process:**
-      1.  **Call Tool:** Use the `validate_yaml_with_schema` tool. Pass the Basic Schema YAML String above as `schema_yaml` and the `{draft_yaml_snippet}` as `content_yaml`.
-      2.  **Check Tool Result:**
-          * If the tool returns `{{'errors': [...]}}`, set `is_valid` = `False` and set `validation_errors` to a string listing the tool's errors. STOP HERE.
-          * If the tool returns `{{'message': 'YAML is valid.'}}`, proceed to step 3.
-      3.  **Perform Logical Checks (based on Reference Schema and parsed snippet):**
-          * Parse `{draft_yaml_snippet}` mentally or assume tool did. Check `type` value ('input' or 'llm').
-          * **If `type` == 'input':** Are required fields present? Are forbidden fields absent? List errors if any.
-          * **If `type` == 'llm':** Are required fields present? Are optional field types correct? Check `tools`/`tools_selection` relationship carefully (is selection present ONLY IF tools=True? Is selection list a subset of `{available_tools}`?). List errors if any.
-          * Check for any extra/unknown keys? List errors if any.
-      4.  **Final Decision:**
-          * If any logical errors found in step 3: Set `is_valid` = `False`, `validation_errors` = Bulleted list of ALL logical errors found.
-          * If step 2 succeeded AND no logical errors found in step 3: Set `is_valid` = `True`, `validation_errors` = "Validation successful.".
+      content_yaml:
+      {current_yaml}
 
-      **Output:**
-      - Set `is_valid` (boolean): `True` ONLY if NO errors were found.
-      - Set `validation_errors` (string): If `is_valid` is `False`, provide a clear, bulleted list of ALL validation errors found. If `is_valid` is `True`, set to "Validation successful.".
+      # Task:
+      Call the 'validate_yaml_with_schema' tool with the content_yaml as input and the schema.
+      Provide in the validation_error full response from the tool in case of error.
     output_model:
-      is_valid: bool
-      validation_errors: str
-    user_message:
-      - validation_errors
+      is_yaml_valid: bool
+      validation_error: list
 
-  - name: format_snippet_for_review
+  - name: summarize_and_display_yaml
     type: llm
     system: |
-      You are an assistant that wraps a validated YAML snippet in Markdown code fences for display.
+      You are an assistant summarizing and presenting an agentic flow YAML.
+      1. Briefly summarize the purpose and main steps of the flow based on the YAML content.
+      2. Format the full YAML content within a markdown code block for display.
+      3. Prepare the text for the feedback prompt, instructing user to provide feedback or type 'SAVE'.
     prompt: |
-      YAML snippet:
-      ```yaml
-      {draft_yaml_snippet}
-      ```
+      # Current Agentic Flow YAML:
+      {current_yaml} # Input from generate_or_refine_yaml
 
-      1. Extract the node name (the value associated with the `name:` key) from the snippet.
-      2. Create a header: `**Proposed Details for Node `[extracted_node_name]`:**`
-      3. Wrap the input snippet string `{validated_snippet}` in YAML Markdown code fences (```yaml ... ```).
-      4. Prepend the header (from step 1) and a newline before the fenced code block.
-
-      Output the combined header and fenced code block as `snippet_review_string`.
+      # Task:
+      1. Analyze the YAML and write a brief summary in 'flow_summary'.
+      2. Create 'formatted_yaml_display' containing the full YAML in a markdown code block.
+      3. Create 'feedback_prompt_text'. Example: "{summary}\n---\n**Current YAML:**\n{yaml_display_block}\n---\nReview the YAML. Provide specific feedback for changes, or type 'SAVE' if satisfied and ready to finalize."
     output_model:
-      snippet_review_string: str
-    user_message:
-      - snippet_review_string
+      flow_summary: str
+      formatted_yaml_display: str
+      feedback_prompt_text: str
 
-  - name: get_feedback_on_snippet
+  - name: user_approval
     type: input
     prompt: |
-      # The YAML snippet below passed basic validation.
+      {flow_summary}
+      ---
+      {formatted_yaml_display}
 
-      Please review the proposed YAML configuration for this node.
-      Does it correctly implement the node's purpose? Are the prompt, type, tools, outputs correct?
-
-      Type specific feedback for changes, or type 'CONTINUE'/'APPROVE'/'OK' if satisfied.
+      Please review the YAML above select 'approve' if you are satisfied with it, or 'refine' if you want to make changes.
     output_model:
-      snippet_feedback: str
+      yaml_feedback: str
+    options:
+      - "approve"
+      - "refine"
 
-  - name: analyze_snippet_feedback
-    type: llm
-    system: |
-      Analyze user feedback about a proposed YAML node snippet. Determine if the user approves or wants refinement. Pass necessary context for looping.
-    prompt: |
-      Proposed YAML Snippet was:
-      ```yaml
-      {validated_snippet} # Snippet the user reviewed (passed from 8.5/8c via state)
-      ```
-
-      User Feedback:
-      {snippet_feedback} # Raw text from the user
-
-      Analyze the feedback:
-      1. Does feedback indicate approval AND no specific change requests?
-      2. If YES (Approval):
-         - Set `snippet_approved` = `True`.
-         - Set `approval_message` = "Node snippet approved."
-      3. If NO (Refinement Needed):
-         - Set `snippet_approved` = `False`.
-         - Set `approval_message` = ""
-
-    output_model:
-      snippet_approved: bool 
-      approval_message: str
-    user_message:
-      - approval_message
-
-  - name: store_snippet_and_increment
-    type: llm
-    system: |
-      You are an assistant responsible for updating state variables within a loop: adding a YAML snippet string to a dictionary map and incrementing an index counter by exactly 1.
-    prompt: |
-      The finalized YAML snippet string for the node named `{current_node_info['name']}` (at input index `{current_node_index}`) is:
-      ```yaml
-      {draft_yaml_snippet}
-      ```
-
-      The dictionary map containing snippets of nodes processed so far is:
-      {detailed_nodes_map}
-
-      Perform the following state updates precisely:
-      1. Create the *updated* `detailed_nodes_map` dictionary by adding/updating the entry for the key `{current_node_info['name']}` with the value `{final_yaml_snippet}`.
-      2. Calculate the *next* `current_node_index` by adding exactly 1 to the input `{current_node_index}`.
-      3. Output the *updated* `detailed_nodes_map`.
-      4. Output the *new* `current_node_index` value.
-
-      **Return only the updated dictionary map and the new index value.**
-    output_model:
-      detailed_nodes_map: dict
-      current_node_index: int
-
-  - name: assemble_nodes_section
-    type: llm
-    system: |
-      You assemble the 'nodes:' section of an agentic flow YAML file from individual node snippets, ensuring correct order and list formatting.
-    prompt: |
-      Map of Node Names to their validated YAML Snippets (Dictionary Content):
-      {detailed_nodes_map}
-
-      Original ordered list of node names/purposes (use this for order):
-      {node_list_to_detail} # List of {'name': ..., 'purpose': ...}
-
-      Task: Create the YAML string for the complete content *under* the 'nodes:' key.
-      1. Iterate through the `node_list_to_detail` list IN ORDER.
-      2. For each node object in the list, get its name (`node['name']`).
-      3. Retrieve the corresponding YAML snippet string (which starts with `name: ...` and has 2-space indent) from `{detailed_nodes_map}` using the name.
-      4. Prepend `"  - "` (two spaces, hyphen, space) ONLY to the first line of this retrieved snippet string. Ensure subsequent lines maintain their relative indentation.
-      5. Concatenate all these modified snippet strings (list items) together, separated by newlines.
-
-      Output the resulting multi-line string containing the fully formatted content for the `nodes:` section (starting from the first `  - `). Do not include the `nodes:` key itself.
-    output_model:
-      nodes_yaml_section: str
-
-  - name: generate_flow_section
-    type: llm
-    system: |
-      You generate the 'flow:' section of an agentic flow YAML file based on structured connection rules, ensuring correct syntax including START/END connections and lambda functions.
-    prompt: |
-      Structured Flow Connection Rules (List of dictionaries, potentially with 'edges'):
-      {refined_connections} # Output from Node 5, defines transitions BETWEEN custom nodes
-
-      List of all defined node names (in intended execution order for simple flows):
-      {node_list_to_detail} # List of {'name': ..., 'purpose': ...}
-
-      Task: Create the YAML string for the complete content *under* the 'flow:' key.
-      1. Identify the name of the first node from `{node_list_to_detail[0]['name']}`. If the list is empty, this is an error state, output only `  - from: START\n    to: END`.
-      2. Generate the first rule string: `  - from: START\n    to: [first_node_name]`
-      3. Initialize an empty list for formatted rule strings based on `{refined_connections}`.
-      4. Iterate through the input `{refined_connections}` list. Format each rule dictionary into a YAML list item string (with correct indentation for `from`, `to`, `edges`, `condition`, ensuring lambda strings are quoted) and add it to the list of formatted rules.
-      5. **Identify Terminal Node(s):** Determine the node name(s) that appear as a `to:` target in `{refined_connections}` or `{node_list_to_detail}` but do **not** appear as a `from:` source in any rule within `{refined_connections}`. For simple linear flows, this will typically be the last node in `{node_list_to_detail}`. If multiple terminal nodes exist (e.g., from branches), identify all of them. Let the primary one be `[last_node_name]`.
-      6. **Generate END Rule(s):** For each identified terminal node (like `[last_node_name]`), create a rule string: `  - from: [terminal_node_name]\n    to: END`. If multiple terminal nodes were identified, create a rule for each.
-      7. **Concatenate:** Combine the START rule string (from step 2), all formatted rule strings (from step 4), and the END rule string(s) (from step 6).
-      8. Output the resulting multi-line string containing the fully formatted content for the `flow:` section. Do not include the `flow:` key itself.
-
-      Output only the assembled string content as `flow_yaml_section`.
-    output_model:
-      flow_yaml_section: str
-
-  - name: assemble_final_yaml
-    type: llm
-    system: |
-      You assemble the final agentic flow YAML file by combining the description, nodes section string, and flow section string. You also wrap it in code fences.
-    prompt: |
-      Overall Description: {overall_idea}
-      Nodes Section YAML String (already formatted list items):
-      {nodes_yaml_section} # From Node 12a
-      Flow Section YAML String (already formatted list items including START):
-      {flow_yaml_section} # From Node 12b
-
-      Task: Combine these parts into the final YAML file string.
-      1. Start with `description: {overall_idea}`.
-      2. Add two newlines (`\n\n`).
-      3. Add `nodes:`.
-      4. Add one newline (`\n`).
-      5. Append the entire `{nodes_yaml_section}` string.
-      6. Add two newlines (`\n\n`).
-      7. Add `flow:`.
-      8. Add one newline (`\n`).
-      9. Append the entire `{flow_yaml_section}` string.
-      10. Ensure there are no trailing extra newlines.
-      11. Wrap the **entire resulting string** (from step 1 to 9) in YAML Markdown code fences (```yaml ... ```).
-
-      Output **only** the final, fenced YAML string as `flow_yaml_formatted`.
-    output_model:
-      flow_yaml_formatted: str
-    user_message:
-      - flow_yaml_formatted
-
-  - name: get_final_yaml_feedback
+  - name: get_yaml_feedback
     type: input
     prompt: |
-      The complete agentic flow YAML is displayed above.
-
-      Please perform a final review. Check the description, node details (prompts, types, tools, outputs), and the flow logic (START, END, connections, conditions).
-
-      Does everything look correct and implement your intended logic?
-
-      Type specific feedback if changes are needed, or type 'APPROVE'/'LOOKS GOOD'/'SAVE'/'CONTINUE' if you are satisfied.
+      Sure, let's refine the YAML. Please provide specific feedback on what you would like to change or improve.
+      You can refer to the YAML structure, node names, or any specific part of the flow.
     output_model:
-      final_yaml_feedback: str
-
-  - name: analyze_final_yaml_feedback
-    type: llm
-    system: |
-      Analyze user feedback on the complete generated YAML file. Determine if the user approves it or if changes are requested.
-    prompt: |
-      Generated YAML File Content:
-      {flow_yaml_formatted} # The YAML string shown to the user by Node 12c
-
-      User Feedback on Final YAML:
-      {final_yaml_feedback} # Raw text from the user
-
-      Analyze the feedback:
-      1. Does the feedback indicate approval/satisfaction (e.g., contains "approve", "looks good", "save", "continue", "perfect", "yes", "ok") AND does NOT contain specific actionable change requests?
-      2. If YES (Approval):
-         - Set `final_yaml_approved` = `True`.
-         - Set `yaml_refinement_feedback` = ""
-         - Set `final_yaml_output` = copy of `{flow_yaml_formatted}`. # Pass approved YAML forward
-         - Set `approval_or_refinement_msg` = "YAML approved! Ready for the next step."
-      3. If NO (Refinement Needed):
-         - Set `final_yaml_approved` = `False`.
-         - Set `yaml_refinement_feedback` = the original `{final_yaml_feedback}` text.
-         - Set `final_yaml_output` = "" # Not used when refinement needed
-         - Set `approval_or_refinement_msg` = "Feedback received. Automatic refinement of the full YAML based on feedback is complex and not supported in this version. If changes are needed, please consider restarting the process with refined requirements based on your feedback.\n\nFeedback: {final_yaml_feedback}"
-
-      Output `final_yaml_approved`, `yaml_refinement_feedback`, `final_yaml_output`, `approval_or_refinement_msg`.
-    output_model:
-      final_yaml_approved: bool
-      yaml_refinement_feedback: str
-      final_yaml_output: str
-      approval_or_refinement_msg: str
-    user_message:
-      - approval_or_refinement_msg
+      yaml_feedback: str
 
   - name: suggest_flow_name
     type: llm
     system: |
-      You are an assistant that creates concise, descriptive filenames in snake_case format based on a description.
+      Generate a short, descriptive snake_case name based on the flow's description or purpose found within the final YAML.
     prompt: |
-      Based on the following overall description for an agentic flow:
-      {overall_idea}
+      # Final Flow YAML:
+      {current_yaml} # The final YAML after refinement loop
 
-      Suggest a suitable filename (without the .yaml extension) using only lowercase letters and underscores (snake_case). Make it short but descriptive.
-
-      Output ONLY the suggested name string.
+      Generate a suitable snake_case name (e.g., example_flow_name). Only return the name string.
     output_model:
       suggested_flow_name: str
-    user_message:
-      - "Suggested filename: {suggested_flow_name}.yaml"
-
-  - name: confirm_save_details
-    type: input
-    prompt: |
-      # Suggested filename shown above.
-
-      Ready to save the generated YAML with this name?
-      - Type 'SAVE' to confirm the suggested name.
-      - Type a different name (snake_case, no extension) to save with that name.
-      - Type 'CANCEL' to exit without saving.
-    output_model:
-      save_decision: str
+      final_yaml_to_save: str
 
   - name: get_config_directory
     type: llm
     tools: True
     tools_selection:
       - shell_command
-    system: |
-      You are a system utility assistant executing commands to find configuration paths.
+    tools_auto_approval: True
+    system: "Get the astonish config directory path."
     prompt: |
-      Run the following exact command to get the user's astonish config directory path:
-      `python3 -c "import appdirs; print(appdirs.user_config_dir('astonish'))"`
-
-      Output ONLY the directory path string returned by the command.
+      Run: `python3 -c "import appdirs; print(appdirs.user_config_dir('astonish'))"`
     output_model:
       config_dir: str
+
+  - name: determine_save_path
+    type: llm
+    system: "Determine the final save path using the suggested name."
+    prompt: |
+      Config Directory: {config_dir}
+      Suggested Name: {suggested_flow_name}
+      Construct the full save path: {config_dir}/agents/{suggested_flow_name}.yaml
+    output_model:
+      final_save_path: str
 
   - name: write_flow_to_file
     type: llm
     tools: True
     tools_selection:
       - write_file
-    system: |
-      You are a system utility assistant that saves provided content to a specified file path using the write_file tool. Determine the final filename based on user decision.
+    system: "Save the YAML content to the specified file path."
     prompt: |
-      User's Save Decision: {save_decision} # Contains 'SAVE', 'CANCEL', or a new_name
-      Suggested Filename (use if user typed 'SAVE'): {suggested_flow_name}
-      Config Directory: {config_dir}
-      YAML Content to Save:
-      {final_yaml_output} # The approved YAML string from Node 14
+      File Path: {final_save_path}
+      YAML Content:
+      {current_yaml}
 
-      1. Determine the final filename (without extension):
-         - If `{save_decision}` is 'SAVE' (case-insensitive), use `{suggested_flow_name}`.
-         - Otherwise (if it's not 'SAVE' or 'CANCEL'), use the value of `{save_decision}` as the new filename.
-      2. Construct the full file path: `{config_dir}/agents/[final_filename].yaml` (Ensure agents subdirectory exists - the write_file tool might need to handle directory creation or assume it exists).
-      3. Use the `write_file` tool to save the YAML Content (`{final_yaml_output}`) to the constructed file path.
-      4. Generate a confirmation message indicating success and the final path, or report any error from the tool.
-
-      Output the confirmation message as `save_confirmation_msg`.
+      Save the content to the file. Output confirmation message.
     output_model:
-      save_confirmation_msg: str
+      save_confirmation: str
     user_message:
-      - save_confirmation_msg
+      - save_confirmation
 
 flow:
   - from: START
-    to: welcome_get_idea
-  - from: welcome_get_idea
+    to: get_overall_idea
+  - from: get_overall_idea
     to: fetch_available_tools
   - from: fetch_available_tools
-    to: propose_initial_structure
-  - from: propose_initial_structure
-    to: get_feedback_on_structure
-  - from: get_feedback_on_structure
-    to: refine_structure
-  - from: refine_structure
+    to: generate_or_refine_yaml
+  - from: generate_or_refine_yaml
+    to: validate_yaml
+  - from: validate_yaml
     edges:
-      - to: get_feedback_on_structure
-        condition: "lambda x: x['structure_needs_review']"
-      - to: initialize_node_detailing
-        condition: "lambda x: not x['structure_needs_review']"
-
-  - from: initialize_node_detailing
-    edges:
-      - to: prepare_node_for_detailing
-        condition: "lambda x: x['current_node_index'] < len(x['node_list_to_detail'])"
-      - to: assemble_nodes_section
-        condition: "lambda x: x['current_node_index'] >= len(x['node_list_to_detail'])"
-  - from: prepare_node_for_detailing
-    to: generate_node_yaml_snippet
-  - from: generate_node_yaml_snippet
-    to: validate_node_yaml
-  - from: validate_node_yaml
-    edges:
-      - to: format_snippet_for_review
-        condition: "lambda x: x['is_valid']"
-      - to: generate_node_yaml_snippet
-        condition: "lambda x: not x['is_valid']"
-  - from: format_snippet_for_review
-    to: get_feedback_on_snippet
-  - from: get_feedback_on_snippet
-    to: analyze_snippet_feedback
-  - from: analyze_snippet_feedback
-    edges:
-      - to: store_snippet_and_increment
-        condition: "lambda x: x['snippet_approved']"
-      - to: generate_node_yaml_snippet
-        condition: "lambda x: not x['snippet_approved']"
-  - from: store_snippet_and_increment
-    edges:
-      - to: prepare_node_for_detailing
-        condition: "lambda x: x['current_node_index'] < len(x['node_list_to_detail'])"
-      - to: assemble_nodes_section
-        condition: "lambda x: x['current_node_index'] >= len(x['node_list_to_detail'])"
-
-  - from: assemble_nodes_section
-    to: generate_flow_section
-  - from: generate_flow_section
-    to: assemble_final_yaml
-
-  - from: assemble_final_yaml
-    to: get_final_yaml_feedback
-  - from: get_final_yaml_feedback
-    to: analyze_final_yaml_feedback
-
-  - from: analyze_final_yaml_feedback
-    edges:
+      - to: generate_or_refine_yaml
+        condition: "lambda x: not x.get('is_yaml_valid', True)"
+      - to: summarize_and_display_yaml
+        condition: "lambda x: not x.get('refinement_complete', False)"
       - to: suggest_flow_name
-        condition: "lambda x: x['final_yaml_approved']"
-      - to: END
-        condition: "lambda x: not x['final_yaml_approved']"
-  - from: suggest_flow_name
-    to: confirm_save_details
-  - from: confirm_save_details
+        condition: "lambda x: x.get('refinement_complete', True)"
+  - from: summarize_and_display_yaml
+    to: user_approval
+  - from: user_approval
     edges:
-      - to: get_config_directory
-        condition: "lambda x: x['save_decision'].upper() != 'CANCEL'"
-      - to: END
-        condition: "lambda x: x['save_decision'].upper() == 'CANCEL'"
+      - to: get_yaml_feedback
+        condition: "lambda x: x['yaml_feedback'] == 'refine'"
+      - to: suggest_flow_name
+        condition: "lambda x: x['yaml_feedback'] == 'approve'"
+  - from: get_yaml_feedback
+    to: generate_or_refine_yaml
+  - from: suggest_flow_name
+    to: get_config_directory
   - from: get_config_directory
+    to: determine_save_path
+  - from: determine_save_path
     to: write_flow_to_file
   - from: write_flow_to_file
     to: END

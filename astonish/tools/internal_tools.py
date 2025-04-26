@@ -69,6 +69,7 @@ def validate_yaml_with_schema(schema_yaml: str, content_yaml: str) -> Dict[str, 
         return {"message": "YAML is valid."}
     
     except Exception as e:
+        print(f"Validation error: {e}")
         return {"errors": [str(e)]}
 
 # Export the list of tools

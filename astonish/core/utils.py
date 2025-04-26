@@ -5,6 +5,7 @@ import astonish.globals as globals
 from importlib import resources
 from colorama import Fore, Style, init as colorama_init
 import re
+import inquirer
 
 def setup_colorama():
     colorama_init(autoreset=True)
@@ -160,40 +161,48 @@ def format_prompt(prompt: str, state: dict, node_config: dict) -> str:
 def request_tool_execution(tool):
     """
     Prompt the user for approval before executing a tool command.
-    Accepts only 'yes', 'no', 'y', or 'n' as valid inputs (case-insensitive).
-    Keeps prompting until a valid response is received.
-
     Parameters:
     - tool (dict): Dictionary containing tool execution details.
-
     Returns:
     - bool: True if the user approves, False otherwise.
     """
     try:
         tool_name = tool['name']
         args = tool['args']
+        auto_approve = tool['auto_approve']
 
-        prompt_message = f"\nTool Call Request:\n"
-        prompt_message += f"Name: {tool_name}\n"
-        prompt_message += "Args:\n"
+        if auto_approve:
+            print(f"{Fore.GREEN}Auto-approving tool '{tool_name}' execution.{Style.RESET_ALL}")
+            return True
+        
+        print(f"\n{Fore.YELLOW}Tool Call Request:{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}Name:{Style.RESET_ALL} {tool_name}")
+        print(f"{Fore.YELLOW}Args:{Style.RESET_ALL}")
         
         for key, value in args.items():
-            prompt_message += f"  {key}: {value}\n"
+            print(f"  {Fore.YELLOW}{key}:{Style.RESET_ALL}")
+            value_lines = str(value).split('\n')
+            for line in value_lines:
+                print(f"{Fore.YELLOW}    {line}{Style.RESET_ALL}")
+                
+        print()
+        questions = [
+            inquirer.List('approval',
+                          message=f"{Fore.YELLOW}Do you approve this execution?{Style.RESET_ALL}",
+                          choices=['Yes', 'No'],
+                          ),
+        ]
         
-        prompt_message += "Do you approve this execution? (y/n): "
-
-        while True:
-            user_input = input(f"{Fore.YELLOW}{prompt_message}{Style.RESET_ALL}").strip().lower()
-            if user_input in ['yes', 'y']:
-                return True
-            elif user_input in ['no', 'n']:
-                return False
-            else:
-                print(f"{Fore.RED}Invalid input. Please enter 'yes' or 'no'.{Style.RESET_ALL}")
-
+        answers = inquirer.prompt(questions)
+        if answers['approval'] == 'Yes':
+            print(f"{Fore.GREEN}Tool execution approved.{Style.RESET_ALL}")
+            return True
+        else:
+            print(f"{Fore.RED}Tool execution denied.{Style.RESET_ALL}")
+            return False
+        
     except KeyError as e:
         print(f"{Fore.RED}Error: Missing required field in tool object: {e}{Style.RESET_ALL}")
-
     return False
 
 async def list_agents():

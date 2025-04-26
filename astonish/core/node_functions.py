@@ -2,9 +2,12 @@ import json
 import re
 import asyncio
 import traceback
+import inquirer
+import readline
+import astonish.globals as globals
 from typing import TypedDict, Union, Optional, get_args, get_origin, Dict, Any, List, Callable, Coroutine, Type
 from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
-from langchain_core.prompts import ChatPromptTemplate, BasePromptTemplate, PromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, BasePromptTemplate
 from langchain_core.tools import BaseTool
 from langchain_core.runnables import Runnable
 from langchain_core.language_models.base import BaseLanguageModel
@@ -14,8 +17,7 @@ from pydantic import Field, ValidationError, create_model, BaseModel
 from astonish.tools.internal_tools import tools as internal_tools_list
 from colorama import Fore, Style
 from astonish.core.llm_manager import LLMManager
-import astonish.globals as globals
-from astonish.core.utils import format_prompt, print_ai, print_output, print_dict
+from astonish.core.utils import format_prompt, print_ai, print_output
 
 class ToolDefinition(TypedDict):
     name: str
@@ -218,19 +220,43 @@ def create_node_function(node_config, mcp_client):
     else:
         raise ValueError(f"Unsupported node type: {node_type}")
 
-
 def create_input_node_function(node_config):
     """Creates input node function."""
     def node_function(state: dict):
         formatted_prompt = format_prompt(node_config['prompt'], state, node_config)
         print_ai(formatted_prompt)
-        user_input = input(f"{Fore.YELLOW}You: {Style.RESET_ALL}")
-        new_state = state.copy()
         output_field = next(iter(node_config.get('output_model', {'user_input': 'str'})), 'user_input')
+
+        options = node_config.get('options')
+        if options:
+            expanded_options = []
+            for option in options:
+                if option in state and isinstance(state[option], list):
+                    expanded_options.extend(state[option])
+                else:
+                    expanded_options.append(option)
+
+            questions = [
+                inquirer.List(
+                    'user_choice',
+                    message=f"{Fore.YELLOW}Choose an option{Style.RESET_ALL}",
+                    choices=expanded_options,
+                ),
+            ]
+            answers = inquirer.prompt(questions)
+            user_input = answers['user_choice']
+        else:
+            # Use readline for better input handling
+            readline.set_completer(lambda text, state: None)
+            readline.parse_and_bind('tab: complete')
+            user_input = input(f"{Fore.YELLOW}You: {Style.RESET_ALL}")
+
+        new_state = state.copy()
         new_state[output_field] = user_input
         print_user_messages(new_state, node_config)
         print_state(new_state, node_config)
         return new_state
+
     return node_function
 
 def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_tools: bool):
@@ -368,7 +394,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                             approve = False
                             try:
                                 from astonish.core.utils import request_tool_execution
-                                tool_call_info_for_approval = {"name": tool_name, "args": tool_args_for_execution}
+                                tool_call_info_for_approval = {"name": tool_name, "args": tool_args_for_execution, "auto_approve": node_config.get('tools_auto_approval', False)}
                                 approve = await asyncio.to_thread(request_tool_execution, tool_call_info_for_approval)
 
                             except ImportError: print(f"{Fore.RED}Error: 'request_tool_execution' not imported...{Style.RESET_ALL}")

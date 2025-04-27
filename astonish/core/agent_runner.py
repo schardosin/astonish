@@ -37,4 +37,4 @@ async def run_agent(agent):
 
         await run_graph(graph, initial_state, thread)
 
-        print_ai("Bye! Bye!")
+        print_ai("See you soon! Bye!")

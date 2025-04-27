@@ -40,13 +40,13 @@ Embrace the future of workflow automation with Astonish, where your tools meet A
 
 | Provider | Status |
 |----------|--------|
+| LM Studio | Supported |
 | Ollama | Supported |
-| SAP AI Core | Supported |
 | Openrouter | Supported |
+| SAP AI Core | Supported |
 | Anthropic | Coming soon |
 | AWS Bedrock | Coming soon |
 | LiteLLM | Coming soon |
-| LM Studio | Coming soon |
 | OpenAI | Coming soon |
 | X AI | Coming soon |
 

@@ -36,6 +36,20 @@ Embrace the future of workflow automation with Astonish, where your tools meet A
 - **Extensible Capabilities**: Leverage the Model Context Protocol (MCP) to expand your toolkit
 - **Rich Tool Integration**: Incorporate various tools within your workflows, including embedded and custom options
 
+## Supported AI Providers
+
+| Provider | Status |
+|----------|--------|
+| Ollama | Supported |
+| SAP AI Core | Supported |
+| Openrouter | Supported |
+| Anthropic | Coming soon |
+| AWS Bedrock | Coming soon |
+| LiteLLM | Coming soon |
+| LM Studio | Coming soon |
+| OpenAI | Coming soon |
+| X AI | Coming soon |
+
 ## Agents Creator: Your AI Architect
 
 At the heart of Astonish lies the Agents Creator. This intelligent assistant guides you through the process of designing and implementing new AI agents:

@@ -32,8 +32,5 @@ class LLMManager:
         # Configure the provider with the default model
         if isinstance(provider, OllamaProvider):
             return provider.get_llm(default_model, False, schema)
-        elif isinstance(provider, SAPAICoreProvider):
-            # Configure SAP AI Core provider (you may need to adjust this based on its specific configuration needs)
-            return provider.get_llm(default_model, False)
         else:
-            raise ValueError(f"Unsupported provider: {default_provider}")
+            return provider.get_llm(default_model, False)

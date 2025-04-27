@@ -1,6 +1,7 @@
 from astonish.providers.ai_provider_interface import AIProvider
 from astonish.providers.sap_ai_core_provider import SAPAICoreProvider
 from astonish.providers.ollama_provider import OllamaProvider
+from astonish.providers.openrouter_provider import OpenRouterProvider
 from typing import List, Tuple
 
 class AIProviderFactory:
@@ -23,5 +24,6 @@ class AIProviderFactory:
     def get_registered_providers(cls) -> List[Tuple[str, str]]:
         return [(name, info[0]) for name, info in cls._providers.items()]
 
-AIProviderFactory.register_provider("sap_ai_core", "SAP AI Core", SAPAICoreProvider)
 AIProviderFactory.register_provider("ollama", "Ollama", OllamaProvider)
+AIProviderFactory.register_provider("openrouter", "Openrouter", OpenRouterProvider)
+AIProviderFactory.register_provider("sap_ai_core", "SAP AI Core", SAPAICoreProvider)

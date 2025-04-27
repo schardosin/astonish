@@ -51,7 +51,7 @@ def shell_command(command: str) -> Dict[str, str]:
             capture_output=True,
             text=True,
             stdin=subprocess.DEVNULL,
-            timeout=10
+            timeout=120
         )
         return {"stdout": result.stdout, "stderr": result.stderr}
     except subprocess.TimeoutExpired:

@@ -265,7 +265,6 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
     adding a final formatting step if node requires structured output.
     Direct call otherwise.
     """
-    node_name_for_debug = node_config.get('name', 'Unnamed LLM Node')
     output_model_config = node_config.get('output_model', {})
     OutputModel = create_output_model(output_model_config)
     parser = PydanticOutputParser(pydantic_object=OutputModel) if OutputModel else None

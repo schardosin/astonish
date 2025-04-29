@@ -1,9 +1,11 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/schardosin/astonish/main/images/astonish-logo-only.svg" width="300" height="300" alt="Astonish Logo">
-
+  
   # Astonish AI Companion
+  
   *Empowering AI-driven workflows with low-code simplicity*
-
+  
+  [![Astonish Introduction](https://img.youtube.com/vi/83360OXEqcA/0.jpg)](https://www.youtube.com/watch?v=83360OXEqcA)
 </div>
 
 ---

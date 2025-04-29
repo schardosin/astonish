@@ -34,6 +34,7 @@ class AnthropicProvider(AIProvider):
             globals.config['ANTHROPIC'][key] = new_value if new_value else (current_value or default)
 
         os.makedirs(os.path.dirname(globals.config_path), exist_ok=True)
+        os.makedirs(os.path.dirname(globals.config_path)+'/agents', exist_ok=True)
         with open(globals.config_path, 'w') as configfile:
             globals.config.write(configfile)
 

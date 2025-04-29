@@ -1,4 +1,4 @@
-description: Agentic flow creator using Generate First, Refine Later approach (adapted from original).
+description: An agentic flow designed to assist in creating new astonish agentic flows.
 nodes:
   - name: get_overall_idea
     type: input
@@ -7,6 +7,8 @@ nodes:
       Please provide an overall description of the flow you want to create. What's the main goal and what should it do?
     output_model:
       overall_idea: str
+    user_message:
+      - "Thank you for your idea! Let's now check which tools are available to help us create this flow."
 
   - name: fetch_available_tools
     type: llm
@@ -24,6 +26,8 @@ nodes:
     output_model:
       available_tools: list
     print_state: False
+    user_message:
+      - "Great! Now I have the list of available tools. Let's generate the YAML for your agentic flow."
 
   - name: generate_or_refine_yaml
     type: llm
@@ -74,6 +78,7 @@ nodes:
       13. When using the shell_command tool, make sure that the command to be run is in the prompt.
       14. When working with items to be appended to a list, make sure to provide the list in the prompt before the item to be appended. For example, if you have a list called 'collected_summaries', make sure to provide it in the prompt before the item to be appended.
       15. Always remember, to inject content use single curly braces, and to show as an example use double curly braces.
+      16. Every prompt must be at least a single content injection by using the single curly braces. So it has the context of the previous node. Multiple injections are allowed, but at least one is required.
 
       # --- Comprehensive Example Flow (Study this structure and apply principles) ---
       ```yaml

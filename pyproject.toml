@@ -14,7 +14,7 @@ packages = [
 
 [project]
 name = "astonish"
-version = "0.6.2"
+version = "0.6.3"
 authors = [
     {name = "Rafael Schardosin Silva", email = "rafael.rs@gmail.com"},
 ]

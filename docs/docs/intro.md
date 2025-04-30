@@ -12,6 +12,11 @@ sidebar_position: 1
 
 Astonish is a low-code AI companion that empowers you to create and run sophisticated agentic workflows with unprecedented ease. By leveraging a flexible, YAML-based framework, Astonish allows you to configure and execute AI-powered tasks without extensive coding knowledge, democratizing the world of AI agent creation.
 
+<div align="center">
+  <iframe width="560" height="315" src="https://www.youtube.com/embed/83360OXEqcA" title="Introduction to Astonish" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+</div>
+
+
 ## Key Features
 
 - **Low-Code Magic**: Create and run customizable agentic workflows using an intuitive, YAML-based approach

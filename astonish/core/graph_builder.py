@@ -5,7 +5,7 @@ import astonish.globals as globals
 from astonish.core.utils import load_agents
 from astonish.core.error_handler import create_error_handler_node, is_error_state
 
-def build_graph(node_config, mcp_client, checkpointer):
+def build_graph(node_config, mcp_client, checkpointer, include_error_handler=True):
     # Create a dictionary to store all unique fields from output_models
     all_fields = {}
     for node in node_config['nodes']:
@@ -35,8 +35,9 @@ def build_graph(node_config, mcp_client, checkpointer):
     
     builder = StateGraph(TypedDict('AgentState', typed_dict_fields))
 
-    # Add a special error handling node
-    builder.add_node("_error_handler", create_error_handler_node())
+    # Add a special error handling node only if include_error_handler is True
+    if include_error_handler:
+        builder.add_node("_error_handler", create_error_handler_node())
     
     # Add regular nodes
     for node in node_config['nodes']:
@@ -72,16 +73,17 @@ def build_graph(node_config, mcp_client, checkpointer):
     
     # Add conditional edges to check for error state after each node
     # These edges need to be added AFTER the regular edges to ensure they take precedence
-    for node in node_config['nodes']:
-        node_name = node['name']
-        # Add a conditional edge that checks for errors
-        # Use a path_map to explicitly map the return value of is_error_state to the next node
-        # This ensures that the error edge takes precedence over regular edges
-        builder.add_conditional_edges(
-            node_name,
-            is_error_state,  # Function from error_handler.py that returns the next node name
-            {"_error_handler": "_error_handler", END: END}  # Explicitly map the return values
-        )
+    if include_error_handler:
+        for node in node_config['nodes']:
+            node_name = node['name']
+            # Add a conditional edge that checks for errors
+            # Use a path_map to explicitly map the return value of is_error_state to the next node
+            # This ensures that the error edge takes precedence over regular edges
+            builder.add_conditional_edges(
+                node_name,
+                is_error_state,  # Function from error_handler.py that returns the next node name
+                {"_error_handler": "_error_handler", END: END}  # Explicitly map the return values
+            )
 
     return builder.compile(checkpointer=checkpointer)
 
@@ -203,6 +205,7 @@ async def run_graph(graph, initial_state, thread):
 
 def print_flow(agent):
     config = load_agents(agent)
-    graph = build_graph(config, None, None)
+    # Pass include_error_handler=False for visualization
+    graph = build_graph(config, None, None, include_error_handler=False)
     graph_obj = graph.get_graph()
     graph_obj.print_ascii()

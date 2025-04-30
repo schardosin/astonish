@@ -68,7 +68,7 @@ This command opens the YAML configuration file for the specified agent in your d
 Astonish looks for agents in two locations:
 
 1. Built-in agents in the `astonish.agents` package
-2. Custom agents in the user's config directory (`~/.config/astonish/agents` on Linux/macOS, `%APPDATA%\astonish\agents` on Windows)
+2. Custom agents in the user's config directory (`~/.config/astonish/agents` on Linux, `~/Library/Application\ Support/astonish/agents` on macOS, `%APPDATA%\astonish\agents` on Windows)
 
 ## Implementation Details
 

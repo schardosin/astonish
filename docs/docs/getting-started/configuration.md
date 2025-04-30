@@ -15,7 +15,8 @@ Astonish uses two main configuration files:
 
 These files are automatically created and managed by the application in the user's config directory:
 
-- On Linux/macOS: `~/.config/astonish/`
+- On Linux: `~/.config/astonish/`
+- On macOS: `~/Library/Application\ Support/astonish/`
 - On Windows: `%APPDATA%\astonish\`
 
 ## Setting Up an AI Provider

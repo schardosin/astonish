@@ -4,6 +4,7 @@ from astonish.providers.ollama_provider import OllamaProvider
 from astonish.providers.openrouter_provider import OpenRouterProvider
 from astonish.providers.lm_studio_provider import LMStudioProvider
 from astonish.providers.anthropic_provider import AnthropicProvider
+from astonish.providers.openai_provider import OpenAIProvider
 from typing import List, Tuple
 
 class AIProviderFactory:
@@ -29,5 +30,6 @@ class AIProviderFactory:
 AIProviderFactory.register_provider("anthropic", "Anthropic", AnthropicProvider)
 AIProviderFactory.register_provider("lm_studio", "LM Studio", LMStudioProvider)
 AIProviderFactory.register_provider("ollama", "Ollama", OllamaProvider)
+AIProviderFactory.register_provider("openai", "OpenAI", OpenAIProvider)
 AIProviderFactory.register_provider("openrouter", "Openrouter", OpenRouterProvider)
 AIProviderFactory.register_provider("sap_ai_core", "SAP AI Core", SAPAICoreProvider)

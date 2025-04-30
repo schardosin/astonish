@@ -175,4 +175,3 @@ The internal tools have access to the file system and can execute shell commands
 ## Related Modules
 
 - [MCP Tools](/docs/api/tools/mcp-tools): External tools provided by MCP servers
-- [Tool Base](/docs/api/tools/tool-base): Base classes for creating custom tools

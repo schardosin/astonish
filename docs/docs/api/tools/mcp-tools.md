@@ -447,4 +447,3 @@ If a tool execution fails:
 ## Related Modules
 
 - [Internal Tools](/docs/api/tools/internal-tools): Built-in tools provided by Astonish
-- [Tool Base](/docs/api/tools/tool-base): Base classes for creating custom tools

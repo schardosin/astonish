@@ -113,6 +113,6 @@ async with AsyncSqliteSaver.from_conn_string(":memory:") as checkpointer:
 
 ## Related Modules
 
-- [Graph Builder](/docs/api/core/graph-builder): Builds and runs the execution graph
-- [Node Functions](/docs/api/core/node-functions): Defines the functions for different node types
-- [Utils](/docs/api/core/utils): Utility functions for agent execution
+- **Graph Builder**: Builds and runs the execution graph
+- **Node Functions**: Defines the functions for different node types
+- **Utils**: Utility functions for agent execution

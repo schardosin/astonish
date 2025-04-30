@@ -70,15 +70,6 @@ Astonish looks for agents in two locations:
 1. Built-in agents in the `astonish.agents` package
 2. Custom agents in the user's config directory (`~/.config/astonish/agents` on Linux, `~/Library/Application\ Support/astonish/agents` on macOS, `%APPDATA%\astonish\agents` on Windows)
 
-## Implementation Details
-
-The agents command is implemented in the `main.py` file and uses several components:
-
-- `run_agent()` in `agent_runner.py` for executing agents
-- `print_flow()` in `graph_builder.py` for visualizing agent flows
-- `list_agents()` in `utils.py` for listing available agents
-- `edit_agent()` in `utils.py` for opening agent files in an editor
-
 ## Agent Structure
 
 Agents are defined using YAML files with the following structure:

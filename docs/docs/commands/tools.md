@@ -65,14 +65,9 @@ To use MCP tools, you need to:
 1. Configure the MCP server in the MCP configuration file
 2. Enable the tools you want to use in your agent's YAML configuration
 
-## Implementation Details
+## Built-in tools
 
-The tools command is implemented in the `main.py` file:
-
-- `list_tools()` function fetches and displays all available tools
-- `edit_mcp_config()` function from `mcp_config_editor.py` opens the MCP configuration file in an editor
-
-The built-in tools are defined in `internal_tools.py` and include:
+The built-in tools include:
 
 - `read_file`: Read the contents of a file
 - `write_file`: Write content to a file

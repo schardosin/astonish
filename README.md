@@ -6,6 +6,8 @@
   *Empowering AI-driven workflows with low-code simplicity*
   
   [![Astonish Introduction](https://img.youtube.com/vi/83360OXEqcA/0.jpg)](https://www.youtube.com/watch?v=83360OXEqcA)
+
+  [![Documentation](https://img.shields.io/badge/docs-website-blue)](https://schardosin.github.io/astonish/)
 </div>
 
 ---

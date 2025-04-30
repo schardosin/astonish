@@ -42,7 +42,8 @@ class VersionAction(argparse.Action):
         parser.exit()
 
 async def main(args=None):
-    from astonish.core.agent_runner import run_agent, print_flow
+    from astonish.core.agent_runner import run_agent
+    from astonish.core.graph_builder import print_flow
     from astonish.core.utils import list_agents, edit_agent
 
     if args is None:

@@ -28,8 +28,8 @@ def print_section(title):
     print(f"{title.center(40)}")
     print(f"{'=' * 40}{Style.RESET_ALL}\n")
 
-def print_output(output):
-    print(f"{Fore.CYAN}{output}{Style.RESET_ALL}")
+def print_output(output, color=Fore.CYAN):
+    print(f"{color}{output}{Style.RESET_ALL}")
 
 def print_dict(dictionary, key_color=Fore.MAGENTA, value_color=Fore.CYAN):
     for key, value in dictionary.items():
@@ -78,15 +78,21 @@ def _evaluate_placeholder(expr: str, context: dict) -> str:
         - Simple variable names: {variable}
         - Dictionary key access (string keys): {variable['key']}
         - Basic attribute access: {variable.attribute}
-    
+        Escapes expressions wrapped in double braces like {{expr}}.
+
     Args:
-        expr: The string expression inside the braces (e.g., "variable", "variable['key']").
+        expr: The string expression inside the braces.
         context: The dictionary ({**state, **node_config}) to look up variables in.
 
     Returns:
         The resolved string value, or the original placeholder string if resolution fails.
     """
-    expr = expr.strip() # Remove leading/trailing whitespace
+    expr = expr.strip()
+
+    # If expression is already wrapped in extra braces, skip evaluation
+    if expr.startswith('{') and expr.endswith('}'):
+        # Unescape: {{...}} -> {...}
+        return f"{{{expr[1:-1]}}}"
 
     try:
         if '.' not in expr and '[' not in expr:
@@ -122,12 +128,10 @@ def _evaluate_placeholder(expr: str, context: dict) -> str:
             else:
                 raise KeyError(f"Base variable '{var_name}' not found")
 
-        # If none of the patterns match, it's an unsupported expression
         raise ValueError(f"Unsupported expression format: {expr}")
 
     except (KeyError, AttributeError, IndexError, TypeError, ValueError) as e:
         globals.logger.warning(f"Could not resolve placeholder '{{{expr}}}': {type(e).__name__}: {e}. Leaving placeholder unchanged.")
-        # Return the original placeholder string on any error
         return f"{{{expr}}}"
 
 def format_prompt(prompt: str, state: dict, node_config: dict) -> str:
@@ -150,11 +154,20 @@ def format_prompt(prompt: str, state: dict, node_config: dict) -> str:
          logger.warning(f"Prompt is not a string, returning as is. Type: {type(prompt)}")
          return prompt
 
+    # Step 1: Temporarily escape double-brace blocks
+    DUMMY_ESCAPE = "§§§"  # unlikely token
+    prompt = prompt.replace("{{", f"{DUMMY_ESCAPE}open_brace§")
+    prompt = prompt.replace("}}", f"{DUMMY_ESCAPE}close_brace§")
+
     formatted_prompt = re.sub(
-        r"\{([^}]+)\}", 
+        r"(?<!\{)\{([^{}]+)\}(?!\})", 
         lambda match: _evaluate_placeholder(match.group(1), format_context), 
         prompt
     )
+
+    # Step 3: Restore the literal braces
+    formatted_prompt = formatted_prompt.replace(f"{DUMMY_ESCAPE}open_brace§", "{")
+    formatted_prompt = formatted_prompt.replace(f"{DUMMY_ESCAPE}close_brace§", "}")
     
     return formatted_prompt
 

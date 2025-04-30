@@ -18,6 +18,8 @@ from astonish.tools.internal_tools import tools as internal_tools_list
 from colorama import Fore, Style
 from astonish.core.llm_manager import LLMManager
 from astonish.core.utils import format_prompt, print_ai, print_output
+from astonish.core.error_handler import create_error_feedback, handle_node_failure
+from astonish.core.format_handler import execute_tool_with_corrected_input
 
 class ToolDefinition(TypedDict):
     name: str
@@ -98,20 +100,59 @@ def create_output_model(output_model_config: Dict[str, str]) -> Optional[Type[Ba
          return None
 
 def update_state(state: Dict[str, Any], output: Union[BaseModel, str, Dict, None], node_config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Update the state with the output from a node execution.
+    
+    Args:
+        state: The current state dictionary
+        output: The output from the node execution
+        node_config: The node configuration dictionary
+        
+    Returns:
+        The updated state dictionary
+    """
+    # Check if the current state already has an error
+    if state.get('_error') is not None:
+        # Don't update state if there's already an error
+        return state
+    
     new_state = state.copy()
     output_field_name = next(iter(node_config.get('output_model', {})), 'agent_final_answer')
+    
+    # Handle different output types
     if isinstance(output, BaseModel):
         new_state.update(output.model_dump(exclude_unset=True))
-    elif isinstance(output, dict) and "output" in output:
-         new_state[output_field_name] = output.get("output", "")
+    elif isinstance(output, dict):
+        # Check for error information
+        if "_error" in output:
+            # Propagate error information to the state
+            new_state['_error'] = output["_error"]
+            
+            # If there's an error, return a minimal state with just the error info
+            # This helps avoid state conflicts
+            if output["_error"] and not output["_error"].get('recoverable', True):
+                return {
+                    '_error': output["_error"],
+                    '_end': False  # Let the error handler node set this to True
+                }
+        
+        # Update the output field
+        if "output" in output:
+            new_state[output_field_name] = output.get("output", "")
     elif isinstance(output, str):
         new_state[output_field_name] = output
-    elif output is None: print(f"{Fore.YELLOW}Warning: Received None output for state update.{Style.RESET_ALL}")
-    limit_counter_field = node_config.get('limit_counter_field'); limit = node_config.get('limit')
-    if limit_counter_field and limit:
+    elif output is None:
+        globals.logger.warning("Received None output for state update.")
+    
+    # Update counter for limited nodes
+    limit_counter_field = node_config.get('limit_counter_field')
+    limit = node_config.get('limit')
+    if limit_counter_field and limit and '_error' not in new_state:
         counter = new_state.get(limit_counter_field, 0) + 1
-        if counter > limit: counter = 1
+        if counter > limit:
+            counter = 1
         new_state[limit_counter_field] = counter
+    
     return new_state
 
 def create_custom_react_prompt_template(tools_definitions: List[ToolDefinition]) -> str:
@@ -223,6 +264,10 @@ def create_node_function(node_config, mcp_client):
 def create_input_node_function(node_config):
     """Creates input node function."""
     def node_function(state: dict):
+        # Check if there's an error in the state
+        if state.get('_error') is not None:
+            return state  # Return the state unchanged if there's an error
+        
         formatted_prompt = format_prompt(node_config['prompt'], state, node_config)
         print_ai(formatted_prompt)
         output_field = next(iter(node_config.get('output_model', {'user_input': 'str'})), 'user_input')
@@ -376,11 +421,52 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                             elif tool_input_type == 'JSON_SCHEMA':
                                 globals.logger.info(f"[{node_name}] Processing as JSON_SCHEMA input.")
                                 if not tool_schema_def: raise ValueError(f"No schema definition found for JSON tool '{tool_name}'")
-                                cleaned_json_string = input_string_from_llm.removeprefix("```json").removesuffix("```").strip()
-                                parsed_args = {} if not cleaned_json_string else json.loads(cleaned_json_string)
-                                if isinstance(tool_schema_def, type) and issubclass(tool_schema_def, BaseModel):
-                                    validated_args = tool_schema_def(**parsed_args); tool_args_for_execution = validated_args.model_dump(mode='json'); globals.logger.info(f"[{node_name}] JSON Validation successful (Pydantic).")
-                                else: tool_args_for_execution = parsed_args; globals.logger.info(f"[{node_name}] JSON Validation skipped.")
+                                
+                                # Process JSON input with error handling
+                                try:
+                                    cleaned_json_string = input_string_from_llm.removeprefix("```json").removesuffix("```").strip()
+                                    parsed_args = {} if not cleaned_json_string else json.loads(cleaned_json_string)
+                                    
+                                    if isinstance(tool_schema_def, type) and issubclass(tool_schema_def, BaseModel):
+                                        validated_args = tool_schema_def(**parsed_args)
+                                        tool_args_for_execution = validated_args.model_dump(mode='json')
+                                        globals.logger.info(f"[{node_name}] JSON Validation successful (Pydantic).")
+                                    else:
+                                        tool_args_for_execution = parsed_args
+                                        globals.logger.info(f"[{node_name}] JSON Validation skipped.")
+                                        
+                                except (json.JSONDecodeError, ValidationError, TypeError) as json_error:
+                                    # Get retry configuration
+                                    max_json_retries = node_config.get('max_json_retries', 2)
+                                    
+                                    if max_json_retries > 0:
+                                        # Import the LLM error handler
+                                        from astonish.core.error_handler import handle_llm_error
+                                        
+                                        # Try to fix the JSON processing issue with retries
+                                        json_result = await handle_llm_error(
+                                            node_name=node_name,
+                                            error_type="json_processing",
+                                            error_details=str(json_error),
+                                            response_text=response_text,
+                                            system_message=system_message_content,
+                                            human_message=human_message_content,
+                                            llm=llm,
+                                            state=state,
+                                            max_retries=max_json_retries
+                                        )
+                                        
+                                        # Check if we got a successful result or an error
+                                        if "_error" in json_result:
+                                            # JSON correction failed after retries
+                                            return json_result
+                                        else:
+                                            # JSON correction succeeded, extract the corrected output
+                                            # and continue with tool execution
+                                            return json_result
+                                    else:
+                                        # No retries configured, re-raise the error
+                                        raise
                             else: raise ValueError(f"Unsupported tool input_type: '{tool_input_type}'")
 
                             globals.logger.info(f"[{node_name}] Requesting user approval for tool '{tool_name}'...")
@@ -422,31 +508,205 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                         except (json.JSONDecodeError, ValidationError, ValueError) as proc_error:
                              error_message = f"Error processing input for tool '{tool_name}': {proc_error}"
                              print(f"{Fore.RED}[{node_name}] {error_message}{Style.RESET_ALL}")
-                             processed_output_react = {"output": f"Error: Input processing failed - {proc_error}"}
+                             processed_output_react = {
+                                 "output": f"Error: Input processing failed - {proc_error}",
+                                 "_error": {
+                                     'node': node_name,
+                                     'message': error_message,
+                                     'type': 'InputProcessingError',
+                                     'user_message': f"I apologize, but I was unable to process the input for tool '{tool_name}'. The error was: {proc_error}",
+                                     'recoverable': False
+                                 }
+                             }
                         except Exception as exec_error:
                              error_message = f"Error executing tool '{tool_name}': {exec_error}"
                              print(f"{Fore.RED}[{node_name}] {error_message}{Style.RESET_ALL}")
-                             print(f"{Fore.RED}Traceback:\n{traceback.format_exc()}{Style.RESET_ALL}")
-                             processed_output_react = {"output": f"Error: Tool execution failed - {exec_error}"}
+                             globals.logger.error(f"{Fore.RED}Traceback:\n{traceback.format_exc()}{Style.RESET_ALL}")
+                             processed_output_react = {
+                                 "output": f"Error: Tool execution failed - {exec_error}",
+                                 "_error": {
+                                     'node': node_name,
+                                     'message': error_message,
+                                     'type': 'ToolExecutionError',
+                                     'user_message': f"I apologize, but I was unable to execute the tool '{tool_name}'. The error was: {exec_error}",
+                                     'recoverable': False
+                                 }
+                             }
 
                     else: # Tool name parsed but not found in registry
                         error_message = f"Error: LLM selected unknown Action: {tool_name}"
                         print(f"{Fore.RED}[{node_name}] {error_message}{Style.RESET_ALL}")
-                        processed_output_react = {"output": error_message}
+                        processed_output_react = {
+                            "output": error_message,
+                            "_error": {
+                                'node': node_name,
+                                'message': error_message,
+                                'type': 'UnknownToolError',
+                                'user_message': f"I apologize, but I tried to use a tool that doesn't exist: '{tool_name}'.",
+                                'recoverable': False
+                            }
+                        }
 
                 elif "Final Answer:" in response_text:
                     final_answer = response_text.split("Final Answer:")[-1].strip()
                     print_output(f"[{node_name}] LLM provided Final Answer: {final_answer}")
                     processed_output_react = {"output": final_answer}
                 else:
-                    warning_message = f"Warning: LLM response for {node_name} did not provide Action or Final Answer. Using raw response."
+                    warning_message = f"Warning: LLM response for {node_name} did not provide Action or Final Answer."
                     print(f"{Fore.YELLOW}{warning_message}{Style.RESET_ALL}")
-                    processed_output_react = {"output": response_text}
+                    
+                    # Check if we should retry with format correction
+                    max_format_retries = node_config.get('max_format_retries', 2)
+                    treat_as_error = node_config.get('strict_format', True)
+                    
+                    if treat_as_error and max_format_retries > 0:
+                        # Instead of using the error handler, we'll handle the format violation directly
+                        # This ensures we use the same prompt template with the tools information
+                        
+                        # Get current retry count
+                        retry_count_key = "_format_violation_retry_count"
+                        current_retry = state.get(retry_count_key, 0)
+                        
+                        if current_retry >= max_format_retries:
+                            # We've exhausted retries, create an error state
+                            error_message = f"The AI model did not follow the required format for {node_name} after {max_format_retries} attempts."
+                            print(f"{Fore.RED}[{node_name}] {error_message}{Style.RESET_ALL}")
+                            
+                            processed_output_react = {
+                                "output": f"Error: Format violation - {error_message}",
+                                "_error": {
+                                    'node': node_name,
+                                    'message': error_message,
+                                    'type': 'FormatViolationError',
+                                    'user_message': f"I apologize, but I was unable to process the '{node_name}' step correctly. The AI model did not follow the required format after {max_format_retries} attempts.",
+                                    'recoverable': False
+                                }
+                            }
+                        else:
+                            # Increment retry count
+                            current_retry += 1
+                            print_output(f"Attempting to fix format issue (Retry {current_retry}/{max_format_retries})...", Fore.YELLOW)
+                            
+                            # Create feedback for the LLM
+                            feedback = (
+                                f"Your response did not follow the required format. You must provide either an Action or a Final Answer. "
+                                f"Please follow the format strictly:\n\n"
+                                f"Thought: your reasoning\n"
+                                f"Action: the tool to use (must be one of the tools listed in the system message)\n"
+                                f"Action Input: the input for the tool\n\n"
+                                f"OR\n\n"
+                                f"Thought: your final reasoning\n"
+                                f"Final Answer: your final answer"
+                            )
+                            
+                            # Use the same prompt template as before, but add the feedback
+                            print_output("Sending format correction feedback to LLM...")
+                            
+                            # Create a new human message with the original question plus feedback
+                            new_human_message = f"{human_message_content}\n\n{feedback}"
+                            
+                            # Use the same chain as before
+                            new_invoke_input = {"input": new_human_message}
+                            if "agent_scratchpad" in custom_react_prompt.input_variables:
+                                new_invoke_input["agent_scratchpad"] = ""
+                            
+                            # Call the LLM again with the same prompt template
+                            new_response = await chain.ainvoke(new_invoke_input)
+                            new_response_text = new_response.content if hasattr(new_response, 'content') else str(new_response)
+                            
+                            # Check if the new response has Action or Final Answer
+                            new_action_match = re.search(r"^\s*Action:\s*([\w.-]+)", new_response_text, re.MULTILINE | re.IGNORECASE)
+                            if new_action_match:
+                                print_output(f"Format correction successful! LLM now provides an Action.")
+                                # Process the corrected response as a new response
+                                # This will go through the normal action processing flow
+                                response_text = new_response_text
+                                # Reset the action_match and other variables to process this new response
+                                action_match = new_action_match
+                                tool_name = action_match.group(1).strip()
+                                
+                                # Extract the new Action Input
+                                new_action_input_line_match = re.search(r"^\s*Action Input:\s*(.*)", new_response_text, re.MULTILINE | re.IGNORECASE)
+                                if new_action_input_line_match:
+                                    raw_input_line = new_action_input_line_match.group(1).strip()
+                                    json_match = re.match(r"^(\{.*?\})\s*$", raw_input_line, re.DOTALL)
+                                    if json_match:
+                                        input_string_from_llm = json_match.group(1)
+                                    else:
+                                        input_string_from_llm = raw_input_line.split('\n')[0].strip()
+                                
+                                # Process this action using the new format_handler module
+                                globals.logger.info(f"[{node_name}] Processing corrected Action: {tool_name}")
+                                globals.logger.info(f"[{node_name}] With corrected Action Input: '{input_string_from_llm}'")
+                                
+                                # Execute the tool with the corrected input
+                                tool_result = await execute_tool_with_corrected_input(
+                                    node_name=node_name,
+                                    tool_name=tool_name,
+                                    input_string=input_string_from_llm,
+                                    tool_registry=tool_registry,
+                                    node_config=node_config
+                                )
+                                
+                                # Use the result from the tool execution
+                                processed_output_react = tool_result
+                            elif "Final Answer:" in new_response_text:
+                                print_output(f"Format correction successful! LLM now provides a Final Answer.")
+                                final_answer = new_response_text.split("Final Answer:")[-1].strip()
+                                processed_output_react = {"output": final_answer}
+                            else:
+                                # Still no proper format, but we can't use continue outside a loop
+                                # Just set an error state and let the next iteration handle it
+                                print_output(f"Format correction failed. LLM still doesn't follow the format.")
+                                state[retry_count_key] = current_retry
+                                processed_output_react = {
+                                    "output": f"Error: Format violation - The AI model still did not follow the required format after retry {current_retry}/{max_format_retries}",
+                                    "_error": {
+                                        'node': node_name,
+                                        'message': f"Format correction failed on retry {current_retry}/{max_format_retries}",
+                                        'type': 'FormatViolationError',
+                                        'user_message': f"I apologize, but I was unable to process the '{node_name}' step correctly. The AI model did not follow the required format.",
+                                        'recoverable': current_retry < max_format_retries  # Only recoverable if we haven't reached max retries
+                                    }
+                                }
+                    elif treat_as_error:
+                        # No retries configured, treat as error immediately
+                        error_message = (
+                            f"The AI model did not follow the required format for {node_name}. "
+                            f"It should provide either an Action or a Final Answer, but it returned: "
+                            f"\"{response_text[:100]}...\""
+                        )
+                        print(f"{Fore.RED}[{node_name}] {error_message}{Style.RESET_ALL}")
+                        
+                        # Create an error state that will be caught by the error handling system
+                        processed_output_react = {
+                            "output": f"Error: Format violation - {error_message}",
+                            "_error": {
+                                'node': node_name,
+                                'message': error_message,
+                                'type': 'FormatViolationError',
+                                'user_message': f"I apologize, but I was unable to process the '{node_name}' step correctly. The AI model did not follow the required format.",
+                                'recoverable': False
+                            }
+                        }
+                    else:
+                        # If not treating as error, use raw response but log a warning
+                        print(f"{Fore.YELLOW}Using raw response as fallback (strict_format=False).{Style.RESET_ALL}")
+                        processed_output_react = {"output": response_text}
 
             except Exception as react_logic_error:
                 print(f"{Fore.RED}[{node_name}] Critical error during ReAct step setup or LLM call: {react_logic_error}{Style.RESET_ALL}")
                 print(f"{Fore.RED}Traceback:\n{traceback.format_exc()}{Style.RESET_ALL}")
-                processed_output_react = {"output": f"Error during ReAct step: {react_logic_error}"}
+                processed_output_react = {
+                    "output": f"Error during ReAct step: {react_logic_error}",
+                    "_error": {
+                        'node': node_name,
+                        'message': f"Critical error during ReAct step: {react_logic_error}",
+                        'type': 'ReActStepError',
+                        'user_message': f"I apologize, but I encountered an error while processing this step. The error was: {react_logic_error}",
+                        'recoverable': False
+                    }
+                }
 
             # Ensure function always returns a dictionary with 'output' key or None
             if isinstance(processed_output_react, dict) and "output" in processed_output_react: return processed_output_react
@@ -472,7 +732,17 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                  except Exception as e:
                       print(f"{Fore.RED}Error within MCP client context execution: {e}{Style.RESET_ALL}")
                       print(f"{Fore.RED}Traceback:\n{traceback.format_exc()}{Style.RESET_ALL}")
-                      if react_step_result is None: react_step_result = {"output": f"Error during MCP context: {e}"}
+                      if react_step_result is None: 
+                          react_step_result = {
+                              "output": f"Error during MCP context: {e}",
+                              "_error": {
+                                  'node': node_name,
+                                  'message': f"Error within MCP client context execution: {e}",
+                                  'type': 'MCPContextError',
+                                  'user_message': f"I apologize, but I encountered an error while using external tools. The error was: {e}",
+                                  'recoverable': False
+                              }
+                          }
 
             else: # Tools requested, but no MCP client
                  print_output("No MCP client provided, using only internal tools for ReAct...")
@@ -490,7 +760,17 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                  except Exception as e:
                      print(f"{Fore.RED}Error during internal tool ReAct execution: {e}{Style.RESET_ALL}")
                      print(f"{Fore.RED}Traceback:\n{traceback.format_exc()}{Style.RESET_ALL}")
-                     if react_step_result is None: react_step_result = {"output": f"Error during internal tool operation: {e}"}
+                     if react_step_result is None: 
+                         react_step_result = {
+                             "output": f"Error during internal tool operation: {e}",
+                             "_error": {
+                                 'node': node_name,
+                                 'message': f"Error during internal tool ReAct execution: {e}",
+                                 'type': 'InternalToolError',
+                                 'user_message': f"I apologize, but I encountered an error while using internal tools. The error was: {e}",
+                                 'recoverable': False
+                             }
+                         }
 
             final_result_text = None
             # Check if react_step_result is a dict with 'output' key and it's a string
@@ -571,6 +851,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
             messages: List[BaseMessage] = [SystemMessage(content=system_message_content), HumanMessage(content=prompt_to_llm)]
             max_retries = node_config.get('max_retries', 3); retry_count = 0
             llm_response_content: Optional[str] = None; direct_call_parsed_output: Union[BaseModel, str, None] = None
+            last_error = None
 
             while retry_count < max_retries:
                  try:
@@ -590,15 +871,34 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                             else: globals.logger.info("Received raw text output (no parser defined).")
                       break # Success
                  except (OutputParserException, ValidationError, json.JSONDecodeError) as e:
-                      retry_count += 1; error_detail = f"{type(e).__name__}: {e}"
-                      print(f"{Fore.RED}Output parsing/validation failed (Attempt {retry_count}/{max_retries}): {error_detail}{Style.RESET_ALL}")
-                      if retry_count >= max_retries: final_output_for_state = f"Error: Failed after {max_retries} attempts. {error_detail}"; break
-                      feedback = f"Your previous response failed ({error_detail}). Please strictly follow the format instructions."
+                      retry_count += 1
+                      last_error = e
+                      error_detail = f"{type(e).__name__}: {e}"
+                      globals.logger.error(f"{Fore.YELLOW}Output parsing/validation failed (Attempt {retry_count}/{max_retries}): {error_detail}{Style.RESET_ALL}")
+                      
+                      if retry_count >= max_retries:
+                          # We've exhausted retries, prepare for graceful termination
+                          break
+                      
+                      # Generate specific feedback for the LLM based on the error
+                      feedback = create_error_feedback(e, node_name)
+                      print_output(f"Providing feedback to LLM: {feedback[:100]}...")
+                      
+                      # Add the feedback as a new message for the next attempt
                       messages = messages[:2] + [HumanMessage(content=feedback)]
-                 except Exception as e: print(f"{Fore.RED}Unexpected LLM call error: {e}{Style.RESET_ALL}"); final_output_for_state = f"Error: {e}"; break
+                 except Exception as e:
+                      print(f"{Fore.RED}Unexpected LLM call error: {e}{Style.RESET_ALL}")
+                      last_error = e
+                      break
 
-            if direct_call_parsed_output is not None: final_output_for_state = direct_call_parsed_output
-            elif final_output_for_state is None: final_output_for_state = f"Error: Max retries reached. Last response maybe: {llm_response_content}"
+            if direct_call_parsed_output is not None:
+                final_output_for_state = direct_call_parsed_output
+            elif last_error is not None:
+                # Handle the failure after exhausting retries
+                new_state = handle_node_failure(new_state, node_name, last_error, max_retries)
+                return new_state  # Return early with error state
+            else:
+                final_output_for_state = f"Error: Max retries reached. Last response maybe: {llm_response_content}"
 
 
         # --- Update State & Print ---

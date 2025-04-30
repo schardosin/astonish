@@ -45,11 +45,11 @@ Embrace the future of workflow automation with Astonish, where your tools meet A
 | Anthropic | Supported |
 | LM Studio | Supported |
 | Ollama | Supported |
+| OpenAI | Supported |
 | Openrouter | Supported |
 | SAP AI Core | Supported |
 | AWS Bedrock | Coming soon |
 | LiteLLM | Coming soon |
-| OpenAI | Coming soon |
 | X AI | Coming soon |
 
 ## Agents Creator: Your AI Architect

@@ -48,11 +48,11 @@ Astonish supports multiple AI providers, giving you flexibility in choosing the 
 | Anthropic | Supported |
 | LM Studio | Supported |
 | Ollama | Supported |
+| OpenAI | Supported |
 | Openrouter | Supported |
 | SAP AI Core | Supported |
 | AWS Bedrock | Coming soon |
 | LiteLLM | Coming soon |
-| OpenAI | Coming soon |
 | X AI | Coming soon |
 
 ## Documentation Overview

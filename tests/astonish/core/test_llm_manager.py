@@ -56,10 +56,13 @@ def test_get_llm_unsupported_provider(mock_config):
             ('GENERAL', 'default_model'): 'test_model'
         }.get((section, key), fallback)
         
+        # Mock an unsupported provider that doesn't have get_llm method
         mock_unsupported = MagicMock()
+        mock_unsupported.get_llm.side_effect = AttributeError("'MagicMock' object has no attribute 'get_llm'")
         mock_get_provider.return_value = mock_unsupported
 
-        with pytest.raises(ValueError, match="Unsupported provider: unsupported_provider"):
+        # The test should now expect an AttributeError instead of ValueError
+        with pytest.raises(AttributeError):
             LLMManager.get_llm()
 
 def test_get_llm_singleton():

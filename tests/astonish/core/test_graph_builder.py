@@ -43,7 +43,7 @@ def test_build_graph(sample_node_config):
         mock_compiled_graph = MagicMock()
         mock_state_graph.return_value.compile.return_value = mock_compiled_graph
         
-        result = build_graph(sample_node_config, None, None)
+        result = build_graph(sample_node_config, None, None, include_error_handler=False)
         
         assert result == mock_compiled_graph
         mock_state_graph.assert_called_once()

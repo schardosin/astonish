@@ -33,7 +33,9 @@ def test_shell_command(mock_subprocess_run):
         "echo 'Hello, World!'",
         shell=True,
         capture_output=True,
-        text=True
+        text=True,
+        stdin=subprocess.DEVNULL,
+        timeout=120
     )
     assert result == {"stdout": "Hello, World!\n", "stderr": ""}
 
@@ -52,7 +54,9 @@ def test_shell_command_with_error(mock_subprocess_run):
         "invalid_command",
         shell=True,
         capture_output=True,
-        text=True
+        text=True,
+        stdin=subprocess.DEVNULL,
+        timeout=120
     )
     assert result == {"stdout": "", "stderr": "Command not found: invalid_command\n"}
 

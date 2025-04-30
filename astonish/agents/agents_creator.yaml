@@ -61,14 +61,14 @@ nodes:
 
       **Framework Rules:**
       1. Valid `type`: 'input', 'llm'.
-      2. `input`: Only for direct user interaction in the final agent. Fields: name, type, prompt, output_model, options.
+      2. `input`: Only for direct user interaction in the final agent. Fields: name, type, prompt, output_model, options, user_message (optional).
       3. `llm`: For logic, generation, tool calls. Fields: name, type, system, prompt, output_model, user_message (optional), tools (optional, bool), tools_selection (optional, list[str]).
       4. Tools: 'tools: True' requires 'tools_selection' listing tools from 'Available Tools'. Tools are used BY 'llm' nodes.
       5. `output_model`: Dictionary mapping string variable names to string types ("str", "list", "dict", "bool", "int"). Example: `{{"results": "list"}}`.
       6. `options` is a variable from output_model of type list or a list of strings (e.g., ["option1", "option2"]), if options is not provided, it will accept any string. Whenever possible, use the 'options' field to limit user input to a specific set of choices, and use the options in the flow, reducing the amount of agent calls.
-      6.1. `options` is very helpful if the agent from previous node is a list of strings, and you want to limit the user input to one of the options. Example: `{"options": ["option1", "option2"]}`. If the options is a output_model variable, it should just mention the variable name. Example: `{"options": [options_list]}`, no curly braces around the list variable name.
+      6.1. `options` is very helpful if the agent from previous node is a list of strings, and you want to limit the user input to one of the options. Example: `{{"options": ["option1", "option2"]}}`. If the options is a output_model variable, it should just mention the variable name. Example: `{{"options": [options_list]}}`, no curly braces around the list variable name.
       6.2. `options` cannot be a complex expression like lamba, it should be a list of strings or a variable from output_model of type list.
-      6.3. `options` must be a list, it CANNOT be something like `{"options": "option1"}` or `{"options": "option1, option2"}`, instead it must use the dash (-) for each item, according to the YAML schema for lists.
+      6.3. `options` must be a list, it CANNOT be something like `{{"options": "option1"}}` or `{{"options": "option1, option2"}}`, instead it must use the dash (-) for each item, according to the YAML schema for lists.
       7. `user_message`: Optional LIST of strings (variable names from output_model) for display. Omit if not needed. Example: `["final_summary"]`. It should be an output_model variable name, or a string. It must be used everytime the information is required to be displayed to the user.
       8. Ensure unique node names, correct variable usage between nodes (`{{variable}}`), valid lambda functions for conditions (`"lambda x: x['var'] == True"`).
       9. Structure: Top-level 'description', 'nodes' (list of node dicts), 'flow' (list of transition dicts like `{{'from': 'nodeA', 'to': 'nodeB'}}` or using 'edges').
@@ -99,7 +99,7 @@ nodes:
           prompt: |
             Please perform a web search to gather useful and recent information on the following topic:
             
-            Topic: "{research_topic}"
+            Topic: "{{research_topic}}"
             
             Make sure to include credible sources and provide a variety of perspectives if relevant.
             Set current_index to 0.
@@ -116,12 +116,12 @@ nodes:
             Extract key info from a search result.
           prompt: |
             collected_summaries:
-            {collected_summaries}
+            {{collected_summaries}}
 
             search_results:
-            {search_results}
+            {{search_results}}
 
-            Process result at index {current_index} from search results and apprend to the collected_summaries.
+            Process result at index {{current_index}} from search results and apprend to the collected_summaries.
 
           output_model: 
             collected_summaries: list
@@ -131,7 +131,7 @@ nodes:
         - name: increment_index
           type: llm
           prompt: | 
-            Increment current_index: {current_index}. Output current_index + 1.
+            Increment current_index: {{current_index}}. Output current_index + 1.
           output_model: 
             current_index: int
           user_message:
@@ -145,7 +145,7 @@ nodes:
             Generate final report using collected summaries, one news per line with a nice format.
             
             collected_summaries:
-            {collected_summaries}
+            {{collected_summaries}}
           output_model: 
             report: str
           user_message:  
@@ -195,71 +195,6 @@ nodes:
       current_yaml: str
       refinement_complete: bool
 
-  - name: validate_yaml
-    type: llm
-    tools: True
-    tools_selection:
-      - validate_yaml_with_schema
-    tools_auto_approval: False
-    system: |
-      You are a YAML validation assistant using the 'validate_yaml_with_schema' tool.
-      Your task is to validate the provided 'content_yaml' against the predefined 'Agentic Flow Schema' defined below.
-      Analyze the tool's output dictionary to determine validity.
-    prompt: |
-      schema:
-      ```yaml
-      type: map
-      mapping:
-        description: {type: str, required: True}
-        nodes:
-          type: seq
-          required: True
-          sequence:
-            - type: map
-              mapping:
-                name: {type: str, required: True}
-                type: {type: str, required: True, enum: ['input', 'llm']}
-                options: {type: seq, required: False, sequence: [{type: str}]}
-                system: {type: str, required: False}
-                prompt: {type: str, required: True}
-                output_model: 
-                  type: map
-                  required: True
-                  mapping: 
-                    regex;(.+): 
-                      type: str
-                user_message: {type: seq, required: False, sequence: [{type: str}]}
-                tools: {type: bool, required: False}
-                tools_selection: {type: seq, required: False, sequence: [{type: str}]}
-                print_state: {type: bool, required: False}
-        flow:
-          type: seq
-          required: True
-          sequence:
-            - type: map
-              mapping:
-                from: {type: str, required: True}
-                to: {type: str, required: False}
-                edges:
-                  type: seq
-                  required: False
-                  sequence:
-                    - type: map
-                      mapping:
-                        to: {type: str, required: True}
-                        condition: {type: str, required: True}
-      ```
-
-      content_yaml:
-      {current_yaml}
-
-      # Task:
-      Call the 'validate_yaml_with_schema' tool with the content_yaml as input and the schema.
-      Provide in the validation_error full response from the tool in case of error.
-    output_model:
-      is_yaml_valid: bool
-      validation_error: list
-
   - name: summarize_and_display_yaml
     type: llm
     system: |
@@ -274,7 +209,7 @@ nodes:
       # Task:
       1. Analyze the YAML and write a brief summary in 'flow_summary'.
       2. Create 'formatted_yaml_display' containing the full YAML in a markdown code block.
-      3. Create 'feedback_prompt_text'. Example: "{summary}\n---\n**Current YAML:**\n{yaml_display_block}\n---\nReview the YAML. Provide specific feedback for changes, or type 'SAVE' if satisfied and ready to finalize."
+      3. Create 'feedback_prompt_text'. Example: "{{summary}}\n---\n**Current YAML:**\n{{yaml_display_block}}\n---\nReview the YAML. Provide specific feedback for changes, or type 'SAVE' if satisfied and ready to finalize."
     output_model:
       flow_summary: str
       formatted_yaml_display: str
@@ -301,6 +236,77 @@ nodes:
       You can refer to the YAML structure, node names, or any specific part of the flow.
     output_model:
       yaml_feedback: str
+    user_message:
+      - "Thank you for your feedback! Let's refine the YAML based on your suggestions."
+
+  - name: validate_yaml
+    type: llm
+    tools: True
+    tools_selection:
+      - validate_yaml_with_schema
+    tools_auto_approval: False
+    system: |
+      You are a YAML validation assistant using the 'validate_yaml_with_schema' tool.
+      Your task is to validate the provided 'content_yaml' against the predefined 'Agentic Flow Schema' defined below.
+      Analyze the tool's output dictionary to determine validity.
+    prompt: |
+      schema:
+      ```yaml
+      type: map
+      mapping:
+        description: {{type: str, required: True}}
+        nodes:
+          type: seq
+          required: True
+          sequence:
+            - type: map
+              mapping:
+                name: {{type: str, required: True}}
+                type: {{type: str, required: True, enum: ['input', 'llm']}}
+                options: {{type: seq, required: False, sequence: [{{type: str}}]}}
+                system: {{type: str, required: False}}
+                prompt: {{type: str, required: True}}
+                output_model: 
+                  type: map
+                  required: True
+                  mapping: 
+                    regex;(.+): 
+                      type: str
+                user_message: {{type: seq, required: False, sequence: [{{type: str}}]}}
+                tools: {{type: bool, required: False}}
+                tools_selection: {{type: seq, required: False, sequence: [{{type: str}}]}}
+                print_state: {{type: bool, required: False}}
+        flow:
+          type: seq
+          required: True
+          sequence:
+            - type: map
+              mapping:
+                from: {{type: str, required: True}}
+                to: {{type: str, required: False}}
+                edges:
+                  type: seq
+                  required: False
+                  sequence:
+                    - type: map
+                      mapping:
+                        to: {{type: str, required: True}}
+                        condition: {{type: str, required: True}}
+      ```
+
+      content_yaml:
+      {current_yaml}
+
+      # Task:
+      Call the 'validate_yaml_with_schema' tool with the content_yaml as input and the schema.
+      Provide in the validation_error full response from the tool in case of error.
+      Provide in the validation_user_message the user message with saying if the validation failed or succeeded.
+    output_model:
+      is_yaml_valid: bool
+      validation_error: list
+      validation_user_message: str
+    user_message:
+      - validation_user_message
 
   - name: suggest_flow_name
     type: llm
@@ -353,6 +359,7 @@ nodes:
       save_confirmation: str
     user_message:
       - save_confirmation
+      - "Flow saved successfully! You can now use by running astonish agents run {suggested_flow_name}"
 
 flow:
   - from: START
@@ -362,25 +369,23 @@ flow:
   - from: fetch_available_tools
     to: generate_or_refine_yaml
   - from: generate_or_refine_yaml
-    to: validate_yaml
-  - from: validate_yaml
-    edges:
-      - to: generate_or_refine_yaml
-        condition: "lambda x: not x.get('is_yaml_valid', True)"
-      - to: summarize_and_display_yaml
-        condition: "lambda x: not x.get('refinement_complete', False)"
-      - to: suggest_flow_name
-        condition: "lambda x: x.get('refinement_complete', True)"
+    to: summarize_and_display_yaml
   - from: summarize_and_display_yaml
     to: user_approval
   - from: user_approval
     edges:
       - to: get_yaml_feedback
         condition: "lambda x: x['yaml_feedback'] == 'refine'"
-      - to: suggest_flow_name
+      - to: validate_yaml
         condition: "lambda x: x['yaml_feedback'] == 'approve'"
   - from: get_yaml_feedback
     to: generate_or_refine_yaml
+  - from: validate_yaml
+    edges:
+      - to: generate_or_refine_yaml
+        condition: "lambda x: not x.get('is_yaml_valid', True)"
+      - to: suggest_flow_name
+        condition: "lambda x: x.get('is_yaml_valid', True)"
   - from: suggest_flow_name
     to: get_config_directory
   - from: get_config_directory

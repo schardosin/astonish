@@ -5,6 +5,7 @@ from astonish.providers.openrouter_provider import OpenRouterProvider
 from astonish.providers.lm_studio_provider import LMStudioProvider
 from astonish.providers.anthropic_provider import AnthropicProvider
 from astonish.providers.openai_provider import OpenAIProvider
+from astonish.providers.groq_provider import GroqProvider
 from typing import List, Tuple
 
 class AIProviderFactory:
@@ -28,6 +29,7 @@ class AIProviderFactory:
         return [(name, info[0]) for name, info in cls._providers.items()]
 
 AIProviderFactory.register_provider("anthropic", "Anthropic", AnthropicProvider)
+AIProviderFactory.register_provider("groq", "Groq", GroqProvider)
 AIProviderFactory.register_provider("lm_studio", "LM Studio", LMStudioProvider)
 AIProviderFactory.register_provider("ollama", "Ollama", OllamaProvider)
 AIProviderFactory.register_provider("openai", "OpenAI", OpenAIProvider)

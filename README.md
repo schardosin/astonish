@@ -46,17 +46,18 @@ Embrace the future of workflow automation with Astonish, where your tools meet A
 
 ## Supported AI Providers
 
-| Provider | Status |
-|----------|--------|
-| Anthropic | Supported |
-| LM Studio | Supported |
-| Ollama | Supported |
-| OpenAI | Supported |
-| Openrouter | Supported |
-| SAP AI Core | Supported |
-| AWS Bedrock | Coming soon |
-| LiteLLM | Coming soon |
-| X AI | Coming soon |
+| Provider         | Status       | Free API Plan               |
+|------------------|--------------|-----------------------------|
+| Anthropic        | Supported    | No                          |
+| Groq             | Supported    | Yes                         |
+| LM Studio        | Supported    | Local                       |
+| Ollama           | Supported    | Local                       |
+| OpenAI           | Supported    | No                          |
+| Openrouter       | Supported    | Yes                         |
+| SAP AI Core      | Supported    | Yes (via SAP BTP Free Tier) |
+| AWS Bedrock      | Coming soon  | No                          |
+| Google AI        | Coming soon  | Yes                         |
+| X AI             | Coming soon  | Unknown                     |
 
 ## Agents Creator: Your AI Architect
 

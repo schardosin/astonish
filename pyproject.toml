@@ -35,7 +35,7 @@ dependencies = [
     "langgraph-checkpoint-sqlite==2.0.6",
     "pydantic==2.10.6",
     "colorama==0.4.6",
-    "langchain-mcp-adapters==0.0.7",
+    "langchain-mcp-adapters==0.0.9",
     "aiosqlite==0.21.0",
     "grandalf==0.8",
     "pykwalify==1.8.0",

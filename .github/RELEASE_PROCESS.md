@@ -21,7 +21,7 @@ When a new tag is pushed, GitHub Actions will automatically:
 
 - **Build and Test** (`.github/workflows/build.yml`): 
   - Runs on tag pushes (e.g., `1.0.0`)
-  - Builds the package and runs tests on multiple Python versions (3.7, 3.8, 3.9, 3.10, 3.11)
+  - Builds the package and runs tests on multiple Python versions (3.8, 3.9, 3.10, 3.11, 3.12)
   - Uploads build artifacts for inspection
 
 - **Publish to PyPI** (`.github/workflows/publish.yml`):

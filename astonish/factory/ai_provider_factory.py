@@ -6,6 +6,7 @@ from astonish.providers.lm_studio_provider import LMStudioProvider
 from astonish.providers.anthropic_provider import AnthropicProvider
 from astonish.providers.openai_provider import OpenAIProvider
 from astonish.providers.groq_provider import GroqProvider
+from astonish.providers.google_genai_provider import GoogleAIProvider
 from typing import List, Tuple
 
 class AIProviderFactory:
@@ -29,6 +30,7 @@ class AIProviderFactory:
         return [(name, info[0]) for name, info in cls._providers.items()]
 
 AIProviderFactory.register_provider("anthropic", "Anthropic", AnthropicProvider)
+AIProviderFactory.register_provider("google_genai", "Google GenAI", GoogleAIProvider)
 AIProviderFactory.register_provider("groq", "Groq", GroqProvider)
 AIProviderFactory.register_provider("lm_studio", "LM Studio", LMStudioProvider)
 AIProviderFactory.register_provider("ollama", "Ollama", OllamaProvider)

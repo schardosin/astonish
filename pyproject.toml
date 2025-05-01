@@ -14,7 +14,7 @@ packages = [
 
 [project]
 name = "astonish"
-version = "0.7.0"
+version = "0.7.1"
 authors = [
     {name = "Rafael Schardosin Silva", email = "rafael.rs@gmail.com"},
 ]
@@ -40,7 +40,8 @@ dependencies = [
     "grandalf==0.8",
     "pykwalify==1.8.0",
     "inquirer==3.4.0",
-    "langchain-anthropic==0.3.12"
+    "langchain-anthropic==0.3.12",
+    "langchain-google-genai==2.1.4"
 ]
 
 [project.optional-dependencies]

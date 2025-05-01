@@ -46,6 +46,7 @@ Astonish supports multiple AI providers, giving you flexibility in choosing the 
 | Provider         | Status       | Free API Plan               |
 |------------------|--------------|-----------------------------|
 | Anthropic        | Supported    | No                          |
+| Google AI        | Supported    | Yes                         |
 | Groq             | Supported    | Yes                         |
 | LM Studio        | Supported    | Local                       |
 | Ollama           | Supported    | Local                       |
@@ -53,8 +54,7 @@ Astonish supports multiple AI providers, giving you flexibility in choosing the 
 | Openrouter       | Supported    | Yes                         |
 | SAP AI Core      | Supported    | Yes (via SAP BTP Free Tier) |
 | AWS Bedrock      | Coming soon  | No                          |
-| Google AI        | Coming soon  | Yes                         |
-| X AI             | Coming soon  | Unknown                     |
+| X AI             | Coming soon  | No                          |
 
 ## Documentation Overview
 

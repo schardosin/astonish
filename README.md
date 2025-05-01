@@ -49,6 +49,7 @@ Embrace the future of workflow automation with Astonish, where your tools meet A
 | Provider         | Status       | Free API Plan               |
 |------------------|--------------|-----------------------------|
 | Anthropic        | Supported    | No                          |
+| Google AI        | Supported    | Yes                         |
 | Groq             | Supported    | Yes                         |
 | LM Studio        | Supported    | Local                       |
 | Ollama           | Supported    | Local                       |
@@ -56,8 +57,7 @@ Embrace the future of workflow automation with Astonish, where your tools meet A
 | Openrouter       | Supported    | Yes                         |
 | SAP AI Core      | Supported    | Yes (via SAP BTP Free Tier) |
 | AWS Bedrock      | Coming soon  | No                          |
-| Google AI        | Coming soon  | Yes                         |
-| X AI             | Coming soon  | Unknown                     |
+| X AI             | Coming soon  | No                          |
 
 ## Agents Creator: Your AI Architect
 

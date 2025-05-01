@@ -9,6 +9,8 @@
 
   [![Documentation](https://img.shields.io/badge/docs-website-blue)](https://schardosin.github.io/astonish/)
   [![PyPI version](https://img.shields.io/pypi/v/astonish.svg)](https://pypi.org/project/astonish/)
+  [![Build Package](https://github.com/schardosin/astonish/actions/workflows/build.yml/badge.svg)](https://github.com/schardosin/astonish/actions/workflows/build.yml)
+  [![Publish to PyPI](https://github.com/schardosin/astonish/actions/workflows/publish.yml/badge.svg)](https://github.com/schardosin/astonish/actions/workflows/publish.yml)
 
 </div>
 

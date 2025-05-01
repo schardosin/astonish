@@ -10,7 +10,7 @@ Astonish uses GitHub Actions for automated building, testing, and publishing to 
 
 1. Update the version number in `pyproject.toml`
 2. Commit the changes: `git commit -m "Bump version to x.y.z"`
-3. Create a new tag: `git tag vx.y.z`
+3. Create a new tag: `git tag x.y.z`
 4. Push the changes and tag: `git push && git push --tags`
 
 When a new tag is pushed, GitHub Actions will automatically:
@@ -20,12 +20,12 @@ When a new tag is pushed, GitHub Actions will automatically:
 ### GitHub Actions Workflows
 
 - **Build and Test** (`.github/workflows/build.yml`): 
-  - Runs on tag pushes (e.g., `v1.0.0`)
+  - Runs on tag pushes (e.g., `1.0.0`)
   - Builds the package and runs tests on multiple Python versions (3.7, 3.8, 3.9, 3.10, 3.11)
   - Uploads build artifacts for inspection
 
 - **Publish to PyPI** (`.github/workflows/publish.yml`):
-  - Runs on tag pushes (e.g., `v1.0.0`)
+  - Runs on tag pushes (e.g., `1.0.0`)
   - Builds and publishes the package to PyPI
   - Uses the PyPI API token stored in GitHub Secrets
 

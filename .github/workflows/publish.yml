@@ -26,6 +26,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install build twine
+          # Install dependencies directly from PyPI
+          pip install appdirs==1.4.4 generative-ai-hub-sdk[all]==4.10.2 langchain-ollama==0.3.1 langchain==0.3.24 langgraph==0.3.27 langgraph-checkpoint-sqlite==2.0.6 pydantic==2.10.6 colorama==0.4.6 aiosqlite==0.21.0 grandalf==0.8 pykwalify==1.8.0 inquirer==3.4.0 langchain-anthropic==0.3.12
+          # Try multiple approaches to install langchain-mcp-adapters
+          pip install langchain-mcp-adapters==0.0.9 || \
+          pip install --index-url https://pypi.org/simple/ langchain-mcp-adapters==0.0.9 || \
+          pip install --no-deps langchain-mcp-adapters==0.0.9 || \
+          pip install --pre langchain-mcp-adapters==0.0.9 || \
+          echo "Warning: Could not install langchain-mcp-adapters==0.0.9, continuing anyway"
 
       - name: Build package
         run: |

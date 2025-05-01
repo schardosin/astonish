@@ -11,7 +11,7 @@ This guide will walk you through the process of installing Astonish on your syst
 Before installing Astonish, ensure you have the following prerequisites:
 
 - **Python**: Version 3.8 or higher
-- **pip**: The Python package installer
+- **Pip**: The Python package installer
 
 You can check your Python version by running:
 

@@ -15,9 +15,8 @@ from langchain.output_parsers import PydanticOutputParser
 from langchain.schema import OutputParserException
 from pydantic import Field, ValidationError, create_model, BaseModel
 from astonish.tools.internal_tools import tools as internal_tools_list
-from colorama import Fore, Style
 from astonish.core.llm_manager import LLMManager
-from astonish.core.utils import format_prompt, print_ai, print_output
+from astonish.core.utils import format_prompt, print_ai, print_output, console
 from astonish.core.error_handler import create_error_feedback, handle_node_failure
 from astonish.core.format_handler import execute_tool_with_corrected_input
 
@@ -66,13 +65,14 @@ def create_output_model(output_model_config: Dict[str, str]) -> Optional[Type[Ba
                 try:
                      field_type = eval(normalized_type_str, globals(), eval_context)
                 except NameError:
-                     print(f"{Fore.YELLOW}Warning: Eval failed to find type components within '{normalized_type_str}'. Defaulting field '{field_name}' to Any.{Style.RESET_ALL}")
+                     console.print(f"Warning: Eval failed to find type components within '{normalized_type_str}'. Defaulting field '{field_name}' to Any.", style="yellow")
+
                      field_type = Any
                 except Exception as e_eval:
-                     print(f"{Fore.RED}Error evaluating complex type '{normalized_type_str}': {e_eval}{Style.RESET_ALL}")
+                     console.print(f"Error evaluating complex type '{normalized_type_str}': {e_eval}", style="red")
                      field_type = Any
             else:
-                 print(f"{Fore.YELLOW}Warning: Unknown or non-generic type '{normalized_type_str}' for field '{field_name}', defaulting to Any.{Style.RESET_ALL}")
+                 console.print(f"Warning: Unknown or non-generic type '{normalized_type_str}' for field '{field_name}', defaulting to Any.", style="yellow")
                  field_type = Any
 
             if field_type is not Any:
@@ -88,7 +88,7 @@ def create_output_model(output_model_config: Dict[str, str]) -> Optional[Type[Ba
             fields[field_name] = (field_type, Field(description=f"{field_name} field"))
 
         except Exception as e:
-            print(f"{Fore.RED}Error processing field '{field_name}' with type string '{field_type_str}': {e}{Style.RESET_ALL}")
+            console.print(f"Error processing field '{field_name}' with type string '{field_type_str}': {e}", style="red")
             fields[field_name] = (Any, Field(description=f"{field_name} field (processing error)"))
 
     model_name = f"DynamicOutputModel_{abs(hash(json.dumps(output_model_config, sort_keys=True)))}"
@@ -96,7 +96,7 @@ def create_output_model(output_model_config: Dict[str, str]) -> Optional[Type[Ba
          Model = create_model(model_name, **fields)
          return Model
     except Exception as e:
-         print(f"{Fore.RED}Failed to create Pydantic model '{model_name}': {e}{Style.RESET_ALL}")
+         console.print(f"Failed to create Pydantic model '{model_name}': {e}", style="red")
          return None
 
 def update_state(state: Dict[str, Any], output: Union[BaseModel, str, Dict, None], node_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -284,7 +284,7 @@ def create_input_node_function(node_config):
             questions = [
                 inquirer.List(
                     'user_choice',
-                    message=f"{Fore.YELLOW}Choose an option{Style.RESET_ALL}",
+                    message=f"Choose an option",
                     choices=expanded_options,
                 ),
             ]
@@ -294,7 +294,8 @@ def create_input_node_function(node_config):
             # Use readline for better input handling
             readline.set_completer(lambda text, state: None)
             readline.parse_and_bind('tab: complete')
-            user_input = input(f"{Fore.YELLOW}You: {Style.RESET_ALL}")
+            console.print("You:", style="yellow", end=" ")
+            user_input = input()
 
         new_state = state.copy()
         new_state[output_field] = user_input
@@ -329,7 +330,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
             system_message_content = format_prompt(node_config.get('system',''), state, node_config)
             human_message_content = format_prompt(node_config['prompt'], state, node_config)
             llm = LLMManager.get_llm()
-        except Exception as e: print(f"{Fore.RED}Error preparing node {node_name}: {e}{Style.RESET_ALL}"); return state
+        except Exception as e: console.print(f"Error preparing node {node_name}: {e}", style="red"); return state
 
         final_output_for_state: Union[BaseModel, str, Dict, None] = None
         new_state = state.copy() # Work on a copy
@@ -361,8 +362,8 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                         globals.logger.info(f"[{node_name}] Fetching external tools via MCP client...")
                         external_tools_data = active_mcp_client.get_tools() or []
                         if isinstance(external_tools_data, list): all_fetched_tools.extend(external_tools_data); globals.logger.info(f"[{node_name}] Fetched {len(external_tools_data)} external tools.")
-                        else: print(f"{Fore.YELLOW}[{node_name}] Warning: mcp_client.get_tools() did not return a list.{Style.RESET_ALL}")
-                    except Exception as e: print(f"{Fore.RED}[{node_name}] Warning: MCP client error getting tools: {e}{Style.RESET_ALL}")
+                        else: console.print(f"[{node_name}] Warning: mcp_client.get_tools() did not return a list.", style="yellow")
+                    except Exception as e: console.print(f"[{node_name}] Warning: MCP client error getting tools: {e}", style="red")
                 if isinstance(internal_tools_list, list): all_fetched_tools.extend(internal_tools_list)
                 tool_selection = node_config.get('tools_selection'); processed_tool_names = set()
                 for tool_obj in all_fetched_tools:
@@ -377,8 +378,8 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                         if not callable(executor): continue
                         tool_def: ToolDefinition = {"name": tool_name, "description": getattr(tool_obj, 'description', 'No description available.'), "input_type": input_type, "input_schema_definition": input_schema, "tool_executor": executor, "tool_instance": tool_obj}
                         filtered_tool_defs.append(tool_def); tool_registry[tool_name] = tool_def; processed_tool_names.add(tool_name)
-                    except Exception as e: print(f"{Fore.RED}[{node_name}] Error processing tool definition for {getattr(tool_obj, 'name', 'unknown')}: {e}{Style.RESET_ALL}")
-                if not filtered_tool_defs: print(f"{Fore.YELLOW}Warning: No valid tools available for ReAct node {node_name}. Agent may only reason.{Style.RESET_ALL}")
+                    except Exception as e: console.print(f"[{node_name}] Error processing tool definition for {getattr(tool_obj, 'name', 'unknown')}: {e}", style="red")
+                if not filtered_tool_defs: console.print(f"Warning: No valid tools available for ReAct node {node_name}. Agent may only reason.", style="yellow")
 
                 custom_prompt_template_str = create_custom_react_prompt_template(filtered_tool_defs)
                 react_system_message = system_message_content + "\n\n" + custom_prompt_template_str
@@ -391,7 +392,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
 
                 llm_response = await chain.ainvoke(invoke_input)
                 response_text = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
-                globals.logger.info(f"[{node_name}] LLM Raw Response:\n{Style.DIM}{response_text}{Style.RESET_ALL}")
+                globals.logger.info(f"[{node_name}] LLM Raw Response:\n{response_text}")
 
                 action_match = re.search(r"^\s*Action:\s*([\w.-]+)", response_text, re.MULTILINE | re.IGNORECASE)
                 input_string_from_llm = ""
@@ -402,7 +403,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                     if json_match: input_string_from_llm = json_match.group(1)
                     else:
                         input_string_from_llm = raw_input_line.split('\n')[0].strip()
-                        if raw_input_line != input_string_from_llm: print(f"{Fore.YELLOW}[{node_name}] Warning: Truncated Action Input. Using: '{input_string_from_llm}'{Style.RESET_ALL}")
+                        if raw_input_line != input_string_from_llm: console.print(f"[{node_name}] Warning: Truncated Action Input. Using: '{input_string_from_llm}'", style="yellow")
 
                 if action_match:
                     tool_name = action_match.group(1).strip()
@@ -482,9 +483,9 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                                 tool_call_info_for_approval = {"name": tool_name, "args": tool_args_for_execution, "auto_approve": node_config.get('tools_auto_approval', False)}
                                 approve = await asyncio.to_thread(request_tool_execution, tool_call_info_for_approval)
 
-                            except ImportError: print(f"{Fore.RED}Error: 'request_tool_execution' not imported...{Style.RESET_ALL}")
-                            except NameError: print(f"{Fore.RED}Error: 'request_tool_execution' not found...{Style.RESET_ALL}")
-                            except Exception as approval_err: print(f"{Fore.RED}Error during tool approval: {approval_err}{Style.RESET_ALL}"); print(f"{Fore.RED}Traceback:\n{traceback.format_exc()}{Style.RESET_ALL}")
+                            except ImportError: console.print(f"Error: 'request_tool_execution' not imported...", style="red")
+                            except NameError: console.print(f"Error: 'request_tool_execution' not found...", style="red")
+                            except Exception as approval_err: console.print(f"Error during tool approval: {approval_err}", style="red"); console.print(f"Traceback:\n{traceback.format_exc()}", style="red")
 
                             observation: str
                             if approve:
@@ -507,7 +508,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                             processed_output_react = {"output": observation}
                         except (json.JSONDecodeError, ValidationError, ValueError) as proc_error:
                              error_message = f"Error processing input for tool '{tool_name}': {proc_error}"
-                             print(f"{Fore.RED}[{node_name}] {error_message}{Style.RESET_ALL}")
+                             console.print(f"[{node_name}] {error_message}", style="red")
                              processed_output_react = {
                                  "output": f"Error: Input processing failed - {proc_error}",
                                  "_error": {
@@ -520,8 +521,8 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                              }
                         except Exception as exec_error:
                              error_message = f"Error executing tool '{tool_name}': {exec_error}"
-                             print(f"{Fore.RED}[{node_name}] {error_message}{Style.RESET_ALL}")
-                             globals.logger.error(f"{Fore.RED}Traceback:\n{traceback.format_exc()}{Style.RESET_ALL}")
+                             console.print(f"[{node_name}] {error_message}", style="red")
+                             globals.logger.error(f"Traceback:\n{traceback.format_exc()}")
                              processed_output_react = {
                                  "output": f"Error: Tool execution failed - {exec_error}",
                                  "_error": {
@@ -535,7 +536,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
 
                     else: # Tool name parsed but not found in registry
                         error_message = f"Error: LLM selected unknown Action: {tool_name}"
-                        print(f"{Fore.RED}[{node_name}] {error_message}{Style.RESET_ALL}")
+                        console.print(f"[{node_name}] {error_message}", style="red")
                         processed_output_react = {
                             "output": error_message,
                             "_error": {
@@ -553,7 +554,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                     processed_output_react = {"output": final_answer}
                 else:
                     warning_message = f"Warning: LLM response for {node_name} did not provide Action or Final Answer."
-                    print(f"{Fore.YELLOW}{warning_message}{Style.RESET_ALL}")
+                    console.print(f"{warning_message}", style="yellow")
                     
                     # Check if we should retry with format correction
                     max_format_retries = node_config.get('max_format_retries', 2)
@@ -570,7 +571,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                         if current_retry >= max_format_retries:
                             # We've exhausted retries, create an error state
                             error_message = f"The AI model did not follow the required format for {node_name} after {max_format_retries} attempts."
-                            print(f"{Fore.RED}[{node_name}] {error_message}{Style.RESET_ALL}")
+                            console.print(f"[{node_name}] {error_message}", style="red")
                             
                             processed_output_react = {
                                 "output": f"Error: Format violation - {error_message}",
@@ -585,7 +586,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                         else:
                             # Increment retry count
                             current_retry += 1
-                            print_output(f"Attempting to fix format issue (Retry {current_retry}/{max_format_retries})...", Fore.YELLOW)
+                            print_output(f"Attempting to fix format issue (Retry {current_retry}/{max_format_retries})...", "yellow")
                             
                             # Create feedback for the LLM
                             feedback = (
@@ -676,7 +677,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                             f"It should provide either an Action or a Final Answer, but it returned: "
                             f"\"{response_text[:100]}...\""
                         )
-                        print(f"{Fore.RED}[{node_name}] {error_message}{Style.RESET_ALL}")
+                        console.print(f"[{node_name}] {error_message}", style="red")
                         
                         # Create an error state that will be caught by the error handling system
                         processed_output_react = {
@@ -691,12 +692,12 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                         }
                     else:
                         # If not treating as error, use raw response but log a warning
-                        print(f"{Fore.YELLOW}Using raw response as fallback (strict_format=False).{Style.RESET_ALL}")
+                        console.print(f"Using raw response as fallback (strict_format=False).", style="yellow")
                         processed_output_react = {"output": response_text}
 
             except Exception as react_logic_error:
-                print(f"{Fore.RED}[{node_name}] Critical error during ReAct step setup or LLM call: {react_logic_error}{Style.RESET_ALL}")
-                print(f"{Fore.RED}Traceback:\n{traceback.format_exc()}{Style.RESET_ALL}")
+                console.print(f"[{node_name}] Critical error during ReAct step setup or LLM call: {react_logic_error}", style="red")
+                console.print(f"Traceback:\n{traceback.format_exc()}", style="red")
                 processed_output_react = {
                     "output": f"Error during ReAct step: {react_logic_error}",
                     "_error": {
@@ -730,8 +731,8 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                                internal_tools_list=internal_tools_list # Pass internal tools list
                            )
                  except Exception as e:
-                      print(f"{Fore.RED}Error within MCP client context execution: {e}{Style.RESET_ALL}")
-                      print(f"{Fore.RED}Traceback:\n{traceback.format_exc()}{Style.RESET_ALL}")
+                      console.print(f"Error within MCP client context execution: {e}", style="red")
+                      console.print(f"Traceback:\n{traceback.format_exc()}", style="red")
                       if react_step_result is None: 
                           react_step_result = {
                               "output": f"Error during MCP context: {e}",
@@ -758,8 +759,8 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                            internal_tools_list=internal_tools_list
                       )
                  except Exception as e:
-                     print(f"{Fore.RED}Error during internal tool ReAct execution: {e}{Style.RESET_ALL}")
-                     print(f"{Fore.RED}Traceback:\n{traceback.format_exc()}{Style.RESET_ALL}")
+                     console.print(f"Error during internal tool ReAct execution: {e}", style="red")
+                     console.print(f"Traceback:\n{traceback.format_exc()}", style="red")
                      if react_step_result is None: 
                          react_step_result = {
                              "output": f"Error during internal tool operation: {e}",
@@ -785,9 +786,9 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                 format_instructions = ""; schema_valid_for_format = False
                 try:
                     if hasattr(parser.pydantic_object, 'model_json_schema'): format_instructions = parser.get_format_instructions(); schema_valid_for_format = True
-                    else: print(f"{Fore.RED}Error: Pydantic V2 model lacks .model_json_schema() for {node_name}{Style.RESET_ALL}")
+                    else: console.print(f"Error: Pydantic V2 model lacks .model_json_schema() for {node_name}", style="red")
 
-                except Exception as e: print(f"{Fore.RED}[{node_name}] Unexpected error getting format instructions: {e}{Style.RESET_ALL}")
+                except Exception as e: console.print(f"[{node_name}] Unexpected error getting format instructions: {e}", style="red")
 
                 if schema_valid_for_format:
                     formatting_prompt = (
@@ -814,39 +815,39 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                             break # Success
                         except (OutputParserException, ValidationError, json.JSONDecodeError) as parse_error:
                             format_retry_count += 1; error_detail = f"{type(parse_error).__name__}: {parse_error}"
-                            print(f"{Fore.YELLOW}Warning: Formatting LLM call failed parsing/validation (Attempt {format_retry_count}/{max_format_retries}): {error_detail}{Style.RESET_ALL}")
+                            console.print(f"Warning: Formatting LLM call failed parsing/validation (Attempt {format_retry_count}/{max_format_retries}): {error_detail}", style="yellow")
                             if format_retry_count >= max_format_retries:
-                                 print(f"{Fore.RED}Failed to format ReAct result to JSON after retries. Storing raw text result.{Style.RESET_ALL}")
+                                 console.print(f"Failed to format ReAct result to JSON after retries. Storing raw text result.", style="red")
                                  parsed_formatted_output = final_result_text # Fallback to raw text
                                  break
                             feedback = f"Formatting failed: {error_detail}. Extract the single key result value from the observation text and provide ONLY the valid JSON object matching the schema."
                             formatting_messages = [formatting_messages[0], HumanMessage(content=feedback)] # Add feedback for retry
                         except Exception as format_error:
-                             print(f"{Fore.RED}Unexpected error during result formatting LLM call: {format_error}{Style.RESET_ALL}")
+                             console.print(f"Unexpected error during result formatting LLM call: {format_error}", style="red")
                              parsed_formatted_output = final_result_text # Fallback
                              break
                     final_output_for_state = parsed_formatted_output
                 else:
-                     print(f"{Fore.YELLOW}Warning: Schema invalid or unavailable for formatting. Using raw ReAct result for {node_name}.{Style.RESET_ALL}")
+                     console.print(f"Warning: Schema invalid or unavailable for formatting. Using raw ReAct result for {node_name}.", style="yellow")
             else:
                 print_output(f"Skipping formatting for {node_name} (No parser, no text result, or result was error).")
         else:
             globals.logger.info(f"Using Direct LLM Call for {node_name}")
-            if not parser: print(f"{Fore.YELLOW}Warning: No parser for direct call node {node_name}. Expecting raw text.{Style.RESET_ALL}")
+            if not parser: console.print(f"Warning: No parser for direct call node {node_name}. Expecting raw text.", style="yellow")
             prompt_to_llm = human_message_content; format_instructions = ""; schema_valid_for_format_direct = False
             if parser:
                 try:
                     if hasattr(parser.pydantic_object, 'model_json_schema'): format_instructions = parser.get_format_instructions(); schema_valid_for_format_direct = True
-                    else: print(f"{Fore.RED}Error: Pydantic V2 model lacks .model_json_schema() for {node_name}{Style.RESET_ALL}")
+                    else: console.print(f"Error: Pydantic V2 model lacks .model_json_schema() for {node_name}", style="red")
 
                     if schema_valid_for_format_direct: # Only add instructions if valid
                          prompt_to_llm += f"\n\nIMPORTANT: Respond ONLY with a JSON object conforming to the schema below. Do not include ```json ``` markers or any text outside the JSON object itself.\nSCHEMA:\n{format_instructions}"
                     else:
                          # If instructions failed, proceed without them? Or raise? Let's proceed without for now.
-                         print(f"{Fore.YELLOW}Warning: Cannot get format instructions for {node_name}. Asking for text.{Style.RESET_ALL}")
+                         console.print(f"Warning: Cannot get format instructions for {node_name}. Asking for text.", style="yellow")
                          # Do not add JSON instructions to prompt_to_llm
 
-                except Exception as e: print(f"{Fore.RED}[{node_name}] Unexpected error getting format instructions: {e}{Style.RESET_ALL}") # Log error but continue?
+                except Exception as e: console.print(f"[{node_name}] Unexpected error getting format instructions: {e}", style="red")
 
             messages: List[BaseMessage] = [SystemMessage(content=system_message_content), HumanMessage(content=prompt_to_llm)]
             max_retries = node_config.get('max_retries', 3); retry_count = 0
@@ -874,7 +875,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                       retry_count += 1
                       last_error = e
                       error_detail = f"{type(e).__name__}: {e}"
-                      globals.logger.error(f"{Fore.YELLOW}Output parsing/validation failed (Attempt {retry_count}/{max_retries}): {error_detail}{Style.RESET_ALL}")
+                      globals.logger.error(f"Output parsing/validation failed (Attempt {retry_count}/{max_retries}): {error_detail}")
                       
                       if retry_count >= max_retries:
                           # We've exhausted retries, prepare for graceful termination
@@ -887,7 +888,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                       # Add the feedback as a new message for the next attempt
                       messages = messages[:2] + [HumanMessage(content=feedback)]
                  except Exception as e:
-                      print(f"{Fore.RED}Unexpected LLM call error: {e}{Style.RESET_ALL}")
+                      console.print(f"Unexpected LLM call error: {e}", style="red")
                       last_error = e
                       break
 
@@ -903,7 +904,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
 
         # --- Update State & Print ---
         if final_output_for_state is None:
-             print(f"{Fore.RED}Error: No output was processed or error captured for node {node_name}. Returning original state.{Style.RESET_ALL}")
+             console.print(f"Error: No output was processed or error captured for node {node_name}. Returning original state.", style="red")
              # Keep new_state as the initial copy
         else:
              new_state = update_state(new_state, final_output_for_state, node_config)
@@ -923,7 +924,7 @@ def print_user_messages(state: Dict[str, Any], node_config: Dict[str, Any]):
     """Prints messages defined in node_config, substituting state variables."""
     user_message_fields = node_config.get('user_message', [])
     if not isinstance(user_message_fields, list):
-         print(f"{Fore.YELLOW}Warning: 'user_message' in node config is not a list.{Style.RESET_ALL}")
+         print(f"Warning: 'user_message' in node config is not a list.", style="yellow")
          return
     for field_or_template in user_message_fields:
         if isinstance(field_or_template, str):
@@ -935,25 +936,25 @@ def print_user_messages(state: Dict[str, Any], node_config: Dict[str, Any]):
                  formatted_msg = format_prompt(field_or_template, state, node_config)
                  print_ai(formatted_msg)
             except Exception as e:
-                 print(f"{Fore.RED}Error formatting user message '{field_or_template}': {e}{Style.RESET_ALL}")
+                 console.print(f"Error formatting user message '{field_or_template}': {e}", style="red")
                  print_ai(field_or_template) # Print original on error
         else:
-             print(f"{Fore.YELLOW}Warning: Item in 'user_message' is not a string: {field_or_template}{Style.RESET_ALL}")
+             console.print(f"Warning: Item in 'user_message' is not a string: {field_or_template}", style="yellow")
 
 def print_chat_prompt(chat_prompt: BasePromptTemplate, node_config: Dict[str, Any]):
     """Prints formatted chat prompt messages if enabled in config."""
     print_prompt_flag = node_config.get('print_prompt', False)
     node_name = node_config.get('name', 'Unknown Node')
     if print_prompt_flag and hasattr(chat_prompt, 'messages'):
-        print(f"{Fore.BLUE}{Style.BRIGHT}ChatPrompt for {node_name}:{Style.RESET_ALL}")
+        console.print(f"ChatPrompt for {node_name}:", style="blue")
         try:
             for i, message in enumerate(chat_prompt.messages, 1):
-                role = "Unknown"; content = str(message); color = Fore.RED; style = Style.NORMAL
-                if isinstance(message, SystemMessage): role = "System"; content = message.content; color = Fore.MAGENTA
-                elif isinstance(message, HumanMessage): role = "Human"; content = message.content; color = Fore.YELLOW
+                role = "Unknown"; content = str(message); color = "red";
+                if isinstance(message, SystemMessage): role = "System"; content = message.content; color = "magenta"
+                elif isinstance(message, HumanMessage): role = "Human"; content = message.content; color = "yellow"
                 content_preview = content
-                print(f"  {color}{role} {i}:{Style.RESET_ALL} {style}{content_preview}{Style.RESET_ALL}")
-        except Exception as e: print(f"{Fore.RED}Error printing chat prompt: {e}{Style.RESET_ALL}")
+                print(f"  {color}{role} {i}: {content_preview}")
+        except Exception as e: console.print(f"Error printing chat prompt: {e}", style="red")
         print("-" * 20)
 
 
@@ -965,6 +966,6 @@ def print_state(state: Dict[str, Any], node_config: Dict[str, Any]):
         print_output(f"Current State after {node_name}:")
         try:
             state_str = json.dumps(state, indent=2, default=lambda o: f"<non-serializable: {type(o).__name__}>")
-            print(f"{Fore.GREEN}{state_str}{Style.RESET_ALL}")
-        except Exception as e: print(f"{Fore.RED}Could not serialize state to JSON. Error: {e}. Raw state:{Style.RESET_ALL}\n{state}")
+            console.print(f"{state_str}", style="green")
+        except Exception as e: print(f"Could not serialize state to JSON. Error: {e}. Raw state:\n{state}", style="red")
         print("-" * 20)

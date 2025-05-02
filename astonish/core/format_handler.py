@@ -6,9 +6,8 @@ import json
 import asyncio
 import traceback
 from typing import Dict, Any
-from colorama import Fore, Style
 from pydantic import BaseModel
-from astonish.core.utils import print_output
+from astonish.core.utils import print_output, console
 
 async def execute_tool_with_corrected_input(
     node_name: str,
@@ -66,7 +65,7 @@ async def execute_tool_with_corrected_input(
                 }
                 approve = await asyncio.to_thread(request_tool_execution, tool_call_info_for_approval)
             except Exception as approval_err:
-                print(f"{Fore.RED}Error during tool approval: {approval_err}{Style.RESET_ALL}")
+                console.print(f"Error during tool approval: {approval_err}", style="red")
             
             # Execute the tool if approved
             if approve:
@@ -84,10 +83,10 @@ async def execute_tool_with_corrected_input(
                 return {"output": f"User denied execution of tool '{tool_name}'."}
         except Exception as exec_error:
             error_message = f"Error executing tool '{tool_name}': {exec_error}"
-            print(f"{Fore.RED}[{node_name}] {error_message}{Style.RESET_ALL}")
-            print(f"{Fore.RED}Traceback:\n{traceback.format_exc()}{Style.RESET_ALL}")
+            console.print(f"[{node_name}] {error_message}", style="red")
+            console.print(f"Traceback:\n{traceback.format_exc()}", style="red")
             return {"output": f"Error: Tool execution failed - {exec_error}"}
     else:
         error_message = f"Error: Unknown tool: {tool_name}"
-        print(f"{Fore.RED}[{node_name}] {error_message}{Style.RESET_ALL}")
+        console.print(f"[{node_name}] {error_message}", style="red")
         return {"output": error_message}

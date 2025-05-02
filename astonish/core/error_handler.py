@@ -1,11 +1,10 @@
 import json
 import traceback
 from typing import Dict, Any, Optional, Union, Type
-from colorama import Fore, Style
 from pydantic import ValidationError
 from langchain.schema import OutputParserException
 import astonish.globals as globals
-from astonish.core.utils import print_ai, print_section, print_output
+from astonish.core.utils import print_ai, print_section, print_output, console
 
 def create_error_feedback(error: Exception, node_name: str) -> str:
     """
@@ -142,7 +141,7 @@ async def handle_llm_error(
     
     # Increment retry count
     current_retry += 1
-    print_output(f"Attempting to fix {error_type} issue (Retry {current_retry}/{max_retries})...", Fore.YELLOW)
+    console(f"Attempting to fix {error_type} issue (Retry {current_retry}/{max_retries})...", style="yellow")
     
     # Create feedback for the LLM based on error type
     if error_type == "format_violation":
@@ -196,7 +195,8 @@ async def handle_llm_error(
                 system_message, human_message, llm, state, max_retries
             )
     except Exception as retry_error:
-        print(f"{Fore.RED}Error during format correction retry: {retry_error}{Style.RESET_ALL}")
+        console.print(f"Error during format correction retry: {retry_error}", style="red")
+        
         # Create an error state
         error_message = f"Error during format correction retry: {retry_error}"
         return {

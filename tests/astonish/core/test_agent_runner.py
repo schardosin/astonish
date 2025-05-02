@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
-from astonish.core.agent_runner import run_agent, print_ai
+from astonish.core.agent_runner import run_agent
 
 @pytest.fixture
 def mock_config():
@@ -25,8 +25,7 @@ def mock_config():
 
 @pytest.mark.asyncio
 async def test_run_agent(mock_config):
-    with patch('astonish.core.agent_runner.setup_colorama') as mock_setup_colorama, \
-         patch('astonish.core.agent_runner.set_debug') as mock_set_debug, \
+    with patch('astonish.core.agent_runner.set_debug') as mock_set_debug, \
          patch('astonish.core.agent_runner.load_agents', return_value=mock_config) as mock_load_agents, \
          patch('astonish.globals.initialize_mcp_tools') as mock_initialize_mcp_tools, \
          patch('astonish.core.agent_runner.AsyncSqliteSaver') as mock_async_sqlite_saver, \
@@ -47,7 +46,6 @@ async def test_run_agent(mock_config):
 
         await run_agent('test_agent')
 
-        mock_setup_colorama.assert_called_once()
         mock_set_debug.assert_called_once_with(False)
         mock_load_agents.assert_called_once_with('test_agent')
         mock_initialize_mcp_tools.assert_called_once()
@@ -66,7 +64,6 @@ async def test_run_agent(mock_config):
 async def test_run_agent_exception():
     with patch('astonish.core.agent_runner.load_agents', side_effect=Exception("Test exception")), \
          patch('astonish.core.agent_runner.print_ai') as mock_print_ai, \
-         patch('astonish.core.agent_runner.setup_colorama'), \
          patch('astonish.core.agent_runner.set_debug'), \
          patch('astonish.globals.initialize_mcp_tools', return_value=AsyncMock()):
 

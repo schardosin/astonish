@@ -67,12 +67,13 @@ nodes:
       5. `output_model`: Dictionary mapping string variable names to string types ("str", "list", "dict", "bool", "int"). Example: `{{"results": "list"}}`.
       6. `options` is a variable from output_model of type list or a list of strings (e.g., ["option1", "option2"]). Whenever possible, use the 'options' field to limit user input to a specific set of choices, and use the options in the flow, reducing the amount of agent calls.
         Good Examples: 
-          - `{{"options": ["option1", "option2"]}}` for a list of strings.
-          - `{{"options": [options_list]}}` for a variable from output_model of type list.
+          - `"options": ["option1", "option2"]` for a list of strings.
+          - `"options": [options_list]` for a variable from output_model of type list.
 
         Bad examples (not allowed):
-          - `{{"options": option1}}` (not a list)
-          - `{{"options": "option1, option2"}}` (not a list)
+          - `"options": option1` (not a list)
+          - `"options": "option1, option2"` (not a list)
+          - `"options": [{{"option1}}]` (should never use curly braces in the options list)
 
       6.1. `options` is very helpful if the agent from previous node is a list of strings, and you want to limit the user input to one of the options. Example: `{{"options": ["option1", "option2"]}}`. If the options is a output_model variable, it should just mention the variable name. Example: `{{"options": [options_list]}}`, no curly braces around the list variable name.
       6.2. `options` cannot be a complex expression like lamba, it should always be a list, and can be strings or a variable from output_model of type list.

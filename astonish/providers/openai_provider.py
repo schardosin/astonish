@@ -4,6 +4,10 @@ from openai import OpenAI
 from langchain_openai import ChatOpenAI
 from astonish.providers.ai_provider_interface import AIProvider
 from typing import List
+from rich.prompt import Prompt, IntPrompt
+from rich.panel import Panel
+from rich.table import Table
+from astonish.core.utils import console
 
 class OpenAIProvider(AIProvider):
     def __init__(self):
@@ -11,31 +15,40 @@ class OpenAIProvider(AIProvider):
         self.client = None
 
     def setup(self):
-        print("Setting up OpenAI...")
-        
-        # Default values and examples
+        console.print("[bold cyan]Setting up OpenAI...[/bold cyan]")
+
         defaults = {
             'api_key': ('', 'your-openai-api-key'),
         }
         # Load existing configuration if it exists
         if os.path.exists(globals.config_path):
             globals.config.read(globals.config_path)
-        
-        # Ensure OPENAI section exists
+
         if 'OPENAI' not in globals.config:
             globals.config['OPENAI'] = {}
 
-        # Input new values
+        # Input configuration with rich prompts
         for key, (default, example) in defaults.items():
             current_value = globals.config['OPENAI'].get(key, '')
-            if current_value:
-                new_value = input(f"Enter {key} (current: {current_value}): ").strip()
-            else:
-                new_value = input(f"Enter {key} (example: {example}): ").strip()
+
+            prompt_panel = Panel.fit(
+                f"[bold magenta]{key.upper()}[/bold magenta]\n"
+                f"[dim]Current:[/dim] [green]{current_value or 'None'}[/green]\n"
+                f"[dim]Example:[/dim] [italic]{example}[/italic]",
+                title="🔧 Configuration Input",
+                border_style="cyan"
+            )
+            console.print(prompt_panel)
+
+            # Inform user how to retain current value
+            new_value = Prompt.ask(
+                f"[bold cyan]Enter value for {key}[/bold cyan] [dim](leave blank to keep current)[/dim]"
+            ).strip()
+
             globals.config['OPENAI'][key] = new_value if new_value else (current_value or default)
 
         os.makedirs(os.path.dirname(globals.config_path), exist_ok=True)
-        os.makedirs(os.path.dirname(globals.config_path)+'/agents', exist_ok=True)
+        os.makedirs(os.path.dirname(globals.config_path) + '/agents', exist_ok=True)
         with open(globals.config_path, 'w') as configfile:
             globals.config.write(configfile)
 
@@ -44,27 +57,29 @@ class OpenAIProvider(AIProvider):
 
         # Get supported models
         supported_models = self.get_supported_models()
-        print("\nSupported models:")
+        
+        # Display supported models
+        console.print("\n[bold yellow]Supported models:[/bold yellow]")
         for i, model in enumerate(supported_models, 1):
-            print(f"{i}. {model}")
+            console.print(f"{i}. {model}")
 
-        # Ask user to select a default model
         while True:
             try:
-                selection = int(input("\nSelect the number of the model you want to use as default: "))
+                selection = IntPrompt.ask(
+                    "\n[bold yellow]🔢 Select the number of the model you want to use as default[/bold yellow]"
+                )
                 if 1 <= selection <= len(supported_models):
                     default_model = supported_models[selection - 1]
                     break
                 else:
-                    print("Invalid selection. Please choose a number from the list.")
+                    console.print("[red]❌ Invalid selection. Please choose a number from the list.[/red]")
             except ValueError:
-                print("Invalid input. Please enter a number.")
+                console.print("[red]⚠️ Invalid input. Please enter a number.[/red]")
 
         # Ensure GENERAL section exists
         if 'GENERAL' not in globals.config:
             globals.config['GENERAL'] = {}
-        
-        # Add general section with default provider and model
+
         globals.config['GENERAL']['default_provider'] = 'openai'
         globals.config['GENERAL']['default_model'] = default_model
 
@@ -72,15 +87,23 @@ class OpenAIProvider(AIProvider):
         with open(globals.config_path, 'w') as configfile:
             globals.config.write(configfile)
 
-        print(f"\nOpenAI configuration saved successfully.")
-        print(f"Default model set to: {default_model}")
+        # Display a success summary panel
+        summary_table = Table(show_header=False, box=None)
+        summary_table.add_row("🔌 Default Provider:", f"[bold green]{'openai'}[/bold green]")
+        summary_table.add_row("🤖 Default Model:", f"[bold blue]{default_model}[/bold blue]")
+
+        console.print(Panel.fit(
+            summary_table,
+            title="✅ [bold green]Configuration Saved Successfully[/bold green]",
+            border_style="green"
+        ))
 
     def _initialize_api_key(self):
         if not os.path.exists(globals.config_path):
             raise FileNotFoundError("Configuration file not found. Please run setup() first.")
         
         globals.config.read(globals.config_path)
-        
+
         # Set API key from the configuration
         self.api_key = globals.config.get('OPENAI', 'api_key')
         os.environ["OPENAI_API_KEY"] = self.api_key

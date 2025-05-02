@@ -5,6 +5,7 @@ import argparse
 import astonish.globals as globals
 from astonish import logo
 from importlib.metadata import version, PackageNotFoundError
+from astonish.core.utils import print_output, console
 
 # Constants for version information
 AUTHOR = "Rafael Schardosin Silva"
@@ -101,23 +102,23 @@ def setup():
     from astonish.factory.ai_provider_factory import AIProviderFactory
 
     globals.logger.info("Starting setup process")
-    print("Select a provider to configure:")
+    print_output("Select a provider to configure:")
     
     try:
         globals.logger.info("Loading Registered Providers")
         providers = AIProviderFactory.get_registered_providers()
         if not providers:
             globals.logger.warning("No providers found")
-            print("No providers found.")
+            print_output("No providers found.")
             return
     except Exception as e:
         globals.logger.error("Failed to fetch providers", exc_info=True)
-        print(f"Error: Could not fetch providers: {e}")
+        print_output(f"Error: Could not fetch providers: {e}")
         return
 
     # Display the list of providers
     for i, (provider_name, display_name) in enumerate(providers, 1):
-        print(f"{i}. {display_name}")
+        console.print(f"{i}. {display_name}")
     
     while True:
         choice = input("Enter the number of your choice: ")

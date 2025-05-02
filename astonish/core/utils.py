@@ -3,46 +3,82 @@ import os
 import appdirs
 import astonish.globals as globals
 from importlib import resources
-from colorama import Fore, Style, init as colorama_init
 import re
 import inquirer
+from rich import print
+from rich.console import Console
+from rich.syntax import Syntax
 
-def setup_colorama():
-    colorama_init(autoreset=True)
+console = Console()
+
+def print_rich(content):
+    """
+    This function formats text with code blocks (like YAML, JSON, etc.) and preserves indentation for normal text.
+    It prints the content with proper formatting, including syntax highlighting for code blocks.
+    """
+    # Initialize the console
+    console = Console()
+
+    # Regex to detect code blocks, e.g., ```yaml, ```json, etc.
+    code_block_pattern = re.compile(r'```(\w+)?\n(.*?)```', re.DOTALL)
+
+    # Initialize position to keep track of current line
+    current_position = 0
+    last_position = 0
+    
+    # Find all code blocks
+    for match in code_block_pattern.finditer(content):
+        # Print the regular text before this code block (preserving indentation)
+        if match.start() > last_position:
+            normal_text = content[last_position:match.start()]
+            console.print(normal_text)
+        
+        # Get the content inside the code block and its language
+        language = match.group(1) or 'text'  # Default to plain text if no language is specified
+        code_content = match.group(2)
+        
+        # Create the Syntax object for syntax highlighting
+        syntax = Syntax(code_content, language)
+        console.print(syntax)
+        
+        # Update the last_position to after the code block
+        last_position = match.end()
+
+    # If there's remaining regular content after the last code block
+    if last_position < len(content):
+        normal_text = content[last_position:]
+        console.print(normal_text)
 
 def format_message(message):
-    # Apply bold (via Style.BRIGHT)
-    message = re.sub(r'\*\*(.*?)\*\*', Style.BRIGHT + r'\1' + Style.RESET_ALL, message)
-
-    return message
+    # Bold text between ** **
+    return re.sub(r'\*\*(.*?)\*\*', r'[bold]\1[/bold]', message)
 
 def print_ai(message):
     formatted = format_message(message)
-    print(f"{Fore.GREEN}AI: {Style.RESET_ALL}{formatted}")
+    print_rich(f"[green]AI:[/green] {formatted}")
 
 def print_user_prompt(message):
-    print(f"{Fore.YELLOW}{message}{Style.RESET_ALL}", end="")
+    print_rich(f"[yellow]{message}[/yellow]", end="")
 
 def print_section(title):
-    print(f"\n{Fore.BLUE}{Style.BRIGHT}{'=' * 40}")
-    print(f"{title.center(40)}")
-    print(f"{'=' * 40}{Style.RESET_ALL}\n")
+    border = "=" * 40
+    print_rich(f"[blue bold]{border}[/blue bold]")
+    print_rich(f"[blue bold]{title.center(40)}[/blue bold]")
+    print_rich(f"[blue bold]{border}[/blue bold]\n")
 
-def print_output(output, color=Fore.CYAN):
-    print(f"{color}{output}{Style.RESET_ALL}")
+def print_output(output, color="cyan"):
+    print_rich(f"[{color}]{output}[/{color}]")
 
-def print_dict(dictionary, key_color=Fore.MAGENTA, value_color=Fore.CYAN):
+def print_dict(dictionary, key_color="magenta", value_color="cyan"):
     for key, value in dictionary.items():
-        print(f"{key_color}{key}: {Style.RESET_ALL}{value_color}{value}{Style.RESET_ALL}")
+        print_rich(f"[{key_color}]{key}:[/{key_color}] [{value_color}]{value}[/{value_color}]")
 
 def load_agents(agent_name):
-    # Try to load from astonish.agents first
     try:
         with resources.path('astonish.agents', f"{agent_name}.yaml") as agent_path:
             with open(agent_path, 'r') as file:
                 return yaml.safe_load(file)
     except FileNotFoundError:
-        # If not found, try to load from config_path/agents
         config_dir = appdirs.user_config_dir("astonish")
         config_agents_path = os.path.join(config_dir, "agents", f"{agent_name}.yaml")
         if os.path.exists(config_agents_path):
@@ -52,10 +88,6 @@ def load_agents(agent_name):
             raise FileNotFoundError(f"Agent {agent_name} not found in astonish.agents or {config_agents_path}")
 
 def edit_agent(agent_name):
-    """
-    Edit an agent configuration file in the user's config directory.
-    If the file doesn't exist, return an error message.
-    """
     config_dir = appdirs.user_config_dir("astonish")
     config_agents_path = os.path.join(config_dir, "agents", f"{agent_name}.yaml")
 
@@ -72,162 +104,107 @@ def edit_agent(agent_name):
         return error_message
 
 def _evaluate_placeholder(expr: str, context: dict) -> str:
-    """
-    Safely evaluates simple expressions found within {}.
-    Supports:
-        - Simple variable names: {variable}
-        - Dictionary key access (string keys): {variable['key']}
-        - Basic attribute access: {variable.attribute}
-        Escapes expressions wrapped in double braces like {{expr}}.
+    import ast
+    def _eval(node):
+        if isinstance(node, ast.Name):
+            return context[node.id]
+        elif isinstance(node, ast.Subscript):
+            target = _eval(node.value)
+            key = _eval(node.slice)
+            return target[key]
+        elif isinstance(node, ast.Constant):
+            return node.value
+        elif isinstance(node, ast.Attribute):
+            value = _eval(node.value)
+            return getattr(value, node.attr)
+        else:
+            raise ValueError(f"Unsupported expression element: {ast.dump(node)}")
 
-    Args:
-        expr: The string expression inside the braces.
-        context: The dictionary ({**state, **node_config}) to look up variables in.
-
-    Returns:
-        The resolved string value, or the original placeholder string if resolution fails.
-    """
-    expr = expr.strip()
-
-    # If expression is already wrapped in extra braces, skip evaluation
-    if expr.startswith('{') and expr.endswith('}'):
-        # Unescape: {{...}} -> {...}
-        return f"{{{expr[1:-1]}}}"
-
-    try:
-        if '.' not in expr and '[' not in expr:
-            if expr in context:
-                return str(context[expr])
-            else:
-                raise KeyError(f"Variable '{expr}' not found")
-
-        dict_match = re.fullmatch(r"(\w+)\[(['\"])(.*?)\2\]", expr)
-        if dict_match:
-            var_name, _, key = dict_match.groups()
-            if var_name in context:
-                target_dict = context[var_name]
-                if isinstance(target_dict, dict):
-                    if key in target_dict:
-                        return str(target_dict[key])
-                    else:
-                        raise KeyError(f"Key '{key}' not found in dict '{var_name}'")
-                else:
-                    raise TypeError(f"Variable '{var_name}' is not a dictionary")
-            else:
-                raise KeyError(f"Base variable '{var_name}' not found")
-
-        attr_match = re.fullmatch(r"(\w+)\.(\w+)", expr)
-        if attr_match:
-            var_name, attr_name = attr_match.groups()
-            if var_name in context:
-                target_obj = context[var_name]
-                if hasattr(target_obj, attr_name):
-                    return str(getattr(target_obj, attr_name))
-                else:
-                    raise AttributeError(f"Object '{var_name}' has no attribute '{attr_name}'")
-            else:
-                raise KeyError(f"Base variable '{var_name}' not found")
-
-        raise ValueError(f"Unsupported expression format: {expr}")
-
-    except (KeyError, AttributeError, IndexError, TypeError, ValueError) as e:
-        globals.logger.warning(f"Could not resolve placeholder '{{{expr}}}': {type(e).__name__}: {e}. Leaving placeholder unchanged.")
-        return f"{{{expr}}}"
+    tree = ast.parse(expr, mode='eval')
+    return str(_eval(tree.body))
 
 def format_prompt(prompt: str, state: dict, node_config: dict) -> str:
-    """
-    Formats the prompt string using custom logic to handle {var} and {var['key']} syntax.
-    It does NOT use str.format() directly to allow for dictionary access within braces.
-    
-    Args:
-        prompt: The template string (using {} delimiters).
-        state: The state dictionary.
-        node_config: The node configuration dictionary.
-
-    Returns:
-        The formatted string, with unresolved placeholders left intact.
-    """
-    # Combine state and node_config. node_config overwrites state on conflicts.
     format_context = {**state, **node_config}
 
     if not isinstance(prompt, str):
-         logger.warning(f"Prompt is not a string, returning as is. Type: {type(prompt)}")
+         globals.logger.warning(f"Prompt is not a string, returning as is. Type: {type(prompt)}")
          return prompt
 
-    # Step 1: Temporarily escape double-brace blocks
-    DUMMY_ESCAPE = "§§§"  # unlikely token
+    DUMMY_ESCAPE = "§§§"
     prompt = prompt.replace("{{", f"{DUMMY_ESCAPE}open_brace§")
     prompt = prompt.replace("}}", f"{DUMMY_ESCAPE}close_brace§")
 
     formatted_prompt = re.sub(
-        r"(?<!\{)\{([^{}]+)\}(?!\})", 
-        lambda match: _evaluate_placeholder(match.group(1), format_context), 
+        r"(?<!\{)\{([^{}]+)\}(?!\})",
+        lambda match: _evaluate_placeholder(match.group(1), format_context),
         prompt
     )
 
-    # Step 3: Restore the literal braces
     formatted_prompt = formatted_prompt.replace(f"{DUMMY_ESCAPE}open_brace§", "{")
     formatted_prompt = formatted_prompt.replace(f"{DUMMY_ESCAPE}close_brace§", "}")
-    
+
     return formatted_prompt
 
 def request_tool_execution(tool):
-    """
-    Prompt the user for approval before executing a tool command.
-    Parameters:
-    - tool (dict): Dictionary containing tool execution details.
-    Returns:
-    - bool: True if the user approves, False otherwise.
-    """
+    from rich.panel import Panel
+    from rich.console import Group
+    from rich.text import Text
+    from rich.syntax import Syntax
+
     try:
         tool_name = tool['name']
         args = tool['args']
-        auto_approve = tool['auto_approve']
+        auto_approve = tool.get('auto_approve', False)
 
         if auto_approve:
-            print(f"{Fore.GREEN}Auto-approving tool '{tool_name}' execution.{Style.RESET_ALL}")
+            console.print(f"[green]Auto-approving tool '{tool_name}' execution.[/green]")
             return True
-        
-        print(f"\n{Fore.YELLOW}Tool Call Request:{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}Name:{Style.RESET_ALL} {tool_name}")
-        print(f"{Fore.YELLOW}Args:{Style.RESET_ALL}")
-        
-        for key, value in args.items():
-            print(f"  {Fore.YELLOW}{key}:{Style.RESET_ALL}")
-            value_lines = str(value).split('\n')
-            for line in value_lines:
-                print(f"{Fore.YELLOW}    {line}{Style.RESET_ALL}")
-                
-        print()
-        questions = [
-            inquirer.List('approval',
-                          message=f"{Fore.YELLOW}Do you approve this execution?{Style.RESET_ALL}",
-                          choices=['Yes', 'No'],
-                          ),
+
+        # Create a Group of formatted items
+        body_lines = [
+            Text(f"Tool: ", style="yellow") + Text(tool_name, style="bold"),
+            Text("\n** Arguments **\n", style="yellow")
         ]
-        
+
+        for key, value in args.items():
+            body_lines.append(Text(f"{key}:", style="yellow"))
+            if isinstance(value, (dict, list)):
+                value_str = yaml.dump(value, default_flow_style=False)
+            else:
+                value_str = str(value)
+
+            syntax = Syntax(value_str, "yaml", indent_guides=True, theme="monokai", word_wrap=True)
+            body_lines.append(syntax)
+
+        panel = Panel(Group(*body_lines), title="Tool Execution", border_style="cyan", expand=False)
+        console.print(panel)
+
+        # Prompt user for confirmation
+        questions = [
+            inquirer.List(
+                'approval',
+                message="Do you approve this execution?",
+                choices=['Yes', 'No'],
+            )
+        ]
         answers = inquirer.prompt(questions)
+
         if answers['approval'] == 'Yes':
-            print(f"{Fore.GREEN}Tool execution approved.{Style.RESET_ALL}")
+            console.print("[green]Tool execution approved.[/green]")
             return True
         else:
-            print(f"{Fore.RED}Tool execution denied.{Style.RESET_ALL}")
+            console.print("[red]Tool execution denied.[/red]")
             return False
-        
+
     except KeyError as e:
-        print(f"{Fore.RED}Error: Missing required field in tool object: {e}{Style.RESET_ALL}")
+        console.print(f"[red]Error: Missing required field in tool object: {e}[/red]")
     return False
 
-async def list_agents():
-    """
-    List all available agents, including their names and descriptions.
-    """
-    setup_colorama()
-    print_section("Available Agents")
 
+async def list_agents():
+    print_section("Available Agents")
     agents_found = False
 
-    # List agents from astonish.agents
     try:
         agents_dir = resources.files('astonish.agents')
         for agent_file in agents_dir.iterdir():
@@ -239,11 +216,10 @@ async def list_agents():
                     print_dict({agent_name: description})
                     agents_found = True
                 except Exception as e:
-                    print(f"{Fore.RED}Error loading agent {agent_name}: {e}{Style.RESET_ALL}")
+                    print_rich(f"[red]Error loading agent {agent_name}: {e}[/red]")
     except Exception as e:
-        print(f"{Fore.YELLOW}Error accessing astonish.agents: {e}{Style.RESET_ALL}")
+        print_rich(f"[yellow]Error accessing astonish.agents: {e}[/yellow]")
 
-    # List agents from config_path/agents
     config_dir = appdirs.user_config_dir("astonish")
     config_agents_path = os.path.join(config_dir, "agents")
     if os.path.exists(config_agents_path):
@@ -256,7 +232,7 @@ async def list_agents():
                     print_dict({agent_name: description})
                     agents_found = True
                 except Exception as e:
-                    print(f"{Fore.RED}Error loading agent {agent_name}: {e}{Style.RESET_ALL}")
+                    print_rich(f"[red]Error loading agent {agent_name}: {e}[/red]")
 
     if not agents_found:
-        print(f"{Fore.YELLOW}No agents found in astonish.agents or {config_agents_path}{Style.RESET_ALL}")
+        print_rich(f"[yellow]No agents found in astonish.agents or {config_agents_path}[/yellow]")

@@ -4,10 +4,10 @@ import os
 from astonish.core.utils import (
     format_prompt, print_dict, load_agents,
     print_ai, print_user_prompt, print_section,
-    setup_colorama, print_output, edit_agent,
+    print_output, edit_agent,
     request_tool_execution, list_agents
 )
-from colorama import Fore, Style, init as colorama_init
+from rich.console import Console
 import yaml
 import astonish.globals as globals
 from importlib import resources
@@ -35,20 +35,19 @@ def test_format_prompt():
     assert result == "The red rabbit jumped over the wall."
 
 def test_format_prompt_missing_key():
-    # The current implementation doesn't raise KeyError but returns the placeholder unchanged
+    # The implementation raises KeyError when a key is not found
     prompt = "Hello, {missing_key}!"
     state = {}
     node_config = {}
-    result = format_prompt(prompt, state, node_config)
-    assert result == "Hello, {missing_key}!"
+    with pytest.raises(KeyError):
+        format_prompt(prompt, state, node_config)
 
-def test_print_dict(capsys):
+@patch('astonish.core.utils.print_rich')
+def test_print_dict(mock_print_rich):
     test_dict = {"key1": "value1", "key2": "value2"}
     print_dict(test_dict)
-    captured = capsys.readouterr()
-    expected_output = f"{Fore.MAGENTA}key1: {Style.RESET_ALL}{Fore.CYAN}value1{Style.RESET_ALL}\n" \
-                      f"{Fore.MAGENTA}key2: {Style.RESET_ALL}{Fore.CYAN}value2{Style.RESET_ALL}\n"
-    assert captured.out == expected_output
+    # Check that print_rich was called twice (once for each key-value pair)
+    assert mock_print_rich.call_count == 2
 
 @pytest.mark.asyncio
 @patch('astonish.core.utils.resources.files')
@@ -175,42 +174,32 @@ def test_edit_agent_error(mock_open_editor, mock_exists, mock_user_config_dir, t
         assert "Error opening agent file" in result
         mock_logger_error.assert_called_once()
 
-def test_setup_colorama():
-    with patch('astonish.core.utils.colorama_init') as mock_init:
-        setup_colorama()
-        mock_init.assert_called_once_with(autoreset=True)
-
-def test_print_output(capsys):
+@patch('astonish.core.utils.print_rich')
+def test_print_output(mock_print_rich):
     output = "Test output"
     print_output(output)
-    captured = capsys.readouterr()
-    expected_output = f"{Fore.CYAN}{output}{Style.RESET_ALL}\n"
-    assert captured.out == expected_output
+    mock_print_rich.assert_called_once_with(f"[cyan]{output}[/cyan]")
 
-def test_print_ai(capsys):
+@patch('astonish.core.utils.print_rich')
+def test_print_ai(mock_print_rich):
     message = "Hello, I'm an AI!"
     print_ai(message)
-    captured = capsys.readouterr()
-    expected_output = f"{Fore.GREEN}AI: {Style.RESET_ALL}{message}\n"
-    assert captured.out == expected_output
+    mock_print_rich.assert_called_once_with(f"[green]AI:[/green] {message}")
 
-def test_print_user_prompt(capsys):
+@patch('astonish.core.utils.print_rich')
+def test_print_user_prompt(mock_print_rich):
     message = "Enter your name: "
     print_user_prompt(message)
-    captured = capsys.readouterr()
-    expected_output = f"{Fore.YELLOW}{message}{Style.RESET_ALL}"
-    assert captured.out == expected_output
+    mock_print_rich.assert_called_once_with(f"[yellow]{message}[/yellow]", end="")
 
-def test_print_section(capsys):
+@patch('astonish.core.utils.print_rich')
+def test_print_section(mock_print_rich):
     title = "Test Section"
     print_section(title)
-    captured = capsys.readouterr()
-    expected_output = (
-        f"\n{Fore.BLUE}{Style.BRIGHT}{'=' * 40}\n"
-        f"{title.center(40)}\n"
-        f"{'=' * 40}{Style.RESET_ALL}\n\n"
-    )
-    assert captured.out == expected_output
+    assert mock_print_rich.call_count == 3
+    mock_print_rich.assert_any_call(f"[blue bold]{'=' * 40}[/blue bold]")
+    mock_print_rich.assert_any_call(f"[blue bold]{title.center(40)}[/blue bold]")
+    mock_print_rich.assert_any_call(f"[blue bold]{'=' * 40}[/blue bold]\n")
 
 @pytest.fixture
 def mock_yaml_content():
@@ -270,10 +259,11 @@ def test_load_agents_not_found(mock_user_config_dir, mock_resources_path, tmp_pa
     with pytest.raises(FileNotFoundError):
         load_agents("nonexistent_agent")
 
-def test_print_dict_custom_colors(capsys):
+@patch('astonish.core.utils.print_rich')
+def test_print_dict_custom_colors(mock_print_rich):
     test_dict = {"key1": "value1", "key2": "value2"}
-    print_dict(test_dict, key_color=Fore.RED, value_color=Fore.GREEN)
-    captured = capsys.readouterr()
-    expected_output = f"{Fore.RED}key1: {Style.RESET_ALL}{Fore.GREEN}value1{Style.RESET_ALL}\n" \
-                      f"{Fore.RED}key2: {Style.RESET_ALL}{Fore.GREEN}value2{Style.RESET_ALL}\n"
-    assert captured.out == expected_output
+    print_dict(test_dict, key_color="red", value_color="green")
+    # Check that print_rich was called twice (once for each key-value pair)
+    assert mock_print_rich.call_count == 2
+    mock_print_rich.assert_any_call(f"[red]key1:[/red] [green]value1[/green]")
+    mock_print_rich.assert_any_call(f"[red]key2:[/red] [green]value2[/green]")

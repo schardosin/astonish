@@ -2,15 +2,13 @@ import traceback
 import astonish.globals as globals
 from langchain.globals import set_debug
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from astonish.core.utils import setup_colorama, load_agents, print_ai, print_section
+from astonish.core.utils import load_agents, print_ai, print_section
 from astonish.core.graph_builder import build_graph, run_graph
 
 async def run_agent(agent):
     """
     Run an agentic flow
     """
-    # Setup
-    setup_colorama()
     set_debug(False)
 
     # Load agents

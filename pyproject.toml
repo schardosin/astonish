@@ -34,14 +34,14 @@ dependencies = [
     "langgraph==0.3.27",
     "langgraph-checkpoint-sqlite==2.0.6",
     "pydantic==2.10.6",
-    "colorama==0.4.6",
     "langchain-mcp-adapters==0.0.9",
     "aiosqlite==0.21.0",
     "grandalf==0.8",
     "pykwalify==1.8.0",
     "inquirer==3.4.0",
     "langchain-anthropic==0.3.12",
-    "langchain-google-genai==2.1.4"
+    "langchain-google-genai==2.1.4",
+    "rich==14.0.0"
 ]
 
 [project.optional-dependencies]

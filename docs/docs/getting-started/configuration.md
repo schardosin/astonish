@@ -126,7 +126,7 @@ Here's an example configuration for a weather MCP server:
 
 ### Logging
 
-Astonish logs information to help with debugging and monitoring. You can control the verbosity of logging using the `--verbose` flag or the `ASTONISH_LOG_LEVEL` environment variable.
+Astonish logs information to help with debugging and monitoring. You can control the verbosity of logging using the `--verbose` flag.
 
 ## Next Steps
 

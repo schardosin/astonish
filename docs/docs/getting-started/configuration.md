@@ -96,7 +96,8 @@ This will open the MCP configuration file in your default editor. The configurat
       "env": {
         "ENV_VAR1": "value1",
         "ENV_VAR2": "value2"
-      }
+      },
+      "transport": "stdio"
     }
   }
 }
@@ -114,21 +115,14 @@ Here's an example configuration for a weather MCP server:
       "args": ["/path/to/weather-server/index.js"],
       "env": {
         "OPENWEATHER_API_KEY": "your-api-key"
-      }
+      },
+      "transport": "stdio"
     }
   }
 }
 ```
 
 ## Advanced Configuration
-
-### Environment Variables
-
-Astonish supports the following environment variables:
-
-- `ASTONISH_CONFIG_DIR`: Override the default configuration directory
-- `ASTONISH_LOG_LEVEL`: Set the logging level (DEBUG, INFO, WARNING, ERROR)
-- `ASTONISH_PROVIDER`: Override the default AI provider
 
 ### Logging
 

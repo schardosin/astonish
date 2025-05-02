@@ -951,7 +951,7 @@ def print_chat_prompt(chat_prompt: BasePromptTemplate, node_config: Dict[str, An
                 role = "Unknown"; content = str(message); color = Fore.RED; style = Style.NORMAL
                 if isinstance(message, SystemMessage): role = "System"; content = message.content; color = Fore.MAGENTA
                 elif isinstance(message, HumanMessage): role = "Human"; content = message.content; color = Fore.YELLOW
-                content_preview = (content[:500] + '...') if len(content) > 503 else content
+                content_preview = content
                 print(f"  {color}{role} {i}:{Style.RESET_ALL} {style}{content_preview}{Style.RESET_ALL}")
         except Exception as e: print(f"{Fore.RED}Error printing chat prompt: {e}{Style.RESET_ALL}")
         print("-" * 20)

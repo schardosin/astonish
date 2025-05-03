@@ -20,30 +20,26 @@ You can pass parameters to an agent using the `-p` or `--param` flag with key=va
 astonish agents run simple_question_answer_loop -p get_question="Who was Albert Einstein" -p continue_loop=no
 ```
 
-### Python API
+### Using File Content
 
-You can also pass parameters directly when using the Python API:
-
-```python
-import asyncio
-from astonish.core.agent_runner import run_agent
-
-async def main():
-    parameters = {
-        "get_question": "Who was Albert Einstein",
-        "continue_loop": "no"
-    }
-    await run_agent("simple_question_answer_loop", parameters)
-
-asyncio.run(main())
-```
-
-### Using the test_params.py Script
-
-The included `test_params.py` script provides a convenient way to test agents with parameters:
+You can use shell expansion to read file content as a parameter value:
 
 ```bash
-python test_params.py simple_question_answer_loop get_question="Who was Albert Einstein" continue_loop=no
+astonish agents run simple_question_answer_loop -p get_question="$(<question.txt)" -p continue_loop=no
+```
+
+This reads the content of `question.txt` and passes it as the value for the `get_question` parameter.
+
+### Using Environment Variables
+
+You can use environment variables as parameter values:
+
+```bash
+# Set an environment variable
+export QUESTION="Who was Albert Einstein"
+
+# Use it in the command
+astonish agents run simple_question_answer_loop -p get_question="$QUESTION" -p continue_loop=no
 ```
 
 ## Parameter Format
@@ -132,5 +128,3 @@ You would call it like this:
 ```bash
 astonish agents run simple_question_answer_loop -p get_question="Who was Albert Einstein" -p continue_loop=no
 ```
-
-See the `test_params.py` file for a complete example of how to use parameter passing with the Python API.

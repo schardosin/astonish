@@ -47,23 +47,6 @@ export QUESTION="Who was Albert Einstein"
 astonish agents run simple_question_answer_loop -p get_question="$QUESTION" -p continue_loop=no
 ```
 
-### Python API
-
-You can also pass parameters directly when using the Python API:
-
-```python
-import asyncio
-from astonish.core.agent_runner import run_agent
-
-async def main():
-    parameters = {
-        "get_question": "Who was Albert Einstein",
-        "continue_loop": "no"
-    }
-    await run_agent("simple_question_answer_loop", parameters)
-
-asyncio.run(main())
-```
 
 ## Parameter Format
 

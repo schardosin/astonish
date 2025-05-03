@@ -161,6 +161,19 @@ astonish agents run <task_name>
 
 This works for both pre-defined agents and agents you've created using the `agents_creator`.
 
+You can also pass parameters to agents to automate workflows:
+
+```bash
+# Basic parameter passing
+astonish agents run simple_question_answer_loop -p get_question="Who was Steve Jobs" -p continue_loop=no
+
+# Using file content
+astonish agents run simple_question_answer_loop -p get_question="$(<question.txt)" -p continue_loop=no
+
+# Using environment variables
+astonish agents run simple_question_answer_loop -p get_question="$QUESTION" -p continue_loop=no
+```
+
 To view the flow of an agentic workflow:
 
 ```

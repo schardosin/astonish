@@ -268,9 +268,32 @@ def create_input_node_function(node_config):
         if state.get('_error') is not None:
             return state  # Return the state unchanged if there's an error
         
+        node_name = node_config.get('name')
+        output_field = next(iter(node_config.get('output_model', {'user_input': 'str'})), 'user_input')
+        
+        # Check if there's a parameter for this node
+        parameters = state.get('_parameters', {})
+        globals.logger.info(f"Node '{node_name}' checking for parameters. Available parameters: {parameters}")
+        
+        if node_name in parameters:            
+            # Display the prompt that would have been shown
+            formatted_prompt = format_prompt(node_config['prompt'], state, node_config)
+            print_ai(formatted_prompt)
+
+            # Use the parameter value for this node
+            param_value = parameters[node_name]
+            console.print(f"Using provided parameter for node '{node_name}': {param_value}", style="cyan")
+            globals.logger.info(f"Using parameter for node '{node_name}': {param_value}")
+            
+            # Update the state with the parameter value
+            new_state = state.copy()
+            new_state[output_field] = param_value
+            print_user_messages(new_state, node_config)
+            print_state(new_state, node_config)
+            return new_state
+        
         formatted_prompt = format_prompt(node_config['prompt'], state, node_config)
         print_ai(formatted_prompt)
-        output_field = next(iter(node_config.get('output_model', {'user_input': 'str'})), 'user_input')
 
         options = node_config.get('options')
         if options:

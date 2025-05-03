@@ -4,8 +4,9 @@ from langchain.globals import set_debug
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from astonish.core.utils import load_agents, print_ai, print_section
 from astonish.core.graph_builder import build_graph, run_graph
+from typing import Dict, Any, Optional
 
-async def run_agent(agent):
+async def run_agent(agent, parameters: Optional[Dict[str, Any]] = None):
     """
     Run an agentic flow
     """
@@ -36,11 +37,12 @@ async def run_agent(agent):
 
     # Initialize state
     initial_state = {}
+    
+    # Initialize output model fields
     for node in config['nodes']:
         if 'output_model' in node:
             for field, type_ in node['output_model'].items():
-                if field not in initial_state:
-                    initial_state[field] = None
+                initial_state[field] = None
         
         # Add initialization for limit_counter_field
         if 'limit_counter_field' in node:
@@ -51,6 +53,13 @@ async def run_agent(agent):
     # Add error tracking fields
     initial_state['_error'] = None
     initial_state['_end'] = False
+    
+    # Store parameters in state for node lookup
+    if parameters:
+        initial_state['_parameters'] = parameters
+        globals.logger.info(f"Added parameters to initial state: {parameters}")
+    else:
+        globals.logger.info("No parameters provided")
 
     # Build graph
     async with AsyncSqliteSaver.from_conn_string(":memory:") as checkpointer:

@@ -68,7 +68,24 @@ async def main(args=None):
     elif args.command == "agents":
         if args.agents_command == "run":
             globals.logger.info(f"Running task: {args.task}")
-            await run_agent(args.task)
+            parameters = {}
+            if args.params:
+                try:
+                    # Parse key=value pairs from command line
+                    for param in args.params:
+                        if '=' in param:
+                            key, value = param.split('=', 1)
+                            parameters[key.strip()] = value.strip()
+                        else:
+                            globals.logger.warning(f"Ignoring malformed parameter: {param} (missing '=')")
+                    
+                    globals.logger.info(f"Using parameters: {parameters}")
+                    print(f"Parameters: {parameters}")
+                except Exception as e:
+                    globals.logger.error(f"Error parsing parameters: {e}")
+                    print(f"Error parsing parameters: {e}")
+                    return
+            await run_agent(args.task, parameters if parameters else None)
         elif args.agents_command == "flow":
             globals.logger.info(f"Printing flow for task: {args.task}")
             print_flow(args.task)
@@ -170,6 +187,8 @@ def parse_arguments():
     # Agents run command
     agents_run_parser = agents_subparsers.add_parser("run", help="Run a specific agentic workflow")
     agents_run_parser.add_argument("task", help="Name of the agentic workflow to run")
+    agents_run_parser.add_argument("-p", "--param", action="append", dest="params", 
+                                  help="Parameter to pass to the agent in key=value format. Can be used multiple times. Example: -p get_question=\"Who was Einstein\" -p continue_loop=no")
     
     # Agents flow command
     agents_flow_parser = agents_subparsers.add_parser("flow", help="Print the flow of a specific agentic workflow")

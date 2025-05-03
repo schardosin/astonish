@@ -161,7 +161,7 @@ astonish agents run <task_name>
 
 This works for both pre-defined agents and agents you've created using the `agents_creator`.
 
-You can also pass parameters to agents to automate workflows:
+You can also pass parameters to agents to automate workflows, where the parameter name corresponds to the name of a node of type 'input'."
 
 ```bash
 # Basic parameter passing

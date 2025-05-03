@@ -17,6 +17,7 @@ def build_graph(node_config, mcp_client, checkpointer, include_error_handler=Tru
     # Add error tracking fields
     all_fields['_error'] = 'dict'
     all_fields['_end'] = 'bool'
+    all_fields['_parameters'] = 'dict'
     
     # Ensure all fields have valid type strings
     for field_name, type_str in list(all_fields.items()):

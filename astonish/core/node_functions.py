@@ -69,7 +69,26 @@ async def run_react_planning_step(
         }
 
         globals.logger.debug(f"[{node_name}] Invoking LLM with scratchpad:\n{agent_scratchpad}")
-        llm_response = await chain.ainvoke(invoke_input)
+        
+        response_chunks = []
+        async for chunk in chain.astream(invoke_input):
+            response_chunks.append(chunk)
+        
+        # Merge the chunks
+        if response_chunks:
+            # Create a complete response by concatenating all chunk contents
+            full_content = ""
+            for chunk in response_chunks:
+                if hasattr(chunk, 'content'):
+                    full_content += chunk.content
+            
+            # Use the last chunk as a template for the response object
+            llm_response = response_chunks[-1]
+            if hasattr(llm_response, 'content'):
+                llm_response.content = full_content
+        else:
+            llm_response = None
+            
         response_text = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
         globals.logger.info(f"[{node_name}] LLM Raw Planning Response:\n{response_text}")
 
@@ -568,7 +587,26 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
             while retry_count < max_retries:
                  try:
                       globals.logger.info(f"Attempt {retry_count + 1}/{max_retries} for direct LLM call...")
-                      llm_response = await llm.ainvoke(messages)
+                      
+                      response_chunks = []
+                      async for chunk in llm.astream(messages):
+                          response_chunks.append(chunk)
+                      
+                      # Merge the chunks
+                      if response_chunks:
+                          # Create a complete response by concatenating all chunk contents
+                          full_content = ""
+                          for chunk in response_chunks:
+                              if hasattr(chunk, 'content'):
+                                  full_content += chunk.content
+                          
+                          # Use the last chunk as a template for the response object
+                          llm_response = response_chunks[-1]
+                          if hasattr(llm_response, 'content'):
+                              llm_response.content = full_content
+                      else:
+                          llm_response = None
+                          
                       llm_response_content = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
                       if parser and schema_valid_for_format_direct:
                             cleaned_content = llm_response_content.strip().removeprefix("```json").removesuffix("```").strip()
@@ -648,7 +686,25 @@ async def _format_final_output_with_llm(
     while format_retry_count < max_format_retries:
         try:
             globals.logger.info(f"Attempt {format_retry_count + 1}/{max_format_retries} for JSON formatting...")
-            formatting_response = await llm.ainvoke(formatting_messages)
+            response_chunks = []
+            async for chunk in llm.astream(formatting_messages):
+                response_chunks.append(chunk)
+            
+            # Merge the chunks
+            if response_chunks:
+                # Create a complete response by concatenating all chunk contents
+                full_content = ""
+                for chunk in response_chunks:
+                    if hasattr(chunk, 'content'):
+                        full_content += chunk.content
+                
+                # Use the last chunk as a template for the response object
+                formatting_response = response_chunks[-1]
+                if hasattr(formatting_response, 'content'):
+                    formatting_response.content = full_content
+            else:
+                formatting_response = None
+                
             cleaned_content = formatting_response.content.strip().removeprefix("```json").removesuffix("```").strip()
             if not cleaned_content: raise OutputParserException("Received empty formatted response.")
             parsed_formatted_output = parser.parse(cleaned_content)

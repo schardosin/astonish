@@ -98,6 +98,7 @@ nodes:
       14. When working with items to be appended to a list, make sure to provide the list in the prompt before the item to be appended. For example, if you have a list called 'collected_summaries', make sure to provide it in the prompt before the item to be appended.
       15. Always remember, to inject content use single curly braces, and to show as an example use double curly braces.
       16. Every prompt must be at least a single content injection by using the single curly braces. So it has the context of the previous node. Multiple injections are allowed, but at least one is required.
+      17. Do not generate a node to only display the output_model variable from previous nodes. Instead, use the user_message field in the same node to show the output_model variable to the user.
 
       # --- Comprehensive Example Flow (Study this structure and apply principles) ---
       ```yaml
@@ -213,6 +214,7 @@ nodes:
     output_model:
       current_yaml: str
     print_prompt: False
+    print_state: False
 
   - name: summarize_and_display_yaml
     type: llm

@@ -9,12 +9,11 @@ from typing import Dict, Any
 from pydantic import BaseModel
 from astonish.core.utils import print_output, console
 
-async def execute_tool_with_corrected_input(
+async def execute_tool(
     node_name: str,
     tool_name: str,
     input_string: str,
-    tool_registry: Dict[str, Any],
-    node_config: Dict[str, Any]
+    tool_registry: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
     Execute a tool with the corrected input.
@@ -24,8 +23,6 @@ async def execute_tool_with_corrected_input(
         tool_name: The name of the tool to execute
         input_string: The input string for the tool
         tool_registry: The tool registry
-        node_config: The node configuration
-        
     Returns:
         A dictionary with the result of the tool execution
     """
@@ -54,33 +51,15 @@ async def execute_tool_with_corrected_input(
             else:
                 raise ValueError(f"Unsupported tool input_type: '{tool_input_type}'")
             
-            # Request user approval
-            approve = False
-            try:
-                from astonish.core.utils import request_tool_execution
-                tool_call_info_for_approval = {
-                    "name": tool_name,
-                    "args": tool_args_for_execution,
-                    "auto_approve": node_config.get('tools_auto_approval', False)
-                }
-                approve = await asyncio.to_thread(request_tool_execution, tool_call_info_for_approval)
-            except Exception as approval_err:
-                console.print(f"Error during tool approval: {approval_err}", style="red")
-            
-            # Execute the tool if approved
-            if approve:
-                print_output(f"Executing tool '{tool_name}' with corrected input.")
-                executor_is_async = asyncio.iscoroutinefunction(tool_executor)
-                if executor_is_async:
-                    tool_result = await tool_executor(tool_args_for_execution)
-                else:
-                    tool_result = await asyncio.to_thread(tool_executor, tool_args_for_execution)
-                
-                observation = str(tool_result)
-                return {"output": observation}
+            print_output(f"Executing tool '{tool_name}'")
+            executor_is_async = asyncio.iscoroutinefunction(tool_executor)
+            if executor_is_async:
+                tool_result = await tool_executor(tool_args_for_execution)
             else:
-                print_output(f"Tool execution denied by user.")
-                return {"output": f"User denied execution of tool '{tool_name}'."}
+                tool_result = await asyncio.to_thread(tool_executor, tool_args_for_execution)
+            
+            observation = str(tool_result)
+            return {"output": observation}
         except Exception as exec_error:
             error_message = f"Error executing tool '{tool_name}': {exec_error}"
             console.print(f"[{node_name}] {error_message}", style="red")

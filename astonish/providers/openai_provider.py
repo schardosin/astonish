@@ -131,7 +131,7 @@ class OpenAIProvider(AIProvider):
             model=model_name,
             openai_api_key=self.api_key,
             streaming=streaming,
-            max_tokens=4096,
+            max_tokens=8192,
             temperature=0
         )
         return llm

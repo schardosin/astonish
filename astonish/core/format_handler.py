@@ -40,7 +40,9 @@ async def execute_tool(
                 if not tool_schema_def:
                     raise ValueError(f"No schema definition found for JSON tool '{tool_name}'")
                 
-                cleaned_json_string = input_string.removeprefix("```json").removesuffix("```").strip()
+                # Use the clean_and_fix_json function from node_functions to handle potential JSON issues
+                from astonish.core.node_functions import clean_and_fix_json
+                cleaned_json_string = clean_and_fix_json(input_string)
                 parsed_args = {} if not cleaned_json_string else json.loads(cleaned_json_string)
                 
                 if isinstance(tool_schema_def, type) and issubclass(tool_schema_def, BaseModel):

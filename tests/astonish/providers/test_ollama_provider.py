@@ -56,7 +56,7 @@ def test_get_llm(ollama_provider, mock_config):
         assert hasattr(llm, 'num_ctx')
         assert hasattr(llm, 'base_url')
         assert llm.model == 'test_model'
-        assert llm.num_ctx == 4096
+        assert llm.num_ctx == 8192
         assert llm.base_url == 'http://test:11434'
 
 def test_get_llm_no_config(ollama_provider):

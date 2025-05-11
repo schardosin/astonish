@@ -23,6 +23,69 @@ from astonish.core.utils import request_tool_execution
 from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
 from langchain_core.prompts import ChatPromptTemplate, BasePromptTemplate
 
+def clean_and_fix_json(content: str) -> str:
+    """
+    Clean and fix JSON content to make it parseable.
+    
+    Args:
+        content: The content to clean and fix
+        
+    Returns:
+        The cleaned and fixed content
+    """
+    if not content or not isinstance(content, str):
+        return ""
+    
+    # Remove markdown code block markers of any language
+    cleaned = re.sub(r'```\w*\n', '', content)
+    cleaned = re.sub(r'```', '', cleaned)
+    
+    # Trim whitespace
+    cleaned = cleaned.strip()
+    
+    # If the content doesn't start with '{' or '[', try to find the first occurrence
+    if cleaned and not cleaned.startswith('{') and not cleaned.startswith('['):
+        json_start_idx = cleaned.find('{')
+        if json_start_idx >= 0:
+            cleaned = cleaned[json_start_idx:]
+    
+    # If the content doesn't end with '}' or ']', try to find the last occurrence
+    if cleaned and not cleaned.endswith('}') and not cleaned.endswith(']'):
+        json_end_idx_brace = cleaned.rfind('}')
+        json_end_idx_bracket = cleaned.rfind(']')
+        json_end_idx = max(json_end_idx_brace, json_end_idx_bracket)
+        if json_end_idx >= 0:
+            cleaned = cleaned[:json_end_idx + 1]
+    
+    # Try to fix common JSON formatting issues
+    if cleaned:
+        # Replace single quotes with double quotes (but not inside strings)
+        # This is a simplified approach and might not work for all cases
+        try:
+            # First try to parse as is
+            json.loads(cleaned)
+        except json.JSONDecodeError:
+            # If that fails, try to fix common issues
+            try:
+                # Replace unquoted keys with quoted keys
+                cleaned = re.sub(r'(\s*?)(\w+)(\s*?):', r'\1"\2"\3:', cleaned)
+                
+                # Replace single quotes with double quotes
+                cleaned = re.sub(r"'([^']*)'", r'"\1"', cleaned)
+                
+                # Remove trailing commas in objects and arrays
+                cleaned = re.sub(r',\s*}', '}', cleaned)
+                cleaned = re.sub(r',\s*\]', ']', cleaned)
+                
+                # Validate the fixed JSON
+                json.loads(cleaned)
+            except (json.JSONDecodeError, Exception):
+                # If we still can't fix it, just return the cleaned content
+                # and let the caller handle the parsing error
+                pass
+    
+    return cleaned
+
 class ToolDefinition(TypedDict):
     name: str
     description: str
@@ -47,7 +110,8 @@ async def run_react_planning_step(
     system_message_content: str,
     llm: BaseLanguageModel,
     tool_definitions: List[ToolDefinition],
-    node_name: str = "ReAct Planner"
+    node_name: str = "ReAct Planner",
+    print_prompt: bool = False,
 ) -> ReactStepOutput:
     """
     Performs one step of ReAct planning using a STRING scratchpad.
@@ -91,6 +155,11 @@ async def run_react_planning_step(
             
         response_text = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
         globals.logger.info(f"[{node_name}] LLM Raw Planning Response:\n{response_text}")
+        if print_prompt:
+            print_output(invoke_input, "green")
+            #print_chat_prompt(ChatPromptTemplate(messages=messages), node_config)
+            #else: print_output(f"Cannot print prompt for {node_name}, 'messages' not defined.", "yellow")
+
 
         thought_blocks = re.findall(r"^\s*Thought:\s*(.*?)(?=(?:\n\s*(?:Action:|Final Answer:|$)))", response_text, re.DOTALL | re.MULTILINE)
         thought_text = thought_blocks[-1].strip() if thought_blocks else None
@@ -102,11 +171,19 @@ async def run_react_planning_step(
         if action_input_line_match:
             raw_input_line = action_input_line_match.group(1).strip()
 
+            # Try to extract JSON content, or clean and fix the raw input
             json_match = re.match(r"^```json\s*(\{.*?\})\s*```$", raw_input_line, re.DOTALL) or re.match(r"^(\{.*?\})\s*$", raw_input_line, re.DOTALL)
-            if json_match: input_string_from_llm = json_match.group(1); globals.logger.debug(f"[{node_name}] Extracted JSON Action Input: {input_string_from_llm}")
+            if json_match: 
+                input_string_from_llm = json_match.group(1)
+                globals.logger.debug(f"[{node_name}] Extracted JSON Action Input: {input_string_from_llm}")
             else:
-                input_string_from_llm = raw_input_line
-                globals.logger.debug(f"[{node_name}] Extracted String Action Input: {input_string_from_llm}")
+                # If it looks like it might be JSON but didn't match the regex patterns, try to clean and fix it
+                if '{' in raw_input_line and '}' in raw_input_line:
+                    input_string_from_llm = clean_and_fix_json(raw_input_line)
+                    globals.logger.debug(f"[{node_name}] Cleaned and fixed JSON Action Input: {input_string_from_llm}")
+                else:
+                    input_string_from_llm = raw_input_line
+                    globals.logger.debug(f"[{node_name}] Extracted String Action Input: {input_string_from_llm}")
 
         if action_match:
             tool_name = action_match.group(1).strip()
@@ -512,7 +589,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
 
             for i in range(max_iterations):
                 print_output(f"--- Tool reasoning: Iteration {i + 1} of a maximum of {max_iterations} ---")
-                react_step_output = await run_react_planning_step(input_question=human_message_content, agent_scratchpad=agent_scratchpad, system_message_content=system_message_content, llm=llm, tool_definitions=filtered_tool_defs, node_name=f"{node_name} Planner")
+                react_step_output = await run_react_planning_step(input_question=human_message_content, agent_scratchpad=agent_scratchpad, system_message_content=system_message_content, llm=llm, tool_definitions=filtered_tool_defs, node_name=f"{node_name} Planner", print_prompt=node_config.get('print_prompt', False))
                 status = react_step_output['status']; thought = react_step_output.get('thought')
 
                 if status == 'action':
@@ -521,7 +598,9 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                     tool_definition_for_exec = tool_registry[tool_name]; approve = False; tool_args_for_approval: Union[Dict, str] = tool_input_str
                     try:
                         if tool_definition_for_exec['input_type'] == 'JSON_SCHEMA':
-                             parsed_args = {} if not tool_input_str else json.loads(tool_input_str)
+                             # Clean and fix the JSON before parsing
+                             cleaned_input = clean_and_fix_json(tool_input_str)
+                             parsed_args = {} if not cleaned_input else json.loads(cleaned_input)
                              schema_def = tool_definition_for_exec['input_schema_definition']
                              if isinstance(schema_def, type) and issubclass(schema_def, BaseModel): validated_args_model = schema_def(**parsed_args); tool_args_for_approval = validated_args_model.model_dump()
                              else: tool_args_for_approval = parsed_args
@@ -609,7 +688,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                           
                       llm_response_content = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
                       if parser and schema_valid_for_format_direct:
-                            cleaned_content = llm_response_content.strip().removeprefix("```json").removesuffix("```").strip()
+                            cleaned_content = clean_and_fix_json(llm_response_content)
                             if not cleaned_content: raise OutputParserException("Received empty response.")
                             direct_call_parsed_output = parser.parse(cleaned_content); globals.logger.info("Successfully parsed and validated JSON output.")
                       else: direct_call_parsed_output = llm_response_content; globals.logger.info("Received raw text output (no parser or format instructions failed/missing).")
@@ -705,7 +784,7 @@ async def _format_final_output_with_llm(
             else:
                 formatting_response = None
                 
-            cleaned_content = formatting_response.content.strip().removeprefix("```json").removesuffix("```").strip()
+            cleaned_content = clean_and_fix_json(formatting_response.content)
             if not cleaned_content: raise OutputParserException("Received empty formatted response.")
             parsed_formatted_output = parser.parse(cleaned_content)
             globals.logger.info("Successfully extracted and formatted final result to JSON.")

@@ -23,6 +23,7 @@ from astonish.core.utils import request_tool_execution
 from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
 from langchain_core.prompts import ChatPromptTemplate, BasePromptTemplate
 
+
 def clean_and_fix_json(content: str) -> str:
     """
     Clean and fix JSON content to make it parseable.
@@ -35,56 +36,70 @@ def clean_and_fix_json(content: str) -> str:
     """
     if not content or not isinstance(content, str):
         return ""
+
+    # 1. Attempt to find a JSON object or array using a regex.
+    # This is useful if the JSON is embedded within other text.
+    # Regex to find content starting with { or [ and ending with } or ] respectively,
+    # attempting to match balanced braces/brackets. This is a common heuristic.
+    # Note: A perfect regex for balanced structures is complex; this is an approximation.
+    json_match = re.search(r"(\{((?:[^{}]*|\{(?:[^{}]*|\{[^{}]*\})*\})*)\}|\[((?:[^\[\]]*|\[(?:[^\[\]]*|\[[^\[\]]*\])*\])*)\])", content)
     
-    # Remove markdown code block markers of any language
-    cleaned = re.sub(r'```\w*\n', '', content)
-    cleaned = re.sub(r'```', '', cleaned)
-    
-    # Trim whitespace
-    cleaned = cleaned.strip()
-    
-    # If the content doesn't start with '{' or '[', try to find the first occurrence
-    if cleaned and not cleaned.startswith('{') and not cleaned.startswith('['):
-        json_start_idx = cleaned.find('{')
-        if json_start_idx >= 0:
-            cleaned = cleaned[json_start_idx:]
-    
-    # If the content doesn't end with '}' or ']', try to find the last occurrence
-    if cleaned and not cleaned.endswith('}') and not cleaned.endswith(']'):
-        json_end_idx_brace = cleaned.rfind('}')
-        json_end_idx_bracket = cleaned.rfind(']')
-        json_end_idx = max(json_end_idx_brace, json_end_idx_bracket)
-        if json_end_idx >= 0:
-            cleaned = cleaned[:json_end_idx + 1]
-    
-    # Try to fix common JSON formatting issues
-    if cleaned:
-        # Replace single quotes with double quotes (but not inside strings)
-        # This is a simplified approach and might not work for all cases
+    potential_json_str = ""
+    if json_match:
+        potential_json_str = json_match.group(0)
         try:
-            # First try to parse as is
-            json.loads(cleaned)
+            # Try to parse to see if it's valid JSON
+            json.loads(potential_json_str)
+            # If it parses, we assume this is our primary JSON content
+            return potential_json_str.strip() 
         except json.JSONDecodeError:
-            # If that fails, try to fix common issues
-            try:
-                # Replace unquoted keys with quoted keys
-                cleaned = re.sub(r'(\s*?)(\w+)(\s*?):', r'\1"\2"\3:', cleaned)
-                
-                # Replace single quotes with double quotes
-                cleaned = re.sub(r"'([^']*)'", r'"\1"', cleaned)
-                
-                # Remove trailing commas in objects and arrays
-                cleaned = re.sub(r',\s*}', '}', cleaned)
-                cleaned = re.sub(r',\s*\]', ']', cleaned)
-                
-                # Validate the fixed JSON
-                json.loads(cleaned)
-            except (json.JSONDecodeError, Exception):
-                # If we still can't fix it, just return the cleaned content
-                # and let the caller handle the parsing error
-                pass
+            # If parsing fails, it might be that this regex match wasn't the actual JSON,
+            # or it's malformed. We'll proceed to other cleaning steps.
+            potential_json_str = "" # Reset, as this wasn't clean JSON
+
+    # 2. If no clear JSON structure was extracted via regex,
+    #    or if the extracted part was not valid, try cleaning common markdown wrappers
+    #    from the original content. This handles cases where the entire response
+    #    is meant to be JSON but is wrapped.
     
-    return cleaned
+    cleaned_content = content.strip()
+    
+    # Remove ```json ... ``` or ``` ... ``` wrappers if they enclose the whole content
+    if cleaned_content.startswith("```json") and cleaned_content.endswith("```"):
+        cleaned_content = cleaned_content[len("```json") : -len("```")].strip()
+    elif cleaned_content.startswith("```") and cleaned_content.endswith("```"):
+        # If it's just ``` ... ```, remove them if the inner content looks like JSON
+        temp_inner = cleaned_content[len("```") : -len("```")].strip()
+        if temp_inner.startswith("{") or temp_inner.startswith("["):
+            cleaned_content = temp_inner
+        # else, it might be a non-JSON code block, so we probably shouldn't strip the ```
+        # and expect the parser to fail if it was expecting JSON.
+        # However, if potential_json_str was populated from regex and failed,
+        # cleaned_content is still the original content here. This part might need refinement
+        # based on how often LLMs return non-JSON in ``` when JSON is expected.
+        # For now, if regex found something, use that attempt; otherwise, use original cleaned_content.
+        
+    if potential_json_str and (not cleaned_content.startswith("{") and not cleaned_content.startswith("[")):
+        # This means regex found something, but it wasn't valid, and outer ``` stripping didn't apply
+        # or also resulted in non-JSON. This case is ambiguous.
+        # Let's prioritize the result of ``` stripping if it looks like JSON.
+        if cleaned_content.startswith("{") or cleaned_content.startswith("["):
+             return cleaned_content
+        # If regex found something that looked like JSON but wasn't, and ``` stripping didn't help,
+        # it's better to return the original stripped content and let the parser fail.
+        # However, for this specific function, we want the *most JSON-like* part.
+        # If no valid JSON was found, return the most "stripped" version assuming it was meant to be JSON.
+        return cleaned_content if (cleaned_content.startswith("{") or cleaned_content.startswith("[")) else potential_json_str
+
+    # If after all this, cleaned_content is still not starting with { or [,
+    # and potential_json_str (from regex) didn't validate, then it's unlikely to be the JSON we want.
+    # Return the most processed version that looks like JSON.
+    if cleaned_content.startswith("{") or cleaned_content.startswith("["):
+        return cleaned_content
+    elif potential_json_str: # from regex, even if it didn't validate alone
+        return potential_json_str
+
+    return content.strip() # Fallback to just stripped original content
 
 class ToolDefinition(TypedDict):
     name: str
@@ -566,7 +581,8 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                 globals.logger.info(f"[{node_name}] Added {len(internal_tools_list)} internal tools.")
 
             # --- Process Tools ---
-            tool_selection = node_config.get('tools_selection'); processed_tool_names = set()
+            tool_selection = node_config.get('tools_selection')
+            processed_tool_names = set()
             for tool_obj in all_fetched_tools:
                  try:
                       tool_name_attr = getattr(tool_obj, 'name', None)
@@ -579,58 +595,146 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                       executor = raw_executor
                       if not asyncio.iscoroutinefunction(raw_executor):
                            def wrapped_sync_executor_factory(sync_func):
-                               async def wrapped_executor(*args, **kwargs): return await asyncio.to_thread(sync_func, *args, **kwargs)
+                               async def wrapped_executor(*args, **kwargs): 
+                                   return await asyncio.to_thread(sync_func, *args, **kwargs)
                                return wrapped_executor
                            executor = wrapped_sync_executor_factory(raw_executor)
                       tool_def: ToolDefinition = {"name": tool_name_attr, "description": getattr(tool_obj, 'description', 'No description available.'), "input_type": input_type, "input_schema_definition": input_schema, "tool_executor": executor, "tool_instance": tool_obj}
-                      filtered_tool_defs.append(tool_def); tool_registry[tool_name_attr] = tool_def; processed_tool_names.add(tool_name_attr)
-                 except Exception as e: console.print(f"[{node_name}] Error processing tool definition for {getattr(tool_obj, 'name', 'unknown')}: {e}", style="red"); globals.logger.error(f"Tool processing Traceback:\n{traceback.format_exc()}")
+                      filtered_tool_defs.append(tool_def)
+                      tool_registry[tool_name_attr] = tool_def
+                      processed_tool_names.add(tool_name_attr)
+                 except Exception as e: 
+                     console.print(f"[{node_name}] Error processing tool definition for {getattr(tool_obj, 'name', 'unknown')}: {e}", style="red")
+                 globals.logger.error(f"Tool processing Traceback:\n{traceback.format_exc()}")
             if not filtered_tool_defs: console.print(f"Warning: No valid tools available for ReAct node {node_name}. Agent may only reason.", style="yellow")
 
             for i in range(max_iterations):
                 print_output(f"--- Tool reasoning: Iteration {i + 1} of a maximum of {max_iterations} ---")
                 react_step_output = await run_react_planning_step(input_question=human_message_content, agent_scratchpad=agent_scratchpad, system_message_content=system_message_content, llm=llm, tool_definitions=filtered_tool_defs, node_name=f"{node_name} Planner", print_prompt=node_config.get('print_prompt', False))
-                status = react_step_output['status']; thought = react_step_output.get('thought')
+                status = react_step_output['status']
+                thought = react_step_output.get('thought')
 
                 if status == 'action':
-                    tool_name = react_step_output['tool']; tool_input_str = react_step_output['tool_input']; observation = ""
-                    if not tool_name or tool_name not in tool_registry: console.print(f"[{node_name}] Error: LLM planned to use unknown tool '{tool_name}'.", style="red"); observation = f"Error: Tool '{tool_name}' not found or not available."; last_react_error = observation; agent_scratchpad += format_react_step_for_scratchpad(thought, tool_name, tool_input_str, observation); break
-                    tool_definition_for_exec = tool_registry[tool_name]; approve = False; tool_args_for_approval: Union[Dict, str] = tool_input_str
+                    tool_name = react_step_output['tool']
+                    tool_input_str = react_step_output['tool_input']
+                    observation = ""
+                    
+                    if not tool_name or tool_name not in tool_registry: 
+                        console.print(f"[{node_name}] Error: LLM planned to use unknown tool '{tool_name}'.", style="red")
+                        observation = f"Error: Tool '{tool_name}' not found or not available."
+                        last_react_error = observation
+                        agent_scratchpad += format_react_step_for_scratchpad(thought, tool_name, tool_input_str, observation)
+                        break
+                    tool_definition_for_exec = tool_registry[tool_name]
+                    approve = False
+                    tool_args_for_approval: Union[Dict, str] = tool_input_str
                     try:
                         if tool_definition_for_exec['input_type'] == 'JSON_SCHEMA':
                              # Clean and fix the JSON before parsing
                              cleaned_input = clean_and_fix_json(tool_input_str)
                              parsed_args = {} if not cleaned_input else json.loads(cleaned_input)
                              schema_def = tool_definition_for_exec['input_schema_definition']
-                             if isinstance(schema_def, type) and issubclass(schema_def, BaseModel): validated_args_model = schema_def(**parsed_args); tool_args_for_approval = validated_args_model.model_dump()
+                             if isinstance(schema_def, type) and issubclass(schema_def, BaseModel): 
+                                validated_args_model = schema_def(**parsed_args)
+                                tool_args_for_approval = validated_args_model.model_dump()
                              else: tool_args_for_approval = parsed_args
                         tool_call_info_for_approval = { "name": tool_name, "args": tool_args_for_approval, "auto_approve": node_config.get('tools_auto_approval', False) }
                         approve = await asyncio.to_thread(request_tool_execution, tool_call_info_for_approval)
-                    except (json.JSONDecodeError, ValidationError) as val_err: err_type = type(val_err).__name__; console.print(f"[{node_name}] Error: Input for tool '{tool_name}' failed {err_type}: {val_err}", style="red"); observation = f"Error: Input {err_type} for tool '{tool_name}'. Error: {val_err}"; approve = False
-                    except Exception as approval_err: console.print(f"Error during tool approval process: {approval_err}", style="red"); observation = f"Error during approval step: {approval_err}"; approve = False
+                    except (json.JSONDecodeError, ValidationError) as val_err: 
+                        err_type = type(val_err).__name__
+                        console.print(f"[{node_name}] Error: Input for tool '{tool_name}' failed {err_type}: {val_err}", style="red")
+                        observation = f"Error: Input {err_type} for tool '{tool_name}'. Error: {val_err}"
+                        approve = False
+                    except Exception as approval_err: 
+                        console.print(f"Error during tool approval process: {approval_err}", style="red")
+                        observation = f"Error during approval step: {approval_err}"
+                        approve = False
 
                     if approve:
                         globals.logger.info(f"[{node_name}] Execution approved. Executing tool '{tool_name}' via helper...")
-                        execution_result_dict = await execute_tool( node_name=node_name, tool_name=tool_name, input_string=tool_input_str, tool_registry=tool_registry) # Assumes this exists
+                        execution_result_dict = await execute_tool(
+                            node_name=node_name,
+                            tool_name=tool_name,
+                            input_string=tool_input_str, # Assuming input_string here means tool_input_str from context
+                            tool_registry=tool_registry
+                        )
+
+                        parsed_store_raw_output_key: Optional[str] = None # Will hold the key like 'pr_diff'
+                        raw_output_config = node_config.get('raw_tool_output')
+
+                        if raw_output_config:
+                            if isinstance(raw_output_config, dict) and len(raw_output_config) == 1:
+                                parsed_store_raw_output_key = next(iter(raw_output_config.keys()))
+                                # raw_output_type_hint = raw_output_config[parsed_store_raw_output_key] # Optional: if you need the type string ("str")
+                                globals.logger.info(
+                                    f"[{node_name}] Node is configured to store raw tool output to state key: '{parsed_store_raw_output_key}'."
+                                )
+                            else:
+                                globals.logger.error(
+                                    f"[{node_name}] Configuration error: 'raw_tool_output' in node config must be a dictionary "
+                                    f"with exactly one entry (e.g., {{'my_key': 'str_type_hint'}}). "
+                                    f"Found: {raw_output_config}. Raw output will not be stored directly for this action."
+                                )
+
+                        raw_tool_output_content: Any
                         if isinstance(execution_result_dict, dict):
-                            if "_error" in execution_result_dict: observation = execution_result_dict["_error"].get('user_message', execution_result_dict["_error"].get('message', "Tool execution failed.")); console.print(f"[{node_name}] Tool execution failed: {observation}", style="red"); last_react_error = observation
-                            else: observation = str(execution_result_dict.get("output", "Tool executed but produced no output.")); globals.logger.info(f"[{node_name}] Tool Observation: {observation}")
-                        else: observation = str(execution_result_dict); globals.logger.warning(f"[{node_name}] Unexpected tool execution result type from helper. Observation: {observation}"); last_react_error = f"Unexpected execution helper result: {observation}"
-                    elif not observation: globals.logger.info(f"[{node_name}] Execution denied by user."); observation = f"User denied execution of tool '{tool_name}'."
+                            if "_error" in execution_result_dict:
+                                observation = execution_result_dict["_error"].get('user_message', execution_result_dict["_error"].get('message', "Tool execution failed."))
+                                console.print(f"[{node_name}] Tool execution failed: {observation}", style="red")
+                                last_react_error = observation # Assuming last_react_error is defined in the outer scope
+                            else:
+                                raw_tool_output_content = execution_result_dict.get("output", "Tool executed but produced no output.")
+
+                                if parsed_store_raw_output_key: # Check if a valid key was parsed
+                                    new_state[parsed_store_raw_output_key] = raw_tool_output_content # Store raw output directly
+                                    observation = f"Tool '{tool_name}' executed successfully. Its output has been directly stored in the agent's state under the key '{parsed_store_raw_output_key}'."
+                                    globals.logger.info(f"[{node_name}] Raw tool output stored to state key '{parsed_store_raw_output_key}'. Observation for LLM: {observation}")
+                                else:
+                                    observation = str(raw_tool_output_content) # Original behavior: use full output as observation
+                                    globals.logger.info(f"[{node_name}] Tool Observation (first 200 chars): {observation[:200]}...")
+                        else:
+                            raw_tool_output_content = str(execution_result_dict)
+
+                            if parsed_store_raw_output_key: # Check if a valid key was parsed
+                                new_state[parsed_store_raw_output_key] = raw_tool_output_content # Store raw output directly
+                                observation = f"Tool '{tool_name}' executed successfully. Its output (non-dict) has been directly stored in the agent's state under the key '{parsed_store_raw_output_key}'."
+                                globals.logger.warning(f"[{node_name}] Raw tool output (non-dict) stored to state key '{parsed_store_raw_output_key}'. Observation for LLM: {observation}")
+                            else:
+                                observation = str(raw_tool_output_content) # Original behavior: use full output as observation
+                                globals.logger.warning(f"[{node_name}] Unexpected tool execution result type (non-dict). Observation for LLM (first 200 chars): {observation[:200]}...")
+                            
+                    elif not observation: 
+                        globals.logger.info(f"[{node_name}] Execution denied by user.")
+                        observation = f"User denied execution of tool '{tool_name}'."
                     # Assumes format_react_step_for_scratchpad exists
                     agent_scratchpad += format_react_step_for_scratchpad(thought, tool_name, tool_input_str, observation)
                     continue
-                elif status == 'final_answer': final_answer_text = react_step_output['answer']; _react_final_output = {"output": final_answer_text}; final_answer_found = True; break
-                elif status == 'error': error_message = f"ReAct planning step failed. Raw Response: {react_step_output['raw_response']}"; console.print(f"[{node_name}] Error: {error_message}", style="red"); last_react_error = error_message; break
+                elif status == 'final_answer': 
+                    final_answer_text = react_step_output['answer']
+                    _react_final_output = {"output": final_answer_text}
+                    final_answer_found = True
+                    break
+                elif status == 'error': 
+                    error_message = f"ReAct planning step failed. Raw Response: {react_step_output['raw_response']}"
+                    console.print(f"[{node_name}] Error: {error_message}", style="red")
+                    last_react_error = error_message
+                    break
 
             if not final_answer_found:
-                if last_react_error: message = f"ReAct loop finished due to error: {last_react_error}"; _react_final_output = { "output": f"Error: {message}", "_error": { 'node': node_name, 'message': message, 'type': 'ReActLoopError', 'user_message': f"I apologize, I encountered an error during my reasoning process: {last_react_error}", 'recoverable': False } }
-                else: message = f"ReAct loop finished after reaching max iterations ({max_iterations}) without a final answer."; history_summary = agent_scratchpad[-500:]; _react_final_output = { "output": message, "_error": { 'node': node_name, 'message': message, 'type': 'MaxIterationsReached', 'user_message': f"I couldn't reach a final answer within the allowed steps ({max_iterations}). My last steps involved:\n{history_summary}", 'recoverable': False } }
+                if last_react_error: 
+                    message = f"ReAct loop finished due to error: {last_react_error}"
+                    _react_final_output = { "output": f"Error: {message}", "_error": { 'node': node_name, 'message': message, 'type': 'ReActLoopError', 'user_message': f"I apologize, I encountered an error during my reasoning process: {last_react_error}", 'recoverable': False } }
+                else: 
+                    message = f"ReAct loop finished after reaching max iterations ({max_iterations}) without a final answer."
+                    history_summary = agent_scratchpad[-500:]
+                    _react_final_output = { "output": message, "_error": { 'node': node_name, 'message': message, 'type': 'MaxIterationsReached', 'user_message': f"I couldn't reach a final answer within the allowed steps ({max_iterations}). My last steps involved:\n{history_summary}", 'recoverable': False } }
 
             final_result_text_from_react = None
-            if isinstance(_react_final_output, dict) and "_error" not in _react_final_output: final_result_text_from_react = _react_final_output.get("output")
+            if isinstance(_react_final_output, dict) and "_error" not in _react_final_output: 
+                final_result_text_from_react = _react_final_output.get("output")
             if parser and final_result_text_from_react and isinstance(final_result_text_from_react, str):
-                 formatted_or_original_text = await _format_final_output_with_llm( final_result_text_from_react, parser, llm, node_name ); _react_final_output = formatted_or_original_text
+                 formatted_or_original_text = await _format_final_output_with_llm( final_result_text_from_react, parser, llm, node_name )
+                 _react_final_output = formatted_or_original_text
             return _react_final_output
 
         if use_tools:
@@ -652,17 +756,29 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                 )
         else:
             globals.logger.info(f"Using Direct LLM Call for {node_name}")
-            prompt_to_llm = human_message_content; format_instructions = ""; schema_valid_for_format_direct = False
+            prompt_to_llm = human_message_content
+            format_instructions = ""
+            schema_valid_for_format_direct = False
             if parser:
                 try:
-                    if hasattr(parser.pydantic_object, 'model_json_schema'): format_instructions = parser.get_format_instructions(); schema_valid_for_format_direct = True
-                    else: console.print(f"Error: Pydantic V2 model lacks .model_json_schema() for {node_name}", style="red")
-                    if schema_valid_for_format_direct: prompt_to_llm += f"\n\nIMPORTANT: Respond ONLY with a JSON object conforming to the schema below. Do not include ```json ``` markers or any text outside the JSON object itself.\nSCHEMA:\n{format_instructions}"
-                    else: console.print(f"Warning: Cannot get format instructions for {node_name}. Asking for text.", style="yellow")
-                except Exception as e: console.print(f"[{node_name}] Unexpected error getting format instructions: {e}", style="red")
+                    if hasattr(parser.pydantic_object, 'model_json_schema'): 
+                        format_instructions = parser.get_format_instructions()
+                        schema_valid_for_format_direct = True
+                    else: 
+                        console.print(f"Error: Pydantic V2 model lacks .model_json_schema() for {node_name}", style="red")
+                    if schema_valid_for_format_direct: 
+                        prompt_to_llm += f"\n\nIMPORTANT: Respond ONLY with a JSON object conforming to the schema below. Do not include ```json ``` markers or any text outside the JSON object itself.\nSCHEMA:\n{format_instructions}"
+                    else: 
+                        console.print(f"Warning: Cannot get format instructions for {node_name}. Asking for text.", style="yellow")
+                except Exception as e: 
+                    console.print(f"[{node_name}] Unexpected error getting format instructions: {e}", style="red")
+            
             messages: List[BaseMessage] = [SystemMessage(content=system_message_content), HumanMessage(content=prompt_to_llm)]
-            max_retries = node_config.get('max_retries', 3); retry_count = 0
-            llm_response_content: Optional[str] = None; direct_call_parsed_output: Union[BaseModel, str, None] = None; last_error = None
+            max_retries = node_config.get('max_retries', 3)
+            retry_count = 0
+            llm_response_content: Optional[str] = None
+            direct_call_parsed_output: Union[BaseModel, str, None] = None
+            last_error = None
             while retry_count < max_retries:
                  try:
                       globals.logger.info(f"Attempt {retry_count + 1}/{max_retries} for direct LLM call...")
@@ -689,24 +805,36 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                       llm_response_content = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
                       if parser and schema_valid_for_format_direct:
                             cleaned_content = clean_and_fix_json(llm_response_content)
-                            if not cleaned_content: raise OutputParserException("Received empty response.")
-                            direct_call_parsed_output = parser.parse(cleaned_content); globals.logger.info("Successfully parsed and validated JSON output.")
-                      else: direct_call_parsed_output = llm_response_content; globals.logger.info("Received raw text output (no parser or format instructions failed/missing).")
+                            if not cleaned_content: 
+                                raise OutputParserException("Received empty response.")
+                            direct_call_parsed_output = parser.parse(cleaned_content)
+                            globals.logger.info("Successfully parsed and validated JSON output.")
+                      else: 
+                        direct_call_parsed_output = llm_response_content
+                        globals.logger.info("Received raw text output (no parser or format instructions failed/missing).")
                       break
                  except (OutputParserException, ValidationError, json.JSONDecodeError) as e:
-                      retry_count += 1; last_error = e; error_detail = f"{type(e).__name__}: {e}"
+                      retry_count += 1
+                      last_error = e
+                      error_detail = f"{type(e).__name__}: {e}"
                       globals.logger.error(f"Output parsing/validation failed (Attempt {retry_count}/{max_retries}): {error_detail}")
-                      if retry_count >= max_retries: break
+                      if retry_count >= max_retries: 
+                          break
 
                       feedback = create_error_feedback(e, node_name)
                       print_output(f"Providing feedback to LLM: {feedback[:100]}...")
                       messages = messages[:1] + [messages[1]] + [HumanMessage(content=feedback)]
-                 except Exception as e: console.print(f"Unexpected LLM call error: {e}", style="red"); last_error = e; break
-            if direct_call_parsed_output is not None: final_output_for_state = direct_call_parsed_output
+                 except Exception as e: 
+                    console.print(f"Unexpected LLM call error: {e}", style="red")
+                    last_error = e
+                    break
+            if direct_call_parsed_output is not None: 
+                final_output_for_state = direct_call_parsed_output
             elif last_error is not None:
                  new_state = handle_node_failure(new_state, node_name, last_error, max_retries)
                  return new_state
-            else: final_output_for_state = f"Error: Max retries reached or unexpected state. Last response: {llm_response_content}"
+            else: 
+                final_output_for_state = f"Error: Max retries reached or unexpected state. Last response: {llm_response_content}"
 
         # --- Update State & Print ---
         if final_output_for_state is None:
@@ -754,14 +882,25 @@ async def _format_final_output_with_llm(
     node_name: str
 ) -> Union[BaseModel, str, Dict]: # Allow Dict if parser outputs dict
     globals.logger.info(f"Attempting to format final result into JSON schema for {node_name}...")
-    format_instructions = ""; schema_valid_for_format = False
+    format_instructions = ""
+    schema_valid_for_format = False
     try:
-        if hasattr(parser.pydantic_object, 'model_json_schema'): format_instructions = parser.get_format_instructions(); schema_valid_for_format = True
-        else: console.print(f"Error: Pydantic V2 model lacks .model_json_schema() for {node_name}", style="red")
-    except Exception as e: console.print(f"[{node_name}] Unexpected error getting format instructions: {e}", style="red")
-    if not schema_valid_for_format: console.print(f"Warning: Schema invalid or unavailable for formatting. Using raw ReAct result for {node_name}.", style="yellow"); return final_text
+        if hasattr(parser.pydantic_object, 'model_json_schema'): 
+            format_instructions = parser.get_format_instructions()
+            schema_valid_for_format = True
+        else: 
+            console.print(f"Error: Pydantic V2 model lacks .model_json_schema() for {node_name}", style="red")
+    except Exception as e: 
+        console.print(f"[{node_name}] Unexpected error getting format instructions: {e}", style="red")
+    
+    if not schema_valid_for_format: 
+        console.print(f"Warning: Schema invalid or unavailable for formatting. Using raw ReAct result for {node_name}.", style="yellow")
+        return final_text
     formatting_prompt = ( f"Analyze the following text, which is the final answer from a reasoning process. Your goal is to extract the single, most salient value or piece of information requested by the desired output schema (e.g., if the schema asks for 'execution_result', extract the primary outcome like a number, status, or summary; if it asks for 'weather_summary', extract that). Then, format ONLY this extracted value into a JSON object conforming strictly to the schema provided below. Respond ONLY with the JSON object, without any markdown formatting like ```json or explanations.\n\nFinal Answer Text:\n```\n{final_text}\n```\n\nRequired JSON Schema (extract the relevant value to fit this):\n{format_instructions}" )
-    formatting_messages = [HumanMessage(content=formatting_prompt)]; max_format_retries = 2; format_retry_count = 0; parsed_formatted_output = None
+    formatting_messages = [HumanMessage(content=formatting_prompt)]
+    max_format_retries = 2
+    format_retry_count = 0
+    parsed_formatted_output = None
     while format_retry_count < max_format_retries:
         try:
             globals.logger.info(f"Attempt {format_retry_count + 1}/{max_format_retries} for JSON formatting...")
@@ -790,12 +929,17 @@ async def _format_final_output_with_llm(
             globals.logger.info("Successfully extracted and formatted final result to JSON.")
             return parsed_formatted_output
         except (OutputParserException, ValidationError, json.JSONDecodeError) as parse_error:
-            format_retry_count += 1; error_detail = f"{type(parse_error).__name__}: {parse_error}"
+            format_retry_count += 1
+            error_detail = f"{type(parse_error).__name__}: {parse_error}"
             console.print(f"Warning: Formatting LLM call failed parsing/validation (Attempt {format_retry_count}/{max_format_retries}): {error_detail}", style="yellow")
-            if format_retry_count >= max_format_retries: console.print(f"Failed to format final result to JSON after retries. Storing raw text result.", style="red"); return final_text
+            if format_retry_count >= max_format_retries: 
+                console.print(f"Failed to format final result to JSON after retries. Storing raw text result.", style="red")
+                return final_text
             feedback = f"Formatting failed: {error_detail}. Extract the single key result value from the text and provide ONLY the valid JSON object matching the schema."
             formatting_messages = [formatting_messages[0], HumanMessage(content=feedback)]
-        except Exception as format_error: console.print(f"Unexpected error during final result formatting LLM call: {format_error}", style="red"); return final_text
+        except Exception as format_error: 
+            console.print(f"Unexpected error during final result formatting LLM call: {format_error}", style="red")
+            return final_text
     return final_text
 
 def print_user_messages(state: Dict[str, Any], node_config: Dict[str, Any]):
@@ -827,9 +971,18 @@ def print_chat_prompt(chat_prompt: BasePromptTemplate, node_config: Dict[str, An
         console.print(f"ChatPrompt for {node_name}:", style="blue")
         try:
             for i, message in enumerate(chat_prompt.messages, 1):
-                role = "Unknown"; content = str(message); color = "red";
-                if isinstance(message, SystemMessage): role = "System"; content = message.content; color = "magenta"
-                elif isinstance(message, HumanMessage): role = "Human"; content = message.content; color = "yellow"
+                role = "Unknown"
+                content = str(message)
+                color = "red"
+                
+                if isinstance(message, SystemMessage): 
+                    role = "System"
+                    content = message.content
+                    color = "magenta"
+                elif isinstance(message, HumanMessage): 
+                    role = "Human"
+                    content = message.content
+                    color = "yellow"
                 content_preview = content
                 print(f"  {color}{role} {i}: {content_preview}")
         except Exception as e: console.print(f"Error printing chat prompt: {e}", style="red")

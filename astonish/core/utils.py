@@ -105,23 +105,48 @@ def edit_agent(agent_name):
 
 def _evaluate_placeholder(expr: str, context: dict) -> str:
     import ast
-    def _eval(node):
+    def _eval_ast_node(node, current_expr_str):
         if isinstance(node, ast.Name):
-            return context[node.id]
+            if node.id in context:
+                return context[node.id]
+            else:
+                raise NameError(f"Name '{node.id}' not found in context for expression '{{{current_expr_str}}}'")
         elif isinstance(node, ast.Subscript):
-            target = _eval(node.value)
-            key = _eval(node.slice)
+            target = _eval_ast_node(node.value, current_expr_str)
+            
+            if isinstance(node.slice, ast.Index):
+                key_node = node.slice.value
+            else:
+                key_node = node.slice
+            
+            key = _eval_ast_node(key_node, current_expr_str)
             return target[key]
-        elif isinstance(node, ast.Constant):
+        elif isinstance(node, ast.Constant): # Handles str, int, float, bool, None
             return node.value
         elif isinstance(node, ast.Attribute):
-            value = _eval(node.value)
-            return getattr(value, node.attr)
+            target_obj = _eval_ast_node(node.value, current_expr_str)
+            return getattr(target_obj, node.attr)
         else:
-            raise ValueError(f"Unsupported expression element: {ast.dump(node)}")
+            globals.logger.error(f"Unsupported AST node type '{type(node).__name__}' in placeholder expression '{{{current_expr_str}}}'. AST: {ast.dump(node)}")
+            raise ValueError(f"Unsupported AST node type '{type(node).__name__}' in expression '{{{current_expr_str}}}'")
 
-    tree = ast.parse(expr, mode='eval')
-    return str(_eval(tree.body))
+    try:
+        # Attempt to parse the expression string (e.g., "pr_diff", "my_dict['key']")
+        tree = ast.parse(expr, mode='eval') # This line can raise SyntaxError
+        evaluated_value = _eval_ast_node(tree.body, expr)
+        return str(evaluated_value)
+    except SyntaxError:
+        # If 'expr' is not valid Python syntax (e.g., "user-name")
+        globals.logger.warning(f"SyntaxError parsing placeholder expression '{{{expr}}}'. Returning placeholder as is.")
+        return f"{{{expr}}}" # Return the original placeholder string (e.g., "{user-name}")
+    except (KeyError, NameError, AttributeError, IndexError, TypeError, ValueError) as e:
+        # Catch errors during the custom AST evaluation (e.g., key not found, unsupported node)
+        globals.logger.warning(f"Evaluation error for placeholder '{{{expr}}}': {type(e).__name__}: {e}. Returning placeholder as is.")
+        return f"{{{expr}}}" # Return the original placeholder string
+    except Exception as e:
+        # Catch any other unexpected errors
+        globals.logger.error(f"Unexpected error evaluating placeholder '{{{expr}}}': {type(e).__name__}: {e}. Returning placeholder as is.")
+        return f"{{{expr}}}"
 
 def format_prompt(prompt: str, state: dict, node_config: dict) -> str:
     format_context = {**state, **node_config}

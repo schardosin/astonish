@@ -116,7 +116,7 @@ class OllamaProvider(AIProvider):
         llm = ChatOllama(
             base_url=base_url,
             model=model_name,
-            num_ctx=4096,
+            num_ctx=8192,
             streaming=streaming,
             format=schema
         )

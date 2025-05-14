@@ -49,6 +49,10 @@ async def run_agent(agent, parameters: Optional[Dict[str, Any]] = None):
             limit_counter_field = node['limit_counter_field']
             if limit_counter_field not in initial_state:
                 initial_state[limit_counter_field] = 0  # Initialize to 0
+
+        if 'raw_tool_output' in node:
+            for field, type_ in node['raw_tool_output'].items():
+                initial_state[field] = None
     
     # Add error tracking fields
     initial_state['_error'] = None

@@ -4,7 +4,7 @@ This module contains functions for creating and handling output models.
 """
 import json
 import asyncio
-from typing import Dict, Any, Union, Optional, Type, List, get_args, get_origin
+from typing import Any, Dict, List, Optional, Type, Union, get_args, get_origin
 from pydantic import Field, BaseModel, create_model, ValidationError
 from langchain_core.language_models.base import BaseLanguageModel
 from langchain_core.messages import HumanMessage
@@ -12,6 +12,7 @@ from langchain.output_parsers import PydanticOutputParser
 from langchain.schema import OutputParserException
 from astonish.core.utils import console, print_output
 from astonish.core.json_utils import clean_and_fix_json
+import astonish.globals as globals
 
 def create_output_model(output_model_config: Dict[str, str]) -> Optional[Type[BaseModel]]:
     """
@@ -84,70 +85,183 @@ def create_output_model(output_model_config: Dict[str, str]) -> Optional[Type[Ba
          console.print(f"Failed to create Pydantic model '{model_name}': {e}", style="red")
          return None
 
-async def _format_final_output_with_llm(
+async def _format_final_output(
     final_text: str,
     parser: PydanticOutputParser,
-    llm: BaseLanguageModel,
     node_name: str
-) -> Union[BaseModel, str, Dict]: # Allow Dict if parser outputs dict
-    import astonish.globals as globals
-    globals.logger.info(f"Attempting to format final result into JSON schema for {node_name}...")
-    format_instructions = ""
-    schema_valid_for_format = False
+) -> Union[BaseModel, str]:
+    """
+    Programmatically populates a Pydantic model, assumed to have a single field,
+    with the given final_text. Performs basic type coercion.
+    For list types, splits multi-line text into list items.
+    No LLM calls are made. The function name is kept as per user request.
+    """
+    globals.logger.info(
+        f"[{node_name}] Attempting programmatic population for single-field output model "
+        f"using _format_final_output."
+    )
+
     try:
-        if hasattr(parser.pydantic_object, 'model_json_schema'): 
-            format_instructions = parser.get_format_instructions()
-            schema_valid_for_format = True
-        else: 
-            console.print(f"Error: Pydantic V2 model lacks .model_json_schema() for {node_name}", style="red")
-    except Exception as e: 
-        console.print(f"[{node_name}] Unexpected error getting format instructions: {e}", style="red")
-    
-    if not schema_valid_for_format: 
-        console.print(f"Warning: Schema invalid or unavailable for formatting. Using raw ReAct result for {node_name}.", style="yellow")
-        return final_text
-    formatting_prompt = ( f"Analyze the following text, which is the final answer from a reasoning process. Your goal is to extract the single, most salient value or piece of information requested by the desired output schema (e.g., if the schema asks for 'execution_result', extract the primary outcome like a number, status, or summary; if it asks for 'weather_summary', extract that). Then, format ONLY this extracted value into a JSON object conforming strictly to the schema provided below. Respond ONLY with the JSON object, without any markdown formatting like ```json or explanations.\n\nFinal Answer Text:\n```\n{final_text}\n```\n\nRequired JSON Schema (extract the relevant value to fit this):\n{format_instructions}" )
-    formatting_messages = [HumanMessage(content=formatting_prompt)]
-    max_format_retries = 2
-    format_retry_count = 0
-    parsed_formatted_output = None
-    while format_retry_count < max_format_retries:
-        try:
-            globals.logger.info(f"Attempt {format_retry_count + 1}/{max_format_retries} for JSON formatting...")
-            response_chunks = []
-            async for chunk in llm.astream(formatting_messages):
-                response_chunks.append(chunk)
+        # Ensure it's a Pydantic model and get its fields
+        pydantic_model_class: Type[BaseModel] = parser.pydantic_object # type: ignore
+        if not hasattr(pydantic_model_class, 'model_fields'):
+            error_msg = (
+                f"[{node_name}] parser.pydantic_object ('{pydantic_model_class.__name__}') "
+                f"is not a Pydantic V2 model or lacks model_fields."
+            )
+            globals.logger.error(error_msg)
+            return final_text # Return raw text as it's a fundamental model issue
+
+        model_fields = pydantic_model_class.model_fields
+        if len(model_fields) != 1:
+            error_msg = (
+                f"[{node_name}] This function expects the output_model ('{pydantic_model_class.__name__}') "
+                f"to have exactly 1 field for programmatic population, "
+                f"but found {len(model_fields)}. Configuration error or model definition mismatch."
+            )
+            globals.logger.error(error_msg)
+            return final_text # Return raw text due to model structure mismatch
+
+        # Exactly one field, proceed with programmatic assignment
+        field_name = list(model_fields.keys())[0]
+        field_info = model_fields[field_name]
+        
+        coerced_value: Any
+        target_type_annotation = field_info.annotation
+
+        actual_target_type = target_type_annotation
+        is_optional = False
+        origin_type = getattr(actual_target_type, '__origin__', None) # Get origin for generics like List[str]
+
+        if origin_type is Union: # Check if it's Union (which includes Optional)
+            union_args = get_args(target_type_annotation)
+            non_none_args = [arg for arg in union_args if arg is not type(None)]
+            if type(None) in union_args:
+                is_optional = True
             
-            # Merge the chunks
-            if response_chunks:
-                # Create a complete response by concatenating all chunk contents
-                full_content = ""
-                for chunk in response_chunks:
-                    if hasattr(chunk, 'content'):
-                        full_content += chunk.content
-                
-                # Use the last chunk as a template for the response object
-                formatting_response = response_chunks[-1]
-                if hasattr(formatting_response, 'content'):
-                    formatting_response.content = full_content
+            if len(non_none_args) == 1:
+                actual_target_type = non_none_args[0]
+                origin_type = getattr(actual_target_type, '__origin__', None) # Update origin for the unwrapped type
+            elif len(non_none_args) > 1:
+                globals.logger.info(
+                    f"[{node_name}] Field '{field_name}' is a complex Union {target_type_annotation}. "
+                    f"Pydantic will attempt coercion from string."
+                )
+                actual_target_type = Any # Fallback to Any
+                origin_type = Union # Indicate it's still a Union for logic below if needed
+
+        globals.logger.info(
+            f"[{node_name}] Target field: '{field_name}', Type: {actual_target_type}, Optional: {is_optional}, Origin: {origin_type}"
+        )
+
+        # Define type checks based on actual_target_type and origin_type
+        is_list_target_type = (actual_target_type is list or origin_type is list or origin_type is List or
+                               (isinstance(actual_target_type, type) and issubclass(actual_target_type, list)))
+        is_dict_target_type = (actual_target_type is dict or origin_type is dict or origin_type is Dict or
+                               (isinstance(actual_target_type, type) and issubclass(actual_target_type, dict)))
+
+        if final_text is None:
+            if is_optional:
+                coerced_value = None
             else:
-                formatting_response = None
-                
-            cleaned_content = clean_and_fix_json(formatting_response.content)
-            if not cleaned_content: raise OutputParserException("Received empty formatted response.")
-            parsed_formatted_output = parser.parse(cleaned_content)
-            globals.logger.info("Successfully extracted and formatted final result to JSON.")
-            return parsed_formatted_output
-        except (OutputParserException, ValidationError, json.JSONDecodeError) as parse_error:
-            format_retry_count += 1
-            error_detail = f"{type(parse_error).__name__}: {parse_error}"
-            console.print(f"Warning: Formatting LLM call failed parsing/validation (Attempt {format_retry_count}/{max_format_retries}): {error_detail}", style="yellow")
-            if format_retry_count >= max_format_retries: 
-                console.print(f"Failed to format final result to JSON after retries. Storing raw text result.", style="red")
-                return final_text
-            feedback = f"Formatting failed: {error_detail}. Extract the single key result value from the text and provide ONLY the valid JSON object matching the schema."
-            formatting_messages = [formatting_messages[0], HumanMessage(content=feedback)]
-        except Exception as format_error: 
-            console.print(f"Unexpected error during final result formatting LLM call: {format_error}", style="red")
-            return final_text
-    return final_text
+                raise ValueError(f"Received None for non-optional field '{field_name}'.")
+        elif actual_target_type is str:
+            coerced_value = final_text
+        elif actual_target_type is int:
+            # Use .strip() as in original code for int, float, bool
+            processed_final_text = final_text.strip()
+            if not processed_final_text and is_optional: # Handle empty string for optional int
+                 coerced_value = None
+            elif not processed_final_text and not is_optional:
+                 raise ValueError(f"Cannot convert empty string to int for non-optional field '{field_name}'.")
+            else:
+                 coerced_value = int(processed_final_text)
+        elif actual_target_type is float:
+            processed_final_text = final_text.strip()
+            if not processed_final_text and is_optional: # Handle empty string for optional float
+                 coerced_value = None
+            elif not processed_final_text and not is_optional:
+                 raise ValueError(f"Cannot convert empty string to float for non-optional field '{field_name}'.")
+            else:
+                 coerced_value = float(processed_final_text)
+        elif actual_target_type is bool:
+            val = final_text.strip().lower()
+            if not val and is_optional: # Handle empty string for optional bool
+                coerced_value = None
+            elif not val and not is_optional:
+                raise ValueError(f"Cannot convert empty string to bool for non-optional field '{field_name}'.")
+            elif val in ["true", "1", "yes", "y", "on"]:
+                coerced_value = True
+            elif val in ["false", "0", "no", "n", "off"]:
+                coerced_value = False
+            else:
+                raise ValueError(f"Cannot coerce '{final_text}' to bool for field '{field_name}'.")
+        
+        elif is_list_target_type: # NEW: Specific handling for list types
+            # final_text is guaranteed not to be None here.
+            # If final_text is an empty string "", splitlines() gives [], and the list comprehension results in [].
+            coerced_value = [line.strip() for line in final_text.splitlines() if line.strip()]
+            globals.logger.info(f"[{node_name}] Coerced multi-line text to list for field '{field_name}'. Preview: {str(coerced_value)[:100]}")
+
+        elif is_dict_target_type: # Existing logic for dict types
+            try:
+                # Using 'final_text' as input to clean_and_fix_json, consistent with original combined block
+                cleaned_final_text = clean_and_fix_json(final_text) 
+                if cleaned_final_text is None: # Check if cleaning resulted in None
+                     raise ValueError(
+                         f"Input text for JSON parsing for field '{field_name}' became None after cleaning."
+                     )
+                if not cleaned_final_text.strip() and is_optional: # Handle empty string for optional dict after cleaning
+                    coerced_value = None
+                elif not cleaned_final_text.strip() and not is_optional:
+                    raise ValueError(f"Cannot parse empty string as dict for non-optional field '{field_name}'.")
+                else:
+                    parsed_json = json.loads(cleaned_final_text)
+                    if not isinstance(parsed_json, dict): # Ensure the parsed result is a dict
+                        raise ValueError(
+                            f"Expected dict for field '{field_name}', but JSON parsing yielded {type(parsed_json).__name__} "
+                            f"from text: '{cleaned_final_text[:100]}'"
+                        )
+                    coerced_value = parsed_json
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    f"Failed to parse JSON for dict field '{field_name}' from text: '{final_text[:100]}...'. Error: {e}"
+                )
+        
+        elif actual_target_type is Any or origin_type is Union: # Check origin_type for complex unions not fully resolved
+             globals.logger.info(
+                 f"[{node_name}] Field '{field_name}' type is Any or complex Union. "
+                 f"Assigning raw text; Pydantic will handle coercion."
+             )
+             coerced_value = final_text # Use original final_text as per existing Any/else logic
+        else:
+            globals.logger.info(
+                f"[{node_name}] Attempting direct assignment for field '{field_name}' of type "
+                f"{actual_target_type}, Pydantic will handle coercion from string."
+            )
+            coerced_value = final_text # Use original final_text
+        
+        parsed_output = pydantic_model_class(**{field_name: coerced_value})
+        globals.logger.info(
+            f"[{node_name}] Successfully created Pydantic model instance programmatically: "
+            f"{pydantic_model_class.__name__}({field_name}=repr('{str(coerced_value)}'[:50]))"
+        )
+        return parsed_output
+
+    except (TypeError, ValueError, ValidationError) as e:
+        error_detail = f"{type(e).__name__}: {e}"
+        model_name_for_log = parser.pydantic_object.__name__ if hasattr(parser.pydantic_object, '__name__') else 'UnknownModel'
+        globals.logger.error(
+            f"[{node_name}] Programmatic population/coercion failed for model "
+            f"{model_name_for_log}: {error_detail}. Input text: '{str(final_text)[:200]}'"
+        )
+        return final_text
+
+    except Exception as e: # Catch-all for any other unexpected errors
+        error_detail = f"Unexpected {type(e).__name__}: {e}"
+        globals.logger.error(
+            f"[{node_name}] Unexpected error during programmatic population: {error_detail}. "
+            f"Input text: '{str(final_text)[:200]}'"
+        )
+        return final_text
+

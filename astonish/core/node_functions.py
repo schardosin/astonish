@@ -26,7 +26,7 @@ from astonish.core.format_handler import execute_tool
 from astonish.core.utils import request_tool_execution
 from astonish.core.json_utils import clean_and_fix_json
 from astonish.core.react_planning import ToolDefinition, ReactStepOutput, run_react_planning_step, format_react_step_for_scratchpad
-from astonish.core.output_model_utils import create_output_model, _format_final_output_with_llm
+from astonish.core.output_model_utils import create_output_model, _format_final_output
 from astonish.core.state_management import update_state
 from astonish.core.ui_utils import print_user_messages, print_chat_prompt, print_state
 
@@ -308,7 +308,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
             if isinstance(_react_final_output, dict) and "_error" not in _react_final_output: 
                 final_result_text_from_react = _react_final_output.get("output")
             if parser and final_result_text_from_react and isinstance(final_result_text_from_react, str):
-                 formatted_or_original_text = await _format_final_output_with_llm( final_result_text_from_react, parser, llm, node_name )
+                 formatted_or_original_text = await _format_final_output( final_result_text_from_react, parser, node_name )
                  _react_final_output = formatted_or_original_text
             return _react_final_output
 
@@ -360,6 +360,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                       
                       response_chunks = []
                       async for chunk in llm.astream(messages):
+                          globals.logger.info(f"LLM chunk response: {chunk}")
                           response_chunks.append(chunk)
                       
                       # Merge the chunks

@@ -8,46 +8,68 @@ import inquirer
 from rich import print
 from rich.console import Console
 from rich.syntax import Syntax
+from rich.markdown import Markdown
 
 console = Console()
 
-def print_rich(content):
+def print_rich(content: str):
     """
-    This function formats text with code blocks (like YAML, JSON, etc.) and preserves indentation for normal text.
-    It prints the content with proper formatting, including syntax highlighting for code blocks.
-    """
-    # Initialize the console
-    console = Console()
+    Processes text based on the original structure, with a modification:
+    - Text outside any ``` blocks is printed directly (handles Rich tags like [green]).
+    - ```language ... ``` blocks are syntax highlighted (e.g., python, yaml).
+    - ```markdown ... ``` blocks are specifically rendered as Markdown.
+    - ``` blocks with no language are treated as plain text.
 
-    # Regex to detect code blocks, e.g., ```yaml, ```json, etc.
+    NOTE: Markdown syntax outside ```markdown blocks will NOT be rendered.
+    """
+    # Regex to detect code blocks, captures optional language and content
     code_block_pattern = re.compile(r'```(\w+)?\n(.*?)```', re.DOTALL)
 
-    # Initialize position to keep track of current line
-    current_position = 0
-    last_position = 0
-    
-    # Find all code blocks
-    for match in code_block_pattern.finditer(content):
-        # Print the regular text before this code block (preserving indentation)
-        if match.start() > last_position:
-            normal_text = content[last_position:match.start()]
-            console.print(normal_text)
-        
-        # Get the content inside the code block and its language
-        language = match.group(1) or 'text'  # Default to plain text if no language is specified
-        code_content = match.group(2)
-        
-        # Create the Syntax object for syntax highlighting
-        syntax = Syntax(code_content, language)
-        console.print(syntax)
-        
-        # Update the last_position to after the code block
-        last_position = match.end()
+    last_end = 0 # Use last_end to track position
 
-    # If there's remaining regular content after the last code block
-    if last_position < len(content):
-        normal_text = content[last_position:]
-        console.print(normal_text)
+    for match in code_block_pattern.finditer(content):
+        start, end = match.span()
+
+        # --- Part 1: Print text BEFORE the current block ---
+        normal_text = content[last_end:start]
+        if normal_text:
+            # Print directly: Processes Rich tags, ignores Markdown syntax
+            # Use end="" to avoid adding extra newlines between segments
+            console.print(normal_text, end="")
+
+        # --- Part 2: Process the detected block based on language ---
+        language = match.group(1) # This is the captured language (or None)
+        code_content = match.group(2).strip() # Get content and remove leading/trailing whitespace
+
+        if not code_content: # Skip empty blocks
+             last_end = end
+             continue
+
+        if language == 'markdown':
+            # If language is 'markdown', render content using Markdown renderer
+            md = Markdown(code_content)
+            console.print(md) # Markdown renderer usually handles its own spacing
+        elif language:
+            # If language is specified (and not 'markdown'), use Syntax highlighting
+            syntax = Syntax(code_content, language, line_numbers=False, word_wrap=True)
+            console.print(syntax)
+        else:
+            # If no language is specified (just ```), treat as plain text syntax
+            syntax = Syntax(code_content, "text", line_numbers=False, word_wrap=True)
+            console.print(syntax)
+
+        # Update position to the end of the current block
+        last_end = end
+
+    # --- Part 3: Print any remaining text AFTER the last block ---
+    remaining_text = content[last_end:]
+    if remaining_text:
+        # Print directly: Processes Rich tags, ignores Markdown syntax
+        console.print(remaining_text, end="")
+
+    # Add a final newline if content wasn't empty, ensuring the prompt appears below
+    if content and not content.endswith('\n'):
+         console.print()
 
 def format_message(message):
     # Bold text between ** **

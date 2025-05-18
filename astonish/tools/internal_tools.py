@@ -1,10 +1,12 @@
 import subprocess
-from typing import Dict, Type, Union, List, Any
+from typing import Dict, Union, List, Any
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from pykwalify.core import Core
 import tempfile
 from unidiff import PatchSet
+import json
+import ast
 
 # Define input schemas
 class ReadFileInput(BaseModel):
@@ -94,6 +96,37 @@ def chunk_pr_diff(diff_content: str) -> List[Dict[str, Any]]:
     Each chunk is a dictionary containing 'file_path', 'chunk_type', 'content', and optional 'metadata'.
     This tool helps in reviewing large PRs by dividing them into smaller, manageable pieces of context.
     """
+
+    def extract_diff_from_jsonish_input(input_str: str) -> Union[str, None]:
+        """
+        Detects and extracts the diff content from a JSON or pseudo-JSON string
+        where the diff is stored under a key like 'stdout'.
+        Returns the raw diff string or None if it cannot be extracted.
+        """
+        stripped = input_str.strip()
+        if not stripped:
+            return None
+
+        # Try proper JSON first
+        try:
+            parsed = json.loads(stripped)
+            if isinstance(parsed, dict) and 'stdout' in parsed:
+                return parsed['stdout']
+        except json.JSONDecodeError:
+            pass
+
+        # Fallback to Python-style dicts (e.g., using single quotes)
+        try:
+            parsed = ast.literal_eval(stripped)
+            if isinstance(parsed, dict) and 'stdout' in parsed:
+                return parsed['stdout']
+        except (ValueError, SyntaxError):
+            pass
+
+        # Not JSON or dict-like
+        return None
+
+    diff_content = extract_diff_from_jsonish_input(diff_content)
     if not diff_content.strip():
         return [{
             "file_path": "N/A",
@@ -128,18 +161,27 @@ def chunk_pr_diff(diff_content: str) -> List[Dict[str, Any]]:
 
     for patched_file in patch_set: # Iterates through PatchedFile objects
         file_path = patched_file.path
-        
         file_level_info_parts = []
+
+        old_mode = getattr(patched_file, 'old_mode', None)
+        new_mode = getattr(patched_file, 'new_mode', None)
+        
         if patched_file.is_added_file:
             file_level_info_parts.append(f"File added: {file_path}")
+            if new_mode:
+                file_level_info_parts.append(f"New file mode: {new_mode}")
         elif patched_file.is_removed_file:
             file_level_info_parts.append(f"File removed: {file_path}")
+            if old_mode: # For deleted files, old_mode is relevant
+                file_level_info_parts.append(f"Old file mode was: {old_mode}")
         else: # Modified file
             file_level_info_parts.append(f"File modified: {file_path}")
+            if old_mode is not None and new_mode is not None and old_mode != new_mode:
+                file_level_info_parts.append(f"Mode changed from {old_mode} to {new_mode}.")
+            # Handle cases where one mode might be present if diff is unusual, though less common for modified
+            elif new_mode is not None and old_mode is None : # Should be rare for non-added files
+                 file_level_info_parts.append(f"File mode is {new_mode} (old mode not specified in diff).")
 
-        if patched_file.old_mode != patched_file.new_mode and patched_file.new_mode is not None:
-            file_level_info_parts.append(f"Mode changed from {patched_file.old_mode} to {patched_file.new_mode}.")
-        
         # This header provides overall context for changes within this file
         file_context_header = "\n".join(file_level_info_parts)
 
@@ -152,34 +194,45 @@ def chunk_pr_diff(diff_content: str) -> List[Dict[str, Any]]:
             })
             continue # Skip hunk processing for binary files
 
-        if not patched_file.hunks:
-            # Handles cases like: new empty file, file with only mode change, or empty diff for the file
+        try:
+            # Treat PatchedFile as directly iterable to get its Hunk objects and convert to a list.
+            # This aligns with the observation that patched_file[0] works.
+            hunks_from_file = list(patched_file)
+        except TypeError: 
+            # This fallback is in case a PatchedFile instance is somehow not iterable as expected.
             review_chunks.append({
                 "file_path": file_path,
-                "chunk_type": "file_info_no_hunks", # LLM can acknowledge this
+                "chunk_type": "hunk_iteration_error",
+                "content": file_context_header + "\nError: Could not iterate over hunks for this file.",
+                "metadata": None
+            })
+            continue # Skip to next patched_file
+        
+        if not hunks_from_file: # Check if the resulting list is empty
+            review_chunks.append({
+                "file_path": file_path,
+                "chunk_type": "file_info_no_hunks",
                 "content": file_context_header + "\nNo content hunks to review for this file.",
                 "metadata": None
             })
-            continue # No hunks to process
+            continue
 
         # Process each hunk as a separate chunk
-        for hunk_num, hunk in enumerate(patched_file.hunks):
+        for hunk_num, hunk in enumerate(hunks_from_file): 
             hunk_details_parts = [
-                f"Hunk {hunk_num + 1}/{len(patched_file.hunks)} for file '{file_path}'."
-                # Information about line numbers in source/target
+                f"Hunk {hunk_num + 1}/{len(hunks_from_file)} for file '{file_path}'.", # Use len(hunks_from_file)
                 f"Changes affect lines from ~{hunk.source_start} (old file) and ~{hunk.target_start} (new file)."
             ]
-            if hunk.section_header: # Often contains function/class name context
+            if hunk.section_header:
                 hunk_details_parts.append(f"Context: {hunk.section_header.strip()}")
             
             hunk_context_summary = "\n".join(hunk_details_parts)
             
-            # The content to be reviewed by the LLM
             chunk_content_for_llm = (
                 f"{hunk_context_summary}\n"
                 "Relevant diff section to review:\n"
                 "```diff\n"
-                f"{str(hunk).strip()}\n" # str(hunk) gives the formatted diff hunk
+                f"{str(hunk).strip()}\n"
                 "```"
             )
             
@@ -187,18 +240,18 @@ def chunk_pr_diff(diff_content: str) -> List[Dict[str, Any]]:
                 "file_path": file_path,
                 "chunk_type": "hunk",
                 "content": chunk_content_for_llm,
-                "metadata": { # Useful for downstream processing or structured feedback
+                "metadata": { 
                     "source_start_line": hunk.source_start,
                     "source_length": hunk.source_length,
                     "target_start_line": hunk.target_start,
                     "target_length": hunk.target_length,
                     "section_header": hunk.section_header.strip() if hunk.section_header else None,
                     "hunk_index_in_file": hunk_num + 1,
-                    "total_hunks_in_file": len(patched_file.hunks)
+                    "total_hunks_in_file": len(hunks_from_file) 
                 }
             })
             
-    if not review_chunks and diff_content.strip():
+    if not review_chunks and diff_content and diff_content.strip():
         review_chunks.append({
             "file_path": "N/A",
             "chunk_type": "no_reviewable_content_extracted",

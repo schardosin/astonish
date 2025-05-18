@@ -38,6 +38,8 @@ def create_node_function(node_config, mcp_client):
     elif node_type == 'llm':
         use_tools_flag = bool(node_config.get('tools', False))
         return create_llm_node_function(node_config, mcp_client, use_tools=use_tools_flag)
+    elif node_type == 'tool':
+        return create_tool_node_function(node_config, mcp_client)
     else:
         raise ValueError(f"Unsupported node type: {node_type}")
 
@@ -101,6 +103,273 @@ def create_input_node_function(node_config):
         print_state(new_state, node_config)
         return new_state
 
+    return node_function
+
+def create_tool_node_function(node_config: Dict[str, Any], mcp_client: Any):
+    """Creates a tool node function that directly executes a tool without LLM involvement."""
+    
+    async def node_function(state: dict) -> dict:
+        if state.get('_error') is not None:
+            return state
+        
+        node_name = node_config.get('name', 'Unnamed Tool Node')
+        print_output(f"Processing direct tool execution node: {node_name}")
+        
+        # Get tool name from tools_selection if available, otherwise use the node name
+        tools_selection = node_config.get('tools_selection')
+        if tools_selection and isinstance(tools_selection, list) and len(tools_selection) > 0:
+            tool_name = tools_selection[0]  # Use the first tool in the list
+            globals.logger.info(f"[{node_name}] Using tool '{tool_name}' from tools_selection")
+        else:
+            tool_name = node_name  # Default to node name if tools_selection is not specified
+            globals.logger.info(f"[{node_name}] No tools_selection specified, using node name as tool name")
+        
+        # Extract arguments from state based on node config
+        args_config = node_config.get('args', {})
+        tool_args = {}
+        
+        for arg_name, arg_value in args_config.items():
+            # Check if the arg_value is a template that needs to be formatted
+            if isinstance(arg_value, str) and arg_value.startswith('{') and arg_value.endswith('}'):
+                # Extract the state key from the template
+                state_key = arg_value[1:-1]  # Remove the curly braces
+                if state_key in state:
+                    tool_args[arg_name] = state[state_key]
+                    globals.logger.info(f"[{node_name}] Injected state value '{state_key}' into argument '{arg_name}'")
+                else:
+                    console.print(f"Warning: State key '{state_key}' not found for argument '{arg_name}' in tool node '{node_name}'", style="yellow")
+                    globals.logger.warning(f"State key '{state_key}' not found for argument '{arg_name}' in tool node '{node_name}'")
+            # Check if the arg_value is a direct reference to a state key (YAML object)
+            elif isinstance(arg_value, dict) and len(arg_value) == 1:
+                # In YAML, {pr_diff} becomes {'pr_diff': None}
+                state_key = next(iter(arg_value))
+                if state_key in state:
+                    tool_args[arg_name] = state[state_key]
+                    globals.logger.info(f"[{node_name}] Injected state value '{state_key}' into argument '{arg_name}'")
+                else:
+                    console.print(f"Warning: State key '{state_key}' not found for argument '{arg_name}' in tool node '{node_name}'", style="yellow")
+                    globals.logger.warning(f"State key '{state_key}' not found for argument '{arg_name}' in tool node '{node_name}'")
+            # Check if the argument name exists directly in the state
+            elif arg_name in state:
+                tool_args[arg_name] = state[arg_name]
+            else:
+                tool_args[arg_name] = arg_value
+                globals.logger.info(f"[{node_name}] Used literal value for argument '{arg_name}'. Value: '{arg_value}'")
+
+        
+        # Get all available tools
+        all_tools = []
+        if mcp_client:
+            try:
+                external_tools = []
+                async with mcp_client as active_session:
+                    external_tools = active_session.get_tools() or []
+                all_tools.extend(external_tools)
+                globals.logger.info(f"[{node_name}] Fetched {len(external_tools)} external tools via MCP.")
+            except Exception as e:
+                console.print(f"Error fetching MCP tools: {e}", style="red")
+                globals.logger.error(f"MCP client error during get_tools: {e}")
+        
+        if isinstance(internal_tools_list, list):
+            all_tools.extend(internal_tools_list)
+            globals.logger.info(f"[{node_name}] Added {len(internal_tools_list)} internal tools.")
+        
+        # Find the tool in the registry
+        tool_registry = {}
+        for tool_obj in all_tools:
+            try:
+                tool_name_attr = getattr(tool_obj, 'name', None)
+                if not tool_name_attr or not isinstance(tool_name_attr, str):
+                    continue
+                
+                input_schema = getattr(tool_obj, 'args_schema', None)
+                input_type = getattr(tool_obj, 'input_type', 'JSON_SCHEMA' if input_schema else 'STRING')
+                raw_executor = getattr(tool_obj, 'arun', getattr(tool_obj, '_arun', getattr(tool_obj, 'run', getattr(tool_obj, '_run', None))))
+                
+                if not callable(raw_executor):
+                    continue
+                
+                executor = raw_executor
+                if not asyncio.iscoroutinefunction(raw_executor):
+                    def wrapped_sync_executor_factory(sync_func):
+                        async def wrapped_executor(*args, **kwargs): 
+                            return await asyncio.to_thread(sync_func, *args, **kwargs)
+                        return wrapped_executor
+                    executor = wrapped_sync_executor_factory(raw_executor)
+                
+                tool_registry[tool_name_attr] = {
+                    "name": tool_name_attr,
+                    "description": getattr(tool_obj, 'description', 'No description available.'),
+                    "input_type": input_type,
+                    "input_schema_definition": input_schema,
+                    "tool_executor": executor,
+                    "tool_instance": tool_obj
+                }
+            except Exception as e:
+                console.print(f"[{node_name}] Error processing tool definition for {getattr(tool_obj, 'name', 'unknown')}: {e}", style="red")
+                globals.logger.error(f"Tool processing error: {e}")
+        
+        if tool_name not in tool_registry:
+            error_message = f"Tool '{tool_name}' not found in tool registry"
+            console.print(f"[{node_name}] {error_message}", style="red")
+            new_state = state.copy()
+            new_state['_error'] = {
+                'node': node_name,
+                'message': error_message,
+                'type': 'ToolNotFoundError',
+                'user_message': f"I couldn't find the tool '{tool_name}' needed for this operation.",
+                'recoverable': False
+            }
+            return new_state
+        
+        # Execute the tool
+        try:
+            # Convert tool_args to the format expected by the tool
+            tool_def = tool_registry[tool_name]
+            input_type = tool_def['input_type']
+            input_string = ""
+            
+            if input_type == 'JSON_SCHEMA':
+                input_string = json.dumps(tool_args)
+            else:
+                # For STRING input type, just use the first argument value if available
+                if tool_args:
+                    input_string = str(next(iter(tool_args.values())))
+            
+            # Execute the tool
+            execution_result = await execute_tool(
+                node_name=node_name,
+                tool_name=tool_name,
+                input_string=input_string,
+                tool_registry=tool_registry
+            )
+            
+            # Update state with tool output
+            new_state = state.copy()
+            
+            if isinstance(execution_result, dict):
+                if "_error" in execution_result:
+                    error_message = execution_result["_error"].get('user_message', execution_result["_error"].get('message', "Tool execution failed."))
+                    console.print(f"[{node_name}] Tool execution failed: {error_message}", style="red")
+                    new_state['_error'] = {
+                        'node': node_name,
+                        'message': error_message,
+                        'type': 'ToolExecutionError',
+                        'user_message': f"I encountered an error while executing the tool: {error_message}",
+                        'recoverable': False
+                    }
+                    return new_state
+
+                tool_raw_output = execution_result.get("output")
+                # Initialize processed_output_for_state with the raw output.
+                # This will be used if no specific parsing/formatting is applied or if it fails.
+                processed_output_for_state = tool_raw_output
+
+                output_model_config = node_config.get('output_model', {})
+
+                if output_model_config and tool_raw_output is not None:
+                    NodeOutputModel = create_output_model(output_model_config)
+                    if NodeOutputModel:
+                        node_parser = PydanticOutputParser(pydantic_object=NodeOutputModel) # Create parser for the model
+
+                        if isinstance(tool_raw_output, str):
+                            globals.logger.info(f"[{node_name}] Tool output is a string. Attempting formatting via _format_final_output.")
+                            try:
+                                formatted_value = await _format_final_output(
+                                    final_text=tool_raw_output,
+                                    parser=node_parser, # parser for the tool node's output model
+                                    node_name=node_name
+                                )
+                                processed_output_for_state = formatted_value
+                                if processed_output_for_state is not tool_raw_output:
+                                    globals.logger.info(f"[{node_name}] Tool output string successfully processed by _format_final_output.")
+                                else:
+                                    globals.logger.info(f"[{node_name}] _format_final_output returned original text. This might be expected if model is not single-field or input was unsuitable.")
+                                    if processed_output_for_state == tool_raw_output and not (hasattr(NodeOutputModel, 'model_fields') and len(NodeOutputModel.model_fields) == 1):
+                                        globals.logger.info(f"[{node_name}] Model is not single-field or _format_final_output did not change text. Attempting general JSON parsing for multi-field model.")
+                                        try:
+                                            cleaned_json_str = clean_and_fix_json(tool_raw_output)
+                                            if cleaned_json_str:
+                                                # Use the existing node_parser created for NodeOutputModel
+                                                parsed_json_model = node_parser.parse(cleaned_json_str)
+                                                processed_output_for_state = parsed_json_model
+                                                globals.logger.info(f"[{node_name}] Successfully parsed tool's JSON string output into multi-field model.")
+                                        except (json.JSONDecodeError, OutputParserException, ValidationError) as e_parse:
+                                            globals.logger.warning(f"[{node_name}] Failed to parse tool's string output as JSON for multi-field model: {e_parse}. Output remains as is.")
+                                        except Exception as e_multi_parse:
+                                             globals.logger.error(f"[{node_name}] Unexpected error parsing tool's string output for multi-field model: {e_multi_parse}. Output remains as is.")
+
+                            except Exception as e_format:
+                                globals.logger.error(f"[{node_name}] Error calling _format_final_output for tool output: {e_format}. Using raw output as fallback.")
+                                # processed_output_for_state remains tool_raw_output
+
+                        elif isinstance(tool_raw_output, (dict, list)):
+                            # If output is already dict/list, validate/convert with Pydantic model
+                            globals.logger.info(f"[{node_name}] Tool output is dict/list. Attempting Pydantic validation.")
+                            try:
+                                processed_output_for_state = NodeOutputModel.model_validate(tool_raw_output)
+                                globals.logger.info(f"[{node_name}] Successfully validated/converted tool output dict/list with Pydantic model.")
+                            except ValidationError as e_validate:
+                                globals.logger.warning(f"[{node_name}] Failed to validate tool output dict/list with Pydantic model: {e_validate}. Using raw output as fallback.")
+                            except Exception as e_model_validate:
+                                globals.logger.error(f"[{node_name}] Unexpected error validating tool output dict/list: {e_model_validate}. Using raw output as fallback.")
+                        # Add other type checks for tool_raw_output if necessary
+
+                # Use the processed_output_for_state (which could be a Pydantic model, a formatted value, or the raw output)
+                # to update the state.
+                new_state = update_state(new_state, processed_output_for_state, node_config)
+                # Log based on whether processing changed the output.
+                if processed_output_for_state is not tool_raw_output:
+                    globals.logger.info(f"[{node_name}] Stored processed/formatted tool output in state.")
+                elif tool_raw_output is not None: # Only log if there was some output initially
+                    globals.logger.info(f"[{node_name}] Stored raw tool output in state (no specific formatting applied or formatting failed).")
+
+            else: # execution_result is not a dict
+                globals.logger.warning(f"[{node_name}] Tool execution result was not a dictionary: {execution_result}. Attempting to update state directly.")
+                # If there's an output model, we could still try to format/validate if execution_result is a string/dict/list
+                processed_output_for_state = execution_result
+                output_model_config = node_config.get('output_model', {})
+                if output_model_config and isinstance(execution_result, str):
+                    NodeOutputModel = create_output_model(output_model_config)
+                    if NodeOutputModel:
+                        node_parser = PydanticOutputParser(pydantic_object=NodeOutputModel)
+                        try:
+                            globals.logger.info(f"[{node_name}] Tool output (non-dict) is a string. Attempting formatting via _format_final_output.")
+                            formatted_value = await _format_final_output(
+                                final_text=execution_result, parser=node_parser, node_name=node_name
+                            )
+                            processed_output_for_state = formatted_value
+                        except Exception as e_format_alt:
+                             globals.logger.error(f"[{node_name}] Error calling _format_final_output for non-dict tool output: {e_format_alt}.")
+                elif output_model_config and isinstance(execution_result, (dict,list)):
+                     NodeOutputModel = create_output_model(output_model_config)
+                     if NodeOutputModel:
+                        try:
+                            processed_output_for_state = NodeOutputModel.model_validate(execution_result)
+                        except ValidationError as e_val_alt:
+                            globals.logger.warning(f"[{node_name}] Failed to validate non-dict tool output with model: {e_val_alt}.")
+
+                new_state = update_state(new_state, processed_output_for_state, node_config)
+
+
+            print_user_messages(new_state, node_config)
+            print_state(new_state, node_config)
+            return new_state
+            
+        except Exception as e:
+            error_message = f"Error executing tool '{tool_name}': {e}"
+            console.print(f"[{node_name}] {error_message}", style="red")
+            globals.logger.error(f"Tool execution error: {traceback.format_exc()}")
+            new_state = state.copy()
+            new_state['_error'] = {
+                'node': node_name,
+                'message': error_message,
+                'type': 'ToolExecutionError',
+                'user_message': f"I encountered an error while executing the tool: {e}",
+                'recoverable': False
+            }
+            return new_state
+    
     return node_function
 
 def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_tools: bool):

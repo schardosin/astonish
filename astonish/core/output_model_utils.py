@@ -3,16 +3,13 @@ Output model utilities for Astonish.
 This module contains functions for creating and handling output models.
 """
 import json
-import asyncio
 from typing import Any, Dict, List, Optional, Type, Union, get_args, get_origin
 from pydantic import Field, BaseModel, create_model, ValidationError
-from langchain_core.language_models.base import BaseLanguageModel
-from langchain_core.messages import HumanMessage
 from langchain.output_parsers import PydanticOutputParser
-from langchain.schema import OutputParserException
-from astonish.core.utils import console, print_output
+from astonish.core.utils import console
 from astonish.core.json_utils import clean_and_fix_json
 import astonish.globals as globals
+import ast
 
 def create_output_model(output_model_config: Dict[str, str]) -> Optional[Type[BaseModel]]:
     """
@@ -199,8 +196,82 @@ async def _format_final_output(
         
         elif is_list_target_type: # NEW: Specific handling for list types
             # final_text is guaranteed not to be None here.
-            # If final_text is an empty string "", splitlines() gives [], and the list comprehension results in [].
-            coerced_value = [line.strip() for line in final_text.splitlines() if line.strip()]
+            parsed_successfully = False
+            temp_coerced_value = None
+
+            stripped_final_text = final_text.strip() # Strip leading/trailing whitespace
+
+            # Attempt 1: Parse as a Python literal (e.g., "['a', 'b']" or "('a', 'b')")
+            if stripped_final_text.startswith(('[', '(')) and stripped_final_text.endswith((']', ')')):
+                try:
+                    evaluated_data = ast.literal_eval(stripped_final_text)
+                    if isinstance(evaluated_data, (list, tuple)):
+                        temp_coerced_value = list(evaluated_data) # Ensure it's a list
+                        parsed_successfully = True
+                        globals.logger.info(
+                            f"[{node_name}] Coerced text to list for field '{field_name}' using ast.literal_eval. "
+                            f"Preview: {str(temp_coerced_value)[:100]}"
+                        )
+                except (ValueError, SyntaxError, TypeError) as e_ast: # TypeError for None if somehow passed
+                    globals.logger.debug(
+                        f"[{node_name}] ast.literal_eval failed for field '{field_name}' "
+                        f"with text '{stripped_final_text[:100]}...'. Error: {e_ast}. Trying other methods."
+                    )
+
+            # Attempt 2: If not parsed as Python literal, try as JSON array (e.g., "[\"a\", \"b\"]")
+            if not parsed_successfully and stripped_final_text.startswith('[') and stripped_final_text.endswith(']'):
+                try:
+                    # clean_and_fix_json might be helpful if the string is almost JSON but slightly malformed
+                    # However, ast.literal_eval is often stricter with Python syntax.
+                    # For JSON parsing, clean_and_fix_json is more relevant.
+                    cleaned_text_for_json = clean_and_fix_json(final_text) # Use original final_text for cleaner
+                    if cleaned_text_for_json: # Ensure not empty string after cleaning
+                        evaluated_data = json.loads(cleaned_text_for_json)
+                        if isinstance(evaluated_data, list):
+                            temp_coerced_value = evaluated_data
+                            parsed_successfully = True
+                            globals.logger.info(
+                                f"[{node_name}] Coerced text to list for field '{field_name}' using json.loads. "
+                                f"Preview: {str(temp_coerced_value)[:100]}"
+                            )
+                        else:
+                            globals.logger.debug(
+                                f"[{node_name}] json.loads on '{cleaned_text_for_json[:100]}...' "
+                                f"did not yield a list for field '{field_name}'."
+                            )
+                    else:
+                        globals.logger.debug(f"[{node_name}] Text for JSON parsing became empty after cleaning for field '{field_name}'.")
+
+                except json.JSONDecodeError as e_json:
+                    globals.logger.debug(
+                        f"[{node_name}] json.loads failed for field '{field_name}' "
+                        f"with text '{final_text[:100]}...'. Error: {e_json}. Falling back to splitlines."
+                    )
+                except Exception as e_json_other: # Catch other unexpected errors during JSON processing
+                    globals.logger.error(
+                        f"[{node_name}] Unexpected error during JSON list parsing for '{final_text[:100]}...': {e_json_other}"
+                    )
+
+
+            # Fallback: If not parsed as a literal list (Python or JSON), assume multi-line string
+            if not parsed_successfully:
+                if final_text == "" and is_optional:
+                    # For an optional list field, an empty input string could mean None
+                    temp_coerced_value = None
+                    globals.logger.info(f"[{node_name}] Setting optional list field '{field_name}' to None due to empty input string.")
+                elif final_text == "":
+                    # For a non-optional list field, an empty input string results in an empty list
+                    temp_coerced_value = []
+                    globals.logger.info(f"[{node_name}] Coerced empty string to empty list for field '{field_name}' using splitlines logic.")
+                else:
+                    # Original splitlines logic for multi-line text
+                    temp_coerced_value = [line.strip() for line in final_text.splitlines() if line.strip()]
+                    globals.logger.info(
+                        f"[{node_name}] Coerced multi-line text to list for field '{field_name}' using splitlines. "
+                        f"Preview: {str(temp_coerced_value)[:100]}"
+                    )
+            
+            coerced_value = temp_coerced_value
             globals.logger.info(f"[{node_name}] Coerced multi-line text to list for field '{field_name}'. Preview: {str(coerced_value)[:100]}")
 
         elif is_dict_target_type: # Existing logic for dict types

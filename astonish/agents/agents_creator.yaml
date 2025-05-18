@@ -313,6 +313,12 @@ nodes:
                 tools: {{type: bool, required: False}}
                 tools_selection: {{type: seq, required: False, sequence: [{{type: str}}]}}
                 print_state: {{type: bool, required: False}}
+                raw_tool_output:
+                  type: map
+                  required: True
+                  mapping: 
+                    regex;(.+): 
+                      type: str
         flow:
           type: seq
           required: True

@@ -141,7 +141,7 @@ class SAPAICoreProvider(AIProvider):
             model_name,
             proxy_client=self.proxy_client,
             streaming=streaming,
-            max_tokens=4096,
+            max_tokens=8192,
             temperature=temperature
         )
         return llm

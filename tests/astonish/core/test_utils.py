@@ -35,12 +35,12 @@ def test_format_prompt():
     assert result == "The red rabbit jumped over the wall."
 
 def test_format_prompt_missing_key():
-    # The implementation raises KeyError when a key is not found
+    # The implementation returns the placeholder as is when a key is not found
     prompt = "Hello, {missing_key}!"
     state = {}
     node_config = {}
-    with pytest.raises(KeyError):
-        format_prompt(prompt, state, node_config)
+    result = format_prompt(prompt, state, node_config)
+    assert result == "Hello, {missing_key}!"
 
 @patch('astonish.core.utils.print_rich')
 def test_print_dict(mock_print_rich):

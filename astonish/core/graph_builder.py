@@ -13,7 +13,10 @@ def build_graph(node_config, mcp_client, checkpointer, include_error_handler=Tru
             all_fields.update(node['output_model'])
         if 'limit_counter_field' in node:
             all_fields[node['limit_counter_field']] = 'int'
-    
+
+        if 'raw_tool_output' in node:
+            all_fields.update(node['raw_tool_output'])
+
     # Add error tracking fields
     all_fields['_error'] = 'dict'
     all_fields['_end'] = 'bool'

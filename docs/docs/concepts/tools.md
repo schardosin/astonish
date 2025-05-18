@@ -118,6 +118,27 @@ When the AI model invokes this tool, it will:
 2. Validate the content against the schema
 3. Return validation results or errors
 
+### chunk_pr_diff
+
+Parses a PR diff string (git diff format) and breaks it down into reviewable chunks.
+
+```yaml
+- name: chunk_pr
+  type: tool
+  args:
+    diff_content: {pr_diff}
+  tools_selection:
+    - chunk_pr_diff
+  output_model:
+    pr_chunks: list
+```
+
+When this tool is executed, it will:
+1. Parse the PR diff content
+2. Break it down into reviewable chunks by file and hunk
+3. Return a list of chunks, each containing file path, chunk type, content, and metadata
+4. This is particularly useful for reviewing large PRs by dividing them into smaller, manageable pieces
+
 ## MCP Tools
 
 In addition to built-in tools, Astonish supports MCP (Model Context Protocol) tools. These are external tools provided by MCP servers that can extend the capabilities of your agents.

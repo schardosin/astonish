@@ -84,7 +84,7 @@ name: get_user_query
 
 #### `type`
 
-The type of the node. Must be either `"input"` or `"llm"`.
+The type of the node. Must be one of `"input"`, `"llm"`, or `"tool"`.
 
 ```yaml
 type: input
@@ -168,6 +168,15 @@ A boolean indicating whether tool usage requires user approval. If `false`, the 
 tools_auto_approval: false
 ```
 
+#### `raw_tool_output`
+
+An object mapping state variable names to types for storing raw tool output directly in the state. This is useful for large or complex tool outputs that you don't want the LLM to process.
+
+```yaml
+raw_tool_output:
+  pr_diff: str
+```
+
 #### `print_state`
 
 A boolean indicating whether to print the state after the node is processed. Useful for debugging.
@@ -198,6 +207,27 @@ The variable name for the loop counter. The counter is incremented each time the
 
 ```yaml
 limit_counter_field: iteration_count
+```
+
+### Tool Node Fields
+
+#### `args`
+
+An object mapping argument names to values for the tool. Values can be literals or references to state variables using curly braces.
+
+```yaml
+args:
+  file_path: "/path/to/file.txt"
+  content: {generated_content}
+```
+
+#### `tools_selection`
+
+An array of tool names that the node can use. The first tool in the list will be executed.
+
+```yaml
+tools_selection:
+  - chunk_pr_diff
 ```
 
 ## Flow Configuration
@@ -257,75 +287,124 @@ prompt: |
 
 ## Complete Example
 
-Here's a complete example of an agent that searches the web and summarizes the results:
+Here's a complete example of an agent that reviews a pull request using both LLM and Tool nodes:
 
 ```yaml
-description: Web search and summarization agent
+description: PR Review Agentic Flow
 nodes:
-  - name: get_query
-    type: input
-    prompt: |
-      What would you like to search for?
-    output_model:
-      search_query: str
-
-  - name: search_web
+  - name: list_prs
     type: llm
     system: |
-      You are a research assistant that performs high-quality web searches.
+      You are a GitHub CLI expert. Your task is to list all open pull requests in the current repository.
     prompt: |
-      Please perform a web search to gather useful information on the following topic:
-      
-      Topic: "{search_query}"
-      
-      Make sure to include credible sources.
+      Use the 'gh pr list' command to list all open pull requests.
+
+      Format the output as:
+      123: Title of PR 1
+      456: Title of PR 2
+      789: Title of PR 3
     output_model:
-      search_results: list
+      pr_list: list
     tools: true
     tools_selection:
-      - web_search
-    tools_auto_approval: false
+      - shell_command
 
-  - name: summarize_results
-    type: llm
-    system: |
-      You are a summarization expert.
-    prompt: |
-      Summarize the following search results:
-      
-      {search_results}
-      
-      Provide a concise summary that covers the main points.
-    output_model:
-      summary: str
-    user_message:
-      - summary
-
-  - name: ask_for_more
+  - name: select_pr
     type: input
     prompt: |
-      Would you like to search for something else?
+      Please select a pull request from the list below by entering its number:
+      {pr_list}
     output_model:
-      continue_search: str
-    options:
-      - "Yes"
-      - "No"
+      selected_pr: str
+    options: [pr_list]
+
+  - name: get_pr_diff
+    type: llm
+    system: |
+      You are a GitHub CLI expert. Your task is to use the 'gh' command to retrieve the diff for a specific pull request.
+    prompt: |
+      Use the 'gh pr diff' command to get the diff for PR number {selected_pr}.
+      IMPORTANT: The tool will return the raw diff. Your final task for this step is to confirm its retrieval.
+    output_model:
+      retrieval_status: str
+    tools: true
+    tools_selection:
+      - shell_command
+    raw_tool_output:
+      pr_diff: str
+
+  - name: chunk_pr
+    type: tool
+    args:
+      diff_content: {pr_diff}
+    tools_selection:
+      - chunk_pr_diff
+    output_model:
+      pr_chunks: list
+      current_index: int
+
+  - name: review_chunk
+    type: llm
+    system: |
+      You are a code review assistant. Your task is to review a chunk of code and provide feedback.
+    prompt: |
+      Review the following chunk of code:
+      {pr_chunks[current_index]}
+      Provide your feedback on this chunk.
+    output_model:
+      chunk_review: str
+
+  - name: collect_reviews
+    type: llm
+    prompt: |
+      collected_reviews:
+      {collected_reviews}
+
+      Append the following review to the collected reviews:
+      {chunk_review}
+    output_model:
+      collected_reviews: list
+
+  - name: increment_index
+    type: llm
+    prompt: |
+      Increment current_index: {current_index}. Output current_index + 1.
+    output_model:
+      current_index: int
+
+  - name: show_reviews
+    type: llm
+    system: |
+      You are a summarization assistant. Your task is to present the collected reviews to the user.
+    prompt: |
+      Here are the reviews for the pull request:
+      {collected_reviews}
+    output_model:
+      final_summary: str
+    user_message:
+      - final_summary
 
 flow:
   - from: START
-    to: get_query
-  - from: get_query
-    to: search_web
-  - from: search_web
-    to: summarize_results
-  - from: summarize_results
-    to: ask_for_more
-  - from: ask_for_more
+    to: list_prs
+  - from: list_prs
+    to: select_pr
+  - from: select_pr
+    to: get_pr_diff
+  - from: get_pr_diff
+    to: chunk_pr
+  - from: chunk_pr
+    to: review_chunk
+  - from: review_chunk
+    to: collect_reviews
+  - from: collect_reviews
+    to: increment_index
+  - from: increment_index
     edges:
-      - to: get_query
-        condition: "lambda x: x['continue_search'] == 'Yes'"
-      - to: END
-        condition: "lambda x: x['continue_search'] == 'No'"
+      - to: review_chunk
+        condition: "lambda x: x['current_index'] < len(x['pr_chunks'])"
+      - to: show_reviews
+        condition: "lambda x: not x['current_index'] < len(x['pr_chunks'])"
 ```
 
 ## Best Practices

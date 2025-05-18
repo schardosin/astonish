@@ -8,10 +8,11 @@ Nodes are the fundamental building blocks of agentic flows in Astonish. Each nod
 
 ## Node Types
 
-Astonish supports two main types of nodes:
+Astonish supports three main types of nodes:
 
 1. **Input Nodes**: Used to get information from the user
 2. **LLM Nodes**: Used to process information using AI models and tools
+3. **Tool Nodes**: Used to directly execute tools without LLM involvement
 
 ### Input Nodes
 
@@ -46,6 +47,58 @@ Input nodes are used to collect information from the user. They display a prompt
 ### LLM Nodes
 
 LLM (Language Learning Model) nodes use AI models to process information and generate responses. They can also use tools to interact with external systems.
+
+#### Raw Tool Output
+
+LLM nodes can store the raw output of tools directly in the state using the `raw_tool_output` field. This is useful when the tool output is large or complex and you want to avoid having the LLM process it.
+
+```yaml
+- name: get_pr_diff
+  type: llm
+  system: |
+    You are a GitHub CLI expert. Your task is to use the 'gh' command to retrieve the diff for a specific pull request.
+  prompt: |
+    Use the 'gh pr diff' command to get the diff for PR number {selected_pr}.
+    IMPORTANT: The tool will return the raw diff. Your final task for this step is to confirm its retrieval.
+  output_model:
+    retrieval_status: str
+  tools: true
+  tools_selection:
+    - shell_command
+  raw_tool_output:
+    pr_diff: str
+```
+
+In this example, the raw output of the `shell_command` tool is stored directly in the state variable `pr_diff`, while the LLM's response is stored in `retrieval_status`.
+
+### Tool Nodes
+
+Tool nodes execute tools directly without involving an LLM. This is useful for operations that don't require AI reasoning, such as data processing, file operations, or API calls.
+
+#### Configuration
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | A unique identifier for the node |
+| `type` | string | Must be `"tool"` |
+| `args` | object | Arguments to pass to the tool |
+| `tools_selection` | array | List of tools the node can use (first tool in the list is used) |
+| `output_model` | object | Defines the variable names and types for the tool's output |
+
+#### Example
+
+```yaml
+- name: chunk_pr
+  type: tool
+  args:
+    diff_content: {pr_diff}
+  tools_selection:
+    - chunk_pr_diff
+  output_model:
+    pr_chunks: list
+```
+
+In this example, the `chunk_pr_diff` tool is executed with the `diff_content` argument, and the result is stored in the `pr_chunks` variable.
 
 #### Configuration
 
@@ -184,6 +237,15 @@ A boolean indicating whether tool usage requires user approval. If `false`, the 
 tools_auto_approval: false
 ```
 
+#### `raw_tool_output`
+
+An object mapping state variable names to types for storing raw tool output directly in the state. This is useful for large or complex tool outputs that you don't want the LLM to process.
+
+```yaml
+raw_tool_output:
+  pr_diff: str
+```
+
 #### `print_state`
 
 A boolean indicating whether to print the state after the node is processed. Useful for debugging.
@@ -214,6 +276,27 @@ The variable name for the loop counter. The counter is incremented each time the
 
 ```yaml
 limit_counter_field: iteration_count
+```
+
+### Tool Node Specific Fields
+
+#### `args`
+
+An object mapping argument names to values for the tool. Values can be literals or references to state variables using curly braces.
+
+```yaml
+args:
+  file_path: "/path/to/file.txt"
+  content: {generated_content}
+```
+
+#### `tools_selection`
+
+An array of tool names that the node can use. The first tool in the list will be executed.
+
+```yaml
+tools_selection:
+  - chunk_pr_diff
 ```
 
 ## Variable Interpolation

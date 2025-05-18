@@ -315,7 +315,7 @@ nodes:
                 print_state: {{type: bool, required: False}}
                 raw_tool_output:
                   type: map
-                  required: True
+                  required: False
                   mapping: 
                     regex;(.+): 
                       type: str

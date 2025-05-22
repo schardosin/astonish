@@ -8,11 +8,40 @@ Nodes are the fundamental building blocks of agentic flows in Astonish. Each nod
 
 ## Node Types
 
-Astonish supports three main types of nodes:
+Astonish supports five main types of nodes:
 
 1. **Input Nodes**: Used to get information from the user
-2. **LLM Nodes**: Used to process information using AI models and tools
-3. **Tool Nodes**: Used to directly execute tools without LLM involvement
+2. **Output Nodes**: Used to format and display information to the user
+3. **LLM Nodes**: Used to process information using AI models and tools
+4. **Tool Nodes**: Used to directly execute tools without LLM involvement
+5. **Update State Nodes**: Used to directly manipulate the state without LLM involvement
+
+### Output Nodes
+
+Output nodes are used to format and display information to the user without modifying the state. They are useful for presenting results, summaries, or status updates at specific points in the flow.
+
+#### Configuration
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | A unique identifier for the node |
+| `type` | string | Must be `"output"` |
+| `prompt` | string | The template used to format the output message |
+| `output_model` | object | Optional, typically empty as output nodes don't modify the state |
+| `user_message` | array (optional) | Variables to display to the user after processing |
+
+#### Example
+
+```yaml
+- name: display_results
+  type: output
+  prompt: |
+    Here are the search results for "{search_query}":
+    
+    {search_results}
+```
+
+In this example, the output node formats and displays the search results to the user without modifying the state.
 
 ### Input Nodes
 
@@ -99,6 +128,50 @@ Tool nodes execute tools directly without involving an LLM. This is useful for o
 ```
 
 In this example, the `chunk_pr_diff` tool is executed with the `diff_content` argument, and the result is stored in the `pr_chunks` variable.
+
+### Update State Nodes
+
+Update State nodes provide direct manipulation of the state without requiring an LLM or tool execution. They are useful for operations like overwriting variables, appending to lists, or other state manipulations that don't require complex reasoning.
+
+#### Configuration
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | A unique identifier for the node |
+| `type` | string | Must be `"update_state"` |
+| `action` | string | The action to perform (`"overwrite"` or `"append"`) |
+| `source_variable` | string (optional) | The name of a state variable to use as the source value |
+| `value` | any (optional) | A literal value to use (alternative to source_variable) |
+| `output_model` | object | Must define exactly one target variable for the update |
+| `user_message` | array (optional) | Variables to display to the user after processing |
+
+Either `source_variable` or `value` must be provided, but not both.
+
+#### Example: Overwrite Action
+
+```yaml
+- name: reset_counter
+  type: update_state
+  action: overwrite
+  value: 0
+  output_model:
+    counter: int
+```
+
+In this example, the `counter` variable in the state is set to 0.
+
+#### Example: Append Action
+
+```yaml
+- name: add_to_results
+  type: update_state
+  action: append
+  source_variable: current_result
+  output_model:
+    all_results: list
+```
+
+In this example, the value of `current_result` is appended to the `all_results` list in the state.
 
 #### Configuration
 
@@ -319,12 +392,23 @@ When a node is executed:
 2. For input nodes:
    - The prompt is displayed to the user
    - The user's response is stored in the state according to the output_model
-3. For LLM nodes:
+3. For output nodes:
+   - The prompt template is formatted with variables from the state
+   - The formatted message is displayed to the user
+   - The state remains unchanged
+4. For LLM nodes:
    - The prompt is sent to the AI model along with the system message
    - If tools are enabled, the AI can use the specified tools
    - The AI's response is parsed according to the output_model and stored in the state
-4. If user_message is specified, the corresponding variables are displayed to the user
-5. The flow continues to the next node as defined in the flow section
+5. For Tool nodes:
+   - The specified tool is executed with the provided arguments
+   - The tool's output is stored in the state according to the output_model
+6. For Update State nodes:
+   - The specified action is performed on the state
+   - For "overwrite", the target variable is set to the source value or literal value
+   - For "append", the source value or literal value is appended to the target list
+7. If user_message is specified, the corresponding variables are displayed to the user
+8. The flow continues to the next node as defined in the flow section
 
 ## Best Practices
 

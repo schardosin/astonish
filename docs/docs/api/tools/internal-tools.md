@@ -12,6 +12,57 @@ The internal tools are defined in the `internal_tools.py` module and are automat
 
 ## Available Tools
 
+### perform_calculation
+
+Performs a specified mathematical operation on a current value and an operand.
+
+#### Input Schema
+
+```python
+class MathOperation(str, Enum):
+    """Defines the supported mathematical operations."""
+    ADD = "add"
+    SUBTRACT = "subtract"
+    MULTIPLY = "multiply"
+    DIVIDE = "divide"
+    SET = "set"
+
+class PerformCalculationInput(BaseModel):
+    current_value: Optional[Union[int, float]] = Field(None, description="The current numerical value. If None (e.g., for initialization or if a state variable is not yet set), it will be treated as 0.")
+    operation: MathOperation = Field(..., description="The mathematical operation to perform (e.g., 'add', 'set').")
+    operand: Union[int, float] = Field(..., description="The second value for the operation (e.g., the amount to add, the value to set).")
+```
+
+#### Returns
+
+- `Union[int, float, str]`: The result of the calculation, or an error message if the operation fails (e.g., division by zero).
+
+#### Example
+
+```yaml
+- name: initialize_index
+  type: tool
+  args:
+    current_value: {current_index}
+    operation: "set"
+    operand: 0
+  tools_selection:
+    - perform_calculation
+  output_model:
+    current_index: int
+
+- name: increment_index
+  type: tool
+  args:
+    current_value: {current_index}
+    operation: "add"
+    operand: 1
+  tools_selection:
+    - perform_calculation
+  output_model:
+    current_index: int
+```
+
 ### read_file
 
 Reads the contents of a file at the specified path.
@@ -139,6 +190,34 @@ class ValidateGenericYAMLInput(BaseModel):
     - validate_yaml_with_schema
 ```
 
+### chunk_pr_diff
+
+Parses a PR diff string (git diff format) and breaks it down into reviewable chunks.
+
+#### Input Schema
+
+```python
+class ChunkPRDiffInput(BaseModel):
+    diff_content: str = Field(..., description="The entire content of the PR diff (git diff format).")
+```
+
+#### Returns
+
+- `List[Dict[str, Any]]`: A list of chunks, each containing file path, chunk type, content, and metadata.
+
+#### Example
+
+```yaml
+- name: chunk_pr
+  type: tool
+  args:
+    diff_content: {pr_diff}
+  tools_selection:
+    - chunk_pr_diff
+  output_model:
+    pr_chunks: list
+```
+
 ## Implementation Details
 
 ### Tool Registration
@@ -161,7 +240,7 @@ The tools are exported as a list that can be used by the agent runner:
 
 ```python
 # Export the list of tools
-tools = [read_file, write_file, shell_command, validate_yaml_with_schema]
+tools = [read_file, write_file, shell_command, validate_yaml_with_schema, chunk_pr_diff, perform_calculation]
 ```
 
 ## Security Considerations

@@ -591,11 +591,74 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                  globals.logger.error(f"Tool processing Traceback:\n{traceback.format_exc()}")
             if not filtered_tool_defs: console.print(f"Warning: No valid tools available for ReAct node {node_name}. Agent may only reason.", style="yellow")
 
+            max_retries = node_config.get('max_retries', 3)
+            
             for i in range(max_iterations):
                 print_output(f"--- Tool reasoning: Iteration {i + 1} of a maximum of {max_iterations} ---")
-                react_step_output = await run_react_planning_step(input_question=human_message_content, agent_scratchpad=agent_scratchpad, system_message_content=system_message_content, llm=llm, tool_definitions=filtered_tool_defs, node_name=f"{node_name} Planner", print_prompt=node_config.get('print_prompt', False))
-                status = react_step_output['status']
-                thought = react_step_output.get('thought')
+                
+                # Add retry logic for the ReAct planning step
+                retry_count = 0
+                react_step_output = None
+                current_system_message = system_message_content
+                current_human_message = human_message_content
+                
+                while retry_count < max_retries:
+                    try:
+                        globals.logger.info(f"[{node_name}] ReAct planning attempt {retry_count + 1}/{max_retries}")
+                        react_step_output = await run_react_planning_step(
+                            input_question=current_human_message, 
+                            agent_scratchpad=agent_scratchpad, 
+                            system_message_content=current_system_message, 
+                            llm=llm, 
+                            tool_definitions=filtered_tool_defs, 
+                            node_name=f"{node_name} Planner", 
+                            print_prompt=node_config.get('print_prompt', False)
+                        )
+                        
+                        status = react_step_output['status']
+                        thought = react_step_output.get('thought')
+                        
+                        if status != 'error':
+                            # If successful, break out of the retry loop
+                            break
+                        
+                        # If we got an error but have retries left
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            error_message = f"ReAct planning step failed. Raw Response: {react_step_output['raw_response']}"
+                            console.print(f"[{node_name}] Error (Attempt {retry_count}/{max_retries}): {error_message}", style="yellow")
+                            
+                            # Create feedback for the LLM
+                            feedback = create_error_feedback(error_message, node_name)
+                            print_output(f"Providing feedback to LLM: {feedback[:100]}...")
+                            
+                            # Add feedback to the human message for the next attempt
+                            current_human_message = f"{human_message_content}\n\nPrevious attempt failed with error: {error_message}\n\nPlease try again with a different approach."
+                        else:
+                            # Max retries reached, log the final error
+                            error_message = f"ReAct planning step failed after {max_retries} attempts. Raw Response: {react_step_output['raw_response']}"
+                            console.print(f"[{node_name}] Error: {error_message}", style="red")
+                            last_react_error = error_message
+                    except Exception as e:
+                        retry_count += 1
+                        error_message = f"Exception during ReAct planning: {type(e).__name__}: {e}"
+                        console.print(f"[{node_name}] Exception (Attempt {retry_count}/{max_retries}): {error_message}", style="yellow")
+                        
+                        if retry_count >= max_retries:
+                            console.print(f"[{node_name}] Max retries reached with exceptions", style="red")
+                            last_react_error = error_message
+                            break
+                        
+                        # Create feedback for the LLM
+                        feedback = create_error_feedback(e, node_name)
+                        print_output(f"Providing feedback to LLM: {feedback[:100]}...")
+                        
+                        # Add feedback to the human message for the next attempt
+                        current_human_message = f"{human_message_content}\n\nPrevious attempt failed with error: {error_message}\n\nPlease try again with a different approach."
+                
+                # If we've exhausted all retries and still have an error, break out of the main loop
+                if status == 'error':
+                    break
 
                 if status == 'action':
                     tool_name = react_step_output['tool']
@@ -700,10 +763,9 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                     _react_final_output = {"output": final_answer_text}
                     final_answer_found = True
                     break
-                elif status == 'error': 
-                    error_message = f"ReAct planning step failed. Raw Response: {react_step_output['raw_response']}"
-                    console.print(f"[{node_name}] Error: {error_message}", style="red")
-                    last_react_error = error_message
+                elif status == 'error':
+                    # This will only be reached if all retries were exhausted
+                    # The error message and last_react_error are already set in the retry loop
                     break
 
             if not final_answer_found:

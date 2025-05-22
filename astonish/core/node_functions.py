@@ -162,10 +162,12 @@ def create_update_state_node_function(node_config: Dict[str, Any]):
                     new_state[target_variable_name] = []
                 elif not isinstance(new_state[target_variable_name], list):
                     raise TypeError(f"Target variable '{target_variable_name}' must be a list to append to, but found type: {type(new_state[target_variable_name])}.")
-
-                
-                new_state[target_variable_name].append(item_to_append)
-                globals.logger.info(f"[{node_name}] Appended item to '{target_variable_name}'. New list size: {len(new_state[target_variable_name])}.")
+                                
+                if item_to_append not in ("", None):
+                    new_state[target_variable_name].append(item_to_append)
+                    globals.logger.info(f"[{node_name}] Appended item to '{target_variable_name}'. New list size: {len(new_state[target_variable_name])}.")
+                else:
+                    globals.logger.info(f"[{node_name}] Skipped appending empty or None item to '{target_variable_name}'.")
 
             else:
                 raise ValueError(f"Unsupported action '{action}' for update_state node. Must be 'overwrite' or 'append'.")
@@ -374,6 +376,42 @@ def create_tool_node_function(node_config: Dict[str, Any], mcp_client: Any):
                 # For STRING input type, just use the first argument value if available
                 if tool_args:
                     input_string = str(next(iter(tool_args.values())))
+            
+            # Request tool execution approval
+            approve = False
+            tool_args_for_approval = tool_args
+            try:
+                tool_call_info_for_approval = {
+                    "name": tool_name,
+                    "args": tool_args_for_approval,
+                    "auto_approve": node_config.get('tools_auto_approval', False)
+                }
+                approve = await asyncio.to_thread(request_tool_execution, tool_call_info_for_approval)
+            except Exception as approval_err:
+                console.print(f"Error during tool approval process: {approval_err}", style="red")
+                globals.logger.error(f"Tool approval error: {traceback.format_exc()}")
+                new_state = state.copy()
+                new_state['_error'] = {
+                    'node': node_name,
+                    'message': f"Error during approval step: {approval_err}",
+                    'type': 'ToolApprovalError',
+                    'user_message': f"I encountered an error while requesting approval for the tool: {approval_err}",
+                    'recoverable': False
+                }
+                return new_state
+            
+            if not approve:
+                console.print(f"[{node_name}] Tool execution denied by user.", style="yellow")
+                globals.logger.info(f"[{node_name}] Tool execution denied by user.")
+                new_state = state.copy()
+                new_state['_error'] = {
+                    'node': node_name,
+                    'message': f"User denied execution of tool '{tool_name}'.",
+                    'type': 'ToolExecutionDenied',
+                    'user_message': f"You denied the execution of tool '{tool_name}'.",
+                    'recoverable': False
+                }
+                return new_state
             
             # Execute the tool
             execution_result = await execute_tool(

@@ -4,9 +4,10 @@ This module contains functions for handling UI/UX elements.
 """
 import json
 from typing import Dict, Any
-from langchain_core.prompts import BasePromptTemplate, ChatPromptTemplate
+from langchain_core.prompts import BasePromptTemplate
 from langchain_core.messages import SystemMessage, HumanMessage
 from astonish.core.utils import format_prompt, print_ai, console, print_output
+from collections.abc import Iterable
 
 def print_user_messages(state: Dict[str, Any], node_config: Dict[str, Any]):
     """
@@ -23,8 +24,12 @@ def print_user_messages(state: Dict[str, Any], node_config: Dict[str, Any]):
     for field_or_template in user_message_fields:
         if isinstance(field_or_template, str):
             if field_or_template in state and state[field_or_template] is not None:
-                 print_ai(str(state[field_or_template])) # Print the value directly
-                 continue
+                value = state.get(field_or_template)
+                if isinstance(value, Iterable) and not isinstance(value, str):
+                    print_ai('\n'.join(str(item) for item in value))
+                else:
+                    print_ai(str(value))
+                continue
 
             try:
                  formatted_msg = format_prompt(field_or_template, state, node_config)

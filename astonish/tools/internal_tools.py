@@ -1,12 +1,14 @@
 import subprocess
-from typing import Dict, Union, List, Any
+from typing import Dict, Union, List, Any, Optional
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from pykwalify.core import Core
 import tempfile
 from unidiff import PatchSet
+from astonish.core.utils import try_extract_stdout_from_string
 import json
 import ast
+from enum import Enum
 
 # Define input schemas
 class ReadFileInput(BaseModel):
@@ -14,7 +16,7 @@ class ReadFileInput(BaseModel):
 
 class WriteFileInput(BaseModel):
     file_path: str = Field(..., description="The path to the file where content will be written.")
-    content: str = Field(..., description="The content to write to the file.")
+    content: Union[str, List[str]] = Field(..., description="The content to write to the file. Can be a single string or a list of strings (each list item will be a new line).")
 
 class ExecuteCommandInput(BaseModel):
     command: str = Field(..., description="The shell command to execute.")
@@ -25,6 +27,19 @@ class ValidateGenericYAMLInput(BaseModel):
 
 class ChunkPRDiffInput(BaseModel):
     diff_content: str = Field(..., description="The entire content of the PR diff (git diff format).")
+
+class MathOperation(str, Enum):
+    """Defines the supported mathematical operations."""
+    ADD = "add"
+    SUBTRACT = "subtract"
+    MULTIPLY = "multiply"
+    DIVIDE = "divide"
+    SET = "set"
+
+class PerformCalculationInput(BaseModel):
+    current_value: Optional[Union[int, float]] = Field(None, description="The current numerical value. If None (e.g., for initialization or if a state variable is not yet set), it will be treated as 0.")
+    operation: MathOperation = Field(..., description="The mathematical operation to perform (e.g., 'add', 'set').")
+    operand: Union[int, float] = Field(..., description="The second value for the operation (e.g., the amount to add, the value to set).")
 
 # Define tools using args_schema
 
@@ -37,13 +52,55 @@ def read_file(file_path: str) -> str:
         return file.read()
 
 @tool("write_file", args_schema=WriteFileInput)
-def write_file(file_path: str, content: str) -> str:
+def write_file(file_path: str, content: Union[str, List[str]]) -> str:
     """
-    Write content to a file. Requires 'file_path' and 'content'.
+    Write content to a file with intelligent 'stdout' extraction.
+
+    Processing steps:
+    1. The input 'content' (string or list of strings) is resolved into a single preliminary string.
+       - If 'content' is a list, its elements are joined by newlines.
+       - If 'content' is already a string, it's used as is.
+    2. This preliminary string is then checked: if it represents a JSON/dict with an 'stdout' key
+       (e.g., output from shell_command), the value of 'stdout' is extracted. This extracted
+       value can itself be a string or a list of strings.
+    3. If no 'stdout' is extracted, the preliminary string from step 1 is used.
+    4. The resulting content (either the extracted 'stdout' or the preliminary string) is then
+       prepared for file writing:
+       - If it's a list, items are joined by newlines.
+       - If it's a string, it's used directly.
+    Requires 'file_path' and 'content'.
     """
-    with open(file_path, 'w') as file:
-        file.write(content)
-    return f"Content successfully written to {file_path}"
+    preliminary_string_to_check: str
+    if isinstance(content, list):
+        preliminary_string_to_check = "\n".join(map(str, content))
+    elif isinstance(content, str):
+        preliminary_string_to_check = content
+    else:
+        return f"Error: Initial content must be a string or a list of strings. Received type: {type(content)}"
+
+    content_after_stdout_check: Union[str, List[str]]
+    extracted_stdout = try_extract_stdout_from_string(preliminary_string_to_check)
+
+    if extracted_stdout is not None:
+        content_after_stdout_check = extracted_stdout
+    else:
+        content_after_stdout_check = preliminary_string_to_check
+
+    final_text_to_write: str
+    if isinstance(content_after_stdout_check, list):
+        final_text_to_write = "\n".join(map(str, content_after_stdout_check))
+    elif isinstance(content_after_stdout_check, str):
+        final_text_to_write = content_after_stdout_check
+    else:
+        return (f"Error: Internal error. Content for writing resolved to an unexpected type "
+                f"after processing: {type(content_after_stdout_check)}.")
+
+    try:
+        with open(file_path, 'w') as file:
+            file.write(final_text_to_write)
+        return f"Content successfully written to {file_path}"
+    except Exception as e:
+        return f"Error writing to file {file_path}: {str(e)}"
 
 @tool("shell_command", args_schema=ExecuteCommandInput)
 def shell_command(command: str) -> Dict[str, str]:
@@ -261,5 +318,54 @@ def chunk_pr_diff(diff_content: str) -> List[Dict[str, Any]]:
     
     return review_chunks
 
+@tool("perform_calculation", args_schema=PerformCalculationInput)
+def perform_calculation(current_value: Optional[Union[int, float]], operation: MathOperation, operand: Union[int, float]) -> Union[int, float, str]:
+    """
+    Performs a specified mathematical operation on a 'current_value' and an 'operand'.
+    If 'current_value' is None (or not provided), it defaults to 0. This is useful for
+    initializing variables or performing operations on variables that might not exist yet.
+
+    For example:
+    - To initialize or set a variable 'my_var' to 5: current_value=None, operation='set', operand=5 (Result: 5)
+    - To increment 'my_var' (currently 10) by 1: current_value=10, operation='add', operand=1 (Result: 11)
+    - To initialize 'my_var' to 0 if it doesn't exist: current_value=None, operation='add', operand=0 (Result: 0)
+    - To initialize 'my_var' to 7 if it doesn't exist, via an add: current_value=None, operation='add', operand=7 (Result: 7)
+
+    Supported operations: 'add', 'subtract', 'multiply', 'divide', 'set'.
+    Returns the calculated numerical result, or an error string for invalid operations (e.g., division by zero).
+    """
+    # Default current_value to 0.0 if it's None
+    # Using float for internal calculation to handle division and mixed types, then convert to int if possible.
+    val_to_use = 0.0 if current_value is None else float(current_value)
+    operand_float = float(operand)
+
+    result: Union[float, str] # Intermediate result can be float or error string
+
+    if operation == MathOperation.ADD:
+        result = val_to_use + operand_float
+    elif operation == MathOperation.SUBTRACT:
+        result = val_to_use - operand_float
+    elif operation == MathOperation.MULTIPLY:
+        result = val_to_use * operand_float
+    elif operation == MathOperation.DIVIDE:
+        if operand_float == 0:
+            return "Error: Division by zero."
+        result = val_to_use / operand_float
+    elif operation == MathOperation.SET:
+        result = operand_float
+    else:
+        # This case should ideally not be reached if MathOperation enum and Pydantic validation are used
+        return f"Error: Unknown or unsupported operation '{operation}'."
+
+    # If the result is an error string, return it
+    if isinstance(result, str):
+        return result
+
+    # Try to return an int if the result is mathematically an integer
+    # (e.g., 5.0 becomes 5, but 5.5 remains 5.5)
+    if result == int(result):
+        return int(result)
+    return result
+
 # Export the list of tools
-tools = [read_file, write_file, shell_command, validate_yaml_with_schema, chunk_pr_diff]
+tools = [read_file, write_file, shell_command, validate_yaml_with_schema, chunk_pr_diff, perform_calculation]

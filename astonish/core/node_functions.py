@@ -3,7 +3,6 @@ Node functions module for Astonish.
 This module contains functions for creating and managing node functions.
 """
 import json
-import re
 import asyncio
 import traceback
 import inquirer
@@ -20,7 +19,7 @@ from langchain.schema import OutputParserException
 from pydantic import ValidationError, BaseModel
 from astonish.tools.internal_tools import tools as internal_tools_list
 from astonish.core.llm_manager import LLMManager
-from astonish.core.utils import format_prompt, print_ai, print_output, console
+from astonish.core.utils import format_prompt, print_ai, print_output, console, remove_think_tags
 from astonish.core.error_handler import create_error_feedback, handle_node_failure
 from astonish.core.format_handler import execute_tool
 from astonish.core.utils import request_tool_execution
@@ -29,19 +28,159 @@ from astonish.core.react_planning import ToolDefinition, ReactStepOutput, run_re
 from astonish.core.output_model_utils import create_output_model, _format_final_output
 from astonish.core.state_management import update_state
 from astonish.core.ui_utils import print_user_messages, print_chat_prompt, print_state
+from astonish.core.utils import try_extract_stdout_from_string
 
 def create_node_function(node_config, mcp_client):
     """Creates the appropriate node function based on node_config type."""
     node_type = node_config.get('type')
     if node_type == 'input':
         return create_input_node_function(node_config)
+    elif node_type == 'output': # Added new output type
+        return create_output_node_function(node_config)
     elif node_type == 'llm':
         use_tools_flag = bool(node_config.get('tools', False))
         return create_llm_node_function(node_config, mcp_client, use_tools=use_tools_flag)
     elif node_type == 'tool':
         return create_tool_node_function(node_config, mcp_client)
+    elif node_type == 'update_state': # New type
+        return create_update_state_node_function(node_config)
     else:
         raise ValueError(f"Unsupported node type: {node_type}")
+
+def create_output_node_function(node_config: Dict[str, Any]):
+    """Creates an output node function that formats and prints data from the state."""
+
+    def node_function(state: dict) -> dict:
+        if state.get('_error') is not None:
+            return state # Propagate errors
+
+        node_name = node_config.get('name', 'Unnamed Output Node')
+        globals.logger.info(f"[{node_name}] Processing output node.")
+        print_output(f"Processing '{node_name}':")
+
+        prompt_template = node_config.get('prompt')
+        if not prompt_template:
+            globals.logger.warning(f"[{node_name}] No 'prompt' template provided in configuration. Node will display nothing specific.")
+            new_state = state.copy()
+            print_user_messages(new_state, node_config)
+            print_state(new_state, node_config)
+            globals.logger.info(f"[{node_name}] Output node processing complete (no prompt template).")
+            return new_state
+
+        try:
+            formatted_output_message = format_prompt(prompt_template, state, node_config)
+            print_ai(formatted_output_message)
+            #console.print(formatted_output_message, style="green")
+
+        except Exception as e:
+            globals.logger.error(f"[{node_name}] Error formatting output message: {e}\n{traceback.format_exc()}")
+            error_state = state.copy()
+            return handle_node_failure(error_state, node_name, e, message_prefix="Output Formatting Error",
+                                       user_message=f"I encountered an error while trying to display information for the '{node_name}' step.")
+
+        new_state = state.copy()
+
+        print_user_messages(new_state, node_config)
+        print_state(new_state, node_config)
+        globals.logger.info(f"[{node_name}] Output node processing complete.")
+        return new_state
+
+    return node_function
+
+
+def create_update_state_node_function(node_config: Dict[str, Any]):
+    """
+    Creates an update_state node function for direct state manipulation.
+    The target variable is specified as the key in the 'output_model'.
+    """
+
+    def node_function(state: dict) -> dict:
+        if state.get('_error') is not None:
+            return state
+
+        node_name = node_config.get('name', 'Unnamed UpdateState Node')
+        print_output(f"Processing state update node: {node_name}")
+        globals.logger.info(f"[{node_name}] Starting state update operation.")
+
+        new_state = state.copy()
+
+        output_model_config = node_config.get('output_model')
+        action = node_config.get('action')
+        source_variable = node_config.get('source_variable')
+        value_provided = 'value' in node_config
+        literal_value = node_config.get('value') if value_provided else None
+
+        # Validate output_model and extract target_variable_name
+        if not isinstance(output_model_config, dict) or len(output_model_config) != 1:
+            return handle_node_failure(
+                new_state, node_name,
+                ValueError("'output_model' must be a dictionary defining exactly one target variable for update_state node."),
+                message_prefix="Configuration Error"
+            )
+        target_variable_name = next(iter(output_model_config.keys()))
+        if not action:
+            return handle_node_failure(new_state, node_name, ValueError("'action' is required for update_state node (e.g., 'overwrite', 'append')."), message_prefix="Configuration Error")
+
+        try:
+            if action == 'overwrite':
+                if source_variable is not None:
+                    if source_variable in new_state:
+                        new_state[target_variable_name] = try_extract_stdout_from_string(new_state[source_variable])
+                        globals.logger.info(f"[{node_name}] Overwrote '{target_variable_name}' with value from '{source_variable}'.")
+                    else:
+                        raise KeyError(f"Source variable '{source_variable}' not found in state.")
+                elif value_provided:
+                    new_state[target_variable_name] = literal_value
+                    globals.logger.info(f"[{node_name}] Overwrote '{target_variable_name}' with literal value: {literal_value}.")
+                else:
+                    raise ValueError("For 'overwrite' action, either 'source_variable' or 'value' must be provided.")
+
+            elif action == 'append':
+                item_to_append = None
+                source_for_append_defined = False
+
+                if source_variable is not None:
+                    if source_variable in new_state:
+                        item_to_append = try_extract_stdout_from_string(new_state[source_variable])
+                        source_for_append_defined = True
+                        globals.logger.info(f"[{node_name}] Preparing to append value from '{source_variable}' to '{target_variable_name}'.")
+                    else:
+                        raise KeyError(f"Source variable '{source_variable}' not found in state for append action.")
+                elif value_provided:
+                    item_to_append = literal_value
+                    source_for_append_defined = True
+                    globals.logger.info(f"[{node_name}] Preparing to append literal value to '{target_variable_name}'. Value: {literal_value}")
+                
+                if not source_for_append_defined:
+                    raise ValueError("For 'append' action, either 'source_variable' or 'value' must be provided.")
+
+                if target_variable_name not in new_state or new_state[target_variable_name] is None:
+                    if target_variable_name in new_state and new_state[target_variable_name] is None:
+                        globals.logger.info(f"[{node_name}] Target variable '{target_variable_name}' was None. Resetting to an empty list for append.")
+                    else:
+                        globals.logger.info(f"[{node_name}] Target variable '{target_variable_name}' not found. Initializing as an empty list for append.")
+                    new_state[target_variable_name] = []
+                elif not isinstance(new_state[target_variable_name], list):
+                    raise TypeError(f"Target variable '{target_variable_name}' must be a list to append to, but found type: {type(new_state[target_variable_name])}.")
+
+                
+                new_state[target_variable_name].append(item_to_append)
+                globals.logger.info(f"[{node_name}] Appended item to '{target_variable_name}'. New list size: {len(new_state[target_variable_name])}.")
+
+            else:
+                raise ValueError(f"Unsupported action '{action}' for update_state node. Must be 'overwrite' or 'append'.")
+
+        except (ValueError, KeyError, TypeError) as e:
+            return handle_node_failure(new_state, node_name, e, message_prefix="State Update Error")
+        except Exception as e:
+            return handle_node_failure(new_state, node_name, e, message_prefix="Unexpected State Update Error")
+
+        print_user_messages(new_state, node_config)
+        print_state(new_state, node_config)
+        globals.logger.info(f"[{node_name}] State update operation completed successfully.")
+        return new_state
+
+    return node_function
 
 def create_input_node_function(node_config):
     """Creates input node function."""
@@ -554,7 +693,10 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                     agent_scratchpad += format_react_step_for_scratchpad(thought, tool_name, tool_input_str, observation)
                     continue
                 elif status == 'final_answer': 
-                    final_answer_text = react_step_output['answer']
+                    raw_final_answer_text = react_step_output['answer']
+                    final_answer_text = remove_think_tags(raw_final_answer_text)
+                    globals.logger.info(f"[{node_name}] ReAct final answer (raw): '{raw_final_answer_text[:100]}...'")
+                    globals.logger.info(f"[{node_name}] ReAct final answer (tags removed): '{final_answer_text[:100]}...'")
                     _react_final_output = {"output": final_answer_text}
                     final_answer_found = True
                     break
@@ -620,7 +762,8 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
             messages: List[BaseMessage] = [SystemMessage(content=system_message_content), HumanMessage(content=prompt_to_llm)]
             max_retries = node_config.get('max_retries', 3)
             retry_count = 0
-            llm_response_content: Optional[str] = None
+            raw_llm_response_content: Optional[str] = None 
+            llm_response_content_no_think: Optional[str] = None
             direct_call_parsed_output: Union[BaseModel, str, None] = None
             last_error = None
             while retry_count < max_retries:
@@ -629,33 +772,34 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                       
                       response_chunks = []
                       async for chunk in llm.astream(messages):
-                          globals.logger.info(f"LLM chunk response: {chunk}")
                           response_chunks.append(chunk)
                       
-                      # Merge the chunks
+                      full_content_from_chunks = ""
+                      final_response_object = None
                       if response_chunks:
-                          # Create a complete response by concatenating all chunk contents
-                          full_content = ""
-                          for chunk in response_chunks:
-                              if hasattr(chunk, 'content'):
-                                  full_content += chunk.content
+                          for chunk_item in response_chunks:
+                              if hasattr(chunk_item, 'content'):
+                                  full_content_from_chunks += chunk_item.content
+                          final_response_object = response_chunks[-1] 
+                          if hasattr(final_response_object, 'content'):
+                              final_response_object.content = full_content_from_chunks
+                          else: # Fallback if last chunk isn't a standard message object
+                              final_response_object = full_content_from_chunks
                           
-                          # Use the last chunk as a template for the response object
-                          llm_response = response_chunks[-1]
-                          if hasattr(llm_response, 'content'):
-                              llm_response.content = full_content
-                      else:
-                          llm_response = None
-                          
-                      llm_response_content = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
+                      raw_llm_response_content = final_response_object.content if hasattr(final_response_object, 'content') else str(final_response_object)
+                      llm_response_content_no_think = remove_think_tags(raw_llm_response_content)
+                      globals.logger.info(f"LLM response (raw): {raw_llm_response_content[:200]}...")
+                      globals.logger.info(f"LLM response (tags removed): {llm_response_content_no_think[:200]}...")
                       if parser and schema_valid_for_format_direct:
-                            cleaned_content = clean_and_fix_json(llm_response_content)
+                            cleaned_content = clean_and_fix_json(llm_response_content_no_think)
                             if not cleaned_content: 
-                                raise OutputParserException("Received empty response.")
+                                if not llm_response_content_no_think and raw_llm_response_content:
+                                     raise OutputParserException("Response became empty after <think> tag removal. Original may have only contained tags.")
+                                raise OutputParserException("Received empty or unparseable response after tag removal and cleaning.")
                             direct_call_parsed_output = parser.parse(cleaned_content)
                             globals.logger.info("Successfully parsed and validated JSON output.")
                       else: 
-                        direct_call_parsed_output = llm_response_content
+                        direct_call_parsed_output = llm_response_content_no_think
                         globals.logger.info("Received raw text output (no parser or format instructions failed/missing).")
                       break
                  except (OutputParserException, ValidationError, json.JSONDecodeError) as e:

@@ -1,11 +1,13 @@
 import yaml
 import os
 import appdirs
+import json
+import ast
 import astonish.globals as globals
 from importlib import resources
+from typing import Union, List
 import re
 import inquirer
-from rich import print
 from rich.console import Console
 from rich.syntax import Syntax
 from rich.markdown import Markdown
@@ -76,7 +78,9 @@ def format_message(message):
     return re.sub(r'\*\*(.*?)\*\*', r'[bold]\1[/bold]', message)
 
 def print_ai(message):
-    formatted = format_message(message)
+    formatted = format_message(message).strip('\n')
+    if '\n' in formatted:
+        formatted = '\n' + formatted
     print_rich(f"[green]AI:[/green] {formatted}")
 
 def print_user_prompt(message):
@@ -283,3 +287,39 @@ async def list_agents():
 
     if not agents_found:
         print_rich(f"[yellow]No agents found in astonish.agents or {config_agents_path}[/yellow]")
+
+def remove_think_tags(text: str) -> str:
+    """Removes <think>...</think> tags and their content from a string."""
+    if not isinstance(text, str):
+        return text
+    # Remove <think>...</think> blocks and any trailing whitespace, then strip overall result
+    return re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
+
+def try_extract_stdout_from_string(text_input: str) -> Union[str, List[str], None]:
+    """
+    Attempts to extract content from an 'stdout' key if the text_input is a
+    JSON or dict-like string (e.g., from shell_command output).
+    Returns the extracted content (str or List[str]) or None if not found/parsed
+    or if 'stdout' value is not a string or list.
+    """
+    stripped = text_input.strip()
+    if not stripped:
+        return None
+
+    parsed_data = None
+    try:
+        # Try proper JSON first
+        parsed_data = json.loads(stripped)
+    except json.JSONDecodeError:
+        # Fallback to Python-style dicts (e.g., using single quotes)
+        try:
+            parsed_data = ast.literal_eval(stripped)
+        except (ValueError, SyntaxError):
+            return text_input # Not parsable as JSON or Python literal
+
+    if isinstance(parsed_data, dict) and 'stdout' in parsed_data:
+        stdout_value = parsed_data['stdout']
+        # Ensure the stdout value is either a string or a list (of any items, will be stringified later)
+        if isinstance(stdout_value, (str, list)):
+            return stdout_value
+    return None

@@ -88,7 +88,9 @@ nodes:
           current_index (type: int)
           A node that selects the current item (e.g., current_file = changed_files[current_index])
           A node that processes the item and appends to a shared result (e.g., file_contents)
-          An increment node for current_index
+          An increment node for current_index using the tool 'perform_calculation' with:
+            - operation: "add"
+            - operand: 1
           A loop condition in flow.edges using:
           "lambda x: x['current_index'] < len(x['changed_files'])"
 
@@ -115,6 +117,7 @@ nodes:
               - shell_command
             raw_tool_output: 
               pr_diff: str
+      19. ALWAYS use the type tool when needs to create the current_index variable and increment it. It should be a tool that uses the perform_calculation tool, and the operation should be set to "set" for the first time, and "add" for the increment.
 
       # --- Comprehensive Example Flow (Study this structure and apply principles) ---
       ```yaml
@@ -126,6 +129,18 @@ nodes:
             What topic do you want to research?
           output_model: 
             research_topic: str
+
+        - name: initialize_index
+          type: tool
+          args:
+            current_value: {current_index}
+            operation: "set"
+            operand: 0
+          tools_selection:
+            - perform_calculation
+          output_model:
+            current_index: int
+
         - name: search_web
           type: llm
           system: |
@@ -138,10 +153,8 @@ nodes:
             Topic: "{{research_topic}}"
             
             Make sure to include credible sources and provide a variety of perspectives if relevant.
-            Set current_index to 0.
           output_model:
             search_results: list
-            current_index: int
           tools: true
           tools_selection:
             - tavily-search  
@@ -165,10 +178,14 @@ nodes:
             - collected_summaries
 
         - name: increment_index
-          type: llm
-          prompt: | 
-            Increment current_index: {{current_index}}. Output current_index + 1.
-          output_model: 
+          type: tool
+          args:
+            current_value: {current_index}
+            operation: "add"
+            operand: 1
+          tools_selection:
+            - perform_calculation
+          output_model:
             current_index: int
           user_message:
             - current_index
@@ -201,6 +218,8 @@ nodes:
         - from: START
           to: get_topic
         - from: get_topic
+          to: initialize_index
+        - from: initialize_index
           to: search_web
         - from: search_web
           to: process_one_result
@@ -299,16 +318,23 @@ nodes:
             - type: map
               mapping:
                 name: {{type: str, required: True}}
-                type: {{type: str, required: True, enum: ['input', 'llm']}}
+                type: {{type: str, required: True, enum: ['input', 'llm', 'tool']}}
                 options: {{type: seq, required: False, sequence: [{{type: str}}]}}
                 system: {{type: str, required: False}}
-                prompt: {{type: str, required: True}}
+                prompt: {{type: str, required: False}}
+                args:
+                  type: map
+                  required: False
+                  mapping:
+                    current_value: {{type: any, required: False}}
+                    operation: {{type: str, required: False}}
+                    operand: {{type: any, required: False}}
                 output_model: 
                   type: map
                   required: True
                   mapping: 
                     regex;(.+): 
-                      type: str
+                      type: any
                 user_message: {{type: seq, required: False, sequence: [{{type: str}}]}}
                 tools: {{type: bool, required: False}}
                 tools_selection: {{type: seq, required: False, sequence: [{{type: str}}]}}
@@ -336,20 +362,14 @@ nodes:
                         to: {{type: str, required: True}}
                         condition: {{type: str, required: True}}
       ```
-
       content_yaml:
       {current_yaml}
-
       # Task:
       Call the 'validate_yaml_with_schema' tool with the content_yaml as input and the schema.
-      Provide in the validation_error full response from the tool in case of error.
-      Provide in the validation_user_message the user message with saying if the validation failed or succeeded.
+      Provide True or False as output. True if valid, False if invalid.
     output_model:
       is_yaml_valid: bool
-      validation_error: list
-      validation_user_message: str
-    user_message:
-      - validation_user_message
+    print_state: True
 
   - name: suggest_flow_name
     type: llm
@@ -369,7 +389,7 @@ nodes:
     tools: True
     tools_selection:
       - shell_command
-    tools_auto_approval: True
+    tools_auto_approval: False
     system: "Get the astonish config directory path."
     prompt: |
       Run: `python3 -c "import appdirs; print(appdirs.user_config_dir('astonish'))"`

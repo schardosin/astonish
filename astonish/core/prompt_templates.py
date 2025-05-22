@@ -102,7 +102,7 @@ def create_custom_react_prompt_template(tools_definitions: List[Dict[str, Any]])
         Observation: the result of the action
         ... (this Thought/Action/Action Input/Observation can repeat N times)
         Thought: I now know the final answer based on my thoughts and observations.
-        Final Answer: the final answer to the original input question. It must be the extraction of the content of the last Observation, without format modification, unless requested in the prompt.
+        Final Answer: the final answer to the original input question. It must be the extraction of the content of the last Observation, without format modification, unless requested in the prompt. NEVER add markdown or formatting to the final answer. If the final answer is a JSON object, it must be a valid JSON object string. If the final answer is a list, it must be a valid JSON array string. If the final answer is a number, it must be a valid number. If the final answer is a boolean, it must be either true or false. If the final answer is null, it must be null.
 
         Begin!
 

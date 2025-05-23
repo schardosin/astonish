@@ -6,7 +6,6 @@ import json
 import asyncio
 import traceback
 import inquirer
-import readline
 import astonish.globals as globals
 from typing import Dict, Any, Union, Optional, List
 from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
@@ -29,6 +28,7 @@ from astonish.core.output_model_utils import create_output_model, _format_final_
 from astonish.core.state_management import update_state
 from astonish.core.ui_utils import print_user_messages, print_chat_prompt, print_state
 from astonish.core.utils import try_extract_stdout_from_string
+from rich.prompt import Prompt
 
 def create_node_function(node_config, mcp_client):
     """Creates the appropriate node function based on node_config type."""
@@ -232,11 +232,7 @@ def create_input_node_function(node_config):
             answers = inquirer.prompt(questions)
             user_input = answers['user_choice']
         else:
-            # Use readline for better input handling
-            readline.set_completer(lambda text, state: None)
-            readline.parse_and_bind('tab: complete')
-            console.print("You:", style="yellow", end=" ")
-            user_input = input()
+            user_input = Prompt.ask("[yellow]You[/yellow]")
 
         new_state = state.copy()
         new_state[output_field] = user_input

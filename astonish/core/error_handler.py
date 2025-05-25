@@ -211,7 +211,7 @@ async def handle_llm_error(
         }
 
 def handle_node_failure(state: Dict[str, Any], node_name: str, error: Exception, 
-                        max_retries: int) -> Dict[str, Any]:
+                        max_retries: int=3) -> Dict[str, Any]:
     """
     Handle the case when a node has failed after all retries.
     

@@ -75,8 +75,7 @@ def create_output_node_function(node_config: Dict[str, Any]):
         except Exception as e:
             globals.logger.error(f"[{node_name}] Error formatting output message: {e}\n{traceback.format_exc()}")
             error_state = state.copy()
-            return handle_node_failure(error_state, node_name, e, message_prefix="Output Formatting Error",
-                                       user_message=f"I encountered an error while trying to display information for the '{node_name}' step.")
+            return handle_node_failure(error_state, node_name, e, user_message=f"I encountered an error while trying to display information for the '{node_name}' step.")
 
         new_state = state.copy()
 
@@ -114,12 +113,11 @@ def create_update_state_node_function(node_config: Dict[str, Any]):
         if not isinstance(output_model_config, dict) or len(output_model_config) != 1:
             return handle_node_failure(
                 new_state, node_name,
-                ValueError("'output_model' must be a dictionary defining exactly one target variable for update_state node."),
-                message_prefix="Configuration Error"
+                ValueError("'output_model' must be a dictionary defining exactly one target variable for update_state node.")
             )
         target_variable_name = next(iter(output_model_config.keys()))
         if not action:
-            return handle_node_failure(new_state, node_name, ValueError("'action' is required for update_state node (e.g., 'overwrite', 'append')."), message_prefix="Configuration Error")
+            return handle_node_failure(new_state, node_name, ValueError("'action' is required for update_state node (e.g., 'overwrite', 'append')."))
 
         try:
             if action == 'overwrite':
@@ -141,9 +139,24 @@ def create_update_state_node_function(node_config: Dict[str, Any]):
 
                 if source_variable is not None:
                     if source_variable in new_state:
-                        item_to_append = try_extract_stdout_from_string(new_state[source_variable])
-                        source_for_append_defined = True
-                        globals.logger.info(f"[{node_name}] Preparing to append value from '{source_variable}' to '{target_variable_name}'.")
+                        if source_variable in new_state:
+                            value = new_state[source_variable]
+                            item_to_append = None
+                            source_for_append_defined = False
+
+                            # Check if the value is a string
+                            if isinstance(value, str):
+                                item_to_append = try_extract_stdout_from_string(value)
+                                source_for_append_defined = True
+                                globals.logger.info(f"[{node_name}] Preparing to append extracted string value from '{source_variable}' to '{target_variable_name}'.")
+                            # Check if the value is a list
+                            elif isinstance(value, list):
+                                item_to_append = value  # Use the list directly
+                                source_for_append_defined = True
+                                globals.logger.info(f"[{node_name}] Preparing to append list from '{source_variable}' to '{target_variable_name}'.")
+                            # Optional: Handle cases where it's neither str nor list, if necessary
+                            else:
+                                globals.logger.warning(f"[{node_name}] Value from '{source_variable}' is neither a string nor a list. Cannot determine item to append.")
                     else:
                         raise KeyError(f"Source variable '{source_variable}' not found in state for append action.")
                 elif value_provided:
@@ -173,9 +186,9 @@ def create_update_state_node_function(node_config: Dict[str, Any]):
                 raise ValueError(f"Unsupported action '{action}' for update_state node. Must be 'overwrite' or 'append'.")
 
         except (ValueError, KeyError, TypeError) as e:
-            return handle_node_failure(new_state, node_name, e, message_prefix="State Update Error")
+            return handle_node_failure(new_state, node_name, e)
         except Exception as e:
-            return handle_node_failure(new_state, node_name, e, message_prefix="Unexpected State Update Error")
+            return handle_node_failure(new_state, node_name, e)
 
         print_user_messages(new_state, node_config)
         print_state(new_state, node_config)
@@ -289,11 +302,16 @@ def create_tool_node_function(node_config: Dict[str, Any], mcp_client: Any):
             # Check if the argument name exists directly in the state
             elif arg_name in state:
                 tool_args[arg_name] = state[arg_name]
+            # Check if the arg_value is a string that might contain templates
+            elif isinstance(arg_value, str) and '{' in arg_value and '}' in arg_value:
+                formatted_value = format_prompt(arg_value, state, node_config)
+                tool_args[arg_name] = formatted_value
+                globals.logger.info(f"[{node_name}] Formatted string value for argument '{arg_name}'. Original: '{arg_value}', Formatted: '{formatted_value}'")
             else:
                 tool_args[arg_name] = arg_value
                 globals.logger.info(f"[{node_name}] Used literal value for argument '{arg_name}'. Value: '{arg_value}'")
 
-        
+            
         # Get all available tools
         all_tools = []
         if mcp_client:
@@ -559,7 +577,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
             llm = LLMManager.get_llm()
         except Exception as e:
             console.print(f"Error preparing node {node_name}: {e}", style="red")
-            error_state = handle_node_failure(state.copy(), node_name, e, 0, message_prefix="Preparation Error")
+            error_state = handle_node_failure(state.copy(), node_name, e, 0)
             return error_state
 
         final_output_for_state: Union[BaseModel, str, Dict, None] = None

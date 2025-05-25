@@ -181,7 +181,7 @@ def chunk_pr_diff(diff_content: str) -> List[Dict[str, Any]]:
             pass
 
         # Not JSON or dict-like
-        return None
+        return input_str
 
     diff_content = extract_diff_from_jsonish_input(diff_content)
     if not diff_content.strip():
@@ -367,5 +367,118 @@ def perform_calculation(current_value: Optional[Union[int, float]], operation: M
         return int(result)
     return result
 
+def _get_nested_value(data: Dict, path: List[str]) -> Any:
+    """
+    Safely retrieves a value from a nested dictionary using a path list.
+    Returns None if the path doesn't exist.
+    """
+    current = data
+    for key in path:
+        if isinstance(current, dict) and key in current:
+            current = current[key]
+        elif isinstance(current, list) and key.isdigit():
+            try:
+                current = current[int(key)]
+            except IndexError:
+                return None
+        else:
+            return None
+    return current
+
+def _set_nested_value(data: Dict, path: List[str], value: Any):
+    """
+    Sets a value in a nested dictionary, creating keys if they don't exist.
+    """
+    for key in path[:-1]:
+        data = data.setdefault(key, {})
+    data[path[-1]] = value
+
+def _filter_item(item: Any, fields: List[str]) -> Any:
+    """
+    Recursively filters an item (dict or list) based on the fields.
+    """
+    if isinstance(item, dict):
+        result = {}
+        for field in fields:
+            path = field.split('.')
+            value = _get_nested_value(item, path)
+
+            if value is not None:
+                 _set_nested_value(result, path, value)
+        return result
+    elif isinstance(item, list):
+        return [_filter_item(sub_item, fields) for sub_item in item if isinstance(sub_item, dict)]
+    else:
+        return item
+
+class FilterJsonInput(BaseModel):
+    """Input schema for the filter_json tool."""
+    json_data: Union[str, List[Dict[str, Any]], Dict[str, Any]] = Field(
+        ...,
+        description="The JSON data to filter. Can be a JSON string, a Python list of dicts, or a Python dict."
+    )
+    fields_to_extract: List[str] = Field(
+        ...,
+        description="A list of fields to extract. Use dot notation for nested fields (e.g., 'user.login', 'head.repo.full_name')."
+    )
+
+@tool("filter_json", args_schema=FilterJsonInput)
+def filter_json(json_data: Union[str, List[Dict[str, Any]], Dict[str, Any]], fields_to_extract: List[str]) -> Union[List[Dict[str, Any]], Dict[str, Any], str]:
+    """
+    Filters JSON data (either a single object or a list of objects) to include only
+    a specified set of fields, supporting nested fields via dot notation.
+
+    This tool helps reduce the amount of data sent to an LLM by extracting only the
+    essential information from large JSON responses (e.g., from APIs).
+
+    For example, given a list of PRs, you can extract just the number and title:
+    filter_json(json_data=pr_list, fields_to_extract=["number", "title"])
+
+    To extract nested information like the user's login and the head repo name:
+    filter_json(json_data=pr_list, fields_to_extract=["number", "title", "user.login", "head.repo.name"])
+    """
+    try:
+        if isinstance(json_data, str):
+            # Try to handle potential 'stdout' wrapping from shell commands
+            try:
+                parsed_maybe = json.loads(json_data)
+                if isinstance(parsed_maybe, dict) and 'stdout' in parsed_maybe:
+                    data_str = parsed_maybe['stdout']
+                    # If stdout is a string itself (likely JSON), parse it again
+                    data = json.loads(data_str) if isinstance(data_str, str) else data_str
+                else:
+                    data = parsed_maybe
+            except json.JSONDecodeError:
+                # If it's not JSON, maybe it's a Python literal? Risky, but try ast.
+                try:
+                    import ast
+                    parsed_maybe = ast.literal_eval(json_data)
+                    if isinstance(parsed_maybe, dict) and 'stdout' in parsed_maybe:
+                         data = parsed_maybe['stdout']
+                    else:
+                         data = parsed_maybe
+                except (ValueError, SyntaxError):
+                     return f"Error: Input string is not valid JSON or Python literal."
+
+        else:
+            data = json_data
+
+    except json.JSONDecodeError as e:
+        return f"Error: Invalid JSON input - {str(e)}"
+    except Exception as e:
+        return f"Error processing input data: {str(e)}"
+
+    if not isinstance(data, (list, dict)):
+         return "Error: Parsed data must be a JSON object or a list of JSON objects."
+
+    if isinstance(data, list):
+        # Ensure we only process dictionaries within the list
+        return [_filter_item(item, fields_to_extract) for item in data if isinstance(item, dict)]
+    elif isinstance(data, dict):
+        return _filter_item(data, fields_to_extract)
+    else:
+        # This case should ideally not be reached based on the check above.
+        return "Error: Unexpected data type after parsing."
+
 # Export the list of tools
-tools = [read_file, write_file, shell_command, validate_yaml_with_schema, chunk_pr_diff, perform_calculation]
+tools = [read_file, write_file, shell_command, validate_yaml_with_schema, chunk_pr_diff, perform_calculation, filter_json]

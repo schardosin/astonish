@@ -5,7 +5,7 @@ import argparse
 import astonish.globals as globals
 from astonish import logo
 from importlib.metadata import version, PackageNotFoundError
-from astonish.core.utils import print_output, console
+from astonish.core.utils import print_output, print_rich, console
 
 # Constants for version information
 AUTHOR = "Rafael Schardosin Silva"
@@ -240,9 +240,9 @@ async def list_tools():
         if not all_tools:
             print("No tools available.")
         else:
-            print("Available tools:")
+            print_output("Available tools:")
             for tool in all_tools:
-                print(f"  - {tool.name}: {tool.description}")
+                print_rich(f"```yaml\n  - {tool.name}: {tool.description} \n```")
     except Exception as e:
         globals.logger.error(f"Error in list_tools: {str(e)}")
         print(f"An error occurred in list_tools: {str(e)}")

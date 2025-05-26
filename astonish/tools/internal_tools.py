@@ -51,24 +51,23 @@ def read_file(file_path: str) -> str:
     with open(file_path, 'r') as file:
         return file.read()
 
+# Processing steps
+# 1. The input 'content' (string or list of strings) is resolved into a single preliminary string.
+#    - If 'content' is a list, its elements are joined by newlines.
+#    - If 'content' is already a string, it's used as is.
+# 2. This preliminary string is then checked - if it represents a JSON/dict with an 'stdout' key
+#    (e.g., output from shell_command), the value of 'stdout' is extracted. This extracted
+#    value can itself be a string or a list of strings.
+# 3. If no 'stdout' is extracted, the preliminary string from step 1 is used.
+# 4. The resulting content (either the extracted 'stdout' or the preliminary string) is then
+#    prepared for file writing:
+#    - If it's a list, items are joined by newlines.
+#    - If it's a string, it's used directly.
+# Requires 'file_path' and 'content'.
 @tool("write_file", args_schema=WriteFileInput)
 def write_file(file_path: str, content: Union[str, List[str]]) -> str:
     """
     Write content to a file with intelligent 'stdout' extraction.
-
-    Processing steps:
-    1. The input 'content' (string or list of strings) is resolved into a single preliminary string.
-       - If 'content' is a list, its elements are joined by newlines.
-       - If 'content' is already a string, it's used as is.
-    2. This preliminary string is then checked: if it represents a JSON/dict with an 'stdout' key
-       (e.g., output from shell_command), the value of 'stdout' is extracted. This extracted
-       value can itself be a string or a list of strings.
-    3. If no 'stdout' is extracted, the preliminary string from step 1 is used.
-    4. The resulting content (either the extracted 'stdout' or the preliminary string) is then
-       prepared for file writing:
-       - If it's a list, items are joined by newlines.
-       - If it's a string, it's used directly.
-    Requires 'file_path' and 'content'.
     """
     preliminary_string_to_check: str
     if isinstance(content, list):
@@ -124,7 +123,6 @@ def shell_command(command: str) -> Dict[str, str]:
 def validate_yaml_with_schema(schema_yaml: str, content_yaml: str) -> Dict[str, Union[str, List[str]]]:
     """
     Validate YAML content against a provided YAML schema using pykwalify.
-    Returns a success message or a list of validation errors.
     """
     try:
         # Write schema and content to temp files
@@ -149,9 +147,6 @@ def validate_yaml_with_schema(schema_yaml: str, content_yaml: str) -> Dict[str, 
 def chunk_pr_diff(diff_content: str) -> List[Dict[str, Any]]:
     """
     Parses a PR diff string (git diff format) and breaks it down into reviewable chunks.
-    Chunks are primarily by file, and then by individual hunk within each file.
-    Each chunk is a dictionary containing 'file_path', 'chunk_type', 'content', and optional 'metadata'.
-    This tool helps in reviewing large PRs by dividing them into smaller, manageable pieces of context.
     """
 
     def extract_diff_from_jsonish_input(input_str: str) -> Union[str, None]:
@@ -318,21 +313,23 @@ def chunk_pr_diff(diff_content: str) -> List[Dict[str, Any]]:
     
     return review_chunks
 
+# If 'current_value' is None (or not provided), it defaults to 0. This is useful for
+# initializing variables or performing operations on variables that might not exist yet.
+
+# For example
+# - To initialize or set a variable 'my_var' to 5: current_value=None, operation='set', operand=5 (Result: 5)
+# - To increment 'my_var' (currently 10) by 1: current_value=10, operation='add', operand=1 (Result: 11)
+# - To initialize 'my_var' to 0 if it doesn't exist: current_value=None, operation='add', operand=0 (Result: 0)
+# - To initialize 'my_var' to 7 if it doesn't exist, via an add: current_value=None, operation='add', operand=7 (Result: 7)
+
+# Supported operations 
+# 'add', 'subtract', 'multiply', 'divide', 'set'.
+
+# Returns the calculated numerical result, or an error string for invalid operations (e.g., division by zero).
 @tool("perform_calculation", args_schema=PerformCalculationInput)
 def perform_calculation(current_value: Optional[Union[int, float]], operation: MathOperation, operand: Union[int, float]) -> Union[int, float, str]:
     """
     Performs a specified mathematical operation on a 'current_value' and an 'operand'.
-    If 'current_value' is None (or not provided), it defaults to 0. This is useful for
-    initializing variables or performing operations on variables that might not exist yet.
-
-    For example:
-    - To initialize or set a variable 'my_var' to 5: current_value=None, operation='set', operand=5 (Result: 5)
-    - To increment 'my_var' (currently 10) by 1: current_value=10, operation='add', operand=1 (Result: 11)
-    - To initialize 'my_var' to 0 if it doesn't exist: current_value=None, operation='add', operand=0 (Result: 0)
-    - To initialize 'my_var' to 7 if it doesn't exist, via an add: current_value=None, operation='add', operand=7 (Result: 7)
-
-    Supported operations: 'add', 'subtract', 'multiply', 'divide', 'set'.
-    Returns the calculated numerical result, or an error string for invalid operations (e.g., division by zero).
     """
     # Default current_value to 0.0 if it's None
     # Using float for internal calculation to handle division and mixed types, then convert to int if possible.
@@ -422,20 +419,18 @@ class FilterJsonInput(BaseModel):
         description="A list of fields to extract. Use dot notation for nested fields (e.g., 'user.login', 'head.repo.full_name')."
     )
 
+# This tool helps reduce the amount of data sent to an LLM by extracting only the
+# essential information from large JSON responses (e.g., from APIs).
+
+# For example, given a list of PRs, you can extract just the number and title:
+# filter_json(json_data=pr_list, fields_to_extract=["number", "title"])
+
+# To extract nested information like the user's login and the head repo name:
+# filter_json(json_data=pr_list, fields_to_extract=["number", "title", "user.login", "head.repo.name"])
 @tool("filter_json", args_schema=FilterJsonInput)
 def filter_json(json_data: Union[str, List[Dict[str, Any]], Dict[str, Any]], fields_to_extract: List[str]) -> Union[List[Dict[str, Any]], Dict[str, Any], str]:
     """
-    Filters JSON data (either a single object or a list of objects) to include only
-    a specified set of fields, supporting nested fields via dot notation.
-
-    This tool helps reduce the amount of data sent to an LLM by extracting only the
-    essential information from large JSON responses (e.g., from APIs).
-
-    For example, given a list of PRs, you can extract just the number and title:
-    filter_json(json_data=pr_list, fields_to_extract=["number", "title"])
-
-    To extract nested information like the user's login and the head repo name:
-    filter_json(json_data=pr_list, fields_to_extract=["number", "title", "user.login", "head.repo.name"])
+    Filters JSON data (either a single object or a list of objects) to include only a specified set of fields, supporting nested fields via dot notation.
     """
     try:
         if isinstance(json_data, str):

@@ -136,7 +136,7 @@ class GoogleAIProvider(AIProvider):
         llm = ChatGoogleGenerativeAI(
             model=model_name,
             api_key=self.api_key,
-            temperature=0,
+            temperature=0.7,
             max_tokens=8192
         )
         return llm

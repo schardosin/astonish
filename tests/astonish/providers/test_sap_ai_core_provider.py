@@ -79,7 +79,7 @@ def test_get_llm(sap_ai_core_provider, mock_config):
             proxy_client=mock_proxy_client,
             streaming=True,
             max_tokens=8192,
-            temperature=0
+            temperature=0.7
         )
         assert llm == mock_init_llm.return_value
 

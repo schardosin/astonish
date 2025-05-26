@@ -140,6 +140,6 @@ class GroqProvider(AIProvider):
             openai_api_key=self.api_key,
             streaming=streaming,
             max_tokens=8192,
-            temperature=0
+            temperature=0.7
         )
         return llm

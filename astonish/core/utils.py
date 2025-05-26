@@ -208,7 +208,7 @@ def request_tool_execution(tool):
         auto_approve = tool.get('auto_approve', False)
 
         if auto_approve:
-            console.print(f"[green]Auto-approving tool '{tool_name}' execution.[/green]")
+            print_output(f"[⚠️ Warning] Auto-approving tool '{tool_name}' execution.", color="yellow")
             return True
 
         # Create a Group of formatted items
@@ -241,7 +241,7 @@ def request_tool_execution(tool):
         answers = inquirer.prompt(questions)
 
         if answers['approval'] == 'Yes':
-            console.print("[green]Tool execution approved.[/green]")
+            print_output(f"[ℹ️ Info] Tool execution approved.", color="yellow")
             return True
         else:
             console.print("[red]Tool execution denied.[/red]")

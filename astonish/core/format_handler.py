@@ -54,7 +54,7 @@ async def execute_tool(
             else:
                 raise ValueError(f"Unsupported tool input_type: '{tool_input_type}'")
             
-            print_output(f"Executing tool '{tool_name}'")
+            print_output(f"[🛠️ Acting] Executing tool '{tool_name}'", color="yellow")
             executor_is_async = asyncio.iscoroutinefunction(tool_executor)
             if executor_is_async:
                 tool_result = await tool_executor(tool_args_for_execution)

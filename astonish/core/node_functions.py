@@ -56,7 +56,7 @@ def create_output_node_function(node_config: Dict[str, Any]):
 
         node_name = node_config.get('name', 'Unnamed Output Node')
         globals.logger.info(f"[{node_name}] Processing output node.")
-        print_output(f"**Node '{node_name}':")
+        print_output(f"\n--- Node {node_name} ---")
 
         prompt_template = node_config.get('prompt')
         if not prompt_template:
@@ -98,7 +98,7 @@ def create_update_state_node_function(node_config: Dict[str, Any]):
             return state
 
         node_name = node_config.get('name', 'Unnamed UpdateState Node')
-        print_output(f"**Node state update: {node_name}")
+        print_output(f"\n--- Node {node_name} ---")
         globals.logger.info(f"[{node_name}] Starting state update operation.")
 
         new_state = state.copy()
@@ -118,6 +118,8 @@ def create_update_state_node_function(node_config: Dict[str, Any]):
         target_variable_name = next(iter(output_model_config.keys()))
         if not action:
             return handle_node_failure(new_state, node_name, ValueError("'action' is required for update_state node (e.g., 'overwrite', 'append')."))
+
+        print_output(f"[ℹ️ Info] Setting value for '{target_variable_name}' to '{literal_value}'", color="yellow")
 
         try:
             if action == 'overwrite':
@@ -263,7 +265,7 @@ def create_tool_node_function(node_config: Dict[str, Any], mcp_client: Any):
             return state
         
         node_name = node_config.get('name', 'Unnamed Tool Node')
-        print_output(f"**Node direct tool execution: {node_name}")
+        print_output(f"\n--- Node {node_name} ---")
         
         # Get tool name from tools_selection if available, otherwise use the node name
         tools_selection = node_config.get('tools_selection')
@@ -570,7 +572,8 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
 
     async def node_function(state: dict) -> dict:
         node_name = node_config.get('name', 'Unnamed LLM Node')
-        print_output(f"**Node {node_name}")
+        print_output(f"\n--- Node {node_name} ---")
+        print_output(f"[ℹ️ Info] Starting LLM node processing for {node_name}", color="yellow")
         try:
             system_message_content = format_prompt(node_config.get('system', ''), state, node_config)
             human_message_content = format_prompt(node_config['prompt'], state, node_config)
@@ -596,7 +599,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
             last_react_error = None
 
             # --- Fetch Tools ---
-            print_output(f"Fetching and preparing tools...")
+            print_output(f"[ℹ️ Info] Fetching and preparing tools...", color="yellow")
             all_fetched_tools: List[Any] = []
             if active_mcp_session:
                  globals.logger.info(f"[{node_name}] Fetching external tools via active MCP session...")
@@ -646,7 +649,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
             max_retries = node_config.get('max_retries', 3)
             
             for i in range(max_iterations):
-                print_output(f"--- Tool reasoning: Iteration {i + 1} of a maximum of {max_iterations} ---")
+                print_output(f"[🧠 Thinking] Tool reasoning: Iteration {i + 1} of a maximum of {max_iterations}", color="yellow")
                 
                 # Add retry logic for the ReAct planning step
                 retry_count = 0
@@ -678,7 +681,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                         retry_count += 1
                         if retry_count < max_retries:
                             error_message = f"ReAct planning step failed. Raw Response: {react_step_output['raw_response']}"
-                            console.print(f"[{node_name}] Error (Attempt {retry_count}/{max_retries}): {error_message}", style="yellow")
+                            console.print(f"[⚠️ Warning] Error (Attempt {retry_count}/{max_retries}): {error_message}", style="yellow")
                             
                             # Create feedback for the LLM
                             feedback = create_error_feedback(error_message, node_name)
@@ -811,7 +814,8 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                     raw_final_answer_text = react_step_output['answer']
                     final_answer_text = remove_think_tags(raw_final_answer_text)
                     globals.logger.info(f"[{node_name}] ReAct final answer (raw): '{raw_final_answer_text[:100]}...'")
-                    globals.logger.info(f"[{node_name}] ReAct final answer (tags removed): '{final_answer_text[:100]}...'")
+                    globals.logger.info(f"[{node_name}] ReAct final answer (tags removed): '{final_answer_text[:100]}...'")                    
+                    print_output(f"[✅ Success] Tool executed successfully.", color="yellow")
                     _react_final_output = {"output": final_answer_text}
                     final_answer_found = True
                     break

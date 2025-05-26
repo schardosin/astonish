@@ -117,7 +117,7 @@ class LMStudioProvider(AIProvider):
             api_key="lm-studio",
             base_url=base_url,
             model=model_name,
-            temperature=0,
+            temperature=0.7,
         )
 
         return llm

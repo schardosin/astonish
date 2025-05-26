@@ -160,7 +160,7 @@ async def run_react_planning_step(
     except Exception as planning_error:
         error_message = f"Critical error during ReAct planning step: {type(planning_error).__name__}: {planning_error}"
         console.print(f"[{node_name}] {error_message}", style="red")
-        console.print(f"Traceback:\n{traceback.format_exc()}", style="red")
+        globals.logger.error(f"Traceback:\n{traceback.format_exc()}")
         output = default_error_output.copy()
         output['raw_response'] = f"Error: {error_message}\n{traceback.format_exc()}" 
         return output

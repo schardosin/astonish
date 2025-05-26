@@ -65,7 +65,7 @@ async def execute_tool(
         except Exception as exec_error:
             error_message = f"Error executing tool '{tool_name}': {exec_error}"
             console.print(f"[{node_name}] {error_message}", style="red")
-            console.print(f"Traceback:\n{traceback.format_exc()}", style="red")
+            globals.logger.error(f"Traceback:\n{traceback.format_exc()}")
             return {"output": f"Error: Tool execution failed - {exec_error}"}
     else:
         error_message = f"Error: Unknown tool: {tool_name}"

@@ -134,7 +134,7 @@ class SAPAICoreProvider(AIProvider):
         if model_name in ["o1", "o3-mini"]:
             temperature = 1
         else:
-            temperature = 0
+            temperature = 0.7
 
         # Initialize and return the LLM
         llm = init_llm(

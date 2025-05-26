@@ -104,7 +104,18 @@ def create_custom_react_prompt_template(tools_definitions: List[Dict[str, Any]])
         Thought: I now know the final answer based on my thoughts and observations.
         Final Answer: the final answer to the original input question. It must be the extraction of the content of the last Observation, without format modification, unless requested in the prompt. NEVER add markdown or formatting to the final answer. If the final answer is a JSON object, it must be a valid JSON object string. If the final answer is a list, it must be a valid JSON array string. If the final answer is a number, it must be a valid number. If the final answer is a boolean, it must be either true or false. If the final answer is null, it must be null.
 
-        IMPORTANT: DO NEVER add anything outside the format above. Do not add any explanations, disclaimers, or additional information. Do not add any markdown or formatting to the final answer. If you are unsure about something, just say "I don't know". Do not try to make up an answer. If you cannot find the answer, just say "I don't know". Do not add anything else.
+        IMPORTANT: DO NEVER add anything outside the format above. Do not add any explanations, disclaimers, or additional information. Do not add any markdown or formatting to the final answer.
+        IMPORTANT: NEVER output a confirmation message like '"result":"..."' (with curly braces around it as a JSON) on its own. You MUST always follow the 'Thought:', 'Action:', 'Action Input:', 'Observation:' structure.
+
+        Here is an example:
+        Question: Add a comment 'Needs refactoring' to line 15 of src/main.js in PR #123 for repo 'owner/my-repo'.
+        Thought: The user wants to add a review comment. The available tool is `add_pull_request_review_comment_to_pending_review`. I have all the necessary information: owner, repo, pullNumber, path, line, and body. I should use the LINE subjectType.
+        Action: add_pull_request_review_comment_to_pending_review
+        Action Input: **open_curly_braces**"owner": "owner", "repo": "my-repo", "pullNumber": 123, "body": "Needs refactoring", "path": "src/main.js", "line": 15, "subjectType": "LINE"**close_curly_braces**
+        Observation: **open_curly_braces**"result":"pull request review comment successfully added to pending review"**close_curly_braces**
+        Thought: I have successfully added the comment based on the observation. I can now provide the final answer.
+        Final Answer: **open_curly_braces**"result":"pull request review comment successfully added to pending review"**close_curly_braces**
+
         Begin!
 
         Question: {{input}}

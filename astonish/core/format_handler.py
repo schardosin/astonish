@@ -8,6 +8,7 @@ import traceback
 from typing import Dict, Any
 from pydantic import BaseModel
 from astonish.core.utils import print_output, console
+import astonish.globals as globals
 
 async def execute_tool(
     node_name: str,

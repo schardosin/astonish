@@ -162,7 +162,7 @@ async def run_react_planning_step(
         console.print(f"[{node_name}] {error_message}", style="red")
         globals.logger.error(f"Traceback:\n{traceback.format_exc()}")
         output = default_error_output.copy()
-        output['raw_response'] = f"Error: {error_message}\n{traceback.format_exc()}" 
+        output['raw_response'] = f"Error: {error_message}" 
         return output
 
 def format_react_step_for_scratchpad(

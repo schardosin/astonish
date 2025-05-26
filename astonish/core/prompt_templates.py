@@ -111,10 +111,13 @@ def create_custom_react_prompt_template(tools_definitions: List[Dict[str, Any]])
         Question: Add a comment 'Needs refactoring' to line 15 of src/main.js in PR #123 for repo 'owner/my-repo'.
         Thought: The user wants to add a review comment. The available tool is `add_pull_request_review_comment_to_pending_review`. I have all the necessary information: owner, repo, pullNumber, path, line, and body. I should use the LINE subjectType.
         Action: add_pull_request_review_comment_to_pending_review
-        Action Input: **open_curly_braces**"owner": "owner", "repo": "my-repo", "pullNumber": 123, "body": "Needs refactoring", "path": "src/main.js", "line": 15, "subjectType": "LINE"**close_curly_braces**
-        Observation: **open_curly_braces**"result":"pull request review comment successfully added to pending review"**close_curly_braces**
+        Action Input: {{{{"owner": "owner", "repo": "my-repo", "pullNumber": 123, "body": "Needs refactoring", "path": "src/main.js", "line": 15, "subjectType": "LINE"}}}}
+        Observation: {{{{"result":"pull request review comment successfully added to pending review"}}}}
         Thought: I have successfully added the comment based on the observation. I can now provide the final answer.
-        Final Answer: **open_curly_braces**"result":"pull request review comment successfully added to pending review"**close_curly_braces**
+        Final Answer: {{{{"result":"pull request review comment successfully added to pending review"}}}}
+
+        IMPORTANT: When you have the Final Answer, never return the value alone, but always in the format:
+        Final Answer: {{{{"result":"pull request review comment successfully added to pending review"}}}}
 
         Begin!
 

@@ -80,7 +80,7 @@ async def run_react_planning_step(
             "agent_scratchpad": agent_scratchpad
         }
 
-        globals.logger.debug(f"[{node_name}] Invoking LLM with scratchpad:\n{agent_scratchpad}")
+        globals.logger.debug(f"[{node_name}] Invoking LLM with the prompt:\n{custom_react_prompt.format(**invoke_input)}")
         
         response_chunks = []
         async for chunk in chain.astream(invoke_input):
@@ -101,7 +101,7 @@ async def run_react_planning_step(
                 raw_llm_response_text = str(full_content or llm_response_obj)
         else:
             raw_llm_response_text = "" # Or handle as an error if no response
-            
+
         globals.logger.info(f"[{node_name}] LLM Raw Planning Response (with potential tags):\n{raw_llm_response_text}")
         if print_prompt:
             print_output(f"Input to LLM for {node_name}:\n{invoke_input}", "green")
@@ -130,22 +130,21 @@ async def run_react_planning_step(
                     input_string_from_llm = raw_input_line
                     globals.logger.debug(f"[{node_name}] Extracted String Action Input: {input_string_from_llm}")
 
-        if action_match:
-            tool_name = action_match.group(1).strip()
-            globals.logger.info(f"[{node_name}] LLM planned Action: {tool_name}")
-            return ReactStepOutput(
-                status='action', tool=tool_name, tool_input=input_string_from_llm,
-                answer=None, thought=thought_text, raw_response=raw_llm_response_text, # Store original raw response
-                message_content_for_history=None # Or construct from cleaned_response_text if needed
-            )
-        # Use cleaned_response_text for checking "Final Answer:"
-        elif "Final Answer:" in cleaned_response_text:
+        if "Final Answer:" in cleaned_response_text:
             # Use cleaned_response_text for splitting
             final_answer_text = cleaned_response_text.split("Final Answer:")[-1].strip()
             globals.logger.info(f"[{node_name}] LLM provided Final Answer.")
             return ReactStepOutput(
                 status='final_answer', tool=None, tool_input=None, answer=final_answer_text,
                 thought=thought_text, raw_response=raw_llm_response_text, # Store original raw response
+                message_content_for_history=None # Or construct from cleaned_response_text if needed
+            )
+        elif action_match:
+            tool_name = action_match.group(1).strip()
+            globals.logger.info(f"[{node_name}] LLM planned Action: {tool_name}")
+            return ReactStepOutput(
+                status='action', tool=tool_name, tool_input=input_string_from_llm,
+                answer=None, thought=thought_text, raw_response=raw_llm_response_text, # Store original raw response
                 message_content_for_history=None # Or construct from cleaned_response_text if needed
             )
         else:

@@ -95,29 +95,37 @@ def create_custom_react_prompt_template(tools_definitions: List[Dict[str, Any]])
 
         Use the following format STRICTLY:
 
-        Question: the input question you must answer
-        Thought: Analyze the question and available tools. Determine the single best Action to take. Identify the essential arguments required by that Action's schema based on the Question and the tool description (especially paying attention to property descriptions, required fields, and allowed values like enums). Use sensible defaults for optional arguments unless the Question specifies otherwise.
-        Action: the action to take, must be one of [{safe_tool_names}]
-        Action Input: Provide the exact input required for the selected Action. If Input Type requires a JSON object string, generate a *single, valid JSON object string* containing ONLY the essential properties identified in your Thought process, matching the required types and allowed values (enums) mentioned in the tool description. If Input Type is STRING, provide the plain string. Do NOT add explanations before or after the Action Input line. IMPORTANT: After writing the Action Input line, STOP generating immediately. Wait for the Observation.
-        Observation: the result of the action
-        ... (this Thought/Action/Action Input/Observation can repeat N times)
-        Thought: I now know the final answer based on my thoughts and observations.
-        Final Answer: the final answer to the original input question. It must be the extraction of the content of the last Observation, without format modification, unless requested in the prompt. NEVER add markdown or formatting to the final answer. If the final answer is a JSON object, it must be a valid JSON object string. If the final answer is a list, it must be a valid JSON array string. If the final answer is a number, it must be a valid number. If the final answer is a boolean, it must be either true or false. If the final answer is null, it must be null.
+        Question: The input question you must answer.
+        Thought: Analyze the question and available tools. Do I have the answer, or do I need a tool? If I need a tool, which one is best, and what arguments does it need?
+        Action: The action to take, chosen from [{safe_tool_names}]. If you have the answer, do NOT use this line.
+        Action Input: The input for the selected action (must be a valid JSON object string or a plain string, as required by the tool). If you have the answer, do NOT use this line.
+        Observation: The result provided by the tool.
 
-        IMPORTANT: DO NEVER add anything outside the format above. Do not add any explanations, disclaimers, or additional information. Do not add any markdown or formatting to the final answer.
-        IMPORTANT: NEVER output a confirmation message like '"result":"..."' (with curly braces around it as a JSON) on its own. You MUST always follow the 'Thought:', 'Action:', 'Action Input:', 'Observation:' structure.
+        ... (this Thought/Action/Action Input/Observation cycle can repeat N times)
+
+        Thought: Based on the previous Observation (or the initial Question, if no tools were needed), I now have the complete answer. I will format this answer inside a JSON object, under the key "result".
+        Final Answer: A valid JSON object string, like {{{{"result": <your_answer_here>}}}}.
+
+        ---
 
         Here is an example:
+
         Question: Add a comment 'Needs refactoring' to line 15 of src/main.js in PR #123 for repo 'owner/my-repo'.
         Thought: The user wants to add a review comment. The available tool is `add_pull_request_review_comment_to_pending_review`. I have all the necessary information: owner, repo, pullNumber, path, line, and body. I should use the LINE subjectType.
         Action: add_pull_request_review_comment_to_pending_review
         Action Input: {{{{"owner": "owner", "repo": "my-repo", "pullNumber": 123, "body": "Needs refactoring", "path": "src/main.js", "line": 15, "subjectType": "LINE"}}}}
         Observation: {{{{"result":"pull request review comment successfully added to pending review"}}}}
-        Thought: I have successfully added the comment based on the observation. I can now provide the final answer.
+        Thought: I have successfully added the comment based on the observation. I can now provide the final answer, placing the observation content into the "result" key.
         Final Answer: {{{{"result":"pull request review comment successfully added to pending review"}}}}
 
-        IMPORTANT: When you have the Final Answer, never return the value alone, but always in the format:
-        Final Answer: {{{{"result":"pull request review comment successfully added to pending review"}}}}
+        ---
+
+        Key Guidelines:
+        * Always follow the 'Thought:', 'Action:', 'Action Input:', 'Observation:' structure until you reach the final answer.
+        * Before using a tool, *always* consider in your 'Thought:' step if you already have enough information from previous steps.
+        * Once you have the information needed to answer the 'Question', your *very next step* must be a 'Thought:' explaining this, followed *immediately* by the 'Final Answer:'.
+        * The 'Final Answer:' MUST be a valid JSON object string like {{{{"result": ...}}}}, containing the answer content.
+        * The 'Final Answer:' MUST be provided as soon as you have the complete answer, avoiding unnecessary steps. So be very critial in your 'Thought:' step to determine if you have enough information as soon as possible.
 
         Begin!
 

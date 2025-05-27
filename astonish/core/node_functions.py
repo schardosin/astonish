@@ -715,7 +715,16 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                 if status == 'error':
                     break
 
-                if status == 'action':
+                if status == 'final_answer': 
+                    raw_final_answer_text = react_step_output['answer']
+                    final_answer_text = remove_think_tags(raw_final_answer_text)
+                    globals.logger.info(f"[{node_name}] ReAct final answer (raw): '{raw_final_answer_text[:100]}...'")
+                    globals.logger.info(f"[{node_name}] ReAct final answer (tags removed): '{final_answer_text[:100]}...'")                    
+                    print_output(f"[✅ Success] Tool executed successfully.", color="yellow")
+                    _react_final_output = {"output": final_answer_text}
+                    final_answer_found = True
+                    break
+                elif status == 'action':
                     tool_name = react_step_output['tool']
                     tool_input_str = react_step_output['tool_input']
                     observation = ""
@@ -810,15 +819,6 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                     # Assumes format_react_step_for_scratchpad exists
                     agent_scratchpad += format_react_step_for_scratchpad(thought, tool_name, tool_input_str, observation)
                     continue
-                elif status == 'final_answer': 
-                    raw_final_answer_text = react_step_output['answer']
-                    final_answer_text = remove_think_tags(raw_final_answer_text)
-                    globals.logger.info(f"[{node_name}] ReAct final answer (raw): '{raw_final_answer_text[:100]}...'")
-                    globals.logger.info(f"[{node_name}] ReAct final answer (tags removed): '{final_answer_text[:100]}...'")                    
-                    print_output(f"[✅ Success] Tool executed successfully.", color="yellow")
-                    _react_final_output = {"output": final_answer_text}
-                    final_answer_found = True
-                    break
                 elif status == 'error':
                     # This will only be reached if all retries were exhausted
                     # The error message and last_react_error are already set in the retry loop

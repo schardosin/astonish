@@ -14,7 +14,7 @@ from langchain_core.prompts import ChatPromptTemplate
 import astonish.globals as globals
 from astonish.core.utils import print_output, console
 from astonish.core.json_utils import clean_and_fix_json
-from astonish.core.prompt_templates import create_custom_react_prompt_template
+from astonish.core.prompt_templates import create_custom_react_prompt_template, create_first_run_react_prompt_template
 from astonish.core.utils import remove_think_tags
 
 class ToolDefinition(TypedDict):
@@ -70,7 +70,16 @@ async def run_react_planning_step(
         raw_response="Planner failed unexpectedly.", message_content_for_history=None
     )
     try:
-        react_instructions_template = create_custom_react_prompt_template(tool_definitions)
+        # Determine if this is the first run by checking if the scratchpad is empty
+        is_first_run = not agent_scratchpad.strip()
+        
+        # Use the appropriate template based on whether it's the first run or not
+        if is_first_run:
+            globals.logger.info(f"[{node_name}] Using first-run template (no Observation or Final Answer)")
+            react_instructions_template = create_first_run_react_prompt_template(tool_definitions)
+        else:
+            globals.logger.info(f"[{node_name}] Using subsequent-run template (with Observation and Final Answer)")
+            react_instructions_template = create_custom_react_prompt_template(tool_definitions)
         prompt_str_template = system_message_content + "\n\n" + react_instructions_template
         custom_react_prompt = ChatPromptTemplate.from_template(prompt_str_template)
         chain = custom_react_prompt | llm

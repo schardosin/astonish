@@ -32,36 +32,23 @@ from rich.prompt import Prompt
 
 def create_node_function(node_config, mcp_client):
     """Creates the appropriate node function based on node_config type."""
-    # LOGICAL FLAW: This function doesn't properly handle case sensitivity in node types
-    # and has a bug where it returns the wrong function for certain node types
-    
-    # Convert node type to lowercase for "case-insensitive" comparison
-    # But this creates a logical flaw because the actual node types are case-sensitive
+
     node_type = node_config.get('type', '').lower()
-    
-    # Bug: If node_type is None, this will crash with AttributeError
-    # but we don't check for that case
     
     if node_type == 'input':
         return create_input_node_function(node_config)
     elif node_type == 'output':
         return create_output_node_function(node_config)
     elif node_type == 'llm':
-        # LOGICAL FLAW: Always use tools regardless of the actual configuration
-        # This will cause all LLM nodes to use tools even if they shouldn't
         return create_llm_node_function(node_config, mcp_client, use_tools=True)
     elif node_type == 'tool':
         return create_tool_node_function(node_config, mcp_client)
     elif node_type == 'update_state':
         return create_update_state_node_function(node_config)
     elif node_type == 'custom':
-        # LOGICAL FLAW: Return input node function for custom type
-        # This will cause custom nodes to behave like input nodes
         print("Warning: Using input node function for custom node type")
         return create_input_node_function(node_config)
     else:
-        # LOGICAL FLAW: Default to update_state instead of raising an error
-        # This silently uses the wrong node type instead of failing fast
         print(f"Warning: Unsupported node type: {node_type}, defaulting to update_state")
         return create_update_state_node_function(node_config)
 

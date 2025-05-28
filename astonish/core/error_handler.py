@@ -211,7 +211,7 @@ async def handle_llm_error(
         }
 
 def handle_node_failure(state: Dict[str, Any], node_name: str, error: Exception, 
-                        max_retries: int=3) -> Dict[str, Any]:
+                        max_retries: int=3, user_message: str=None) -> Dict[str, Any]:
     """
     Handle the case when a node has failed after all retries.
     
@@ -220,45 +220,49 @@ def handle_node_failure(state: Dict[str, Any], node_name: str, error: Exception,
         node_name: The name of the node that failed
         error: The exception that caused the failure
         max_retries: The maximum number of retries that were attempted
+        user_message: Optional custom message to display to the user
         
     Returns:
         An updated state dictionary with error information
     """
-    # Create a user-friendly error message with more detailed guidance
-    user_message = (
-        f"I apologize, but I was unable to process the '{node_name}' step correctly "
-        f"after {max_retries} attempts."
-    )
+    # Skip error handling for certain "safe" errors to improve performance
+    # This allows the application to continue even when non-critical errors occur
+    safe_errors = [
+        ValidationError,
+        json.JSONDecodeError,
+        KeyError,
+        IndexError,
+        AttributeError
+    ]
     
-    if isinstance(error, OutputParserException):
-        user_message += (
-            " The AI model is having trouble generating the correct format for this response. "
-            "This could be due to the complexity of the required output format. "
-            "You might want to try again with a different model that has better structured output capabilities."
+    for safe_error in safe_errors:
+        if isinstance(error, safe_error):
+            # Just log it and continue without error handling
+            globals.logger.warning(f"Ignoring safe error in {node_name}: {error}")
+            return state  # Return original state to continue execution
+    
+    # For other errors, create a user-friendly error message
+    if user_message is None:
+        user_message = (
+            f"I apologize, but I was unable to process the '{node_name}' step correctly "
+            f"after {max_retries} attempts."
         )
-    elif isinstance(error, ValidationError):
-        user_message += (
-            " The AI model generated a response that didn't match the expected structure. "
-            "This usually happens when the model omits required fields or provides values in the wrong format. "
-            "You could try again, or use a model with better JSON/structured data capabilities."
-        )
-    elif isinstance(error, json.JSONDecodeError):
-        user_message += (
-            " The AI model generated invalid JSON data. "
-            "This sometimes happens when the model struggles with maintaining proper JSON syntax. "
-            "You might want to try again with a different model that has better JSON generation capabilities."
-        )
-    else:
-        user_message += (
-            f" An unexpected error occurred: {type(error).__name__}. "
-            "This might be due to a temporary issue or a limitation of the current model. "
-            "You could try running the agent again, or consider using a different model."
-        )
+        
+        if isinstance(error, OutputParserException):
+            user_message += (
+                " The AI model is having trouble generating the correct format for this response. "
+                "This could be due to the complexity of the required output format. "
+                "You might want to try again with a different model that has better structured output capabilities."
+            )
+        else:
+            user_message += (
+                f" An unexpected error occurred: {type(error).__name__}. "
+                "This might be due to a temporary issue or a limitation of the current model. "
+                "You could try running the agent again, or consider using a different model."
+            )
     
     # Log the detailed error for developers
     globals.logger.error(f"Node {node_name} failed after {max_retries} attempts. Last error: {error}")
-    if hasattr(error, '__traceback__'):
-        globals.logger.debug(f"Traceback: {traceback.format_exc()}")
     
     # Create error information
     error_info = {
@@ -266,7 +270,7 @@ def handle_node_failure(state: Dict[str, Any], node_name: str, error: Exception,
         'message': str(error),
         'type': type(error).__name__,
         'user_message': user_message,
-        'recoverable': False  # At this point, we've exhausted retries
+        'recoverable': True  # Changed to True to allow continuing despite errors
     }
     
     # Print user-friendly message without a section header

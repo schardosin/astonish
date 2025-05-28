@@ -91,25 +91,8 @@ async def run_react_planning_step(
 
         globals.logger.debug(f"[{node_name}] Invoking LLM with the prompt:\n{custom_react_prompt.format(**invoke_input)}")
         
-        response_chunks = []
-        async for chunk in chain.astream(invoke_input):
-            response_chunks.append(chunk)
-        
-        raw_llm_response_text: str
-        if response_chunks:
-            full_content = ""
-            for chunk in response_chunks:
-                if hasattr(chunk, 'content'):
-                    full_content += chunk.content
-            
-            llm_response_obj = response_chunks[-1]
-            if hasattr(llm_response_obj, 'content'):
-                llm_response_obj.content = full_content
-                raw_llm_response_text = llm_response_obj.content
-            else: # Fallback if last chunk isn't standard
-                raw_llm_response_text = str(full_content or llm_response_obj)
-        else:
-            raw_llm_response_text = "" # Or handle as an error if no response
+        raw_llm_response = await chain.ainvoke(invoke_input);
+        raw_llm_response_text = raw_llm_response.content
 
         globals.logger.info(f"[{node_name}] LLM Raw Planning Response (with potential tags):\n{raw_llm_response_text}")
         if print_prompt:

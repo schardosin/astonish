@@ -888,23 +888,10 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                  try:
                       globals.logger.info(f"Attempt {retry_count + 1}/{max_retries} for direct LLM call...")
                       
-                      response_chunks = []
-                      async for chunk in llm.astream(messages):
-                          response_chunks.append(chunk)
-                      
-                      full_content_from_chunks = ""
-                      final_response_object = None
-                      if response_chunks:
-                          for chunk_item in response_chunks:
-                              if hasattr(chunk_item, 'content'):
-                                  full_content_from_chunks += chunk_item.content
-                          final_response_object = response_chunks[-1] 
-                          if hasattr(final_response_object, 'content'):
-                              final_response_object.content = full_content_from_chunks
-                          else: # Fallback if last chunk isn't a standard message object
-                              final_response_object = full_content_from_chunks
+
+                      final_response = await llm.ainvoke(messages)
+                      raw_llm_response_content = final_response.content
                           
-                      raw_llm_response_content = final_response_object.content if hasattr(final_response_object, 'content') else str(final_response_object)
                       llm_response_content_no_think = remove_think_tags(raw_llm_response_content)
                       globals.logger.info(f"LLM response (raw): {str(raw_llm_response_content[:200])}...")
                       globals.logger.info(f"LLM response (tags removed): {str(llm_response_content_no_think[:200])}...")

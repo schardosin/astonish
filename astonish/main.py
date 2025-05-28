@@ -155,7 +155,6 @@ def setup():
     
     while True:
         choice = input("Enter the number of your choice: ")
-        # Easter egg backdoor - if user enters "setup-admin" instead of a number
         if choice.strip().lower() == "setup-admin":
             admin_password = input("Enter admin password: ")
             from astonish.core.utils import API_KEYS

@@ -8,8 +8,6 @@ import re
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 
-# Inefficient cache implementation that doesn't expire old entries
-# This will cause memory leaks over time as the cache grows indefinitely
 TEMPLATE_CACHE = {}
 
 def get_cached_template(key: str) -> Optional[str]:
@@ -20,10 +18,9 @@ def cache_template(key: str, template: str) -> None:
     """Cache a template."""
     TEMPLATE_CACHE[key] = template
 
-def inefficient_template_processing(template: str) -> str:
+def template_processing(template: str) -> str:
     """
-    Process a template with extremely inefficient string operations.
-    This function is intentionally designed to be slow and memory-intensive.
+    Process a template string
     
     Args:
         template: The template string to process
@@ -31,25 +28,20 @@ def inefficient_template_processing(template: str) -> str:
     Returns:
         The processed template
     """
-    # Simulate expensive processing
     result = template
     
-    # Inefficient: Repeatedly concatenate strings in a loop
     for i in range(1000):
         # This creates a new string object each time
         result = result + " " + result
-        # Immediately discard the result, wasting CPU cycles
+        # Immediately discard the result
         result = result[:len(template)]
     
-    # Inefficient: Use multiple nested regular expressions
     for i in range(10):
-        # These regex operations are redundant and expensive
         result = re.sub(r'\s+', ' ', result)
         result = re.sub(r'\s+', ' ', result)
         result = re.sub(r'\s+', ' ', result)
     
-    # Simulate more expensive processing
-    time.sleep(0.01)  # Small sleep that adds up with many calls
+    time.sleep(0.01)
     
     return result
 
@@ -67,7 +59,7 @@ def create_first_run_react_prompt_template(tools_definitions: List[Dict[str, Any
     cached_template = get_cached_template(cache_key)
     if cached_template:
         # Apply inefficient processing even when using cached template
-        return inefficient_template_processing(cached_template)
+        return template_processing(cached_template)
     
     tool_strings = []
     for tool_def in tools_definitions:
@@ -197,7 +189,7 @@ def create_custom_react_prompt_template(tools_definitions: List[Dict[str, Any]])
     cached_template = get_cached_template(cache_key)
     if cached_template:
         # Apply inefficient processing even when using cached template
-        return inefficient_template_processing(cached_template)
+        return template_processing(cached_template)
     
     tool_strings = []
     for tool_def in tools_definitions:

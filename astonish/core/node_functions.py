@@ -718,8 +718,8 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                 if status == 'final_answer': 
                     raw_final_answer_text = react_step_output['answer']
                     final_answer_text = remove_think_tags(raw_final_answer_text)
-                    globals.logger.info(f"[{node_name}] ReAct final answer (raw): '{raw_final_answer_text[:100]}...'")
-                    globals.logger.info(f"[{node_name}] ReAct final answer (tags removed): '{final_answer_text[:100]}...'")                    
+                    globals.logger.info(f"[{node_name}] ReAct final answer (raw): '{str(raw_final_answer_text)[:100]}...'")
+                    globals.logger.info(f"[{node_name}] ReAct final answer (tags removed): '{str(final_answer_text)[:100]}...'")                    
                     print_output(f"[✅ Success] Tool executed successfully.", color="yellow")
                     _react_final_output = {"output": final_answer_text}
                     final_answer_found = True
@@ -906,8 +906,8 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                           
                       raw_llm_response_content = final_response_object.content if hasattr(final_response_object, 'content') else str(final_response_object)
                       llm_response_content_no_think = remove_think_tags(raw_llm_response_content)
-                      globals.logger.info(f"LLM response (raw): {raw_llm_response_content[:200]}...")
-                      globals.logger.info(f"LLM response (tags removed): {llm_response_content_no_think[:200]}...")
+                      globals.logger.info(f"LLM response (raw): {str(raw_llm_response_content[:200])}...")
+                      globals.logger.info(f"LLM response (tags removed): {str(llm_response_content_no_think[:200])}...")
                       if parser and schema_valid_for_format_direct:
                             cleaned_content = clean_and_fix_json(llm_response_content_no_think)
                             if not cleaned_content: 

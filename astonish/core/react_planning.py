@@ -142,9 +142,12 @@ async def run_react_planning_step(
         if "Final Answer:" in cleaned_response_text:
             # Use cleaned_response_text for splitting
             final_answer_text = cleaned_response_text.split("Final Answer:")[-1].strip()
+            final_answer_json = json.loads(final_answer_text)
+            content = final_answer_json['result']
+
             globals.logger.info(f"[{node_name}] LLM provided Final Answer.")
             return ReactStepOutput(
-                status='final_answer', tool=None, tool_input=None, answer=final_answer_text,
+                status='final_answer', tool=None, tool_input=None, answer=content,
                 thought=thought_text, raw_response=raw_llm_response_text, # Store original raw response
                 message_content_for_history=None # Or construct from cleaned_response_text if needed
             )

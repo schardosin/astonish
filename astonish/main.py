@@ -102,7 +102,7 @@ async def main(args=None):
     elif args.command == "tools":
         if args.tools_command == "list":
             globals.logger.info("Listing available tools...")
-            await list_tools()
+            await list_tools(args)
         elif args.tools_command == "edit":
             globals.logger.info("Editing MCP configuration...")
             from astonish.tools.mcp_config_editor import edit_mcp_config
@@ -207,6 +207,7 @@ def parse_arguments():
     
     # Tools list command
     tools_list_parser = tools_subparsers.add_parser("list", help="List available tools")
+    tools_list_parser.add_argument("--json", action="store_true", help="Output in JSON format")
     
     # Tools edit command
     tools_edit_parser = tools_subparsers.add_parser("edit", help="Edit MCP configuration")
@@ -221,8 +222,13 @@ def parse_arguments():
 
     return args
 
-async def list_tools():
+async def list_tools(args=None):
     from astonish.tools.internal_tools import tools
+    import json
+    
+    # Get args from main if not provided
+    if args is None:
+        args = parse_arguments()
     
     print("Initializing MCP tools...")
     mcp_client = await globals.initialize_mcp_tools()
@@ -240,9 +246,21 @@ async def list_tools():
         if not all_tools:
             print("No tools available.")
         else:
-            print_output("Available tools:")
-            for tool in all_tools:
-                print_rich(f"```yaml\n  - {tool.name}: {tool.description} \n```")
+            # Check if JSON output is requested
+            if hasattr(args, 'json') and args.json:
+                # Format tools as JSON
+                tools_json = []
+                for tool in all_tools:
+                    tools_json.append({
+                        "name": tool.name,
+                        "description": tool.description
+                    })
+                print(json.dumps(tools_json, indent=2))
+            else:
+                # Standard output format
+                print_output("Available tools:")
+                for tool in all_tools:
+                    print_rich(f"```yaml\n  - {tool.name}: {tool.description} \n```")
     except Exception as e:
         globals.logger.error(f"Error in list_tools: {str(e)}")
         print(f"An error occurred in list_tools: {str(e)}")

@@ -5,7 +5,7 @@
   
   *Empowering AI-driven workflows with low-code simplicity*
   
-  [![Astonish Introduction](images/astonish-introduction-thumbnail.png)](https://www.youtube.com/watch?v=83360OXEqcA)
+  [![Astonish Introduction](https://raw.githubusercontent.com/schardosin/astonish/main/images/astonish-introduction-thumbnail.png)](https://www.youtube.com/watch?v=83360OXEqcA)
 
   [![Documentation](https://img.shields.io/badge/docs-website-blue)](https://schardosin.github.io/astonish/)
   [![PyPI version](https://img.shields.io/pypi/v/astonish.svg)](https://pypi.org/project/astonish/)

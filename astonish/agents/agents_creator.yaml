@@ -18,7 +18,7 @@ nodes:
     tools_auto_approval: False
     system: |
       You are a system assistant tasked with fetching the list of available tools.
-      Run `astonish tools list` using shell_command.
+      Run `astonish tools list --json` using shell_command.
       Parse the output and create a structured list of available tools. Each item should be a dictionary with 'name' and 'description' keys.
     prompt: |
       Use the shell_command tool to run: `astonish tools list`

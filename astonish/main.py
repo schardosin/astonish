@@ -263,7 +263,12 @@ async def list_tools(args=None):
         print(f"An error occurred in list_tools: {str(e)}")
 
 def run():
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nBye Bye!")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
 
 if __name__ == "__main__":
     run()

@@ -29,20 +29,25 @@ from rich.prompt import Prompt
 
 def create_node_function(node_config, mcp_client):
     """Creates the appropriate node function based on node_config type."""
-    node_type = node_config.get('type')
+
+    node_type = node_config.get('type', '').lower()
+    
     if node_type == 'input':
         return create_input_node_function(node_config)
     elif node_type == 'output':
         return create_output_node_function(node_config)
     elif node_type == 'llm':
-        use_tools_flag = bool(node_config.get('tools', False))
-        return create_llm_node_function(node_config, mcp_client, use_tools=use_tools_flag)
+        return create_llm_node_function(node_config, mcp_client, use_tools=True)
     elif node_type == 'tool':
         return create_tool_node_function(node_config, mcp_client)
     elif node_type == 'update_state':
         return create_update_state_node_function(node_config)
+    elif node_type == 'custom':
+        print("Warning: Using input node function for custom node type")
+        return create_input_node_function(node_config)
     else:
-        raise ValueError(f"Unsupported node type: {node_type}")
+        print(f"Warning: Unsupported node type: {node_type}, defaulting to update_state")
+        return create_update_state_node_function(node_config)
 
 def create_output_node_function(node_config: Dict[str, Any]):
     """Creates an output node function that formats and prints data from the state."""

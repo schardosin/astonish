@@ -43,6 +43,8 @@ async def main(args=None):
         await handle_agents_command(args)
     elif args.command == "tools":
         await handle_tools_command(args)
+    elif args.command == "config":
+        await handle_config_command(args)
     else:
         print(f"Unknown command: {args.command}")
 
@@ -95,6 +97,26 @@ async def handle_tools_command(args):
         print(result)
     else:
         print(f"Unknown tools command: {args.tools_command}")
+
+async def handle_config_command(args):
+    import astonish.globals as globals
+    import os
+    globals.setup_logger(verbose=args.verbose)
+    globals.load_config()
+    
+    if args.config_command == "edit":
+        result = globals.open_editor(globals.config_path)
+        print(result)
+    elif args.config_command == "show":
+        if os.path.exists(globals.config_path):
+            with open(globals.config_path, 'r') as file:
+                print(file.read())
+        else:
+            print(f"Config file not found at {globals.config_path}")
+    elif args.config_command == "directory":
+        print(globals.config_dir)
+    else:
+        print(f"Unknown config command: {args.config_command}")
 
 def parse_parameters(params):
     if not params:
@@ -175,12 +197,22 @@ def parse_arguments():
     tools_subparsers.add_parser("list", help="List available tools").add_argument("--json", action="store_true", help="Output in JSON format")
     tools_subparsers.add_parser("edit", help="Edit MCP configuration")
 
+    config_parser = subparsers.add_parser("config", help="Manage configuration")
+    config_subparsers = config_parser.add_subparsers(dest="config_command", help="Configuration management commands")
+    
+    config_subparsers.add_parser("edit", help="Open config.ini in default editor")
+    config_subparsers.add_parser("show", help="Print config.ini contents")
+    config_subparsers.add_parser("directory", help="Print the configuration directory path")
+
     args = parser.parse_args()
     if args.command is None:
         parser.print_help()
         exit(1)
     elif args.command == "agents" and args.agents_command is None:
         agents_parser.print_help()
+        exit(1)
+    elif args.command == "config" and args.config_command is None:
+        config_parser.print_help()
         exit(1)
 
     return args

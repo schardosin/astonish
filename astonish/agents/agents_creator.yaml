@@ -78,7 +78,7 @@ nodes:
       6.1. `options` is very helpful if the agent from previous node is a list of strings, and you want to limit the user input to one of the options. Example: `{{"options": ["option1", "option2"]}}`. If the options is a output_model variable, it should just mention the variable name. Example: `{{"options": [options_list]}}`, no curly braces around the list variable name.
       6.2. `options` cannot be a complex expression like lamba, it should always be a list, and can be strings or a variable from output_model of type list.
       6.3. `options` must be a list, it CANNOT be something like `{{"options": option1}}` or `{{"options": "option1, option2"}}`, instead it must use the dash (-) for each item, according to the YAML schema for lists.
-      7. `user_message`: Optional LIST of strings (variable names from output_model) for display. Omit if not needed. Example: `["final_summary"]`. It should be an output_model variable name, or a string. It must be used everytime the information is required to be displayed to the user.
+      7. user_message: Optional LIST of strings (variable names from output_model) for display. Used to show information from this node to the user. Omit if not needed or if the information is more appropriately displayed only in the prompt of the immediate next node (see Rule 20 for avoiding redundancy). Example: ["final_summary"]
       8. Ensure unique node names, correct variable usage between nodes (`{{variable}}`), valid lambda functions for conditions (`"lambda x: x['var'] == True"`).
       9. Structure: Top-level 'description', 'nodes' (list of node dicts), 'flow' (list of transition dicts like `{{'from': 'nodeA', 'to': 'nodeB'}}` or using 'edges').
       10. Loops: If iteration is needed, implement using an index variable, conditional edges, and index increment nodes.
@@ -100,7 +100,7 @@ nodes:
       14. When working with items to be appended to a list, make sure to provide the list in the prompt before the item to be appended. For example, if you have a list called 'collected_summaries', make sure to provide it in the prompt before the item to be appended.
       15. Always remember, to inject content use single curly braces, and to show as an example use double curly braces.
       16. Every prompt must be at least a single content injection by using the single curly braces. So it has the context of the previous node. Multiple injections are allowed, but at least one is required.
-      17. Do not generate a node to only display the output_model variable from previous nodes. Instead, use the user_message field in the same node to show the output_model variable to the user.
+      17. Avoid creating separate nodes solely for displaying information. If a node produces data that needs to be shown, generally use its user_message field. However, this is secondary to Rule 20: if the immediately following node's prompt will display the same data, omit user_message in the current node to prevent redundancy.
       18. When the content possibly will be too big, like for example, the content of a PR diff or source code, use the raw_tool_output to avoid overprocessing in the react flow.
         example:
           - name: get_pr_diff
@@ -118,6 +118,10 @@ nodes:
             raw_tool_output: 
               pr_diff: str
       19. ALWAYS use the type tool when needs to create the current_index variable and increment it. It should be a tool that uses the perform_calculation tool, and the operation should be set to "set" for the first time, and "add" for the increment.
+      20. There are two ways that content can be displayed to the user: 
+        - By using the user_message field, which displays the specified output_model variable(s) to the user after the node runs.
+        - By injecting a variable inside the input prompt using curly braces (e.g., {variable}), which displays the value within the prompt itself.
+        Do NOT use both methods to display the same variable in nodes in a row unless explicitly required, as this will result in duplicate content being shown to the user. Always choose the most appropriate method for the context, and avoid redundancy.
 
       # --- Comprehensive Example Flow (Study this structure and apply principles) ---
       ```yaml
@@ -392,7 +396,7 @@ nodes:
     tools_auto_approval: False
     system: "Get the astonish config directory path."
     prompt: |
-      Run: `python3 -c "import appdirs; print(appdirs.user_config_dir('astonish'))"`
+      Run: `astonish config directory`
     output_model:
       config_dir: str
 

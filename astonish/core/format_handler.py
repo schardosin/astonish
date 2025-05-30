@@ -44,7 +44,7 @@ async def execute_tool(
                 # Use the clean_and_fix_json function to handle potential JSON issues
                 from astonish.core.json_utils import clean_and_fix_json
                 cleaned_json_string = clean_and_fix_json(input_string)
-                parsed_args = {} if not cleaned_json_string else json.loads(cleaned_json_string)
+                parsed_args = {} if not cleaned_json_string else json.loads(cleaned_json_string, strict=False)
                 
                 if isinstance(tool_schema_def, type) and issubclass(tool_schema_def, BaseModel):
                     validated_args = tool_schema_def(**parsed_args)

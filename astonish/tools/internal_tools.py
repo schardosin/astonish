@@ -162,7 +162,7 @@ def chunk_pr_diff(diff_content: str) -> List[Dict[str, Any]]:
 
         # Try proper JSON first
         try:
-            parsed = json.loads(stripped)
+            parsed = json.loads(stripped, strict=False)
             if isinstance(parsed, dict) and 'stdout' in parsed:
                 return parsed['stdout']
         except json.JSONDecodeError:
@@ -445,11 +445,11 @@ def filter_json(json_data: Union[str, List[Dict[str, Any]], Dict[str, Any]], fie
         if isinstance(json_data, str):
             # Try to handle potential 'stdout' wrapping from shell commands
             try:
-                parsed_maybe = json.loads(json_data)
+                parsed_maybe = json.loads(json_data, strict=False)
                 if isinstance(parsed_maybe, dict) and 'stdout' in parsed_maybe:
                     data_str = parsed_maybe['stdout']
                     # If stdout is a string itself (likely JSON), parse it again
-                    data = json.loads(data_str) if isinstance(data_str, str) else data_str
+                    data = json.loads(data_str, strict=False) if isinstance(data_str, str) else data_str
                 else:
                     data = parsed_maybe
             except json.JSONDecodeError:

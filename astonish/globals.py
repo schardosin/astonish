@@ -61,7 +61,7 @@ def load_mcp_config():
     if os.path.exists(mcp_config_path):
         try:
             with open(mcp_config_path, 'r') as mcp_config_file:
-                loaded_config = json.load(mcp_config_file)
+                loaded_config = json.load(mcp_config_file, strict=False)
             
             # Check if 'mcpServers' key exists in the loaded config
             if "mcpServers" not in loaded_config:

@@ -125,7 +125,7 @@ async def run_react_planning_step(
         if "Final Answer:" in cleaned_response_text:
             # Use cleaned_response_text for splitting
             final_answer_text = cleaned_response_text.split("Final Answer:")[-1].strip()
-            final_answer_json = json.loads(final_answer_text)
+            final_answer_json = json.loads(final_answer_text, strict=False)
             content = final_answer_json['result']
 
             globals.logger.info(f"[{node_name}] LLM provided Final Answer.")

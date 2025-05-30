@@ -226,7 +226,7 @@ async def _format_final_output(
                     # For JSON parsing, clean_and_fix_json is more relevant.
                     cleaned_text_for_json = clean_and_fix_json(final_text) # Use original final_text for cleaner
                     if cleaned_text_for_json: # Ensure not empty string after cleaning
-                        evaluated_data = json.loads(cleaned_text_for_json)
+                        evaluated_data = json.loads(cleaned_text_for_json, strict=False)
                         if isinstance(evaluated_data, list):
                             temp_coerced_value = evaluated_data
                             parsed_successfully = True
@@ -287,7 +287,7 @@ async def _format_final_output(
                 elif not cleaned_final_text.strip() and not is_optional:
                     raise ValueError(f"Cannot parse empty string as dict for non-optional field '{field_name}'.")
                 else:
-                    parsed_json = json.loads(cleaned_final_text)
+                    parsed_json = json.loads(cleaned_final_text, strict=False)
                     if not isinstance(parsed_json, dict): # Ensure the parsed result is a dict
                         raise ValueError(
                             f"Expected dict for field '{field_name}', but JSON parsing yielded {type(parsed_json).__name__} "

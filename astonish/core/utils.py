@@ -309,7 +309,7 @@ def try_extract_stdout_from_string(text_input: str) -> Union[str, List[str], Non
     parsed_data = None
     try:
         # Try proper JSON first
-        parsed_data = json.loads(stripped)
+        parsed_data = json.loads(stripped, strict=False)
     except json.JSONDecodeError:
         # Fallback to Python-style dicts (e.g., using single quotes)
         try:

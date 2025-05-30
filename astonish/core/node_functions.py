@@ -742,7 +742,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                         if tool_definition_for_exec['input_type'] == 'JSON_SCHEMA':
                              # Clean and fix the JSON before parsing
                              cleaned_input = clean_and_fix_json(tool_input_str)
-                             parsed_args = {} if not cleaned_input else json.loads(cleaned_input)
+                             parsed_args = {} if not cleaned_input else json.loads(cleaned_input, strict=False)
                              schema_def = tool_definition_for_exec['input_schema_definition']
                              if isinstance(schema_def, type) and issubclass(schema_def, BaseModel): 
                                 validated_args_model = schema_def(**parsed_args)

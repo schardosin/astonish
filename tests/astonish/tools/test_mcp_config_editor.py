@@ -42,7 +42,7 @@ def test_create_default_config(mock_globals):
     
     # Combine all write calls to get the full content
     written_content = ''.join(call.args[0] for call in handle.write.call_args_list)
-    assert json.loads(written_content) == {"mcpServers": {}}
+    assert json.loads(written_content, strict=False) == {"mcpServers": {}}
 
 def test_create_default_config_error(mock_globals):
     with patch('os.makedirs', side_effect=Exception("Mock error")), \

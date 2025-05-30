@@ -1,11 +1,6 @@
-import configparser
-import os
-import appdirs
 from astonish.providers.ai_provider_interface import AIProvider
 from astonish.providers.ollama_provider import OllamaProvider
-from astonish.providers.sap_ai_core_provider import SAPAICoreProvider
 from astonish.factory.ai_provider_factory import AIProviderFactory
-from astonish.globals import CONFIG_FILE
 import astonish.globals as globals
 
 class LLMManager:

@@ -1,10 +1,10 @@
 import json
 import traceback
-from typing import Dict, Any, Optional, Union, Type
+from typing import Dict, Any
 from pydantic import ValidationError
 from langchain.schema import OutputParserException
 import astonish.globals as globals
-from astonish.core.utils import print_ai, print_section, print_output, console
+from astonish.core.utils import print_ai,print_output, console
 
 def create_error_feedback(error: Exception, node_name: str) -> str:
     """

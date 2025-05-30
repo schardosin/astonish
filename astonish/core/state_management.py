@@ -5,7 +5,6 @@ This module contains functions for managing state in the agentic flow.
 from typing import Dict, Any, Union
 from pydantic import BaseModel
 import astonish.globals as globals
-from astonish.core.utils import print_output
 
 def update_state(state: Dict[str, Any], output: Union[BaseModel, str, Dict, None], node_config: Dict[str, Any]) -> Dict[str, Any]:
     """

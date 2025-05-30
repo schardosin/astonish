@@ -9,10 +9,7 @@ import inquirer
 import astonish.globals as globals
 from typing import Dict, Any, Union, Optional, List
 from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
-from langchain_core.prompts import ChatPromptTemplate, BasePromptTemplate
-from langchain_core.tools import BaseTool
-from langchain_core.runnables import Runnable
-from langchain_core.language_models.base import BaseLanguageModel
+from langchain_core.prompts import ChatPromptTemplate
 from langchain.output_parsers import PydanticOutputParser
 from langchain.schema import OutputParserException
 from pydantic import ValidationError, BaseModel
@@ -23,7 +20,7 @@ from astonish.core.error_handler import create_error_feedback, handle_node_failu
 from astonish.core.format_handler import execute_tool
 from astonish.core.utils import request_tool_execution
 from astonish.core.json_utils import clean_and_fix_json
-from astonish.core.react_planning import ToolDefinition, ReactStepOutput, run_react_planning_step, format_react_step_for_scratchpad
+from astonish.core.react_planning import ToolDefinition, run_react_planning_step, format_react_step_for_scratchpad
 from astonish.core.output_model_utils import create_output_model, _format_final_output
 from astonish.core.state_management import update_state
 from astonish.core.ui_utils import print_user_messages, print_chat_prompt, print_state
@@ -35,14 +32,14 @@ def create_node_function(node_config, mcp_client):
     node_type = node_config.get('type')
     if node_type == 'input':
         return create_input_node_function(node_config)
-    elif node_type == 'output': # Added new output type
+    elif node_type == 'output':
         return create_output_node_function(node_config)
     elif node_type == 'llm':
         use_tools_flag = bool(node_config.get('tools', False))
         return create_llm_node_function(node_config, mcp_client, use_tools=use_tools_flag)
     elif node_type == 'tool':
         return create_tool_node_function(node_config, mcp_client)
-    elif node_type == 'update_state': # New type
+    elif node_type == 'update_state':
         return create_update_state_node_function(node_config)
     else:
         raise ValueError(f"Unsupported node type: {node_type}")

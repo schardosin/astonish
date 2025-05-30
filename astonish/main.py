@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import importlib
 import asyncio
 
 # Constants for version information
@@ -9,9 +8,10 @@ PROJECT_NAME = "Astonish AI companion"
 GITHUB_LINK = "https://github.com/schardosin/astonish"
 
 def get_version():
+    from importlib.metadata import version, PackageNotFoundError
     try:
-        return importlib.metadata.version("astonish")
-    except importlib.metadata.PackageNotFoundError:
+        return version("astonish")
+    except PackageNotFoundError:
         return "unknown"
 
 def version_info():

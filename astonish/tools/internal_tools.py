@@ -281,8 +281,8 @@ def chunk_pr_diff(diff_content: str) -> List[Dict[str, Any]]:
                 new_ln = str(line.target_line_no or '').rjust(4)
                 
                 # Get the line content, remove the original +,-,' ' and any trailing newline
-                content = line.value[1:].rstrip('\n')
-                
+                content = line.value.rstrip('\n')
+
                 # Reconstruct the line with the line type, numbers, and content
                 formatted_hunk_lines.append(f"{line.line_type}{old_ln} {new_ln} {content}")
 

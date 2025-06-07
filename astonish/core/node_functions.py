@@ -176,8 +176,12 @@ def create_update_state_node_function(node_config: Dict[str, Any]):
                     raise TypeError(f"Target variable '{target_variable_name}' must be a list to append to, but found type: {type(new_state[target_variable_name])}.")
                                 
                 if item_to_append not in ("", None):
-                    new_state[target_variable_name].append(item_to_append)
-                    globals.logger.info(f"[{node_name}] Appended item to '{target_variable_name}'. New list size: {len(new_state[target_variable_name])}.")
+                    if isinstance(item_to_append, list):
+                        new_state[target_variable_name].extend(item_to_append)
+                        globals.logger.info(f"[{node_name}] Extended list with items from the source list. New list size: {len(new_state[target_variable_name])}.")
+                    else:
+                        new_state[target_variable_name].append(item_to_append)
+                        globals.logger.info(f"[{node_name}] Appended item to '{target_variable_name}'. New list size: {len(new_state[target_variable_name])}.")
                 else:
                     globals.logger.info(f"[{node_name}] Skipped appending empty or None item to '{target_variable_name}'.")
 

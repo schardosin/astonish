@@ -122,6 +122,8 @@ def create_first_run_react_prompt_template(tools_definitions: List[Dict[str, Any
         * Choose the most appropriate tool from the available options
         * Provide properly formatted Action Input according to the tool's requirements
 
+        CRITICAL FORMATTING RULE: You MUST NOT wrap your 'Thought:', 'Action:', 'Action Input:', or 'Final Answer:' in JSON markdown ```json code blocks.
+
         Begin!
 
         Question: {{input}}
@@ -252,6 +254,8 @@ def create_custom_react_prompt_template(tools_definitions: List[Dict[str, Any]])
         * Once you have the information needed to answer the 'Question', your *very next step* must be a 'Thought:' explaining this, followed *immediately* by the 'Final Answer:'.
         * The 'Final Answer:' MUST be provided as soon as you have the complete answer, avoiding unnecessary steps. So be very critial in your 'Thought:' step to determine if you have enough information as soon as possible.
         * The 'Final Answer:' MUST be provide with the prefix 'Final Answer:' and the content must be a valid JSON object string, like {{{{"result": <your_answer_here>}}}}.
+
+        CRITICAL FORMATTING RULE: You MUST NOT wrap your 'Thought:', 'Action:', 'Action Input:', or 'Final Answer:' in JSON markdown ```json code blocks.
 
         Begin!
 

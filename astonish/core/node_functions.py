@@ -573,23 +573,21 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
     
     async def _perform_direct_llm_call(system_message_content, human_message_content, llm, parser, node_config, node_name):
         prompt_to_llm = human_message_content
-        format_instructions = ""
-        schema_valid_for_format_direct = False
+        # Add format instructions to the prompt if a parser is available. This is a "best effort" enhancement.
         if parser:
             try:
                 if hasattr(parser.pydantic_object, 'model_json_schema'): 
                     format_instructions = parser.get_format_instructions()
-                    schema_valid_for_format_direct = True
-                else: 
-                    console.print(f"Error: Pydantic V2 model lacks .model_json_schema() for {node_name}", style="red")
-                if schema_valid_for_format_direct: 
                     prompt_to_llm += f"\n\nIMPORTANT: Respond ONLY with a JSON object conforming to the schema below. Do not include ```json ``` markers or any text outside the JSON object itself.\nSCHEMA:\n{format_instructions}"
                 else: 
-                    console.print(f"Warning: Cannot get format instructions for {node_name}. Asking for text.", style="yellow")
+                    console.print(f"Error: Pydantic V2 model lacks .model_json_schema() for {node_name}", style="red")
             except Exception as e: 
                 console.print(f"[{node_name}] Unexpected error getting format instructions: {e}", style="red")
         
         messages: List[BaseMessage] = [SystemMessage(content=system_message_content), HumanMessage(content=prompt_to_llm)]
+        if node_config.get('print_prompt', False):
+            print_chat_prompt(ChatPromptTemplate(messages=messages), node_config)
+            
         max_retries = node_config.get('max_retries', 3)
         retry_count = 0
         last_error = None
@@ -597,25 +595,23 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
         while retry_count < max_retries:
              try:
                   globals.logger.info(f"[{node_name}] Attempt {retry_count + 1}/{max_retries} for direct LLM call...")
-                  
                   final_response = await llm.ainvoke(messages)
                   raw_llm_response_content = final_response.content
-                      
                   llm_response_content_no_think = remove_think_tags(raw_llm_response_content)
                   globals.logger.info(f"[{node_name}] LLM response (raw): {str(raw_llm_response_content[:200])}...")
                   globals.logger.info(f"[{node_name}] LLM response (tags removed): {str(llm_response_content_no_think[:200])}...")
                   
-                  if parser and schema_valid_for_format_direct:
+                  if parser:
                         cleaned_content = clean_and_fix_json(llm_response_content_no_think)
                         if not cleaned_content: 
                             if not llm_response_content_no_think and raw_llm_response_content:
-                                 raise OutputParserException("Response became empty after <think> tag removal. Original may have only contained tags.")
-                            raise OutputParserException("Received empty or unparseable response after tag removal and cleaning.")
+                                 raise OutputParserException("Response became empty after <think> tag removal.")
+                            raise OutputParserException("Received empty or unparseable response after cleaning.")
                         parsed_output = parser.parse(cleaned_content)
                         globals.logger.info(f"[{node_name}] Successfully parsed and validated JSON output.")
                         return parsed_output
                   else: 
-                    globals.logger.info(f"[{node_name}] Received raw text output (no parser or format instructions failed/missing).")
+                    globals.logger.info(f"[{node_name}] No parser defined. Received raw text output.")
                     return llm_response_content_no_think
 
              except (OutputParserException, ValidationError, json.JSONDecodeError) as e:
@@ -625,7 +621,6 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                   globals.logger.error(f"[{node_name}] Output parsing/validation failed (Attempt {retry_count}/{max_retries}): {error_detail}")
                   if retry_count >= max_retries: 
                       break
-
                   feedback = create_error_feedback(e, node_name)
                   print_output(f"Providing feedback to LLM: {feedback[:100]}...")
                   messages = messages[:1] + [messages[1]] + [HumanMessage(content=feedback)]
@@ -633,7 +628,6 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                 console.print(f"[{node_name}] Unexpected LLM call error: {e}", style="red")
                 last_error = e
                 break
-        
         raise last_error if last_error else Exception("LLM call failed after multiple retries without a specific parsing error.")
 
     async def _execute_parallel_llm_append(node_config, state, llm, parser, active_session, react_logic_func):
@@ -642,6 +636,7 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
         list_key = parallel_config.get('forEach', '').strip('{}')
         item_name = parallel_config.get('as')
         max_concurrency = parallel_config.get('maxConcurrency', 5)
+        index_as_key = parallel_config.get('index_as')
         if not all([list_key, item_name]):
             return handle_node_failure(state, node_name, ValueError("Parallel config requires 'forEach' and 'as' keys."))
         input_list = state.get(list_key)
@@ -658,6 +653,9 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
         node_uses_tools = bool(node_config.get('tools', False))
         tool_execution_queue, consumer_task = None, None
         if node_uses_tools:
+            is_auto_approved = node_config.get('tools_auto_approval', False)
+            if max_concurrency > 1 and not is_auto_approved:
+                console.print(f"[⚠️ Warning] Node '{node_name}' has parallel tool calls but 'tools_auto_approval' is false. Prompts will appear sequentially.", style="yellow")
             tool_execution_queue = asyncio.Queue()
             async def tool_consumer():
                 while True:
@@ -682,18 +680,14 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
             async with semaphore:
                 scoped_state = state.copy()
                 scoped_state[item_name] = item
+                if index_as_key:
+                    scoped_state[index_as_key] = index
                 try:
                     print_output(f"[⚡️ Parallel] Worker {index+1}/{len(input_list)} starting (max concurrency: {max_concurrency}).", color="cyan")
                     system_prompt = format_prompt(node_config.get('system', ''), scoped_state, node_config)
                     human_prompt = format_prompt(node_config['prompt'], scoped_state, node_config)
                     final_output, raw_outputs = None, {}
                     if node_uses_tools:
-                        is_auto_approved = node_config.get('tools_auto_approval', False)
-                        if max_concurrency > 1 and not is_auto_approved:
-                            # This is the safety rail for interactive mode. We allow the LLM calls in parallel,
-                            # but the user prompts for approval will appear sequentially via the tool consumer.
-                            console.print(f"[⚠️ Warning] Node '{node_name}' has parallel tool calls but 'tools_auto_approval' is false. Approval prompts will appear sequentially.", style="yellow")
-
                         final_output, raw_outputs = await react_logic_func(
                             active_mcp_session=active_session, system_message_content=system_prompt,
                             human_message_content=human_prompt, node_config=node_config, parser=parser,
@@ -745,7 +739,6 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
             node_config: Dict, parser: Optional[PydanticOutputParser], worker_node_name: str,
             scoped_state: Dict, llm: Any, tool_queue: Optional[asyncio.Queue] = None
         ) -> tuple[Union[BaseModel, str, Dict, None], Dict[str, Any]]:
-            
             agent_scratchpad, tool_registry, filtered_tool_defs = "", {}, []
             max_iterations, final_answer_found = node_config.get('max_react_iterations', 5), False
             raw_outputs_to_store, last_react_error = {}, None
@@ -758,7 +751,6 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                      console.print(f"[{worker_node_name}] Warning: MCP client error during get_tools: {e}", style="red")
             if isinstance(internal_tools_list, list):
                 all_fetched_tools.extend(internal_tools_list)
-            
             tool_selection = node_config.get('tools_selection')
             for tool_obj in all_fetched_tools:
                 try:
@@ -778,7 +770,6 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                     tool_registry[tool_name_attr] = tool_def
                 except Exception as e: 
                      console.print(f"[{worker_node_name}] Error processing tool definition: {e}", style="red")
-
             current_human_message = human_message_content
             for i in range(max_iterations):
                 print_output(f"[{worker_node_name} 🧠 Thinking] Iteration {i + 1}/{max_iterations}", color="yellow")
@@ -808,55 +799,41 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_client: Any, use_t
                         else:
                             last_react_error = error_message; break
                 if last_react_error: break
-                
                 status, thought = react_step_output.get('status'), react_step_output.get('thought')
                 if status == 'final_answer':
                     _react_final_output = {"output": remove_think_tags(react_step_output.get('answer',''))}
                     final_answer_found = True; break
-                
                 if status == 'action':
                     tool_name, tool_input_str, observation = react_step_output.get('tool'), react_step_output.get('tool_input'), ""
-                    
                     tool_args_for_approval = tool_input_str
                     try:
-                        # Try to parse the input string as JSON, which is needed for display in the prompt
                         cleaned_input = clean_and_fix_json(tool_input_str)
-                        if cleaned_input:
-                            tool_args_for_approval = json.loads(cleaned_input)
+                        if cleaned_input: tool_args_for_approval = json.loads(cleaned_input)
                     except (json.JSONDecodeError, TypeError):
-                        # If it's not valid JSON, we'll just use the raw string
-                        globals.logger.debug(f"[{worker_node_name}] Tool input was not valid JSON, using raw string for approval display.")
-
+                        globals.logger.debug(f"[{worker_node_name}] Tool input not valid JSON, using raw string for approval.")
                     approval_info = { "name": tool_name, "args": tool_args_for_approval, "auto_approve": node_config.get('tools_auto_approval', False) }
-                    
                     if tool_queue:
                         future = asyncio.get_running_loop().create_future()
-                        request = {
-                            "approval_info": approval_info,
-                            "node_name": worker_node_name, "tool_name": tool_name, 
-                            "input_string": tool_input_str, "tool_registry": tool_registry,
-                            "future": future
-                        }
+                        request = { "approval_info": approval_info, "node_name": worker_node_name, "tool_name": tool_name, "input_string": tool_input_str, "tool_registry": tool_registry, "future": future }
                         await tool_queue.put(request)
                         execution_result_dict = await future
-                    else: # This is the sequential path
+                    else:
                         approve = await asyncio.to_thread(request_tool_execution, approval_info)
                         if approve:
                             execution_result_dict = await execute_tool(node_name=worker_node_name, tool_name=tool_name, input_string=tool_input_str, tool_registry=tool_registry)
                         else:
                             execution_result_dict = { "_error": { "message": f"User denied execution of tool '{tool_name}'.", "user_message": f"Execution of tool '{tool_name}' was denied." } }
-                    
                     raw_tool_output_content = execution_result_dict.get("output", "Tool executed with no output.")
                     if isinstance(execution_result_dict, dict) and "_error" in execution_result_dict:
                          observation = execution_result_dict["_error"].get('user_message', "Tool execution failed.")
-                    else: observation = str(raw_tool_output_content)
-                    raw_output_config = node_config.get('raw_tool_output')
-                    if raw_output_config and isinstance(raw_output_config, dict) and len(raw_output_config) == 1:
-                        key_to_store = next(iter(raw_output_config.keys()))
+                    elif node_config.get('raw_tool_output') and isinstance(node_config.get('raw_tool_output'), dict) and len(node_config.get('raw_tool_output')) == 1:
+                        key_to_store = next(iter(node_config.get('raw_tool_output').keys()))
                         raw_outputs_to_store[key_to_store] = raw_tool_output_content
-                        globals.logger.info(f"[{worker_node_name}] Captured raw tool output for key '{key_to_store}'.")
+                        observation = f"Tool '{tool_name}' executed successfully. Its output has been directly stored in the agent's state under the key '{key_to_store}'."
+                        globals.logger.info(f"[{worker_node_name}] {observation}")
+                    else:
+                        observation = str(raw_tool_output_content)
                     agent_scratchpad += format_react_step_for_scratchpad(thought, tool_name, tool_input_str, observation)
-
             if not final_answer_found:
                  raise Exception(f"ReAct loop finished. Last error: {last_react_error}" if last_react_error else "Max iterations reached.")
             final_text = _react_final_output.get("output") if isinstance(_react_final_output, dict) else str(_react_final_output)

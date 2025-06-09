@@ -254,6 +254,7 @@ def create_custom_react_prompt_template(tools_definitions: List[Dict[str, Any]])
         * Once you have the information needed to answer the 'Question', your *very next step* must be a 'Thought:' explaining this, followed *immediately* by the 'Final Answer:'.
         * The 'Final Answer:' MUST be provided as soon as you have the complete answer, avoiding unnecessary steps. So be very critial in your 'Thought:' step to determine if you have enough information as soon as possible.
         * The 'Final Answer:' MUST be provide with the prefix 'Final Answer:' and the content must be a valid JSON object string, like {{{{"result": <your_answer_here>}}}}.
+        * The 'Final Answer:' MUST be provided only in case of successful completion of the task. If you encounter an error or cannot complete the task, do not provide a 'Final Answer:'.
 
         CRITICAL FORMATTING RULE: You MUST NOT wrap your 'Thought:', 'Action:', 'Action Input:', or 'Final Answer:' in JSON markdown ```json code blocks.
 

@@ -142,6 +142,29 @@ system: |
   You are a helpful assistant that provides concise and accurate information.
 ```
 
+#### `parallel`
+
+A configuration object for enabling parallel processing in the LLM node. This allows the node to process multiple items concurrently, improving efficiency for tasks that can be parallelized.
+
+```yaml
+parallel:
+  forEach: "{list_variable}"
+  as: "item_name"
+  maxConcurrency: 30
+```
+
+- `forEach`: Specifies the state variable (enclosed in curly braces) containing the list of items to process in parallel.
+- `as`: Defines the name to use for each item in the parallel processing context.
+- `maxConcurrency`: Sets the maximum number of concurrent operations allowed.
+
+#### `output_action`
+
+Specifies how the output of parallel processing should be handled. When using parallelism, only `"append"` is currently supported to add results to a list.
+
+```yaml
+output_action: append
+```
+
 #### `tools`
 
 A boolean indicating whether the node can use tools. If `true`, the node will be able to use tools specified in `tools_selection`.
@@ -285,7 +308,9 @@ prompt: |
   {previous_results}
 ```
 
-## Complete Example
+## Complete Examples
+
+### Example 1: PR Review Agent
 
 Here's a complete example of an agent that reviews a pull request using both LLM and Tool nodes:
 
@@ -406,6 +431,119 @@ flow:
       - to: show_reviews
         condition: "lambda x: not x['current_index'] < len(x['pr_chunks'])"
 ```
+
+### Example 2: Parallel PR Review Agent
+
+This example demonstrates how to use the parallelism feature to review multiple chunks of a PR simultaneously:
+
+```yaml
+description: Parallel PR Review Agentic Flow
+nodes:
+  - name: list_prs
+    type: llm
+    system: |
+      You are a GitHub CLI expert. Your task is to list all open pull requests in the current repository.
+    prompt: |
+      Use the 'gh pr list' command to list all open pull requests.
+
+      Format the output as:
+      123: Title of PR 1
+      456: Title of PR 2
+      789: Title of PR 3
+    output_model:
+      pr_list: list
+    tools: true
+    tools_selection:
+      - shell_command
+
+  - name: select_pr
+    type: input
+    prompt: |
+      Please select a pull request from the list below by entering its number:
+      {pr_list}
+    output_model:
+      selected_pr: str
+    options: [pr_list]
+
+  - name: get_pr_diff
+    type: llm
+    system: |
+      You are a GitHub CLI expert. Your task is to use the 'gh' command to retrieve the diff for a specific pull request.
+    prompt: |
+      Use the 'gh pr diff' command to get the diff for PR number {selected_pr}.
+      IMPORTANT: The tool will return the raw diff. Your final task for this step is to confirm its retrieval.
+    output_model:
+      retrieval_status: str
+    tools: true
+    tools_selection:
+      - shell_command
+    raw_tool_output:
+      pr_diff: str
+
+  - name: chunk_pr
+    type: tool
+    args:
+      diff_content: {pr_diff}
+    tools_selection:
+      - chunk_pr_diff
+    output_model:
+      pr_chunks: list
+
+  - name: review_chunks
+    type: llm
+    parallel:
+      forEach: "{pr_chunks}"
+      as: "chunk"
+      maxConcurrency: 5
+    output_action: append
+    system: |
+      You are a code review assistant. Your task is to review a chunk of code and provide feedback.
+    prompt: |
+      Review the following chunk of code:
+      {chunk}
+      Provide your feedback on this chunk.
+    output_model:
+      chunk_reviews: list
+
+  - name: summarize_reviews
+    type: llm
+    system: |
+      You are a summarization assistant. Your task is to present a summary of the code reviews to the user.
+    prompt: |
+      Here are the reviews for the pull request:
+      {chunk_reviews}
+      
+      Summarize the key points from these reviews.
+    output_model:
+      final_summary: str
+    user_message:
+      - final_summary
+
+flow:
+  - from: START
+    to: list_prs
+  - from: list_prs
+    to: select_pr
+  - from: select_pr
+    to: get_pr_diff
+  - from: get_pr_diff
+    to: chunk_pr
+  - from: chunk_pr
+    to: review_chunks
+  - from: review_chunks
+    to: summarize_reviews
+  - from: summarize_reviews
+    to: END
+```
+
+In this parallel version:
+
+1. The `chunk_pr` node splits the PR diff into chunks.
+2. The `review_chunks` node uses the `parallel` configuration to process all chunks concurrently, with a maximum of 5 concurrent operations.
+3. The `output_action: append` ensures that all chunk reviews are collected into a list.
+4. The `summarize_reviews` node then summarizes all the collected reviews.
+
+This parallel approach can significantly speed up the review process for large PRs by processing multiple chunks simultaneously.
 
 ## Best Practices
 

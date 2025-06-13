@@ -25,8 +25,15 @@ class ValidateGenericYAMLInput(BaseModel):
     schema_yaml: str = Field(..., description="YAML schema definition (as a string).")
     content_yaml: str = Field(..., description="YAML content to validate (as a string).")
 
-class ChunkPRDiffInput(BaseModel):
+class GitDiffAddLineNumbersInput(BaseModel):
+    """Input schema for the git_diff_add_line_numbers tool."""
     diff_content: str = Field(..., description="The entire content of the PR diff (git diff format).")
+
+class GitSplitChunkDiffInput(BaseModel):
+    """Input schema for the git_split_chunk_diff tool."""
+    diff_content: str = Field(..., description="The entire content of the PR diff (git diff format).")
+    add_line_numbers: bool = Field(default=False, description="If True, adds line numbers to each line within the diff chunk.")
+
 
 class MathOperation(str, Enum):
     """Defines the supported mathematical operations."""
@@ -143,182 +150,122 @@ def validate_yaml_with_schema(schema_yaml: str, content_yaml: str) -> Dict[str, 
         print(f"Validation error: {e}")
         return {"errors": [str(e)]}
 
-@tool("chunk_pr_diff", args_schema=ChunkPRDiffInput)
-def chunk_pr_diff(diff_content: str) -> List[Dict[str, Any]]:
+@tool("git_diff_add_line_numbers", args_schema=GitDiffAddLineNumbersInput)
+def git_diff_add_line_numbers(diff_content: str) -> str:
     """
-    Parses a PR diff string (git diff format) and breaks it down into reviewable chunks,
-    including line numbers for each line in the diff.
+    Parses a PR diff string or a patch snippet and adds line numbers to 
+    each line of change, returning the formatted result as a single string.
     """
+    processed_diff = diff_content.strip()
+    is_partial_patch = False
 
-    def extract_diff_from_jsonish_input(input_str: str) -> Union[str, None]:
-        """
-        Detects and extracts the diff content from a JSON or pseudo-JSON string
-        where the diff is stored under a key like 'stdout'.
-        Returns the raw diff string or None if it cannot be extracted.
-        """
-        stripped = input_str.strip()
-        if not stripped:
-            return None
-
-        # Try proper JSON first
-        try:
-            parsed = json.loads(stripped, strict=False)
-            if isinstance(parsed, dict) and 'stdout' in parsed:
-                return parsed['stdout']
-        except json.JSONDecodeError:
-            pass
-
-        # Fallback to Python-style dicts (e.g., using single quotes)
-        try:
-            parsed = ast.literal_eval(stripped)
-            if isinstance(parsed, dict) and 'stdout' in parsed:
-                return parsed['stdout']
-        except (ValueError, SyntaxError):
-            pass
-
-        # Not JSON or dict-like
-        return input_str
-
-    diff_content = extract_diff_from_jsonish_input(diff_content) or "" # Ensure it's a string
-    if not diff_content.strip():
-        return [{
-            "file_path": "N/A",
-            "chunk_type": "empty_diff_input",
-            "content": "The provided PR diff content was empty or whitespace only.",
-            "metadata": None
-        }]
+    if processed_diff.startswith('@@') and '--- a/' not in processed_diff:
+        is_partial_patch = True
+        processed_diff = "--- a/file.patch\n+++ b/file.patch\n" + processed_diff
 
     try:
-        # PatchSet expects an iterable of lines. Using splitlines(True) preserves newlines.
+        patch_set = PatchSet(processed_diff.splitlines(keepends=True))
+        if not any([patch_set.modified_files, patch_set.added_files, patch_set.removed_files]):
+            return "No file changes were found in the provided diff."
+            
+    except Exception as e:
+        error_context = "This may be due to an unrecognized diff format."
+        return f"Critical error while parsing the PR diff: {str(e)}. {error_context}"
+
+    formatted_diff_parts = []
+    for patched_file in patch_set:
+        if patched_file.is_binary_file:
+            source = patched_file.source_file or 'source_binary'
+            target = patched_file.target_file or 'target_binary'
+            formatted_diff_parts.append(f"--- a/{source}\n+++ b/{target}\nBinary files differ\n")
+            continue
+
+        if not is_partial_patch:
+            formatted_diff_parts.append(str(patched_file.header))
+
+        for hunk in patched_file:
+            # --- FIX IS HERE ---
+            # Manually reconstruct the hunk header from its attributes.
+            hunk_header = (
+                f"@@ -{hunk.source_start},{hunk.source_length} "
+                f"+{hunk.target_start},{hunk.target_length} @@"
+                f" {hunk.section_header}".rstrip() # Use rstrip to remove trailing space if no section_header
+            )
+            formatted_diff_parts.append(hunk_header)
+            # --- END OF FIX ---
+
+            for line in hunk:
+                old_ln = str(line.source_line_no or '').rjust(4)
+                new_ln = str(line.target_line_no or '').rjust(4)
+                content = line.value.rstrip('\n\r')
+                formatted_diff_parts.append(f"{line.line_type}{old_ln} {new_ln} {content}")
+    
+    return "\n".join(formatted_diff_parts)
+
+@tool("git_split_chunk_diff", args_schema=GitSplitChunkDiffInput)
+def git_split_chunk_diff(diff_content: str, add_line_numbers: bool = False) -> List[Dict[str, Any]]:
+    """
+    Parses a PR diff string and breaks it down into reviewable chunks,
+    one for each hunk of change.
+    """
+    if not diff_content.strip():
+        return [{"file_path": "N/A", "chunk_type": "empty_diff_input", "content": "The provided PR diff content was empty.", "metadata": None}]
+
+    try:
         patch_set = PatchSet(diff_content.splitlines(keepends=True))
     except Exception as e:
-        return [{
-            "file_path": "N/A",
-            "chunk_type": "diff_parse_error",
-            "content": f"Critical error while trying to parse the PR diff. Error: {str(e)}\n\nFirst 500 chars of diff (approx):\n{diff_content[:500]}",
-            "metadata": None
-        }]
+        return [{"file_path": "N/A", "chunk_type": "diff_parse_error", "content": f"Critical error parsing PR diff: {str(e)}", "metadata": None}]
 
     review_chunks: List[Dict[str, Any]] = []
-
-    if not patch_set.modified_files and not patch_set.added_files and not patch_set.removed_files:
-         return [{
-            "file_path": "N/A",
-            "chunk_type": "no_files_in_diff",
-            "content": "The PR diff was parsed, but no modified, added, or removed files were identified by the parser.",
-            "metadata": None
-        }]
-
     for patched_file in patch_set:
         file_path = patched_file.path
-        file_level_info_parts = []
-
-        old_mode = getattr(patched_file, 'old_mode', None)
-        new_mode = getattr(patched_file, 'new_mode', None)
-
-        if patched_file.is_added_file:
-            file_level_info_parts.append(f"File added: {file_path}")
-            if new_mode: 
-                file_level_info_parts.append(f"New file mode: {new_mode}")
-        elif patched_file.is_removed_file:
-            file_level_info_parts.append(f"File removed: {file_path}")
-            if old_mode: 
-                file_level_info_parts.append(f"Old file mode was: {old_mode}")
-        else:
-            file_level_info_parts.append(f"File modified: {file_path}")
-            if old_mode is not None and new_mode is not None and old_mode != new_mode:
-                file_level_info_parts.append(f"Mode changed from {old_mode} to {new_mode}.")
-            elif new_mode is not None and old_mode is None :
-                 file_level_info_parts.append(f"File mode is {new_mode} (old mode not specified in diff).")
-
-        file_context_header = "\n".join(file_level_info_parts)
-
         if patched_file.is_binary_file:
             review_chunks.append({
-                "file_path": file_path,
-                "chunk_type": "binary_file_summary",
-                "content": file_context_header + "\nThis is a binary file. Review manually if necessary.",
+                "file_path": file_path, "chunk_type": "binary_file_summary",
+                "content": f"File: {file_path}\nThis is a binary file. Review manually.",
                 "metadata": {"is_binary": True}
             })
             continue
 
-        try:
-            hunks_from_file = list(patched_file)
-        except TypeError:
-            review_chunks.append({
-                "file_path": file_path,
-                "chunk_type": "hunk_iteration_error",
-                "content": file_context_header + "\nError: Could not iterate over hunks for this file.",
-                "metadata": None
-            })
-            continue
-
+        hunks_from_file = list(patched_file)
         if not hunks_from_file:
-            review_chunks.append({
-                "file_path": file_path,
-                "chunk_type": "file_info_no_hunks",
-                "content": file_context_header + "\nNo content hunks to review for this file.",
-                "metadata": None
-            })
             continue
 
-        # Process each hunk as a separate chunk
         for hunk_num, hunk in enumerate(hunks_from_file):
-            hunk_details_parts = [
-                f"Hunk {hunk_num + 1}/{len(hunks_from_file)} for file '{file_path}'.",
-                f"Changes affect lines from ~{hunk.source_start} (old file) and ~{hunk.target_start} (new file)."
-            ]
-            if hunk.section_header:
-                hunk_details_parts.append(f"Context: {hunk.section_header.strip()}")
-
-            hunk_context_summary = "\n".join(hunk_details_parts)
-
+            hunk_context_summary = f"File: '{file_path}' | Hunk {hunk_num + 1}/{len(hunks_from_file)}"
+            
             formatted_hunk_lines = []
-            # Iterate through each line in the hunk
             for line in hunk:
-                # Get old and new line numbers, use spaces if None
-                old_ln = str(line.source_line_no or '').rjust(4)
-                new_ln = str(line.target_line_no or '').rjust(4)
-                
-                # Get the line content, remove the original +,-,' ' and any trailing newline
-                content = line.value.rstrip('\n')
+                content = line.value.rstrip('\n\r')
+                if add_line_numbers:
+                    old_ln = str(line.source_line_no or '').rjust(4)
+                    new_ln = str(line.target_line_no or '').rjust(4)
+                    formatted_hunk_lines.append(f"{line.line_type}{old_ln} {new_ln} {content}")
+                else:
+                    formatted_hunk_lines.append(f"{line.line_type}{content}")
+            
+            diff_section = "\n".join(formatted_hunk_lines)
+            format_header = "(<+/-><old#><new#><content>)" if add_line_numbers else "(<+/-><content>)"
 
-                # Reconstruct the line with the line type, numbers, and content
-                formatted_hunk_lines.append(f"{line.line_type}{old_ln} {new_ln} {content}")
-
-            # Join the formatted lines into a single string for the diff block
-            diff_section_with_lines = "\n".join(formatted_hunk_lines)
-
-            chunk_content_for_llm = (
+            chunk_content = (
                 f"{hunk_context_summary}\n"
-                "Relevant diff section (Format: <+/-><old_ln><new_ln><content>) to review:\n"
+                f"Relevant diff section {format_header}:\n"
                 "```diff\n"
-                f"{diff_section_with_lines}\n"
+                f"{diff_section}\n"
                 "```"
             )
 
             review_chunks.append({
-                "file_path": file_path,
-                "chunk_type": "hunk",
-                "content": chunk_content_for_llm,
+                "file_path": file_path, "chunk_type": "hunk",
+                "content": chunk_content,
                 "metadata": {
-                    "source_start_line": hunk.source_start,
-                    "source_length": hunk.source_length,
-                    "target_start_line": hunk.target_start,
-                    "target_length": hunk.target_length,
-                    "section_header": hunk.section_header.strip() if hunk.section_header else None,
-                    "hunk_index_in_file": hunk_num + 1,
-                    "total_hunks_in_file": len(hunks_from_file)
+                    "source_start_line": hunk.source_start, "target_start_line": hunk.target_start,
+                    "hunk_index": hunk_num + 1, "total_hunks": len(hunks_from_file)
                 }
             })
 
     if not review_chunks and diff_content and diff_content.strip():
-        review_chunks.append({
-            "file_path": "N/A",
-            "chunk_type": "no_reviewable_content_extracted",
-            "content": "The PR diff was processed, but no reviewable file changes or hunks were extracted.",
-            "metadata": None
-        })
+        return [{"file_path": "N/A", "chunk_type": "no_reviewable_content", "content": "No reviewable file changes were extracted.", "metadata": None}]
 
     return review_chunks
 
@@ -485,4 +432,4 @@ def filter_json(json_data: Union[str, List[Dict[str, Any]], Dict[str, Any]], fie
         return "Error: Unexpected data type after parsing."
 
 # Export the list of tools
-tools = [read_file, write_file, shell_command, validate_yaml_with_schema, chunk_pr_diff, perform_calculation, filter_json]
+tools = [read_file, write_file, shell_command, validate_yaml_with_schema, git_diff_add_line_numbers, git_split_chunk_diff, perform_calculation, filter_json]

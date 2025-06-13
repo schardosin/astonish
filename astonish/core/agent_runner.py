@@ -5,6 +5,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from astonish.core.utils import load_agents, print_ai, print_section
 from astonish.core.graph_builder import build_graph, run_graph
 from typing import Dict, Any, Optional
+from astonish.core.mcp_manager import MCPManager
 
 async def run_agent(agent, parameters: Optional[Dict[str, Any]] = None):
     """
@@ -26,14 +27,15 @@ async def run_agent(agent, parameters: Optional[Dict[str, Any]] = None):
         globals.logger.debug(traceback.format_exc())
         return
 
-    # Initialize MCP tools
+    # Initialize MCPManager
     try:
-        mcp_client = await globals.initialize_mcp_tools()
+        mcp_manager = MCPManager()
+        await mcp_manager.startup()
     except Exception as e:
         print_section("Warning")
         print_ai(f"I had trouble initializing MCP tools, but I'll continue without them: {str(e)}")
         globals.logger.warning(f"Error initializing MCP tools: {e}")
-        mcp_client = None
+        mcp_manager = None
 
     # Initialize state
     initial_state = {}
@@ -70,7 +72,7 @@ async def run_agent(agent, parameters: Optional[Dict[str, Any]] = None):
         thread = {"configurable": {"thread_id": "1"}, "recursion_limit": 200}
         
         try:
-            graph = build_graph(config, mcp_client, checkpointer)
+            graph = build_graph(config, mcp_manager, checkpointer)
         except Exception as e:
             print_section("Error Building Graph")
             print_ai(f"I encountered an error while building the agent graph: {str(e)}")
@@ -100,3 +102,7 @@ async def run_agent(agent, parameters: Optional[Dict[str, Any]] = None):
             print_ai("This is likely a bug in the system. Please report this issue to the developers.")
             globals.logger.error(f"Critical error running graph: {e}")
             globals.logger.debug(traceback.format_exc())
+        finally:
+            # Ensure the MCP session is properly closed
+            if mcp_manager:
+                await mcp_manager.shutdown()

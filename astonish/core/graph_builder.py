@@ -5,7 +5,7 @@ import astonish.globals as globals
 from astonish.core.utils import load_agents
 from astonish.core.error_handler import create_error_handler_node, is_error_state
 
-def build_graph(node_config, mcp_client, checkpointer, include_error_handler=True):
+def build_graph(node_config, mcp_manager, checkpointer, include_error_handler=True):
     # Create a dictionary to store all unique fields from output_models
     all_fields = {}
     for node in node_config['nodes']:
@@ -45,7 +45,7 @@ def build_graph(node_config, mcp_client, checkpointer, include_error_handler=Tru
     
     # Add regular nodes
     for node in node_config['nodes']:
-        builder.add_node(node['name'], create_node_function(node, mcp_client))
+        builder.add_node(node['name'], create_node_function(node, mcp_manager))
 
     # Add edges from the flow configuration
     for edge in node_config['flow']:
@@ -210,6 +210,7 @@ async def run_graph(graph, initial_state, thread):
 def print_flow(agent):
     config = load_agents(agent)
     # Pass include_error_handler=False for visualization
-    graph = build_graph(config, None, None, include_error_handler=False)
+    mcp_manager = None  # For visualization purposes only, we don't need an active MCP session
+    graph = build_graph(config, mcp_manager, None, include_error_handler=False)
     graph_obj = graph.get_graph()
     graph_obj.print_ascii()

@@ -39,10 +39,12 @@ def update_state(state: Dict[str, Any], output: Union[BaseModel, str, Dict, None
 
         if "output" in output:
             new_state[output_field_name] = output.get("output", "")
-    elif isinstance(output, str):
+    elif isinstance(output, (str, int, float, bool)):
         new_state[output_field_name] = output
     elif output is None:
         globals.logger.warning("Received None output for state update.")
+    else:
+        globals.logger.warning(f"Received unhandled output type: {type(output)}. State will not be updated with this output.")
     
     limit_counter_field = node_config.get('limit_counter_field')
     limit = node_config.get('limit')

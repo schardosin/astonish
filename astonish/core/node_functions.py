@@ -326,7 +326,11 @@ def create_tool_node_function(node_config: Dict[str, Any], mcp_manager: Any):
             output_key = next(iter(output_model_config.keys()))
 
             new_state = state.copy()
-            new_state[output_key] = []
+            # Preserve existing output variable if it exists and is a list
+            if output_key in new_state and isinstance(new_state[output_key], list):
+                new_state[output_key] = list(new_state[output_key])
+            else:
+                new_state[output_key] = []
             aggregation_lock, semaphore = asyncio.Lock(), asyncio.Semaphore(max_concurrency)
 
             # --- Start: Tool Execution Queue and Consumer ---
@@ -594,7 +598,12 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_manager: Any, use_
         output_model_config = node_config.get('output_model', {})
         output_keys = list(output_model_config.keys())
         new_state = state.copy()
-        for key in output_keys: new_state[key] = []
+        for key in output_keys:
+            # Preserve existing output variable if it exists and is a list
+            if key in new_state and isinstance(new_state[key], list):
+                new_state[key] = list(new_state[key])
+            else:
+                new_state[key] = []
         aggregation_lock, semaphore = asyncio.Lock(), asyncio.Semaphore(max_concurrency)
         node_uses_tools = bool(node_config.get('tools', False))
         tool_execution_queue, consumer_task = None, None

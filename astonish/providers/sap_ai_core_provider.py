@@ -3,6 +3,7 @@ import astonish.globals as globals
 from gen_ai_hub.proxy.langchain.init_models import init_llm
 from gen_ai_hub.proxy.core.proxy_clients import get_proxy_client
 from astonish.providers.ai_provider_interface import AIProvider
+from astonish.providers.exceptions import SapAICoreRateLimitError
 from typing import List
 from rich.prompt import Prompt, IntPrompt
 from rich.panel import Panel
@@ -144,4 +145,21 @@ class SAPAICoreProvider(AIProvider):
             max_tokens=8192,
             temperature=temperature
         )
+
+        # Monkey-patch ainvoke to intercept rate limit errors, preserving type
+        orig_ainvoke = llm.ainvoke
+
+        async def ainvoke_with_rate_limit_check(*args, **kwargs):
+            try:
+                result = await orig_ainvoke(*args, **kwargs)
+                if hasattr(result, "content") and isinstance(result.content, str):
+                    if "Your request has been rate limited by AI Core" in result.content:
+                        raise SapAICoreRateLimitError("Your request has been rate limited by AI Core. Please try again later.")
+                return result
+            except Exception as e:
+                if "Your request has been rate limited by AI Core" in str(e):
+                    raise SapAICoreRateLimitError("Your request has been rate limited by AI Core. Please try again later.") from e
+                raise
+
+        llm.ainvoke = ainvoke_with_rate_limit_check
         return llm

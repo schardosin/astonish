@@ -26,6 +26,7 @@ from astonish.core.state_management import update_state
 from astonish.core.ui_utils import print_user_messages, print_chat_prompt, print_state
 from astonish.core.utils import try_extract_stdout_from_string
 from rich.prompt import Prompt
+from astonish.providers.exceptions import SapAICoreRateLimitError
 
 def create_node_function(node_config, mcp_manager):
     """Creates the appropriate node function based on node_config type."""
@@ -526,12 +527,12 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_manager: Any, use_
         # Add format instructions to the prompt if a parser is available. This is a "best effort" enhancement.
         if parser:
             try:
-                if hasattr(parser.pydantic_object, 'model_json_schema'): 
+                if hasattr(parser.pydantic_object, 'model_json_schema'):
                     format_instructions = parser.get_format_instructions()
                     prompt_to_llm += f"\n\nIMPORTANT: Respond ONLY with a JSON object conforming to the schema below. Do not include ```json ``` markers or any text outside the JSON object itself.\nSCHEMA:\n{format_instructions}"
-                else: 
+                else:
                     console.print(f"Error: Pydantic V2 model lacks .model_json_schema() for {node_name}", style="red")
-            except Exception as e: 
+            except Exception as e:
                 console.print(f"[{node_name}] Unexpected error getting format instructions: {e}", style="red")
         
         messages: List[BaseMessage] = [SystemMessage(content=system_message_content), HumanMessage(content=prompt_to_llm)]
@@ -543,38 +544,46 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_manager: Any, use_
         last_error = None
         
         while retry_count < max_retries:
-             try:
-                  globals.logger.info(f"[{node_name}] Attempt {retry_count + 1}/{max_retries} for direct LLM call...")
-                  final_response = await llm.ainvoke(messages)
-                  raw_llm_response_content = final_response.content
-                  llm_response_content_no_think = remove_think_tags(raw_llm_response_content)
-                  globals.logger.info(f"[{node_name}] LLM response (raw): {str(raw_llm_response_content[:200])}...")
-                  globals.logger.info(f"[{node_name}] LLM response (tags removed): {str(llm_response_content_no_think[:200])}...")
-                  
-                  if parser:
-                        cleaned_content = clean_and_fix_json(llm_response_content_no_think)
-                        if not cleaned_content: 
-                            if not llm_response_content_no_think and raw_llm_response_content:
-                                 raise OutputParserException("Response became empty after <think> tag removal.")
-                            raise OutputParserException("Received empty or unparseable response after cleaning.")
-                        parsed_output = parser.parse(cleaned_content)
-                        globals.logger.info(f"[{node_name}] Successfully parsed and validated JSON output.")
-                        return parsed_output
-                  else: 
+            try:
+                globals.logger.info(f"[{node_name}] Attempt {retry_count + 1}/{max_retries} for direct LLM call...")
+                final_response = await llm.ainvoke(messages)
+                raw_llm_response_content = final_response.content
+                llm_response_content_no_think = remove_think_tags(raw_llm_response_content)
+                globals.logger.info(f"[{node_name}] LLM response (raw): {str(raw_llm_response_content[:200])}...")
+                globals.logger.info(f"[{node_name}] LLM response (tags removed): {str(llm_response_content_no_think[:200])}...")
+                
+                if parser:
+                    cleaned_content = clean_and_fix_json(llm_response_content_no_think)
+                    if not cleaned_content:
+                        if not llm_response_content_no_think and raw_llm_response_content:
+                            raise OutputParserException("Response became empty after <think> tag removal.")
+                        raise OutputParserException("Received empty or unparseable response after cleaning.")
+                    parsed_output = parser.parse(cleaned_content)
+                    globals.logger.info(f"[{node_name}] Successfully parsed and validated JSON output.")
+                    return parsed_output
+                else:
                     globals.logger.info(f"[{node_name}] No parser defined. Received raw text output.")
                     return llm_response_content_no_think
 
-             except (OutputParserException, ValidationError, json.JSONDecodeError) as e:
-                  retry_count += 1
-                  last_error = e
-                  error_detail = f"{type(e).__name__}: {e}"
-                  globals.logger.error(f"[{node_name}] Output parsing/validation failed (Attempt {retry_count}/{max_retries}): {error_detail}")
-                  if retry_count >= max_retries: 
-                      break
-                  feedback = create_error_feedback(e, node_name)
-                  print_output(f"Providing feedback to LLM: {feedback[:100]}...")
-                  messages = messages[:1] + [messages[1]] + [HumanMessage(content=feedback)]
-             except Exception as e: 
+            except SapAICoreRateLimitError as e:
+                retry_count += 1
+                last_error = e
+                globals.logger.warning(f"[{node_name}] SAP AI Core rate limit encountered (Attempt {retry_count}/{max_retries}): {e}")
+                if retry_count >= max_retries:
+                    break
+                print_output(f"[{node_name}] Rate limited by SAP AI Core. Sleeping for 5 seconds before retry...", color="yellow")
+                await asyncio.sleep(5)
+            except (OutputParserException, ValidationError, json.JSONDecodeError) as e:
+                retry_count += 1
+                last_error = e
+                error_detail = f"{type(e).__name__}: {e}"
+                globals.logger.error(f"[{node_name}] Output parsing/validation failed (Attempt {retry_count}/{max_retries}): {error_detail}")
+                if retry_count >= max_retries:
+                    break
+                feedback = create_error_feedback(e, node_name)
+                print_output(f"Providing feedback to LLM: {feedback[:100]}...")
+                messages = messages[:1] + [messages[1]] + [HumanMessage(content=feedback)]
+            except Exception as e:
                 console.print(f"[{node_name}] Unexpected LLM call error: {e}", style="red")
                 last_error = e
                 break
@@ -744,6 +753,17 @@ def create_llm_node_function(node_config: Dict[str, Any], mcp_manager: Any, use_
                             print_output(f"Providing feedback to LLM: {feedback[:100]}...")
                             current_human_message = f"{human_message_content}\n\nPrevious attempt failed. Error: {error_message}\nYou must follow the specified format."
                         else: last_react_error = error_message
+                    except SapAICoreRateLimitError as e:
+                        retry_count += 1
+                        error_message = f"SapAICoreRateLimitError: {e}"
+                        if retry_count < max_retries:
+                            console.print(f"[{worker_node_name}] SAP AI Core rate limit (Attempt {retry_count}/{max_retries}): {e}", style="yellow")
+                            print_output(f"[{worker_node_name}] Rate limited by SAP AI Core. Sleeping for 5 seconds before retry...", color="yellow")
+                            await asyncio.sleep(5)
+                            current_human_message = human_message_content
+                        else:
+                            last_react_error = error_message
+                            break
                     except Exception as e:
                         retry_count += 1; error_message = f"Exception during ReAct planning: {type(e).__name__}: {e}"
                         if retry_count < max_retries:

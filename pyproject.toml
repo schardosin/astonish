@@ -14,7 +14,7 @@ packages = [
 
 [project]
 name = "astonish"
-version = "0.12.1"
+version = "0.12.2"
 authors = [
     {name = "Rafael Schardosin Silva", email = "rafael.rs@gmail.com"},
 ]
@@ -28,19 +28,18 @@ classifiers = [
 ]
 dependencies = [
     "appdirs==1.4.4",
-    "generative-ai-hub-sdk[all]==4.12.4",
+    "sap-ai-sdk-gen[all]==5.3.4",
     "langchain-ollama==0.3.1",
-    "langchain==0.3.24",
-    "langgraph==0.3.27",
+    "langchain==0.3.26",
+    "langgraph==0.5.0",
     "langgraph-checkpoint-sqlite==2.0.6",
-    "pydantic==2.10.6",
     "langchain-mcp-adapters==0.0.9",
     "aiosqlite==0.21.0",
     "grandalf==0.8",
     "pykwalify==1.8.0",
     "inquirer==3.4.0",
-    "langchain-anthropic==0.3.12",
-    "langchain-google-genai==2.1.4",
+    "langchain-anthropic==0.3.16",
+    "langchain-google-genai==2.1.5",
     "rich==14.0.0",
     "unidiff==0.7.5",
     "json5==0.12.0"

@@ -1,16 +1,27 @@
 import os
 import astonish.globals as globals
+from typing import List, Callable, Dict
+
+# Import all the specific initializers we might need
 from gen_ai_hub.proxy.langchain.init_models import init_llm
+from gen_ai_hub.proxy.langchain.openai import init_chat_model as openai_init_chat_model
+from gen_ai_hub.proxy.langchain.google_vertexai import init_chat_model as google_vertexai_init_chat_model
+from gen_ai_hub.proxy.langchain.amazon import init_chat_model as amazon_init_invoke_model, init_chat_converse_model as amazon_init_converse_model
 from gen_ai_hub.proxy.core.proxy_clients import get_proxy_client
 from astonish.providers.ai_provider_interface import AIProvider
 from astonish.providers.exceptions import SapAICoreRateLimitError
-from typing import List
 from rich.prompt import Prompt, IntPrompt
 from rich.panel import Panel
 from rich.table import Table
 from astonish.core.utils import console
 
 class SAPAICoreProvider(AIProvider):
+    # A mapping for model names to specific, required model_id strings.
+    # This allows overriding the default SDK behavior for new or unsupported models.
+    MODEL_ID_MAP: Dict[str, str] = {
+        'anthropic--claude-4-sonnet': 'anthropic.claude-sonnet-4-20250514-v1:0'
+    }
+
     def __init__(self):
         self.proxy_client = None
 
@@ -21,7 +32,7 @@ class SAPAICoreProvider(AIProvider):
             'client_id': ('', 'your-client-id'),
             'client_secret': ('', 'your-client-secret'),
             'auth_url': ('', 'https://<tenant-id>.authentication.sap.hana.ondemand.com'),
-            'base_url': ('', 'https://api.ai.internalprod.eu-central-1.aws.ml.hana.ondemand.com/v2'),
+            'base_url': ('', 'https://api.ai.internalprod.eu-central-1.aws.ml.hana.ondemand.com'),
             'resource_group': ('default', 'default')
         }
 
@@ -102,6 +113,7 @@ class SAPAICoreProvider(AIProvider):
             border_style="green"
         ))
 
+
     def _initialize_proxy_client(self):
         if not os.path.exists(globals.config_path):
             raise FileNotFoundError("Configuration file not found. Please run setup() first.")
@@ -113,6 +125,9 @@ class SAPAICoreProvider(AIProvider):
         os.environ["AICORE_CLIENT_ID"] = globals.config.get('SAP_AI_CORE', 'client_id')
         os.environ["AICORE_CLIENT_SECRET"] = globals.config.get('SAP_AI_CORE', 'client_secret')
         os.environ["AICORE_RESOURCE_GROUP"] = globals.config.get('SAP_AI_CORE', 'resource_group')
+        base_url = globals.config.get('SAP_AI_CORE', 'base_url')
+        if not base_url.endswith('/v2'):
+            base_url += '/v2'
         os.environ["AICORE_BASE_URL"] = globals.config.get('SAP_AI_CORE', 'base_url')
 
         # Initialize the proxy client
@@ -127,26 +142,70 @@ class SAPAICoreProvider(AIProvider):
         
         return sorted(list(set(model_names)))
 
+    def _get_init_func_for_model(self, model_name: str) -> Callable:
+        """
+        Resolves the correct initialization function based on the model name.
+        This works around a bug in the SDK's default model resolution.
+        """
+        # A list of models known to use the newer Bedrock Converse API
+        converse_api_models = ['claude-3.7', 'claude-4']
+
+        # --- Anthropic models are routed via Amazon Bedrock ---
+        # Check for Anthropic prefix or if the model is in our manual list
+        if model_name.startswith('anthropic--') or model_name in converse_api_models:
+            # Check if the model name contains any known Converse API model identifiers
+            if any(m in model_name for m in converse_api_models):
+                return amazon_init_converse_model
+            # Older models use the older Invoke API
+            else:
+                return amazon_init_invoke_model
+        
+        elif model_name.startswith('gemini-'):
+            return google_vertexai_init_chat_model
+        elif model_name.startswith('amazon--'):
+            # This handles non-Anthropic Bedrock models like Titan
+            return amazon_init_invoke_model
+        else:
+            return openai_init_chat_model
+
     def get_llm(self, model_name: str, streaming: bool = True):
+        """
+        Dynamically initializes any supported LLM by resolving the correct
+        init function and passing a specific model_id when mapped.
+        """
         if not self.proxy_client:
             self._initialize_proxy_client()
 
-        # o1 and o3-mini require temperature=1
-        if model_name in ["o1", "o3-mini"]:
+        if model_name in ["o1", "o3-mini", "o3", "o4-mini", "o4"]:
             temperature = 1
         else:
             temperature = 0.7
 
-        # Initialize and return the LLM
-        llm = init_llm(
-            model_name,
-            proxy_client=self.proxy_client,
-            streaming=streaming,
-            max_tokens=8192,
-            temperature=temperature
-        )
+        initializer_function = self._get_init_func_for_model(model_name)
 
-        # Monkey-patch ainvoke to intercept rate limit errors, preserving type
+        # Prepare keyword arguments for the init_llm call
+        init_kwargs = {
+            "proxy_client": self.proxy_client,
+            "streaming": streaming,
+            "max_tokens": 32768,
+            "temperature": temperature,
+            "init_func": initializer_function
+        }
+
+        # If the model_name has a specific model_id mapped, add it to the kwargs.
+        # This allows for using models not yet fully supported by the SDK.
+        if model_name in self.MODEL_ID_MAP:
+            init_kwargs["model_id"] = self.MODEL_ID_MAP[model_name]
+
+        try:
+            # Call init_llm by unpacking the prepared arguments
+            llm = init_llm(model_name, **init_kwargs)
+
+        except Exception as e:
+            print(f"Error initializing LLM '{model_name}': {str(e)}")
+            raise SapAICoreRateLimitError(f"Failed to initialize LLM '{model_name}': {str(e)}") from e
+
+        # Monkey-patch ainvoke to add custom rate limit error handling
         orig_ainvoke = llm.ainvoke
 
         async def ainvoke_with_rate_limit_check(*args, **kwargs):

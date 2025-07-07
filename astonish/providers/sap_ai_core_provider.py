@@ -19,7 +19,9 @@ class SAPAICoreProvider(AIProvider):
     # A mapping for model names to specific, required model_id strings.
     # This allows overriding the default SDK behavior for new or unsupported models.
     MODEL_ID_MAP: Dict[str, str] = {
-        'anthropic--claude-4-sonnet': 'anthropic.claude-sonnet-4-20250514-v1:0'
+        'anthropic--claude-4-sonnet': 'anthropic.claude-sonnet-4-20250514-v1:0',
+        'o1': 'o1',
+        'o4-mini': 'o4-mini',
     }
 
     def __init__(self):
@@ -188,13 +190,16 @@ class SAPAICoreProvider(AIProvider):
             "proxy_client": self.proxy_client,
             "streaming": streaming,
             "max_tokens": 32768,
-            "temperature": temperature,
-            "init_func": initializer_function
+            "temperature": temperature
         }
+
+        # Only set init_func if the model is in MODEL_ID_MAP
+        if model_name in self.MODEL_ID_MAP:
+            init_kwargs["init_func"] = initializer_function
 
         # If the model_name has a specific model_id mapped, add it to the kwargs.
         # This allows for using models not yet fully supported by the SDK.
-        if model_name in self.MODEL_ID_MAP:
+        if model_name in self.MODEL_ID_MAP and model_name.startswith('anthropic--'):
             init_kwargs["model_id"] = self.MODEL_ID_MAP[model_name]
 
         try:

@@ -289,11 +289,33 @@ async def list_agents():
         print_rich(f"[yellow]No agents found in astonish.agents or {config_agents_path}[/yellow]")
 
 def remove_think_tags(text: str) -> str:
-    """Removes <think>...</think> tags and their content from a string."""
+    """
+    Removes <think>...</think> tags and their content from a string.
+    Also handles GPT-OSS format by extracting content after the last <|message|> tag.
+    """
     if not isinstance(text, str):
         return text
-    # Remove <think>...</think> blocks and any trailing whitespace, then strip overall result
-    return re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
+    
+    # First, remove <think>...</think> blocks and any trailing whitespace
+    text = re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
+    
+    # Check if text contains GPT-OSS format tags
+    if '<|' in text and '|>' in text:
+        # Look for the last <|message|> tag and extract everything after it
+        message_pattern = r'<\|message\|>(.*?)(?=<\|[^|]*\||$)'
+        matches = re.findall(message_pattern, text, flags=re.DOTALL)
+        
+        if matches:
+            # Take the content after the last <|message|> tag
+            content = matches[-1].strip()
+            
+            # Clean up any remaining GPT-OSS tags that might appear in the content
+            # Remove any remaining <|...| > tags
+            content = re.sub(r'<\|[^|]*\|>', '', content).strip()
+            
+            return content
+    
+    return text
 
 def try_extract_stdout_from_string(text_input: str) -> Union[str, List[str], None]:
     """

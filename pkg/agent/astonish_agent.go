@@ -83,43 +83,77 @@ func (p *ProtectedTool) Run(ctx tool.Context, args any) (map[string]any, error) 
 	
 	// 2. We do NOT have approval. Trigger the flow.
 	
-	// Convert args to map for display
-	argsMap, ok := args.(map[string]any)
-	if !ok {
+	// 2. Format arguments for display
+	var argsMap map[string]any
+	if m, ok := args.(map[string]any); ok {
+		argsMap = m
+	} else {
+		// If args is not a map (e.g. struct or primitive), wrap it
 		argsMap = map[string]any{"args": args}
 	}
 	
-	// Emit the approval request
-	approvalText := p.Agent.formatToolApprovalRequest(toolName, argsMap)
-	approvalEvent := &session.Event{
+	// Prompt for approval
+	prompt := p.Agent.formatToolApprovalRequest(toolName, argsMap)
+	
+	// Yield event with approval prompt and state update
+	p.YieldFunc(&session.Event{
 		LLMResponse: model.LLMResponse{
 			Content: &genai.Content{
-				Parts: []*genai.Part{{Text: approvalText}},
+				Parts: []*genai.Part{{Text: prompt}},
 				Role:  "model",
 			},
 		},
 		Actions: session.EventActions{
 			StateDelta: map[string]any{
 				"awaiting_approval": true,
-				"approval_tool":     toolName,
-				"approval_args":     argsMap,
+				"pending_tool_name": toolName,
+				"pending_tool_args": args,
+				"approval_options":  []string{"Yes", "No"}, // Trigger interactive selection
 			},
 		},
+	}, nil)
+	
+	// Wait for user input (handled by runner loop)
+	// But since we are in the agent logic, we need to know the result.
+	// The runner loop will pause, get input, and resume.
+	// When resuming, the input will be in ctx.UserContent()
+	
+	// Check if we have user content (meaning we resumed)
+	if ctx.UserContent() != nil && len(ctx.UserContent().Parts) > 0 {
+		// We have input! Check if it's approval
+		input := ""
+		for _, part := range ctx.UserContent().Parts {
+			input += part.Text
+		}
+		input = strings.TrimSpace(strings.ToLower(input))
+		
+		approved := input == "yes" || input == "y"
+		
+		// Clear approval state
+		p.State.Set("awaiting_approval", false)
+		p.State.Set("pending_tool_name", nil)
+		p.State.Set("pending_tool_args", nil)
+		
+		if approved {
+			// If approved, set the approval key for the tool and re-run
+			p.State.Set(approvalKey, true)
+			// The agent loop will re-evaluate and call Run again, which will then execute the tool.
+			// For now, we return a "soft refusal" to the LLM to indicate we're waiting.
+			return map[string]any{
+				"status": "APPROVAL_GRANTED_RESUMING",
+				"info":   "Approval granted. The tool will be executed on the next turn.",
+			}, nil
+		} else {
+			// If not approved, return a "soft refusal" indicating denial
+			return map[string]any{
+				"status": "APPROVAL_DENIED",
+				"info":   "Tool execution denied by user.",
+			}, nil
+		}
 	}
-	p.YieldFunc(approvalEvent, nil)
 	
-	// 3. Set the state to "Awaiting" so the main loop knows what to do
-	p.State.Set("awaiting_approval", true)
-	p.State.Set("approval_tool", toolName)
-	p.State.Set("approval_args", argsMap)
-	
-	// 3. Set the state to "Awaiting" so the main loop knows what to do
-	p.State.Set("awaiting_approval", true)
-	p.State.Set("approval_tool", toolName)
-	p.State.Set("approval_args", argsMap)
-	
-	// 4. RETURN A RESULT TO THE LLM (The "Soft Refusal")
-	// This completes the tool execution successfully from ADK's perspective
+	// If we reached here, it means we just yielded the approval prompt and are waiting for user input.
+	// We return a "soft refusal" to the LLM to indicate that execution is paused.
 	return map[string]any{
 		"status": "APPROVAL_REQUIRED",
 		"info":   "Execution blocked. The user has been asked for approval. Please wait for their response.",
@@ -225,11 +259,7 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				return
 			}
 			currentNodeName = nextNode
-			
-			// Emit node transition
-			if !a.emitNodeTransition(currentNodeName, state, yield) {
-				return
-			}
+			// Main loop will emit the transition
 			
 			// Check if first node is an input node - if so, show prompt immediately
 			node, found := a.getNode(currentNodeName)
@@ -297,11 +327,7 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 						StateDelta: stateDelta,
 					},
 				}, nil)
-				
-				// Emit node transition for the new node
-				if !a.emitNodeTransition(currentNodeName, state, yield) {
-					return
-				}
+				// Main loop will emit the transition for the next node
 			}
 		}
 
@@ -320,12 +346,75 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				return
 			}
 			
-
+			// Emit node transition before processing
+			if !a.emitNodeTransition(currentNodeName, state, yield) {
+				return
+			}
 
 			if node.Type == "input" {
 				// Render prompt
 				prompt := a.renderString(node.Prompt, state)
 				
+				// Resolve options if present
+				var inputOptions []string
+				if len(node.Options) > 0 {
+					for _, opt := range node.Options {
+						// Check if option is a state variable
+						if val, err := state.Get(opt); err == nil {
+							// If it's a list of strings, expand it
+							if list, ok := val.([]string); ok {
+								inputOptions = append(inputOptions, list...)
+								continue
+							}
+							// If it's a generic list, try to convert elements to strings
+							if list, ok := val.([]interface{}); ok {
+								for _, item := range list {
+									inputOptions = append(inputOptions, fmt.Sprintf("%v", item))
+								}
+								continue
+							}
+							// If it's a string, split by newline
+							if strVal, ok := val.(string); ok {
+								lines := strings.Split(strings.TrimSpace(strVal), "\n")
+								for _, line := range lines {
+									trimmed := strings.TrimSpace(line)
+									if trimmed == "" {
+										continue
+									}
+									// Filter out lines that look like LLM preamble/commentary
+									// Accept lines that start with a number followed by colon (PR format)
+									// or lines that don't look like natural language sentences
+									if strings.Contains(trimmed, ":") {
+										// Check if it starts with a number (likely a PR)
+										parts := strings.SplitN(trimmed, ":", 2)
+										if len(parts) == 2 {
+											// Check if the first part is numeric (or starts with #)
+											firstPart := strings.TrimSpace(parts[0])
+											if len(firstPart) > 0 {
+												// Remove leading # if present
+												if firstPart[0] == '#' {
+													firstPart = firstPart[1:]
+												}
+												// Check if it's a number
+												if _, err := fmt.Sscanf(firstPart, "%d", new(int)); err == nil {
+													inputOptions = append(inputOptions, trimmed)
+													continue
+												}
+											}
+										}
+									}
+									// If it doesn't match the PR format, skip it (likely LLM commentary)
+								}
+								if len(inputOptions) > 0 {
+									continue
+								}
+							}
+						}
+						// Otherwise treat as literal option
+						inputOptions = append(inputOptions, opt)
+					}
+				}
+
 				// Yield prompt event and update state
 				promptEvent := &session.Event{
 					LLMResponse: model.LLMResponse{
@@ -336,7 +425,8 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 					},
 					Actions: session.EventActions{
 						StateDelta: map[string]any{
-							"current_node": currentNodeName,
+							"current_node":  currentNodeName,
+							"input_options": inputOptions,
 						},
 					},
 				}
@@ -358,11 +448,7 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 					return
 				}
 				currentNodeName = nextNode
-				
-				// Emit node transition
-				if !a.emitNodeTransition(currentNodeName, state, yield) {
-					return
-				}
+				// Don't emit transition here - the main loop will do it
 
 			} else if node.Type == "tool" {
 				if !a.handleToolNode(ctx, node, state, yield) {
@@ -376,11 +462,7 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 					return
 				}
 				currentNodeName = nextNode
-				
-				// Emit node transition
-				if !a.emitNodeTransition(currentNodeName, state, yield) {
-					return
-				}
+				// Don't emit transition here - the main loop will do it
 
 			} else {
 				yield(nil, fmt.Errorf("unsupported node type: %s", node.Type))
@@ -874,6 +956,7 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 					"current_node":      node.Name,
 					"approval_tool":     toolName,
 					"approval_args":     resolvedArgs,
+					"approval_options":  []string{"Yes", "No"}, // Trigger interactive selection
 				},
 			},
 		}
@@ -978,17 +1061,6 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 		},
 	}, nil)
 	
-	// 6. Move to Next Node
-	nextNode, err := a.getNextNode(node.Name, state)
-	if err != nil {
-		yield(nil, err)
-		return false
-	}
-	
-	if !a.emitNodeTransition(nextNode, state, yield) {
-		return false
-	}
-	
 	return true
 }
 
@@ -1077,10 +1149,7 @@ func (a *AstonishAgent) formatToolApprovalRequest(toolName string, args map[stri
 	
 	// Footer
 	sb.WriteString("╰" + strings.Repeat("─", contentWidth + 2) + "╯\n")
-	
-	sb.WriteString("\nDo you approve this execution?\n")
-	sb.WriteString("> Yes\n")
-	sb.WriteString("  No")
+	// Removed explicit "Do you approve..." prompt as it's handled by interactive UI
 	
 	return sb.String()
 }

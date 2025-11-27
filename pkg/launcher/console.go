@@ -13,6 +13,7 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/tools"
+	"github.com/schardosin/astonish/pkg/ui"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
@@ -135,6 +136,8 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		
 		waitingForInput := false
 		waitingForApproval := false
+		var approvalOptions []string
+		var inputOptions []string
 		
 		for event, err := range r.Run(ctx, userID, sess.ID(), userMsg, adkagent.RunConfig{
 			StreamingMode: adkagent.StreamingModeSSE,
@@ -154,6 +157,28 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				if awaitingVal, ok := event.Actions.StateDelta["awaiting_approval"]; ok {
 					if awaiting, ok := awaitingVal.(bool); ok && awaiting {
 						waitingForApproval = true
+					}
+				}
+				
+				// Check for approval options
+				if optsVal, ok := event.Actions.StateDelta["approval_options"]; ok {
+					if opts, ok := optsVal.([]string); ok {
+						approvalOptions = opts
+					} else if optsInterface, ok := optsVal.([]interface{}); ok {
+						for _, v := range optsInterface {
+							approvalOptions = append(approvalOptions, fmt.Sprintf("%v", v))
+						}
+					}
+				}
+				
+				// Check for input options
+				if optsVal, ok := event.Actions.StateDelta["input_options"]; ok {
+					if opts, ok := optsVal.([]string); ok {
+						inputOptions = opts
+					} else if optsInterface, ok := optsVal.([]interface{}); ok {
+						for _, v := range optsInterface {
+							inputOptions = append(inputOptions, fmt.Sprintf("%v", v))
+						}
 					}
 				}
 			}
@@ -413,16 +438,42 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		
 		// If we're waiting for input OR approval, prompt the user
 		if waitingForInput || waitingForApproval {
-			fmt.Printf("\n\n%sYou:%s ", ColorYellow, ColorReset)
+			var userInput string
+			var err error
 			
-			userInput, err := reader.ReadString('\n')
-			if err != nil {
-				// Use fmt instead of log.Fatal to avoid suppression
-				fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-				os.Exit(1)
+			// Check if we have options for selection
+			if len(approvalOptions) > 0 {
+				// Use interactive selection for approval
+				fmt.Println("\nSelect an option:")
+				selectedIdx, err := ui.ReadSelection(approvalOptions)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+					os.Exit(1)
+				}
+				userInput = approvalOptions[selectedIdx]
+				fmt.Printf("You: %s\n", userInput)
+				approvalOptions = nil // Clear for next iteration
+			} else if len(inputOptions) > 0 {
+				// Use interactive selection for input
+				fmt.Println("\nSelect an option:")
+				selectedIdx, err := ui.ReadSelection(inputOptions)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+					os.Exit(1)
+				}
+				userInput = inputOptions[selectedIdx]
+				fmt.Printf("You: %s\n", userInput)
+				inputOptions = nil // Clear for next iteration
+			} else {
+				// Free text input
+				fmt.Printf("\n\n%sYou:%s ", ColorYellow, ColorReset)
+				userInput, err = reader.ReadString('\n')
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+					os.Exit(1)
+				}
+				userInput = strings.TrimSpace(userInput)
 			}
-
-			userInput = strings.TrimSpace(userInput)
 			
 			// Create user message
 			userMsg = genai.NewContentFromText(userInput, genai.RoleUser)
@@ -432,6 +483,5 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 			break
 		}
 	}
-
 	return nil
 }

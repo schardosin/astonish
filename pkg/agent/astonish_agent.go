@@ -1,12 +1,15 @@
 package agent
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"iter"
 	"regexp"
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/config"
+	pkgtools "github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/model"
@@ -151,6 +154,56 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 			currentNodeName = "START"
 		}
 
+		// Pending state delta to be attached to the next event
+		pendingStateDelta := make(map[string]any)
+
+		// Wrap yield to inject pendingStateDelta
+		originalYield := yield
+		yield = func(event *session.Event, err error) bool {
+			if event != nil && len(pendingStateDelta) > 0 {
+				if event.Actions.StateDelta == nil {
+					event.Actions.StateDelta = make(map[string]any)
+				}
+				for k, v := range pendingStateDelta {
+					// Only add if not already present (event takes precedence)
+					if _, exists := event.Actions.StateDelta[k]; !exists {
+						event.Actions.StateDelta[k] = v
+					}
+				}
+				// Clear pendingStateDelta so we don't send it again
+				pendingStateDelta = make(map[string]any)
+			}
+			return originalYield(event, err)
+		}
+
+		// Initialize state keys from all nodes if not present
+		// This mimics Python's behavior of pre-populating keys
+		if currentNodeName == "START" {
+			for _, node := range a.Config.Nodes {
+				// Initialize output_model keys
+				for key := range node.OutputModel {
+					if _, err := state.Get(key); err != nil {
+						val := ""
+						if err := state.Set(key, val); err != nil {
+							// Log error but continue
+							fmt.Printf("Warning: Failed to initialize key '%s': %v\n", key, err)
+						}
+						pendingStateDelta[key] = val
+					}
+				}
+				// Initialize raw_tool_output keys
+				for key := range node.RawToolOutput {
+					if _, err := state.Get(key); err != nil {
+						val := ""
+						if err := state.Set(key, val); err != nil {
+							fmt.Printf("Warning: Failed to initialize key '%s': %v\n", key, err)
+						}
+						pendingStateDelta[key] = val
+					}
+				}
+			}
+		}
+
 		// Check if we're awaiting tool approval
 		if awaitingApproval, _ := state.Get("awaiting_approval"); awaitingApproval == true {
 			if !a.handleToolApproval(ctx, state, yield) {
@@ -203,6 +256,9 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				}
 				return
 			}
+			
+			// Update state
+			state.Set("current_node", currentNodeName)
 		}
 
 		// Handle resume from input
@@ -263,6 +319,8 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				yield(nil, fmt.Errorf("node not found: %s", currentNodeName))
 				return
 			}
+			
+
 
 			if node.Type == "input" {
 				// Render prompt
@@ -306,13 +364,33 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 					return
 				}
 
+			} else if node.Type == "tool" {
+				if !a.handleToolNode(ctx, node, state, yield) {
+					return
+				}
+				
+				// Move to next node
+				nextNode, err := a.getNextNode(currentNodeName, state)
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+				currentNodeName = nextNode
+				
+				// Emit node transition
+				if !a.emitNodeTransition(currentNodeName, state, yield) {
+					return
+				}
+
 			} else {
 				yield(nil, fmt.Errorf("unsupported node type: %s", node.Type))
 				return
 			}
 		}
+		}
 	}
-}
+
+
 
 // emitNodeTransition emits a node transition event
 func (a *AstonishAgent) emitNodeTransition(nodeName string, state session.State, yield func(*session.Event, error) bool) bool {
@@ -474,25 +552,36 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 		instruction = systemInstruction + "\n\n" + instruction
 	}
 	
-	// Filter tools based on node configuration
+	// 2. Initialize LLM Agent
+	// We need to pass tools if the node uses them
 	var nodeTools []tool.Tool
 	if node.Tools {
-		for _, t := range a.Tools {
-			// Filter based on tools_selection if present
-			if len(node.ToolsSelection) > 0 {
-				selected := false
-				for _, sel := range node.ToolsSelection {
-					if sel == t.Name() {
-						selected = true
-						break
+
+		
+		// Filter based on ToolsSelection
+		if len(node.ToolsSelection) > 0 {
+			for _, t := range a.Tools {
+				for _, selected := range node.ToolsSelection {
+					// Check against the underlying tool name if wrapped?
+					// t.Name() should return the name.
+					if t.Name() == selected {
+						nodeTools = append(nodeTools, t)
+
 					}
 				}
-				if !selected {
-					continue
-				}
 			}
-			nodeTools = append(nodeTools, t)
+		} else {
+			// If no selection, add all? Or none?
+			// Python adds all if selection is empty?
+			// For now, assume selection is required
 		}
+	} else {
+
+	}
+	
+	// Inject tool use instruction if tools are enabled
+	if len(nodeTools) > 0 {
+		instruction += "\n\nYou have access to tools. You MUST use the provided tools to fulfill the request. Do not just describe what you are going to do."
 	}
 	
 	// Wrap tools dynamically if approval is required
@@ -514,6 +603,8 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 	
 	// Debug: Log tool configuration
 	// Debug: Log tool configuration
+
+
 
 	// [NEW] Build list of known tool names for detection
 	var knownToolNames []string
@@ -619,6 +710,13 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 					}
 					continue
 				}
+
+				
+				// [FIX] Yield the current event (containing the closing tag) BEFORE pausing
+				// This ensures the console sees the </tool_use> and resets its filter state
+				if !yield(event, nil) {
+					return false
+				}
 				
 				// Extract parameters
 				params := extractParametersFromXML(currentTotalText)
@@ -655,7 +753,43 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			}
 		}
 		
-		// Forward events to caller
+		// Check for ToolResponse in LLMResponse and handle raw_tool_output
+		if event.LLMResponse.Content != nil && len(node.RawToolOutput) == 1 {
+			for _, part := range event.LLMResponse.Content.Parts {
+				if part.FunctionResponse != nil {
+					// This is a tool response
+					// Get the state key to update (we only support 1 key mapping for now, like Python)
+					var stateKey string
+					for k := range node.RawToolOutput {
+						stateKey = k
+						break
+					}
+
+					// Update state with the response map
+					// We store the whole response map, similar to Python storing the dict
+					response := part.FunctionResponse.Response
+					
+					// If the response has "stdout" and the map has only that, maybe we should store just the string?
+					// But Python stores the whole dict. Let's store the whole dict (map[string]any).
+					// However, state values are usually expected to be strings or lists for simple usage.
+					// If we store a map, can it be used in prompts?
+					// Yes, format_prompt handles it.
+					
+					if err := state.Set(stateKey, response); err != nil {
+						yield(nil, fmt.Errorf("failed to set state key %s: %w", stateKey, err))
+						return false
+					}
+
+					// Add to StateDelta so UI updates
+					if event.Actions.StateDelta == nil {
+						event.Actions.StateDelta = make(map[string]any)
+					}
+					event.Actions.StateDelta[stateKey] = response
+				}
+			}
+		}
+
+		// Forward event
 		if !yield(event, nil) {
 			return false
 		}
@@ -668,6 +802,8 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 		}
 	}
 	
+
+
 	// Save to output_model if defined
 	if len(node.OutputModel) > 0 {
 		output := fullResponse.String()
@@ -676,8 +812,181 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 				yield(nil, err)
 				return false
 			}
+		}
+	}
+	
+	return true
+}
+
+func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, state session.State, yield func(*session.Event, error) bool) bool {
+	// 1. Resolve arguments
+	resolvedArgs := make(map[string]interface{})
+	for key, val := range node.Args {
+		if strVal, ok := val.(string); ok {
+			resolvedArgs[key] = a.renderString(strVal, state)
+		} else {
+			resolvedArgs[key] = val
+		}
+	}
+
+	// 2. Identify Tool
+	if len(node.ToolsSelection) == 0 {
+		yield(nil, fmt.Errorf("tool node '%s' missing tools_selection", node.Name))
+		return false
+	}
+	toolName := node.ToolsSelection[0]
+
+	// 3. Approval Workflow
+	approved := false
+	if node.ToolsAutoApproval {
+		approved = true
+	} else {
+		// Check if we already have approval for this specific tool execution
+		approvalKey := fmt.Sprintf("approval:%s", toolName)
+		val, _ := state.Get(approvalKey)
+		if isApproved, ok := val.(bool); ok && isApproved {
+			approved = true
+			// Clear approval so we don't loop forever if we come back here? 
+			// Actually, for a linear flow, it's fine. For a loop, we might want to clear it.
+			// But clearing it might break if we crash and resume?
+			// Let's clear it after execution.
+		}
+	}
+
+	if !approved {
+		// Set state for approval
+		state.Set("awaiting_approval", true)
+		state.Set("approval_tool", toolName)
+		state.Set("approval_args", resolvedArgs)
+
+		// Emit approval request
+		approvalText := a.formatToolApprovalRequest(toolName, resolvedArgs)
+		approvalEvent := &session.Event{
+			LLMResponse: model.LLMResponse{
+				Content: &genai.Content{
+					Parts: []*genai.Part{{Text: approvalText}},
+					Role:  "model",
+				},
+			},
+			Actions: session.EventActions{
+				StateDelta: map[string]any{
+					"awaiting_approval": true,
+					"current_node":      node.Name,
+					"approval_tool":     toolName,
+					"approval_args":     resolvedArgs,
+				},
+			},
+		}
+		// Yield and return false to pause execution
+		yield(approvalEvent, nil)
+		return false
+	}
+
+	// 4. Execute Tool
+	// Find the tool in a.Tools
+	var selectedTool tool.Tool
+	for _, t := range a.Tools {
+		if t.Name() == toolName {
+			selectedTool = t
 			break
 		}
+	}
+	if selectedTool == nil {
+		yield(nil, fmt.Errorf("tool '%s' not found", toolName))
+		return false
+	}
+
+	// Execute using internal helper
+	toolResult, err := pkgtools.ExecuteTool(ctx, toolName, resolvedArgs)
+	if err != nil {
+		yield(nil, fmt.Errorf("tool execution failed: %w", err))
+		return false
+	}
+	
+	// 5. Process Output
+	// toolResult is likely a struct (e.g. ShellCommandResult).
+	// We need to extract fields based on `output_model` and `raw_tool_output`.
+	
+	// Convert result to map for easy access
+	resultMap := make(map[string]interface{})
+	// Marshal/Unmarshal hack to convert struct to map
+	resultBytes, _ := json.Marshal(toolResult)
+	json.Unmarshal(resultBytes, &resultMap)
+	
+	stateDelta := make(map[string]any)
+	
+	// Handle raw_tool_output
+	for key, mapping := range node.RawToolOutput {
+		// mapping is the field name in the tool result (e.g. "stdout")
+		// key is the state key to set (e.g. "pr_diff")
+		if val, ok := resultMap[mapping]; ok {
+			stateDelta[key] = val
+			state.Set(key, val)
+		}
+	}
+	
+	// Handle output_model
+	for key, typeName := range node.OutputModel {
+		// For now, we assume the tool result HAS a field matching the key?
+		// Or does the node config specify mapping?
+		// In `github_pr_description_generator`:
+		// output_model: { prs: list }
+		// args: { command: "gh pr list" }
+		// The tool `shell_command` returns `stdout`.
+		// There is no explicit mapping in `output_model` keys to tool result fields.
+		// It seems we assume the tool result *is* the content?
+		// Or we map from `stdout`?
+		
+		// In the python code, `tool` node has `output_model` and `raw_tool_output`.
+		// `raw_tool_output` maps tool output fields to state fields.
+		// `output_model` seems to imply parsing?
+		
+		// Example:
+		// name: get_prs
+		// output_model: { prs: list }
+		// No `raw_tool_output`.
+		// So it must take `stdout` and parse it into `prs`.
+		
+		if val, ok := resultMap["stdout"]; ok {
+			valStr := fmt.Sprintf("%v", val)
+			if typeName == "list" {
+				// Split by newline
+				lines := strings.Split(strings.TrimSpace(valStr), "\n")
+				var cleanLines []string
+				for _, line := range lines {
+					if strings.TrimSpace(line) != "" {
+						cleanLines = append(cleanLines, line)
+					}
+				}
+				stateDelta[key] = cleanLines
+				state.Set(key, cleanLines)
+			} else {
+				stateDelta[key] = valStr
+				state.Set(key, valStr)
+			}
+		}
+	}
+	
+	// Clear approval state
+	state.Set("awaiting_approval", false)
+	state.Set(fmt.Sprintf("approval:%s", toolName), false)
+	
+	// Yield result event
+	yield(&session.Event{
+		Actions: session.EventActions{
+			StateDelta: stateDelta,
+		},
+	}, nil)
+	
+	// 6. Move to Next Node
+	nextNode, err := a.getNextNode(node.Name, state)
+	if err != nil {
+		yield(nil, err)
+		return false
+	}
+	
+	if !a.emitNodeTransition(nextNode, state, yield) {
+		return false
 	}
 	
 	return true
@@ -685,21 +994,90 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 
 // formatToolApprovalRequest formats a tool approval request
 func (a *AstonishAgent) formatToolApprovalRequest(toolName string, args map[string]interface{}) string {
-	var sb strings.Builder
-	sb.WriteString("╭────────────── Tool Execution ──────────────╮\n")
-	sb.WriteString(fmt.Sprintf("│ Tool: %-37s│\n", toolName))
-	sb.WriteString("│                                            │\n")
-	sb.WriteString("│ ** Arguments **                            │\n")
+	// Calculate required width
+	minContentWidth := 44
+	contentWidth := minContentWidth
 	
-	for key, value := range args {
-		line := fmt.Sprintf("%s: %v", key, value)
-		if len(line) > 37 {
-			line = line[:34] + "..."
-		}
-		sb.WriteString(fmt.Sprintf("│ %-42s │\n", line))
+	// Check tool name length
+	toolLineLen := len(fmt.Sprintf("Tool: %s", toolName))
+	if toolLineLen > contentWidth {
+		contentWidth = toolLineLen
 	}
 	
-	sb.WriteString("╰────────────────────────────────────────────╯\n")
+	// Check args length
+	type argLine struct {
+		key   string
+		value string
+		multiline bool
+	}
+	var processedArgs []argLine
+	
+	for key, value := range args {
+		valStr := fmt.Sprintf("%v", value)
+		lineLen := len(fmt.Sprintf("%s: %s", key, valStr))
+		
+		if lineLen > 40 { // Lower threshold to trigger multiline more often
+			processedArgs = append(processedArgs, argLine{key: key, value: valStr, multiline: true})
+			if len(valStr) > contentWidth {
+				contentWidth = len(valStr)
+			}
+			if len(key) + 1 > contentWidth { // +1 for colon
+				contentWidth = len(key) + 1
+			}
+		} else {
+			processedArgs = append(processedArgs, argLine{key: key, value: valStr, multiline: false})
+			if lineLen > contentWidth {
+				contentWidth = lineLen
+			}
+		}
+	}
+	
+	// Cap width to avoid breaking terminal (e.g. 120 chars)
+	if contentWidth > 120 {
+		contentWidth = 120
+	}
+	
+	// Construct Box
+	var sb strings.Builder
+	
+	// Header
+	headerTitle := " Tool Execution "
+	dashCount := (contentWidth + 2 - len(headerTitle)) / 2
+	header := "\n╭" + strings.Repeat("─", dashCount) + headerTitle + strings.Repeat("─", contentWidth + 2 - dashCount - len(headerTitle)) + "╮\n"
+	sb.WriteString(header)
+	
+	// Tool Name
+	sb.WriteString(fmt.Sprintf("│ Tool: %-*s │\n", contentWidth - 6, toolName))
+	
+	// Spacer
+	sb.WriteString("│ " + strings.Repeat(" ", contentWidth) + " │\n")
+	
+	// Arguments Header
+	sb.WriteString(fmt.Sprintf("│ %-*s │\n", contentWidth, "** Arguments **"))
+	
+	// Arguments
+	for _, arg := range processedArgs {
+		if arg.multiline {
+			// Key line
+			sb.WriteString(fmt.Sprintf("│ %-*s │\n", contentWidth, arg.key + ":"))
+			// Value line (potentially truncated if > 120)
+			val := arg.value
+			if len(val) > contentWidth {
+				val = val[:contentWidth-3] + "..."
+			}
+			sb.WriteString(fmt.Sprintf("│ %-*s │\n", contentWidth, val))
+		} else {
+			line := fmt.Sprintf("%s: %s", arg.key, arg.value)
+			if len(line) > contentWidth {
+				line = line[:contentWidth-3] + "..."
+			}
+			sb.WriteString(fmt.Sprintf("│ %-*s │\n", contentWidth, line))
+		}
+	}
+	
+	// Footer
+	sb.WriteString("╰" + strings.Repeat("─", contentWidth + 2) + "╯\n")
+	
 	sb.WriteString("\nDo you approve this execution?\n")
 	sb.WriteString("> Yes\n")
 	sb.WriteString("  No")

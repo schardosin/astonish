@@ -1,0 +1,223 @@
+package astonish
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+
+	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/launcher"
+	"google.golang.org/adk/session"
+)
+
+func handleAgentsCommand(args []string) error {
+	if len(args) < 1 {
+		fmt.Println("Usage: astonish agents <command> [args]")
+		return fmt.Errorf("no agents subcommand provided")
+	}
+
+	switch args[0] {
+	case "run":
+		return handleRunCommand(args[1:])
+	case "list":
+		return handleListCommand()
+	default:
+		return fmt.Errorf("unknown agents command: %s", args[0])
+	}
+}
+
+func handleRunCommand(args []string) error {
+	// Load config first
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		// Just warn, don't fail, maybe first run
+		fmt.Printf("Warning: Failed to load config: %v\n", err)
+		appCfg = &config.AppConfig{}
+	}
+
+	runCmd := flag.NewFlagSet("run", flag.ExitOnError)
+	providerName := runCmd.String("provider", appCfg.General.DefaultProvider, "LLM provider (gemini, openai, sap_ai_core)")
+	modelName := runCmd.String("model", appCfg.General.DefaultModel, "Model name")
+	useBrowser := runCmd.Bool("browser", false, "Launch with embedded web browser UI")
+	port := runCmd.Int("port", 8080, "Port for web server (only used with --browser)")
+
+	if err := runCmd.Parse(args); err != nil {
+		return fmt.Errorf("failed to parse flags: %w", err)
+	}
+
+	// If provider is still empty, default to gemini
+	if *providerName == "" {
+		*providerName = "gemini"
+	}
+
+	// Set environment variables from config for the selected provider
+	if providerCfg, ok := appCfg.Providers[*providerName]; ok {
+		for k, v := range providerCfg {
+			envKey := ""
+			switch *providerName {
+			case "gemini":
+				if k == "api_key" {
+					envKey = "GOOGLE_API_KEY"
+				}
+			case "openai":
+				if k == "api_key" {
+					envKey = "OPENAI_API_KEY"
+				}
+			case "sap_ai_core":
+				switch k {
+				case "client_id":
+					envKey = "AICORE_CLIENT_ID"
+				case "client_secret":
+					envKey = "AICORE_CLIENT_SECRET"
+				case "auth_url":
+					envKey = "AICORE_AUTH_URL"
+				case "base_url":
+					envKey = "AICORE_BASE_URL"
+				case "resource_group":
+					envKey = "AICORE_RESOURCE_GROUP"
+				}
+			}
+			if envKey != "" && v != "" {
+				os.Setenv(envKey, v)
+			}
+		}
+	}
+
+	if runCmd.NArg() < 1 {
+		fmt.Println("Usage: astonish agents run [flags] <agent_name>")
+		runCmd.PrintDefaults()
+		return fmt.Errorf("no agent name provided")
+	}
+
+	agentName := runCmd.Arg(0)
+	// Try to find the agent file
+	// 1. Check if it's a full path or in current dir
+	agentPath := agentName
+	if _, err := os.Stat(agentPath); os.IsNotExist(err) {
+		// 2. Check with .yaml extension
+		agentPath = fmt.Sprintf("%s.yaml", agentName)
+		if _, err := os.Stat(agentPath); os.IsNotExist(err) {
+			// 3. Check in standard system agents directory
+			agentsDir, err := config.GetAgentsDir()
+			if err == nil {
+				sysAgentPath := filepath.Join(agentsDir, fmt.Sprintf("%s.yaml", agentName))
+				if _, err := os.Stat(sysAgentPath); err == nil {
+					agentPath = sysAgentPath
+					goto Found
+				}
+			}
+			
+			// 4. Check in local dev path (fallback)
+			agentPath = fmt.Sprintf("astonish/agents/%s.yaml", agentName)
+			if _, err := os.Stat(agentPath); os.IsNotExist(err) {
+				return fmt.Errorf("agent file not found: %s", agentName)
+			}
+		}
+	}
+
+Found:
+
+	cfg, err := config.LoadAgent(agentPath)
+	if err != nil {
+		return fmt.Errorf("failed to load agent: %w", err)
+	}
+
+	ctx := context.Background()
+
+	// Create the base session service and wrap it to fix state initialization bug
+	baseService := session.InMemoryService()
+	safeService := NewAutoInitService(baseService)
+
+	// Choose launcher based on --browser flag
+	if *useBrowser {
+		// Use simple web launcher with chat-only UI
+		return launcher.RunSimpleWeb(ctx, &launcher.SimpleWebConfig{
+			AgentConfig:    cfg,
+			ProviderName:   *providerName,
+			ModelName:      *modelName,
+			SessionService: safeService,
+			Port:           *port,
+		})
+	}
+
+	// Use our custom console launcher
+	return launcher.RunConsole(ctx, &launcher.ConsoleConfig{
+		AgentConfig:    cfg,
+		ProviderName:   *providerName,
+		ModelName:      *modelName,
+		SessionService: safeService,
+	})
+}
+
+func handleListCommand() error {
+	type AgentInfo struct {
+		Name        string
+		Description string
+	}
+	agents := make(map[string]AgentInfo)
+
+	// ANSI colors
+	const (
+		ColorReset   = "\033[0m"
+		ColorMagenta = "\033[35m"
+		ColorCyan    = "\033[36m"
+	)
+
+	// Helper to scan directory
+	scanDir := func(dir string) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return // Ignore errors
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() && filepath.Ext(entry.Name()) == ".yaml" {
+				name := entry.Name()[:len(entry.Name())-5]
+				// Only process if not already found (prioritize system over local or vice versa? 
+				// The previous logic prioritized System then Local, but map overwrite would mean Local wins if processed second.
+				// Let's check existence to respect priority order: System first, then Local.
+				if _, exists := agents[name]; !exists {
+					path := filepath.Join(dir, entry.Name())
+					cfg, err := config.LoadAgent(path)
+					if err != nil {
+						continue // Skip invalid agents
+					}
+					agents[name] = AgentInfo{
+						Name:        name,
+						Description: cfg.Description,
+					}
+				}
+			}
+		}
+	}
+
+	// 1. Scan System Directory
+	if sysDir, err := config.GetAgentsDir(); err == nil {
+		scanDir(sysDir)
+	}
+
+	// 2. Scan Local Directory
+	scanDir("astonish/agents")
+
+	if len(agents) == 0 {
+		fmt.Println("No agents found.")
+		return nil
+	}
+
+	// Sort agents by name
+	var agentList []AgentInfo
+	for _, info := range agents {
+		agentList = append(agentList, info)
+	}
+	sort.Slice(agentList, func(i, j int) bool {
+		return agentList[i].Name < agentList[j].Name
+	})
+
+	for _, agent := range agentList {
+		fmt.Printf("%s%s%s: %s%s%s\n", ColorMagenta, agent.Name, ColorReset, ColorCyan, agent.Description, ColorReset)
+	}
+
+	return nil
+}

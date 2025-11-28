@@ -3,6 +3,7 @@ package launcher
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -11,12 +12,14 @@ import (
 
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/tools"
 	"github.com/schardosin/astonish/pkg/ui"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
 )
 
@@ -26,6 +29,7 @@ type ConsoleConfig struct {
 	ProviderName   string
 	ModelName      string
 	SessionService session.Service
+	DebugMode      bool
 }
 
 // RunConsole runs the agent in console mode with agent-controlled flow
@@ -42,18 +46,47 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	}
 	fmt.Printf("✓ Provider initialized: %s (model: %s)\n", cfg.ProviderName, cfg.ModelName)
 
-	// Initialize tools
-	fmt.Println("Initializing tools...")
+	// Initialize internal tools
+	fmt.Println("Initializing internal tools...")
 	internalTools, err := tools.GetInternalTools()
 	if err != nil {
 		fmt.Printf("ERROR: Failed to initialize tools: %v\n", err)
 		return fmt.Errorf("failed to initialize internal tools: %w", err)
 	}
-	fmt.Printf("✓ Tools initialized: %d tools available\n", len(internalTools))
+	fmt.Printf("✓ Internal tools initialized: %d tools available\n", len(internalTools))
 
-	// Create Astonish agent
+	// Initialize MCP tools
+	fmt.Println("Initializing MCP servers...")
+	
+	mcpManager, err := mcp.NewManager()
+	var mcpToolsets []tool.Toolset
+	if err != nil {
+		fmt.Printf("Warning: Failed to create MCP manager: %v\n", err)
+	} else {
+		if err := mcpManager.InitializeToolsets(ctx); err != nil {
+			fmt.Printf("Warning: Failed to initialize MCP toolsets: %v\n", err)
+		} else {
+			mcpToolsets = mcpManager.GetToolsets()
+			if len(mcpToolsets) > 0 {
+				fmt.Printf("✓ MCP servers initialized: %d server(s)\n", len(mcpToolsets))
+			} else {
+				fmt.Println("✓ No MCP servers configured")
+			}
+		}
+	}
+
+	// Create session service
+	sessionService := cfg.SessionService
+	if sessionService == nil {
+		sessionService = session.InMemoryService()
+	}
+
+	// Create Astonish agent with internal tools
+	// MCP toolsets will be passed directly to llmagent when creating nodes
 	fmt.Println("Creating agent...")
-	astonishAgent := agent.NewAstonishAgent(cfg.AgentConfig, llm, internalTools)
+	astonishAgent := agent.NewAstonishAgentWithToolsets(cfg.AgentConfig, llm, internalTools, mcpToolsets)
+	astonishAgent.DebugMode = cfg.DebugMode
+	astonishAgent.SessionService = sessionService
 
 	// Create ADK agent wrapper
 	adkAgent, err := adkagent.New(adkagent.Config{
@@ -67,11 +100,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	}
 	fmt.Println("✓ Agent created")
 
-	// Create session service
-	sessionService := cfg.SessionService
-	if sessionService == nil {
-		sessionService = session.InMemoryService()
-	}
+
 
 	// Create session
 	fmt.Println("Creating session...")
@@ -144,7 +173,21 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		}) {
 			if err != nil {
 				fmt.Printf("\nERROR: %v\n", err)
-				return err
+				break
+			}
+
+			// Debug logging for tool calls and responses
+			if cfg.DebugMode && event.LLMResponse.Content != nil {
+				for _, part := range event.LLMResponse.Content.Parts {
+					if part.FunctionCall != nil {
+						argsJSON, _ := json.MarshalIndent(part.FunctionCall.Args, "", "  ")
+						fmt.Printf("\n%s[DEBUG] Tool Call: %s%s\nArguments:\n%s\n", ColorCyan, part.FunctionCall.Name, ColorReset, string(argsJSON))
+					}
+					if part.FunctionResponse != nil {
+						respJSON, _ := json.MarshalIndent(part.FunctionResponse.Response, "", "  ")
+						fmt.Printf("\n%s[DEBUG] Tool Response: %s%s\nResult:\n%s\n", ColorCyan, part.FunctionResponse.Name, ColorReset, string(respJSON))
+					}
+				}
 			}
 
 			// Update current node from StateDelta if present
@@ -296,7 +339,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						// Handle AI prefix
 						// Only print prefix if it's NOT a system message AND the line is not empty
 						if !isSystemMsg && !aiPrefixPrinted && strings.TrimSpace(line) != "" {
-							fmt.Printf("\n%sAI:%s ", ColorGreen, ColorReset)
+							fmt.Printf("\n%sAgent:%s ", ColorGreen, ColorReset)
 							aiPrefixPrinted = true
 						}
 						
@@ -444,7 +487,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 			// Check if we have options for selection
 			if len(approvalOptions) > 0 {
 				// Use interactive selection for approval
-				fmt.Println("\nSelect an option:")
+				fmt.Println("\n[?] Do you approve this execution?:")
 				selectedIdx, err := ui.ReadSelection(approvalOptions)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)

@@ -21,8 +21,7 @@ func Execute() error {
 	case "config":
 		return handleConfigCommand(os.Args[2:])
 	case "tools":
-		fmt.Println("Tools not implemented yet")
-		return nil
+		return handleToolsCommand(os.Args[2:])
 	default:
 		printUsage()
 		return fmt.Errorf("unknown command: %s", command)

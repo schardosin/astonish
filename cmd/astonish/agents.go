@@ -43,6 +43,7 @@ func handleRunCommand(args []string) error {
 	modelName := runCmd.String("model", appCfg.General.DefaultModel, "Model name")
 	useBrowser := runCmd.Bool("browser", false, "Launch with embedded web browser UI")
 	port := runCmd.Int("port", 8080, "Port for web server (only used with --browser)")
+	debugMode := runCmd.Bool("debug", false, "Enable debug mode to show tool inputs and responses")
 
 	if err := runCmd.Parse(args); err != nil {
 		return fmt.Errorf("failed to parse flags: %w", err)
@@ -149,6 +150,7 @@ Found:
 		ProviderName:   *providerName,
 		ModelName:      *modelName,
 		SessionService: safeService,
+		DebugMode:      *debugMode,
 	})
 }
 

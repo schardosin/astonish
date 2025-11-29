@@ -7,6 +7,7 @@ import (
 	"iter"
 	"log"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1374,6 +1375,43 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 
 		// 3. If not mapped (not JSON, or JSON didn't match keys), fallback
 		if !mapped {
+			// Special handling: If we have exactly 1 item which is a list (parsed), and multiple keys,
+			// try to broadcast the list to all list-type keys.
+			// This handles the case where the LLM returns one list but we expect it to populate multiple variables (e.g. pr_list and pr_numbers).
+			if isJson && len(node.OutputModel) > 1 {
+				if listVal, ok := parsed.([]any); ok {
+					if a.DebugMode {
+						fmt.Printf("[DEBUG] Broadcasting single list output to %d keys.\n", len(node.OutputModel))
+					}
+					
+					// Sort keys for deterministic behavior
+					var keys []string
+					for k := range node.OutputModel {
+						keys = append(keys, k)
+					}
+					sort.Strings(keys)
+
+					broadcasted := false
+					for _, key := range keys {
+						targetType := node.OutputModel[key]
+						if targetType == "list" || targetType == "any" {
+							if err := state.Set(key, listVal); err != nil {
+								yield(nil, err)
+								return false
+							}
+							broadcasted = true
+							if a.DebugMode {
+								fmt.Printf("[DEBUG] Broadcasted list to key %s\n", key)
+							}
+						}
+					}
+					
+					if broadcasted {
+						return true
+					}
+				}
+			}
+
 			// If there is exactly one target, assign the raw output 
 			// (or parsed object if it was JSON but didn't match keys, AND target expects structure)
 			if len(node.OutputModel) == 1 {

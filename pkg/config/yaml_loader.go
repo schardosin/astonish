@@ -27,6 +27,19 @@ type Node struct {
 	Args            map[string]interface{} `yaml:"args,omitempty"`
 	RawToolOutput   map[string]string      `yaml:"raw_tool_output,omitempty"`
 	ToolsAutoApproval bool                 `yaml:"tools_auto_approval,omitempty"`
+	Updates         map[string]string      `yaml:"updates,omitempty"`
+	Action          string                 `yaml:"action,omitempty"`
+	Value           interface{}            `yaml:"value,omitempty"`
+	SourceVariable  string                 `yaml:"source_variable,omitempty"`
+	Parallel        *ParallelConfig        `yaml:"parallel,omitempty"`
+}
+
+// ParallelConfig defines configuration for parallel execution.
+type ParallelConfig struct {
+	ForEach        string `yaml:"forEach"`
+	As             string `yaml:"as"`
+	IndexAs        string `yaml:"index_as,omitempty"`
+	MaxConcurrency int    `yaml:"maxConcurrency,omitempty"`
 }
 
 // FlowItem represents a transition in the flow.

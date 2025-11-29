@@ -131,6 +131,15 @@ func (t *sapTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Constructed: .../inference/deployments/{id}/chat/completions
 	// This should match SAP AI Core API
 
+	// Inject api-version for Azure OpenAI models if missing
+	if strings.Contains(req.URL.Path, "/chat/completions") {
+		q := req.URL.Query()
+		if q.Get("api-version") == "" {
+			q.Set("api-version", "2024-02-01")
+			req.URL.RawQuery = q.Encode()
+		}
+	}
+
 	return t.base.RoundTrip(req)
 }
 
@@ -180,8 +189,24 @@ func (t *sapTransport) getToken() (string, error) {
 	return t.token, nil
 }
 
+// ModelIDMap maps friendly model names to SAP AI Core model names
+var ModelIDMap = map[string]string{
+	"gpt-4o":        "gpt-4o",
+	"gpt-4o-mini":   "gpt-4o-mini",
+	"gpt-4":         "gpt-4",
+	"gpt-3.5-turbo": "gpt-3.5-turbo",
+	"o1":            "o1",
+	"o4-mini":       "o4-mini",
+	"gpt-5":         "gpt-5",
+}
+
 // ResolveDeploymentID finds the deployment ID for a given model name.
 func ResolveDeploymentID(ctx context.Context, modelName string) (string, error) {
+	// Check map first
+	if mapped, ok := ModelIDMap[modelName]; ok {
+		modelName = mapped
+	}
+
 	// We need a temporary transport to get the token
 	t := &sapTransport{
 		base:          http.DefaultTransport,
@@ -242,6 +267,7 @@ func ResolveDeploymentID(ctx context.Context, modelName string) (string, error) 
 
 	for _, res := range result.Resources {
 		if res.Status == "RUNNING" && res.Details.Resources.BackendDetails.Model.Name == modelName {
+			fmt.Printf("[DEBUG] Found running deployment for model '%s': %s\n", modelName, res.ID)
 			return res.ID, nil
 		}
 	}

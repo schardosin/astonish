@@ -7,12 +7,14 @@ import (
 	"iter"
 	"log"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/schardosin/astonish/pkg/config"
-	pkgtools "github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
+	"google.golang.org/adk/memory"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
@@ -25,6 +27,8 @@ var ErrWaitingForApproval = fmt.Errorf("interrupt: waiting for user approval")
 // minimalReadonlyContext implements agent.ReadonlyContext for fetching tools from toolsets
 type minimalReadonlyContext struct {
 	context.Context
+	actions *session.EventActions
+	state   session.State
 }
 
 func (m *minimalReadonlyContext) AgentName() string                    { return "astonish-agent" }
@@ -35,6 +39,29 @@ func (m *minimalReadonlyContext) ReadonlyState() session.ReadonlyState { return 
 func (m *minimalReadonlyContext) UserID() string                       { return "" }
 func (m *minimalReadonlyContext) SessionID() string                    { return "" }
 func (m *minimalReadonlyContext) Branch() string                       { return "" }
+func (m *minimalReadonlyContext) Actions() *session.EventActions {
+	if m.actions == nil {
+		return &session.EventActions{}
+	}
+	return m.actions
+}
+func (m *minimalReadonlyContext) SearchMemory(ctx context.Context, query string) (*memory.SearchResponse, error) {
+	return nil, nil
+}
+func (m *minimalReadonlyContext) FunctionCallID() string { return "" }
+func (m *minimalReadonlyContext) Artifacts() agent.Artifacts { return nil }
+func (m *minimalReadonlyContext) State() session.State       { return m.state }
+
+// RunnableTool defines an interface for tools that can be executed.
+// This matches the signature of Run method in adk-go's internal tool implementations.
+type RunnableTool interface {
+	Run(ctx tool.Context, args any) (map[string]any, error)
+}
+
+// ToolWithDeclaration allows inspecting the tool's schema
+type ToolWithDeclaration interface {
+	Declaration() *genai.FunctionDeclaration
+}
 
 // ProtectedToolset wraps a toolset and returns tools wrapped with ProtectedTool
 type ProtectedToolset struct {
@@ -104,11 +131,7 @@ func (f *FilteredToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error) 
 	return filteredTools, nil
 }
 
-// RunnableTool interface for executing tools.
-type RunnableTool interface {
-	tool.Tool
-	Run(ctx tool.Context, args any) (map[string]any, error)
-}
+
 
 // ProtectedTool wraps a standard tool and adds an approval gate.
 type ProtectedTool struct {
@@ -116,6 +139,14 @@ type ProtectedTool struct {
 	State     session.State  // Access to session state
 	Agent     *AstonishAgent // Access to helper methods
 	YieldFunc func(*session.Event, error) bool // For emitting events
+}
+
+// Declaration forwards the call to the underlying tool if it supports it
+func (p *ProtectedTool) Declaration() *genai.FunctionDeclaration {
+	if declTool, ok := p.Tool.(ToolWithDeclaration); ok {
+		return declTool.Declaration()
+	}
+	return nil
 }
 
 // ProcessRequest always delegates to underlying tool to register it with the LLM
@@ -221,6 +252,27 @@ func NewAstonishAgentWithToolsets(cfg *config.AgentConfig, llm model.LLM, tools 
 
 // Run executes the agent flow with stateful workflow management.
 func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+	if a.DebugMode {
+		fmt.Println("[DEBUG] Available Tools:")
+		for _, t := range a.Tools {
+			fmt.Printf(" - %s (Internal)\n", t.Name())
+		}
+		if a.Toolsets != nil {
+			// Create a minimal context for listing tools
+			roCtx := &minimalReadonlyContext{Context: context.Background()}
+			for _, ts := range a.Toolsets {
+				tools, err := ts.Tools(roCtx)
+				if err == nil {
+					for _, t := range tools {
+						fmt.Printf(" - %s (MCP: %s)\n", t.Name(), ts.Name())
+					}
+				} else {
+					fmt.Printf(" - [Error listing tools for toolset %s: %v]\n", ts.Name(), err)
+				}
+			}
+		}
+	}
+
 	state := ctx.Session().State()
 	hasUserInput := ctx.UserContent() != nil && len(ctx.UserContent().Parts) > 0
 
@@ -475,6 +527,22 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				return
 			}
 
+			// Check for Parallel execution
+			if node.Parallel != nil {
+				if !a.handleParallelNode(ctx, node, state, yield) {
+					return
+				}
+				
+				// Move to next node
+				nextNode, err := a.getNextNode(currentNodeName, state)
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+				currentNodeName = nextNode
+				continue
+			}
+
 			if node.Type == "input" {
 				// Render prompt
 				prompt := a.renderString(node.Prompt, state)
@@ -588,6 +656,34 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				currentNodeName = nextNode
 				// Don't emit transition here - the main loop will do it
 
+			} else if node.Type == "update_state" {
+				if !a.handleUpdateStateNode(ctx, node, state, yield) {
+					return
+				}
+				
+				// Move to next node
+				nextNode, err := a.getNextNode(currentNodeName, state)
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+				currentNodeName = nextNode
+				// Don't emit transition here - the main loop will do it
+
+			} else if node.Type == "output" {
+				if !a.handleOutputNode(ctx, node, state, yield) {
+					return
+				}
+				
+				// Move to next node
+				nextNode, err := a.getNextNode(currentNodeName, state)
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+				currentNodeName = nextNode
+				// Don't emit transition here - the main loop will do it
+
 			} else {
 				yield(nil, fmt.Errorf("unsupported node type: %s", node.Type))
 				return
@@ -640,7 +736,136 @@ func (a *AstonishAgent) emitNodeTransition(nodeName string, state session.State,
 	return yield(event, nil)
 }
 
-// handleToolApproval handles tool approval flow when resuming after pause
+// handleUpdateStateNode handles update_state nodes
+func (a *AstonishAgent) handleUpdateStateNode(ctx agent.InvocationContext, node *config.Node, state session.State, yield func(*session.Event, error) bool) bool {
+	// Fallback to simple Updates map if Action is not set
+	if node.Action == "" && len(node.Updates) > 0 {
+		stateDelta := make(map[string]any)
+		for key, valueTemplate := range node.Updates {
+			value := a.renderString(valueTemplate, state)
+			if err := state.Set(key, value); err != nil {
+				yield(nil, fmt.Errorf("failed to set state key %s: %w", key, err))
+				return false
+			}
+			stateDelta[key] = value
+		}
+		// Emit event
+		event := &session.Event{
+			LLMResponse: model.LLMResponse{
+				Content: &genai.Content{
+					Parts: []*genai.Part{{Text: fmt.Sprintf("Updated state: %v", stateDelta)}},
+					Role:  "model",
+				},
+			},
+			Actions: session.EventActions{StateDelta: stateDelta},
+		}
+		return yield(event, nil)
+	}
+
+	// Python-compatible logic
+	if len(node.OutputModel) != 1 {
+		yield(nil, fmt.Errorf("update_state node must have exactly one key in output_model defining the target variable"))
+		return false
+	}
+
+	var targetVar string
+	for k := range node.OutputModel {
+		targetVar = k
+		break
+	}
+
+	var valueToUse any
+	if node.SourceVariable != "" {
+		val, err := state.Get(node.SourceVariable)
+		if err != nil {
+			// If source variable missing, is it an error? Python raises KeyError.
+			yield(nil, fmt.Errorf("failed to get source variable %s: %w", node.SourceVariable, err))
+			return false
+		}
+		valueToUse = val
+	} else if node.Value != nil {
+		valueToUse = node.Value
+	} else {
+		yield(nil, fmt.Errorf("update_state node must have either source_variable or value"))
+		return false
+	}
+
+	// Render string values
+	if strVal, ok := valueToUse.(string); ok {
+		valueToUse = a.renderString(strVal, state)
+	}
+
+	stateDelta := make(map[string]any)
+
+	switch node.Action {
+	case "overwrite":
+		if err := state.Set(targetVar, valueToUse); err != nil {
+			yield(nil, fmt.Errorf("failed to set state variable %s: %w", targetVar, err))
+			return false
+		}
+		stateDelta[targetVar] = valueToUse
+
+	case "append":
+		// Get existing list
+		existing, err := state.Get(targetVar)
+		var list []any
+		if err == nil && existing != nil {
+			if l, ok := existing.([]any); ok {
+				list = l
+			} else if l, ok := existing.([]string); ok {
+				list = make([]any, len(l))
+				for i, v := range l {
+					list[i] = v
+				}
+			} else {
+				// Initialize new list if type mismatch
+				list = []any{}
+			}
+		} else {
+			list = []any{}
+		}
+
+		// Append
+		if valList, ok := valueToUse.([]any); ok {
+			list = append(list, valList...)
+		} else if valList, ok := valueToUse.([]string); ok {
+			for _, v := range valList {
+				list = append(list, v)
+			}
+		} else {
+			list = append(list, valueToUse)
+		}
+
+		if err := state.Set(targetVar, list); err != nil {
+			yield(nil, fmt.Errorf("failed to set state variable %s: %w", targetVar, err))
+			return false
+		}
+		stateDelta[targetVar] = list
+
+	default:
+		yield(nil, fmt.Errorf("unsupported action: %s", node.Action))
+		return false
+	}
+
+	// Emit event with state delta
+	event := &session.Event{
+		LLMResponse: model.LLMResponse{
+			Content: &genai.Content{
+				Parts: []*genai.Part{{
+					Text: fmt.Sprintf("Updated state: %v", stateDelta),
+				}},
+				Role: "model",
+			},
+		},
+		Actions: session.EventActions{
+			StateDelta: stateDelta,
+		},
+	}
+
+	return yield(event, nil)
+}
+
+// handleToolNode handles tool execution nodesval flow when resuming after pause
 func (a *AstonishAgent) handleToolApproval(ctx agent.InvocationContext, state session.State, yield func(*session.Event, error) bool) bool {
 	// Check if user provided approval
 	if ctx.UserContent() == nil || len(ctx.UserContent().Parts) == 0 {
@@ -1021,7 +1246,6 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 		})
 	} else {
 		// No tools enabled
-
 		llmAgent, err = llmagent.New(llmagent.Config{
 			Name:        nodeName,
 			Model:       a.LLM,
@@ -1110,13 +1334,83 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 	// Save to output_model if defined
 	if len(node.OutputModel) > 0 {
 		output := fullResponse.String()
-		for key := range node.OutputModel {
-			if err := state.Set(key, output); err != nil {
-				yield(nil, err)
-				return false
+		
+		// 1. Try to parse as JSON first
+		// We use cleanAndFixJson only for the parsing attempt
+		cleaned := a.cleanAndFixJson(output)
+		var parsed any
+		isJson := false
+		if err := json.Unmarshal([]byte(cleaned), &parsed); err == nil {
+			isJson = true
+		}
+
+		// 2. If JSON, try to map to output model
+		mapped := false
+		if isJson {
+			if parsedMap, ok := parsed.(map[string]any); ok {
+				// Check if keys match
+				keysMatch := false
+				for key := range node.OutputModel {
+					if _, ok := parsedMap[key]; ok {
+						keysMatch = true
+						break
+					}
+				}
+				
+				if keysMatch {
+					// Distribute values
+					for key := range node.OutputModel {
+						if val, ok := parsedMap[key]; ok {
+							if err := state.Set(key, val); err != nil {
+								yield(nil, err)
+								return false
+							}
+						}
+					}
+					mapped = true
+				}
+			}
+		}
+
+		// 3. If not mapped (not JSON, or JSON didn't match keys), fallback
+		if !mapped {
+			// If there is exactly one target, assign the raw output 
+			// (or parsed object if it was JSON but didn't match keys, AND target expects structure)
+			if len(node.OutputModel) == 1 {
+				var targetKey string
+				for k := range node.OutputModel {
+					targetKey = k
+					break
+				}
+				
+				targetType := node.OutputModel[targetKey]
+				// If it was valid JSON and the target expects a list/dict, use the parsed value
+				if isJson && (targetType == "list" || targetType == "dict" || targetType == "object") {
+					if err := state.Set(targetKey, parsed); err != nil {
+						yield(nil, err)
+						return false
+					}
+				} else {
+					// Otherwise use raw output (preserves markdown for string fields)
+					if err := state.Set(targetKey, output); err != nil {
+						yield(nil, err)
+						return false
+					}
+				}
+			} else {
+				// Multiple targets but failed to map.
+				// Fallback: assign raw output to all fields (likely incorrect but safe fallback)
+				// Or maybe error? Python logs warning.
+				for key := range node.OutputModel {
+					if err := state.Set(key, output); err != nil {
+						yield(nil, err)
+						return false
+					}
+				}
 			}
 		}
 	}
+
 	
 	return true
 }
@@ -1127,6 +1421,22 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 	for key, val := range node.Args {
 		if strVal, ok := val.(string); ok {
 			resolvedArgs[key] = a.renderString(strVal, state)
+		} else if mapVal, ok := val.(map[string]interface{}); ok && len(mapVal) == 1 {
+			// Handle map arguments (e.g. owner: {owner: str}) -> resolve from state
+			var stateKey string
+			for k := range mapVal {
+				stateKey = k
+				break
+			}
+			
+			if stateVal, err := state.Get(stateKey); err == nil {
+				resolvedArgs[key] = stateVal
+			} else {
+				if a.DebugMode {
+					fmt.Printf("[WARN] State key '%s' for arg '%s' not found in state.\n", stateKey, key)
+				}
+				resolvedArgs[key] = nil
+			}
 		} else {
 			resolvedArgs[key] = val
 		}
@@ -1195,13 +1505,179 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 			break
 		}
 	}
+
+	// If not found in internal tools, check Toolsets (MCP)
+	if selectedTool == nil && a.Toolsets != nil {
+		roCtx := &minimalReadonlyContext{Context: ctx}
+		for _, ts := range a.Toolsets {
+			tools, err := ts.Tools(roCtx)
+			if err == nil {
+				for _, t := range tools {
+					if t.Name() == toolName {
+						selectedTool = t
+						break
+					}
+				}
+			}
+			if selectedTool != nil {
+				break
+			}
+		}
+	}
 	if selectedTool == nil {
 		yield(nil, fmt.Errorf("tool '%s' not found", toolName))
 		return false
 	}
 
-	// Execute using internal helper
-	toolResult, err := pkgtools.ExecuteTool(ctx, toolName, resolvedArgs)
+	// 5. Type Conversion based on Schema
+	if declTool, ok := selectedTool.(ToolWithDeclaration); ok {
+		if a.DebugMode {
+			fmt.Printf("[DEBUG] Tool '%s' implements ToolWithDeclaration\n", toolName)
+		}
+		decl := declTool.Declaration()
+		if decl != nil && decl.ParametersJsonSchema != nil {
+			if a.DebugMode {
+				fmt.Printf("[DEBUG] ParametersJsonSchema type: %T\n", decl.ParametersJsonSchema)
+			}
+			if schema, ok := decl.ParametersJsonSchema.(*genai.Schema); ok {
+				if a.DebugMode {
+					fmt.Printf("[DEBUG] Schema Type: %s (Expected: %s)\n", schema.Type, genai.TypeObject)
+				}
+				if schema.Type == genai.TypeObject {
+					for key, val := range resolvedArgs {
+						if strVal, ok := val.(string); ok {
+							if prop, ok := schema.Properties[key]; ok {
+								if prop.Type == genai.TypeNumber || prop.Type == genai.TypeInteger {
+									if num, err := strconv.ParseFloat(strVal, 64); err == nil {
+										resolvedArgs[key] = num
+										if a.DebugMode {
+											fmt.Printf("[DEBUG] Converted arg '%s' from string to number: %v\n", key, num)
+										}
+									} else {
+										// Fallback: Try to extract leading number (e.g. "709: Title" -> 709)
+										// This handles cases where the selection includes the title
+										re := regexp.MustCompile(`^(\d+)`)
+										if match := re.FindStringSubmatch(strVal); len(match) > 1 {
+											if num, err := strconv.ParseFloat(match[1], 64); err == nil {
+												resolvedArgs[key] = num
+												if a.DebugMode {
+													fmt.Printf("[DEBUG] Extracted number from arg '%s': %v (from '%s')\n", key, num, strVal)
+												}
+											}
+										}
+									}
+								} else if prop.Type == genai.TypeBoolean {
+									// Try to convert to boolean
+									if b, err := strconv.ParseBool(strVal); err == nil {
+										resolvedArgs[key] = b
+										if a.DebugMode {
+											fmt.Printf("[DEBUG] Converted arg '%s' from string to boolean: %v\n", key, b)
+										}
+									}
+								}
+							} else {
+								if a.DebugMode {
+									fmt.Printf("[DEBUG] Arg '%s' not found in schema properties\n", key)
+								}
+							}
+						}
+					}
+				} else {
+					if a.DebugMode {
+						fmt.Printf("[DEBUG] Schema is not TypeObject\n")
+					}
+				}
+			} else if schemaMap, ok := decl.ParametersJsonSchema.(map[string]interface{}); ok {
+				// Handle map[string]interface{} schema (common in MCP or other providers)
+				if a.DebugMode {
+					fmt.Printf("[DEBUG] Inspecting schema as map[string]interface{}\n")
+				}
+				
+				if typeVal, ok := schemaMap["type"].(string); ok && typeVal == "object" {
+					if props, ok := schemaMap["properties"].(map[string]interface{}); ok {
+						for key, val := range resolvedArgs {
+							if strVal, ok := val.(string); ok {
+								if prop, ok := props[key].(map[string]interface{}); ok {
+									propType, _ := prop["type"].(string)
+									if a.DebugMode {
+										fmt.Printf("[DEBUG] Arg '%s' schema type (map): %s\n", key, propType)
+									}
+									
+									if propType == "number" || propType == "integer" {
+										// Try to convert string to float64
+										if num, err := strconv.ParseFloat(strVal, 64); err == nil {
+											resolvedArgs[key] = num
+											if a.DebugMode {
+												fmt.Printf("[DEBUG] Converted arg '%s' from string to number: %v\n", key, num)
+											}
+										} else {
+											// Fallback: Try to extract leading number (e.g. "709: Title" -> 709)
+											re := regexp.MustCompile(`^(\d+)`)
+											if match := re.FindStringSubmatch(strVal); len(match) > 1 {
+												if num, err := strconv.ParseFloat(match[1], 64); err == nil {
+													resolvedArgs[key] = num
+													if a.DebugMode {
+														fmt.Printf("[DEBUG] Extracted number from arg '%s': %v (from '%s')\n", key, num, strVal)
+													}
+												}
+											}
+										}
+									} else if propType == "boolean" {
+										// Try to convert string to boolean
+										if b, err := strconv.ParseBool(strVal); err == nil {
+											resolvedArgs[key] = b
+											if a.DebugMode {
+												fmt.Printf("[DEBUG] Converted arg '%s' from string to boolean: %v\n", key, b)
+											}
+										}
+									}
+								}
+							}
+							// Also handle int to float64 if needed
+							if intVal, ok := val.(int); ok {
+								// Check if schema expects number/integer
+								if prop, ok := props[key].(map[string]interface{}); ok {
+									propType, _ := prop["type"].(string)
+									if propType == "number" {
+										resolvedArgs[key] = float64(intVal)
+									}
+								}
+							}
+						}
+					}
+				}
+			} else {
+				if a.DebugMode {
+					fmt.Printf("[DEBUG] ParametersJsonSchema is not *genai.Schema or map[string]interface{}\n")
+				}
+			}
+		} else {
+			if a.DebugMode {
+				fmt.Printf("[DEBUG] Declaration or ParametersJsonSchema is nil\n")
+			}
+		}
+	} else {
+		if a.DebugMode {
+			fmt.Printf("[DEBUG] Tool '%s' does NOT implement ToolWithDeclaration\n", toolName)
+		}
+	}
+
+	// Execute using RunnableTool interface
+	// Create tool context
+	stateDelta := make(map[string]any)
+	toolCtx := &minimalReadonlyContext{
+		Context: ctx,
+		actions: &session.EventActions{StateDelta: stateDelta},
+		state:   state,
+	}
+
+	runnable, ok := selectedTool.(RunnableTool)
+	if !ok {
+		yield(nil, fmt.Errorf("tool '%s' does not implement Run method", toolName))
+		return false
+	}
+
+	toolResult, err := runnable.Run(toolCtx, resolvedArgs)
 	if err != nil {
 		yield(nil, fmt.Errorf("tool execution failed: %w", err))
 		return false
@@ -1215,9 +1691,12 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 	resultMap := make(map[string]interface{})
 	// Marshal/Unmarshal hack to convert struct to map
 	resultBytes, _ := json.Marshal(toolResult)
-	json.Unmarshal(resultBytes, &resultMap)
+	err = json.Unmarshal(resultBytes, &resultMap)
 	
-	stateDelta := make(map[string]any)
+	if err != nil {
+		fmt.Printf("[DEBUG] JSON Unmarshal Error: %v\n", err)
+	}
+	// fmt.Printf("[DEBUG] Result JSON: %s\n", string(resultBytes))
 	
 	// Handle raw_tool_output
 	for key, mapping := range node.RawToolOutput {
@@ -1231,42 +1710,81 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 	
 	// Handle output_model
 	for key, typeName := range node.OutputModel {
-		// For now, we assume the tool result HAS a field matching the key?
-		// Or does the node config specify mapping?
-		// In `github_pr_description_generator`:
-		// output_model: { prs: list }
-		// args: { command: "gh pr list" }
-		// The tool `shell_command` returns `stdout`.
-		// There is no explicit mapping in `output_model` keys to tool result fields.
-		// It seems we assume the tool result *is* the content?
-		// Or we map from `stdout`?
+		// Try to find the content from various common keys
+		var val interface{}
+		found := false
 		
-		// In the python code, `tool` node has `output_model` and `raw_tool_output`.
-		// `raw_tool_output` maps tool output fields to state fields.
-		// `output_model` seems to imply parsing?
+		// Priority list of keys to check
+		keysToCheck := []string{"stdout", "output", "content", "formatted_diff", "result"}
 		
-		// Example:
-		// name: get_prs
-		// output_model: { prs: list }
-		// No `raw_tool_output`.
-		// So it must take `stdout` and parse it into `prs`.
+		// 1. Check explicit mapping first (if any) - though output_model doesn't define mapping usually
 		
-		if val, ok := resultMap["stdout"]; ok {
-			valStr := fmt.Sprintf("%v", val)
+		// 2. Check common keys
+		for _, k := range keysToCheck {
+			if v, ok := resultMap[k]; ok {
+				val = v
+				found = true
+				break
+			}
+		}
+		
+		// 3. If not found, check if the result itself is a string or simple type (and not a map/struct wrapper)
+		if !found && len(resultMap) == 0 {
+			// This might happen if toolResult was not a struct/map
+			val = toolResult
+			found = true
+		}
+		
+		if found {
 			if typeName == "list" {
-				// Split by newline
-				lines := strings.Split(strings.TrimSpace(valStr), "\n")
-				var cleanLines []string
-				for _, line := range lines {
-					if strings.TrimSpace(line) != "" {
-						cleanLines = append(cleanLines, line)
+				// Check if val is already a slice
+				switch v := val.(type) {
+				case []interface{}:
+					stateDelta[key] = v
+					state.Set(key, v)
+					continue
+				case []string:
+					// Convert to []interface{}
+					var list []interface{}
+					for _, s := range v {
+						list = append(list, s)
 					}
+					stateDelta[key] = list
+					state.Set(key, list)
+					continue
 				}
-				stateDelta[key] = cleanLines
-				state.Set(key, cleanLines)
+
+				// Try to parse as JSON list first
+				valStr := fmt.Sprintf("%v", val)
+				var list []any
+				if err := json.Unmarshal([]byte(valStr), &list); err == nil {
+					stateDelta[key] = list
+					state.Set(key, list)
+				} else {
+					// Fallback: Split by newline
+					lines := strings.Split(strings.TrimSpace(valStr), "\n")
+					var cleanLines []string
+					for _, line := range lines {
+						if strings.TrimSpace(line) != "" {
+							cleanLines = append(cleanLines, line)
+						}
+					}
+					stateDelta[key] = cleanLines
+					state.Set(key, cleanLines)
+				}
+			} else if typeName == "any" {
+				// Just set the value as is
+				stateDelta[key] = val
+				state.Set(key, val)
 			} else {
+				// Default to string
+				valStr := fmt.Sprintf("%v", val)
 				stateDelta[key] = valStr
 				state.Set(key, valStr)
+			}
+		} else {
+			if a.DebugMode {
+				fmt.Printf("[WARN] Could not find output for key '%s' in tool result: %v\n", key, resultMap)
 			}
 		}
 	}
@@ -1403,23 +1921,36 @@ func (a *AstonishAgent) getNextNode(current string, state session.State) (string
 }
 
 func (a *AstonishAgent) evaluateCondition(condition string, state session.State) bool {
+	// Handle simple "true" condition
 	if condition == "true" {
 		return true
 	}
-	if strings.Contains(condition, "==") {
-		parts := strings.Split(condition, "==")
-		if len(parts) == 2 {
-			re := regexp.MustCompile(`\['([^']+)'\]`)
-			match := re.FindStringSubmatch(parts[0])
-			if len(match) == 2 {
-				key := match[1]
-				val, _ := state.Get(key)
-				expected := strings.Trim(strings.TrimSpace(parts[1]), "'\"")
-				return fmt.Sprintf("%v", val) == expected
-			}
+
+	// Convert session.State to map[string]interface{}
+	stateMap := a.stateToMap(state)
+
+	// Use Starlark evaluator
+	result, err := EvaluateCondition(condition, stateMap)
+	if err != nil {
+		if a.DebugMode {
+			fmt.Printf("[DEBUG] Condition evaluation error for '%s': %v\n", condition, err)
 		}
+		return false
 	}
-	return false
+
+	return result
+}
+
+// stateToMap converts session.State to map[string]interface{}
+func (a *AstonishAgent) stateToMap(state session.State) map[string]interface{} {
+	stateMap := make(map[string]interface{})
+	
+	// Use the All() iterator to get all key-value pairs
+	for key, value := range state.All() {
+		stateMap[key] = value
+	}
+	
+	return stateMap
 }
 
 func (a *AstonishAgent) renderString(tmpl string, state session.State) string {
@@ -1432,6 +1963,63 @@ func (a *AstonishAgent) renderString(tmpl string, state session.State) string {
 		}
 		return fmt.Sprintf("%v", val)
 	})
+}
+
+func (a *AstonishAgent) cleanAndFixJson(input string) string {
+	// Remove markdown code blocks first
+	re := regexp.MustCompile("(?s)```(?:json)?\\s*(.*?)\\s*```")
+	match := re.FindStringSubmatch(input)
+	if len(match) > 1 {
+		return strings.TrimSpace(match[1])
+	}
+	
+	// Try to find JSON array or object in the text
+	// Look for patterns like [...] or {...}
+	trimmed := strings.TrimSpace(input)
+	
+	// Find the first occurrence of [ or {
+	startIdx := -1
+	startChar := ""
+	for i, ch := range trimmed {
+		if ch == '[' || ch == '{' {
+			startIdx = i
+			startChar = string(ch)
+			break
+		}
+	}
+	
+	if startIdx == -1 {
+		// No JSON found, return as-is
+		return trimmed
+	}
+	
+	// Find the matching closing bracket
+	endChar := "]"
+	if startChar == "{" {
+		endChar = "}"
+	}
+	
+	depth := 0
+	endIdx := -1
+	for i := startIdx; i < len(trimmed); i++ {
+		ch := trimmed[i]
+		if string(ch) == startChar {
+			depth++
+		} else if string(ch) == endChar {
+			depth--
+			if depth == 0 {
+				endIdx = i
+				break
+			}
+		}
+	}
+	
+	if endIdx != -1 {
+		// Extract the JSON portion
+		return strings.TrimSpace(trimmed[startIdx : endIdx+1])
+	}
+	
+	return trimmed
 }
 
 // extractToolNameFromXML extracts the tool name from XML-formatted tool calls
@@ -1526,4 +2114,317 @@ func extractParametersFromXML(text string) map[string]any {
 	}
 	
 	return params
+}
+
+// ScopedState wraps a parent state and allows local overrides
+type ScopedState struct {
+	Parent session.State
+	Local  map[string]any
+}
+
+func (s *ScopedState) Get(key string) (any, error) {
+	if v, ok := s.Local[key]; ok {
+		return v, nil
+	}
+	return s.Parent.Get(key)
+}
+
+func (s *ScopedState) Set(key string, value any) error {
+	s.Local[key] = value
+	return nil
+}
+
+func (s *ScopedState) Delete(key string) error {
+	delete(s.Local, key)
+	return nil
+}
+
+func (s *ScopedState) All() iter.Seq2[string, any] {
+	return func(yield func(string, any) bool) {
+		// Yield local keys
+		for k, v := range s.Local {
+			if !yield(k, v) {
+				return
+			}
+		}
+		// Yield parent keys if not in local
+		for k, v := range s.Parent.All() {
+			if _, ok := s.Local[k]; !ok {
+				if !yield(k, v) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// ScopedContext wraps an InvocationContext and overrides the state
+type ScopedContext struct {
+	agent.InvocationContext
+	state session.State
+}
+
+func (s *ScopedContext) Session() session.Session {
+	return &ScopedSession{
+		Session: s.InvocationContext.Session(),
+		state:   s.state,
+	}
+}
+
+// ScopedSession wraps a Session and overrides the state
+type ScopedSession struct {
+	session.Session
+	state session.State
+}
+
+func (s *ScopedSession) State() session.State {
+	return s.state
+}
+
+// handleParallelNode handles nodes with parallel configuration
+func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *config.Node, state session.State, yield func(*session.Event, error) bool) bool {
+	pConfig := node.Parallel
+	if pConfig == nil {
+		return false
+	}
+
+	// 1. Get the list to iterate over
+	listKey := strings.Trim(pConfig.ForEach, "{}") // Remove potential braces
+	listVal, err := state.Get(listKey)
+	if err != nil {
+		yield(nil, fmt.Errorf("failed to get parallel list '%s': %w", listKey, err))
+		return false
+	}
+
+	// Convert to slice
+	var items []any
+	if l, ok := listVal.([]any); ok {
+		items = l
+	} else if l, ok := listVal.([]string); ok {
+		for _, v := range l {
+			items = append(items, v)
+		}
+	} else if l, ok := listVal.([]int); ok {
+		for _, v := range l {
+			items = append(items, v)
+		}
+	} else {
+		// Try reflection or assume empty/error
+		// Also handle if it's a list of maps (common in JSON)
+		if l, ok := listVal.([]map[string]any); ok {
+			for _, v := range l {
+				items = append(items, v)
+			}
+		} else if l, ok := listVal.([]interface{}); ok {
+			items = l
+		} else {
+			yield(nil, fmt.Errorf("variable '%s' is not a list (type: %T)", listKey, listVal))
+			return false
+		}
+	}
+
+	if len(items) == 0 {
+		return true
+	}
+
+	// 2. Prepare for aggregation
+	if len(node.OutputModel) != 1 {
+		yield(nil, fmt.Errorf("parallel node must have exactly one key in output_model"))
+		return false
+	}
+	var outputKey string
+	for k := range node.OutputModel {
+		outputKey = k
+		break
+	}
+
+	// 3. Execute in Parallel
+	maxConcurrency := 1
+	if pConfig.MaxConcurrency > 0 {
+		maxConcurrency = pConfig.MaxConcurrency
+	}
+	
+	// Semaphore to limit concurrency
+	sem := make(chan struct{}, maxConcurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex // Protects results and yield
+	
+	// Pre-allocate results to preserve order
+	results := make([]any, len(items))
+	// Track success to know if we should include the result
+	successes := make([]bool, len(items))
+
+	fmt.Printf("[⚡️ Parallel] Processing %d items for node '%s' with concurrency %d\n", len(items), node.Name, maxConcurrency)
+
+	// Wrap yield to be thread-safe and track cancellation
+	yieldCancelled := false
+	safeYield := func(event *session.Event, err error) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if yieldCancelled {
+			return false
+		}
+		if !yield(event, err) {
+			yieldCancelled = true
+			return false
+		}
+		return true
+	}
+
+	for i, item := range items {
+		wg.Add(1)
+		go func(idx int, it any) {
+			defer wg.Done()
+			
+			// Acquire semaphore
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			// Check cancellation
+			mu.Lock()
+			if yieldCancelled {
+				mu.Unlock()
+				return
+			}
+			mu.Unlock()
+
+			// Progress logging
+			// Use a mutex for clean logging if needed, or just let it interleave
+			// fmt.Printf is generally thread-safe for output but lines might mix.
+			// Let's rely on standard stdout buffering.
+			// fmt.Printf("[⚡️ Parallel] Processing item %d/%d for node '%s'\n", idx+1, len(items), node.Name)
+
+			scopedState := &ScopedState{
+				Parent: state,
+				Local:  make(map[string]any),
+			}
+			
+			scopedState.Local[pConfig.As] = it
+			if pConfig.IndexAs != "" {
+				scopedState.Local[pConfig.IndexAs] = idx
+			}
+			
+			// Workaround for "Severity" template error in ADK llmagent
+			if _, err := scopedState.Get("Severity"); err != nil {
+				scopedState.Local["Severity"] = "{{Severity}}"
+			}
+
+			// Create ScopedContext
+			scopedCtx := &ScopedContext{
+				InvocationContext: ctx,
+				state:             scopedState,
+			}
+
+			success := false
+			if node.Type == "tool" {
+				success = a.handleToolNode(scopedCtx, node, scopedState, safeYield)
+			} else if node.Type == "llm" {
+				success = a.executeLLMNode(scopedCtx, node, node.Name, scopedState, safeYield)
+			} else {
+				safeYield(nil, fmt.Errorf("unsupported type for parallel node: %s", node.Type))
+				return
+			}
+
+			if !success {
+				mu.Lock()
+				if !yieldCancelled {
+					fmt.Printf("[⚠️ Parallel] Item %d failed\n", idx)
+				}
+				mu.Unlock()
+				return
+			}
+
+			val, err := scopedState.Get(outputKey)
+			if err == nil {
+				mu.Lock()
+				results[idx] = val
+				successes[idx] = true
+				mu.Unlock()
+			}
+		}(i, item)
+	}
+
+	wg.Wait()
+
+	// Check if cancelled during execution
+	if yieldCancelled {
+		return false
+	}
+
+	// 4. Update Parent State with Aggregated Results
+	// Filter results based on success to maintain density if needed, 
+	// OR keep them sparse?
+	// The original sequential logic appended only on success.
+	// So we should filter.
+	var finalResults []any
+	for i, s := range successes {
+		if s {
+			finalResults = append(finalResults, results[i])
+		}
+	}
+
+	existingVal, _ := state.Get(outputKey)
+	var final []any
+	
+	if existingVal != nil {
+		if l, ok := existingVal.([]any); ok {
+			final = l
+		} else {
+			final = []any{}
+		}
+	} else {
+		final = []any{}
+	}
+	
+	for _, res := range finalResults {
+		if l, ok := res.([]any); ok {
+			final = append(final, l...)
+		} else {
+			final = append(final, res)
+		}
+	}
+	
+	state.Set(outputKey, final)
+	
+	yield(&session.Event{
+		Actions: session.EventActions{
+			StateDelta: map[string]any{
+				outputKey: final,
+			},
+		},
+	}, nil)
+
+	return true
+}
+
+// handleOutputNode handles output nodes
+func (a *AstonishAgent) handleOutputNode(ctx agent.InvocationContext, node *config.Node, state session.State, yield func(*session.Event, error) bool) bool {
+	if a.DebugMode {
+		fmt.Printf("[DEBUG] Processing output node '%s'\n", node.Name)
+	}
+
+	var parts []string
+	for _, msgPart := range node.UserMessage {
+		// Check if part is a state variable
+		if val, err := state.Get(msgPart); err == nil {
+			parts = append(parts, fmt.Sprintf("%v", val))
+		} else {
+			// Not a state variable, use as literal
+			parts = append(parts, msgPart)
+		}
+	}
+
+	message := strings.Join(parts, " ")
+	
+	// Emit message event
+	evt := &session.Event{
+		LLMResponse: model.LLMResponse{
+			Content: &genai.Content{
+				Parts: []*genai.Part{{Text: message}},
+				Role:  "model",
+			},
+		},
+	}
+	
+	return yield(evt, nil)
 }

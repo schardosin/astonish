@@ -87,6 +87,18 @@ func handleRunCommand(args []string) error {
 		}
 	}
 
+	// Load MCP config and set environment variables from all servers
+	// This allows internal tools to access configuration defined for MCP servers (e.g. GITHUB_HOST)
+	if mcpCfg, err := config.LoadMCPConfig(); err == nil {
+		for _, server := range mcpCfg.MCPServers {
+			for k, v := range server.Env {
+				if v != "" {
+					os.Setenv(k, v)
+				}
+			}
+		}
+	}
+
 	if runCmd.NArg() < 1 {
 		fmt.Println("Usage: astonish agents run [flags] <agent_name>")
 		runCmd.PrintDefaults()

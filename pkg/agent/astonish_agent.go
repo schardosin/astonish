@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/ui"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/memory"
@@ -715,14 +716,7 @@ func (a *AstonishAgent) emitNodeTransition(nodeName string, state session.State,
 	history = append(history, nodeName)
 	
 	event := &session.Event{
-		LLMResponse: model.LLMResponse{
-			Content: &genai.Content{
-				Parts: []*genai.Part{{
-					Text: fmt.Sprintf("\n--- Node %s ---\n", nodeName),
-				}},
-				Role: "model",
-			},
-		},
+		// LLMResponse removed to prevent static "--- Node ---" log
 		Actions: session.EventActions{
 			StateDelta: map[string]any{
 				"current_node":       nodeName,
@@ -960,20 +954,8 @@ func (a *AstonishAgent) handleToolApproval(ctx agent.InvocationContext, state se
 
 // executeLLMNode executes an LLM node using ADK's llmagent
 func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config.Node, nodeName string, state session.State, yield func(*session.Event, error) bool) bool {
-	// Emit info message
-	infoEvent := &session.Event{
-		LLMResponse: model.LLMResponse{
-			Content: &genai.Content{
-				Parts: []*genai.Part{{
-					Text: fmt.Sprintf("[ℹ️ Info] Starting LLM node processing for %s\n", nodeName),
-				}},
-				Role: "model",
-			},
-		},
-	}
-	if !yield(infoEvent, nil) {
-		return false
-	}
+	// Emit info message - REMOVED for modern UI (spinner)
+	// infoEvent := ...
 	
 	// Render prompt and system instruction
 	instruction := a.renderString(node.Prompt, state)
@@ -2064,92 +2046,7 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 
 // formatToolApprovalRequest formats a tool approval request
 func (a *AstonishAgent) formatToolApprovalRequest(toolName string, args map[string]interface{}) string {
-	// Calculate required width
-	minContentWidth := 44
-	contentWidth := minContentWidth
-	
-	// Check tool name length
-	toolLineLen := len(fmt.Sprintf("Tool: %s", toolName))
-	if toolLineLen > contentWidth {
-		contentWidth = toolLineLen
-	}
-	
-	// Check args length
-	type argLine struct {
-		key   string
-		value string
-		multiline bool
-	}
-	var processedArgs []argLine
-	
-	for key, value := range args {
-		valStr := fmt.Sprintf("%v", value)
-		lineLen := len(fmt.Sprintf("%s: %s", key, valStr))
-		
-		if lineLen > 40 { // Lower threshold to trigger multiline more often
-			processedArgs = append(processedArgs, argLine{key: key, value: valStr, multiline: true})
-			if len(valStr) > contentWidth {
-				contentWidth = len(valStr)
-			}
-			if len(key) + 1 > contentWidth { // +1 for colon
-				contentWidth = len(key) + 1
-			}
-		} else {
-			processedArgs = append(processedArgs, argLine{key: key, value: valStr, multiline: false})
-			if lineLen > contentWidth {
-				contentWidth = lineLen
-			}
-		}
-	}
-	
-	// Cap width to avoid breaking terminal (e.g. 120 chars)
-	if contentWidth > 120 {
-		contentWidth = 120
-	}
-	
-	// Construct Box
-	var sb strings.Builder
-	
-	// Header
-	headerTitle := " Tool Execution "
-	dashCount := (contentWidth + 2 - len(headerTitle)) / 2
-	header := "\n╭" + strings.Repeat("─", dashCount) + headerTitle + strings.Repeat("─", contentWidth + 2 - dashCount - len(headerTitle)) + "╮\n"
-	sb.WriteString(header)
-	
-	// Tool Name
-	sb.WriteString(fmt.Sprintf("│ Tool: %-*s │\n", contentWidth - 6, toolName))
-	
-	// Spacer
-	sb.WriteString("│ " + strings.Repeat(" ", contentWidth) + " │\n")
-	
-	// Arguments Header
-	sb.WriteString(fmt.Sprintf("│ %-*s │\n", contentWidth, "** Arguments **"))
-	
-	// Arguments
-	for _, arg := range processedArgs {
-		if arg.multiline {
-			// Key line
-			sb.WriteString(fmt.Sprintf("│ %-*s │\n", contentWidth, arg.key + ":"))
-			// Value line (potentially truncated if > 120)
-			val := arg.value
-			if len(val) > contentWidth {
-				val = val[:contentWidth-3] + "..."
-			}
-			sb.WriteString(fmt.Sprintf("│ %-*s │\n", contentWidth, val))
-		} else {
-			line := fmt.Sprintf("%s: %s", arg.key, arg.value)
-			if len(line) > contentWidth {
-				line = line[:contentWidth-3] + "..."
-			}
-			sb.WriteString(fmt.Sprintf("│ %-*s │\n", contentWidth, line))
-		}
-	}
-	
-	// Footer
-	sb.WriteString("╰" + strings.Repeat("─", contentWidth + 2) + "╯\n")
-	// Removed explicit "Do you approve..." prompt as it's handled by interactive UI
-	
-	return sb.String()
+	return ui.RenderToolBox(toolName, args)
 }
 
 func (a *AstonishAgent) getNode(name string) (*config.Node, bool) {

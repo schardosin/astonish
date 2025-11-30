@@ -21,6 +21,8 @@ import (
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // ConsoleConfig contains configuration for the console launcher
@@ -35,42 +37,61 @@ type ConsoleConfig struct {
 // RunConsole runs the agent in console mode with agent-controlled flow
 func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	// Suppress default logger (used by ADK for "unknown agent" warnings)
-	log.SetOutput(io.Discard)
+	// Only suppress if NOT in debug mode
+	if !cfg.DebugMode {
+		log.SetOutput(io.Discard)
+	}
 	
 	// Initialize LLM
-	fmt.Println("Initializing LLM provider...")
+	if cfg.DebugMode {
+		fmt.Println("Initializing LLM provider...")
+	}
 	llm, err := provider.GetProvider(ctx, cfg.ProviderName, cfg.ModelName)
 	if err != nil {
 		fmt.Printf("ERROR: Failed to initialize provider '%s' with model '%s': %v\n", cfg.ProviderName, cfg.ModelName, err)
 		return fmt.Errorf("failed to initialize provider: %w", err)
 	}
-	fmt.Printf("✓ Provider initialized: %s (model: %s)\n", cfg.ProviderName, cfg.ModelName)
+	if cfg.DebugMode {
+		fmt.Printf("✓ Provider initialized: %s (model: %s)\n", cfg.ProviderName, cfg.ModelName)
+	}
 
 	// Initialize internal tools
-	fmt.Println("Initializing internal tools...")
+	if cfg.DebugMode {
+		fmt.Println("Initializing internal tools...")
+	}
 	internalTools, err := tools.GetInternalTools()
 	if err != nil {
 		fmt.Printf("ERROR: Failed to initialize tools: %v\n", err)
 		return fmt.Errorf("failed to initialize internal tools: %w", err)
 	}
-	fmt.Printf("✓ Internal tools initialized: %d tools available\n", len(internalTools))
+	if cfg.DebugMode {
+		fmt.Printf("✓ Internal tools initialized: %d tools available\n", len(internalTools))
+	}
 
 	// Initialize MCP tools
-	fmt.Println("Initializing MCP servers...")
+	if cfg.DebugMode {
+		fmt.Println("Initializing MCP servers...")
+	}
 	
 	mcpManager, err := mcp.NewManager()
 	var mcpToolsets []tool.Toolset
 	if err != nil {
-		fmt.Printf("Warning: Failed to create MCP manager: %v\n", err)
+		if cfg.DebugMode {
+			fmt.Printf("Warning: Failed to create MCP manager: %v\n", err)
+		}
 	} else {
 		if err := mcpManager.InitializeToolsets(ctx); err != nil {
-			fmt.Printf("Warning: Failed to initialize MCP toolsets: %v\n", err)
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Failed to initialize MCP toolsets: %v\n", err)
+			}
 		} else {
 			mcpToolsets = mcpManager.GetToolsets()
-			if len(mcpToolsets) > 0 {
-				fmt.Printf("✓ MCP servers initialized: %d server(s)\n", len(mcpToolsets))
-			} else {
-				fmt.Println("✓ No MCP servers configured")
+			if cfg.DebugMode {
+				if len(mcpToolsets) > 0 {
+					fmt.Printf("✓ MCP servers initialized: %d server(s)\n", len(mcpToolsets))
+				} else {
+					fmt.Println("✓ No MCP servers configured")
+				}
 			}
 		}
 	}
@@ -83,7 +104,9 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 
 	// Create Astonish agent with internal tools
 	// MCP toolsets will be passed directly to llmagent when creating nodes
-	fmt.Println("Creating agent...")
+	if cfg.DebugMode {
+		fmt.Println("Creating agent...")
+	}
 	astonishAgent := agent.NewAstonishAgentWithToolsets(cfg.AgentConfig, llm, internalTools, mcpToolsets)
 	astonishAgent.DebugMode = cfg.DebugMode
 	astonishAgent.SessionService = sessionService
@@ -98,12 +121,16 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		fmt.Printf("ERROR: Failed to create ADK agent: %v\n", err)
 		return fmt.Errorf("failed to create ADK agent: %w", err)
 	}
-	fmt.Println("✓ Agent created")
+	if cfg.DebugMode {
+		fmt.Println("✓ Agent created")
+	}
 
 
 
 	// Create session
-	fmt.Println("Creating session...")
+	if cfg.DebugMode {
+		fmt.Println("Creating session...")
+	}
 	userID, appName := "console_user", "astonish"
 	resp, err := sessionService.Create(ctx, &session.CreateRequest{
 		AppName: appName,
@@ -113,12 +140,16 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		fmt.Printf("ERROR: Failed to create session: %v\n", err)
 		return fmt.Errorf("failed to create session: %w", err)
 	}
-	fmt.Println("✓ Session created")
+	if cfg.DebugMode {
+		fmt.Println("✓ Session created")
+	}
 
 	sess := resp.Session
 
 	// Create runner
-	fmt.Println("Creating runner...")
+	if cfg.DebugMode {
+		fmt.Println("Creating runner...")
+	}
 	r, err := runner.New(runner.Config{
 		AppName:        appName,
 		Agent:          adkAgent,
@@ -128,8 +159,9 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		fmt.Printf("ERROR: Failed to create runner: %v\n", err)
 		return fmt.Errorf("failed to create runner: %w", err)
 	}
-	fmt.Println("✓ Runner created")
-	fmt.Println("\n" + strings.Repeat("=", 50))
+	if cfg.DebugMode {
+		fmt.Println("✓ Runner created")
+	}
 
 	reader := bufio.NewReader(os.Stdin)
 
@@ -157,7 +189,44 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	var inToolBlock bool
 	var inToolBox bool
 
+	// Spinner state
+	var spinnerProgram *tea.Program
+	var spinnerDone chan struct{}
+	var currentSpinnerText string
+
+	stopSpinner := func(markDone bool) {
+		if spinnerProgram != nil {
+			spinnerProgram.Quit()
+			if spinnerDone != nil {
+				<-spinnerDone
+			}
+			spinnerProgram = nil
+			spinnerDone = nil
+			
+			if markDone && currentSpinnerText != "" {
+				fmt.Printf("✓ %s\n", currentSpinnerText)
+			}
+			currentSpinnerText = ""
+		}
+	}
+
+	startSpinner := func(text string) {
+		stopSpinner(false) // Don't mark done when replacing
+		currentSpinnerText = text
+		spinnerDone = make(chan struct{})
+		model := ui.NewSpinner(text)
+		spinnerProgram = tea.NewProgram(model, tea.WithInput(nil))
+		go func() {
+			spinnerProgram.Run()
+			close(spinnerDone)
+		}()
+	}
+
 	for {
+		// Reset state flags at start of turn
+		inToolBox = false
+		inToolBlock = false
+
 		// Run the agent
 		// Only print the AI prefix if we are actually going to print something from the AI
 		aiPrefixPrinted := false
@@ -247,10 +316,13 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					// Re-evaluate suppression when node changes
 					suppressStreaming = false
 					userMessageFields = nil
+					
+					// Determine if this is an input node and setup suppression
+					isInput := false
 					for _, n := range cfg.AgentConfig.Nodes {
 						if n.Name == currentNodeName {
-							// Smart Suppression logic (same as above)
 							if n.Type == "input" {
+								isInput = true
 								suppressStreaming = false
 							} else {
 								hasUserMessage := len(n.UserMessage) > 0
@@ -268,6 +340,13 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 							}
 							break
 						}
+					}
+					
+					// Manage Spinner
+					if isInput {
+						stopSpinner(true)
+					} else {
+						startSpinner(fmt.Sprintf("Processing %s...", currentNodeName))
 					}
 				}
 				
@@ -388,24 +467,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					} else if inToolBox {
 						isSystemMsg = true
 						shouldPrint = true
-						
-						// Colorize Tool Box
-						if strings.Contains(line, "╭") || strings.Contains(line, "╰") {
-							// Borders: Cyan
-							line = fmt.Sprintf("%s%s%s", ColorCyan, strings.TrimSuffix(line, "\n"), ColorReset) + "\n"
-						} else {
-							// Content: Cyan borders, Yellow text
-							// Re-construct the line
-							content := line
-							content = strings.ReplaceAll(content, "│", fmt.Sprintf("%s│%s", ColorCyan, ColorYellow))
-							line = content
-							// Ensure line ends with reset
-							if strings.HasSuffix(line, "\n") {
-								line = strings.TrimSuffix(line, "\n") + ColorReset + "\n"
-							} else {
-								line += ColorReset
-							}
-						}
+						// Manual coloring removed - relying on lipgloss styles from agent
 					} else if strings.Contains(line, "--- Node") {
 						isSystemMsg = true
 						shouldPrint = true
@@ -442,6 +504,8 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					}
 
 					if shouldPrint {
+						stopSpinner(true) // Stop spinner before printing any output
+						
 						if isSystemMsg {
 							// FLUSH TEXT BUFFER before printing system message
 							if textBuffer.Len() > 0 {
@@ -515,6 +579,8 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		
 		// If we're waiting for input OR approval, prompt the user
 		if waitingForInput || waitingForApproval {
+			stopSpinner(true) // Ensure spinner is stopped before prompting
+			
 			var userInput string
 			var err error
 			

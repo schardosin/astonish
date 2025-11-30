@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -267,7 +268,7 @@ func ResolveDeploymentID(ctx context.Context, modelName string) (string, error) 
 
 	for _, res := range result.Resources {
 		if res.Status == "RUNNING" && res.Details.Resources.BackendDetails.Model.Name == modelName {
-			fmt.Printf("[DEBUG] Found running deployment for model '%s': %s\n", modelName, res.ID)
+			log.Printf("[DEBUG] Found running deployment for model '%s': %s\n", modelName, res.ID)
 			return res.ID, nil
 		}
 	}

@@ -153,14 +153,13 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 
 	// Buffer for handling fragmented streaming output
 	var lineBuffer string
+	var textBuffer strings.Builder // Buffer for accumulating text to be rendered as markdown
 	var inToolBlock bool
 	var inToolBox bool
 
 	for {
 		// Run the agent
 		// Only print the AI prefix if we are actually going to print something from the AI
-		// But we don't know yet.
-		// For now, let's print it when we detect the first printable content.
 		aiPrefixPrinted := false
 		
 		waitingForInput := false
@@ -178,6 +177,17 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 
 			// Debug logging for tool calls and responses
 			if cfg.DebugMode && event.LLMResponse.Content != nil {
+				// Flush text buffer before debug output
+				if textBuffer.Len() > 0 {
+					rendered := ui.SmartRender(textBuffer.String())
+					if !aiPrefixPrinted {
+						fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
+						aiPrefixPrinted = true
+					}
+					fmt.Print(rendered)
+					textBuffer.Reset()
+				}
+
 				for _, part := range event.LLMResponse.Content.Parts {
 					if part.FunctionCall != nil {
 						argsJSON, _ := json.MarshalIndent(part.FunctionCall.Args, "", "  ")
@@ -196,7 +206,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					currentNodeName = node
 				}
 				
-				// Check for approval state - [FIX] Check correct key "awaiting_approval"
+				// Check for approval state
 				if awaitingVal, ok := event.Actions.StateDelta["awaiting_approval"]; ok {
 					if awaiting, ok := awaitingVal.(bool); ok && awaiting {
 						waitingForApproval = true
@@ -336,24 +346,26 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					}
 
 					if shouldPrint {
-						// Handle AI prefix
-						// Only print prefix if it's NOT a system message AND the line is not empty
-						if !isSystemMsg && !aiPrefixPrinted && strings.TrimSpace(line) != "" {
-							fmt.Printf("\n%sAgent:%s ", ColorGreen, ColorReset)
-							aiPrefixPrinted = true
-						}
-						
-						// If we are printing a system message, ensure we have a newline before it if we were printing AI text
-						if isSystemMsg && aiPrefixPrinted {
-							fmt.Println() // Newline to separate from AI text
-							aiPrefixPrinted = false
-						}
-
-						fmt.Print(line)
-						
-						// If we printed a system message, reset prefix state for next AI output
 						if isSystemMsg {
+							// FLUSH TEXT BUFFER before printing system message
+							if textBuffer.Len() > 0 {
+								rendered := ui.SmartRender(textBuffer.String())
+								if !aiPrefixPrinted {
+									fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
+									aiPrefixPrinted = true
+								}
+								fmt.Print(rendered)
+								textBuffer.Reset()
+							}
+							
+							// Print System Message
+							fmt.Print(line)
+							
+							// Reset prefix state for next AI output (since we interrupted with system msg)
 							aiPrefixPrinted = false
+						} else {
+							// Buffer regular text
+							textBuffer.WriteString(line)
 						}
 					}
 				}
@@ -372,111 +384,22 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		
 		// Flush any remaining content in lineBuffer
 		if lineBuffer != "" {
-			line := lineBuffer
+			// Treat remaining buffer as text if it's not a system message
+			// But wait, lineBuffer might contain partial lines. 
+			// For now, let's just flush it to textBuffer if it's not empty
+			textBuffer.WriteString(lineBuffer)
 			lineBuffer = ""
-			
-			// Check for Tool Block Start (Internal XML)
-			if strings.Contains(line, "<tool_use>") {
-				inToolBlock = true
+		}
+		
+		// FLUSH TEXT BUFFER at end of turn
+		if textBuffer.Len() > 0 {
+			rendered := ui.SmartRender(textBuffer.String())
+			if !aiPrefixPrinted {
+				fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
+				aiPrefixPrinted = true
 			}
-			
-			// Check for Tool Box Start (Visual UI)
-			if strings.Contains(line, "╭") {
-				inToolBox = true
-			}
-			
-			shouldPrint := false
-			isSystemMsg := false
-			
-			if inToolBlock {
-				shouldPrint = false
-			} else if inToolBox {
-				isSystemMsg = true
-				shouldPrint = true
-				
-				// Colorize Tool Box (Flush Logic)
-				if strings.Contains(line, "╭") || strings.Contains(line, "╰") {
-					line = fmt.Sprintf("%s%s%s", ColorCyan, strings.TrimSuffix(line, "\n"), ColorReset) + "\n"
-				} else {
-					content := line
-					content = strings.ReplaceAll(content, "│", fmt.Sprintf("%s│%s", ColorCyan, ColorYellow))
-					line = content
-					if strings.HasSuffix(line, "\n") {
-						line = strings.TrimSuffix(line, "\n") + ColorReset + "\n"
-					} else {
-						line += ColorReset
-					}
-				}
-			} else if strings.Contains(line, "--- Node") {
-				isSystemMsg = true
-				shouldPrint = true
-				// Colorize Node Header
-				line = strings.ReplaceAll(line, "--- Node", fmt.Sprintf("%s--- Node", ColorCyan))
-				line = strings.ReplaceAll(line, " ---", fmt.Sprintf(" ---%s", ColorReset))
-			} else if strings.Contains(line, "[ℹ️ Info]") {
-				isSystemMsg = true
-				shouldPrint = true
-				// Colorize Info
-				line = strings.ReplaceAll(line, "[ℹ️ Info]", fmt.Sprintf("%s[ℹ️ Info]%s", ColorBlue, ColorReset))
-			} else if strings.Contains(line, "Do you approve this execution?") {
-				isSystemMsg = true
-				shouldPrint = true
-				waitingForApproval = true
-			} else if strings.Contains(line, "> Yes") || strings.Contains(line, "  No") {
-				isSystemMsg = true
-				shouldPrint = true
-			} else {
-				// Regular LLM Output: Check UserMessage config
-				if currentNodeName != "" {
-					for _, node := range cfg.AgentConfig.Nodes {
-						if node.Name == currentNodeName {
-							// If UserMessage is configured and not empty, allow printing
-							if len(node.UserMessage) > 0 {
-								shouldPrint = true
-							}
-							// Also always allow printing for "input" nodes (prompts)
-							if node.Type == "input" {
-								shouldPrint = true
-							}
-							break
-						}
-					}
-				} else {
-					// If we don't know the node yet (e.g. startup), default to print
-					shouldPrint = true
-				}
-			}
-			
-			// Check for Tool Block End
-			if strings.Contains(line, "</tool_use>") {
-				inToolBlock = false
-			}
-			
-			// Check for Tool Box End
-			if strings.Contains(line, "╰") {
-				inToolBox = false
-			}
-
-			if shouldPrint {
-				// Handle AI prefix
-				if !isSystemMsg && !aiPrefixPrinted && strings.TrimSpace(line) != "" {
-					fmt.Printf("\n%sAI:%s ", ColorGreen, ColorReset)
-					aiPrefixPrinted = true
-				}
-				
-				// If we are printing a system message, ensure we have a newline before it if we were printing AI text
-				if isSystemMsg && aiPrefixPrinted {
-					fmt.Println() // Newline to separate from AI text
-					aiPrefixPrinted = false
-				}
-
-				fmt.Print(line)
-				
-				// If we printed a system message, reset prefix state for next AI output
-				if isSystemMsg {
-					aiPrefixPrinted = false
-				}
-			}
+			fmt.Print(rendered)
+			textBuffer.Reset()
 		}
 		
 		// If we're waiting for input OR approval, prompt the user

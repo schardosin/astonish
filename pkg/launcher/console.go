@@ -597,24 +597,20 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 			// Check if we have options for selection
 			if len(approvalOptions) > 0 {
 				// Use interactive selection for approval
-				fmt.Println("\n[?] Do you approve this execution?:")
-				selectedIdx, err := ui.ReadSelection(approvalOptions)
+				userInput, err = ui.ReadSelection(approvalOptions, "Do you approve this execution?")
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 					os.Exit(1)
 				}
-				userInput = approvalOptions[selectedIdx]
 				fmt.Printf("You: %s\n", userInput)
 				approvalOptions = nil // Clear for next iteration
 			} else if len(inputOptions) > 0 {
 				// Use interactive selection for input
-				fmt.Println("\nSelect an option:")
-				selectedIdx, err := ui.ReadSelection(inputOptions)
+				userInput, err = ui.ReadSelection(inputOptions, "Select an option")
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 					os.Exit(1)
 				}
-				userInput = inputOptions[selectedIdx]
 				fmt.Printf("You: %s\n", userInput)
 				inputOptions = nil // Clear for next iteration
 			} else {

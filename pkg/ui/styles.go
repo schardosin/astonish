@@ -114,7 +114,7 @@ func RenderStatusBadge(text string, success bool) string {
 	}
 
 	checkStyle := lipgloss.NewStyle().Foreground(iconColor).SetString(icon)
-	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // Grey text
+	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244")) // Lighter Grey text
 
 	return checkStyle.String() + " " + textStyle.Render(text)
 }

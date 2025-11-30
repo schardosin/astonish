@@ -37,3 +37,24 @@ func ReadSelection(options []string, title string) (string, error) {
 
 	return selected, nil
 }
+
+// ReadInput prompts the user for text input using huh
+func ReadInput(title string, description string) (string, error) {
+	var input string
+
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title(title).
+				Description(description).
+				Value(&input),
+		),
+	)
+
+	err := form.Run()
+	if err != nil {
+		return "", err
+	}
+
+	return input, nil
+}

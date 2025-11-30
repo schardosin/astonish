@@ -1,13 +1,13 @@
 package launcher
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/agent"
@@ -163,7 +163,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		fmt.Println("✓ Runner created")
 	}
 
-	reader := bufio.NewReader(os.Stdin)
+
 
 	// ANSI color codes
 	const (
@@ -564,31 +564,37 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		}
 		
 		// Flush text buffer at the end of the turn
-		if textBuffer.Len() > 0 {
-			rendered := ui.SmartRender(textBuffer.String())
-			if rendered != "" {
-				if !aiPrefixPrinted {
-					fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
-					aiPrefixPrinted = true
-				}
-				fmt.Print(rendered)
-			}
-			textBuffer.Reset()
-		}
-		
-		// FLUSH TEXT BUFFER at end of turn
-		if textBuffer.Len() > 0 {
-			rendered := ui.SmartRender(textBuffer.String())
-			if !aiPrefixPrinted {
-				fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
-				aiPrefixPrinted = true
-			}
-			fmt.Print(rendered)
-			textBuffer.Reset()
-		}
-		
-		// If we're waiting for input OR approval, prompt the user
+		// If we are waiting for input, we CAPTURE the text buffer as the prompt instead of printing it
 		if waitingForInput || waitingForApproval {
+			// Capture prompt from text buffer
+			var title, description string
+			if textBuffer.Len() > 0 {
+				// SmartRender returns text with ANSI color codes. We need to strip them
+				// to get clean text for the title/description and status badge.
+				rawRendered := ui.SmartRender(textBuffer.String())
+				ansiRegex := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+				cleanText := ansiRegex.ReplaceAllString(rawRendered, "")
+				promptText := strings.TrimSpace(cleanText)
+				
+				parts := strings.SplitN(promptText, "\n", 2)
+				if len(parts) > 0 {
+					title = strings.TrimSpace(parts[0])
+				}
+				if len(parts) > 1 {
+					description = strings.TrimSpace(parts[1])
+				}
+				textBuffer.Reset()
+			}
+			
+			// Default title if empty
+			if title == "" {
+				if waitingForApproval {
+					title = "Do you approve this execution?"
+				} else {
+					title = "Please provide input"
+				}
+			}
+
 			stopSpinner(true) // Ensure spinner is stopped before prompting
 			
 			var userInput string
@@ -597,7 +603,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 			// Check if we have options for selection
 			if len(approvalOptions) > 0 {
 				// Use interactive selection for approval
-				userInput, err = ui.ReadSelection(approvalOptions, "Do you approve this execution?")
+				userInput, err = ui.ReadSelection(approvalOptions, title)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 					os.Exit(1)
@@ -606,27 +612,39 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				approvalOptions = nil // Clear for next iteration
 			} else if len(inputOptions) > 0 {
 				// Use interactive selection for input
-				userInput, err = ui.ReadSelection(inputOptions, "Select an option")
+				userInput, err = ui.ReadSelection(inputOptions, title)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 					os.Exit(1)
 				}
-				fmt.Println(ui.RenderStatusBadge("Selected: "+userInput, true))
+				fmt.Println(ui.RenderStatusBadge(fmt.Sprintf("%s: %s", title, userInput), true))
 				inputOptions = nil // Clear for next iteration
 			} else {
-				// Free text input
-				fmt.Printf("\n\n%sYou:%s ", ColorYellow, ColorReset)
-				userInput, err = reader.ReadString('\n')
+				// Free text input using huh
+				userInput, err = ui.ReadInput(title, description)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 					os.Exit(1)
 				}
-				userInput = strings.TrimSpace(userInput)
+				fmt.Println(ui.RenderStatusBadge(fmt.Sprintf("%s: %s", title, userInput), true))
 			}
 			
 			// Create user message
 			userMsg = genai.NewContentFromText(userInput, genai.RoleUser)
 		} else {
+			// Not waiting for input, flush text buffer normally
+			if textBuffer.Len() > 0 {
+				rendered := ui.SmartRender(textBuffer.String())
+				if rendered != "" {
+					if !aiPrefixPrinted {
+						fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
+						aiPrefixPrinted = true
+					}
+					fmt.Print(rendered)
+				}
+				textBuffer.Reset()
+			}
+			
 			// Agent completed without needing input
 			fmt.Println()
 			break

@@ -211,11 +211,26 @@ func (p *Provider) toOpenAIMessages(req *model.LLMRequest) []openai.ChatCompleti
 			// Handle tool outputs
 			for _, part := range c.Parts {
 				if part.FunctionResponse != nil {
-					content := fmt.Sprintf("%v", part.FunctionResponse.Response)
+					var content string
+					// Marshal response to JSON string for better LLM comprehension
+					contentBytes, err := json.Marshal(part.FunctionResponse.Response)
+					if err != nil {
+						// Fallback to string representation if marshaling fails
+						content = fmt.Sprintf("%v", part.FunctionResponse.Response)
+					} else {
+						content = string(contentBytes)
+					}
+					
 					// Response is map[string]any
 					m := part.FunctionResponse.Response
 					if res, ok := m["result"]; ok {
-						content = fmt.Sprintf("%v", res)
+						// If there's a specific "result" key, prefer that, but still JSON encode it if it's complex
+						if resStr, ok := res.(string); ok {
+							content = resStr
+						} else {
+							resBytes, _ := json.Marshal(res)
+							content = string(resBytes)
+						}
 					}
 					
 					// Use real ID if available

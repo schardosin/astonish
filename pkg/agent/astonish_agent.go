@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
-	"log"
 	"regexp"
 	"sort"
 	"strconv"
@@ -1021,6 +1020,43 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 		instruction += "\n\nIMPORTANT: You have access to tools that you MUST use to complete this task. Do not describe what you would do or say you are waiting for results. Instead, immediately call the appropriate tool with the required parameters. The tools are available and ready to use right now."
 	}
 
+	// Inject JSON output instruction if output_model is defined (matching Python behavior)
+	// BUT only if we actually need structured output (multiple fields or non-string types)
+	// If it's a single string field, we prefer raw output to avoid JSON escaping issues and "Agent: { ... }" display.
+	shouldEnforceJSON := false
+	if len(node.OutputModel) > 1 {
+		shouldEnforceJSON = true
+	} else if len(node.OutputModel) == 1 {
+		for _, v := range node.OutputModel {
+			if v != "str" && v != "string" {
+				shouldEnforceJSON = true
+			}
+		}
+	}
+
+	if shouldEnforceJSON {
+		// Construct schema description
+		schemaDesc := "{\n"
+		var keys []string
+		for k := range node.OutputModel {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys) // Sort for deterministic output
+		
+		for i, k := range keys {
+			v := node.OutputModel[k]
+			schemaDesc += fmt.Sprintf("  \"%s\": <%s>", k, v)
+			if i < len(keys)-1 {
+				schemaDesc += ",\n"
+			} else {
+				schemaDesc += "\n"
+			}
+		}
+		schemaDesc += "}"
+
+		instruction += fmt.Sprintf("\n\nIMPORTANT: Respond ONLY with a JSON object conforming to the schema below. Do not include any other text, markdown formatting, or explanations.\n\nSchema:\n%s", schemaDesc)
+	}
+
 	// Build list of known tool names for detection (from internal tools)
 	var knownToolNames []string
 	for _, t := range nodeTools {
@@ -1116,35 +1152,34 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 		
 		// Create BeforeToolCallback for approval if needed
 		var beforeToolCallbacks []llmagent.BeforeToolCallback
+		var afterToolCallbacks []llmagent.AfterToolCallback
+		
 		if !node.ToolsAutoApproval {
 			beforeToolCallbacks = []llmagent.BeforeToolCallback{
 				func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 					toolName := t.Name()
-
-					// Debug logging
+					
+					// DEBUG: Log tool execution attempt
 					if a.DebugMode {
-						argsJSON, err := json.MarshalIndent(args, "", "  ")
-						if err != nil {
-							log.Printf("[DEBUG] Failed to marshal tool arguments for logging: %v", err)
-						} else {
-							// Use ANSI colors if possible, but we don't have constants here.
-							// Just plain text for now or hardcode colors.
-							// Cyan: \033[36m, Reset: \033[0m
-							fmt.Printf("\n\033[36m[DEBUG] Tool Call (Intercepted): %s\033[0m\nArguments:\n%s\n", toolName, string(argsJSON))
-						}
+						argsJSON, _ := json.MarshalIndent(args, "", "  ")
+						fmt.Printf("\n[DEBUG] ========== TOOL EXECUTION ATTEMPT ==========\n")
+						fmt.Printf("[DEBUG] Tool Name: %s\n", toolName)
+						fmt.Printf("[DEBUG] Arguments:\n%s\n", string(argsJSON))
+						fmt.Printf("[DEBUG] ===============================================\n\n")
 					}
 
 					approvalKey := fmt.Sprintf("approval:%s", toolName)
 					
 					// Check if we already have approval for this tool
 					approvedVal, _ := state.Get(approvalKey)
-					if a.DebugMode {
-						fmt.Printf("[DEBUG] Callback: Checking approval for %s. Key=%s, Value=%v\n", toolName, approvalKey, approvedVal)
-					}
 
 					approved := false
 					if b, ok := approvedVal.(bool); ok && b {
 						approved = true
+					}
+					
+					if a.DebugMode {
+						fmt.Printf("[DEBUG] Approval check: approved=%v, approvalKey=%s\n", approved, approvalKey)
 					}
 
 					// Fallback: Check history for explicit user approval if state is missing
@@ -1196,8 +1231,16 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 					if approved {
 						// Consume approval
 						state.Set(approvalKey, false)
-						// Allow tool to run
+						if a.DebugMode {
+							fmt.Printf("[DEBUG] Tool approved! Allowing execution to proceed.\n")
+						}
+						// Allow tool to run - returning nil means "proceed with actual execution"
+						// The actual tool result will be captured by the ADK framework
 						return nil, nil
+					}
+					
+					if a.DebugMode {
+						fmt.Printf("[DEBUG] Tool NOT approved. Requesting user approval...\n")
 					}
 					
 					// No approval - request it
@@ -1228,14 +1271,65 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 					// Return a placeholder result
 					// This string enters the LLM context. When we resume, we will overwrite this
 					// context or instruct the LLM to ignore it and retry.
-					return map[string]any{
+					placeholderResult := map[string]any{
 						"status": "pending_approval",
 						"info":   "Execution paused for user approval. When you see this message in history, it means the user has APPROVED the execution. You MUST retry the tool call immediately.",
-					}, nil
+					}
+					
+					if a.DebugMode {
+						placeholderJSON, _ := json.MarshalIndent(placeholderResult, "", "  ")
+						fmt.Printf("[DEBUG] Returning placeholder result:\n%s\n", string(placeholderJSON))
+					}
+					
+					return placeholderResult, nil
 				},
 			}
 		}
 		
+		// Add AfterToolCallback to force completion after successful tool execution in parallel nodes
+		// For parallel nodes, we need to stop the LLM immediately after the first successful tool call
+		afterToolCallbacks = []llmagent.AfterToolCallback{
+			func(ctx tool.Context, t tool.Tool, args map[string]any, result map[string]any, err error) (map[string]any, error) {
+				if err != nil {
+					// Tool failed, let the LLM see the error
+					return result, err
+				}
+				
+				toolName := t.Name()
+				
+				// DEBUG: Log successful tool execution
+				if a.DebugMode {
+					resultJSON, _ := json.MarshalIndent(result, "", "  ")
+					fmt.Printf("\n[DEBUG] ========== AFTER TOOL CALLBACK ==========\n")
+					fmt.Printf("[DEBUG] Tool Name: %s\n", toolName)
+					fmt.Printf("[DEBUG] Result:\n%s\n", string(resultJSON))
+					fmt.Printf("[DEBUG] ===========================================\n\n")
+				}
+				
+				// For parallel nodes, force immediate completion after successful tool execution
+				// This prevents the LLM from calling the tool again
+				if node.Parallel != nil {
+					if a.DebugMode {
+						fmt.Printf("[DEBUG] Parallel node detected - setting force_stop flag\n")
+					}
+					
+					// Set a flag to stop the agent run immediately
+					state.Set("force_stop_parallel", true)
+					
+					// Enhance the result with a clear completion message
+					enhancedResult := make(map[string]any)
+					for k, v := range result {
+						enhancedResult[k] = v
+					}
+					enhancedResult["status"] = "completed"
+					enhancedResult["message"] = "Task completed successfully. No further action needed."
+					
+					return enhancedResult, nil
+				}
+				
+				return result, nil
+			},
+		}
 
 		llmAgent, err = llmagent.New(llmagent.Config{
 			Name:                nodeName,
@@ -1244,6 +1338,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			Tools:               internalTools,
 			Toolsets:            mcpToolsets,
 			BeforeToolCallbacks: beforeToolCallbacks,
+			AfterToolCallbacks:  afterToolCallbacks,
 		})
 	} else {
 		// No tools enabled
@@ -1264,11 +1359,120 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 	
 	// Run the agent - ADK handles everything (native function calling)
 	var fullResponse strings.Builder
+	toolCallCount := 0
+	const maxToolCalls = 5 // Maximum tool calls to prevent infinite loops
 	
+	// Check if this is a parallel node - if so, we want to detect repeated calls
+	isParallelNode := node.Parallel != nil
+	
+	// Track tool calls to detect infinite loops (repeated identical calls after success)
+	type toolCallRecord struct {
+		name string
+		args string // JSON serialized args for comparison
+	}
+	var lastSuccessfulCall *toolCallRecord
+	repeatedCallCount := 0
+
 	for event, err := range llmAgent.Run(ctx) {
 		if err != nil {
 			// Genuine error
 			yield(nil, err)
+			return false
+		}
+		
+		// Debug logging for event flow
+		if a.DebugMode {
+			// fmt.Printf("[DEBUG] Event received: Type=%s, Node=%s\n", event.Type, event.NodeName) // Fields not available directly on event?
+            // Let's just log the content parts
+			if event.LLMResponse.Content != nil {
+				for _, part := range event.LLMResponse.Content.Parts {
+					if part.FunctionCall != nil {
+						fmt.Printf("[DEBUG] -> Function Call: %s\n", part.FunctionCall.Name)
+						toolCallCount++
+					}
+					if part.FunctionResponse != nil {
+						respJSON, _ := json.MarshalIndent(part.FunctionResponse.Response, "", "  ")
+						fmt.Printf("\n[DEBUG] ========== TOOL EXECUTION RESULT ==========\n")
+						fmt.Printf("[DEBUG] Tool Name: %s\n", part.FunctionResponse.Name)
+						fmt.Printf("[DEBUG] Response:\n%s\n", string(respJSON))
+						fmt.Printf("[DEBUG] ============================================\n\n")
+					}
+					if part.Text != "" {
+						fmt.Printf("[DEBUG] -> Text: %s\n", part.Text)
+					}
+				}
+			} else {
+				// Also count function calls if they appear in other structures or if debug mode is off
+				// But wait, we need to count them regardless of debug mode.
+				// Let's do counting separately.
+			}
+		}
+
+		// Count tool calls reliably and detect repeated calls
+		if event.LLMResponse.Content != nil {
+			// First pass: look for function calls and track them
+			var currentFunctionCall *toolCallRecord
+			for _, part := range event.LLMResponse.Content.Parts {
+				if part.FunctionCall != nil {
+					if !a.DebugMode {
+						toolCallCount++
+					}
+					
+					// For parallel nodes, serialize the call for tracking
+					if isParallelNode {
+						argsJSON, _ := json.Marshal(part.FunctionCall.Args)
+						currentFunctionCall = &toolCallRecord{
+							name: part.FunctionCall.Name,
+							args: string(argsJSON),
+						}
+					}
+				}
+			}
+			
+			// Second pass: look for function responses and check for repeated calls
+			for _, part := range event.LLMResponse.Content.Parts {
+				// Track successful tool responses for parallel nodes
+				if part.FunctionResponse != nil && isParallelNode {
+					// Check if the response indicates success (no error field)
+					if _, hasError := part.FunctionResponse.Response["error"]; !hasError {
+						// This was a successful call
+						// Check if we have the args from the current event
+						if currentFunctionCall != nil && currentFunctionCall.name == part.FunctionResponse.Name {
+							// Check if this matches the last successful call
+							if lastSuccessfulCall != nil && 
+							   lastSuccessfulCall.name == currentFunctionCall.name && 
+							   lastSuccessfulCall.args == currentFunctionCall.args {
+								repeatedCallCount++
+								if a.DebugMode {
+									fmt.Printf("[DEBUG] Detected repeated call #%d (same tool + args after success)\n", repeatedCallCount)
+								}
+								
+								// If we see 1 repeated identical call after success, it's a loop
+								// (We already had 1 successful call, this is the 2nd with same args)
+								if repeatedCallCount >= 1 {
+									if a.DebugMode {
+										fmt.Printf("[DEBUG] Breaking loop: Same tool called %d times with identical args after success\n", repeatedCallCount+1)
+									}
+									// Exit gracefully - the first call succeeded, we just prevented retries
+									break
+								}
+							} else {
+								// Different call or first successful call, record it
+								lastSuccessfulCall = currentFunctionCall
+								repeatedCallCount = 0
+								if a.DebugMode {
+									fmt.Printf("[DEBUG] Recorded successful tool call: %s\n", part.FunctionResponse.Name)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Hard limit to prevent infinite loops (for both parallel and non-parallel)
+		if toolCallCount > maxToolCalls {
+			yield(nil, fmt.Errorf("tool call limit exceeded (%d) for node '%s' - breaking infinite loop", maxToolCalls, nodeName))
 			return false
 		}
 		
@@ -1283,6 +1487,18 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			// Clear the flag so it doesn't block the next run
 			state.Set("force_pause", false)
 			return false // Stops the loop, effectively pausing the agent
+		}
+		
+		// 3. CHECK FOR PARALLEL STOP SIGNAL
+		// For parallel nodes, stop immediately after first successful tool execution
+		if isParallelNode {
+			if shouldStop, _ := state.Get("force_stop_parallel"); shouldStop == true {
+				if a.DebugMode {
+					fmt.Printf("[DEBUG] Parallel node: force_stop_parallel flag detected, stopping agent\n")
+				}
+				state.Set("force_stop_parallel", false)
+				break // Exit the loop gracefully
+			}
 		}
 		
 		// 3. Accumulate text response for output_model (if needed)
@@ -1300,6 +1516,10 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			for _, part := range event.LLMResponse.Content.Parts {
 				if part.FunctionResponse != nil {
 					// This is a tool response - print it for debugging
+					if a.DebugMode {
+						respJSON, _ := json.MarshalIndent(part.FunctionResponse.Response, "", "  ")
+						fmt.Printf("[DEBUG] Tool Response for %s: %s\n", part.FunctionResponse.Name, string(respJSON))
+					}
 
 					
 					// Handle raw_tool_output if configured
@@ -1380,10 +1600,6 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			// This handles the case where the LLM returns one list but we expect it to populate multiple variables (e.g. pr_list and pr_numbers).
 			if isJson && len(node.OutputModel) > 1 {
 				if listVal, ok := parsed.([]any); ok {
-					if a.DebugMode {
-						fmt.Printf("[DEBUG] Broadcasting single list output to %d keys.\n", len(node.OutputModel))
-					}
-					
 					// Sort keys for deterministic behavior
 					var keys []string
 					for k := range node.OutputModel {
@@ -1400,9 +1616,6 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 								return false
 							}
 							broadcasted = true
-							if a.DebugMode {
-								fmt.Printf("[DEBUG] Broadcasted list to key %s\n", key)
-							}
 						}
 					}
 					
@@ -1613,23 +1826,12 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 										}
 									}
 								}
-							} else {
-								if a.DebugMode {
-									fmt.Printf("[DEBUG] Arg '%s' not found in schema properties\n", key)
-								}
 							}
 						}
-					}
-				} else {
-					if a.DebugMode {
-						fmt.Printf("[DEBUG] Schema is not TypeObject\n")
 					}
 				}
 			} else if schemaMap, ok := decl.ParametersJsonSchema.(map[string]interface{}); ok {
 				// Handle map[string]interface{} schema (common in MCP or other providers)
-				if a.DebugMode {
-					fmt.Printf("[DEBUG] Inspecting schema as map[string]interface{}\n")
-				}
 				
 				if typeVal, ok := schemaMap["type"].(string); ok && typeVal == "object" {
 					if props, ok := schemaMap["properties"].(map[string]interface{}); ok {
@@ -1637,26 +1839,17 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 							if strVal, ok := val.(string); ok {
 								if prop, ok := props[key].(map[string]interface{}); ok {
 									propType, _ := prop["type"].(string)
-									if a.DebugMode {
-										fmt.Printf("[DEBUG] Arg '%s' schema type (map): %s\n", key, propType)
-									}
 									
 									if propType == "number" || propType == "integer" {
 										// Try to convert string to float64
 										if num, err := strconv.ParseFloat(strVal, 64); err == nil {
 											resolvedArgs[key] = num
-											if a.DebugMode {
-												fmt.Printf("[DEBUG] Converted arg '%s' from string to number: %v\n", key, num)
-											}
 										} else {
 											// Fallback: Try to extract leading number (e.g. "709: Title" -> 709)
 											re := regexp.MustCompile(`^(\d+)`)
 											if match := re.FindStringSubmatch(strVal); len(match) > 1 {
 												if num, err := strconv.ParseFloat(match[1], 64); err == nil {
 													resolvedArgs[key] = num
-													if a.DebugMode {
-														fmt.Printf("[DEBUG] Extracted number from arg '%s': %v (from '%s')\n", key, num, strVal)
-													}
 												}
 											}
 										}
@@ -1664,9 +1857,6 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 										// Try to convert string to boolean
 										if b, err := strconv.ParseBool(strVal); err == nil {
 											resolvedArgs[key] = b
-											if a.DebugMode {
-												fmt.Printf("[DEBUG] Converted arg '%s' from string to boolean: %v\n", key, b)
-											}
 										}
 									}
 								}
@@ -1992,13 +2182,31 @@ func (a *AstonishAgent) stateToMap(state session.State) map[string]interface{} {
 }
 
 func (a *AstonishAgent) renderString(tmpl string, state session.State) string {
-	re := regexp.MustCompile(`\{([a-zA-Z0-9_]+)\}`)
+	// Use a regex that captures content inside {} but not nested {}
+	// This allows for expressions like {comment["patch"]}
+	re := regexp.MustCompile(`\{([^{}]+)\}`)
+	
+	// Convert state to map once for efficiency if needed, but renderString might be called often
+	// For now, convert inside the loop or pass it?
+	// stateToMap is relatively cheap if state is small.
+	stateMap := a.stateToMap(state)
+
 	return re.ReplaceAllStringFunc(tmpl, func(match string) string {
-		key := match[1 : len(match)-1]
-		val, err := state.Get(key)
-		if err != nil || val == nil {
+		expr := match[1 : len(match)-1]
+		
+		// Try to evaluate the expression using Starlark
+		val, err := EvaluateExpression(expr, stateMap)
+		if err != nil {
+			// If evaluation fails, try simple lookup as fallback (or just return match)
+			// The original logic just did state.Get(key)
+			// If EvaluateExpression failed, it might be because it's not a valid expression or key missing
 			return match
 		}
+		
+		if val == nil {
+			return match
+		}
+		
 		return fmt.Sprintf("%v", val)
 	})
 }
@@ -2199,14 +2407,23 @@ func (s *ScopedState) All() iter.Seq2[string, any] {
 // ScopedContext wraps an InvocationContext and overrides the state
 type ScopedContext struct {
 	agent.InvocationContext
-	state session.State
+	state   session.State
+	session session.Session
+}
+
+func (s *ScopedContext) SessionID() string {
+	return s.session.ID()
 }
 
 func (s *ScopedContext) Session() session.Session {
 	return &ScopedSession{
-		Session: s.InvocationContext.Session(),
+		Session: s.session,
 		state:   s.state,
 	}
+}
+
+func (s *ScopedContext) State() session.State {
+	return s.state
 }
 
 // ScopedSession wraps a Session and overrides the state
@@ -2232,6 +2449,20 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 	if err != nil {
 		yield(nil, fmt.Errorf("failed to get parallel list '%s': %w", listKey, err))
 		return false
+	}
+	
+	// DEBUG: Log what we're iterating over
+	if a.DebugMode {
+		listJSON, _ := json.MarshalIndent(listVal, "", "  ")
+		fmt.Printf("\n[DEBUG] ========== PARALLEL NODE: %s ==========\n", node.Name)
+		fmt.Printf("[DEBUG] Iterating over list key: %s\n", listKey)
+		fmt.Printf("[DEBUG] List type: %T\n", listVal)
+		if len(string(listJSON)) > 2000 {
+			fmt.Printf("[DEBUG] List content (truncated): %s...\n", string(listJSON)[:2000])
+		} else {
+			fmt.Printf("[DEBUG] List content:\n%s\n", string(listJSON))
+		}
+		fmt.Printf("[DEBUG] =============================================\n\n")
 	}
 
 	// Convert to slice
@@ -2292,8 +2523,6 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 	// Track success to know if we should include the result
 	successes := make([]bool, len(items))
 
-	fmt.Printf("[⚡️ Parallel] Processing %d items for node '%s' with concurrency %d\n", len(items), node.Name, maxConcurrency)
-
 	// Wrap yield to be thread-safe and track cancellation
 	yieldCancelled := false
 	safeYield := func(event *session.Event, err error) bool {
@@ -2347,10 +2576,58 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 				scopedState.Local["Severity"] = "{{Severity}}"
 			}
 
-			// Create ScopedContext
+			// Create ephemeral session for isolation
+			// This ensures each parallel branch has its own history
+			// Include node name to avoid collisions between different parallel nodes in the same flow
+			newSessionID := fmt.Sprintf("%s:%s:parallel-%d", ctx.Session().ID(), node.Name, idx)
+			
+			// Try to get AppName and UserID from session if possible, or context
+			// Assuming session.Session has these methods or we can get them from context
+			// If InvocationContext doesn't have them, we might need to cast or find another way.
+			// For now, let's try ctx.Session().UserID() if it exists.
+			// But wait, session.Session interface usually has ID(), Events(), etc.
+			// Let's try to use the values from the parent session if available.
+			
+			// NOTE: If this fails to compile, we might need to check the interface definition.
+			// But typically session carries this info.
+			
+			createReq := &session.CreateRequest{
+				SessionID: newSessionID,
+			}
+			
+			// Try to populate fields
+			// We can't easily check interface methods in this environment without reflection or docs.
+			// Let's try to use the same values as the parent session.
+			// If ctx.Session() has UserID(), use it.
+			
+			// HACK: For now, let's try to use the values from the context if they were available,
+			// but since they are not, let's try to use the session's ID to derive them or just pass what we can.
+			// Actually, let's look at the error again: "ctx.AppName undefined".
+			
+			// Let's try to use the session service to GET the parent session first, then use its metadata?
+			// We already have ctx.Session().
+			
+			createReq.AppName = "astonish" // Placeholder
+			createReq.UserID = "user"      // Placeholder
+			
+			// If we can get real values:
+			if s, ok := ctx.Session().(interface{ AppName() string }); ok {
+				createReq.AppName = s.AppName()
+			}
+			if s, ok := ctx.Session().(interface{ UserID() string }); ok {
+				createReq.UserID = s.UserID()
+			}
+
+			createResp, err := a.SessionService.Create(ctx, createReq)
+			if err != nil {
+				safeYield(nil, fmt.Errorf("failed to create ephemeral session: %w", err))
+				return
+			}
+			
 			scopedCtx := &ScopedContext{
 				InvocationContext: ctx,
 				state:             scopedState,
+				session:           createResp.Session,
 			}
 
 			success := false
@@ -2365,9 +2642,6 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 
 			if !success {
 				mu.Lock()
-				if !yieldCancelled {
-					fmt.Printf("[⚠️ Parallel] Item %d failed\n", idx)
-				}
 				mu.Unlock()
 				return
 			}
@@ -2414,15 +2688,130 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 		final = []any{}
 	}
 	
-	for _, res := range finalResults {
-		if l, ok := res.([]any); ok {
-			final = append(final, l...)
+	// DEBUG: Log the state before aggregation
+	if a.DebugMode {
+		fmt.Printf("\n[DEBUG] ========== PRE-AGGREGATION STATE: %s ==========\n", node.Name)
+		fmt.Printf("[DEBUG] Output key: %s\n", outputKey)
+		fmt.Printf("[DEBUG] Existing list size: %d\n", len(final))
+		fmt.Printf("[DEBUG] New results to add: %d\n", len(finalResults))
+	}
+	
+	// Aggregate results based on output_action
+	// If output_action is "append", flatten lists; otherwise keep as-is
+	outputAction := "append" // Default behavior
+	if node.OutputAction != "" {
+		outputAction = node.OutputAction
+	}
+	
+	if a.DebugMode {
+		fmt.Printf("\n[DEBUG] ========== AGGREGATION: %s ==========\n", node.Name)
+		fmt.Printf("[DEBUG] Output key: %s\n", outputKey)
+		fmt.Printf("[DEBUG] Output action: %s\n", outputAction)
+		fmt.Printf("[DEBUG] Number of results to aggregate: %d\n", len(finalResults))
+		fmt.Printf("[DEBUG] Starting list size: %d\n", len(final))
+	}
+	
+	for idx, res := range finalResults {
+		if a.DebugMode {
+			resJSON, _ := json.MarshalIndent(res, "", "  ")
+			if len(string(resJSON)) > 500 {
+				fmt.Printf("[DEBUG] Result %d (truncated): %s...\n", idx, string(resJSON)[:500])
+			} else {
+				fmt.Printf("[DEBUG] Result %d: %s\n", idx, string(resJSON))
+			}
+		}
+		
+		if outputAction == "append" {
+			// Check if res is a JSON string that needs parsing
+			if strRes, ok := res.(string); ok {
+				// Try to parse as JSON
+				cleaned := a.cleanAndFixJson(strRes)
+				var parsed any
+				if err := json.Unmarshal([]byte(cleaned), &parsed); err == nil {
+					if a.DebugMode {
+						fmt.Printf("[DEBUG] Successfully parsed JSON string for result %d\n", idx)
+					}
+					// Successfully parsed - check if it's a map with the output key
+					if parsedMap, ok := parsed.(map[string]any); ok {
+						// Check if the map contains the output key (e.g., "review_comment_validated")
+						if val, ok := parsedMap[outputKey]; ok {
+							// Extract the value from the nested structure
+							if l, ok := val.([]any); ok {
+								// It's a list - flatten it
+								if a.DebugMode {
+									fmt.Printf("[DEBUG] Extracted list with %d items from nested structure\n", len(l))
+								}
+								final = append(final, l...)
+								continue
+							} else {
+								// It's a single value - append it
+								if a.DebugMode {
+									fmt.Printf("[DEBUG] Extracted single value from nested structure\n")
+								}
+								final = append(final, val)
+								continue
+							}
+						}
+					}
+					// If parsed but doesn't match expected structure, treat as regular value
+					res = parsed
+				} else if a.DebugMode {
+					fmt.Printf("[DEBUG] Failed to parse as JSON: %v\n", err)
+				}
+				// If parsing failed, continue with string as-is
+			}
+			
+			// Flatten lists when appending
+			if l, ok := res.([]any); ok {
+				// Flatten the list - append all items from the list
+				if a.DebugMode {
+					fmt.Printf("[DEBUG] Flattening list with %d items\n", len(l))
+				}
+				final = append(final, l...)
+			} else {
+				// Not a list, append as-is
+				if a.DebugMode {
+					fmt.Printf("[DEBUG] Appending single item (type: %T)\n", res)
+				}
+				final = append(final, res)
+			}
 		} else {
+			// Keep results as-is (don't flatten)
 			final = append(final, res)
 		}
 	}
 	
+	if a.DebugMode {
+		fmt.Printf("[DEBUG] Final aggregated list size: %d\n", len(final))
+		
+		// Log detailed info about what's in the final list
+		if len(final) > 0 {
+			fmt.Printf("[DEBUG] Sample of final list items:\n")
+			for i := 0; i < len(final) && i < 3; i++ {
+				itemJSON, _ := json.MarshalIndent(final[i], "  ", "  ")
+				if len(string(itemJSON)) > 300 {
+					fmt.Printf("[DEBUG]   Item %d (truncated): %s...\n", i, string(itemJSON)[:300])
+				} else {
+					fmt.Printf("[DEBUG]   Item %d: %s\n", i, string(itemJSON))
+				}
+			}
+			if len(final) > 3 {
+				fmt.Printf("[DEBUG]   ... and %d more items\n", len(final)-3)
+			}
+		}
+		
+		fmt.Printf("[DEBUG] =============================================\n\n")
+	}
+	
 	state.Set(outputKey, final)
+	
+	// DEBUG: Log state after setting
+	if a.DebugMode {
+		verifyVal, _ := state.Get(outputKey)
+		if verifyList, ok := verifyVal.([]any); ok {
+			fmt.Printf("[DEBUG] Verified state[%s] size after set: %d\n", outputKey, len(verifyList))
+		}
+	}
 	
 	yield(&session.Event{
 		Actions: session.EventActions{

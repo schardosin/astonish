@@ -32,6 +32,7 @@ type Node struct {
 	Value           interface{}            `yaml:"value,omitempty"`
 	SourceVariable  string                 `yaml:"source_variable,omitempty"`
 	Parallel        *ParallelConfig        `yaml:"parallel,omitempty"`
+	OutputAction    string                 `yaml:"output_action,omitempty"` // "append" or other aggregation strategies
 }
 
 // ParallelConfig defines configuration for parallel execution.

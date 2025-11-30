@@ -1660,6 +1660,30 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 				}
 			}
 		}
+		
+		// Emit StateDelta event if we updated the state
+		if mapped || len(node.OutputModel) == 1 {
+			// Construct the delta map
+			delta := make(map[string]any)
+			
+			// Re-read the values we just set to ensure we send exactly what's in the state
+			for key := range node.OutputModel {
+				if val, err := state.Get(key); err == nil {
+					delta[key] = val
+				}
+			}
+			
+			// Yield the event
+			if len(delta) > 0 {
+				yield(&session.Event{
+					// Type is not a field in Event struct. It seems to be implicit or not needed for state updates?
+					// Let's just omit it. The console checks for Actions.StateDelta.
+					Actions: session.EventActions{
+						StateDelta: delta,
+					},
+				}, nil)
+			}
+		}
 	}
 
 	

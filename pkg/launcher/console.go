@@ -167,6 +167,10 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		var approvalOptions []string
 		var inputOptions []string
 		
+		// Declare suppression variables here so they are accessible throughout the loop and after
+		suppressStreaming := false
+		var userMessageFields []string
+		
 		for event, err := range r.Run(ctx, userID, sess.ID(), userMsg, adkagent.RunConfig{
 			StreamingMode: adkagent.StreamingModeSSE,
 		}) {
@@ -200,10 +204,71 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				}
 			}
 
+			// Check if we should suppress streaming output based on UserMessage OR OutputModel config
+			// suppressStreaming is now declared outside the loop
+			
+			if currentNodeName != "" {
+				for _, node := range cfg.AgentConfig.Nodes {
+					if node.Name == currentNodeName {
+						// Smart Suppression:
+						// 1. If UserMessage is configured, suppress streaming and show specific fields.
+						// 2. If OutputModel is configured (but no UserMessage), suppress streaming (silent data node).
+						// 3. If NEITHER is configured, allow streaming (chat node).
+						// 4. EXCEPTION: Input nodes should always show their prompt (even if they have OutputModel).
+						
+						if node.Type == "input" {
+							suppressStreaming = false
+						} else {
+							hasUserMessage := len(node.UserMessage) > 0
+							hasOutputModel := len(node.OutputModel) > 0
+							
+							if hasUserMessage {
+								suppressStreaming = true
+								userMessageFields = node.UserMessage
+							} else if hasOutputModel {
+								suppressStreaming = true
+								// No user message fields to show, just suppress
+							}
+						}
+						break
+					}
+				}
+			}
+
 			// Update current node from StateDelta if present
 			if event.Actions.StateDelta != nil {
 				if node, ok := event.Actions.StateDelta["current_node"].(string); ok {
+					// If we were suppressing, clear the line buffer to prevent leakage of partial lines from the previous node
+					if suppressStreaming {
+						lineBuffer = ""
+					}
+					
 					currentNodeName = node
+					// Re-evaluate suppression when node changes
+					suppressStreaming = false
+					userMessageFields = nil
+					for _, n := range cfg.AgentConfig.Nodes {
+						if n.Name == currentNodeName {
+							// Smart Suppression logic (same as above)
+							if n.Type == "input" {
+								suppressStreaming = false
+							} else {
+								hasUserMessage := len(n.UserMessage) > 0
+								hasOutputModel := len(n.OutputModel) > 0
+								
+								if hasUserMessage {
+									suppressStreaming = true
+									userMessageFields = n.UserMessage
+								} else if hasOutputModel {
+									suppressStreaming = true
+								}
+							}
+							if cfg.DebugMode {
+								fmt.Printf("[DEBUG] Node changed to '%s'. SuppressStreaming: %v\n", currentNodeName, suppressStreaming)
+							}
+							break
+						}
+					}
 				}
 				
 				// Check for approval state
@@ -231,6 +296,52 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					} else if optsInterface, ok := optsVal.([]interface{}); ok {
 						for _, v := range optsInterface {
 							inputOptions = append(inputOptions, fmt.Sprintf("%v", v))
+						}
+					}
+				}
+
+				// Check for UserMessage fields in StateDelta and print them if found
+				if len(userMessageFields) > 0 {
+					for _, field := range userMessageFields {
+						if val, ok := event.Actions.StateDelta[field]; ok {
+							// Format the value for display
+							var displayStr string
+							switch v := val.(type) {
+							case string:
+								displayStr = v
+							case []string:
+								// For lists, format as a bulleted list
+								var sb strings.Builder
+								for _, item := range v {
+									sb.WriteString(fmt.Sprintf("- %s\n", item))
+								}
+								displayStr = sb.String()
+							case []interface{}:
+								// For generic lists
+								var sb strings.Builder
+								for _, item := range v {
+									sb.WriteString(fmt.Sprintf("- %v\n", item))
+								}
+								displayStr = sb.String()
+							default:
+								// Fallback to JSON representation for complex objects
+								jsonBytes, err := json.MarshalIndent(v, "", "  ")
+								if err == nil {
+									displayStr = string(jsonBytes)
+								} else {
+									displayStr = fmt.Sprintf("%v", v)
+								}
+							}
+
+							// Render and print immediately
+							if displayStr != "" {
+								rendered := ui.SmartRender(displayStr)
+								if !aiPrefixPrinted {
+									fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
+									aiPrefixPrinted = true
+								}
+								fmt.Print(rendered)
+							}
 						}
 					}
 				}
@@ -314,23 +425,8 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						isSystemMsg = true
 						shouldPrint = true
 					} else {
-						// Regular LLM Output: Check UserMessage config
-						if currentNodeName != "" {
-							for _, node := range cfg.AgentConfig.Nodes {
-								if node.Name == currentNodeName {
-									// If UserMessage is configured and not empty, allow printing
-									if len(node.UserMessage) > 0 {
-										shouldPrint = true
-									}
-									// Also always allow printing for "input" nodes (prompts)
-									if node.Type == "input" {
-										shouldPrint = true
-									}
-									break
-								}
-							}
-						} else {
-							// If we don't know the node yet (e.g. startup), default to print
+						// Regular LLM Output: Check suppression
+						if !suppressStreaming {
 							shouldPrint = true
 						}
 					}
@@ -350,11 +446,13 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 							// FLUSH TEXT BUFFER before printing system message
 							if textBuffer.Len() > 0 {
 								rendered := ui.SmartRender(textBuffer.String())
-								if !aiPrefixPrinted {
-									fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
-									aiPrefixPrinted = true
+								if rendered != "" {
+									if !aiPrefixPrinted {
+										fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
+										aiPrefixPrinted = true
+									}
+									fmt.Print(rendered)
 								}
-								fmt.Print(rendered)
 								textBuffer.Reset()
 							}
 							
@@ -384,11 +482,24 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		
 		// Flush any remaining content in lineBuffer
 		if lineBuffer != "" {
-			// Treat remaining buffer as text if it's not a system message
-			// But wait, lineBuffer might contain partial lines. 
-			// For now, let's just flush it to textBuffer if it's not empty
-			textBuffer.WriteString(lineBuffer)
+			// Only flush if NOT suppressed
+			if !suppressStreaming {
+				textBuffer.WriteString(lineBuffer)
+			}
 			lineBuffer = ""
+		}
+		
+		// Flush text buffer at the end of the turn
+		if textBuffer.Len() > 0 {
+			rendered := ui.SmartRender(textBuffer.String())
+			if rendered != "" {
+				if !aiPrefixPrinted {
+					fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
+					aiPrefixPrinted = true
+				}
+				fmt.Print(rendered)
+			}
+			textBuffer.Reset()
 		}
 		
 		// FLUSH TEXT BUFFER at end of turn

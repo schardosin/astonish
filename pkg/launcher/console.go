@@ -211,7 +211,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	}
 
 	startSpinner := func(text string) {
-		stopSpinner(false) // Don't mark done when replacing
+		stopSpinner(true) // Mark previous as done before starting new one
 		currentSpinnerText = text
 		spinnerDone = make(chan struct{})
 		model := ui.NewSpinner(text)
@@ -307,49 +307,57 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 			// Update current node from StateDelta if present
 			if event.Actions.StateDelta != nil {
 				if node, ok := event.Actions.StateDelta["current_node"].(string); ok {
-					// If we were suppressing, clear the line buffer to prevent leakage of partial lines from the previous node
-					if suppressStreaming {
-						lineBuffer = ""
-					}
-					
-					currentNodeName = node
-					// Re-evaluate suppression when node changes
-					suppressStreaming = false
-					userMessageFields = nil
-					
-					// Determine if this is an input node and setup suppression
-					isInput := false
-					for _, n := range cfg.AgentConfig.Nodes {
-						if n.Name == currentNodeName {
-							if n.Type == "input" {
-								isInput = true
-								suppressStreaming = false
-							} else {
-								hasUserMessage := len(n.UserMessage) > 0
-								hasOutputModel := len(n.OutputModel) > 0
-								
-								if hasUserMessage {
-									suppressStreaming = true
-									userMessageFields = n.UserMessage
-								} else if hasOutputModel {
-									suppressStreaming = true
-								}
-							}
-							if cfg.DebugMode {
-								fmt.Printf("[DEBUG] Node changed to '%s'. SuppressStreaming: %v\n", currentNodeName, suppressStreaming)
-							}
-							break
+					// Only process if node actually changed
+					if node != currentNodeName {
+						// If we were suppressing, clear the line buffer to prevent leakage of partial lines from the previous node
+						if suppressStreaming {
+							lineBuffer = ""
 						}
-					}
-					
-					// Manage Spinner
-					if isInput {
-						stopSpinner(true)
-					} else {
+						
+						currentNodeName = node
+						// Re-evaluate suppression when node changes
+						suppressStreaming = false
+						userMessageFields = nil
+						
+						// Determine if this is an input node and setup suppression
+						isInput := false
+						for _, n := range cfg.AgentConfig.Nodes {
+							if n.Name == currentNodeName {
+								if n.Type == "input" {
+									isInput = true
+									suppressStreaming = false
+								} else {
+									hasUserMessage := len(n.UserMessage) > 0
+									hasOutputModel := len(n.OutputModel) > 0
+									
+									if hasUserMessage {
+										suppressStreaming = true
+										userMessageFields = n.UserMessage
+									} else if hasOutputModel {
+										suppressStreaming = true
+									}
+								}
+								if cfg.DebugMode {
+									fmt.Printf("[DEBUG] Node changed to '%s'. SuppressStreaming: %v\n", currentNodeName, suppressStreaming)
+								}
+								break
+							}
+						}
+						
+						// Manage Spinner
+						if isInput {
+							stopSpinner(true)
+						} else {
+							startSpinner(fmt.Sprintf("Processing %s...", currentNodeName))
+						}
+					} else if spinnerProgram == nil && event.LLMResponse.Content == nil {
+						// Node hasn't changed, but spinner was stopped (e.g. by tool box)
+						// Restart it if we are not about to print content
 						startSpinner(fmt.Sprintf("Processing %s...", currentNodeName))
 					}
 				}
-				
+
+
 				// Check for approval state
 				if awaitingVal, ok := event.Actions.StateDelta["awaiting_approval"]; ok {
 					if awaiting, ok := awaitingVal.(bool); ok && awaiting {
@@ -504,7 +512,9 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					}
 
 					if shouldPrint {
-						stopSpinner(true) // Stop spinner before printing any output
+						// Only mark as done if it's NOT a system message (e.g. tool box, approval)
+						// If it IS a system message, we just want to pause/clear it temporarily
+						stopSpinner(!isSystemMsg)
 						
 						if isSystemMsg {
 							// FLUSH TEXT BUFFER before printing system message

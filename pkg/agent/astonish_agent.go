@@ -1359,6 +1359,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 	
 	// Run the agent - ADK handles everything (native function calling)
 	var fullResponse strings.Builder
+	var debugTextBuffer strings.Builder // Buffer for debug output
 	toolCallCount := 0
 	const maxToolCalls = 5 // Maximum tool calls to prevent infinite loops
 	
@@ -1398,7 +1399,8 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 						fmt.Printf("[DEBUG] ============================================\n\n")
 					}
 					if part.Text != "" {
-						fmt.Printf("[DEBUG] -> Text: %s\n", part.Text)
+						// Buffer text instead of printing immediately
+						debugTextBuffer.WriteString(part.Text)
 					}
 				}
 			} else {
@@ -1548,6 +1550,11 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 				}
 			}
 		}
+	}
+	
+	// Print accumulated debug text
+	if a.DebugMode && debugTextBuffer.Len() > 0 {
+		fmt.Printf("[DEBUG] Full LLM Response: %s\n", debugTextBuffer.String())
 	}
 	
 

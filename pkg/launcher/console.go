@@ -602,7 +602,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 					os.Exit(1)
 				}
-				fmt.Printf("You: %s\n", userInput)
+				fmt.Println(ui.RenderStatusBadge("Command approved", true))
 				approvalOptions = nil // Clear for next iteration
 			} else if len(inputOptions) > 0 {
 				// Use interactive selection for input
@@ -611,7 +611,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 					os.Exit(1)
 				}
-				fmt.Printf("You: %s\n", userInput)
+				fmt.Println(ui.RenderStatusBadge("Selected: "+userInput, true))
 				inputOptions = nil // Clear for next iteration
 			} else {
 				// Free text input

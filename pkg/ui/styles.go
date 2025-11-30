@@ -48,3 +48,22 @@ func RenderToolBox(toolName string, args map[string]interface{}) string {
 
 	return boxStyle.Render(strings.TrimSpace(content.String())) + "\n"
 }
+
+// RenderStatusBadge renders a styled status badge (e.g. "✓ Command approved")
+func RenderStatusBadge(text string, success bool) string {
+	var icon string
+	var iconColor lipgloss.Color
+
+	if success {
+		icon = "✓"
+		iconColor = lipgloss.Color("42") // Green
+	} else {
+		icon = "✗"
+		iconColor = lipgloss.Color("196") // Red
+	}
+
+	checkStyle := lipgloss.NewStyle().Foreground(iconColor).SetString(icon)
+	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // Grey text
+
+	return checkStyle.String() + " " + textStyle.Render(text)
+}

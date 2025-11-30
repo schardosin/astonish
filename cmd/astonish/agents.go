@@ -8,15 +8,16 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/launcher"
 	"google.golang.org/adk/session"
 )
 
 func handleAgentsCommand(args []string) error {
-	if len(args) < 1 {
-		fmt.Println("Usage: astonish agents <command> [args]")
-		return fmt.Errorf("no agents subcommand provided")
+	if len(args) < 1 || args[0] == "--help" || args[0] == "-h" {
+		printAgentsUsage()
+		return nil
 	}
 
 	switch args[0] {
@@ -27,6 +28,13 @@ func handleAgentsCommand(args []string) error {
 	default:
 		return fmt.Errorf("unknown agents command: %s", args[0])
 	}
+}
+
+func printAgentsUsage() {
+	fmt.Println("Usage: astonish agents <command> [args]")
+	fmt.Println("\nAvailable Commands:")
+	fmt.Println("  run   Run an agent")
+	fmt.Println("  list  List available agents")
 }
 
 func handleRunCommand(args []string) error {
@@ -173,13 +181,6 @@ func handleListCommand() error {
 	}
 	agents := make(map[string]AgentInfo)
 
-	// ANSI colors
-	const (
-		ColorReset   = "\033[0m"
-		ColorMagenta = "\033[35m"
-		ColorCyan    = "\033[36m"
-	)
-
 	// Helper to scan directory
 	scanDir := func(dir string) {
 		entries, err := os.ReadDir(dir)
@@ -220,17 +221,47 @@ func handleListCommand() error {
 		return nil
 	}
 
-	// Sort agents by name
-	var agentList []AgentInfo
-	for _, info := range agents {
-		agentList = append(agentList, info)
-	}
-	sort.Slice(agentList, func(i, j int) bool {
-		return agentList[i].Name < agentList[j].Name
-	})
+	// 1. Styles
+	headerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("63")). // Purple
+		Bold(true).
+		PaddingBottom(1) // Space after header
 
-	for _, agent := range agentList {
-		fmt.Printf("%s%s%s: %s%s%s\n", ColorMagenta, agent.Name, ColorReset, ColorCyan, agent.Description, ColorReset)
+	nameStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("205")). // Pinkish
+		Bold(true)
+
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252")) // White/Grey
+
+	// 2. Find longest name for padding
+	var maxLen int
+	var keys []string
+	for k := range agents {
+		if len(k) > maxLen {
+			maxLen = len(k)
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // Always sort!
+
+	// 3. Render
+	// Print Header
+	fmt.Println(headerStyle.Render("AVAILABLE AGENTS"))
+
+	for _, name := range keys {
+		info := agents[name]
+		
+		// Render the name with fixed width padding
+		// %-*s means: Left justify (-), pad to width (*), string (s)
+		paddedName := fmt.Sprintf("%-*s", maxLen + 4, name) 
+		
+		row := lipgloss.JoinHorizontal(lipgloss.Left,
+			nameStyle.Render(paddedName),
+			descStyle.Render(info.Description),
+		)
+		
+		fmt.Println(row)
 	}
 
 	return nil

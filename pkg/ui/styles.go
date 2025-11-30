@@ -2,51 +2,102 @@ package ui
 
 import (
 	"fmt"
-	"strings"
+	"sort"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
 // RenderToolBox renders a styled box for tool execution approval.
 func RenderToolBox(toolName string, args map[string]interface{}) string {
-	// Define styles
+	// --- Styles ---
+	borderColor := lipgloss.Color("63") // Purple
+
+	// The outer box
 	boxStyle := lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("63")). // Purple border
-		Padding(0, 2).                          // Reduced vertical padding
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		BorderTop(true).
+		BorderLeft(true).
+		BorderRight(true).
+		BorderBottom(true).
+		Padding(0, 1). // Compact padding
 		Width(60)
 
-	titleStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("86")). // Cyan
-		Bold(true)
-
+	// Style for the keys (e.g., "max_results:")
 	keyStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("244")) // Gray
+		Foreground(lipgloss.Color("244")). // Lighter Grey for better contrast
+		Width(14).                         // Fixed width for alignment
+		Align(lipgloss.Right).             // Right align looks cleaner for kv-pairs
+		MarginRight(1)
 
-	valueStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252")) // White
+	// Style for the values
+	valStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252")) // White/Light Grey
 
-	// Build content
-	var content strings.Builder
-	
-	content.WriteString(fmt.Sprintf("%s %s", titleStyle.Render("Tool:"), valueStyle.Render(toolName)))
-	
-	if len(args) > 0 {
-		content.WriteString("\n\n") // Spacer
-		content.WriteString(titleStyle.Render("** Arguments **"))
-		content.WriteString("\n")
-		
-		for k, v := range args {
-			valStr := fmt.Sprintf("%v", v)
-			// Truncate long values
-			if len(valStr) > 200 {
-				valStr = valStr[:197] + "..."
-			}
-			content.WriteString(fmt.Sprintf("%s: %s\n", keyStyle.Render(k), valueStyle.Render(valStr)))
+	// Style for numbers (optional pop of color)
+	numberStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("208")) // Orange for numbers
+
+	// --- Rendering Logic ---
+
+	// 1. Sort the keys so they appear in a consistent order
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	// 2. Build the rows
+	var rows []string
+	for _, key := range keys {
+		val := args[key]
+		strVal := fmt.Sprintf("%v", val)
+
+		// Truncate long values
+		if len(strVal) > 200 {
+			strVal = strVal[:197] + "..."
 		}
+
+		// Choose style based on type (simple heuristic)
+		var renderedVal string
+		switch val.(type) {
+		case int, float64, float32:
+			renderedVal = numberStyle.Render(strVal)
+		default:
+			renderedVal = valStyle.Render(strVal)
+		}
+
+		// Create the line: "      topic: news"
+		row := lipgloss.JoinHorizontal(lipgloss.Left,
+			keyStyle.Render(key+":"),
+			renderedVal,
+		)
+		rows = append(rows, row)
 	}
 
-	return boxStyle.Render(strings.TrimSpace(content.String())) + "\n"
+	// 3. Create the Header
+	header := lipgloss.NewStyle().
+		Foreground(borderColor).
+		Bold(true).
+		Render("🛠  " + toolName)
+
+	// 4. Create a subtle divider
+	divider := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), true, false, false, false). // Top border only
+		BorderForeground(lipgloss.Color("236")).                    // Very dark grey
+		Width(58).                                                  // Match box width approx
+		Padding(0)
+
+	// 5. Join everything
+	body := lipgloss.JoinVertical(lipgloss.Left, rows...)
+	
+	content := lipgloss.JoinVertical(lipgloss.Left, 
+        header, 
+        divider.String(), // The new divider
+        body,
+    )
+
+	return boxStyle.Render(content) + "\n"
 }
 
 // RenderStatusBadge renders a styled status badge (e.g. "✓ Command approved")

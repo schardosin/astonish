@@ -967,6 +967,40 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 	// We need to pass tools if the node uses them
 	var nodeTools []tool.Tool
 	if node.Tools {
+		// Validate that all selected tools exist
+		if len(node.ToolsSelection) > 0 {
+			foundTools := make(map[string]bool)
+			
+			// Check internal tools
+			for _, t := range a.Tools {
+				foundTools[t.Name()] = true
+			}
+			
+			// Check MCP toolsets
+			if len(a.Toolsets) > 0 {
+				minimalCtx := &minimalReadonlyContext{Context: ctx}
+				for _, ts := range a.Toolsets {
+					tools, err := ts.Tools(minimalCtx)
+					if err == nil {
+						for _, t := range tools {
+							foundTools[t.Name()] = true
+						}
+					}
+				}
+			}
+			
+			var missingTools []string
+			for _, selected := range node.ToolsSelection {
+				if !foundTools[selected] {
+					missingTools = append(missingTools, selected)
+				}
+			}
+			
+			if len(missingTools) > 0 {
+				yield(nil, fmt.Errorf("configured tools not found: %s", strings.Join(missingTools, ", ")))
+				return false
+			}
+		}
 
 		
 		// Filter based on ToolsSelection

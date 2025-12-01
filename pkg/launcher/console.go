@@ -531,7 +531,21 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 							}
 							
 							// Print System Message
-							fmt.Print(line)
+							toPrint := line
+							// If we are suppressing streaming, but the line contains a tool box start,
+							// we must trim any text before the tool box to prevent leakage,
+							// BUT we must preserve the ANSI color codes that immediately precede the box.
+							if suppressStreaming && strings.Contains(line, "╭") {
+								// Regex to find the tool box start and any immediately preceding ANSI color codes
+								// This matches: (optional ANSI codes) followed by "╭"
+								re := regexp.MustCompile(`((?:\x1b\[[0-9;]*m)*)╭`)
+								loc := re.FindStringIndex(line)
+								if loc != nil {
+									// loc[0] is the start of the match (including the ANSI codes)
+									toPrint = line[loc[0]:]
+								}
+							}
+							fmt.Print(toPrint)
 							
 							// Reset prefix state for next AI output (since we interrupted with system msg)
 							aiPrefixPrinted = false

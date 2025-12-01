@@ -11,7 +11,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/launcher"
-	"github.com/schardosin/astonish/pkg/ui"
 	"google.golang.org/adk/session"
 )
 
@@ -26,8 +25,6 @@ func handleAgentsCommand(args []string) error {
 		return handleRunCommand(args[1:])
 	case "list":
 		return handleListCommand()
-	case "flow":
-		return handleFlowCommand(args[1:])
 	default:
 		return fmt.Errorf("unknown agents command: %s", args[0])
 	}
@@ -38,7 +35,6 @@ func printAgentsUsage() {
 	fmt.Println("\nAvailable Commands:")
 	fmt.Println("  run   Run an agent")
 	fmt.Println("  list  List available agents")
-	fmt.Println("  flow  Visualize the agent flow")
 }
 
 func handleRunCommand(args []string) error {
@@ -268,47 +264,5 @@ func handleListCommand() error {
 		fmt.Println(row)
 	}
 
-	return nil
-}
-
-func handleFlowCommand(args []string) error {
-	if len(args) < 1 {
-		fmt.Println("Usage: astonish agents flow <agent_name>")
-		return fmt.Errorf("no agent name provided")
-	}
-
-	agentName := args[0]
-	// Reuse the logic to find the agent file (duplicated from handleRunCommand for now, could be refactored)
-	// 1. Check if it's a full path or in current dir
-	agentPath := agentName
-	if _, err := os.Stat(agentPath); os.IsNotExist(err) {
-		// 2. Check with .yaml extension
-		agentPath = fmt.Sprintf("%s.yaml", agentName)
-		if _, err := os.Stat(agentPath); os.IsNotExist(err) {
-			// 3. Check in standard system agents directory
-			agentsDir, err := config.GetAgentsDir()
-			if err == nil {
-				sysAgentPath := filepath.Join(agentsDir, fmt.Sprintf("%s.yaml", agentName))
-				if _, err := os.Stat(sysAgentPath); err == nil {
-					agentPath = sysAgentPath
-					goto Found
-				}
-			}
-			
-			// 4. Check in local dev path (fallback)
-			agentPath = fmt.Sprintf("astonish/agents/%s.yaml", agentName)
-			if _, err := os.Stat(agentPath); os.IsNotExist(err) {
-				return fmt.Errorf("agent file not found: %s", agentName)
-			}
-		}
-	}
-
-Found:
-	cfg, err := config.LoadAgent(agentPath)
-	if err != nil {
-		return fmt.Errorf("failed to load agent: %w", err)
-	}
-
-	ui.RenderCharmFlow(cfg)
 	return nil
 }

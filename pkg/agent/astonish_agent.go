@@ -1362,6 +1362,59 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			yield(nil, err)
 			return false
 		}
+
+		// [CRITICAL FIX] Event Stream Interceptor
+		// This inspects the raw event payload before the LLM (or the UI) sees it.
+		// It enforces a hard stop on any "Logical Error" returned by a tool.
+		if event.LLMResponse.Content != nil {
+			for _, part := range event.LLMResponse.Content.Parts {
+				if part.FunctionResponse != nil {
+					// We found a tool output. Inspect it.
+					resp := part.FunctionResponse.Response
+					
+					// Check for the "error" key
+					if errVal, hasError := resp["error"]; hasError {
+						// Logic: Is this a real error?
+						// We treat ANY presence of "error" that isn't nil as a failure.
+						// This includes "error": {} which implies the tool failed but gave no details.
+						isFailure := false
+						
+						if errVal != nil {
+							// [CRITICAL FIX] Handle Go 'error' type which marshals to {}
+							if errObj, ok := errVal.(error); ok {
+								// Convert error to string so it marshals correctly
+								resp["error"] = errObj.Error()
+								isFailure = true
+							} else if _, isMap := errVal.(map[string]any); isMap {
+								// If it's a map (even empty), it's a failure
+								isFailure = true
+							} else if str, isStr := errVal.(string); isStr && str != "" {
+								// If it's a string, it's a failure
+								isFailure = true
+							} else {
+								// Default: treat unknown non-nil types as failures to be safe
+								isFailure = true
+							}
+						}
+
+						if isFailure {
+							toolName := part.FunctionResponse.Name
+							// Marshal the ENTIRE response to give the user full context
+							respBytes, _ := json.Marshal(resp)
+							
+							if a.DebugMode {
+								fmt.Printf("[DEBUG] 🛑 INTERCEPTOR: Stopping flow due to error in tool '%s': %s\n", toolName, string(respBytes))
+							}
+
+							// STOP THE FLOW.
+							// We return a Go error here. This bubbles up and stops the Run() loop immediately.
+							yield(nil, fmt.Errorf("tool '%s' failed. Response: %s", toolName, string(respBytes)))
+							return false
+						}
+					}
+				}
+			}
+		}
 		
 		// Debug logging for event flow
 		if a.DebugMode {

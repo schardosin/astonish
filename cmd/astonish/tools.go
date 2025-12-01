@@ -32,9 +32,9 @@ func (m *minimalReadonlyContext) SessionID() string                    { return 
 func (m *minimalReadonlyContext) Branch() string                       { return "" }
 
 func handleToolsCommand(args []string) error {
-	if len(args) < 1 {
-		fmt.Println("Usage: astonish tools <command> [args]")
-		return fmt.Errorf("no tools subcommand provided")
+	if len(args) < 1 || args[0] == "-h" || args[0] == "--help" {
+		printToolsUsage()
+		return nil
 	}
 
 	switch args[0] {
@@ -45,6 +45,19 @@ func handleToolsCommand(args []string) error {
 	default:
 		return fmt.Errorf("unknown tools command: %s", args[0])
 	}
+}
+
+func printToolsUsage() {
+	fmt.Println("usage: astonish tools [-h] {list,edit} ...")
+	fmt.Println("")
+	fmt.Println("positional arguments:")
+	fmt.Println("  {list,edit}")
+	fmt.Println("                        Tools management commands")
+	fmt.Println("    list                List available tools (internal + MCP)")
+	fmt.Println("    edit                Edit MCP configuration")
+	fmt.Println("")
+	fmt.Println("options:")
+	fmt.Println("  -h, --help            show this help message and exit")
 }
 
 func handleToolsListCommand(args []string) error {

@@ -34,11 +34,17 @@ func handleAgentsCommand(args []string) error {
 }
 
 func printAgentsUsage() {
-	fmt.Println("Usage: astonish agents <command> [args]")
-	fmt.Println("\nAvailable Commands:")
-	fmt.Println("  run   Run an agent")
-	fmt.Println("  list  List available agents")
-	fmt.Println("  flow  Visualize the agent flow")
+	fmt.Println("usage: astonish agents [-h] {run,list,flow} ...")
+	fmt.Println("")
+	fmt.Println("positional arguments:")
+	fmt.Println("  {run,list,flow}")
+	fmt.Println("                        Agent management commands")
+	fmt.Println("    run                 Run an agent")
+	fmt.Println("    list                List available agents")
+	fmt.Println("    flow                Visualize the agent flow")
+	fmt.Println("")
+	fmt.Println("options:")
+	fmt.Println("  -h, --help            show this help message and exit")
 }
 
 func handleRunCommand(args []string) error {

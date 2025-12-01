@@ -7,9 +7,12 @@ import (
 
 // Execute is the main entry point for the CLI
 func Execute() error {
-	if len(os.Args) < 2 {
+	if len(os.Args) < 2 || os.Args[1] == "-h" || os.Args[1] == "--help" {
 		printUsage()
-		return fmt.Errorf("no command provided")
+		if len(os.Args) < 2 {
+			return fmt.Errorf("no command provided")
+		}
+		return nil
 	}
 
 	command := os.Args[1]
@@ -29,6 +32,16 @@ func Execute() error {
 }
 
 func printUsage() {
-	fmt.Println("Usage: astonish <command> [args]")
-	fmt.Println("Commands: agents, config, setup, tools")
+	fmt.Println("usage: astonish [-h] {agents,config,setup,tools} ...")
+	fmt.Println("")
+	fmt.Println("positional arguments:")
+	fmt.Println("  {agents,config,setup,tools}")
+	fmt.Println("                        Astonish CLI commands")
+	fmt.Println("    agents              Manage AI agents")
+	fmt.Println("    config              Manage configuration")
+	fmt.Println("    setup               Run interactive setup")
+	fmt.Println("    tools               Manage MCP tools")
+	fmt.Println("")
+	fmt.Println("options:")
+	fmt.Println("  -h, --help            show this help message and exit")
 }

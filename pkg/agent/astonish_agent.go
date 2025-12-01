@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/ui"
@@ -1401,14 +1402,75 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 							toolName := part.FunctionResponse.Name
 							// Marshal the ENTIRE response to give the user full context
 							respBytes, _ := json.Marshal(resp)
+							rawErrorStr := string(respBytes)
 							
 							if a.DebugMode {
-								fmt.Printf("[DEBUG] 🛑 INTERCEPTOR: Stopping flow due to error in tool '%s': %s\n", toolName, string(respBytes))
+								fmt.Printf("[DEBUG] 🛑 INTERCEPTOR: Stopping flow due to error in tool '%s': %s\n", toolName, rawErrorStr)
 							}
 
-							// STOP THE FLOW.
-							// We return a Go error here. This bubbles up and stops the Run() loop immediately.
-							yield(nil, fmt.Errorf("tool '%s' failed. Response: %s", toolName, string(respBytes)))
+							// [ENHANCEMENT] Ask LLM to explain the error
+							var friendlyError string
+							
+							// Construct prompt for the LLM
+							explanationPrompt := fmt.Sprintf(`The tool '%s' failed with the following error response:
+%s
+
+Please provide a concise, user-friendly explanation of this error. 
+- Explain what went wrong in simple terms.
+- Suggest potential next steps or fixes for the user.
+- Do not include raw JSON or technical stack traces unless absolutely necessary.
+- Keep it under 3 sentences.`, toolName, rawErrorStr)
+
+							// Create LLM request
+							req := &model.LLMRequest{
+								Contents: []*genai.Content{
+									{
+										Role: "user",
+										Parts: []*genai.Part{{Text: explanationPrompt}},
+									},
+								},
+							}
+
+							// Call LLM (synchronously collect response)
+							// We use a separate context with timeout to avoid hanging
+							genCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+							defer cancel()
+
+							if a.DebugMode {
+								fmt.Println("[DEBUG] Asking LLM to explain the error...")
+							}
+
+							var sb strings.Builder
+							// Use the agent's LLM model
+							for resp, err := range a.LLM.GenerateContent(genCtx, req, false) {
+								if err != nil {
+									if a.DebugMode {
+										fmt.Printf("[DEBUG] Failed to generate error explanation: %v\n", err)
+									}
+									break
+								}
+								if resp.Content != nil {
+									for _, p := range resp.Content.Parts {
+										sb.WriteString(p.Text)
+									}
+								}
+							}
+							
+							friendlyError = strings.TrimSpace(sb.String())
+							
+							// Fallback if LLM failed or returned empty
+							if friendlyError == "" {
+								friendlyError = fmt.Sprintf("Tool execution failed. Raw response: %s", rawErrorStr)
+							} else {
+								// Append raw error for technical reference if debug mode is on, or just keep it clean
+								// The user asked to "print it nicely", so let's stick to the friendly message
+								// but maybe append the raw error in a collapsible way or just keeping it simple.
+								// Let's format it: "Friendly Message (Raw Details: ...)"
+								friendlyError = fmt.Sprintf("%s\n\nTechnical Details: %s", friendlyError, rawErrorStr)
+							}
+
+							// STOP THE FLOW with the friendly error
+							yield(nil, fmt.Errorf("tool '%s' failed: %s", toolName, friendlyError))
 							return false
 						}
 					}

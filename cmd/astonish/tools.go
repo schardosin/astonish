@@ -8,11 +8,14 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
 )
 
@@ -91,12 +94,16 @@ func handleToolsListCommand(args []string) error {
 			for name := range mcpConfig.MCPServers {
 				serverNames = append(serverNames, name)
 			}
+			sort.Strings(serverNames) // Sort server names
 			
-			for i, toolset := range toolsets {
-				serverName := "unknown"
-				if i < len(serverNames) {
-					serverName = serverNames[i]
-				}
+			// Map toolsets by name for easier lookup if possible, or just iterate
+			// The mcpManager.GetToolsets() returns a slice, likely in order of initialization
+			// But we want to group by server name. 
+			// Let's iterate toolsets and try to match names or just list them.
+			
+			// Actually, let's just iterate the toolsets we have
+			for _, toolset := range toolsets {
+				serverName := toolset.Name()
 				
 				serverInfo := MCPServerInfo{
 					Name:  serverName,
@@ -114,27 +121,45 @@ func handleToolsListCommand(args []string) error {
 						})
 					}
 				}
+				// Sort tools within server
+				sort.Slice(serverInfo.Tools, func(i, j int) bool {
+					return serverInfo.Tools[i].Name < serverInfo.Tools[j].Name
+				})
 				
 				mcpServers = append(mcpServers, serverInfo)
 			}
+			// Sort servers by name
+			sort.Slice(mcpServers, func(i, j int) bool {
+				return mcpServers[i].Name < mcpServers[j].Name
+			})
 		}
 	}
 
-	// Combine all tools
+	// Combine all tools for JSON output or max length calculation
 	allTools := make([]ToolInfo, 0)
+	var maxLen int
 
 	// Add internal tools
 	for _, tool := range internalTools {
-		allTools = append(allTools, ToolInfo{
+		t := ToolInfo{
 			Name:        tool.Name(),
 			Description: tool.Description(),
 			Source:      "Internal",
-		})
+		}
+		allTools = append(allTools, t)
+		if len(t.Name) > maxLen {
+			maxLen = len(t.Name)
+		}
 	}
 	
 	// Add MCP tools
 	for _, server := range mcpServers {
 		allTools = append(allTools, server.Tools...)
+		for _, tool := range server.Tools {
+			if len(tool.Name) > maxLen {
+				maxLen = len(tool.Name)
+			}
+		}
 	}
 
 	if *jsonOutput {
@@ -145,50 +170,79 @@ func handleToolsListCommand(args []string) error {
 		}
 		fmt.Println(string(data))
 	} else {
-		// Human-readable output
-		const (
-			ColorReset   = "\033[0m"
-			ColorMagenta = "\033[35m"
-			ColorCyan    = "\033[36m"
-			ColorYellow  = "\033[33m"
-		)
+		// Styles
+		headerStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("63")). // Purple
+			Bold(true).
+			PaddingBottom(1)
 
-		fmt.Println("\nAvailable Tools:")
-		fmt.Println("================")
+		sectionStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("220")). // Yellow
+			Bold(true).
+			PaddingTop(1)
 
+		nameStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("205")). // Pinkish
+			Bold(true)
+
+		descStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252")) // White/Grey
+
+		fmt.Println(headerStyle.Render("AVAILABLE TOOLS"))
+
+		// Internal Tools
 		if len(internalTools) > 0 {
-			fmt.Printf("\n%sInternal Tools:%s\n", ColorYellow, ColorReset)
-			for _, tool := range internalTools {
-				fmt.Printf("  %s%s%s: %s%s%s\n",
-					ColorMagenta, tool.Name(), ColorReset,
-					ColorCyan, tool.Description(), ColorReset)
+			fmt.Println(sectionStyle.Render("Internal Tools"))
+			
+			// Sort internal tools
+			sortedInternal := make([]tool.Tool, len(internalTools))
+			copy(sortedInternal, internalTools)
+			sort.Slice(sortedInternal, func(i, j int) bool {
+				return sortedInternal[i].Name() < sortedInternal[j].Name()
+			})
+
+			for _, tool := range sortedInternal {
+				paddedName := fmt.Sprintf("%-*s", maxLen + 4, tool.Name())
+				row := lipgloss.JoinHorizontal(lipgloss.Left,
+					nameStyle.Render(paddedName),
+					descStyle.Render(tool.Description()),
+				)
+				fmt.Println(row)
 			}
 		}
 
+		// MCP Servers
 		if len(mcpServers) > 0 {
-			fmt.Printf("\n%sMCP Servers:%s\n", ColorYellow, ColorReset)
 			for _, server := range mcpServers {
-				fmt.Printf("  %s%s%s\n", ColorMagenta, server.Name, ColorReset)
+				fmt.Println(sectionStyle.Render(fmt.Sprintf("MCP Server: %s", server.Name)))
+				
 				if len(server.Tools) > 0 {
 					for _, tool := range server.Tools {
-						fmt.Printf("    %s%s%s: %s%s%s\n",
-							ColorMagenta, tool.Name, ColorReset,
-							ColorCyan, tool.Description, ColorReset)
+						paddedName := fmt.Sprintf("%-*s", maxLen + 4, tool.Name)
+						row := lipgloss.JoinHorizontal(lipgloss.Left,
+							nameStyle.Render(paddedName),
+							descStyle.Render(tool.Description),
+						)
+						fmt.Println(row)
 					}
 				} else {
-					fmt.Printf("    %s(no tools available)%s\n", ColorCyan, ColorReset)
+					fmt.Println(descStyle.Render("  (no tools available)"))
 				}
 			}
 		}
 
-		// Count total MCP tools
+		// Summary footer
 		totalMCPTools := 0
 		for _, server := range mcpServers {
 			totalMCPTools += len(server.Tools)
 		}
-
-		fmt.Printf("\nTotal: %d internal tools, %d MCP servers with %d tools\n", 
-			len(internalTools), len(mcpServers), totalMCPTools)
+		
+		footerStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240")). // Dark Grey
+			PaddingTop(1)
+			
+		fmt.Println(footerStyle.Render(fmt.Sprintf("Total: %d internal tools, %d MCP servers with %d tools", 
+			len(internalTools), len(mcpServers), totalMCPTools)))
 	}
 
 	return nil

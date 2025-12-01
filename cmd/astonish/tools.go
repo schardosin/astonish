@@ -6,8 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
-	"runtime"
 	"sort"
 
 	"github.com/charmbracelet/lipgloss"
@@ -267,30 +265,6 @@ func handleToolsEditCommand() error {
 		fmt.Printf("Created new MCP config file at: %s\n", mcpConfigPath)
 	}
 
-	// Get editor
-	editor := os.Getenv("EDITOR")
-	if editor == "" {
-		// Platform-specific defaults
-		switch runtime.GOOS {
-		case "windows":
-			editor = "notepad.exe"
-		case "darwin", "linux":
-			editor = "vi"
-		default:
-			editor = "vi"
-		}
-	}
-
-	// Open editor
-	cmd := exec.Command(editor, mcpConfigPath)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to open editor: %w", err)
-	}
-
-	fmt.Printf("MCP configuration saved to: %s\n", mcpConfigPath)
-	return nil
+	fmt.Printf("Opening MCP configuration at: %s\n", mcpConfigPath)
+	return openInEditor(mcpConfigPath)
 }

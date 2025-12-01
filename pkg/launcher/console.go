@@ -617,7 +617,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 			// Check if we have options for selection
 			if len(approvalOptions) > 0 {
 				// Use interactive selection for approval
-				userInput, err = ui.ReadSelection(approvalOptions, title)
+				userInput, err = ui.ReadSelection(approvalOptions, title, description)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 					os.Exit(1)
@@ -626,7 +626,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				approvalOptions = nil // Clear for next iteration
 			} else if len(inputOptions) > 0 {
 				// Use interactive selection for input
-				userInput, err = ui.ReadSelection(inputOptions, title)
+				userInput, err = ui.ReadSelection(inputOptions, title, description)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 					os.Exit(1)

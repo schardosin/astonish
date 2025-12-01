@@ -7,7 +7,7 @@ import (
 )
 
 // ReadSelection prompts the user to select from a list of options using huh
-func ReadSelection(options []string, title string) (string, error) {
+func ReadSelection(options []string, title string, description string) (string, error) {
 	if len(options) == 0 {
 		return "", fmt.Errorf("no options provided")
 	}
@@ -25,6 +25,7 @@ func ReadSelection(options []string, title string) (string, error) {
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title(title).
+				Description(description).
 				Options(huhOptions...).
 				Value(&selected),
 		),

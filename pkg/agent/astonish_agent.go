@@ -259,12 +259,8 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 			// Create a minimal context for listing tools
 			roCtx := &minimalReadonlyContext{Context: context.Background()}
 			for _, ts := range a.Toolsets {
-				tools, err := ts.Tools(roCtx)
-				if err == nil {
-					for _, t := range tools {
-						fmt.Printf(" - %s (MCP: %s)\n", t.Name(), ts.Name())
-					}
-				} else {
+				_, err := ts.Tools(roCtx)
+				if err != nil {
 					fmt.Printf(" - [Error listing tools for toolset %s: %v]\n", ts.Name(), err)
 				}
 			}

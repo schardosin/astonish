@@ -255,10 +255,6 @@ func NewAstonishAgentWithToolsets(cfg *config.AgentConfig, llm model.LLM, tools 
 // Run executes the agent flow with stateful workflow management.
 func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
 	if a.DebugMode {
-		fmt.Println("[DEBUG] Available Tools:")
-		for _, t := range a.Tools {
-			fmt.Printf(" - %s (Internal)\n", t.Name())
-		}
 		if a.Toolsets != nil {
 			// Create a minimal context for listing tools
 			roCtx := &minimalReadonlyContext{Context: context.Background()}

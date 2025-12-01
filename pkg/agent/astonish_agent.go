@@ -945,20 +945,58 @@ func (a *AstonishAgent) handleToolApproval(ctx agent.InvocationContext, state se
 	}
 }
 
+
+
 // executeLLMNode executes an LLM node using ADK's llmagent
 func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config.Node, nodeName string, state session.State, yield func(*session.Event, error) bool) bool {
-	// Emit info message - REMOVED for modern UI (spinner)
-	// infoEvent := ...
-	
 	// Render prompt and system instruction
-	instruction := a.renderString(node.Prompt, state)
+	userPrompt := a.renderString(node.Prompt, state)
 	systemInstruction := a.renderString(node.System, state)
 	
-	// Combine system and instruction if both present
-	if systemInstruction != "" {
-		instruction = systemInstruction + "\n\n" + instruction
+	// Use system instruction as the main instruction for the agent
+	// This ensures it goes to the System Prompt in the LLM request
+	instruction := systemInstruction
+	
+	// If no system instruction, use the user prompt as instruction (fallback behavior)
+	// But for Bedrock/Claude, we prefer separation.
+	if instruction == "" {
+		instruction = "You are a helpful AI assistant."
 	}
 	
+	// Manually append the User Message to the session history
+	// This ensures that the LLM sees a User Message even if llmagent doesn't pick it up from context
+	// or if history is empty.
+	userEvent := &session.Event{
+		LLMResponse: model.LLMResponse{
+			Content: &genai.Content{
+				Parts: []*genai.Part{{Text: userPrompt}},
+				Role:  "user",
+			},
+		},
+	}
+	
+	if a.SessionService != nil {
+		sess := ctx.Session()
+		
+		// Unwrap ScopedSession if present, as SessionService might expect the underlying session type
+		if scopedSess, ok := sess.(*ScopedSession); ok {
+			sess = scopedSess.Session
+		}
+		
+		// Try to append with (potentially unwrapped) session object
+		if err := a.SessionService.AppendEvent(ctx, sess, userEvent); err != nil {
+			// Retry with session fetched via Get (last resort)
+			if sess.ID() != "" {
+				getResp, getErr := a.SessionService.Get(ctx, &session.GetRequest{
+					SessionID: sess.ID(),
+				})
+				if getErr == nil && getResp != nil && getResp.Session != nil {
+					_ = a.SessionService.AppendEvent(ctx, getResp.Session, userEvent)
+				}
+			}
+		}
+	}
+
 	// 2. Initialize LLM Agent
 	// We need to pass tools if the node uses them
 	var nodeTools []tool.Tool
@@ -2524,6 +2562,11 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 	if a.DebugMode {
 		listJSON, _ := json.MarshalIndent(listVal, "", "  ")
 		fmt.Printf("\n[DEBUG] ========== PARALLEL NODE: %s ==========\n", node.Name)
+		if ctx.UserContent() != nil && len(ctx.UserContent().Parts) > 0 {
+			fmt.Printf("[DEBUG] UserContent: %s\n", ctx.UserContent().Parts[0].Text)
+		} else {
+			fmt.Printf("[DEBUG] UserContent: <nil> or empty\n")
+		}
 		fmt.Printf("[DEBUG] Iterating over list key: %s\n", listKey)
 		fmt.Printf("[DEBUG] List type: %T\n", listVal)
 		if len(string(listJSON)) > 2000 {

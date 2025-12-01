@@ -285,7 +285,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						// 3. If NEITHER is configured, allow streaming (chat node).
 						// 4. EXCEPTION: Input nodes should always show their prompt (even if they have OutputModel).
 						
-						if node.Type == "input" {
+						if node.Type == "input" || node.Type == "output" {
 							suppressStreaming = false
 						} else {
 							hasUserMessage := len(node.UserMessage) > 0
@@ -309,6 +309,19 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				if node, ok := event.Actions.StateDelta["current_node"].(string); ok {
 					// Only process if node actually changed
 					if node != currentNodeName {
+						// Flush buffer if we were streaming
+						if !suppressStreaming && lineBuffer != "" {
+							// Stop spinner before printing flush content
+							stopSpinner(true)
+							
+							rendered := ui.SmartRender(lineBuffer)
+							fmt.Print(rendered)
+							if !strings.HasSuffix(rendered, "\n") {
+								fmt.Println()
+							}
+							lineBuffer = ""
+						}
+
 						// If we were suppressing, clear the line buffer to prevent leakage of partial lines from the previous node
 						if suppressStreaming {
 							lineBuffer = ""
@@ -319,14 +332,21 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						suppressStreaming = false
 						userMessageFields = nil
 						
-						// Determine if this is an input node and setup suppression
+						// Determine if this is an input node or parallel node and setup suppression
 						isInput := false
+						isParallel := false
 						for _, n := range cfg.AgentConfig.Nodes {
 							if n.Name == currentNodeName {
 								if n.Type == "input" {
 									isInput = true
 									suppressStreaming = false
+								} else if n.Type == "output" {
+									suppressStreaming = false
 								} else {
+									if n.Parallel != nil {
+										isParallel = true
+									}
+									
 									hasUserMessage := len(n.UserMessage) > 0
 									hasOutputModel := len(n.OutputModel) > 0
 									
@@ -338,14 +358,14 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 									}
 								}
 								if cfg.DebugMode {
-									fmt.Printf("[DEBUG] Node changed to '%s'. SuppressStreaming: %v\n", currentNodeName, suppressStreaming)
+									fmt.Printf("[DEBUG] Node changed to '%s'. SuppressStreaming: %v, IsParallel: %v\n", currentNodeName, suppressStreaming, isParallel)
 								}
 								break
 							}
 						}
 						
 						// Manage Spinner
-						if isInput {
+						if isInput || isParallel {
 							stopSpinner(true)
 						} else {
 							startSpinner(fmt.Sprintf("Processing %s...", currentNodeName))
@@ -422,12 +442,24 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 
 							// Render and print immediately
 							if displayStr != "" {
-								rendered := ui.SmartRender(displayStr)
-								if !aiPrefixPrinted {
-									fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
-									aiPrefixPrinted = true
+								// For output nodes, we want to ensure it's visible
+								// Use a box or distinct styling if it's a "User Message"
+								
+								// If it's a list, render it nicely
+								if strings.Contains(displayStr, "\n- ") {
+									fmt.Printf("\n%s\n", displayStr)
+								} else {
+									// Standard output
+									rendered := ui.SmartRender(displayStr)
+									fmt.Print(rendered)
+									// Ensure newline at end if not present
+									if !strings.HasSuffix(rendered, "\n") {
+										fmt.Println()
+									}
 								}
-								fmt.Print(rendered)
+								
+								// Mark as printed so we don't print "AI:" prefix unnecessarily later
+								aiPrefixPrinted = true
 							}
 						}
 					}

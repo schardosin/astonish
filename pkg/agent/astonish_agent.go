@@ -504,6 +504,9 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 		// Main execution loop
 		for {
 			if currentNodeName == "END" {
+				// Emit transition to END so UI knows we are done
+				a.emitNodeTransition("END", state, yield)
+
 				if err := state.Set("current_node", "END"); err != nil {
 					yield(nil, err)
 				}
@@ -691,7 +694,15 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 // emitNodeTransition emits a node transition event
 func (a *AstonishAgent) emitNodeTransition(nodeName string, state session.State, yield func(*session.Event, error) bool) bool {
 	if nodeName == "END" {
-		return true
+		event := &session.Event{
+			Actions: session.EventActions{
+				StateDelta: map[string]any{
+					"current_node": "END",
+					"node_type":    "END",
+				},
+			},
+		}
+		return yield(event, nil)
 	}
 	
 	// Get node info
@@ -2650,6 +2661,20 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 		return true
 	}
 
+	// Initialize progress bar UI
+	prog := ui.NewParallelProgram(len(items), node.Name)
+	
+	// Channel to signal UI completion
+	uiDone := make(chan struct{})
+	
+	// Run UI in a goroutine
+	go func() {
+		defer close(uiDone)
+		if _, err := prog.Run(); err != nil {
+			fmt.Printf("Error running progress UI: %v\n", err)
+		}
+	}()
+
 	for i, item := range items {
 		wg.Add(1)
 		go func(idx int, it any) {
@@ -2659,18 +2684,20 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			// Check cancellation
-			mu.Lock()
-			if yieldCancelled {
-				mu.Unlock()
+			// Check for cancellation or stop flag
+			select {
+			case <-ctx.Done():
 				return
+			default:
+				// Check for force_stop_parallel flag in parent state
+				// Use a mutex if needed, but state.Get is thread-safe enough for this check
+				if val, err := state.Get("force_stop_parallel"); err == nil {
+					if b, ok := val.(bool); ok && b {
+						return
+					}
+				}
 			}
-			mu.Unlock()
 
-			// Progress logging
-			// Use a mutex for clean logging if needed, or just let it interleave
-			// fmt.Printf is generally thread-safe for output but lines might mix.
-			// Let's rely on standard stdout buffering.
 			// fmt.Printf("[⚡️ Parallel] Processing item %d/%d for node '%s'\n", idx+1, len(items), node.Name)
 
 			scopedState := &ScopedState{
@@ -2693,34 +2720,11 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 			// Include node name to avoid collisions between different parallel nodes in the same flow
 			newSessionID := fmt.Sprintf("%s:%s:parallel-%d", ctx.Session().ID(), node.Name, idx)
 			
-			// Try to get AppName and UserID from session if possible, or context
-			// Assuming session.Session has these methods or we can get them from context
-			// If InvocationContext doesn't have them, we might need to cast or find another way.
-			// For now, let's try ctx.Session().UserID() if it exists.
-			// But wait, session.Session interface usually has ID(), Events(), etc.
-			// Let's try to use the values from the parent session if available.
-			
-			// NOTE: If this fails to compile, we might need to check the interface definition.
-			// But typically session carries this info.
-			
+			// Create a session using the service
+			// We need to pass AppName and UserID if possible
 			createReq := &session.CreateRequest{
 				SessionID: newSessionID,
 			}
-			
-			// Try to populate fields
-			// We can't easily check interface methods in this environment without reflection or docs.
-			// Let's try to use the same values as the parent session.
-			// If ctx.Session() has UserID(), use it.
-			
-			// HACK: For now, let's try to use the values from the context if they were available,
-			// but since they are not, let's try to use the session's ID to derive them or just pass what we can.
-			// Actually, let's look at the error again: "ctx.AppName undefined".
-			
-			// Let's try to use the session service to GET the parent session first, then use its metadata?
-			// We already have ctx.Session().
-			
-			createReq.AppName = "astonish" // Placeholder
-			createReq.UserID = "user"      // Placeholder
 			
 			// If we can get real values:
 			if s, ok := ctx.Session().(interface{ AppName() string }); ok {
@@ -2751,9 +2755,14 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 				safeYield(nil, fmt.Errorf("unsupported type for parallel node: %s", node.Type))
 				return
 			}
+			
+			// Signal UI that item is finished
+			prog.Send(ui.ItemFinishedMsg{})
 
 			if !success {
 				mu.Lock()
+				// Don't fail the whole batch immediately, just log?
+				// For now, we continue.
 				mu.Unlock()
 				return
 			}
@@ -2769,6 +2778,12 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 	}
 
 	wg.Wait()
+	
+	// Ensure UI is done (though model handles auto-quit)
+	// We can wait a tiny bit to ensure the final render happens if needed, 
+	// but usually wg.Wait() + the model's logic is enough.
+	<-uiDone
+
 
 	// Check if cancelled during execution
 	if yieldCancelled {

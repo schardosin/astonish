@@ -239,6 +239,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		// Declare suppression variables here so they are accessible throughout the loop and after
 		suppressStreaming := false
 		var userMessageFields []string
+		isInputNode := false
 		
 		for event, err := range r.Run(ctx, userID, sess.ID(), userMsg, adkagent.RunConfig{
 			StreamingMode: adkagent.StreamingModeSSE,
@@ -349,13 +350,13 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						userMessageFields = nil
 						
 						// Determine if this is an input node or parallel node and setup suppression
-						isInput := false
+						isInputNode = false
 						isParallel := false
 						for _, n := range cfg.AgentConfig.Nodes {
 							if n.Name == currentNodeName {
 								if n.Type == "input" {
-									isInput = true
-									suppressStreaming = false
+									isInputNode = true
+									suppressStreaming = true
 								} else if n.Type == "output" {
 									suppressStreaming = false
 								} else {
@@ -381,7 +382,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						}
 						
 						// Manage Spinner
-						if isInput || isParallel {
+						if isInputNode || isParallel {
 							stopSpinner(true)
 						} else {
 							startSpinner(fmt.Sprintf("Processing %s...", currentNodeName))
@@ -550,7 +551,9 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						shouldPrint = true
 					} else {
 						// Regular LLM Output: Check suppression
-						if !suppressStreaming {
+						// If it's an input node, we WANT to process (buffer) the text so we can use it as the prompt,
+						// even though we suppress streaming printing.
+						if !suppressStreaming || isInputNode {
 							shouldPrint = true
 						}
 					}
@@ -610,7 +613,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 							// Flush immediately for streaming effect
 							// Note: SmartRender might be less effective on single lines for things like tables,
 							// but it's necessary for real-time feedback.
-							if textBuffer.Len() > 0 {
+							if !suppressStreaming && textBuffer.Len() > 0 {
 								rendered := ui.SmartRender(textBuffer.String())
 								if rendered != "" {
 									if !aiPrefixPrinted {
@@ -639,8 +642,8 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		
 		// Flush any remaining content in lineBuffer
 		if lineBuffer != "" {
-			// Only flush if NOT suppressed
-			if !suppressStreaming {
+			// Only flush if NOT suppressed OR if it's an input node (to capture prompt)
+			if !suppressStreaming || isInputNode {
 				textBuffer.WriteString(lineBuffer)
 			}
 			lineBuffer = ""

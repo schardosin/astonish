@@ -1794,7 +1794,9 @@ Please provide a concise, user-friendly explanation of this error.
 		fmt.Printf("[DEBUG] Full LLM Response: %s\n", debugTextBuffer.String())
 	}
 	
-
+	if a.DebugMode {
+		fmt.Printf("[DEBUG] astonish_agent.go: After llmagent.Run loop. node.OutputModel length: %d, node.UserMessage length: %d\n", len(node.OutputModel), len(node.UserMessage))
+	}
 
 	// Distribute output_model values by parsing the LLM's text response
 	// ADK's OutputSchema doesn't work reliably with tool-enabled nodes
@@ -1830,34 +1832,51 @@ Please provide a concise, user-friendly explanation of this error.
 	}
 
 	// Handle user_message if defined
-	// This allows displaying specific state variables or literal text to the user
+	// IMPORTANT: We need to emit this with BOTH text content AND StateDelta
+	// The text content will be displayed, and we'll add a special marker in StateDelta
+	// to tell console.go to print the "Agent:" prefix
 	if len(node.UserMessage) > 0 {
-		var messageParts []string
+		var textParts []string
+		
 		for _, msgPart := range node.UserMessage {
 			// Try to resolve as state variable first
 			if val, err := state.Get(msgPart); err == nil {
-				// Found in state - format and add
-				messageParts = append(messageParts, fmt.Sprintf("%v", val))
-			} else {
-				// Not in state - use as literal text
-				messageParts = append(messageParts, msgPart)
+				textParts = append(textParts, fmt.Sprintf("%v", val))
+				
+				if a.DebugMode {
+					fmt.Printf("[DEBUG] astonish_agent.go: Resolved '%s' to value: %v\n", msgPart, val)
+				}
 			}
 		}
 		
-		// Join all parts and emit as a message event
-		message := strings.Join(messageParts, " ")
-		
-		userMessageEvent := &session.Event{
-			LLMResponse: model.LLMResponse{
-				Content: &genai.Content{
-					Parts: []*genai.Part{{Text: message}},
-					Role:  "model",
+		if len(textParts) > 0 {
+			if a.DebugMode {
+				fmt.Printf("[DEBUG] astonish_agent.go: Emitting user_message event with text: %s\n", strings.Join(textParts, " "))
+			}
+			
+			// Emit event with text content AND a special marker in StateDelta
+			// The marker tells console.go this is a user_message that needs the "Agent:" prefix
+			userMessageEvent := &session.Event{
+				LLMResponse: model.LLMResponse{
+					Content: &genai.Content{
+						Parts: []*genai.Part{{Text: strings.Join(textParts, " ")}},
+						Role:  "model",
+					},
 				},
-			},
-		}
-		
-		if !yield(userMessageEvent, nil) {
-			return false
+				Actions: session.EventActions{
+					StateDelta: map[string]any{
+						"_user_message_display": true, // Special marker for console.go
+					},
+				},
+			}
+			
+			if !yield(userMessageEvent, nil) {
+				return false
+			}
+			
+			if a.DebugMode {
+				fmt.Printf("[DEBUG] astonish_agent.go: user_message event yielded successfully\n")
+			}
 		}
 	}
 	

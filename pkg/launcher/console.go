@@ -280,6 +280,22 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 			// Check if we should suppress streaming output based on UserMessage OR OutputModel config
 			// suppressStreaming is now declared outside the loop and updated in the node change block below.
 
+			// Check for user_message display marker first
+			if event.Actions.StateDelta != nil {
+				if _, hasMarker := event.Actions.StateDelta["_user_message_display"]; hasMarker {
+					// This is a user_message event - print Agent prefix before the text
+					stopSpinner(true)
+					
+					if !aiPrefixPrinted {
+						fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
+						aiPrefixPrinted = true
+					}
+					
+					// The text content will be printed by the normal text processing below
+					// We just needed to ensure the prefix is printed first
+				}
+			}
+			
 			// Update current node from StateDelta if present
 			if event.Actions.StateDelta != nil {
 				if node, ok := event.Actions.StateDelta["current_node"].(string); ok {
@@ -404,65 +420,82 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 
 				// Check for UserMessage fields in StateDelta and print them if found
 				if len(userMessageFields) > 0 {
+					// Check if any fields are present in this event
+					hasUserMessageContent := false
 					for _, field := range userMessageFields {
-						if val, ok := event.Actions.StateDelta[field]; ok {
-							// Format the value for display
-							var displayStr string
-							switch v := val.(type) {
-							case string:
-								displayStr = v
-							case []string:
-								// For lists, format as a bulleted list
-								var sb strings.Builder
-								for _, item := range v {
-									sb.WriteString(fmt.Sprintf("- %s\n", item))
-								}
-								displayStr = sb.String()
-							case []interface{}:
-								// For generic lists
-								var sb strings.Builder
-								for _, item := range v {
-									sb.WriteString(fmt.Sprintf("- %v\n", item))
-								}
-								displayStr = sb.String()
-							default:
-								// Fallback to JSON representation for complex objects
-								jsonBytes, err := json.MarshalIndent(v, "", "  ")
-								if err == nil {
-									displayStr = string(jsonBytes)
-								} else {
-									displayStr = fmt.Sprintf("%v", v)
-								}
-							}
-
-							// Render and print immediately
-							if displayStr != "" {
-								// For output nodes, we want to ensure it's visible
-								// Use a box or distinct styling if it's a "User Message"
-								
-								// If it's a list, render it nicely
-								// Ensure Agent prefix is printed
-								if !aiPrefixPrinted {
-									fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
-									aiPrefixPrinted = true
-								}
-
-								if strings.Contains(displayStr, "\n- ") {
-									fmt.Printf("\n%s\n", displayStr)
-								} else {
-									// Standard output
-									rendered := ui.SmartRender(displayStr)
-									fmt.Print(rendered)
-									// Ensure newline at end if not present
-									if !strings.HasSuffix(rendered, "\n") {
-										fmt.Println()
+						if _, ok := event.Actions.StateDelta[field]; ok {
+							hasUserMessageContent = true
+							break
+						}
+					}
+					
+					// If we have user_message content, ensure Agent prefix is printed first
+					if hasUserMessageContent {
+						// Stop spinner before printing
+						stopSpinner(true)
+						
+						// Print Agent prefix if not already printed
+						if !aiPrefixPrinted {
+							fmt.Printf("\nAgent:\n")
+							aiPrefixPrinted = true
+						}
+						
+						// Now print each field
+						for _, field := range userMessageFields {
+							if val, ok := event.Actions.StateDelta[field]; ok {
+								// Format the value for display
+								var displayStr string
+								switch v := val.(type) {
+								case string:
+									displayStr = v
+								case []string:
+									// For lists, format as a bulleted list
+									var sb strings.Builder
+									for _, item := range v {
+										sb.WriteString(fmt.Sprintf("- %s\n", item))
+									}
+									displayStr = sb.String()
+								case []interface{}:
+									// For generic lists
+									var sb strings.Builder
+									for _, item := range v {
+										sb.WriteString(fmt.Sprintf("- %v\n", item))
+									}
+									displayStr = sb.String()
+								default:
+									// Fallback to JSON representation for complex objects
+									jsonBytes, err := json.MarshalIndent(v, "", "  ")
+									if err == nil {
+										displayStr = string(jsonBytes)
+									} else {
+										displayStr = fmt.Sprintf("%v", v)
 									}
 								}
-								
-								// Mark as printed so we don't print "AI:" prefix unnecessarily later
-								aiPrefixPrinted = true
+
+								// Render and print immediately
+								if displayStr != "" {
+									// For output nodes, we want to ensure it's visible
+									// If it's a list, render it nicely
+									if strings.Contains(displayStr, "\n- ") {
+										fmt.Printf("\n%s\n", displayStr)
+									} else {
+										// Standard output
+										rendered := ui.SmartRender(displayStr)
+										fmt.Print(rendered)
+										// Ensure newline at end if not present
+										if !strings.HasSuffix(rendered, "\n") {
+											fmt.Println()
+										}
+									}
+								}
 							}
 						}
+						
+						// CRITICAL: Clear text buffer to prevent duplicate display
+						// Since we've already displayed the user_message content from StateDelta,
+						// we don't want the text content from the event to be displayed again
+						textBuffer.Reset()
+						lineBuffer = ""
 					}
 				}
 			}

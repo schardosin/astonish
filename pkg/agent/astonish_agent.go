@@ -1449,9 +1449,11 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 	state.Set("force_pause", false)
 	
 	// Determine if we should display LLM text output to the user
-	// When user_message is defined, we should SUPPRESS the raw JSON output
-	// and only display the extracted user_message fields
-	shouldDisplayText := len(node.UserMessage) == 0
+	// Logic:
+	// - If output_model is defined: Suppress streaming (data extraction mode)
+	// - If user_message is defined: Suppress streaming (controlled output mode)
+	// - If neither is defined: Show streaming text (conversational mode)
+	shouldDisplayText := len(node.OutputModel) == 0 && len(node.UserMessage) == 0
 	
 	// Run the agent - ADK handles everything (native function calling)
 	var fullResponse strings.Builder

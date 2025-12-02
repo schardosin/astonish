@@ -1373,8 +1373,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			}
 		}
 		
-		// Add AfterToolCallback to force completion after successful tool execution in parallel nodes
-		// For parallel nodes, we need to stop the LLM immediately after the first successful tool call
+		// Add AfterToolCallback for debugging (removed force_stop logic that broke parallel processing)
 		afterToolCallbacks = []llmagent.AfterToolCallback{
 			func(ctx tool.Context, t tool.Tool, args map[string]any, result map[string]any, err error) (map[string]any, error) {
 				if err != nil {
@@ -1391,27 +1390,6 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 					fmt.Printf("[DEBUG] Tool Name: %s\n", toolName)
 					fmt.Printf("[DEBUG] Result:\n%s\n", string(resultJSON))
 					fmt.Printf("[DEBUG] ===========================================\n\n")
-				}
-				
-				// For parallel nodes, force immediate completion after successful tool execution
-				// This prevents the LLM from calling the tool again
-				if node.Parallel != nil {
-					if a.DebugMode {
-						fmt.Printf("[DEBUG] Parallel node detected - setting force_stop flag\n")
-					}
-					
-					// Set a flag to stop the agent run immediately
-					state.Set("force_stop_parallel", true)
-					
-					// Enhance the result with a clear completion message
-					enhancedResult := make(map[string]any)
-					for k, v := range result {
-						enhancedResult[k] = v
-					}
-					enhancedResult["status"] = "completed"
-					enhancedResult["message"] = "Task completed successfully. No further action needed."
-					
-					return enhancedResult, nil
 				}
 				
 				return result, nil
@@ -1459,18 +1437,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 	var fullResponse strings.Builder
 	var debugTextBuffer strings.Builder // Buffer for debug output
 	toolCallCount := 0
-	const maxToolCalls = 5 // Maximum tool calls to prevent infinite loops
-	
-	// Check if this is a parallel node - if so, we want to detect repeated calls
-	isParallelNode := node.Parallel != nil
-	
-	// Track tool calls to detect infinite loops (repeated identical calls after success)
-	type toolCallRecord struct {
-		name string
-		args string // JSON serialized args for comparison
-	}
-	var lastSuccessfulCall *toolCallRecord
-	repeatedCallCount := 0
+	const maxToolCalls = 20 // Maximum tool calls to prevent infinite loops
 
 	for event, err := range llmAgent.Run(ctx) {
 		if err != nil {
@@ -1479,115 +1446,36 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			return false
 		}
 
-		// [CRITICAL FIX] Event Stream Interceptor
-		// This inspects the raw event payload before the LLM (or the UI) sees it.
-		// It enforces a hard stop on any "Logical Error" returned by a tool.
+		// [ERROR HANDLING] Track tool errors but let them flow to the LLM
+		// The LLM needs to see the error response to understand the tool failed
+		// We'll stop after the LLM processes the error
+		hasToolError := false
+		var toolErrorMsg string
 		if event.LLMResponse.Content != nil {
 			for _, part := range event.LLMResponse.Content.Parts {
 				if part.FunctionResponse != nil {
-					// We found a tool output. Inspect it.
 					resp := part.FunctionResponse.Response
 					
 					// Check for the "error" key
-					if errVal, hasError := resp["error"]; hasError {
-						// Logic: Is this a real error?
-						// We treat ANY presence of "error" that isn't nil as a failure.
-						// This includes "error": {} which implies the tool failed but gave no details.
-						isFailure := false
+					if errVal, hasError := resp["error"]; hasError && errVal != nil {
+						toolName := part.FunctionResponse.Name
 						
-						if errVal != nil {
-							// [CRITICAL FIX] Handle Go 'error' type which marshals to {}
-							if errObj, ok := errVal.(error); ok {
-								// Convert error to string so it marshals correctly
-								resp["error"] = errObj.Error()
-								isFailure = true
-							} else if _, isMap := errVal.(map[string]any); isMap {
-								// If it's a map (even empty), it's a failure
-								isFailure = true
-							} else if str, isStr := errVal.(string); isStr && str != "" {
-								// If it's a string, it's a failure
-								isFailure = true
-							} else {
-								// Default: treat unknown non-nil types as failures to be safe
-								isFailure = true
-							}
+						// Convert error to string if it's an error type
+						var errorStr string
+						if errObj, ok := errVal.(error); ok {
+							errorStr = errObj.Error()
+						} else {
+							errBytes, _ := json.Marshal(errVal)
+							errorStr = string(errBytes)
 						}
-
-						if isFailure {
-							toolName := part.FunctionResponse.Name
-							// Marshal the ENTIRE response to give the user full context
-							respBytes, _ := json.Marshal(resp)
-							rawErrorStr := string(respBytes)
-							
-							if a.DebugMode {
-								fmt.Printf("[DEBUG] 🛑 INTERCEPTOR: Stopping flow due to error in tool '%s': %s\n", toolName, rawErrorStr)
-							}
-
-							// [ENHANCEMENT] Ask LLM to explain the error
-							var friendlyError string
-							
-							// Construct prompt for the LLM
-							explanationPrompt := fmt.Sprintf(`The tool '%s' failed with the following error response:
-%s
-
-Please provide a concise, user-friendly explanation of this error. 
-- Explain what went wrong in simple terms.
-- Suggest potential next steps or fixes for the user.
-- Do not include raw JSON or technical stack traces unless absolutely necessary.
-- Keep it under 3 sentences.`, toolName, rawErrorStr)
-
-							// Create LLM request
-							req := &model.LLMRequest{
-								Contents: []*genai.Content{
-									{
-										Role: "user",
-										Parts: []*genai.Part{{Text: explanationPrompt}},
-									},
-								},
-							}
-
-							// Call LLM (synchronously collect response)
-							// We use a separate context with timeout to avoid hanging
-							genCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-							defer cancel()
-
-							if a.DebugMode {
-								fmt.Println("[DEBUG] Asking LLM to explain the error...")
-							}
-
-							var sb strings.Builder
-							// Use the agent's LLM model
-							for resp, err := range a.LLM.GenerateContent(genCtx, req, false) {
-								if err != nil {
-									if a.DebugMode {
-										fmt.Printf("[DEBUG] Failed to generate error explanation: %v\n", err)
-									}
-									break
-								}
-								if resp.Content != nil {
-									for _, p := range resp.Content.Parts {
-										sb.WriteString(p.Text)
-									}
-								}
-							}
-							
-							friendlyError = strings.TrimSpace(sb.String())
-							
-							// Fallback if LLM failed or returned empty
-							if friendlyError == "" {
-								friendlyError = fmt.Sprintf("Tool execution failed. Raw response: %s", rawErrorStr)
-							} else {
-								// Append raw error for technical reference if debug mode is on, or just keep it clean
-								// The user asked to "print it nicely", so let's stick to the friendly message
-								// but maybe append the raw error in a collapsible way or just keeping it simple.
-								// Let's format it: "Friendly Message (Raw Details: ...)"
-								friendlyError = fmt.Sprintf("%s\n\nTechnical Details: %s", friendlyError, rawErrorStr)
-							}
-
-							// STOP THE FLOW with the friendly error
-							yield(nil, fmt.Errorf("tool '%s' failed: %s", toolName, friendlyError))
-							return false
+						
+						if a.DebugMode {
+							fmt.Printf("[DEBUG] Tool '%s' failed with error: %s\n", toolName, errorStr)
 						}
+						
+						hasToolError = true
+						toolErrorMsg = fmt.Sprintf("tool '%s' failed: %s", toolName, errorStr)
+						// Don't return yet - let the error response flow to the LLM first
 					}
 				}
 			}
@@ -1622,71 +1510,23 @@ Please provide a concise, user-friendly explanation of this error.
 			}
 		}
 
-		// Count tool calls reliably and detect repeated calls
+		// Count tool calls to prevent infinite loops
 		if event.LLMResponse.Content != nil {
-			// First pass: look for function calls and track them
-			var currentFunctionCall *toolCallRecord
 			for _, part := range event.LLMResponse.Content.Parts {
 				if part.FunctionCall != nil {
 					if !a.DebugMode {
 						toolCallCount++
 					}
-					
-					// For parallel nodes, serialize the call for tracking
-					if isParallelNode {
-						argsJSON, _ := json.Marshal(part.FunctionCall.Args)
-						currentFunctionCall = &toolCallRecord{
-							name: part.FunctionCall.Name,
-							args: string(argsJSON),
-						}
-					}
-				}
-			}
-			
-			// Second pass: look for function responses and check for repeated calls
-			for _, part := range event.LLMResponse.Content.Parts {
-				// Track successful tool responses for parallel nodes
-				if part.FunctionResponse != nil && isParallelNode {
-					// Check if the response indicates success (no error field)
-					if _, hasError := part.FunctionResponse.Response["error"]; !hasError {
-						// This was a successful call
-						// Check if we have the args from the current event
-						if currentFunctionCall != nil && currentFunctionCall.name == part.FunctionResponse.Name {
-							// Check if this matches the last successful call
-							if lastSuccessfulCall != nil && 
-							   lastSuccessfulCall.name == currentFunctionCall.name && 
-							   lastSuccessfulCall.args == currentFunctionCall.args {
-								repeatedCallCount++
-								if a.DebugMode {
-									fmt.Printf("[DEBUG] Detected repeated call #%d (same tool + args after success)\n", repeatedCallCount)
-								}
-								
-								// If we see 1 repeated identical call after success, it's a loop
-								// (We already had 1 successful call, this is the 2nd with same args)
-								if repeatedCallCount >= 1 {
-									if a.DebugMode {
-										fmt.Printf("[DEBUG] Breaking loop: Same tool called %d times with identical args after success\n", repeatedCallCount+1)
-									}
-									// Exit gracefully - the first call succeeded, we just prevented retries
-									break
-								}
-							} else {
-								// Different call or first successful call, record it
-								lastSuccessfulCall = currentFunctionCall
-								repeatedCallCount = 0
-								if a.DebugMode {
-									fmt.Printf("[DEBUG] Recorded successful tool call: %s\n", part.FunctionResponse.Name)
-								}
-							}
-						}
-					}
 				}
 			}
 		}
 
-		// Hard limit to prevent infinite loops (for both parallel and non-parallel)
+		// Hard limit to prevent infinite loops
 		if toolCallCount > maxToolCalls {
-			yield(nil, fmt.Errorf("tool call limit exceeded (%d) for node '%s' - breaking infinite loop", maxToolCalls, nodeName))
+			if a.DebugMode {
+				fmt.Printf("[DEBUG] Tool call limit exceeded (%d) for node '%s'\n", maxToolCalls, nodeName)
+			}
+			yield(nil, fmt.Errorf("tool call limit exceeded (%d) for node '%s'", maxToolCalls, nodeName))
 			return false
 		}
 		
@@ -1707,9 +1547,6 @@ Please provide a concise, user-friendly explanation of this error.
 			// This prevents unwanted LLM conversational output from being displayed
 			if isTextOnly && !shouldDisplayText {
 				shouldYieldEvent = false
-				if a.DebugMode {
-					fmt.Printf("[DEBUG] Suppressing text-only event (no user_message defined)\n")
-				}
 			}
 		}
 		
@@ -1720,24 +1557,19 @@ Please provide a concise, user-friendly explanation of this error.
 			}
 		}
 		
-		// 2. CHECK FOR INTERRUPT SIGNAL
+		// 2a. If we detected a tool error, stop after yielding the error response
+		// This allows the LLM to see the error before we stop
+		if hasToolError {
+			yield(nil, fmt.Errorf("%s", toolErrorMsg))
+			return false
+		}
+		
+		// 2b. CHECK FOR INTERRUPT SIGNAL
 		// If the tool set this flag, we must stop immediately
 		if shouldPause, _ := state.Get("force_pause"); shouldPause == true {
 			// Clear the flag so it doesn't block the next run
 			state.Set("force_pause", false)
 			return false // Stops the loop, effectively pausing the agent
-		}
-		
-		// 3. CHECK FOR PARALLEL STOP SIGNAL
-		// For parallel nodes, stop immediately after first successful tool execution
-		if isParallelNode {
-			if shouldStop, _ := state.Get("force_stop_parallel"); shouldStop == true {
-				if a.DebugMode {
-					fmt.Printf("[DEBUG] Parallel node: force_stop_parallel flag detected, stopping agent\n")
-				}
-				state.Set("force_stop_parallel", false)
-				break // Exit the loop gracefully
-			}
 		}
 		
 		// 3. Accumulate text response for output_model (if needed)
@@ -1804,29 +1636,59 @@ Please provide a concise, user-friendly explanation of this error.
 		// Get the accumulated text response
 		responseText := strings.TrimSpace(fullResponse.String())
 		
+		if a.DebugMode {
+			fmt.Printf("[DEBUG] executeLLMNode: Attempting to extract output_model. Response length: %d\n", len(responseText))
+		}
+		
 		if responseText != "" {
 			// Try to parse as JSON
 			cleaned := a.cleanAndFixJson(responseText)
 			
+			if a.DebugMode {
+				fmt.Printf("[DEBUG] executeLLMNode: Cleaned JSON: %s\n", cleaned)
+			}
+			
 			var parsedOutput map[string]any
 			if err := json.Unmarshal([]byte(cleaned), &parsedOutput); err == nil {
+				if a.DebugMode {
+					fmt.Printf("[DEBUG] executeLLMNode: Successfully parsed JSON. Keys: %v\n", getKeys(parsedOutput))
+				}
+				
 				// Distribute values to individual output_model keys
 				delta := make(map[string]any)
 				for key := range node.OutputModel {
 					if val, ok := parsedOutput[key]; ok {
+						if a.DebugMode {
+							fmt.Printf("[DEBUG] executeLLMNode: Setting state key '%s' with value type: %T\n", key, val)
+						}
 						state.Set(key, val)
 						delta[key] = val
+					} else {
+						if a.DebugMode {
+							fmt.Printf("[DEBUG] executeLLMNode: Key '%s' not found in parsed output\n", key)
+						}
 					}
 				}
 				
 				// Emit state delta if we updated anything
 				if len(delta) > 0 {
+					if a.DebugMode {
+						fmt.Printf("[DEBUG] executeLLMNode: Emitting state delta with keys: %v\n", getKeys(delta))
+					}
 					yield(&session.Event{
 						Actions: session.EventActions{
 							StateDelta: delta,
 						},
 					}, nil)
 				}
+			} else {
+				if a.DebugMode {
+					fmt.Printf("[DEBUG] executeLLMNode: Failed to parse JSON: %v\n", err)
+				}
+			}
+		} else {
+			if a.DebugMode {
+				fmt.Printf("[DEBUG] executeLLMNode: Response text is empty, skipping output_model extraction\n")
 			}
 		}
 	}
@@ -2344,18 +2206,68 @@ func (a *AstonishAgent) renderString(tmpl string, state session.State) string {
 }
 
 func (a *AstonishAgent) cleanAndFixJson(input string) string {
-	// Remove markdown code blocks first
+	trimmed := strings.TrimSpace(input)
+	
+	// Strategy 1: Check if the input starts with JSON (most reliable for structured output)
+	// This handles cases where the LLM returns pure JSON without markdown
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		// Find the matching closing bracket
+		startChar := string(trimmed[0])
+		endChar := "]"
+		if startChar == "{" {
+			endChar = "}"
+		}
+		
+		depth := 0
+		endIdx := -1
+		inString := false
+		escapeNext := false
+		
+		for i := 0; i < len(trimmed); i++ {
+			ch := trimmed[i]
+			
+			// Handle string escaping to avoid counting brackets inside strings
+			if escapeNext {
+				escapeNext = false
+				continue
+			}
+			if ch == '\\' {
+				escapeNext = true
+				continue
+			}
+			if ch == '"' {
+				inString = !inString
+				continue
+			}
+			
+			// Only count brackets outside of strings
+			if !inString {
+				if string(ch) == startChar {
+					depth++
+				} else if string(ch) == endChar {
+					depth--
+					if depth == 0 {
+						endIdx = i
+						break
+					}
+				}
+			}
+		}
+		
+		if endIdx != -1 {
+			return strings.TrimSpace(trimmed[:endIdx+1])
+		}
+	}
+	
+	// Strategy 2: Look for markdown JSON code blocks
 	re := regexp.MustCompile("(?s)```(?:json)?\\s*(.*?)\\s*```")
-	match := re.FindStringSubmatch(input)
+	match := re.FindStringSubmatch(trimmed)
 	if len(match) > 1 {
 		return strings.TrimSpace(match[1])
 	}
 	
-	// Try to find JSON array or object in the text
-	// Look for patterns like [...] or {...}
-	trimmed := strings.TrimSpace(input)
-	
-	// Find the first occurrence of [ or {
+	// Strategy 3: Try to find JSON object/array anywhere in the text
+	// This is the fallback for cases where JSON is embedded in other text
 	startIdx := -1
 	startChar := ""
 	for i, ch := range trimmed {
@@ -2371,7 +2283,7 @@ func (a *AstonishAgent) cleanAndFixJson(input string) string {
 		return trimmed
 	}
 	
-	// Find the matching closing bracket
+	// Find the matching closing bracket with proper string handling
 	endChar := "]"
 	if startChar == "{" {
 		endChar = "}"
@@ -2379,25 +2291,54 @@ func (a *AstonishAgent) cleanAndFixJson(input string) string {
 	
 	depth := 0
 	endIdx := -1
+	inString := false
+	escapeNext := false
+	
 	for i := startIdx; i < len(trimmed); i++ {
 		ch := trimmed[i]
-		if string(ch) == startChar {
-			depth++
-		} else if string(ch) == endChar {
-			depth--
-			if depth == 0 {
-				endIdx = i
-				break
+		
+		// Handle string escaping
+		if escapeNext {
+			escapeNext = false
+			continue
+		}
+		if ch == '\\' {
+			escapeNext = true
+			continue
+		}
+		if ch == '"' {
+			inString = !inString
+			continue
+		}
+		
+		// Only count brackets outside of strings
+		if !inString {
+			if string(ch) == startChar {
+				depth++
+			} else if string(ch) == endChar {
+				depth--
+				if depth == 0 {
+					endIdx = i
+					break
+				}
 			}
 		}
 	}
 	
 	if endIdx != -1 {
-		// Extract the JSON portion
 		return strings.TrimSpace(trimmed[startIdx : endIdx+1])
 	}
 	
 	return trimmed
+}
+
+// getKeys returns the keys of a map as a slice
+func getKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // extractToolNameFromXML extracts the tool name from XML-formatted tool calls
@@ -2650,6 +2591,19 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 		if yieldCancelled {
 			return false
 		}
+		
+		// Suppress StateDelta and LLMResponse to prevent console printing during parallel execution
+		// We only want to collect the results, not print them as they happen
+		if event != nil {
+			if event.Actions.StateDelta != nil {
+				event.Actions.StateDelta = nil
+			}
+			// Also suppress content streaming
+			if event.LLMResponse.Content != nil {
+				event.LLMResponse.Content = nil
+			}
+		}
+
 		if !yield(event, err) {
 			yieldCancelled = true
 			return false
@@ -2756,10 +2710,8 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 			prog.Send(ui.ItemFinishedMsg{})
 
 			if !success {
-				mu.Lock()
-				// Don't fail the whole batch immediately, just log?
-				// For now, we continue.
-				mu.Unlock()
+				// If execution failed, don't try to get the result
+				// Just return - the error has already been yielded
 				return
 			}
 
@@ -2780,8 +2732,7 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 	// but usually wg.Wait() + the model's logic is enough.
 	<-uiDone
 
-
-	// Check if cancelled during execution
+	// Check if cancelled during execution (includes errors)
 	if yieldCancelled {
 		return false
 	}

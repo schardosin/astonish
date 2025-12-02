@@ -246,7 +246,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		}) {
 			if err != nil {
 				fmt.Printf("\nERROR: %v\n", err)
-				break
+				return err
 			}
 
 			// Debug logging for tool calls and responses
@@ -436,7 +436,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						
 						// Print Agent prefix if not already printed
 						if !aiPrefixPrinted {
-							fmt.Printf("\nAgent:\n")
+							fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
 							aiPrefixPrinted = true
 						}
 						
@@ -459,6 +459,27 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 									// For generic lists
 									var sb strings.Builder
 									for _, item := range v {
+										// Check if item is complex (map or struct)
+										if _, isMap := item.(map[string]interface{}); isMap {
+											jsonBytes, err := json.MarshalIndent(item, "  ", "  ")
+											if err == nil {
+												sb.WriteString(fmt.Sprintf("- %s\n", string(jsonBytes)))
+												continue
+											}
+										}
+										// Check for map[string]string or other common map types if needed, 
+										// but usually it comes as map[string]interface{} from JSON
+										
+										// Fallback to %v but clean up map printing if possible
+										str := fmt.Sprintf("%v", item)
+										if strings.HasPrefix(str, "map[") {
+											// Try to marshal anyway
+											jsonBytes, err := json.MarshalIndent(item, "  ", "  ")
+											if err == nil {
+												sb.WriteString(fmt.Sprintf("- %s\n", string(jsonBytes)))
+												continue
+											}
+										}
 										sb.WriteString(fmt.Sprintf("- %v\n", item))
 									}
 									displayStr = sb.String()

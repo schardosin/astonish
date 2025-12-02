@@ -277,33 +277,8 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 			// Check if we should suppress streaming output based on UserMessage OR OutputModel config
 			// suppressStreaming is now declared outside the loop
 			
-			if currentNodeName != "" {
-				for _, node := range cfg.AgentConfig.Nodes {
-					if node.Name == currentNodeName {
-						// Smart Suppression:
-						// 1. If UserMessage is configured, suppress streaming and show specific fields.
-						// 2. If OutputModel is configured (but no UserMessage), suppress streaming (silent data node).
-						// 3. If NEITHER is configured, allow streaming (chat node).
-						// 4. EXCEPTION: Input nodes should always show their prompt (even if they have OutputModel).
-						
-						if node.Type == "input" || node.Type == "output" {
-							suppressStreaming = false
-						} else {
-							hasUserMessage := len(node.UserMessage) > 0
-							hasOutputModel := len(node.OutputModel) > 0
-							
-							if hasUserMessage {
-								suppressStreaming = true
-								userMessageFields = node.UserMessage
-							} else if hasOutputModel {
-								suppressStreaming = true
-								// No user message fields to show, just suppress
-							}
-						}
-						break
-					}
-				}
-			}
+			// Check if we should suppress streaming output based on UserMessage OR OutputModel config
+			// suppressStreaming is now declared outside the loop and updated in the node change block below.
 
 			// Update current node from StateDelta if present
 			if event.Actions.StateDelta != nil {
@@ -352,6 +327,9 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						// Determine if this is an input node or parallel node and setup suppression
 						isInputNode = false
 						isParallel := false
+						hasUserMessage := false
+						hasOutputModel := false
+						
 						for _, n := range cfg.AgentConfig.Nodes {
 							if n.Name == currentNodeName {
 								if n.Type == "input" {
@@ -364,8 +342,8 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 										isParallel = true
 									}
 									
-									hasUserMessage := len(n.UserMessage) > 0
-									hasOutputModel := len(n.OutputModel) > 0
+									hasUserMessage = len(n.UserMessage) > 0
+									hasOutputModel = len(n.OutputModel) > 0
 									
 									if hasUserMessage {
 										suppressStreaming = true
@@ -731,9 +709,16 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				textBuffer.Reset()
 			}
 			
+			// Check if we've reached the END node - if so, exit the loop
+			if currentNodeName == "END" {
+				stopSpinner(true)
+				if cfg.DebugMode {
+					fmt.Println("[DEBUG] Reached END node, exiting main loop")
+				}
+				break
+			}
+			
 			// Agent completed without needing input
-			fmt.Println()
-			break
 		}
 	}
 	return nil

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"iter"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -505,10 +504,13 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 		for {
 			if currentNodeName == "END" {
 				// Emit transition to END so UI knows we are done
-				a.emitNodeTransition("END", state, yield)
+				if !a.emitNodeTransition("END", state, yield) {
+					return
+				}
 
 				if err := state.Set("current_node", "END"); err != nil {
 					yield(nil, err)
+					return
 				}
 				return
 			}
@@ -1083,41 +1085,63 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 		instruction += "\n\nIMPORTANT: You have access to tools that you MUST use to complete this task. Do not describe what you would do or say you are waiting for results. Instead, immediately call the appropriate tool with the required parameters. The tools are available and ready to use right now."
 	}
 
-	// Inject JSON output instruction if output_model is defined (matching Python behavior)
-	// BUT only if we actually need structured output (multiple fields or non-string types)
-	// If it's a single string field, we prefer raw output to avoid JSON escaping issues and "Agent: { ... }" display.
-	shouldEnforceJSON := false
-	if len(node.OutputModel) > 1 {
-		shouldEnforceJSON = true
-	} else if len(node.OutputModel) == 1 {
-		for _, v := range node.OutputModel {
-			if v != "str" && v != "string" {
-				shouldEnforceJSON = true
-			}
+	// Build OutputSchema from output_model if defined
+	// This leverages ADK's native structured output support
+	var outputSchema *genai.Schema
+	var outputKey string
+	if len(node.OutputModel) > 0 {
+		// Add explicit instruction about the required output format
+		instruction += "\n\nIMPORTANT: Your response MUST be a valid JSON object with the following structure:\n"
+		instruction += "{\n"
+		for key, typeName := range node.OutputModel {
+			instruction += fmt.Sprintf("  \"%s\": <%s>,\n", key, typeName)
 		}
-	}
-
-	if shouldEnforceJSON {
-		// Construct schema description
-		schemaDesc := "{\n"
-		var keys []string
-		for k := range node.OutputModel {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys) // Sort for deterministic output
+		instruction += "}\n"
+		instruction += "Do not include any other text, explanations, or markdown formatting. Return ONLY the JSON object."
 		
-		for i, k := range keys {
-			v := node.OutputModel[k]
-			schemaDesc += fmt.Sprintf("  \"%s\": <%s>", k, v)
-			if i < len(keys)-1 {
-				schemaDesc += ",\n"
-			} else {
-				schemaDesc += "\n"
+		properties := make(map[string]*genai.Schema)
+		required := []string{}
+		
+		for key, typeName := range node.OutputModel {
+			var propType genai.Type
+			var items *genai.Schema
+			
+			switch typeName {
+			case "str", "string":
+				propType = genai.TypeString
+			case "int", "integer":
+				propType = genai.TypeInteger
+			case "float", "number":
+				propType = genai.TypeNumber
+			case "bool", "boolean":
+				propType = genai.TypeBoolean
+			case "list", "array":
+				propType = genai.TypeArray
+				// Default to string items, can be enhanced later
+				items = &genai.Schema{Type: genai.TypeString}
+			case "dict", "object", "any":
+				propType = genai.TypeObject
+			default:
+				propType = genai.TypeString
 			}
+			
+			propSchema := &genai.Schema{Type: propType}
+			if items != nil {
+				propSchema.Items = items
+			}
+			
+			properties[key] = propSchema
+			required = append(required, key)
 		}
-		schemaDesc += "}"
-
-		instruction += fmt.Sprintf("\n\nIMPORTANT: Respond ONLY with a JSON object conforming to the schema below. Do not include any other text, markdown formatting, or explanations.\n\nSchema:\n%s", schemaDesc)
+		
+		outputSchema = &genai.Schema{
+			Type:       genai.TypeObject,
+			Properties: properties,
+			Required:   required,
+		}
+		
+		// Use a temporary key for ADK to save the structured output
+		outputKey = "temp:llm_output:" + nodeName
 	}
 
 	// Build list of known tool names for detection (from internal tools)
@@ -1127,10 +1151,10 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 	}
 	
 	// Create ADK llmagent for this node
-	// NEW STRATEGY: Keep MCP toolsets as toolsets, don't extract individual tools
+	// Strategy:
 	// - Internal tools go via Tools field
-	// - MCP toolsets go via Toolsets field (wrapped with ProtectedToolset)
-	// This ensures ProcessRequest is called and tools are sent to the LLM
+	// - MCP toolsets go via Toolsets field
+	// - OutputSchema is used for structured output (replaces manual JSON parsing)
 	var llmAgent agent.Agent
 	var err error
 	
@@ -1400,15 +1424,19 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			Instruction:         instruction,
 			Tools:               internalTools,
 			Toolsets:            mcpToolsets,
+			OutputSchema:        outputSchema,
+			OutputKey:           outputKey,
 			BeforeToolCallbacks: beforeToolCallbacks,
 			AfterToolCallbacks:  afterToolCallbacks,
 		})
 	} else {
 		// No tools enabled
 		llmAgent, err = llmagent.New(llmagent.Config{
-			Name:        nodeName,
-			Model:       a.LLM,
-			Instruction: instruction,
+			Name:         nodeName,
+			Model:        a.LLM,
+			Instruction:  instruction,
+			OutputSchema: outputSchema,
+			OutputKey:    outputKey,
 		})
 	}
 	
@@ -1419,6 +1447,11 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 	
 	// Reset the pause flag before starting
 	state.Set("force_pause", false)
+	
+	// Determine if we should display LLM text output to the user
+	// When user_message is defined, we should SUPPRESS the raw JSON output
+	// and only display the extracted user_message fields
+	shouldDisplayText := len(node.UserMessage) == 0
 	
 	// Run the agent - ADK handles everything (native function calling)
 	var fullResponse strings.Builder
@@ -1655,9 +1688,34 @@ Please provide a concise, user-friendly explanation of this error.
 			return false
 		}
 		
-		// 1. FORWARD the event first (so the UI sees the tool output/logs)
-		if !yield(event, nil) {
-			return false
+		// 1. Determine if this event should be displayed to the user
+		shouldYieldEvent := true
+		
+		if event.LLMResponse.Content != nil && len(event.LLMResponse.Content.Parts) > 0 {
+			// Check if this is a text-only event (no tool calls/responses)
+			isTextOnly := true
+			for _, part := range event.LLMResponse.Content.Parts {
+				if part.FunctionCall != nil || part.FunctionResponse != nil {
+					isTextOnly = false
+					break
+				}
+			}
+			
+			// Suppress text-only events if user_message is not defined
+			// This prevents unwanted LLM conversational output from being displayed
+			if isTextOnly && !shouldDisplayText {
+				shouldYieldEvent = false
+				if a.DebugMode {
+					fmt.Printf("[DEBUG] Suppressing text-only event (no user_message defined)\n")
+				}
+			}
+		}
+		
+		// 2. FORWARD the event if it should be displayed
+		if shouldYieldEvent {
+			if !yield(event, nil) {
+				return false
+			}
 		}
 		
 		// 2. CHECK FOR INTERRUPT SIGNAL
@@ -1736,140 +1794,70 @@ Please provide a concise, user-friendly explanation of this error.
 	
 
 
-	// Save to output_model if defined
+	// Distribute output_model values by parsing the LLM's text response
+	// ADK's OutputSchema doesn't work reliably with tool-enabled nodes
 	if len(node.OutputModel) > 0 {
-		output := fullResponse.String()
+		// Get the accumulated text response
+		responseText := strings.TrimSpace(fullResponse.String())
 		
-		// 1. Try to parse as JSON first
-		// We use cleanAndFixJson only for the parsing attempt
-		cleaned := a.cleanAndFixJson(output)
-		var parsed any
-		isJson := false
-		if err := json.Unmarshal([]byte(cleaned), &parsed); err == nil {
-			isJson = true
-		}
-
-		// 2. If JSON, try to map to output model
-		mapped := false
-		if isJson {
-			if parsedMap, ok := parsed.(map[string]any); ok {
-				// Check if keys match
-				keysMatch := false
+		if responseText != "" {
+			// Try to parse as JSON
+			cleaned := a.cleanAndFixJson(responseText)
+			
+			var parsedOutput map[string]any
+			if err := json.Unmarshal([]byte(cleaned), &parsedOutput); err == nil {
+				// Distribute values to individual output_model keys
+				delta := make(map[string]any)
 				for key := range node.OutputModel {
-					if _, ok := parsedMap[key]; ok {
-						keysMatch = true
-						break
+					if val, ok := parsedOutput[key]; ok {
+						state.Set(key, val)
+						delta[key] = val
 					}
 				}
 				
-				if keysMatch {
-					// Distribute values
-					for key := range node.OutputModel {
-						if val, ok := parsedMap[key]; ok {
-							if err := state.Set(key, val); err != nil {
-								yield(nil, err)
-								return false
-							}
-						}
-					}
-					mapped = true
+				// Emit state delta if we updated anything
+				if len(delta) > 0 {
+					yield(&session.Event{
+						Actions: session.EventActions{
+							StateDelta: delta,
+						},
+					}, nil)
 				}
-			}
-		}
-
-		// 3. If not mapped (not JSON, or JSON didn't match keys), fallback
-		if !mapped {
-			// Special handling: If we have exactly 1 item which is a list (parsed), and multiple keys,
-			// try to broadcast the list to all list-type keys.
-			// This handles the case where the LLM returns one list but we expect it to populate multiple variables (e.g. pr_list and pr_numbers).
-			if isJson && len(node.OutputModel) > 1 {
-				if listVal, ok := parsed.([]any); ok {
-					// Sort keys for deterministic behavior
-					var keys []string
-					for k := range node.OutputModel {
-						keys = append(keys, k)
-					}
-					sort.Strings(keys)
-
-					broadcasted := false
-					for _, key := range keys {
-						targetType := node.OutputModel[key]
-						if targetType == "list" || targetType == "any" {
-							if err := state.Set(key, listVal); err != nil {
-								yield(nil, err)
-								return false
-							}
-							broadcasted = true
-						}
-					}
-					
-					if broadcasted {
-						return true
-					}
-				}
-			}
-
-			// If there is exactly one target, assign the raw output 
-			// (or parsed object if it was JSON but didn't match keys, AND target expects structure)
-			if len(node.OutputModel) == 1 {
-				var targetKey string
-				for k := range node.OutputModel {
-					targetKey = k
-					break
-				}
-				
-				targetType := node.OutputModel[targetKey]
-				// If it was valid JSON and the target expects a list/dict, use the parsed value
-				if isJson && (targetType == "list" || targetType == "dict" || targetType == "object") {
-					if err := state.Set(targetKey, parsed); err != nil {
-						yield(nil, err)
-						return false
-					}
-				} else {
-					// Otherwise use raw output (preserves markdown for string fields)
-					if err := state.Set(targetKey, output); err != nil {
-						yield(nil, err)
-						return false
-					}
-				}
-			} else {
-				// Multiple targets but failed to map.
-				// Fallback: assign raw output to all fields (likely incorrect but safe fallback)
-				// Or maybe error? Python logs warning.
-				for key := range node.OutputModel {
-					if err := state.Set(key, output); err != nil {
-						yield(nil, err)
-						return false
-					}
-				}
-			}
-		}
-		
-		// Emit StateDelta event if we updated the state
-		if mapped || len(node.OutputModel) == 1 {
-			// Construct the delta map
-			delta := make(map[string]any)
-			
-			// Re-read the values we just set to ensure we send exactly what's in the state
-			for key := range node.OutputModel {
-				if val, err := state.Get(key); err == nil {
-					delta[key] = val
-				}
-			}
-			
-			// Yield the event
-			if len(delta) > 0 {
-				yield(&session.Event{
-					// Type is not a field in Event struct. It seems to be implicit or not needed for state updates?
-					// Let's just omit it. The console checks for Actions.StateDelta.
-					Actions: session.EventActions{
-						StateDelta: delta,
-					},
-				}, nil)
 			}
 		}
 	}
 
+	// Handle user_message if defined
+	// This allows displaying specific state variables or literal text to the user
+	if len(node.UserMessage) > 0 {
+		var messageParts []string
+		for _, msgPart := range node.UserMessage {
+			// Try to resolve as state variable first
+			if val, err := state.Get(msgPart); err == nil {
+				// Found in state - format and add
+				messageParts = append(messageParts, fmt.Sprintf("%v", val))
+			} else {
+				// Not in state - use as literal text
+				messageParts = append(messageParts, msgPart)
+			}
+		}
+		
+		// Join all parts and emit as a message event
+		message := strings.Join(messageParts, " ")
+		
+		userMessageEvent := &session.Event{
+			LLMResponse: model.LLMResponse{
+				Content: &genai.Content{
+					Parts: []*genai.Part{{Text: message}},
+					Role:  "model",
+				},
+			},
+		}
+		
+		if !yield(userMessageEvent, nil) {
+			return false
+		}
+	}
 	
 	return true
 }
@@ -2574,24 +2562,6 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 		return false
 	}
 	
-	// DEBUG: Log what we're iterating over
-	if a.DebugMode {
-		listJSON, _ := json.MarshalIndent(listVal, "", "  ")
-		fmt.Printf("\n[DEBUG] ========== PARALLEL NODE: %s ==========\n", node.Name)
-		if ctx.UserContent() != nil && len(ctx.UserContent().Parts) > 0 {
-			fmt.Printf("[DEBUG] UserContent: %s\n", ctx.UserContent().Parts[0].Text)
-		} else {
-			fmt.Printf("[DEBUG] UserContent: <nil> or empty\n")
-		}
-		fmt.Printf("[DEBUG] Iterating over list key: %s\n", listKey)
-		fmt.Printf("[DEBUG] List type: %T\n", listVal)
-		if len(string(listJSON)) > 2000 {
-			fmt.Printf("[DEBUG] List content (truncated): %s...\n", string(listJSON)[:2000])
-		} else {
-			fmt.Printf("[DEBUG] List content:\n%s\n", string(listJSON))
-		}
-		fmt.Printf("[DEBUG] =============================================\n\n")
-	}
 
 	// Convert to slice
 	var items []any
@@ -2820,14 +2790,6 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 		final = []any{}
 	}
 	
-	// DEBUG: Log the state before aggregation
-	if a.DebugMode {
-		fmt.Printf("\n[DEBUG] ========== PRE-AGGREGATION STATE: %s ==========\n", node.Name)
-		fmt.Printf("[DEBUG] Output key: %s\n", outputKey)
-		fmt.Printf("[DEBUG] Existing list size: %d\n", len(final))
-		fmt.Printf("[DEBUG] New results to add: %d\n", len(finalResults))
-	}
-	
 	// Aggregate results based on output_action
 	// If output_action is "append", flatten lists; otherwise keep as-is
 	outputAction := "append" // Default behavior
@@ -2835,24 +2797,7 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 		outputAction = node.OutputAction
 	}
 	
-	if a.DebugMode {
-		fmt.Printf("\n[DEBUG] ========== AGGREGATION: %s ==========\n", node.Name)
-		fmt.Printf("[DEBUG] Output key: %s\n", outputKey)
-		fmt.Printf("[DEBUG] Output action: %s\n", outputAction)
-		fmt.Printf("[DEBUG] Number of results to aggregate: %d\n", len(finalResults))
-		fmt.Printf("[DEBUG] Starting list size: %d\n", len(final))
-	}
-	
-	for idx, res := range finalResults {
-		if a.DebugMode {
-			resJSON, _ := json.MarshalIndent(res, "", "  ")
-			if len(string(resJSON)) > 500 {
-				fmt.Printf("[DEBUG] Result %d (truncated): %s...\n", idx, string(resJSON)[:500])
-			} else {
-				fmt.Printf("[DEBUG] Result %d: %s\n", idx, string(resJSON))
-			}
-		}
-		
+	for _, res := range finalResults {
 		if outputAction == "append" {
 			// Check if res is a JSON string that needs parsing
 			if strRes, ok := res.(string); ok {
@@ -2860,9 +2805,6 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 				cleaned := a.cleanAndFixJson(strRes)
 				var parsed any
 				if err := json.Unmarshal([]byte(cleaned), &parsed); err == nil {
-					if a.DebugMode {
-						fmt.Printf("[DEBUG] Successfully parsed JSON string for result %d\n", idx)
-					}
 					// Successfully parsed - check if it's a map with the output key
 					if parsedMap, ok := parsed.(map[string]any); ok {
 						// Check if the map contains the output key (e.g., "review_comment_validated")
@@ -2870,16 +2812,10 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 							// Extract the value from the nested structure
 							if l, ok := val.([]any); ok {
 								// It's a list - flatten it
-								if a.DebugMode {
-									fmt.Printf("[DEBUG] Extracted list with %d items from nested structure\n", len(l))
-								}
 								final = append(final, l...)
 								continue
 							} else {
 								// It's a single value - append it
-								if a.DebugMode {
-									fmt.Printf("[DEBUG] Extracted single value from nested structure\n")
-								}
 								final = append(final, val)
 								continue
 							}
@@ -2887,8 +2823,6 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 					}
 					// If parsed but doesn't match expected structure, treat as regular value
 					res = parsed
-				} else if a.DebugMode {
-					fmt.Printf("[DEBUG] Failed to parse as JSON: %v\n", err)
 				}
 				// If parsing failed, continue with string as-is
 			}
@@ -2896,15 +2830,9 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 			// Flatten lists when appending
 			if l, ok := res.([]any); ok {
 				// Flatten the list - append all items from the list
-				if a.DebugMode {
-					fmt.Printf("[DEBUG] Flattening list with %d items\n", len(l))
-				}
 				final = append(final, l...)
 			} else {
 				// Not a list, append as-is
-				if a.DebugMode {
-					fmt.Printf("[DEBUG] Appending single item (type: %T)\n", res)
-				}
 				final = append(final, res)
 			}
 		} else {
@@ -2913,37 +2841,7 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 		}
 	}
 	
-	if a.DebugMode {
-		fmt.Printf("[DEBUG] Final aggregated list size: %d\n", len(final))
-		
-		// Log detailed info about what's in the final list
-		if len(final) > 0 {
-			fmt.Printf("[DEBUG] Sample of final list items:\n")
-			for i := 0; i < len(final) && i < 3; i++ {
-				itemJSON, _ := json.MarshalIndent(final[i], "  ", "  ")
-				if len(string(itemJSON)) > 300 {
-					fmt.Printf("[DEBUG]   Item %d (truncated): %s...\n", i, string(itemJSON)[:300])
-				} else {
-					fmt.Printf("[DEBUG]   Item %d: %s\n", i, string(itemJSON))
-				}
-			}
-			if len(final) > 3 {
-				fmt.Printf("[DEBUG]   ... and %d more items\n", len(final)-3)
-			}
-		}
-		
-		fmt.Printf("[DEBUG] =============================================\n\n")
-	}
-	
 	state.Set(outputKey, final)
-	
-	// DEBUG: Log state after setting
-	if a.DebugMode {
-		verifyVal, _ := state.Get(outputKey)
-		if verifyList, ok := verifyVal.([]any); ok {
-			fmt.Printf("[DEBUG] Verified state[%s] size after set: %d\n", outputKey, len(verifyList))
-		}
-	}
 	
 	yield(&session.Event{
 		Actions: session.EventActions{
@@ -2958,10 +2856,6 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 
 // handleOutputNode handles output nodes
 func (a *AstonishAgent) handleOutputNode(ctx agent.InvocationContext, node *config.Node, state session.State, yield func(*session.Event, error) bool) bool {
-	if a.DebugMode {
-		fmt.Printf("[DEBUG] Processing output node '%s'\n", node.Name)
-	}
-
 	var parts []string
 	for _, msgPart := range node.UserMessage {
 		// Check if part is a state variable

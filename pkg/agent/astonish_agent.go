@@ -672,6 +672,11 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 					return
 				}
 				
+				// Yield processor to allow events to propagate to the console runner
+				// This mitigates a race condition where the next node's transition event
+				// might be processed before the output content is fully flushed.
+				time.Sleep(50 * time.Millisecond)
+				
 				// Move to next node
 				nextNode, err := a.getNextNode(currentNodeName, state)
 				if err != nil {

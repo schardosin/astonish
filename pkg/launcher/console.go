@@ -310,16 +310,32 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					// Only process if node actually changed
 					if node != currentNodeName {
 						// Flush buffer if we were streaming
-						if !suppressStreaming && lineBuffer != "" {
+						if !suppressStreaming {
 							// Stop spinner before printing flush content
 							stopSpinner(true)
 							
-							rendered := ui.SmartRender(lineBuffer)
-							fmt.Print(rendered)
-							if !strings.HasSuffix(rendered, "\n") {
-								fmt.Println()
+							// Flush lineBuffer
+							if lineBuffer != "" {
+								rendered := ui.SmartRender(lineBuffer)
+								fmt.Print(rendered)
+								if !strings.HasSuffix(rendered, "\n") {
+									fmt.Println()
+								}
+								lineBuffer = ""
 							}
-							lineBuffer = ""
+							
+							// Flush textBuffer
+							if textBuffer.Len() > 0 {
+								rendered := ui.SmartRender(textBuffer.String())
+								if rendered != "" {
+									if !aiPrefixPrinted {
+										fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
+										aiPrefixPrinted = true
+									}
+									fmt.Print(rendered)
+								}
+								textBuffer.Reset()
+							}
 						}
 
 						// If we were suppressing, clear the line buffer to prevent leakage of partial lines from the previous node
@@ -446,6 +462,12 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 								// Use a box or distinct styling if it's a "User Message"
 								
 								// If it's a list, render it nicely
+								// Ensure Agent prefix is printed
+								if !aiPrefixPrinted {
+									fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
+									aiPrefixPrinted = true
+								}
+
 								if strings.Contains(displayStr, "\n- ") {
 									fmt.Printf("\n%s\n", displayStr)
 								} else {
@@ -584,6 +606,21 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						} else {
 							// Buffer regular text
 							textBuffer.WriteString(line)
+							
+							// Flush immediately for streaming effect
+							// Note: SmartRender might be less effective on single lines for things like tables,
+							// but it's necessary for real-time feedback.
+							if textBuffer.Len() > 0 {
+								rendered := ui.SmartRender(textBuffer.String())
+								if rendered != "" {
+									if !aiPrefixPrinted {
+										fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
+										aiPrefixPrinted = true
+									}
+									fmt.Print(rendered)
+								}
+								textBuffer.Reset()
+							}
 						}
 					}
 				}

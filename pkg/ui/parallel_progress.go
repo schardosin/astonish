@@ -13,6 +13,7 @@ import (
 type ParallelModel struct {
 	totalItems    int
 	processed     int
+	activeCount   int
 	nodeName      string
 	spinner       spinner.Model
 	progress      progress.Model
@@ -23,6 +24,9 @@ type ParallelModel struct {
 
 // ItemFinishedMsg signals that a worker has finished an item
 type ItemFinishedMsg struct{}
+
+// ActiveCountMsg signals an update to the number of active workers
+type ActiveCountMsg int
 
 // NewParallelProgram creates a new tea.Program for the parallel progress UI
 func NewParallelProgram(total int, nodeName string) *tea.Program {
@@ -61,14 +65,36 @@ func (m ParallelModel) View() string {
 	}
 
 	// While running
-	spin := m.spinner.View()
+	// spin := m.spinner.View() // Spinner removed as requested in the mockup
 	bar := m.progress.View()
 	
-	// Create the count text: "( 4/12 )"
-	countStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	count := countStyle.Render(fmt.Sprintf("( %d/%d )", m.processed, m.totalItems))
+	// Percentage
+	percent := 0.0
+	if m.totalItems > 0 {
+		percent = float64(m.processed) / float64(m.totalItems)
+	}
+	percentStr := fmt.Sprintf("%.0f%%", percent*100)
+	
+	// Counts: "(6/12)"
+	countStr := fmt.Sprintf("(%d/%d)", m.processed, m.totalItems)
+	
+	// Active: "• 5 active"
+	activeStr := fmt.Sprintf("• %d active", m.activeCount)
+	
+	// Styles
+	nodeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Bold(true).Width(20).Align(lipgloss.Left)
+	percentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Width(5).Align(lipgloss.Right)
+	countStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).PaddingLeft(1)
+	activeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).PaddingLeft(1)
 
-	view := fmt.Sprintf("%s Processing %s %s %s", spin, m.nodeName, bar, count)
+	// Format: add_review_comment  [██████░░░░░░]  50%  (6/12) • 5 active
+	view := fmt.Sprintf("%s %s %s %s %s", 
+		nodeStyle.Render(m.nodeName), 
+		bar, 
+		percentStyle.Render(percentStr), 
+		countStyle.Render(countStr),
+		activeStyle.Render(activeStr),
+	)
 	
 	if m.lastLog != "" {
 		logStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Italic(true)
@@ -106,6 +132,10 @@ func (m ParallelModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update progress bar
 		cmd := m.progress.SetPercent(float64(m.processed) / float64(m.totalItems))
 		return m, cmd
+		
+	case ActiveCountMsg:
+		m.activeCount = int(msg)
+		return m, nil
 		
 	case ItemLogMsg:
 		m.lastLog = string(msg)

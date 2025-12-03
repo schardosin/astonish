@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/schardosin/astonish/pkg/config"
@@ -2836,6 +2837,9 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 		return true
 	}
 
+	// Track active workers
+	var activeWorkers int32
+
 	for i, item := range items {
 		wg.Add(1)
 		go func(idx int, it any) {
@@ -2843,7 +2847,17 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 			
 			// Acquire semaphore
 			sem <- struct{}{}
-			defer func() { <-sem }()
+			
+			// Update active count
+			atomic.AddInt32(&activeWorkers, 1)
+			prog.Send(ui.ActiveCountMsg(atomic.LoadInt32(&activeWorkers)))
+			
+			defer func() { 
+				// Update active count
+				atomic.AddInt32(&activeWorkers, -1)
+				prog.Send(ui.ActiveCountMsg(atomic.LoadInt32(&activeWorkers)))
+				<-sem 
+			}()
 
 			// Check for cancellation or stop flag
 			select {

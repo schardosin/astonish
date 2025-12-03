@@ -670,7 +670,20 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					title = strings.TrimSpace(parts[0])
 				}
 				if len(parts) > 1 {
-					description = strings.TrimSpace(parts[1])
+					// Custom cleaning to preserve indentation while removing leading/trailing empty lines
+					// This fixes alignment issues when Glamour adds indentation to lists
+					descLines := strings.Split(parts[1], "\n")
+					start := 0
+					for start < len(descLines) && strings.TrimSpace(descLines[start]) == "" {
+						start++
+					}
+					end := len(descLines)
+					for end > start && strings.TrimSpace(descLines[end-1]) == "" {
+						end--
+					}
+					if start < end {
+						description = strings.Join(descLines[start:end], "\n")
+					}
 				}
 				
 				// Clear text buffer as we've consumed it

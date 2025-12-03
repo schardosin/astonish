@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"regexp"
 	"strings"
 
@@ -231,6 +230,9 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		// Only print the AI prefix if we are actually going to print something from the AI
 		aiPrefixPrinted := false
 		
+		// State tracking for input nodes
+		isInputNode := false
+		isOutputNode := false
 		waitingForInput := false
 		waitingForApproval := false
 		var approvalOptions []string
@@ -239,7 +241,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		// Declare suppression variables here so they are accessible throughout the loop and after
 		suppressStreaming := false
 		var userMessageFields []string
-		isInputNode := false
+
 		
 		for event, err := range r.Run(ctx, userID, sess.ID(), userMsg, adkagent.RunConfig{
 			StreamingMode: adkagent.StreamingModeSSE,
@@ -342,6 +344,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						
 						// Determine if this is an input node or parallel node and setup suppression
 						isInputNode = false
+						isOutputNode = false
 						isParallel := false
 						hasUserMessage := false
 						hasOutputModel := false
@@ -352,6 +355,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 									isInputNode = true
 									suppressStreaming = true
 								} else if n.Type == "output" {
+									isOutputNode = true
 									suppressStreaming = false
 								} else {
 									if n.Parallel != nil {
@@ -448,49 +452,9 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 								switch v := val.(type) {
 								case string:
 									displayStr = v
-								case []string:
-									// For lists, format as a bulleted list
-									var sb strings.Builder
-									for _, item := range v {
-										sb.WriteString(fmt.Sprintf("- %s\n", item))
-									}
-									displayStr = sb.String()
-								case []interface{}:
-									// For generic lists
-									var sb strings.Builder
-									for _, item := range v {
-										// Check if item is complex (map or struct)
-										if _, isMap := item.(map[string]interface{}); isMap {
-											jsonBytes, err := json.MarshalIndent(item, "  ", "  ")
-											if err == nil {
-												sb.WriteString(fmt.Sprintf("- %s\n", string(jsonBytes)))
-												continue
-											}
-										}
-										// Check for map[string]string or other common map types if needed, 
-										// but usually it comes as map[string]interface{} from JSON
-										
-										// Fallback to %v but clean up map printing if possible
-										str := fmt.Sprintf("%v", item)
-										if strings.HasPrefix(str, "map[") {
-											// Try to marshal anyway
-											jsonBytes, err := json.MarshalIndent(item, "  ", "  ")
-											if err == nil {
-												sb.WriteString(fmt.Sprintf("- %s\n", string(jsonBytes)))
-												continue
-											}
-										}
-										sb.WriteString(fmt.Sprintf("- %v\n", item))
-									}
-									displayStr = sb.String()
 								default:
-									// Fallback to JSON representation for complex objects
-									jsonBytes, err := json.MarshalIndent(v, "", "  ")
-									if err == nil {
-										displayStr = string(jsonBytes)
-									} else {
-										displayStr = fmt.Sprintf("%v", v)
-									}
+									// Use YAML-like formatting for everything else
+									displayStr = ui.FormatAsYamlLike(v, 0)
 								}
 
 								// Render and print immediately
@@ -646,7 +610,14 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 							// Note: SmartRender might be less effective on single lines for things like tables,
 							// but it's necessary for real-time feedback.
 							if !suppressStreaming && textBuffer.Len() > 0 {
-								rendered := ui.SmartRender(textBuffer.String())
+								var rendered string
+								if isOutputNode {
+									// For output nodes, bypass SmartRender to preserve formatting (e.g. JSON)
+									rendered = textBuffer.String()
+								} else {
+									rendered = ui.SmartRender(textBuffer.String())
+								}
+								
 								if rendered != "" {
 									if !aiPrefixPrinted {
 										fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
@@ -701,79 +672,105 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				if len(parts) > 1 {
 					description = strings.TrimSpace(parts[1])
 				}
+				
+				// Clear text buffer as we've consumed it
 				textBuffer.Reset()
 			}
 			
-			// Default title if empty
-			if title == "" {
-				if waitingForApproval {
-					title = "Do you approve this execution?"
-				} else {
-					title = "Please provide input"
-				}
-			}
-
-			stopSpinner(true) // Ensure spinner is stopped before prompting
+			// Stop spinner before showing input
+			stopSpinner(true)
 			
-			var userInput string
-			var err error
-			
-			// Check if we have options for selection
-			if len(approvalOptions) > 0 {
-				// Use interactive selection for approval
-				userInput, err = ui.ReadSelection(approvalOptions, title, description)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-					os.Exit(1)
+			// Show input dialog
+			if waitingForApproval {
+				// Use approval options if available
+				opts := []string{"Yes", "No"}
+				if len(approvalOptions) > 0 {
+					opts = approvalOptions
 				}
-				fmt.Println(ui.RenderStatusBadge("Command approved", true))
-				approvalOptions = nil // Clear for next iteration
-			} else if len(inputOptions) > 0 {
-				// Use interactive selection for input
-				userInput, err = ui.ReadSelection(inputOptions, title, description)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-					os.Exit(1)
+				
+				// Default title if empty
+				if title == "" {
+					title = "Approval Required"
 				}
-				fmt.Println(ui.RenderStatusBadge(fmt.Sprintf("%s: %s", title, userInput), true))
-				inputOptions = nil // Clear for next iteration
+				
+				selection, err := ui.ReadSelection(opts, title, description)
+				if err != nil {
+					return err
+				}
+				
+				// Send selection back to agent
+				userMsg = genai.NewContentFromText(selection, genai.RoleUser)
+				continue
+				
+				// Reset state
+				waitingForApproval = false
+				approvalOptions = nil
 			} else {
-				// Free text input using huh
-				userInput, err = ui.ReadInput(title, description)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-					os.Exit(1)
+				// Regular input
+				// Default title if empty
+				if title == "" {
+					title = "Input Required"
 				}
-				fmt.Println(ui.RenderStatusBadge(fmt.Sprintf("%s: %s", title, userInput), true))
-			}
-			
-			// Create user message
-			userMsg = genai.NewContentFromText(userInput, genai.RoleUser)
-		} else {
-			// Not waiting for input, flush text buffer normally
-			if textBuffer.Len() > 0 {
-				rendered := ui.SmartRender(textBuffer.String())
-				if rendered != "" {
-					if !aiPrefixPrinted {
-						fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
-						aiPrefixPrinted = true
+				
+				// Check if we have options for selection
+				if len(inputOptions) > 0 {
+					selection, err := ui.ReadSelection(inputOptions, title, description)
+					if err != nil {
+						return err
 					}
-					fmt.Print(rendered)
+					userMsg = genai.NewContentFromText(selection, genai.RoleUser)
+					continue
+				} else {
+					// Free text input
+					input, err := ui.ReadInput(title, description)
+					if err != nil {
+						return err
+					}
+					userMsg = genai.NewContentFromText(input, genai.RoleUser)
+					continue
+				}
+				
+				// Reset state
+				waitingForInput = false
+				inputOptions = nil
+			}
+		} else {
+			// Normal flush at end of turn
+			if textBuffer.Len() > 0 {
+				// Only print if not suppressed
+				if !suppressStreaming {
+					stopSpinner(true)
+					var rendered string
+					if isOutputNode {
+						rendered = textBuffer.String()
+					} else {
+						rendered = ui.SmartRender(textBuffer.String())
+					}
+					if rendered != "" {
+						if !aiPrefixPrinted {
+							fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
+							aiPrefixPrinted = true
+						}
+						fmt.Print(rendered)
+						if !strings.HasSuffix(rendered, "\n") {
+							fmt.Println()
+						}
+					}
 				}
 				textBuffer.Reset()
 			}
-			
-			// Check if we've reached the END node - if so, exit the loop
-			if currentNodeName == "END" {
-				stopSpinner(true)
-				if cfg.DebugMode {
-					fmt.Println("[DEBUG] Reached END node, exiting main loop")
-				}
-				break
-			}
-			
-			// Agent completed without needing input
 		}
+		
+		// If we broke out of the loop (e.g. END node), stop spinner
+		if currentNodeName == "END" {
+			stopSpinner(true)
+			if cfg.DebugMode {
+				fmt.Println("[DEBUG] Reached END node, exiting main loop")
+			}
+			break
+		}
+		
+		// Agent completed without needing input
 	}
 	return nil
 }

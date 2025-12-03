@@ -2832,7 +2832,7 @@ func (a *AstonishAgent) handleOutputNode(ctx agent.InvocationContext, node *conf
 	for _, msgPart := range node.UserMessage {
 		// Check if part is a state variable
 		if val, err := state.Get(msgPart); err == nil {
-			parts = append(parts, fmt.Sprintf("%v", val))
+			parts = append(parts, ui.FormatAsYamlLike(val, 0))
 		} else {
 			// Not a state variable, use as literal
 			parts = append(parts, msgPart)

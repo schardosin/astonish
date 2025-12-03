@@ -1,7 +1,6 @@
 package sap
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -17,9 +16,9 @@ import (
 	"time"
 
 	goopenai "github.com/sashabaranov/go-openai"
+	"github.com/schardosin/astonish/pkg/provider/bedrock"
 	"github.com/schardosin/astonish/pkg/provider/openai"
 	"google.golang.org/adk/model"
-	"google.golang.org/genai"
 )
 
 // Provider implements the model.LLM interface for SAP AI Core.
@@ -362,166 +361,13 @@ func ListModels(ctx context.Context, clientID, clientSecret, authURL, baseURL, r
 	return models, nil
 }
 
-// Bedrock payload structures
-type bedrockRequest struct {
-	AnthropicVersion string           `json:"anthropic_version"`
-	MaxTokens        int              `json:"max_tokens"`
-	Messages         []bedrockMessage `json:"messages"`
-	System           string           `json:"system,omitempty"`
-	Temperature      float64          `json:"temperature,omitempty"`
-	Tools            []bedrockTool    `json:"tools,omitempty"`
-}
-
-type bedrockMessage struct {
-	Role    string      `json:"role"`
-	Content interface{} `json:"content"` // Can be string or array of content blocks
-}
-
-type bedrockTool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"input_schema"`
-}
-
-type bedrockContentBlock struct {
-	Type      string                  `json:"type"`
-	Text      string                  `json:"text,omitempty"`
-	ID        string                  `json:"id,omitempty"`
-	Name      string                  `json:"name,omitempty"`
-	Input     *map[string]interface{} `json:"input,omitempty"` // Pointer so we can control when it's included
-	ToolUseID string                  `json:"tool_use_id,omitempty"`
-	Content   string                  `json:"content,omitempty"`
-}
-
-type bedrockResponse struct {
-	Content []bedrockContentBlock `json:"content"`
-	Usage   struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
-	} `json:"usage"`
-	StopReason string `json:"stop_reason"`
-}
-
 func (p *Provider) generateBedrockContent(ctx context.Context, req *model.LLMRequest, streaming bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		// Construct Bedrock payload
-		bedrockReq := bedrockRequest{
-			AnthropicVersion: "bedrock-2023-05-31",
-			MaxTokens:        4096, // Default max tokens
-			Messages:         make([]bedrockMessage, 0),
-			Temperature:      0.7,
-		}
-
-		// Convert ADK messages to Bedrock messages
-		for _, content := range req.Contents {
-			role := content.Role
-			if role == "model" {
-				role = "assistant"
-			}
-			
-			// Check if this message contains function calls or responses
-			hasFunctionCall := false
-			hasFunctionResponse := false
-			for _, part := range content.Parts {
-				if part.FunctionCall != nil {
-					hasFunctionCall = true
-				}
-				if part.FunctionResponse != nil {
-					hasFunctionResponse = true
-				}
-			}
-			
-			if hasFunctionCall {
-				// Convert function calls to tool_use blocks
-				var contentBlocks []bedrockContentBlock
-				for _, part := range content.Parts {
-					if part.FunctionCall != nil {
-						// Ensure Input is never nil - Bedrock requires this field for tool_use
-						input := part.FunctionCall.Args
-						if input == nil {
-							input = make(map[string]interface{})
-						}
-						contentBlocks = append(contentBlocks, bedrockContentBlock{
-							Type:  "tool_use",
-							ID:    part.FunctionCall.ID,
-							Name:  part.FunctionCall.Name,
-							Input: &input, // Use pointer
-						})
-					}
-				}
-				bedrockReq.Messages = append(bedrockReq.Messages, bedrockMessage{
-					Role:    role,
-					Content: contentBlocks,
-				})
-			} else if hasFunctionResponse {
-				// Convert function responses to tool_result blocks
-				var contentBlocks []bedrockContentBlock
-				for _, part := range content.Parts {
-					if part.FunctionResponse != nil {
-						resultJSON, _ := json.Marshal(part.FunctionResponse.Response)
-						contentBlocks = append(contentBlocks, bedrockContentBlock{
-							Type:      "tool_result",
-							ToolUseID: part.FunctionResponse.ID,
-							Content:   string(resultJSON),
-						})
-					}
-				}
-				bedrockReq.Messages = append(bedrockReq.Messages, bedrockMessage{
-					Role:    "user", // Tool results must be from user role
-					Content: contentBlocks,
-				})
-			} else {
-				// Regular text message
-				var textBuilder strings.Builder
-				for _, part := range content.Parts {
-					if part.Text != "" {
-						textBuilder.WriteString(part.Text)
-					}
-				}
-				bedrockReq.Messages = append(bedrockReq.Messages, bedrockMessage{
-					Role:    role,
-					Content: textBuilder.String(),
-				})
-			}
-		}
-
-		// Handle system instruction
-		if req.Config != nil && req.Config.SystemInstruction != nil {
-			var sysBuilder strings.Builder
-			for _, part := range req.Config.SystemInstruction.Parts {
-				sysBuilder.WriteString(part.Text)
-			}
-			bedrockReq.System = sysBuilder.String()
-		}
-
-		// Handle tools
-		if req.Config != nil && len(req.Config.Tools) > 0 {
-			for _, tool := range req.Config.Tools {
-				for _, funcDecl := range tool.FunctionDeclarations {
-					bedrockTool := bedrockTool{
-						Name:        funcDecl.Name,
-						Description: funcDecl.Description,
-						InputSchema: make(map[string]interface{}),
-					}
-					
-					// Convert JSON schema to Bedrock format
-					if funcDecl.ParametersJsonSchema != nil {
-						bedrockTool.InputSchema["type"] = "object"
-						if schemaMap, ok := funcDecl.ParametersJsonSchema.(map[string]interface{}); ok {
-							if props, ok := schemaMap["properties"].(map[string]interface{}); ok {
-								bedrockTool.InputSchema["properties"] = props
-							}
-							if required, ok := schemaMap["required"].([]interface{}); ok {
-								bedrockTool.InputSchema["required"] = required
-							}
-						}
-					} else {
-						fmt.Printf("[BEDROCK DEBUG] WARNING: ParametersJsonSchema is nil for %s\n", funcDecl.Name)
-					}
-					
-					bedrockReq.Tools = append(bedrockReq.Tools, bedrockTool)
-				}
-			}
+		// Convert request using bedrock protocol
+		bedrockReq, err := bedrock.ConvertRequest(req)
+		if err != nil {
+			yield(nil, err)
+			return
 		}
 
 		payload, err := json.Marshal(bedrockReq)
@@ -560,165 +406,21 @@ func (p *Provider) generateBedrockContent(ctx context.Context, req *model.LLMReq
 		}
 
 		if streaming {
-			// Handle streaming response (SSE format)
-			reader := bufio.NewReader(resp.Body)
-			var currentToolUse *bedrockContentBlock
-			var jsonBuffer strings.Builder
-			
-			for {
-				line, err := reader.ReadBytes('\n')
-				if err == io.EOF {
-					break
-				}
-				if err != nil {
-					yield(nil, err)
+			// Handle streaming response using bedrock protocol
+			for resp, err := range bedrock.ParseStream(resp.Body) {
+				if !yield(resp, err) {
 					return
-				}
-
-				// Skip empty lines
-				line = bytes.TrimSpace(line)
-				if len(line) == 0 {
-					continue
-				}
-
-				// SSE format: "data: {...}"
-				if bytes.HasPrefix(line, []byte("data: ")) {
-					data := bytes.TrimPrefix(line, []byte("data: "))
-					
-					// Parse the JSON chunk - handle multiple event types
-					var chunk struct {
-						Type         string `json:"type"`
-						Index        int    `json:"index"`
-						ContentBlock *struct {
-							Type  string                 `json:"type"`
-							ID    string                 `json:"id"`
-							Name  string                 `json:"name"`
-							Input map[string]interface{} `json:"input"`
-						} `json:"content_block"`
-						Delta *struct {
-							Type         string                 `json:"type"`
-							Text         string                 `json:"text"`
-							PartialJSON  string                 `json:"partial_json"`
-						} `json:"delta"`
-					}
-					
-					if err := json.Unmarshal(data, &chunk); err != nil {
-						// Skip malformed chunks
-						continue
-					}
-
-					// Handle different chunk types
-					switch chunk.Type {
-					case "content_block_start":
-						// Start of a new content block (text or tool_use)
-						if chunk.ContentBlock != nil && chunk.ContentBlock.Type == "tool_use" {
-							inputMap := make(map[string]interface{})
-							currentToolUse = &bedrockContentBlock{
-								Type:  "tool_use",
-								ID:    chunk.ContentBlock.ID,
-								Name:  chunk.ContentBlock.Name,
-								Input: &inputMap,
-							}
-							jsonBuffer.Reset()
-						}
-						
-					case "content_block_delta":
-						if chunk.Delta != nil {
-							if chunk.Delta.Text != "" {
-								// Text delta
-								if !yield(&model.LLMResponse{
-									Content: &genai.Content{
-										Role:  "model",
-										Parts: []*genai.Part{{Text: chunk.Delta.Text}},
-									},
-								}, nil) {
-									return
-								}
-							} else if chunk.Delta.PartialJSON != "" && currentToolUse != nil {
-								// Tool input delta - accumulate JSON string
-								jsonBuffer.WriteString(chunk.Delta.PartialJSON)
-							}
-						}
-						
-					case "content_block_stop":
-						// End of content block - if it's a tool use, yield it
-						if currentToolUse != nil {
-							// Parse accumulated JSON
-							if jsonBuffer.Len() > 0 {
-								var args map[string]interface{}
-								if err := json.Unmarshal([]byte(jsonBuffer.String()), &args); err == nil {
-									currentToolUse.Input = &args
-								}
-							}
-							
-							// Ensure Args is never nil - ADK/Bedrock requires this field
-							var args map[string]interface{}
-							if currentToolUse.Input != nil {
-								args = *currentToolUse.Input
-							}
-							if args == nil {
-								args = make(map[string]interface{})
-							}
-							
-							if !yield(&model.LLMResponse{
-								Content: &genai.Content{
-									Role: "model",
-									Parts: []*genai.Part{{
-										FunctionCall: &genai.FunctionCall{
-											ID:   currentToolUse.ID,
-											Name: currentToolUse.Name,
-											Args: args,
-										},
-									}},
-								},
-							}, nil) {
-								return
-							}
-							currentToolUse = nil
-							jsonBuffer.Reset()
-						}
-					}
 				}
 			}
 		} else {
 			// Non-streaming response
 			body, _ := io.ReadAll(resp.Body)
-			var bedrockResp bedrockResponse
-			if err := json.Unmarshal(body, &bedrockResp); err != nil {
-				yield(nil, fmt.Errorf("failed to decode bedrock response: %w", err))
+			llmResp, err := bedrock.ParseResponse(body)
+			if err != nil {
+				yield(nil, err)
 				return
 			}
-
-			// Convert back to ADK response
-			var parts []*genai.Part
-			for _, block := range bedrockResp.Content {
-				switch block.Type {
-				case "text":
-					if block.Text != "" {
-						parts = append(parts, &genai.Part{Text: block.Text})
-					}
-				case "tool_use":
-					// Convert tool_use to function call
-					var args map[string]interface{}
-					if block.Input != nil {
-						args = *block.Input
-					}
-					parts = append(parts, &genai.Part{
-						FunctionCall: &genai.FunctionCall{
-							ID:   block.ID,
-							Name: block.Name,
-							Args: args,
-						},
-					})
-				}
-			}
-
-			yield(&model.LLMResponse{
-				Content: &genai.Content{
-					Role:  "model",
-					Parts: parts,
-				},
-			}, nil)
+			yield(llmResp, nil)
 		}
 	}
 }

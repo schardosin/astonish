@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 
 	"go.starlark.net/starlark"
@@ -94,9 +95,25 @@ func toStarlarkValue(v interface{}) starlark.Value {
 			list = append(list, toStarlarkValue(item))
 		}
 		return starlark.NewList(list)
+	case []string:
+		list := make([]starlark.Value, 0, len(val))
+		for _, item := range val {
+			list = append(list, starlark.String(item))
+		}
+		return starlark.NewList(list)
 	case map[string]interface{}:
 		return convertMapToStarlark(val)
 	default:
+		// Use reflection to handle other slice types
+		rVal := reflect.ValueOf(val)
+		if rVal.Kind() == reflect.Slice || rVal.Kind() == reflect.Array {
+			list := make([]starlark.Value, 0, rVal.Len())
+			for i := 0; i < rVal.Len(); i++ {
+				list = append(list, toStarlarkValue(rVal.Index(i).Interface()))
+			}
+			return starlark.NewList(list)
+		}
+		
 		// For unknown types, convert to string
 		return starlark.String(fmt.Sprintf("%v", val))
 	}

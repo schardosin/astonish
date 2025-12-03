@@ -857,7 +857,7 @@ func (a *AstonishAgent) handleUpdateStateNode(ctx agent.InvocationContext, node 
 		LLMResponse: model.LLMResponse{
 			Content: &genai.Content{
 				Parts: []*genai.Part{{
-					Text: fmt.Sprintf("Updated state: %v", stateDelta),
+					Text: fmt.Sprintf("Updated state: %s", ui.FormatAsYamlLike(stateDelta, 0)),
 				}},
 				Role: "model",
 			},
@@ -979,6 +979,11 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 	// But for Bedrock/Claude, we prefer separation.
 	if instruction == "" {
 		instruction = "You are a helpful AI assistant."
+	}
+	
+	if a.DebugMode {
+		fmt.Printf("[DEBUG] FINAL USER PROMPT:\n%s\n", userPrompt)
+		fmt.Printf("[DEBUG] FINAL SYSTEM INSTRUCTION:\n%s\n", instruction)
 	}
 	
 	// Manually append the User Message to the session history
@@ -1125,12 +1130,14 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 				propType = genai.TypeString
 			}
 			
-			propSchema := &genai.Schema{Type: propType}
+			schema := &genai.Schema{
+				Type: propType,
+			}
 			if items != nil {
-				propSchema.Items = items
+				schema.Items = items
 			}
 			
-			properties[key] = propSchema
+			properties[key] = schema
 			required = append(required, key)
 		}
 		
@@ -1140,15 +1147,40 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			Required:   required,
 		}
 		
-		// Use a temporary key for ADK to save the structured output
-		outputKey = "temp:llm_output:" + nodeName
+		// If there is only one output key, we might want to map it directly
+		// But for now, we stick to the map/object structure
 	}
 
-	// Build list of known tool names for detection (from internal tools)
-	var knownToolNames []string
-	for _, t := range nodeTools {
-		knownToolNames = append(knownToolNames, t.Name())
+	// Define callback to inject user prompt if missing
+	injectUserPrompt := func(ctx agent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
+		if userPrompt == "" {
+			return nil, nil
+		}
+		
+		// Check if already present in Contents
+		found := false
+		for _, c := range req.Contents {
+			for _, p := range c.Parts {
+				if p.Text == userPrompt {
+					found = true
+					break
+				}
+			}
+		}
+		
+		if !found {
+			if a.DebugMode {
+				fmt.Printf("[DEBUG] Injecting missing user prompt into request contents\n")
+			}
+			req.Contents = append(req.Contents, &genai.Content{
+				Role: "user",
+				Parts: []*genai.Part{{Text: userPrompt}},
+			})
+		}
+		return nil, nil
 	}
+
+
 	
 	// Create ADK llmagent for this node
 	// Strategy:
@@ -1406,6 +1438,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			OutputKey:           outputKey,
 			BeforeToolCallbacks: beforeToolCallbacks,
 			AfterToolCallbacks:  afterToolCallbacks,
+			BeforeModelCallbacks: []llmagent.BeforeModelCallback{injectUserPrompt},
 		})
 	} else {
 		// No tools enabled
@@ -1415,6 +1448,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			Instruction:  instruction,
 			OutputSchema: outputSchema,
 			OutputKey:    outputKey,
+			BeforeModelCallbacks: []llmagent.BeforeModelCallback{injectUserPrompt},
 		})
 	}
 	
@@ -2072,8 +2106,9 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 					lines := strings.Split(strings.TrimSpace(valStr), "\n")
 					var cleanLines []string
 					for _, line := range lines {
-						if strings.TrimSpace(line) != "" {
-							cleanLines = append(cleanLines, line)
+						trimmedLine := strings.TrimSpace(line)
+						if trimmedLine != "" {
+							cleanLines = append(cleanLines, trimmedLine)
 						}
 					}
 					stateDelta[key] = cleanLines
@@ -2201,7 +2236,11 @@ func (a *AstonishAgent) renderString(tmpl string, state session.State) string {
 			return match
 		}
 		
-		return fmt.Sprintf("%v", val)
+		formatted := ui.FormatAsYamlLike(val, 0)
+		if a.DebugMode {
+			fmt.Printf("[DEBUG] renderString: Replaced '{%s}' with:\n%s\n", expr, formatted)
+		}
+		return formatted
 	})
 }
 

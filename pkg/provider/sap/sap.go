@@ -18,6 +18,7 @@ import (
 	goopenai "github.com/sashabaranov/go-openai"
 	"github.com/schardosin/astonish/pkg/provider/bedrock"
 	"github.com/schardosin/astonish/pkg/provider/openai"
+	"github.com/schardosin/astonish/pkg/provider/vertex"
 	"google.golang.org/adk/model"
 )
 
@@ -101,6 +102,9 @@ func (p *Provider) Name() string {
 func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, streaming bool) iter.Seq2[*model.LLMResponse, error] {
 	if strings.HasPrefix(p.modelName, "anthropic--") || strings.HasPrefix(p.modelName, "amazon--") {
 		return p.generateBedrockContent(ctx, req, streaming)
+	}
+	if strings.HasPrefix(p.modelName, "gemini-") {
+		return p.generateVertexContent(ctx, req, streaming)
 	}
 	return p.openaiProvider.GenerateContent(ctx, req, streaming)
 }
@@ -416,6 +420,72 @@ func (p *Provider) generateBedrockContent(ctx context.Context, req *model.LLMReq
 			// Non-streaming response
 			body, _ := io.ReadAll(resp.Body)
 			llmResp, err := bedrock.ParseResponse(body)
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			yield(llmResp, nil)
+		}
+	}
+}
+
+func (p *Provider) generateVertexContent(ctx context.Context, req *model.LLMRequest, streaming bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		// Convert request using vertex protocol
+		vertexReq, err := vertex.ConvertRequest(req)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+
+		payload, err := json.Marshal(vertexReq)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		
+		var url string
+		if streaming {
+			// Vertex AI streaming endpoint: /models/{model}:streamGenerateContent?alt=sse
+			url = fmt.Sprintf("%s/inference/deployments/%s/models/%s:streamGenerateContent?alt=sse", p.baseURL, p.deploymentID, p.modelName)
+		} else {
+			// Vertex AI non-streaming endpoint: /models/{model}:generateContent
+			url = fmt.Sprintf("%s/inference/deployments/%s/models/%s:generateContent", p.baseURL, p.deploymentID, p.modelName)
+		}
+
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("AI-Resource-Group", p.authConfig.resourceGroup)
+		// Token is added by transport
+
+		resp, err := p.httpClient.Do(httpReq)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			yield(nil, fmt.Errorf("vertex request failed: %s, body: %s", resp.Status, string(body)))
+			return
+		}
+
+		if streaming {
+			// Handle streaming response using vertex protocol
+			for resp, err := range vertex.ParseStream(resp.Body) {
+				if !yield(resp, err) {
+					return
+				}
+			}
+		} else {
+			// Non-streaming response
+			body, _ := io.ReadAll(resp.Body)
+			llmResp, err := vertex.ParseResponse(body)
 			if err != nil {
 				yield(nil, err)
 				return

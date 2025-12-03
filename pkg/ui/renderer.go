@@ -42,7 +42,7 @@ func SmartRender(input string) string {
 	}
 	
 	// Glamour adds a newline at the beginning sometimes, trim it if it's excessive
-	return strings.Trim(out, "\n")
+	return strings.TrimLeft(out, "\n")
 }
 
 // Helper to check validity

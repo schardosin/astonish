@@ -699,6 +699,11 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				}
 				
 				// Send selection back to agent
+				if selection == "Yes" {
+					fmt.Println(ui.RenderStatusBadge("Command approved", true))
+				} else {
+					fmt.Println(ui.RenderStatusBadge("Command rejected", false))
+				}
 				userMsg = genai.NewContentFromText(selection, genai.RoleUser)
 				continue
 				
@@ -718,6 +723,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					if err != nil {
 						return err
 					}
+					fmt.Println(ui.RenderStatusBadge(fmt.Sprintf("%s: %s", title, selection), true))
 					userMsg = genai.NewContentFromText(selection, genai.RoleUser)
 					continue
 				} else {
@@ -726,6 +732,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					if err != nil {
 						return err
 					}
+					fmt.Println(ui.RenderStatusBadge(fmt.Sprintf("%s: %s", title, input), true))
 					userMsg = genai.NewContentFromText(input, genai.RoleUser)
 					continue
 				}

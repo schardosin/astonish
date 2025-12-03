@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -436,6 +437,66 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				// Show the prompt and return, waiting for user input
 				prompt := a.renderString(node.Prompt, state)
 				
+				// Resolve options if present
+				var inputOptions []string
+				if len(node.Options) > 0 {
+					for _, opt := range node.Options {
+						// Check if option is a state variable
+						if val, err := state.Get(opt); err == nil {
+							// If it's a list of strings, expand it
+							if list, ok := val.([]string); ok {
+								inputOptions = append(inputOptions, list...)
+								continue
+							}
+							// If it's a generic list, try to convert elements to strings
+							if list, ok := val.([]interface{}); ok {
+								for _, item := range list {
+									inputOptions = append(inputOptions, fmt.Sprintf("%v", item))
+								}
+								continue
+							}
+							// If it's a string, split by newline
+							if strVal, ok := val.(string); ok {
+								lines := strings.Split(strings.TrimSpace(strVal), "\n")
+								for _, line := range lines {
+									trimmed := strings.TrimSpace(line)
+									if trimmed == "" {
+										continue
+									}
+									// Filter out lines that look like LLM preamble/commentary
+									// Accept lines that start with a number followed by colon (PR format)
+									// or lines that don't look like natural language sentences
+									if strings.Contains(trimmed, ":") {
+										// Check if it starts with a number (likely a PR)
+										parts := strings.SplitN(trimmed, ":", 2)
+										if len(parts) == 2 {
+											// Check if the first part is numeric (or starts with #)
+											firstPart := strings.TrimSpace(parts[0])
+											if len(firstPart) > 0 {
+												// Remove leading # if present
+												if firstPart[0] == '#' {
+													firstPart = firstPart[1:]
+												}
+												// Check if it's a number
+												if _, err := fmt.Sscanf(firstPart, "%d", new(int)); err == nil {
+													inputOptions = append(inputOptions, trimmed)
+													continue
+												}
+											}
+										}
+									}
+									// If it doesn't match the PR format, skip it (likely LLM commentary)
+								}
+								if len(inputOptions) > 0 {
+									continue
+								}
+							}
+						}
+						// Otherwise treat as literal option
+						inputOptions = append(inputOptions, opt)
+					}
+				}
+
 				promptEvent := &session.Event{
 					LLMResponse: model.LLMResponse{
 						Content: &genai.Content{
@@ -445,7 +506,8 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 					},
 					Actions: session.EventActions{
 						StateDelta: map[string]any{
-							"current_node": currentNodeName,
+							"current_node":  currentNodeName,
+							"input_options": inputOptions,
 						},
 					},
 				}
@@ -540,6 +602,13 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				}
 				currentNodeName = nextNode
 				continue
+			}
+
+			// DEBUG LOGGING TO ABSOLUTE PATH
+			f, _ := os.OpenFile("/Users/I851355/Projects/astonish/agent_debug_absolute.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if f != nil {
+				fmt.Fprintf(f, "[DEBUG] Processing Node: %s, Type: %s\n", node.Name, node.Type)
+				f.Close()
 			}
 
 			if node.Type == "input" {

@@ -990,6 +990,9 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 	// This ensures that the LLM sees a User Message even if llmagent doesn't pick it up from context
 	// or if history is empty.
 	userEvent := &session.Event{
+		InvocationID: ctx.InvocationID(),
+		Branch:       ctx.Branch(),
+		Author:       "user",
 		LLMResponse: model.LLMResponse{
 			Content: &genai.Content{
 				Parts: []*genai.Part{{Text: userPrompt}},
@@ -998,8 +1001,9 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 		},
 	}
 	
+	sess := ctx.Session()
+	
 	if a.SessionService != nil {
-		sess := ctx.Session()
 		
 		// Unwrap ScopedSession if present, as SessionService might expect the underlying session type
 		if scopedSess, ok := sess.(*ScopedSession); ok {
@@ -1010,8 +1014,19 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 		if err := a.SessionService.AppendEvent(ctx, sess, userEvent); err != nil {
 			// Retry with session fetched via Get (last resort)
 			if sess.ID() != "" {
+				appName := sess.AppName()
+				if appName == "" {
+					appName = "astonish"
+				}
+				userID := sess.UserID()
+				if userID == "" {
+					userID = "console_user"
+				}
+				
 				getResp, getErr := a.SessionService.Get(ctx, &session.GetRequest{
 					SessionID: sess.ID(),
+					AppName:   appName,
+					UserID:    userID,
 				})
 				if getErr == nil && getResp != nil && getResp.Session != nil {
 					_ = a.SessionService.AppendEvent(ctx, getResp.Session, userEvent)
@@ -1151,53 +1166,24 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 		// But for now, we stick to the map/object structure
 	}
 
-	// Define callback to inject user prompt if missing
-	injectUserPrompt := func(ctx agent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
-		if userPrompt == "" {
-			return nil, nil
-		}
-		
-		// Check if already present in Contents
-		found := false
-		for _, c := range req.Contents {
-			for _, p := range c.Parts {
-				if p.Text == userPrompt {
-					found = true
-					break
-				}
-			}
-		}
-		
-		if !found {
-			if a.DebugMode {
-				fmt.Printf("[DEBUG] Injecting missing user prompt into request contents\n")
-			}
-			req.Contents = append(req.Contents, &genai.Content{
-				Role: "user",
-				Parts: []*genai.Part{{Text: userPrompt}},
-			})
-		}
-		return nil, nil
-	}
-
-
-	
 	// Create ADK llmagent for this node
 	// Strategy:
 	// - Internal tools go via Tools field
 	// - MCP toolsets go via Toolsets field
 	// - OutputSchema is used for structured output (replaces manual JSON parsing)
+	// Declare l (agent) early so it can be captured by the callback
+	var l agent.Agent
+
 	var llmAgent agent.Agent
 	var err error
-	
+
 	if node.Tools {
 		// Prepare internal tools (no wrapping needed - callback handles approval)
 		var internalTools []tool.Tool
 		if len(nodeTools) > 0 {
 			internalTools = append(internalTools, nodeTools...)
-
 		}
-		
+
 		// Prepare MCP toolsets (no wrapping needed - callback handles approval)
 		var mcpToolsets []tool.Toolset
 		if len(a.Toolsets) > 0 {
@@ -1211,7 +1197,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 
 						continue
 					}
-					
+
 					// Check if any tool in this toolset matches our selection
 					hasMatchingTool := false
 					for _, t := range tsTools {
@@ -1225,23 +1211,23 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 							break
 						}
 					}
-					
+
 					if !hasMatchingTool {
 
 						continue
 					}
 				}
-				
+
 				mcpToolsets = append(mcpToolsets, ts)
 
 			}
 		}
 
-		
+
 		// Apply tools_selection filter if specified
 		if len(node.ToolsSelection) > 0 {
 
-			
+
 			// Filter internal tools
 			var filteredInternalTools []tool.Tool
 			for _, t := range internalTools {
@@ -1254,7 +1240,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 				}
 			}
 			internalTools = filteredInternalTools
-			
+
 			// Wrap MCP toolsets with FilteredToolset to filter tools
 			var filteredMCPToolsets []tool.Toolset
 			for _, ts := range mcpToolsets {
@@ -1264,20 +1250,20 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 				})
 			}
 			mcpToolsets = filteredMCPToolsets
-			
+
 
 		}
 
-		
+
 		// Create BeforeToolCallback for approval if needed
 		var beforeToolCallbacks []llmagent.BeforeToolCallback
 		var afterToolCallbacks []llmagent.AfterToolCallback
-		
+
 		if !node.ToolsAutoApproval {
 			beforeToolCallbacks = []llmagent.BeforeToolCallback{
 				func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 					toolName := t.Name()
-					
+
 					// DEBUG: Log tool execution attempt
 					if a.DebugMode {
 						argsJSON, _ := json.MarshalIndent(args, "", "  ")
@@ -1288,7 +1274,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 					}
 
 					approvalKey := fmt.Sprintf("approval:%s", toolName)
-					
+
 					// Check if we already have approval for this tool
 					approvedVal, _ := state.Get(approvalKey)
 
@@ -1296,7 +1282,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 					if b, ok := approvedVal.(bool); ok && b {
 						approved = true
 					}
-					
+
 					if a.DebugMode {
 						fmt.Printf("[DEBUG] Approval check: approved=%v, approvalKey=%s\n", approved, approvalKey)
 					}
@@ -1309,13 +1295,13 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 							UserID:    ctx.UserID(),
 							SessionID: ctx.SessionID(),
 						})
-						
+
 						if err == nil && sessResp != nil && sessResp.Session != nil {
 							events := sessResp.Session.Events()
 						if events.Len() >= 2 {
 							lastEvent := events.At(events.Len() - 1)
 							prevEvent := events.At(events.Len() - 2)
-							
+
 							// Check if last event is user "Yes"
 							isUserYes := false
 							if lastEvent.Author == "user" && lastEvent.LLMResponse.Content != nil && len(lastEvent.LLMResponse.Content.Parts) > 0 {
@@ -1357,18 +1343,18 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 						// The actual tool result will be captured by the ADK framework
 						return nil, nil
 					}
-					
+
 					if a.DebugMode {
 						fmt.Printf("[DEBUG] Tool NOT approved. Requesting user approval...\n")
 					}
-					
+
 					// No approval - request it
 					// We set 'force_pause' to tell the outer loop to stop immediately
 					state.Set("force_pause", true)
 					state.Set("awaiting_approval", true)
 					state.Set("approval_tool", toolName)
 					state.Set("approval_args", args)
-					
+
 					// Emit approval request event
 					prompt := a.formatToolApprovalRequest(toolName, args)
 					yield(&session.Event{
@@ -1386,7 +1372,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 							},
 						},
 					}, nil)
-					
+
 					// Return a placeholder result
 					// This string enters the LLM context. When we resume, we will overwrite this
 					// context or instruct the LLM to ignore it and retry.
@@ -1394,17 +1380,17 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 						"status": "pending_approval",
 						"info":   "Execution paused for user approval. When you see this message in history, it means the user has APPROVED the execution. You MUST retry the tool call immediately.",
 					}
-					
+
 					if a.DebugMode {
 						placeholderJSON, _ := json.MarshalIndent(placeholderResult, "", "  ")
 						fmt.Printf("[DEBUG] Returning placeholder result:\n%s\n", string(placeholderJSON))
 					}
-					
+
 					return placeholderResult, nil
 				},
 			}
 		}
-		
+
 		// Add AfterToolCallback for debugging (removed force_stop logic that broke parallel processing)
 		afterToolCallbacks = []llmagent.AfterToolCallback{
 			func(ctx tool.Context, t tool.Tool, args map[string]any, result map[string]any, err error) (map[string]any, error) {
@@ -1412,9 +1398,9 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 					// Tool failed, let the LLM see the error
 					return result, err
 				}
-				
+
 				toolName := t.Name()
-				
+
 				// DEBUG: Log successful tool execution
 				if a.DebugMode {
 					resultJSON, _ := json.MarshalIndent(result, "", "  ")
@@ -1423,7 +1409,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 					fmt.Printf("[DEBUG] Result:\n%s\n", string(resultJSON))
 					fmt.Printf("[DEBUG] ===========================================\n\n")
 				}
-				
+
 				return result, nil
 			},
 		}
@@ -1438,25 +1424,46 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			OutputKey:           outputKey,
 			BeforeToolCallbacks: beforeToolCallbacks,
 			AfterToolCallbacks:  afterToolCallbacks,
-			BeforeModelCallbacks: []llmagent.BeforeModelCallback{injectUserPrompt},
 		})
 	} else {
 		// No tools enabled
 		llmAgent, err = llmagent.New(llmagent.Config{
-			Name:         nodeName,
-			Model:        a.LLM,
-			Instruction:  instruction,
+			Name:        nodeName,
+			Model:       a.LLM,
+			Instruction: instruction,
+			Tools:       nodeTools,
 			OutputSchema: outputSchema,
 			OutputKey:    outputKey,
-			BeforeModelCallbacks: []llmagent.BeforeModelCallback{injectUserPrompt},
 		})
 	}
-	
+	l = llmAgent // Assign to 'l' after creation
+
+	// Wrap session in LiveSession to ensure fresh history
+	liveSess := &LiveSession{
+		service: a.SessionService,
+		ctx:     ctx,
+		base:    sess,
+	}
+
+	// Create a ScopedContext that uses the LiveSession and the correct Agent (l)
+	// This ensures:
+	// 1. llmagent sees fresh history (via LiveSession.Events)
+	// 2. llmagent sees itself as the agent (via ScopedContext.Agent override), fixing ContentsRequestProcessor
+	scopedCtx := &ScopedContext{
+		InvocationContext: ctx,
+		session:           liveSess,
+		state:             state,
+		agent:             l,
+	}
+
+	// Use scopedCtx for Run
+	ctx = scopedCtx
+
 	if err != nil {
 		yield(nil, fmt.Errorf("failed to create llmagent: %w", err))
 		return false
 	}
-	
+
 	// Reset the pause flag before starting
 	state.Set("force_pause", false)
 	
@@ -2521,6 +2528,7 @@ type ScopedContext struct {
 	agent.InvocationContext
 	state   session.State
 	session session.Session
+	agent   agent.Agent
 }
 
 func (s *ScopedContext) SessionID() string {
@@ -2538,6 +2546,13 @@ func (s *ScopedContext) State() session.State {
 	return s.state
 }
 
+func (s *ScopedContext) Agent() agent.Agent {
+	if s.agent != nil {
+		return s.agent
+	}
+	return s.InvocationContext.Agent()
+}
+
 // ScopedSession wraps a Session and overrides the state
 type ScopedSession struct {
 	session.Session
@@ -2546,6 +2561,76 @@ type ScopedSession struct {
 
 func (s *ScopedSession) State() session.State {
 	return s.state
+}
+
+// LiveSession wraps a session and fetches fresh data from the service on access
+type LiveSession struct {
+	service session.Service
+	ctx     context.Context
+	base    session.Session
+}
+
+func (s *LiveSession) ID() string {
+	return s.base.ID()
+}
+
+func (s *LiveSession) AppName() string {
+	return s.base.AppName()
+}
+
+func (s *LiveSession) UserID() string {
+	return s.base.UserID()
+}
+
+func (s *LiveSession) getAppAndUser() (string, string) {
+	appName := s.base.AppName()
+	if appName == "" {
+		appName = "astonish"
+	}
+	userID := s.base.UserID()
+	if userID == "" {
+		userID = "console_user"
+	}
+	return appName, userID
+}
+
+func (s *LiveSession) LastUpdateTime() time.Time {
+	appName, userID := s.getAppAndUser()
+	resp, err := s.service.Get(s.ctx, &session.GetRequest{
+		SessionID: s.base.ID(),
+		AppName:   appName,
+		UserID:    userID,
+	})
+	if err != nil || resp == nil || resp.Session == nil {
+		return s.base.LastUpdateTime()
+	}
+	return resp.Session.LastUpdateTime()
+}
+
+func (s *LiveSession) State() session.State {
+	appName, userID := s.getAppAndUser()
+	resp, err := s.service.Get(s.ctx, &session.GetRequest{
+		SessionID: s.base.ID(),
+		AppName:   appName,
+		UserID:    userID,
+	})
+	if err != nil || resp == nil || resp.Session == nil {
+		return s.base.State()
+	}
+	return resp.Session.State()
+}
+
+func (s *LiveSession) Events() session.Events {
+	appName, userID := s.getAppAndUser()
+	resp, err := s.service.Get(s.ctx, &session.GetRequest{
+		SessionID: s.base.ID(),
+		AppName:   appName,
+		UserID:    userID,
+	})
+	if err != nil || resp == nil || resp.Session == nil {
+		return s.base.Events()
+	}
+	return resp.Session.Events()
 }
 
 // handleParallelNode handles nodes with parallel configuration
@@ -2622,6 +2707,20 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 	// Track success to know if we should include the result
 	successes := make([]bool, len(items))
 
+	// Initialize progress bar UI
+	prog := ui.NewParallelProgram(len(items), node.Name)
+	
+	// Channel to signal UI completion
+	uiDone := make(chan struct{})
+	
+	// Run UI in a goroutine
+	go func() {
+		defer close(uiDone)
+		if _, err := prog.Run(); err != nil {
+			fmt.Printf("Error running progress UI: %v\n", err)
+		}
+	}()
+
 	// Wrap yield to be thread-safe and track cancellation
 	yieldCancelled := false
 	safeYield := func(event *session.Event, err error) bool {
@@ -2629,6 +2728,24 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 		defer mu.Unlock()
 		if yieldCancelled {
 			return false
+		}
+		
+		// Log tool calls and errors to UI
+		if event != nil && event.LLMResponse.Content != nil {
+			for _, part := range event.LLMResponse.Content.Parts {
+				if part.FunctionCall != nil {
+					msg := fmt.Sprintf("Calling tool: %s", part.FunctionCall.Name)
+					prog.Send(ui.ItemLogMsg(msg))
+				}
+				if part.FunctionResponse != nil {
+					msg := fmt.Sprintf("Tool finished: %s", part.FunctionResponse.Name)
+					prog.Send(ui.ItemLogMsg(msg))
+				}
+			}
+		}
+		if err != nil {
+			msg := fmt.Sprintf("Error: %v", err)
+			prog.Send(ui.ItemLogMsg(msg))
 		}
 		
 		// Suppress StateDelta and LLMResponse to prevent console printing during parallel execution
@@ -2649,20 +2766,6 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 		}
 		return true
 	}
-
-	// Initialize progress bar UI
-	prog := ui.NewParallelProgram(len(items), node.Name)
-	
-	// Channel to signal UI completion
-	uiDone := make(chan struct{})
-	
-	// Run UI in a goroutine
-	go func() {
-		defer close(uiDone)
-		if _, err := prog.Run(); err != nil {
-			fmt.Printf("Error running progress UI: %v\n", err)
-		}
-	}()
 
 	for i, item := range items {
 		wg.Add(1)

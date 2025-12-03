@@ -736,7 +736,9 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					if err != nil {
 						return err
 					}
-					fmt.Println(ui.RenderStatusBadge(fmt.Sprintf("%s: %s", title, selection), true))
+					// Strip trailing colon from title for cleaner display
+					displayTitle := strings.TrimSuffix(title, ":")
+					fmt.Println(ui.RenderStatusBadge(fmt.Sprintf("%s: %s", displayTitle, selection), true))
 					userMsg = genai.NewContentFromText(selection, genai.RoleUser)
 					continue
 				} else {
@@ -745,7 +747,9 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					if err != nil {
 						return err
 					}
-					fmt.Println(ui.RenderStatusBadge(fmt.Sprintf("%s: %s", title, input), true))
+					// Strip trailing colon from title for cleaner display
+					displayTitle := strings.TrimSuffix(title, ":")
+					fmt.Println(ui.RenderStatusBadge(fmt.Sprintf("%s: %s", displayTitle, input), true))
 					userMsg = genai.NewContentFromText(input, genai.RoleUser)
 					continue
 				}

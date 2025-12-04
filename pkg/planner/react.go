@@ -118,7 +118,34 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 	temp := float32(0.0)
 	
 	for i := startStep; i < maxSteps; i++ {
-		// 2. Call LLM
+		var action, actionInput string
+		var skipLLM bool
+
+		// CHECK: Do we have a pending action from a resume?
+		if p.State != nil {
+			if pendingAction, _ := p.State.Get("_react_pending_action"); pendingAction != nil {
+				if act, ok := pendingAction.(string); ok {
+					action = act
+					if pendingInput, _ := p.State.Get("_react_pending_input"); pendingInput != nil {
+						if inp, ok := pendingInput.(string); ok {
+							actionInput = inp
+						}
+					}
+					
+					// Clear the pending state so we don't loop forever
+					p.State.Set("_react_pending_action", nil)
+					p.State.Set("_react_pending_input", nil)
+					
+					skipLLM = true
+					if p.DebugMode {
+						fmt.Printf("[ReAct] Resuming execution of pending tool: %s\n", action)
+					}
+				}
+			}
+		}
+
+		if !skipLLM {
+			// 2. Call LLM
 		req := &model.LLMRequest{
 			Contents: []*genai.Content{
 				{
@@ -182,20 +209,25 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 		}
 		
 		// Parse Action
-		actionRegex := regexp.MustCompile(`Action:\s*(\w+)`)
+		// Allow hyphens, dots, or other safe chars in tool names (non-whitespace)
+		actionRegex := regexp.MustCompile(`Action:\s*([^\s]+)`)
 		actionMatch := actionRegex.FindStringSubmatch(responseText)
 		if len(actionMatch) < 2 {
+			// Heuristic: If it wrote "Action Input" but missed "Action", or if the text is very long, it failed.
+			if strings.Contains(responseText, "Action Input:") {
+				history += "\n\nObservation: Error: Invalid Format. You provided an Input but no Action. Please use the 'Action: <ToolName>' format.\n\nThought: "
+				continue
+			}
 			// No action found - might be just thinking, continue
 			// The responseText is already added to history, so just continue.
 			continue
 		}
-		action := actionMatch[1]
+		action = actionMatch[1]
 		
 		// Parse Action Input - it might be multiline or contain code blocks
 		// Look for "Action Input:" and capture everything until "STOP HERE", "Observation:", or end
 		actionInputRegex := regexp.MustCompile(`(?s)Action Input:\s*(.*?)(?:\n\nSTOP HERE|\n\nObservation:|$)`)
 		inputMatch := actionInputRegex.FindStringSubmatch(responseText)
-		var actionInput string
 		if len(inputMatch) >= 2 {
 			actionInput = strings.TrimSpace(inputMatch[1])
 			
@@ -216,6 +248,7 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 			}
 			actionInput = strings.TrimSpace(actionInput)
 		}
+		} // End of !skipLLM block
 
 		// Execute tool
 		if p.DebugMode {
@@ -229,6 +262,11 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 				if p.State != nil {
 					p.State.Set("_react_history", history)
 					p.State.Set("_react_step", i)
+					
+					// NEW: Save the pending action details
+					p.State.Set("_react_pending_action", action)
+					p.State.Set("_react_pending_input", actionInput)
+
 					if p.DebugMode {
 						fmt.Printf("[ReAct DEBUG] Saving state at step %d\n", i)
 					}
@@ -385,7 +423,10 @@ func (p *ReActPlanner) executeTool(ctx context.Context, name string, inputJSON s
 	// tool.Tool is an interface, but concrete implementations have a Run method
 	// We need to use type assertion or reflection to call it
 	// Create a minimal tool context
-	toolCtx := &minimalToolContext{Context: ctx}
+	toolCtx := &minimalToolContext{
+		Context: ctx,
+		state:   p.State,
+	}
 	
 	// Try to call Run using reflection or type assertion
 	// Most ADK tools implement a Run(tool.Context, any) (map[string]any, error) method
@@ -414,6 +455,7 @@ func (p *ReActPlanner) executeTool(ctx context.Context, name string, inputJSON s
 // minimalToolContext implements tool.Context for ReAct tool execution
 type minimalToolContext struct {
 	context.Context // Embed to get Deadline, Done, Err, Value methods
+	state           session.State
 }
 
 func (m *minimalToolContext) Actions() *session.EventActions {
@@ -465,5 +507,5 @@ func (m *minimalToolContext) SearchMemory(ctx context.Context, query string) (*m
 }
 
 func (m *minimalToolContext) State() session.State {
-	return nil
+	return m.state
 }

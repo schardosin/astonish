@@ -332,7 +332,8 @@ Return ONLY the JSON object, no other text or markdown.`, systemContext, schemaD
 			},
 		},
 		Config: &genai.GenerateContentConfig{
-			Temperature: func() *float32 { t := float32(0.0); return &t }(),
+			Temperature:      func() *float32 { t := float32(0.0); return &t }(),
+			ResponseMIMEType: "application/json",
 		},
 	}
 

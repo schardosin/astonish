@@ -28,9 +28,16 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 	// WORKAROUND: Google GenAI (Gemini) does not support function calling with response_mime_type: application/json
 	// If tools are present, we must unset the response MIME type and schema to avoid 400 error.
 	// The prompt instructions will still guide the model to produce JSON, and the agent will parse it manually.
-	if req.Config != nil && len(req.Config.Tools) > 0 {
-		req.Config.ResponseMIMEType = ""
-		req.Config.ResponseSchema = nil
+	if req.Config != nil {
+		if len(req.Config.Tools) > 0 {
+			req.Config.ResponseMIMEType = ""
+			req.Config.ResponseSchema = nil
+		} else if req.Config.ResponseMIMEType == "application/json" && req.Config.ResponseSchema == nil {
+			// WORKAROUND: Some Google models (e.g. gemma-3-27b-it) do not support "JSON mode" (MIME type without schema).
+			// If we are requesting JSON but providing no schema, unset the MIME type to avoid 400 error.
+			// The prompt instructions in ReAct FormatOutput are sufficient for these models.
+			req.Config.ResponseMIMEType = ""
+		}
 	}
 	return p.model.GenerateContent(ctx, req, stream)
 }

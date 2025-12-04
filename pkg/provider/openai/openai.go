@@ -55,6 +55,13 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 			Tools:    tools,
 		}
 
+		// Check for JSON mode request
+		if req.Config != nil && req.Config.ResponseMIMEType == "application/json" {
+			openAIReq.ResponseFormat = &openai.ChatCompletionResponseFormat{
+				Type: openai.ChatCompletionResponseFormatTypeJSONObject,
+			}
+		}
+
 		if streaming {
 			stream, err := p.client.CreateChatCompletionStream(ctx, openAIReq)
 			if err != nil {

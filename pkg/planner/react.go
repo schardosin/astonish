@@ -390,21 +390,38 @@ func (p *ReActPlanner) executeTool(ctx context.Context, name string, inputJSON s
 	}
 	
 	// Parse input
+	// Parse input
 	var args map[string]any
 	// Try parsing as JSON first
 	if err := json.Unmarshal([]byte(inputJSON), &args); err != nil {
-		// If not JSON, wrap it appropriately based on the tool
-		// Check the tool's schema to determine the correct field name
-		// For now, use common patterns
-		if name == "execute_python" {
-			args = map[string]any{"code": inputJSON}
-		} else if name == "run_python_code" {
-			args = map[string]any{"python_code": inputJSON}
-		} else if name == "shell_command" {
-			args = map[string]any{"command": inputJSON}
-		} else {
-			args = map[string]any{"input": inputJSON}
+		// If not JSON, try to determine the single argument name from the schema
+		argName := "input" // Default fallback
+
+		type ToolWithDeclaration interface {
+			Declaration() *genai.FunctionDeclaration
 		}
+
+		if declTool, ok := selectedTool.(ToolWithDeclaration); ok {
+			decl := declTool.Declaration()
+			if decl != nil && decl.ParametersJsonSchema != nil {
+				if schema, ok := decl.ParametersJsonSchema.(*genai.Schema); ok {
+					if schema.Type == genai.TypeObject && len(schema.Properties) == 1 {
+						for k := range schema.Properties {
+							argName = k
+							break
+						}
+					}
+				} else if schemaMap, ok := decl.ParametersJsonSchema.(map[string]interface{}); ok {
+					if props, ok := schemaMap["properties"].(map[string]interface{}); ok && len(props) == 1 {
+						for k := range props {
+							argName = k
+							break
+						}
+					}
+				}
+			}
+		}
+		args = map[string]any{argName: inputJSON}
 	}
 
 	// WORKAROUND: Sanitize arguments for common model hallucinations

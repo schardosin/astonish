@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"iter"
 	"net/http"
 	"os"
 	"sort"
@@ -16,9 +17,22 @@ import (
 
 // Provider implements the model.LLM interface for Google GenAI.
 type Provider struct {
-	client    *genai.Client
-	modelName string
-	model     model.LLM
+	model model.LLM
+}
+
+func (p *Provider) Name() string {
+	return p.model.Name()
+}
+
+func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	// WORKAROUND: Google GenAI (Gemini) does not support function calling with response_mime_type: application/json
+	// If tools are present, we must unset the response MIME type and schema to avoid 400 error.
+	// The prompt instructions will still guide the model to produce JSON, and the agent will parse it manually.
+	if req.Config != nil && len(req.Config.Tools) > 0 {
+		req.Config.ResponseMIMEType = ""
+		req.Config.ResponseSchema = nil
+	}
+	return p.model.GenerateContent(ctx, req, stream)
 }
 
 // NewProvider creates a new Google GenAI provider.
@@ -39,12 +53,7 @@ func NewProvider(ctx context.Context, modelName string, apiKey string) (model.LL
 		return nil, err
 	}
 
-	// We also need a raw client for listing models if needed, 
-	// but for the Provider interface, the ADK model is sufficient.
-	// However, to support ListModels, we might need a separate client or just use the one created by ADK if accessible.
-	// Since ADK hides the client, we'll create a lightweight one for listing if requested.
-
-	return m, nil
+	return &Provider{model: m}, nil
 }
 
 // ListModels fetches available models from Google GenAI API using the OpenAI-compatible endpoint.

@@ -296,6 +296,11 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					// The text content will be printed by the normal text processing below
 					// We just needed to ensure the prefix is printed first
 				}
+				
+				// Check for spinner text update
+				if spinnerText, ok := event.Actions.StateDelta["_spinner_text"].(string); ok {
+					startSpinner(spinnerText)
+				}
 			}
 			
 			// Update current node from StateDelta if present

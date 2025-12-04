@@ -139,7 +139,7 @@ func (t *sapTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if strings.Contains(req.URL.Path, "/chat/completions") {
 		q := req.URL.Query()
 		if q.Get("api-version") == "" {
-			q.Set("api-version", "2024-02-01")
+			q.Set("api-version", "2024-12-01-preview")
 			req.URL.RawQuery = q.Encode()
 		}
 	}

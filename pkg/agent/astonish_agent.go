@@ -1551,12 +1551,23 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 	toolCallCount := 0
 	const maxToolCalls = 20 // Maximum tool calls to prevent infinite loops
 
-	// Check if we should use ReAct fallback from cache
-	useReAct, _ := state.Get("_use_react_fallback")
-	if useReAct == true {
-		if a.DebugMode {
-			fmt.Println("[DEBUG] Using cached ReAct fallback decision")
+	// Check if we should use ReAct fallback
+	useReActFallback := false
+	if fallbackVal, err := state.Get("_use_react_fallback"); err == nil {
+		if b, ok := fallbackVal.(bool); ok && b {
+			useReActFallback = true
 		}
+	}
+	
+	if useReActFallback {
+		// Emit a message indicating we're using the fallback via spinner update
+		yield(&session.Event{
+			Actions: session.EventActions{
+				StateDelta: map[string]any{
+					"_spinner_text": fmt.Sprintf("Processing %s (Fallback: built-in tool)...", node.Name),
+				},
+			},
+		}, nil)
 		
 		// Collect all tools (internal + MCP) for ReAct planner
 		allTools := make([]tool.Tool, 0, len(internalTools))
@@ -1764,6 +1775,15 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 				
 				// Enable fallback for future runs
 				state.Set("_use_react_fallback", true)
+				
+				// Emit a message indicating we're using the fallback via spinner update
+				yield(&session.Event{
+					Actions: session.EventActions{
+						StateDelta: map[string]any{
+							"_spinner_text": fmt.Sprintf("Processing %s (Fallback: built-in tool)...", node.Name),
+						},
+					},
+				}, nil)
 				
 				// Collect all tools (internal + MCP) for ReAct planner
 				allTools := make([]tool.Tool, 0, len(internalTools))

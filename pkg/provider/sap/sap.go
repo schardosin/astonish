@@ -80,7 +80,7 @@ func NewProvider(ctx context.Context, modelName string) (model.LLM, error) {
 
 	// Create the wrapped OpenAI provider
 	client := goopenai.NewClientWithConfig(openaiConfig)
-	op := openai.NewProvider(client, modelName)
+	op := openai.NewProvider(client, modelName, true)
 
 	return &Provider{
 		openaiProvider: op,

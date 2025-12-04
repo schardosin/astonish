@@ -16,17 +16,20 @@ import (
 
 // Provider implements model.LLM for OpenAI.
 type Provider struct {
-	client *openai.Client
-	model  string
+	client           *openai.Client
+	model            string
+	supportsJSONMode bool
 }
 
 // NewProvider creates a new OpenAI provider.
-func NewProvider(client *openai.Client, modelName string) *Provider {
+func NewProvider(client *openai.Client, modelName string, supportsJSONMode bool) *Provider {
 	return &Provider{
-		client: client,
-		model:  modelName,
+		client:           client,
+		model:            modelName,
+		supportsJSONMode: supportsJSONMode,
 	}
 }
+
 // GenerateContent implements model.LLM.
 func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, streaming bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
@@ -56,7 +59,7 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 		}
 
 		// Check for JSON mode request
-		if req.Config != nil && req.Config.ResponseMIMEType == "application/json" {
+		if p.supportsJSONMode && req.Config != nil && req.Config.ResponseMIMEType == "application/json" {
 			openAIReq.ResponseFormat = &openai.ChatCompletionResponseFormat{
 				Type: openai.ChatCompletionResponseFormatTypeJSONObject,
 			}

@@ -41,7 +41,7 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 			modelName = "gpt-4"
 		}
 		client := openai.NewClient(apiKey)
-		return openai_provider.NewProvider(client, modelName), nil
+		return openai_provider.NewProvider(client, modelName, true), nil
 
 	case "openrouter":
 		apiKey := ""
@@ -58,7 +58,7 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 		config := openai.DefaultConfig(apiKey)
 		config.BaseURL = "https://openrouter.ai/api/v1"
 		client := openai.NewClientWithConfig(config)
-		return openai_provider.NewProvider(client, modelName), nil
+		return openai_provider.NewProvider(client, modelName, true), nil
 
 	case "ollama":
 		baseURL := "http://localhost:11434"
@@ -76,7 +76,23 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 		config := openai.DefaultConfig("ollama") // API key not required but must be non-empty string
 		config.BaseURL = fmt.Sprintf("%s/v1", baseURL)
 		client := openai.NewClientWithConfig(config)
-		return openai_provider.NewProvider(client, modelName), nil
+		return openai_provider.NewProvider(client, modelName, true), nil
+
+	case "lm_studio":
+		baseURL := "http://localhost:1234/v1"
+		if cfg != nil && cfg.Providers["lm_studio"] != nil {
+			if val, ok := cfg.Providers["lm_studio"]["base_url"]; ok && val != "" {
+				baseURL = val
+			}
+		}
+		if modelName == "" {
+			return nil, fmt.Errorf("model name required for lm_studio")
+		}
+
+		config := openai.DefaultConfig("lm-studio")
+		config.BaseURL = baseURL
+		client := openai.NewClientWithConfig(config)
+		return openai_provider.NewProvider(client, modelName, false), nil
 
 	case "sap_ai_core":
 		if modelName == "" {

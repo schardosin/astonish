@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/provider/google"
+	"github.com/schardosin/astonish/pkg/provider/lmstudio"
 	"github.com/schardosin/astonish/pkg/provider/ollama"
 	"github.com/schardosin/astonish/pkg/provider/openrouter"
 	"github.com/schardosin/astonish/pkg/provider/sap"
@@ -81,6 +82,11 @@ func handleSetupCommand() error {
 		runAPIKeyForm("Groq API Key", "api_key", pCfg)
 	case "lm_studio":
 		runBaseURLForm("LM Studio Base URL", "http://localhost:1234/v1", pCfg)
+		if err := fetchAndSelectLMStudioModel(pCfg, cfg); err != nil {
+			fmt.Printf("Warning: Failed to fetch/select LM Studio models: %v\n", err)
+		} else {
+			goto SaveConfig
+		}
 	case "ollama":
 		runOllamaForm(pCfg)
 		if err := fetchAndSelectOllamaModel(pCfg, cfg); err != nil {
@@ -442,6 +448,53 @@ func fetchAndSelectOllamaModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Select an Ollama Model").
+				Options(options...).
+				Value(&selectedModel).
+				Height(10),
+		),
+	).Run()
+	
+	if err != nil {
+		return err
+	}
+
+	// Save selected model as default
+	appCfg.General.DefaultModel = selectedModel
+	fmt.Printf("Selected default model: %s\n", selectedModel)
+	
+	return nil
+}
+
+func fetchAndSelectLMStudioModel(pCfg config.ProviderConfig, appCfg *config.AppConfig) error {
+	baseURL := pCfg["base_url"]
+	if baseURL == "" {
+		baseURL = "http://localhost:1234/v1"
+	}
+
+	fmt.Println("Fetching available models from LM Studio...")
+	runSpinner("Connecting to LM Studio...")
+
+	models, err := lmstudio.ListModels(context.Background(), baseURL)
+	if err != nil {
+		return err
+	}
+
+	if len(models) == 0 {
+		return fmt.Errorf("no models found")
+	}
+
+	// Create options for huh.Select
+	var options []huh.Option[string]
+	for _, m := range models {
+		options = append(options, huh.NewOption(m, m))
+	}
+
+	var selectedModel string
+	
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select an LM Studio Model").
 				Options(options...).
 				Value(&selectedModel).
 				Height(10),

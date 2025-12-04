@@ -1564,7 +1564,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 		yield(&session.Event{
 			Actions: session.EventActions{
 				StateDelta: map[string]any{
-					"_spinner_text": fmt.Sprintf("Processing %s (Fallback: built-in tool)...", node.Name),
+					"_spinner_text": fmt.Sprintf("Processing %s (Fallback: internal tool reasoning)...", node.Name),
 				},
 			},
 		}, nil)
@@ -1780,7 +1780,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 				yield(&session.Event{
 					Actions: session.EventActions{
 						StateDelta: map[string]any{
-							"_spinner_text": fmt.Sprintf("Processing %s (Fallback: built-in tool)...", node.Name),
+							"_spinner_text": fmt.Sprintf("Processing %s (Fallback: internal tool reasoning)...", node.Name),
 						},
 					},
 				}, nil)

@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/provider/google"
 	"github.com/schardosin/astonish/pkg/provider/openrouter"
 	"github.com/schardosin/astonish/pkg/provider/sap"
 )
@@ -70,6 +71,11 @@ func handleSetupCommand() error {
 		runAPIKeyForm("Anthropic API Key", "api_key", pCfg)
 	case "gemini":
 		runAPIKeyForm("Google API Key", "api_key", pCfg)
+		if err := fetchAndSelectGoogleModel(pCfg, cfg); err != nil {
+			fmt.Printf("Warning: Failed to fetch/select Google models: %v\n", err)
+		} else {
+			goto SaveConfig
+		}
 	case "groq":
 		runAPIKeyForm("Groq API Key", "api_key", pCfg)
 	case "lm_studio":
@@ -285,6 +291,77 @@ func fetchAndSelectSAPModel(pCfg config.ProviderConfig, appCfg *config.AppConfig
 	return nil
 }
 
+// fetchAndSelectGoogleModel fetches available models from Google GenAI and prompts user to select one
+func fetchAndSelectGoogleModel(pCfg config.ProviderConfig, appCfg *config.AppConfig) error {
+	apiKey := pCfg["api_key"]
+	if apiKey == "" {
+		return fmt.Errorf("API key is missing")
+	}
+
+	fmt.Println("Fetching available models from Google GenAI...")
+	
+	// Create a spinner
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	
+	// Run fetching in a goroutine to show spinner
+	type result struct {
+		models []string
+		err    error
+	}
+	ch := make(chan result)
+	
+	go func() {
+		models, err := google.ListModels(context.Background(), apiKey)
+		ch <- result{models: models, err: err}
+	}()
+
+	// Wait for result while spinning
+	// Note: In a real CLI app we'd use Bubble Tea properly, but here we just want a simple spinner
+	// For simplicity in this setup script, we'll just wait. 
+	// The spinner library requires a loop or Bubble Tea program.
+	// Let's just print "..." for now to match other providers.
+	
+	res := <-ch
+	if res.err != nil {
+		return res.err
+	}
+	
+	if len(res.models) == 0 {
+		return fmt.Errorf("no models found")
+	}
+
+	// Create options for huh.Select
+	var options []huh.Option[string]
+	for _, m := range res.models {
+		options = append(options, huh.NewOption(m, m))
+	}
+
+	var selectedModel string
+	
+	// Use a form with a Select field
+	// Set a height limit to ensure scrolling works nicely
+	err := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select a Google GenAI Model").
+				Options(options...).
+				Value(&selectedModel).
+				Height(10), // Limit height to prevent taking up full screen
+		),
+	).Run()
+	
+	if err != nil {
+		return err
+	}
+
+	// Save selected model as default
+	appCfg.General.DefaultModel = selectedModel
+	fmt.Printf("Selected default model: %s\n", selectedModel)
+	
+	return nil
+}
 func fetchAndSelectOpenRouterModel(pCfg config.ProviderConfig, appCfg *config.AppConfig) error {
 	runSpinner("Fetching models from OpenRouter...")
 

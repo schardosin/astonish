@@ -7,11 +7,10 @@ import (
 
 	"github.com/sashabaranov/go-openai"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/provider/google"
 	openai_provider "github.com/schardosin/astonish/pkg/provider/openai"
 	"github.com/schardosin/astonish/pkg/provider/sap"
 	"google.golang.org/adk/model"
-	"google.golang.org/adk/model/gemini"
-	"google.golang.org/genai"
 )
 
 // GetProvider returns an LLM model based on the provider name.
@@ -28,9 +27,7 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 		if modelName == "" {
 			modelName = "gemini-1.5-flash"
 		}
-		return gemini.NewModel(ctx, modelName, &genai.ClientConfig{
-			APIKey: apiKey,
-		})
+		return google.NewProvider(ctx, modelName, apiKey)
 
 	case "openai":
 		apiKey := os.Getenv("OPENAI_API_KEY")

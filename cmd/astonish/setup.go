@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"sort"
+
+	"golang.org/x/term"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/huh"
@@ -271,7 +274,7 @@ func fetchAndSelectSAPModel(pCfg config.ProviderConfig, appCfg *config.AppConfig
 				Description("Type to filter list").
 				Options(modelOptions...).
 				Value(&selectedModel).
-				Height(len(models) + 2), 
+				Height(20), 
 		),
 	).Run()
 
@@ -322,7 +325,7 @@ func fetchAndSelectOpenRouterModel(pCfg config.ProviderConfig, appCfg *config.Ap
 				Description("Type to filter list").
 				Options(modelOptions...).
 				Value(&selectedModel).
-				Height(len(models) + 2), 
+				Height(20), 
 		),
 	).Run()
 
@@ -335,6 +338,33 @@ func fetchAndSelectOpenRouterModel(pCfg config.ProviderConfig, appCfg *config.Ap
 }
 
 // UI Helpers
+
+func getDynamicHeight(maxItems int) int {
+	_, height, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil {
+		// Fallback if we can't get terminal size
+		if maxItems < 20 {
+			return maxItems + 2
+		}
+		return 20
+	}
+
+	// Reserve space for header, footer, prompt (approx 5-6 lines)
+	// Also ensure we don't exceed the number of items
+	availableHeight := height - 6
+	if availableHeight < 5 {
+		availableHeight = 5 // Minimum usable height
+	}
+
+	// If the list is smaller than available space, just show the list
+	// +2 for some padding/borders if needed, but huh handles exact count well
+	if maxItems < availableHeight {
+		return maxItems + 2 
+	}
+
+	// Otherwise use all available space
+	return availableHeight
+}
 
 func runSpinner(msg string) {
 	s := spinner.New()

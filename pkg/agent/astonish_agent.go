@@ -740,20 +740,6 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				currentNodeName = nextNode
 				// Don't emit transition here - the main loop will do it
 
-			} else if node.Type == "parallel" {
-				if !a.handleParallelNode(ctx, node, state, yield) {
-					return
-				}
-				
-				// Move to next node
-				nextNode, err := a.getNextNode(currentNodeName, state)
-				if err != nil {
-					yield(nil, err)
-					return
-				}
-				currentNodeName = nextNode
-				// Don't emit transition here - the main loop will do it
-
 			} else if node.Type == "output" {
 				if !a.handleOutputNode(ctx, node, state, yield) {
 					return
@@ -1781,9 +1767,8 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 	// Execute with fallback retry
 	for event, err := range runAgent() {
 		if err != nil {
-			// Check for "Tool calling is not supported" error or OpenRouter 404
-			if strings.Contains(err.Error(), "Tool calling is not supported") || 
-			   strings.Contains(err.Error(), "No endpoints found that support tool use") {
+			// Check for "Tool calling is not supported" error
+			if strings.Contains(err.Error(), "Tool calling is not supported") {
 				if a.DebugMode {
 					fmt.Printf("[DEBUG] Caught tool calling error: %v. Switching to ReAct fallback.\n", err)
 				}

@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/provider/google"
+	"github.com/schardosin/astonish/pkg/provider/ollama"
 	"github.com/schardosin/astonish/pkg/provider/openrouter"
 	"github.com/schardosin/astonish/pkg/provider/sap"
 )
@@ -82,6 +83,11 @@ func handleSetupCommand() error {
 		runBaseURLForm("LM Studio Base URL", "http://localhost:1234/v1", pCfg)
 	case "ollama":
 		runOllamaForm(pCfg)
+		if err := fetchAndSelectOllamaModel(pCfg, cfg); err != nil {
+			fmt.Printf("Warning: Failed to fetch/select Ollama models: %v\n", err)
+		} else {
+			goto SaveConfig
+		}
 	case "openai":
 		runAPIKeyForm("OpenAI API Key", "api_key", pCfg)
 	case "openrouter":
@@ -171,26 +177,20 @@ func runBaseURLForm(title string, defaultVal string, pCfg config.ProviderConfig)
 func runOllamaForm(pCfg config.ProviderConfig) {
 	baseURL := pCfg["base_url"]
 	if baseURL == "" {
-		baseURL = "http://localhost:11434/v1"
+		baseURL = "http://localhost:11434"
 	}
-	model := pCfg["model"]
 
 	err := huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Ollama Base URL").
 				Value(&baseURL),
-			huh.NewInput().
-				Title("Default Model").
-				Description("e.g. llama3").
-				Value(&model),
 		),
 	).Run()
 	if err != nil {
 		log.Fatal(err)
 	}
 	pCfg["base_url"] = baseURL
-	pCfg["model"] = model
 }
 
 func runSAPAICoreForm(pCfg config.ProviderConfig) {
@@ -409,6 +409,53 @@ func fetchAndSelectOpenRouterModel(pCfg config.ProviderConfig, appCfg *config.Ap
 	}
 
 	appCfg.General.DefaultModel = selectedModel
+	return nil
+}
+
+func fetchAndSelectOllamaModel(pCfg config.ProviderConfig, appCfg *config.AppConfig) error {
+	baseURL := pCfg["base_url"]
+	if baseURL == "" {
+		baseURL = "http://localhost:11434"
+	}
+
+	fmt.Println("Fetching available models from Ollama...")
+	runSpinner("Connecting to Ollama...")
+
+	models, err := ollama.ListModels(context.Background(), baseURL)
+	if err != nil {
+		return err
+	}
+
+	if len(models) == 0 {
+		return fmt.Errorf("no models found")
+	}
+
+	// Create options for huh.Select
+	var options []huh.Option[string]
+	for _, m := range models {
+		options = append(options, huh.NewOption(m, m))
+	}
+
+	var selectedModel string
+	
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select an Ollama Model").
+				Options(options...).
+				Value(&selectedModel).
+				Height(10),
+		),
+	).Run()
+	
+	if err != nil {
+		return err
+	}
+
+	// Save selected model as default
+	appCfg.General.DefaultModel = selectedModel
+	fmt.Printf("Selected default model: %s\n", selectedModel)
+	
 	return nil
 }
 

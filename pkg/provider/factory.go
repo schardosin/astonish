@@ -60,6 +60,24 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 		client := openai.NewClientWithConfig(config)
 		return openai_provider.NewProvider(client, modelName), nil
 
+	case "ollama":
+		baseURL := "http://localhost:11434"
+		if cfg != nil && cfg.Providers["ollama"] != nil {
+			if val, ok := cfg.Providers["ollama"]["base_url"]; ok && val != "" {
+				baseURL = val
+			}
+		}
+		if modelName == "" {
+			return nil, fmt.Errorf("model name required for ollama")
+		}
+
+		// Use OpenAI client with Ollama base URL
+		// Note: Ollama's OpenAI compatible endpoint is at /v1
+		config := openai.DefaultConfig("ollama") // API key not required but must be non-empty string
+		config.BaseURL = fmt.Sprintf("%s/v1", baseURL)
+		client := openai.NewClientWithConfig(config)
+		return openai_provider.NewProvider(client, modelName), nil
+
 	case "sap_ai_core":
 		if modelName == "" {
 			return nil, fmt.Errorf("model name required for sap_ai_core")

@@ -21,9 +21,26 @@ func handleSetupCommand() error {
 	}
 
 	fmt.Println("Select a provider to configure:")
-	providers := []string{"gemini", "openai", "sap_ai_core"}
-	for i, p := range providers {
-		fmt.Printf("%d. %s\n", i+1, p)
+	
+	// Define providers with display names and internal IDs
+	type providerOption struct {
+		DisplayName string
+		ID          string
+	}
+	
+	options := []providerOption{
+		{"Anthropic", "anthropic"},
+		{"Google GenAI", "gemini"},
+		{"Groq", "groq"},
+		{"LM Studio", "lm_studio"},
+		{"Ollama", "ollama"},
+		{"OpenAI", "openai"},
+		{"Openrouter", "openrouter"},
+		{"SAP AI Core", "sap_ai_core"},
+	}
+
+	for i, opt := range options {
+		fmt.Printf("%d. %s\n", i+1, opt.DisplayName)
 	}
 
 	fmt.Print("Enter the number of your choice: ")
@@ -31,28 +48,38 @@ func handleSetupCommand() error {
 	input = strings.TrimSpace(input)
 
 	var selectedProvider string
-	switch input {
-	case "1":
-		selectedProvider = "gemini"
-	case "2":
-		selectedProvider = "openai"
-	case "3":
-		selectedProvider = "sap_ai_core"
-	default:
+	var selectedDisplayName string
+	
+	var idx int
+	if _, err := fmt.Sscanf(input, "%d", &idx); err == nil && idx > 0 && idx <= len(options) {
+		selectedProvider = options[idx-1].ID
+		selectedDisplayName = options[idx-1].DisplayName
+	} else {
 		return fmt.Errorf("invalid selection")
 	}
 
-	fmt.Printf("Configuring %s...\n", selectedProvider)
+	fmt.Printf("Configuring %s...\n", selectedDisplayName)
 
 	if cfg.Providers[selectedProvider] == nil {
 		cfg.Providers[selectedProvider] = make(config.ProviderConfig)
 	}
 
 	switch selectedProvider {
+	case "anthropic":
+		promptAndSet(reader, cfg.Providers[selectedProvider], "api_key", "Enter Anthropic API Key")
 	case "gemini":
 		promptAndSet(reader, cfg.Providers[selectedProvider], "api_key", "Enter Google API Key")
+	case "groq":
+		promptAndSet(reader, cfg.Providers[selectedProvider], "api_key", "Enter Groq API Key")
+	case "lm_studio":
+		promptAndSet(reader, cfg.Providers[selectedProvider], "base_url", "Enter LM Studio Base URL [http://localhost:1234/v1]")
+	case "ollama":
+		promptAndSet(reader, cfg.Providers[selectedProvider], "base_url", "Enter Ollama Base URL [http://localhost:11434/v1]")
+		promptAndSet(reader, cfg.Providers[selectedProvider], "model", "Enter Default Model (e.g. llama3)")
 	case "openai":
 		promptAndSet(reader, cfg.Providers[selectedProvider], "api_key", "Enter OpenAI API Key")
+	case "openrouter":
+		promptAndSet(reader, cfg.Providers[selectedProvider], "api_key", "Enter OpenRouter API Key")
 	case "sap_ai_core":
 		promptAndSet(reader, cfg.Providers[selectedProvider], "client_id", "Enter Client ID")
 		promptAndSet(reader, cfg.Providers[selectedProvider], "client_secret", "Enter Client Secret")
@@ -98,7 +125,7 @@ func handleSetupCommand() error {
 
 	// Set as default
 	cfg.General.DefaultProvider = selectedProvider
-	fmt.Printf("Set %s as default provider.\n", selectedProvider)
+	fmt.Printf("Set %s as default provider.\n", selectedDisplayName)
 
 	// Ask for default model
 	fmt.Print("Enter default model (leave empty to keep current/default): ")

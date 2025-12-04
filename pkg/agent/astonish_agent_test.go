@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,23 +75,71 @@ func TestReActFallbackDirect(t *testing.T) {
 		StateVal: state,
 	}
 
-	// Run and verify spinner event and no panic
+	// Run and verify spinner and final answer observation; add guards to prevent hangs.
 	seenSpinner := false
-	for ev, err := range agent.Run(ctx) {
+	seenFinal := false
+	steps := 0
+	maxSteps := 50
+	deadline := time.Now().Add(2 * time.Second)
+
+		for ev, err := range agent.Run(ctx) {
+		steps++
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout waiting for fallback completion; steps=%d", steps)
+		}
+		if steps > maxSteps {
+			t.Fatalf("exceeded max steps without completing; steps=%d", steps)
+		}
 		if err != nil {
 			// ReAct planner should not error in this setup
 			t.Fatalf("unexpected error during fallback run: %v", err)
 		}
-		if ev != nil && ev.Actions.StateDelta != nil {
+		if ev == nil {
+			continue
+		}
+		// Spinner detection
+		if ev.Actions.StateDelta != nil {
 			if _, ok := ev.Actions.StateDelta["_spinner_text"]; ok {
 				seenSpinner = true
-				// Do not break early; allow the generator to finish to avoid iter panic.
+			}
+			// Final Answer detection in StateDelta (key-agnostic)
+			for _, v := range ev.Actions.StateDelta {
+				if s, ok := v.(string); ok && s != "" && strings.Contains(s, "Final Answer: ok") {
+					seenFinal = true
+				}
+			}
+		}
+		// Final Answer detection in streamed content
+		if ev.LLMResponse.Content != nil {
+			for _, part := range ev.LLMResponse.Content.Parts {
+				if part.Text != "" {
+					text := strings.TrimSpace(part.Text)
+					// ReAct planner returns only the extracted final answer (e.g., "ok"),
+					// not the "Final Answer:" prefix. Accept either form.
+					if text == "ok" || strings.Contains(text, "Final Answer: ok") {
+						seenFinal = true
+					}
+				}
+			}
+		}
+		// Also check top-level Content (some events populate Event.Content)
+		if ev.Content != nil {
+			for _, part := range ev.Content.Parts {
+				if part.Text != "" {
+					text := strings.TrimSpace(part.Text)
+					if text == "ok" || strings.Contains(text, "Final Answer: ok") {
+						seenFinal = true
+					}
+				}
 			}
 		}
 	}
 
 	if !seenSpinner {
 		t.Errorf("expected spinner event from fallback path but did not observe one")
+	}
+	if !seenFinal {
+		t.Errorf("expected to observe final answer content in state updates, but did not")
 	}
 
 	// Fallback flag remains set; core goal is that fallback executed without panic.

@@ -1,156 +1,306 @@
 package astonish
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"os"
-	"strings"
+	"log"
+	"sort"
 
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/provider/sap"
 )
 
 func handleSetupCommand() error {
-	var modelInput string
-	reader := bufio.NewReader(os.Stdin)
+	// Load config
 	cfg, err := config.LoadAppConfig()
 	if err != nil {
 		fmt.Printf("Error loading config: %v\n", err)
-		return err
-	}
-
-	fmt.Println("Select a provider to configure:")
-	
-	// Define providers with display names and internal IDs
-	type providerOption struct {
-		DisplayName string
-		ID          string
-	}
-	
-	options := []providerOption{
-		{"Anthropic", "anthropic"},
-		{"Google GenAI", "gemini"},
-		{"Groq", "groq"},
-		{"LM Studio", "lm_studio"},
-		{"Ollama", "ollama"},
-		{"OpenAI", "openai"},
-		{"Openrouter", "openrouter"},
-		{"SAP AI Core", "sap_ai_core"},
-	}
-
-	for i, opt := range options {
-		fmt.Printf("%d. %s\n", i+1, opt.DisplayName)
-	}
-
-	fmt.Print("Enter the number of your choice: ")
-	input, _ := reader.ReadString('\n')
-	input = strings.TrimSpace(input)
-
-	var selectedProvider string
-	var selectedDisplayName string
-	
-	var idx int
-	if _, err := fmt.Sscanf(input, "%d", &idx); err == nil && idx > 0 && idx <= len(options) {
-		selectedProvider = options[idx-1].ID
-		selectedDisplayName = options[idx-1].DisplayName
-	} else {
-		return fmt.Errorf("invalid selection")
-	}
-
-	fmt.Printf("Configuring %s...\n", selectedDisplayName)
-
-	if cfg.Providers[selectedProvider] == nil {
-		cfg.Providers[selectedProvider] = make(config.ProviderConfig)
-	}
-
-	switch selectedProvider {
-	case "anthropic":
-		promptAndSet(reader, cfg.Providers[selectedProvider], "api_key", "Enter Anthropic API Key")
-	case "gemini":
-		promptAndSet(reader, cfg.Providers[selectedProvider], "api_key", "Enter Google API Key")
-	case "groq":
-		promptAndSet(reader, cfg.Providers[selectedProvider], "api_key", "Enter Groq API Key")
-	case "lm_studio":
-		promptAndSet(reader, cfg.Providers[selectedProvider], "base_url", "Enter LM Studio Base URL [http://localhost:1234/v1]")
-	case "ollama":
-		promptAndSet(reader, cfg.Providers[selectedProvider], "base_url", "Enter Ollama Base URL [http://localhost:11434/v1]")
-		promptAndSet(reader, cfg.Providers[selectedProvider], "model", "Enter Default Model (e.g. llama3)")
-	case "openai":
-		promptAndSet(reader, cfg.Providers[selectedProvider], "api_key", "Enter OpenAI API Key")
-	case "openrouter":
-		promptAndSet(reader, cfg.Providers[selectedProvider], "api_key", "Enter OpenRouter API Key")
-	case "sap_ai_core":
-		promptAndSet(reader, cfg.Providers[selectedProvider], "client_id", "Enter Client ID")
-		promptAndSet(reader, cfg.Providers[selectedProvider], "client_secret", "Enter Client Secret")
-		promptAndSet(reader, cfg.Providers[selectedProvider], "auth_url", "Enter Auth URL")
-		promptAndSet(reader, cfg.Providers[selectedProvider], "base_url", "Enter Base URL")
-		promptAndSet(reader, cfg.Providers[selectedProvider], "resource_group", "Enter Resource Group")
-
-		// Fetch and list models
-		fmt.Println("Fetching available models from SAP AI Core...")
-		pCfg := cfg.Providers[selectedProvider]
-		models, err := sap.ListModels(context.Background(),
-			pCfg["client_id"],
-			pCfg["client_secret"],
-			pCfg["auth_url"],
-			pCfg["base_url"],
-			pCfg["resource_group"])
-
-		if err != nil {
-			fmt.Printf("Warning: Failed to fetch models: %v\n", err)
-		} else if len(models) > 0 {
-			fmt.Println("Available models:")
-			for i, m := range models {
-				fmt.Printf("%d. %s\n", i+1, m)
-			}
-			fmt.Print("Select a model number (or press Enter to skip): ")
-			modelChoice, _ := reader.ReadString('\n')
-			modelChoice = strings.TrimSpace(modelChoice)
-			if modelChoice != "" {
-				var idx int
-				if _, err := fmt.Sscanf(modelChoice, "%d", &idx); err == nil && idx > 0 && idx <= len(models) {
-					cfg.General.DefaultModel = models[idx-1]
-					fmt.Printf("Selected model: %s\n", cfg.General.DefaultModel)
-					// Skip the generic model prompt below
-					goto SaveConfig
-				} else {
-					fmt.Println("Invalid selection, skipping model selection.")
-				}
-			}
-		} else {
-			fmt.Println("No running models found.")
+		// Initialize empty config if load fails
+		cfg = &config.AppConfig{
+			Providers: make(map[string]config.ProviderConfig),
+			General:   config.GeneralConfig{},
 		}
 	}
 
-	// Set as default
-	cfg.General.DefaultProvider = selectedProvider
-	fmt.Printf("Set %s as default provider.\n", selectedDisplayName)
-
-	// Ask for default model
-	fmt.Print("Enter default model (leave empty to keep current/default): ")
-	modelInput, _ = reader.ReadString('\n')
-	modelInput = strings.TrimSpace(modelInput)
-	if modelInput != "" {
-		cfg.General.DefaultModel = modelInput
+	// --- STEP 1: Provider Selection ---
+	var selectedProviderID string
+	
+	// Define options
+	options := []huh.Option[string]{
+		huh.NewOption("Anthropic", "anthropic"),
+		huh.NewOption("Google GenAI", "gemini"),
+		huh.NewOption("Groq", "groq"),
+		huh.NewOption("LM Studio", "lm_studio"),
+		huh.NewOption("Ollama", "ollama"),
+		huh.NewOption("OpenAI", "openai"),
+		huh.NewOption("Openrouter", "openrouter"),
+		huh.NewOption("SAP AI Core", "sap_ai_core"),
 	}
 
-SaveConfig:
-	if err := config.SaveAppConfig(cfg); err != nil {
-		fmt.Printf("Error saving config: %v\n", err)
+	// Run selection form
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select a provider to configure").
+				Options(options...).
+				Value(&selectedProviderID),
+		),
+	).Run()
+	if err != nil {
 		return err
 	}
 
-	fmt.Println("Configuration saved successfully!")
+	// Initialize provider config if nil
+	if cfg.Providers[selectedProviderID] == nil {
+		cfg.Providers[selectedProviderID] = make(config.ProviderConfig)
+	}
+	
+	pCfg := cfg.Providers[selectedProviderID]
+
+	// --- STEP 2: Configuration Form ---
+	switch selectedProviderID {
+	case "anthropic":
+		runAPIKeyForm("Anthropic API Key", "api_key", pCfg)
+	case "gemini":
+		runAPIKeyForm("Google API Key", "api_key", pCfg)
+	case "groq":
+		runAPIKeyForm("Groq API Key", "api_key", pCfg)
+	case "lm_studio":
+		runBaseURLForm("LM Studio Base URL", "http://localhost:1234/v1", pCfg)
+	case "ollama":
+		runOllamaForm(pCfg)
+	case "openai":
+		runAPIKeyForm("OpenAI API Key", "api_key", pCfg)
+	case "openrouter":
+		runAPIKeyForm("OpenRouter API Key", "api_key", pCfg)
+	case "sap_ai_core":
+		runSAPAICoreForm(pCfg)
+		// Special handling for SAP AI Core model selection
+		if err := fetchAndSelectSAPModel(pCfg, cfg); err != nil {
+			fmt.Printf("Warning: Failed to fetch/select SAP models: %v\n", err)
+		} else {
+			// Skip generic model selection if we did it specifically for SAP
+			goto SaveConfig
+		}
+	}
+
+	// --- STEP 3: Default Model Selection (Generic) ---
+	// Only ask if not already handled (like in SAP AI Core)
+	{
+		var defaultModel string = cfg.General.DefaultModel
+		err = huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Default Model").
+					Description("Leave empty to keep current").
+					Value(&defaultModel),
+			),
+		).Run()
+		if err == nil && defaultModel != "" {
+			cfg.General.DefaultModel = defaultModel
+		}
+	}
+
+SaveConfig:
+	// Set as default provider
+	cfg.General.DefaultProvider = selectedProviderID
+
+	// Save config
+	if err := config.SaveAppConfig(cfg); err != nil {
+		return fmt.Errorf("error saving config: %w", err)
+	}
+
+	printSuccess(fmt.Sprintf("%s configured successfully!", selectedProviderID))
 	return nil
 }
 
-func promptAndSet(reader *bufio.Reader, providerConfig config.ProviderConfig, key string, prompt string) {
-	current := providerConfig[key]
-	fmt.Printf("%s [%s]: ", prompt, current)
-	input, _ := reader.ReadString('\n')
-	input = strings.TrimSpace(input)
-	if input != "" {
-		providerConfig[key] = input
+// Helper functions for forms
+
+func runAPIKeyForm(title string, key string, pCfg config.ProviderConfig) {
+	val := pCfg[key]
+	err := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title(title).
+				EchoMode(huh.EchoModePassword).
+				Value(&val),
+		),
+	).Run()
+	if err != nil {
+		log.Fatal(err)
 	}
+	pCfg[key] = val
+}
+
+func runBaseURLForm(title string, defaultVal string, pCfg config.ProviderConfig) {
+	val := pCfg["base_url"]
+	if val == "" {
+		val = defaultVal
+	}
+	err := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title(title).
+				Value(&val),
+		),
+	).Run()
+	if err != nil {
+		log.Fatal(err)
+	}
+	pCfg["base_url"] = val
+}
+
+func runOllamaForm(pCfg config.ProviderConfig) {
+	baseURL := pCfg["base_url"]
+	if baseURL == "" {
+		baseURL = "http://localhost:11434/v1"
+	}
+	model := pCfg["model"]
+
+	err := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Ollama Base URL").
+				Value(&baseURL),
+			huh.NewInput().
+				Title("Default Model").
+				Description("e.g. llama3").
+				Value(&model),
+		),
+	).Run()
+	if err != nil {
+		log.Fatal(err)
+	}
+	pCfg["base_url"] = baseURL
+	pCfg["model"] = model
+}
+
+func runSAPAICoreForm(pCfg config.ProviderConfig) {
+	clientID := pCfg["client_id"]
+	clientSecret := pCfg["client_secret"]
+	authURL := pCfg["auth_url"]
+	baseURL := pCfg["base_url"]
+	resourceGroup := pCfg["resource_group"]
+	if resourceGroup == "" {
+		resourceGroup = "default"
+	}
+
+	err := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Client ID").
+				Value(&clientID),
+			huh.NewInput().
+				Title("Client Secret").
+				EchoMode(huh.EchoModePassword).
+				Value(&clientSecret),
+			huh.NewInput().
+				Title("Auth URL").
+				Value(&authURL),
+			huh.NewInput().
+				Title("Base URL").
+				Value(&baseURL),
+			huh.NewInput().
+				Title("Resource Group").
+				Value(&resourceGroup),
+		),
+	).Run()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	pCfg["client_id"] = clientID
+	pCfg["client_secret"] = clientSecret
+	pCfg["auth_url"] = authURL
+	pCfg["base_url"] = baseURL
+	pCfg["resource_group"] = resourceGroup
+}
+
+func fetchAndSelectSAPModel(pCfg config.ProviderConfig, appCfg *config.AppConfig) error {
+	runSpinner("Connecting to SAP AI Core...")
+
+	// Fetch models
+	models, err := sap.ListModels(context.Background(),
+		pCfg["client_id"],
+		pCfg["client_secret"],
+		pCfg["auth_url"],
+		pCfg["base_url"],
+		pCfg["resource_group"])
+
+	if err != nil {
+		return err
+	}
+
+	if len(models) == 0 {
+		return fmt.Errorf("no running models found")
+	}
+	
+	// Sort models for better UX
+	sort.Strings(models)
+
+	// Create Options dynamically
+	var modelOptions []huh.Option[string]
+	for _, m := range models {
+		modelOptions = append(modelOptions, huh.NewOption(m, m))
+	}
+
+	var selectedModel string
+	// Pre-select current default if it exists in the list
+	if appCfg.General.DefaultModel != "" {
+		for _, m := range models {
+			if m == appCfg.General.DefaultModel {
+				selectedModel = m
+				break
+			}
+		}
+	}
+
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select a model").
+				Description("Type to filter list").
+				Options(modelOptions...).
+				Value(&selectedModel).
+				Height(10), 
+		),
+	).Run()
+
+	if err != nil {
+		return err
+	}
+
+	appCfg.General.DefaultModel = selectedModel
+	return nil
+}
+
+// UI Helpers
+
+func runSpinner(msg string) {
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
+	
+	// We can't easily run the bubbletea program and block here without more complex setup
+	// For now, let's just print a message that looks nice
+	fmt.Printf("%s %s\n", s.Style.Render("•"), msg)
+	
+	// In a real CLI app we might want to use tea.NewProgram to run the spinner properly
+	// but since we're about to make a blocking network call, we can't update the spinner 
+	// unless we run the network call in a goroutine.
+	// For simplicity in this setup script, we just print the message.
+}
+
+func printSuccess(msg string) {
+	style := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("42")). // Green
+		Bold(true).
+		Padding(1, 2).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("42"))
+	
+	fmt.Println(style.Render("✓ " + msg))
 }

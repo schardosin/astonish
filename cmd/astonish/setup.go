@@ -265,7 +265,7 @@ func fetchAndSelectSAPModel(pCfg config.ProviderConfig, appCfg *config.AppConfig
 				Description("Type to filter list").
 				Options(modelOptions...).
 				Value(&selectedModel).
-				Height(10), 
+				Height(len(models) + 2), 
 		),
 	).Run()
 

@@ -159,7 +159,9 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 			}
 		}
 		
-		fmt.Printf("[ReAct] Step %d LLM Output: %s\n", i+1, responseText)
+		if p.DebugMode {
+			fmt.Printf("[ReAct] Step %d LLM Output: %s\n", i+1, responseText)
+		}
 		
 		// Update history with the LLM's response
 		history += responseText
@@ -216,7 +218,9 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 		}
 
 		// Execute tool
-		fmt.Printf("[ReAct] Executing Tool: %s with Input: %s\n", action, actionInput)
+		if p.DebugMode {
+			fmt.Printf("[ReAct] Executing Tool: %s with Input: %s\n", action, actionInput)
+		}
 		observation, err := p.executeTool(ctx, action, actionInput)
 		if err != nil {
 			// Check if this is an approval required error
@@ -237,7 +241,9 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 			observation = fmt.Sprintf("Error: %v", err)
 		}
 		
-		fmt.Printf("[ReAct] Observation: %s\n", observation)
+		if p.DebugMode {
+			fmt.Printf("[ReAct] Observation: %s\n", observation)
+		}
 		
 		// Append observation to history
 		history += fmt.Sprintf("\n\nObservation: %s\n\nThought: ", observation)

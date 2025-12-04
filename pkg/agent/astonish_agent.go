@@ -740,6 +740,20 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				currentNodeName = nextNode
 				// Don't emit transition here - the main loop will do it
 
+			} else if node.Type == "parallel" {
+				if !a.handleParallelNode(ctx, node, state, yield) {
+					return
+				}
+				
+				// Move to next node
+				nextNode, err := a.getNextNode(currentNodeName, state)
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+				currentNodeName = nextNode
+				// Don't emit transition here - the main loop will do it
+
 			} else if node.Type == "output" {
 				if !a.handleOutputNode(ctx, node, state, yield) {
 					return

@@ -65,7 +65,7 @@ func (m ParallelModel) View() string {
 	}
 
 	// While running
-	// spin := m.spinner.View() // Spinner removed as requested in the mockup
+	spin := m.spinner.View()
 	bar := m.progress.View()
 	
 	// Percentage
@@ -82,14 +82,22 @@ func (m ParallelModel) View() string {
 	activeStr := fmt.Sprintf("• %d active", m.activeCount)
 	
 	// Styles
-	nodeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Bold(true).Width(20).Align(lipgloss.Left)
+	// Increased width to 40 to accommodate longer node names without wrapping
+	nodeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Bold(true).Width(40).Align(lipgloss.Left)
 	percentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Width(5).Align(lipgloss.Right)
 	countStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).PaddingLeft(1)
 	activeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).PaddingLeft(1)
 
-	// Format: add_review_comment  [██████░░░░░░]  50%  (6/12) • 5 active
-	view := fmt.Sprintf("%s %s %s %s %s", 
-		nodeStyle.Render(m.nodeName), 
+	// Truncate node name if it exceeds width to prevent wrapping
+	displayName := m.nodeName
+	if len(displayName) > 38 {
+		displayName = displayName[:37] + "…"
+	}
+
+	// Format: ⣻  add_review_comment  [██████░░░░░░]  50%  (6/12) • 5 active
+	view := fmt.Sprintf("%s %s %s %s %s %s", 
+		spin,
+		nodeStyle.Render(displayName), 
 		bar, 
 		percentStyle.Render(percentStr), 
 		countStyle.Render(countStr),

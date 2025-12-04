@@ -406,6 +406,14 @@ func (p *ReActPlanner) executeTool(ctx context.Context, name string, inputJSON s
 			args = map[string]any{"input": inputJSON}
 		}
 	}
+
+	// WORKAROUND: Sanitize arguments for common model hallucinations
+	// Some models (e.g. phi-4) output "map[]" string for empty object fields
+	if val, ok := args["global_variables"]; ok {
+		if strVal, ok := val.(string); ok && (strVal == "map[]" || strVal == "") {
+			args["global_variables"] = map[string]any{}
+		}
+	}
 	
 	// Check for approval if callback is set
 	if p.ApprovalCallback != nil {

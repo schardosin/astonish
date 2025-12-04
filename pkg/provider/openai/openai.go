@@ -59,7 +59,9 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 		}
 
 		// Check for JSON mode request
-		if p.supportsJSONMode && req.Config != nil && req.Config.ResponseMIMEType == "application/json" {
+		// Note: Some providers (Groq, Google) do not support JSON mode combined with tools.
+		// If tools are present, we prioritize tools and disable JSON mode enforcement.
+		if p.supportsJSONMode && req.Config != nil && req.Config.ResponseMIMEType == "application/json" && len(tools) == 0 {
 			openAIReq.ResponseFormat = &openai.ChatCompletionResponseFormat{
 				Type: openai.ChatCompletionResponseFormatTypeJSONObject,
 			}

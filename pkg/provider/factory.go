@@ -78,6 +78,26 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 		client := openai.NewClientWithConfig(config)
 		return openai_provider.NewProvider(client, modelName, true), nil
 
+	case "groq":
+		apiKey := ""
+		if cfg != nil && cfg.Providers["groq"] != nil {
+			apiKey = cfg.Providers["groq"]["api_key"]
+		}
+		if apiKey == "" {
+			apiKey = os.Getenv("GROQ_API_KEY")
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("GROQ_API_KEY not set")
+		}
+		if modelName == "" {
+			modelName = "llama3-70b-8192"
+		}
+
+		config := openai.DefaultConfig(apiKey)
+		config.BaseURL = "https://api.groq.com/openai/v1"
+		client := openai.NewClientWithConfig(config)
+		return openai_provider.NewProvider(client, modelName, true), nil
+
 	case "lm_studio":
 		baseURL := "http://localhost:1234/v1"
 		if cfg != nil && cfg.Providers["lm_studio"] != nil {

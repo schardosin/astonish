@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/provider/google"
+	"github.com/schardosin/astonish/pkg/provider/groq"
 	"github.com/schardosin/astonish/pkg/provider/lmstudio"
 	"github.com/schardosin/astonish/pkg/provider/ollama"
 	"github.com/schardosin/astonish/pkg/provider/openrouter"
@@ -80,6 +81,11 @@ func handleSetupCommand() error {
 		}
 	case "groq":
 		runAPIKeyForm("Groq API Key", "api_key", pCfg)
+		if err := fetchAndSelectGroqModel(pCfg, cfg); err != nil {
+			fmt.Printf("Warning: Failed to fetch/select Groq models: %v\n", err)
+		} else {
+			goto SaveConfig
+		}
 	case "lm_studio":
 		runBaseURLForm("LM Studio Base URL", "http://localhost:1234/v1", pCfg)
 		if err := fetchAndSelectLMStudioModel(pCfg, cfg); err != nil {
@@ -495,6 +501,53 @@ func fetchAndSelectLMStudioModel(pCfg config.ProviderConfig, appCfg *config.AppC
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Select an LM Studio Model").
+				Options(options...).
+				Value(&selectedModel).
+				Height(10),
+		),
+	).Run()
+	
+	if err != nil {
+		return err
+	}
+
+	// Save selected model as default
+	appCfg.General.DefaultModel = selectedModel
+	fmt.Printf("Selected default model: %s\n", selectedModel)
+	
+	return nil
+}
+
+func fetchAndSelectGroqModel(pCfg config.ProviderConfig, appCfg *config.AppConfig) error {
+	apiKey := pCfg["api_key"]
+	if apiKey == "" {
+		return fmt.Errorf("API key required")
+	}
+
+	fmt.Println("Fetching available models from Groq...")
+	runSpinner("Connecting to Groq...")
+
+	models, err := groq.ListModels(context.Background(), apiKey)
+	if err != nil {
+		return err
+	}
+
+	if len(models) == 0 {
+		return fmt.Errorf("no models found")
+	}
+
+	// Create options for huh.Select
+	var options []huh.Option[string]
+	for _, m := range models {
+		options = append(options, huh.NewOption(m, m))
+	}
+
+	var selectedModel string
+	
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select a Groq Model").
 				Options(options...).
 				Value(&selectedModel).
 				Height(10),

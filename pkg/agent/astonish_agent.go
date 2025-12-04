@@ -1771,7 +1771,8 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			if strings.Contains(err.Error(), "Tool calling is not supported") || 
 			   strings.Contains(err.Error(), "No endpoints found that support tool use") ||
 			   strings.Contains(err.Error(), "Function calling is not enabled") || 
-			   strings.Contains(err.Error(), "does not support tools") {
+			   strings.Contains(err.Error(), "does not support tools") ||
+			   strings.Contains(err.Error(), "`tool calling` is not supported") {
 				if a.DebugMode {
 					fmt.Printf("[DEBUG] Caught tool calling error: %v. Switching to ReAct fallback.\n", err)
 				}

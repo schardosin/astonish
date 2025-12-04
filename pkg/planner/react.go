@@ -70,8 +70,9 @@ func (p *ReActPlanner) Run(ctx context.Context, input string, systemInstruction 
 	}
 	
 	// If not resuming, construct initial system prompt
+	var currentSystemPrompt string
 	if history == "" {
-		// 1. Construct System Prompt
+		// 1. Construct System Prompt (First Run)
 		toolDescriptions := p.getToolDescriptions()
 		toolNames := p.getToolNames()
 		
@@ -81,7 +82,49 @@ func (p *ReActPlanner) Run(ctx context.Context, input string, systemInstruction 
 			systemContext = fmt.Sprintf("%s\n\n", systemInstruction)
 		}
 		
-		systemPrompt := fmt.Sprintf(`%sAnswer the following questions as best you can. You have access to the following tools:
+		currentSystemPrompt = fmt.Sprintf(`%sAnswer the following questions as best you can. You have access to the following tools:
+
+%s
+
+IMPORTANT: You must ONLY use the tools listed above. Do not invent new tools or actions.
+
+Use the following format STRICTLY for this FIRST RUN ONLY:
+
+Question: the input question you must answer
+Thought: Analyze the question and available tools. Do I have the answer, or do I need a tool? If I need a tool, which one is best, and what arguments does it need?
+Action: the action to take, should be one of [%s]
+Action Input: the input to the action
+
+IMPORTANT: For this FIRST RUN, DO NOT include Observation or Final Answer. The system will execute your chosen Action and provide the Observation in the next run.
+
+Begin!
+
+Question: %s
+Thought:`, systemContext, toolDescriptions, toolNames, input)
+
+		history = currentSystemPrompt
+	}
+	
+	maxSteps := 10
+
+	// Helper for float32 pointer
+	temp := float32(0.0)
+	
+	for i := startStep; i < maxSteps; i++ {
+		// If we are past the first step (and not resuming from a state where we already switched),
+		// switch to the full system prompt.
+		// We do this at the start of i=1 (after first tool execution).
+		if i == 1 && startStep == 0 {
+			// Construct Full System Prompt
+			toolDescriptions := p.getToolDescriptions()
+			toolNames := p.getToolNames()
+			
+			var systemContext string
+			if systemInstruction != "" {
+				systemContext = fmt.Sprintf("%s\n\n", systemInstruction)
+			}
+			
+			fullSystemPrompt := fmt.Sprintf(`%sAnswer the following questions as best you can. You have access to the following tools:
 
 %s
 
@@ -93,11 +136,7 @@ Question: the input question you must answer
 Thought: you should always think about what to do
 Action: the action to take, should be one of [%s]
 Action Input: the input to the action
-
-STOP HERE. Do NOT write "Observation:" - the system will execute the tool and provide the observation.
-
-After receiving the observation, continue with:
-Thought: [your analysis of the observation]
+Observation: the result of the action
 ... (this Thought/Action/Action Input/Observation cycle can repeat N times)
 
 When you have enough information:
@@ -109,15 +148,15 @@ Begin!
 Question: %s
 Thought:`, systemContext, toolDescriptions, toolNames, input)
 
-		history = systemPrompt
-	}
-	
-	maxSteps := 10
-
-	// Helper for float32 pointer
-	temp := float32(0.0)
-	
-	for i := startStep; i < maxSteps; i++ {
+			// Replace the first run prompt with the full prompt in history
+			// We assume history starts with currentSystemPrompt
+			if strings.HasPrefix(history, currentSystemPrompt) {
+				history = strings.Replace(history, currentSystemPrompt, fullSystemPrompt, 1)
+				if p.DebugMode {
+					fmt.Println("[ReAct DEBUG] Switched to Full System Prompt")
+				}
+			}
+		}
 		var action, actionInput string
 		var skipLLM bool
 
@@ -186,6 +225,22 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 			}
 		}
 		
+		// Sanitize response: Remove repeated "Question:" if present
+		// The model sometimes repeats the question at the start of its response.
+		// We want to keep the history clean.
+		if strings.HasPrefix(strings.TrimSpace(responseText), "Question:") {
+			// Find the first "Thought:" or "Action:"
+			thoughtIdx := strings.Index(responseText, "Thought:")
+			if thoughtIdx != -1 {
+				responseText = responseText[thoughtIdx:]
+			} else {
+				actionIdx := strings.Index(responseText, "Action:")
+				if actionIdx != -1 {
+					responseText = responseText[actionIdx:]
+				}
+			}
+		}
+
 		if p.DebugMode {
 			fmt.Printf("[ReAct] Step %d LLM Output: %s\n", i+1, responseText)
 		}
@@ -210,11 +265,12 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 		
 		// Parse Action
 		// Allow hyphens, dots, or other safe chars in tool names (non-whitespace)
+		cleanedResponse := removeThinkTags(responseText)
 		actionRegex := regexp.MustCompile(`Action:\s*([^\s]+)`)
-		actionMatch := actionRegex.FindStringSubmatch(responseText)
+		actionMatch := actionRegex.FindStringSubmatch(cleanedResponse)
 		if len(actionMatch) < 2 {
 			// Heuristic: If it wrote "Action Input" but missed "Action", or if the text is very long, it failed.
-			if strings.Contains(responseText, "Action Input:") {
+			if strings.Contains(cleanedResponse, "Action Input:") {
 				history += "\n\nObservation: Error: Invalid Format. You provided an Input but no Action. Please use the 'Action: <ToolName>' format.\n\nThought: "
 				continue
 			}
@@ -222,12 +278,12 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 			// The responseText is already added to history, so just continue.
 			continue
 		}
-		action = actionMatch[1]
+		action = strings.Trim(actionMatch[1], "`\"'")
 		
 		// Parse Action Input - it might be multiline or contain code blocks
 		// Look for "Action Input:" and capture everything until "STOP HERE", "Observation:", or end
 		actionInputRegex := regexp.MustCompile(`(?s)Action Input:\s*(.*?)(?:\n\nSTOP HERE|\n\nObservation:|$)`)
-		inputMatch := actionInputRegex.FindStringSubmatch(responseText)
+		inputMatch := actionInputRegex.FindStringSubmatch(cleanedResponse)
 		if len(inputMatch) >= 2 {
 			actionInput = strings.TrimSpace(inputMatch[1])
 			
@@ -349,6 +405,8 @@ Return ONLY the JSON object, no other text or markdown.`, systemContext, schemaD
 		}
 	}
 	
+	responseText = removeThinkTags(responseText)
+
 	// Clean up markdown if present
 	responseText = strings.TrimSpace(responseText)
 	responseText = strings.TrimPrefix(responseText, "```json")
@@ -402,17 +460,30 @@ func (p *ReActPlanner) executeTool(ctx context.Context, name string, inputJSON s
 		}
 
 		if declTool, ok := selectedTool.(ToolWithDeclaration); ok {
+			if p.DebugMode {
+				fmt.Printf("[ReAct DEBUG] Tool '%s' implements ToolWithDeclaration\n", name)
+			}
 			decl := declTool.Declaration()
 			if decl != nil && decl.ParametersJsonSchema != nil {
 				if schema, ok := decl.ParametersJsonSchema.(*genai.Schema); ok {
-					if schema.Type == genai.TypeObject && len(schema.Properties) == 1 {
-						for k := range schema.Properties {
-							argName = k
-							break
+					// Check if there is exactly one required property
+					if schema.Type == genai.TypeObject {
+						if len(schema.Required) == 1 {
+							argName = schema.Required[0]
+						} else if len(schema.Properties) == 1 {
+							for k := range schema.Properties {
+								argName = k
+								break
+							}
 						}
 					}
 				} else if schemaMap, ok := decl.ParametersJsonSchema.(map[string]interface{}); ok {
-					if props, ok := schemaMap["properties"].(map[string]interface{}); ok && len(props) == 1 {
+					// Check required list in map
+					if required, ok := schemaMap["required"].([]interface{}); ok && len(required) == 1 {
+						if reqStr, ok := required[0].(string); ok {
+							argName = reqStr
+						}
+					} else if props, ok := schemaMap["properties"].(map[string]interface{}); ok && len(props) == 1 {
 						for k := range props {
 							argName = k
 							break
@@ -420,8 +491,15 @@ func (p *ReActPlanner) executeTool(ctx context.Context, name string, inputJSON s
 					}
 				}
 			}
+		} else {
+			if p.DebugMode {
+				fmt.Printf("[ReAct DEBUG] Tool '%s' (type %T) does NOT implement ToolWithDeclaration\n", name, selectedTool)
+			}
 		}
 		args = map[string]any{argName: inputJSON}
+		if p.DebugMode {
+			fmt.Printf("[ReAct DEBUG] Wrapped input for tool '%s': %v\n", name, args)
+		}
 	}
 
 	// WORKAROUND: Sanitize arguments for common model hallucinations
@@ -534,4 +612,9 @@ func (m *minimalToolContext) SearchMemory(ctx context.Context, query string) (*m
 
 func (m *minimalToolContext) State() session.State {
 	return m.state
+}
+
+func removeThinkTags(input string) string {
+	re := regexp.MustCompile(`(?s)<think>.*?</think>`)
+	return re.ReplaceAllString(input, "")
 }

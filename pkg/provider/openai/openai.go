@@ -58,6 +58,10 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 			Tools:    tools,
 		}
 
+		if req.Config != nil && len(req.Config.StopSequences) > 0 {
+			openAIReq.Stop = req.Config.StopSequences
+		}
+
 		// Check for JSON mode request
 		// Note: Some providers (Groq, Google) do not support JSON mode combined with tools.
 		// If tools are present, we prioritize tools and disable JSON mode enforcement.

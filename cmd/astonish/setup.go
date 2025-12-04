@@ -273,8 +273,7 @@ func fetchAndSelectSAPModel(pCfg config.ProviderConfig, appCfg *config.AppConfig
 				Title("Select a model").
 				Description("Type to filter list").
 				Options(modelOptions...).
-				Value(&selectedModel).
-				Height(20), 
+				Value(&selectedModel),
 		),
 	).Run()
 
@@ -324,8 +323,7 @@ func fetchAndSelectOpenRouterModel(pCfg config.ProviderConfig, appCfg *config.Ap
 				Title("Select a model").
 				Description("Type to filter list").
 				Options(modelOptions...).
-				Value(&selectedModel).
-				Height(20), 
+				Value(&selectedModel),
 		),
 	).Run()
 

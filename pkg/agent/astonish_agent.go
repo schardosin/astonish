@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/planner"
 	"github.com/schardosin/astonish/pkg/ui"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
@@ -1247,9 +1248,9 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 	var llmAgent agent.Agent
 	var err error
 
+	var internalTools []tool.Tool
 	if node.Tools {
 		// Prepare internal tools (no wrapping needed - callback handles approval)
-		var internalTools []tool.Tool
 		if len(nodeTools) > 0 {
 			internalTools = append(internalTools, nodeTools...)
 		}
@@ -1550,12 +1551,399 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 	toolCallCount := 0
 	const maxToolCalls = 20 // Maximum tool calls to prevent infinite loops
 
-	for event, err := range llmAgent.Run(ctx) {
+	// Check if we should use ReAct fallback from cache
+	useReAct, _ := state.Get("_use_react_fallback")
+	if useReAct == true {
+		if a.DebugMode {
+			fmt.Println("[DEBUG] Using cached ReAct fallback decision")
+		}
+		
+		// Collect all tools (internal + MCP) for ReAct planner
+		allTools := make([]tool.Tool, 0, len(internalTools))
+		allTools = append(allTools, internalTools...)
+		
+		// Add MCP tools
+		if len(a.Toolsets) > 0 {
+			minimalCtx := &minimalReadonlyContext{Context: ctx}
+			for _, ts := range a.Toolsets {
+				tsTools, err := ts.Tools(minimalCtx)
+				if err != nil {
+					continue
+				}
+				// Filter by tools_selection if specified
+				if len(node.ToolsSelection) > 0 {
+					for _, t := range tsTools {
+						for _, selected := range node.ToolsSelection {
+							if t.Name() == selected {
+								allTools = append(allTools, t)
+								break
+							}
+						}
+					}
+				} else {
+					allTools = append(allTools, tsTools...)
+				}
+			}
+		}
+		
+		// Create approval callback if tools_auto_approval is false
+		var approvalCallback planner.ApprovalCallback
+		if !node.ToolsAutoApproval {
+			approvalCallback = func(toolName string, args map[string]any) (bool, error) {
+				approvalKey := fmt.Sprintf("approval:%s", toolName)
+				
+				// Check if we already have approval for this tool
+				approvedVal, _ := state.Get(approvalKey)
+				approved := false
+				if b, ok := approvedVal.(bool); ok && b {
+					approved = true
+				}
+				
+				if approved {
+					// Consume approval
+					state.Set(approvalKey, false)
+					if a.DebugMode {
+						fmt.Printf("[ReAct DEBUG] Tool %s approved! Allowing execution.\n", toolName)
+					}
+					return true, nil
+				}
+				
+				if a.DebugMode {
+					fmt.Printf("[ReAct DEBUG] Tool %s NOT approved. Requesting approval...\n", toolName)
+				}
+				
+				// No approval - request it
+				state.Set("force_pause", true)
+				state.Set("awaiting_approval", true)
+				state.Set("approval_tool", toolName)
+				state.Set("approval_args", args)
+				
+				// Emit approval request event
+				prompt := a.formatToolApprovalRequest(toolName, args)
+				yield(&session.Event{
+					LLMResponse: model.LLMResponse{
+						Content: &genai.Content{
+							Parts: []*genai.Part{{Text: prompt}},
+							Role:  "model",
+						},
+					},
+					Actions: session.EventActions{
+						StateDelta: map[string]any{
+							"awaiting_approval": true,
+							"approval_tool":     toolName,
+							"approval_options":  []string{"Yes", "No"},
+						},
+					},
+				}, nil)
+				
+				return false, nil
+			}
+		}
+		
+		// Use manual ReAct planner with all tools and approval callback
+		var reactPlanner *planner.ReActPlanner
+		if approvalCallback != nil {
+			reactPlanner = planner.NewReActPlannerWithApproval(a.LLM, allTools, approvalCallback, state, a.DebugMode)
+		} else {
+			reactPlanner = planner.NewReActPlanner(a.LLM, allTools)
+		}
+		
+		// Strip output_model instructions from system instruction for ReAct
+		// The ReAct loop should focus on tool usage, not output formatting
+		cleanInstruction := instruction
+		if len(node.OutputModel) > 0 {
+			// Remove lines mentioning output_model fields
+			lines := strings.Split(instruction, "\n")
+			var cleanLines []string
+			for _, line := range lines {
+				// Skip lines that mention the output model fields or JSON formatting
+				skipLine := false
+				for key := range node.OutputModel {
+					if strings.Contains(line, key) || strings.Contains(line, "JSON") || strings.Contains(line, "json") {
+						skipLine = true
+						break
+					}
+				}
+				if !skipLine {
+					cleanLines = append(cleanLines, line)
+				}
+			}
+			cleanInstruction = strings.Join(cleanLines, "\n")
+		}
+		
+		result, err := reactPlanner.Run(ctx, userPrompt, cleanInstruction) // Pass cleaned instruction
 		if err != nil {
+			// Check if this is an approval required error
+			if strings.HasPrefix(err.Error(), "APPROVAL_REQUIRED:") {
+				// Approval is needed - the callback has already emitted the approval request
+				// Just return false to pause execution
+				if a.DebugMode {
+					fmt.Println("[ReAct DEBUG] Pausing for tool approval")
+				}
+				return false
+			}
+			yield(nil, fmt.Errorf("ReAct planner failed: %w", err))
+			return false
+		}
+		
+		// Format output according to output_model if specified
+		if len(node.OutputModel) > 0 {
+			formattedResult, formatErr := reactPlanner.FormatOutput(ctx, result, node.OutputModel, instruction)
+			if formatErr != nil {
+				yield(nil, fmt.Errorf("failed to format ReAct output: %w", formatErr))
+				return false
+			}
+			result = formattedResult
+			
+			// Parse the formatted result and store in state
+			var resultMap map[string]any
+			if err := json.Unmarshal([]byte(result), &resultMap); err == nil {
+				for key, value := range resultMap {
+					state.Set(key, value)
+				}
+			}
+		}
+		
+		// Handle user_message if defined
+		if len(node.UserMessage) > 0 {
+			var textParts []string
+			for _, msgPart := range node.UserMessage {
+				if val, err := state.Get(msgPart); err == nil {
+					textParts = append(textParts, fmt.Sprintf("%v", val))
+					if a.DebugMode {
+						fmt.Printf("[ReAct DEBUG] Resolved '%s' to value: %v\n", msgPart, val)
+					}
+				}
+			}
+			
+			if len(textParts) > 0 {
+				// Emit user_message event
+				userMessageEvent := &session.Event{
+					LLMResponse: model.LLMResponse{
+						Content: &genai.Content{
+							Parts: []*genai.Part{{Text: strings.Join(textParts, " ")}},
+							Role:  "model",
+						},
+					},
+					Actions: session.EventActions{
+						StateDelta: map[string]any{
+							"_user_message_display": true,
+						},
+					},
+				}
+				yield(userMessageEvent, nil)
+			}
+		} else {
+			// No user_message - yield the full result
+			yield(&session.Event{
+				LLMResponse: model.LLMResponse{
+					Content: &genai.Content{
+						Parts: []*genai.Part{{Text: result}},
+						Role:  "model",
+					},
+				},
+			}, nil)
+		}
+		
+		return true
+	}
+
+	// We'll wrap the iteration in a function to allow retry
+	runAgent := func() iter.Seq2[*session.Event, error] {
+		return l.Run(ctx)
+	}
+
+	// Execute with fallback retry
+	for event, err := range runAgent() {
+		if err != nil {
+			// Check for "Tool calling is not supported" error
+			if strings.Contains(err.Error(), "Tool calling is not supported") {
+				if a.DebugMode {
+					fmt.Printf("[DEBUG] Caught tool calling error: %v. Switching to ReAct fallback.\n", err)
+				}
+				
+				// Enable fallback for future runs
+				state.Set("_use_react_fallback", true)
+				
+				// Collect all tools (internal + MCP) for ReAct planner
+				allTools := make([]tool.Tool, 0, len(internalTools))
+				allTools = append(allTools, internalTools...)
+				
+				// Add MCP tools
+				if len(a.Toolsets) > 0 {
+					minimalCtx := &minimalReadonlyContext{Context: ctx}
+					for _, ts := range a.Toolsets {
+						tsTools, err := ts.Tools(minimalCtx)
+						if err != nil {
+							continue
+						}
+						// Filter by tools_selection if specified
+						if len(node.ToolsSelection) > 0 {
+							for _, t := range tsTools {
+								for _, selected := range node.ToolsSelection {
+									if t.Name() == selected {
+										allTools = append(allTools, t)
+										break
+									}
+								}
+							}
+						} else {
+							allTools = append(allTools, tsTools...)
+						}
+					}
+				}
+				
+				// Create approval callback if tools_auto_approval is false
+				var approvalCallback planner.ApprovalCallback
+				if !node.ToolsAutoApproval {
+					approvalCallback = func(toolName string, args map[string]any) (bool, error) {
+						approvalKey := fmt.Sprintf("approval:%s", toolName)
+						approvedVal, _ := state.Get(approvalKey)
+						approved := false
+						if b, ok := approvedVal.(bool); ok && b {
+							approved = true
+						}
+						if approved {
+							state.Set(approvalKey, false)
+							if a.DebugMode {
+								fmt.Printf("[ReAct DEBUG] Tool %s approved!\n", toolName)
+							}
+							return true, nil
+						}
+						if a.DebugMode {
+							fmt.Printf("[ReAct DEBUG] Tool %s NOT approved.\n", toolName)
+						}
+						state.Set("force_pause", true)
+						state.Set("awaiting_approval", true)
+						state.Set("approval_tool", toolName)
+						state.Set("approval_args", args)
+						prompt := a.formatToolApprovalRequest(toolName, args)
+						yield(&session.Event{
+							LLMResponse: model.LLMResponse{
+								Content: &genai.Content{
+									Parts: []*genai.Part{{Text: prompt}},
+									Role:  "model",
+								},
+							},
+							Actions: session.EventActions{
+								StateDelta: map[string]any{
+									"awaiting_approval": true,
+									"approval_tool":     toolName,
+									"approval_options":  []string{"Yes", "No"},
+								},
+							},
+						}, nil)
+						return false, nil
+					}
+				}
+				var reactPlanner *planner.ReActPlanner
+				if approvalCallback != nil {
+					reactPlanner = planner.NewReActPlannerWithApproval(a.LLM, allTools, approvalCallback, state, a.DebugMode)
+				} else {
+					reactPlanner = planner.NewReActPlanner(a.LLM, allTools)
+				}
+				
+				// Strip output_model instructions from system instruction for ReAct
+				cleanInstruction := instruction
+				if len(node.OutputModel) > 0 {
+					lines := strings.Split(instruction, "\n")
+					var cleanLines []string
+					for _, line := range lines {
+						skipLine := false
+						for key := range node.OutputModel {
+							if strings.Contains(line, key) || strings.Contains(line, "JSON") || strings.Contains(line, "json") {
+								skipLine = true
+								break
+							}
+						}
+						if !skipLine {
+							cleanLines = append(cleanLines, line)
+						}
+					}
+					cleanInstruction = strings.Join(cleanLines, "\n")
+				}
+				
+				// Execute planner
+				result, planErr := reactPlanner.Run(ctx, userPrompt, cleanInstruction)
+				if planErr != nil {
+					if strings.HasPrefix(planErr.Error(), "APPROVAL_REQUIRED:") {
+						if a.DebugMode {
+							fmt.Println("[ReAct DEBUG] Pausing for tool approval")
+						}
+						return false
+					}
+					yield(nil, fmt.Errorf("ReAct planner fallback failed: %w", planErr))
+					return false
+				}
+				
+				// Format output according to output_model if specified
+				if len(node.OutputModel) > 0 {
+					formattedResult, formatErr := reactPlanner.FormatOutput(ctx, result, node.OutputModel, instruction)
+					if formatErr != nil {
+						yield(nil, fmt.Errorf("failed to format ReAct output: %w", formatErr))
+						return false
+					}
+					result = formattedResult
+					
+					// Parse the formatted result and store in state
+					var resultMap map[string]any
+					if err := json.Unmarshal([]byte(result), &resultMap); err == nil {
+						for key, value := range resultMap {
+							state.Set(key, value)
+						}
+					}
+				}
+				
+				// Handle user_message if defined
+				if len(node.UserMessage) > 0 {
+					var textParts []string
+					for _, msgPart := range node.UserMessage {
+						if val, err := state.Get(msgPart); err == nil {
+							textParts = append(textParts, fmt.Sprintf("%v", val))
+						}
+					}
+					
+					if len(textParts) > 0 {
+						userMessageEvent := &session.Event{
+							LLMResponse: model.LLMResponse{
+								Content: &genai.Content{
+									Parts: []*genai.Part{{Text: strings.Join(textParts, " ")}},
+									Role:  "model",
+								},
+							},
+							Actions: session.EventActions{
+								StateDelta: map[string]any{
+									"_user_message_display": true,
+								},
+							},
+						}
+						yield(userMessageEvent, nil)
+					}
+				} else {
+					// No user_message - yield the full result
+					yield(&session.Event{
+						LLMResponse: model.LLMResponse{
+							Content: &genai.Content{
+								Parts: []*genai.Part{{Text: result}},
+								Role:  "model",
+							},
+						},
+					}, nil)
+				}
+				
+				return true
+			}
+			
 			// Genuine error
 			yield(nil, err)
 			return false
 		}
+		
+		// ... process event ...
+		goto ProcessEvent
+		
+	ProcessEvent:
+
 
 		// [ERROR HANDLING] Track tool errors but let them flow to the LLM
 		// The LLM needs to see the error response to understand the tool failed

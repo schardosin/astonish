@@ -29,7 +29,7 @@ type WebConfig struct {
 // RunWeb runs the agent in web mode with ADK's embedded browser UI
 func RunWeb(ctx context.Context, cfg *WebConfig) error {
 	// Initialize LLM
-	llm, err := provider.GetProvider(ctx, cfg.ProviderName, cfg.ModelName)
+	llm, err := provider.GetProvider(ctx, cfg.ProviderName, cfg.ModelName, nil)
 	if err != nil {
 		return fmt.Errorf("failed to initialize provider: %w", err)
 	}

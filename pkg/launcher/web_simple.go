@@ -38,7 +38,7 @@ type chatServer struct {
 // RunSimpleWeb runs a simplified chat-only web interface
 func RunSimpleWeb(ctx context.Context, cfg *SimpleWebConfig) error {
 	// Initialize LLM
-	llm, err := provider.GetProvider(ctx, cfg.ProviderName, cfg.ModelName)
+	llm, err := provider.GetProvider(ctx, cfg.ProviderName, cfg.ModelName, nil)
 	if err != nil {
 		return fmt.Errorf("failed to initialize provider: %w", err)
 	}

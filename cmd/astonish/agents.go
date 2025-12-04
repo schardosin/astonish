@@ -177,6 +177,7 @@ Found:
 	// Use our custom console launcher
 	return launcher.RunConsole(ctx, &launcher.ConsoleConfig{
 		AgentConfig:    cfg,
+		AppConfig:      appCfg,
 		ProviderName:   *providerName,
 		ModelName:      *modelName,
 		SessionService: safeService,

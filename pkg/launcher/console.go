@@ -27,6 +27,7 @@ import (
 // ConsoleConfig contains configuration for the console launcher
 type ConsoleConfig struct {
 	AgentConfig    *config.AgentConfig
+	AppConfig      *config.AppConfig
 	ProviderName   string
 	ModelName      string
 	SessionService session.Service
@@ -45,7 +46,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	if cfg.DebugMode {
 		fmt.Println("Initializing LLM provider...")
 	}
-	llm, err := provider.GetProvider(ctx, cfg.ProviderName, cfg.ModelName)
+	llm, err := provider.GetProvider(ctx, cfg.ProviderName, cfg.ModelName, cfg.AppConfig)
 	if err != nil {
 		fmt.Printf("ERROR: Failed to initialize provider '%s' with model '%s': %v\n", cfg.ProviderName, cfg.ModelName, err)
 		return fmt.Errorf("failed to initialize provider: %w", err)

@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/provider/openrouter"
 	"github.com/schardosin/astonish/pkg/provider/sap"
 )
 
@@ -76,6 +77,11 @@ func handleSetupCommand() error {
 		runAPIKeyForm("OpenAI API Key", "api_key", pCfg)
 	case "openrouter":
 		runAPIKeyForm("OpenRouter API Key", "api_key", pCfg)
+		if err := fetchAndSelectOpenRouterModel(pCfg, cfg); err != nil {
+			fmt.Printf("Warning: Failed to fetch/select OpenRouter models: %v\n", err)
+		} else {
+			goto SaveConfig
+		}
 	case "sap_ai_core":
 		runSAPAICoreForm(pCfg)
 		// Special handling for SAP AI Core model selection
@@ -253,6 +259,57 @@ func fetchAndSelectSAPModel(pCfg config.ProviderConfig, appCfg *config.AppConfig
 		for _, m := range models {
 			if m == appCfg.General.DefaultModel {
 				selectedModel = m
+				break
+			}
+		}
+	}
+
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select a model").
+				Description("Type to filter list").
+				Options(modelOptions...).
+				Value(&selectedModel).
+				Height(len(models) + 2), 
+		),
+	).Run()
+
+	if err != nil {
+		return err
+	}
+
+	appCfg.General.DefaultModel = selectedModel
+	return nil
+}
+
+func fetchAndSelectOpenRouterModel(pCfg config.ProviderConfig, appCfg *config.AppConfig) error {
+	runSpinner("Fetching models from OpenRouter...")
+
+	models, err := openrouter.ListModels(pCfg["api_key"])
+	if err != nil {
+		return err
+	}
+
+	if len(models) == 0 {
+		return fmt.Errorf("no models found")
+	}
+
+	// Create Options dynamically
+	var modelOptions []huh.Option[string]
+	for _, m := range models {
+		// Format: [Group] Name
+		// We use the ID as the value
+		label := fmt.Sprintf("[%s] %s", m.Group, m.DisplayName)
+		modelOptions = append(modelOptions, huh.NewOption(label, m.ID))
+	}
+
+	var selectedModel string
+	// Pre-select current default if it exists
+	if appCfg.General.DefaultModel != "" {
+		for _, m := range models {
+			if m.ID == appCfg.General.DefaultModel {
+				selectedModel = m.ID
 				break
 			}
 		}

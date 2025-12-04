@@ -1767,8 +1767,9 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 	// Execute with fallback retry
 	for event, err := range runAgent() {
 		if err != nil {
-			// Check for "Tool calling is not supported" error
-			if strings.Contains(err.Error(), "Tool calling is not supported") {
+			// Check for "Tool calling is not supported" error or OpenRouter 404
+			if strings.Contains(err.Error(), "Tool calling is not supported") || 
+			   strings.Contains(err.Error(), "No endpoints found that support tool use") {
 				if a.DebugMode {
 					fmt.Printf("[DEBUG] Caught tool calling error: %v. Switching to ReAct fallback.\n", err)
 				}

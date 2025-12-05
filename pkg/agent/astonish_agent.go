@@ -1117,26 +1117,85 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 		state.Set("_error_context", errCtx)
 		state.Set("_has_error", true)
 		
-		// Last attempt? Don't retry, just fail
-		if attempt >= maxRetries-1 {
+		// Check if this is the last attempt
+		isLastAttempt := (attempt >= maxRetries-1)
+		
+		// Decide whether to retry using intelligent recovery or simple retry
+		var shouldRetry bool
+		var errorTitle string
+		var oneLiner string
+		var explanation string
+		var decision *RecoveryDecision
+		
+		if useIntelligentRetry && !isLastAttempt {
+			// Use LLM-based error recovery
+			recovery := NewErrorRecoveryNode(a.LLM, a.DebugMode)
+			var recoveryErr error
+			decision, recoveryErr = recovery.Decide(ctx, errCtx)
+			
+			if recoveryErr != nil {
+				// Error recovery failed, fall back to simple retry
+				if a.DebugMode {
+					fmt.Printf("[RETRY] Error recovery failed: %v, using simple retry\n", recoveryErr)
+				}
+				shouldRetry = true
+				errorTitle = "Retry Attempt"
+				oneLiner = "Error analysis failed"
+				explanation = "Error analysis failed, retrying automatically"
+			} else {
+				shouldRetry = decision.ShouldRetry
+				errorTitle = decision.Title
+				oneLiner = decision.OneLiner
+				explanation = decision.Reason
+				
+				if decision.Suggestion != "" {
+					explanation += "\n\nSuggestion: " + decision.Suggestion
+				}
+			}
+		} else if !isLastAttempt {
+			// Simple retry strategy
+			shouldRetry = true
+			errorTitle = "Retry Attempt"
+			oneLiner = fmt.Sprintf("Attempt %d/%d", attempt+2, maxRetries)
+			explanation = fmt.Sprintf("Retrying automatically (attempt %d/%d)", attempt+2, maxRetries)
+		}
+		
+		// Always emit retry badge for every attempt (1-based indexing)
+		// This shows progress: 1/3, 2/3, 3/3
+		// Emit retry info via StateDelta for console to render
+		if oneLiner == "" {
+			oneLiner = errorTitle
+		}
+		
+		yield(&session.Event{
+			Actions: session.EventActions{
+				StateDelta: map[string]any{
+					"_retry_info": map[string]any{
+						"attempt":     attempt + 1,
+						"max_retries": maxRetries,
+						"reason":      oneLiner,
+					},
+					"_processing_info": true, 
+				},
+			},
+		}, nil)
+		
+		if isLastAttempt {
+			// Show final error after retry badge
 			if a.DebugMode {
 				fmt.Printf("[RETRY] Max retries (%d) exceeded for node '%s'\n", maxRetries, nodeName)
 			}
 			
-			// Emit final error message - this MUST be displayed before we stop
-			// Mark it with a special state delta so console knows to display it
+			// Emit final failure info via StateDelta
 			if !yield(&session.Event{
-				LLMResponse: model.LLMResponse{
-					Content: &genai.Content{
-						Parts: []*genai.Part{{
-							Text: fmt.Sprintf("❌ Max Retries Exceeded\n\nFailed after %d attempts. The error persisted across all retry attempts.\n\nFinal error: %s", maxRetries, err.Error()),
-						}},
-						Role: "model",
-					},
-				},
 				Actions: session.EventActions{
 					StateDelta: map[string]any{
-						"_error_message_display": true, // Force display even if streaming is suppressed
+						"_failure_info": map[string]any{
+							"title":          "Max Retries Exceeded",
+							"reason":         fmt.Sprintf("Failed after %d attempts. The error persisted across all retry attempts.", maxRetries),
+							"original_error": err.Error(),
+						},
+						"_processing_info": true,
 					},
 				},
 			}, nil) {
@@ -1157,59 +1216,43 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			break
 		}
 		
-		// Decide whether to retry using intelligent recovery or simple retry
-		var shouldRetry bool
-		var errorTitle string
-		var explanation string
-		
-		if useIntelligentRetry {
-			// Use LLM-based error recovery
-			recovery := NewErrorRecoveryNode(a.LLM, a.DebugMode)
-			decision, recoveryErr := recovery.Decide(ctx, errCtx)
-			
-			if recoveryErr != nil {
-				// Error recovery failed, fall back to simple retry
-				if a.DebugMode {
-					fmt.Printf("[RETRY] Error recovery failed: %v, using simple retry\n", recoveryErr)
-				}
-				shouldRetry = true
-				errorTitle = "Retry Attempt"
-				explanation = "Error analysis failed, retrying automatically"
-			} else {
-				shouldRetry = decision.ShouldRetry
-				errorTitle = decision.Title
-				explanation = decision.Reason
-				
-				if decision.Suggestion != "" {
-					explanation += "\n\nSuggestion: " + decision.Suggestion
-				}
-			}
-		} else {
-			// Simple retry strategy
-			shouldRetry = true
-			errorTitle = "Retry Attempt"
-			explanation = fmt.Sprintf("Retrying automatically (attempt %d/%d)", attempt+2, maxRetries)
-		}
-		
 		if !shouldRetry {
 			// Error recovery decided to abort - don't retry
 			if a.DebugMode {
 				fmt.Printf("[RETRY] Error recovery decided to ABORT: %s\n", explanation)
 			}
 			
-			// Emit abort message - this MUST be displayed before we stop
-			// Mark it with a special state delta so console knows to display it
-			// Use the LLM-generated title for a polished, user-friendly message
+			// Emit abort message using styled error box
+			// Split explanation into reason and suggestion
+			reason := explanation
+			suggestion := ""
+			
+			// Check if explanation contains a "Suggestion:" section
+			if strings.Contains(explanation, "Suggestion: ") {
+				parts := strings.SplitN(explanation, "Suggestion: ", 2)
+				if len(parts) == 2 {
+					reason = strings.TrimSpace(parts[0])
+					suggestion = strings.TrimSpace(parts[1])
+				}
+			} else if strings.Contains(explanation, "\n\nSuggestion: ") {
+				parts := strings.SplitN(explanation, "\n\nSuggestion: ", 2)
+				if len(parts) == 2 {
+					reason = strings.TrimSpace(parts[0])
+					suggestion = strings.TrimSpace(parts[1])
+				}
+			}
+			
 			title := errorTitle
 			if title == "" {
 				title = "Error"
 			}
-			abortMsg := fmt.Sprintf("❌ %s\n\n%s\n\nOriginal error: %s", title, explanation, err.Error())
+			
+			errorBox := ui.RenderErrorBox(title, reason, suggestion, err.Error())
 			if !yield(&session.Event{
 				LLMResponse: model.LLMResponse{
 					Content: &genai.Content{
 						Parts: []*genai.Part{{
-							Text: abortMsg,
+							Text: errorBox,
 						}},
 						Role: "model",
 					},
@@ -1233,31 +1276,14 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 				fmt.Printf("[RETRY] Abort message yielded, breaking retry loop\n")
 			}
 			
-			// Break out of retry loop - this will cause executeLLMNode to return false
-			// The main loop will then check for error transitions in the flow
+			// Break out of retry loop - error recovery decided not to retry
 			break
 		}
 		
-		// Emit retry message
+		// Continue with retry
 		if a.DebugMode {
-			fmt.Printf("[RETRY] Error recovery decided to RETRY: %s\n", explanation)
+			fmt.Printf("[RETRY] Proceeding with retry (attempt %d/%d)\n", attempt+2, maxRetries)
 		}
-		
-		yield(&session.Event{
-			LLMResponse: model.LLMResponse{
-				Content: &genai.Content{
-					Parts: []*genai.Part{{
-						Text: fmt.Sprintf("⚠️  %s (Attempt %d/%d)\n\n%s", errorTitle, attempt+1, maxRetries, explanation),
-					}},
-					Role: "model",
-				},
-			},
-			Actions: session.EventActions{
-				StateDelta: map[string]any{
-					"_error_message_display": true, // Force display even if streaming is suppressed
-				},
-			},
-		}, nil)
 		
 		// Add error to history
 		errorHistory = append(errorHistory, err.Error())

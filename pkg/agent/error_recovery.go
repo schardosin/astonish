@@ -28,6 +28,7 @@ type ErrorContext struct {
 type RecoveryDecision struct {
 	ShouldRetry bool   `json:"should_retry"` // true = retry, false = abort
 	Title       string `json:"title"`        // Short, clear summary of the error (max 100 chars)
+	OneLiner    string `json:"one_liner"`    // Ultra-short summary for badges (max 60 chars)
 	Reason      string `json:"reason"`       // Explanation of the decision
 	Suggestion  string `json:"suggestion"`   // What to fix or try differently (if retry)
 }
@@ -140,6 +141,7 @@ You MUST respond with ONLY a JSON object in this exact format:
 {
   "should_retry": true or false,
   "title": "Short, clear summary of the error (max 80 chars, no emoji)",
+  "one_liner": "Ultra-short summary for UI badge (max 60 chars, no emoji)",
   "reason": "clear explanation of your decision (2-3 sentences)",
   "suggestion": "what to try differently (if retry) or how to fix (if abort)"
 }
@@ -149,6 +151,11 @@ You MUST respond with ONLY a JSON object in this exact format:
 - State the actual problem, not just "error occurred"
 - Use plain language, avoid technical jargon when possible
 - Examples: "Pending review already exists", "Authentication required", "Resource not found"
+
+**One-Liner Guidelines:**
+- Even more concise than title (max 60 characters)
+- Used in retry badges, must be extremely brief
+- Examples: "Rate limit (429)", "Review exists", "Auth required"
 
 Do not include any other text, markdown, or explanations outside the JSON object.`
 }
@@ -240,9 +247,14 @@ func (e *ErrorRecoveryNode) fallbackDecision(errCtx ErrorContext) *RecoveryDecis
 	
 	for pattern, title := range nonRecoverablePatterns {
 		if strings.Contains(errorLower, pattern) {
+			oneLiner := title
+			if len(oneLiner) > 60 {
+				oneLiner = oneLiner[:57] + "..."
+			}
 			return &RecoveryDecision{
 				ShouldRetry: false,
 				Title:       title,
+				OneLiner:    oneLiner,
 				Reason:      fmt.Sprintf("Non-recoverable error detected: %s", pattern),
 				Suggestion:  "Please check your configuration and ensure all required resources exist",
 			}
@@ -264,9 +276,14 @@ func (e *ErrorRecoveryNode) fallbackDecision(errCtx ErrorContext) *RecoveryDecis
 	
 	for pattern, title := range recoverablePatterns {
 		if strings.Contains(errorLower, pattern) {
+			oneLiner := title
+			if len(oneLiner) > 60 {
+				oneLiner = oneLiner[:57] + "..."
+			}
 			return &RecoveryDecision{
 				ShouldRetry: true,
 				Title:       title,
+				OneLiner:    oneLiner,
 				Reason:      fmt.Sprintf("Transient error detected: %s", pattern),
 				Suggestion:  "Retrying with the same parameters",
 			}
@@ -278,6 +295,7 @@ func (e *ErrorRecoveryNode) fallbackDecision(errCtx ErrorContext) *RecoveryDecis
 		return &RecoveryDecision{
 			ShouldRetry: true,
 			Title:       "Retry Attempt",
+			OneLiner:    "Uncertain error",
 			Reason:      "Error type uncertain, but retry budget available",
 			Suggestion:  "Attempting retry with same parameters",
 		}
@@ -286,6 +304,7 @@ func (e *ErrorRecoveryNode) fallbackDecision(errCtx ErrorContext) *RecoveryDecis
 	return &RecoveryDecision{
 		ShouldRetry: false,
 		Title:       "Max Retries Exceeded",
+		OneLiner:    "Max retries reached",
 		Reason:      "Max retry attempts reached",
 		Suggestion:  "Please review the error and adjust the node configuration",
 	}

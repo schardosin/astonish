@@ -305,15 +305,67 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					suppressStreaming = false
 					stopSpinner(true)
 					
-					if !aiPrefixPrinted {
-						fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
-						aiPrefixPrinted = true
+					// Check if this is a processing info message (no Agent: prefix)
+					if _, isProcessingInfo := event.Actions.StateDelta["_processing_info"]; !isProcessingInfo {
+						if !aiPrefixPrinted {
+							fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
+							aiPrefixPrinted = true
+						}
 					}
 				}
 				
 				// Check for spinner text update
 				if spinnerText, ok := event.Actions.StateDelta["_spinner_text"].(string); ok {
 					startSpinner(spinnerText)
+				}
+
+				// Check for Retry Info
+				if retryInfoVal, ok := event.Actions.StateDelta["_retry_info"]; ok {
+					if retryInfo, ok := retryInfoVal.(map[string]any); ok {
+						stopSpinner(true)
+						
+						// Extract fields
+						var attempt, maxRetries int
+						
+						if a, ok := retryInfo["attempt"].(int); ok {
+							attempt = a
+						} else if a, ok := retryInfo["attempt"].(float64); ok {
+							attempt = int(a)
+						}
+						
+						if m, ok := retryInfo["max_retries"].(int); ok {
+							maxRetries = m
+						} else if m, ok := retryInfo["max_retries"].(float64); ok {
+							maxRetries = int(m)
+						}
+
+						reason := retryInfo["reason"].(string)
+						
+						// Render badge
+						badge := ui.RenderRetryBadge(attempt, maxRetries, reason)
+						
+						// Print with indentation (3 spaces)
+						fmt.Printf("\n   %s\n", badge)
+					}
+				}
+
+				// Check for Failure Info
+				if failureInfoVal, ok := event.Actions.StateDelta["_failure_info"]; ok {
+					if failureInfo, ok := failureInfoVal.(map[string]any); ok {
+						stopSpinner(true)
+						
+						// Extract fields
+						title := failureInfo["title"].(string)
+						reason := failureInfo["reason"].(string)
+						originalError := failureInfo["original_error"].(string)
+						suggestion, _ := failureInfo["suggestion"].(string) // Optional
+						
+						// Render error box
+						box := ui.RenderErrorBox(title, reason, suggestion, originalError)
+						
+						// Print
+						fmt.Printf("\n%s\n", box)
+					}
 				}
 			}
 			

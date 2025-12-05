@@ -1766,7 +1766,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			}
 		}
 
-		// Add AfterToolCallback for debugging (removed force_stop logic that broke parallel processing)
+		// Add AfterToolCallback for debugging and raw_tool_output handling
 		afterToolCallbacks = []llmagent.AfterToolCallback{
 			func(ctx tool.Context, t tool.Tool, args map[string]any, result map[string]any, err error) (map[string]any, error) {
 				if err != nil {
@@ -1783,6 +1783,34 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 					fmt.Printf("[DEBUG] Tool Name: %s\n", toolName)
 					fmt.Printf("[DEBUG] Result:\n%s\n", string(resultJSON))
 					fmt.Printf("[DEBUG] ===========================================\n\n")
+				}
+
+				// Handle raw_tool_output: Store actual result in state, return sanitized message to LLM
+				// This prevents large tool outputs from polluting the LLM's context window
+				if len(node.RawToolOutput) == 1 {
+					// Get the state key to store the raw output
+					var stateKey string
+					for k := range node.RawToolOutput {
+						stateKey = k
+						break
+					}
+
+					// Store the actual tool result in state
+					if err := state.Set(stateKey, result); err != nil {
+						return result, fmt.Errorf("failed to set raw_tool_output state key %s: %w", stateKey, err)
+					}
+
+					if a.DebugMode {
+						fmt.Printf("[DEBUG] raw_tool_output: Stored tool result in state key '%s'\n", stateKey)
+					}
+
+					// Return sanitized message to LLM instead of raw data
+					// This matches Python's behavior: LLM doesn't see the actual data
+					sanitizedResult := map[string]any{
+						"status":  "success",
+						"message": fmt.Sprintf("Tool '%s' executed successfully. Its output has been directly stored in the agent's state under the key '%s'.", toolName, stateKey),
+					}
+					return sanitizedResult, nil
 				}
 
 				return result, nil

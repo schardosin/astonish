@@ -244,6 +244,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		waitingForApproval := false
 		var approvalOptions []string
 		var inputOptions []string
+		isAutoApproved := false
 		
 		// Declare suppression variables here so they are accessible throughout the loop and after
 		suppressStreaming := false
@@ -257,6 +258,8 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				fmt.Printf("\nERROR: %v\n", err)
 				return err
 			}
+
+
 
 			// Debug logging for tool calls and responses
 			if cfg.DebugMode && event.LLMResponse.Content != nil {
@@ -425,6 +428,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						isParallel := false
 						hasUserMessage := false
 						hasOutputModel := false
+						isAutoApproved = false
 						
 						for _, n := range cfg.AgentConfig.Nodes {
 							if n.Name == currentNodeName {
@@ -474,6 +478,37 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				if awaitingVal, ok := event.Actions.StateDelta["awaiting_approval"]; ok {
 					if awaiting, ok := awaitingVal.(bool); ok && awaiting {
 						waitingForApproval = true
+					}
+				}
+				
+				// Check for auto-approval - handle IMMEDIATELY
+				if autoApprovedVal, ok := event.Actions.StateDelta["auto_approved"]; ok {
+					if auto, ok := autoApprovedVal.(bool); ok && auto {
+						// Stop spinner before printing
+						stopSpinner(true, true)
+						
+						// Print the tool info from the event content
+						// Note: formatToolApprovalRequest already returns ANSI-formatted output
+						// from ui.RenderToolBox, so we print it directly without SmartRender
+						if event.LLMResponse.Content != nil {
+							for _, part := range event.LLMResponse.Content.Parts {
+								if part.Text != "" {
+									fmt.Print(part.Text)
+								}
+							}
+						}
+						
+						// Print Auto-Approved Badge
+						fmt.Println(ui.RenderStatusBadge("Auto Approved", true))
+						
+						// Simulate "Yes" selection
+						userMsg = genai.NewContentFromText("Yes", genai.RoleUser)
+						
+						// Reset flags
+						waitingForApproval = false
+						isAutoApproved = false
+						
+						continue
 					}
 				}
 				
@@ -787,6 +822,25 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 			
 			// Show input dialog
 			if waitingForApproval {
+				// Handle Auto-Approval
+				if isAutoApproved {
+					// Print the tool description (which contains the tool call details)
+					if description != "" {
+						fmt.Println(description)
+					}
+					
+					// Print Auto-Approved Badge
+					fmt.Println(ui.RenderStatusBadge("Auto Approved", true))
+					
+					// Simulate "Yes" selection
+					userMsg = genai.NewContentFromText("Yes", genai.RoleUser)
+					
+					// Reset state
+					waitingForApproval = false
+					approvalOptions = nil
+					isAutoApproved = false
+					continue
+				}
 				// Use approval options if available
 				opts := []string{"Yes", "No"}
 				if len(approvalOptions) > 0 {

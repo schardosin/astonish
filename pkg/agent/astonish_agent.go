@@ -1736,6 +1736,34 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 					return placeholderResult, nil
 				},
 			}
+		} else {
+			// Auto-approval enabled: Register callback to emit visual event
+			// and then allow the tool to execute normally
+			beforeToolCallbacks = []llmagent.BeforeToolCallback{
+				func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
+					toolName := t.Name()
+					
+					// Emit auto-approval visual event
+					prompt := a.formatToolApprovalRequest(toolName, args)
+					yield(&session.Event{
+						LLMResponse: model.LLMResponse{
+							Content: &genai.Content{
+								Parts: []*genai.Part{{Text: prompt}},
+								Role:  "model",
+							},
+						},
+						Actions: session.EventActions{
+							StateDelta: map[string]any{
+								"auto_approved":  true,
+								"approval_tool":  toolName,
+							},
+						},
+					}, nil)
+					
+					// Return nil to allow the actual tool to execute
+					return nil, nil
+				},
+			}
 		}
 
 		// Add AfterToolCallback for debugging (removed force_stop logic that broke parallel processing)

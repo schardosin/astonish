@@ -344,8 +344,8 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						// Render badge
 						badge := ui.RenderRetryBadge(attempt, maxRetries, reason)
 						
-						// Print with indentation (3 spaces)
-						fmt.Printf("\n   %s\n", badge)
+						// Print with indentation (3 spaces) - no leading newline
+						fmt.Printf("   %s\n", badge)
 					}
 				}
 

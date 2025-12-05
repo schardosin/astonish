@@ -14,6 +14,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.1.0
 	github.com/sashabaranov/go-openai v1.41.2
 	go.starlark.net v0.0.0-20251109183026-be02852a5e1f
+	golang.org/x/term v0.37.0
 	google.golang.org/adk v0.2.0
 	google.golang.org/genai v1.36.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -79,7 +80,6 @@ require (
 	golang.org/x/oauth2 v0.32.0 // indirect
 	golang.org/x/sync v0.18.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
-	golang.org/x/term v0.37.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251014184007-4626949a642f // indirect
 	google.golang.org/grpc v1.76.0 // indirect
@@ -87,5 +87,3 @@ require (
 	rsc.io/omap v1.2.0 // indirect
 	rsc.io/ordered v1.1.1 // indirect
 )
-
-replace google.golang.org/adk => ./adk-go

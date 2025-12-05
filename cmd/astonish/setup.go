@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strings"
 
 	"golang.org/x/term"
 
@@ -21,6 +22,7 @@ import (
 	openai_provider "github.com/schardosin/astonish/pkg/provider/openai"
 	"github.com/schardosin/astonish/pkg/provider/openrouter"
 	"github.com/schardosin/astonish/pkg/provider/sap"
+	"github.com/schardosin/astonish/pkg/provider/xai"
 )
 
 func handleSetupCommand() error {
@@ -48,6 +50,7 @@ func handleSetupCommand() error {
 		huh.NewOption("OpenAI", "openai"),
 		huh.NewOption("Openrouter", "openrouter"),
 		huh.NewOption("SAP AI Core", "sap_ai_core"),
+		huh.NewOption("xAI", "xai"),
 	}
 
 	// Run selection form
@@ -114,6 +117,13 @@ func handleSetupCommand() error {
 		} else {
 			goto SaveConfig
 		}
+	case "xai":
+		runAPIKeyForm("xAI API Key", "api_key", pCfg)
+		if err := fetchAndSelectXAIModel(pCfg, cfg); err != nil {
+			fmt.Printf("Warning: Failed to fetch/select xAI models: %v\n", err)
+		} else {
+			goto SaveConfig
+		}
 	case "openrouter":
 		runAPIKeyForm("OpenRouter API Key", "api_key", pCfg)
 		if err := fetchAndSelectOpenRouterModel(pCfg, cfg); err != nil {
@@ -177,7 +187,7 @@ func runAPIKeyForm(title string, key string, pCfg config.ProviderConfig) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	pCfg[key] = val
+	pCfg[key] = strings.TrimSpace(val)
 }
 
 func runBaseURLForm(title string, defaultVal string, pCfg config.ProviderConfig) {
@@ -709,6 +719,53 @@ func fetchAndSelectAnthropicModel(pCfg config.ProviderConfig, appCfg *config.App
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Select an Anthropic Model").
+				Options(options...).
+				Value(&selectedModel).
+				Height(10),
+		),
+	).Run()
+	
+	if err != nil {
+		return err
+	}
+
+	// Save selected model as default
+	appCfg.General.DefaultModel = selectedModel
+	fmt.Printf("Selected default model: %s\n", selectedModel)
+	
+	return nil
+}
+
+func fetchAndSelectXAIModel(pCfg config.ProviderConfig, appCfg *config.AppConfig) error {
+	apiKey := pCfg["api_key"]
+	if apiKey == "" {
+		return fmt.Errorf("API key required")
+	}
+
+	fmt.Println("Fetching available models from xAI...")
+	runSpinner("Connecting to xAI...")
+
+	models, err := xai.ListModels(context.Background(), apiKey)
+	if err != nil {
+		return err
+	}
+
+	if len(models) == 0 {
+		return fmt.Errorf("no models found")
+	}
+
+	// Create options for huh.Select
+	var options []huh.Option[string]
+	for _, m := range models {
+		options = append(options, huh.NewOption(m, m))
+	}
+
+	var selectedModel string
+	
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select an xAI Model").
 				Options(options...).
 				Value(&selectedModel).
 				Height(10),

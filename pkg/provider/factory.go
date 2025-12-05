@@ -134,6 +134,23 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 		}
 		return sap.NewProvider(ctx, modelName)
 
+	case "xai", "grok":
+		apiKey := os.Getenv("XAI_API_KEY")
+		if apiKey == "" && cfg != nil {
+			apiKey = cfg.Providers["xai"]["api_key"]
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("XAI_API_KEY not set")
+		}
+		if modelName == "" {
+			modelName = "grok-beta"
+		}
+		
+		config := openai.DefaultConfig(apiKey)
+		config.BaseURL = "https://api.x.ai/v1"
+		client := openai.NewClientWithConfig(config)
+		return openai_provider.NewProvider(client, modelName, true), nil
+
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", name)
 	}

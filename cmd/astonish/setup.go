@@ -78,6 +78,10 @@ func handleSetupCommand() error {
 	case "anthropic":
 		runAPIKeyForm("Anthropic API Key", "api_key", pCfg)
 		if err := fetchAndSelectAnthropicModel(pCfg, cfg); err != nil {
+			if isUserAborted(err) {
+				fmt.Println("Setup aborted by user; no changes were saved.")
+				return nil
+			}
 			fmt.Printf("Warning: Failed to fetch/select Anthropic models: %v\n", err)
 		} else {
 			goto SaveConfig
@@ -85,6 +89,10 @@ func handleSetupCommand() error {
 	case "gemini":
 		runAPIKeyForm("Google API Key", "api_key", pCfg)
 		if err := fetchAndSelectGoogleModel(pCfg, cfg); err != nil {
+			if isUserAborted(err) {
+				fmt.Println("Setup aborted by user; no changes were saved.")
+				return nil
+			}
 			fmt.Printf("Warning: Failed to fetch/select Google models: %v\n", err)
 		} else {
 			goto SaveConfig
@@ -92,6 +100,10 @@ func handleSetupCommand() error {
 	case "groq":
 		runAPIKeyForm("Groq API Key", "api_key", pCfg)
 		if err := fetchAndSelectGroqModel(pCfg, cfg); err != nil {
+			if isUserAborted(err) {
+				fmt.Println("Setup aborted by user; no changes were saved.")
+				return nil
+			}
 			fmt.Printf("Warning: Failed to fetch/select Groq models: %v\n", err)
 		} else {
 			goto SaveConfig
@@ -99,6 +111,10 @@ func handleSetupCommand() error {
 	case "lm_studio":
 		runBaseURLForm("LM Studio Base URL", "http://localhost:1234/v1", pCfg)
 		if err := fetchAndSelectLMStudioModel(pCfg, cfg); err != nil {
+			if isUserAborted(err) {
+				fmt.Println("Setup aborted by user; no changes were saved.")
+				return nil
+			}
 			fmt.Printf("Warning: Failed to fetch/select LM Studio models: %v\n", err)
 		} else {
 			goto SaveConfig
@@ -106,6 +122,10 @@ func handleSetupCommand() error {
 	case "ollama":
 		runOllamaForm(pCfg)
 		if err := fetchAndSelectOllamaModel(pCfg, cfg); err != nil {
+			if isUserAborted(err) {
+				fmt.Println("Setup aborted by user; no changes were saved.")
+				return nil
+			}
 			fmt.Printf("Warning: Failed to fetch/select Ollama models: %v\n", err)
 		} else {
 			goto SaveConfig
@@ -113,20 +133,32 @@ func handleSetupCommand() error {
 	case "openai":
 		runAPIKeyForm("OpenAI API Key", "api_key", pCfg)
 		if err := fetchAndSelectOpenAIModel(pCfg, cfg); err != nil {
-			fmt.Printf("Warning: Failed to fetch/select OpenAI models: %v\n", err)
+			if isUserAborted(err) {
+				fmt.Println("Setup aborted by user; no changes were saved.")
+				return nil
+			}
+			fmt.Printf("Warning: Failed to fetch/select OpenAI models %v\n", err)
 		} else {
 			goto SaveConfig
 		}
 	case "xai":
 		runAPIKeyForm("xAI API Key", "api_key", pCfg)
 		if err := fetchAndSelectXAIModel(pCfg, cfg); err != nil {
-			fmt.Printf("Warning: Failed to fetch/select xAI models: %v\n", err)
+			if isUserAborted(err) {
+				fmt.Println("Setup aborted by user; no changes were saved.")
+				return nil
+			}
+			fmt.Printf("Warning: Failed to fetch/select xAI models %v\n", err)
 		} else {
 			goto SaveConfig
 		}
 	case "openrouter":
 		runAPIKeyForm("OpenRouter API Key", "api_key", pCfg)
 		if err := fetchAndSelectOpenRouterModel(pCfg, cfg); err != nil {
+			if isUserAborted(err) {
+				fmt.Println("Setup aborted by user; no changes were saved.")
+				return nil
+	}
 			fmt.Printf("Warning: Failed to fetch/select OpenRouter models: %v\n", err)
 		} else {
 			goto SaveConfig
@@ -135,6 +167,10 @@ func handleSetupCommand() error {
 		runSAPAICoreForm(pCfg)
 		// Special handling for SAP AI Core model selection
 		if err := fetchAndSelectSAPModel(pCfg, cfg); err != nil {
+			if isUserAborted(err) {
+				fmt.Println("Setup aborted by user; no changes were saved.")
+				return nil
+			}
 			fmt.Printf("Warning: Failed to fetch/select SAP models: %v\n", err)
 		} else {
 			// Skip generic model selection if we did it specifically for SAP
@@ -381,8 +417,7 @@ func fetchAndSelectGoogleModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 			huh.NewSelect[string]().
 				Title("Select a Google GenAI Model").
 				Options(options...).
-				Value(&selectedModel).
-				Height(10), // Limit height to prevent taking up full screen
+				Value(&selectedModel),
 		),
 	).Run()
 	
@@ -477,8 +512,7 @@ func fetchAndSelectOllamaModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 			huh.NewSelect[string]().
 				Title("Select an Ollama Model").
 				Options(options...).
-				Value(&selectedModel).
-				Height(10),
+				Value(&selectedModel),
 		),
 	).Run()
 	
@@ -524,8 +558,7 @@ func fetchAndSelectLMStudioModel(pCfg config.ProviderConfig, appCfg *config.AppC
 			huh.NewSelect[string]().
 				Title("Select an LM Studio Model").
 				Options(options...).
-				Value(&selectedModel).
-				Height(10),
+				Value(&selectedModel),
 		),
 	).Run()
 	
@@ -571,8 +604,7 @@ func fetchAndSelectGroqModel(pCfg config.ProviderConfig, appCfg *config.AppConfi
 			huh.NewSelect[string]().
 				Title("Select a Groq Model").
 				Options(options...).
-				Value(&selectedModel).
-				Height(10),
+				Value(&selectedModel),
 		),
 	).Run()
 	
@@ -585,6 +617,14 @@ func fetchAndSelectGroqModel(pCfg config.ProviderConfig, appCfg *config.AppConfi
 	fmt.Printf("Selected default model: %s\n", selectedModel)
 	
 	return nil
+}
+
+func isUserAborted(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "user aborted") || strings.Contains(msg, "aborted") || strings.Contains(msg, "interrupt")
 }
 
 // UI Helpers
@@ -673,8 +713,7 @@ func fetchAndSelectOpenAIModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 			huh.NewSelect[string]().
 				Title("Select an OpenAI Model").
 				Options(options...).
-				Value(&selectedModel).
-				Height(10),
+				Value(&selectedModel),
 		),
 	).Run()
 	
@@ -720,8 +759,7 @@ func fetchAndSelectAnthropicModel(pCfg config.ProviderConfig, appCfg *config.App
 			huh.NewSelect[string]().
 				Title("Select an Anthropic Model").
 				Options(options...).
-				Value(&selectedModel).
-				Height(10),
+				Value(&selectedModel),
 		),
 	).Run()
 	
@@ -767,8 +805,7 @@ func fetchAndSelectXAIModel(pCfg config.ProviderConfig, appCfg *config.AppConfig
 			huh.NewSelect[string]().
 				Title("Select an xAI Model").
 				Options(options...).
-				Value(&selectedModel).
-				Height(10),
+				Value(&selectedModel),
 		),
 	).Run()
 	

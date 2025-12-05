@@ -1222,7 +1222,6 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 				fmt.Printf("[RETRY] Error recovery decided to ABORT: %s\n", explanation)
 			}
 			
-			// Emit abort message using styled error box
 			// Split explanation into reason and suggestion
 			reason := explanation
 			suggestion := ""
@@ -1247,19 +1246,17 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 				title = "Error"
 			}
 			
-			errorBox := ui.RenderErrorBox(title, reason, suggestion, err.Error())
+			// Emit abort info via StateDelta (same pattern as _failure_info)
 			if !yield(&session.Event{
-				LLMResponse: model.LLMResponse{
-					Content: &genai.Content{
-						Parts: []*genai.Part{{
-							Text: errorBox,
-						}},
-						Role: "model",
-					},
-				},
 				Actions: session.EventActions{
 					StateDelta: map[string]any{
-						"_error_message_display": true, // Force display even if streaming is suppressed
+						"_failure_info": map[string]any{
+							"title":          title,
+							"reason":         reason,
+							"suggestion":     suggestion,
+							"original_error": err.Error(),
+						},
+						"_processing_info": true, // No "Agent:" prefix for this display
 					},
 				},
 			}, nil) {

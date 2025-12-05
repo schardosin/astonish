@@ -7,25 +7,20 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// ANSI color codes
+const (
+	ansiRed    = "\033[1;38;5;196m"
+	ansiOrange = "\033[38;5;208m"
+	ansiYellow = "\033[38;5;226m"
+	ansiGrey   = "\033[38;5;240m"
+	ansiReset  = "\033[0m"
+)
+
 var (
-	// --- COLORS ---
-	// Using a slightly softer red for the border to be less aggressive
-	colorRed    = lipgloss.Color("196") 
+	// Lipgloss styles for retry badge (kept for consistency)
 	colorOrange = lipgloss.Color("#FFA500")
-	colorYellow = lipgloss.Color("226")
-	colorWhite  = lipgloss.Color("252")
 	colorGrey   = lipgloss.Color("240")
 	
-	// --- DIMENSIONS ---
-	// Reduced width slightly to prevent border wrapping/leaking artifacts
-	boxWidth     = 68
-	contentWidth = boxWidth - 4 
-
-	// --- STYLES ---
-
-	// 1. Retry Style (Text Only, No Background)
-	// Old: [ ORANGE ]
-	// New: ⟳ Retry 1/3
 	retryBadgeStyle = lipgloss.NewStyle().
 			Foreground(colorOrange).
 			Bold(true)
@@ -33,43 +28,6 @@ var (
 	retryMessageStyle = lipgloss.NewStyle().
 			Foreground(colorGrey).
 			PaddingLeft(1)
-
-	// 2. Failure Box (Cleaner)
-	errorBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorRed).
-			Padding(0, 1).
-			Width(boxWidth)
-
-	// Headers
-	errorHeaderStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(colorRed)
-
-	// Content Text
-	reasonStyle = lipgloss.NewStyle().
-			Foreground(colorWhite).
-			Width(contentWidth)
-
-	// Suggestion (Simpler, no icon)
-	suggestionTitleStyle = lipgloss.NewStyle().
-			Foreground(colorYellow).
-			Bold(true).
-			MarginTop(1)
-
-	suggestionBodyStyle = lipgloss.NewStyle().
-			Foreground(colorYellow).
-			Width(contentWidth)
-
-	// Raw Error (Dimmed, minimal)
-	originalErrorTitleStyle = lipgloss.NewStyle().
-			Foreground(colorGrey).
-			Bold(true).
-			MarginTop(1)
-
-	originalErrorBodyStyle = lipgloss.NewStyle().
-			Foreground(colorGrey).
-			Width(contentWidth)
 )
 
 // RenderRetryBadge: Clean text-only line
@@ -80,40 +38,38 @@ func RenderRetryBadge(attempt, maxRetries int, oneLiner string) string {
 	return lipgloss.JoinHorizontal(lipgloss.Left, badge, message)
 }
 
-// RenderErrorBox: Simplified card without dividers
+// RenderErrorBox: Simple text block with ANSI colors
 func RenderErrorBox(title, reason, suggestion, originalError string) string {
-	// 1. Header (e.g. "FAILURE: Validation Error")
-	header := errorHeaderStyle.Render(fmt.Sprintf("✕ %s", title))
-
-	// 2. Build blocks (Vertical stack)
-	blocks := []string{header, lipgloss.NewStyle().Height(1).Render("")}
-
-	// Reason
+	var output strings.Builder
+	
+	// Empty line at the beginning for visual separation
+	output.WriteString("\n")
+	
+	// 1. Header with red color
+	output.WriteString(fmt.Sprintf("%s✕ %s%s\n", ansiRed, title, ansiReset))
+	output.WriteString("\n")
+	
+	// 2. Reason (white/default color, no special formatting needed)
 	if reason != "" {
-		blocks = append(blocks, reasonStyle.Render(reason))
+		output.WriteString(fmt.Sprintf("%s\n", reason))
 	}
-
-	// Suggestion
+	
+	// 3. Suggestion (yellow)
 	if suggestion != "" {
-		blocks = append(blocks, 
-			suggestionTitleStyle.Render("Suggestion:"), // Removed emoji
-			suggestionBodyStyle.Render(suggestion),
-		)
+		output.WriteString(fmt.Sprintf("\n%sSuggestion:%s\n", ansiYellow, ansiReset))
+		output.WriteString(fmt.Sprintf("%s%s%s\n", ansiYellow, suggestion, ansiReset))
 	}
-
-	// Original Error (Technical details)
+	
+	// 4. Raw Error (grey, dimmed)
 	if originalError != "" {
-		// Add a tiny vertical gap before the raw error to separate it visually
-		blocks = append(blocks, 
-			lipgloss.NewStyle().Height(1).Render(""),
-			originalErrorTitleStyle.Render("Raw Error:"),
-			originalErrorBodyStyle.Render(cleanError(originalError)),
-		)
+		output.WriteString(fmt.Sprintf("\n%sRaw Error:%s\n", ansiGrey, ansiReset))
+		output.WriteString(fmt.Sprintf("%s%s%s\n", ansiGrey, cleanError(originalError), ansiReset))
 	}
-
-	// 3. Render
-	content := lipgloss.JoinVertical(lipgloss.Left, blocks...)
-	return errorBoxStyle.Render(content)
+	
+	// Empty line at the end for visual separation
+	output.WriteString("\n")
+	
+	return output.String()
 }
 
 func RenderMaxRetriesBox(attempts int, originalError string) string {

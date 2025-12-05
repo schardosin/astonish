@@ -363,8 +363,8 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						// Render error box
 						box := ui.RenderErrorBox(title, reason, suggestion, originalError)
 						
-						// Print
-						fmt.Printf("\n%s\n", box)
+						// Print directly (no SmartRender - we want raw ANSI codes to pass through)
+						fmt.Print(box)
 					}
 				}
 			}

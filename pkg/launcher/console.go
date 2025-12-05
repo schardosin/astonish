@@ -168,6 +168,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	// ANSI color codes
 	const (
 		ColorReset  = "\033[0m"
+		ColorRed    = "\033[31m"
 		ColorGreen  = "\033[32m"
 		ColorYellow = "\033[33m"
 		ColorBlue   = "\033[34m"
@@ -194,7 +195,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	var spinnerDone chan struct{}
 	var currentSpinnerText string
 
-	stopSpinner := func(markDone bool) {
+	stopSpinner := func(markDone bool, success bool) {
 		if spinnerProgram != nil {
 			spinnerProgram.Quit()
 			if spinnerDone != nil {
@@ -204,14 +205,18 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 			spinnerDone = nil
 			
 			if markDone && currentSpinnerText != "" {
-				fmt.Printf("✓ %s\n", currentSpinnerText)
+				if success {
+					fmt.Printf("✓ %s\n", currentSpinnerText)
+				} else {
+					fmt.Printf("%s✕%s %s\n", ColorRed, ColorReset, currentSpinnerText)
+				}
 			}
 			currentSpinnerText = ""
 		}
 	}
 
 	startSpinner := func(text string) {
-		stopSpinner(true) // Mark previous as done before starting new one
+		stopSpinner(true, true) // Mark previous as done before starting new one
 		currentSpinnerText = text
 		spinnerDone = make(chan struct{})
 		model := ui.NewSpinner(text)
@@ -287,7 +292,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 			if event.Actions.StateDelta != nil {
 				if _, hasMarker := event.Actions.StateDelta["_user_message_display"]; hasMarker {
 					// This is a user_message event - print Agent prefix before the text
-					stopSpinner(true)
+					stopSpinner(true, true)
 					
 					if !aiPrefixPrinted {
 						fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
@@ -303,7 +308,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					// This is an error message that must be displayed
 					// Temporarily disable suppression for this event only
 					suppressStreaming = false
-					stopSpinner(true)
+					stopSpinner(true, false)
 					
 					// Check if this is a processing info message (no Agent: prefix)
 					if _, isProcessingInfo := event.Actions.StateDelta["_processing_info"]; !isProcessingInfo {
@@ -322,7 +327,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				// Check for Retry Info
 				if retryInfoVal, ok := event.Actions.StateDelta["_retry_info"]; ok {
 					if retryInfo, ok := retryInfoVal.(map[string]any); ok {
-						stopSpinner(true)
+						stopSpinner(false, true)
 						
 						// Extract fields
 						var attempt, maxRetries int
@@ -352,7 +357,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				// Check for Failure Info
 				if failureInfoVal, ok := event.Actions.StateDelta["_failure_info"]; ok {
 					if failureInfo, ok := failureInfoVal.(map[string]any); ok {
-						stopSpinner(true)
+						stopSpinner(true, false)
 						
 						// Extract fields
 						title := failureInfo["title"].(string)
@@ -377,7 +382,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						// Flush buffer if we were streaming
 						if !suppressStreaming {
 							// Stop spinner before printing flush content
-							stopSpinner(true)
+							stopSpinner(true, true)
 							
 							// Flush lineBuffer
 							if lineBuffer != "" {
@@ -452,7 +457,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						
 						// Manage Spinner
 						if isInputNode || isParallel {
-							stopSpinner(true)
+							stopSpinner(true, true)
 						} else {
 							startSpinner(fmt.Sprintf("Processing %s...", currentNodeName))
 						}
@@ -507,8 +512,8 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					// If we have user_message content, ensure Agent prefix is printed first
 					if hasUserMessageContent {
 						// Stop spinner before printing
-						stopSpinner(true)
-						
+						stopSpinner(true, true)
+
 						// Print Agent prefix if not already printed
 						if !aiPrefixPrinted {
 							fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
@@ -638,7 +643,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					if shouldPrint {
 						// Only mark as done if it's NOT a system message (e.g. tool box, approval)
 						// If it IS a system message, we just want to pause/clear it temporarily
-						stopSpinner(!isSystemMsg)
+						stopSpinner(!isSystemMsg, true)
 						
 						if isSystemMsg {
 							// FLUSH TEXT BUFFER before printing system message
@@ -762,7 +767,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 			}
 			
 			// Stop spinner before showing input
-			stopSpinner(true)
+			stopSpinner(true, true)
 			
 			// Show input dialog
 			if waitingForApproval {
@@ -834,7 +839,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 			if textBuffer.Len() > 0 {
 				// Only print if not suppressed
 				if !suppressStreaming {
-					stopSpinner(true)
+					stopSpinner(true, true)
 					var rendered string
 					if isOutputNode {
 						rendered = textBuffer.String()
@@ -858,7 +863,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		
 		// If we broke out of the loop (e.g. END node), stop spinner
 		if currentNodeName == "END" {
-			stopSpinner(true)
+			stopSpinner(true, true)
 			if cfg.DebugMode {
 				fmt.Println("[DEBUG] Reached END node, exiting main loop")
 			}

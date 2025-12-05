@@ -298,6 +298,19 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					// We just needed to ensure the prefix is printed first
 				}
 				
+				// Check for error_message display marker - these MUST be shown even if streaming is suppressed
+				if _, hasMarker := event.Actions.StateDelta["_error_message_display"]; hasMarker {
+					// This is an error message that must be displayed
+					// Temporarily disable suppression for this event only
+					suppressStreaming = false
+					stopSpinner(true)
+					
+					if !aiPrefixPrinted {
+						fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
+						aiPrefixPrinted = true
+					}
+				}
+				
 				// Check for spinner text update
 				if spinnerText, ok := event.Actions.StateDelta["_spinner_text"].(string); ok {
 					startSpinner(spinnerText)

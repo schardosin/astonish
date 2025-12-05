@@ -699,11 +699,27 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				
 				return
 			} else if node.Type == "llm" {
-				if !a.executeLLMNode(ctx, node, currentNodeName, state, yield) {
+				success := a.executeLLMNode(ctx, node, currentNodeName, state, yield)
+				
+				// Check if node failed and set error flag
+				if !success {
+					// Check if this failure should stop execution
+					hasError, _ := state.Get("_has_error")
+					if hasErrorBool, ok := hasError.(bool); ok && hasErrorBool {
+						// Error occurred and was handled by retry logic
+						// Check if we should stop or continue
+						// For now, transition to END to stop execution
+						if a.DebugMode {
+							fmt.Printf("[DEBUG] Node '%s' failed with _has_error=true, transitioning to END\n", currentNodeName)
+						}
+						currentNodeName = "END"
+						continue
+					}
+					// Node failed but no error flag - this shouldn't happen, but handle it
 					return
 				}
 				
-				// Move to next node
+				// Node succeeded - move to next node
 				nextNode, err := a.getNextNode(currentNodeName, state)
 				if err != nil {
 					yield(nil, err)
@@ -1036,8 +1052,242 @@ func (a *AstonishAgent) handleToolApproval(ctx agent.InvocationContext, state se
 
 
 
-// executeLLMNode executes an LLM node using ADK's llmagent
+// executeLLMNode executes an LLM node with intelligent retry logic
 func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config.Node, nodeName string, state session.State, yield func(*session.Event, error) bool) bool {
+	// Clear any previous error state at the start
+	state.Set("_has_error", false)
+	state.Set("_last_error", "")
+	state.Set("_error_node", "")
+	
+	// Determine max retries
+	maxRetries := 3 // default
+	if node.MaxRetries > 0 {
+		maxRetries = node.MaxRetries
+	}
+	
+	if a.DebugMode {
+		fmt.Printf("[RETRY] Starting executeLLMNode for '%s' with max_retries=%d\n", nodeName, maxRetries)
+	}
+	
+	// Determine retry strategy
+	useIntelligentRetry := true
+	if node.RetryStrategy == "simple" {
+		useIntelligentRetry = false
+	}
+	
+	// Error context for intelligent recovery
+	errorHistory := []string{}
+	var lastErr error // Track the last error for use after the loop
+	
+	// Retry loop
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if a.DebugMode && attempt > 0 {
+			fmt.Printf("[RETRY] Attempt %d/%d for node '%s'\n", attempt+1, maxRetries, nodeName)
+		}
+		
+		// Execute the node
+		success, err := a.executeLLMNodeAttempt(ctx, node, nodeName, state, yield)
+		lastErr = err // Track the last error
+		
+		if success {
+			// Success! Clear any error state and return
+			state.Set("_error_context", nil)
+			state.Set("_has_error", false)
+			return true
+		}
+		
+		// Node failed - decide whether to retry
+		if err == nil {
+			// No error but failed (shouldn't happen, but handle it)
+			return false
+		}
+		
+		// Build error context
+		errCtx := ErrorContext{
+			NodeName:       nodeName,
+			NodeType:       node.Type,
+			ErrorType:      "execution_error",
+			ErrorMessage:   err.Error(),
+			AttemptCount:   attempt + 1,
+			MaxRetries:     maxRetries,
+			PreviousErrors: errorHistory,
+		}
+		
+		// Store error context in state
+		state.Set("_error_context", errCtx)
+		state.Set("_has_error", true)
+		
+		// Last attempt? Don't retry, just fail
+		if attempt >= maxRetries-1 {
+			if a.DebugMode {
+				fmt.Printf("[RETRY] Max retries (%d) exceeded for node '%s'\n", maxRetries, nodeName)
+			}
+			
+			// Emit final error message - this MUST be displayed before we stop
+			// Mark it with a special state delta so console knows to display it
+			if !yield(&session.Event{
+				LLMResponse: model.LLMResponse{
+					Content: &genai.Content{
+						Parts: []*genai.Part{{
+							Text: fmt.Sprintf("❌ Max Retries Exceeded\n\nFailed after %d attempts. The error persisted across all retry attempts.\n\nFinal error: %s", maxRetries, err.Error()),
+						}},
+						Role: "model",
+					},
+				},
+				Actions: session.EventActions{
+					StateDelta: map[string]any{
+						"_error_message_display": true, // Force display even if streaming is suppressed
+					},
+				},
+			}, nil) {
+				// Yield was cancelled, stop immediately
+				return false
+			}
+			
+			// Store error details in state for error handler nodes
+			state.Set("_last_error", err.Error())
+			state.Set("_error_node", nodeName)
+			state.Set("_has_error", true)
+			
+			if a.DebugMode {
+				fmt.Printf("[RETRY] Max retries message yielded, breaking retry loop\n")
+			}
+			
+			// Break out of retry loop
+			break
+		}
+		
+		// Decide whether to retry using intelligent recovery or simple retry
+		var shouldRetry bool
+		var errorTitle string
+		var explanation string
+		
+		if useIntelligentRetry {
+			// Use LLM-based error recovery
+			recovery := NewErrorRecoveryNode(a.LLM, a.DebugMode)
+			decision, recoveryErr := recovery.Decide(ctx, errCtx)
+			
+			if recoveryErr != nil {
+				// Error recovery failed, fall back to simple retry
+				if a.DebugMode {
+					fmt.Printf("[RETRY] Error recovery failed: %v, using simple retry\n", recoveryErr)
+				}
+				shouldRetry = true
+				errorTitle = "Retry Attempt"
+				explanation = "Error analysis failed, retrying automatically"
+			} else {
+				shouldRetry = decision.ShouldRetry
+				errorTitle = decision.Title
+				explanation = decision.Reason
+				
+				if decision.Suggestion != "" {
+					explanation += "\n\nSuggestion: " + decision.Suggestion
+				}
+			}
+		} else {
+			// Simple retry strategy
+			shouldRetry = true
+			errorTitle = "Retry Attempt"
+			explanation = fmt.Sprintf("Retrying automatically (attempt %d/%d)", attempt+2, maxRetries)
+		}
+		
+		if !shouldRetry {
+			// Error recovery decided to abort - don't retry
+			if a.DebugMode {
+				fmt.Printf("[RETRY] Error recovery decided to ABORT: %s\n", explanation)
+			}
+			
+			// Emit abort message - this MUST be displayed before we stop
+			// Mark it with a special state delta so console knows to display it
+			// Use the LLM-generated title for a polished, user-friendly message
+			title := errorTitle
+			if title == "" {
+				title = "Error"
+			}
+			abortMsg := fmt.Sprintf("❌ %s\n\n%s\n\nOriginal error: %s", title, explanation, err.Error())
+			if !yield(&session.Event{
+				LLMResponse: model.LLMResponse{
+					Content: &genai.Content{
+						Parts: []*genai.Part{{
+							Text: abortMsg,
+						}},
+						Role: "model",
+					},
+				},
+				Actions: session.EventActions{
+					StateDelta: map[string]any{
+						"_error_message_display": true, // Force display even if streaming is suppressed
+					},
+				},
+			}, nil) {
+				// Yield was cancelled, stop immediately
+				return false
+			}
+			
+			// Store error details in state for error handler nodes
+			state.Set("_last_error", err.Error())
+			state.Set("_error_node", nodeName)
+			state.Set("_has_error", true)
+			
+			if a.DebugMode {
+				fmt.Printf("[RETRY] Abort message yielded, breaking retry loop\n")
+			}
+			
+			// Break out of retry loop - this will cause executeLLMNode to return false
+			// The main loop will then check for error transitions in the flow
+			break
+		}
+		
+		// Emit retry message
+		if a.DebugMode {
+			fmt.Printf("[RETRY] Error recovery decided to RETRY: %s\n", explanation)
+		}
+		
+		yield(&session.Event{
+			LLMResponse: model.LLMResponse{
+				Content: &genai.Content{
+					Parts: []*genai.Part{{
+						Text: fmt.Sprintf("⚠️  %s (Attempt %d/%d)\n\n%s", errorTitle, attempt+1, maxRetries, explanation),
+					}},
+					Role: "model",
+				},
+			},
+			Actions: session.EventActions{
+				StateDelta: map[string]any{
+					"_error_message_display": true, // Force display even if streaming is suppressed
+				},
+			},
+		}, nil)
+		
+		// Add error to history
+		errorHistory = append(errorHistory, err.Error())
+		
+		// Continue to next attempt
+	}
+	
+	// If we exit the loop, it means we exhausted retries or error recovery decided to abort
+	// Check if there's an error transition in the flow for this node
+	nextNode, transErr := a.getNextNode(nodeName, state)
+	
+	if transErr != nil || nextNode == "" {
+		// No error transition configured - stop execution with error
+		if a.DebugMode {
+			fmt.Printf("[RETRY] No error transition found for node '%s', stopping execution\n", nodeName)
+		}
+		yield(nil, fmt.Errorf("node '%s' failed: %w", nodeName, lastErr))
+		return false
+	}
+	
+	// There is a transition (possibly to an error handler node)
+	// Return false to indicate failure, let the main loop handle the transition
+	if a.DebugMode {
+		fmt.Printf("[RETRY] Error transition found: %s -> %s\n", nodeName, nextNode)
+	}
+	return false
+}
+
+// executeLLMNodeAttempt executes a single attempt of an LLM node using ADK's llmagent
+func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node *config.Node, nodeName string, state session.State, yield func(*session.Event, error) bool) (bool, error) {
 	// Render prompt and system instruction
 	userPrompt := a.renderString(node.Prompt, state)
 	systemInstruction := a.renderString(node.System, state)
@@ -1141,7 +1391,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			
 			if len(missingTools) > 0 {
 				yield(nil, fmt.Errorf("configured tools not found: %s", strings.Join(missingTools, ", ")))
-				return false
+				return false, fmt.Errorf("configured tools not found: %s", strings.Join(missingTools, ", "))
 			}
 		}
 
@@ -1531,8 +1781,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 	ctx = scopedCtx
 
 	if err != nil {
-		yield(nil, fmt.Errorf("failed to create llmagent: %w", err))
-		return false
+		return false, fmt.Errorf("failed to create llmagent: %w", err)
 	}
 
 	// Reset the pause flag before starting
@@ -1691,18 +1940,16 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 				if a.DebugMode {
 					fmt.Println("[ReAct DEBUG] Pausing for tool approval")
 				}
-				return false
+				return false, nil
 			}
-			yield(nil, fmt.Errorf("ReAct planner failed: %w", err))
-			return false
+			return false, fmt.Errorf("ReAct planner failed: %w", err)
 		}
 		
 		// Format output according to output_model if specified
 		if len(node.OutputModel) > 0 {
 			formattedResult, formatErr := reactPlanner.FormatOutput(ctx, result, node.OutputModel, instruction)
 			if formatErr != nil {
-				yield(nil, fmt.Errorf("failed to format ReAct output: %w", formatErr))
-				return false
+				return false, fmt.Errorf("failed to format ReAct output: %w", formatErr)
 			}
 			result = formattedResult
 			
@@ -1756,7 +2003,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			}, nil)
 		}
 		
-		return true
+		return true, nil
 	}
 
 	// We'll wrap the iteration in a function to allow retry
@@ -1894,18 +2141,16 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 						if a.DebugMode {
 							fmt.Println("[ReAct DEBUG] Pausing for tool approval")
 						}
-						return false
+						return false, nil
 					}
-					yield(nil, fmt.Errorf("ReAct planner fallback failed: %w", planErr))
-					return false
+					return false, fmt.Errorf("ReAct planner fallback failed: %w", planErr)
 				}
 				
 				// Format output according to output_model if specified
 				if len(node.OutputModel) > 0 {
 					formattedResult, formatErr := reactPlanner.FormatOutput(ctx, result, node.OutputModel, instruction)
 					if formatErr != nil {
-						yield(nil, fmt.Errorf("failed to format ReAct output: %w", formatErr))
-						return false
+						return false, fmt.Errorf("failed to format ReAct output: %w", formatErr)
 					}
 					result = formattedResult
 					
@@ -1955,12 +2200,11 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 					}, nil)
 				}
 				
-				return true
+				return true, nil
 			}
 			
 			// Genuine error
-			yield(nil, err)
-			return false
+			return false, err
 		}
 		
 		// ... process event ...
@@ -2049,8 +2293,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			if a.DebugMode {
 				fmt.Printf("[DEBUG] Tool call limit exceeded (%d) for node '%s'\n", maxToolCalls, nodeName)
 			}
-			yield(nil, fmt.Errorf("tool call limit exceeded (%d) for node '%s'", maxToolCalls, nodeName))
-			return false
+			return false, fmt.Errorf("tool call limit exceeded (%d) for node '%s'", maxToolCalls, nodeName)
 		}
 		
 		// 1. Determine if this event should be displayed to the user
@@ -2076,15 +2319,14 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 		// 2. FORWARD the event if it should be displayed
 		if shouldYieldEvent {
 			if !yield(event, nil) {
-				return false
+				return false, nil
 			}
 		}
 		
 		// 2a. If we detected a tool error, stop after yielding the error response
 		// This allows the LLM to see the error before we stop
 		if hasToolError {
-			yield(nil, fmt.Errorf("%s", toolErrorMsg))
-			return false
+			return false, fmt.Errorf("%s", toolErrorMsg)
 		}
 		
 		// 2b. CHECK FOR INTERRUPT SIGNAL
@@ -2092,7 +2334,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 		if shouldPause, _ := state.Get("force_pause"); shouldPause == true {
 			// Clear the flag so it doesn't block the next run
 			state.Set("force_pause", false)
-			return false // Stops the loop, effectively pausing the agent
+			return false, nil // Stops the loop, effectively pausing the agent
 		}
 		
 		// 3. Accumulate text response for output_model (if needed)
@@ -2129,8 +2371,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 						response := part.FunctionResponse.Response
 						
 						if err := state.Set(stateKey, response); err != nil {
-							yield(nil, fmt.Errorf("failed to set state key %s: %w", stateKey, err))
-							return false
+							return false, fmt.Errorf("failed to set state key %s: %w", stateKey, err)
 						}
 
 						// Add to StateDelta so UI updates
@@ -2256,7 +2497,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			}
 			
 			if !yield(userMessageEvent, nil) {
-				return false
+				return false, nil
 			}
 			
 			if a.DebugMode {
@@ -2265,7 +2506,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 		}
 	}
 	
-	return true
+	return true, nil
 }
 
 func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, state session.State, yield func(*session.Event, error) bool) bool {
@@ -3489,4 +3730,52 @@ func (a *AstonishAgent) handleOutputNode(ctx agent.InvocationContext, node *conf
 	}
 	
 	return yield(evt, nil)
+}
+
+
+// extractErrorTitle extracts a clear, user-friendly title from an error message
+func extractErrorTitle(errorMsg string) string {
+	// Common patterns to extract meaningful error titles
+	
+	// Pattern 1: "Tool execution failed. Details: <actual error>"
+	if idx := strings.Index(errorMsg, "Details: "); idx != -1 {
+		details := errorMsg[idx+9:] // Skip "Details: "
+		// Limit to first sentence or 100 chars
+		if endIdx := strings.Index(details, "."); endIdx != -1 && endIdx < 100 {
+			return details[:endIdx+1]
+		}
+		if len(details) > 100 {
+			return details[:100] + "..."
+		}
+		return details
+	}
+	
+	// Pattern 2: "tool 'name' failed: <actual error>"
+	if idx := strings.LastIndex(errorMsg, "failed: "); idx != -1 {
+		details := errorMsg[idx+8:] // Skip "failed: "
+		// Skip nested "tool ... failed:" if present
+		if strings.Contains(details, "failed: ") {
+			if idx2 := strings.LastIndex(details, "failed: "); idx2 != -1 {
+				details = details[idx2+8:]
+			}
+		}
+		// Limit to first sentence or 100 chars
+		if endIdx := strings.Index(details, "."); endIdx != -1 && endIdx < 100 {
+			return details[:endIdx+1]
+		}
+		if len(details) > 100 {
+			return details[:100] + "..."
+		}
+		return details
+	}
+	
+	// Pattern 3: Generic - take first sentence or 100 chars
+	if endIdx := strings.Index(errorMsg, "."); endIdx != -1 && endIdx < 100 {
+		return errorMsg[:endIdx+1]
+	}
+	if len(errorMsg) > 100 {
+		return errorMsg[:100] + "..."
+	}
+	
+	return errorMsg
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/config"
@@ -62,9 +63,55 @@ func handleRunCommand(args []string) error {
 	useBrowser := runCmd.Bool("browser", false, "Launch with embedded web browser UI")
 	port := runCmd.Int("port", 8080, "Port for web server (only used with --browser)")
 	debugMode := runCmd.Bool("debug", false, "Enable debug mode to show tool inputs and responses")
+	
+	var params stringArray
+	runCmd.Var(&params, "p", "Parameter to pass to the agent in key=value format (can be used multiple times)")
 
-	if err := runCmd.Parse(args); err != nil {
+	// Pre-process args to allow positional agent name to be anywhere
+	// We extract the first non-flag argument as the agent name
+	var agentName string
+	var flagArgs []string
+	
+	skipNext := false
+	for _, arg := range args {
+		if skipNext {
+			flagArgs = append(flagArgs, arg)
+			skipNext = false
+			continue
+		}
+
+		if strings.HasPrefix(arg, "-") {
+			flagArgs = append(flagArgs, arg)
+			// Check if it's a flag that takes an argument and doesn't use =
+			if !strings.Contains(arg, "=") {
+				name := strings.TrimLeft(arg, "-")
+				if name == "provider" || name == "model" || name == "port" || name == "p" || name == "param" {
+					skipNext = true
+				}
+			}
+		} else {
+			if agentName == "" {
+				agentName = arg
+			} else {
+				// Extra positional args, keep them (flag.Parse will likely stop or error)
+				flagArgs = append(flagArgs, arg)
+			}
+		}
+	}
+
+	if err := runCmd.Parse(flagArgs); err != nil {
 		return fmt.Errorf("failed to parse flags: %w", err)
+	}
+
+	// Parse parameters
+	parameters := make(map[string]string)
+	for _, p := range params {
+		parts := strings.SplitN(p, "=", 2)
+		if len(parts) == 2 {
+			parameters[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+		} else {
+			fmt.Printf("Warning: Ignoring malformed parameter: %s (missing '=')\n", p)
+		}
 	}
 
 	// If provider is still empty, default to gemini
@@ -117,13 +164,17 @@ func handleRunCommand(args []string) error {
 		}
 	}
 
-	if runCmd.NArg() < 1 {
-		fmt.Println("Usage: astonish agents run [flags] <agent_name>")
-		runCmd.PrintDefaults()
-		return fmt.Errorf("no agent name provided")
+	if agentName == "" {
+		// Fallback to NArg check if somehow it ended up there
+		if runCmd.NArg() > 0 {
+			agentName = runCmd.Arg(0)
+		} else {
+			fmt.Println("Usage: astonish agents run [flags] <agent_name>")
+			runCmd.PrintDefaults()
+			return fmt.Errorf("no agent name provided")
+		}
 	}
 
-	agentName := runCmd.Arg(0)
 	// Try to find the agent file
 	// 1. Check if it's a full path or in current dir
 	agentPath := agentName
@@ -182,7 +233,20 @@ Found:
 		ModelName:      *modelName,
 		SessionService: safeService,
 		DebugMode:      *debugMode,
+		Parameters:     parameters,
 	})
+}
+
+// stringArray implements flag.Value interface for multiple string flags
+type stringArray []string
+
+func (i *stringArray) String() string {
+	return strings.Join(*i, ", ")
+}
+
+func (i *stringArray) Set(value string) error {
+	*i = append(*i, value)
+	return nil
 }
 
 func handleListCommand() error {

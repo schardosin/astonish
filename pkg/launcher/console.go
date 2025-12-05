@@ -32,6 +32,7 @@ type ConsoleConfig struct {
 	ModelName      string
 	SessionService session.Service
 	DebugMode      bool
+	Parameters     map[string]string
 }
 
 // RunConsole runs the agent in console mode with agent-controlled flow
@@ -768,6 +769,21 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 			
 			// Stop spinner before showing input
 			stopSpinner(true, true)
+			
+			// Check for CLI parameter override for input nodes
+			if waitingForInput && cfg.Parameters != nil {
+				if val, ok := cfg.Parameters[currentNodeName]; ok {
+					// Print confirmation
+					fmt.Printf("✓ Using provided value for '%s': %s\n", currentNodeName, val)
+					
+					// Create user message with provided value
+					userMsg = genai.NewContentFromText(val, genai.RoleUser)
+					
+					// Reset state and continue loop
+					waitingForInput = false
+					continue
+				}
+			}
 			
 			// Show input dialog
 			if waitingForApproval {

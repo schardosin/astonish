@@ -7,6 +7,7 @@ import (
 
 	"github.com/sashabaranov/go-openai"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/provider/anthropic"
 	"github.com/schardosin/astonish/pkg/provider/google"
 	openai_provider "github.com/schardosin/astonish/pkg/provider/openai"
 	"github.com/schardosin/astonish/pkg/provider/sap"
@@ -16,6 +17,19 @@ import (
 // GetProvider returns an LLM model based on the provider name.
 func GetProvider(ctx context.Context, name string, modelName string, cfg *config.AppConfig) (model.LLM, error) {
 	switch name {
+	case "anthropic":
+		apiKey := os.Getenv("ANTHROPIC_API_KEY")
+		if apiKey == "" && cfg != nil {
+			apiKey = cfg.Providers["anthropic"]["api_key"]
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("ANTHROPIC_API_KEY not set")
+		}
+		if modelName == "" {
+			modelName = "claude-3-opus-20240229"
+		}
+		return anthropic.NewProvider(apiKey, modelName), nil
+
 	case "google_genai", "gemini":
 		apiKey := os.Getenv("GOOGLE_API_KEY")
 		if apiKey == "" && cfg != nil {

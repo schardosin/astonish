@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/provider/anthropic"
 	"github.com/schardosin/astonish/pkg/provider/google"
 	"github.com/schardosin/astonish/pkg/provider/groq"
 	"github.com/schardosin/astonish/pkg/provider/lmstudio"
@@ -73,6 +74,11 @@ func handleSetupCommand() error {
 	switch selectedProviderID {
 	case "anthropic":
 		runAPIKeyForm("Anthropic API Key", "api_key", pCfg)
+		if err := fetchAndSelectAnthropicModel(pCfg, cfg); err != nil {
+			fmt.Printf("Warning: Failed to fetch/select Anthropic models: %v\n", err)
+		} else {
+			goto SaveConfig
+		}
 	case "gemini":
 		runAPIKeyForm("Google API Key", "api_key", pCfg)
 		if err := fetchAndSelectGoogleModel(pCfg, cfg); err != nil {
@@ -656,6 +662,53 @@ func fetchAndSelectOpenAIModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Select an OpenAI Model").
+				Options(options...).
+				Value(&selectedModel).
+				Height(10),
+		),
+	).Run()
+	
+	if err != nil {
+		return err
+	}
+
+	// Save selected model as default
+	appCfg.General.DefaultModel = selectedModel
+	fmt.Printf("Selected default model: %s\n", selectedModel)
+	
+	return nil
+}
+
+func fetchAndSelectAnthropicModel(pCfg config.ProviderConfig, appCfg *config.AppConfig) error {
+	apiKey := pCfg["api_key"]
+	if apiKey == "" {
+		return fmt.Errorf("API key required")
+	}
+
+	fmt.Println("Fetching available models from Anthropic...")
+	runSpinner("Connecting to Anthropic...")
+
+	models, err := anthropic.ListModels(apiKey)
+	if err != nil {
+		return err
+	}
+
+	if len(models) == 0 {
+		return fmt.Errorf("no models found")
+	}
+
+	// Create options for huh.Select
+	var options []huh.Option[string]
+	for _, m := range models {
+		options = append(options, huh.NewOption(m, m))
+	}
+
+	var selectedModel string
+	
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select an Anthropic Model").
 				Options(options...).
 				Value(&selectedModel).
 				Height(10),

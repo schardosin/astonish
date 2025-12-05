@@ -1053,55 +1053,56 @@ func (a *AstonishAgent) handleToolApproval(ctx agent.InvocationContext, state se
 
 
 // executeLLMNode executes an LLM node with intelligent retry logic
+// executeLLMNode executes an LLM node with intelligent retry logic
 func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config.Node, nodeName string, state session.State, yield func(*session.Event, error) bool) bool {
 	// Clear any previous error state at the start
 	state.Set("_has_error", false)
 	state.Set("_last_error", "")
 	state.Set("_error_node", "")
-	
+
 	// Determine max retries
 	maxRetries := 3 // default
 	if node.MaxRetries > 0 {
 		maxRetries = node.MaxRetries
 	}
-	
+
 	if a.DebugMode {
 		fmt.Printf("[RETRY] Starting executeLLMNode for '%s' with max_retries=%d\n", nodeName, maxRetries)
 	}
-	
+
 	// Determine retry strategy
 	useIntelligentRetry := true
 	if node.RetryStrategy == "simple" {
 		useIntelligentRetry = false
 	}
-	
+
 	// Error context for intelligent recovery
 	errorHistory := []string{}
 	var lastErr error // Track the last error for use after the loop
-	
+
 	// Retry loop
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if a.DebugMode && attempt > 0 {
 			fmt.Printf("[RETRY] Attempt %d/%d for node '%s'\n", attempt+1, maxRetries, nodeName)
 		}
-		
+
 		// Execute the node
 		success, err := a.executeLLMNodeAttempt(ctx, node, nodeName, state, yield)
 		lastErr = err // Track the last error
-		
+
 		if success {
 			// Success! Clear any error state and return
 			state.Set("_error_context", nil)
 			state.Set("_has_error", false)
 			return true
 		}
-		
+
 		// Node failed - decide whether to retry
 		if err == nil {
 			// No error but failed (shouldn't happen, but handle it)
 			return false
 		}
-		
+
 		// Build error context
 		errCtx := ErrorContext{
 			NodeName:       nodeName,
@@ -1112,27 +1113,27 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			MaxRetries:     maxRetries,
 			PreviousErrors: errorHistory,
 		}
-		
+
 		// Store error context in state
 		state.Set("_error_context", errCtx)
 		state.Set("_has_error", true)
-		
+
 		// Check if this is the last attempt
 		isLastAttempt := (attempt >= maxRetries-1)
-		
+
 		// Decide whether to retry using intelligent recovery or simple retry
 		var shouldRetry bool
 		var errorTitle string
 		var oneLiner string
 		var explanation string
 		var decision *RecoveryDecision
-		
+
 		if useIntelligentRetry && !isLastAttempt {
 			// Use LLM-based error recovery
 			recovery := NewErrorRecoveryNode(a.LLM, a.DebugMode)
 			var recoveryErr error
 			decision, recoveryErr = recovery.Decide(ctx, errCtx)
-			
+
 			if recoveryErr != nil {
 				// Error recovery failed, fall back to simple retry
 				if a.DebugMode {
@@ -1147,7 +1148,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 				errorTitle = decision.Title
 				oneLiner = decision.OneLiner
 				explanation = decision.Reason
-				
+
 				if decision.Suggestion != "" {
 					explanation += "\n\nSuggestion: " + decision.Suggestion
 				}
@@ -1159,33 +1160,35 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 			oneLiner = fmt.Sprintf("Attempt %d/%d", attempt+2, maxRetries)
 			explanation = fmt.Sprintf("Retrying automatically (attempt %d/%d)", attempt+2, maxRetries)
 		}
-		
-		// Always emit retry badge for every attempt (1-based indexing)
-		// This shows progress: 1/3, 2/3, 3/3
-		// Emit retry info via StateDelta for console to render
-		if oneLiner == "" {
-			oneLiner = errorTitle
-		}
-		
-		yield(&session.Event{
-			Actions: session.EventActions{
-				StateDelta: map[string]any{
-					"_retry_info": map[string]any{
-						"attempt":     attempt + 1,
-						"max_retries": maxRetries,
-						"reason":      oneLiner,
+
+		// Emit retry badge ONLY if we are actually going to retry.
+		// This prevents showing "Retry" on the last attempt (where we show Max Retries Failure)
+		// or when the agent decides to Abort (where we show the Abort Failure).
+		if shouldRetry {
+			if oneLiner == "" {
+				oneLiner = errorTitle
+			}
+
+			yield(&session.Event{
+				Actions: session.EventActions{
+					StateDelta: map[string]any{
+						"_retry_info": map[string]any{
+							"attempt":     attempt + 1,
+							"max_retries": maxRetries,
+							"reason":      oneLiner,
+						},
+						"_processing_info": true,
 					},
-					"_processing_info": true, 
 				},
-			},
-		}, nil)
-		
+			}, nil)
+		}
+
 		if isLastAttempt {
 			// Show final error after retry badge
 			if a.DebugMode {
 				fmt.Printf("[RETRY] Max retries (%d) exceeded for node '%s'\n", maxRetries, nodeName)
 			}
-			
+
 			// Emit final failure info via StateDelta
 			if !yield(&session.Event{
 				Actions: session.EventActions{
@@ -1202,30 +1205,30 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 				// Yield was cancelled, stop immediately
 				return false
 			}
-			
+
 			// Store error details in state for error handler nodes
 			state.Set("_last_error", err.Error())
 			state.Set("_error_node", nodeName)
 			state.Set("_has_error", true)
-			
+
 			if a.DebugMode {
 				fmt.Printf("[RETRY] Max retries message yielded, breaking retry loop\n")
 			}
-			
+
 			// Break out of retry loop
 			break
 		}
-		
+
 		if !shouldRetry {
 			// Error recovery decided to abort - don't retry
 			if a.DebugMode {
 				fmt.Printf("[RETRY] Error recovery decided to ABORT: %s\n", explanation)
 			}
-			
+
 			// Split explanation into reason and suggestion
 			reason := explanation
 			suggestion := ""
-			
+
 			// Check if explanation contains a "Suggestion:" section
 			if strings.Contains(explanation, "Suggestion: ") {
 				parts := strings.SplitN(explanation, "Suggestion: ", 2)
@@ -1240,12 +1243,12 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 					suggestion = strings.TrimSpace(parts[1])
 				}
 			}
-			
+
 			title := errorTitle
 			if title == "" {
 				title = "Error"
 			}
-			
+
 			// Emit abort info via StateDelta (same pattern as _failure_info)
 			if !yield(&session.Event{
 				Actions: session.EventActions{
@@ -1263,35 +1266,35 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 				// Yield was cancelled, stop immediately
 				return false
 			}
-			
+
 			// Store error details in state for error handler nodes
 			state.Set("_last_error", err.Error())
 			state.Set("_error_node", nodeName)
 			state.Set("_has_error", true)
-			
+
 			if a.DebugMode {
 				fmt.Printf("[RETRY] Abort message yielded, breaking retry loop\n")
 			}
-			
+
 			// Break out of retry loop - error recovery decided not to retry
 			break
 		}
-		
+
 		// Continue with retry
 		if a.DebugMode {
 			fmt.Printf("[RETRY] Proceeding with retry (attempt %d/%d)\n", attempt+2, maxRetries)
 		}
-		
+
 		// Add error to history
 		errorHistory = append(errorHistory, err.Error())
-		
+
 		// Continue to next attempt
 	}
-	
+
 	// If we exit the loop, it means we exhausted retries or error recovery decided to abort
 	// Check if there's an error transition in the flow for this node
 	nextNode, transErr := a.getNextNode(nodeName, state)
-	
+
 	if transErr != nil || nextNode == "" {
 		// No error transition configured - stop execution with error
 		if a.DebugMode {
@@ -1300,7 +1303,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 		yield(nil, fmt.Errorf("node '%s' failed: %w", nodeName, lastErr))
 		return false
 	}
-	
+
 	// There is a transition (possibly to an error handler node)
 	// Return false to indicate failure, let the main loop handle the transition
 	if a.DebugMode {

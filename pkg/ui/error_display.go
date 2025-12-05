@@ -2,25 +2,24 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-)
-
-// ANSI color codes
-const (
-	ansiRed    = "\033[1;38;5;196m"
-	ansiOrange = "\033[38;5;208m"
-	ansiYellow = "\033[38;5;226m"
-	ansiGrey   = "\033[38;5;240m"
-	ansiReset  = "\033[0m"
+	"golang.org/x/term"
 )
 
 var (
-	// Lipgloss styles for retry badge (kept for consistency)
+	// --- COLORS ---
+	colorRed    = lipgloss.Color("196")
 	colorOrange = lipgloss.Color("#FFA500")
+	colorYellow = lipgloss.Color("226")
+	colorWhite  = lipgloss.Color("252")
 	colorGrey   = lipgloss.Color("240")
-	
+
+	// --- STYLES ---
+
+	// 1. Retry Badge
 	retryBadgeStyle = lipgloss.NewStyle().
 			Foreground(colorOrange).
 			Bold(true)
@@ -28,48 +27,100 @@ var (
 	retryMessageStyle = lipgloss.NewStyle().
 			Foreground(colorGrey).
 			PaddingLeft(1)
+
+	// 2. Error Components
+	headerStyle = lipgloss.NewStyle().
+			Foreground(colorRed).
+			Bold(true)
+
+	// Indentation wrapper
+	indentStyle = lipgloss.NewStyle().
+			PaddingLeft(3)
+
+	// Section Text Styles
+	reasonTextStyle = lipgloss.NewStyle().
+			Foreground(colorWhite)
+
+	suggestionTitleStyle = lipgloss.NewStyle().
+			Foreground(colorYellow).
+			Bold(true)
+
+	suggestionTextStyle = lipgloss.NewStyle().
+			Foreground(colorYellow)
+
+	rawErrorTitleStyle = lipgloss.NewStyle().
+			Foreground(colorGrey).
+			Bold(true)
+
+	rawErrorTextStyle = lipgloss.NewStyle().
+			Foreground(colorGrey)
 )
 
 // RenderRetryBadge: Clean text-only line
-// Output: ⟳ Retry 1/3: Rate limit exceeded
 func RenderRetryBadge(attempt, maxRetries int, oneLiner string) string {
 	badge := retryBadgeStyle.Render(fmt.Sprintf("⟳ Retry %d/%d:", attempt, maxRetries))
 	message := retryMessageStyle.Render(oneLiner)
 	return lipgloss.JoinHorizontal(lipgloss.Left, badge, message)
 }
 
-// RenderErrorBox: Simple text block with ANSI colors
+// RenderErrorBox: Pure lipgloss implementation with dynamic wrapping
 func RenderErrorBox(title, reason, suggestion, originalError string) string {
-	var output strings.Builder
+	// 1. Calculate Width (Crucial for fixing line breaks)
+	width, _, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil || width <= 0 {
+		width = 80 // Fallback
+	}
+	// Content width = Terminal Width - Indent(3) - Safety Margin(2)
+	contentWidth := width - 5
+
+	// 2. Header (Now Indented!)
+	// We render the red text first, then wrap it in the indentation style
+	rawHeader := headerStyle.Render(fmt.Sprintf("✕ %s", title))
+	header := indentStyle.Render(rawHeader)
+
+	// 3. Build Body Blocks
+	var bodyBlocks []string
 	
-	// Empty line at the beginning for visual separation
-	output.WriteString("\n")
-	
-	// 1. Header with red color
-	output.WriteString(fmt.Sprintf("%s✕ %s%s\n", ansiRed, title, ansiReset))
-	output.WriteString("\n")
-	
-	// 2. Reason (white/default color, no special formatting needed)
+	// Helper to add a blank line spacer
+	addSpacer := func() {
+		if len(bodyBlocks) > 0 {
+			bodyBlocks = append(bodyBlocks, "")
+		}
+	}
+
+	// Reason
 	if reason != "" {
-		output.WriteString(fmt.Sprintf("%s\n", reason))
+		// Setting Width() forces lipgloss to wrap, preserving the indentation on new lines
+		bodyBlocks = append(bodyBlocks, reasonTextStyle.Width(contentWidth).Render(reason))
 	}
-	
-	// 3. Suggestion (yellow)
+
+	// Suggestion
 	if suggestion != "" {
-		output.WriteString(fmt.Sprintf("\n%sSuggestion:%s\n", ansiYellow, ansiReset))
-		output.WriteString(fmt.Sprintf("%s%s%s\n", ansiYellow, suggestion, ansiReset))
+		addSpacer()
+		bodyBlocks = append(bodyBlocks,
+			suggestionTitleStyle.Render("Suggestion:"),
+			suggestionTextStyle.Width(contentWidth).Render(suggestion),
+		)
 	}
-	
-	// 4. Raw Error (grey, dimmed)
+
+	// Raw Error
 	if originalError != "" {
-		output.WriteString(fmt.Sprintf("\n%sRaw Error:%s\n", ansiGrey, ansiReset))
-		output.WriteString(fmt.Sprintf("%s%s%s\n", ansiGrey, cleanError(originalError), ansiReset))
+		addSpacer()
+		bodyBlocks = append(bodyBlocks,
+			rawErrorTitleStyle.Render("Raw Error:"),
+			rawErrorTextStyle.Width(contentWidth).Render(strings.TrimSpace(originalError)),
+		)
 	}
+
+	// 4. Assemble
+	// Join all body blocks vertically
+	bodyContent := lipgloss.JoinVertical(lipgloss.Left, bodyBlocks...)
 	
-	// Empty line at the end for visual separation
-	output.WriteString("\n")
-	
-	return output.String()
+	// Apply indentation to the whole body
+	indentedBody := indentStyle.Render(bodyContent)
+
+	// Join Header + Indented Body
+	return fmt.Sprintf("\n%s\n%s\n", header, indentedBody)
 }
 
 func RenderMaxRetriesBox(attempts int, originalError string) string {

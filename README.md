@@ -149,6 +149,7 @@ Astonish acts as a neutral orchestrator, supporting major providers via standard
 | Ollama (Local) | Supported |
 | LM Studio (Local) | Supported |
 | OpenRouter | Supported |
+| X AI | Supported |
 
 ## Project Structure
 

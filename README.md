@@ -15,7 +15,7 @@
 
 **Astonish** is a high-performance, low-code engine for orchestrating sophisticated AI agent workflows. 
 
-Written purely in **Go**, Astonish bridges the gap between raw LLM capabilities and production-grade automation. It allows you to define complex, state-aware, and parallelized agentic flows using simple declarative YAML, turning the probabilistic nature of AI into deterministic business processes.
+Written purely in **Go**, Astonish bridges the gap between raw LLM capabilities and production-grade automation. It allows you to define complex, state-aware agentic flows using simple declarative YAML, turning the probabilistic nature of AI into deterministic business processes.
 
 ## Why Astonish? (The Orchestration Layer)
 
@@ -26,13 +26,13 @@ While the ADK provides the incredible "Engine" (handling model connections, tool
 | Feature | Standard Agent SDKs (Google ADK, LangChain) | Astonish Orchestration Engine |
 | :--- | :--- | :--- |
 | **Philosophy** | **ReAct Loops:** "Here are tools, figure out what to do." | **Deterministic DAGs:** "Follow this specific Standard Operating Procedure (SOP), but use AI to solve the steps." |
-| **Memory** | **History-Based:** Appends every step to a growing chat log. Agents often forget details as context grows. | **State Blackboard:** Stores data in variables (`{repo_name}`, `{pr_id}`). Agents access exact data via O(1) lookup. |
-| **Concurrency** | **Sequential:** Steps usually run one after another. | **Parallel Map-Reduce:** Uses **Go Routines** to spin up hundreds of concurrent workers (e.g., review 50 files simultaneously). |
+| **Memory** | **History-Based:** Appends every step to a growing chat log. Agents often forget details as context grows. | **State Blackboard:** Stores data in variables (`{file_path}`, `{summary}`). Agents access exact data via O(1) lookup. |
+| **Concurrency** | **Sequential:** Steps usually run one after another. | **Parallel Map-Reduce:** Uses **Go Routines** to spin up hundreds of concurrent workers (e.g., process 50 items simultaneously). |
 | **Quality Control**| **Self-Correction:** The agent hopes to catch its own errors. | **Validator Nodes:** Explicit "Critic" nodes configured in YAML to strictly filter or reject outputs from previous nodes. |
 
 ## Key Features
 
--   **Go-Native Performance**: Ported from Python to Go to leverage lightweight Goroutines. Execute massive parallel workloads (like reviewing every file in a large repo) with negligible overhead.
+-   **Go-Native Performance**: Ported from Python to Go to leverage lightweight Goroutines. Execute massive parallel workloads with negligible overhead.
 -   **Declarative YAML Workflows**: Define your agents as Infrastructure-as-Code. Version control your agent logic just like your software.
 -   **State Blackboard Architecture**: Avoid "Context Pollution." Pass exact, structured data between nodes without relying on the LLM's short-term memory.
 -   **Parallel Execution**: Native support for `forEach` loops in YAML, allowing you to parallelize LLM tasks over lists of data.
@@ -40,18 +40,25 @@ While the ADK provides the incredible "Engine" (handling model connections, tool
 
 ## Installation
 
-### Install with Go (Recommended)
+### Install with Homebrew (Recommended)
+
+```bash
+brew tap schardosin/astonish
+brew install astonish
+```
+
+### Alternative: Install with Go
 
 ```bash
 go install github.com/schardosin/astonish@latest
 ```
 
-### Build from Source
+### Alternative: Build from Source
 
 ```bash
 git clone https://github.com/schardosin/astonish.git
 cd astonish
-go build -o astonish main.go
+go build -o astonish .
 ```
 
 ## Quick Start
@@ -82,57 +89,67 @@ astonish agents run <agent_name>
 You can also inject runtime variables directly into the State Blackboard:
 
 ```bash
-# Example: Injecting a PR number into a reviewer agent
-astonish agents run github_pr_reviewer -p pr_number="123" -p repo="astonish"
+# Example: Injecting a question into a generic agent
+astonish agents run simple_question_answer -p question="Who was Steve Jobs?"
 ```
 
 ## The Power of Declarative Flows
 
 Astonish flows are defined in YAML. They separate the **Flow Logic** (Edges) from the **Step Logic** (Nodes).
 
-### Example: A Parallel Code Reviewer
-*This snippet demonstrates the power of Astonish: It fetches a PR, splits the files, and uses **Go Routines** to review 5 files at once using a "Validator" pattern.*
+### Example: A File Summarizer
+*This snippet demonstrates the core logic of Astonish: Gathering input, using a specific tool (reading a file), and passing that specific data to an LLM for summarization using the State Blackboard (`{file_content}`).*
 
 ```yaml
+description: An agent that reads a file and summarizes it.
 nodes:
-  - name: get_pr_files
-    type: tool
-    args:
-      owner: { owner } # Accessing State Blackboard
-      repo: { repo }
-      pullNumber: { selected_pr }
+  - name: get_file_path
+    type: input
+    prompt: |
+      Please enter the path to the file you want to analyze:
     output_model:
-      files_to_review: list
+      file_path: str
 
-  # PARALLEL EXECUTION BLOCK
-  - name: review_code
+  - name: read_file_content
     type: llm
-    parallel:
-      forEach: "{files_to_review}"
-      as: "file"
-      maxConcurrency: 5 # Spawns 5 Go Routines
     system: |
-      You are a Senior Engineer. Review this code for bugs.
+      You are a file reading assistant.
+    prompt: |
+      Read the contents of the file at path: {file_path}
     output_model:
-      review_comments: list
+      file_content: str
+    tools: true
+    tools_selection:
+      - read_file
 
-  # QUALITY GATE / VALIDATOR BLOCK
-  - name: validate_reviews
+  - name: extract_summary
     type: llm
-    parallel:
-      forEach: "{review_comments}"
-      as: "comment"
     system: |
-      You are a QA Lead. Discard this comment if it is about formatting only.
+      You are an AI assistant specialized in summarizing text.
+    prompt: |
+      Analyze the following file content and extract the core information:
+
+      {file_content}
+
+      Provide a concise summary.
     output_model:
-      validated_comments: list
+      summary: str
+
+  - name: present_summary
+    type: output
+    user_message:
+      - summary
 
 flow:
-  - from: get_pr_files
-    to: review_code
-  - from: review_code
-    to: validate_reviews
-  - from: validate_reviews
+  - from: START
+    to: get_file_path
+  - from: get_file_path
+    to: read_file_content
+  - from: read_file_content
+    to: extract_summary
+  - from: extract_summary
+    to: present_summary
+  - from: present_summary
     to: END
 ```
 

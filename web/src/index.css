@@ -65,6 +65,16 @@ body {
   fill: #0d121f !important;
 }
 
+/* Selected node indicator */
+.react-flow__node.selected,
+.react-flow__node:focus {
+  outline: none !important;
+}
+
+.react-flow__node.selected > div {
+  box-shadow: 0 0 0 3px #22D3EE, 0 4px 6px -1px rgba(0, 0, 0, 0.1) !important;
+}
+
 .react-flow__edge-path {
   stroke: var(--accent-purple);
   stroke-width: 2;

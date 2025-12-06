@@ -1,6 +1,13 @@
 import { Users, Plus, Moon, Sun } from 'lucide-react'
 
-export default function Sidebar({ agents, selectedAgent, onAgentSelect, onCreateNew, theme, onToggleTheme }) {
+export default function Sidebar({ 
+  agents, 
+  selectedAgent, 
+  onAgentSelect, 
+  onCreateNew, 
+  theme, 
+  onToggleTheme
+}) {
   return (
     <div className="w-64 flex flex-col" style={{ background: 'var(--bg-secondary)', borderRight: '1px solid var(--border-color)' }}>
       {/* Logo */}
@@ -39,7 +46,7 @@ export default function Sidebar({ agents, selectedAgent, onAgentSelect, onCreate
       </div>
 
       {/* Create New Agent Button */}
-      <div className="p-4">
+      <div className="p-4" style={{ borderBottom: '1px solid var(--border-color)' }}>
         <button
           onClick={onCreateNew}
           className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-[#805AD5] hover:bg-[#6B46C1] text-white font-medium rounded-lg transition-colors shadow-sm"

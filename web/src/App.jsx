@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 import yaml from 'js-yaml'
 import Sidebar from './components/Sidebar'
@@ -8,6 +8,7 @@ import YamlDrawer from './components/YamlDrawer'
 import Header from './components/Header'
 import { useTheme } from './hooks/useTheme'
 import { yamlToFlow } from './utils/yamlToFlow'
+import { addNodeToFlow } from './utils/flowToYaml'
 import './index.css'
 
 // Mock data for agents
@@ -85,6 +86,7 @@ function App() {
   const [yamlContent, setYamlContent] = useState(sampleYaml)
   const [showYaml, setShowYaml] = useState(false)
   const [isRunning, setIsRunning] = useState(false)
+  const [selectedNodeId, setSelectedNodeId] = useState('START')
   const [chatMessages, setChatMessages] = useState([
     { type: 'agent', content: 'Welcome! Click "Run" to start the agent flow.' },
   ])
@@ -103,12 +105,14 @@ function App() {
 
   const handleAgentSelect = useCallback((agent) => {
     setSelectedAgent(agent)
+    setSelectedNodeId('START')
     // In real app, would load agent's YAML here
   }, [])
 
   const handleCreateNew = useCallback(() => {
     // Create new agent with minimal YAML
     setSelectedAgent({ id: 'new', name: 'New Agent', description: '' })
+    setSelectedNodeId('START')
     setYamlContent(`description: New Agent
 
 nodes:
@@ -138,6 +142,17 @@ flow:
   const handleYamlChange = useCallback((newYaml) => {
     setYamlContent(newYaml)
   }, [])
+
+  const handleNodeSelect = useCallback((nodeId) => {
+    setSelectedNodeId(nodeId)
+  }, [])
+
+  const handleAddNode = useCallback((nodeType) => {
+    // Add new node after the selected node
+    const afterNode = selectedNodeId || 'START'
+    const newYaml = addNodeToFlow(yamlContent, nodeType, afterNode)
+    setYamlContent(newYaml)
+  }, [yamlContent, selectedNodeId])
 
   return (
     <ReactFlowProvider>
@@ -173,6 +188,9 @@ flow:
                 edges={edges}
                 isRunning={isRunning}
                 theme={theme}
+                onNodeSelect={handleNodeSelect}
+                selectedNodeId={selectedNodeId}
+                onAddNode={handleAddNode}
               />
             </div>
 

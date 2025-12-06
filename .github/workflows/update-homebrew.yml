@@ -8,7 +8,6 @@ jobs:
   update-homebrew:
     name: Update Homebrew Formula
     runs-on: ubuntu-latest
-    if: github.repository == 'schardosin/astonish'
 
     steps:
       - name: Checkout homebrew-astonish

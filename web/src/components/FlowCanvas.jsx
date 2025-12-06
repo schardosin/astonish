@@ -53,9 +53,9 @@ function FlowCanvasInner({
 }) {
   const [nodes, setNodes, handleNodesChange] = useNodesState([])
   const [edges, setEdges, handleEdgesChange] = useEdgesState([])
-  const { fitView } = useReactFlow()
+  const { setViewport } = useReactFlow()
 
-  // Sync nodes/edges from props when they change and trigger fitView
+  // Sync nodes/edges from props when they change
   useEffect(() => {
     if (propNodes && propNodes.length > 0) {
       // Add selected state to nodes
@@ -69,14 +69,26 @@ function FlowCanvasInner({
       }))
       setNodes(nodesWithSelection)
       
-      // Trigger fitView when nodes change significantly
+      // Find the START node to center on it
+      const startNode = propNodes.find(n => n.id === 'START')
+      
+      // Set viewport to 100% zoom, centered on START node (or origin if no START)
       const timer = setTimeout(() => {
-        fitView({ padding: 0.2, duration: 300 })
+        // Calculate viewport center - account for header (56px) and potential bottom panel
+        const viewportHeight = window.innerHeight - 56 // Subtract header height
+        const nodeHeight = 60 // Approximate node height
+        
+        const x = startNode ? -(startNode.position.x - 100) : 50
+        const y = startNode 
+          ? -(startNode.position.y - (viewportHeight / 2) + (nodeHeight / 2))
+          : (viewportHeight / 2) - 100
+        
+        setViewport({ x, y, zoom: 1 })
       }, 50)
       
       return () => clearTimeout(timer)
     }
-  }, [propNodes, selectedNodeId, setNodes, fitView])
+  }, [propNodes, selectedNodeId, setNodes, setViewport])
 
   useEffect(() => {
     if (propEdges) {

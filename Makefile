@@ -1,44 +1,43 @@
 # Variables
-PACKAGE_NAME = astonish
-DIST_DIR = dist
+BINARY_NAME = astonish
 
 # Default target
-all: help
+all: build
 
 # Help
 help:
 	@echo "Usage:"
-	@echo "  make build       - Build the package as a wheel"
-	@echo "  make install     - Install the built wheel"
-	@echo "  make uninstall   - Uninstall the package"
-	@echo "  make clean       - Clean up build artifacts"
+	@echo "  make build    - Build the Go binary"
+	@echo "  make run      - Run the Go application"
+	@echo "  make test     - Run Go tests"
+	@echo "  make install  - Install the binary to ~/bin"
+	@echo "  make clean    - Clean up build artifacts"
 
-# Build the wheel
-build: clean
-	@echo "Building the wheel..."
-	python3 -m build --wheel
-	@echo "Wheel built successfully!"
+# Build the binary
+build:
+	@echo "Building Go binary..."
+	go build -o $(BINARY_NAME) .
+	@echo "Go binary built successfully: $(BINARY_NAME)"
 
-installdev: uninstall
-	@echo "Installing in editable mode..."
-	pip3 install -e .
-	@echo "Package installed successfully!"
+# Run the application
+run:
+	@echo "Running Go application..."
+	go run .
 
-# Install the package
-install: build uninstall
-	@echo "Installing the wheel..."
-	pip3 install $(DIST_DIR)/$(PACKAGE_NAME)-*.whl
-	@echo "Package installed successfully!"
+# Run tests
+test:
+	@echo "Running Go tests..."
+	go test ./...
 
-# Uninstall the package
-uninstall:
-	@echo "Uninstalling the package..."
-	pip3 uninstall -y $(PACKAGE_NAME)
-	@echo "Package uninstalled successfully!"
+# Install to ~/bin
+install: build
+	@echo "Installing $(BINARY_NAME) to ~/bin..."
+	@mkdir -p ~/bin
+	cp $(BINARY_NAME) ~/bin/
+	@echo "Installed successfully!"
 
 # Clean up build artifacts
 clean:
 	@echo "Cleaning up build artifacts..."
-	rm -rf $(DIST_DIR) build *.egg-info
+	rm -rf $(BINARY_NAME)
 	@echo "Cleanup complete!"
-

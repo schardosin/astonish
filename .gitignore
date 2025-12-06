@@ -1,79 +1,33 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# C extensions
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
 *.so
+*.dylib
 
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+# Test binary
+*.test
 
-# Virtual environments
-astonish_env
-venv/
-ENV/
-env/
-.venv/
-.pyenv/
-pip-wheel-metadata/
-pip-log.txt
+# Coverage
+*.out
+coverage.html
 
-# pytest cache
-.pytest_cache/
+# Go workspace
+go.work
 
-# MyPy cache
-.mypy_cache/
-
-# Pyre type checker
-.pyre/
-
-# Coverage reports
-.coverage
-coverage.xml
-.cache/
-*.cover
-*.py,cover
-
-# Jupyter Notebook checkpoints
-.ipynb_checkpoints
-
-# PyInstaller
-# Usually contains platform-specific files
-*.manifest
-*.spec
+# Binary
+./astonish
+./astonish_bin
+./test_bin
 
 # macOS specific files
 .DS_Store
 
-# Windows specific files
-Thumbs.db
-desktop.ini
-
-# Editor and IDE backups/settings
+# Editor and IDE settings
 .vscode/
 .idea/
 *.swp
 *~
-*.sublime-project
-*.sublime-workspace
 
 # Logs and debug files
 *.log
@@ -85,19 +39,8 @@ desktop.ini
 .env
 .env.*
 
-# Flask and Django stuff
-instance/
-.webassets-cache
-*.sqlite3
-db.sqlite3
+# Node modules (for docs)
+node_modules/
 
-# Other cache files
-*.lock
-*.pkl
-*.tgz
-*.gz
-*.bz2
-*.zip
-*.tar
-*.log
-
+# MCP server directories (runtime)
+mcp_servers/

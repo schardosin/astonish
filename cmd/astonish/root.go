@@ -15,6 +15,12 @@ func Execute() error {
 		return nil
 	}
 
+	// Handle --version flag
+	if os.Args[1] == "--version" || os.Args[1] == "-v" {
+		printVersion()
+		return nil
+	}
+
 	command := os.Args[1]
 	switch command {
 	case "agents":
@@ -32,7 +38,7 @@ func Execute() error {
 }
 
 func printUsage() {
-	fmt.Println("usage: astonish [-h] {agents,config,setup,tools} ...")
+	fmt.Println("usage: astonish [-h] [-v] {agents,config,setup,tools} ...")
 	fmt.Println("")
 	fmt.Println("positional arguments:")
 	fmt.Println("  {agents,config,setup,tools}")
@@ -44,4 +50,5 @@ func printUsage() {
 	fmt.Println("")
 	fmt.Println("options:")
 	fmt.Println("  -h, --help            show this help message and exit")
+	fmt.Println("  -v, --version         show version information and exit")
 }

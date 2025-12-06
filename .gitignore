@@ -16,9 +16,9 @@ coverage.html
 go.work
 
 # Binary
-astonish
-astonish_bin
-test_bin
+./astonish
+./astonish_bin
+./test_bin
 
 # macOS specific files
 .DS_Store

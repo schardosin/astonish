@@ -123,21 +123,28 @@ export function autoLayout(nodes, edges) {
   const dagreGraph = new dagre.graphlib.Graph()
   dagreGraph.setDefaultEdgeLabel(() => ({}))
   
+  // Calculate max node width based on label lengths
+  const getNodeWidth = (label) => {
+    const baseWidth = 120
+    const charWidth = 8 // approximate pixels per character
+    return Math.max(baseWidth, label.length * charWidth + 60)
+  }
+  
   // Configure for left-to-right layout
   dagreGraph.setGraph({
     rankdir: 'LR', // Left to Right
-    nodesep: 80,   // Horizontal spacing between nodes
-    ranksep: 120,  // Vertical spacing between ranks
+    nodesep: 60,   // Vertical spacing between nodes in same rank
+    ranksep: 100,  // Horizontal spacing between ranks
     marginx: 50,
     marginy: 50,
   })
   
-  // Node dimensions
-  const nodeWidth = 180
-  const nodeHeight = 80
+  // Node height
+  const nodeHeight = 60
   
-  // Add nodes to Dagre
+  // Add nodes to Dagre with dynamic widths
   nodes.forEach((node) => {
+    const nodeWidth = getNodeWidth(node.data?.label || node.id)
     dagreGraph.setNode(node.id, { width: nodeWidth, height: nodeHeight })
   })
   
@@ -151,12 +158,13 @@ export function autoLayout(nodes, edges) {
   
   // Update node positions
   return nodes.map((node) => {
-    const nodeWithPosition = dagreGraph.node(node.id)
+    const dagreNode = dagreGraph.node(node.id)
+    const nodeWidth = getNodeWidth(node.data?.label || node.id)
     return {
       ...node,
       position: {
-        x: nodeWithPosition.x - nodeWidth / 2,
-        y: nodeWithPosition.y - nodeHeight / 2,
+        x: dagreNode.x - nodeWidth / 2,
+        y: dagreNode.y - nodeHeight / 2,
       },
     }
   })

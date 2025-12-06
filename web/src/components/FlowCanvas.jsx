@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useEffect } from 'react'
+import { useCallback, useMemo, useEffect, useRef } from 'react'
 import {
   ReactFlow,
   Background,
@@ -7,6 +7,7 @@ import {
   useNodesState,
   useEdgesState,
   addEdge,
+  useReactFlow,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 
@@ -28,17 +29,32 @@ const nodeTypes = {
   updateState: UpdateStateNode,
 }
 
-export default function FlowCanvas({ nodes: propNodes, edges: propEdges, isRunning, theme }) {
+function FlowCanvasInner({ nodes: propNodes, edges: propEdges, isRunning, theme }) {
   const [nodes, setNodes, handleNodesChange] = useNodesState([])
   const [edges, setEdges, handleEdgesChange] = useEdgesState([])
+  const { fitView } = useReactFlow()
+  const prevNodesLengthRef = useRef(0)
 
-  // Sync nodes/edges from props when they change
+  // Sync nodes/edges from props when they change and trigger fitView
   useEffect(() => {
-    setNodes(propNodes || [])
-  }, [propNodes, setNodes])
+    if (propNodes && propNodes.length > 0) {
+      setNodes(propNodes)
+      
+      // Trigger fitView when nodes change significantly
+      // Small delay to let React Flow update first
+      const timer = setTimeout(() => {
+        fitView({ padding: 0.2, duration: 300 })
+      }, 50)
+      
+      prevNodesLengthRef.current = propNodes.length
+      return () => clearTimeout(timer)
+    }
+  }, [propNodes, setNodes, fitView])
 
   useEffect(() => {
-    setEdges(propEdges || [])
+    if (propEdges) {
+      setEdges(propEdges)
+    }
   }, [propEdges, setEdges])
 
   const onConnect = useCallback(
@@ -67,6 +83,8 @@ export default function FlowCanvas({ nodes: propNodes, edges: propEdges, isRunni
         nodesConnectable={!isRunning}
         elementsSelectable={!isRunning}
         colorMode={theme}
+        minZoom={0.1}
+        maxZoom={2}
       >
         <Background color={theme === 'dark' ? '#374151' : '#E2E8F0'} gap={20} />
         <Controls className="rounded-lg shadow-md" style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }} />
@@ -89,5 +107,24 @@ export default function FlowCanvas({ nodes: propNodes, edges: propEdges, isRunni
         />
       </ReactFlow>
     </div>
+  )
+}
+
+// Wrapper component that provides a key to force re-mount when flow structure changes dramatically
+export default function FlowCanvas({ nodes, edges, isRunning, theme }) {
+  // Generate a key based on node IDs to force re-mount when nodes change completely
+  const flowKey = useMemo(() => {
+    if (!nodes || nodes.length === 0) return 'empty'
+    return nodes.map(n => n.id).sort().join(',')
+  }, [nodes])
+
+  return (
+    <FlowCanvasInner
+      key={flowKey}
+      nodes={nodes}
+      edges={edges}
+      isRunning={isRunning}
+      theme={theme}
+    />
   )
 }

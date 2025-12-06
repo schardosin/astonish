@@ -1,15 +1,15 @@
 import { Play, Square, Code, LogOut } from 'lucide-react'
 
-export default function Header({ agentName, showYaml, onToggleYaml, isRunning, onRun, onStop }) {
+export default function Header({ agentName, showYaml, onToggleYaml, isRunning, onRun, onStop, theme }) {
   return (
-    <div className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-6">
+    <div className="h-14 flex items-center justify-between px-6" style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)' }}>
       {/* Left: Agent Title */}
       <div className="flex items-center gap-4">
-        <h1 className="text-lg font-semibold text-gray-800">
+        <h1 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
           {isRunning ? 'Run an Agent' : 'Edit Agent'}
         </h1>
-        <span className="text-gray-400">|</span>
-        <span className="text-gray-600">{agentName}</span>
+        <span style={{ color: 'var(--text-muted)' }}>|</span>
+        <span style={{ color: 'var(--text-secondary)' }}>{agentName}</span>
       </div>
 
       {/* Right: Actions */}
@@ -21,16 +21,20 @@ export default function Header({ agentName, showYaml, onToggleYaml, isRunning, o
               onClick={onToggleYaml}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                 showYaml
-                  ? 'bg-purple-100 text-[#6B46C1]'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  ? 'bg-purple-500/20 text-purple-400'
+                  : ''
               }`}
+              style={!showYaml ? { background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' } : {}}
             >
               <Code size={18} />
               {showYaml ? 'Hide Source' : 'View Source'}
             </button>
 
             {/* Save Button */}
-            <button className="px-4 py-2 bg-gray-100 text-gray-600 hover:bg-gray-200 rounded-lg text-sm font-medium transition-colors">
+            <button 
+              className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            >
               Save
             </button>
           </>
@@ -57,7 +61,7 @@ export default function Header({ agentName, showYaml, onToggleYaml, isRunning, o
 
         {/* Exit Button (when running) */}
         {isRunning && (
-          <button className="p-2 text-gray-400 hover:text-gray-600">
+          <button className="p-2 hover:bg-gray-700/50 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}>
             <LogOut size={20} />
           </button>
         )}

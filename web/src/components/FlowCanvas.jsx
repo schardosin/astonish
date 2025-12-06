@@ -26,7 +26,7 @@ const nodeTypes = {
   output: OutputNode,
 }
 
-export default function FlowCanvas({ nodes: initialNodes, edges: initialEdges, onNodesChange, onEdgesChange, isRunning }) {
+export default function FlowCanvas({ nodes: initialNodes, edges: initialEdges, onNodesChange, onEdgesChange, isRunning, theme }) {
   const [nodes, setNodes, handleNodesChange] = useNodesState(initialNodes)
   const [edges, setEdges, handleEdgesChange] = useEdgesState(initialEdges)
 
@@ -41,7 +41,7 @@ export default function FlowCanvas({ nodes: initialNodes, edges: initialEdges, o
   }), [])
 
   return (
-    <div className="w-full h-full bg-[#F7F5FB]">
+    <div className="w-full h-full" style={{ background: theme === 'dark' ? '#0d121f' : '#F7F5FB' }}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -55,29 +55,27 @@ export default function FlowCanvas({ nodes: initialNodes, edges: initialEdges, o
         nodesDraggable={!isRunning}
         nodesConnectable={!isRunning}
         elementsSelectable={!isRunning}
+        colorMode={theme}
       >
-        <Background color="#E2E8F0" gap={20} />
-        <Controls className="bg-white rounded-lg shadow-md" />
+        <Background color={theme === 'dark' ? '#374151' : '#E2E8F0'} gap={20} />
+        <Controls className="rounded-lg shadow-md" style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }} />
         <MiniMap
           nodeColor={(node) => {
             switch (node.type) {
               case 'start': return '#38A169'
               case 'end': return '#E53E3E'
-              case 'input': return '#DDD6FE'
+              case 'input': return theme === 'dark' ? '#3B2667' : '#DDD6FE'
               case 'llm': return '#6B46C1'
               case 'tool': return '#805AD5'
               case 'output': return '#9F7AEA'
               default: return '#CBD5E0'
             }
           }}
-          className="bg-white rounded-lg shadow-md"
+          className="rounded-lg shadow-md"
+          style={{ background: 'var(--bg-secondary)' }}
+          maskColor={theme === 'dark' ? 'rgba(0, 0, 0, 0.5)' : 'rgba(255, 255, 255, 0.5)'}
         />
       </ReactFlow>
-
-      {/* Powered by React Flow */}
-      <div className="absolute bottom-4 left-4 text-xs text-gray-400">
-        Powered by <a href="https://reactflow.dev" target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-600">React Flow</a>
-      </div>
     </div>
   )
 }

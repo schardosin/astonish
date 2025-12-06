@@ -10,12 +10,34 @@
   --node-llm: #6B46C1;
   --node-tool: #805AD5;
   --node-output: #9F7AEA;
+  
+  /* Light mode colors */
+  --bg-primary: #F7F5FB;
+  --bg-secondary: #FFFFFF;
+  --bg-tertiary: #F3F4F6;
+  --text-primary: #1F2937;
+  --text-secondary: #4B5563;
+  --text-muted: #9CA3AF;
+  --border-color: #E5E7EB;
+}
+
+.dark {
+  --bg-primary: #0d121f;
+  --bg-secondary: #101323;
+  --bg-tertiary: #252540;
+  --text-primary: #F9FAFB;
+  --text-secondary: #D1D5DB;
+  --text-muted: #6B7280;
+  --border-color: rgba(255, 255, 255, 0.1);
+  --node-input: #3B2667;
 }
 
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  background: var(--light-background);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 /* React Flow Customizations */
@@ -25,6 +47,22 @@ body {
   background: transparent !important;
   padding: 0 !important;
   border: none !important;
+}
+
+/* Force React Flow background in dark mode */
+.dark .react-flow__viewport,
+.dark .react-flow__pane,
+.dark .react-flow__renderer,
+.dark .react-flow {
+  background-color: #0d121f !important;
+}
+
+.dark .react-flow__background {
+  background-color: #0d121f !important;
+}
+
+.dark .react-flow__background pattern rect {
+  fill: #0d121f !important;
 }
 
 .react-flow__edge-path {

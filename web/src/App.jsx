@@ -5,6 +5,7 @@ import FlowCanvas from './components/FlowCanvas'
 import ChatPanel from './components/ChatPanel'
 import YamlDrawer from './components/YamlDrawer'
 import Header from './components/Header'
+import { useTheme } from './hooks/useTheme'
 import './index.css'
 
 // Mock data for agents
@@ -65,6 +66,7 @@ flow:
 `
 
 function App() {
+  const { theme, toggleTheme } = useTheme()
   const [agents] = useState(mockAgents)
   const [selectedAgent, setSelectedAgent] = useState(mockAgents[0])
   const [nodes, setNodes] = useState(mockNodes)
@@ -102,13 +104,15 @@ function App() {
 
   return (
     <ReactFlowProvider>
-      <div className="flex h-screen bg-[#F7F5FB]">
+      <div className="flex h-screen" style={{ background: 'var(--bg-primary)' }}>
         {/* Sidebar */}
         <Sidebar
           agents={agents}
           selectedAgent={selectedAgent}
           onAgentSelect={handleAgentSelect}
           onCreateNew={handleCreateNew}
+          theme={theme}
+          onToggleTheme={toggleTheme}
         />
 
         {/* Main Content */}
@@ -120,6 +124,7 @@ function App() {
             isRunning={isRunning}
             onRun={handleRun}
             onStop={handleStopRun}
+            theme={theme}
           />
 
           <div className="flex-1 flex overflow-hidden">
@@ -131,26 +136,29 @@ function App() {
                 onNodesChange={setNodes}
                 onEdgesChange={setEdges}
                 isRunning={isRunning}
+                theme={theme}
               />
             </div>
 
             {/* Chat Panel (visible when running) */}
             {isRunning && (
-              <div className="w-1/2 border-l border-gray-200">
+              <div className="w-1/2" style={{ borderLeft: '1px solid var(--border-color)' }}>
                 <ChatPanel
                   messages={chatMessages}
                   onSendMessage={(msg) => setChatMessages([...chatMessages, { type: 'user', content: msg }])}
+                  theme={theme}
                 />
               </div>
             )}
 
             {/* YAML Drawer */}
             {showYaml && !isRunning && (
-              <div className="w-96 border-l border-gray-200">
+              <div className="w-96" style={{ borderLeft: '1px solid var(--border-color)' }}>
                 <YamlDrawer
                   content={yamlContent}
                   onChange={setYamlContent}
                   onClose={() => setShowYaml(false)}
+                  theme={theme}
                 />
               </div>
             )}

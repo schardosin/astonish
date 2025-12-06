@@ -130,11 +130,11 @@ export function autoLayout(nodes, edges) {
     return Math.max(baseWidth, label.length * charWidth + 60)
   }
   
-  // Configure for left-to-right layout
+  // Configure for left-to-right layout with generous spacing
   dagreGraph.setGraph({
     rankdir: 'LR', // Left to Right
-    nodesep: 60,   // Vertical spacing between nodes in same rank
-    ranksep: 100,  // Horizontal spacing between ranks
+    nodesep: 100,  // Vertical spacing between nodes in same rank
+    ranksep: 150,  // Horizontal spacing between ranks
     marginx: 50,
     marginy: 50,
   })

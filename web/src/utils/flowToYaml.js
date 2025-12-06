@@ -243,3 +243,52 @@ export function removeNode(yamlContent, nodeId) {
     return yamlContent
   }
 }
+
+/**
+ * Update an existing node's data in the YAML
+ * Returns updated YAML string
+ */
+export function updateNode(yamlContent, nodeId, newNodeData) {
+  try {
+    const yamlData = yaml.load(yamlContent) || { nodes: [], flow: [] }
+    yamlData.nodes = yamlData.nodes || []
+    
+    // Find and update the node
+    const nodeIndex = yamlData.nodes.findIndex(n => n.name === nodeId)
+    
+    if (nodeIndex !== -1) {
+      // If name changed, update flow references too
+      const oldName = yamlData.nodes[nodeIndex].name
+      const newName = newNodeData.name
+      
+      if (oldName !== newName) {
+        // Update flow references
+        yamlData.flow = (yamlData.flow || []).map(f => {
+          const updated = { ...f }
+          if (updated.from === oldName) updated.from = newName
+          if (updated.to === oldName) updated.to = newName
+          if (updated.edges) {
+            updated.edges = updated.edges.map(e => ({
+              ...e,
+              to: e.to === oldName ? newName : e.to
+            }))
+          }
+          return updated
+        })
+      }
+      
+      // Update the node data
+      yamlData.nodes[nodeIndex] = newNodeData
+    }
+    
+    return yaml.dump(yamlData, { 
+      lineWidth: -1,
+      noRefs: true,
+      quotingType: '"',
+      forceQuotes: false
+    })
+  } catch (e) {
+    console.error('Error updating node:', e)
+    return yamlContent
+  }
+}

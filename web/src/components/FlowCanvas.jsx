@@ -45,6 +45,7 @@ function FlowCanvasInner({
   isRunning, 
   theme, 
   onNodeSelect, 
+  onNodeDoubleClick,
   selectedNodeId, 
   onAddNode,
   onConnect: onConnectCallback,
@@ -106,6 +107,12 @@ function FlowCanvasInner({
     }
   }, [onNodeSelect])
 
+  const handleNodeDoubleClick = useCallback((event, node) => {
+    if (onNodeDoubleClick) {
+      onNodeDoubleClick(node.id)
+    }
+  }, [onNodeDoubleClick])
+
   const onPaneClick = useCallback(() => {
     // Clicking on empty space deselects
     if (onNodeSelect) {
@@ -128,6 +135,7 @@ function FlowCanvasInner({
         onConnect={onConnect}
         onEdgesDelete={onEdgesDelete}
         onNodeClick={onNodeClick}
+        onNodeDoubleClick={handleNodeDoubleClick}
         onPaneClick={onPaneClick}
         nodeTypes={nodeTypes}
         defaultEdgeOptions={defaultEdgeOptions}
@@ -208,7 +216,7 @@ function FlowCanvasInner({
 }
 
 // Wrapper component that provides a key to force re-mount when flow structure changes dramatically
-export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelect, selectedNodeId, onAddNode, onConnect, onEdgeRemove }) {
+export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelect, onNodeDoubleClick, selectedNodeId, onAddNode, onConnect, onEdgeRemove }) {
   // Generate a key based on node IDs to force re-mount when nodes change completely
   const flowKey = useMemo(() => {
     if (!nodes || nodes.length === 0) return 'empty'
@@ -223,6 +231,7 @@ export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelec
       isRunning={isRunning}
       theme={theme}
       onNodeSelect={onNodeSelect}
+      onNodeDoubleClick={onNodeDoubleClick}
       selectedNodeId={selectedNodeId}
       onAddNode={onAddNode}
       onConnect={onConnect}

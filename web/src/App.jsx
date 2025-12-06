@@ -6,9 +6,10 @@ import FlowCanvas from './components/FlowCanvas'
 import ChatPanel from './components/ChatPanel'
 import YamlDrawer from './components/YamlDrawer'
 import Header from './components/Header'
+import NodeEditor from './components/NodeEditor'
 import { useTheme } from './hooks/useTheme'
 import { yamlToFlow } from './utils/yamlToFlow'
-import { addStandaloneNode, addConnection, removeConnection } from './utils/flowToYaml'
+import { addStandaloneNode, addConnection, removeConnection, updateNode } from './utils/flowToYaml'
 import './index.css'
 
 // Mock data for agents
@@ -18,7 +19,7 @@ const mockAgents = [
   { id: 'agent-listager', name: 'Agent Listager', description: 'List available agents' },
 ]
 
-// Sample YAML that demonstrates various node types and conditional edges
+// Sample YAML that demonstrates various node types
 const sampleYaml = `description: GitHub PR Review Agent
 
 nodes:
@@ -87,6 +88,7 @@ function App() {
   const [showYaml, setShowYaml] = useState(false)
   const [isRunning, setIsRunning] = useState(false)
   const [selectedNodeId, setSelectedNodeId] = useState(null)
+  const [editingNode, setEditingNode] = useState(null)
   const [chatMessages, setChatMessages] = useState([
     { type: 'agent', content: 'Welcome! Click "Run" to start the agent flow.' },
   ])
@@ -98,7 +100,6 @@ function App() {
       return yamlToFlow(parsed)
     } catch (e) {
       console.error('YAML parse error:', e)
-      // Return empty flow on parse error
       return { nodes: [], edges: [] }
     }
   }, [yamlContent])
@@ -106,13 +107,13 @@ function App() {
   const handleAgentSelect = useCallback((agent) => {
     setSelectedAgent(agent)
     setSelectedNodeId(null)
-    // In real app, would load agent's YAML here
+    setEditingNode(null)
   }, [])
 
   const handleCreateNew = useCallback(() => {
-    // Create new agent with minimal YAML
     setSelectedAgent({ id: 'new', name: 'New Agent', description: '' })
     setSelectedNodeId(null)
+    setEditingNode(null)
     setYamlContent(`description: New Agent
 
 nodes: []
@@ -125,7 +126,7 @@ flow:
 
   const handleRun = useCallback(() => {
     setIsRunning(true)
-    // In real app, would start agent execution here
+    setEditingNode(null)
   }, [])
 
   const handleStopRun = useCallback(() => {
@@ -140,13 +141,21 @@ flow:
     setSelectedNodeId(nodeId)
   }, [])
 
-  // Add standalone node (not connected to flow)
+  // Double-click to open editor
+  const handleNodeDoubleClick = useCallback((nodeId) => {
+    const node = nodes.find(n => n.id === nodeId)
+    if (node && node.type !== 'start' && node.type !== 'end') {
+      setEditingNode(node)
+    }
+  }, [nodes])
+
+  // Add standalone node
   const handleAddNode = useCallback((nodeType) => {
     const newYaml = addStandaloneNode(yamlContent, nodeType)
     setYamlContent(newYaml)
   }, [yamlContent])
 
-  // Handle new connection made by dragging
+  // Handle new connection
   const handleConnect = useCallback((sourceId, targetId) => {
     const newYaml = addConnection(yamlContent, sourceId, targetId)
     setYamlContent(newYaml)
@@ -157,6 +166,18 @@ flow:
     const newYaml = removeConnection(yamlContent, sourceId, targetId)
     setYamlContent(newYaml)
   }, [yamlContent])
+
+  // Save node edits
+  const handleNodeSave = useCallback((nodeId, newData) => {
+    const newYaml = updateNode(yamlContent, nodeId, newData)
+    setYamlContent(newYaml)
+    setEditingNode(null)
+  }, [yamlContent])
+
+  // Close node editor
+  const handleNodeEditorClose = useCallback(() => {
+    setEditingNode(null)
+  }, [])
 
   return (
     <ReactFlowProvider>
@@ -183,16 +204,17 @@ flow:
             theme={theme}
           />
 
-          {/* Flow + Chat Area */}
+          {/* Flow + Chat + Editor Area */}
           <div className={`flex-1 flex overflow-hidden ${showYaml && !isRunning ? 'h-1/2' : ''}`}>
             {/* Flow Canvas */}
-            <div className={`${isRunning ? 'w-1/2' : 'flex-1'} transition-all duration-300`}>
+            <div className={`flex-1 transition-all duration-300 ${isRunning ? 'w-1/2' : ''}`}>
               <FlowCanvas
                 nodes={nodes}
                 edges={edges}
                 isRunning={isRunning}
                 theme={theme}
                 onNodeSelect={handleNodeSelect}
+                onNodeDoubleClick={handleNodeDoubleClick}
                 selectedNodeId={selectedNodeId}
                 onAddNode={handleAddNode}
                 onConnect={handleConnect}
@@ -212,15 +234,24 @@ flow:
             )}
           </div>
 
-          {/* YAML Drawer - Bottom Panel */}
-          {showYaml && !isRunning && (
+          {/* Bottom Panel - Node Editor OR YAML Drawer */}
+          {!isRunning && (editingNode || showYaml) && (
             <div className="h-1/2" style={{ borderTop: '1px solid var(--border-color)' }}>
-              <YamlDrawer
-                content={yamlContent}
-                onChange={handleYamlChange}
-                onClose={() => setShowYaml(false)}
-                theme={theme}
-              />
+              {editingNode ? (
+                <NodeEditor
+                  node={editingNode}
+                  onSave={handleNodeSave}
+                  onClose={handleNodeEditorClose}
+                  theme={theme}
+                />
+              ) : (
+                <YamlDrawer
+                  content={yamlContent}
+                  onChange={handleYamlChange}
+                  onClose={() => setShowYaml(false)}
+                  theme={theme}
+                />
+              )}
             </div>
           )}
         </div>

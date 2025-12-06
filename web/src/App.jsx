@@ -153,7 +153,7 @@ flow:
         />
 
         {/* Main Content */}
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col overflow-hidden">
           <Header
             agentName={selectedAgent?.name || 'Select Agent'}
             showYaml={showYaml}
@@ -164,7 +164,8 @@ flow:
             theme={theme}
           />
 
-          <div className="flex-1 flex overflow-hidden">
+          {/* Flow + Chat Area */}
+          <div className={`flex-1 flex overflow-hidden ${showYaml && !isRunning ? 'h-1/2' : ''}`}>
             {/* Flow Canvas */}
             <div className={`${isRunning ? 'w-1/2' : 'flex-1'} transition-all duration-300`}>
               <FlowCanvas
@@ -185,19 +186,19 @@ flow:
                 />
               </div>
             )}
-
-            {/* YAML Drawer */}
-            {showYaml && !isRunning && (
-              <div className="w-96" style={{ borderLeft: '1px solid var(--border-color)' }}>
-                <YamlDrawer
-                  content={yamlContent}
-                  onChange={handleYamlChange}
-                  onClose={() => setShowYaml(false)}
-                  theme={theme}
-                />
-              </div>
-            )}
           </div>
+
+          {/* YAML Drawer - Bottom Panel */}
+          {showYaml && !isRunning && (
+            <div className="h-1/2" style={{ borderTop: '1px solid var(--border-color)' }}>
+              <YamlDrawer
+                content={yamlContent}
+                onChange={handleYamlChange}
+                onClose={() => setShowYaml(false)}
+                theme={theme}
+              />
+            </div>
+          )}
         </div>
       </div>
     </ReactFlowProvider>

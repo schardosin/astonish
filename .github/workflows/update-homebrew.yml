@@ -1,13 +1,17 @@
 name: Update Homebrew Formula
 
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: ["Release"]
+    types:
+      - completed
 
 jobs:
   update-homebrew:
     name: Update Homebrew Formula
     runs-on: ubuntu-latest
+    # Only run if the Release workflow succeeded
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
 
     steps:
       - name: Checkout homebrew-astonish
@@ -19,11 +23,17 @@ jobs:
 
       - name: Get release info
         id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION="${{ github.event.release.tag_name }}"
+          # Fetch the latest release from the API
+          RELEASE_INFO=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/latest")
+          VERSION=$(echo "$RELEASE_INFO" | jq -r '.tag_name')
           FORMULA_VERSION="${VERSION#v}"
           echo "version=$FORMULA_VERSION" >> $GITHUB_OUTPUT
           echo "tag=$VERSION" >> $GITHUB_OUTPUT
+          echo "Found release: $VERSION"
 
       - name: Download release assets and calculate checksums
         run: |

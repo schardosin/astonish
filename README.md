@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="[https://raw.githubusercontent.com/schardosin/astonish/main/images/astonish-logo-only.svg](https://raw.githubusercontent.com/schardosin/astonish/main/images/astonish-logo-only.svg)" width="300" height="300" alt="Astonish Logo">
+  <img src="https://raw.githubusercontent.com/schardosin/astonish/main/images/astonish-logo-only.svg" width="300" height="300" alt="Astonish Logo">
   
   # Astonish: The Declarative AI Orchestration Engine
   

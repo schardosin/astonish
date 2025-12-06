@@ -1,0 +1,118 @@
+@import "tailwindcss";
+
+/* Custom CSS Variables for Astonish Studio Theme */
+:root {
+  --primary-purple: #6B46C1;
+  --accent-purple: #805AD5;
+  --light-background: #F7F5FB;
+  --dark-text: #2D3748;
+  --node-input: #E9D5FF;
+  --node-llm: #6B46C1;
+  --node-tool: #805AD5;
+  --node-output: #9F7AEA;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background: var(--light-background);
+}
+
+/* React Flow Customizations */
+.react-flow__node {
+  border-radius: 12px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  background: transparent !important;
+  padding: 0 !important;
+  border: none !important;
+}
+
+.react-flow__edge-path {
+  stroke: var(--accent-purple);
+  stroke-width: 2;
+}
+
+.react-flow__edge.animated path {
+  stroke-dasharray: 5;
+  animation: dash 0.5s linear infinite;
+}
+
+@keyframes dash {
+  to {
+    stroke-dashoffset: -10;
+  }
+}
+
+/* Node type styles */
+.node-input {
+  background: linear-gradient(135deg, #E9D5FF 0%, #DDD6FE 100%);
+  border: 2px solid #C4B5FD;
+}
+
+.node-llm {
+  background: linear-gradient(135deg, #6B46C1 0%, #553C9A 100%);
+  color: white;
+  border: 2px solid #553C9A;
+}
+
+.node-tool {
+  background: linear-gradient(135deg, #805AD5 0%, #6B46C1 100%);
+  color: white;
+  border: 2px solid #6B46C1;
+}
+
+.node-output {
+  background: linear-gradient(135deg, #9F7AEA 0%, #805AD5 100%);
+  color: white;
+  border: 2px solid #805AD5;
+}
+
+.node-start {
+  background: linear-gradient(135deg, #38A169 0%, #2F855A 100%);
+  color: white;
+  border: 2px solid #2F855A;
+}
+
+.node-end {
+  background: linear-gradient(135deg, #E53E3E 0%, #C53030 100%);
+  color: white;
+  border: 2px solid #C53030;
+}
+
+/* Active node glow effect */
+.node-active {
+  box-shadow: 0 0 20px rgba(107, 70, 193, 0.6);
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    box-shadow: 0 0 20px rgba(107, 70, 193, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 40px rgba(107, 70, 193, 0.8);
+  }
+}
+
+/* Chat styles */
+.chat-bubble-user {
+  background: linear-gradient(135deg, var(--primary-purple) 0%, var(--accent-purple) 100%);
+  color: white;
+}
+
+.chat-bubble-agent {
+  background: white;
+  border: 1px solid #E2E8F0;
+}
+
+.thinking-indicator {
+  background: #FEF3C7;
+  border: 1px solid #F59E0B;
+  color: #92400E;
+}
+
+.tool-indicator {
+  background: #DBEAFE;
+  border: 1px solid #3B82F6;
+  color: #1E40AF;
+}

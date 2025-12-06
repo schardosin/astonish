@@ -131,7 +131,3 @@ func RenderMaxRetriesBox(attempts int, originalError string) string {
 		originalError,
 	)
 }
-
-func cleanError(err string) string {
-	return strings.TrimSpace(err)
-}

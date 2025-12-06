@@ -196,7 +196,7 @@ func handleRunCommand(args []string) error {
 			}
 			
 			// 4. Check in local dev path (fallback)
-			agentPath = fmt.Sprintf("astonish/agents/%s.yaml", agentName)
+			agentPath = fmt.Sprintf("agents/%s.yaml", agentName)
 			if _, err := os.Stat(agentPath); os.IsNotExist(err) {
 				return fmt.Errorf("agent file not found: %s", agentName)
 			}
@@ -292,7 +292,7 @@ func handleListCommand() error {
 	}
 
 	// 2. Scan Local Directory
-	scanDir("astonish/agents")
+	scanDir("agents")
 
 	if len(agents) == 0 {
 		fmt.Println("No agents found.")
@@ -370,7 +370,7 @@ func handleFlowCommand(args []string) error {
 			}
 			
 			// 4. Check in local dev path (fallback)
-			agentPath = fmt.Sprintf("astonish/agents/%s.yaml", agentName)
+			agentPath = fmt.Sprintf("agents/%s.yaml", agentName)
 			if _, err := os.Stat(agentPath); os.IsNotExist(err) {
 				return fmt.Errorf("agent file not found: %s", agentName)
 			}
@@ -412,7 +412,7 @@ func handleEditCommand(args []string) error {
 			}
 			
 			// Check in local dev path (fallback)
-			agentPath = fmt.Sprintf("astonish/agents/%s.yaml", agentName)
+			agentPath = fmt.Sprintf("agents/%s.yaml", agentName)
 			if _, err := os.Stat(agentPath); os.IsNotExist(err) {
 				return fmt.Errorf("agent file not found: %s", agentName)
 			}

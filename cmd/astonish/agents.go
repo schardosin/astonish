@@ -29,20 +29,23 @@ func handleAgentsCommand(args []string) error {
 		return handleListCommand()
 	case "flow":
 		return handleFlowCommand(args[1:])
+	case "edit":
+		return handleEditCommand(args[1:])
 	default:
 		return fmt.Errorf("unknown agents command: %s", args[0])
 	}
 }
 
 func printAgentsUsage() {
-	fmt.Println("usage: astonish agents [-h] {run,list,flow} ...")
+	fmt.Println("usage: astonish agents [-h] {run,list,flow,edit} ...")
 	fmt.Println("")
 	fmt.Println("positional arguments:")
-	fmt.Println("  {run,list,flow}")
+	fmt.Println("  {run,list,flow,edit}")
 	fmt.Println("                        Agent management commands")
 	fmt.Println("    run                 Run an agent")
 	fmt.Println("    list                List available agents")
 	fmt.Println("    flow                Visualize the agent flow")
+	fmt.Println("    edit                Edit an agent YAML file")
 	fmt.Println("")
 	fmt.Println("options:")
 	fmt.Println("  -h, --help            show this help message and exit")
@@ -382,4 +385,41 @@ Found:
 
 	ui.RenderCharmFlow(cfg)
 	return nil
+}
+
+func handleEditCommand(args []string) error {
+	if len(args) < 1 {
+		fmt.Println("Usage: astonish agents edit <agent_name>")
+		return fmt.Errorf("no agent name provided")
+	}
+
+	agentName := args[0]
+	
+	// Find the agent file path (reusing same logic as run/flow)
+	agentPath := agentName
+	if _, err := os.Stat(agentPath); os.IsNotExist(err) {
+		// Check with .yaml extension
+		agentPath = fmt.Sprintf("%s.yaml", agentName)
+		if _, err := os.Stat(agentPath); os.IsNotExist(err) {
+			// Check in standard system agents directory
+			agentsDir, err := config.GetAgentsDir()
+			if err == nil {
+				sysAgentPath := filepath.Join(agentsDir, fmt.Sprintf("%s.yaml", agentName))
+				if _, err := os.Stat(sysAgentPath); err == nil {
+					agentPath = sysAgentPath
+					goto Found
+				}
+			}
+			
+			// Check in local dev path (fallback)
+			agentPath = fmt.Sprintf("astonish/agents/%s.yaml", agentName)
+			if _, err := os.Stat(agentPath); os.IsNotExist(err) {
+				return fmt.Errorf("agent file not found: %s", agentName)
+			}
+		}
+	}
+
+Found:
+	fmt.Printf("Opening %s in editor...\n", agentPath)
+	return openInEditor(agentPath)
 }

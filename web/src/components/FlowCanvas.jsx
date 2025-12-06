@@ -6,7 +6,6 @@ import {
   MiniMap,
   useNodesState,
   useEdgesState,
-  addEdge,
   useReactFlow,
   Panel,
 } from '@xyflow/react'
@@ -40,7 +39,17 @@ const NODE_TYPES = [
   { type: 'output', label: 'Output', icon: MessageSquare, color: '#9F7AEA', darkColor: '#9F7AEA' },
 ]
 
-function FlowCanvasInner({ nodes: propNodes, edges: propEdges, isRunning, theme, onNodeSelect, selectedNodeId, onAddNode }) {
+function FlowCanvasInner({ 
+  nodes: propNodes, 
+  edges: propEdges, 
+  isRunning, 
+  theme, 
+  onNodeSelect, 
+  selectedNodeId, 
+  onAddNode,
+  onConnect: onConnectCallback,
+  onEdgeRemove
+}) {
   const [nodes, setNodes, handleNodesChange] = useNodesState([])
   const [edges, setEdges, handleEdgesChange] = useEdgesState([])
   const { fitView } = useReactFlow()
@@ -74,10 +83,22 @@ function FlowCanvasInner({ nodes: propNodes, edges: propEdges, isRunning, theme,
     }
   }, [propEdges, setEdges])
 
-  const onConnect = useCallback(
-    (params) => setEdges((eds) => addEdge({ ...params, animated: true }, eds)),
-    [setEdges]
-  )
+  // Handle new connection (drag from one node to another)
+  const onConnect = useCallback((params) => {
+    if (onConnectCallback) {
+      // Call parent to update YAML, which will re-render with new edge
+      onConnectCallback(params.source, params.target)
+    }
+  }, [onConnectCallback])
+
+  // Handle edge deletion
+  const onEdgesDelete = useCallback((deletedEdges) => {
+    if (onEdgeRemove) {
+      deletedEdges.forEach(edge => {
+        onEdgeRemove(edge.source, edge.target)
+      })
+    }
+  }, [onEdgeRemove])
 
   const onNodeClick = useCallback((event, node) => {
     if (onNodeSelect) {
@@ -86,9 +107,9 @@ function FlowCanvasInner({ nodes: propNodes, edges: propEdges, isRunning, theme,
   }, [onNodeSelect])
 
   const onPaneClick = useCallback(() => {
-    // Clicking on empty space selects START
+    // Clicking on empty space deselects
     if (onNodeSelect) {
-      onNodeSelect('START')
+      onNodeSelect(null)
     }
   }, [onNodeSelect])
 
@@ -105,6 +126,7 @@ function FlowCanvasInner({ nodes: propNodes, edges: propEdges, isRunning, theme,
         onNodesChange={handleNodesChange}
         onEdgesChange={handleEdgesChange}
         onConnect={onConnect}
+        onEdgesDelete={onEdgesDelete}
         onNodeClick={onNodeClick}
         onPaneClick={onPaneClick}
         nodeTypes={nodeTypes}
@@ -114,6 +136,7 @@ function FlowCanvasInner({ nodes: propNodes, edges: propEdges, isRunning, theme,
         nodesDraggable={!isRunning}
         nodesConnectable={!isRunning}
         elementsSelectable={!isRunning}
+        deleteKeyCode={['Backspace', 'Delete']}
         colorMode={theme}
         minZoom={0.1}
         maxZoom={2}
@@ -158,12 +181,24 @@ function FlowCanvasInner({ nodes: propNodes, edges: propEdges, isRunning, theme,
                     color: type === 'input' && theme !== 'dark' ? '#1F2937' : 'white',
                     minWidth: '48px'
                   }}
-                  title={`Add ${label} node after ${selectedNodeId || 'START'}`}
+                  title={`Add ${label} node (standalone)`}
                 >
                   <Icon size={18} />
                   <span className="text-[10px] font-medium">{label}</span>
                 </button>
               ))}
+            </div>
+          </Panel>
+        )}
+        
+        {/* Instructions */}
+        {!isRunning && (
+          <Panel position="bottom-left" className="m-2">
+            <div 
+              className="text-xs px-3 py-2 rounded-lg"
+              style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-muted)' }}
+            >
+              Drag from node handles to connect • Select edge + Delete to remove
             </div>
           </Panel>
         )}
@@ -173,7 +208,7 @@ function FlowCanvasInner({ nodes: propNodes, edges: propEdges, isRunning, theme,
 }
 
 // Wrapper component that provides a key to force re-mount when flow structure changes dramatically
-export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelect, selectedNodeId, onAddNode }) {
+export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelect, selectedNodeId, onAddNode, onConnect, onEdgeRemove }) {
   // Generate a key based on node IDs to force re-mount when nodes change completely
   const flowKey = useMemo(() => {
     if (!nodes || nodes.length === 0) return 'empty'
@@ -190,6 +225,8 @@ export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelec
       onNodeSelect={onNodeSelect}
       selectedNodeId={selectedNodeId}
       onAddNode={onAddNode}
+      onConnect={onConnect}
+      onEdgeRemove={onEdgeRemove}
     />
   )
 }

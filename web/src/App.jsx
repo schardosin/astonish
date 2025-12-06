@@ -8,7 +8,7 @@ import YamlDrawer from './components/YamlDrawer'
 import Header from './components/Header'
 import { useTheme } from './hooks/useTheme'
 import { yamlToFlow } from './utils/yamlToFlow'
-import { addNodeToFlow } from './utils/flowToYaml'
+import { addStandaloneNode, addConnection, removeConnection } from './utils/flowToYaml'
 import './index.css'
 
 // Mock data for agents
@@ -86,7 +86,7 @@ function App() {
   const [yamlContent, setYamlContent] = useState(sampleYaml)
   const [showYaml, setShowYaml] = useState(false)
   const [isRunning, setIsRunning] = useState(false)
-  const [selectedNodeId, setSelectedNodeId] = useState('START')
+  const [selectedNodeId, setSelectedNodeId] = useState(null)
   const [chatMessages, setChatMessages] = useState([
     { type: 'agent', content: 'Welcome! Click "Run" to start the agent flow.' },
   ])
@@ -105,27 +105,20 @@ function App() {
 
   const handleAgentSelect = useCallback((agent) => {
     setSelectedAgent(agent)
-    setSelectedNodeId('START')
+    setSelectedNodeId(null)
     // In real app, would load agent's YAML here
   }, [])
 
   const handleCreateNew = useCallback(() => {
     // Create new agent with minimal YAML
     setSelectedAgent({ id: 'new', name: 'New Agent', description: '' })
-    setSelectedNodeId('START')
+    setSelectedNodeId(null)
     setYamlContent(`description: New Agent
 
-nodes:
-  - name: my_node
-    type: llm
-    prompt: "Hello, how can I help you?"
-    output_model:
-      response: str
+nodes: []
 
 flow:
   - from: START
-    to: my_node
-  - from: my_node
     to: END
 `)
   }, [])
@@ -147,12 +140,23 @@ flow:
     setSelectedNodeId(nodeId)
   }, [])
 
+  // Add standalone node (not connected to flow)
   const handleAddNode = useCallback((nodeType) => {
-    // Add new node after the selected node
-    const afterNode = selectedNodeId || 'START'
-    const newYaml = addNodeToFlow(yamlContent, nodeType, afterNode)
+    const newYaml = addStandaloneNode(yamlContent, nodeType)
     setYamlContent(newYaml)
-  }, [yamlContent, selectedNodeId])
+  }, [yamlContent])
+
+  // Handle new connection made by dragging
+  const handleConnect = useCallback((sourceId, targetId) => {
+    const newYaml = addConnection(yamlContent, sourceId, targetId)
+    setYamlContent(newYaml)
+  }, [yamlContent])
+
+  // Handle edge removal
+  const handleEdgeRemove = useCallback((sourceId, targetId) => {
+    const newYaml = removeConnection(yamlContent, sourceId, targetId)
+    setYamlContent(newYaml)
+  }, [yamlContent])
 
   return (
     <ReactFlowProvider>
@@ -191,6 +195,8 @@ flow:
                 onNodeSelect={handleNodeSelect}
                 selectedNodeId={selectedNodeId}
                 onAddNode={handleAddNode}
+                onConnect={handleConnect}
+                onEdgeRemove={handleEdgeRemove}
               />
             </div>
 

@@ -86,11 +86,15 @@ export default function Sidebar({
                     : 'hover:bg-purple-500/10'
                 }`}
                 style={{ color: selectedAgent?.id === agent.id ? '#9F7AEA' : 'var(--text-secondary)' }}
+                title={agent.description || ''}
               >
                 <div className="font-medium text-sm">{agent.name}</div>
-                {agent.source && (
-                  <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                    {agent.source}
+                {agent.description && (
+                  <div 
+                    className="text-xs mt-0.5 truncate" 
+                    style={{ color: 'var(--text-muted)', maxWidth: '200px' }}
+                  >
+                    {agent.description}
                   </div>
                 )}
               </button>

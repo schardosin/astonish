@@ -159,9 +159,9 @@ Astonish acts as a neutral orchestrator, supporting major providers via standard
 
 | Provider | Status | 
 |----------|--------|
-| **Google AI (Gemini)** | **First-Class Support** |
 | Anthropic | Supported |
 | OpenAI | Supported |
+| Google Gemini | Supported |
 | Groq | Supported |
 | Ollama (Local) | Supported |
 | LM Studio (Local) | Supported |

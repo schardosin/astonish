@@ -4,7 +4,7 @@ import { Brain, Check } from 'lucide-react'
 export default function LlmNode({ data }) {
   return (
     <div className={`node-llm px-4 py-3 rounded-lg min-w-[200px] ${data.isActive ? 'node-active' : ''}`}>
-      <Handle type="target" position={Position.Top} className="!bg-purple-300 !w-3 !h-3" />
+      <Handle type="target" position={Position.Left} className="!bg-purple-300 !w-3 !h-3" />
       <div className="flex items-center gap-2">
         {data.isActive ? (
           <div className="w-4 h-4 rounded-full bg-white flex items-center justify-center">
@@ -19,7 +19,7 @@ export default function LlmNode({ data }) {
       {data.description && (
         <p className="text-xs opacity-80 mt-1">{data.description}</p>
       )}
-      <Handle type="source" position={Position.Bottom} className="!bg-purple-300 !w-3 !h-3" />
+      <Handle type="source" position={Position.Right} className="!bg-purple-300 !w-3 !h-3" />
     </div>
   )
 }

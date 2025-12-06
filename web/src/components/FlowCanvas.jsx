@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useEffect } from 'react'
 import {
   ReactFlow,
   Background,
@@ -16,6 +16,7 @@ import InputNode from './nodes/InputNode'
 import LlmNode from './nodes/LlmNode'
 import ToolNode from './nodes/ToolNode'
 import OutputNode from './nodes/OutputNode'
+import UpdateStateNode from './nodes/UpdateStateNode'
 
 const nodeTypes = {
   start: StartNode,
@@ -24,11 +25,21 @@ const nodeTypes = {
   llm: LlmNode,
   tool: ToolNode,
   output: OutputNode,
+  updateState: UpdateStateNode,
 }
 
-export default function FlowCanvas({ nodes: initialNodes, edges: initialEdges, onNodesChange, onEdgesChange, isRunning, theme }) {
-  const [nodes, setNodes, handleNodesChange] = useNodesState(initialNodes)
-  const [edges, setEdges, handleEdgesChange] = useEdgesState(initialEdges)
+export default function FlowCanvas({ nodes: propNodes, edges: propEdges, isRunning, theme }) {
+  const [nodes, setNodes, handleNodesChange] = useNodesState([])
+  const [edges, setEdges, handleEdgesChange] = useEdgesState([])
+
+  // Sync nodes/edges from props when they change
+  useEffect(() => {
+    setNodes(propNodes || [])
+  }, [propNodes, setNodes])
+
+  useEffect(() => {
+    setEdges(propEdges || [])
+  }, [propEdges, setEdges])
 
   const onConnect = useCallback(
     (params) => setEdges((eds) => addEdge({ ...params, animated: true }, eds)),
@@ -68,6 +79,7 @@ export default function FlowCanvas({ nodes: initialNodes, edges: initialEdges, o
               case 'llm': return '#6B46C1'
               case 'tool': return '#805AD5'
               case 'output': return '#9F7AEA'
+              case 'updateState': return '#4A5568'
               default: return '#CBD5E0'
             }
           }}

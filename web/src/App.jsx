@@ -1,11 +1,13 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
+import yaml from 'js-yaml'
 import Sidebar from './components/Sidebar'
 import FlowCanvas from './components/FlowCanvas'
 import ChatPanel from './components/ChatPanel'
 import YamlDrawer from './components/YamlDrawer'
 import Header from './components/Header'
 import { useTheme } from './hooks/useTheme'
+import { yamlToFlow } from './utils/yamlToFlow'
 import './index.css'
 
 // Mock data for agents
@@ -15,82 +17,113 @@ const mockAgents = [
   { id: 'agent-listager', name: 'Agent Listager', description: 'List available agents' },
 ]
 
-// Mock flow data
-const mockNodes = [
-  { id: 'start', type: 'start', position: { x: 250, y: 0 }, data: { label: 'START', description: 'Run time the owner a repository' } },
-  { id: 'set_owner', type: 'input', position: { x: 250, y: 120 }, data: { label: 'set_owner', description: 'Set up in owner repository' } },
-  { id: 'set_repo', type: 'input', position: { x: 250, y: 240 }, data: { label: 'set_repo', description: 'Set up the repo repository' } },
-  { id: 'list_pull_requests', type: 'llm', position: { x: 250, y: 360 }, data: { label: 'list_pull_requests', description: 'Inr use list_pull_requests for your project.', isActive: true } },
-  { id: 'end', type: 'end', position: { x: 250, y: 480 }, data: { label: 'END' } },
-]
-
-const mockEdges = [
-  { id: 'e-start-owner', source: 'start', target: 'set_owner', animated: true },
-  { id: 'e-owner-repo', source: 'set_owner', target: 'set_repo', animated: true },
-  { id: 'e-repo-pr', source: 'set_repo', target: 'list_pull_requests', animated: true },
-  { id: 'e-pr-end', source: 'list_pull_requests', target: 'end' },
-]
-
-const mockYaml = `description: GitHub PR Review Agent
+// Sample YAML that demonstrates various node types and conditional edges
+const sampleYaml = `description: GitHub PR Review Agent
 
 nodes:
-  - name: set_owner
-    type: input
-    prompt: "Enter the repository owner:"
+  - name: get_prs
+    type: tool
+    tool_name: list_pull_requests
     output_model:
-      owner: str
+      prs: list
 
-  - name: set_repo
-    type: input
-    prompt: "Enter the repository name:"
-    output_model:
-      repo: str
-
-  - name: list_pull_requests
+  - name: list_prs
     type: llm
-    system: "You are a helpful assistant."
-    prompt: "List pull requests for {owner}/{repo}"
-    tools: true
+    prompt: "List the available PRs"
     output_model:
-      pull_requests: list
+      pr_list: str
+
+  - name: select_pr
+    type: input
+    prompt: "Select a PR number to review:"
+    output_model:
+      selected_pr: str
+
+  - name: get_pr_diff
+    type: tool
+    tool_name: get_pull_request_diff
+    output_model:
+      diff: str
+
+  - name: analyze_pr
+    type: llm
+    prompt: "Analyze the PR diff and provide feedback"
+    output_model:
+      analysis: str
+
+  - name: new_pr
+    type: input
+    prompt: "Analyze another PR? (yes/no)"
+    output_model:
+      analyze_another: str
 
 flow:
   - from: START
-    to: set_owner
-  - from: set_owner
-    to: set_repo
-  - from: set_repo
-    to: list_pull_requests
-  - from: list_pull_requests
-    to: END
+    to: get_prs
+  - from: get_prs
+    to: list_prs
+  - from: list_prs
+    to: select_pr
+  - from: select_pr
+    to: get_pr_diff
+  - from: get_pr_diff
+    to: analyze_pr
+  - from: analyze_pr
+    to: new_pr
+  - from: new_pr
+    edges:
+      - to: list_prs
+        condition: "lambda x: x['analyze_another'] == 'yes'"
+      - to: END
+        condition: "lambda x: x['analyze_another'] == 'no'"
 `
 
 function App() {
   const { theme, toggleTheme } = useTheme()
   const [agents] = useState(mockAgents)
   const [selectedAgent, setSelectedAgent] = useState(mockAgents[0])
-  const [nodes, setNodes] = useState(mockNodes)
-  const [edges, setEdges] = useState(mockEdges)
-  const [yamlContent, setYamlContent] = useState(mockYaml)
+  const [yamlContent, setYamlContent] = useState(sampleYaml)
   const [showYaml, setShowYaml] = useState(false)
   const [isRunning, setIsRunning] = useState(false)
   const [chatMessages, setChatMessages] = useState([
-    { type: 'agent', content: 'What is the first repository naom for tus for the repository. If you want to detexmine your repository?' },
+    { type: 'agent', content: 'Welcome! Click "Run" to start the agent flow.' },
   ])
+
+  // Parse YAML and generate flow
+  const { nodes, edges } = useMemo(() => {
+    try {
+      const parsed = yaml.load(yamlContent)
+      return yamlToFlow(parsed)
+    } catch (e) {
+      console.error('YAML parse error:', e)
+      // Return empty flow on parse error
+      return { nodes: [], edges: [] }
+    }
+  }, [yamlContent])
 
   const handleAgentSelect = useCallback((agent) => {
     setSelectedAgent(agent)
-    // In real app, would load agent's flow here
+    // In real app, would load agent's YAML here
   }, [])
 
   const handleCreateNew = useCallback(() => {
-    // Create new agent flow
+    // Create new agent with minimal YAML
     setSelectedAgent({ id: 'new', name: 'New Agent', description: '' })
-    setNodes([
-      { id: 'start', type: 'start', position: { x: 250, y: 0 }, data: { label: 'START' } },
-      { id: 'end', type: 'end', position: { x: 250, y: 120 }, data: { label: 'END' } },
-    ])
-    setEdges([{ id: 'e-start-end', source: 'start', target: 'end' }])
+    setYamlContent(`description: New Agent
+
+nodes:
+  - name: my_node
+    type: llm
+    prompt: "Hello, how can I help you?"
+    output_model:
+      response: str
+
+flow:
+  - from: START
+    to: my_node
+  - from: my_node
+    to: END
+`)
   }, [])
 
   const handleRun = useCallback(() => {
@@ -100,6 +133,10 @@ function App() {
 
   const handleStopRun = useCallback(() => {
     setIsRunning(false)
+  }, [])
+
+  const handleYamlChange = useCallback((newYaml) => {
+    setYamlContent(newYaml)
   }, [])
 
   return (
@@ -133,8 +170,6 @@ function App() {
               <FlowCanvas
                 nodes={nodes}
                 edges={edges}
-                onNodesChange={setNodes}
-                onEdgesChange={setEdges}
                 isRunning={isRunning}
                 theme={theme}
               />
@@ -156,7 +191,7 @@ function App() {
               <div className="w-96" style={{ borderLeft: '1px solid var(--border-color)' }}>
                 <YamlDrawer
                   content={yamlContent}
-                  onChange={setYamlContent}
+                  onChange={handleYamlChange}
                   onClose={() => setShowYaml(false)}
                   theme={theme}
                 />

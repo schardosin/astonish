@@ -11,7 +11,7 @@ export default function InputNode({ data }) {
         boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
       }}
     >
-      <Handle type="target" position={Position.Top} className="!bg-purple-400 !w-3 !h-3" />
+      <Handle type="target" position={Position.Left} className="!bg-purple-400 !w-3 !h-3" />
       <div className="flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
         <Edit3 size={16} />
         <span className="font-semibold text-sm">{data.label}</span>
@@ -19,7 +19,7 @@ export default function InputNode({ data }) {
       {data.description && (
         <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{data.description}</p>
       )}
-      <Handle type="source" position={Position.Bottom} className="!bg-purple-400 !w-3 !h-3" />
+      <Handle type="source" position={Position.Right} className="!bg-purple-400 !w-3 !h-3" />
     </div>
   )
 }

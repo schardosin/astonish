@@ -1,0 +1,109 @@
+name: Update Homebrew Formula
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-homebrew:
+    name: Update Homebrew Formula
+    runs-on: ubuntu-latest
+    if: github.repository == 'schardosin/astonish'
+
+    steps:
+      - name: Checkout homebrew-astonish
+        uses: actions/checkout@v4
+        with:
+          repository: schardosin/homebrew-astonish
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Get release info
+        id: release
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          FORMULA_VERSION="${VERSION#v}"
+          echo "version=$FORMULA_VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download release assets and calculate checksums
+        run: |
+          VERSION="${{ steps.release.outputs.tag }}"
+          BASE_URL="https://github.com/schardosin/astonish/releases/download/${VERSION}"
+          
+          echo "Downloading binaries from ${BASE_URL}..."
+          
+          curl -sL "${BASE_URL}/astonish-darwin-amd64" -o darwin-amd64
+          curl -sL "${BASE_URL}/astonish-darwin-arm64" -o darwin-arm64
+          curl -sL "${BASE_URL}/astonish-linux-amd64" -o linux-amd64
+          curl -sL "${BASE_URL}/astonish-linux-arm64" -o linux-arm64
+          
+          echo "DARWIN_AMD64_SHA=$(sha256sum darwin-amd64 | cut -d' ' -f1)" >> $GITHUB_ENV
+          echo "DARWIN_ARM64_SHA=$(sha256sum darwin-arm64 | cut -d' ' -f1)" >> $GITHUB_ENV
+          echo "LINUX_AMD64_SHA=$(sha256sum linux-amd64 | cut -d' ' -f1)" >> $GITHUB_ENV
+          echo "LINUX_ARM64_SHA=$(sha256sum linux-arm64 | cut -d' ' -f1)" >> $GITHUB_ENV
+
+      - name: Update formula
+        run: |
+          VERSION="${{ steps.release.outputs.tag }}"
+          FORMULA_VERSION="${{ steps.release.outputs.version }}"
+          
+          cat > homebrew-tap/Formula/astonish.rb << EOF
+          # typed: false
+          # frozen_string_literal: true
+
+          class Astonish < Formula
+            desc "AI-powered terminal assistant"
+            homepage "https://github.com/schardosin/astonish"
+            version "${FORMULA_VERSION}"
+            license "MIT"
+
+            on_macos do
+              on_intel do
+                url "https://github.com/schardosin/astonish/releases/download/${VERSION}/astonish-darwin-amd64"
+                sha256 "${DARWIN_AMD64_SHA}"
+              end
+
+              on_arm do
+                url "https://github.com/schardosin/astonish/releases/download/${VERSION}/astonish-darwin-arm64"
+                sha256 "${DARWIN_ARM64_SHA}"
+              end
+            end
+
+            on_linux do
+              on_intel do
+                url "https://github.com/schardosin/astonish/releases/download/${VERSION}/astonish-linux-amd64"
+                sha256 "${LINUX_AMD64_SHA}"
+              end
+
+              on_arm do
+                url "https://github.com/schardosin/astonish/releases/download/${VERSION}/astonish-linux-arm64"
+                sha256 "${LINUX_ARM64_SHA}"
+              end
+            end
+
+            def install
+              binary_name = "astonish"
+              downloaded_file = Dir["astonish-*"].first || "astonish"
+              
+              if File.exist?(downloaded_file)
+                bin.install downloaded_file => binary_name
+              else
+                bin.install binary_name
+              end
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/astonish --version", 2)
+            end
+          end
+          EOF
+
+      - name: Commit and push
+        run: |
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/astonish.rb
+          git commit -m "Update astonish to ${{ steps.release.outputs.tag }}"
+          git push

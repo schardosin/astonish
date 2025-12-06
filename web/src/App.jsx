@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 import yaml from 'js-yaml'
 import Sidebar from './components/Sidebar'
@@ -10,88 +10,57 @@ import NodeEditor from './components/NodeEditor'
 import { useTheme } from './hooks/useTheme'
 import { yamlToFlow } from './utils/yamlToFlow'
 import { addStandaloneNode, addConnection, removeConnection, updateNode } from './utils/flowToYaml'
+import { fetchAgents, fetchAgent, saveAgent } from './api/agents'
 import './index.css'
 
-// Mock data for agents
-const mockAgents = [
-  { id: 'github-pr-review', name: 'GitHub PR Review', description: 'Review pull requests' },
-  { id: 'file-summarizer', name: 'File Summarizer', description: 'Summarize file contents' },
-  { id: 'agent-listager', name: 'Agent Listager', description: 'List available agents' },
-]
+// Default YAML for new agents
+const defaultYaml = `description: New Agent
 
-// Sample YAML that demonstrates various node types
-const sampleYaml = `description: GitHub PR Review Agent
-
-nodes:
-  - name: get_prs
-    type: tool
-    tool_name: list_pull_requests
-    output_model:
-      prs: list
-
-  - name: list_prs
-    type: llm
-    prompt: "List the available PRs"
-    output_model:
-      pr_list: str
-
-  - name: select_pr
-    type: input
-    prompt: "Select a PR number to review:"
-    output_model:
-      selected_pr: str
-
-  - name: get_pr_diff
-    type: tool
-    tool_name: get_pull_request_diff
-    output_model:
-      diff: str
-
-  - name: analyze_pr
-    type: llm
-    prompt: "Analyze the PR diff and provide feedback"
-    output_model:
-      analysis: str
-
-  - name: new_pr
-    type: input
-    prompt: "Analyze another PR? (yes/no)"
-    output_model:
-      analyze_another: str
+nodes: []
 
 flow:
   - from: START
-    to: get_prs
-  - from: get_prs
-    to: list_prs
-  - from: list_prs
-    to: select_pr
-  - from: select_pr
-    to: get_pr_diff
-  - from: get_pr_diff
-    to: analyze_pr
-  - from: analyze_pr
-    to: new_pr
-  - from: new_pr
-    edges:
-      - to: list_prs
-        condition: "lambda x: x['analyze_another'] == 'yes'"
-      - to: END
-        condition: "lambda x: x['analyze_another'] == 'no'"
+    to: END
 `
 
 function App() {
   const { theme, toggleTheme } = useTheme()
-  const [agents] = useState(mockAgents)
-  const [selectedAgent, setSelectedAgent] = useState(mockAgents[0])
-  const [yamlContent, setYamlContent] = useState(sampleYaml)
+  const [agents, setAgents] = useState([])
+  const [isLoadingAgents, setIsLoadingAgents] = useState(true)
+  const [selectedAgent, setSelectedAgent] = useState(null)
+  const [yamlContent, setYamlContent] = useState(defaultYaml)
   const [showYaml, setShowYaml] = useState(false)
   const [isRunning, setIsRunning] = useState(false)
   const [selectedNodeId, setSelectedNodeId] = useState(null)
   const [editingNode, setEditingNode] = useState(null)
+  const [isSaving, setIsSaving] = useState(false)
   const [chatMessages, setChatMessages] = useState([
     { type: 'agent', content: 'Welcome! Click "Run" to start the agent flow.' },
   ])
+
+  // Load agents from API on mount
+  useEffect(() => {
+    loadAgents()
+  }, [])
+
+  const loadAgents = async () => {
+    try {
+      setIsLoadingAgents(true)
+      const data = await fetchAgents()
+      setAgents(data.agents || [])
+      
+      // Auto-select first agent if available
+      if (data.agents && data.agents.length > 0 && !selectedAgent) {
+        handleAgentSelect(data.agents[0])
+      }
+    } catch (err) {
+      console.error('Failed to load agents:', err)
+      // Keep empty array if API fails
+      setAgents([])
+    } finally {
+      setIsLoadingAgents(false)
+    }
+  }
 
   // Parse YAML and generate flow
   const { nodes, edges } = useMemo(() => {
@@ -104,24 +73,26 @@ function App() {
     }
   }, [yamlContent])
 
-  const handleAgentSelect = useCallback((agent) => {
+  const handleAgentSelect = useCallback(async (agent) => {
     setSelectedAgent(agent)
     setSelectedNodeId(null)
     setEditingNode(null)
+    
+    // Load agent YAML from API
+    try {
+      const data = await fetchAgent(agent.id)
+      setYamlContent(data.yaml || defaultYaml)
+    } catch (err) {
+      console.error('Failed to load agent:', err)
+      setYamlContent(defaultYaml)
+    }
   }, [])
 
   const handleCreateNew = useCallback(() => {
-    setSelectedAgent({ id: 'new', name: 'New Agent', description: '' })
+    setSelectedAgent({ id: 'new-agent', name: 'New Agent', description: '', isNew: true })
     setSelectedNodeId(null)
     setEditingNode(null)
-    setYamlContent(`description: New Agent
-
-nodes: []
-
-flow:
-  - from: START
-    to: END
-`)
+    setYamlContent(defaultYaml)
   }, [])
 
   const handleRun = useCallback(() => {
@@ -179,6 +150,23 @@ flow:
     setEditingNode(null)
   }, [])
 
+  // Save agent to backend
+  const handleSave = useCallback(async () => {
+    if (!selectedAgent) return
+    
+    setIsSaving(true)
+    try {
+      await saveAgent(selectedAgent.id, yamlContent)
+      // Refresh agent list in case description changed
+      loadAgents()
+    } catch (err) {
+      console.error('Failed to save agent:', err)
+      alert('Failed to save agent: ' + err.message)
+    } finally {
+      setIsSaving(false)
+    }
+  }, [selectedAgent, yamlContent])
+
   return (
     <ReactFlowProvider>
       <div className="flex h-screen" style={{ background: 'var(--bg-primary)' }}>
@@ -190,6 +178,7 @@ flow:
           onCreateNew={handleCreateNew}
           theme={theme}
           onToggleTheme={toggleTheme}
+          isLoading={isLoadingAgents}
         />
 
         {/* Main Content */}
@@ -201,11 +190,13 @@ flow:
             isRunning={isRunning}
             onRun={handleRun}
             onStop={handleStopRun}
+            onSave={handleSave}
+            isSaving={isSaving}
             theme={theme}
           />
 
-          {/* Flow + Chat + Editor Area */}
-          <div className={`flex-1 flex overflow-hidden ${showYaml && !isRunning ? 'h-1/2' : ''}`}>
+          {/* Flow + Chat Area */}
+          <div className={`flex-1 flex overflow-hidden ${!isRunning && (editingNode || showYaml) ? 'h-1/2' : ''}`}>
             {/* Flow Canvas */}
             <div className={`flex-1 transition-all duration-300 ${isRunning ? 'w-1/2' : ''}`}>
               <FlowCanvas

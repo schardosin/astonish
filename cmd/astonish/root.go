@@ -25,6 +25,8 @@ func Execute() error {
 	switch command {
 	case "agents":
 		return handleAgentsCommand(os.Args[2:])
+	case "studio":
+		return handleStudioCommand(os.Args[2:])
 	case "setup":
 		return handleSetupCommand()
 	case "config":
@@ -38,12 +40,13 @@ func Execute() error {
 }
 
 func printUsage() {
-	fmt.Println("usage: astonish [-h] [-v] {agents,config,setup,tools} ...")
+	fmt.Println("usage: astonish [-h] [-v] {agents,studio,config,setup,tools} ...")
 	fmt.Println("")
 	fmt.Println("positional arguments:")
-	fmt.Println("  {agents,config,setup,tools}")
+	fmt.Println("  {agents,studio,config,setup,tools}")
 	fmt.Println("                        Astonish CLI commands")
 	fmt.Println("    agents              Manage AI agents")
+	fmt.Println("    studio              Launch the visual editor")
 	fmt.Println("    config              Manage configuration")
 	fmt.Println("    setup               Run interactive setup")
 	fmt.Println("    tools               Manage MCP tools")

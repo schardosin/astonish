@@ -6,7 +6,8 @@ export default function Sidebar({
   onAgentSelect, 
   onCreateNew, 
   theme, 
-  onToggleTheme
+  onToggleTheme,
+  isLoading
 }) {
   return (
     <div className="w-64 flex flex-col" style={{ background: 'var(--bg-secondary)', borderRight: '1px solid var(--border-color)' }}>
@@ -66,20 +67,35 @@ export default function Sidebar({
         </div>
 
         <div className="space-y-1 px-2">
-          {agents.map((agent) => (
-            <button
-              key={agent.id}
-              onClick={() => onAgentSelect(agent)}
-              className={`w-full text-left px-3 py-2.5 rounded-lg transition-colors ${
-                selectedAgent?.id === agent.id
-                  ? 'bg-purple-500/20 border-l-4 border-[#6B46C1]'
-                  : 'hover:bg-purple-500/10'
-              }`}
-              style={{ color: selectedAgent?.id === agent.id ? '#9F7AEA' : 'var(--text-secondary)' }}
-            >
-              <div className="font-medium text-sm">{agent.name}</div>
-            </button>
-          ))}
+          {isLoading ? (
+            <div className="text-center py-4" style={{ color: 'var(--text-muted)' }}>
+              <span className="text-sm">Loading agents...</span>
+            </div>
+          ) : agents.length === 0 ? (
+            <div className="text-center py-4" style={{ color: 'var(--text-muted)' }}>
+              <span className="text-sm">No agents found</span>
+            </div>
+          ) : (
+            agents.map((agent) => (
+              <button
+                key={agent.id}
+                onClick={() => onAgentSelect(agent)}
+                className={`w-full text-left px-3 py-2.5 rounded-lg transition-colors ${
+                  selectedAgent?.id === agent.id
+                    ? 'bg-purple-500/20 border-l-4 border-[#6B46C1]'
+                    : 'hover:bg-purple-500/10'
+                }`}
+                style={{ color: selectedAgent?.id === agent.id ? '#9F7AEA' : 'var(--text-secondary)' }}
+              >
+                <div className="font-medium text-sm">{agent.name}</div>
+                {agent.source && (
+                  <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                    {agent.source}
+                  </div>
+                )}
+              </button>
+            ))
+          )}
         </div>
       </div>
     </div>

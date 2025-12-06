@@ -1,6 +1,6 @@
-import { Play, Square, Code, LogOut } from 'lucide-react'
+import { Play, Square, Code, LogOut, Loader } from 'lucide-react'
 
-export default function Header({ agentName, showYaml, onToggleYaml, isRunning, onRun, onStop, theme }) {
+export default function Header({ agentName, showYaml, onToggleYaml, isRunning, onRun, onStop, onSave, isSaving, theme }) {
   return (
     <div className="h-14 flex items-center justify-between px-6" style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)' }}>
       {/* Left: Agent Title */}
@@ -32,10 +32,13 @@ export default function Header({ agentName, showYaml, onToggleYaml, isRunning, o
 
             {/* Save Button */}
             <button 
-              className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              onClick={onSave}
+              disabled={isSaving}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
               style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
             >
-              Save
+              {isSaving && <Loader size={16} className="animate-spin" />}
+              {isSaving ? 'Saving...' : 'Save'}
             </button>
           </>
         )}

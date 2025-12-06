@@ -6,12 +6,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// Version is set at build time via -ldflags
+var Version = "dev"
+
 // Version information
 const (
-	Version = "1.0.0"
-	Name    = "Astonish AI Companion"
-	Author  = "Rafael Schardosin Silva"
-	GitHub  = "https://github.com/schardosin/astonish"
+	Name   = "Astonish AI Companion"
+	Author = "Rafael Schardosin Silva"
+	GitHub = "https://github.com/schardosin/astonish"
 )
 
 // ASCII Logo with colors using lipgloss

@@ -6,6 +6,7 @@ import {
   MiniMap,
   useNodesState,
   useEdgesState,
+  useReactFlow,
   Panel,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
@@ -18,6 +19,7 @@ import LlmNode from './nodes/LlmNode'
 import ToolNode from './nodes/ToolNode'
 import OutputNode from './nodes/OutputNode'
 import UpdateStateNode from './nodes/UpdateStateNode'
+import WaypointNode from './nodes/WaypointNode'
 
 const nodeTypes = {
   start: StartNode,
@@ -27,6 +29,7 @@ const nodeTypes = {
   tool: ToolNode,
   output: OutputNode,
   updateState: UpdateStateNode,
+  waypoint: WaypointNode,
 }
 
 // Node type definitions for toolbar
@@ -53,27 +56,110 @@ function FlowCanvasInner({
   const [nodes, setNodes, handleNodesChange] = useNodesState([])
   const [edges, setEdges, handleEdgesChange] = useEdgesState([])
 
-  // Sync nodes from props - update selection state
+  // Sync nodes from props - update selection state but preserve waypoint nodes
   useEffect(() => {
     if (propNodes && propNodes.length > 0) {
-      // Add selected state to nodes
-      const nodesWithSelection = propNodes.map(node => ({
-        ...node,
-        selected: node.id === selectedNodeId,
-        data: {
-          ...node.data,
-          isSelected: node.id === selectedNodeId
-        }
-      }))
-      setNodes(nodesWithSelection)
+      setNodes((currentNodes) => {
+        // Keep any runtime waypoint nodes
+        const waypointNodes = currentNodes.filter(n => n.type === 'waypoint')
+        
+        // Add selected state to prop nodes
+        const nodesWithSelection = propNodes.map(node => ({
+          ...node,
+          selected: node.id === selectedNodeId,
+          data: {
+            ...node.data,
+            isSelected: node.id === selectedNodeId
+          }
+        }))
+        
+        // Merge prop nodes with waypoint nodes
+        return [...nodesWithSelection, ...waypointNodes]
+      })
     }
-  }, [propNodes, selectedNodeId, setNodes])
+  }, [propNodes, selectedNodeId])
 
+  // Sync edges from props - but preserve runtime waypoint edges
   useEffect(() => {
     if (propEdges) {
-      setEdges(propEdges)
+      setEdges((currentEdges) => {
+        // Keep any runtime waypoint edges (edges connected to waypoint nodes)
+        const waypointEdges = currentEdges.filter(e => 
+          e.source.startsWith('waypoint-') || e.target.startsWith('waypoint-')
+        )
+        
+        // Get IDs of original edges that have been replaced by waypoint edges
+        // (edges where the source or target is now connected through a waypoint)
+        const waypointConnections = new Set()
+        waypointEdges.forEach(e => {
+          if (e.source.startsWith('waypoint-')) waypointConnections.add(e.target)
+          if (e.target.startsWith('waypoint-')) waypointConnections.add(e.source)
+        })
+        
+        // Filter out propEdges that have been split by waypoints
+        const filteredPropEdges = propEdges.filter(e => {
+          // Check if this edge has been replaced by waypoint edges
+          const hasWaypointOnSource = waypointEdges.some(we => we.source === e.source && we.target.startsWith('waypoint-'))
+          const hasWaypointOnTarget = waypointEdges.some(we => we.target === e.target && we.source.startsWith('waypoint-'))
+          return !(hasWaypointOnSource && hasWaypointOnTarget)
+        })
+        
+        // If we have waypoint edges, merge them with filtered prop edges
+        if (waypointEdges.length > 0) {
+          return [...filteredPropEdges, ...waypointEdges]
+        }
+        
+        return propEdges
+      })
     }
-  }, [propEdges, setEdges])
+  }, [propEdges])
+
+  // Get React Flow instance for coordinate conversion
+  const { screenToFlowPosition } = useReactFlow()
+
+  // Handle double-click on edge to add waypoint
+  const onEdgeDoubleClick = useCallback((event, edge) => {
+    event.stopPropagation()
+    event.preventDefault()
+
+    // Convert screen position to flow coordinates
+    const position = screenToFlowPosition({
+      x: event.clientX,
+      y: event.clientY,
+    })
+
+    // Create unique ID for the waypoint with random suffix
+    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    const waypointId = `waypoint-${uniqueSuffix}`
+
+    // Create the new waypoint node
+    const waypointNode = {
+      id: waypointId,
+      type: 'waypoint',
+      position: position,
+      data: { label: '' },
+      draggable: true,
+    }
+
+    // Create two new edges to replace the original (use unique IDs)
+    const newEdge1 = {
+      ...edge,
+      id: `e-${edge.source}-${waypointId}-${uniqueSuffix}`,
+      source: edge.source,
+      target: waypointId,
+    }
+
+    const newEdge2 = {
+      ...edge,
+      id: `e-${waypointId}-${edge.target}-${uniqueSuffix}`,
+      source: waypointId,
+      target: edge.target,
+    }
+
+    // Update nodes and edges
+    setNodes((nds) => [...nds, waypointNode])
+    setEdges((eds) => eds.filter((e) => e.id !== edge.id).concat([newEdge1, newEdge2]))
+  }, [screenToFlowPosition, setNodes, setEdges])
 
   // Handle new connection (drag from one node to another)
   const onConnect = useCallback((params) => {
@@ -99,10 +185,44 @@ function FlowCanvasInner({
   }, [onNodeSelect])
 
   const handleNodeDoubleClick = useCallback((event, node) => {
+    // If double-clicking a waypoint node, remove it and rejoin the edges
+    if (node.type === 'waypoint') {
+      event.stopPropagation()
+      
+      // Find edges connected to this waypoint
+      setEdges((currentEdges) => {
+        const incomingEdge = currentEdges.find(e => e.target === node.id)
+        const outgoingEdge = currentEdges.find(e => e.source === node.id)
+        
+        if (incomingEdge && outgoingEdge) {
+          // Create a new edge connecting the original source to original target
+          const rejoinedEdge = {
+            ...incomingEdge,
+            id: `e-${incomingEdge.source}-${outgoingEdge.target}-${Date.now()}`,
+            source: incomingEdge.source,
+            target: outgoingEdge.target,
+          }
+          
+          // Remove the waypoint edges and add the rejoined edge
+          return currentEdges
+            .filter(e => e.id !== incomingEdge.id && e.id !== outgoingEdge.id)
+            .concat([rejoinedEdge])
+        }
+        
+        return currentEdges
+      })
+      
+      // Remove the waypoint node
+      setNodes((currentNodes) => currentNodes.filter(n => n.id !== node.id))
+      
+      return
+    }
+    
+    // For regular nodes, call the parent handler
     if (onNodeDoubleClick) {
       onNodeDoubleClick(node.id)
     }
-  }, [onNodeDoubleClick])
+  }, [onNodeDoubleClick, setNodes, setEdges])
 
   const onPaneClick = useCallback(() => {
     // Clicking on empty space deselects
@@ -127,6 +247,7 @@ function FlowCanvasInner({
         onEdgesDelete={onEdgesDelete}
         onNodeClick={onNodeClick}
         onNodeDoubleClick={handleNodeDoubleClick}
+        onEdgeDoubleClick={onEdgeDoubleClick}
         onPaneClick={onPaneClick}
         nodeTypes={nodeTypes}
         defaultEdgeOptions={defaultEdgeOptions}

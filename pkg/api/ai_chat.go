@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/model"
@@ -44,7 +45,7 @@ func getSystemPrompt(ctx string, availableTools []ToolInfo) string {
 		toolsList.WriteString("- " + t.Name + ": " + t.Description + " (source: " + t.Source + ")\n")
 	}
 	
-	basePrompt := GetFlowSchema() + "\n\n# Available Tools\n" + toolsList.String()
+	basePrompt := GetFlowSchema() + "\n\n# Available Tools\nONLY use tools from this list. Do NOT invent or hallucinate tool names.\n" + toolsList.String()
 	
 	switch ctx {
 	case "create_flow":
@@ -53,6 +54,22 @@ func getSystemPrompt(ctx string, availableTools []ToolInfo) string {
 # Your Task
 You are an AI assistant helping users create agent workflows.
 When the user describes what they want, generate a COMPLETE and VALID YAML flow.
+
+CRITICAL TOOL RULES:
+- ONLY use tools from the "Available Tools" list above
+- For LLM nodes that need tools, you MUST set "tools: true"
+- Use tools_selection to limit which tools are available to that node
+
+TOOL TIPS:
+- shell_command: Can run any shell command including curl for HTTP requests/web APIs
+  Example: Use curl to call search APIs, fetch web pages, etc.
+- write_file: Save content to files
+- read_file: Read file contents
+- run_python_code: Execute Python for complex logic
+- filter_json: Extract specific fields from JSON data
+
+If the user needs web search, suggest using shell_command with curl to call a search API,
+or explain that they need an MCP server with search capabilities.
 
 Response format:
 1. Brief explanation of the flow you're creating
@@ -251,9 +268,8 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// getAvailableTools fetches tools for AI context
+// getAvailableTools fetches tools for AI context (both internal and MCP)
 func getAvailableTools(ctx context.Context) []ToolInfo {
-	// Reuse the same logic from ListToolsHandler
 	var allTools []ToolInfo
 	
 	// Get internal tools
@@ -266,8 +282,30 @@ func getAvailableTools(ctx context.Context) []ToolInfo {
 		})
 	}
 	
-	// Note: MCP tools require more context, skip for now
-	// They can be added later when we have proper MCP manager access
+	// Get MCP tools
+	mcpManager, err := mcp.NewManager()
+	if err == nil {
+		if err := mcpManager.InitializeToolsets(ctx); err == nil {
+			toolsets := mcpManager.GetToolsets()
+			
+			// Create minimal context for fetching tools
+			minimalCtx := &minimalReadonlyContext{Context: ctx}
+			
+			for _, toolset := range toolsets {
+				serverName := toolset.Name()
+				mcpToolsList, err := toolset.Tools(minimalCtx)
+				if err == nil {
+					for _, t := range mcpToolsList {
+						allTools = append(allTools, ToolInfo{
+							Name:        t.Name(),
+							Description: t.Description(),
+							Source:      serverName,
+						})
+					}
+				}
+			}
+		}
+	}
 	
 	return allTools
 }

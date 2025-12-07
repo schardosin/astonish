@@ -174,26 +174,32 @@ function FlowCanvasInner({
       const waypointY = position.y
       
       // Source -> Waypoint edge handles
-      let edge1SourceHandle = null // Default: bottom
-      let edge1TargetHandle = null // Default: top
+      let edge1SourceHandle = null // Default: bottom (normal node)
+      let edge1TargetHandle = null // Default: top (normal node) or specific for waypoint
       
       if (sourceY > waypointY) {
         // Source is BELOW waypoint - this is a back-edge going UP
         edge1SourceHandle = 'top-source'
         edge1TargetHandle = 'bottom-target'
+      } else {
+        // Source is ABOVE waypoint - normal flow (top to bottom)
+        // Explicitly set waypoint handle for proper routing
+        edge1TargetHandle = 'top-target'
       }
-      // else: Source is ABOVE waypoint - normal flow, use defaults (bottom -> top)
       
       // Waypoint -> Target edge handles
-      let edge2SourceHandle = null // Default: bottom
-      let edge2TargetHandle = null // Default: top
+      let edge2SourceHandle = null // Default: bottom (normal node) or specific for waypoint
+      let edge2TargetHandle = null // Default: top (normal node)
       
       if (waypointY > targetY) {
         // Waypoint is BELOW target - back-edge going UP
         edge2SourceHandle = 'top-source'
-        edge2TargetHandle = 'left' // or top for back-edges
+        edge2TargetHandle = 'left'
+      } else {
+        // Waypoint is ABOVE target - normal flow (top to bottom)
+        // Explicitly set waypoint handle for proper routing
+        edge2SourceHandle = 'bottom-source'
       }
-      // else: Waypoint is ABOVE target - normal flow, use defaults
       
       // Create two new edges with proper handles
       const newEdge1 = {

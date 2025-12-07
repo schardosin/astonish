@@ -64,3 +64,14 @@ export async function deleteAgent(name) {
   return response.json()
 }
 
+/**
+ * Fetch all available tools
+ * @returns {Promise<{tools: Array<{name: string, description: string, source: string}>}>}
+ */
+export async function fetchTools() {
+  const response = await fetch(`${API_BASE}/tools`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch tools: ${response.statusText}`)
+  }
+  return response.json()
+}

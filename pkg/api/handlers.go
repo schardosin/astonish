@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -9,6 +10,10 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/mcp"
+	"github.com/schardosin/astonish/pkg/tools"
+	"google.golang.org/adk/session"
+	"google.golang.org/genai"
 )
 
 // AgentListItem represents an agent in the list response
@@ -209,10 +214,89 @@ func DeleteAgentHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "deleted": name})
 }
 
+// ToolInfo represents a tool in the list response
+type ToolInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Source      string `json:"source"` // "internal" or MCP server name
+}
+
+// ToolsListResponse is the response for GET /api/tools
+type ToolsListResponse struct {
+	Tools []ToolInfo `json:"tools"`
+}
+
+// ListToolsHandler handles GET /api/tools
+func ListToolsHandler(w http.ResponseWriter, r *http.Request) {
+	allTools := []ToolInfo{}
+	ctx := context.Background()
+
+	// Get internal tools
+	internalToolsList, err := tools.GetInternalTools()
+	if err == nil {
+		for _, t := range internalToolsList {
+			allTools = append(allTools, ToolInfo{
+				Name:        t.Name(),
+				Description: t.Description(),
+				Source:      "internal",
+			})
+		}
+	}
+
+	// Get MCP tools
+	mcpManager, err := mcp.NewManager()
+	if err == nil {
+		if err := mcpManager.InitializeToolsets(ctx); err == nil {
+			toolsets := mcpManager.GetToolsets()
+			
+			// Create minimal context for fetching tools
+			minimalCtx := &minimalReadonlyContext{Context: ctx}
+			
+			for _, toolset := range toolsets {
+				serverName := toolset.Name()
+				mcpToolsList, err := toolset.Tools(minimalCtx)
+				if err == nil {
+					for _, t := range mcpToolsList {
+						allTools = append(allTools, ToolInfo{
+							Name:        t.Name(),
+							Description: t.Description(),
+							Source:      serverName,
+						})
+					}
+				}
+			}
+		}
+	}
+
+	// Sort tools by name
+	sort.Slice(allTools, func(i, j int) bool {
+		return allTools[i].Name < allTools[j].Name
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(ToolsListResponse{Tools: allTools})
+}
+
+// minimalReadonlyContext implements agent.ReadonlyContext for tool listing
+type minimalReadonlyContext struct {
+	context.Context
+}
+
+func (m *minimalReadonlyContext) AgentName() string                    { return "tools-api" }
+func (m *minimalReadonlyContext) AppName() string                      { return "astonish" }
+func (m *minimalReadonlyContext) UserContent() *genai.Content          { return nil }
+func (m *minimalReadonlyContext) InvocationID() string                 { return "" }
+func (m *minimalReadonlyContext) ReadonlyState() session.ReadonlyState { return nil }
+func (m *minimalReadonlyContext) UserID() string                       { return "" }
+func (m *minimalReadonlyContext) SessionID() string                    { return "" }
+func (m *minimalReadonlyContext) Branch() string                       { return "" }
+
 // RegisterRoutes registers the API routes on a router
 func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/agents", ListAgentsHandler).Methods("GET")
 	router.HandleFunc("/api/agents/{name}", GetAgentHandler).Methods("GET")
 	router.HandleFunc("/api/agents/{name}", SaveAgentHandler).Methods("PUT")
 	router.HandleFunc("/api/agents/{name}", DeleteAgentHandler).Methods("DELETE")
+	router.HandleFunc("/api/tools", ListToolsHandler).Methods("GET")
 }
+

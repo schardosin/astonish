@@ -13,7 +13,7 @@ import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import { useTheme } from './hooks/useTheme'
 import { yamlToFlow } from './utils/yamlToFlow'
 import { addStandaloneNode, addConnection, removeConnection, updateNode } from './utils/flowToYaml'
-import { fetchAgents, fetchAgent, saveAgent, deleteAgent } from './api/agents'
+import { fetchAgents, fetchAgent, saveAgent, deleteAgent, fetchTools } from './api/agents'
 import { snakeToTitleCase } from './utils/formatters'
 import './index.css'
 
@@ -40,13 +40,15 @@ function App() {
   const [isSaving, setIsSaving] = useState(false)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [availableTools, setAvailableTools] = useState([])
   const [chatMessages, setChatMessages] = useState([
     { type: 'agent', content: 'Welcome! Click "Run" to start the agent flow.' },
   ])
 
-  // Load agents from API on mount
+  // Load agents and tools from API on mount
   useEffect(() => {
     loadAgents()
+    loadTools()
   }, [])
 
   const loadAgents = async () => {
@@ -65,6 +67,16 @@ function App() {
       setAgents([])
     } finally {
       setIsLoadingAgents(false)
+    }
+  }
+
+  const loadTools = async () => {
+    try {
+      const data = await fetchTools()
+      setAvailableTools(data.tools || [])
+    } catch (err) {
+      console.error('Failed to load tools:', err)
+      setAvailableTools([])
     }
   }
 
@@ -287,6 +299,7 @@ flow:
                   onSave={handleNodeSave}
                   onClose={handleNodeEditorClose}
                   theme={theme}
+                  availableTools={availableTools}
                 />
               ) : (
                 <YamlDrawer

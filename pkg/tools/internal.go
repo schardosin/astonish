@@ -29,6 +29,85 @@ func ReadFile(ctx tool.Context, args ReadFileArgs) (ReadFileResult, error) {
 	return ReadFileResult{Content: string(content)}, nil
 }
 
+// --- Write File Tool ---
+
+type WriteFileArgs struct {
+	FilePath string      `json:"file_path" jsonschema_description:"The path to the file where content will be written."`
+	Content  interface{} `json:"content" jsonschema_description:"The content to write to the file. Can be a single string or a list of strings (each list item will be a new line)."`
+}
+
+type WriteFileResult struct {
+	Message string `json:"message"`
+}
+
+// tryExtractStdout attempts to extract content from an 'stdout' key if the input
+// is a JSON or dict-like string (e.g., from shell_command output).
+func tryExtractStdout(input string) (string, bool) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return "", false
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+		return "", false
+	}
+
+	if stdout, ok := parsed["stdout"]; ok {
+		switch v := stdout.(type) {
+		case string:
+			return v, true
+		case []interface{}:
+			var lines []string
+			for _, item := range v {
+				lines = append(lines, fmt.Sprintf("%v", item))
+			}
+			return strings.Join(lines, "\n"), true
+		}
+	}
+	return "", false
+}
+
+// contentToString converts the content (string or []interface{}) to a single string
+func contentToString(content interface{}) (string, error) {
+	switch v := content.(type) {
+	case string:
+		return v, nil
+	case []interface{}:
+		var lines []string
+		for _, item := range v {
+			lines = append(lines, fmt.Sprintf("%v", item))
+		}
+		return strings.Join(lines, "\n"), nil
+	case []string:
+		return strings.Join(v, "\n"), nil
+	default:
+		return fmt.Sprintf("%v", content), nil
+	}
+}
+
+func WriteFile(ctx tool.Context, args WriteFileArgs) (WriteFileResult, error) {
+	// Convert content to string
+	preliminaryString, err := contentToString(args.Content)
+	if err != nil {
+		return WriteFileResult{}, fmt.Errorf("failed to process content: %w", err)
+	}
+
+	// Try to extract stdout from JSON (for shell_command output)
+	var finalContent string
+	if extracted, ok := tryExtractStdout(preliminaryString); ok {
+		finalContent = extracted
+	} else {
+		finalContent = preliminaryString
+	}
+
+	// Write to file
+	if err := os.WriteFile(args.FilePath, []byte(finalContent), 0644); err != nil {
+		return WriteFileResult{}, fmt.Errorf("failed to write to file %s: %w", args.FilePath, err)
+	}
+
+	return WriteFileResult{Message: fmt.Sprintf("Content successfully written to %s", args.FilePath)}, nil
+}
 
 
 type ShellCommandArgs struct {
@@ -233,6 +312,14 @@ func GetInternalTools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
+	writeFileTool, err := functiontool.New(functiontool.Config{
+		Name:        "write_file",
+		Description: "Write content to a file with intelligent 'stdout' extraction. If the content is the output from shell_command (containing 'stdout' key), it will extract and write only the stdout value.",
+	}, WriteFile)
+	if err != nil {
+		return nil, err
+	}
+
 	shellCommandTool, err := functiontool.New(functiontool.Config{
 		Name:        "shell_command",
 		Description: "Execute a shell command to retrieve information or perform actions. Use this tool when you need to run CLI commands like 'gh', 'git', etc.",
@@ -267,7 +354,7 @@ func GetInternalTools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
-	return []tool.Tool{readFileTool, shellCommandTool, filterJsonTool, gitDiffAddLineNumbersTool, runPythonCodeTool}, nil
+	return []tool.Tool{readFileTool, writeFileTool, shellCommandTool, filterJsonTool, gitDiffAddLineNumbersTool, runPythonCodeTool}, nil
 }
 
 func ExecuteTool(ctx context.Context, name string, args map[string]interface{}) (any, error) {

@@ -107,6 +107,12 @@ func spaFileServer(fs http.FileSystem) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 
+		// Skip API routes - let them 404 naturally so mux routes work
+		if len(path) >= 4 && path[:4] == "/api" {
+			http.NotFound(w, r)
+			return
+		}
+
 		// Check if file exists
 		f, err := fs.Open(path)
 		if err != nil {

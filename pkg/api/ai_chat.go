@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/model"
@@ -319,11 +318,16 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// getAvailableTools fetches tools for AI context (both internal and MCP)
+// getAvailableTools fetches tools for AI context from cache
 func getAvailableTools(ctx context.Context) []ToolInfo {
-	var allTools []ToolInfo
+	// Use cached tools (initialized at startup)
+	cached := GetCachedTools()
+	if cached != nil {
+		return cached
+	}
 	
-	// Get internal tools
+	// Fallback to internal tools only if cache not ready
+	var allTools []ToolInfo
 	internalTools, _ := tools.GetInternalTools()
 	for _, t := range internalTools {
 		allTools = append(allTools, ToolInfo{
@@ -332,31 +336,5 @@ func getAvailableTools(ctx context.Context) []ToolInfo {
 			Source:      "internal",
 		})
 	}
-	
-	// Get MCP tools
-	mcpManager, err := mcp.NewManager()
-	if err == nil {
-		if err := mcpManager.InitializeToolsets(ctx); err == nil {
-			toolsets := mcpManager.GetToolsets()
-			
-			// Create minimal context for fetching tools
-			minimalCtx := &minimalReadonlyContext{Context: ctx}
-			
-			for _, toolset := range toolsets {
-				serverName := toolset.Name()
-				mcpToolsList, err := toolset.Tools(minimalCtx)
-				if err == nil {
-					for _, t := range mcpToolsList {
-						allTools = append(allTools, ToolInfo{
-							Name:        t.Name(),
-							Description: t.Description(),
-							Source:      serverName,
-						})
-					}
-				}
-			}
-		}
-	}
-	
 	return allTools
 }

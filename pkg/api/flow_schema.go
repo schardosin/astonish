@@ -144,12 +144,30 @@ Modify state variables.
 - Data flows through nodes via output_model which saves to state
 - Access previous node outputs from state keys defined in output_model
 
+## Template Examples (users can ask "show me an example of X")
+
+### Simple Q&A Flow
+Get user question, answer with AI, show response.
+
+### Web Search Flow
+Get query, search with tavily-search tool, summarize results.
+
+### File Processing Flow
+Get file path, read file content, process with LLM, output results.
+
+### Multi-Step Workflow
+Chain multiple LLM nodes for complex reasoning (analyze -> plan -> execute).
+
+### Interactive Loop
+Keep processing until user says "done" using conditional edges.
+
 ## Rules
 1. Flow must start from START node
 2. Flow must end at END node
 3. All node names must be unique
 4. Edge targets must reference valid node names or START/END
 5. Use output_model on LLM/tool nodes to pass data to later nodes
+6. When user asks "show me an example of X", generate a complete working flow for that pattern
 `
 
 // GetFlowSchema returns the schema as a string for AI context

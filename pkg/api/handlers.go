@@ -10,8 +10,6 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/mcp"
-	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
 )
@@ -228,44 +226,12 @@ type ToolsListResponse struct {
 
 // ListToolsHandler handles GET /api/tools
 func ListToolsHandler(w http.ResponseWriter, r *http.Request) {
-	allTools := []ToolInfo{}
-	ctx := context.Background()
-
-	// Get internal tools
-	internalToolsList, err := tools.GetInternalTools()
-	if err == nil {
-		for _, t := range internalToolsList {
-			allTools = append(allTools, ToolInfo{
-				Name:        t.Name(),
-				Description: t.Description(),
-				Source:      "internal",
-			})
-		}
-	}
-
-	// Get MCP tools
-	mcpManager, err := mcp.NewManager()
-	if err == nil {
-		if err := mcpManager.InitializeToolsets(ctx); err == nil {
-			toolsets := mcpManager.GetToolsets()
-			
-			// Create minimal context for fetching tools
-			minimalCtx := &minimalReadonlyContext{Context: ctx}
-			
-			for _, toolset := range toolsets {
-				serverName := toolset.Name()
-				mcpToolsList, err := toolset.Tools(minimalCtx)
-				if err == nil {
-					for _, t := range mcpToolsList {
-						allTools = append(allTools, ToolInfo{
-							Name:        t.Name(),
-							Description: t.Description(),
-							Source:      serverName,
-						})
-					}
-				}
-			}
-		}
+	// Use cached tools (initialized at startup)
+	allTools := GetCachedTools()
+	
+	// If cache not ready, return empty list
+	if allTools == nil {
+		allTools = []ToolInfo{}
 	}
 
 	// Sort tools by name

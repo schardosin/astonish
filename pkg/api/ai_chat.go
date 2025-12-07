@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -232,32 +233,82 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	
-	// Call LLM
-	var responseText strings.Builder
-	for resp, err := range llm.GenerateContent(ctx, llmReq, false) {
-		if err != nil {
-			json.NewEncoder(w).Encode(AIChatResponse{
-				Error: "LLM error: " + err.Error(),
-			})
-			return
-		}
-		if resp != nil && resp.Content != nil {
-			for _, part := range resp.Content.Parts {
-				if part.Text != "" {
-					responseText.WriteString(part.Text)
+	// Call LLM with validation retry loop (max 3 attempts)
+	const maxRetries = 3
+	var fullResponse string
+	var proposedYAML string
+	var lastValidationErrors []string
+	
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Call LLM
+		var responseText strings.Builder
+		for resp, err := range llm.GenerateContent(ctx, llmReq, false) {
+			if err != nil {
+				json.NewEncoder(w).Encode(AIChatResponse{
+					Error: "LLM error: " + err.Error(),
+				})
+				return
+			}
+			if resp != nil && resp.Content != nil {
+				for _, part := range resp.Content.Parts {
+					if part.Text != "" {
+						responseText.WriteString(part.Text)
+					}
 				}
 			}
 		}
+		
+		fullResponse = responseText.String()
+		proposedYAML = extractYAML(fullResponse)
+		
+		// If no YAML was generated, no need to validate
+		if proposedYAML == "" {
+			break
+		}
+		
+		// Validate the YAML
+		validation := ValidateFlowYAML(proposedYAML, availableTools)
+		if validation.Valid {
+			// YAML is valid, we're done
+			break
+		}
+		
+		// YAML has errors
+		lastValidationErrors = validation.Errors
+		
+		// If this was the last attempt, break and return with errors
+		if attempt == maxRetries {
+			break
+		}
+		
+		// Add the assistant's response and validation error to history for retry
+		llmReq.Contents = append(llmReq.Contents, &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{
+				genai.NewPartFromText(fullResponse),
+			},
+		})
+		llmReq.Contents = append(llmReq.Contents, &genai.Content{
+			Role: "user",
+			Parts: []*genai.Part{
+				genai.NewPartFromText(FormatValidationErrors(validation.Errors)),
+			},
+		})
 	}
 	
-	// Extract YAML if present
-	fullResponse := responseText.String()
-	proposedYAML := extractYAML(fullResponse)
-	
-	// Determine action based on whether YAML was generated
+	// Determine action based on whether YAML was generated and valid
 	action := "info"
 	if proposedYAML != "" {
-		action = "preview"
+		if len(lastValidationErrors) > 0 {
+			// YAML has validation errors after all retries
+			action = "preview"
+			fullResponse += "\n\n⚠️ **Validation Warnings** (after " + fmt.Sprintf("%d", maxRetries) + " attempts):\n"
+			for _, err := range lastValidationErrors {
+				fullResponse += "- " + err + "\n"
+			}
+		} else {
+			action = "preview"
+		}
 	}
 	
 	w.Header().Set("Content-Type", "application/json")

@@ -278,27 +278,6 @@ func FilterJson(ctx tool.Context, args FilterJsonArgs) (FilterJsonResult, error)
 	return FilterJsonResult{Result: result}, nil
 }
 
-// --- Run Python Code Tool ---
-
-type RunPythonCodeArgs struct {
-	Code string `json:"code" jsonschema_description:"Python code to execute"`
-}
-
-type RunPythonCodeResult struct {
-	Output string `json:"output"`
-}
-
-func RunPythonCode(ctx tool.Context, args RunPythonCodeArgs) (RunPythonCodeResult, error) {
-	fmt.Printf("Executing Python code: %s\n", args.Code)
-	// Use python3 -c to execute the code
-	cmd := exec.Command("python3", "-c", args.Code)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return RunPythonCodeResult{}, fmt.Errorf("failed to execute Python code: %w, output: %s", err, string(output))
-	}
-	return RunPythonCodeResult{Output: string(output)}, nil
-}
-
 // --- Get Pull Request Files Tool ---
 
 
@@ -346,15 +325,7 @@ func GetInternalTools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
-	runPythonCodeTool, err := functiontool.New(functiontool.Config{
-		Name:        "execute_python",
-		Description: "Execute Python code and return the output. Use this for calculations, data processing, or any Python operations.",
-	}, RunPythonCode)
-	if err != nil {
-		return nil, err
-	}
-
-	return []tool.Tool{readFileTool, writeFileTool, shellCommandTool, filterJsonTool, gitDiffAddLineNumbersTool, runPythonCodeTool}, nil
+	return []tool.Tool{readFileTool, writeFileTool, shellCommandTool, filterJsonTool, gitDiffAddLineNumbersTool}, nil
 }
 
 func ExecuteTool(ctx context.Context, name string, args map[string]interface{}) (any, error) {
@@ -403,13 +374,6 @@ func ExecuteTool(ctx context.Context, name string, args map[string]interface{}) 
 			return nil, fmt.Errorf("invalid args for git_diff_add_line_numbers: %w", err)
 		}
 		return GitDiffAddLineNumbers(nil, toolArgs)
-
-	case "execute_python":
-		var toolArgs RunPythonCodeArgs
-		if err := toStruct(args, &toolArgs); err != nil {
-			return nil, fmt.Errorf("invalid args for execute_python: %w", err)
-		}
-		return RunPythonCode(nil, toolArgs)
 
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)

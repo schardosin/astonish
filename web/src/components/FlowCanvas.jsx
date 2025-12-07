@@ -162,7 +162,7 @@ function FlowCanvasInner({
         
         {/* Node Type Toolbar */}
         {!isRunning && (
-          <Panel position="top-left" className="m-2">
+          <Panel position="top-right" className="m-2">
             <div 
               className="flex flex-col gap-2 p-2 rounded-lg shadow-lg"
               style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}

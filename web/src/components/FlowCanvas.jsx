@@ -10,7 +10,7 @@ import {
   Panel,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Edit3, Brain, Wrench, Settings, MessageSquare } from 'lucide-react'
+import { Edit3, Brain, Wrench, Settings, MessageSquare, Sparkles } from 'lucide-react'
 
 import StartNode from './nodes/StartNode'
 import EndNode from './nodes/EndNode'
@@ -52,10 +52,14 @@ function FlowCanvasInner({
   onAddNode,
   onConnect: onConnectCallback,
   onEdgeRemove,
-  onLayoutChange
+  onLayoutChange,
+  onOpenAIChat
 }) {
   const [nodes, setNodes, handleNodesChange] = useNodesState([])
   const [edges, setEdges, handleEdgesChange] = useEdgesState([])
+  
+  // Check if canvas is empty (only START and END nodes)
+  const isEmptyCanvas = propNodes.filter(n => n.type !== 'start' && n.type !== 'end').length === 0
 
   // Sync nodes from props - update selection state but preserve waypoint nodes
   // UNLESS propNodes already contains waypoints (from YAML)
@@ -388,6 +392,41 @@ function FlowCanvasInner({
           </Panel>
         )}
         
+        {/* Empty Canvas State - Create with AI */}
+        {!isRunning && isEmptyCanvas && onOpenAIChat && (
+          <Panel position="top-center" className="mt-16">
+            <div 
+              className="flex flex-col items-center gap-4 p-6 rounded-2xl shadow-xl"
+              style={{ 
+                background: 'var(--bg-secondary)', 
+                border: '2px solid var(--border-color)',
+                minWidth: '320px'
+              }}
+            >
+              <div className="text-center">
+                <h3 className="text-lg font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
+                  Start Building Your Flow
+                </h3>
+                <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                  Describe what you want or drag nodes from the toolbar
+                </p>
+              </div>
+              
+              <button
+                onClick={onOpenAIChat}
+                className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white font-medium rounded-xl shadow-lg transition-all hover:scale-105"
+              >
+                <Sparkles className="w-5 h-5" />
+                Create with AI
+              </button>
+              
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                or use the node toolbar on the right →
+              </div>
+            </div>
+          </Panel>
+        )}
+        
         {/* Instructions */}
         {!isRunning && (
           <Panel position="bottom-left" className="m-2">
@@ -405,7 +444,7 @@ function FlowCanvasInner({
 }
 
 // Wrapper component that provides a key to force re-mount when flow structure changes dramatically
-export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelect, onNodeDoubleClick, selectedNodeId, onAddNode, onConnect, onEdgeRemove, onLayoutChange }) {
+export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelect, onNodeDoubleClick, selectedNodeId, onAddNode, onConnect, onEdgeRemove, onLayoutChange, onOpenAIChat }) {
   // Generate a key based on node IDs to force re-mount when nodes change completely
   const flowKey = useMemo(() => {
     if (!nodes || nodes.length === 0) return 'empty'
@@ -426,6 +465,8 @@ export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelec
       onConnect={onConnect}
       onEdgeRemove={onEdgeRemove}
       onLayoutChange={onLayoutChange}
+      onOpenAIChat={onOpenAIChat}
     />
   )
 }
+

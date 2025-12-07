@@ -316,6 +316,7 @@ flow:
                 onConnect={handleConnect}
                 onEdgeRemove={handleEdgeRemove}
                 onLayoutChange={handleLayoutChange}
+                onOpenAIChat={() => setShowAIChat(true)}
               />
             </div>
 

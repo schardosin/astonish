@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 
+	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/launcher"
 )
 
@@ -13,6 +14,17 @@ func handleStudioCommand(args []string) error {
 
 	if err := studioCmd.Parse(args); err != nil {
 		return fmt.Errorf("failed to parse flags: %w", err)
+	}
+
+	// Set up provider environment variables from config
+	// This matches what agents.go does for CLI commands
+	if appCfg, err := config.LoadAppConfig(); err == nil {
+		config.SetupAllProviderEnv(appCfg)
+	}
+
+	// Set up MCP environment variables
+	if mcpCfg, err := config.LoadMCPConfig(); err == nil {
+		config.SetupMCPEnv(mcpCfg)
 	}
 
 	return launcher.RunStudio(*port)
@@ -27,3 +39,5 @@ func printStudioUsage() {
 	fmt.Println("  -h, --help            show this help message and exit")
 	fmt.Println("  --port PORT           Port to run the studio server on (default: 9393)")
 }
+
+

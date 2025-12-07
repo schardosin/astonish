@@ -188,9 +188,31 @@ func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "path": path})
 }
 
+// DeleteAgentHandler handles DELETE /api/agents/{name}
+func DeleteAgentHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	name := vars["name"]
+
+	path, _, err := findAgentPath(name)
+	if err != nil {
+		http.Error(w, "Agent not found", http.StatusNotFound)
+		return
+	}
+
+	// Delete the file
+	if err := os.Remove(path); err != nil {
+		http.Error(w, "Failed to delete agent file", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "deleted": name})
+}
+
 // RegisterRoutes registers the API routes on a router
 func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/agents", ListAgentsHandler).Methods("GET")
 	router.HandleFunc("/api/agents/{name}", GetAgentHandler).Methods("GET")
 	router.HandleFunc("/api/agents/{name}", SaveAgentHandler).Methods("PUT")
+	router.HandleFunc("/api/agents/{name}", DeleteAgentHandler).Methods("DELETE")
 }

@@ -1,4 +1,4 @@
-import { Users, Plus, Moon, Sun } from 'lucide-react'
+import { Users, Plus, Moon, Sun, Trash2 } from 'lucide-react'
 import { snakeToTitleCase } from '../utils/formatters'
 
 export default function Sidebar({ 
@@ -6,6 +6,7 @@ export default function Sidebar({
   selectedAgent, 
   onAgentSelect, 
   onCreateNew, 
+  onDeleteAgent,
   theme, 
   onToggleTheme,
   isLoading
@@ -78,27 +79,41 @@ export default function Sidebar({
             </div>
           ) : (
             agents.map((agent) => (
-              <button
+              <div
                 key={agent.id}
-                onClick={() => onAgentSelect(agent)}
-                className={`w-full text-left px-3 py-2.5 rounded-lg transition-colors ${
+                className={`group flex items-center gap-1 px-3 py-2.5 rounded-lg transition-colors ${
                   selectedAgent?.id === agent.id
                     ? 'bg-purple-500/20 border-l-4 border-[#6B46C1]'
                     : 'hover:bg-purple-500/10'
                 }`}
-                style={{ color: selectedAgent?.id === agent.id ? '#9F7AEA' : 'var(--text-secondary)' }}
-                title={agent.description || ''}
               >
-                <div className="font-medium text-sm">{snakeToTitleCase(agent.name)}</div>
-                {agent.description && (
-                  <div 
-                    className="text-xs mt-0.5 truncate" 
-                    style={{ color: 'var(--text-muted)', maxWidth: '200px' }}
-                  >
-                    {agent.description}
-                  </div>
-                )}
-              </button>
+                <button
+                  onClick={() => onAgentSelect(agent)}
+                  className="flex-1 text-left"
+                  style={{ color: selectedAgent?.id === agent.id ? '#9F7AEA' : 'var(--text-secondary)' }}
+                  title={agent.description || ''}
+                >
+                  <div className="font-medium text-sm">{snakeToTitleCase(agent.name)}</div>
+                  {agent.description && (
+                    <div 
+                      className="text-xs mt-0.5 truncate" 
+                      style={{ color: 'var(--text-muted)', maxWidth: '180px' }}
+                    >
+                      {agent.description}
+                    </div>
+                  )}
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onDeleteAgent(agent)
+                  }}
+                  className="p-1.5 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/20 transition-all"
+                  title="Delete agent"
+                >
+                  <Trash2 size={14} className="text-red-400" />
+                </button>
+              </div>
             ))
           )}
         </div>

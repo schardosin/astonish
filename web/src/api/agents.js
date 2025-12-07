@@ -48,3 +48,19 @@ export async function saveAgent(name, yaml) {
   }
   return response.json()
 }
+
+/**
+ * Delete an agent
+ * @param {string} name - Agent name
+ * @returns {Promise<{status: string, deleted: string}>}
+ */
+export async function deleteAgent(name) {
+  const response = await fetch(`${API_BASE}/agents/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to delete agent: ${response.statusText}`)
+  }
+  return response.json()
+}
+

@@ -8,10 +8,12 @@ import YamlDrawer from './components/YamlDrawer'
 import Header from './components/Header'
 import NodeEditor from './components/NodeEditor'
 import CreateAgentModal from './components/CreateAgentModal'
+import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import { useTheme } from './hooks/useTheme'
 import { yamlToFlow } from './utils/yamlToFlow'
 import { addStandaloneNode, addConnection, removeConnection, updateNode } from './utils/flowToYaml'
-import { fetchAgents, fetchAgent, saveAgent } from './api/agents'
+import { fetchAgents, fetchAgent, saveAgent, deleteAgent } from './api/agents'
+import { snakeToTitleCase } from './utils/formatters'
 import './index.css'
 
 // Default YAML for new agents
@@ -36,6 +38,7 @@ function App() {
   const [editingNode, setEditingNode] = useState(null)
   const [isSaving, setIsSaving] = useState(false)
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState(null)
   const [chatMessages, setChatMessages] = useState([
     { type: 'agent', content: 'Welcome! Click "Run" to start the agent flow.' },
   ])
@@ -183,6 +186,31 @@ flow:
     }
   }, [selectedAgent, yamlContent])
 
+  // Delete agent
+  const handleDeleteAgent = useCallback((agent) => {
+    setDeleteTarget(agent)
+  }, [])
+
+  const confirmDelete = useCallback(async () => {
+    if (!deleteTarget) return
+    
+    try {
+      await deleteAgent(deleteTarget.id)
+      // Refresh agent list
+      loadAgents()
+      // If we deleted the selected agent, clear selection
+      if (selectedAgent?.id === deleteTarget.id) {
+        setSelectedAgent(null)
+        setYamlContent(defaultYaml)
+      }
+    } catch (err) {
+      console.error('Failed to delete agent:', err)
+      alert('Failed to delete agent: ' + err.message)
+    } finally {
+      setDeleteTarget(null)
+    }
+  }, [deleteTarget, selectedAgent])
+
   return (
     <ReactFlowProvider>
       <div className="flex h-screen" style={{ background: 'var(--bg-primary)' }}>
@@ -192,6 +220,7 @@ flow:
           selectedAgent={selectedAgent}
           onAgentSelect={handleAgentSelect}
           onCreateNew={handleCreateNew}
+          onDeleteAgent={handleDeleteAgent}
           theme={theme}
           onToggleTheme={toggleTheme}
           isLoading={isLoadingAgents}
@@ -269,6 +298,14 @@ flow:
         isOpen={showCreateModal}
         onClose={() => setShowCreateModal(false)}
         onCreate={handleCreateAgent}
+      />
+
+      {/* Delete Confirmation Modal */}
+      <ConfirmDeleteModal
+        isOpen={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={confirmDelete}
+        agentName={deleteTarget ? snakeToTitleCase(deleteTarget.name) : ''}
       />
     </ReactFlowProvider>
   )

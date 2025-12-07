@@ -1,6 +1,9 @@
 import { Play, Square, Code, LogOut, Loader } from 'lucide-react'
+import { snakeToTitleCase } from '../utils/formatters'
 
 export default function Header({ agentName, showYaml, onToggleYaml, isRunning, onRun, onStop, onSave, isSaving, theme }) {
+  const displayName = snakeToTitleCase(agentName) || agentName
+  
   return (
     <div className="h-14 flex items-center justify-between px-6" style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)' }}>
       {/* Left: Agent Title */}
@@ -9,7 +12,7 @@ export default function Header({ agentName, showYaml, onToggleYaml, isRunning, o
           {isRunning ? 'Run an Agent' : 'Edit Agent'}
         </h1>
         <span style={{ color: 'var(--text-muted)' }}>|</span>
-        <span style={{ color: 'var(--text-secondary)' }}>{agentName}</span>
+        <span style={{ color: 'var(--text-secondary)' }}>{displayName}</span>
       </div>
 
       {/* Right: Actions */}

@@ -163,11 +163,17 @@ func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine path - prefer local directory for saves
-	path := filepath.Join("agents", name+".yaml")
+	// Save to system directory (~/.config/astonish/agents/)
+	sysDir, err := config.GetAgentsDir()
+	if err != nil {
+		http.Error(w, "Failed to get agents directory", http.StatusInternalServerError)
+		return
+	}
+	
+	path := filepath.Join(sysDir, name+".yaml")
 
 	// Ensure directory exists
-	if err := os.MkdirAll("agents", 0755); err != nil {
+	if err := os.MkdirAll(sysDir, 0755); err != nil {
 		http.Error(w, "Failed to create agents directory", http.StatusInternalServerError)
 		return
 	}

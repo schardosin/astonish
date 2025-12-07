@@ -1,4 +1,5 @@
 import { Users, Plus, Moon, Sun } from 'lucide-react'
+import { snakeToTitleCase } from '../utils/formatters'
 
 export default function Sidebar({ 
   agents, 
@@ -88,7 +89,7 @@ export default function Sidebar({
                 style={{ color: selectedAgent?.id === agent.id ? '#9F7AEA' : 'var(--text-secondary)' }}
                 title={agent.description || ''}
               >
-                <div className="font-medium text-sm">{agent.name}</div>
+                <div className="font-medium text-sm">{snakeToTitleCase(agent.name)}</div>
                 {agent.description && (
                   <div 
                     className="text-xs mt-0.5 truncate" 

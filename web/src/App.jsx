@@ -7,6 +7,7 @@ import ChatPanel from './components/ChatPanel'
 import YamlDrawer from './components/YamlDrawer'
 import Header from './components/Header'
 import NodeEditor from './components/NodeEditor'
+import CreateAgentModal from './components/CreateAgentModal'
 import { useTheme } from './hooks/useTheme'
 import { yamlToFlow } from './utils/yamlToFlow'
 import { addStandaloneNode, addConnection, removeConnection, updateNode } from './utils/flowToYaml'
@@ -34,6 +35,7 @@ function App() {
   const [selectedNodeId, setSelectedNodeId] = useState(null)
   const [editingNode, setEditingNode] = useState(null)
   const [isSaving, setIsSaving] = useState(false)
+  const [showCreateModal, setShowCreateModal] = useState(false)
   const [chatMessages, setChatMessages] = useState([
     { type: 'agent', content: 'Welcome! Click "Run" to start the agent flow.' },
   ])
@@ -89,10 +91,24 @@ function App() {
   }, [])
 
   const handleCreateNew = useCallback(() => {
-    setSelectedAgent({ id: 'new-agent', name: 'New Agent', description: '', isNew: true })
+    setShowCreateModal(true)
+  }, [])
+
+  const handleCreateAgent = useCallback(({ id, name, description }) => {
+    const newYaml = `description: ${description || name}
+
+nodes: []
+
+flow:
+  - from: START
+    to: END
+`
+    
+    setSelectedAgent({ id, name, description: description || name, isNew: true })
     setSelectedNodeId(null)
     setEditingNode(null)
-    setYamlContent(defaultYaml)
+    setYamlContent(newYaml)
+    setShowCreateModal(false)
   }, [])
 
   const handleRun = useCallback(() => {
@@ -247,6 +263,13 @@ function App() {
           )}
         </div>
       </div>
+
+      {/* Create Agent Modal */}
+      <CreateAgentModal
+        isOpen={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        onCreate={handleCreateAgent}
+      />
     </ReactFlowProvider>
   )
 }

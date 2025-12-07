@@ -108,10 +108,33 @@ function parseWaypoints(savedLayout) {
  * Parse edges from YAML flow config, considering waypoints
  * @param {Object} yamlData - Parsed YAML object
  * @param {Object} waypointEdgeMap - Map of edges that have waypoints
+ * @param {Object} nodePositions - Map of node ID to position { x, y }
  * @returns {Array} React Flow edges
  */
-export function parseEdges(yamlData, waypointEdgeMap = {}) {
+export function parseEdges(yamlData, waypointEdgeMap = {}, nodePositions = {}) {
   const edges = []
+  
+  // Helper to determine handles based on relative Y positions
+  // Waypoints use different handle IDs than regular nodes
+  const isWaypoint = (id) => id.startsWith('waypoint-')
+  
+  const getHandles = (sourceId, targetId) => {
+    const sourceY = nodePositions[sourceId]?.y ?? 0
+    const targetY = nodePositions[targetId]?.y ?? 0
+    
+    if (sourceY > targetY) {
+      // Source is BELOW target - back-edge going UP
+      return { 
+        sourceHandle: 'top-source', 
+        targetHandle: isWaypoint(targetId) ? 'bottom-target' : 'left' 
+      }
+    }
+    // Normal flow - source above target
+    return { 
+      sourceHandle: isWaypoint(sourceId) ? 'bottom-source' : null, 
+      targetHandle: isWaypoint(targetId) ? 'top-target' : null 
+    }
+  }
   
   if (yamlData.flow && Array.isArray(yamlData.flow)) {
     yamlData.flow.forEach((flowItem, index) => {
@@ -123,16 +146,23 @@ export function parseEdges(yamlData, waypointEdgeMap = {}) {
         
         if (waypoints && waypoints.length > 0) {
           // Edge has waypoints - create split edges
-          // Sort waypoints by their order (assuming single waypoint for now)
+          // Sort waypoints by their Y position
           const sortedWps = [...waypoints].sort((a, b) => a.y - b.y)
           
           // Create edges: source -> wp1 -> wp2 -> ... -> target
           let prevNodeId = from
+          
           sortedWps.forEach((wp, wpIndex) => {
+            // Use saved handles if available, otherwise calculate
+            const srcHandle = wpIndex === 0 ? wp.incomingSourceHandle : null
+            const tgtHandle = wpIndex === 0 ? wp.incomingTargetHandle : null
+            
             edges.push({
               id: `e-${prevNodeId}-${wp.id}-${index}-${wpIndex}`,
               source: prevNodeId,
               target: wp.id,
+              sourceHandle: srcHandle || null,
+              targetHandle: tgtHandle || null,
               animated: true,
               style: { stroke: '#805AD5', strokeWidth: 2 },
               type: 'smoothstep',
@@ -141,20 +171,26 @@ export function parseEdges(yamlData, waypointEdgeMap = {}) {
           })
           
           // Final edge from last waypoint to target
+          const lastWp = sortedWps[sortedWps.length - 1]
           edges.push({
             id: `e-${prevNodeId}-${flowItem.to}-${index}-final`,
             source: prevNodeId,
             target: flowItem.to,
+            sourceHandle: lastWp.outgoingSourceHandle || null,
+            targetHandle: lastWp.outgoingTargetHandle || null,
             animated: true,
             style: { stroke: '#805AD5', strokeWidth: 2 },
             type: 'smoothstep',
           })
         } else {
           // No waypoints - normal edge
+          const handles = getHandles(from, flowItem.to)
           edges.push({
             id: `e-${from}-${flowItem.to}-${index}`,
             source: from,
             target: flowItem.to,
+            sourceHandle: handles.sourceHandle,
+            targetHandle: handles.targetHandle,
             animated: true,
             style: { stroke: '#805AD5', strokeWidth: 2 },
             type: 'smoothstep',
@@ -182,10 +218,16 @@ export function parseEdges(yamlData, waypointEdgeMap = {}) {
             let prevNodeId = from
             
             sortedWps.forEach((wp, wpIndex) => {
+              // Use saved handles if available
+              const srcHandle = wpIndex === 0 ? wp.incomingSourceHandle : null
+              const tgtHandle = wpIndex === 0 ? wp.incomingTargetHandle : null
+              
               edges.push({
                 id: `e-${prevNodeId}-${wp.id}-${index}-${edgeIndex}-${wpIndex}`,
                 source: prevNodeId,
                 target: wp.id,
+                sourceHandle: srcHandle || null,
+                targetHandle: tgtHandle || null,
                 animated: true,
                 style: { stroke: '#805AD5', strokeWidth: 2 },
                 type: 'smoothstep',
@@ -197,10 +239,13 @@ export function parseEdges(yamlData, waypointEdgeMap = {}) {
               prevNodeId = wp.id
             })
             
+            const lastWp = sortedWps[sortedWps.length - 1]
             edges.push({
               id: `e-${prevNodeId}-${edge.to}-${index}-${edgeIndex}-final`,
               source: prevNodeId,
               target: edge.to,
+              sourceHandle: lastWp.outgoingSourceHandle || null,
+              targetHandle: lastWp.outgoingTargetHandle || null,
               animated: true,
               style: { stroke: '#805AD5', strokeWidth: 2 },
               type: 'smoothstep',
@@ -320,8 +365,13 @@ export async function yamlToFlowAsync(yamlData) {
   // Parse nodes with saved positions if available
   const nodes = parseNodes(yamlData, savedLayout)
   
-  // Parse edges considering waypoints
-  const edges = parseEdges(yamlData, waypointEdgeMap)
+  // Build nodePositions map for handle calculation
+  const nodePositions = {}
+  nodes.forEach(n => { nodePositions[n.id] = n.position })
+  waypointNodes.forEach(wp => { nodePositions[wp.id] = wp.position })
+  
+  // Parse edges considering waypoints and positions for handles
+  const edges = parseEdges(yamlData, waypointEdgeMap, nodePositions)
   
   let finalNodes
   if (hasLayout) {
@@ -351,7 +401,13 @@ export function yamlToFlow(yamlData) {
   
   const { waypointNodes, waypointEdgeMap } = parseWaypoints(savedLayout)
   const nodes = parseNodes(yamlData, savedLayout)
-  const edges = parseEdges(yamlData, waypointEdgeMap)
+  
+  // Build nodePositions map for handle calculation
+  const nodePositions = {}
+  nodes.forEach(n => { nodePositions[n.id] = n.position })
+  waypointNodes.forEach(wp => { nodePositions[wp.id] = wp.position })
+  
+  const edges = parseEdges(yamlData, waypointEdgeMap, nodePositions)
   
   let finalNodes
   if (hasLayout) {
@@ -402,12 +458,18 @@ export function extractLayout(nodes, edges) {
           nextEdge = edges.find(e => e.source === target)
         }
         
+        // Save the handle information so we can restore exact edge routing
         layout.waypoints.push({
           id: node.id,
           x: Math.round(node.position.x),
           y: Math.round(node.position.y),
           source: source,
-          target: target
+          target: target,
+          // Save edge handle info for exact restoration
+          incomingSourceHandle: incomingEdge.sourceHandle || null,
+          incomingTargetHandle: incomingEdge.targetHandle || null,
+          outgoingSourceHandle: outgoingEdge.sourceHandle || null,
+          outgoingTargetHandle: outgoingEdge.targetHandle || null,
         })
       }
     } else {

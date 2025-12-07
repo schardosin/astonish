@@ -18,6 +18,9 @@ export default function UpdateStateNode({ data }) {
         <span className="font-semibold text-sm">{data.label}</span>
       </div>
       <Handle type="source" position={Position.Bottom} className="!bg-gray-400 !w-3 !h-3" />
+      {/* Hidden handles for back-edges - invisible but functional */}
+      <Handle type="source" position={Position.Top} id="top-source" className="!opacity-0 !w-1 !h-1" style={{ left: '30%' }} />
+      <Handle type="target" position={Position.Left} id="left" className="!opacity-0 !w-1 !h-1" />
     </div>
   )
 }

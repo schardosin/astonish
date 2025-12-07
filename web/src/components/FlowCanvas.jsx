@@ -58,12 +58,13 @@ function FlowCanvasInner({
   const [edges, setEdges, handleEdgesChange] = useEdgesState([])
 
   // Sync nodes from props - update selection state but preserve waypoint nodes
+  // UNLESS propNodes already contains waypoints (from YAML)
   useEffect(() => {
     if (propNodes && propNodes.length > 0) {
+      // Check if propNodes already has waypoints (from YAML loading)
+      const propsHaveWaypoints = propNodes.some(n => n.type === 'waypoint')
+      
       setNodes((currentNodes) => {
-        // Keep any runtime waypoint nodes
-        const waypointNodes = currentNodes.filter(n => n.type === 'waypoint')
-        
         // Add selected state to prop nodes
         const nodesWithSelection = propNodes.map(node => ({
           ...node,
@@ -74,43 +75,53 @@ function FlowCanvasInner({
           }
         }))
         
-        // Merge prop nodes with waypoint nodes
+        // Only preserve local waypoints if propNodes doesn't already have waypoints
+        if (propsHaveWaypoints) {
+          // propNodes already has waypoints from YAML - use them directly
+          return nodesWithSelection
+        }
+        
+        // Keep any runtime waypoint nodes (only when propNodes doesn't have waypoints)
+        const waypointNodes = currentNodes.filter(n => n.type === 'waypoint')
         return [...nodesWithSelection, ...waypointNodes]
       })
     }
   }, [propNodes, selectedNodeId])
 
   // Sync edges from props - but preserve runtime waypoint edges
+  // UNLESS propEdges already contains waypoint edges (from YAML)
   useEffect(() => {
     if (propEdges) {
+      // Check if propEdges already has waypoint edges (from YAML loading)
+      const propsHaveWaypointEdges = propEdges.some(e => 
+        e.source.startsWith('waypoint-') || e.target.startsWith('waypoint-')
+      )
+      
+      if (propsHaveWaypointEdges) {
+        // propEdges already has waypoint edges from YAML - use them directly
+        setEdges(propEdges)
+        return
+      }
+      
+      // Local waypoint preservation logic (only when propEdges doesn't have waypoints)
       setEdges((currentEdges) => {
         // Keep any runtime waypoint edges (edges connected to waypoint nodes)
         const waypointEdges = currentEdges.filter(e => 
           e.source.startsWith('waypoint-') || e.target.startsWith('waypoint-')
         )
         
-        // Get IDs of original edges that have been replaced by waypoint edges
-        // (edges where the source or target is now connected through a waypoint)
-        const waypointConnections = new Set()
-        waypointEdges.forEach(e => {
-          if (e.source.startsWith('waypoint-')) waypointConnections.add(e.target)
-          if (e.target.startsWith('waypoint-')) waypointConnections.add(e.source)
-        })
+        if (waypointEdges.length === 0) {
+          return propEdges
+        }
         
         // Filter out propEdges that have been split by waypoints
         const filteredPropEdges = propEdges.filter(e => {
-          // Check if this edge has been replaced by waypoint edges
           const hasWaypointOnSource = waypointEdges.some(we => we.source === e.source && we.target.startsWith('waypoint-'))
           const hasWaypointOnTarget = waypointEdges.some(we => we.target === e.target && we.source.startsWith('waypoint-'))
           return !(hasWaypointOnSource && hasWaypointOnTarget)
         })
         
-        // If we have waypoint edges, merge them with filtered prop edges
-        if (waypointEdges.length > 0) {
-          return [...filteredPropEdges, ...waypointEdges]
-        }
-        
-        return propEdges
+        return [...filteredPropEdges, ...waypointEdges]
       })
     }
   }, [propEdges])
@@ -149,24 +160,66 @@ function FlowCanvasInner({
       draggable: true,
     }
 
-    // Create two new edges to replace the original (use unique IDs)
-    const newEdge1 = {
-      ...edge,
-      id: `e-${edge.source}-${waypointId}-${uniqueSuffix}`,
-      source: edge.source,
-      target: waypointId,
-    }
+    // Find source and target node positions to determine handle connections
+    setNodes((currentNodes) => {
+      const sourceNode = currentNodes.find(n => n.id === edge.source)
+      const targetNode = currentNodes.find(n => n.id === edge.target)
+      
+      // Determine handles based on relative positions
+      // For edge FROM source TO waypoint:
+      // - If source is above waypoint, source exits from bottom, waypoint receives at top
+      // - If source is below waypoint, source exits from top/left, waypoint receives at bottom
+      const sourceY = sourceNode?.position?.y || 0
+      const targetY = targetNode?.position?.y || 0
+      const waypointY = position.y
+      
+      // Source -> Waypoint edge handles
+      let edge1SourceHandle = null // Default: bottom
+      let edge1TargetHandle = null // Default: top
+      
+      if (sourceY > waypointY) {
+        // Source is BELOW waypoint - this is a back-edge going UP
+        edge1SourceHandle = 'top-source'
+        edge1TargetHandle = 'bottom-target'
+      }
+      // else: Source is ABOVE waypoint - normal flow, use defaults (bottom -> top)
+      
+      // Waypoint -> Target edge handles
+      let edge2SourceHandle = null // Default: bottom
+      let edge2TargetHandle = null // Default: top
+      
+      if (waypointY > targetY) {
+        // Waypoint is BELOW target - back-edge going UP
+        edge2SourceHandle = 'top-source'
+        edge2TargetHandle = 'left' // or top for back-edges
+      }
+      // else: Waypoint is ABOVE target - normal flow, use defaults
+      
+      // Create two new edges with proper handles
+      const newEdge1 = {
+        ...edge,
+        id: `e-${edge.source}-${waypointId}-${uniqueSuffix}`,
+        source: edge.source,
+        target: waypointId,
+        sourceHandle: edge1SourceHandle,
+        targetHandle: edge1TargetHandle,
+      }
 
-    const newEdge2 = {
-      ...edge,
-      id: `e-${waypointId}-${edge.target}-${uniqueSuffix}`,
-      source: waypointId,
-      target: edge.target,
-    }
+      const newEdge2 = {
+        ...edge,
+        id: `e-${waypointId}-${edge.target}-${uniqueSuffix}`,
+        source: waypointId,
+        target: edge.target,
+        sourceHandle: edge2SourceHandle,
+        targetHandle: edge2TargetHandle,
+      }
 
-    // Update nodes and edges
-    setNodes((nds) => [...nds, waypointNode])
-    setEdges((eds) => eds.filter((e) => e.id !== edge.id).concat([newEdge1, newEdge2]))
+      // Update edges
+      setEdges((eds) => eds.filter((e) => e.id !== edge.id).concat([newEdge1, newEdge2]))
+      
+      // Return updated nodes with the new waypoint
+      return [...currentNodes, waypointNode]
+    })
   }, [screenToFlowPosition, setNodes, setEdges])
 
   // Handle new connection (drag from one node to another)
@@ -204,11 +257,21 @@ function FlowCanvasInner({
         
         if (incomingEdge && outgoingEdge) {
           // Create a new edge connecting the original source to original target
+          // Reset handles to null for direct node-to-node connection
           const rejoinedEdge = {
-            ...incomingEdge,
             id: `e-${incomingEdge.source}-${outgoingEdge.target}-${Date.now()}`,
             source: incomingEdge.source,
             target: outgoingEdge.target,
+            sourceHandle: null, // Reset - no waypoint handles needed
+            targetHandle: null, // Reset - no waypoint handles needed
+            animated: true,
+            style: { stroke: '#805AD5', strokeWidth: 2 },
+            type: 'smoothstep',
+            // Preserve label if it was on the incoming edge
+            label: incomingEdge.label || '',
+            labelStyle: incomingEdge.labelStyle,
+            labelBgStyle: incomingEdge.labelBgStyle,
+            labelBgPadding: incomingEdge.labelBgPadding,
           }
           
           // Remove the waypoint edges and add the rejoined edge

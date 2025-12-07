@@ -20,6 +20,9 @@ export default function InputNode({ data }) {
         <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{data.description}</p>
       )}
       <Handle type="source" position={Position.Bottom} className="!bg-purple-400 !w-3 !h-3" />
+      {/* Hidden handles for back-edges - invisible but functional */}
+      <Handle type="source" position={Position.Top} id="top-source" className="!opacity-0 !w-1 !h-1" style={{ left: '30%' }} />
+      <Handle type="target" position={Position.Left} id="left" className="!opacity-0 !w-1 !h-1" />
     </div>
   )
 }

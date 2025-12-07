@@ -3,17 +3,49 @@ import { Handle, Position } from '@xyflow/react'
 export default function WaypointNode({ selected }) {
   return (
     <div className="relative flex items-center justify-center" style={{ width: '16px', height: '16px' }}>
-      {/* Invisible Handles to center the line */}
+      {/* Top handles for normal top-down flow */}
       <Handle 
         type="target" 
-        position={Position.Top} 
-        className="!opacity-0 !w-4 !h-1" 
+        position={Position.Top}
+        id="top-target"
+        className="!opacity-0 !w-3 !h-1" 
         style={{ top: 0 }}
       />
       <Handle 
         type="source" 
-        position={Position.Bottom} 
-        className="!opacity-0 !w-4 !h-1" 
+        position={Position.Top}
+        id="top-source"
+        className="!opacity-0 !w-3 !h-1" 
+        style={{ top: 0 }}
+      />
+      
+      {/* Bottom handles for normal top-down flow */}
+      <Handle 
+        type="target" 
+        position={Position.Bottom}
+        id="bottom-target"
+        className="!opacity-0 !w-3 !h-1" 
+        style={{ bottom: 0 }}
+      />
+      <Handle 
+        type="source" 
+        position={Position.Bottom}
+        id="bottom-source"
+        className="!opacity-0 !w-3 !h-1" 
+        style={{ bottom: 0 }}
+      />
+      
+      {/* Default handles (no ID) for backward compatibility */}
+      <Handle 
+        type="target" 
+        position={Position.Top}
+        className="!opacity-0 !w-3 !h-1" 
+        style={{ top: 0 }}
+      />
+      <Handle 
+        type="source" 
+        position={Position.Bottom}
+        className="!opacity-0 !w-3 !h-1" 
         style={{ bottom: 0 }}
       />
       

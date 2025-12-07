@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 import yaml from 'js-yaml'
 import TopBar from './components/TopBar'
@@ -11,7 +11,7 @@ import NodeEditor from './components/NodeEditor'
 import CreateAgentModal from './components/CreateAgentModal'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import { useTheme } from './hooks/useTheme'
-import { yamlToFlowAsync, parseNodes, parseEdges } from './utils/yamlToFlow'
+import { yamlToFlowAsync, extractLayout } from './utils/yamlToFlow'
 import { addStandaloneNode, addConnection, removeConnection, updateNode } from './utils/flowToYaml'
 import { fetchAgents, fetchAgent, saveAgent, deleteAgent, fetchTools } from './api/agents'
 import { snakeToTitleCase } from './utils/formatters'
@@ -43,6 +43,8 @@ function App() {
   const [availableTools, setAvailableTools] = useState([])
   const [nodes, setNodes] = useState([])
   const [edges, setEdges] = useState([])
+  const currentFlowNodesRef = useRef([])
+  const currentFlowEdgesRef = useRef([])
   const [chatMessages, setChatMessages] = useState([
     { type: 'agent', content: 'Welcome! Click "Run" to start the agent flow.' },
   ])
@@ -190,13 +192,40 @@ flow:
     setEditingNode(null)
   }, [])
 
-  // Save agent to backend
+  // Track layout changes from FlowCanvas
+  const handleLayoutChange = useCallback((flowNodes, flowEdges) => {
+    currentFlowNodesRef.current = flowNodes
+    currentFlowEdgesRef.current = flowEdges
+  }, [])
+
+  // Save agent to backend (including layout)
   const handleSave = useCallback(async () => {
     if (!selectedAgent) return
     
     setIsSaving(true)
     try {
-      await saveAgent(selectedAgent.id, yamlContent)
+      // Parse current YAML
+      const parsed = yaml.load(yamlContent) || {}
+      
+      // Extract layout from current flow state
+      const layout = extractLayout(currentFlowNodesRef.current, currentFlowEdgesRef.current)
+      
+      // Merge layout into parsed YAML
+      parsed.layout = layout
+      
+      // Convert back to YAML string
+      const updatedYaml = yaml.dump(parsed, { 
+        indent: 2, 
+        lineWidth: -1, // Don't wrap lines
+        noRefs: true,
+        sortKeys: false // Preserve order
+      })
+      
+      await saveAgent(selectedAgent.id, updatedYaml)
+      
+      // Update local YAML content with layout
+      setYamlContent(updatedYaml)
+      
       // Refresh agent list in case description changed
       loadAgents()
     } catch (err) {
@@ -283,6 +312,7 @@ flow:
                 onAddNode={handleAddNode}
                 onConnect={handleConnect}
                 onEdgeRemove={handleEdgeRemove}
+                onLayoutChange={handleLayoutChange}
               />
             </div>
 

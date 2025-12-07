@@ -51,7 +51,8 @@ function FlowCanvasInner({
   selectedNodeId, 
   onAddNode,
   onConnect: onConnectCallback,
-  onEdgeRemove
+  onEdgeRemove,
+  onLayoutChange
 }) {
   const [nodes, setNodes, handleNodesChange] = useNodesState([])
   const [edges, setEdges, handleEdgesChange] = useEdgesState([])
@@ -113,6 +114,13 @@ function FlowCanvasInner({
       })
     }
   }, [propEdges])
+
+  // Notify parent of layout changes (for saving)
+  useEffect(() => {
+    if (onLayoutChange && nodes.length > 0) {
+      onLayoutChange(nodes, edges)
+    }
+  }, [nodes, edges, onLayoutChange])
 
   // Get React Flow instance for coordinate conversion
   const { screenToFlowPosition } = useReactFlow()
@@ -328,7 +336,7 @@ function FlowCanvasInner({
 }
 
 // Wrapper component that provides a key to force re-mount when flow structure changes dramatically
-export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelect, onNodeDoubleClick, selectedNodeId, onAddNode, onConnect, onEdgeRemove }) {
+export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelect, onNodeDoubleClick, selectedNodeId, onAddNode, onConnect, onEdgeRemove, onLayoutChange }) {
   // Generate a key based on node IDs to force re-mount when nodes change completely
   const flowKey = useMemo(() => {
     if (!nodes || nodes.length === 0) return 'empty'
@@ -348,6 +356,7 @@ export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelec
       onAddNode={onAddNode}
       onConnect={onConnect}
       onEdgeRemove={onEdgeRemove}
+      onLayoutChange={onLayoutChange}
     />
   )
 }

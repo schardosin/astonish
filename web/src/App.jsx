@@ -11,7 +11,7 @@ import NodeEditor from './components/NodeEditor'
 import CreateAgentModal from './components/CreateAgentModal'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import { useTheme } from './hooks/useTheme'
-import { yamlToFlow } from './utils/yamlToFlow'
+import { yamlToFlowAsync, parseNodes, parseEdges } from './utils/yamlToFlow'
 import { addStandaloneNode, addConnection, removeConnection, updateNode } from './utils/flowToYaml'
 import { fetchAgents, fetchAgent, saveAgent, deleteAgent, fetchTools } from './api/agents'
 import { snakeToTitleCase } from './utils/formatters'
@@ -41,6 +41,8 @@ function App() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [availableTools, setAvailableTools] = useState([])
+  const [nodes, setNodes] = useState([])
+  const [edges, setEdges] = useState([])
   const [chatMessages, setChatMessages] = useState([
     { type: 'agent', content: 'Welcome! Click "Run" to start the agent flow.' },
   ])
@@ -80,15 +82,21 @@ function App() {
     }
   }
 
-  // Parse YAML and generate flow
-  const { nodes, edges } = useMemo(() => {
-    try {
-      const parsed = yaml.load(yamlContent)
-      return yamlToFlow(parsed)
-    } catch (e) {
-      console.error('YAML parse error:', e)
-      return { nodes: [], edges: [] }
+  // Parse YAML and generate flow (async with ELKjs)
+  useEffect(() => {
+    const layoutFlow = async () => {
+      try {
+        const parsed = yaml.load(yamlContent)
+        const result = await yamlToFlowAsync(parsed)
+        setNodes(result.nodes)
+        setEdges(result.edges)
+      } catch (e) {
+        console.error('YAML parse error:', e)
+        setNodes([])
+        setEdges([])
+      }
     }
+    layoutFlow()
   }, [yamlContent])
 
   const handleAgentSelect = useCallback(async (agent) => {

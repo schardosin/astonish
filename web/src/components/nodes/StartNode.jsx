@@ -11,7 +11,7 @@ export default function StartNode({ data }) {
       {data.description && (
         <p className="text-xs opacity-80 mt-1">{data.description}</p>
       )}
-      <Handle type="source" position={Position.Right} className="!bg-green-600 !w-3 !h-3" />
+      <Handle type="source" position={Position.Bottom} className="!bg-green-600 !w-3 !h-3" />
     </div>
   )
 }

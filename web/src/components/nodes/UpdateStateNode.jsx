@@ -12,12 +12,12 @@ export default function UpdateStateNode({ data }) {
         boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
       }}
     >
-      <Handle type="target" position={Position.Left} className="!bg-gray-400 !w-3 !h-3" />
+      <Handle type="target" position={Position.Top} className="!bg-gray-400 !w-3 !h-3" />
       <div className="flex items-center gap-2">
         <Settings size={16} />
         <span className="font-semibold text-sm">{data.label}</span>
       </div>
-      <Handle type="source" position={Position.Right} className="!bg-gray-400 !w-3 !h-3" />
+      <Handle type="source" position={Position.Bottom} className="!bg-gray-400 !w-3 !h-3" />
     </div>
   )
 }

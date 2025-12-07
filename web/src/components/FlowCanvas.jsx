@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useEffect, useRef } from 'react'
+import { useCallback, useMemo, useEffect } from 'react'
 import {
   ReactFlow,
   Background,
@@ -6,7 +6,6 @@ import {
   MiniMap,
   useNodesState,
   useEdgesState,
-  useReactFlow,
   Panel,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
@@ -53,8 +52,6 @@ function FlowCanvasInner({
 }) {
   const [nodes, setNodes, handleNodesChange] = useNodesState([])
   const [edges, setEdges, handleEdgesChange] = useEdgesState([])
-  const { setViewport } = useReactFlow()
-  const lastLoadedNodesRef = useRef(null)
 
   // Sync nodes from props - update selection state
   useEffect(() => {
@@ -71,42 +68,6 @@ function FlowCanvasInner({
       setNodes(nodesWithSelection)
     }
   }, [propNodes, selectedNodeId, setNodes])
-
-  // Center viewport only when loading a different flow
-  const viewportTimerRef = useRef(null)
-  
-  useEffect(() => {
-    if (propNodes && propNodes.length > 0) {
-      const nodesKey = propNodes.map(n => n.id).sort().join(',')
-      
-      if (lastLoadedNodesRef.current !== nodesKey) {
-        lastLoadedNodesRef.current = nodesKey
-        
-        // Clear any pending viewport update
-        if (viewportTimerRef.current) {
-          clearTimeout(viewportTimerRef.current)
-        }
-        
-        // Find the START node to center on it
-        const startNode = propNodes.find(n => n.id === 'START')
-        
-        // Set viewport to 100% zoom, centered on START node - use requestAnimationFrame for smooth render
-        viewportTimerRef.current = setTimeout(() => {
-          // Calculate viewport center - account for header height
-          const viewportHeight = window.innerHeight - 56
-          const nodeHeight = 60
-          
-          const x = startNode ? -(startNode.position.x - 100) : 50
-          const y = startNode 
-            ? -(startNode.position.y - (viewportHeight / 2) + (nodeHeight / 2))
-            : (viewportHeight / 2) - 100
-          
-          setViewport({ x, y, zoom: 1 })
-          viewportTimerRef.current = null
-        }, 0) // Use 0ms - will run after React Flow processes nodes
-      }
-    }
-  }, [propNodes, setViewport])
 
   useEffect(() => {
     if (propEdges) {
@@ -169,7 +130,7 @@ function FlowCanvasInner({
         onPaneClick={onPaneClick}
         nodeTypes={nodeTypes}
         defaultEdgeOptions={defaultEdgeOptions}
-        defaultViewport={{ x: 100, y: 300, zoom: 1 }}
+        defaultViewport={{ x: 50, y: 30, zoom: 1 }}
         proOptions={{ hideAttribution: true }}
         nodesDraggable={!isRunning}
         nodesConnectable={!isRunning}

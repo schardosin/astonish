@@ -14,7 +14,7 @@
     "@types/dagre": "^0.7.53",
     "@uiw/react-codemirror": "^4.25.3",
     "@xyflow/react": "^12.10.0",
-    "dagre": "^0.8.5",
+    "elkjs": "^0.11.0",
     "js-yaml": "^4.1.1",
     "lucide-react": "^0.556.0",
     "react": "^19.2.0",

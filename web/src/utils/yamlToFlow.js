@@ -1,4 +1,6 @@
-import dagre from 'dagre'
+import ELK from 'elkjs/lib/elk.bundled.js'
+
+const elk = new ELK()
 
 /**
  * Node type mapping from YAML to React Flow
@@ -9,6 +11,17 @@ const NODE_TYPE_MAP = {
   tool: 'tool',
   output: 'output',
   update_state: 'updateState',
+}
+
+// ELKjs layout options for clean, engineered look
+const elkOptions = {
+  'elk.algorithm': 'layered',
+  'elk.direction': 'DOWN', // Top-to-Bottom
+  'elk.layered.spacing.nodeNodeBetweenLayers': '100', // Vertical gap between layers
+  'elk.spacing.nodeNode': '60', // Horizontal gap between parallel nodes
+  'elk.edgeRouting': 'ORTHOGONAL', // Clean 90° edges
+  'elk.layered.nodePlacement.strategy': 'BRANDES_KOEPF', // Better for linear flows
+  'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
 }
 
 /**
@@ -76,7 +89,7 @@ export function parseEdges(yamlData) {
           target: flowItem.to,
           animated: true,
           style: { stroke: '#805AD5', strokeWidth: 2 },
-          type: 'smoothstep',
+          type: 'smoothstep', // Works well with orthogonal routing
         })
       } else if (flowItem.edges && Array.isArray(flowItem.edges)) {
         // Conditional edges
@@ -114,64 +127,107 @@ export function parseEdges(yamlData) {
 }
 
 /**
- * Auto-layout nodes using Dagre (left-to-right)
+ * Calculate node dimensions based on label
+ */
+function getNodeDimensions(label) {
+  const baseWidth = 120
+  const charWidth = 8
+  const width = Math.max(baseWidth, label.length * charWidth + 60)
+  const height = 50
+  return { width, height }
+}
+
+/**
+ * Auto-layout nodes using ELKjs (top-to-bottom, orthogonal routing)
+ * @param {Array} nodes - React Flow nodes
+ * @param {Array} edges - React Flow edges
+ * @returns {Promise<Array>} Nodes with updated positions
+ */
+export async function autoLayoutAsync(nodes, edges) {
+  // Build ELK graph structure
+  const graph = {
+    id: 'root',
+    layoutOptions: elkOptions,
+    children: nodes.map((node) => {
+      const { width, height } = getNodeDimensions(node.data?.label || node.id)
+      return {
+        id: node.id,
+        width,
+        height,
+      }
+    }),
+    edges: edges.map((edge) => ({
+      id: edge.id,
+      sources: [edge.source],
+      targets: [edge.target],
+    })),
+  }
+
+  try {
+    const layoutedGraph = await elk.layout(graph)
+    
+    // Map layout positions back to React Flow nodes
+    return nodes.map((node) => {
+      const elkNode = layoutedGraph.children.find((n) => n.id === node.id)
+      if (elkNode) {
+        return {
+          ...node,
+          position: { x: elkNode.x, y: elkNode.y },
+        }
+      }
+      return node
+    })
+  } catch (error) {
+    console.error('ELK layout error:', error)
+    // Fallback: return nodes with basic vertical positioning
+    return nodes.map((node, index) => ({
+      ...node,
+      position: { x: 100, y: index * 100 },
+    }))
+  }
+}
+
+/**
+ * Synchronous auto-layout (fallback, uses simple vertical stacking)
  * @param {Array} nodes - React Flow nodes
  * @param {Array} edges - React Flow edges
  * @returns {Array} Nodes with updated positions
  */
 export function autoLayout(nodes, edges) {
-  const dagreGraph = new dagre.graphlib.Graph()
-  dagreGraph.setDefaultEdgeLabel(() => ({}))
+  // Simple vertical layout as fallback for sync usage
+  let y = 0
+  const spacing = 100
   
-  // Calculate max node width based on label lengths
-  const getNodeWidth = (label) => {
-    const baseWidth = 120
-    const charWidth = 8 // approximate pixels per character
-    return Math.max(baseWidth, label.length * charWidth + 60)
-  }
-  
-  // Configure for left-to-right layout with generous spacing
-  dagreGraph.setGraph({
-    rankdir: 'LR', // Left to Right
-    nodesep: 100,  // Vertical spacing between nodes in same rank
-    ranksep: 150,  // Horizontal spacing between ranks
-    marginx: 50,
-    marginy: 50,
-  })
-  
-  // Node height
-  const nodeHeight = 60
-  
-  // Add nodes to Dagre with dynamic widths
-  nodes.forEach((node) => {
-    const nodeWidth = getNodeWidth(node.data?.label || node.id)
-    dagreGraph.setNode(node.id, { width: nodeWidth, height: nodeHeight })
-  })
-  
-  // Add edges to Dagre
-  edges.forEach((edge) => {
-    dagreGraph.setEdge(edge.source, edge.target)
-  })
-  
-  // Run layout algorithm
-  dagre.layout(dagreGraph)
-  
-  // Update node positions
   return nodes.map((node) => {
-    const dagreNode = dagreGraph.node(node.id)
-    const nodeWidth = getNodeWidth(node.data?.label || node.id)
-    return {
-      ...node,
-      position: {
-        x: dagreNode.x - nodeWidth / 2,
-        y: dagreNode.y - nodeHeight / 2,
-      },
-    }
+    const { height } = getNodeDimensions(node.data?.label || node.id)
+    const position = { x: 200, y }
+    y += height + spacing
+    return { ...node, position }
   })
 }
 
 /**
- * Convert YAML to React Flow nodes and edges with auto-layout
+ * Convert YAML to React Flow nodes and edges with auto-layout (async version)
+ * @param {Object} yamlData - Parsed YAML object
+ * @returns {Promise<Object>} { nodes, edges }
+ */
+export async function yamlToFlowAsync(yamlData) {
+  if (!yamlData) {
+    return { nodes: [], edges: [] }
+  }
+  
+  const nodes = parseNodes(yamlData)
+  const edges = parseEdges(yamlData)
+  const layoutedNodes = await autoLayoutAsync(nodes, edges)
+  
+  return {
+    nodes: layoutedNodes,
+    edges,
+  }
+}
+
+/**
+ * Convert YAML to React Flow nodes and edges with auto-layout (sync version with basic layout)
  * @param {Object} yamlData - Parsed YAML object
  * @returns {Object} { nodes, edges }
  */

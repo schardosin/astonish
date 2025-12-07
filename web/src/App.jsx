@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useEffect } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 import yaml from 'js-yaml'
+import TopBar from './components/TopBar'
 import Sidebar from './components/Sidebar'
 import FlowCanvas from './components/FlowCanvas'
 import ChatPanel from './components/ChatPanel'
@@ -213,18 +214,25 @@ flow:
 
   return (
     <ReactFlowProvider>
-      <div className="flex h-screen" style={{ background: 'var(--bg-primary)' }}>
-        {/* Sidebar */}
-        <Sidebar
-          agents={agents}
-          selectedAgent={selectedAgent}
-          onAgentSelect={handleAgentSelect}
-          onCreateNew={handleCreateNew}
-          onDeleteAgent={handleDeleteAgent}
-          theme={theme}
+      <div className="flex flex-col h-screen" style={{ background: 'var(--bg-primary)' }}>
+        {/* Top Bar */}
+        <TopBar 
+          theme={theme} 
           onToggleTheme={toggleTheme}
-          isLoading={isLoadingAgents}
+          onOpenSettings={() => console.log('Settings clicked')}
         />
+
+        {/* Main Content Area */}
+        <div className="flex flex-1 overflow-hidden">
+          {/* Sidebar */}
+          <Sidebar
+            agents={agents}
+            selectedAgent={selectedAgent}
+            onAgentSelect={handleAgentSelect}
+            onCreateNew={handleCreateNew}
+            onDeleteAgent={handleDeleteAgent}
+            isLoading={isLoadingAgents}
+          />
 
         {/* Main Content */}
         <div className="flex-1 flex flex-col overflow-hidden">
@@ -290,6 +298,7 @@ flow:
               )}
             </div>
           )}
+        </div>
         </div>
       </div>
 

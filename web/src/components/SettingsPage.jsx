@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid } from 'lucide-react'
+import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2 } from 'lucide-react'
 
 // API functions
 const fetchSettings = async () => {
@@ -34,6 +34,12 @@ const saveMCPConfig = async (data) => {
   return res.json()
 }
 
+const fetchProviderModels = async (providerId) => {
+  const res = await fetch(`/api/providers/${providerId}/models`)
+  if (!res.ok) throw new Error('Failed to fetch models')
+  return res.json()
+}
+
 export default function SettingsPage({ onClose, theme }) {
   const [activeSection, setActiveSection] = useState('general')
   const [settings, setSettings] = useState(null)
@@ -51,6 +57,11 @@ export default function SettingsPage({ onClose, theme }) {
   const [mcpViewMode, setMcpViewMode] = useState('editor') // 'editor' or 'source'
   const [mcpSourceText, setMcpSourceText] = useState('')
   const [mcpSourceError, setMcpSourceError] = useState(null)
+  
+  // Model selection state
+  const [availableModels, setAvailableModels] = useState([])
+  const [loadingModels, setLoadingModels] = useState(false)
+  const [modelsError, setModelsError] = useState(null)
 
   useEffect(() => {
     loadData()
@@ -125,6 +136,30 @@ export default function SettingsPage({ onClose, theme }) {
     } finally {
       setSaving(false)
     }
+  }
+
+  const loadModelsForProvider = async (providerId) => {
+    if (!providerId) {
+      setAvailableModels([])
+      return
+    }
+    setLoadingModels(true)
+    setModelsError(null)
+    try {
+      const data = await fetchProviderModels(providerId)
+      setAvailableModels(data.models || [])
+    } catch (err) {
+      setModelsError(err.message)
+      setAvailableModels([])
+    } finally {
+      setLoadingModels(false)
+    }
+  }
+
+  const handleProviderChange = (providerId) => {
+    setGeneralForm({ ...generalForm, default_provider: providerId, default_model: '' })
+    setAvailableModels([])
+    setModelsError(null)
   }
 
   const handleAddMcpServer = () => {
@@ -224,17 +259,17 @@ export default function SettingsPage({ onClose, theme }) {
                 </label>
                 <select
                   value={generalForm.default_provider}
-                  onChange={(e) => setGeneralForm({ ...generalForm, default_provider: e.target.value })}
+                  onChange={(e) => handleProviderChange(e.target.value)}
                   className="w-full px-4 py-2.5 rounded-lg border text-sm"
                   style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                 >
                   <option value="">Select a provider...</option>
-                  <option value="gemini">Gemini</option>
-                  <option value="anthropic">Anthropic (Claude)</option>
-                  <option value="openai">OpenAI</option>
-                  <option value="sap_ai_core">SAP AI Core</option>
-                  <option value="xai">xAI (Grok)</option>
-                  <option value="groq">Groq</option>
+                  {settings?.providers.map(p => (
+                    <option key={p.name} value={p.name}>
+                      {p.display_name || p.name}
+                      {!p.configured && ' (not configured)'}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -242,14 +277,51 @@ export default function SettingsPage({ onClose, theme }) {
                 <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
                   Default Model
                 </label>
-                <input
-                  type="text"
-                  value={generalForm.default_model}
-                  onChange={(e) => setGeneralForm({ ...generalForm, default_model: e.target.value })}
-                  placeholder="e.g., gemini-2.0-flash"
-                  className="w-full px-4 py-2.5 rounded-lg border text-sm"
-                  style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-                />
+                <div className="relative">
+                  <select
+                    value={generalForm.default_model}
+                    onChange={(e) => setGeneralForm({ ...generalForm, default_model: e.target.value })}
+                    onFocus={() => {
+                      if (generalForm.default_provider && availableModels.length === 0 && !loadingModels) {
+                        loadModelsForProvider(generalForm.default_provider)
+                      }
+                    }}
+                    className="w-full px-4 py-2.5 rounded-lg border text-sm"
+                    style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                    disabled={!generalForm.default_provider}
+                  >
+                    {!generalForm.default_provider && (
+                      <option value="">Select a provider first...</option>
+                    )}
+                    {generalForm.default_provider && availableModels.length === 0 && !loadingModels && (
+                      <option value={generalForm.default_model || ''}>
+                        {generalForm.default_model || 'Click to load models...'}
+                      </option>
+                    )}
+                    {loadingModels && (
+                      <option value="">Loading models...</option>
+                    )}
+                    {availableModels.length > 0 && (
+                      <>
+                        <option value="">Select a model...</option>
+                        {availableModels.map(model => (
+                          <option key={model} value={model}>{model}</option>
+                        ))}
+                      </>
+                    )}
+                  </select>
+                  {loadingModels && (
+                    <div className="absolute right-10 top-1/2 -translate-y-1/2">
+                      <Loader2 size={16} className="animate-spin text-purple-400" />
+                    </div>
+                  )}
+                </div>
+                {modelsError && (
+                  <p className="text-xs text-red-400 mt-1">{modelsError}</p>
+                )}
+                <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                  Click the dropdown to load available models from the provider
+                </p>
               </div>
 
               <button

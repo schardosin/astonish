@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/provider"
 )
@@ -178,4 +179,28 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// ListProviderModelsHandler handles GET /api/providers/{providerId}/models
+func ListProviderModelsHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	providerID := vars["providerId"]
+
+	cfg, err := config.LoadAppConfig()
+	if err != nil {
+		http.Error(w, "Failed to load config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	models, err := provider.ListModelsForProvider(r.Context(), providerID, cfg)
+	if err != nil {
+		http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"provider": providerID,
+		"models":   models,
+	})
 }

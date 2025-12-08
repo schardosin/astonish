@@ -125,6 +125,17 @@ function App() {
     }
   }
 
+  // React to URL path changes (hash navigation)
+  useEffect(() => {
+    if (path.view === 'agent' && path.params.agentName && agents.length > 0) {
+      const targetAgent = agents.find(a => a.id === path.params.agentName || a.name === path.params.agentName)
+      // Only switch if it's a different agent than currently selected
+      if (targetAgent && targetAgent.id !== selectedAgent?.id) {
+        handleAgentSelectInternal(targetAgent, false)
+      }
+    }
+  }, [path, agents]) // Re-run when path or agents list changes
+
   // Parse YAML and generate flow (async with ELKjs)
   useEffect(() => {
     const layoutFlow = async () => {
@@ -197,7 +208,10 @@ flow:
     setEditingNode(null)
     setYamlContent(newYaml)
     setShowCreateModal(false)
-  }, [])
+    
+    // Update URL using navigate (triggers hashchange) so we stay on this agent after save
+    navigate(`/agent/${encodeURIComponent(id)}`)
+  }, [navigate])
 
   const handleRun = useCallback(() => {
     setIsRunning(true)
@@ -283,10 +297,15 @@ flow:
         sortKeys: false // Preserve order
       })
       
-      await saveAgent(selectedAgent.id, updatedYaml)
+      const result = await saveAgent(selectedAgent.id, updatedYaml)
       
       // Update local YAML content with layout
       setYamlContent(updatedYaml)
+      
+      // If this was a new agent, mark it as saved (no longer new)
+      if (selectedAgent.isNew) {
+        setSelectedAgent({ ...selectedAgent, isNew: false })
+      }
       
       // Refresh agent list in case description changed
       loadAgents()

@@ -533,9 +533,12 @@ function FlowCanvasInner({
         
         {/* Empty Canvas State - Create with AI */}
         {!isRunning && isEmptyCanvas && onOpenAIChat && (
-          <Panel position="top-center" className="mt-16">
+          <div 
+            className="absolute inset-0 flex items-center justify-center pointer-events-none"
+            style={{ zIndex: 10 }}
+          >
             <div 
-              className="flex flex-col items-center gap-4 p-6 rounded-2xl shadow-xl"
+              className="flex flex-col items-center gap-4 p-6 rounded-2xl shadow-xl pointer-events-auto"
               style={{ 
                 background: 'var(--bg-secondary)', 
                 border: '2px solid var(--border-color)',
@@ -563,7 +566,7 @@ function FlowCanvasInner({
                 or use the node toolbar on the right →
               </div>
             </div>
-          </Panel>
+          </div>
         )}
         
         {/* Instructions */}

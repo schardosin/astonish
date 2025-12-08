@@ -24,7 +24,7 @@ const NODE_COLORS = {
 /**
  * Output Model Editor - key-value list for output_model field
  */
-function OutputModelEditor({ value, onChange, theme }) {
+function OutputModelEditor({ value, onChange, theme, hideLabel = false }) {
   const entries = Object.entries(value || {})
   
   const handleAdd = () => {
@@ -53,17 +53,19 @@ function OutputModelEditor({ value, onChange, theme }) {
   
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
-          Output Model
-        </label>
-        <button
-          onClick={handleAdd}
-          className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-purple-600 text-white hover:bg-purple-700"
-        >
-          <Plus size={12} /> Add
-        </button>
-      </div>
+      {!hideLabel && (
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
+            Output Model
+          </label>
+          <button
+            onClick={handleAdd}
+            className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-purple-600 text-white hover:bg-purple-700"
+          >
+            <Plus size={12} /> Add
+          </button>
+        </div>
+      )}
       
       {entries.length === 0 ? (
         <div className="text-xs py-2" style={{ color: 'var(--text-muted)' }}>
@@ -220,6 +222,7 @@ function LlmNodeForm({ data, onChange, theme, availableTools = [] }) {
   
   const tabs = [
     { id: 'prompts', label: 'Prompts' },
+    { id: 'output', label: 'Output' },
     { id: 'tools', label: 'Tools' },
     { id: 'advanced', label: 'Advanced' },
   ]
@@ -272,6 +275,97 @@ function LlmNodeForm({ data, onChange, theme, availableTools = [] }) {
                 style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                 placeholder="Enter the LLM prompt. Use {variable} for state references..."
               />
+            </div>
+          </div>
+        )}
+        
+        {activeTab === 'output' && (
+          <div className="flex gap-8 h-full">
+            {/* Left column - Output Model */}
+            <div className="flex-1">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
+                    Output Model
+                  </label>
+                  <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                    Variables saved to state
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    const newKey = `field_${Object.keys(data.output_model || {}).length + 1}`
+                    onChange({ ...data, output_model: { ...(data.output_model || {}), [newKey]: 'str' } })
+                  }}
+                  className="flex items-center gap-1 px-2.5 py-1 text-xs rounded bg-purple-600 hover:bg-purple-500 text-white transition-colors"
+                >
+                  <Plus size={12} />
+                  Add
+                </button>
+              </div>
+              <OutputModelEditor
+                value={data.output_model}
+                onChange={(newModel) => onChange({ ...data, output_model: newModel })}
+                theme={theme}
+                hideLabel={true}
+              />
+            </div>
+            
+            {/* Right column - User Message */}
+            <div className="flex-1">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
+                    User Message
+                  </label>
+                  <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                    Display to user
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    const newItems = [...(data.user_message || []), '']
+                    onChange({ ...data, user_message: newItems })
+                  }}
+                  className="flex items-center gap-1 px-2.5 py-1 text-xs rounded bg-purple-600 hover:bg-purple-500 text-white transition-colors"
+                >
+                  <Plus size={12} />
+                  Add
+                </button>
+              </div>
+              
+              <div className="space-y-2">
+                {(data.user_message || []).map((item, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={item}
+                      onChange={(e) => {
+                        const newItems = [...(data.user_message || [])]
+                        newItems[idx] = e.target.value
+                        onChange({ ...data, user_message: newItems })
+                      }}
+                      className="flex-1 px-3 py-1.5 rounded border font-mono text-sm"
+                      style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                      placeholder="Variable name..."
+                    />
+                    <button
+                      onClick={() => {
+                        const newItems = (data.user_message || []).filter((_, i) => i !== idx)
+                        onChange({ ...data, user_message: newItems.length > 0 ? newItems : undefined })
+                      }}
+                      className="p-1.5 text-red-400 hover:text-red-300 hover:bg-red-500/20 rounded"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+                {(!data.user_message || data.user_message.length === 0) && (
+                  <p className="text-xs italic py-2" style={{ color: 'var(--text-muted)' }}>
+                    No items. Add output_model variables to show results.
+                  </p>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -646,8 +740,8 @@ export default function NodeEditor({ node, onSave, onClose, theme, availableTool
             {nodeType}
           </span>
           
-          {/* Output Model - inline in header for compact layout */}
-          {nodeType !== 'output' && (
+          {/* Output Model - inline in header for non-LLM nodes (LLM has it in Output tab) */}
+          {nodeType !== 'output' && nodeType !== 'llm' && (
             <div className="flex items-center gap-2 pl-4" style={{ borderLeft: '1px solid var(--border-color)' }}>
               <OutputModelEditor
                 value={editedData.output_model}

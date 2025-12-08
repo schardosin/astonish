@@ -70,14 +70,22 @@ function FlowCanvasInner({
       
       setNodes((currentNodes) => {
         // Add selected state to prop nodes
-        const nodesWithSelection = propNodes.map(node => ({
-          ...node,
-          selected: node.id === selectedNodeId,
-          data: {
-            ...node.data,
-            isSelected: node.id === selectedNodeId
+        const nodesWithSelection = propNodes.map(node => {
+          // Check if we have a current position for this node to preserve dragged position
+          // But only if the node ID matches (to avoid using position from different agent's node)
+          const currentNode = currentNodes.find(n => n.id === node.id)
+          const position = currentNode ? currentNode.position : node.position
+          
+          return {
+            ...node,
+            position,
+            selected: node.id === selectedNodeId,
+            data: {
+              ...node.data,
+              isSelected: node.id === selectedNodeId
+            }
           }
-        }))
+        })
         
         // Only preserve local waypoints if propNodes doesn't already have waypoints
         if (propsHaveWaypoints) {

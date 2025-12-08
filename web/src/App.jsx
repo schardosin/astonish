@@ -365,6 +365,7 @@ flow:
             {/* Flow Canvas */}
             <div className={`flex-1 transition-all duration-300 ${isRunning ? 'w-1/2' : ''}`}>
               <FlowCanvas
+                key={selectedAgent ? selectedAgent.id : 'empty'}
                 nodes={nodes}
                 edges={edges}
                 isRunning={isRunning}

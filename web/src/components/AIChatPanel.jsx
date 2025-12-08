@@ -23,15 +23,23 @@ export default function AIChatPanel({
   context = 'create_flow',
   currentYaml = '',
   selectedNodes = [],
+  focusedNode = null,
   onApplyYaml,
   onPreviewYaml,
 }) {
-  const [messages, setMessages] = useState([])
+  // Separate message histories: flow chat preserves, node refiner resets
+  const [flowMessages, setFlowMessages] = useState([])
+  const [nodeMessages, setNodeMessages] = useState([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [pendingYaml, setPendingYaml] = useState(null)
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
+  
+  // Use the right message state based on context
+  const isNodeContext = context === 'node_config' && focusedNode
+  const messages = isNodeContext ? nodeMessages : flowMessages
+  const setMessages = isNodeContext ? setNodeMessages : setFlowMessages
 
   // Scroll to bottom when new messages arrive
   useEffect(() => {
@@ -45,11 +53,13 @@ export default function AIChatPanel({
     }
   }, [isOpen])
 
-  // Reset when context changes
+  // Reset node refiner when focused node changes (fresh start per node)
   useEffect(() => {
-    setMessages([])
-    setPendingYaml(null)
-  }, [context])
+    if (focusedNode) {
+      setNodeMessages([])
+      setPendingYaml(null)
+    }
+  }, [focusedNode])
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return
@@ -148,13 +158,19 @@ export default function AIChatPanel({
     <div className="fixed bottom-4 right-4 w-96 h-[500px] bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg shadow-2xl flex flex-col z-50">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)] bg-gradient-to-r from-purple-600/20 to-blue-600/20">
-        <div className="flex items-center gap-2">
-          <Sparkles size={18} className="text-purple-400" />
-          <span className="font-semibold text-[var(--text-primary)]">{getContextTitle()}</span>
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <Sparkles size={18} className="text-purple-400 flex-shrink-0" />
+          <span className="font-semibold text-[var(--text-primary)] truncate">{getContextTitle()}</span>
+          {/* Show focused node badge */}
+          {focusedNode && (
+            <span className="ml-2 px-2 py-0.5 text-xs rounded bg-purple-600/30 text-purple-300 truncate">
+              {focusedNode.name} ({focusedNode.type})
+            </span>
+          )}
         </div>
         <button 
           onClick={onClose}
-          className="p-1 hover:bg-white/10 rounded transition-colors"
+          className="p-1 hover:bg-white/10 rounded transition-colors flex-shrink-0"
         >
           <X size={18} className="text-[var(--text-secondary)]" />
         </button>
@@ -165,26 +181,83 @@ export default function AIChatPanel({
         {messages.length === 0 && (
           <div className="text-center py-4">
             <Sparkles size={32} className="mx-auto mb-3 text-purple-400 opacity-50" />
-            <p className="text-[var(--text-secondary)] text-sm mb-4">I can help you design and build flows</p>
             
-            {/* Quick Examples */}
-            <div className="text-left space-y-2">
-              <p className="text-xs text-[var(--text-muted)] mb-2">Try an example:</p>
-              {[
-                'Create a simple Q&A chatbot',
-                'Build a web search summarizer',
-                'Make a file reader and analyzer',
-                'Create a multi-step reasoning flow',
-              ].map((example, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => setInput(example)}
-                  className="block w-full text-left px-3 py-2 text-xs bg-[var(--bg-primary)] hover:bg-purple-600/20 rounded-lg transition-colors text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                >
-                  → {example}
-                </button>
-              ))}
-            </div>
+            {context === 'node_config' && focusedNode ? (
+              <>
+                <p className="text-[var(--text-primary)] font-medium mb-1">Node Refiner</p>
+                <p className="text-[var(--text-secondary)] text-sm mb-4">
+                  Let me help you improve <span className="text-purple-400 font-medium">{focusedNode.name}</span>
+                </p>
+                
+                {/* Node-specific suggestions */}
+                <div className="text-left space-y-2">
+                  <p className="text-xs text-[var(--text-muted)] mb-2">Try asking:</p>
+                  {focusedNode.type === 'llm' && [
+                    'Improve the system prompt',
+                    'Make the prompt more concise',
+                    'Add user_message to show output',
+                    'Suggest tools for this task',
+                  ].map((example, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => setInput(example)}
+                      className="block w-full text-left px-3 py-2 text-xs bg-[var(--bg-primary)] hover:bg-purple-600/20 rounded-lg transition-colors text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                    >
+                      → {example}
+                    </button>
+                  ))}
+                  {focusedNode.type === 'input' && [
+                    'Make the prompt clearer',
+                    'Add options for choices',
+                    'Improve user experience',
+                  ].map((example, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => setInput(example)}
+                      className="block w-full text-left px-3 py-2 text-xs bg-[var(--bg-primary)] hover:bg-purple-600/20 rounded-lg transition-colors text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                    >
+                      → {example}
+                    </button>
+                  ))}
+                  {(focusedNode.type !== 'llm' && focusedNode.type !== 'input') && [
+                    'How can I improve this node?',
+                    'What should I configure here?',
+                    'Show me best practices',
+                  ].map((example, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => setInput(example)}
+                      className="block w-full text-left px-3 py-2 text-xs bg-[var(--bg-primary)] hover:bg-purple-600/20 rounded-lg transition-colors text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                    >
+                      → {example}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-[var(--text-secondary)] text-sm mb-4">I can help you design and build flows</p>
+                
+                {/* Quick Examples for flow creation */}
+                <div className="text-left space-y-2">
+                  <p className="text-xs text-[var(--text-muted)] mb-2">Try an example:</p>
+                  {[
+                    'Create a simple Q&A chatbot',
+                    'Build a web search summarizer',
+                    'Make a file reader and analyzer',
+                    'Create a multi-step reasoning flow',
+                  ].map((example, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => setInput(example)}
+                      className="block w-full text-left px-3 py-2 text-xs bg-[var(--bg-primary)] hover:bg-purple-600/20 rounded-lg transition-colors text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                    >
+                      → {example}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         )}
         

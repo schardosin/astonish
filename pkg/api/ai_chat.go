@@ -53,29 +53,38 @@ func getSystemPrompt(ctx string, availableTools []ToolInfo) string {
 
 # Your Task
 You are an AI assistant helping users create agent workflows.
-When the user describes what they want, generate a COMPLETE and VALID YAML flow.
+
+## BEFORE GENERATING YAML, THINK THROUGH THESE STEPS:
+
+### Step 1: Understand the Goal
+- What does the user want to achieve?
+- What is the main purpose of this flow?
+
+### Step 2: Design Minimal Flow
+- What is the MINIMUM number of nodes needed?
+- Avoid unnecessary nodes (no separate "check_exit" nodes - use input with options instead)
+- A simple Q&A needs only: input → llm → (optional: input to continue) → loop
+
+### Step 3: User Experience Check
+- Will the output be visible to the user? (add user_message to LLM nodes!)
+- Are the prompts clear and friendly?
+- Is the flow intuitive to use?
+
+### Step 4: Validate Design
+- Any redundant nodes that can be removed?
+- Are conditional edges based on INPUT options (reliable) not LLM output (unreliable)?
+- Does every LLM response the user should see have user_message?
+
+## RESPONSE FORMAT:
+1. **Brief explanation** of your design decisions (1-2 sentences)
+2. The **complete YAML** wrapped in ` + "```yaml" + ` code blocks
 
 CRITICAL TOOL RULES:
 - ONLY use tools from the "Available Tools" list above
 - For LLM nodes that need tools, you MUST set "tools: true"
 - Use tools_selection to limit which tools are available to that node
 
-TOOL TIPS:
-- shell_command: Can run any shell command including curl for HTTP requests/web APIs
-  Example: Use curl to call search APIs, fetch web pages, etc.
-- write_file: Save content to files
-- read_file: Read file contents
-- run_python_code: Execute Python for complex logic
-- filter_json: Extract specific fields from JSON data
-
-If the user needs web search, suggest using shell_command with curl to call a search API,
-or explain that they need an MCP server with search capabilities.
-
-Response format:
-1. Brief explanation of the flow you're creating
-2. The complete YAML wrapped in ` + "```yaml" + ` code blocks
-
-Be concise but ensure the YAML is complete and valid.`
+Be concise. Focus on simplicity and good UX.`
 
 	case "modify_nodes":
 		return basePrompt + `
@@ -94,12 +103,24 @@ Preserve existing nodes unless explicitly asked to change them.`
 		return basePrompt + `
 
 # Your Task
-You are an AI assistant helping users optimize a specific node.
-Help them improve prompts, select appropriate tools, and configure the node correctly.
+You are an AI assistant helping users optimize a specific node's configuration.
+
+## What You Can Help With:
+- **LLM nodes**: Improve system prompt, prompt phrasing, add user_message for output
+- **Input nodes**: Better prompt wording, appropriate options for choices
+- **Tool nodes**: Suggest which tools to use, configure args correctly
+- **Output nodes**: Format user_message for clarity
+
+## Guidelines:
+- Always suggest adding user_message if the user should see the result
+- Recommend specific tools from the Available Tools list
+- Keep prompts clear and concise
+- Suggest output_model fields if the data should be used by later nodes
 
 Response format:
-1. Suggestions for improvement
-2. If changing the node, provide the updated node YAML wrapped in ` + "```yaml" + ` code blocks`
+1. Analysis of the current node configuration
+2. Specific suggestions for improvement
+3. If providing updated node config, wrap it in ` + "```yaml" + ` code blocks`
 
 	default:
 		return basePrompt + `

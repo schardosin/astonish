@@ -37,7 +37,7 @@ AI processing with optional tool use.
 # LLM that shows answer to user (most common pattern)
 - name: answer_question
   type: llm
-  system_prompt: "You are a helpful assistant."
+  system: "You are a helpful assistant."
   prompt: "{user_question}"
   output_model:
     answer: str
@@ -47,7 +47,7 @@ AI processing with optional tool use.
 # LLM with tools
 - name: search_and_summarize
   type: llm
-  system_prompt: "You are a search assistant."
+  system: "You are a search assistant."
   prompt: "Search for: {query}"
   tools: true
   tools_selection:
@@ -60,27 +60,29 @@ AI processing with optional tool use.
 
 ### 2. Input Node
 Collect user input. output_model is REQUIRED to store input in state.
-` + "```yaml" + `
-# Free text input
-- name: get_user_text
-  type: input
-  prompt: "Enter your text:"
-  output_model:
-    user_text: str  # REQUIRED - stores input in state
 
-# Multiple choice input
-- name: get_user_choice
+**IMPORTANT: options behavior**
+- WITHOUT options: User can type ANY text (free form input)
+- WITH options: User can ONLY select from the listed options (no free text!)
+` + "```yaml" + `
+# Free text input - user can type anything
+- name: get_question
   type: input
-  prompt: |
-    Please select an option:
-    1. Option one
-    2. Option two
+  prompt: "What is your question?"
   output_model:
-    user_choice: str  # REQUIRED
+    question: str
+
+# Choice input - user can ONLY select from these options
+- name: ask_continue
+  type: input
+  prompt: "Continue? (yes/no)"
+  output_model:
+    choice: str
   options:
-    - "1"
-    - "2"
+    - "yes"
+    - "no"
 ` + "```" + `
+**DO NOT use options if you want the user to type free text!**
 
 ### 3. Tool Node (RARELY USED)
 Execute a tool directly WITHOUT LLM intelligence. Only use when you need deterministic tool execution.

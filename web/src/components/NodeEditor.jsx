@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { X, Save, Edit3, Brain, Wrench, Settings, MessageSquare, Plus, Trash2, AlertCircle } from 'lucide-react'
+import { X, Save, Edit3, Brain, Wrench, Settings, MessageSquare, Plus, Trash2, AlertCircle, Sparkles } from 'lucide-react'
 
 // Node type icons
 const NODE_ICONS = {
@@ -555,7 +555,7 @@ function OutputNodeForm({ data, onChange, theme }) {
 /**
  * Main Node Editor Component - Horizontal Bottom Layout
  */
-export default function NodeEditor({ node, onSave, onClose, theme, availableTools = [] }) {
+export default function NodeEditor({ node, onSave, onClose, theme, availableTools = [], onAIAssist }) {
   const [editedData, setEditedData] = useState({})
   const [nodeName, setNodeName] = useState('')
   
@@ -660,6 +660,16 @@ export default function NodeEditor({ node, onSave, onClose, theme, availableTool
         
         {/* Actions */}
         <div className="flex items-center gap-2">
+          {onAIAssist && (
+            <button
+              onClick={() => onAIAssist(node, nodeName, editedData)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white transition-all"
+              title="Get AI suggestions for this node"
+            >
+              <Sparkles size={14} />
+              AI Assist
+            </button>
+          )}
           <button
             onClick={onClose}
             className="px-3 py-1.5 rounded text-sm font-medium transition-colors hover:bg-gray-500/20"

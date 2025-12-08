@@ -51,6 +51,7 @@ function App() {
   ])
   const [showAIChat, setShowAIChat] = useState(false)
   const [aiChatContext, setAIChatContext] = useState('create_flow')
+  const [aiFocusedNode, setAIFocusedNode] = useState(null)  // Node being edited when AI chat opens
 
   // Load agents and tools from API on mount
   useEffect(() => {
@@ -342,6 +343,11 @@ flow:
                   onClose={handleNodeEditorClose}
                   theme={theme}
                   availableTools={availableTools}
+                  onAIAssist={(node, nodeName, nodeData) => {
+                    setAIChatContext('node_config')
+                    setAIFocusedNode({ name: nodeName, type: node.data?.nodeType || node.type, data: nodeData })
+                    setShowAIChat(true)
+                  }}
                 />
               ) : (
                 <YamlDrawer
@@ -375,10 +381,11 @@ flow:
       {/* AI Chat Panel */}
       <AIChatPanel
         isOpen={showAIChat}
-        onClose={() => setShowAIChat(false)}
+        onClose={() => { setShowAIChat(false); setAIFocusedNode(null); }}
         context={aiChatContext}
         currentYaml={yamlContent}
         selectedNodes={selectedNodeId ? [selectedNodeId] : []}
+        focusedNode={aiFocusedNode}
         onPreviewYaml={(newYaml) => {
           // Preview: update flow but don't save
           setYamlContent(newYaml)

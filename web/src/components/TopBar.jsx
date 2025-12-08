@@ -1,15 +1,6 @@
 import { Moon, Sun, Settings, Cpu } from 'lucide-react'
 
 export default function TopBar({ theme, onToggleTheme, onOpenSettings, defaultProvider, defaultModel }) {
-  // Format provider name for display
-  const formatProvider = (provider) => {
-    if (!provider) return 'Not configured'
-    return provider
-      .split('_')
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ')
-  }
-
   return (
     <div 
       className="h-12 flex items-center justify-between px-4"
@@ -47,7 +38,7 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, defaultPr
           <Cpu size={16} className="text-purple-400" />
           <div className="flex flex-col leading-tight">
             <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-              {formatProvider(defaultProvider)}
+              {defaultProvider || 'Not configured'}
             </span>
             <span className="text-xs font-mono" style={{ color: 'var(--text-secondary)' }}>
               {defaultModel || 'No model set'}

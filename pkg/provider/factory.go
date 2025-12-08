@@ -14,6 +14,39 @@ import (
 	"google.golang.org/adk/model"
 )
 
+// ProviderDisplayNames maps provider IDs to their proper display names.
+// This is the centralized source of truth for how provider names should be displayed
+// in both the CLI and UI.
+var ProviderDisplayNames = map[string]string{
+	"anthropic":   "Anthropic",
+	"gemini":      "Google GenAI",
+	"groq":        "Groq",
+	"lm_studio":   "LM Studio",
+	"ollama":      "Ollama",
+	"openai":      "OpenAI",
+	"openrouter":  "Openrouter",
+	"sap_ai_core": "SAP AI Core",
+	"xai":         "xAI",
+}
+
+// GetProviderDisplayName returns the proper display name for a provider ID.
+// If the provider ID is not found, it returns the ID as-is.
+func GetProviderDisplayName(providerID string) string {
+	if name, ok := ProviderDisplayNames[providerID]; ok {
+		return name
+	}
+	return providerID
+}
+
+// GetProviderIDs returns a list of all known provider IDs.
+func GetProviderIDs() []string {
+	ids := make([]string, 0, len(ProviderDisplayNames))
+	for id := range ProviderDisplayNames {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 // GetProvider returns an LLM model based on the provider name.
 func GetProvider(ctx context.Context, name string, modelName string, cfg *config.AppConfig) (model.LLM, error) {
 	switch name {

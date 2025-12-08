@@ -5,19 +5,22 @@ import (
 	"net/http"
 
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/provider"
 )
 
 // GeneralSettings represents the general app settings
 type GeneralSettings struct {
-	DefaultProvider string `json:"default_provider"`
-	DefaultModel    string `json:"default_model"`
+	DefaultProvider            string `json:"default_provider"`
+	DefaultProviderDisplayName string `json:"default_provider_display_name"`
+	DefaultModel               string `json:"default_model"`
 }
 
 // ProviderSettings represents a provider's configuration (masked)
 type ProviderSettings struct {
-	Name       string            `json:"name"`
-	Configured bool              `json:"configured"`
-	Fields     map[string]string `json:"fields"` // Masked values for display
+	Name        string            `json:"name"`
+	DisplayName string            `json:"display_name"`
+	Configured  bool              `json:"configured"`
+	Fields      map[string]string `json:"fields"` // Masked values for display
 }
 
 // AppSettingsResponse is the response for GET /api/settings/config
@@ -70,16 +73,18 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		
 		providers = append(providers, ProviderSettings{
-			Name:       name,
-			Configured: configured,
-			Fields:     fields,
+			Name:        name,
+			DisplayName: provider.GetProviderDisplayName(name),
+			Configured:  configured,
+			Fields:      fields,
 		})
 	}
 
 	response := AppSettingsResponse{
 		General: GeneralSettings{
-			DefaultProvider: cfg.General.DefaultProvider,
-			DefaultModel:    cfg.General.DefaultModel,
+			DefaultProvider:            cfg.General.DefaultProvider,
+			DefaultProviderDisplayName: provider.GetProviderDisplayName(cfg.General.DefaultProvider),
+			DefaultModel:               cfg.General.DefaultModel,
 		},
 		Providers: providers,
 	}

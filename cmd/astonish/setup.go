@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/provider/anthropic"
 	"github.com/schardosin/astonish/pkg/provider/google"
 	"github.com/schardosin/astonish/pkg/provider/groq"
@@ -40,17 +41,17 @@ func handleSetupCommand() error {
 	// --- STEP 1: Provider Selection ---
 	var selectedProviderID string
 	
-	// Define options
+	// Define options using centralized display names
 	options := []huh.Option[string]{
-		huh.NewOption("Anthropic", "anthropic"),
-		huh.NewOption("Google GenAI", "gemini"),
-		huh.NewOption("Groq", "groq"),
-		huh.NewOption("LM Studio", "lm_studio"),
-		huh.NewOption("Ollama", "ollama"),
-		huh.NewOption("OpenAI", "openai"),
-		huh.NewOption("Openrouter", "openrouter"),
-		huh.NewOption("SAP AI Core", "sap_ai_core"),
-		huh.NewOption("xAI", "xai"),
+		huh.NewOption(provider.GetProviderDisplayName("anthropic"), "anthropic"),
+		huh.NewOption(provider.GetProviderDisplayName("gemini"), "gemini"),
+		huh.NewOption(provider.GetProviderDisplayName("groq"), "groq"),
+		huh.NewOption(provider.GetProviderDisplayName("lm_studio"), "lm_studio"),
+		huh.NewOption(provider.GetProviderDisplayName("ollama"), "ollama"),
+		huh.NewOption(provider.GetProviderDisplayName("openai"), "openai"),
+		huh.NewOption(provider.GetProviderDisplayName("openrouter"), "openrouter"),
+		huh.NewOption(provider.GetProviderDisplayName("sap_ai_core"), "sap_ai_core"),
+		huh.NewOption(provider.GetProviderDisplayName("xai"), "xai"),
 	}
 
 	// Run selection form

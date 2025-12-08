@@ -69,7 +69,8 @@ function App() {
       const res = await fetch('/api/settings/config')
       if (res.ok) {
         const data = await res.json()
-        setDefaultProvider(data.general?.default_provider || '')
+        // Use display name from API for proper formatting
+        setDefaultProvider(data.general?.default_provider_display_name || data.general?.default_provider || '')
         setDefaultModel(data.general?.default_model || '')
       }
     } catch (err) {

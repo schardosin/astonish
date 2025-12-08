@@ -54,12 +54,28 @@ function App() {
   const [aiChatContext, setAIChatContext] = useState('create_flow')
   const [aiFocusedNode, setAIFocusedNode] = useState(null)  // Node being edited when AI chat opens
   const [showSettings, setShowSettings] = useState(false)
+  const [defaultProvider, setDefaultProvider] = useState('')
+  const [defaultModel, setDefaultModel] = useState('')
 
-  // Load agents and tools from API on mount
+  // Load agents, tools, and settings from API on mount
   useEffect(() => {
     loadAgents()
     loadTools()
+    loadSettings()
   }, [])
+
+  const loadSettings = async () => {
+    try {
+      const res = await fetch('/api/settings/config')
+      if (res.ok) {
+        const data = await res.json()
+        setDefaultProvider(data.general?.default_provider || '')
+        setDefaultModel(data.general?.default_model || '')
+      }
+    } catch (err) {
+      console.error('Failed to load settings:', err)
+    }
+  }
 
   const loadAgents = async () => {
     try {
@@ -285,6 +301,8 @@ flow:
           theme={theme} 
           onToggleTheme={toggleTheme}
           onOpenSettings={() => setShowSettings(true)}
+          defaultProvider={defaultProvider}
+          defaultModel={defaultModel}
         />
 
         {/* Main Content Area */}

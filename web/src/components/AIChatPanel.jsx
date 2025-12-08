@@ -163,10 +163,28 @@ export default function AIChatPanel({
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 && (
-          <div className="text-center text-[var(--text-secondary)] text-sm py-8">
+          <div className="text-center py-4">
             <Sparkles size={32} className="mx-auto mb-3 text-purple-400 opacity-50" />
-            <p>Start a conversation to get help</p>
-            <p className="text-xs mt-2 opacity-70">I can help you design and build flows</p>
+            <p className="text-[var(--text-secondary)] text-sm mb-4">I can help you design and build flows</p>
+            
+            {/* Quick Examples */}
+            <div className="text-left space-y-2">
+              <p className="text-xs text-[var(--text-muted)] mb-2">Try an example:</p>
+              {[
+                'Create a simple Q&A chatbot',
+                'Build a web search summarizer',
+                'Make a file reader and analyzer',
+                'Create a multi-step reasoning flow',
+              ].map((example, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => setInput(example)}
+                  className="block w-full text-left px-3 py-2 text-xs bg-[var(--bg-primary)] hover:bg-purple-600/20 rounded-lg transition-colors text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                >
+                  → {example}
+                </button>
+              ))}
+            </div>
           </div>
         )}
         

@@ -30,27 +30,32 @@ flow:
 ## Node Types
 
 ### 1. LLM Node (PREFERRED for tool usage)
-AI processing with optional tool use. Use output_model to store results in state.
-IMPORTANT: To use tools, set tools: true and tools_selection with the tool names.
+AI processing with optional tool use.
+- output_model: saves result to state for later nodes
+- user_message: DISPLAY result to user (use this when user needs to see the response!)
 ` + "```yaml" + `
-# LLM without tools
-- name: analyze_request
+# LLM that shows answer to user (most common pattern)
+- name: answer_question
   type: llm
-  system_prompt: "You are a helpful assistant..."
-  prompt: "Analyze this: {user_input}"
+  system_prompt: "You are a helpful assistant."
+  prompt: "{user_question}"
   output_model:
-    analysis_result: str
+    answer: str
+  user_message:
+    - answer  # This displays the LLM response to the user!
 
-# LLM with tools - THIS IS THE PREFERRED WAY TO USE TOOLS
+# LLM with tools
 - name: search_and_summarize
   type: llm
-  system_prompt: "You are a helpful assistant. Use the search tool to find information."
-  prompt: "Search for information about: {query}"
+  system_prompt: "You are a search assistant."
+  prompt: "Search for: {query}"
   tools: true
   tools_selection:
-    - tavily-search  # Use exact tool name from Available Tools
+    - tavily-search
   output_model:
     search_result: str
+  user_message:
+    - search_result  # Show the result to user
 ` + "```" + `
 
 ### 2. Input Node
@@ -93,12 +98,13 @@ In most cases, prefer LLM node with tools: true instead.
 
 ### 4. Output Node
 Display messages to user. Use user_message array with strings and state variable names.
+Note: LLM responses are shown automatically, so output nodes are mainly for formatting/labeling.
 ` + "```yaml" + `
 - name: show_result
   type: output
   user_message:
-    - "Here is the result:"
-    - result_variable  # Reference state variable without braces
+    - "Answer:"
+    - answer
 ` + "```" + `
 
 ### 5. Update State Node
@@ -144,30 +150,48 @@ Modify state variables.
 - Data flows through nodes via output_model which saves to state
 - Access previous node outputs from state keys defined in output_model
 
-## Template Examples (users can ask "show me an example of X")
+## Patterns
 
-### Simple Q&A Flow
-Get user question, answer with AI, show response.
+### User Confirmation Pattern
+Use INPUT node with options for reliable branching:
+` + "```yaml" + `
+- name: confirm
+  type: input
+  prompt: "Continue? (yes/no)"
+  output_model:
+    choice: str
+  options:
+    - "yes"
+    - "no"
+` + "```" + `
+Then use in conditional edge: ` + "`" + `condition: "lambda x: x['choice'] == 'yes'"` + "`" + `
 
-### Web Search Flow
-Get query, search with tavily-search tool, summarize results.
+### Displaying LLM Response
+Always add user_message when the user should see the output:
+` + "```yaml" + `
+- name: process
+  type: llm
+  prompt: "{user_input}"
+  output_model:
+    result: str
+  user_message:
+    - result  # This shows the response to the user
+` + "```" + `
 
-### File Processing Flow
-Get file path, read file content, process with LLM, output results.
+## Anti-Patterns (DO NOT DO)
 
-### Multi-Step Workflow
-Chain multiple LLM nodes for complex reasoning (analyze -> plan -> execute).
-
-### Interactive Loop
-Keep processing until user says "done" using conditional edges.
+❌ Using LLM to check yes/no conditions - unpredictable output breaks edges
+❌ Creating "check_exit" or "check_quit" nodes - use input with options instead  
+❌ Missing user_message on LLM nodes - user won't see the response
+❌ Using LLM output in conditional edges - conditions may never match
 
 ## Rules
-1. Flow must start from START node
-2. Flow must end at END node
-3. All node names must be unique
-4. Edge targets must reference valid node names or START/END
-5. Use output_model on LLM/tool nodes to pass data to later nodes
-6. When user asks "show me an example of X", generate a complete working flow for that pattern
+1. Flow must start from START and end at END
+2. All node names must be unique
+3. Use output_model to pass data between nodes
+4. ALWAYS include user_message on LLM nodes when user should see output
+5. For branching/loops, use INPUT with options - gives reliable condition values
+6. NEVER use LLM output in conditional edges - it's unpredictable
 `
 
 // GetFlowSchema returns the schema as a string for AI context

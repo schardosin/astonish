@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle } from 'lucide-react'
+import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid } from 'lucide-react'
 
 // API functions
 const fetchSettings = async () => {
@@ -48,6 +48,9 @@ export default function SettingsPage({ onClose, theme }) {
   const [providerForms, setProviderForms] = useState({})
   const [mcpServers, setMcpServers] = useState({})
   const [editingMcpServer, setEditingMcpServer] = useState(null)
+  const [mcpViewMode, setMcpViewMode] = useState('editor') // 'editor' or 'source'
+  const [mcpSourceText, setMcpSourceText] = useState('')
+  const [mcpSourceError, setMcpSourceError] = useState(null)
 
   useEffect(() => {
     loadData()
@@ -317,128 +320,217 @@ export default function SettingsPage({ onClose, theme }) {
 
           {activeSection === 'mcp' && (
             <div className="space-y-4">
-              <button
-                onClick={handleAddMcpServer}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-medium transition-colors"
-              >
-                <Plus size={16} />
-                Add MCP Server
-              </button>
-
-              {Object.entries(mcpServers).map(([name, server]) => (
-                <div
-                  key={name}
-                  className="p-4 rounded-lg border"
-                  style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
-                >
-                  <div className="flex items-center justify-between mb-4">
-                    <input
-                      type="text"
-                      value={name}
-                      onChange={(e) => {
-                        const newServers = {}
-                        Object.entries(mcpServers).forEach(([k, v]) => {
-                          newServers[k === name ? e.target.value : k] = v
-                        })
-                        setMcpServers(newServers)
-                      }}
-                      className="text-lg font-medium bg-transparent border-none outline-none"
-                      style={{ color: 'var(--text-primary)' }}
-                      placeholder="Server name"
-                    />
-                    <button
-                      onClick={() => handleDeleteMcpServer(name)}
-                      className="p-1.5 text-red-400 hover:text-red-300 hover:bg-red-500/20 rounded"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm mb-1" style={{ color: 'var(--text-muted)' }}>Command</label>
-                      <input
-                        type="text"
-                        value={server.command || ''}
-                        onChange={(e) => setMcpServers({
-                          ...mcpServers,
-                          [name]: { ...server, command: e.target.value }
-                        })}
-                        placeholder="e.g., npx"
-                        className="w-full px-3 py-2 rounded border text-sm font-mono"
-                        style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm mb-1" style={{ color: 'var(--text-muted)' }}>Transport</label>
-                      <select
-                        value={server.transport || 'stdio'}
-                        onChange={(e) => setMcpServers({
-                          ...mcpServers,
-                          [name]: { ...server, transport: e.target.value }
-                        })}
-                        className="w-full px-3 py-2 rounded border text-sm"
-                        style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-                      >
-                        <option value="stdio">stdio</option>
-                        <option value="sse">sse</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="mt-3">
-                    <label className="block text-sm mb-1" style={{ color: 'var(--text-muted)' }}>Args (comma-separated)</label>
-                    <input
-                      type="text"
-                      value={(server.args || []).join(', ')}
-                      onChange={(e) => setMcpServers({
-                        ...mcpServers,
-                        [name]: { ...server, args: e.target.value.split(',').map(s => s.trim()).filter(Boolean) }
-                      })}
-                      placeholder="e.g., -y, @anthropic-ai/mcp-server-github"
-                      className="w-full px-3 py-2 rounded border text-sm font-mono"
-                      style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-                    />
-                  </div>
-
-                  <div className="mt-3">
-                    <label className="block text-sm mb-1" style={{ color: 'var(--text-muted)' }}>Environment (JSON)</label>
-                    <input
-                      type="text"
-                      value={Object.keys(server.env || {}).length > 0 ? JSON.stringify(server.env) : ''}
-                      onChange={(e) => {
-                        try {
-                          const env = e.target.value ? JSON.parse(e.target.value) : {}
-                          setMcpServers({
-                            ...mcpServers,
-                            [name]: { ...server, env }
-                          })
-                        } catch {}
-                      }}
-                      placeholder='{"KEY": "value"}'
-                      className="w-full px-3 py-2 rounded border text-sm font-mono"
-                      style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-                    />
-                  </div>
+              {/* View toggle */}
+              <div className="flex items-center gap-2">
+                <div className="flex rounded-lg overflow-hidden border" style={{ borderColor: 'var(--border-color)' }}>
+                  <button
+                    onClick={() => {
+                      setMcpViewMode('editor')
+                      setMcpSourceError(null)
+                    }}
+                    className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium transition-colors ${
+                      mcpViewMode === 'editor' 
+                        ? 'bg-purple-600 text-white' 
+                        : 'hover:bg-gray-600/20'
+                    }`}
+                    style={{ color: mcpViewMode !== 'editor' ? 'var(--text-secondary)' : undefined }}
+                  >
+                    <LayoutGrid size={14} />
+                    Editor
+                  </button>
+                  <button
+                    onClick={() => {
+                      setMcpViewMode('source')
+                      setMcpSourceText(JSON.stringify({ mcpServers }, null, 2))
+                      setMcpSourceError(null)
+                    }}
+                    className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium transition-colors ${
+                      mcpViewMode === 'source' 
+                        ? 'bg-purple-600 text-white' 
+                        : 'hover:bg-gray-600/20'
+                    }`}
+                    style={{ color: mcpViewMode !== 'source' ? 'var(--text-secondary)' : undefined }}
+                  >
+                    <Code size={14} />
+                    Source
+                  </button>
                 </div>
-              ))}
+              </div>
 
-              {Object.keys(mcpServers).length > 0 && (
-                <button
-                  onClick={handleSaveMCP}
-                  disabled={saving}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-medium transition-colors disabled:opacity-50"
-                >
-                  <Save size={16} />
-                  {saving ? 'Saving...' : 'Save MCP Configuration'}
-                </button>
+              {/* Editor View */}
+              {mcpViewMode === 'editor' && (
+                <>
+                  <button
+                    onClick={handleAddMcpServer}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-medium transition-colors"
+                  >
+                    <Plus size={16} />
+                    Add MCP Server
+                  </button>
+
+                  {Object.entries(mcpServers).map(([name, server]) => (
+                    <div
+                      key={name}
+                      className="p-4 rounded-lg border"
+                      style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
+                    >
+                      <div className="flex items-center justify-between mb-4">
+                        <input
+                          type="text"
+                          value={name}
+                          onChange={(e) => {
+                            const newServers = {}
+                            Object.entries(mcpServers).forEach(([k, v]) => {
+                              newServers[k === name ? e.target.value : k] = v
+                            })
+                            setMcpServers(newServers)
+                          }}
+                          className="text-lg font-medium bg-transparent border-none outline-none"
+                          style={{ color: 'var(--text-primary)' }}
+                          placeholder="Server name"
+                        />
+                        <button
+                          onClick={() => handleDeleteMcpServer(name)}
+                          className="p-1.5 text-red-400 hover:text-red-300 hover:bg-red-500/20 rounded"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm mb-1" style={{ color: 'var(--text-muted)' }}>Command</label>
+                          <input
+                            type="text"
+                            value={server.command || ''}
+                            onChange={(e) => setMcpServers({
+                              ...mcpServers,
+                              [name]: { ...server, command: e.target.value }
+                            })}
+                            placeholder="e.g., npx"
+                            className="w-full px-3 py-2 rounded border text-sm font-mono"
+                            style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm mb-1" style={{ color: 'var(--text-muted)' }}>Transport</label>
+                          <select
+                            value={server.transport || 'stdio'}
+                            onChange={(e) => setMcpServers({
+                              ...mcpServers,
+                              [name]: { ...server, transport: e.target.value }
+                            })}
+                            className="w-full px-3 py-2 rounded border text-sm"
+                            style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                          >
+                            <option value="stdio">stdio</option>
+                            <option value="sse">sse</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="mt-3">
+                        <label className="block text-sm mb-1" style={{ color: 'var(--text-muted)' }}>Args (comma-separated)</label>
+                        <input
+                          type="text"
+                          value={(server.args || []).join(', ')}
+                          onChange={(e) => setMcpServers({
+                            ...mcpServers,
+                            [name]: { ...server, args: e.target.value.split(',').map(s => s.trim()).filter(Boolean) }
+                          })}
+                          placeholder="e.g., -y, @anthropic-ai/mcp-server-github"
+                          className="w-full px-3 py-2 rounded border text-sm font-mono"
+                          style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                        />
+                      </div>
+
+                      <div className="mt-3">
+                        <label className="block text-sm mb-1" style={{ color: 'var(--text-muted)' }}>Environment (JSON)</label>
+                        <input
+                          type="text"
+                          value={Object.keys(server.env || {}).length > 0 ? JSON.stringify(server.env) : ''}
+                          onChange={(e) => {
+                            try {
+                              const env = e.target.value ? JSON.parse(e.target.value) : {}
+                              setMcpServers({
+                                ...mcpServers,
+                                [name]: { ...server, env }
+                              })
+                            } catch {}
+                          }}
+                          placeholder='{"KEY": "value"}'
+                          className="w-full px-3 py-2 rounded border text-sm font-mono"
+                          style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+
+                  {Object.keys(mcpServers).length > 0 && (
+                    <button
+                      onClick={handleSaveMCP}
+                      disabled={saving}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-medium transition-colors disabled:opacity-50"
+                    >
+                      <Save size={16} />
+                      {saving ? 'Saving...' : 'Save MCP Configuration'}
+                    </button>
+                  )}
+
+                  {Object.keys(mcpServers).length === 0 && (
+                    <div className="text-center py-8" style={{ color: 'var(--text-muted)' }}>
+                      <Server size={48} className="mx-auto mb-3 opacity-30" />
+                      <p>No MCP servers configured.</p>
+                      <p className="text-sm mt-1">Click "Add MCP Server" to add one.</p>
+                    </div>
+                  )}
+                </>
               )}
 
-              {Object.keys(mcpServers).length === 0 && (
-                <div className="text-center py-8" style={{ color: 'var(--text-muted)' }}>
-                  <Server size={48} className="mx-auto mb-3 opacity-30" />
-                  <p>No MCP servers configured.</p>
-                  <p className="text-sm mt-1">Click "Add MCP Server" to add one.</p>
+              {/* Source View */}
+              {mcpViewMode === 'source' && (
+                <div className="space-y-4">
+                  <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                    Edit the raw JSON configuration below. Changes will be synced when you save or switch back to Editor view.
+                  </p>
+                  {mcpSourceError && (
+                    <div className="flex items-center gap-2 text-red-400 text-sm">
+                      <AlertCircle size={16} />
+                      {mcpSourceError}
+                    </div>
+                  )}
+                  <textarea
+                    value={mcpSourceText}
+                    onChange={(e) => setMcpSourceText(e.target.value)}
+                    className="w-full h-96 px-4 py-3 rounded-lg border text-sm font-mono resize-y"
+                    style={{ 
+                      background: 'var(--bg-secondary)', 
+                      borderColor: mcpSourceError ? '#f87171' : 'var(--border-color)', 
+                      color: 'var(--text-primary)' 
+                    }}
+                    spellCheck={false}
+                  />
+                  <button
+                    onClick={() => {
+                      try {
+                        const parsed = JSON.parse(mcpSourceText)
+                        if (parsed.mcpServers && typeof parsed.mcpServers === 'object') {
+                          setMcpServers(parsed.mcpServers)
+                          setMcpSourceError(null)
+                          handleSaveMCP()
+                        } else {
+                          setMcpSourceError('Invalid format: expected { "mcpServers": { ... } }')
+                        }
+                      } catch (e) {
+                        setMcpSourceError(`Invalid JSON: ${e.message}`)
+                      }
+                    }}
+                    disabled={saving}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-medium transition-colors disabled:opacity-50"
+                  >
+                    <Save size={16} />
+                    {saving ? 'Saving...' : 'Apply & Save'}
+                  </button>
                 </div>
               )}
             </div>

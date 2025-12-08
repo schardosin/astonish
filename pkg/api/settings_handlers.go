@@ -48,7 +48,7 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	providers := []ProviderSettings{}
 	
 	// List all known providers
-	knownProviders := []string{"gemini", "anthropic", "openai", "sap_ai_core", "xai", "groq"}
+	knownProviders := []string{"gemini", "anthropic", "openai", "sap_ai_core", "xai", "groq", "openrouter", "ollama", "lm_studio"}
 	
 	for _, name := range knownProviders {
 		providerCfg, exists := cfg.Providers[name]

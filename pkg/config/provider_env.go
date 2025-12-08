@@ -30,6 +30,15 @@ var ProviderEnvMapping = map[string]map[string]string{
 	"groq": {
 		"api_key": "GROQ_API_KEY",
 	},
+	"openrouter": {
+		"api_key": "OPENROUTER_API_KEY",
+	},
+	"ollama": {
+		"base_url": "OLLAMA_BASE_URL",
+	},
+	"lm_studio": {
+		"base_url": "LMSTUDIO_BASE_URL",
+	},
 }
 
 // SetupProviderEnv sets environment variables from config for a specific provider

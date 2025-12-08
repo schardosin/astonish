@@ -1,0 +1,176 @@
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"github.com/schardosin/astonish/pkg/config"
+)
+
+// GeneralSettings represents the general app settings
+type GeneralSettings struct {
+	DefaultProvider string `json:"default_provider"`
+	DefaultModel    string `json:"default_model"`
+}
+
+// ProviderSettings represents a provider's configuration (masked)
+type ProviderSettings struct {
+	Name       string            `json:"name"`
+	Configured bool              `json:"configured"`
+	Fields     map[string]string `json:"fields"` // Masked values for display
+}
+
+// AppSettingsResponse is the response for GET /api/settings/config
+type AppSettingsResponse struct {
+	General   GeneralSettings    `json:"general"`
+	Providers []ProviderSettings `json:"providers"`
+}
+
+// UpdateAppSettingsRequest is the request for PUT /api/settings/config
+type UpdateAppSettingsRequest struct {
+	General   *GeneralSettings   `json:"general,omitempty"`
+	Providers map[string]map[string]string `json:"providers,omitempty"`
+}
+
+// GetSettingsHandler handles GET /api/settings/config
+func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	cfg, err := config.LoadAppConfig()
+	if err != nil {
+		http.Error(w, "Failed to load config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Build response with masked provider values
+	providers := []ProviderSettings{}
+	
+	// List all known providers
+	knownProviders := []string{"gemini", "anthropic", "openai", "sap_ai_core", "xai", "groq"}
+	
+	for _, name := range knownProviders {
+		providerCfg, exists := cfg.Providers[name]
+		fields := make(map[string]string)
+		configured := false
+		
+		// Get expected fields for this provider
+		if mapping, ok := config.ProviderEnvMapping[name]; ok {
+			for cfgKey := range mapping {
+				if exists && providerCfg[cfgKey] != "" {
+					// Mask the value (show last 4 chars)
+					val := providerCfg[cfgKey]
+					if len(val) > 4 {
+						fields[cfgKey] = "****" + val[len(val)-4:]
+					} else {
+						fields[cfgKey] = "****"
+					}
+					configured = true
+				} else {
+					fields[cfgKey] = ""
+				}
+			}
+		}
+		
+		providers = append(providers, ProviderSettings{
+			Name:       name,
+			Configured: configured,
+			Fields:     fields,
+		})
+	}
+
+	response := AppSettingsResponse{
+		General: GeneralSettings{
+			DefaultProvider: cfg.General.DefaultProvider,
+			DefaultModel:    cfg.General.DefaultModel,
+		},
+		Providers: providers,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// UpdateSettingsHandler handles PUT /api/settings/config
+func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	var req UpdateAppSettingsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	cfg, err := config.LoadAppConfig()
+	if err != nil {
+		http.Error(w, "Failed to load config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Update general settings if provided
+	if req.General != nil {
+		cfg.General.DefaultProvider = req.General.DefaultProvider
+		cfg.General.DefaultModel = req.General.DefaultModel
+	}
+
+	// Update provider settings if provided
+	if req.Providers != nil {
+		for providerName, providerFields := range req.Providers {
+			if cfg.Providers == nil {
+				cfg.Providers = make(map[string]config.ProviderConfig)
+			}
+			if cfg.Providers[providerName] == nil {
+				cfg.Providers[providerName] = make(config.ProviderConfig)
+			}
+			for key, value := range providerFields {
+				// Only update if value is not masked placeholder
+				if value != "" && !isMaskedValue(value) {
+					cfg.Providers[providerName][key] = value
+				}
+			}
+		}
+	}
+
+	if err := config.SaveAppConfig(cfg); err != nil {
+		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Re-setup environment variables
+	config.SetupAllProviderEnv(cfg)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// isMaskedValue checks if a value is a masked placeholder
+func isMaskedValue(val string) bool {
+	return len(val) >= 4 && val[:4] == "****"
+}
+
+// GetMCPSettingsHandler handles GET /api/settings/mcp
+func GetMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	cfg, err := config.LoadMCPConfig()
+	if err != nil {
+		http.Error(w, "Failed to load MCP config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(cfg)
+}
+
+// UpdateMCPSettingsHandler handles PUT /api/settings/mcp
+func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	var cfg config.MCPConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if err := config.SaveMCPConfig(&cfg); err != nil {
+		http.Error(w, "Failed to save MCP config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Re-setup environment variables
+	config.SetupMCPEnv(&cfg)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}

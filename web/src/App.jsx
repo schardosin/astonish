@@ -11,6 +11,7 @@ import NodeEditor from './components/NodeEditor'
 import CreateAgentModal from './components/CreateAgentModal'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import AIChatPanel from './components/AIChatPanel'
+import SettingsPage from './components/SettingsPage'
 import { useTheme } from './hooks/useTheme'
 import { yamlToFlowAsync, extractLayout } from './utils/yamlToFlow'
 import { addStandaloneNode, addConnection, removeConnection, updateNode } from './utils/flowToYaml'
@@ -52,6 +53,7 @@ function App() {
   const [showAIChat, setShowAIChat] = useState(false)
   const [aiChatContext, setAIChatContext] = useState('create_flow')
   const [aiFocusedNode, setAIFocusedNode] = useState(null)  // Node being edited when AI chat opens
+  const [showSettings, setShowSettings] = useState(false)
 
   // Load agents and tools from API on mount
   useEffect(() => {
@@ -282,7 +284,7 @@ flow:
         <TopBar 
           theme={theme} 
           onToggleTheme={toggleTheme}
-          onOpenSettings={() => console.log('Settings clicked')}
+          onOpenSettings={() => setShowSettings(true)}
         />
 
         {/* Main Content Area */}
@@ -425,6 +427,14 @@ flow:
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
           </svg>
         </button>
+      )}
+
+      {/* Settings Page */}
+      {showSettings && (
+        <SettingsPage
+          onClose={() => setShowSettings(false)}
+          theme={theme}
+        />
       )}
     </ReactFlowProvider>
   )

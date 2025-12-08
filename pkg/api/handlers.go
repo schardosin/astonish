@@ -265,5 +265,11 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/agents/{name}", DeleteAgentHandler).Methods("DELETE")
 	router.HandleFunc("/api/tools", ListToolsHandler).Methods("GET")
 	router.HandleFunc("/api/ai/chat", AIChatHandler).Methods("POST")
+	
+	// Settings endpoints
+	router.HandleFunc("/api/settings/config", GetSettingsHandler).Methods("GET")
+	router.HandleFunc("/api/settings/config", UpdateSettingsHandler).Methods("PUT")
+	router.HandleFunc("/api/settings/mcp", GetMCPSettingsHandler).Methods("GET")
+	router.HandleFunc("/api/settings/mcp", UpdateMCPSettingsHandler).Methods("PUT")
 }
 

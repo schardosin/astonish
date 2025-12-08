@@ -119,7 +119,6 @@ type ShellCommandResult struct {
 }
 
 func ShellCommand(ctx tool.Context, args ShellCommandArgs) (ShellCommandResult, error) {
-	fmt.Printf("Executing shell command: %s\n", args.Command)
 	// Use sh -c to execute the command
 	cmd := exec.Command("sh", "-c", args.Command)
 	output, err := cmd.CombinedOutput()

@@ -177,6 +177,16 @@ function App() {
 
   // Internal agent select (optionally updates URL)
   const handleAgentSelectInternal = useCallback(async (agent, updateUrl = true) => {
+    // Reset running state when switching agents
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+    setIsRunning(false)
+    setRunningNodeId(null)
+    setSessionId(null)
+    setChatMessages([])
+    setIsWaitingForInput(false)
+    
     setSelectedAgent(agent)
     setSelectedNodeId(null)
     setEditingNode(null)

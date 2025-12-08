@@ -179,7 +179,7 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 
 	// 5. Create Astonish Agent & ADK Agent
 	astonishAgent := agent.NewAstonishAgentWithToolsets(cfg, llm, internalTools, mcpToolsets)
-	astonishAgent.DebugMode = true // Enable debug info for UI
+	astonishAgent.DebugMode = false // Disable verbose debug output
 	astonishAgent.IsWebMode = true // Enable Web mode for UI (disables ANSI colors)
 	astonishAgent.SessionService = sm.service
 

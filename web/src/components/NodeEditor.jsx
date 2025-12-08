@@ -24,7 +24,7 @@ const NODE_COLORS = {
 /**
  * Output Model Editor - key-value list for output_model field
  */
-function OutputModelEditor({ value, onChange, theme, hideLabel = false }) {
+function OutputModelEditor({ value, onChange, theme, hideLabel = false, singleField = false }) {
   const entries = Object.entries(value || {})
   
   const handleAdd = () => {
@@ -58,23 +58,25 @@ function OutputModelEditor({ value, onChange, theme, hideLabel = false }) {
           <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
             Output Model
           </label>
-          <button
-            onClick={handleAdd}
-            className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-purple-600 text-white hover:bg-purple-700"
-          >
-            <Plus size={12} /> Add
-          </button>
+          {!singleField && (
+            <button
+              onClick={handleAdd}
+              className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-purple-600 text-white hover:bg-purple-700"
+            >
+              <Plus size={12} /> Add
+            </button>
+          )}
         </div>
       )}
       
       {entries.length === 0 ? (
         <div className="text-xs py-2" style={{ color: 'var(--text-muted)' }}>
-          No fields. Add at least one.
+          {singleField ? 'Enter a variable name.' : 'No fields. Add at least one.'}
         </div>
       ) : (
         <div className="space-y-1">
-          {entries.map(([key, type]) => (
-            <div key={key} className="flex items-center gap-1">
+          {entries.slice(0, singleField ? 1 : undefined).map(([key, type], idx) => (
+            <div key={idx} className="flex items-center gap-1">
               <input
                 type="text"
                 value={key}
@@ -103,12 +105,14 @@ function OutputModelEditor({ value, onChange, theme, hideLabel = false }) {
                 <option value="any">any</option>
                 <option value="bool">bool</option>
               </select>
-              <button
-                onClick={() => handleRemove(key)}
-                className="p-0.5 text-red-400 hover:text-red-300"
-              >
-                <Trash2 size={12} />
-              </button>
+              {!singleField && (
+                <button
+                  onClick={() => handleRemove(key)}
+                  className="p-0.5 text-red-400 hover:text-red-300"
+                >
+                  <Trash2 size={12} />
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -609,23 +613,73 @@ function ToolNodeForm({ data, onChange, theme, availableTools = [] }) {
       
       {/* Right column - Args */}
       <div className="flex-1">
-        <label className="text-sm font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>
-          Args (JSON)
-        </label>
-        <textarea
-          value={data.args ? JSON.stringify(data.args, null, 2) : ''}
-          onChange={(e) => {
-            try {
-              const parsed = JSON.parse(e.target.value)
-              onChange({ ...data, args: parsed })
-            } catch {
-              // Invalid JSON, don't update
-            }
-          }}
-          className="w-full h-32 px-3 py-2 rounded border font-mono text-sm resize-none"
-          style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-          placeholder='{"key": {"variable_name"}}'
-        />
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <label className="text-sm font-medium block" style={{ color: 'var(--text-secondary)' }}>
+              Arguments
+            </label>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              Key-value pairs passed to the tool
+            </p>
+          </div>
+          <button
+            onClick={() => {
+              const newKey = `arg_${Object.keys(data.args || {}).length + 1}`
+              onChange({ ...data, args: { ...(data.args || {}), [newKey]: '{variable}' } })
+            }}
+            className="flex items-center gap-1 px-2.5 py-1 text-xs rounded bg-purple-600 hover:bg-purple-500 text-white transition-colors"
+          >
+            <Plus size={12} />
+            Add
+          </button>
+        </div>
+        
+        <div className="space-y-2">
+          {Object.entries(data.args || {}).map(([key, value], idx) => (
+            <div key={idx} className="flex items-center gap-2">
+              <input
+                type="text"
+                value={key}
+                onChange={(e) => {
+                  const newArgs = {}
+                  Object.entries(data.args || {}).forEach(([k, v]) => {
+                    newArgs[k === key ? e.target.value : k] = v
+                  })
+                  onChange({ ...data, args: newArgs })
+                }}
+                className="w-32 px-2 py-1.5 rounded border font-mono text-sm"
+                style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                placeholder="key"
+              />
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>=</span>
+              <input
+                type="text"
+                value={typeof value === 'string' ? value : JSON.stringify(value)}
+                onChange={(e) => {
+                  onChange({ ...data, args: { ...(data.args || {}), [key]: e.target.value } })
+                }}
+                className="flex-1 px-2 py-1.5 rounded border font-mono text-sm"
+                style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                placeholder="{variable} or value"
+              />
+              <button
+                onClick={() => {
+                  const newArgs = { ...data.args }
+                  delete newArgs[key]
+                  onChange({ ...data, args: Object.keys(newArgs).length > 0 ? newArgs : undefined })
+                }}
+                className="p-1.5 text-red-400 hover:text-red-300 hover:bg-red-500/20 rounded"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
+          {(!data.args || Object.keys(data.args).length === 0) && (
+            <p className="text-xs italic py-2" style={{ color: 'var(--text-muted)' }}>
+              No arguments. Click "Add" to add key-value pairs.
+            </p>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -747,6 +801,7 @@ export default function NodeEditor({ node, onSave, onClose, theme, availableTool
                 value={editedData.output_model}
                 onChange={(newModel) => setEditedData({ ...editedData, output_model: newModel })}
                 theme={theme}
+                singleField={nodeType === 'input'}
               />
             </div>
           )}

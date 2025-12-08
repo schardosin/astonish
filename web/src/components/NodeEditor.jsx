@@ -183,14 +183,14 @@ function InputNodeForm({ data, onChange, theme }) {
       </div>
       
       {/* Right column - Prompt */}
-      <div className="flex-1">
+      <div className="flex-1 flex flex-col">
         <label className="text-sm font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>
           Prompt
         </label>
         <textarea
           value={data.prompt || ''}
           onChange={(e) => onChange({ ...data, prompt: e.target.value })}
-          className="w-full h-32 px-3 py-2 rounded border font-mono text-sm resize-none"
+          className="w-full flex-1 min-h-[120px] px-3 py-2 rounded border font-mono text-sm resize-none"
           style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
           placeholder="Enter the prompt to show to the user..."
         />
@@ -247,28 +247,28 @@ function LlmNodeForm({ data, onChange, theme, availableTools = [] }) {
         {activeTab === 'prompts' && (
           <div className="flex gap-4 h-full">
             {/* System Prompt */}
-            <div className="flex-1">
+            <div className="flex-1 flex flex-col">
               <label className="text-sm font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>
                 System Prompt (optional)
               </label>
               <textarea
                 value={data.system || ''}
                 onChange={(e) => onChange({ ...data, system: e.target.value || undefined })}
-                className="w-full h-32 px-3 py-2 rounded border font-mono text-sm resize-none"
+                className="w-full flex-1 min-h-[120px] px-3 py-2 rounded border font-mono text-sm resize-none"
                 style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                 placeholder="Enter system instructions..."
               />
             </div>
             
             {/* User Prompt */}
-            <div className="flex-1">
+            <div className="flex-1 flex flex-col">
               <label className="text-sm font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>
                 Prompt
               </label>
               <textarea
                 value={data.prompt || ''}
                 onChange={(e) => onChange({ ...data, prompt: e.target.value })}
-                className="w-full h-32 px-3 py-2 rounded border font-mono text-sm resize-none"
+                className="w-full flex-1 min-h-[120px] px-3 py-2 rounded border font-mono text-sm resize-none"
                 style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                 placeholder="Enter the LLM prompt. Use {variable} for state references..."
               />

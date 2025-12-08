@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useEffect } from 'react'
+import { useCallback, useMemo, useEffect, useRef } from 'react'
 import {
   ReactFlow,
   Background,
@@ -137,8 +137,33 @@ function FlowCanvasInner({
     }
   }, [nodes, edges, onLayoutChange])
 
-  // Get React Flow instance for coordinate conversion
-  const { screenToFlowPosition } = useReactFlow()
+  // Get React Flow instance for coordinate conversion and viewport control
+  const { screenToFlowPosition, setViewport, getViewport } = useReactFlow()
+  const hasCentered = useRef(false)
+  const containerRef = useRef(null)
+  
+  // Center viewport horizontally on START node when flow first loads (view only, no flash)
+  useEffect(() => {
+    if (nodes.length > 0 && !hasCentered.current) {
+      const startNode = nodes.find(n => n.id === 'START')
+      if (startNode && startNode.position) {
+        // Get container width to calculate center offset
+        const containerWidth = containerRef.current?.offsetWidth || 800
+        // Calculate X to center START node horizontally
+        const centerX = -(startNode.position.x - containerWidth / 2 + 60)
+        // Set viewport: center horizontally, keep top visible
+        setViewport({ x: centerX, y: 30, zoom: 1 }, { duration: 0 })
+        hasCentered.current = true
+      }
+    }
+  }, [nodes, setViewport])
+  
+  // Reset centering flag when agent changes (nodes cleared)
+  useEffect(() => {
+    if (nodes.length === 0) {
+      hasCentered.current = false
+    }
+  }, [nodes.length])
 
   // Handle double-click on edge to add waypoint
   const onEdgeDoubleClick = useCallback((event, edge) => {
@@ -318,7 +343,7 @@ function FlowCanvasInner({
   }), [])
 
   return (
-    <div className="w-full h-full" style={{ background: theme === 'dark' ? '#0d121f' : '#F7F5FB' }}>
+    <div ref={containerRef} className="w-full h-full" style={{ background: theme === 'dark' ? '#0d121f' : '#F7F5FB' }}>
       <ReactFlow
         nodes={nodes}
         edges={edges}

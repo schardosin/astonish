@@ -40,8 +40,8 @@ const fetchProviderModels = async (providerId) => {
   return res.json()
 }
 
-export default function SettingsPage({ onClose, theme }) {
-  const [activeSection, setActiveSection] = useState('general')
+export default function SettingsPage({ onClose, theme, activeSection = 'general', onSectionChange }) {
+  // Use prop for active section, default to 'general'
   const [settings, setSettings] = useState(null)
   const [mcpConfig, setMcpConfig] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -213,7 +213,7 @@ export default function SettingsPage({ onClose, theme }) {
             return (
               <button
                 key={item.id}
-                onClick={() => setActiveSection(item.id)}
+                onClick={() => onSectionChange ? onSectionChange(item.id) : null}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-all ${
                   isActive ? 'bg-purple-600/20 text-purple-400' : 'hover:bg-gray-600/20'
                 }`}

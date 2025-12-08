@@ -13,6 +13,7 @@ import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import AIChatPanel from './components/AIChatPanel'
 import SettingsPage from './components/SettingsPage'
 import { useTheme } from './hooks/useTheme'
+import { useHashRouter, buildPath } from './hooks/useHashRouter'
 import { yamlToFlowAsync, extractLayout } from './utils/yamlToFlow'
 import { addStandaloneNode, addConnection, removeConnection, updateNode } from './utils/flowToYaml'
 import { fetchAgents, fetchAgent, saveAgent, deleteAgent, fetchTools } from './api/agents'
@@ -31,6 +32,7 @@ flow:
 
 function App() {
   const { theme, toggleTheme } = useTheme()
+  const { path, navigate, replaceHash } = useHashRouter()
   const [agents, setAgents] = useState([])
   const [isLoadingAgents, setIsLoadingAgents] = useState(true)
   const [selectedAgent, setSelectedAgent] = useState(null)
@@ -53,9 +55,12 @@ function App() {
   const [showAIChat, setShowAIChat] = useState(false)
   const [aiChatContext, setAIChatContext] = useState('create_flow')
   const [aiFocusedNode, setAIFocusedNode] = useState(null)  // Node being edited when AI chat opens
-  const [showSettings, setShowSettings] = useState(false)
   const [defaultProvider, setDefaultProvider] = useState('')
   const [defaultModel, setDefaultModel] = useState('')
+
+  // Derive showSettings from path
+  const showSettings = path.view === 'settings'
+  const settingsSection = path.params.section || 'general'
 
   // Load agents, tools, and settings from API on mount
   useEffect(() => {
@@ -82,15 +87,27 @@ function App() {
     try {
       setIsLoadingAgents(true)
       const data = await fetchAgents()
-      setAgents(data.agents || [])
+      const agentsList = data.agents || []
+      setAgents(agentsList)
       
-      // Auto-select first agent if available
-      if (data.agents && data.agents.length > 0 && !selectedAgent) {
-        handleAgentSelect(data.agents[0])
+      // Check if URL specifies an agent
+      const urlAgentName = path.view === 'agent' ? path.params.agentName : null
+      
+      if (urlAgentName && agentsList.length > 0) {
+        // Try to find the agent from URL
+        const urlAgent = agentsList.find(a => a.id === urlAgentName || a.name === urlAgentName)
+        if (urlAgent) {
+          handleAgentSelectInternal(urlAgent, false) // Don't update URL, already there
+        } else if (agentsList.length > 0) {
+          // Agent not found, select first and update URL
+          handleAgentSelectInternal(agentsList[0], true)
+        }
+      } else if (agentsList.length > 0 && !selectedAgent && path.view !== 'settings') {
+        // No URL agent, auto-select first
+        handleAgentSelectInternal(agentsList[0], true)
       }
     } catch (err) {
       console.error('Failed to load agents:', err)
-      // Keep empty array if API fails
       setAgents([])
     } finally {
       setIsLoadingAgents(false)
@@ -134,10 +151,16 @@ function App() {
     }
   }, [nodes, editingNode])
 
-  const handleAgentSelect = useCallback(async (agent) => {
+  // Internal agent select (optionally updates URL)
+  const handleAgentSelectInternal = useCallback(async (agent, updateUrl = true) => {
     setSelectedAgent(agent)
     setSelectedNodeId(null)
     setEditingNode(null)
+    
+    // Update URL if requested
+    if (updateUrl) {
+      navigate(buildPath('agent', { agentName: agent.id }))
+    }
     
     // Load agent YAML from API
     try {
@@ -147,7 +170,12 @@ function App() {
       console.error('Failed to load agent:', err)
       setYamlContent(defaultYaml)
     }
-  }, [])
+  }, [navigate])
+
+  // Public agent select (always updates URL)
+  const handleAgentSelect = useCallback(async (agent) => {
+    await handleAgentSelectInternal(agent, true)
+  }, [handleAgentSelectInternal])
 
   const handleCreateNew = useCallback(() => {
     setShowCreateModal(true)
@@ -301,7 +329,7 @@ flow:
         <TopBar 
           theme={theme} 
           onToggleTheme={toggleTheme}
-          onOpenSettings={() => setShowSettings(true)}
+          onOpenSettings={() => navigate(buildPath('settings', { section: 'general' }))}
           defaultProvider={defaultProvider}
           defaultModel={defaultModel}
         />
@@ -451,7 +479,15 @@ flow:
       {/* Settings Page */}
       {showSettings && (
         <SettingsPage
-          onClose={() => setShowSettings(false)}
+          onClose={() => {
+            if (selectedAgent) {
+              navigate(buildPath('agent', { agentName: selectedAgent.id }))
+            } else {
+              navigate('/')
+            }
+          }}
+          activeSection={settingsSection}
+          onSectionChange={(section) => replaceHash(buildPath('settings', { section }))}
           theme={theme}
         />
       )}

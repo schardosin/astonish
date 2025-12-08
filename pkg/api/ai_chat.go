@@ -12,6 +12,7 @@ import (
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
+	"gopkg.in/yaml.v3"
 )
 
 // AIChatRequest is the request body for AI chat
@@ -75,7 +76,27 @@ You are an AI assistant helping users create agent workflows.
 - Are conditional edges based on INPUT options (reliable) not LLM output (unreliable)?
 - Does every LLM response the user should see have user_message?
 
-## RESPONSE FORMAT:
+## IMPORTANT: Judge the Request Type
+
+**ACTION REQUEST** (user wants to create/modify something):
+→ Follow the planning steps above and generate YAML
+
+**QUESTION** (user is asking about the flow, asking for info, or chatting):
+→ Just answer conversationally. Do NOT generate YAML.
+
+Examples of QUESTIONS (no YAML needed):
+- "What is the name of this flow?"
+- "How many nodes does it have?"
+- "Can you explain what this does?"
+- "What tools are available?"
+
+Examples of ACTION REQUESTS (generate YAML):
+- "Create a Q&A chatbot"
+- "Add a node that summarizes"
+- "Make it loop until the user says stop"
+- "Change the prompt to be friendlier"
+
+## RESPONSE FORMAT (for action requests only):
 1. **Brief explanation** of your design decisions (1-2 sentences)
 2. The **complete YAML** wrapped in ` + "```yaml" + ` code blocks
 
@@ -103,7 +124,8 @@ Preserve existing nodes unless explicitly asked to change them.`
 		return basePrompt + `
 
 # Your Task
-You are an AI assistant helping users optimize a specific node's configuration.
+You are an AI assistant helping users optimize a SINGLE node's configuration.
+The user is editing a specific node and wants help improving it.
 
 ## What You Can Help With:
 - **LLM nodes**: Improve system prompt, prompt phrasing, add user_message for output
@@ -117,10 +139,27 @@ You are an AI assistant helping users optimize a specific node's configuration.
 - Keep prompts clear and concise
 - Suggest output_model fields if the data should be used by later nodes
 
-Response format:
-1. Analysis of the current node configuration
-2. Specific suggestions for improvement
-3. If providing updated node config, wrap it in ` + "```yaml" + ` code blocks`
+## RESPONSE FORMAT (IMPORTANT - follow exactly):
+1. A brief, positive explanation of your improvements (1-2 sentences)
+2. The improved node YAML wrapped in ` + "```yaml" + ` code blocks
+
+**YOU MUST ONLY RETURN THE SINGLE NODE** - starting with "- name:".
+DO NOT apologize or mention needing the full flow.
+DO NOT return the complete flow YAML.
+The system automatically merges your node into the existing flow.
+
+Example good response:
+"I've improved the system prompt to be clearer and added user_message so the response is shown to the user."
+` + "```yaml" + `
+- name: answer_question
+  type: llm
+  system: "You are a helpful assistant..."
+  prompt: "{question}"
+  output_model:
+    answer: str
+  user_message:
+    - answer
+` + "```" + "`"
 
 	default:
 		return basePrompt + `
@@ -170,6 +209,68 @@ func extractYAML(text string) string {
 	}
 	
 	return strings.TrimSpace(remaining[:endIdx])
+}
+
+// isNodeSnippet checks if the YAML is just a node (not a full flow)
+func isNodeSnippet(yamlContent string) bool {
+	trimmed := strings.TrimSpace(yamlContent)
+	return strings.HasPrefix(trimmed, "- name:")
+}
+
+// mergeNodeIntoFlow merges a node snippet into the full flow YAML
+func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string) (string, error) {
+	// Parse the node snippet to get the node name
+	var nodes []map[string]interface{}
+	if err := yaml.Unmarshal([]byte(nodeSnippet), &nodes); err != nil {
+		return "", fmt.Errorf("failed to parse node snippet: %w", err)
+	}
+	if len(nodes) == 0 {
+		return "", fmt.Errorf("no node found in snippet")
+	}
+	
+	nodeName, ok := nodes[0]["name"].(string)
+	if !ok {
+		return "", fmt.Errorf("node name not found")
+	}
+	
+	// Parse the full flow
+	var flow map[string]interface{}
+	if err := yaml.Unmarshal([]byte(fullFlowYAML), &flow); err != nil {
+		return "", fmt.Errorf("failed to parse flow: %w", err)
+	}
+	
+	// Find and replace the node in the flow
+	flowNodes, ok := flow["nodes"].([]interface{})
+	if !ok {
+		return "", fmt.Errorf("nodes section not found in flow")
+	}
+	
+	nodeFound := false
+	for i, n := range flowNodes {
+		nodeMap, ok := n.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if nodeMap["name"] == nodeName {
+			flowNodes[i] = nodes[0]
+			nodeFound = true
+			break
+		}
+	}
+	
+	if !nodeFound {
+		return "", fmt.Errorf("node '%s' not found in flow", nodeName)
+	}
+	
+	flow["nodes"] = flowNodes
+	
+	// Marshal back to YAML
+	result, err := yaml.Marshal(flow)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal updated flow: %w", err)
+	}
+	
+	return string(result), nil
 }
 
 // AIChatHandler handles AI chat requests
@@ -286,7 +387,13 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		
-		// Validate the YAML
+		// For node_config with node snippets, skip full-flow validation here
+		// (will be validated after merging into full flow)
+		if req.Context == "node_config" && isNodeSnippet(proposedYAML) {
+			break
+		}
+		
+		// Validate the YAML (for full flows)
 		validation := ValidateFlowYAML(proposedYAML, availableTools)
 		if validation.Valid {
 			// YAML is valid, we're done
@@ -314,6 +421,26 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 				genai.NewPartFromText(FormatValidationErrors(validation.Errors)),
 			},
 		})
+	}
+	
+	// For node_config context, if the AI returned a node snippet, merge it into the full flow
+	if req.Context == "node_config" && proposedYAML != "" && isNodeSnippet(proposedYAML) {
+		if req.CurrentYAML != "" {
+			mergedYAML, err := mergeNodeIntoFlow(proposedYAML, req.CurrentYAML)
+			if err != nil {
+				// If merge fails, keep the snippet but add a warning
+				fullResponse += "\n\n⚠️ Could not merge node into flow: " + err.Error()
+			} else {
+				proposedYAML = mergedYAML
+				// Re-validate the merged flow
+				validation := ValidateFlowYAML(proposedYAML, availableTools)
+				if !validation.Valid {
+					lastValidationErrors = validation.Errors
+				} else {
+					lastValidationErrors = nil
+				}
+			}
+		}
 	}
 	
 	// Determine action based on whether YAML was generated and valid

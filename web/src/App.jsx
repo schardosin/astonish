@@ -290,6 +290,7 @@ flow:
                   setChatMessages(prev => [...prev, { type: 'node', nodeName: data.node }])
                   if (data.node === 'END') {
                      setRunningNodeId(null)
+                     setChatMessages(prev => [...prev, { type: 'flow_complete' }])
                   }
                 } else if (data.options) { // Handle input_request which sends options directly or nested
                   setIsWaitingForInput(true)
@@ -315,7 +316,11 @@ flow:
       }
     } catch (err) {
       if (err.name === 'AbortError') {
-        setChatMessages(prev => [...prev, { type: 'system', content: 'Execution stopped by user.' }])
+        setChatMessages(prev => [
+           ...prev, 
+           { type: 'system', content: 'Execution stopped by user.' },
+           { type: 'flow_complete' }
+        ])
         setRunningNodeId(null)
         setIsWaitingForInput(false)
       } else {
@@ -353,8 +358,17 @@ flow:
   const handleStopRun = useCallback(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
+    } else if (isWaitingForInput) {
+       // If waiting for input, the connection is closed, so we must manually trigger stop state
+       setChatMessages(prev => [
+         ...prev, 
+         { type: 'system', content: 'Execution stopped by user.' },
+         { type: 'flow_complete' }
+      ])
+      setRunningNodeId(null)
+      setIsWaitingForInput(false)
     }
-  }, [])
+  }, [isWaitingForInput])
 
   const handleExitRun = useCallback(() => {
     if (abortControllerRef.current) {

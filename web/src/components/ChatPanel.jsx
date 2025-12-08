@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Send, Brain, Wrench, Loader } from 'lucide-react'
+import { Send, Brain, Wrench, Loader, RotateCcw } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -120,6 +120,19 @@ export default function ChatPanel({ messages, onSendMessage, onStartRun, theme, 
             )}
           </div>
         ))}
+        
+        {/* Restart Flow Button */}
+        {messages.length > 0 && messages[messages.length - 1].type === 'flow_complete' && (
+          <div className="flex justify-center mt-6 mb-4">
+            <button
+              onClick={onStartRun}
+              className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white font-medium rounded-xl shadow-lg transition-all hover:scale-105"
+            >
+              <RotateCcw size={18} />
+              Start Again
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Input */}

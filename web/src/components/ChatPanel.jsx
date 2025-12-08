@@ -110,7 +110,8 @@ export default function ChatPanel({ messages, onSendMessage, onStartRun, theme, 
                    <button 
                      key={i}
                      onClick={() => onSendMessage(opt)}
-                     className="px-3 py-2 text-sm bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 rounded transition-colors text-left truncate"
+                     disabled={!isWaitingForInput || index !== messages.length - 1}
+                     className="px-3 py-2 text-sm bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 rounded transition-colors text-left truncate disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-purple-500/20"
                    >
                      {opt}
                    </button>

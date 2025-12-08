@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { Send, Brain, Wrench } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
-export default function ChatPanel({ messages, onSendMessage, theme }) {
+export default function ChatPanel({ messages, onSendMessage, onStartRun, theme }) {
   const [input, setInput] = useState('')
 
   const handleSubmit = (e) => {
@@ -21,6 +23,26 @@ export default function ChatPanel({ messages, onSendMessage, theme }) {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {messages.length === 0 && onStartRun && (
+          <div className="h-full flex flex-col items-center justify-center gap-4 text-center">
+            <div className="p-4 rounded-full bg-purple-500/10 mb-2">
+              <Brain size={32} className="text-purple-400" />
+            </div>
+            <h3 className="text-lg font-medium" style={{ color: 'var(--text-primary)' }}>
+              Ready to Run
+            </h3>
+            <p className="text-sm max-w-xs mb-4" style={{ color: 'var(--text-muted)' }}>
+              Start the agent execution to see the flow in action.
+            </p>
+            <button
+              onClick={onStartRun}
+              className="px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white font-medium rounded-xl shadow-lg transition-all hover:scale-105 flex items-center gap-2"
+            >
+              <Send size={18} />
+              Start Execution
+            </button>
+          </div>
+        )}
         {messages.map((message, index) => (
           <div key={index}>
             {message.type === 'agent' && (
@@ -33,7 +55,11 @@ export default function ChatPanel({ messages, onSendMessage, theme }) {
                     border: `1px solid var(--border-color)` 
                   }}
                 >
-                  <p style={{ color: 'var(--text-primary)' }}>{message.content}</p>
+                  <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {message.content}
+                    </ReactMarkdown>
+                  </div>
                 </div>
               </div>
             )}
@@ -47,17 +73,41 @@ export default function ChatPanel({ messages, onSendMessage, theme }) {
                 </div>
               </div>
             )}
+            {message.type === 'node' && (
+              <div className="flex items-center justify-center my-2">
+                <div className="px-3 py-1 rounded-full text-xs font-medium bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                  ⚡ Executing Node: {message.nodeName}
+                </div>
+              </div>
+            )}
+            {message.type === 'system' && (
+              <div className="text-xs text-center my-1 italic" style={{ color: 'var(--text-muted)' }}>
+                {message.content}
+              </div>
+            )}
+            {message.type === 'error' && (
+              <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+                Error: {message.content}
+              </div>
+            )}
             {message.type === 'thinking' && (
               <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm w-fit bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">
                 <Brain size={16} />
                 <span>Thinking...</span>
               </div>
             )}
-            {message.type === 'tool' && (
-              <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm w-fit bg-blue-500/20 text-blue-400 border border-blue-500/30">
-                <Wrench size={16} />
-                <span>Calling tool: {message.toolName}...</span>
-              </div>
+            {message.type === 'input_request' && message.options && (
+               <div className="grid grid-cols-2 gap-2 mt-2">
+                 {message.options.map((opt, i) => (
+                   <button 
+                     key={i}
+                     onClick={() => onSendMessage(opt)}
+                     className="px-3 py-2 text-sm bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 rounded transition-colors text-left truncate"
+                   >
+                     {opt}
+                   </button>
+                 ))}
+               </div>
             )}
           </div>
         ))}

@@ -58,6 +58,9 @@ function App() {
   const [aiSelectedNodeIds, setAISelectedNodeIds] = useState([])  // Multi-selected nodes for AI
   const [defaultProvider, setDefaultProvider] = useState('')
   const [defaultModel, setDefaultModel] = useState('')
+  const [runningNodeId, setRunningNodeId] = useState(null)
+  const [sessionId, setSessionId] = useState(null)
+  const [isWaitingForInput, setIsWaitingForInput] = useState(false)
 
   // Derive showSettings from path
   const showSettings = path.view === 'settings'
@@ -213,10 +216,122 @@ flow:
     navigate(`/agent/${encodeURIComponent(id)}`)
   }, [navigate])
 
+  const connectToChat = useCallback(async (currentSessionId, message = '') => {
+    try {
+      if (message) {
+        setChatMessages(prev => [...prev, { type: 'user', content: message }])
+        setIsWaitingForInput(false)
+      }
+
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId: selectedAgent.id,
+          message: message,
+          sessionId: currentSessionId,
+          provider: defaultProvider, // Use default or selected
+          model: defaultModel
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n\n')
+        buffer = lines.pop() // Keep incomplete line
+
+        for (const block of lines) {
+          // SSE blocks can contain multiple lines (event: ..., data: ...)
+          const blockLines = block.split('\n')
+          
+          for (const line of blockLines) {
+            if (line.startsWith('data: ')) {
+              const dataStr = line.slice(6)
+              try {
+                const data = JSON.parse(dataStr)
+                
+                if (data.error) {
+                   setChatMessages(prev => [...prev, { type: 'error', content: data.error }])
+                } else if (data.text) {
+                  // Determine if we should append to last agent message or create new one
+                  setChatMessages(prev => {
+                    const last = prev[prev.length - 1]
+                    if (last && last.type === 'agent') {
+                      return [...prev.slice(0, -1), { ...last, content: last.content + data.text }]
+                    }
+                    return [...prev, { type: 'agent', content: data.text }]
+                  })
+                } else if (data.node) {
+                  setRunningNodeId(data.node)
+                  setChatMessages(prev => [...prev, { type: 'node', nodeName: data.node }])
+                  if (data.node === 'END') {
+                     setRunningNodeId(null)
+                  }
+                } else if (data.options) { // Handle input_request which sends options directly or nested
+                  // In run_handler.go provided snippet: "input_request" event sends data: {"options": [...]}
+                  setIsWaitingForInput(true)
+                  setChatMessages(prev => [...prev, { 
+                    type: 'input_request', 
+                    options: data.options 
+                  }])
+                } else if (data.input_request) { // Handle nested format just in case
+                   setIsWaitingForInput(true)
+                   setChatMessages(prev => [...prev, { 
+                     type: 'input_request', 
+                     options: data.input_request.options 
+                   }])
+                } else if (data.done) {
+                   // Clean finish
+                }
+              } catch (e) {
+                console.error('Error parsing SSE data:', e, 'Line:', line)
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Chat error:', err)
+      setChatMessages(prev => [...prev, { type: 'error', content: err.message }])
+      setRunningNodeId(null)
+    }
+  }, [selectedAgent, defaultProvider, defaultModel])
+
   const handleRun = useCallback(() => {
     setIsRunning(true)
     setEditingNode(null)
+    setChatMessages([]) // Clear history
+    setRunningNodeId(null)
+    // Don't auto-start, wait for user to click Start
+    // const newSessionId = `session-${Date.now()}`
+    // setSessionId(newSessionId)
+    // connectToChat(newSessionId) 
   }, [])
+
+  const handleStartRun = useCallback(() => {
+    setChatMessages([])
+    setRunningNodeId(null)
+    const newSessionId = `session-${Date.now()}`
+    setSessionId(newSessionId)
+    connectToChat(newSessionId)
+  }, [connectToChat])
+
+  const handleSendMessage = useCallback((msg) => {
+    if (sessionId) {
+      connectToChat(sessionId, msg)
+    }
+  }, [sessionId, connectToChat])
 
   const handleStopRun = useCallback(() => {
     setIsRunning(false)
@@ -393,6 +508,7 @@ flow:
                 onNodeSelect={handleNodeSelect}
                 onNodeDoubleClick={handleNodeDoubleClick}
                 selectedNodeId={selectedNodeId}
+                runningNodeId={runningNodeId}
                 onAddNode={handleAddNode}
                 onConnect={handleConnect}
                 onEdgeRemove={handleEdgeRemove}
@@ -419,7 +535,9 @@ flow:
               <div className="w-1/2" style={{ borderLeft: '1px solid var(--border-color)' }}>
                 <ChatPanel
                   messages={chatMessages}
-                  onSendMessage={(msg) => setChatMessages([...chatMessages, { type: 'user', content: msg }])}
+                  onSendMessage={handleSendMessage}
+                  onStartRun={handleStartRun}
+                  isWaitingForInput={isWaitingForInput}
                   theme={theme}
                 />
               </div>
@@ -499,7 +617,7 @@ flow:
       />
 
       {/* AI Chat Toggle Button */}
-      {selectedAgent && (
+      {selectedAgent && !isRunning && (
         <button
           onClick={() => setShowAIChat(true)}
           className="fixed bottom-4 right-4 w-14 h-14 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 rounded-full shadow-lg flex items-center justify-center transition-all hover:scale-110 z-40"

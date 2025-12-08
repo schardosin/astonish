@@ -274,5 +274,8 @@ func RegisterRoutes(router *mux.Router) {
 	
 	// Provider endpoints
 	router.HandleFunc("/api/providers/{providerId}/models", ListProviderModelsHandler).Methods("GET")
+	
+	// Execution endpoints
+	router.HandleFunc("/api/chat", HandleChat).Methods("POST")
 }
 

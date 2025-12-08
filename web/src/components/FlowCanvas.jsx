@@ -53,7 +53,8 @@ function FlowCanvasInner({
   onConnect: onConnectCallback,
   onEdgeRemove,
   onLayoutChange,
-  onOpenAIChat
+  onOpenAIChat,
+  runningNodeId
 }) {
   const [nodes, setNodes, handleNodesChange] = useNodesState([])
   const [edges, setEdges, handleEdgesChange] = useEdgesState([])
@@ -107,7 +108,8 @@ function FlowCanvasInner({
             selected: node.id === selectedNodeId,
             data: {
               ...node.data,
-              isSelected: node.id === selectedNodeId
+              isSelected: node.id === selectedNodeId,
+              isActive: node.id === runningNodeId
             }
           }
         })
@@ -123,7 +125,7 @@ function FlowCanvasInner({
         return [...nodesWithSelection, ...waypointNodes]
       })
     }
-  }, [propNodes, selectedNodeId])
+  }, [propNodes, selectedNodeId, runningNodeId])
 
   // Sync edges from props - but preserve runtime waypoint edges
   // UNLESS propEdges already contains waypoint edges (from YAML)
@@ -603,7 +605,7 @@ function FlowCanvasInner({
 }
 
 // Wrapper component that provides a key to force re-mount when flow structure changes dramatically
-export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelect, onNodeDoubleClick, selectedNodeId, onAddNode, onConnect, onEdgeRemove, onLayoutChange, onOpenAIChat }) {
+export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelect, onNodeDoubleClick, selectedNodeId, runningNodeId, onAddNode, onConnect, onEdgeRemove, onLayoutChange, onOpenAIChat }) {
   // Generate a key based on node IDs to force re-mount when nodes change completely
   const flowKey = useMemo(() => {
     if (!nodes || nodes.length === 0) return 'empty'
@@ -625,6 +627,7 @@ export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelec
       onEdgeRemove={onEdgeRemove}
       onLayoutChange={onLayoutChange}
       onOpenAIChat={onOpenAIChat}
+      runningNodeId={runningNodeId}
     />
   )
 }

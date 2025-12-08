@@ -241,65 +241,92 @@ function FlowCanvasInner({
       draggable: true,
     }
 
-    // Get node positions BEFORE updating state (to avoid stale closure issues)
-    // We need to read from the current nodes to determine handle positions
-    let edge1SourceHandle = null
-    let edge1TargetHandle = 'top-target'
-    let edge2SourceHandle = 'bottom-source'
-    let edge2TargetHandle = null
-
-    // Create two new edges
-    const newEdge1 = {
-      ...edge,
-      id: `e-${edge.source}-${waypointId}-${uniqueSuffix}`,
-      source: edge.source,
-      target: waypointId,
-      sourceHandle: edge1SourceHandle,
-      targetHandle: edge1TargetHandle,
-    }
-
-    const newEdge2 = {
-      ...edge,
-      id: `e-${waypointId}-${edge.target}-${uniqueSuffix}`,
-      source: waypointId,
-      target: edge.target,
-      sourceHandle: edge2SourceHandle,
-      targetHandle: edge2TargetHandle,
-    }
-
-    // Update nodes first
+    // We need to read current node positions to determine handle positions
+    // Do this synchronously by reading from the current nodes state
     setNodes((currentNodes) => {
-      // Adjust handles based on actual node positions
       const sourceNode = currentNodes.find(n => n.id === edge.source)
       const targetNode = currentNodes.find(n => n.id === edge.target)
       const sourceY = sourceNode?.position?.y || 0
       const targetY = targetNode?.position?.y || 0
       const waypointY = position.y
       
-      if (sourceY > waypointY) {
-        newEdge1.sourceHandle = 'top-source'
-        newEdge1.targetHandle = 'bottom-target'
+      // Check if source or target are waypoints (for chains)
+      const sourceIsWaypoint = sourceNode?.type === 'waypoint'
+      const targetIsWaypoint = targetNode?.type === 'waypoint'
+      
+      // Determine handles for edge1 (source -> new waypoint)
+      // New waypoint's target handle
+      let edge1SourceHandle = null
+      let edge1TargetHandle = 'top-target' // New waypoint's top-target
+      
+      if (sourceIsWaypoint) {
+        // Source is also a waypoint - use waypoint source handles
+        edge1SourceHandle = sourceY > waypointY ? 'top-source' : 'bottom-source'
+      } else if (sourceY > waypointY) {
+        // Source is below waypoint - back-edge going UP
+        edge1SourceHandle = 'top-source' // Regular node's top-source
       }
+      
+      if (sourceY > waypointY) {
+        edge1TargetHandle = 'bottom-target'
+      }
+      
+      // Determine handles for edge2 (new waypoint -> target)
+      let edge2SourceHandle = 'bottom-source' // New waypoint's bottom-source
+      let edge2TargetHandle = null // Target's handle
       
       if (waypointY > targetY) {
-        newEdge2.sourceHandle = 'top-source'
-        newEdge2.targetHandle = 'left'
+        // New waypoint is BELOW target - back-edge going UP
+        edge2SourceHandle = 'top-source'
+        
+        if (targetIsWaypoint) {
+          // Target is a waypoint - use waypoint target handle
+          edge2TargetHandle = 'bottom-target'
+        } else {
+          // Target is regular node - use left handle
+          edge2TargetHandle = 'left'
+        }
+      } else {
+        // Normal flow - new waypoint above target
+        if (targetIsWaypoint) {
+          edge2TargetHandle = 'top-target'
+        }
+        // Regular nodes use null for top-down flow
       }
       
-      return [...currentNodes, waypointNode]
-    })
+      // Create edges with correct handles (computed from actual positions)
+      const newEdge1 = {
+        ...edge,
+        id: `e-${edge.source}-${waypointId}-${uniqueSuffix}`,
+        source: edge.source,
+        target: waypointId,
+        sourceHandle: edge1SourceHandle,
+        targetHandle: edge1TargetHandle,
+      }
 
-    // Update edges separately - use functional update with deduplication
-    setEdges((currentEdges) => {
-      // Check if we already added these edges (React Strict Mode can cause double calls)
-      const alreadyHasEdge1 = currentEdges.some(e => e.id === newEdge1.id)
-      if (alreadyHasEdge1) {
-        return currentEdges // Already added, don't duplicate
+      const newEdge2 = {
+        ...edge,
+        id: `e-${waypointId}-${edge.target}-${uniqueSuffix}`,
+        source: waypointId,
+        target: edge.target,
+        sourceHandle: edge2SourceHandle,
+        targetHandle: edge2TargetHandle,
       }
-      
-      return currentEdges
-        .filter((e) => e.id !== edge.id)
-        .concat([newEdge1, newEdge2])
+
+      // Update edges from within setNodes to avoid timing issues
+      setEdges((currentEdges) => {
+        // Check if we already added these edges (React Strict Mode can cause double calls)
+        const alreadyHasEdge1 = currentEdges.some(e => e.id === newEdge1.id)
+        if (alreadyHasEdge1) {
+          return currentEdges // Already added, don't duplicate
+        }
+        
+        return currentEdges
+          .filter((e) => e.id !== edge.id)
+          .concat([newEdge1, newEdge2])
+      })
+
+      return [...currentNodes, waypointNode]
     })
   }, [screenToFlowPosition, setNodes, setEdges])
 

@@ -99,6 +99,51 @@ function parseWaypoints(savedLayout) {
       }
       waypointEdgeMap[edgeKey].push(wp)
     })
+    
+    // For each edge, order waypoints by chain topology using immediateSource/immediateTarget
+    // This preserves the actual routing order instead of just Y-sorting
+    Object.keys(waypointEdgeMap).forEach(edgeKey => {
+      const waypoints = waypointEdgeMap[edgeKey]
+      if (waypoints.length <= 1) return  // No need to sort single waypoint
+      
+      // Check if we have immediateSource/immediateTarget info (new format)
+      const hasChainInfo = waypoints.some(wp => wp.immediateSource || wp.immediateTarget)
+      
+      if (hasChainInfo) {
+        // Build chain using topology
+        const [originalSource] = edgeKey.split('->')
+        const wpById = new Map(waypoints.map(wp => [wp.id, wp]))
+        const sorted = []
+        
+        // Find first waypoint in chain (one whose immediateSource is the original source)
+        let current = waypoints.find(wp => wp.immediateSource === originalSource)
+        
+        if (current) {
+          sorted.push(current)
+          // Follow the chain
+          while (sorted.length < waypoints.length) {
+            const next = waypoints.find(wp => wp.immediateSource === current.id)
+            if (next) {
+              sorted.push(next)
+              current = next
+            } else {
+              break
+            }
+          }
+        }
+        
+        // If we successfully built the chain, use it; otherwise fall back to Y-sort
+        if (sorted.length === waypoints.length) {
+          waypointEdgeMap[edgeKey] = sorted
+        } else {
+          // Fallback: sort by Y
+          waypointEdgeMap[edgeKey] = [...waypoints].sort((a, b) => a.y - b.y)
+        }
+      } else {
+        // Old format without chain info - sort by Y (legacy behavior)
+        waypointEdgeMap[edgeKey] = [...waypoints].sort((a, b) => a.y - b.y)
+      }
+    })
   }
   
   return { waypointNodes, waypointEdgeMap }
@@ -145,39 +190,84 @@ export function parseEdges(yamlData, waypointEdgeMap = {}, nodePositions = {}) {
         const waypoints = waypointEdgeMap[edgeKey]
         
         if (waypoints && waypoints.length > 0) {
-          // Edge has waypoints - create split edges
-          // Sort waypoints by their Y position
-          const sortedWps = [...waypoints].sort((a, b) => a.y - b.y)
+          // Edge has waypoints - they are pre-sorted by chain topology in parseWaypoints
+          const sortedWps = waypoints  // Already sorted!
+          
+          // Get target node Y for handle calculation
+          const targetY = nodePositions[flowItem.to]?.y ?? 0
+          const sourceY = nodePositions[from]?.y ?? 0
           
           // Create edges: source -> wp1 -> wp2 -> ... -> target
           let prevNodeId = from
+          let prevY = sourceY
           
           sortedWps.forEach((wp, wpIndex) => {
-            // Use saved handles if available, otherwise calculate
-            const srcHandle = wpIndex === 0 ? wp.incomingSourceHandle : null
-            const tgtHandle = wpIndex === 0 ? wp.incomingTargetHandle : null
+            const isFirstEdge = wpIndex === 0
+            const wpY = wp.y
+            
+            // Compute handles based on relative Y positions
+            // If prev is below current (prevY > wpY), it's a back-edge going UP
+            let srcHandle = null
+            let tgtHandle = null
+            
+            if (isFirstEdge) {
+              // First edge: from original source to first waypoint
+              if (prevY > wpY) {
+                // Source below waypoint - back-edge
+                srcHandle = 'top-source'
+                tgtHandle = 'bottom-target'
+              } else {
+                // Normal flow
+                srcHandle = null
+                tgtHandle = 'top-target'
+              }
+            } else {
+              // Edge from previous waypoint to this waypoint
+              if (prevY > wpY) {
+                // Previous WP below this WP - edge going UP
+                srcHandle = 'top-source'
+                tgtHandle = 'bottom-target'
+              } else {
+                // Normal flow
+                srcHandle = 'bottom-source'
+                tgtHandle = 'top-target'
+              }
+            }
             
             edges.push({
               id: `e-${prevNodeId}-${wp.id}-${index}-${wpIndex}`,
               source: prevNodeId,
               target: wp.id,
-              sourceHandle: srcHandle || null,
-              targetHandle: tgtHandle || null,
+              sourceHandle: srcHandle,
+              targetHandle: tgtHandle,
               animated: true,
               style: { stroke: '#805AD5', strokeWidth: 2 },
               type: 'smoothstep',
             })
             prevNodeId = wp.id
+            prevY = wpY
           })
           
-          // Final edge from last waypoint to target
+          // Final edge from last waypoint to target (a regular node)
           const lastWp = sortedWps[sortedWps.length - 1]
+          const lastWpY = lastWp.y
+          
+          // Compute handles for final edge
+          let finalSrcHandle = 'bottom-source'
+          let finalTgtHandle = null  // Regular nodes use null for top target
+          
+          if (lastWpY > targetY) {
+            // Last waypoint is BELOW target - back-edge going UP
+            finalSrcHandle = 'top-source'
+            finalTgtHandle = 'left'  // Regular nodes use 'left' for back-edges
+          }
+          
           edges.push({
             id: `e-${prevNodeId}-${flowItem.to}-${index}-final`,
             source: prevNodeId,
             target: flowItem.to,
-            sourceHandle: lastWp.outgoingSourceHandle || null,
-            targetHandle: lastWp.outgoingTargetHandle || null,
+            sourceHandle: finalSrcHandle,
+            targetHandle: finalTgtHandle,
             animated: true,
             style: { stroke: '#805AD5', strokeWidth: 2 },
             type: 'smoothstep',
@@ -213,21 +303,48 @@ export function parseEdges(yamlData, waypointEdgeMap = {}, nodePositions = {}) {
           const waypoints = waypointEdgeMap[edgeKey]
           
           if (waypoints && waypoints.length > 0) {
-            // Handle waypoints for conditional edges
-            const sortedWps = [...waypoints].sort((a, b) => a.y - b.y)
+            // Handle waypoints for conditional edges - pre-sorted by chain topology
+            const sortedWps = waypoints  // Already sorted!
+            
+            // Get Y positions for handle calculation
+            const targetY = nodePositions[edge.to]?.y ?? 0
+            const sourceY = nodePositions[from]?.y ?? 0
+            
             let prevNodeId = from
+            let prevY = sourceY
             
             sortedWps.forEach((wp, wpIndex) => {
-              // Use saved handles if available
-              const srcHandle = wpIndex === 0 ? wp.incomingSourceHandle : null
-              const tgtHandle = wpIndex === 0 ? wp.incomingTargetHandle : null
+              const isFirstEdge = wpIndex === 0
+              const wpY = wp.y
+              
+              // Compute handles based on relative Y positions
+              let srcHandle = null
+              let tgtHandle = null
+              
+              if (isFirstEdge) {
+                if (prevY > wpY) {
+                  srcHandle = 'top-source'
+                  tgtHandle = 'bottom-target'
+                } else {
+                  srcHandle = null
+                  tgtHandle = 'top-target'
+                }
+              } else {
+                if (prevY > wpY) {
+                  srcHandle = 'top-source'
+                  tgtHandle = 'bottom-target'
+                } else {
+                  srcHandle = 'bottom-source'
+                  tgtHandle = 'top-target'
+                }
+              }
               
               edges.push({
                 id: `e-${prevNodeId}-${wp.id}-${index}-${edgeIndex}-${wpIndex}`,
                 source: prevNodeId,
                 target: wp.id,
-                sourceHandle: srcHandle || null,
-                targetHandle: tgtHandle || null,
+                sourceHandle: srcHandle,
+                targetHandle: tgtHandle,
                 animated: true,
                 style: { stroke: '#805AD5', strokeWidth: 2 },
                 type: 'smoothstep',
@@ -237,15 +354,27 @@ export function parseEdges(yamlData, waypointEdgeMap = {}, nodePositions = {}) {
                 labelBgPadding: [4, 2],
               })
               prevNodeId = wp.id
+              prevY = wpY
             })
             
+            // Final edge from last waypoint to target
             const lastWp = sortedWps[sortedWps.length - 1]
+            const lastWpY = lastWp.y
+            
+            let finalSrcHandle = 'bottom-source'
+            let finalTgtHandle = null
+            
+            if (lastWpY > targetY) {
+              finalSrcHandle = 'top-source'
+              finalTgtHandle = 'left'
+            }
+            
             edges.push({
               id: `e-${prevNodeId}-${edge.to}-${index}-${edgeIndex}-final`,
               source: prevNodeId,
               target: edge.to,
-              sourceHandle: lastWp.outgoingSourceHandle || null,
-              targetHandle: lastWp.outgoingTargetHandle || null,
+              sourceHandle: finalSrcHandle,
+              targetHandle: finalTgtHandle,
               animated: true,
               style: { stroke: '#805AD5', strokeWidth: 2 },
               type: 'smoothstep',
@@ -421,12 +550,8 @@ export function yamlToFlow(yamlData) {
     edges,
   }
 }
-
 /**
- * Extract layout from current nodes and edges for saving to YAML
- * @param {Array} nodes - Current React Flow nodes
- * @param {Array} edges - Current React Flow edges
- * @returns {Object} Layout object for YAML
+ * Extract layout from nodes and edges for saving
  */
 export function extractLayout(nodes, edges) {
   const layout = {
@@ -434,46 +559,56 @@ export function extractLayout(nodes, edges) {
     waypoints: []
   }
   
-  // Extract node positions
-  nodes.forEach((node) => {
-    if (node.type === 'waypoint') {
-      // Find the edges connected to this waypoint to determine original source/target
-      const incomingEdge = edges.find(e => e.target === node.id)
-      const outgoingEdge = edges.find(e => e.source === node.id)
-      
-      if (incomingEdge && outgoingEdge) {
-        // Trace back to find original source (non-waypoint)
-        let source = incomingEdge.source
-        let prevEdge = edges.find(e => e.target === source)
-        while (prevEdge && nodes.find(n => n.id === source)?.type === 'waypoint') {
-          source = prevEdge.source
-          prevEdge = edges.find(e => e.target === source)
-        }
-        
-        // Trace forward to find original target (non-waypoint)
-        let target = outgoingEdge.target
-        let nextEdge = edges.find(e => e.source === target)
-        while (nextEdge && nodes.find(n => n.id === target)?.type === 'waypoint') {
-          target = nextEdge.target
-          nextEdge = edges.find(e => e.source === target)
-        }
-        
-        // Save the handle information so we can restore exact edge routing
-        layout.waypoints.push({
-          id: node.id,
-          x: Math.round(node.position.x),
-          y: Math.round(node.position.y),
-          source: source,
-          target: target,
-          // Save edge handle info for exact restoration
-          incomingSourceHandle: incomingEdge.sourceHandle || null,
-          incomingTargetHandle: incomingEdge.targetHandle || null,
-          outgoingSourceHandle: outgoingEdge.sourceHandle || null,
-          outgoingTargetHandle: outgoingEdge.targetHandle || null,
-        })
+  // First, collect all waypoints to understand chains
+  const waypointNodes = nodes.filter(n => n.type === 'waypoint')
+  
+  // For each waypoint, find its position in the chain
+  waypointNodes.forEach((node) => {
+    const incomingEdge = edges.find(e => e.target === node.id)
+    const outgoingEdge = edges.find(e => e.source === node.id)
+    
+    if (incomingEdge && outgoingEdge) {
+      // Find original source (first non-waypoint going backwards)
+      let originalSource = incomingEdge.source
+      let tempEdge = edges.find(e => e.target === originalSource)
+      while (tempEdge && nodes.find(n => n.id === originalSource)?.type === 'waypoint') {
+        originalSource = tempEdge.source
+        tempEdge = edges.find(e => e.target === originalSource)
       }
-    } else {
-      // Regular node - save position
+      
+      // Find original target (first non-waypoint going forwards)
+      let originalTarget = outgoingEdge.target
+      let tempEdge2 = edges.find(e => e.source === originalTarget)
+      while (tempEdge2 && nodes.find(n => n.id === originalTarget)?.type === 'waypoint') {
+        originalTarget = tempEdge2.target
+        tempEdge2 = edges.find(e => e.source === originalTarget)
+      }
+      
+      // Calculate sequence order based on Y position (lower Y = earlier in chain for top-down flows)
+      // We'll compute this relative to other waypoints on the same original edge
+      
+      layout.waypoints.push({
+        id: node.id,
+        x: Math.round(node.position.x),
+        y: Math.round(node.position.y),
+        // Original edge endpoints (for grouping waypoints on the same edge)
+        source: originalSource,
+        target: originalTarget,
+        // Actual immediate neighbors (for precise chain reconstruction)
+        immediateSource: incomingEdge.source,
+        immediateTarget: outgoingEdge.target,
+        // Save edge handle info for exact restoration
+        incomingSourceHandle: incomingEdge.sourceHandle || null,
+        incomingTargetHandle: incomingEdge.targetHandle || null,
+        outgoingSourceHandle: outgoingEdge.sourceHandle || null,
+        outgoingTargetHandle: outgoingEdge.targetHandle || null,
+      })
+    }
+  })
+  
+  // Extract regular node positions
+  nodes.forEach((node) => {
+    if (node.type !== 'waypoint') {
       layout.nodes[node.id] = {
         x: Math.round(node.position.x),
         y: Math.round(node.position.y)

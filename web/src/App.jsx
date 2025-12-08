@@ -460,6 +460,7 @@ flow:
         currentYaml={yamlContent}
         selectedNodes={aiSelectedNodeIds.length > 0 ? aiSelectedNodeIds : (selectedNodeId ? [selectedNodeId] : [])}
         focusedNode={aiFocusedNode}
+        agentId={selectedAgent?.id}
         onPreviewYaml={(newYaml) => {
           // Preview: update flow but don't save
           setYamlContent(newYaml)

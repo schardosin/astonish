@@ -24,6 +24,7 @@ export default function AIChatPanel({
   currentYaml = '',
   selectedNodes = [],
   focusedNode = null,
+  agentId = null,
   onApplyYaml,
   onPreviewYaml,
 }) {
@@ -52,6 +53,12 @@ export default function AIChatPanel({
       inputRef.current?.focus()
     }
   }, [isOpen])
+
+  // Reset flow chat when agent changes (context is different per agent)
+  useEffect(() => {
+    setFlowMessages([])
+    setPendingYaml(null)
+  }, [agentId])
 
   // Reset node refiner when focused node changes (fresh start per node)
   useEffect(() => {

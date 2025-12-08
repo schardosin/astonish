@@ -138,10 +138,11 @@ Modify state variables.
 ` + "```" + `
 
 ### Loop (Back-edge)
+IMPORTANT: Loops must point to actual nodes, NEVER to START!
 ` + "```yaml" + `
-- from: process_node
+- from: ask_continue
   edges:
-    - to: START  # or any earlier node
+    - to: get_question  # Loop back to the actual node, NOT to START!
       condition: "lambda x: x['continue'] == 'yes'"
     - to: END
       condition: "lambda x: x['continue'] == 'no'"
@@ -189,11 +190,14 @@ Always add user_message when the user should see the output:
 
 ## Rules
 1. Flow must start from START and end at END
-2. All node names must be unique
-3. Use output_model to pass data between nodes
-4. ALWAYS include user_message on LLM nodes when user should see output
-5. For branching/loops, use INPUT with options - gives reliable condition values
-6. NEVER use LLM output in conditional edges - it's unpredictable
+2. START and END are VIRTUAL nodes - they are NOT actual nodes you define
+3. You can ONLY use "from: START" to begin the flow - NEVER use "to: START"
+4. Loops must point to actual node names (e.g., "to: get_question"), NEVER to START
+5. All node names must be unique
+6. Use output_model to pass data between nodes
+7. ALWAYS include user_message on LLM nodes when user should see output
+8. For branching/loops, use INPUT with options - gives reliable condition values
+9. NEVER use LLM output in conditional edges - it's unpredictable
 `
 
 // GetFlowSchema returns the schema as a string for AI context

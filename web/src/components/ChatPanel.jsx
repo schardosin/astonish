@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
-import { Send, Brain, Wrench, Loader, RotateCcw } from 'lucide-react'
+import { Send, Brain, Wrench, Loader, RotateCcw, Square } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-export default function ChatPanel({ messages, onSendMessage, onStartRun, theme, isWaitingForInput }) {
+export default function ChatPanel({ messages, onSendMessage, onStartRun, onStop, theme, isWaitingForInput, hasActiveSession }) {
   const [input, setInput] = useState('')
   const scrollRef = useRef(null)
 
@@ -138,6 +138,17 @@ export default function ChatPanel({ messages, onSendMessage, onStartRun, theme, 
       {/* Input */}
       <form onSubmit={handleSubmit} className="p-4" style={{ borderTop: '1px solid var(--border-color)' }}>
         <div className="flex gap-3">
+          {/* Stop Button - only when session is active */}
+          {hasActiveSession && (
+            <button
+              type="button"
+              onClick={onStop}
+              className="px-4 py-3 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors flex items-center gap-2"
+              title="Stop Execution"
+            >
+              <Square size={18} />
+            </button>
+          )}
           <div className="relative flex-1">
             <input
               type="text"

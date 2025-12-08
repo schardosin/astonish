@@ -580,7 +580,9 @@ flow:
                   messages={chatMessages}
                   onSendMessage={handleSendMessage}
                   onStartRun={handleStartRun}
+                  onStop={handleStopRun}
                   isWaitingForInput={isWaitingForInput}
+                  hasActiveSession={sessionId !== null}
                   theme={theme}
                 />
               </div>

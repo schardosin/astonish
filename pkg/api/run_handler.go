@@ -79,7 +79,7 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	fmt.Printf("[Chat API] Received request for agent: %s, session: %s\n", req.AgentID, req.SessionID)
+
 
 	if req.AgentID == "" {
 		http.Error(w, "AgentID is required", http.StatusBadRequest)
@@ -111,11 +111,10 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	// 1. Load Agent Config
 	agentPath, _, err := findAgentPath(req.AgentID)
 	if err != nil {
-		fmt.Printf("[Chat API] Agent not found: %v\n", err)
 		SendErrorSSE(w, flusher, fmt.Sprintf("Agent not found: %s", req.AgentID))
 		return
 	}
-	fmt.Printf("[Chat API] Found agent path: %s\n", agentPath)
+
 
 	cfg, err := config.LoadAgent(agentPath)
 	if err != nil {
@@ -157,11 +156,10 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	// 3. Initialize Provider/LLM
 	llm, err := provider.GetProvider(ctx, providerName, modelName, appCfg)
 	if err != nil {
-		fmt.Printf("[Chat API] Failed to init provider: %v\n", err)
 		SendErrorSSE(w, flusher, fmt.Sprintf("Failed to initialize provider: %v", err))
 		return
 	}
-	fmt.Printf("[Chat API] Provider initialized: %s/%s\n", providerName, modelName)
+
 
 	// 4. Initialize Tools
 	internalTools, err := tools.GetInternalTools()
@@ -191,11 +189,10 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		Run:         astonishAgent.Run,
 	})
 	if err != nil {
-		fmt.Printf("[Chat API] Failed to create agent: %v\n", err)
 		SendErrorSSE(w, flusher, fmt.Sprintf("Failed to create agent: %v", err))
 		return
 	}
-	fmt.Printf("[Chat API] Agent created\n")
+
 
 	// 6. Manage Session
 	sm.mu.Lock()
@@ -223,11 +220,10 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		SessionService: sm.service,
 	})
 	if err != nil {
-		fmt.Printf("[Chat API] Failed to create runner: %v\n", err)
 		SendErrorSSE(w, flusher, fmt.Sprintf("Failed to create runner: %v", err))
 		return
 	}
-	fmt.Printf("[Chat API] Runner created, starting flow...\n")
+
 
 	// 8. Run & Stream
 	var userMsg *genai.Content
@@ -239,16 +235,11 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 
 	var lastNodeName string
 
-	fmt.Printf("[Chat API] Entering run loop\n")
 	for event, err := range rnr.Run(ctx, req.SessionID, sess.ID(), userMsg, adkagent.RunConfig{}) {
-		fmt.Printf("[Chat API] Received event. Err: %v\n", err)
 		if err != nil {
-			fmt.Printf("[Chat API] Run error: %v\n", err)
 			SendErrorSSE(w, flusher, err.Error())
 			return
 		}
-		
-		fmt.Printf("[Chat API] Event Content: LLMResponse=%v, StateDelta=%v\n", event.LLMResponse.Content != nil, event.Actions.StateDelta != nil)
 
 		// Stream LLM Text chunks
 		if event.LLMResponse.Content != nil {

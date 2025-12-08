@@ -1,4 +1,4 @@
-import { Play, Square, Code, LogOut, Loader } from 'lucide-react'
+import { Play, Code, LogOut, Loader } from 'lucide-react'
 import { snakeToTitleCase } from '../utils/formatters'
 
 export default function Header({ agentName, showYaml, onToggleYaml, isRunning, onRun, onStop, onExit, onSave, isSaving, theme }) {
@@ -46,16 +46,8 @@ export default function Header({ agentName, showYaml, onToggleYaml, isRunning, o
           </>
         )}
 
-        {/* Run/Stop Button */}
-        {isRunning ? (
-          <button
-            onClick={onStop}
-            className="flex items-center gap-2 px-5 py-2 bg-red-500 hover:bg-red-600 text-white font-medium rounded-lg transition-colors shadow-sm"
-          >
-            <Square size={18} />
-            Stop
-          </button>
-        ) : (
+        {/* Run Button (only when not running) */}
+        {!isRunning && (
           <button
             onClick={onRun}
             className="flex items-center gap-2 px-5 py-2 bg-[#805AD5] hover:bg-[#6B46C1] text-white font-medium rounded-lg transition-colors shadow-sm"

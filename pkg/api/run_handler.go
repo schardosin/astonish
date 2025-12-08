@@ -237,6 +237,8 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 
 	SendSSE(w, flusher, "status", map[string]string{"status": "running"})
 
+	var lastNodeName string
+
 	fmt.Printf("[Chat API] Entering run loop\n")
 	for event, err := range rnr.Run(ctx, req.SessionID, sess.ID(), userMsg, adkagent.RunConfig{}) {
 		fmt.Printf("[Chat API] Received event. Err: %v\n", err)
@@ -265,12 +267,16 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 			
 			// Detect node transition
 			if nodeName, ok := delta["current_node"].(string); ok {
-				// Also check node_type if available (sometimes implicit)
-				nodeType, _ := delta["node_type"].(string) 
-				SendSSE(w, flusher, "node", map[string]string{
-					"node": nodeName,
-					"type": nodeType,
-				})
+				// Only send if node actually changed
+				if nodeName != lastNodeName {
+					lastNodeName = nodeName
+					// Also check node_type if available (sometimes implicit)
+					nodeType, _ := delta["node_type"].(string) 
+					SendSSE(w, flusher, "node", map[string]string{
+						"node": nodeName,
+						"type": nodeType,
+					})
+				}
 			}
 
 			// Capture input request from approval_options (tool approval)

@@ -1,10 +1,18 @@
-import { useState } from 'react'
-import { Send, Brain, Wrench } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Send, Brain, Wrench, Loader } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-export default function ChatPanel({ messages, onSendMessage, onStartRun, theme }) {
+export default function ChatPanel({ messages, onSendMessage, onStartRun, theme, isWaitingForInput }) {
   const [input, setInput] = useState('')
+  const scrollRef = useRef(null)
+
+  // Auto-scroll to bottom directly, without smooth behavior for instant feedback
+  useEffect(() => {
+    if (scrollRef.current) {
+       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }, [messages])
 
   const handleSubmit = (e) => {
     e.preventDefault()
@@ -22,7 +30,7 @@ export default function ChatPanel({ messages, onSendMessage, onStartRun, theme }
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 && onStartRun && (
           <div className="h-full flex flex-col items-center justify-center gap-4 text-center">
             <div className="p-4 rounded-full bg-purple-500/10 mb-2">
@@ -116,21 +124,30 @@ export default function ChatPanel({ messages, onSendMessage, onStartRun, theme }
       {/* Input */}
       <form onSubmit={handleSubmit} className="p-4" style={{ borderTop: '1px solid var(--border-color)' }}>
         <div className="flex gap-3">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Disabled for Response..."
-            className="flex-1 px-4 py-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-            style={{ 
-              background: 'var(--bg-tertiary)', 
-              color: 'var(--text-primary)',
-              border: '1px solid var(--border-color)'
-            }}
-          />
+          <div className="relative flex-1">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              disabled={!isWaitingForInput}
+              placeholder={isWaitingForInput ? "Type your response..." : "Agent is thinking..."}
+              className="w-full px-4 py-3 pr-10 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-70 disabled:cursor-not-allowed transition-all"
+              style={{ 
+                background: 'var(--bg-tertiary)', 
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border-color)'
+              }}
+            />
+            {!isWaitingForInput && messages.length > 0 && (
+              <div className="absolute right-3 top-1/2 -translate-y-1/2 text-purple-500">
+                <Loader size={18} className="animate-spin" />
+              </div>
+            )}
+          </div>
           <button
             type="submit"
-            className="px-4 py-3 bg-[#805AD5] hover:bg-[#6B46C1] text-white rounded-lg transition-colors"
+            disabled={!isWaitingForInput || !input.trim()}
+            className="px-4 py-3 bg-[#805AD5] hover:bg-[#6B46C1] text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Send size={20} />
           </button>

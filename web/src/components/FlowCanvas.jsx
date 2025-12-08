@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useEffect, useRef } from 'react'
+import { useCallback, useMemo, useEffect, useRef, useState } from 'react'
 import {
   ReactFlow,
   Background,
@@ -67,6 +67,19 @@ function FlowCanvasInner({
   
   // Check if canvas is empty (only START and END nodes)
   const isEmptyCanvas = propNodes.filter(n => n.type !== 'start' && n.type !== 'end').length === 0
+
+  // Track multi-selection for AI assist
+  const [selectedNodeIds, setSelectedNodeIds] = useState([])
+  
+  // Filter to get only "real" nodes (not START, END, waypoint)
+  const selectedRealNodes = useMemo(() => {
+    return selectedNodeIds.filter(id => {
+      const node = nodes.find(n => n.id === id)
+      return node && !['start', 'end', 'waypoint'].includes(node.type)
+    })
+  }, [selectedNodeIds, nodes])
+  
+  const hasMultiSelection = selectedRealNodes.length >= 2
 
   // Sync nodes from props - update selection state but preserve waypoint nodes
   // UNLESS propNodes already contains waypoints (from YAML)
@@ -348,6 +361,10 @@ function FlowCanvasInner({
   }, [onEdgeRemove])
 
   const onNodeClick = useCallback((event, node) => {
+    // Skip parent's single-select handler when shift is held (multi-selection)
+    if (event.shiftKey) {
+      return // Let React Flow handle multi-selection
+    }
     if (onNodeSelect) {
       onNodeSelect(node.id)
     }
@@ -413,11 +430,19 @@ function FlowCanvasInner({
     }
   }, [onNodeDoubleClick, setNodes, setEdges])
 
+  // Handle selection changes from React Flow
+  const onSelectionChange = useCallback(({ nodes: selectedNodes }) => {
+    const ids = selectedNodes?.map(n => n.id) || []
+    setSelectedNodeIds(ids)
+  }, [])
+
   const onPaneClick = useCallback(() => {
     // Clicking on empty space deselects
     if (onNodeSelect) {
       onNodeSelect(null)
     }
+    // Also clear multi-selection
+    setSelectedNodeIds([])
   }, [onNodeSelect])
 
   const defaultEdgeOptions = useMemo(() => ({
@@ -438,6 +463,12 @@ function FlowCanvasInner({
         onNodeDoubleClick={handleNodeDoubleClick}
         onEdgeDoubleClick={onEdgeDoubleClick}
         onPaneClick={onPaneClick}
+        onSelectionChange={onSelectionChange}
+        selectionOnDrag={true}
+        selectNodesOnDrag={true}
+        panOnDrag={[1, 2]}
+        panOnScroll={true}
+        multiSelectionKeyCode="Shift"
         nodeTypes={nodeTypes}
         defaultEdgeOptions={defaultEdgeOptions}
         defaultViewport={{ x: 50, y: 30, zoom: 1 }}
@@ -542,8 +573,25 @@ function FlowCanvasInner({
               className="text-xs px-3 py-2 rounded-lg"
               style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-muted)' }}
             >
-              Drag from node handles to connect • Select edge + Delete to remove
+              Drag from node handles to connect • Select edge + Delete to remove • Shift+click or drag to multi-select
             </div>
+          </Panel>
+        )}
+        
+        {/* Multi-Selection AI Assist Button */}
+        {!isRunning && hasMultiSelection && onOpenAIChat && (
+          <Panel position="bottom-center" className="mb-4">
+            <button
+              onClick={() => onOpenAIChat({ context: 'multi_node', nodeIds: selectedRealNodes })}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-lg shadow-lg text-white font-medium transition-all hover:scale-105"
+              style={{ 
+                background: 'linear-gradient(135deg, #6B46C1 0%, #4F46E5 100%)',
+                border: '1px solid rgba(255,255,255,0.2)'
+              }}
+            >
+              <Sparkles size={18} />
+              AI Assist ({selectedRealNodes.length} nodes)
+            </button>
           </Panel>
         )}
       </ReactFlow>

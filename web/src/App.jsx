@@ -55,6 +55,7 @@ function App() {
   const [showAIChat, setShowAIChat] = useState(false)
   const [aiChatContext, setAIChatContext] = useState('create_flow')
   const [aiFocusedNode, setAIFocusedNode] = useState(null)  // Node being edited when AI chat opens
+  const [aiSelectedNodeIds, setAISelectedNodeIds] = useState([])  // Multi-selected nodes for AI
   const [defaultProvider, setDefaultProvider] = useState('')
   const [defaultModel, setDefaultModel] = useState('')
 
@@ -377,7 +378,20 @@ flow:
                 onConnect={handleConnect}
                 onEdgeRemove={handleEdgeRemove}
                 onLayoutChange={handleLayoutChange}
-                onOpenAIChat={() => setShowAIChat(true)}
+                onOpenAIChat={(options) => {
+                  if (options?.context === 'multi_node' && options?.nodeIds) {
+                    // Multi-node context
+                    setAIChatContext('multi_node')
+                    setAISelectedNodeIds(options.nodeIds)
+                    setAIFocusedNode(null)
+                  } else {
+                    // Default flow context
+                    setAIChatContext('create_flow')
+                    setAISelectedNodeIds([])
+                    setAIFocusedNode(null)
+                  }
+                  setShowAIChat(true)
+                }}
               />
             </div>
 
@@ -441,10 +455,10 @@ flow:
       {/* AI Chat Panel */}
       <AIChatPanel
         isOpen={showAIChat}
-        onClose={() => { setShowAIChat(false); setAIFocusedNode(null); }}
+        onClose={() => { setShowAIChat(false); setAIFocusedNode(null); setAISelectedNodeIds([]); }}
         context={aiChatContext}
         currentYaml={yamlContent}
-        selectedNodes={selectedNodeId ? [selectedNodeId] : []}
+        selectedNodes={aiSelectedNodeIds.length > 0 ? aiSelectedNodeIds : (selectedNodeId ? [selectedNodeId] : [])}
         focusedNode={aiFocusedNode}
         onPreviewYaml={(newYaml) => {
           // Preview: update flow but don't save

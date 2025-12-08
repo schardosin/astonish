@@ -139,6 +139,7 @@ export default function AIChatPanel({
       case 'create_flow': return 'Create Flow'
       case 'modify_nodes': return 'Modify Nodes'
       case 'node_config': return 'Node Assistant'
+      case 'multi_node': return 'Multi-Node Assistant'
       default: return 'AI Assistant'
     }
   }
@@ -148,6 +149,7 @@ export default function AIChatPanel({
       case 'create_flow': return 'Describe the flow you want to create...'
       case 'modify_nodes': return 'What changes do you want to make?'
       case 'node_config': return 'How can I help with this node?'
+      case 'multi_node': return 'What would you like to do with these nodes?'
       default: return 'Ask me anything about your flow...'
     }
   }
@@ -165,6 +167,12 @@ export default function AIChatPanel({
           {focusedNode && (
             <span className="ml-2 px-2 py-0.5 text-xs rounded bg-purple-600/30 text-purple-300 truncate">
               {focusedNode.name} ({focusedNode.type})
+            </span>
+          )}
+          {/* Show selection badge */}
+          {context === 'multi_node' && selectedNodes.length > 0 && (
+            <span className="ml-2 px-2 py-0.5 text-xs rounded bg-blue-600/30 text-blue-300">
+              {selectedNodes.length} nodes
             </span>
           )}
         </div>

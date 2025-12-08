@@ -161,6 +161,53 @@ Example good response:
     - answer
 ` + "```" + "`"
 
+	case "multi_node":
+		return basePrompt + `
+
+# Your Task
+You are an AI assistant helping users modify MULTIPLE SELECTED NODES in their flow.
+The user has selected specific nodes and wants to make targeted changes to just those nodes.
+
+## What You Can Help With:
+- Improve prompts across multiple nodes
+- Refactor a section of the flow
+- Add error handling or validation
+- Optimize the logic within the selected nodes
+- Connect nodes more effectively
+
+## Guidelines:
+- ONLY modify the selected nodes - do not add or remove nodes
+- Keep the node names the same to preserve flow connections
+- Suggest user_message additions where appropriate
+- Preserve output_model fields that are used by other nodes
+
+## RESPONSE FORMAT (IMPORTANT - follow exactly):
+1. A brief explanation of your improvements (1-2 sentences)
+2. The improved nodes YAML wrapped in ` + "```yaml" + ` code blocks
+
+**RETURN ONLY THE SELECTED NODES as a YAML array** - each node starting with "- name:".
+DO NOT return the complete flow YAML.
+DO NOT use "---" between nodes - use proper YAML array format.
+The system automatically merges your nodes into the existing flow.
+
+**Example format for 2 nodes:**
+` + "```yaml" + `
+- name: first_node
+  type: llm
+  system: You are a helpful assistant.
+  prompt: "{question}"
+  output_model:
+    answer: str
+  user_message:
+    - answer
+
+- name: second_node
+  type: input
+  prompt: Would you like to continue?
+  output_model:
+    choice: str
+` + "```" + "`"
+
 	default:
 		return basePrompt + `
 
@@ -211,26 +258,44 @@ func extractYAML(text string) string {
 	return strings.TrimSpace(remaining[:endIdx])
 }
 
-// isNodeSnippet checks if the YAML is just a node (not a full flow)
+// isNodeSnippet checks if the YAML is just node(s) (not a full flow)
+// Handles: "- name:", "name:", or multi-node snippets separated by ---
 func isNodeSnippet(yamlContent string) bool {
 	trimmed := strings.TrimSpace(yamlContent)
-	return strings.HasPrefix(trimmed, "- name:")
+	// Check for YAML array format (- name:)
+	if strings.HasPrefix(trimmed, "- name:") {
+		return true
+	}
+	// Check for single node without dash (name:)
+	if strings.HasPrefix(trimmed, "name:") {
+		return true
+	}
+	// Not a node snippet - has other flow elements
+	return false
 }
 
-// mergeNodeIntoFlow merges a node snippet into the full flow YAML
+// mergeNodeIntoFlow merges one or more node snippet(s) into the full flow YAML
 func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string) (string, error) {
-	// Parse the node snippet to get the node name
+	// Handle multi-document YAML (nodes separated by ---)
+	// Convert to single array format
+	nodeSnippet = strings.TrimSpace(nodeSnippet)
+	
+	// If snippet starts with "name:" (no dash), add the dash
+	if strings.HasPrefix(nodeSnippet, "name:") {
+		nodeSnippet = "- " + nodeSnippet
+	}
+	
+	// Replace "---\nname:" with "\n- name:" to convert multi-doc to array
+	nodeSnippet = strings.ReplaceAll(nodeSnippet, "---\nname:", "\n- name:")
+	nodeSnippet = strings.ReplaceAll(nodeSnippet, "---\n\nname:", "\n- name:")
+	
+	// Parse the node snippet(s) - should now be a YAML array
 	var nodes []map[string]interface{}
 	if err := yaml.Unmarshal([]byte(nodeSnippet), &nodes); err != nil {
 		return "", fmt.Errorf("failed to parse node snippet: %w", err)
 	}
 	if len(nodes) == 0 {
-		return "", fmt.Errorf("no node found in snippet")
-	}
-	
-	nodeName, ok := nodes[0]["name"].(string)
-	if !ok {
-		return "", fmt.Errorf("node name not found")
+		return "", fmt.Errorf("no nodes found in snippet")
 	}
 	
 	// Parse the full flow
@@ -239,27 +304,35 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string) (string, error) {
 		return "", fmt.Errorf("failed to parse flow: %w", err)
 	}
 	
-	// Find and replace the node in the flow
+	// Get the nodes section
 	flowNodes, ok := flow["nodes"].([]interface{})
 	if !ok {
 		return "", fmt.Errorf("nodes section not found in flow")
 	}
 	
-	nodeFound := false
-	for i, n := range flowNodes {
-		nodeMap, ok := n.(map[string]interface{})
+	// Replace each node from the snippet in the flow
+	for _, snippetNode := range nodes {
+		nodeName, ok := snippetNode["name"].(string)
 		if !ok {
 			continue
 		}
-		if nodeMap["name"] == nodeName {
-			flowNodes[i] = nodes[0]
-			nodeFound = true
-			break
+		
+		nodeFound := false
+		for i, n := range flowNodes {
+			nodeMap, ok := n.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if nodeMap["name"] == nodeName {
+				flowNodes[i] = snippetNode
+				nodeFound = true
+				break
+			}
 		}
-	}
-	
-	if !nodeFound {
-		return "", fmt.Errorf("node '%s' not found in flow", nodeName)
+		
+		if !nodeFound {
+			return "", fmt.Errorf("node '%s' not found in flow", nodeName)
+		}
 	}
 	
 	flow["nodes"] = flowNodes
@@ -423,13 +496,13 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	
-	// For node_config context, if the AI returned a node snippet, merge it into the full flow
-	if req.Context == "node_config" && proposedYAML != "" && isNodeSnippet(proposedYAML) {
+	// For node_config or multi_node context, if the AI returned node snippet(s), merge them into the full flow
+	if (req.Context == "node_config" || req.Context == "multi_node") && proposedYAML != "" && isNodeSnippet(proposedYAML) {
 		if req.CurrentYAML != "" {
 			mergedYAML, err := mergeNodeIntoFlow(proposedYAML, req.CurrentYAML)
 			if err != nil {
 				// If merge fails, keep the snippet but add a warning
-				fullResponse += "\n\n⚠️ Could not merge node into flow: " + err.Error()
+				fullResponse += "\n\n⚠️ Could not merge node(s) into flow: " + err.Error()
 			} else {
 				proposedYAML = mergedYAML
 				// Re-validate the merged flow

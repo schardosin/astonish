@@ -337,7 +337,7 @@ flow:
   }, [])
 
   const handleStartRun = useCallback(() => {
-    setChatMessages([])
+    setChatMessages([{ type: 'system', content: 'Execution started...' }])
     setRunningNodeId(null)
     const newSessionId = `session-${Date.now()}`
     setSessionId(newSessionId)

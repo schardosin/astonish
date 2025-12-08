@@ -105,6 +105,16 @@ function App() {
     layoutFlow()
   }, [yamlContent])
 
+  // Refresh editingNode when nodes update (e.g., after AI applies changes)
+  useEffect(() => {
+    if (editingNode && nodes.length > 0) {
+      const updatedNode = nodes.find(n => n.id === editingNode.id)
+      if (updatedNode && JSON.stringify(updatedNode) !== JSON.stringify(editingNode)) {
+        setEditingNode(updatedNode)
+      }
+    }
+  }, [nodes, editingNode])
+
   const handleAgentSelect = useCallback(async (agent) => {
     setSelectedAgent(agent)
     setSelectedNodeId(null)

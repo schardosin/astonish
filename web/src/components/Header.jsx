@@ -1,7 +1,7 @@
 import { Play, Square, Code, LogOut, Loader } from 'lucide-react'
 import { snakeToTitleCase } from '../utils/formatters'
 
-export default function Header({ agentName, showYaml, onToggleYaml, isRunning, onRun, onStop, onSave, isSaving, theme }) {
+export default function Header({ agentName, showYaml, onToggleYaml, isRunning, onRun, onStop, onExit, onSave, isSaving, theme }) {
   const displayName = snakeToTitleCase(agentName) || agentName
   
   return (
@@ -67,7 +67,12 @@ export default function Header({ agentName, showYaml, onToggleYaml, isRunning, o
 
         {/* Exit Button (when running) */}
         {isRunning && (
-          <button className="p-2 hover:bg-gray-700/50 rounded-lg transition-colors" style={{ color: 'var(--text-muted)' }}>
+          <button 
+            onClick={onExit}
+            className="p-2 hover:bg-gray-700/50 rounded-lg transition-colors" 
+            style={{ color: 'var(--text-muted)' }}
+            title="Exit Run Mode"
+          >
             <LogOut size={20} />
           </button>
         )}

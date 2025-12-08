@@ -42,17 +42,26 @@ function App() {
   const [selectedNodeId, setSelectedNodeId] = useState(null)
   const [editingNode, setEditingNode] = useState(null)
   const [isSaving, setIsSaving] = useState(false)
+  
+  // UI State
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [showAIChat, setShowAIChat] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState(null)
+  
+  // Flow State
   const [availableTools, setAvailableTools] = useState([])
   const [nodes, setNodes] = useState([])
   const [edges, setEdges] = useState([])
+
+  // Refs
   const currentFlowNodesRef = useRef([])
   const currentFlowEdgesRef = useRef([])
+  const abortControllerRef = useRef(null)
+  
+  // Chat State
   const [chatMessages, setChatMessages] = useState([
     { type: 'agent', content: 'Welcome! Click "Run" to start the agent flow.' },
   ])
-  const [showAIChat, setShowAIChat] = useState(false)
   const [aiChatContext, setAIChatContext] = useState('create_flow')
   const [aiFocusedNode, setAIFocusedNode] = useState(null)  // Node being edited when AI chat opens
   const [aiSelectedNodeIds, setAISelectedNodeIds] = useState([])  // Multi-selected nodes for AI
@@ -223,9 +232,13 @@ flow:
         setIsWaitingForInput(false)
       }
 
+      const controller = new AbortController()
+      abortControllerRef.current = controller
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           agentId: selectedAgent.id,
           message: message,
@@ -279,7 +292,6 @@ flow:
                      setRunningNodeId(null)
                   }
                 } else if (data.options) { // Handle input_request which sends options directly or nested
-                  // In run_handler.go provided snippet: "input_request" event sends data: {"options": [...]}
                   setIsWaitingForInput(true)
                   setChatMessages(prev => [...prev, { 
                     type: 'input_request', 
@@ -302,9 +314,17 @@ flow:
         }
       }
     } catch (err) {
-      console.error('Chat error:', err)
-      setChatMessages(prev => [...prev, { type: 'error', content: err.message }])
-      setRunningNodeId(null)
+      if (err.name === 'AbortError') {
+        setChatMessages(prev => [...prev, { type: 'system', content: 'Execution stopped by user.' }])
+        setRunningNodeId(null)
+        setIsWaitingForInput(false)
+      } else {
+        console.error('Chat error:', err)
+        setChatMessages(prev => [...prev, { type: 'error', content: err.message }])
+        setRunningNodeId(null)
+      }
+    } finally {
+      abortControllerRef.current = null
     }
   }, [selectedAgent, defaultProvider, defaultModel])
 
@@ -314,9 +334,6 @@ flow:
     setChatMessages([]) // Clear history
     setRunningNodeId(null)
     // Don't auto-start, wait for user to click Start
-    // const newSessionId = `session-${Date.now()}`
-    // setSessionId(newSessionId)
-    // connectToChat(newSessionId) 
   }, [])
 
   const handleStartRun = useCallback(() => {
@@ -334,7 +351,18 @@ flow:
   }, [sessionId, connectToChat])
 
   const handleStopRun = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+  }, [])
+
+  const handleExitRun = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
     setIsRunning(false)
+    setRunningNodeId(null)
+    setChatMessages([])
   }, [])
 
   const handleYamlChange = useCallback((newYaml) => {
@@ -490,6 +518,7 @@ flow:
             isRunning={isRunning}
             onRun={handleRun}
             onStop={handleStopRun}
+            onExit={handleExitRun}
             onSave={handleSave}
             isSaving={isSaving}
             theme={theme}

@@ -12,6 +12,8 @@ import CreateAgentModal from './components/CreateAgentModal'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import AIChatPanel from './components/AIChatPanel'
 import SettingsPage from './components/SettingsPage'
+import SetupWizard from './components/SetupWizard'
+import HomePage from './components/HomePage'
 import { useTheme } from './hooks/useTheme'
 import { useHashRouter, buildPath } from './hooks/useHashRouter'
 import { yamlToFlowAsync, extractLayout } from './utils/yamlToFlow'
@@ -70,17 +72,50 @@ function App() {
   const [runningNodeId, setRunningNodeId] = useState(null)
   const [sessionId, setSessionId] = useState(null)
   const [isWaitingForInput, setIsWaitingForInput] = useState(false)
+  
+  // Undo/Redo History (max 100 versions)
+  const [yamlHistory, setYamlHistory] = useState([])
+  const [historyIndex, setHistoryIndex] = useState(-1)
+  const MAX_HISTORY = 100
 
   // Derive showSettings from path
   const showSettings = path.view === 'settings'
   const settingsSection = path.params.section || 'general'
 
+  // Setup wizard state
+  const [showSetupWizard, setShowSetupWizard] = useState(false)
+  const [isCheckingSetup, setIsCheckingSetup] = useState(true)
+
+  // Check if setup is required on mount
+  useEffect(() => {
+    checkSetupStatus()
+  }, [])
+
+  const checkSetupStatus = async () => {
+    try {
+      setIsCheckingSetup(true)
+      const res = await fetch('/api/settings/status')
+      if (res.ok) {
+        const data = await res.json()
+        setShowSetupWizard(data.setupRequired)
+      }
+    } catch (err) {
+      console.error('Failed to check setup status:', err)
+      // If we can't check, assume setup is required
+      setShowSetupWizard(true)
+    } finally {
+      setIsCheckingSetup(false)
+    }
+  }
+
   // Load agents, tools, and settings from API on mount
   useEffect(() => {
-    loadAgents()
-    loadTools()
-    loadSettings()
-  }, [])
+    if (!showSetupWizard && !isCheckingSetup) {
+      loadAgents()
+      loadTools()
+      loadSettings()
+    }
+  }, [showSetupWizard, isCheckingSetup])
 
   const loadSettings = async () => {
     try {
@@ -137,6 +172,58 @@ function App() {
     }
   }
 
+  // Push new YAML to history (called after applying changes)
+  const pushToHistory = useCallback((newYaml) => {
+    if (!newYaml) return
+    setYamlHistory(prev => {
+      // If we're not at the end, truncate forward history
+      const truncated = prev.slice(0, historyIndex + 1)
+      // Add new entry
+      const updated = [...truncated, newYaml]
+      // Keep only last MAX_HISTORY entries
+      if (updated.length > MAX_HISTORY) {
+        return updated.slice(-MAX_HISTORY)
+      }
+      return updated
+    })
+    setHistoryIndex(prev => Math.min(prev + 1, MAX_HISTORY - 1))
+  }, [historyIndex])
+
+  // Undo: go back in history
+  const handleUndo = useCallback(() => {
+    if (historyIndex > 0) {
+      setHistoryIndex(prev => prev - 1)
+      setYamlContent(yamlHistory[historyIndex - 1])
+    }
+  }, [historyIndex, yamlHistory])
+
+  // Redo: go forward in history
+  const handleRedo = useCallback(() => {
+    if (historyIndex < yamlHistory.length - 1) {
+      setHistoryIndex(prev => prev + 1)
+      setYamlContent(yamlHistory[historyIndex + 1])
+    }
+  }, [historyIndex, yamlHistory])
+
+  // Keyboard shortcuts for undo/redo
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Only handle when not in an input/textarea
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+      
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+        e.preventDefault()
+        if (e.shiftKey) {
+          handleRedo()
+        } else {
+          handleUndo()
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [handleUndo, handleRedo])
+
   // React to URL path changes (hash navigation)
   useEffect(() => {
     if (path.view === 'agent' && path.params.agentName && agents.length > 0) {
@@ -187,6 +274,10 @@ function App() {
     setChatMessages([])
     setIsWaitingForInput(false)
     
+    // Reset undo/redo history for new agent
+    setYamlHistory([])
+    setHistoryIndex(-1)
+    
     setSelectedAgent(agent)
     setSelectedNodeId(null)
     setEditingNode(null)
@@ -199,10 +290,16 @@ function App() {
     // Load agent YAML from API
     try {
       const data = await fetchAgent(agent.id)
-      setYamlContent(data.yaml || defaultYaml)
+      const loadedYaml = data.yaml || defaultYaml
+      setYamlContent(loadedYaml)
+      // Initialize history with loaded state
+      setYamlHistory([loadedYaml])
+      setHistoryIndex(0)
     } catch (err) {
       console.error('Failed to load agent:', err)
       setYamlContent(defaultYaml)
+      setYamlHistory([defaultYaml])
+      setHistoryIndex(0)
     }
   }, [navigate])
 
@@ -229,6 +326,9 @@ flow:
     setSelectedNodeId(null)
     setEditingNode(null)
     setYamlContent(newYaml)
+    // Reset and initialize history for new agent
+    setYamlHistory([newYaml])
+    setHistoryIndex(0)
     setShowCreateModal(false)
     
     // Update URL using navigate (triggers hashchange) so we stay on this agent after save
@@ -516,6 +616,31 @@ flow:
 
   return (
     <ReactFlowProvider>
+      {/* Setup Wizard */}
+      {showSetupWizard && !isCheckingSetup && (
+        <SetupWizard
+          theme={theme}
+          onComplete={() => {
+            setShowSetupWizard(false)
+            loadSettings()
+            loadAgents()
+            loadTools()
+          }}
+        />
+      )}
+
+      {/* Loading state while checking setup */}
+      {isCheckingSetup && (
+        <div 
+          className="flex flex-col h-screen items-center justify-center"
+          style={{ background: 'var(--bg-primary)' }}
+        >
+          <div className="animate-pulse text-purple-400 text-lg">Loading...</div>
+        </div>
+      )}
+
+      {/* Main App (only show when not in setup wizard and not checking) */}
+      {!showSetupWizard && !isCheckingSetup && (
       <div className="flex flex-col h-screen" style={{ background: 'var(--bg-primary)' }}>
         {/* Top Bar */}
         <TopBar 
@@ -540,6 +665,18 @@ flow:
 
         {/* Main Content */}
         <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Show HomePage when no agent is selected */}
+          {!selectedAgent ? (
+            <HomePage
+              onCreateAgent={handleCreateNew}
+              onOpenSettings={() => navigate(buildPath('settings', { section: 'general' }))}
+              onOpenMCP={() => navigate(buildPath('settings', { section: 'mcp' }))}
+              defaultProvider={defaultProvider}
+              defaultModel={defaultModel}
+              theme={theme}
+            />
+          ) : (
+          <>
           <Header
             agentName={selectedAgent?.name || 'Select Agent'}
             showYaml={showYaml}
@@ -551,6 +688,10 @@ flow:
             onSave={handleSave}
             isSaving={isSaving}
             theme={theme}
+            canUndo={historyIndex > 0}
+            canRedo={historyIndex < yamlHistory.length - 1}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
           />
 
           {/* Flow + Chat Area */}
@@ -578,8 +719,9 @@ flow:
                     setAISelectedNodeIds(options.nodeIds)
                     setAIFocusedNode(null)
                   } else {
-                    // Default flow context
-                    setAIChatContext('create_flow')
+                    // Check if flow has existing nodes (not just START->END)
+                    const hasExistingNodes = nodes.length > 0 && nodes.some(n => n.id !== 'START' && n.id !== 'END')
+                    setAIChatContext(hasExistingNodes ? 'modify_flow' : 'create_flow')
                     setAISelectedNodeIds([])
                     setAIFocusedNode(null)
                   }
@@ -630,10 +772,12 @@ flow:
               )}
             </div>
           )}
+          </>
+          )}
         </div>
         </div>
       </div>
-
+      )}
       {/* Create Agent Modal */}
       <CreateAgentModal
         isOpen={showCreateModal}
@@ -658,13 +802,11 @@ flow:
         selectedNodes={aiSelectedNodeIds.length > 0 ? aiSelectedNodeIds : (selectedNodeId ? [selectedNodeId] : [])}
         focusedNode={aiFocusedNode}
         agentId={selectedAgent?.id}
-        onPreviewYaml={(newYaml) => {
-          // Preview: update flow but don't save
-          setYamlContent(newYaml)
-        }}
         onApplyYaml={(newYaml) => {
-          // Apply: update flow and trigger save
+          // Apply the new YAML
           setYamlContent(newYaml)
+          // Push new state to history (for undo)
+          pushToHistory(newYaml)
           // Auto-save after applying
           if (selectedAgent) {
             saveAgent(selectedAgent.id, newYaml).then(() => {
@@ -679,7 +821,14 @@ flow:
       {/* AI Chat Toggle Button */}
       {selectedAgent && !isRunning && (
         <button
-          onClick={() => setShowAIChat(true)}
+          onClick={() => {
+            // Detect if flow has existing nodes
+            const hasExistingNodes = nodes.length > 0 && nodes.some(n => n.id !== 'START' && n.id !== 'END')
+            setAIChatContext(hasExistingNodes ? 'modify_flow' : 'create_flow')
+            setAISelectedNodeIds([])
+            setAIFocusedNode(null)
+            setShowAIChat(true)
+          }}
           className="fixed bottom-4 right-4 w-14 h-14 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 rounded-full shadow-lg flex items-center justify-center transition-all hover:scale-110 z-40"
           title="AI Assistant"
         >
@@ -702,6 +851,7 @@ flow:
           activeSection={settingsSection}
           onSectionChange={(section) => replaceHash(buildPath('settings', { section }))}
           theme={theme}
+          onToolsRefresh={loadTools}
         />
       )}
     </ReactFlowProvider>

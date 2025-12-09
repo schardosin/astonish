@@ -110,13 +110,32 @@ Note: LLM responses are shown automatically, so output nodes are mainly for form
 ` + "```" + `
 
 ### 5. Update State Node
-Modify state variables.
+Modify state variables. Use source_variable OR value to set data, action to control how (overwrite/append), 
+and output_model to define the target variable and its type.
 ` + "```yaml" + `
-- name: set_defaults
+# Overwrite a variable with a value
+- name: set_flag
   type: update_state
-  updates:
-    processed: "true"
-    counter: "1"
+  value: "true"
+  action: overwrite
+  output_model:
+    is_processed: string
+
+# Copy from one variable to another
+- name: save_result
+  type: update_state
+  source_variable: llm_response
+  action: overwrite
+  output_model:
+    saved_answer: string
+
+# Append to a list
+- name: add_to_history
+  type: update_state
+  source_variable: current_item
+  action: append
+  output_model:
+    history_list: list
 ` + "```" + `
 
 ## Flow Edges

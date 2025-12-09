@@ -122,9 +122,12 @@ function OutputModelEditor({ value, onChange, theme, hideLabel = false, singleFi
 }
 
 /**
- * Update State Form - Horizontal layout
+ * Update State Form - Horizontal layout with source_variable support
  */
 function UpdateStateForm({ data, onChange, theme }) {
+  // Determine if using source_variable or value
+  const useSourceVariable = data.source_variable !== undefined
+  
   return (
     <div className="flex gap-6 h-full">
       {/* Left column - Settings */}
@@ -143,20 +146,68 @@ function UpdateStateForm({ data, onChange, theme }) {
             <option value="append">append</option>
           </select>
         </div>
+        
+        <div>
+          <label className="text-sm font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>
+            Source Type
+          </label>
+          <select
+            value={useSourceVariable ? 'variable' : 'value'}
+            onChange={(e) => {
+              if (e.target.value === 'variable') {
+                // Switch to source_variable mode
+                const newData = { ...data, source_variable: data.value || '' }
+                delete newData.value
+                onChange(newData)
+              } else {
+                // Switch to value mode
+                const newData = { ...data, value: data.source_variable || '' }
+                delete newData.source_variable
+                onChange(newData)
+              }
+            }}
+            className="w-full px-3 py-2 rounded border"
+            style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+          >
+            <option value="variable">From Variable</option>
+            <option value="value">Literal Value</option>
+          </select>
+        </div>
       </div>
       
-      {/* Right column - Value */}
+      {/* Right column - Source Variable or Value */}
       <div className="flex-1">
-        <label className="text-sm font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>
-          Value
-        </label>
-        <textarea
-          value={data.value || ''}
-          onChange={(e) => onChange({ ...data, value: e.target.value })}
-          className="w-full h-32 px-3 py-2 rounded border font-mono text-sm resize-none"
-          style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-          placeholder="Enter value or expression..."
-        />
+        {useSourceVariable ? (
+          <>
+            <label className="text-sm font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>
+              Source Variable
+            </label>
+            <input
+              type="text"
+              value={data.source_variable || ''}
+              onChange={(e) => onChange({ ...data, source_variable: e.target.value })}
+              className="w-full px-3 py-2 rounded border font-mono text-sm"
+              style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+              placeholder="Enter state variable name..."
+            />
+            <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+              The value from this state variable will be used
+            </p>
+          </>
+        ) : (
+          <>
+            <label className="text-sm font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>
+              Value
+            </label>
+            <textarea
+              value={data.value || ''}
+              onChange={(e) => onChange({ ...data, value: e.target.value })}
+              className="w-full h-32 px-3 py-2 rounded border font-mono text-sm resize-none"
+              style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+              placeholder="Enter value or expression..."
+            />
+          </>
+        )}
       </div>
     </div>
   )
@@ -166,25 +217,47 @@ function UpdateStateForm({ data, onChange, theme }) {
  * Input Node Form - Horizontal layout
  */
 function InputNodeForm({ data, onChange, theme }) {
+  // Local state for options field to prevent reformatting while typing
+  const [optionsText, setOptionsText] = useState(() => {
+    return data.options ? data.options.join(', ') : ''
+  })
+  
+  // Update local state when data.options changes externally
+  useEffect(() => {
+    const newText = data.options ? data.options.join(', ') : ''
+    // Only update if the parsed values are different (to avoid cursor jumping)
+    const currentParsed = optionsText.split(',').map(s => s.trim()).filter(Boolean)
+    const newParsed = data.options || []
+    if (JSON.stringify(currentParsed) !== JSON.stringify(newParsed)) {
+      setOptionsText(newText)
+    }
+  }, [data.options])
+  
+  const handleOptionsBlur = () => {
+    const val = optionsText.split(',').map(s => s.trim()).filter(Boolean)
+    onChange({ ...data, options: val.length > 0 ? val : undefined })
+  }
+  
   return (
     <div className="flex gap-6 h-full">
       {/* Left column - Options */}
       <div className="w-64 space-y-4">
         <div>
           <label className="text-sm font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>
-            Options (variable)
+            Options (comma-separated)
           </label>
           <input
             type="text"
-            value={data.options ? `[${data.options.join(', ')}]` : ''}
-            onChange={(e) => {
-              const val = e.target.value.replace(/[\[\]]/g, '').split(',').map(s => s.trim()).filter(Boolean)
-              onChange({ ...data, options: val.length > 0 ? val : undefined })
-            }}
+            value={optionsText}
+            onChange={(e) => setOptionsText(e.target.value)}
+            onBlur={handleOptionsBlur}
             className="w-full px-3 py-2 rounded border font-mono text-sm"
             style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-            placeholder="[variable]"
+            placeholder="Option 1, Option 2, Option 3"
           />
+          <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+            Separate options with commas
+          </p>
         </div>
       </div>
       
@@ -686,15 +759,106 @@ function ToolNodeForm({ data, onChange, theme, availableTools = [] }) {
 }
 
 /**
- * Output Node Form
+ * Output Node Form - with user_message array editor
  */
 function OutputNodeForm({ data, onChange, theme }) {
+  const userMessage = data.user_message || []
+  
+  const handleAddItem = () => {
+    onChange({ ...data, user_message: [...userMessage, ''] })
+  }
+  
+  const handleRemoveItem = (index) => {
+    const newItems = userMessage.filter((_, i) => i !== index)
+    onChange({ ...data, user_message: newItems })
+  }
+  
+  const handleItemChange = (index, value) => {
+    const newItems = [...userMessage]
+    newItems[index] = value
+    onChange({ ...data, user_message: newItems })
+  }
+  
   return (
-    <div className="flex items-center gap-4" style={{ color: 'var(--text-muted)' }}>
-      <MessageSquare size={24} className="opacity-50" />
-      <div>
-        <p className="text-sm">Output nodes display the final state.</p>
-        <p className="text-xs">No additional configuration required.</p>
+    <div className="flex gap-6 h-full">
+      {/* Left column - Info */}
+      <div className="w-64 space-y-4">
+        <div className="flex items-center gap-3" style={{ color: 'var(--text-muted)' }}>
+          <MessageSquare size={20} className="opacity-50" />
+          <div>
+            <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Output Display</p>
+            <p className="text-xs">Configure what to show</p>
+          </div>
+        </div>
+        <div className="text-xs space-y-2 p-3 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>
+          <p><strong>Tips:</strong></p>
+          <p>• Add literal text strings</p>
+          <p>• Reference state variables by name</p>
+          <p>• Items are joined with spaces</p>
+        </div>
+      </div>
+      
+      {/* Right column - User Message Editor */}
+      <div className="flex-1">
+        <div className="flex justify-between items-center mb-2">
+          <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
+            User Message
+          </label>
+          <button
+            type="button"
+            onClick={handleAddItem}
+            className="flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors hover:opacity-80"
+            style={{ background: 'var(--accent-color)', color: 'white' }}
+          >
+            <Plus size={12} />
+            Add Item
+          </button>
+        </div>
+        
+        {userMessage.length === 0 ? (
+          <div 
+            className="text-sm p-4 rounded border border-dashed text-center"
+            style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}
+          >
+            No items yet. Click "Add Item" to add a message part.
+          </div>
+        ) : (
+          <div className="space-y-2 max-h-48 overflow-y-auto">
+            {userMessage.map((item, index) => (
+              <div key={index} className="flex items-center gap-2">
+                <span 
+                  className="text-xs px-2 py-1 rounded" 
+                  style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}
+                >
+                  {index + 1}
+                </span>
+                <input
+                  type="text"
+                  value={item}
+                  onChange={(e) => handleItemChange(index, e.target.value)}
+                  className="flex-1 px-3 py-2 rounded border text-sm"
+                  style={{ 
+                    background: 'var(--bg-primary)', 
+                    borderColor: 'var(--border-color)', 
+                    color: 'var(--text-primary)' 
+                  }}
+                  placeholder='Text or variable name (e.g., "Result:" or answer)'
+                />
+                <button
+                  type="button"
+                  onClick={() => handleRemoveItem(index)}
+                  className="p-1 rounded hover:bg-red-500/20 text-red-500"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        
+        <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
+          Enter text strings or state variable names. Variables will be resolved at runtime.
+        </p>
       </div>
     </div>
   )

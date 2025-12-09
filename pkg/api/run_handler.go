@@ -229,6 +229,7 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	SendSSE(w, flusher, "status", map[string]string{"status": "running"})
 
 	var lastNodeName string
+	var currentNodeType string  // Track node type for conditional streaming
 
 	for event, err := range rnr.Run(ctx, req.SessionID, sess.ID(), userMsg, adkagent.RunConfig{}) {
 		if err != nil {
@@ -236,8 +237,10 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Stream LLM Text chunks
-		if event.LLMResponse.Content != nil {
+		// Stream LLM Text chunks (only for appropriate node types)
+		// Suppress for: update_state, tool (internal), input (prompt collection)
+		shouldStream := currentNodeType == "" || currentNodeType == "llm" || currentNodeType == "output"
+		if shouldStream && event.LLMResponse.Content != nil {
 			for _, part := range event.LLMResponse.Content.Parts {
 				if part.Text != "" {
 					SendSSE(w, flusher, "text", map[string]string{
@@ -258,6 +261,7 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 					lastNodeName = nodeName
 					// Also check node_type if available (sometimes implicit)
 					nodeType, _ := delta["node_type"].(string)
+					currentNodeType = nodeType  // Update for streaming filter
 					SendSSE(w, flusher, "node", map[string]string{
 						"node": nodeName,
 						"type": nodeType,

@@ -107,9 +107,17 @@ func ValidateFlowYAML(yamlStr string, availableTools []ToolInfo) FlowValidationR
 					}
 				}
 			case "update_state":
-				// update_state nodes require updates
-				if _, ok := node["updates"]; !ok {
-					result.Errors = append(result.Errors, fmt.Sprintf("Node '%s' (update_state): missing required field 'updates'", nodeName))
+				// update_state nodes require either:
+				// - Legacy: updates field
+				// - New: action + output_model + (source_variable OR value)
+				_, hasUpdates := node["updates"]
+				_, hasAction := node["action"]
+				_, hasOutputModel := node["output_model"]
+				_, hasSourceVar := node["source_variable"]
+				_, hasValue := node["value"]
+				
+				if !hasUpdates && !(hasAction && hasOutputModel && (hasSourceVar || hasValue)) {
+					result.Errors = append(result.Errors, fmt.Sprintf("Node '%s' (update_state): requires either 'updates' field OR 'action' + 'output_model' + ('source_variable' OR 'value')", nodeName))
 				}
 			default:
 				result.Errors = append(result.Errors, fmt.Sprintf("Node '%s': unknown node type '%s'. Valid types: input, llm, output, tool, update_state", nodeName, nodeType))

@@ -1,7 +1,10 @@
-import { Play, Code, LogOut, Loader } from 'lucide-react'
+import { Play, Code, LogOut, Loader, Undo2, Redo2 } from 'lucide-react'
 import { snakeToTitleCase } from '../utils/formatters'
 
-export default function Header({ agentName, showYaml, onToggleYaml, isRunning, onRun, onStop, onExit, onSave, isSaving, theme }) {
+export default function Header({ 
+  agentName, showYaml, onToggleYaml, isRunning, onRun, onStop, onExit, onSave, isSaving, theme,
+  canUndo, canRedo, onUndo, onRedo
+}) {
   const displayName = snakeToTitleCase(agentName) || agentName
   
   return (
@@ -19,6 +22,28 @@ export default function Header({ agentName, showYaml, onToggleYaml, isRunning, o
       <div className="flex items-center gap-3">
         {!isRunning && (
           <>
+            {/* Undo/Redo Buttons */}
+            <div className="flex items-center gap-1 mr-2">
+              <button
+                onClick={onUndo}
+                disabled={!canUndo}
+                className="p-2 rounded-lg transition-colors disabled:opacity-30"
+                style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+                title="Undo (Cmd+Z)"
+              >
+                <Undo2 size={18} />
+              </button>
+              <button
+                onClick={onRedo}
+                disabled={!canRedo}
+                className="p-2 rounded-lg transition-colors disabled:opacity-30"
+                style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+                title="Redo (Cmd+Shift+Z)"
+              >
+                <Redo2 size={18} />
+              </button>
+            </div>
+
             {/* View Source Toggle */}
             <button
               onClick={onToggleYaml}

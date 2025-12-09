@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -360,6 +361,7 @@ func ListModels(ctx context.Context, clientID, clientSecret, authURL, baseURL, r
 	for m := range modelSet {
 		models = append(models, m)
 	}
+	sort.Strings(models)
 	return models, nil
 }
 

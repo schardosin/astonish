@@ -137,46 +137,55 @@ export default function ChatPanel({ messages, onSendMessage, onStartRun, onStop,
 
       {/* Input */}
       <form onSubmit={handleSubmit} className="p-4" style={{ borderTop: '1px solid var(--border-color)' }}>
-        <div className="flex gap-3">
-          {/* Stop Button - only when session is active */}
-          {hasActiveSession && (
-            <button
-              type="button"
-              onClick={onStop}
-              className="px-4 py-3 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors flex items-center gap-2"
-              title="Stop Execution"
-            >
-              <Square size={18} />
-            </button>
-          )}
-          <div className="relative flex-1">
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              disabled={!isWaitingForInput}
-              placeholder={isWaitingForInput ? "Type your response..." : "Agent is thinking..."}
-              className="w-full px-4 py-3 pr-10 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-70 disabled:cursor-not-allowed transition-all"
-              style={{ 
-                background: 'var(--bg-tertiary)', 
-                color: 'var(--text-primary)',
-                border: '1px solid var(--border-color)'
-              }}
-            />
-            {!isWaitingForInput && messages.length > 0 && (
-              <div className="absolute right-3 top-1/2 -translate-y-1/2 text-purple-500">
-                <Loader size={18} className="animate-spin" />
+        {(() => {
+          // Check if last message has selection options (must click buttons, not type)
+          const lastMessage = messages[messages.length - 1]
+          const hasSelectionOptions = lastMessage?.type === 'input_request' && lastMessage?.options?.length > 0
+          const canType = isWaitingForInput && !hasSelectionOptions
+          
+          return (
+            <div className="flex gap-3">
+              {/* Stop Button - only when session is active */}
+              {hasActiveSession && (
+                <button
+                  type="button"
+                  onClick={onStop}
+                  className="px-4 py-3 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors flex items-center gap-2"
+                  title="Stop Execution"
+                >
+                  <Square size={18} />
+                </button>
+              )}
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  disabled={!canType}
+                  placeholder={hasSelectionOptions ? "Click an option above" : (isWaitingForInput ? "Type your response..." : "Agent is thinking...")}
+                  className="w-full px-4 py-3 pr-10 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-70 disabled:cursor-not-allowed transition-all"
+                  style={{ 
+                    background: 'var(--bg-tertiary)', 
+                    color: 'var(--text-primary)',
+                    border: '1px solid var(--border-color)'
+                  }}
+                />
+                {!isWaitingForInput && messages.length > 0 && (
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 text-purple-500">
+                    <Loader size={18} className="animate-spin" />
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-          <button
-            type="submit"
-            disabled={!isWaitingForInput || !input.trim()}
-            className="px-4 py-3 bg-[#805AD5] hover:bg-[#6B46C1] text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Send size={20} />
-          </button>
-        </div>
+              <button
+                type="submit"
+                disabled={!canType || !input.trim()}
+                className="px-4 py-3 bg-[#805AD5] hover:bg-[#6B46C1] text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Send size={20} />
+              </button>
+            </div>
+          )
+        })()}
       </form>
     </div>
   )

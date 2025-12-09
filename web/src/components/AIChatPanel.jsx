@@ -26,7 +26,6 @@ export default function AIChatPanel({
   focusedNode = null,
   agentId = null,
   onApplyYaml,
-  onPreviewYaml,
 }) {
   // Separate message histories: flow chat preserves, node refiner resets
   const [flowMessages, setFlowMessages] = useState([])
@@ -102,8 +101,13 @@ export default function AIChatPanel({
           action: response.action,
         }])
         
-        if (response.proposedYaml) {
-          setPendingYaml(response.proposedYaml)
+        // Auto-apply YAML changes when received
+        if (response.proposedYaml && onApplyYaml) {
+          onApplyYaml(response.proposedYaml)
+          setMessages(prev => [...prev, { 
+            role: 'system', 
+            content: '✓ Changes applied! Use Undo (⌘Z) to revert if needed.' 
+          }])
         }
       }
     } catch (err) {
@@ -124,26 +128,10 @@ export default function AIChatPanel({
     }
   }
 
-  const handlePreview = () => {
-    if (pendingYaml && onPreviewYaml) {
-      onPreviewYaml(pendingYaml)
-    }
-  }
-
-  const handleApply = () => {
-    if (pendingYaml && onApplyYaml) {
-      onApplyYaml(pendingYaml)
-      setPendingYaml(null)
-      setMessages(prev => [...prev, { 
-        role: 'system', 
-        content: '✓ Changes applied successfully!' 
-      }])
-    }
-  }
-
   const getContextTitle = () => {
     switch (context) {
       case 'create_flow': return 'Create Flow'
+      case 'modify_flow': return 'Modify Flow'
       case 'modify_nodes': return 'Modify Nodes'
       case 'node_config': return 'Node Assistant'
       case 'multi_node': return 'Multi-Node Assistant'
@@ -154,6 +142,7 @@ export default function AIChatPanel({
   const getPlaceholder = () => {
     switch (context) {
       case 'create_flow': return 'Describe the flow you want to create...'
+      case 'modify_flow': return 'Describe changes to make to this flow...'
       case 'modify_nodes': return 'What changes do you want to make?'
       case 'node_config': return 'How can I help with this node?'
       case 'multi_node': return 'What would you like to do with these nodes?'
@@ -251,12 +240,29 @@ export default function AIChatPanel({
               </>
             ) : (
               <>
-                <p className="text-[var(--text-secondary)] text-sm mb-4">I can help you design and build flows</p>
+                <p className="text-[var(--text-secondary)] text-sm mb-4">
+                  {context === 'modify_flow' 
+                    ? 'I can help you modify and improve this flow'
+                    : 'I can help you design and build flows'}
+                </p>
                 
-                {/* Quick Examples for flow creation */}
+                {/* Quick Examples based on context */}
                 <div className="text-left space-y-2">
                   <p className="text-xs text-[var(--text-muted)] mb-2">Try an example:</p>
-                  {[
+                  {context === 'modify_flow' ? [
+                    'Add a new node to save the result',
+                    'Insert an input step before processing',
+                    'Add error handling to the flow',
+                    'Add a confirmation step at the end',
+                  ].map((example, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => setInput(example)}
+                      className="block w-full text-left px-3 py-2 text-xs bg-[var(--bg-primary)] hover:bg-purple-600/20 rounded-lg transition-colors text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                    >
+                      → {example}
+                    </button>
+                  )) : [
                     'Create a simple Q&A chatbot',
                     'Build a web search summarizer',
                     'Make a file reader and analyzer',
@@ -318,29 +324,6 @@ export default function AIChatPanel({
         
         <div ref={messagesEndRef} />
       </div>
-
-      {/* Pending YAML Actions */}
-      {pendingYaml && (
-        <div className="px-4 py-2 border-t border-[var(--border-color)] bg-purple-600/10 flex items-center justify-between">
-          <span className="text-sm text-purple-300">YAML ready</span>
-          <div className="flex gap-2">
-            <button
-              onClick={handlePreview}
-              className="flex items-center gap-1 px-3 py-1 text-xs bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 rounded transition-colors"
-            >
-              <Eye size={12} />
-              Preview
-            </button>
-            <button
-              onClick={handleApply}
-              className="flex items-center gap-1 px-3 py-1 text-xs bg-green-600/20 hover:bg-green-600/30 text-green-400 rounded transition-colors"
-            >
-              <Check size={12} />
-              Apply
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Input */}
       <div className="p-3 border-t border-[var(--border-color)]">

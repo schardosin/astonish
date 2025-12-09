@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/api"
+	"github.com/schardosin/astonish/web"
 )
 
 // RunStudio starts the Studio web server
@@ -18,11 +20,10 @@ func RunStudio(port int) error {
 	// Register API routes
 	api.RegisterRoutes(router)
 
-	// Serve web assets from file system
-	webDir := findWebDir()
-	if webDir != "" {
-		log.Printf("Serving web assets from: %s", webDir)
-		spaHandler := spaFileServer(http.Dir(webDir))
+	// Try to get web assets (embedded or filesystem)
+	webFS := getWebAssets()
+	if webFS != nil {
+		spaHandler := spaFileServer(http.FS(webFS))
 		router.PathPrefix("/").Handler(spaHandler)
 	} else {
 		// No web assets found - print helpful message
@@ -57,7 +58,7 @@ npm run dev
 	}
 
 	addr := fmt.Sprintf(":%d", port)
-	
+
 	// Print startup message
 	fmt.Printf("\n")
 	fmt.Printf("  🚀 Astonish Studio is running!\n")
@@ -70,7 +71,25 @@ npm run dev
 	return http.ListenAndServe(addr, router)
 }
 
-// findWebDir looks for the web/dist directory
+// getWebAssets returns the web assets filesystem
+// Priority: 1. Filesystem (for dev), 2. Embedded (for production)
+func getWebAssets() fs.FS {
+	// First, try filesystem (for development)
+	if dir := findWebDir(); dir != "" {
+		log.Printf("Serving web assets from filesystem: %s", dir)
+		return os.DirFS(dir)
+	}
+
+	// Fall back to embedded assets (for production binary)
+	if embeddedFS := web.GetDistFS(); embeddedFS != nil {
+		log.Printf("Serving web assets from embedded binary")
+		return embeddedFS
+	}
+
+	return nil
+}
+
+// findWebDir looks for the web/dist directory on filesystem
 func findWebDir() string {
 	// Check relative to current directory
 	paths := []string{
@@ -125,4 +144,3 @@ func spaFileServer(fs http.FileSystem) http.Handler {
 		fileServer.ServeHTTP(w, r)
 	})
 }
-

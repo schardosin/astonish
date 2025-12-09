@@ -98,8 +98,9 @@ astonish agents run my_agent
 
 Design your agent flows visually with the built-in **Astonish Studio**:
 
+
 <div align="center">
-  <img src="https://raw.githubusercontent.com/schardosin/astonish/main/images/astonish_studio.jpg" width="600" height="400" alt="Astonish Studio">
+  <img src="https://github.com/user-attachments/assets/9b8b4ddf-67b3-43da-bec7-8685d203ab58" width="1000" alt="Astonish Studio">
 </div>
 
 - 🤖 **AI Assistant** — Your co-pilot for building agents:
@@ -181,31 +182,41 @@ astonish agents run summarizer -p file_path="/path/to/document.txt"
 
 Astonish is built on **Google's Agent Development Kit (ADK)** but removes all the boilerplate:
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     ASTONISH                                │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │  YAML Flow  │  │   Studio    │  │    CLI Runner       │  │
-│  │  Definition │  │  (Visual)   │  │  (cron/scripts)     │  │
-│  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘  │
-│         └────────────────┼────────────────────┘             │
-│                    ┌─────▼─────┐                            │
-│                    │  Engine   │ ← State Blackboard         │
-│                    │  (Go)     │ ← Parallel Execution       │
-│                    └─────┬─────┘ ← Error Recovery           │
-│                          │                                  │
-│         ┌────────────────┼────────────────┐                 │
-│   ┌─────▼─────┐    ┌─────▼─────┐    ┌─────▼─────┐           │
-│   │  Google   │    │    MCP    │    │  Built-in │           │
-│   │    ADK    │    │  Servers  │    │   Tools   │           │
-│   └───────────┘    └───────────┘    └───────────┘           │
-└─────────────────────────────────────────────────────────────┘
-                              │
-        ┌─────────────────────┼─────────────────────┐
-  ┌─────▼─────┐    ┌─────▼─────┐    ┌─────▼─────┐   │
-  │  Gemini   │    │  Claude   │    │   GPT-4   │  ...
-  │           │    │           │    │           │
-  └───────────┘    └───────────┘    └───────────┘
+```mermaid
+flowchart TB
+    subgraph Astonish["🚀 ASTONISH"]
+        YAML["📄 YAML Flow Definition"]
+        Studio["🎨 Studio (Visual)"]
+        CLI["⌨️ CLI Runner (cron/scripts)"]
+        
+        YAML --> Engine
+        Studio --> Engine
+        CLI --> Engine
+        
+        Engine["⚙️ Engine (Go)
+        • State Blackboard
+        • Parallel Execution
+        • Error Recovery"]
+        
+        Engine --> ADK
+        Engine --> MCP
+        Engine --> Tools
+        
+        ADK["🔧 Google ADK"]
+        MCP["🔌 MCP Servers"]
+        Tools["🛠️ Built-in Tools"]
+    end
+    
+    ADK --> Providers
+    MCP --> Providers
+    Tools --> Providers
+    
+    subgraph Providers["☁️ AI Providers"]
+        Gemini["Gemini"]
+        Claude["Claude"]
+        GPT["GPT-4"]
+        More["..."]
+    end
 ```
 
 ---

@@ -13,6 +13,7 @@ import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import AIChatPanel from './components/AIChatPanel'
 import SettingsPage from './components/SettingsPage'
 import SetupWizard from './components/SetupWizard'
+import HomePage from './components/HomePage'
 import { useTheme } from './hooks/useTheme'
 import { useHashRouter, buildPath } from './hooks/useHashRouter'
 import { yamlToFlowAsync, extractLayout } from './utils/yamlToFlow'
@@ -594,6 +595,18 @@ flow:
 
         {/* Main Content */}
         <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Show HomePage when no agent is selected */}
+          {!selectedAgent ? (
+            <HomePage
+              onCreateAgent={handleCreateNew}
+              onOpenSettings={() => navigate(buildPath('settings', { section: 'general' }))}
+              onOpenMCP={() => navigate(buildPath('settings', { section: 'mcp' }))}
+              defaultProvider={defaultProvider}
+              defaultModel={defaultModel}
+              theme={theme}
+            />
+          ) : (
+          <>
           <Header
             agentName={selectedAgent?.name || 'Select Agent'}
             showYaml={showYaml}
@@ -683,6 +696,8 @@ flow:
                 />
               )}
             </div>
+          )}
+          </>
           )}
         </div>
         </div>

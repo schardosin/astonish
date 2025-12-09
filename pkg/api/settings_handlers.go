@@ -177,6 +177,9 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	// Re-setup environment variables
 	config.SetupMCPEnv(&cfg)
 
+	// Refresh the tools cache to pick up new MCP servers
+	RefreshToolsCache(r.Context())
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }

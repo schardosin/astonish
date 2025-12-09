@@ -40,7 +40,7 @@ const fetchProviderModels = async (providerId) => {
   return res.json()
 }
 
-export default function SettingsPage({ onClose, theme, activeSection = 'general', onSectionChange }) {
+export default function SettingsPage({ onClose, theme, activeSection = 'general', onSectionChange, onToolsRefresh }) {
   // Use prop for active section, default to 'general'
   const [settings, setSettings] = useState(null)
   const [mcpConfig, setMcpConfig] = useState(null)
@@ -61,6 +61,8 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
   const [mcpServerNames, setMcpServerNames] = useState({})
   // Track args as raw strings (key is server ID, value is comma-separated string)
   const [mcpServerArgs, setMcpServerArgs] = useState({})
+  // Track if MCP config has unsaved changes (e.g., deletions)
+  const [mcpHasChanges, setMcpHasChanges] = useState(false)
   
   // Model selection state
   const [availableModels, setAvailableModels] = useState([])
@@ -154,6 +156,9 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
       })
       await saveMCPConfig({ mcpServers: finalServers })
       setSaveSuccess(true)
+      setMcpHasChanges(false)
+      // Refresh tools cache in the UI
+      if (onToolsRefresh) onToolsRefresh()
       setTimeout(() => setSaveSuccess(false), 2000)
     } catch (err) {
       setError(err.message)
@@ -207,6 +212,7 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
     const newArgs = { ...mcpServerArgs }
     delete newArgs[name]
     setMcpServerArgs(newArgs)
+    setMcpHasChanges(true)
   }
 
   const menuItems = [
@@ -561,7 +567,7 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
                     </div>
                   ))}
 
-                  {Object.keys(mcpServers).length > 0 && (
+                  {(Object.keys(mcpServers).length > 0 || mcpHasChanges) && (
                     <button
                       onClick={handleSaveMCP}
                       disabled={saving}

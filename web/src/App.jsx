@@ -771,6 +771,7 @@ flow:
           activeSection={settingsSection}
           onSectionChange={(section) => replaceHash(buildPath('settings', { section }))}
           theme={theme}
+          onToolsRefresh={loadTools}
         />
       )}
     </ReactFlowProvider>

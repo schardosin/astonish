@@ -204,3 +204,57 @@ func ListProviderModelsHandler(w http.ResponseWriter, r *http.Request) {
 		"models":   models,
 	})
 }
+
+// SetupStatusResponse represents the setup status for the wizard
+type SetupStatusResponse struct {
+	SetupRequired       bool     `json:"setupRequired"`
+	HasDefaultProvider  bool     `json:"hasDefaultProvider"`
+	HasDefaultModel     bool     `json:"hasDefaultModel"`
+	ConfiguredProviders []string `json:"configuredProviders"`
+}
+
+// GetSetupStatusHandler handles GET /api/settings/status
+func GetSetupStatusHandler(w http.ResponseWriter, r *http.Request) {
+	cfg, err := config.LoadAppConfig()
+	if err != nil {
+		// If config doesn't exist, setup is definitely required
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(SetupStatusResponse{
+			SetupRequired:       true,
+			HasDefaultProvider:  false,
+			HasDefaultModel:     false,
+			ConfiguredProviders: []string{},
+		})
+		return
+	}
+
+	// Check for configured providers
+	var configuredProviders []string
+	knownProviders := []string{"anthropic", "gemini", "groq", "lm_studio", "ollama", "openai", "openrouter", "sap_ai_core", "xai"}
+
+	for _, name := range knownProviders {
+		if providerCfg, exists := cfg.Providers[name]; exists {
+			// Check if at least one field has a value
+			for _, val := range providerCfg {
+				if val != "" {
+					configuredProviders = append(configuredProviders, name)
+					break
+				}
+			}
+		}
+	}
+
+	hasDefaultProvider := cfg.General.DefaultProvider != ""
+	hasDefaultModel := cfg.General.DefaultModel != ""
+
+	// Setup is required if no default provider OR no configured providers
+	setupRequired := !hasDefaultProvider || len(configuredProviders) == 0
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(SetupStatusResponse{
+		SetupRequired:       setupRequired,
+		HasDefaultProvider:  hasDefaultProvider,
+		HasDefaultModel:     hasDefaultModel,
+		ConfiguredProviders: configuredProviders,
+	})
+}

@@ -12,6 +12,7 @@ import CreateAgentModal from './components/CreateAgentModal'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import AIChatPanel from './components/AIChatPanel'
 import SettingsPage from './components/SettingsPage'
+import SetupWizard from './components/SetupWizard'
 import { useTheme } from './hooks/useTheme'
 import { useHashRouter, buildPath } from './hooks/useHashRouter'
 import { yamlToFlowAsync, extractLayout } from './utils/yamlToFlow'
@@ -75,12 +76,40 @@ function App() {
   const showSettings = path.view === 'settings'
   const settingsSection = path.params.section || 'general'
 
+  // Setup wizard state
+  const [showSetupWizard, setShowSetupWizard] = useState(false)
+  const [isCheckingSetup, setIsCheckingSetup] = useState(true)
+
+  // Check if setup is required on mount
+  useEffect(() => {
+    checkSetupStatus()
+  }, [])
+
+  const checkSetupStatus = async () => {
+    try {
+      setIsCheckingSetup(true)
+      const res = await fetch('/api/settings/status')
+      if (res.ok) {
+        const data = await res.json()
+        setShowSetupWizard(data.setupRequired)
+      }
+    } catch (err) {
+      console.error('Failed to check setup status:', err)
+      // If we can't check, assume setup is required
+      setShowSetupWizard(true)
+    } finally {
+      setIsCheckingSetup(false)
+    }
+  }
+
   // Load agents, tools, and settings from API on mount
   useEffect(() => {
-    loadAgents()
-    loadTools()
-    loadSettings()
-  }, [])
+    if (!showSetupWizard && !isCheckingSetup) {
+      loadAgents()
+      loadTools()
+      loadSettings()
+    }
+  }, [showSetupWizard, isCheckingSetup])
 
   const loadSettings = async () => {
     try {
@@ -516,6 +545,31 @@ flow:
 
   return (
     <ReactFlowProvider>
+      {/* Setup Wizard */}
+      {showSetupWizard && !isCheckingSetup && (
+        <SetupWizard
+          theme={theme}
+          onComplete={() => {
+            setShowSetupWizard(false)
+            loadSettings()
+            loadAgents()
+            loadTools()
+          }}
+        />
+      )}
+
+      {/* Loading state while checking setup */}
+      {isCheckingSetup && (
+        <div 
+          className="flex flex-col h-screen items-center justify-center"
+          style={{ background: 'var(--bg-primary)' }}
+        >
+          <div className="animate-pulse text-purple-400 text-lg">Loading...</div>
+        </div>
+      )}
+
+      {/* Main App (only show when not in setup wizard and not checking) */}
+      {!showSetupWizard && !isCheckingSetup && (
       <div className="flex flex-col h-screen" style={{ background: 'var(--bg-primary)' }}>
         {/* Top Bar */}
         <TopBar 
@@ -633,7 +687,7 @@ flow:
         </div>
         </div>
       </div>
-
+      )}
       {/* Create Agent Modal */}
       <CreateAgentModal
         isOpen={showCreateModal}

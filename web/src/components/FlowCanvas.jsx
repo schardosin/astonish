@@ -466,10 +466,11 @@ function FlowCanvasInner({
         onEdgeDoubleClick={onEdgeDoubleClick}
         onPaneClick={onPaneClick}
         onSelectionChange={onSelectionChange}
-        selectionOnDrag={true}
-        selectNodesOnDrag={true}
-        panOnDrag={[1, 2]}
+        selectionOnDrag={false}
+        selectNodesOnDrag={false}
+        panOnDrag={true}
         panOnScroll={true}
+        selectionKeyCode="Shift"
         multiSelectionKeyCode="Shift"
         nodeTypes={nodeTypes}
         defaultEdgeOptions={defaultEdgeOptions}
@@ -578,7 +579,7 @@ function FlowCanvasInner({
               className="text-xs px-3 py-2 rounded-lg"
               style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-muted)' }}
             >
-              Drag from node handles to connect • Select edge + Delete to remove • Shift+click or drag to multi-select
+              Drag from node handles to connect • Select edge + Delete to remove • Shift+drag to multi-select
             </div>
           </Panel>
         )}

@@ -52,7 +52,7 @@ func (m *minimalReadonlyContext) Actions() *session.EventActions {
 func (m *minimalReadonlyContext) SearchMemory(ctx context.Context, query string) (*memory.SearchResponse, error) {
 	return nil, nil
 }
-func (m *minimalReadonlyContext) FunctionCallID() string { return "" }
+func (m *minimalReadonlyContext) FunctionCallID() string     { return "" }
 func (m *minimalReadonlyContext) Artifacts() agent.Artifacts { return nil }
 func (m *minimalReadonlyContext) State() session.State       { return m.state }
 
@@ -86,7 +86,7 @@ func (p *ProtectedToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	wrappedTools := make([]tool.Tool, len(underlyingTools))
 	for i, t := range underlyingTools {
 		wrappedTools[i] = &ProtectedTool{
@@ -96,7 +96,7 @@ func (p *ProtectedToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error)
 			YieldFunc: p.yieldFunc,
 		}
 	}
-	
+
 	return wrappedTools, nil
 }
 
@@ -117,13 +117,13 @@ func (f *FilteredToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error) 
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Create a map for fast lookup
 	allowedMap := make(map[string]bool)
 	for _, name := range f.allowedTools {
 		allowedMap[name] = true
 	}
-	
+
 	// Filter tools
 	var filteredTools []tool.Tool
 	for _, t := range underlyingTools {
@@ -131,17 +131,15 @@ func (f *FilteredToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error) 
 			filteredTools = append(filteredTools, t)
 		}
 	}
-	
+
 	return filteredTools, nil
 }
 
-
-
 // ProtectedTool wraps a standard tool and adds an approval gate.
 type ProtectedTool struct {
-	tool.Tool                // Embed the underlying tool
-	State     session.State  // Access to session state
-	Agent     *AstonishAgent // Access to helper methods
+	tool.Tool                                  // Embed the underlying tool
+	State     session.State                    // Access to session state
+	Agent     *AstonishAgent                   // Access to helper methods
 	YieldFunc func(*session.Event, error) bool // For emitting events
 }
 
@@ -166,7 +164,6 @@ func (p *ProtectedTool) ProcessRequest(ctx tool.Context, req *model.LLMRequest) 
 	return nil // Tool doesn't implement ProcessRequest, that's okay
 }
 
-
 // Run intercepts the execution to check for approval
 func (p *ProtectedTool) Run(ctx tool.Context, args any) (map[string]any, error) {
 	toolName := p.Tool.Name()
@@ -176,7 +173,7 @@ func (p *ProtectedTool) Run(ctx tool.Context, args any) (map[string]any, error) 
 	if approved, _ := p.State.Get(approvalKey); approved == true {
 		// Consume approval
 		p.State.Set(approvalKey, false)
-		
+
 		// We use a broader interface check here to be safe
 		if rt, ok := p.Tool.(interface {
 			Run(tool.Context, any) (map[string]any, error)
@@ -202,7 +199,7 @@ func (p *ProtectedTool) Run(ctx tool.Context, args any) (map[string]any, error) 
 
 	// 4. Emit the UI Event
 	prompt := p.Agent.formatToolApprovalRequest(toolName, argsMap)
-	
+
 	p.YieldFunc(&session.Event{
 		LLMResponse: model.LLMResponse{
 			Content: &genai.Content{
@@ -223,15 +220,14 @@ func (p *ProtectedTool) Run(ctx tool.Context, args any) (map[string]any, error) 
 	return nil, ErrWaitingForApproval
 }
 
-
 // AstonishAgent implements the logic for running Astonish agents.
 type AstonishAgent struct {
-	Config   *config.AgentConfig
-	LLM      model.LLM
-	Tools    []tool.Tool
-	Toolsets []tool.Toolset
-	DebugMode     bool
-	IsWebMode     bool // If true, avoids ANSI codes in output
+	Config         *config.AgentConfig
+	LLM            model.LLM
+	Tools          []tool.Tool
+	Toolsets       []tool.Toolset
+	DebugMode      bool
+	IsWebMode      bool // If true, avoids ANSI codes in output
 	SessionService session.Service
 }
 
@@ -318,7 +314,7 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 			// Get the tool that was waiting
 			toolName, _ := state.Get("approval_tool")
 			toolNameStr, _ := toolName.(string)
-			
+
 			// Get user response
 			var inputBuilder strings.Builder
 			for _, part := range ctx.UserContent().Parts {
@@ -327,11 +323,11 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				}
 			}
 			input := strings.TrimSpace(inputBuilder.String())
-			
+
 			if a.DebugMode {
 				fmt.Printf("[DEBUG] Run: Awaiting=true, Tool='%s', Input='%s'\n", toolNameStr, input)
 			}
-			
+
 			if strings.EqualFold(input, "Yes") {
 				// Approved!
 				if toolNameStr != "" {
@@ -342,7 +338,7 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 					}
 				}
 			}
-			
+
 			// Clear waiting state
 			state.Set("awaiting_approval", false)
 			state.Set("approval_tool", "")
@@ -433,13 +429,13 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 			}
 			currentNodeName = nextNode
 			// Main loop will emit the transition
-			
+
 			// Check if first node is an input node - if so, show prompt immediately
 			node, found := a.getNode(currentNodeName)
 			if found && node.Type == "input" && !hasUserInput {
 				// Show the prompt and return, waiting for user input
 				prompt := a.renderString(node.Prompt, state)
-				
+
 				// Resolve options if present
 				var inputOptions []string
 				if len(node.Options) > 0 {
@@ -509,18 +505,19 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 					},
 					Actions: session.EventActions{
 						StateDelta: map[string]any{
-							"current_node":  currentNodeName,
-							"input_options": inputOptions,
+							"current_node":      currentNodeName,
+							"input_options":     inputOptions,
+							"waiting_for_input": true,
 						},
 					},
 				}
-				
+
 				if !yield(promptEvent, nil) {
 					return
 				}
 				return
 			}
-			
+
 			// Update state
 			state.Set("current_node", currentNodeName)
 		}
@@ -585,7 +582,7 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				yield(nil, fmt.Errorf("node not found: %s", currentNodeName))
 				return
 			}
-			
+
 			// Emit node transition before processing
 			if !a.emitNodeTransition(currentNodeName, state, yield) {
 				return
@@ -596,7 +593,7 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				if !a.handleParallelNode(ctx, node, state, yield) {
 					return
 				}
-				
+
 				// Move to next node
 				nextNode, err := a.getNextNode(currentNodeName, state)
 				if err != nil {
@@ -617,7 +614,7 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 			if node.Type == "input" {
 				// Render prompt
 				prompt := a.renderString(node.Prompt, state)
-				
+
 				// Resolve options if present
 				var inputOptions []string
 				if len(node.Options) > 0 {
@@ -688,20 +685,21 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 					},
 					Actions: session.EventActions{
 						StateDelta: map[string]any{
-							"current_node":  currentNodeName,
-							"input_options": inputOptions,
+							"current_node":      currentNodeName,
+							"input_options":     inputOptions,
+							"waiting_for_input": true,
 						},
 					},
 				}
-				
+
 				if !yield(promptEvent, nil) {
 					return
 				}
-				
+
 				return
 			} else if node.Type == "llm" {
 				success := a.executeLLMNode(ctx, node, currentNodeName, state, yield)
-				
+
 				// Check if node failed and set error flag
 				if !success {
 					// Check if this failure should stop execution
@@ -719,7 +717,7 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 					// Node failed but no error flag - this shouldn't happen, but handle it
 					return
 				}
-				
+
 				// Node succeeded - move to next node
 				nextNode, err := a.getNextNode(currentNodeName, state)
 				if err != nil {
@@ -733,7 +731,7 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				if !a.handleToolNode(ctx, node, state, yield) {
 					return
 				}
-				
+
 				// Move to next node
 				nextNode, err := a.getNextNode(currentNodeName, state)
 				if err != nil {
@@ -747,7 +745,7 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				if !a.handleUpdateStateNode(ctx, node, state, yield) {
 					return
 				}
-				
+
 				// Move to next node
 				nextNode, err := a.getNextNode(currentNodeName, state)
 				if err != nil {
@@ -761,12 +759,12 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				if !a.handleOutputNode(ctx, node, state, yield) {
 					return
 				}
-				
+
 				// Yield processor to allow events to propagate to the console runner
 				// This mitigates a race condition where the next node's transition event
 				// might be processed before the output content is fully flushed.
 				time.Sleep(50 * time.Millisecond)
-				
+
 				// Move to next node
 				nextNode, err := a.getNextNode(currentNodeName, state)
 				if err != nil {
@@ -781,10 +779,8 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				return
 			}
 		}
-		}
 	}
-
-
+}
 
 // emitNodeTransition emits a node transition event
 func (a *AstonishAgent) emitNodeTransition(nodeName string, state session.State, yield func(*session.Event, error) bool) bool {
@@ -799,13 +795,13 @@ func (a *AstonishAgent) emitNodeTransition(nodeName string, state session.State,
 		}
 		return yield(event, nil)
 	}
-	
+
 	// Get node info
 	node, found := a.getNode(nodeName)
 	if !found {
 		return true
 	}
-	
+
 	// Add to node history
 	historyVal, _ := state.Get("temp:node_history")
 	history, ok := historyVal.([]string)
@@ -813,19 +809,19 @@ func (a *AstonishAgent) emitNodeTransition(nodeName string, state session.State,
 		history = []string{}
 	}
 	history = append(history, nodeName)
-	
+
 	event := &session.Event{
 		// LLMResponse removed to prevent static "--- Node ---" log
 		Actions: session.EventActions{
 			StateDelta: map[string]any{
-				"current_node":       nodeName,
-				"temp:node_history":  history,
-				"temp:node_type":     node.Type,
-				"node_type":          node.Type,
+				"current_node":      nodeName,
+				"temp:node_history": history,
+				"temp:node_type":    node.Type,
+				"node_type":         node.Type,
 			},
 		},
 	}
-	
+
 	return yield(event, nil)
 }
 
@@ -964,11 +960,11 @@ func (a *AstonishAgent) handleToolApproval(ctx agent.InvocationContext, state se
 	if ctx.UserContent() == nil || len(ctx.UserContent().Parts) == 0 {
 		return true // No user input, continue
 	}
-	
+
 	// Get the tool name that's awaiting approval
 	toolNameVal, _ := state.Get("approval_tool")
 	toolName, _ := toolNameVal.(string)
-	
+
 	// Extract approval response
 	var responseText string
 	for _, part := range ctx.UserContent().Parts {
@@ -977,27 +973,27 @@ func (a *AstonishAgent) handleToolApproval(ctx agent.InvocationContext, state se
 		}
 	}
 	responseText = strings.ToLower(strings.TrimSpace(responseText))
-	
+
 	approved := responseText == "yes" || responseText == "y" || responseText == "approve"
-	
+
 	if approved {
 		// Grant approval using the tool-specific key
 		approvalKey := fmt.Sprintf("approval:%s", toolName)
 		state.Set(approvalKey, true)
 		state.Set("awaiting_approval", false)
-		
+
 		// [MCP-SPECIFIC FIX] Inject a very specific instruction for MCP tools
 		// MCP tools are sensitive to exact arguments - must retry with same args
 		retryPrompt := fmt.Sprintf(
 			"User approved execution. IMMEDIATELY call the function '%s' again with the exact same arguments as before.",
 			toolName,
 		)
-		
+
 		// Override the user input in the context so the LLM sees the instruction
 		ctx.UserContent().Parts = []*genai.Part{{
 			Text: retryPrompt,
 		}}
-		
+
 		// Emit approval confirmation
 		event := &session.Event{
 			LLMResponse: model.LLMResponse{
@@ -1019,7 +1015,7 @@ func (a *AstonishAgent) handleToolApproval(ctx agent.InvocationContext, state se
 	} else {
 		// User denied - move to next node
 		state.Set("awaiting_approval", false)
-		
+
 		event := &session.Event{
 			LLMResponse: model.LLMResponse{
 				Content: &genai.Content{
@@ -1036,7 +1032,7 @@ func (a *AstonishAgent) handleToolApproval(ctx agent.InvocationContext, state se
 			},
 		}
 		yield(event, nil)
-		
+
 		// Get current node and move to next
 		currentNodeVal, _ := state.Get("current_node")
 		currentNode, _ := currentNodeVal.(string)
@@ -1046,12 +1042,10 @@ func (a *AstonishAgent) handleToolApproval(ctx agent.InvocationContext, state se
 			return false
 		}
 		state.Set("current_node", nextNode)
-		
+
 		return true // Continue to next node
 	}
 }
-
-
 
 // executeLLMNode executes an LLM node with intelligent retry logic
 // executeLLMNode executes an LLM node with intelligent retry logic
@@ -1318,22 +1312,22 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 	// Render prompt and system instruction
 	userPrompt := a.renderString(node.Prompt, state)
 	systemInstruction := a.renderString(node.System, state)
-	
+
 	// Use system instruction as the main instruction for the agent
 	// This ensures it goes to the System Prompt in the LLM request
 	instruction := systemInstruction
-	
+
 	// If no system instruction, use the user prompt as instruction (fallback behavior)
 	// But for Bedrock/Claude, we prefer separation.
 	if instruction == "" {
 		instruction = "You are a helpful AI assistant."
 	}
-	
+
 	if a.DebugMode {
 		fmt.Printf("[DEBUG] FINAL USER PROMPT:\n%s\n", userPrompt)
 		fmt.Printf("[DEBUG] FINAL SYSTEM INSTRUCTION:\n%s\n", instruction)
 	}
-	
+
 	// Manually append the User Message to the session history
 	// This ensures that the LLM sees a User Message even if llmagent doesn't pick it up from context
 	// or if history is empty.
@@ -1348,16 +1342,16 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			},
 		},
 	}
-	
+
 	sess := ctx.Session()
-	
+
 	if a.SessionService != nil {
-		
+
 		// Unwrap ScopedSession if present, as SessionService might expect the underlying session type
 		if scopedSess, ok := sess.(*ScopedSession); ok {
 			sess = scopedSess.Session
 		}
-		
+
 		// Try to append with (potentially unwrapped) session object
 		if err := a.SessionService.AppendEvent(ctx, sess, userEvent); err != nil {
 			// Retry with session fetched via Get (last resort)
@@ -1370,7 +1364,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				if userID == "" {
 					userID = "console_user"
 				}
-				
+
 				getResp, getErr := a.SessionService.Get(ctx, &session.GetRequest{
 					SessionID: sess.ID(),
 					AppName:   appName,
@@ -1390,12 +1384,12 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		// Validate that all selected tools exist
 		if len(node.ToolsSelection) > 0 {
 			foundTools := make(map[string]bool)
-			
+
 			// Check internal tools
 			for _, t := range a.Tools {
 				foundTools[t.Name()] = true
 			}
-			
+
 			// Check MCP toolsets
 			if len(a.Toolsets) > 0 {
 				minimalCtx := &minimalReadonlyContext{Context: ctx}
@@ -1408,21 +1402,20 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 					}
 				}
 			}
-			
+
 			var missingTools []string
 			for _, selected := range node.ToolsSelection {
 				if !foundTools[selected] {
 					missingTools = append(missingTools, selected)
 				}
 			}
-			
+
 			if len(missingTools) > 0 {
 				yield(nil, fmt.Errorf("configured tools not found: %s", strings.Join(missingTools, ", ")))
 				return false, fmt.Errorf("configured tools not found: %s", strings.Join(missingTools, ", "))
 			}
 		}
 
-		
 		// Filter based on ToolsSelection
 		if len(node.ToolsSelection) > 0 {
 
@@ -1447,7 +1440,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 	} else {
 
 	}
-	
+
 	// Inject tool use instruction if tools are enabled
 	if node.Tools {
 		instruction += "\n\nIMPORTANT: You have access to tools that you MUST use to complete this task. Do not describe what you would do or say you are waiting for results. Instead, immediately call the appropriate tool with the required parameters. The tools are available and ready to use right now."
@@ -1466,14 +1459,14 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		}
 		instruction += "}\n"
 		instruction += "Do not include any other text, explanations, or markdown formatting. Return ONLY the JSON object."
-		
+
 		properties := make(map[string]*genai.Schema)
 		required := []string{}
-		
+
 		for key, typeName := range node.OutputModel {
 			var propType genai.Type
 			var items *genai.Schema
-			
+
 			switch typeName {
 			case "str", "string":
 				propType = genai.TypeString
@@ -1492,24 +1485,24 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			default:
 				propType = genai.TypeString
 			}
-			
+
 			schema := &genai.Schema{
 				Type: propType,
 			}
 			if items != nil {
 				schema.Items = items
 			}
-			
+
 			properties[key] = schema
 			required = append(required, key)
 		}
-		
+
 		outputSchema = &genai.Schema{
 			Type:       genai.TypeObject,
 			Properties: properties,
 			Required:   required,
 		}
-		
+
 		// If there is only one output key, we might want to map it directly
 		// But for now, we stick to the map/object structure
 	}
@@ -1571,10 +1564,8 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			}
 		}
 
-
 		// Apply tools_selection filter if specified
 		if len(node.ToolsSelection) > 0 {
-
 
 			// Filter internal tools
 			var filteredInternalTools []tool.Tool
@@ -1599,9 +1590,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			}
 			mcpToolsets = filteredMCPToolsets
 
-
 		}
-
 
 		// Create BeforeToolCallback for approval if needed
 		var beforeToolCallbacks []llmagent.BeforeToolCallback
@@ -1646,30 +1635,31 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 
 						if err == nil && sessResp != nil && sessResp.Session != nil {
 							events := sessResp.Session.Events()
-						if events.Len() >= 2 {
-							lastEvent := events.At(events.Len() - 1)
-							prevEvent := events.At(events.Len() - 2)
+							if events.Len() >= 2 {
+								lastEvent := events.At(events.Len() - 1)
+								prevEvent := events.At(events.Len() - 2)
 
-							// Check if last event is user "Yes"
-							isUserYes := false
-							if lastEvent.Author == "user" && lastEvent.LLMResponse.Content != nil && len(lastEvent.LLMResponse.Content.Parts) > 0 {
-								text := strings.TrimSpace(lastEvent.LLMResponse.Content.Parts[0].Text)
-								if strings.EqualFold(text, "Yes") {
-									isUserYes = true
+								// Check if last event is user "Yes"
+								isUserYes := false
+								if lastEvent.Author == "user" && lastEvent.LLMResponse.Content != nil && len(lastEvent.LLMResponse.Content.Parts) > 0 {
+									text := strings.TrimSpace(lastEvent.LLMResponse.Content.Parts[0].Text)
+									if strings.EqualFold(text, "Yes") {
+										isUserYes = true
+									}
 								}
-							}
 
-							if isUserYes {
-								// Check if prev event was an approval request
-								if prevEvent.Actions.StateDelta != nil {
-									if val, ok := prevEvent.Actions.StateDelta["awaiting_approval"]; ok {
-										if b, ok := val.(bool); ok && b {
-											// Check if it was for THIS tool
-											if toolVal, ok := prevEvent.Actions.StateDelta["approval_tool"]; ok {
-												if tName, ok := toolVal.(string); ok && tName == toolName {
-													approved = true
-													if a.DebugMode {
-														fmt.Println("[DEBUG] Callback: Approved via history check!")
+								if isUserYes {
+									// Check if prev event was an approval request
+									if prevEvent.Actions.StateDelta != nil {
+										if val, ok := prevEvent.Actions.StateDelta["awaiting_approval"]; ok {
+											if b, ok := val.(bool); ok && b {
+												// Check if it was for THIS tool
+												if toolVal, ok := prevEvent.Actions.StateDelta["approval_tool"]; ok {
+													if tName, ok := toolVal.(string); ok && tName == toolName {
+														approved = true
+														if a.DebugMode {
+															fmt.Println("[DEBUG] Callback: Approved via history check!")
+														}
 													}
 												}
 											}
@@ -1677,7 +1667,6 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 									}
 								}
 							}
-						}
 						}
 					}
 
@@ -1743,7 +1732,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			beforeToolCallbacks = []llmagent.BeforeToolCallback{
 				func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 					toolName := t.Name()
-					
+
 					// Emit auto-approval visual event
 					prompt := a.formatToolApprovalRequest(toolName, args)
 					yield(&session.Event{
@@ -1755,12 +1744,12 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 						},
 						Actions: session.EventActions{
 							StateDelta: map[string]any{
-								"auto_approved":  true,
-								"approval_tool":  toolName,
+								"auto_approved": true,
+								"approval_tool": toolName,
 							},
 						},
 					}, nil)
-					
+
 					// Return nil to allow the actual tool to execute
 					return nil, nil
 				},
@@ -1832,10 +1821,10 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 	} else {
 		// No tools enabled
 		llmAgent, err = llmagent.New(llmagent.Config{
-			Name:        nodeName,
-			Model:       a.LLM,
-			Instruction: instruction,
-			Tools:       nodeTools,
+			Name:         nodeName,
+			Model:        a.LLM,
+			Instruction:  instruction,
+			Tools:        nodeTools,
 			OutputSchema: outputSchema,
 			OutputKey:    outputKey,
 		})
@@ -1869,14 +1858,14 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 
 	// Reset the pause flag before starting
 	state.Set("force_pause", false)
-	
+
 	// Determine if we should display LLM text output to the user
 	// Logic:
 	// - If output_model is defined: Suppress streaming (data extraction mode)
 	// - If user_message is defined: Suppress streaming (controlled output mode)
 	// - If neither is defined: Show streaming text (conversational mode)
 	shouldDisplayText := len(node.OutputModel) == 0 && len(node.UserMessage) == 0
-	
+
 	// Run the agent - ADK handles everything (native function calling)
 	var fullResponse strings.Builder
 	var debugTextBuffer strings.Builder // Buffer for debug output
@@ -1890,7 +1879,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			useReActFallback = true
 		}
 	}
-	
+
 	if useReActFallback {
 		// Emit a message indicating we're using the fallback via spinner update
 		yield(&session.Event{
@@ -1900,11 +1889,11 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				},
 			},
 		}, nil)
-		
+
 		// Collect all tools (internal + MCP) for ReAct planner
 		allTools := make([]tool.Tool, 0, len(internalTools))
 		allTools = append(allTools, internalTools...)
-		
+
 		// Add MCP tools
 		if len(a.Toolsets) > 0 {
 			minimalCtx := &minimalReadonlyContext{Context: ctx}
@@ -1928,20 +1917,20 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				}
 			}
 		}
-		
+
 		// Create approval callback if tools_auto_approval is false
 		var approvalCallback planner.ApprovalCallback
 		if !node.ToolsAutoApproval {
 			approvalCallback = func(toolName string, args map[string]any) (bool, error) {
 				approvalKey := fmt.Sprintf("approval:%s", toolName)
-				
+
 				// Check if we already have approval for this tool
 				approvedVal, _ := state.Get(approvalKey)
 				approved := false
 				if b, ok := approvedVal.(bool); ok && b {
 					approved = true
 				}
-				
+
 				if approved {
 					// Consume approval
 					state.Set(approvalKey, false)
@@ -1950,17 +1939,17 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 					}
 					return true, nil
 				}
-				
+
 				if a.DebugMode {
 					fmt.Printf("[ReAct DEBUG] Tool %s NOT approved. Requesting approval...\n", toolName)
 				}
-				
+
 				// No approval - request it
 				state.Set("force_pause", true)
 				state.Set("awaiting_approval", true)
 				state.Set("approval_tool", toolName)
 				state.Set("approval_args", args)
-				
+
 				// Emit approval request event
 				prompt := a.formatToolApprovalRequest(toolName, args)
 				yield(&session.Event{
@@ -1978,11 +1967,11 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 						},
 					},
 				}, nil)
-				
+
 				return false, nil
 			}
 		}
-		
+
 		// Use manual ReAct planner with all tools and approval callback
 		var reactPlanner *planner.ReActPlanner
 		if approvalCallback != nil {
@@ -1990,7 +1979,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		} else {
 			reactPlanner = planner.NewReActPlanner(a.LLM, allTools)
 		}
-		
+
 		// Strip output_model instructions from system instruction for ReAct
 		// The ReAct loop should focus on tool usage, not output formatting
 		cleanInstruction := instruction
@@ -2013,7 +2002,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			}
 			cleanInstruction = strings.Join(cleanLines, "\n")
 		}
-		
+
 		result, err := reactPlanner.Run(ctx, userPrompt, cleanInstruction) // Pass cleaned instruction
 		if err != nil {
 			// Check if this is an approval required error
@@ -2027,7 +2016,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			}
 			return false, fmt.Errorf("ReAct planner failed: %w", err)
 		}
-		
+
 		// Format output according to output_model if specified
 		if len(node.OutputModel) > 0 {
 			formattedResult, formatErr := reactPlanner.FormatOutput(ctx, result, node.OutputModel, instruction)
@@ -2035,7 +2024,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				return false, fmt.Errorf("failed to format ReAct output: %w", formatErr)
 			}
 			result = formattedResult
-			
+
 			// Parse the formatted result and store in state
 			var resultMap map[string]any
 			if err := json.Unmarshal([]byte(result), &resultMap); err == nil {
@@ -2044,7 +2033,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				}
 			}
 		}
-		
+
 		// Handle user_message if defined
 		if len(node.UserMessage) > 0 {
 			var textParts []string
@@ -2056,7 +2045,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 					}
 				}
 			}
-			
+
 			if len(textParts) > 0 {
 				// Emit user_message event
 				userMessageEvent := &session.Event{
@@ -2085,7 +2074,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				},
 			}, nil)
 		}
-		
+
 		return true, nil
 	}
 
@@ -2098,18 +2087,18 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 	for event, err := range runAgent() {
 		if err != nil {
 			// Check for "Tool calling is not supported" error or OpenRouter 404
-			if strings.Contains(err.Error(), "Tool calling is not supported") || 
-			   strings.Contains(err.Error(), "No endpoints found that support tool use") ||
-			   strings.Contains(err.Error(), "Function calling is not enabled") || 
-			   strings.Contains(err.Error(), "does not support tools") ||
-			   strings.Contains(err.Error(), "`tool calling` is not supported") {
+			if strings.Contains(err.Error(), "Tool calling is not supported") ||
+				strings.Contains(err.Error(), "No endpoints found that support tool use") ||
+				strings.Contains(err.Error(), "Function calling is not enabled") ||
+				strings.Contains(err.Error(), "does not support tools") ||
+				strings.Contains(err.Error(), "`tool calling` is not supported") {
 				if a.DebugMode {
 					fmt.Printf("[DEBUG] Caught tool calling error: %v. Switching to ReAct fallback.\n", err)
 				}
-				
+
 				// Enable fallback for future runs
 				state.Set("_use_react_fallback", true)
-				
+
 				// Emit a message indicating we're using the fallback via spinner update
 				yield(&session.Event{
 					Actions: session.EventActions{
@@ -2118,11 +2107,11 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 						},
 					},
 				}, nil)
-				
+
 				// Collect all tools (internal + MCP) for ReAct planner
 				allTools := make([]tool.Tool, 0, len(internalTools))
 				allTools = append(allTools, internalTools...)
-				
+
 				// Add MCP tools
 				if len(a.Toolsets) > 0 {
 					minimalCtx := &minimalReadonlyContext{Context: ctx}
@@ -2146,7 +2135,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 						}
 					}
 				}
-				
+
 				// Create approval callback if tools_auto_approval is false
 				var approvalCallback planner.ApprovalCallback
 				if !node.ToolsAutoApproval {
@@ -2196,7 +2185,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				} else {
 					reactPlanner = planner.NewReActPlanner(a.LLM, allTools)
 				}
-				
+
 				// Strip output_model instructions from system instruction for ReAct
 				cleanInstruction := instruction
 				if len(node.OutputModel) > 0 {
@@ -2216,7 +2205,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 					}
 					cleanInstruction = strings.Join(cleanLines, "\n")
 				}
-				
+
 				// Execute planner
 				result, planErr := reactPlanner.Run(ctx, userPrompt, cleanInstruction)
 				if planErr != nil {
@@ -2228,7 +2217,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 					}
 					return false, fmt.Errorf("ReAct planner fallback failed: %w", planErr)
 				}
-				
+
 				// Format output according to output_model if specified
 				if len(node.OutputModel) > 0 {
 					formattedResult, formatErr := reactPlanner.FormatOutput(ctx, result, node.OutputModel, instruction)
@@ -2236,7 +2225,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 						return false, fmt.Errorf("failed to format ReAct output: %w", formatErr)
 					}
 					result = formattedResult
-					
+
 					// Parse the formatted result and store in state
 					var resultMap map[string]any
 					if err := json.Unmarshal([]byte(result), &resultMap); err == nil {
@@ -2245,7 +2234,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 						}
 					}
 				}
-				
+
 				// Handle user_message if defined
 				if len(node.UserMessage) > 0 {
 					var textParts []string
@@ -2254,7 +2243,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 							textParts = append(textParts, fmt.Sprintf("%v", val))
 						}
 					}
-					
+
 					if len(textParts) > 0 {
 						userMessageEvent := &session.Event{
 							LLMResponse: model.LLMResponse{
@@ -2282,19 +2271,18 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 						},
 					}, nil)
 				}
-				
+
 				return true, nil
 			}
-			
+
 			// Genuine error
 			return false, err
 		}
-		
+
 		// ... process event ...
 		goto ProcessEvent
-		
-	ProcessEvent:
 
+	ProcessEvent:
 
 		// [ERROR HANDLING] Track tool errors but let them flow to the LLM
 		// The LLM needs to see the error response to understand the tool failed
@@ -2305,11 +2293,11 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			for _, part := range event.LLMResponse.Content.Parts {
 				if part.FunctionResponse != nil {
 					resp := part.FunctionResponse.Response
-					
+
 					// Check for the "error" key
 					if errVal, hasError := resp["error"]; hasError && errVal != nil {
 						toolName := part.FunctionResponse.Name
-						
+
 						// Convert error to string if it's an error type
 						var errorStr string
 						if errObj, ok := errVal.(error); ok {
@@ -2318,11 +2306,11 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 							errBytes, _ := json.Marshal(errVal)
 							errorStr = string(errBytes)
 						}
-						
+
 						if a.DebugMode {
 							fmt.Printf("[DEBUG] Tool '%s' failed with error: %s\n", toolName, errorStr)
 						}
-						
+
 						hasToolError = true
 						toolErrorMsg = fmt.Sprintf("tool '%s' failed: %s", toolName, errorStr)
 						// Don't return yet - let the error response flow to the LLM first
@@ -2330,11 +2318,11 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				}
 			}
 		}
-		
+
 		// Debug logging for event flow
 		if a.DebugMode {
 			// fmt.Printf("[DEBUG] Event received: Type=%s, Node=%s\n", event.Type, event.NodeName) // Fields not available directly on event?
-            // Let's just log the content parts
+			// Let's just log the content parts
 			if event.LLMResponse.Content != nil {
 				for _, part := range event.LLMResponse.Content.Parts {
 					if part.FunctionCall != nil {
@@ -2378,10 +2366,10 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			}
 			return false, fmt.Errorf("tool call limit exceeded (%d) for node '%s'", maxToolCalls, nodeName)
 		}
-		
+
 		// 1. Determine if this event should be displayed to the user
 		shouldYieldEvent := true
-		
+
 		if event.LLMResponse.Content != nil && len(event.LLMResponse.Content.Parts) > 0 {
 			// Check if this is a text-only event (no tool calls/responses)
 			isTextOnly := true
@@ -2391,27 +2379,27 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 					break
 				}
 			}
-			
+
 			// Suppress text-only events if user_message is not defined
 			// This prevents unwanted LLM conversational output from being displayed
 			if isTextOnly && !shouldDisplayText {
 				shouldYieldEvent = false
 			}
 		}
-		
+
 		// 2. FORWARD the event if it should be displayed
 		if shouldYieldEvent {
 			if !yield(event, nil) {
 				return false, nil
 			}
 		}
-		
+
 		// 2a. If we detected a tool error, stop after yielding the error response
 		// This allows the LLM to see the error before we stop
 		if hasToolError {
 			return false, fmt.Errorf("%s", toolErrorMsg)
 		}
-		
+
 		// 2b. CHECK FOR INTERRUPT SIGNAL
 		// If the tool set this flag, we must stop immediately
 		if shouldPause, _ := state.Get("force_pause"); shouldPause == true {
@@ -2419,7 +2407,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			state.Set("force_pause", false)
 			return false, nil // Stops the loop, effectively pausing the agent
 		}
-		
+
 		// 3. Accumulate text response for output_model (if needed)
 		if event.Content != nil {
 
@@ -2440,7 +2428,6 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 						fmt.Printf("[DEBUG] Tool Response for %s: %s\n", part.FunctionResponse.Name, string(respJSON))
 					}
 
-					
 					// Handle raw_tool_output if configured
 					if len(node.RawToolOutput) == 1 {
 						// Get the state key to update
@@ -2452,7 +2439,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 
 						// Update state with the response map
 						response := part.FunctionResponse.Response
-						
+
 						if err := state.Set(stateKey, response); err != nil {
 							return false, fmt.Errorf("failed to set state key %s: %w", stateKey, err)
 						}
@@ -2467,12 +2454,12 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			}
 		}
 	}
-	
+
 	// Print accumulated debug text
 	if a.DebugMode && debugTextBuffer.Len() > 0 {
 		fmt.Printf("[DEBUG] Full LLM Response: %s\n", debugTextBuffer.String())
 	}
-	
+
 	if a.DebugMode {
 		fmt.Printf("[DEBUG] astonish_agent.go: After llmagent.Run loop. node.OutputModel length: %d, node.UserMessage length: %d\n", len(node.OutputModel), len(node.UserMessage))
 	}
@@ -2482,25 +2469,25 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 	if len(node.OutputModel) > 0 {
 		// Get the accumulated text response
 		responseText := strings.TrimSpace(fullResponse.String())
-		
+
 		if a.DebugMode {
 			fmt.Printf("[DEBUG] executeLLMNode: Attempting to extract output_model. Response length: %d\n", len(responseText))
 		}
-		
+
 		if responseText != "" {
 			// Try to parse as JSON
 			cleaned := a.cleanAndFixJson(responseText)
-			
+
 			if a.DebugMode {
 				fmt.Printf("[DEBUG] executeLLMNode: Cleaned JSON: %s\n", cleaned)
 			}
-			
+
 			var parsedOutput map[string]any
 			if err := json.Unmarshal([]byte(cleaned), &parsedOutput); err == nil {
 				if a.DebugMode {
 					fmt.Printf("[DEBUG] executeLLMNode: Successfully parsed JSON. Keys: %v\n", getKeys(parsedOutput))
 				}
-				
+
 				// Distribute values to individual output_model keys
 				delta := make(map[string]any)
 				for key := range node.OutputModel {
@@ -2516,7 +2503,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 						}
 					}
 				}
-				
+
 				// Emit state delta if we updated anything
 				if len(delta) > 0 {
 					if a.DebugMode {
@@ -2546,23 +2533,23 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 	// to tell console.go to print the "Agent:" prefix
 	if len(node.UserMessage) > 0 {
 		var textParts []string
-		
+
 		for _, msgPart := range node.UserMessage {
 			// Try to resolve as state variable first
 			if val, err := state.Get(msgPart); err == nil {
 				textParts = append(textParts, fmt.Sprintf("%v", val))
-				
+
 				if a.DebugMode {
 					fmt.Printf("[DEBUG] astonish_agent.go: Resolved '%s' to value: %v\n", msgPart, val)
 				}
 			}
 		}
-		
+
 		if len(textParts) > 0 {
 			if a.DebugMode {
 				fmt.Printf("[DEBUG] astonish_agent.go: Emitting user_message event with text: %s\n", strings.Join(textParts, " "))
 			}
-			
+
 			// Emit event with text content AND a special marker in StateDelta
 			// The marker tells console.go this is a user_message that needs the "Agent:" prefix
 			userMessageEvent := &session.Event{
@@ -2578,17 +2565,17 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 					},
 				},
 			}
-			
+
 			if !yield(userMessageEvent, nil) {
 				return false, nil
 			}
-			
+
 			if a.DebugMode {
 				fmt.Printf("[DEBUG] astonish_agent.go: user_message event yielded successfully\n")
 			}
 		}
 	}
-	
+
 	return true, nil
 }
 
@@ -2605,7 +2592,7 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 				stateKey = k
 				break
 			}
-			
+
 			if stateVal, err := state.Get(stateKey); err == nil {
 				resolvedArgs[key] = stateVal
 			} else {
@@ -2636,7 +2623,7 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 		val, _ := state.Get(approvalKey)
 		if isApproved, ok := val.(bool); ok && isApproved {
 			approved = true
-			// Clear approval so we don't loop forever if we come back here? 
+			// Clear approval so we don't loop forever if we come back here?
 			// Actually, for a linear flow, it's fine. For a loop, we might want to clear it.
 			// But clearing it might break if we crash and resume?
 			// Let's clear it after execution.
@@ -2758,14 +2745,14 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 				}
 			} else if schemaMap, ok := decl.ParametersJsonSchema.(map[string]interface{}); ok {
 				// Handle map[string]interface{} schema (common in MCP or other providers)
-				
+
 				if typeVal, ok := schemaMap["type"].(string); ok && typeVal == "object" {
 					if props, ok := schemaMap["properties"].(map[string]interface{}); ok {
 						for key, val := range resolvedArgs {
 							if strVal, ok := val.(string); ok {
 								if prop, ok := props[key].(map[string]interface{}); ok {
 									propType, _ := prop["type"].(string)
-									
+
 									if propType == "number" || propType == "integer" {
 										// Try to convert string to float64
 										if num, err := strconv.ParseFloat(strVal, 64); err == nil {
@@ -2836,22 +2823,22 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 		yield(nil, fmt.Errorf("tool execution failed: %w", err))
 		return false
 	}
-	
+
 	// 5. Process Output
 	// toolResult is likely a struct (e.g. ShellCommandResult).
 	// We need to extract fields based on `output_model` and `raw_tool_output`.
-	
+
 	// Convert result to map for easy access
 	resultMap := make(map[string]interface{})
 	// Marshal/Unmarshal hack to convert struct to map
 	resultBytes, _ := json.Marshal(toolResult)
 	err = json.Unmarshal(resultBytes, &resultMap)
-	
+
 	if err != nil {
 		fmt.Printf("[DEBUG] JSON Unmarshal Error: %v\n", err)
 	}
 	// fmt.Printf("[DEBUG] Result JSON: %s\n", string(resultBytes))
-	
+
 	// Handle raw_tool_output
 	for key, mapping := range node.RawToolOutput {
 		// mapping is the field name in the tool result (e.g. "stdout")
@@ -2861,18 +2848,18 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 			state.Set(key, val)
 		}
 	}
-	
+
 	// Handle output_model
 	for key, typeName := range node.OutputModel {
 		// Try to find the content from various common keys
 		var val interface{}
 		found := false
-		
+
 		// Priority list of keys to check
 		keysToCheck := []string{"stdout", "output", "content", "formatted_diff", "result"}
-		
+
 		// 1. Check explicit mapping first (if any) - though output_model doesn't define mapping usually
-		
+
 		// 2. Check common keys
 		for _, k := range keysToCheck {
 			if v, ok := resultMap[k]; ok {
@@ -2881,14 +2868,14 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 				break
 			}
 		}
-		
+
 		// 3. If not found, check if the result itself is a string or simple type (and not a map/struct wrapper)
 		if !found && len(resultMap) == 0 {
 			// This might happen if toolResult was not a struct/map
 			val = toolResult
 			found = true
 		}
-		
+
 		if found {
 			if typeName == "list" {
 				// Check if val is already a slice
@@ -2943,18 +2930,18 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 			}
 		}
 	}
-	
+
 	// Clear approval state
 	state.Set("awaiting_approval", false)
 	state.Set(fmt.Sprintf("approval:%s", toolName), false)
-	
+
 	// Yield result event
 	yield(&session.Event{
 		Actions: session.EventActions{
 			StateDelta: stateDelta,
 		},
 	}, nil)
-	
+
 	return true
 }
 
@@ -3027,12 +3014,12 @@ func (a *AstonishAgent) evaluateCondition(condition string, state session.State)
 // stateToMap converts session.State to map[string]interface{}
 func (a *AstonishAgent) stateToMap(state session.State) map[string]interface{} {
 	stateMap := make(map[string]interface{})
-	
+
 	// Use the All() iterator to get all key-value pairs
 	for key, value := range state.All() {
 		stateMap[key] = value
 	}
-	
+
 	return stateMap
 }
 
@@ -3040,7 +3027,7 @@ func (a *AstonishAgent) renderString(tmpl string, state session.State) string {
 	// Use a regex that captures content inside {} but not nested {}
 	// This allows for expressions like {comment["patch"]}
 	re := regexp.MustCompile(`\{([^{}]+)\}`)
-	
+
 	// Convert state to map once for efficiency if needed, but renderString might be called often
 	// For now, convert inside the loop or pass it?
 	// stateToMap is relatively cheap if state is small.
@@ -3048,7 +3035,7 @@ func (a *AstonishAgent) renderString(tmpl string, state session.State) string {
 
 	return re.ReplaceAllStringFunc(tmpl, func(match string) string {
 		expr := match[1 : len(match)-1]
-		
+
 		// Try to evaluate the expression using Starlark
 		val, err := EvaluateExpression(expr, stateMap)
 		if err != nil {
@@ -3057,11 +3044,11 @@ func (a *AstonishAgent) renderString(tmpl string, state session.State) string {
 			// If EvaluateExpression failed, it might be because it's not a valid expression or key missing
 			return match
 		}
-		
+
 		if val == nil {
 			return match
 		}
-		
+
 		formatted := ui.FormatAsYamlLike(val, 0)
 		if a.DebugMode {
 			fmt.Printf("[DEBUG] renderString: Replaced '{%s}' with:\n%s\n", expr, formatted)
@@ -3072,7 +3059,7 @@ func (a *AstonishAgent) renderString(tmpl string, state session.State) string {
 
 func (a *AstonishAgent) cleanAndFixJson(input string) string {
 	trimmed := strings.TrimSpace(input)
-	
+
 	// Strategy 1: Check if the input starts with JSON (most reliable for structured output)
 	// This handles cases where the LLM returns pure JSON without markdown
 	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
@@ -3082,15 +3069,15 @@ func (a *AstonishAgent) cleanAndFixJson(input string) string {
 		if startChar == "{" {
 			endChar = "}"
 		}
-		
+
 		depth := 0
 		endIdx := -1
 		inString := false
 		escapeNext := false
-		
+
 		for i := 0; i < len(trimmed); i++ {
 			ch := trimmed[i]
-			
+
 			// Handle string escaping to avoid counting brackets inside strings
 			if escapeNext {
 				escapeNext = false
@@ -3104,7 +3091,7 @@ func (a *AstonishAgent) cleanAndFixJson(input string) string {
 				inString = !inString
 				continue
 			}
-			
+
 			// Only count brackets outside of strings
 			if !inString {
 				if string(ch) == startChar {
@@ -3118,19 +3105,19 @@ func (a *AstonishAgent) cleanAndFixJson(input string) string {
 				}
 			}
 		}
-		
+
 		if endIdx != -1 {
 			return strings.TrimSpace(trimmed[:endIdx+1])
 		}
 	}
-	
+
 	// Strategy 2: Look for markdown JSON code blocks
 	re := regexp.MustCompile("(?s)```(?:json)?\\s*(.*?)\\s*```")
 	match := re.FindStringSubmatch(trimmed)
 	if len(match) > 1 {
 		return strings.TrimSpace(match[1])
 	}
-	
+
 	// Strategy 3: Try to find JSON object/array anywhere in the text
 	// This is the fallback for cases where JSON is embedded in other text
 	startIdx := -1
@@ -3142,26 +3129,26 @@ func (a *AstonishAgent) cleanAndFixJson(input string) string {
 			break
 		}
 	}
-	
+
 	if startIdx == -1 {
 		// No JSON found, return as-is
 		return trimmed
 	}
-	
+
 	// Find the matching closing bracket with proper string handling
 	endChar := "]"
 	if startChar == "{" {
 		endChar = "}"
 	}
-	
+
 	depth := 0
 	endIdx := -1
 	inString := false
 	escapeNext := false
-	
+
 	for i := startIdx; i < len(trimmed); i++ {
 		ch := trimmed[i]
-		
+
 		// Handle string escaping
 		if escapeNext {
 			escapeNext = false
@@ -3175,7 +3162,7 @@ func (a *AstonishAgent) cleanAndFixJson(input string) string {
 			inString = !inString
 			continue
 		}
-		
+
 		// Only count brackets outside of strings
 		if !inString {
 			if string(ch) == startChar {
@@ -3189,11 +3176,11 @@ func (a *AstonishAgent) cleanAndFixJson(input string) string {
 			}
 		}
 	}
-	
+
 	if endIdx != -1 {
 		return strings.TrimSpace(trimmed[startIdx : endIdx+1])
 	}
-	
+
 	return trimmed
 }
 
@@ -3221,14 +3208,14 @@ func extractToolNameFromXML(text string, knownTools []string) string {
 	if len(matches) > 1 {
 		return strings.TrimSpace(matches[1])
 	}
-	
+
 	// 3. Fallback for other formats
 	re2 := regexp.MustCompile(`<tool_use>.*?</tool_use>`)
 	if re2.MatchString(text) {
 		commonTools := []string{"read_file", "write_file", "execute_command", "search_files", "list_files"}
 		// Add known tools to common tools
 		commonTools = append(commonTools, knownTools...)
-		
+
 		for _, toolName := range commonTools {
 			if strings.Contains(text, toolName) {
 				return toolName
@@ -3243,14 +3230,14 @@ func extractToolNameFromXML(text string, knownTools []string) string {
 			return toolName
 		}
 	}
-	
+
 	return ""
 }
 
 // extractParametersFromXML extracts parameters from XML-formatted tool calls
 func extractParametersFromXML(text string) map[string]any {
 	params := make(map[string]any)
-	
+
 	// 1. Handle <parameter name="key">value</parameter> format (Seen in logs)
 	reParam := regexp.MustCompile(`<parameter name="([^"]+)">([^<]+)</parameter>`)
 	matchesParam := reParam.FindAllStringSubmatch(text, -1)
@@ -3259,7 +3246,7 @@ func extractParametersFromXML(text string) map[string]any {
 			params[match[1]] = strings.TrimSpace(match[2])
 		}
 	}
-	
+
 	// If we found params using the new method, return them
 	if len(params) > 0 {
 		return params
@@ -3269,34 +3256,34 @@ func extractParametersFromXML(text string) map[string]any {
 	// Extract all potential parameter tags
 	re := regexp.MustCompile(`<([a-zA-Z_][a-zA-Z0-9_]*)>([^<]*)</([a-zA-Z_][a-zA-Z0-9_]*)>`)
 	matches := re.FindAllStringSubmatch(text, -1)
-	
+
 	for _, match := range matches {
 		if len(match) >= 4 {
 			openTag := match[1]
 			value := strings.TrimSpace(match[2])
 			closeTag := match[3]
-			
+
 			// Only accept if opening and closing tags match
 			if openTag != closeTag {
 				continue
 			}
-			
+
 			// Skip structural tags
-			if openTag == "tool_use" || openTag == "tool_name" || 
-			   openTag == "function_calls" || openTag == "invoke" ||
-			   openTag == "parameters" {
+			if openTag == "tool_use" || openTag == "tool_name" ||
+				openTag == "function_calls" || openTag == "invoke" ||
+				openTag == "parameters" {
 				continue
 			}
-			
+
 			params[openTag] = value
 		}
 	}
-	
+
 	// Generic fallback
 	if len(params) == 0 {
 		params["detected"] = "prompt-based tool call (check raw logs)"
 	}
-	
+
 	return params
 }
 
@@ -3466,7 +3453,6 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 		yield(nil, fmt.Errorf("failed to get parallel list '%s': %w", listKey, err))
 		return false
 	}
-	
 
 	// Convert to slice
 	var items []any
@@ -3515,12 +3501,12 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 	if pConfig.MaxConcurrency > 0 {
 		maxConcurrency = pConfig.MaxConcurrency
 	}
-	
+
 	// Semaphore to limit concurrency
 	sem := make(chan struct{}, maxConcurrency)
 	var wg sync.WaitGroup
 	var mu sync.Mutex // Protects results and yield
-	
+
 	// Pre-allocate results to preserve order
 	results := make([]any, len(items))
 	// Track success to know if we should include the result
@@ -3528,10 +3514,10 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 
 	// Initialize progress bar UI
 	prog := ui.NewParallelProgram(len(items), node.Name)
-	
+
 	// Channel to signal UI completion
 	uiDone := make(chan struct{})
-	
+
 	// Run UI in a goroutine
 	go func() {
 		defer close(uiDone)
@@ -3548,7 +3534,7 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 		if yieldCancelled {
 			return false
 		}
-		
+
 		// Log tool calls and errors to UI
 		if event != nil && event.LLMResponse.Content != nil {
 			for _, part := range event.LLMResponse.Content.Parts {
@@ -3566,7 +3552,7 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 			msg := fmt.Sprintf("Error: %v", err)
 			prog.Send(ui.ItemLogMsg(msg))
 		}
-		
+
 		// Suppress StateDelta and LLMResponse to prevent console printing during parallel execution
 		// We only want to collect the results, not print them as they happen
 		if event != nil {
@@ -3593,19 +3579,19 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 		wg.Add(1)
 		go func(idx int, it any) {
 			defer wg.Done()
-			
+
 			// Acquire semaphore
 			sem <- struct{}{}
-			
+
 			// Update active count
 			atomic.AddInt32(&activeWorkers, 1)
 			prog.Send(ui.ActiveCountMsg(atomic.LoadInt32(&activeWorkers)))
-			
-			defer func() { 
+
+			defer func() {
 				// Update active count
 				atomic.AddInt32(&activeWorkers, -1)
 				prog.Send(ui.ActiveCountMsg(atomic.LoadInt32(&activeWorkers)))
-				<-sem 
+				<-sem
 			}()
 
 			// Check for cancellation or stop flag
@@ -3628,12 +3614,12 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 				Parent: state,
 				Local:  make(map[string]any),
 			}
-			
+
 			scopedState.Local[pConfig.As] = it
 			if pConfig.IndexAs != "" {
 				scopedState.Local[pConfig.IndexAs] = idx
 			}
-			
+
 			// Workaround for "Severity" template error in ADK llmagent
 			if _, err := scopedState.Get("Severity"); err != nil {
 				scopedState.Local["Severity"] = "{{Severity}}"
@@ -3643,13 +3629,13 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 			// This ensures each parallel branch has its own history
 			// Include node name to avoid collisions between different parallel nodes in the same flow
 			newSessionID := fmt.Sprintf("%s:%s:parallel-%d", ctx.Session().ID(), node.Name, idx)
-			
+
 			// Create a session using the service
 			// We need to pass AppName and UserID if possible
 			createReq := &session.CreateRequest{
 				SessionID: newSessionID,
 			}
-			
+
 			// If we can get real values:
 			if s, ok := ctx.Session().(interface{ AppName() string }); ok {
 				createReq.AppName = s.AppName()
@@ -3663,7 +3649,7 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 				safeYield(nil, fmt.Errorf("failed to create ephemeral session: %w", err))
 				return
 			}
-			
+
 			scopedCtx := &ScopedContext{
 				InvocationContext: ctx,
 				state:             scopedState,
@@ -3679,7 +3665,7 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 				safeYield(nil, fmt.Errorf("unsupported type for parallel node: %s", node.Type))
 				return
 			}
-			
+
 			// Signal UI that item is finished
 			prog.Send(ui.ItemFinishedMsg{})
 
@@ -3700,9 +3686,9 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 	}
 
 	wg.Wait()
-	
+
 	// Ensure UI is done (though model handles auto-quit)
-	// We can wait a tiny bit to ensure the final render happens if needed, 
+	// We can wait a tiny bit to ensure the final render happens if needed,
 	// but usually wg.Wait() + the model's logic is enough.
 	<-uiDone
 
@@ -3712,7 +3698,7 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 	}
 
 	// 4. Update Parent State with Aggregated Results
-	// Filter results based on success to maintain density if needed, 
+	// Filter results based on success to maintain density if needed,
 	// OR keep them sparse?
 	// The original sequential logic appended only on success.
 	// So we should filter.
@@ -3725,7 +3711,7 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 
 	existingVal, _ := state.Get(outputKey)
 	var final []any
-	
+
 	if existingVal != nil {
 		if l, ok := existingVal.([]any); ok {
 			final = l
@@ -3735,14 +3721,14 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 	} else {
 		final = []any{}
 	}
-	
+
 	// Aggregate results based on output_action
 	// If output_action is "append", flatten lists; otherwise keep as-is
 	outputAction := "append" // Default behavior
 	if node.OutputAction != "" {
 		outputAction = node.OutputAction
 	}
-	
+
 	for _, res := range finalResults {
 		if outputAction == "append" {
 			// Check if res is a JSON string that needs parsing
@@ -3772,7 +3758,7 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 				}
 				// If parsing failed, continue with string as-is
 			}
-			
+
 			// Flatten lists when appending
 			if l, ok := res.([]any); ok {
 				// Flatten the list - append all items from the list
@@ -3786,9 +3772,9 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 			final = append(final, res)
 		}
 	}
-	
+
 	state.Set(outputKey, final)
-	
+
 	yield(&session.Event{
 		Actions: session.EventActions{
 			StateDelta: map[string]any{
@@ -3814,7 +3800,7 @@ func (a *AstonishAgent) handleOutputNode(ctx agent.InvocationContext, node *conf
 	}
 
 	message := strings.Join(parts, " ")
-	
+
 	// Emit message event
 	evt := &session.Event{
 		LLMResponse: model.LLMResponse{
@@ -3824,15 +3810,14 @@ func (a *AstonishAgent) handleOutputNode(ctx agent.InvocationContext, node *conf
 			},
 		},
 	}
-	
+
 	return yield(evt, nil)
 }
-
 
 // extractErrorTitle extracts a clear, user-friendly title from an error message
 func extractErrorTitle(errorMsg string) string {
 	// Common patterns to extract meaningful error titles
-	
+
 	// Pattern 1: "Tool execution failed. Details: <actual error>"
 	if idx := strings.Index(errorMsg, "Details: "); idx != -1 {
 		details := errorMsg[idx+9:] // Skip "Details: "
@@ -3845,7 +3830,7 @@ func extractErrorTitle(errorMsg string) string {
 		}
 		return details
 	}
-	
+
 	// Pattern 2: "tool 'name' failed: <actual error>"
 	if idx := strings.LastIndex(errorMsg, "failed: "); idx != -1 {
 		details := errorMsg[idx+8:] // Skip "failed: "
@@ -3864,7 +3849,7 @@ func extractErrorTitle(errorMsg string) string {
 		}
 		return details
 	}
-	
+
 	// Pattern 3: Generic - take first sentence or 100 chars
 	if endIdx := strings.Index(errorMsg, "."); endIdx != -1 && endIdx < 100 {
 		return errorMsg[:endIdx+1]
@@ -3872,6 +3857,6 @@ func extractErrorTitle(errorMsg string) string {
 	if len(errorMsg) > 100 {
 		return errorMsg[:100] + "..."
 	}
-	
+
 	return errorMsg
 }

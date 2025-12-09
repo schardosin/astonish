@@ -80,7 +80,6 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-
 	if req.AgentID == "" {
 		http.Error(w, "AgentID is required", http.StatusBadRequest)
 		return
@@ -114,7 +113,6 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		SendErrorSSE(w, flusher, fmt.Sprintf("Agent not found: %s", req.AgentID))
 		return
 	}
-
 
 	cfg, err := config.LoadAgent(agentPath)
 	if err != nil {
@@ -160,7 +158,6 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-
 	// 4. Initialize Tools
 	internalTools, err := tools.GetInternalTools()
 	if err != nil {
@@ -180,7 +177,7 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	// 5. Create Astonish Agent & ADK Agent
 	astonishAgent := agent.NewAstonishAgentWithToolsets(cfg, llm, internalTools, mcpToolsets)
 	astonishAgent.DebugMode = false // Disable verbose debug output
-	astonishAgent.IsWebMode = true // Enable Web mode for UI (disables ANSI colors)
+	astonishAgent.IsWebMode = true  // Enable Web mode for UI (disables ANSI colors)
 	astonishAgent.SessionService = sm.service
 
 	adkAgent, err := adkagent.New(adkagent.Config{
@@ -192,7 +189,6 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		SendErrorSSE(w, flusher, fmt.Sprintf("Failed to create agent: %v", err))
 		return
 	}
-
 
 	// 6. Manage Session
 	sm.mu.Lock()
@@ -224,7 +220,6 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-
 	// 8. Run & Stream
 	var userMsg *genai.Content
 	if req.Message != "" {
@@ -255,14 +250,14 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		// Stream State Updates / Node Transitions
 		if event.Actions.StateDelta != nil {
 			delta := event.Actions.StateDelta
-			
+
 			// Detect node transition
 			if nodeName, ok := delta["current_node"].(string); ok {
 				// Only send if node actually changed
 				if nodeName != lastNodeName {
 					lastNodeName = nodeName
 					// Also check node_type if available (sometimes implicit)
-					nodeType, _ := delta["node_type"].(string) 
+					nodeType, _ := delta["node_type"].(string)
 					SendSSE(w, flusher, "node", map[string]string{
 						"node": nodeName,
 						"type": nodeType,
@@ -282,15 +277,20 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Capture input request from input_options (input node)
-			if options, ok := delta["input_options"].([]string); ok {
-				// This implies an input node or approval is waiting
+			if options, ok := delta["input_options"].([]string); ok && len(options) > 0 {
+				// Input node with predefined options
 				SendSSE(w, flusher, "input_request", map[string]interface{}{
 					"options": options,
 				})
-			} else if optionsRaw, ok := delta["input_options"].([]interface{}); ok {
+			} else if optionsRaw, ok := delta["input_options"].([]interface{}); ok && len(optionsRaw) > 0 {
 				// Handle []interface{} case
 				SendSSE(w, flusher, "input_request", map[string]interface{}{
 					"options": optionsRaw,
+				})
+			} else if waiting, ok := delta["waiting_for_input"].(bool); ok && waiting {
+				// Free-text input (no options) - send empty options to enable input
+				SendSSE(w, flusher, "input_request", map[string]interface{}{
+					"options": []string{},
 				})
 			}
 

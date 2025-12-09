@@ -302,18 +302,23 @@ flow:
                      setRunningNodeId(null)
                      setChatMessages(prev => [...prev, { type: 'flow_complete' }])
                   }
-                } else if (data.options) { // Handle input_request which sends options directly or nested
+                } else if (data.options !== undefined) { // Handle input_request (options may be empty for free-text)
                   setIsWaitingForInput(true)
-                  setChatMessages(prev => [...prev, { 
-                    type: 'input_request', 
-                    options: data.options 
-                  }])
+                  // Only add to chat if there are options to display
+                  if (data.options.length > 0) {
+                    setChatMessages(prev => [...prev, { 
+                      type: 'input_request', 
+                      options: data.options 
+                    }])
+                  }
                 } else if (data.input_request) { // Handle nested format just in case
                    setIsWaitingForInput(true)
-                   setChatMessages(prev => [...prev, { 
-                     type: 'input_request', 
-                     options: data.input_request.options 
-                   }])
+                   if (data.input_request.options && data.input_request.options.length > 0) {
+                     setChatMessages(prev => [...prev, { 
+                       type: 'input_request', 
+                       options: data.input_request.options 
+                     }])
+                   }
                 } else if (data.done) {
                    // Clean finish
                 }

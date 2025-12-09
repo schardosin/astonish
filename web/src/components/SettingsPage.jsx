@@ -57,6 +57,10 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
   const [mcpViewMode, setMcpViewMode] = useState('editor') // 'editor' or 'source'
   const [mcpSourceText, setMcpSourceText] = useState('')
   const [mcpSourceError, setMcpSourceError] = useState(null)
+  // Track editable server names (key is stable ID, value is display name)
+  const [mcpServerNames, setMcpServerNames] = useState({})
+  // Track args as raw strings (key is server ID, value is comma-separated string)
+  const [mcpServerArgs, setMcpServerArgs] = useState({})
   
   // Model selection state
   const [availableModels, setAvailableModels] = useState([])
@@ -86,7 +90,17 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
         pForms[p.name] = { ...p.fields }
       })
       setProviderForms(pForms)
-      setMcpServers(mcpData.mcpServers || {})
+      const servers = mcpData.mcpServers || {}
+      setMcpServers(servers)
+      // Initialize editable names and args
+      const names = {}
+      const args = {}
+      Object.entries(servers).forEach(([name, server]) => {
+        names[name] = name
+        args[name] = (server.args || []).join(', ')
+      })
+      setMcpServerNames(names)
+      setMcpServerArgs(args)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -128,7 +142,17 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
     setSaving(true)
     setSaveSuccess(false)
     try {
-      await saveMCPConfig({ mcpServers })
+      // Build final server config using editable names and args
+      const finalServers = {}
+      Object.entries(mcpServers).forEach(([id, server]) => {
+        const finalName = mcpServerNames[id] || id
+        const argsString = mcpServerArgs[id] || ''
+        finalServers[finalName] = {
+          ...server,
+          args: argsString.split(',').map(s => s.trim()).filter(Boolean)
+        }
+      })
+      await saveMCPConfig({ mcpServers: finalServers })
       setSaveSuccess(true)
       setTimeout(() => setSaveSuccess(false), 2000)
     } catch (err) {
@@ -168,6 +192,8 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
       ...mcpServers,
       [newName]: { command: '', args: [], env: {}, transport: 'stdio' }
     })
+    setMcpServerNames({ ...mcpServerNames, [newName]: newName })
+    setMcpServerArgs({ ...mcpServerArgs, [newName]: '' })
     setEditingMcpServer(newName)
   }
 
@@ -175,6 +201,12 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
     const newServers = { ...mcpServers }
     delete newServers[name]
     setMcpServers(newServers)
+    const newNames = { ...mcpServerNames }
+    delete newNames[name]
+    setMcpServerNames(newNames)
+    const newArgs = { ...mcpServerArgs }
+    delete newArgs[name]
+    setMcpServerArgs(newArgs)
   }
 
   const menuItems = [
@@ -449,15 +481,9 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
                       <div className="flex items-center justify-between mb-4">
                         <input
                           type="text"
-                          value={name}
-                          onChange={(e) => {
-                            const newServers = {}
-                            Object.entries(mcpServers).forEach(([k, v]) => {
-                              newServers[k === name ? e.target.value : k] = v
-                            })
-                            setMcpServers(newServers)
-                          }}
-                          className="text-lg font-medium bg-transparent border-none outline-none"
+                          value={mcpServerNames[name] || name}
+                          onChange={(e) => setMcpServerNames({ ...mcpServerNames, [name]: e.target.value })}
+                          className="text-lg font-medium bg-transparent border-none outline-none flex-1"
                           style={{ color: 'var(--text-primary)' }}
                           placeholder="Server name"
                         />
@@ -505,11 +531,8 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
                         <label className="block text-sm mb-1" style={{ color: 'var(--text-muted)' }}>Args (comma-separated)</label>
                         <input
                           type="text"
-                          value={(server.args || []).join(', ')}
-                          onChange={(e) => setMcpServers({
-                            ...mcpServers,
-                            [name]: { ...server, args: e.target.value.split(',').map(s => s.trim()).filter(Boolean) }
-                          })}
+                          value={mcpServerArgs[name] !== undefined ? mcpServerArgs[name] : (server.args || []).join(', ')}
+                          onChange={(e) => setMcpServerArgs({ ...mcpServerArgs, [name]: e.target.value })}
                           placeholder="e.g., -y, @anthropic-ai/mcp-server-github"
                           className="w-full px-3 py-2 rounded border text-sm font-mono"
                           style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
@@ -518,9 +541,8 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
 
                       <div className="mt-3">
                         <label className="block text-sm mb-1" style={{ color: 'var(--text-muted)' }}>Environment (JSON)</label>
-                        <input
-                          type="text"
-                          value={Object.keys(server.env || {}).length > 0 ? JSON.stringify(server.env) : ''}
+                        <textarea
+                          value={Object.keys(server.env || {}).length > 0 ? JSON.stringify(server.env, null, 2) : ''}
                           onChange={(e) => {
                             try {
                               const env = e.target.value ? JSON.parse(e.target.value) : {}
@@ -530,8 +552,9 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
                               })
                             } catch {}
                           }}
-                          placeholder='{"KEY": "value"}'
-                          className="w-full px-3 py-2 rounded border text-sm font-mono"
+                          placeholder={'{\n  "KEY": "value"\n}'}
+                          rows={4}
+                          className="w-full px-3 py-2 rounded border text-sm font-mono resize-y"
                           style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                         />
                       </div>

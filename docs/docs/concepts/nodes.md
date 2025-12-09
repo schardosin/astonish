@@ -18,7 +18,7 @@ Astonish supports five main types of nodes:
 
 ### Output Nodes
 
-Output nodes are used to format and display information to the user without modifying the state. They are useful for presenting results, summaries, or status updates at specific points in the flow.
+Output nodes are used to format and display information to the user. They iterate through the `user_message` array and display each item - either as a literal string or by resolving state variable names.
 
 #### Configuration
 
@@ -26,22 +26,22 @@ Output nodes are used to format and display information to the user without modi
 |-------|------|-------------|
 | `name` | string | A unique identifier for the node |
 | `type` | string | Must be `"output"` |
-| `prompt` | string | The template used to format the output message |
-| `output_model` | object | Optional, typically empty as output nodes don't modify the state |
-| `user_message` | array (optional) | Variables to display to the user after processing |
+| `user_message` | array | **Required.** Array of strings and/or state variable names to display |
 
 #### Example
 
 ```yaml
 - name: display_results
   type: output
-  prompt: |
-    Here are the search results for "{search_query}":
-    
-    {search_results}
+  user_message:
+    - "Search Results for:"
+    - search_query
+    - "---"
+    - search_results
 ```
 
-In this example, the output node formats and displays the search results to the user without modifying the state.
+In this example, the output node displays literal text ("Search Results for:" and "---") interspersed with state variable values (`search_query` and `search_results`). Items are joined with spaces when displayed.
+
 
 ### Input Nodes
 

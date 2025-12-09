@@ -737,15 +737,106 @@ function ToolNodeForm({ data, onChange, theme, availableTools = [] }) {
 }
 
 /**
- * Output Node Form
+ * Output Node Form - with user_message array editor
  */
 function OutputNodeForm({ data, onChange, theme }) {
+  const userMessage = data.user_message || []
+  
+  const handleAddItem = () => {
+    onChange({ ...data, user_message: [...userMessage, ''] })
+  }
+  
+  const handleRemoveItem = (index) => {
+    const newItems = userMessage.filter((_, i) => i !== index)
+    onChange({ ...data, user_message: newItems })
+  }
+  
+  const handleItemChange = (index, value) => {
+    const newItems = [...userMessage]
+    newItems[index] = value
+    onChange({ ...data, user_message: newItems })
+  }
+  
   return (
-    <div className="flex items-center gap-4" style={{ color: 'var(--text-muted)' }}>
-      <MessageSquare size={24} className="opacity-50" />
-      <div>
-        <p className="text-sm">Output nodes display the final state.</p>
-        <p className="text-xs">No additional configuration required.</p>
+    <div className="flex gap-6 h-full">
+      {/* Left column - Info */}
+      <div className="w-64 space-y-4">
+        <div className="flex items-center gap-3" style={{ color: 'var(--text-muted)' }}>
+          <MessageSquare size={20} className="opacity-50" />
+          <div>
+            <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Output Display</p>
+            <p className="text-xs">Configure what to show</p>
+          </div>
+        </div>
+        <div className="text-xs space-y-2 p-3 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>
+          <p><strong>Tips:</strong></p>
+          <p>• Add literal text strings</p>
+          <p>• Reference state variables by name</p>
+          <p>• Items are joined with spaces</p>
+        </div>
+      </div>
+      
+      {/* Right column - User Message Editor */}
+      <div className="flex-1">
+        <div className="flex justify-between items-center mb-2">
+          <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
+            User Message
+          </label>
+          <button
+            type="button"
+            onClick={handleAddItem}
+            className="flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors hover:opacity-80"
+            style={{ background: 'var(--accent-color)', color: 'white' }}
+          >
+            <Plus size={12} />
+            Add Item
+          </button>
+        </div>
+        
+        {userMessage.length === 0 ? (
+          <div 
+            className="text-sm p-4 rounded border border-dashed text-center"
+            style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}
+          >
+            No items yet. Click "Add Item" to add a message part.
+          </div>
+        ) : (
+          <div className="space-y-2 max-h-48 overflow-y-auto">
+            {userMessage.map((item, index) => (
+              <div key={index} className="flex items-center gap-2">
+                <span 
+                  className="text-xs px-2 py-1 rounded" 
+                  style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}
+                >
+                  {index + 1}
+                </span>
+                <input
+                  type="text"
+                  value={item}
+                  onChange={(e) => handleItemChange(index, e.target.value)}
+                  className="flex-1 px-3 py-2 rounded border text-sm"
+                  style={{ 
+                    background: 'var(--bg-primary)', 
+                    borderColor: 'var(--border-color)', 
+                    color: 'var(--text-primary)' 
+                  }}
+                  placeholder='Text or variable name (e.g., "Result:" or answer)'
+                />
+                <button
+                  type="button"
+                  onClick={() => handleRemoveItem(index)}
+                  className="p-1 rounded hover:bg-red-500/20 text-red-500"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        
+        <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
+          Enter text strings or state variable names. Variables will be resolved at runtime.
+        </p>
       </div>
     </div>
   )

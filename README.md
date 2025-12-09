@@ -153,7 +153,7 @@ go install github.com/schardosin/astonish/cmd/astonish@latest
 astonish setup
 ```
 
-Configure your AI providers (Gemini, Claude, GPT-4, Ollama, etc.) and MCP servers.
+Configure your AI providers (Gemini, Claude, GPT-4, Ollama, etc.).
 
 ### 3. Launch Studio (Visual Designer)
 

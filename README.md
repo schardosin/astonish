@@ -109,7 +109,7 @@ astonish agents run my_agent
   - **Multi-node**: Select multiple nodes and ask AI to optimize the sequence
 - 🎨 **Drag-and-drop** flow designer with visual node connections
 - ⚡ **One-click execution** with real-time streaming output
-- 🔧 **MCP server integration** for GitHub, databases, and more
+- 🔧 **Connect any MCP server** — GitHub, Slack, databases, or your own custom servers
 - 💾 **Instant save** to YAML—version control your agents like code
 
 ---

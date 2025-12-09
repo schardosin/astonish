@@ -96,12 +96,12 @@ astonish agents run my_agent
 
 ## ✨ Astonish Studio
 
-Design your agent flows visually with the built-in **Astonish Studio**:
-
-
 <div align="center">
+  <p>Design your agent flows visually with the built-in <b>Astonish Studio</b></p>
   <img src="https://github.com/user-attachments/assets/9b8b4ddf-67b3-43da-bec7-8685d203ab58" width="1000" alt="Astonish Studio">
 </div>
+
+---
 
 - 🤖 **AI Assistant** — Your co-pilot for building agents:
   - **Flow-level**: Describe what you want and let AI generate the entire flow

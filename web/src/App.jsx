@@ -72,6 +72,11 @@ function App() {
   const [runningNodeId, setRunningNodeId] = useState(null)
   const [sessionId, setSessionId] = useState(null)
   const [isWaitingForInput, setIsWaitingForInput] = useState(false)
+  
+  // Undo/Redo History (max 100 versions)
+  const [yamlHistory, setYamlHistory] = useState([])
+  const [historyIndex, setHistoryIndex] = useState(-1)
+  const MAX_HISTORY = 100
 
   // Derive showSettings from path
   const showSettings = path.view === 'settings'
@@ -167,6 +172,58 @@ function App() {
     }
   }
 
+  // Push new YAML to history (called after applying changes)
+  const pushToHistory = useCallback((newYaml) => {
+    if (!newYaml) return
+    setYamlHistory(prev => {
+      // If we're not at the end, truncate forward history
+      const truncated = prev.slice(0, historyIndex + 1)
+      // Add new entry
+      const updated = [...truncated, newYaml]
+      // Keep only last MAX_HISTORY entries
+      if (updated.length > MAX_HISTORY) {
+        return updated.slice(-MAX_HISTORY)
+      }
+      return updated
+    })
+    setHistoryIndex(prev => Math.min(prev + 1, MAX_HISTORY - 1))
+  }, [historyIndex])
+
+  // Undo: go back in history
+  const handleUndo = useCallback(() => {
+    if (historyIndex > 0) {
+      setHistoryIndex(prev => prev - 1)
+      setYamlContent(yamlHistory[historyIndex - 1])
+    }
+  }, [historyIndex, yamlHistory])
+
+  // Redo: go forward in history
+  const handleRedo = useCallback(() => {
+    if (historyIndex < yamlHistory.length - 1) {
+      setHistoryIndex(prev => prev + 1)
+      setYamlContent(yamlHistory[historyIndex + 1])
+    }
+  }, [historyIndex, yamlHistory])
+
+  // Keyboard shortcuts for undo/redo
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Only handle when not in an input/textarea
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+      
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+        e.preventDefault()
+        if (e.shiftKey) {
+          handleRedo()
+        } else {
+          handleUndo()
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [handleUndo, handleRedo])
+
   // React to URL path changes (hash navigation)
   useEffect(() => {
     if (path.view === 'agent' && path.params.agentName && agents.length > 0) {
@@ -217,6 +274,10 @@ function App() {
     setChatMessages([])
     setIsWaitingForInput(false)
     
+    // Reset undo/redo history for new agent
+    setYamlHistory([])
+    setHistoryIndex(-1)
+    
     setSelectedAgent(agent)
     setSelectedNodeId(null)
     setEditingNode(null)
@@ -229,10 +290,16 @@ function App() {
     // Load agent YAML from API
     try {
       const data = await fetchAgent(agent.id)
-      setYamlContent(data.yaml || defaultYaml)
+      const loadedYaml = data.yaml || defaultYaml
+      setYamlContent(loadedYaml)
+      // Initialize history with loaded state
+      setYamlHistory([loadedYaml])
+      setHistoryIndex(0)
     } catch (err) {
       console.error('Failed to load agent:', err)
       setYamlContent(defaultYaml)
+      setYamlHistory([defaultYaml])
+      setHistoryIndex(0)
     }
   }, [navigate])
 
@@ -259,6 +326,9 @@ flow:
     setSelectedNodeId(null)
     setEditingNode(null)
     setYamlContent(newYaml)
+    // Reset and initialize history for new agent
+    setYamlHistory([newYaml])
+    setHistoryIndex(0)
     setShowCreateModal(false)
     
     // Update URL using navigate (triggers hashchange) so we stay on this agent after save
@@ -618,6 +688,10 @@ flow:
             onSave={handleSave}
             isSaving={isSaving}
             theme={theme}
+            canUndo={historyIndex > 0}
+            canRedo={historyIndex < yamlHistory.length - 1}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
           />
 
           {/* Flow + Chat Area */}
@@ -727,13 +801,11 @@ flow:
         selectedNodes={aiSelectedNodeIds.length > 0 ? aiSelectedNodeIds : (selectedNodeId ? [selectedNodeId] : [])}
         focusedNode={aiFocusedNode}
         agentId={selectedAgent?.id}
-        onPreviewYaml={(newYaml) => {
-          // Preview: update flow but don't save
-          setYamlContent(newYaml)
-        }}
         onApplyYaml={(newYaml) => {
-          // Apply: update flow and trigger save
+          // Apply the new YAML
           setYamlContent(newYaml)
+          // Push new state to history (for undo)
+          pushToHistory(newYaml)
           // Auto-save after applying
           if (selectedAgent) {
             saveAgent(selectedAgent.id, newYaml).then(() => {

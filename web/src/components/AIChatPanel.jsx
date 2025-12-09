@@ -26,7 +26,6 @@ export default function AIChatPanel({
   focusedNode = null,
   agentId = null,
   onApplyYaml,
-  onPreviewYaml,
 }) {
   // Separate message histories: flow chat preserves, node refiner resets
   const [flowMessages, setFlowMessages] = useState([])
@@ -102,8 +101,13 @@ export default function AIChatPanel({
           action: response.action,
         }])
         
-        if (response.proposedYaml) {
-          setPendingYaml(response.proposedYaml)
+        // Auto-apply YAML changes when received
+        if (response.proposedYaml && onApplyYaml) {
+          onApplyYaml(response.proposedYaml)
+          setMessages(prev => [...prev, { 
+            role: 'system', 
+            content: '✓ Changes applied! Use Undo (⌘Z) to revert if needed.' 
+          }])
         }
       }
     } catch (err) {
@@ -121,23 +125,6 @@ export default function AIChatPanel({
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
-    }
-  }
-
-  const handlePreview = () => {
-    if (pendingYaml && onPreviewYaml) {
-      onPreviewYaml(pendingYaml)
-    }
-  }
-
-  const handleApply = () => {
-    if (pendingYaml && onApplyYaml) {
-      onApplyYaml(pendingYaml)
-      setPendingYaml(null)
-      setMessages(prev => [...prev, { 
-        role: 'system', 
-        content: '✓ Changes applied successfully!' 
-      }])
     }
   }
 
@@ -318,29 +305,6 @@ export default function AIChatPanel({
         
         <div ref={messagesEndRef} />
       </div>
-
-      {/* Pending YAML Actions */}
-      {pendingYaml && (
-        <div className="px-4 py-2 border-t border-[var(--border-color)] bg-purple-600/10 flex items-center justify-between">
-          <span className="text-sm text-purple-300">YAML ready</span>
-          <div className="flex gap-2">
-            <button
-              onClick={handlePreview}
-              className="flex items-center gap-1 px-3 py-1 text-xs bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 rounded transition-colors"
-            >
-              <Eye size={12} />
-              Preview
-            </button>
-            <button
-              onClick={handleApply}
-              className="flex items-center gap-1 px-3 py-1 text-xs bg-green-600/20 hover:bg-green-600/30 text-green-400 rounded transition-colors"
-            >
-              <Check size={12} />
-              Apply
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Input */}
       <div className="p-3 border-t border-[var(--border-color)]">

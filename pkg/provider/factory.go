@@ -9,10 +9,48 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/provider/anthropic"
 	"github.com/schardosin/astonish/pkg/provider/google"
+	"github.com/schardosin/astonish/pkg/provider/groq"
+	"github.com/schardosin/astonish/pkg/provider/lmstudio"
+	"github.com/schardosin/astonish/pkg/provider/ollama"
 	openai_provider "github.com/schardosin/astonish/pkg/provider/openai"
+	"github.com/schardosin/astonish/pkg/provider/openrouter"
 	"github.com/schardosin/astonish/pkg/provider/sap"
+	"github.com/schardosin/astonish/pkg/provider/xai"
 	"google.golang.org/adk/model"
 )
+
+// ProviderDisplayNames maps provider IDs to their proper display names.
+// This is the centralized source of truth for how provider names should be displayed
+// in both the CLI and UI.
+var ProviderDisplayNames = map[string]string{
+	"anthropic":   "Anthropic",
+	"gemini":      "Google GenAI",
+	"groq":        "Groq",
+	"lm_studio":   "LM Studio",
+	"ollama":      "Ollama",
+	"openai":      "OpenAI",
+	"openrouter":  "Openrouter",
+	"sap_ai_core": "SAP AI Core",
+	"xai":         "xAI",
+}
+
+// GetProviderDisplayName returns the proper display name for a provider ID.
+// If the provider ID is not found, it returns the ID as-is.
+func GetProviderDisplayName(providerID string) string {
+	if name, ok := ProviderDisplayNames[providerID]; ok {
+		return name
+	}
+	return providerID
+}
+
+// GetProviderIDs returns a list of all known provider IDs.
+func GetProviderIDs() []string {
+	ids := make([]string, 0, len(ProviderDisplayNames))
+	for id := range ProviderDisplayNames {
+		ids = append(ids, id)
+	}
+	return ids
+}
 
 // GetProvider returns an LLM model based on the provider name.
 func GetProvider(ctx context.Context, name string, modelName string, cfg *config.AppConfig) (model.LLM, error) {
@@ -153,5 +191,125 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", name)
+	}
+}
+
+// ListModelsForProvider fetches available models for a given provider.
+// This is used by the API to provide model lists to the UI.
+func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.AppConfig) ([]string, error) {
+	switch providerID {
+	case "anthropic":
+		apiKey := ""
+		if cfg != nil && cfg.Providers["anthropic"] != nil {
+			apiKey = cfg.Providers["anthropic"]["api_key"]
+		}
+		if apiKey == "" {
+			apiKey = os.Getenv("ANTHROPIC_API_KEY")
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("Anthropic API key not configured")
+		}
+		return anthropic.ListModels(apiKey)
+
+	case "google_genai", "gemini":
+		apiKey := ""
+		if cfg != nil && cfg.Providers["gemini"] != nil {
+			apiKey = cfg.Providers["gemini"]["api_key"]
+		}
+		if apiKey == "" {
+			apiKey = os.Getenv("GOOGLE_API_KEY")
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("Google API key not configured")
+		}
+		return google.ListModels(ctx, apiKey)
+
+	case "openai":
+		apiKey := ""
+		if cfg != nil && cfg.Providers["openai"] != nil {
+			apiKey = cfg.Providers["openai"]["api_key"]
+		}
+		if apiKey == "" {
+			apiKey = os.Getenv("OPENAI_API_KEY")
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("OpenAI API key not configured")
+		}
+		return openai_provider.ListModels(ctx, apiKey)
+
+	case "groq":
+		apiKey := ""
+		if cfg != nil && cfg.Providers["groq"] != nil {
+			apiKey = cfg.Providers["groq"]["api_key"]
+		}
+		if apiKey == "" {
+			apiKey = os.Getenv("GROQ_API_KEY")
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("Groq API key not configured")
+		}
+		return groq.ListModels(ctx, apiKey)
+
+	case "xai":
+		apiKey := ""
+		if cfg != nil && cfg.Providers["xai"] != nil {
+			apiKey = cfg.Providers["xai"]["api_key"]
+		}
+		if apiKey == "" {
+			apiKey = os.Getenv("XAI_API_KEY")
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("xAI API key not configured")
+		}
+		return xai.ListModels(ctx, apiKey)
+
+	case "ollama":
+		baseURL := "http://localhost:11434"
+		if cfg != nil && cfg.Providers["ollama"] != nil {
+			if val, ok := cfg.Providers["ollama"]["base_url"]; ok && val != "" {
+				baseURL = val
+			}
+		}
+		return ollama.ListModels(ctx, baseURL)
+
+	case "lm_studio":
+		baseURL := "http://localhost:1234/v1"
+		if cfg != nil && cfg.Providers["lm_studio"] != nil {
+			if val, ok := cfg.Providers["lm_studio"]["base_url"]; ok && val != "" {
+				baseURL = val
+			}
+		}
+		return lmstudio.ListModels(ctx, baseURL)
+
+	case "openrouter":
+		apiKey := ""
+		if cfg != nil && cfg.Providers["openrouter"] != nil {
+			apiKey = cfg.Providers["openrouter"]["api_key"]
+		}
+		models, err := openrouter.ListModels(apiKey)
+		if err != nil {
+			return nil, err
+		}
+		// Convert DisplayModel to string list
+		var modelNames []string
+		for _, m := range models {
+			modelNames = append(modelNames, m.ID)
+		}
+		return modelNames, nil
+
+	case "sap_ai_core":
+		if cfg == nil || cfg.Providers["sap_ai_core"] == nil {
+			return nil, fmt.Errorf("SAP AI Core not configured")
+		}
+		pCfg := cfg.Providers["sap_ai_core"]
+		return sap.ListModels(ctx,
+			pCfg["client_id"],
+			pCfg["client_secret"],
+			pCfg["auth_url"],
+			pCfg["base_url"],
+			pCfg["resource_group"])
+
+	default:
+		return nil, fmt.Errorf("unsupported provider: %s", providerID)
 	}
 }

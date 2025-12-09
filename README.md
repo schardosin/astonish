@@ -1,9 +1,11 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/schardosin/astonish/main/images/astonish-logo-only.svg" width="300" height="300" alt="Astonish Logo">
+  <img src="https://raw.githubusercontent.com/schardosin/astonish/main/images/astonish-logo-only.svg" width="200" height="200" alt="Astonish Logo">
   
-  # Astonish: The Declarative AI Orchestration Engine
+  # Astonish
   
-  *High-performance, state-aware agent workflows built in Go.*
+  ### Build Production AI Agents in Minutes, Not Months
+  
+  *Design visually. Run anywhere. No servers required.*
   
   [![Go Report Card](https://goreportcard.com/badge/github.com/schardosin/astonish)](https://goreportcard.com/report/github.com/schardosin/astonish)
   [![Build Status](https://github.com/schardosin/astonish/actions/workflows/build.yml/badge.svg)](https://github.com/schardosin/astonish/actions/workflows/build.yml)
@@ -13,176 +15,347 @@
 
 ---
 
-**Astonish** is a high-performance, low-code engine for orchestrating sophisticated AI agent workflows. 
+## 💡 Our Vision
 
-Written purely in **Go**, Astonish bridges the gap between raw LLM capabilities and production-grade automation. It allows you to define complex, state-aware agentic flows using simple declarative YAML, turning the probabilistic nature of AI into deterministic business processes.
+**Agent flows should be designed, not coded.**
 
-## Why Astonish? (The Orchestration Layer)
+We believe the future of AI automation is declarative. You should focus on *what* your agent does—the business logic, the steps, the outcomes—not *how* to wire up providers, handle errors, or manage retries.
 
-Astonish is designed to work in harmony with powerful execution frameworks like the **Google Gen AI SDK (ADK)**. 
+Here's how Astonish makes this possible:
 
-While the ADK provides the incredible "Engine" (handling model connections, tool calling, and multimodal generation), Astonish provides the **"Assembly Line."**
+| You Focus On | Astonish Handles |
+|-------------|------------------|
+| Designing the flow | Provider connections & authentication |
+| Choosing which tools to use | Error detection & intelligent retries |
+| Defining success criteria | State management across steps |
+| Business logic | Parallel execution & performance |
 
-| Feature | Standard Agent SDKs (Google ADK, LangChain) | Astonish Orchestration Engine |
-| :--- | :--- | :--- |
-| **Philosophy** | **ReAct Loops:** "Here are tools, figure out what to do." | **Deterministic DAGs:** "Follow this specific Standard Operating Procedure (SOP), but use AI to solve the steps." |
-| **Memory** | **History-Based:** Appends every step to a growing chat log. Agents often forget details as context grows. | **State Blackboard:** Stores data in variables (`{file_path}`, `{summary}`). Agents access exact data via O(1) lookup. |
-| **Concurrency** | **Sequential:** Steps usually run one after another. | **Parallel Map-Reduce:** Uses **Go Routines** to spin up hundreds of concurrent workers (e.g., process 50 items simultaneously). |
-| **Quality Control**| **Self-Correction:** The agent hopes to catch its own errors. | **Validator Nodes:** Explicit "Critic" nodes configured in YAML to strictly filter or reject outputs from previous nodes. |
+**MCP servers extend capabilities** — Need GitHub integration? Database access? File operations? Add an MCP server. Your flow stays clean; capabilities plug in.
 
-## Key Features
+**AI assists your design** — Not sure how to structure your flow? Describe what you want in plain English. The AI Assistant generates the flow, refines nodes, and optimizes sequences.
 
--   **Go-Native Performance**: Ported from Python to Go to leverage lightweight Goroutines. Execute massive parallel workloads with negligible overhead.
--   **Declarative YAML Workflows**: Define your agents as Infrastructure-as-Code. Version control your agent logic just like your software.
--   **State Blackboard Architecture**: Avoid "Context Pollution." Pass exact, structured data between nodes without relying on the LLM's short-term memory.
--   **Parallel Execution**: Native support for `forEach` loops in YAML, allowing you to parallelize LLM tasks over lists of data.
--   **Model Context Protocol (MCP)**: Seamlessly integrate with the MCP ecosystem to give your agents access to GitHub, local files, databases, and more.
+**The framework handles resilience** — When things fail (and they will), Astonish evaluates errors, decides whether to retry or abort, and keeps your flow moving. You don't write a single line of error-handling code.
 
-## Installation
+This is why Astonish exists: to let you think in flows, not in code.
 
-### Install with Homebrew (Recommended)
+---
 
-```bash
-brew tap schardosin/astonish
-brew install astonish
-```
+## What Makes Astonish Different
 
-### Alternative: Install with Go
+### 🎯 Single Binary, Zero Infrastructure
+
+No web servers. No Docker. No cloud subscriptions. Astonish is a single executable that runs anywhere—your laptop, a Raspberry Pi, or a CI/CD pipeline.
 
 ```bash
-go install github.com/schardosin/astonish@latest
+# Add it to your cron
+0 9 * * * /usr/local/bin/astonish agents run daily_report >> /var/log/report.log
+
+# Run in any script
+./astonish agents run code_reviewer -p repo="./my-project"
 ```
 
-### Alternative: Build from Source
+### 📄 YAML as Source of Truth
+
+Your agent logic lives in simple YAML files. Version control them. Review them in PRs. Move them between environments. No platform lock-in.
+
+```yaml
+# This IS your agent. Copy it, share it, version it.
+nodes:
+  - name: analyze
+    type: llm
+    prompt: "Analyze {input}"
+flow:
+  - from: START
+    to: analyze
+```
+
+### 🖥️ Design Visually, Run Anywhere
+
+Use **Astonish Studio** to design flows visually, then run the exact same YAML from the command line. No "export" step. No format conversion.
+
+---
+
+## The Solution: Astonish
+
+Astonish is a **declarative AI agent engine** that lets you design, test, and run production-grade agents with zero code.
 
 ```bash
-git clone https://github.com/schardosin/astonish.git
-cd astonish
-go build -o astonish .
+# Install
+brew install schardosin/astonish/astonish
+
+# Design your agent visually
+astonish studio
+
+# Or run agents directly from CLI
+astonish agents run my_agent
 ```
 
-## Quick Start
+**That's it.** No web servers. No Docker. No complex deployments. Just a single binary that runs anywhere—your laptop, a cron job, or a CI/CD pipeline.
 
-### 1. Setup
+---
 
-Configure your AI providers (Google Gemini, Anthropic, OpenAI, etc.) and MCP servers.
+## ✨ Astonish Studio
+
+<div align="center">
+  <p>Design your agent flows visually with the built-in <b>Astonish Studio</b></p>
+  <img src="https://github.com/user-attachments/assets/9b8b4ddf-67b3-43da-bec7-8685d203ab58" width="1000" alt="Astonish Studio">
+</div>
+
+---
+
+- 🤖 **AI Assistant** — Your co-pilot for building agents:
+  - **Flow-level**: Describe what you want and let AI generate the entire flow
+  - **Node-level**: Select a node and ask AI to refine or improve it
+  - **Multi-node**: Select multiple nodes and ask AI to optimize the sequence
+- 🎨 **Drag-and-drop** flow designer with visual node connections
+- ⚡ **One-click execution** with real-time streaming output
+- 🔧 **Connect any MCP server** — GitHub, Slack, databases, or your own custom servers
+- 💾 **Instant save** to YAML—version control your agents like code
+
+---
+
+## Astonish vs. Alternatives
+
+| Feature | Astonish | Traditional No-Code (N8N, Make) | Raw SDKs (ADK, LangChain) |
+|---------|----------|--------------------------------|---------------------------|
+| **Runs as CLI** | ✅ Native | ❌ Requires server | ❌ You build it |
+| **Single binary** | ✅ One file | ❌ Docker/cloud | ❌ Dependencies |
+| **Version-controlled flows** | ✅ YAML in Git | ⚠️ Platform exports | ✅ Code in Git |
+| **Cron-job friendly** | ✅ Built for it | ⚠️ Needs running server | ✅ If you code it |
+| **Visual designer** | ✅ Studio | ✅ Native | ❌ None |
+| **Zero boilerplate** | ✅ Declarative | ✅ Visual | ❌ You write it |
+| **AI providers** | ✅ 8+ built-in | ✅ Native support | ❌ You integrate |
+| **MCP support** | ✅ Native | ✅ Supported | ⚠️ Manual setup |
+
+**Astonish is ideal when you want:**
+- Agent flows that run in automation (cron, CI/CD, scripts)
+- Simple YAML files you can version control and share
+- Visual design with CLI execution
+- No server infrastructure to maintain
+
+---
+
+## 🚀 Quick Start
+
+### 1. Install
+
+```bash
+# macOS/Linux (Homebrew)
+brew install schardosin/astonish/astonish
+
+# Or with Go
+go install github.com/schardosin/astonish/cmd/astonish@latest
+```
+
+### 2. Setup Providers
 
 ```bash
 astonish setup
 ```
 
-### 2. Create an Agent (The AI Architect)
+Configure your AI providers (Gemini, Claude, GPT-4, Ollama, etc.).
 
-Don't want to write YAML from scratch? Let Astonish write it for you.
-
-```bash
-astonish agents run agents_creator
-```
-*Describe your goal, and the system will generate a valid YAML workflow for you.*
-
-### 3. Run a Workflow
+### 3. Launch Studio (Visual Designer)
 
 ```bash
-astonish agents run <agent_name>
+astonish studio
 ```
 
-You can also inject runtime variables directly into the State Blackboard:
+Opens a local web UI at `http://localhost:9393` where you can visually design and test your agents.
+
+### 4. Run from CLI
 
 ```bash
-# Example: Injecting a question into a generic agent
-astonish agents run simple_question_answer -p question="Who was Steve Jobs?"
+# Interactive mode
+astonish agents run my_agent
+
+# With injected variables
+astonish agents run summarizer -p file_path="/path/to/document.txt"
+
+# Perfect for cron jobs and automation
+0 9 * * * /usr/local/bin/astonish agents run daily_report >> /var/log/report.log
 ```
 
-## The Power of Declarative Flows
+---
 
-Astonish flows are defined in YAML. They separate the **Flow Logic** (Edges) from the **Step Logic** (Nodes).
+## 🏗️ Architecture
 
-### Example: A File Summarizer
-*This snippet demonstrates the core logic of Astonish: Gathering input, using a specific tool (reading a file), and passing that specific data to an LLM for summarization using the State Blackboard (`{file_content}`).*
+Astonish is built on **Google's Agent Development Kit (ADK)** but removes all the boilerplate:
+
+```mermaid
+flowchart TB
+    subgraph Astonish["🚀 ASTONISH"]
+        YAML["📄 YAML Flow Definition"]
+        Studio["🎨 Studio (Visual)"]
+        CLI["⌨️ CLI Runner (cron/scripts)"]
+        
+        YAML --> Engine
+        Studio --> Engine
+        CLI --> Engine
+        
+        Engine["⚙️ Engine (Go)
+        • State Blackboard
+        • Parallel Execution
+        • Error Recovery"]
+        
+        Engine --> ADK
+        Engine --> MCP
+        Engine --> Tools
+        
+        ADK["🔧 Google ADK"]
+        MCP["🔌 MCP Servers"]
+        Tools["🛠️ Built-in Tools"]
+    end
+    
+    ADK --> Providers
+    MCP --> Providers
+    Tools --> Providers
+    
+    subgraph Providers["☁️ AI Providers"]
+        Gemini["Gemini"]
+        Claude["Claude"]
+        GPT["GPT-4"]
+        More["..."]
+    end
+```
+
+---
+
+## 📋 Example: PR Description Generator
+
+A real-world agent that reads GitHub PRs and generates descriptions:
 
 ```yaml
-description: An agent that reads a file and summarizes it.
+description: Generate PR descriptions from code changes
+
 nodes:
-  - name: get_file_path
-    type: input
-    prompt: |
-      Please enter the path to the file you want to analyze:
-    output_model:
-      file_path: str
-
-  - name: read_file_content
+  - name: get_prs
     type: llm
-    system: |
-      You are a file reading assistant.
-    prompt: |
-      Read the contents of the file at path: {file_path}
-    output_model:
-      file_content: str
+    prompt: List open PRs using the gh CLI
     tools: true
-    tools_selection:
-      - read_file
-
-  - name: extract_summary
-    type: llm
-    system: |
-      You are an AI assistant specialized in summarizing text.
-    prompt: |
-      Analyze the following file content and extract the core information:
-
-      {file_content}
-
-      Provide a concise summary.
+    tools_selection: [shell_command]
     output_model:
-      summary: str
+      prs: str
 
-  - name: present_summary
-    type: output
-    user_message:
-      - summary
+  - name: select_pr
+    type: input
+    prompt: "Select a PR number from:\n{prs}"
+    output_model:
+      pr_number: int
+
+  - name: get_diff
+    type: llm
+    prompt: Get the diff for PR #{pr_number}
+    tools: true
+    tools_selection: [shell_command]
+    output_model:
+      diff: str
+
+  - name: generate_description
+    type: llm
+    system: You are a technical writer.
+    prompt: |
+      Generate a clear PR description for this diff:
+      {diff}
+    output_model:
+      description: str
 
 flow:
   - from: START
-    to: get_file_path
-  - from: get_file_path
-    to: read_file_content
-  - from: read_file_content
-    to: extract_summary
-  - from: extract_summary
-    to: present_summary
-  - from: present_summary
+    to: get_prs
+  - from: get_prs
+    to: select_pr
+  - from: select_pr
+    to: get_diff
+  - from: get_diff
+    to: generate_description
+  - from: generate_description
     to: END
 ```
 
-## Supported AI Providers
+Run it:
+```bash
+astonish agents run pr_description_generator
+```
 
-Astonish acts as a neutral orchestrator, supporting major providers via standard APIs.
+---
 
-| Provider | Status | 
-|----------|--------|
-| Anthropic | Supported |
-| OpenAI | Supported |
-| Google Gemini | Supported |
-| Groq | Supported |
-| Ollama (Local) | Supported |
-| LM Studio (Local) | Supported |
-| OpenRouter | Supported |
-| X AI | Supported |
+## 🔌 Supported Providers
 
-## Project Structure
+| Provider | Type | Status |
+|----------|------|--------|
+| Google Gemini | Cloud | ✅ |
+| Anthropic Claude | Cloud | ✅ |
+| OpenAI GPT-4 | Cloud | ✅ |
+| SAP AI Core | Enterprise | ✅ |
+| Groq | Cloud | ✅ |
+| OpenRouter | Cloud | ✅ |
+| X.AI (Grok) | Cloud | ✅ |
+| Ollama | Local | ✅ |
+| LM Studio | Local | ✅ |
 
-- `core/`: The Go-based orchestration engine.
-- `engine/runner.go`: Handles the DAG execution and State Blackboard management.
-- `mcp/`: Client implementation for Model Context Protocol.
-- `agents/`: Directory where your declarative YAML agents live.
+---
 
-## Contributing
+## 🛠️ MCP Integration
 
-We are building the standard for deterministic agent orchestration.
+Connect your agents to any MCP-compatible server:
+
+```bash
+# Add MCP servers via setup
+astonish setup
+
+# Or configure manually in ~/.astonish/mcp_config.json
+{
+  "github": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"]
+  }
+}
+```
+
+Your agents can now interact with GitHub, read files, query databases, and more.
+
+---
+
+## 🎯 Use Cases
+
+- **DevOps Automation**: PR reviews, release notes, incident response
+- **Data Processing**: ETL pipelines with AI-powered transformation
+- **Content Generation**: Blog posts, documentation, translations
+- **Code Analysis**: Security audits, refactoring suggestions
+- **Research Agents**: Web scraping with intelligent extraction
+- **Scheduled Tasks**: Daily summaries, monitoring alerts (perfect for cron)
+
+---
+
+## 📖 Documentation
+
+- [Full Documentation](https://github.com/schardosin/astonish/wiki)
+- [Agent Examples](https://github.com/schardosin/astonish/tree/main/agents)
+- [MCP Server Setup](https://github.com/schardosin/astonish/wiki/MCP-Setup)
+
+---
+
+## 🤝 Contributing
+
+We're building the future of declarative AI agents. Contributions welcome!
 
 1. Fork the repository
 2. Create a feature branch
 3. Submit a Pull Request
 
-## License
+---
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+---
+
+<div align="center">
+  
+  **Built with ❤️ using Google ADK**
+  
+  [⭐ Star us on GitHub](https://github.com/schardosin/astonish)
+  
+</div>

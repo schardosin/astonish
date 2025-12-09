@@ -231,6 +231,7 @@ type AstonishAgent struct {
 	Tools    []tool.Tool
 	Toolsets []tool.Toolset
 	DebugMode     bool
+	IsWebMode     bool // If true, avoids ANSI codes in output
 	SessionService session.Service
 }
 
@@ -2959,6 +2960,19 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 
 // formatToolApprovalRequest formats a tool approval request
 func (a *AstonishAgent) formatToolApprovalRequest(toolName string, args map[string]interface{}) string {
+	if a.IsWebMode {
+		// Return plain text / markdown for Web UI
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("**Requesting approval to execute tool: `%s`**\n\n", toolName))
+		sb.WriteString("Arguments:\n")
+		sb.WriteString("```json\n")
+		enc := json.NewEncoder(&sb)
+		enc.SetIndent("", "  ")
+		enc.Encode(args)
+		sb.WriteString("```\n")
+		return sb.String()
+	}
+	// Return ANSI formatted box for CLI
 	return ui.RenderToolBox(toolName, args)
 }
 

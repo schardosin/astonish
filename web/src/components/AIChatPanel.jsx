@@ -131,6 +131,7 @@ export default function AIChatPanel({
   const getContextTitle = () => {
     switch (context) {
       case 'create_flow': return 'Create Flow'
+      case 'modify_flow': return 'Modify Flow'
       case 'modify_nodes': return 'Modify Nodes'
       case 'node_config': return 'Node Assistant'
       case 'multi_node': return 'Multi-Node Assistant'
@@ -141,6 +142,7 @@ export default function AIChatPanel({
   const getPlaceholder = () => {
     switch (context) {
       case 'create_flow': return 'Describe the flow you want to create...'
+      case 'modify_flow': return 'Describe changes to make to this flow...'
       case 'modify_nodes': return 'What changes do you want to make?'
       case 'node_config': return 'How can I help with this node?'
       case 'multi_node': return 'What would you like to do with these nodes?'
@@ -238,12 +240,29 @@ export default function AIChatPanel({
               </>
             ) : (
               <>
-                <p className="text-[var(--text-secondary)] text-sm mb-4">I can help you design and build flows</p>
+                <p className="text-[var(--text-secondary)] text-sm mb-4">
+                  {context === 'modify_flow' 
+                    ? 'I can help you modify and improve this flow'
+                    : 'I can help you design and build flows'}
+                </p>
                 
-                {/* Quick Examples for flow creation */}
+                {/* Quick Examples based on context */}
                 <div className="text-left space-y-2">
                   <p className="text-xs text-[var(--text-muted)] mb-2">Try an example:</p>
-                  {[
+                  {context === 'modify_flow' ? [
+                    'Add a new node to save the result',
+                    'Insert an input step before processing',
+                    'Add error handling to the flow',
+                    'Add a confirmation step at the end',
+                  ].map((example, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => setInput(example)}
+                      className="block w-full text-left px-3 py-2 text-xs bg-[var(--bg-primary)] hover:bg-purple-600/20 rounded-lg transition-colors text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                    >
+                      → {example}
+                    </button>
+                  )) : [
                     'Create a simple Q&A chatbot',
                     'Build a web search summarizer',
                     'Make a file reader and analyzer',

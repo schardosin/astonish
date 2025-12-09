@@ -719,8 +719,9 @@ flow:
                     setAISelectedNodeIds(options.nodeIds)
                     setAIFocusedNode(null)
                   } else {
-                    // Default flow context
-                    setAIChatContext('create_flow')
+                    // Check if flow has existing nodes (not just START->END)
+                    const hasExistingNodes = nodes.length > 0 && nodes.some(n => n.id !== 'START' && n.id !== 'END')
+                    setAIChatContext(hasExistingNodes ? 'modify_flow' : 'create_flow')
                     setAISelectedNodeIds([])
                     setAIFocusedNode(null)
                   }
@@ -820,7 +821,14 @@ flow:
       {/* AI Chat Toggle Button */}
       {selectedAgent && !isRunning && (
         <button
-          onClick={() => setShowAIChat(true)}
+          onClick={() => {
+            // Detect if flow has existing nodes
+            const hasExistingNodes = nodes.length > 0 && nodes.some(n => n.id !== 'START' && n.id !== 'END')
+            setAIChatContext(hasExistingNodes ? 'modify_flow' : 'create_flow')
+            setAISelectedNodeIds([])
+            setAIFocusedNode(null)
+            setShowAIChat(true)
+          }}
           className="fixed bottom-4 right-4 w-14 h-14 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 rounded-full shadow-lg flex items-center justify-center transition-all hover:scale-110 z-40"
           title="AI Assistant"
         >

@@ -114,24 +114,68 @@ astonish agents run my_agent
 
 ---
 
-## Astonish vs. Alternatives
+## 🔍 When to Choose Astonish
 
-| Feature | Astonish | Traditional No-Code (N8N, Make) | Raw SDKs (ADK, LangChain) |
-|---------|----------|--------------------------------|---------------------------|
-| **Runs as CLI** | ✅ Native | ❌ Requires server | ❌ You build it |
-| **Single binary** | ✅ One file | ❌ Docker/cloud | ❌ Dependencies |
-| **Version-controlled flows** | ✅ YAML in Git | ⚠️ Platform exports | ✅ Code in Git |
-| **Cron-job friendly** | ✅ Built for it | ⚠️ Needs running server | ✅ If you code it |
-| **Visual designer** | ✅ Studio | ✅ Native | ❌ None |
-| **Zero boilerplate** | ✅ Declarative | ✅ Visual | ❌ You write it |
-| **AI providers** | ✅ 8+ built-in | ✅ Native support | ❌ You integrate |
-| **MCP support** | ✅ Native | ✅ Supported | ⚠️ Manual setup |
+Astonish occupies a unique middle ground: **the visual ease of n8n** with **the lightweight, portable execution of a CLI tool**.
 
-**Astonish is ideal when you want:**
-- Agent flows that run in automation (cron, CI/CD, scripts)
-- Simple YAML files you can version control and share
-- Visual design with CLI execution
-- No server infrastructure to maintain
+---
+
+### Astonish vs. n8n
+
+*The "Server" vs. "CLI" distinction*
+
+| Feature | n8n | Astonish |
+|---------|-----|----------|
+| **Infrastructure** | Server-based. Requires an always-on instance (cloud or self-hosted Docker). | **Serverless / CLI.** A single binary you can run anywhere. |
+| **Storage** | Database. Flows live in a database. Hard to version control without exporting JSON. | **Files (YAML).** Simple text files you commit to GitHub and review in PRs. |
+| **Use Case** | Trigger-based: "When a webhook hits, do X." Great for connecting apps. | **Task-based:** "Run this job now." Great for reports, reviews, on-demand tasks. |
+| **Complexity** | High. Full GUI application to manage. | **Low.** No infrastructure to maintain. |
+
+> **Choose Astonish if:** You want to run an agent inside a GitHub Action, a shell script, or a cron job without paying for or maintaining an n8n server.
+
+---
+
+### Astonish vs. CrewAI / AutoGen
+
+*The "Code" vs. "Config" distinction*
+
+| Feature | CrewAI / AutoGen | Astonish |
+|---------|------------------|----------|
+| **Language** | Python. You must write Python code. Dependency management (pip/conda) can be painful. | **YAML.** Define logic in config files. No Python envs to manage. |
+| **Philosophy** | Role-Playing. "Manager" and "worker" agents chat to solve problems. Results can be unpredictable. | **Deterministic Flow.** Clear steps. You define an SOP for the AI to follow. |
+| **Visuals** | None (mostly). You're staring at code. | **Visual Studio.** Design flows visually and watch execution in real-time. |
+
+> **Choose Astonish if:** You want strict workflow control (DAG) rather than agents chatting randomly. You prefer not to deal with Python environments.
+
+---
+
+### Astonish vs. LangChain / LangGraph
+
+*The "Boilerplate" distinction*
+
+| Feature | LangChain / LangGraph | Astonish |
+|---------|----------------------|----------|
+| **Audience** | Software Engineers. Requires deep coding knowledge. | **Builders / DevOps.** Accessible to anyone who understands logic/flow. |
+| **Boilerplate** | High. You write code for connections, error handling, retries, state management. | **Zero.** Astonish handles it automatically. You just write prompts. |
+
+> **Choose Astonish if:** You want the power of LangGraph (state, loops) without writing hundreds of lines of code.
+
+---
+
+### Summary: The Right Tool for the Job
+
+| Use Case | Best Choice |
+|----------|-------------|
+| Gluing APIs together (webhooks, app-to-app) | **n8n** |
+| Team of agents brainstorming creatively | **CrewAI** |
+| Building reliable, executable tools that just work | **Astonish** |
+
+**Choose Astonish if you fit the "DevOps for AI" profile:**
+
+- 📁 **Infrastructure as Code** — AI agents live in your GitHub repo as YAML files, not hidden in a platform's database
+- 🚀 **Portable Agents** — Write once, run on your MacBook, Raspberry Pi, or GitHub Actions pipeline
+- 🎯 **No Context Pollution** — Structured State Blackboard passes exact data between steps, not messy chat history
+- ⚡ **Performance** — Written in Go with Goroutines. Run 50 parallel tasks faster and with less memory than Python
 
 ---
 
@@ -147,23 +191,22 @@ brew install schardosin/astonish/astonish
 go install github.com/schardosin/astonish/cmd/astonish@latest
 ```
 
-### 2. Setup Providers
-
-```bash
-astonish setup
-```
-
-Configure your AI providers (Gemini, Claude, GPT-4, Ollama, etc.).
-
-### 3. Launch Studio (Visual Designer)
+### 2. Launch Studio
 
 ```bash
 astonish studio
 ```
 
-Opens a local web UI at `http://localhost:9393` where you can visually design and test your agents.
+Opens a local web UI at `http://localhost:9393` where you can:
+- **Configure providers** — A built-in setup wizard guides you through connecting AI providers (Gemini, Claude, GPT-4, Ollama, etc.)
+- **Design flows visually** — Drag-and-drop nodes, connect edges, test in real-time
+- **Manage MCP servers** — Add GitHub, Slack, databases, or custom tools
 
-### 4. Run from CLI
+> **Prefer command line?** Run `astonish setup` for CLI-based configuration instead.
+
+### 3. Run from CLI
+
+Once configured, run your agents anywhere:
 
 ```bash
 # Interactive mode

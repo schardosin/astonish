@@ -151,6 +151,14 @@ export default function ChatPanel({ messages, onSendMessage, onStartRun, onStop,
           </div>
         ))}
         
+        {/* Thinking Indicator - shows when agent is running but not waiting for input */}
+        {hasActiveSession && !isWaitingForInput && messages.length > 0 && messages[messages.length - 1].type !== 'flow_complete' && (
+          <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-purple-500/10 border border-purple-500/20 animate-pulse">
+            <Loader size={18} className="text-purple-400 animate-spin" />
+            <span className="text-sm text-purple-300">Thinking...</span>
+          </div>
+        )}
+        
         {/* Restart Flow Button */}
         {messages.length > 0 && messages[messages.length - 1].type === 'flow_complete' && (
           <div className="flex justify-center mt-6 mb-4">
@@ -193,18 +201,13 @@ export default function ChatPanel({ messages, onSendMessage, onStartRun, onStop,
                   onChange={(e) => setInput(e.target.value)}
                   disabled={!canType}
                   placeholder={hasSelectionOptions ? "Click an option above" : (isWaitingForInput ? "Type your response..." : "Agent is thinking...")}
-                  className="w-full px-4 py-3 pr-10 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-70 disabled:cursor-not-allowed transition-all"
+                  className="w-full px-4 py-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-70 disabled:cursor-not-allowed transition-all"
                   style={{ 
                     background: 'var(--bg-tertiary)', 
                     color: 'var(--text-primary)',
                     border: '1px solid var(--border-color)'
                   }}
                 />
-                {!isWaitingForInput && messages.length > 0 && (
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2 text-purple-500">
-                    <Loader size={18} className="animate-spin" />
-                  </div>
-                )}
               </div>
               <button
                 type="submit"

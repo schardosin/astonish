@@ -312,7 +312,7 @@ function App() {
     setShowCreateModal(true)
   }, [])
 
-  const handleCreateAgent = useCallback(({ id, name, description }) => {
+  const handleCreateAgent = useCallback(async ({ id, name, description }) => {
     const newYaml = `description: ${description || name}
 
 nodes: []
@@ -333,7 +333,16 @@ flow:
     
     // Update URL using navigate (triggers hashchange) so we stay on this agent after save
     navigate(`/agent/${encodeURIComponent(id)}`)
-  }, [navigate])
+    
+    // Save immediately so it appears in the left menu
+    try {
+      await saveAgent(id, newYaml)
+      await loadAgents()
+      console.log('New agent saved and appears in menu')
+    } catch (err) {
+      console.error('Failed to save new agent:', err)
+    }
+  }, [navigate, loadAgents])
 
   const connectToChat = useCallback(async (currentSessionId, message = '') => {
     try {

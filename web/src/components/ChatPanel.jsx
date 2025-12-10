@@ -104,6 +104,13 @@ export default function ChatPanel({ messages, onSendMessage, onStartRun, onStop,
                 <span className="text-gray-400">{message.reason}</span>
               </div>
             )}
+            {message.type === 'tool_auto_approved' && (
+              <div className="flex items-center gap-2 px-3 py-2 my-1 text-sm">
+                <span className="flex items-center gap-1.5 px-2 py-1 rounded bg-green-500/10 border border-green-500/20 text-green-400">
+                  <span>✓</span> Auto-approved: <code className="bg-green-500/20 px-1.5 py-0.5 rounded font-mono text-xs">{message.toolName}</code>
+                </span>
+              </div>
+            )}
             {message.type === 'error_info' && (
               <div className="my-3 p-4 rounded-lg bg-red-500/5 border border-red-500/20 space-y-3">
                 <div className="flex items-center gap-2 text-red-400 font-medium">

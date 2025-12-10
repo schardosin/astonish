@@ -436,6 +436,12 @@ flow:
                     suggestion: data.suggestion,
                     originalError: data.originalError
                   }])
+                } else if (data.auto_approved && data.approval_tool) {
+                  // Handle tool auto-approval notification
+                  setChatMessages(prev => [...prev, { 
+                    type: 'tool_auto_approved', 
+                    toolName: data.approval_tool
+                  }])
                 } else if (data.done) {
                    // Clean finish
                 }

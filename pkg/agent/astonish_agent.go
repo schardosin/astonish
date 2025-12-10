@@ -838,14 +838,8 @@ func (a *AstonishAgent) handleUpdateStateNode(ctx agent.InvocationContext, node 
 			}
 			stateDelta[key] = value
 		}
-		// Emit event
+		// Emit event (no LLMResponse text - state updates are internal)
 		event := &session.Event{
-			LLMResponse: model.LLMResponse{
-				Content: &genai.Content{
-					Parts: []*genai.Part{{Text: fmt.Sprintf("Updated state: %v", stateDelta)}},
-					Role:  "model",
-				},
-			},
 			Actions: session.EventActions{StateDelta: stateDelta},
 		}
 		return yield(event, nil)
@@ -936,16 +930,8 @@ func (a *AstonishAgent) handleUpdateStateNode(ctx agent.InvocationContext, node 
 		return false
 	}
 
-	// Emit event with state delta
+	// Emit event with state delta (no LLMResponse text - state updates are internal)
 	event := &session.Event{
-		LLMResponse: model.LLMResponse{
-			Content: &genai.Content{
-				Parts: []*genai.Part{{
-					Text: fmt.Sprintf("Updated state: %s", ui.FormatAsYamlLike(stateDelta, 0)),
-				}},
-				Role: "model",
-			},
-		},
 		Actions: session.EventActions{
 			StateDelta: stateDelta,
 		},

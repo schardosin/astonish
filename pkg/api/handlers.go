@@ -17,9 +17,11 @@ import (
 // AgentListItem represents an agent in the list response
 type AgentListItem struct {
 	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Source      string `json:"source"` // "system" or "local"
+	Name         string `json:"name"`
+	Description  string `json:"description"`
+	Source       string `json:"source"` // "system" or "local"
+	HasError     bool   `json:"hasError,omitempty"`
+	ErrorMessage string `json:"errorMessage,omitempty"`
 }
 
 // AgentListResponse is the response for GET /api/agents
@@ -57,7 +59,16 @@ func scanAgentsDir(dir string, source string, agents map[string]AgentListItem) {
 		path := filepath.Join(dir, entry.Name())
 		cfg, err := config.LoadAgent(path)
 		if err != nil {
-			continue // Skip invalid agents
+			// Still add the agent but mark it as having an error
+			agents[name] = AgentListItem{
+				ID:           name,
+				Name:         name,
+				Description:  "(Error loading agent)",
+				Source:       source,
+				HasError:     true,
+				ErrorMessage: err.Error(),
+			}
+			continue
 		}
 
 		agents[name] = AgentListItem{

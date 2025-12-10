@@ -81,7 +81,32 @@ Collect user input. output_model is REQUIRED to store input in state.
   options:
     - "yes"
     - "no"
+
+# DYNAMIC options from state variable (from previous node output)
+# Use this when a previous LLM node outputs a list and you want user to select from it
+- name: list_items
+  type: llm
+  prompt: "List all available items"
+  output_model:
+    items: list  # This outputs a list to state
+  tools: true
+  user_message:
+    - items
+
+- name: select_item
+  type: input
+  prompt: "Select an item from the list above:"
+  output_model:
+    selected_item: str
+  options:
+    - items  # Reference the state variable containing the list (NOT {items}!)
 ` + "```" + `
+**CRITICAL for dynamic options:**
+- Use ` + "`" + `options: [variable_name]` + "`" + ` to reference a list from state
+- Do NOT use ` + "`" + `options: '{variable_name}'` + "`" + ` - this is WRONG!
+- Do NOT use ` + "`" + `options: variable_name` + "`" + ` without brackets - this is WRONG!
+- The variable must be a list type from a previous node's output_model
+
 **DO NOT use options if you want the user to type free text!**
 
 ### 3. Tool Node (RARELY USED)

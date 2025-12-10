@@ -43,21 +43,68 @@ export function parseNodes(yamlData, savedLayout = null) {
     data: { label: 'START' }
   })
   
-  // Parse defined nodes
+  // Parse defined nodes with error handling per-node
   if (yamlData.nodes && Array.isArray(yamlData.nodes)) {
-    yamlData.nodes.forEach((node) => {
-      const nodeType = NODE_TYPE_MAP[node.type] || 'llm'
-      const savedPos = nodePositions[node.name]
-      nodes.push({
-        id: node.name,
-        type: nodeType,
-        position: savedPos ? { x: savedPos.x, y: savedPos.y } : { x: 0, y: 0 },
-        data: {
-          label: node.name,
-          nodeType: node.type,
-          yaml: node
+    yamlData.nodes.forEach((node, index) => {
+      try {
+        // Validate required fields
+        if (!node || typeof node !== 'object') {
+          throw new Error('Node must be an object')
         }
-      })
+        if (!node.name) {
+          throw new Error('Node missing required "name" field')
+        }
+        
+        // Semantic validation for common field errors
+        const validationErrors = []
+        
+        // options must be an array
+        if (node.options !== undefined && !Array.isArray(node.options)) {
+          validationErrors.push(`'options' must be an array (got ${typeof node.options}). Use: options: [value1, value2] or options: [variable_name]`)
+        }
+        
+        // output_model should be an object
+        if (node.output_model !== undefined && typeof node.output_model !== 'object') {
+          validationErrors.push(`'output_model' must be an object (got ${typeof node.output_model})`)
+        }
+        
+        // user_message should be an array
+        if (node.user_message !== undefined && !Array.isArray(node.user_message)) {
+          validationErrors.push(`'user_message' must be an array (got ${typeof node.user_message})`)
+        }
+        
+        const nodeType = NODE_TYPE_MAP[node.type] || 'llm'
+        const savedPos = nodePositions[node.name]
+        
+        nodes.push({
+          id: node.name,
+          type: nodeType,
+          position: savedPos ? { x: savedPos.x, y: savedPos.y } : { x: 0, y: 0 },
+          data: {
+            label: node.name,
+            nodeType: node.type,
+            yaml: node,
+            hasError: validationErrors.length > 0,
+            errorMessage: validationErrors.length > 0 ? validationErrors.join('; ') : undefined
+          }
+        })
+      } catch (error) {
+        // Create error node placeholder so flow doesn't break
+        const nodeName = node?.name || `error_node_${index}`
+        console.error(`Error parsing node at index ${index}:`, error)
+        nodes.push({
+          id: nodeName,
+          type: 'llm', // Default fallback type
+          position: { x: 0, y: 0 },
+          data: {
+            label: nodeName,
+            nodeType: node?.type || 'unknown',
+            yaml: node || {},
+            hasError: true,
+            errorMessage: error.message
+          }
+        })
+      }
     })
   }
   

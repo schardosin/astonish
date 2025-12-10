@@ -473,13 +473,6 @@ flow:
     // Don't auto-start, wait for user to click Start
   }, [])
 
-  const handleStartRun = useCallback(() => {
-    setChatMessages([{ type: 'system', content: 'Execution started...' }])
-    setRunningNodeId(null)
-    const newSessionId = `session-${Date.now()}`
-    setSessionId(newSessionId)
-    connectToChat(newSessionId)
-  }, [connectToChat])
 
   const handleSendMessage = useCallback((msg) => {
     if (sessionId) {
@@ -683,6 +676,29 @@ flow:
       setIsSaving(false)
     }
   }, [selectedAgent, yamlContent])
+
+  const handleStartRun = useCallback(async () => {
+    // Silent save before running (without loadAgents which would reset state)
+    if (selectedAgent && yamlContent) {
+      try {
+        const parsed = yaml.load(yamlContent) || {}
+        const layout = extractLayout(currentFlowNodesRef.current, currentFlowEdgesRef.current)
+        parsed.layout = layout
+        const updatedYaml = yaml.dump(parsed, { lineWidth: -1, noRefs: true, quotingType: '"' })
+        await saveAgent(selectedAgent.id, updatedYaml)
+        setYamlContent(updatedYaml)
+      } catch (err) {
+        console.error('Auto-save before run failed:', err)
+        // Continue with run even if save fails
+      }
+    }
+    
+    setChatMessages([{ type: 'system', content: 'Execution started...' }])
+    setRunningNodeId(null)
+    const newSessionId = `session-${Date.now()}`
+    setSessionId(newSessionId)
+    connectToChat(newSessionId)
+  }, [connectToChat, selectedAgent, yamlContent])
 
   // Delete agent
   const handleDeleteAgent = useCallback((agent) => {

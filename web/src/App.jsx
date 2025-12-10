@@ -561,6 +561,35 @@ flow:
       // Merge layout into parsed YAML
       parsed.layout = layout
       
+      // Sync node deletions: only keep nodes that exist in the current flow
+      // (handles case where user deleted nodes in the UI)
+      const currentFlowNodeIds = new Set(
+        currentFlowNodesRef.current
+          ?.filter(n => !['start', 'end', 'waypoint'].includes(n.type))
+          .map(n => n.id) || []
+      )
+      
+      if (parsed.nodes && Array.isArray(parsed.nodes)) {
+        // Filter out nodes that were deleted
+        const originalNodeCount = parsed.nodes.length
+        parsed.nodes = parsed.nodes.filter(node => currentFlowNodeIds.has(node.name))
+        
+        if (parsed.nodes.length !== originalNodeCount) {
+          console.log(`[SAVE] Synced node deletions: ${originalNodeCount} -> ${parsed.nodes.length} nodes`)
+          
+          // Also clean up flow edges that reference deleted nodes
+          if (parsed.flow && Array.isArray(parsed.flow)) {
+            const validNodeNames = new Set(['START', 'END', ...parsed.nodes.map(n => n.name)])
+            parsed.flow = parsed.flow.filter(edge => {
+              const fromValid = validNodeNames.has(edge.from)
+              const toValid = !edge.to || validNodeNames.has(edge.to)
+              const edgesValid = !edge.edges || edge.edges.every(e => !e.to || validNodeNames.has(e.to))
+              return fromValid && toValid && edgesValid
+            })
+          }
+        }
+      }
+      
       // Convert back to YAML string
       const updatedYaml = yaml.dump(parsed, { 
         indent: 2, 

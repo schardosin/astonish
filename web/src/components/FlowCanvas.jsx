@@ -54,10 +54,31 @@ function FlowCanvasInner({
   onEdgeRemove,
   onLayoutChange,
   onOpenAIChat,
+  onNodeDelete,
   runningNodeId
 }) {
-  const [nodes, setNodes, handleNodesChange] = useNodesState([])
+  const [nodes, setNodes, onNodesChangeBase] = useNodesState([])
   const [edges, setEdges, handleEdgesChange] = useEdgesState([])
+  
+  // Wrap node change handler to detect deletions and notify parent
+  const handleNodesChange = useCallback((changes) => {
+    // Check for node removals
+    const removals = changes.filter(change => change.type === 'remove')
+    if (removals.length > 0 && onNodeDelete) {
+      // Get the IDs of removed nodes that are not waypoints/start/end
+      const removedIds = removals
+        .map(r => r.id)
+        .filter(id => id !== 'START' && id !== 'END' && !id.startsWith('waypoint'))
+      
+      if (removedIds.length > 0) {
+        // Notify parent of deletions BEFORE applying the change
+        removedIds.forEach(id => onNodeDelete(id))
+      }
+    }
+    
+    // Apply the change locally
+    onNodesChangeBase(changes)
+  }, [onNodesChangeBase, onNodeDelete])
   
   // Track local modifications (like waypoint deletion) that shouldn't be overwritten by prop sync
   const localModificationRef = useRef(false)
@@ -606,7 +627,7 @@ function FlowCanvasInner({
 }
 
 // Wrapper component that provides a key to force re-mount when flow structure changes dramatically
-export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelect, onNodeDoubleClick, selectedNodeId, runningNodeId, onAddNode, onConnect, onEdgeRemove, onLayoutChange, onOpenAIChat }) {
+export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelect, onNodeDoubleClick, selectedNodeId, runningNodeId, onAddNode, onConnect, onEdgeRemove, onLayoutChange, onOpenAIChat, onNodeDelete }) {
   // Generate a key based on node IDs to force re-mount when nodes change completely
   const flowKey = useMemo(() => {
     if (!nodes || nodes.length === 0) return 'empty'
@@ -628,6 +649,7 @@ export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelec
       onEdgeRemove={onEdgeRemove}
       onLayoutChange={onLayoutChange}
       onOpenAIChat={onOpenAIChat}
+      onNodeDelete={onNodeDelete}
       runningNodeId={runningNodeId}
     />
   )

@@ -546,6 +546,55 @@ flow:
     currentFlowEdgesRef.current = flowEdges
   }, [])
 
+  // Handle node deletion from FlowCanvas - update YAML immediately
+  const handleNodeDelete = useCallback((nodeId) => {
+    console.log(`[NODE DELETE] Removing node: ${nodeId}`)
+    
+    // Parse current YAML and remove the node
+    try {
+      const parsed = yaml.load(yamlContent) || {}
+      
+      if (parsed.nodes && Array.isArray(parsed.nodes)) {
+        parsed.nodes = parsed.nodes.filter(n => n.name !== nodeId)
+      }
+      
+      // Also clean up flow edges that reference this node
+      if (parsed.flow && Array.isArray(parsed.flow)) {
+        parsed.flow = parsed.flow.filter(edge => {
+          if (edge.from === nodeId) return false
+          if (edge.to === nodeId) return false
+          // Handle conditional edges
+          if (edge.edges && Array.isArray(edge.edges)) {
+            edge.edges = edge.edges.filter(e => e.to !== nodeId)
+            return edge.edges.length > 0 || edge.to
+          }
+          return true
+        })
+      }
+      
+      // Clean up layout
+      if (parsed.layout && parsed.layout.nodes) {
+        delete parsed.layout.nodes[nodeId]
+      }
+      
+      const newYaml = yaml.dump(parsed, { 
+        indent: 2, 
+        lineWidth: -1,
+        noRefs: true,
+        sortKeys: false
+      })
+      
+      setYamlContent(newYaml)
+      
+      // Also update local nodes/edges state to keep in sync
+      setNodes(prev => prev.filter(n => n.id !== nodeId))
+      setEdges(prev => prev.filter(e => e.source !== nodeId && e.target !== nodeId))
+      
+    } catch (err) {
+      console.error('Failed to delete node from YAML:', err)
+    }
+  }, [yamlContent])
+
   // Save agent to backend (including layout)
   const handleSave = useCallback(async () => {
     if (!selectedAgent) return
@@ -741,6 +790,7 @@ flow:
                 onConnect={handleConnect}
                 onEdgeRemove={handleEdgeRemove}
                 onLayoutChange={handleLayoutChange}
+                onNodeDelete={handleNodeDelete}
                 onOpenAIChat={(options) => {
                   if (options?.context === 'multi_node' && options?.nodeIds) {
                     // Multi-node context

@@ -2516,16 +2516,26 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 					}, nil)
 				}
 			} else {
+				// JSON parsing failed - return error to trigger retry
 				if a.DebugMode {
 					fmt.Printf("[DEBUG] executeLLMNode: Failed to parse JSON: %v\n", err)
 				}
+				// Create a descriptive error that will help intelligent retry
+				truncatedPreview := cleaned
+				if len(truncatedPreview) > 200 {
+					truncatedPreview = truncatedPreview[:200] + "..."
+				}
+				return false, fmt.Errorf("failed to parse LLM output as JSON for output_model extraction: %v. Response preview: %s", err, truncatedPreview)
 			}
 		} else {
+			// Empty response when output_model is expected - return error
 			if a.DebugMode {
-				fmt.Printf("[DEBUG] executeLLMNode: Response text is empty, skipping output_model extraction\n")
+				fmt.Printf("[DEBUG] executeLLMNode: Response text is empty, required for output_model extraction\n")
 			}
+			return false, fmt.Errorf("LLM returned empty response but output_model requires JSON output with keys: %v", getKeysStr(node.OutputModel))
 		}
 	}
+
 
 	// Handle user_message if defined
 	// IMPORTANT: We need to emit this with BOTH text content AND StateDelta
@@ -3060,70 +3070,13 @@ func (a *AstonishAgent) renderString(tmpl string, state session.State) string {
 func (a *AstonishAgent) cleanAndFixJson(input string) string {
 	trimmed := strings.TrimSpace(input)
 
-	// Strategy 1: Check if the input starts with JSON (most reliable for structured output)
-	// This handles cases where the LLM returns pure JSON without markdown
-	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
-		// Find the matching closing bracket
-		startChar := string(trimmed[0])
-		endChar := "]"
-		if startChar == "{" {
-			endChar = "}"
-		}
-
-		depth := 0
-		endIdx := -1
-		inString := false
-		escapeNext := false
-
-		for i := 0; i < len(trimmed); i++ {
-			ch := trimmed[i]
-
-			// Handle string escaping to avoid counting brackets inside strings
-			if escapeNext {
-				escapeNext = false
-				continue
-			}
-			if ch == '\\' {
-				escapeNext = true
-				continue
-			}
-			if ch == '"' {
-				inString = !inString
-				continue
-			}
-
-			// Only count brackets outside of strings
-			if !inString {
-				if string(ch) == startChar {
-					depth++
-				} else if string(ch) == endChar {
-					depth--
-					if depth == 0 {
-						endIdx = i
-						break
-					}
-				}
-			}
-		}
-
-		if endIdx != -1 {
-			return strings.TrimSpace(trimmed[:endIdx+1])
-		}
-	}
-
-	// Strategy 2: Look for markdown JSON code blocks
-	re := regexp.MustCompile("(?s)```(?:json)?\\s*(.*?)\\s*```")
-	match := re.FindStringSubmatch(trimmed)
-	if len(match) > 1 {
-		return strings.TrimSpace(match[1])
-	}
-
-	// Strategy 3: Try to find JSON object/array anywhere in the text
-	// This is the fallback for cases where JSON is embedded in other text
+	// Find the first JSON object or array start character
+	// This handles both pure JSON and markdown-wrapped JSON (```json ... ```)
 	startIdx := -1
 	startChar := ""
-	for i, ch := range trimmed {
-		if ch == '[' || ch == '{' {
+	for i := 0; i < len(trimmed); i++ {
+		ch := trimmed[i]
+		if ch == '{' || ch == '[' {
 			startIdx = i
 			startChar = string(ch)
 			break
@@ -3181,11 +3134,22 @@ func (a *AstonishAgent) cleanAndFixJson(input string) string {
 		return strings.TrimSpace(trimmed[startIdx : endIdx+1])
 	}
 
-	return trimmed
+	// If we couldn't find matching bracket, return from startIdx to end
+	// This at least gives us partial JSON that might still be parseable
+	return strings.TrimSpace(trimmed[startIdx:])
 }
 
 // getKeys returns the keys of a map as a slice
 func getKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// getKeysStr returns the keys of a map[string]string as a slice
+func getKeysStr(m map[string]string) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)

@@ -193,6 +193,58 @@ func (t *sapTransport) getToken() (string, error) {
 	return t.token, nil
 }
 
+// ModelConfig contains configuration for a specific model
+type ModelConfig struct {
+	MaxTokens     int
+	ContextWindow int
+}
+
+// ModelConfigs contains configuration for all supported models
+var ModelConfigs = map[string]ModelConfig{
+	// Anthropic models via Bedrock
+	"anthropic--claude-4.5-sonnet": {MaxTokens: 64000, ContextWindow: 200000},
+	"anthropic--claude-4-sonnet":   {MaxTokens: 64000, ContextWindow: 200000},
+	"anthropic--claude-4-opus":     {MaxTokens: 64000, ContextWindow: 200000},
+	"anthropic--claude-3.7-sonnet": {MaxTokens: 64000, ContextWindow: 200000},
+	"anthropic--claude-3.5-sonnet": {MaxTokens: 8192, ContextWindow: 200000},
+	"anthropic--claude-3-sonnet":   {MaxTokens: 4096, ContextWindow: 200000},
+	"anthropic--claude-3-haiku":    {MaxTokens: 4096, ContextWindow: 200000},
+	"anthropic--claude-3-opus":     {MaxTokens: 4096, ContextWindow: 200000},
+
+	// Gemini models via Vertex
+	"gemini-2.5-pro":   {MaxTokens: 65536, ContextWindow: 1048576},
+	"gemini-2.5-flash": {MaxTokens: 65536, ContextWindow: 1048576},
+
+	// OpenAI models
+	"gpt-4":       {MaxTokens: 4096, ContextWindow: 200000},
+	"gpt-4o":      {MaxTokens: 4096, ContextWindow: 200000},
+	"gpt-4o-mini": {MaxTokens: 4096, ContextWindow: 200000},
+	"gpt-4.1":     {MaxTokens: 32768, ContextWindow: 1047576},
+	"gpt-4.1-nano": {MaxTokens: 32768, ContextWindow: 1047576},
+	"gpt-5":       {MaxTokens: 128000, ContextWindow: 272000},
+	"gpt-5-nano":  {MaxTokens: 128000, ContextWindow: 272000},
+	"gpt-5-mini":  {MaxTokens: 128000, ContextWindow: 272000},
+
+	// Reasoning models
+	"o1":      {MaxTokens: 4096, ContextWindow: 200000},
+	"o3":      {MaxTokens: 100000, ContextWindow: 200000},
+	"o3-mini": {MaxTokens: 4096, ContextWindow: 200000},
+	"o4-mini": {MaxTokens: 100000, ContextWindow: 200000},
+
+	// Perplexity models
+	"sonar":     {MaxTokens: 128000, ContextWindow: 128000},
+	"sonar-pro": {MaxTokens: 128000, ContextWindow: 200000},
+}
+
+// GetModelConfig returns the configuration for a model, with fallback defaults
+func GetModelConfig(modelName string) ModelConfig {
+	if config, ok := ModelConfigs[modelName]; ok {
+		return config
+	}
+	// Default fallback
+	return ModelConfig{MaxTokens: 8192, ContextWindow: 200000}
+}
+
 // ModelIDMap maps friendly model names to SAP AI Core model names
 var ModelIDMap = map[string]string{
 	"gpt-4o":        "gpt-4o",
@@ -367,8 +419,11 @@ func ListModels(ctx context.Context, clientID, clientSecret, authURL, baseURL, r
 
 func (p *Provider) generateBedrockContent(ctx context.Context, req *model.LLMRequest, streaming bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		// Convert request using bedrock protocol
-		bedrockReq, err := bedrock.ConvertRequest(req)
+		// Get model-specific config
+		config := GetModelConfig(p.modelName)
+		
+		// Convert request using bedrock protocol with model-specific maxTokens
+		bedrockReq, err := bedrock.ConvertRequest(req, config.MaxTokens)
 		if err != nil {
 			yield(nil, err)
 			return
@@ -431,8 +486,11 @@ func (p *Provider) generateBedrockContent(ctx context.Context, req *model.LLMReq
 
 func (p *Provider) generateVertexContent(ctx context.Context, req *model.LLMRequest, streaming bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		// Convert request using vertex protocol
-		vertexReq, err := vertex.ConvertRequest(req)
+		// Get model-specific config
+		config := GetModelConfig(p.modelName)
+		
+		// Convert request using vertex protocol with model-specific maxOutputTokens
+		vertexReq, err := vertex.ConvertRequest(req, config.MaxTokens)
 		if err != nil {
 			yield(nil, err)
 			return

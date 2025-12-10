@@ -289,7 +289,7 @@ func (p *Provider) toAnthropicRequest(req *model.LLMRequest, streaming bool) (*R
 		Model:     p.model,
 		Messages:  messages,
 		System:    system,
-		MaxTokens: 4096,
+		MaxTokens: 64000,
 		Stream:    streaming,
 		Tools:     tools,
 	}, nil

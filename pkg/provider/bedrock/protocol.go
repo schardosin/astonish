@@ -58,10 +58,14 @@ type Response struct {
 }
 
 // ConvertRequest converts an ADK LLMRequest to a Bedrock Request.
-func ConvertRequest(req *model.LLMRequest) (*Request, error) {
+// maxTokens can be 0 to use the default (8192)
+func ConvertRequest(req *model.LLMRequest, maxTokens int) (*Request, error) {
+	if maxTokens <= 0 {
+		maxTokens = 8192 // Default fallback
+	}
 	bedrockReq := &Request{
 		AnthropicVersion: "bedrock-2023-05-31",
-		MaxTokens:        4096, // Default max tokens
+		MaxTokens:        maxTokens,
 		Messages:         make([]Message, 0),
 		Temperature:      0.7,
 	}

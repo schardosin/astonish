@@ -79,11 +79,16 @@ type Candidate struct {
 }
 
 // ConvertRequest converts an ADK LLMRequest to a Vertex AI Request.
-func ConvertRequest(req *model.LLMRequest) (*Request, error) {
+// maxOutputTokens can be 0 to use the default (8192)
+func ConvertRequest(req *model.LLMRequest, maxOutputTokens int) (*Request, error) {
+	if maxOutputTokens <= 0 {
+		maxOutputTokens = 8192 // Default fallback
+	}
 	vertexReq := &Request{
 		Contents: make([]Content, 0),
 		GenerationConfig: &GenerationConfig{
-			Temperature: 0.7, // Default
+			Temperature:     0.7, // Default
+			MaxOutputTokens: maxOutputTokens,
 		},
 	}
 

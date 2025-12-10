@@ -238,8 +238,9 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Stream LLM Text chunks (only for appropriate node types)
-		// Suppress for: update_state, tool (internal), input (prompt collection)
-		shouldStream := currentNodeType == "" || currentNodeType == "llm" || currentNodeType == "output"
+		// Suppress for: update_state (internal state changes), tool (internal processing)
+		// Allow for: llm, output, input (prompts should be visible to users)
+		shouldStream := currentNodeType == "" || currentNodeType == "llm" || currentNodeType == "output" || currentNodeType == "input"
 		if shouldStream && event.LLMResponse.Content != nil {
 			for _, part := range event.LLMResponse.Content.Parts {
 				if part.Text != "" {

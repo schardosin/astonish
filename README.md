@@ -30,7 +30,7 @@ Here's how Astonish makes this possible:
 | Defining success criteria | State management across steps |
 | Business logic | Parallel execution & performance |
 
-**MCP servers extend capabilities** — Need GitHub integration? Database access? File operations? Add an MCP server. Your flow stays clean; capabilities plug in.
+**MCP servers extend capabilities** — Need GitHub integration? Database access? Search the Internet? Add an MCP server. Your flow stays clean; capabilities plug in.
 
 **AI assists your design** — Not sure how to structure your flow? Describe what you want in plain English. The AI Assistant generates the flow, refines nodes, and optimizes sequences.
 
@@ -44,7 +44,7 @@ This is why Astonish exists: to let you think in flows, not in code.
 
 ### 🎯 Single Binary, Zero Infrastructure
 
-No web servers. No Docker. No cloud subscriptions. Astonish is a single executable that runs anywhere—your laptop, a Raspberry Pi, or a CI/CD pipeline.
+No web servers. No cloud subscriptions. Astonish is a single executable that runs anywhere—your laptop, a Raspberry Pi, in a container, or a CI/CD pipeline.
 
 ```bash
 # Add it to your cron

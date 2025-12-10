@@ -98,6 +98,36 @@ export default function ChatPanel({ messages, onSendMessage, onStartRun, onStop,
                 Error: {message.content}
               </div>
             )}
+            {message.type === 'retry' && (
+              <div className="flex items-center gap-2 px-3 py-2 my-1 text-sm">
+                <span className="text-orange-400 font-medium">⟳ Retry {message.attempt}/{message.maxRetries}:</span>
+                <span className="text-gray-400">{message.reason}</span>
+              </div>
+            )}
+            {message.type === 'error_info' && (
+              <div className="my-3 p-4 rounded-lg bg-red-500/5 border border-red-500/20 space-y-3">
+                <div className="flex items-center gap-2 text-red-400 font-medium">
+                  <span>✕</span> {message.title}
+                </div>
+                {message.reason && (
+                  <p className="text-sm text-gray-300 pl-4">{message.reason}</p>
+                )}
+                {message.suggestion && (
+                  <div className="pl-4">
+                    <p className="text-sm font-medium text-yellow-400">Suggestion:</p>
+                    <p className="text-sm text-yellow-300/80">{message.suggestion}</p>
+                  </div>
+                )}
+                {message.originalError && (
+                  <details className="pl-4">
+                    <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-400">Raw Error</summary>
+                    <pre className="text-xs text-gray-500 mt-1 whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
+                      {message.originalError}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            )}
             {message.type === 'thinking' && (
               <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm w-fit bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">
                 <Brain size={16} />

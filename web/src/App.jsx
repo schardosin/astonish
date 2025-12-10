@@ -419,6 +419,23 @@ flow:
                        options: data.input_request.options 
                      }])
                    }
+                } else if (data.attempt !== undefined && data.maxRetries !== undefined) {
+                  // Handle retry events
+                  setChatMessages(prev => [...prev, { 
+                    type: 'retry', 
+                    attempt: data.attempt,
+                    maxRetries: data.maxRetries,
+                    reason: data.reason
+                  }])
+                } else if (data.title && data.reason && data.originalError !== undefined) {
+                  // Handle error_info events (smart error handling)
+                  setChatMessages(prev => [...prev, { 
+                    type: 'error_info', 
+                    title: data.title,
+                    reason: data.reason,
+                    suggestion: data.suggestion,
+                    originalError: data.originalError
+                  }])
                 } else if (data.done) {
                    // Clean finish
                 }

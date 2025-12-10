@@ -270,6 +270,54 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
+			// Check for Retry Info (smart error handling)
+			if retryInfoVal, ok := delta["_retry_info"]; ok {
+				if retryInfo, ok := retryInfoVal.(map[string]interface{}); ok {
+					attempt := 0
+					maxRetries := 3
+					reason := ""
+					
+					if a, ok := retryInfo["attempt"].(int); ok {
+						attempt = a
+					} else if a, ok := retryInfo["attempt"].(float64); ok {
+						attempt = int(a)
+					}
+					
+					if m, ok := retryInfo["max_retries"].(int); ok {
+						maxRetries = m
+					} else if m, ok := retryInfo["max_retries"].(float64); ok {
+						maxRetries = int(m)
+					}
+					
+					if r, ok := retryInfo["reason"].(string); ok {
+						reason = r
+					}
+					
+					SendSSE(w, flusher, "retry", map[string]interface{}{
+						"attempt":    attempt,
+						"maxRetries": maxRetries,
+						"reason":     reason,
+					})
+				}
+			}
+
+			// Check for Failure Info (smart error handling)
+			if failureInfoVal, ok := delta["_failure_info"]; ok {
+				if failureInfo, ok := failureInfoVal.(map[string]interface{}); ok {
+					title, _ := failureInfo["title"].(string)
+					reason, _ := failureInfo["reason"].(string)
+					originalError, _ := failureInfo["original_error"].(string)
+					suggestion, _ := failureInfo["suggestion"].(string)
+					
+					SendSSE(w, flusher, "error_info", map[string]interface{}{
+						"title":         title,
+						"reason":        reason,
+						"suggestion":    suggestion,
+						"originalError": originalError,
+					})
+				}
+			}
+
 			// Capture input request from approval_options (tool approval)
 			if options, ok := delta["approval_options"].([]string); ok {
 				SendSSE(w, flusher, "input_request", map[string]interface{}{

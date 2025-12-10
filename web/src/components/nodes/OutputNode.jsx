@@ -1,16 +1,25 @@
 import { Handle, Position } from '@xyflow/react'
-import { MessageSquare } from 'lucide-react'
+import { MessageSquare, AlertTriangle } from 'lucide-react'
 
 export default function OutputNode({ data }) {
+  const hasError = data.hasError
+  
   return (
-    <div className={`node-output px-4 py-3 rounded-lg min-w-[180px] ${data.isActive ? 'node-active' : ''}`}>
+    <div 
+      className={`node-output px-4 py-3 rounded-lg min-w-[180px] ${data.isActive ? 'node-active' : ''}`}
+      style={hasError ? { border: '2px solid #ef4444', boxShadow: '0 0 10px rgba(239, 68, 68, 0.4)' } : undefined}
+      title={hasError ? data.errorMessage : undefined}
+    >
       <Handle type="target" position={Position.Top} className="!bg-purple-300 !w-3 !h-3" />
       <div className="flex items-center gap-2">
-        <MessageSquare size={16} />
+        {hasError ? <AlertTriangle size={16} className="text-red-500" /> : <MessageSquare size={16} />}
         <span className="font-semibold text-sm">{data.label}</span>
       </div>
       {data.description && (
         <p className="text-xs opacity-80 mt-1">{data.description}</p>
+      )}
+      {hasError && (
+        <p className="text-xs mt-1 text-red-400 truncate max-w-[200px]">{data.errorMessage}</p>
       )}
       <Handle type="source" position={Position.Bottom} className="!bg-purple-300 !w-3 !h-3" />
       {/* Hidden handles for back-edges - invisible but functional */}

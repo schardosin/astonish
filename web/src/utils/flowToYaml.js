@@ -42,7 +42,7 @@ const NODE_TEMPLATES = {
   output: (name) => ({
     name,
     type: 'output',
-    value: '${response}'
+    user_message: ['output_here']
   }),
 }
 

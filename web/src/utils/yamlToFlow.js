@@ -97,8 +97,15 @@ export function parseNodes(yamlData, savedLayout = null) {
           }
         }
         
-        // user_message should be an array
-        if (node.user_message !== undefined && !Array.isArray(node.user_message)) {
+        // user_message is required for output nodes and should be an array
+        if (node.type === 'output') {
+          if (!node.user_message) {
+            validationErrors.push(`'user_message' is required for output nodes to display content to the user`)
+          } else if (!Array.isArray(node.user_message)) {
+            validationErrors.push(`'user_message' must be an array (got ${typeof node.user_message})`)
+          }
+        } else if (node.user_message !== undefined && !Array.isArray(node.user_message)) {
+          // For other node types, user_message is optional but must be an array if present
           validationErrors.push(`'user_message' must be an array (got ${typeof node.user_message})`)
         }
         

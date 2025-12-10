@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { MessageSquare, Send, X, Sparkles, Loader2, Check, Eye } from 'lucide-react'
+import { MessageSquare, Send, X, Sparkles, Loader2, Check, Eye, Maximize2, Minimize2 } from 'lucide-react'
 
 // API function to chat with AI
 async function sendChatMessage(message, context, currentYaml, selectedNodes, history) {
@@ -33,6 +33,7 @@ export default function AIChatPanel({
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [pendingYaml, setPendingYaml] = useState(null)
+  const [isExpanded, setIsExpanded] = useState(false)
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   
@@ -153,7 +154,7 @@ export default function AIChatPanel({
   if (!isOpen) return null
 
   return (
-    <div className="fixed bottom-4 right-4 w-96 h-[500px] bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg shadow-2xl flex flex-col z-50">
+    <div className={`fixed bottom-4 right-4 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg shadow-2xl flex flex-col z-50 transition-all duration-200 ${isExpanded ? 'w-[600px] h-[80vh]' : 'w-96 h-[500px]'}`}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)] bg-gradient-to-r from-purple-600/20 to-blue-600/20">
         <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -172,12 +173,25 @@ export default function AIChatPanel({
             </span>
           )}
         </div>
-        <button 
-          onClick={onClose}
-          className="p-1 hover:bg-white/10 rounded transition-colors flex-shrink-0"
-        >
-          <X size={18} className="text-[var(--text-secondary)]" />
-        </button>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <button 
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="p-1 hover:bg-white/10 rounded transition-colors"
+            title={isExpanded ? 'Collapse' : 'Expand'}
+          >
+            {isExpanded ? (
+              <Minimize2 size={16} className="text-[var(--text-secondary)]" />
+            ) : (
+              <Maximize2 size={16} className="text-[var(--text-secondary)]" />
+            )}
+          </button>
+          <button 
+            onClick={onClose}
+            className="p-1 hover:bg-white/10 rounded transition-colors"
+          >
+            <X size={18} className="text-[var(--text-secondary)]" />
+          </button>
+        </div>
       </div>
 
       {/* Messages */}
@@ -334,8 +348,8 @@ export default function AIChatPanel({
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={getPlaceholder()}
-            rows={1}
-            className="flex-1 px-3 py-2 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] resize-none focus:outline-none focus:ring-2 focus:ring-purple-500/50"
+            rows={isExpanded ? 6 : 1}
+            className={`flex-1 px-3 py-2 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] focus:outline-none focus:ring-2 focus:ring-purple-500/50 ${isExpanded ? 'resize-y min-h-[120px]' : 'resize-none'}`}
             disabled={isLoading}
           />
           <button

@@ -1671,6 +1671,21 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 						fmt.Printf("[DEBUG] Tool NOT approved. Requesting user approval...\n")
 					}
 
+					// Check if we're already awaiting approval for another tool
+					// This handles parallel tool calls - only show first prompt
+					if alreadyAwaitingVal, _ := state.Get("awaiting_approval"); alreadyAwaitingVal != nil {
+						if alreadyAwaiting, ok := alreadyAwaitingVal.(bool); ok && alreadyAwaiting {
+							if a.DebugMode {
+								fmt.Printf("[DEBUG] Already awaiting approval for another tool, skipping this tool: %s\n", toolName)
+							}
+							// Return placeholder silently - don't emit another approval request
+							return map[string]any{
+								"status": "pending_approval",
+								"info":   "Waiting for user approval on a previous tool call.",
+							}, nil
+						}
+					}
+
 					// No approval - request it
 					// We set 'force_pause' to tell the outer loop to stop immediately
 					state.Set("force_pause", true)

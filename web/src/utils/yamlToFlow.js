@@ -57,15 +57,44 @@ export function parseNodes(yamlData, savedLayout = null) {
         
         // Semantic validation for common field errors
         const validationErrors = []
+        const VALID_NODE_TYPES = ['input', 'llm', 'tool', 'output', 'update_state']
+        
+        // type is required and must be valid
+        if (!node.type) {
+          validationErrors.push(`'type' is required. Valid types: ${VALID_NODE_TYPES.join(', ')}`)
+        } else if (!VALID_NODE_TYPES.includes(node.type)) {
+          validationErrors.push(`'type' must be one of: ${VALID_NODE_TYPES.join(', ')} (got '${node.type}')`)
+        }
         
         // options must be an array
         if (node.options !== undefined && !Array.isArray(node.options)) {
           validationErrors.push(`'options' must be an array (got ${typeof node.options}). Use: options: [value1, value2] or options: [variable_name]`)
         }
         
-        // output_model should be an object
+        // output_model should be an object when present
         if (node.output_model !== undefined && typeof node.output_model !== 'object') {
           validationErrors.push(`'output_model' must be an object (got ${typeof node.output_model})`)
+        }
+        
+        // output_model is required for input, llm, and tool types
+        const TYPES_REQUIRING_OUTPUT_MODEL = ['input', 'llm', 'tool']
+        if (TYPES_REQUIRING_OUTPUT_MODEL.includes(node.type) && !node.output_model) {
+          validationErrors.push(`'output_model' is required for '${node.type}' nodes to store results in state`)
+        }
+        
+        // prompt is required for input nodes
+        if (node.type === 'input' && !node.prompt) {
+          validationErrors.push(`'prompt' is required for input nodes to show the user what to enter`)
+        }
+        
+        // system and prompt are required for llm nodes
+        if (node.type === 'llm') {
+          if (!node.system) {
+            validationErrors.push(`'system' is required for llm nodes to set the AI's behavior`)
+          }
+          if (!node.prompt) {
+            validationErrors.push(`'prompt' is required for llm nodes to provide the input to the AI`)
+          }
         }
         
         // user_message should be an array

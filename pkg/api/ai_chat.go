@@ -285,14 +285,26 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string) (string, error) {
 		nodeSnippet = "- " + nodeSnippet
 	}
 	
-	// Replace "---\nname:" with "\n- name:" to convert multi-doc to array
+	// Replace various forms of "---" separator with proper YAML array notation
+	// Handle: "---\nname:", "---\n\nname:", "---\n- name:", "---\n\n- name:"
+	nodeSnippet = strings.ReplaceAll(nodeSnippet, "---\n- name:", "\n- name:")
+	nodeSnippet = strings.ReplaceAll(nodeSnippet, "---\n\n- name:", "\n- name:")
 	nodeSnippet = strings.ReplaceAll(nodeSnippet, "---\nname:", "\n- name:")
 	nodeSnippet = strings.ReplaceAll(nodeSnippet, "---\n\nname:", "\n- name:")
+	// Also handle case where --- is at the beginning
+	nodeSnippet = strings.TrimPrefix(nodeSnippet, "---\n")
+	nodeSnippet = strings.TrimPrefix(nodeSnippet, "---")
+	nodeSnippet = strings.TrimSpace(nodeSnippet)
+	
+	// If after trimming it now starts with "name:", add the dash
+	if strings.HasPrefix(nodeSnippet, "name:") {
+		nodeSnippet = "- " + nodeSnippet
+	}
 	
 	// Parse the node snippet(s) - should now be a YAML array
 	var nodes []map[string]interface{}
 	if err := yaml.Unmarshal([]byte(nodeSnippet), &nodes); err != nil {
-		return "", fmt.Errorf("failed to parse node snippet: %w", err)
+		return "", fmt.Errorf("failed to parse node snippet: %w (snippet: %s)", err, nodeSnippet[:min(100, len(nodeSnippet))])
 	}
 	if len(nodes) == 0 {
 		return "", fmt.Errorf("no nodes found in snippet")

@@ -165,48 +165,32 @@ Example good response:
 		return basePrompt + `
 
 # Your Task
-You are an AI assistant helping users modify MULTIPLE SELECTED NODES in their flow.
-The user has selected specific nodes and wants to make targeted changes to just those nodes.
+You are an AI assistant helping users modify SELECTED NODES in their flow.
+The user has selected specific nodes and wants to make targeted changes.
+
+## SCOPE RULES (CRITICAL!):
+- You can MODIFY the selected nodes
+- You can ADD NEW NODES between the selected nodes
+- You must NOT modify nodes that are NOT selected
+- You must keep the rest of the flow exactly as provided
 
 ## What You Can Help With:
-- Improve prompts across multiple nodes
-- Refactor a section of the flow
-- Add error handling or validation
-- Optimize the logic within the selected nodes
-- Connect nodes more effectively
+- Improve prompts in selected nodes
+- Add new nodes between selected ones (e.g., add confirmation, validation)
+- Refactor selected nodes
+- Split a node into multiple nodes
 
-## Guidelines:
-- ONLY modify the selected nodes - do not add or remove nodes
-- Keep the node names the same to preserve flow connections
-- Suggest user_message additions where appropriate
-- Preserve output_model fields that are used by other nodes
+## RESPONSE FORMAT:
+1. Brief explanation of your changes (1-2 sentences)
+2. Return the **COMPLETE FLOW YAML** wrapped in ` + "```yaml" + ` code blocks
 
-## RESPONSE FORMAT (IMPORTANT - follow exactly):
-1. A brief explanation of your improvements (1-2 sentences)
-2. The improved nodes YAML wrapped in ` + "```yaml" + ` code blocks
+**CRITICAL: Return the ENTIRE flow YAML** - including nodes, flow, and all other sections.
+Only the selected nodes should be modified. All other nodes must remain exactly the same.
+The system will replace the entire flow with your response.
 
-**RETURN ONLY THE SELECTED NODES as a YAML array** - each node starting with "- name:".
-DO NOT return the complete flow YAML.
-DO NOT use "---" between nodes - use proper YAML array format.
-The system automatically merges your nodes into the existing flow.
-
-**Example format for 2 nodes:**
-` + "```yaml" + `
-- name: first_node
-  type: llm
-  system: You are a helpful assistant.
-  prompt: "{question}"
-  output_model:
-    answer: str
-  user_message:
-    - answer
-
-- name: second_node
-  type: input
-  prompt: Would you like to continue?
-  output_model:
-    choice: str
-` + "```" + "`"
+When adding new nodes between selected ones:
+1. Add the new node(s) in the nodes section
+2. Update the flow section to connect them properly`
 
 	default:
 		return basePrompt + `
@@ -275,7 +259,8 @@ func isNodeSnippet(yamlContent string) bool {
 }
 
 // mergeNodeIntoFlow merges one or more node snippet(s) into the full flow YAML
-func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string) (string, error) {
+// selectedNodeNames is the list of originally selected nodes that should be replaced
+func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string, selectedNodeNames []string) (string, error) {
 	// Handle multi-document YAML (nodes separated by ---)
 	// Convert to single array format
 	nodeSnippet = strings.TrimSpace(nodeSnippet)
@@ -302,11 +287,11 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string) (string, error) {
 	}
 	
 	// Parse the node snippet(s) - should now be a YAML array
-	var nodes []map[string]interface{}
-	if err := yaml.Unmarshal([]byte(nodeSnippet), &nodes); err != nil {
+	var newNodes []map[string]interface{}
+	if err := yaml.Unmarshal([]byte(nodeSnippet), &newNodes); err != nil {
 		return "", fmt.Errorf("failed to parse node snippet: %w (snippet: %s)", err, nodeSnippet[:min(100, len(nodeSnippet))])
 	}
-	if len(nodes) == 0 {
+	if len(newNodes) == 0 {
 		return "", fmt.Errorf("no nodes found in snippet")
 	}
 	
@@ -322,32 +307,183 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string) (string, error) {
 		return "", fmt.Errorf("nodes section not found in flow")
 	}
 	
-	// Replace each node from the snippet in the flow
-	for _, snippetNode := range nodes {
-		nodeName, ok := snippetNode["name"].(string)
-		if !ok {
-			continue
-		}
-		
-		nodeFound := false
-		for i, n := range flowNodes {
-			nodeMap, ok := n.(map[string]interface{})
+	// Create a set of selected node names for quick lookup
+	selectedSet := make(map[string]bool)
+	for _, name := range selectedNodeNames {
+		selectedSet[name] = true
+	}
+	
+	// If no selected nodes specified, use simple update/append logic (backward compatibility)
+	if len(selectedNodeNames) == 0 {
+		for _, snippetNode := range newNodes {
+			nodeName, ok := snippetNode["name"].(string)
 			if !ok {
 				continue
 			}
-			if nodeMap["name"] == nodeName {
-				flowNodes[i] = snippetNode
-				nodeFound = true
-				break
+			
+			nodeFound := false
+			for i, n := range flowNodes {
+				nodeMap, ok := n.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				if nodeMap["name"] == nodeName {
+					flowNodes[i] = snippetNode
+					nodeFound = true
+					break
+				}
+			}
+			
+			if !nodeFound {
+				flowNodes = append(flowNodes, snippetNode)
 			}
 		}
 		
-		if !nodeFound {
-			return "", fmt.Errorf("node '%s' not found in flow", nodeName)
+		flow["nodes"] = flowNodes
+		result, err := yaml.Marshal(flow)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal updated flow: %w", err)
+		}
+		return string(result), nil
+	}
+	
+	// Scoped replacement: find insertion position (index of first selected node)
+	insertPosition := -1
+	for i, n := range flowNodes {
+		nodeMap, ok := n.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		nodeName, _ := nodeMap["name"].(string)
+		if selectedSet[nodeName] && insertPosition == -1 {
+			insertPosition = i
+			break
 		}
 	}
 	
-	flow["nodes"] = flowNodes
+	// If we couldn't find the insertion position, append to end
+	if insertPosition == -1 {
+		insertPosition = len(flowNodes)
+	}
+	
+	// Build new nodes list: keep non-selected nodes, insert new nodes at position
+	var updatedNodes []interface{}
+	insertedNewNodes := false
+	
+	for i, n := range flowNodes {
+		nodeMap, ok := n.(map[string]interface{})
+		if !ok {
+			updatedNodes = append(updatedNodes, n)
+			continue
+		}
+		nodeName, _ := nodeMap["name"].(string)
+		
+		if selectedSet[nodeName] {
+			// This is a selected node - skip it (will be replaced)
+			// Insert new nodes at the position of the first selected node
+			if !insertedNewNodes && i == insertPosition {
+				for _, newNode := range newNodes {
+					updatedNodes = append(updatedNodes, newNode)
+				}
+				insertedNewNodes = true
+			}
+			continue
+		}
+		
+		updatedNodes = append(updatedNodes, n)
+	}
+	
+	// If we didn't insert yet (no selected nodes found), append new nodes
+	if !insertedNewNodes {
+		for _, newNode := range newNodes {
+			updatedNodes = append(updatedNodes, newNode)
+		}
+	}
+	
+	flow["nodes"] = updatedNodes
+	
+	// Update flow connections if we have selected nodes
+	if len(selectedNodeNames) > 0 {
+		flowEdges, ok := flow["flow"].([]interface{})
+		if ok {
+			// Get first and last node names from new nodes and selected nodes
+			firstSelectedNode := selectedNodeNames[0]
+			lastSelectedNode := selectedNodeNames[len(selectedNodeNames)-1]
+			
+			// Get first and last from new nodes
+			firstNewNode := ""
+			lastNewNode := ""
+			if len(newNodes) > 0 {
+				if name, ok := newNodes[0]["name"].(string); ok {
+					firstNewNode = name
+				}
+				if name, ok := newNodes[len(newNodes)-1]["name"].(string); ok {
+					lastNewNode = name
+				}
+			}
+			
+			// Update edges
+			var updatedEdges []interface{}
+			for _, e := range flowEdges {
+				edge, ok := e.(map[string]interface{})
+				if !ok {
+					updatedEdges = append(updatedEdges, e)
+					continue
+				}
+				
+				// Make a copy to modify
+				newEdge := make(map[string]interface{})
+				for k, v := range edge {
+					newEdge[k] = v
+				}
+				
+				// Update connections TO first selected node -> point to first new node
+				if to, ok := newEdge["to"].(string); ok && to == firstSelectedNode && firstNewNode != "" {
+					newEdge["to"] = firstNewNode
+				}
+				
+				// Update connections FROM last selected node -> change source to last new node  
+				if from, ok := newEdge["from"].(string); ok && from == lastSelectedNode && lastNewNode != "" {
+					newEdge["from"] = lastNewNode
+				}
+				
+				// Handle edges array (conditional branches)
+				if edges, ok := newEdge["edges"].([]interface{}); ok {
+					var newSubEdges []interface{}
+					for _, subE := range edges {
+						subEdge, ok := subE.(map[string]interface{})
+						if !ok {
+							newSubEdges = append(newSubEdges, subE)
+							continue
+						}
+						newSubEdge := make(map[string]interface{})
+						for k, v := range subEdge {
+							newSubEdge[k] = v
+						}
+						if to, ok := newSubEdge["to"].(string); ok && to == firstSelectedNode && firstNewNode != "" {
+							newSubEdge["to"] = firstNewNode
+						}
+						newSubEdges = append(newSubEdges, newSubEdge)
+					}
+					newEdge["edges"] = newSubEdges
+				}
+				
+				// Skip edges that are FROM a selected node (except the last one, handled above)
+				// or TO a selected node (except the first one, handled above)
+				from, _ := newEdge["from"].(string)
+				to, _ := newEdge["to"].(string)
+				
+				// Keep edge if it's not internal to the selection
+				if !selectedSet[from] || from == lastSelectedNode {
+					if !selectedSet[to] || to == firstSelectedNode {
+						updatedEdges = append(updatedEdges, newEdge)
+					}
+				}
+			}
+			
+			flow["flow"] = updatedEdges
+		}
+	}
 	
 	// Marshal back to YAML
 	result, err := yaml.Marshal(flow)
@@ -410,9 +546,43 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 		systemPrompt += "\n\n# Current Flow YAML\n```yaml\n" + req.CurrentYAML + "\n```"
 	}
 	
-	// Add selected nodes context if provided
+	// Add selected nodes context if provided - include full YAML content of selected nodes
 	if len(req.SelectedNodes) > 0 {
-		systemPrompt += "\n\n# Selected Nodes\n" + strings.Join(req.SelectedNodes, ", ")
+		systemPrompt += "\n\n# Selected Nodes (these are the nodes you should modify/replace):\n"
+		systemPrompt += "Names: " + strings.Join(req.SelectedNodes, ", ") + "\n"
+		
+		// Extract full YAML of selected nodes from the current YAML
+		if req.CurrentYAML != "" {
+			var flow map[string]interface{}
+			if err := yaml.Unmarshal([]byte(req.CurrentYAML), &flow); err == nil {
+				if nodes, ok := flow["nodes"].([]interface{}); ok {
+					selectedSet := make(map[string]bool)
+					for _, name := range req.SelectedNodes {
+						selectedSet[name] = true
+					}
+					
+					var selectedNodeYAMLs []map[string]interface{}
+					for _, n := range nodes {
+						nodeMap, ok := n.(map[string]interface{})
+						if !ok {
+							continue
+						}
+						nodeName, _ := nodeMap["name"].(string)
+						if selectedSet[nodeName] {
+							selectedNodeYAMLs = append(selectedNodeYAMLs, nodeMap)
+						}
+					}
+					
+					if len(selectedNodeYAMLs) > 0 {
+						selectedYAML, err := yaml.Marshal(selectedNodeYAMLs)
+						if err == nil {
+							systemPrompt += "\n```yaml\n" + string(selectedYAML) + "```\n"
+							systemPrompt += "\n**IMPORTANT: Return ALL nodes (modified + any new ones) as a YAML array. The first node should replace '" + req.SelectedNodes[0] + "' and the last node should replace '" + req.SelectedNodes[len(req.SelectedNodes)-1] + "'.**"
+						}
+					}
+				}
+			}
+		}
 	}
 	
 	// Build conversation
@@ -508,13 +678,17 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	
-	// For node_config or multi_node context, if the AI returned node snippet(s), merge them into the full flow
-	if (req.Context == "node_config" || req.Context == "multi_node") && proposedYAML != "" && isNodeSnippet(proposedYAML) {
+	// For node_config context (single node editing), if the AI returned a node snippet, merge it into the full flow
+	// NOTE: multi_node context now returns the full flow directly, so no merge needed
+	// CRITICAL: We MUST return a full flow, never a partial snippet
+	if req.Context == "node_config" && proposedYAML != "" && isNodeSnippet(proposedYAML) {
 		if req.CurrentYAML != "" {
-			mergedYAML, err := mergeNodeIntoFlow(proposedYAML, req.CurrentYAML)
+			mergedYAML, err := mergeNodeIntoFlow(proposedYAML, req.CurrentYAML, req.SelectedNodes)
 			if err != nil {
-				// If merge fails, keep the snippet but add a warning
+				// If merge fails, DO NOT return the snippet - return nothing and show error
 				fullResponse += "\n\n⚠️ Could not merge node(s) into flow: " + err.Error()
+				fullResponse += "\n\nPlease try again with a clearer request."
+				proposedYAML = "" // Clear the snippet - never return partial YAML
 			} else {
 				proposedYAML = mergedYAML
 				// Re-validate the merged flow
@@ -525,6 +699,10 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 					lastValidationErrors = nil
 				}
 			}
+		} else {
+			// No current YAML to merge into - can't use snippet
+			fullResponse += "\n\n⚠️ Cannot apply node changes without the current flow context."
+			proposedYAML = "" // Clear the snippet
 		}
 	}
 	

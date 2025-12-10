@@ -246,6 +246,22 @@ function FlowCanvasInner({
     }
   }, [nodes.length])
 
+  // Recenter flow horizontally when isRunning changes (container size changes)
+  useEffect(() => {
+    // Small delay to let the container resize complete
+    const timer = setTimeout(() => {
+      const viewport = getViewport()
+      const containerWidth = containerRef.current?.offsetWidth || 800
+      const startNode = nodes.find(n => n.id === 'START')
+      if (startNode && startNode.position) {
+        // Calculate X to center START node horizontally, keep same Y and zoom
+        const centerX = -(startNode.position.x - containerWidth / 2 + 60) * viewport.zoom
+        setViewport({ x: centerX, y: viewport.y, zoom: viewport.zoom }, { duration: 300 })
+      }
+    }, 100)
+    return () => clearTimeout(timer)
+  }, [isRunning, getViewport, setViewport, nodes])
+
   // Handle double-click on edge to add waypoint
   const onEdgeDoubleClick = useCallback((event, edge) => {
     event.stopPropagation()

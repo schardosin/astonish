@@ -483,6 +483,7 @@ flow:
   const handleRun = useCallback(() => {
     setIsRunning(true)
     setEditingNode(null)
+    setShowAIChat(false) // Close AI Assistant when opening Run dialog
     setChatMessages([]) // Clear history
     setRunningNodeId(null)
     // Don't auto-start, wait for user to click Start

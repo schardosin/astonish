@@ -454,41 +454,11 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 								}
 								continue
 							}
-							// If it's a string, split by newline
-							if strVal, ok := val.(string); ok {
-								lines := strings.Split(strings.TrimSpace(strVal), "\n")
-								for _, line := range lines {
-									trimmed := strings.TrimSpace(line)
-									if trimmed == "" {
-										continue
-									}
-									// Filter out lines that look like LLM preamble/commentary
-									// Accept lines that start with a number followed by colon (PR format)
-									// or lines that don't look like natural language sentences
-									if strings.Contains(trimmed, ":") {
-										// Check if it starts with a number (likely a PR)
-										parts := strings.SplitN(trimmed, ":", 2)
-										if len(parts) == 2 {
-											// Check if the first part is numeric (or starts with #)
-											firstPart := strings.TrimSpace(parts[0])
-											if len(firstPart) > 0 {
-												// Remove leading # if present
-												if firstPart[0] == '#' {
-													firstPart = firstPart[1:]
-												}
-												// Check if it's a number
-												if _, err := fmt.Sscanf(firstPart, "%d", new(int)); err == nil {
-													inputOptions = append(inputOptions, trimmed)
-													continue
-												}
-											}
-										}
-									}
-									// If it doesn't match the PR format, skip it (likely LLM commentary)
-								}
-								if len(inputOptions) > 0 {
-									continue
-								}
+							// If it's a single string (LLM returned one item as string instead of array),
+							// treat it as a single option
+							if strVal, ok := val.(string); ok && strings.TrimSpace(strVal) != "" {
+								inputOptions = append(inputOptions, strings.TrimSpace(strVal))
+								continue
 							}
 						}
 						// Otherwise treat as literal option
@@ -633,41 +603,11 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 								}
 								continue
 							}
-							// If it's a string, split by newline
-							if strVal, ok := val.(string); ok {
-								lines := strings.Split(strings.TrimSpace(strVal), "\n")
-								for _, line := range lines {
-									trimmed := strings.TrimSpace(line)
-									if trimmed == "" {
-										continue
-									}
-									// Filter out lines that look like LLM preamble/commentary
-									// Accept lines that start with a number followed by colon (PR format)
-									// or lines that don't look like natural language sentences
-									if strings.Contains(trimmed, ":") {
-										// Check if it starts with a number (likely a PR)
-										parts := strings.SplitN(trimmed, ":", 2)
-										if len(parts) == 2 {
-											// Check if the first part is numeric (or starts with #)
-											firstPart := strings.TrimSpace(parts[0])
-											if len(firstPart) > 0 {
-												// Remove leading # if present
-												if firstPart[0] == '#' {
-													firstPart = firstPart[1:]
-												}
-												// Check if it's a number
-												if _, err := fmt.Sscanf(firstPart, "%d", new(int)); err == nil {
-													inputOptions = append(inputOptions, trimmed)
-													continue
-												}
-											}
-										}
-									}
-									// If it doesn't match the PR format, skip it (likely LLM commentary)
-								}
-								if len(inputOptions) > 0 {
-									continue
-								}
+							// If it's a single string (LLM returned one item as string instead of array),
+							// treat it as a single option
+							if strVal, ok := val.(string); ok && strings.TrimSpace(strVal) != "" {
+								inputOptions = append(inputOptions, strings.TrimSpace(strVal))
+								continue
 							}
 						}
 						// Otherwise treat as literal option

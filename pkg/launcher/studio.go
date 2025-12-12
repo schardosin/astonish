@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -59,7 +60,24 @@ npm run dev
 
 	addr := fmt.Sprintf(":%d", port)
 
-	// Print startup message
+	// Create listener first to check if port is available
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		fmt.Printf("\n")
+		fmt.Printf("  ❌ Failed to start Astonish Studio\n")
+		fmt.Printf("\n")
+		fmt.Printf("  Error: %v\n", err)
+		fmt.Printf("\n")
+		if isPortInUse(err) {
+			fmt.Printf("  💡 Port %d is already in use. Try one of these:\n", port)
+			fmt.Printf("     • Stop the other process using port %d\n", port)
+			fmt.Printf("     • Use a different port: astonish studio --port 9394\n")
+		}
+		fmt.Printf("\n")
+		return err
+	}
+
+	// Print startup message only after we know the port is available
 	fmt.Printf("\n")
 	fmt.Printf("  🚀 Astonish Studio is running!\n")
 	fmt.Printf("\n")
@@ -68,7 +86,32 @@ npm run dev
 	fmt.Printf("  Press Ctrl+C to stop\n")
 	fmt.Printf("\n")
 
-	return http.ListenAndServe(addr, router)
+	// Serve using the listener we already created
+	return http.Serve(listener, router)
+}
+
+// isPortInUse checks if the error indicates the port is already in use
+func isPortInUse(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return contains(errStr, "address already in use") ||
+		contains(errStr, "bind: address already in use") ||
+		contains(errStr, "Only one usage of each socket address")
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsAt(s, substr))
+}
+
+func containsAt(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
 // getWebAssets returns the web assets filesystem

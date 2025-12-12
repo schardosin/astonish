@@ -85,6 +85,13 @@ body {
   animation: dash 0.5s linear infinite;
 }
 
+/* Selected edge styling */
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #22D3EE !important;
+  stroke-width: 3 !important;
+  filter: drop-shadow(0 0 4px #22D3EE);
+}
+
 @keyframes dash {
   to {
     stroke-dashoffset: -10;

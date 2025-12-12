@@ -31,9 +31,6 @@ export default function LlmNode({ data }) {
         <p className="text-xs mt-1 text-red-400 truncate max-w-[200px]">{data.errorMessage}</p>
       )}
       <Handle type="source" position={Position.Bottom} className="!bg-purple-300 !w-3 !h-3" />
-      {/* Hidden handles for back-edges - invisible but functional */}
-      <Handle type="source" position={Position.Top} id="top-source" className="!opacity-0 !w-1 !h-1" style={{ left: '30%' }} />
-      <Handle type="target" position={Position.Left} id="left" className="!opacity-0 !w-1 !h-1" />
     </div>
   )
 }

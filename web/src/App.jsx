@@ -624,10 +624,18 @@ flow:
 
   // Save node edits (called from NodeEditor on every change)
   const handleNodeSave = useCallback((nodeId, newData) => {
+    // Optimization: Skip update if data hasn't changed (prevents undo history spam)
+    if (editingNode && editingNode.id === nodeId && editingNode.data?.yaml) {
+      // Simple deep comparison to see if logic actually changed
+      if (JSON.stringify(editingNode.data.yaml) === JSON.stringify(newData)) {
+        return
+      }
+    }
+
     const newYaml = updateNode(yamlContent, nodeId, newData)
     updateYaml(newYaml)
     // Don't close editor here - it auto-saves continuously, user closes via Done button
-  }, [yamlContent, updateYaml])
+  }, [yamlContent, updateYaml, editingNode])
 
   // Close node editor
   const handleNodeEditorClose = useCallback(() => {

@@ -255,17 +255,7 @@ export function parseEdges(yamlData, waypointEdgeMap = {}, nodePositions = {}) {
   const isWaypoint = (id) => id.startsWith('waypoint-')
   
   const getHandles = (sourceId, targetId) => {
-    const sourceY = nodePositions[sourceId]?.y ?? 0
-    const targetY = nodePositions[targetId]?.y ?? 0
-    
-    if (sourceY > targetY) {
-      // Source is BELOW target - back-edge going UP
-      return { 
-        sourceHandle: 'top-source', 
-        targetHandle: isWaypoint(targetId) ? 'bottom-target' : 'left' 
-      }
-    }
-    // Normal flow - source above target
+    // Standard handles for all directions - simplest layout
     return { 
       sourceHandle: isWaypoint(sourceId) ? 'bottom-source' : null, 
       targetHandle: isWaypoint(targetId) ? 'top-target' : null 

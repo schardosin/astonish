@@ -189,7 +189,7 @@ function App() {
     setHistoryIndex(prev => Math.min(prev + 1, MAX_HISTORY - 1))
   }, [historyIndex])
 
-  // Debounced auto-save to disk (300ms delay)
+  // Debounced auto-save to disk (300ms delay) - includes layout extraction
   const debouncedAutoSave = useCallback((newYaml) => {
     if (!selectedAgent) return
     
@@ -201,8 +201,18 @@ function App() {
     // Schedule new save
     autoSaveTimerRef.current = setTimeout(async () => {
       try {
-        await saveAgent(selectedAgent.id, newYaml)
-        console.log('[Auto-save] Saved successfully')
+        // Extract current layout from flow nodes and merge into YAML
+        const parsed = yaml.load(newYaml) || {}
+        const layout = extractLayout(currentFlowNodesRef.current, currentFlowEdgesRef.current)
+        parsed.layout = layout
+        const yamlWithLayout = yaml.dump(parsed, { 
+          indent: 2,
+          lineWidth: -1, 
+          noRefs: true, 
+          sortKeys: false 
+        })
+        await saveAgent(selectedAgent.id, yamlWithLayout)
+        console.log('[Auto-save] Saved with layout')
       } catch (err) {
         console.error('[Auto-save] Failed:', err)
       }

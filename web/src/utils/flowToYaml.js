@@ -87,7 +87,27 @@ export function addStandaloneNode(yamlContent, nodeType) {
     yamlData.nodes = yamlData.nodes || []
     yamlData.nodes.push(newNode)
     
-    // Note: We don't add to flow - the node is standalone until connected
+    // Calculate a default position for the new node
+    // Place it to the right of existing nodes
+    yamlData.layout = yamlData.layout || { nodes: {}, waypoints: [] }
+    yamlData.layout.nodes = yamlData.layout.nodes || {}
+    
+    // Find the rightmost node position
+    let maxX = 200 // Default if no nodes
+    let sumY = 150
+    let nodeCount = 0
+    Object.values(yamlData.layout.nodes || {}).forEach(pos => {
+      if (pos.x > maxX) maxX = pos.x
+      sumY += pos.y
+      nodeCount++
+    })
+    const avgY = nodeCount > 0 ? sumY / nodeCount : 150
+    
+    // Add position for new node (200px to the right)
+    yamlData.layout.nodes[newName] = {
+      x: Math.round(maxX + 200),
+      y: Math.round(avgY)
+    }
     
     return yaml.dump(yamlData, { 
       lineWidth: -1,

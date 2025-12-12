@@ -34,9 +34,6 @@ func FormatAsYamlLike(v interface{}, indent int) string {
 		// but for now, let's stick to the bulleted list format for consistency.
 		for i := 0; i < val.Len(); i++ {
 			item := val.Index(i).Interface()
-			itemStr := FormatAsYamlLike(item, indent+1)
-			// Trim leading whitespace from itemStr because we are adding the bullet
-			itemStr = strings.TrimLeft(itemStr, " ")
 
 			// If the item is a complex type (map/struct) that produced multiple lines,
 			// we need to ensure subsequent lines are indented correctly relative to the bullet.

@@ -552,7 +552,15 @@ flow:
   const handleEdgeRemove = useCallback((sourceId, targetId) => {
     const newYaml = removeConnection(yamlContent, sourceId, targetId)
     setYamlContent(newYaml)
-  }, [yamlContent])
+    // Auto-save after edge removal
+    if (selectedAgent) {
+      saveAgent(selectedAgent.id, newYaml).then(() => {
+        console.log('Auto-saved after edge removal')
+      }).catch(err => {
+        console.error('Failed to auto-save after edge removal:', err)
+      })
+    }
+  }, [yamlContent, selectedAgent])
 
   // Save node edits
   const handleNodeSave = useCallback((nodeId, newData) => {

@@ -178,6 +178,11 @@ function FlowCanvasInner({
           e.source.startsWith('waypoint-') || e.target.startsWith('waypoint-')
         )
         
+        // If propEdges is empty and no waypoints, just use empty (edges were deleted)
+        if (propEdges.length === 0 && waypointEdges.length === 0) {
+          return []
+        }
+        
         // Filter out propEdges that:
         // 1. Have been split by waypoints (tracked in splitEdgesRef)
         // 2. Are currently split by active waypoints
@@ -200,11 +205,12 @@ function FlowCanvasInner({
         })
         
         // Preserve any local edges (non-waypoint edges that aren't in propEdges)
-        const localNonWaypointEdges = currentEdges.filter(ce => 
+        // Only preserve if propEdges has content (otherwise we're loading from YAML with no edges)
+        const localNonWaypointEdges = propEdges.length > 0 ? currentEdges.filter(ce => 
           !ce.source.startsWith('waypoint-') && 
           !ce.target.startsWith('waypoint-') &&
           !propEdges.some(pe => pe.source === ce.source && pe.target === ce.target)
-        )
+        ) : []
         
         return [...filteredPropEdges, ...waypointEdges, ...localNonWaypointEdges]
       })

@@ -169,6 +169,14 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Set default transport to "stdio" if not specified
+	for name, server := range cfg.MCPServers {
+		if server.Transport == "" {
+			server.Transport = "stdio"
+			cfg.MCPServers[name] = server
+		}
+	}
+
 	if err := config.SaveMCPConfig(&cfg); err != nil {
 		http.Error(w, "Failed to save MCP config: "+err.Error(), http.StatusInternalServerError)
 		return

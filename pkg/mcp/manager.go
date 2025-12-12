@@ -98,7 +98,7 @@ func createStdioTransport(cfg config.MCPServerConfig) (mcp.Transport, error) {
 	if len(cfg.Env) > 0 {
 		// Start with current environment
 		cmd.Env = append(cmd.Env, cmd.Environ()...)
-		
+
 		// Add custom environment variables
 		for key, value := range cfg.Env {
 			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))

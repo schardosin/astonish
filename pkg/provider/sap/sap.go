@@ -70,7 +70,7 @@ func NewProvider(ctx context.Context, modelName string) (model.LLM, error) {
 	// We construct the full URL for OpenAI provider: baseURL + /inference/deployments/{id}
 	// go-openai appends /chat/completions
 	deploymentURL := fmt.Sprintf("%s/inference/deployments/%s", baseURL, deploymentID)
-	
+
 	openaiConfig := goopenai.DefaultConfig(clientSecret) // Token is handled by transport, but config needs something
 	openaiConfig.BaseURL = deploymentURL
 	openaiConfig.HTTPClient = &http.Client{
@@ -115,7 +115,7 @@ type sapTransport struct {
 	clientSecret  string
 	authURL       string
 	resourceGroup string
-	
+
 	token     string
 	expiresAt time.Time
 	mu        sync.Mutex
@@ -129,7 +129,7 @@ func (t *sapTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("AI-Resource-Group", t.resourceGroup)
-	
+
 	// SAP AI Core requires specific path adjustment sometimes, but let's try standard OpenAI path first
 	// Standard: BaseURL + /chat/completions
 	// Constructed: .../inference/deployments/{id}/chat/completions
@@ -216,14 +216,14 @@ var ModelConfigs = map[string]ModelConfig{
 	"gemini-2.5-flash": {MaxTokens: 65536, ContextWindow: 1048576},
 
 	// OpenAI models
-	"gpt-4":       {MaxTokens: 4096, ContextWindow: 200000},
-	"gpt-4o":      {MaxTokens: 4096, ContextWindow: 200000},
-	"gpt-4o-mini": {MaxTokens: 4096, ContextWindow: 200000},
-	"gpt-4.1":     {MaxTokens: 32768, ContextWindow: 1047576},
+	"gpt-4":        {MaxTokens: 4096, ContextWindow: 200000},
+	"gpt-4o":       {MaxTokens: 4096, ContextWindow: 200000},
+	"gpt-4o-mini":  {MaxTokens: 4096, ContextWindow: 200000},
+	"gpt-4.1":      {MaxTokens: 32768, ContextWindow: 1047576},
 	"gpt-4.1-nano": {MaxTokens: 32768, ContextWindow: 1047576},
-	"gpt-5":       {MaxTokens: 128000, ContextWindow: 272000},
-	"gpt-5-nano":  {MaxTokens: 128000, ContextWindow: 272000},
-	"gpt-5-mini":  {MaxTokens: 128000, ContextWindow: 272000},
+	"gpt-5":        {MaxTokens: 128000, ContextWindow: 272000},
+	"gpt-5-nano":   {MaxTokens: 128000, ContextWindow: 272000},
+	"gpt-5-mini":   {MaxTokens: 128000, ContextWindow: 272000},
 
 	// Reasoning models
 	"o1":      {MaxTokens: 4096, ContextWindow: 200000},
@@ -271,7 +271,7 @@ func ResolveDeploymentID(ctx context.Context, modelName string) (string, error) 
 		authURL:       os.Getenv("AICORE_AUTH_URL"),
 		resourceGroup: os.Getenv("AICORE_RESOURCE_GROUP"),
 	}
-	
+
 	token, err := t.getToken()
 	if err != nil {
 		return "", fmt.Errorf("failed to get token for deployment lookup: %w", err)
@@ -303,7 +303,7 @@ func ResolveDeploymentID(ctx context.Context, modelName string) (string, error) 
 
 	var result struct {
 		Resources []struct {
-			ID            string `json:"id"`
+			ID      string `json:"id"`
 			Details struct {
 				Resources struct {
 					BackendDetails struct {
@@ -421,7 +421,7 @@ func (p *Provider) generateBedrockContent(ctx context.Context, req *model.LLMReq
 	return func(yield func(*model.LLMResponse, error) bool) {
 		// Get model-specific config
 		config := GetModelConfig(p.modelName)
-		
+
 		// Convert request using bedrock protocol with model-specific maxTokens
 		bedrockReq, err := bedrock.ConvertRequest(req, config.MaxTokens)
 		if err != nil {
@@ -434,7 +434,7 @@ func (p *Provider) generateBedrockContent(ctx context.Context, req *model.LLMReq
 			yield(nil, err)
 			return
 		}
-		
+
 		var url string
 		if streaming {
 			url = fmt.Sprintf("%s/inference/deployments/%s/invoke-with-response-stream", p.baseURL, p.deploymentID)
@@ -488,7 +488,7 @@ func (p *Provider) generateVertexContent(ctx context.Context, req *model.LLMRequ
 	return func(yield func(*model.LLMResponse, error) bool) {
 		// Get model-specific config
 		config := GetModelConfig(p.modelName)
-		
+
 		// Convert request using vertex protocol with model-specific maxOutputTokens
 		vertexReq, err := vertex.ConvertRequest(req, config.MaxTokens)
 		if err != nil {
@@ -501,7 +501,7 @@ func (p *Provider) generateVertexContent(ctx context.Context, req *model.LLMRequ
 			yield(nil, err)
 			return
 		}
-		
+
 		var url string
 		if streaming {
 			// Vertex AI streaming endpoint: /models/{model}:streamGenerateContent?alt=sse

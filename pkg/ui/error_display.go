@@ -25,8 +25,8 @@ var (
 			Bold(true)
 
 	retryMessageStyle = lipgloss.NewStyle().
-			Foreground(colorGrey).
-			PaddingLeft(1)
+				Foreground(colorGrey).
+				PaddingLeft(1)
 
 	// 2. Error Components
 	headerStyle = lipgloss.NewStyle().
@@ -42,18 +42,18 @@ var (
 			Foreground(colorWhite)
 
 	suggestionTitleStyle = lipgloss.NewStyle().
-			Foreground(colorYellow).
-			Bold(true)
+				Foreground(colorYellow).
+				Bold(true)
 
 	suggestionTextStyle = lipgloss.NewStyle().
-			Foreground(colorYellow)
+				Foreground(colorYellow)
 
 	rawErrorTitleStyle = lipgloss.NewStyle().
-			Foreground(colorGrey).
-			Bold(true)
+				Foreground(colorGrey).
+				Bold(true)
 
 	rawErrorTextStyle = lipgloss.NewStyle().
-			Foreground(colorGrey)
+				Foreground(colorGrey)
 )
 
 // RenderRetryBadge: Clean text-only line
@@ -80,7 +80,7 @@ func RenderErrorBox(title, reason, suggestion, originalError string) string {
 
 	// 3. Build Body Blocks
 	var bodyBlocks []string
-	
+
 	// Helper to add a blank line spacer
 	addSpacer := func() {
 		if len(bodyBlocks) > 0 {
@@ -115,7 +115,7 @@ func RenderErrorBox(title, reason, suggestion, originalError string) string {
 	// 4. Assemble
 	// Join all body blocks vertically
 	bodyContent := lipgloss.JoinVertical(lipgloss.Left, bodyBlocks...)
-	
+
 	// Apply indentation to the whole body
 	indentedBody := indentStyle.Render(bodyContent)
 
@@ -125,7 +125,7 @@ func RenderErrorBox(title, reason, suggestion, originalError string) string {
 
 func RenderMaxRetriesBox(attempts int, originalError string) string {
 	return RenderErrorBox(
-		"Max Retries Reached", 
+		"Max Retries Reached",
 		fmt.Sprintf("Stopped after %d attempts. The error persisted.", attempts),
 		"",
 		originalError,

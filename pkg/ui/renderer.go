@@ -35,12 +35,12 @@ func SmartRender(input string) string {
 	if err != nil {
 		return input // Fallback to raw text on error
 	}
-	
+
 	out, err := renderer.Render(input)
 	if err != nil {
 		return input // Fallback to raw text on error
 	}
-	
+
 	// Glamour adds a newline at the beginning sometimes, trim it if it's excessive
 	return strings.TrimLeft(out, "\n")
 }

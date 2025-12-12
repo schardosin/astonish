@@ -18,7 +18,7 @@ var (
 	colorGray   = lipgloss.Color("240")
 	colorEnd    = lipgloss.Color("196") // Red
 	colorSystem = lipgloss.Color("255") // White
-	
+
 	// Styles for different node types
 	llmStyle    = lipgloss.NewStyle().Foreground(colorLLM).Bold(true)
 	toolStyle   = lipgloss.NewStyle().Foreground(colorTool).Bold(true)
@@ -26,7 +26,7 @@ var (
 	stateStyle  = lipgloss.NewStyle().Foreground(colorState).Bold(true)
 	systemStyle = lipgloss.NewStyle().Foreground(colorSystem).Bold(true)
 	endStyle    = lipgloss.NewStyle().Foreground(colorEnd).Bold(true)
-	
+
 	// Other styles
 	conditionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("246")).Italic(true)
 	loopStyle      = lipgloss.NewStyle().Foreground(colorGray).Italic(true)
@@ -35,11 +35,11 @@ var (
 
 // Max lengths for truncation to prevent overflow
 const (
-	maxNodeNameLen    = 40
-	maxConditionLen   = 60
-	indentSpacing     = "  "
-	connectorMid      = "├─ "
-	connectorLast     = "└─ "
+	maxNodeNameLen  = 40
+	maxConditionLen = 60
+	indentSpacing   = "  "
+	connectorMid    = "├─ "
+	connectorLast   = "└─ "
 )
 
 // RenderCharmFlow prints the flow using Lipgloss styles in a tree-like structure
@@ -55,7 +55,7 @@ func RenderCharmFlow(cfg *config.AgentConfig) {
 
 	// Track visited nodes to detect loops and avoid infinite recursion
 	visited := make(map[string]bool)
-	
+
 	// Start recursion from root
 	renderNodeRecursive(cfg, "START", "", false, visited, false)
 	fmt.Println()

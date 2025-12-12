@@ -32,7 +32,7 @@ type AppSettingsResponse struct {
 
 // UpdateAppSettingsRequest is the request for PUT /api/settings/config
 type UpdateAppSettingsRequest struct {
-	General   *GeneralSettings   `json:"general,omitempty"`
+	General   *GeneralSettings             `json:"general,omitempty"`
 	Providers map[string]map[string]string `json:"providers,omitempty"`
 }
 
@@ -46,15 +46,15 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Build response with masked provider values
 	providers := []ProviderSettings{}
-	
+
 	// List all known providers (alphabetically ordered)
 	knownProviders := []string{"anthropic", "gemini", "groq", "lm_studio", "ollama", "openai", "openrouter", "sap_ai_core", "xai"}
-	
+
 	for _, name := range knownProviders {
 		providerCfg, exists := cfg.Providers[name]
 		fields := make(map[string]string)
 		configured := false
-		
+
 		// Get expected fields for this provider
 		if mapping, ok := config.ProviderEnvMapping[name]; ok {
 			for cfgKey := range mapping {
@@ -72,7 +72,7 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		
+
 		providers = append(providers, ProviderSettings{
 			Name:        name,
 			DisplayName: provider.GetProviderDisplayName(name),

@@ -111,7 +111,7 @@ func (p *Provider) handleResponse(body io.Reader, yield func(*model.LLMResponse,
 				// Handle error or use empty map
 				args = make(map[string]any)
 			}
-			
+
 			llmResp.Content.Parts = append(llmResp.Content.Parts, &genai.Part{
 				FunctionCall: &genai.FunctionCall{
 					Name: content.Name,
@@ -127,7 +127,7 @@ func (p *Provider) handleResponse(body io.Reader, yield func(*model.LLMResponse,
 
 func (p *Provider) handleStream(body io.Reader, yield func(*model.LLMResponse, error) bool) {
 	scanner := bufio.NewScanner(body)
-	
+
 	// State for accumulating tool calls
 	var currentToolID string
 	var currentToolName string
@@ -159,7 +159,7 @@ func (p *Provider) handleStream(body io.Reader, yield func(*model.LLMResponse, e
 				currentToolInput.Reset()
 				currentBlockIndex = event.Index
 			}
-		
+
 		case "content_block_delta":
 			if event.Delta != nil {
 				if event.Delta.Type == "text_delta" {
@@ -225,7 +225,7 @@ func (p *Provider) toAnthropicRequest(req *model.LLMRequest, streaming bool) (*R
 		if c.Role == "model" {
 			role = "assistant"
 		}
-		
+
 		var content []Content
 		for _, part := range c.Parts {
 			if part.Text != "" {
@@ -234,7 +234,7 @@ func (p *Provider) toAnthropicRequest(req *model.LLMRequest, streaming bool) (*R
 					Text: part.Text,
 				})
 			}
-			
+
 			if part.FunctionCall != nil {
 				argsBytes, _ := json.Marshal(part.FunctionCall.Args)
 				content = append(content, Content{
@@ -244,16 +244,16 @@ func (p *Provider) toAnthropicRequest(req *model.LLMRequest, streaming bool) (*R
 					Input: argsBytes,
 				})
 			}
-			
+
 			if part.FunctionResponse != nil {
 				// Tool results are user messages
-				role = "user" 
-				
+				role = "user"
+
 				resBytes, err := json.Marshal(part.FunctionResponse.Response)
 				if err != nil {
 					resBytes = []byte(fmt.Sprintf("%v", part.FunctionResponse.Response))
 				}
-				
+
 				content = append(content, Content{
 					Type:      "tool_result",
 					ToolUseID: part.FunctionResponse.ID,
@@ -261,7 +261,7 @@ func (p *Provider) toAnthropicRequest(req *model.LLMRequest, streaming bool) (*R
 				})
 			}
 		}
-		
+
 		if len(content) > 0 {
 			messages = append(messages, Message{
 				Role:    role,
@@ -269,7 +269,7 @@ func (p *Provider) toAnthropicRequest(req *model.LLMRequest, streaming bool) (*R
 			})
 		}
 	}
-	
+
 	// Map tools
 	var tools []Tool
 	if req.Config != nil && len(req.Config.Tools) > 0 {
@@ -320,12 +320,12 @@ type Message struct {
 type Content struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
-	ID        string          `json:"id,omitempty"`        // For tool_use
-	Name      string          `json:"name,omitempty"`      // For tool_use
-	Input     json.RawMessage `json:"input,omitempty"`     // For tool_use
+	ID        string          `json:"id,omitempty"`          // For tool_use
+	Name      string          `json:"name,omitempty"`        // For tool_use
+	Input     json.RawMessage `json:"input,omitempty"`       // For tool_use
 	ToolUseID string          `json:"tool_use_id,omitempty"` // For tool_result
-	Content   string          `json:"content,omitempty"`   // For tool_result (can be string or list of content blocks)
-	IsError   bool            `json:"is_error,omitempty"`  // For tool_result
+	Content   string          `json:"content,omitempty"`     // For tool_result (can be string or list of content blocks)
+	IsError   bool            `json:"is_error,omitempty"`    // For tool_result
 }
 
 type Response struct {
@@ -343,7 +343,7 @@ type StreamEvent struct {
 }
 
 type StreamDelta struct {
-	Type        string          `json:"type"`
-	Text        string          `json:"text,omitempty"`
-	PartialJson string          `json:"partial_json,omitempty"` // For tool_use input delta
+	Type        string `json:"type"`
+	Text        string `json:"text,omitempty"`
+	PartialJson string `json:"partial_json,omitempty"` // For tool_use input delta
 }

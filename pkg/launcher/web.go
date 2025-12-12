@@ -89,6 +89,6 @@ func RunWeb(ctx context.Context, cfg *WebConfig) error {
 	if err != nil {
 		return fmt.Errorf("failed to parse web launcher args: %w", err)
 	}
-	
+
 	return webLauncher.Run(ctx, launcherConfig)
 }

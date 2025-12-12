@@ -17,16 +17,16 @@ import (
 
 // AIChatRequest is the request body for AI chat
 type AIChatRequest struct {
-	Message       string   `json:"message"`
-	Context       string   `json:"context"`       // "create_flow" | "modify_nodes" | "node_config"
-	CurrentYAML   string   `json:"currentYaml"`   // Current flow state
-	SelectedNodes []string `json:"selectedNodes"` // For node operations
-	History       []ChatMessage `json:"history"`  // Conversation history
+	Message       string        `json:"message"`
+	Context       string        `json:"context"`       // "create_flow" | "modify_nodes" | "node_config"
+	CurrentYAML   string        `json:"currentYaml"`   // Current flow state
+	SelectedNodes []string      `json:"selectedNodes"` // For node operations
+	History       []ChatMessage `json:"history"`       // Conversation history
 }
 
 // ChatMessage represents a message in the conversation
 type ChatMessage struct {
-	Role    string `json:"role"`    // "user" | "assistant"
+	Role    string `json:"role"` // "user" | "assistant"
 	Content string `json:"content"`
 }
 
@@ -45,9 +45,9 @@ func getSystemPrompt(ctx string, availableTools []ToolInfo) string {
 	for _, t := range availableTools {
 		toolsList.WriteString("- " + t.Name + ": " + t.Description + " (source: " + t.Source + ")\n")
 	}
-	
+
 	basePrompt := GetFlowSchema() + "\n\n# Available Tools\nONLY use tools from this list. Do NOT invent or hallucinate tool names.\n" + toolsList.String()
-	
+
 	switch ctx {
 	case "create_flow":
 		return basePrompt + `
@@ -236,20 +236,20 @@ func extractYAML(text string) string {
 	// Look for ```yaml ... ``` blocks
 	startMarker := "```yaml"
 	endMarker := "```"
-	
+
 	startIdx := strings.Index(text, startMarker)
 	if startIdx == -1 {
 		return ""
 	}
-	
+
 	startIdx += len(startMarker)
 	remaining := text[startIdx:]
-	
+
 	endIdx := strings.Index(remaining, endMarker)
 	if endIdx == -1 {
 		return ""
 	}
-	
+
 	return strings.TrimSpace(remaining[:endIdx])
 }
 
@@ -275,12 +275,12 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string, selectedNodeNames []str
 	// Handle multi-document YAML (nodes separated by ---)
 	// Convert to single array format
 	nodeSnippet = strings.TrimSpace(nodeSnippet)
-	
+
 	// If snippet starts with "name:" (no dash), add the dash
 	if strings.HasPrefix(nodeSnippet, "name:") {
 		nodeSnippet = "- " + nodeSnippet
 	}
-	
+
 	// Replace various forms of "---" separator with proper YAML array notation
 	// Handle: "---\nname:", "---\n\nname:", "---\n- name:", "---\n\n- name:"
 	nodeSnippet = strings.ReplaceAll(nodeSnippet, "---\n- name:", "\n- name:")
@@ -291,12 +291,12 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string, selectedNodeNames []str
 	nodeSnippet = strings.TrimPrefix(nodeSnippet, "---\n")
 	nodeSnippet = strings.TrimPrefix(nodeSnippet, "---")
 	nodeSnippet = strings.TrimSpace(nodeSnippet)
-	
+
 	// If after trimming it now starts with "name:", add the dash
 	if strings.HasPrefix(nodeSnippet, "name:") {
 		nodeSnippet = "- " + nodeSnippet
 	}
-	
+
 	// Parse the node snippet(s) - should now be a YAML array
 	var newNodes []map[string]interface{}
 	if err := yaml.Unmarshal([]byte(nodeSnippet), &newNodes); err != nil {
@@ -305,25 +305,25 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string, selectedNodeNames []str
 	if len(newNodes) == 0 {
 		return "", fmt.Errorf("no nodes found in snippet")
 	}
-	
+
 	// Parse the full flow
 	var flow map[string]interface{}
 	if err := yaml.Unmarshal([]byte(fullFlowYAML), &flow); err != nil {
 		return "", fmt.Errorf("failed to parse flow: %w", err)
 	}
-	
+
 	// Get the nodes section
 	flowNodes, ok := flow["nodes"].([]interface{})
 	if !ok {
 		return "", fmt.Errorf("nodes section not found in flow")
 	}
-	
+
 	// Create a set of selected node names for quick lookup
 	selectedSet := make(map[string]bool)
 	for _, name := range selectedNodeNames {
 		selectedSet[name] = true
 	}
-	
+
 	// If no selected nodes specified, use simple update/append logic (backward compatibility)
 	if len(selectedNodeNames) == 0 {
 		for _, snippetNode := range newNodes {
@@ -331,7 +331,7 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string, selectedNodeNames []str
 			if !ok {
 				continue
 			}
-			
+
 			nodeFound := false
 			for i, n := range flowNodes {
 				nodeMap, ok := n.(map[string]interface{})
@@ -344,12 +344,12 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string, selectedNodeNames []str
 					break
 				}
 			}
-			
+
 			if !nodeFound {
 				flowNodes = append(flowNodes, snippetNode)
 			}
 		}
-		
+
 		flow["nodes"] = flowNodes
 		result, err := yaml.Marshal(flow)
 		if err != nil {
@@ -357,7 +357,7 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string, selectedNodeNames []str
 		}
 		return string(result), nil
 	}
-	
+
 	// Scoped replacement: find insertion position (index of first selected node)
 	insertPosition := -1
 	for i, n := range flowNodes {
@@ -371,16 +371,16 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string, selectedNodeNames []str
 			break
 		}
 	}
-	
+
 	// If we couldn't find the insertion position, append to end
 	if insertPosition == -1 {
 		insertPosition = len(flowNodes)
 	}
-	
+
 	// Build new nodes list: keep non-selected nodes, insert new nodes at position
 	var updatedNodes []interface{}
 	insertedNewNodes := false
-	
+
 	for i, n := range flowNodes {
 		nodeMap, ok := n.(map[string]interface{})
 		if !ok {
@@ -388,7 +388,7 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string, selectedNodeNames []str
 			continue
 		}
 		nodeName, _ := nodeMap["name"].(string)
-		
+
 		if selectedSet[nodeName] {
 			// This is a selected node - skip it (will be replaced)
 			// Insert new nodes at the position of the first selected node
@@ -400,19 +400,19 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string, selectedNodeNames []str
 			}
 			continue
 		}
-		
+
 		updatedNodes = append(updatedNodes, n)
 	}
-	
+
 	// If we didn't insert yet (no selected nodes found), append new nodes
 	if !insertedNewNodes {
 		for _, newNode := range newNodes {
 			updatedNodes = append(updatedNodes, newNode)
 		}
 	}
-	
+
 	flow["nodes"] = updatedNodes
-	
+
 	// Update flow connections if we have selected nodes
 	if len(selectedNodeNames) > 0 {
 		flowEdges, ok := flow["flow"].([]interface{})
@@ -420,7 +420,7 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string, selectedNodeNames []str
 			// Get first and last node names from new nodes and selected nodes
 			firstSelectedNode := selectedNodeNames[0]
 			lastSelectedNode := selectedNodeNames[len(selectedNodeNames)-1]
-			
+
 			// Get first and last from new nodes
 			firstNewNode := ""
 			lastNewNode := ""
@@ -432,7 +432,7 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string, selectedNodeNames []str
 					lastNewNode = name
 				}
 			}
-			
+
 			// Update edges
 			var updatedEdges []interface{}
 			for _, e := range flowEdges {
@@ -441,23 +441,23 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string, selectedNodeNames []str
 					updatedEdges = append(updatedEdges, e)
 					continue
 				}
-				
+
 				// Make a copy to modify
 				newEdge := make(map[string]interface{})
 				for k, v := range edge {
 					newEdge[k] = v
 				}
-				
+
 				// Update connections TO first selected node -> point to first new node
 				if to, ok := newEdge["to"].(string); ok && to == firstSelectedNode && firstNewNode != "" {
 					newEdge["to"] = firstNewNode
 				}
-				
-				// Update connections FROM last selected node -> change source to last new node  
+
+				// Update connections FROM last selected node -> change source to last new node
 				if from, ok := newEdge["from"].(string); ok && from == lastSelectedNode && lastNewNode != "" {
 					newEdge["from"] = lastNewNode
 				}
-				
+
 				// Handle edges array (conditional branches)
 				if edges, ok := newEdge["edges"].([]interface{}); ok {
 					var newSubEdges []interface{}
@@ -478,12 +478,12 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string, selectedNodeNames []str
 					}
 					newEdge["edges"] = newSubEdges
 				}
-				
+
 				// Skip edges that are FROM a selected node (except the last one, handled above)
 				// or TO a selected node (except the first one, handled above)
 				from, _ := newEdge["from"].(string)
 				to, _ := newEdge["to"].(string)
-				
+
 				// Keep edge if it's not internal to the selection
 				if !selectedSet[from] || from == lastSelectedNode {
 					if !selectedSet[to] || to == firstSelectedNode {
@@ -491,31 +491,31 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string, selectedNodeNames []str
 					}
 				}
 			}
-			
+
 			flow["flow"] = updatedEdges
 		}
 	}
-	
+
 	// Marshal back to YAML
 	result, err := yaml.Marshal(flow)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal updated flow: %w", err)
 	}
-	
+
 	return string(result), nil
 }
 
 // AIChatHandler handles AI chat requests
 func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	
+
 	// Parse request
 	var req AIChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	
+
 	// Load app config
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
@@ -524,19 +524,19 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	
+
 	// Get default provider and model
 	// Note: Provider env vars are set up at studio startup in cmd/astonish/studio.go
 	providerName := appCfg.General.DefaultProvider
 	modelName := appCfg.General.DefaultModel
-	
+
 	if providerName == "" {
 		providerName = "gemini" // fallback
 	}
 	if modelName == "" {
 		modelName = "gemini-2.0-flash" // fallback
 	}
-	
+
 	// Create LLM client
 	llm, err := provider.GetProvider(ctx, providerName, modelName, appCfg)
 	if err != nil {
@@ -545,23 +545,23 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	
+
 	// Get available tools for context
 	availableTools := getAvailableTools(ctx)
-	
+
 	// Build system prompt
 	systemPrompt := getSystemPrompt(req.Context, availableTools)
-	
+
 	// Add current YAML context if provided
 	if req.CurrentYAML != "" {
 		systemPrompt += "\n\n# Current Flow YAML\n```yaml\n" + req.CurrentYAML + "\n```"
 	}
-	
+
 	// Add selected nodes context if provided - include full YAML content of selected nodes
 	if len(req.SelectedNodes) > 0 {
 		systemPrompt += "\n\n# Selected Nodes (these are the nodes you should modify/replace):\n"
 		systemPrompt += "Names: " + strings.Join(req.SelectedNodes, ", ") + "\n"
-		
+
 		// Extract full YAML of selected nodes from the current YAML
 		if req.CurrentYAML != "" {
 			var flow map[string]interface{}
@@ -571,7 +571,7 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 					for _, name := range req.SelectedNodes {
 						selectedSet[name] = true
 					}
-					
+
 					var selectedNodeYAMLs []map[string]interface{}
 					for _, n := range nodes {
 						nodeMap, ok := n.(map[string]interface{})
@@ -583,7 +583,7 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 							selectedNodeYAMLs = append(selectedNodeYAMLs, nodeMap)
 						}
 					}
-					
+
 					if len(selectedNodeYAMLs) > 0 {
 						selectedYAML, err := yaml.Marshal(selectedNodeYAMLs)
 						if err == nil {
@@ -595,10 +595,10 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	
+
 	// Build conversation
 	history := buildConversationHistory(req.History)
-	
+
 	// Add current user message
 	history = append(history, &genai.Content{
 		Role: "user",
@@ -606,7 +606,7 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 			genai.NewPartFromText(req.Message),
 		},
 	})
-	
+
 	// Create LLM request
 	llmReq := &model.LLMRequest{
 		Contents: history,
@@ -619,13 +619,13 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 			Temperature: genai.Ptr(float32(0.7)),
 		},
 	}
-	
+
 	// Call LLM with validation retry loop (max 3 attempts)
 	const maxRetries = 3
 	var fullResponse string
 	var proposedYAML string
 	var lastValidationErrors []string
-	
+
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		// Call LLM
 		var responseText strings.Builder
@@ -644,36 +644,36 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		
+
 		fullResponse = responseText.String()
 		proposedYAML = extractYAML(fullResponse)
-		
+
 		// If no YAML was generated, no need to validate
 		if proposedYAML == "" {
 			break
 		}
-		
+
 		// For node_config with node snippets, skip full-flow validation here
 		// (will be validated after merging into full flow)
 		if req.Context == "node_config" && isNodeSnippet(proposedYAML) {
 			break
 		}
-		
+
 		// Validate the YAML (for full flows)
 		validation := ValidateFlowYAML(proposedYAML, availableTools)
 		if validation.Valid {
 			// YAML is valid, we're done
 			break
 		}
-		
+
 		// YAML has errors
 		lastValidationErrors = validation.Errors
-		
+
 		// If this was the last attempt, break and return with errors
 		if attempt == maxRetries {
 			break
 		}
-		
+
 		// Add the assistant's response and validation error to history for retry
 		llmReq.Contents = append(llmReq.Contents, &genai.Content{
 			Role: "model",
@@ -688,7 +688,7 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 			},
 		})
 	}
-	
+
 	// For node_config context (single node editing), if the AI returned a node snippet, merge it into the full flow
 	// NOTE: multi_node context now returns the full flow directly, so no merge needed
 	// CRITICAL: We MUST return a full flow, never a partial snippet
@@ -716,7 +716,7 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 			proposedYAML = "" // Clear the snippet
 		}
 	}
-	
+
 	// Determine action based on whether YAML was generated and valid
 	action := "info"
 	if proposedYAML != "" {
@@ -731,7 +731,7 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 			action = "preview"
 		}
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(AIChatResponse{
 		Message:      fullResponse,
@@ -747,7 +747,7 @@ func getAvailableTools(ctx context.Context) []ToolInfo {
 	if cached != nil {
 		return cached
 	}
-	
+
 	// Fallback to internal tools only if cache not ready
 	var allTools []ToolInfo
 	internalTools, _ := tools.GetInternalTools()

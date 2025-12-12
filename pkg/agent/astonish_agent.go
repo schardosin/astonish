@@ -2477,7 +2477,6 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		}
 	}
 
-
 	// Handle user_message if defined
 	// IMPORTANT: We need to emit this with BOTH text content AND StateDelta
 	// The text content will be displayed, and we'll add a special marker in StateDelta

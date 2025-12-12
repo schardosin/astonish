@@ -109,7 +109,6 @@ func WriteFile(ctx tool.Context, args WriteFileArgs) (WriteFileResult, error) {
 	return WriteFileResult{Message: fmt.Sprintf("Content successfully written to %s", args.FilePath)}, nil
 }
 
-
 type ShellCommandArgs struct {
 	Command string `json:"command" jsonschema_description:"shell command to execute"`
 }
@@ -226,7 +225,7 @@ func FilterJson(ctx tool.Context, args FilterJsonArgs) (FilterJsonResult, error)
 			// Python returns error string.
 			return FilterJsonResult{Result: fmt.Sprintf("Error: Invalid JSON input - %v", err)}, nil
 		}
-		
+
 		// Check for 'stdout' wrapping
 		if m, ok := parsed.(map[string]interface{}); ok {
 			if stdout, exists := m["stdout"]; exists {
@@ -279,8 +278,6 @@ func FilterJson(ctx tool.Context, args FilterJsonArgs) (FilterJsonResult, error)
 
 // --- Get Pull Request Files Tool ---
 
-
-
 func GetInternalTools() ([]tool.Tool, error) {
 	readFileTool, err := functiontool.New(functiontool.Config{
 		Name:        "read_file_content",
@@ -313,8 +310,6 @@ func GetInternalTools() ([]tool.Tool, error) {
 	if err != nil {
 		return nil, err
 	}
-
-
 
 	gitDiffAddLineNumbersTool, err := functiontool.New(functiontool.Config{
 		Name:        "git_diff_add_line_numbers",

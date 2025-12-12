@@ -40,7 +40,7 @@ func handleSetupCommand() error {
 
 	// --- STEP 1: Provider Selection ---
 	var selectedProviderID string
-	
+
 	// Define options using centralized display names
 	options := []huh.Option[string]{
 		huh.NewOption(provider.GetProviderDisplayName("anthropic"), "anthropic"),
@@ -71,7 +71,7 @@ func handleSetupCommand() error {
 	if cfg.Providers[selectedProviderID] == nil {
 		cfg.Providers[selectedProviderID] = make(config.ProviderConfig)
 	}
-	
+
 	pCfg := cfg.Providers[selectedProviderID]
 
 	// --- STEP 2: Configuration Form ---
@@ -159,7 +159,7 @@ func handleSetupCommand() error {
 			if isUserAborted(err) {
 				fmt.Println("Setup aborted by user; no changes were saved.")
 				return nil
-	}
+			}
 			fmt.Printf("Warning: Failed to fetch/select OpenRouter models: %v\n", err)
 		} else {
 			goto SaveConfig
@@ -323,7 +323,7 @@ func fetchAndSelectSAPModel(pCfg config.ProviderConfig, appCfg *config.AppConfig
 	if len(models) == 0 {
 		return fmt.Errorf("no running models found")
 	}
-	
+
 	// Sort models for better UX
 	sort.Strings(models)
 
@@ -370,19 +370,19 @@ func fetchAndSelectGoogleModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 	}
 
 	fmt.Println("Fetching available models from Google GenAI...")
-	
+
 	// Create a spinner
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-	
+
 	// Run fetching in a goroutine to show spinner
 	type result struct {
 		models []string
 		err    error
 	}
 	ch := make(chan result)
-	
+
 	go func() {
 		models, err := google.ListModels(context.Background(), apiKey)
 		ch <- result{models: models, err: err}
@@ -390,15 +390,15 @@ func fetchAndSelectGoogleModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 
 	// Wait for result while spinning
 	// Note: In a real CLI app we'd use Bubble Tea properly, but here we just want a simple spinner
-	// For simplicity in this setup script, we'll just wait. 
+	// For simplicity in this setup script, we'll just wait.
 	// The spinner library requires a loop or Bubble Tea program.
 	// Let's just print "..." for now to match other providers.
-	
+
 	res := <-ch
 	if res.err != nil {
 		return res.err
 	}
-	
+
 	if len(res.models) == 0 {
 		return fmt.Errorf("no models found")
 	}
@@ -410,7 +410,7 @@ func fetchAndSelectGoogleModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 	}
 
 	var selectedModel string
-	
+
 	// Use a form with a Select field
 	// Set a height limit to ensure scrolling works nicely
 	err := huh.NewForm(
@@ -421,7 +421,7 @@ func fetchAndSelectGoogleModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 				Value(&selectedModel),
 		),
 	).Run()
-	
+
 	if err != nil {
 		return err
 	}
@@ -429,7 +429,7 @@ func fetchAndSelectGoogleModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 	// Save selected model as default
 	appCfg.General.DefaultModel = selectedModel
 	fmt.Printf("Selected default model: %s\n", selectedModel)
-	
+
 	return nil
 }
 func fetchAndSelectOpenRouterModel(pCfg config.ProviderConfig, appCfg *config.AppConfig) error {
@@ -507,7 +507,7 @@ func fetchAndSelectOllamaModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 	}
 
 	var selectedModel string
-	
+
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -516,7 +516,7 @@ func fetchAndSelectOllamaModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 				Value(&selectedModel),
 		),
 	).Run()
-	
+
 	if err != nil {
 		return err
 	}
@@ -524,7 +524,7 @@ func fetchAndSelectOllamaModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 	// Save selected model as default
 	appCfg.General.DefaultModel = selectedModel
 	fmt.Printf("Selected default model: %s\n", selectedModel)
-	
+
 	return nil
 }
 
@@ -553,7 +553,7 @@ func fetchAndSelectLMStudioModel(pCfg config.ProviderConfig, appCfg *config.AppC
 	}
 
 	var selectedModel string
-	
+
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -562,7 +562,7 @@ func fetchAndSelectLMStudioModel(pCfg config.ProviderConfig, appCfg *config.AppC
 				Value(&selectedModel),
 		),
 	).Run()
-	
+
 	if err != nil {
 		return err
 	}
@@ -570,7 +570,7 @@ func fetchAndSelectLMStudioModel(pCfg config.ProviderConfig, appCfg *config.AppC
 	// Save selected model as default
 	appCfg.General.DefaultModel = selectedModel
 	fmt.Printf("Selected default model: %s\n", selectedModel)
-	
+
 	return nil
 }
 
@@ -599,7 +599,7 @@ func fetchAndSelectGroqModel(pCfg config.ProviderConfig, appCfg *config.AppConfi
 	}
 
 	var selectedModel string
-	
+
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -608,7 +608,7 @@ func fetchAndSelectGroqModel(pCfg config.ProviderConfig, appCfg *config.AppConfi
 				Value(&selectedModel),
 		),
 	).Run()
-	
+
 	if err != nil {
 		return err
 	}
@@ -616,7 +616,7 @@ func fetchAndSelectGroqModel(pCfg config.ProviderConfig, appCfg *config.AppConfi
 	// Save selected model as default
 	appCfg.General.DefaultModel = selectedModel
 	fmt.Printf("Selected default model: %s\n", selectedModel)
-	
+
 	return nil
 }
 
@@ -650,7 +650,7 @@ func getDynamicHeight(maxItems int) int {
 	// If the list is smaller than available space, just show the list
 	// +2 for some padding/borders if needed, but huh handles exact count well
 	if maxItems < availableHeight {
-		return maxItems + 2 
+		return maxItems + 2
 	}
 
 	// Otherwise use all available space
@@ -661,13 +661,13 @@ func runSpinner(msg string) {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
-	
+
 	// We can't easily run the bubbletea program and block here without more complex setup
 	// For now, let's just print a message that looks nice
 	fmt.Printf("%s %s\n", s.Style.Render("•"), msg)
-	
+
 	// In a real CLI app we might want to use tea.NewProgram to run the spinner properly
-	// but since we're about to make a blocking network call, we can't update the spinner 
+	// but since we're about to make a blocking network call, we can't update the spinner
 	// unless we run the network call in a goroutine.
 	// For simplicity in this setup script, we just print the message.
 }
@@ -679,7 +679,7 @@ func printSuccess(msg string) {
 		Padding(1, 2).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("42"))
-	
+
 	fmt.Println(style.Render("✓ " + msg))
 }
 
@@ -708,7 +708,7 @@ func fetchAndSelectOpenAIModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 	}
 
 	var selectedModel string
-	
+
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -717,7 +717,7 @@ func fetchAndSelectOpenAIModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 				Value(&selectedModel),
 		),
 	).Run()
-	
+
 	if err != nil {
 		return err
 	}
@@ -725,7 +725,7 @@ func fetchAndSelectOpenAIModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 	// Save selected model as default
 	appCfg.General.DefaultModel = selectedModel
 	fmt.Printf("Selected default model: %s\n", selectedModel)
-	
+
 	return nil
 }
 
@@ -754,7 +754,7 @@ func fetchAndSelectAnthropicModel(pCfg config.ProviderConfig, appCfg *config.App
 	}
 
 	var selectedModel string
-	
+
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -763,7 +763,7 @@ func fetchAndSelectAnthropicModel(pCfg config.ProviderConfig, appCfg *config.App
 				Value(&selectedModel),
 		),
 	).Run()
-	
+
 	if err != nil {
 		return err
 	}
@@ -771,7 +771,7 @@ func fetchAndSelectAnthropicModel(pCfg config.ProviderConfig, appCfg *config.App
 	// Save selected model as default
 	appCfg.General.DefaultModel = selectedModel
 	fmt.Printf("Selected default model: %s\n", selectedModel)
-	
+
 	return nil
 }
 
@@ -800,7 +800,7 @@ func fetchAndSelectXAIModel(pCfg config.ProviderConfig, appCfg *config.AppConfig
 	}
 
 	var selectedModel string
-	
+
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -809,7 +809,7 @@ func fetchAndSelectXAIModel(pCfg config.ProviderConfig, appCfg *config.AppConfig
 				Value(&selectedModel),
 		),
 	).Run()
-	
+
 	if err != nil {
 		return err
 	}
@@ -817,6 +817,6 @@ func fetchAndSelectXAIModel(pCfg config.ProviderConfig, appCfg *config.AppConfig
 	// Save selected model as default
 	appCfg.General.DefaultModel = selectedModel
 	fmt.Printf("Selected default model: %s\n", selectedModel)
-	
+
 	return nil
 }

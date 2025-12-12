@@ -11,15 +11,15 @@ import (
 
 // ParallelModel holds the state of the parallel execution UI
 type ParallelModel struct {
-	totalItems    int
-	processed     int
-	activeCount   int
-	nodeName      string
-	spinner       spinner.Model
-	progress      progress.Model
-	width         int
-	done          bool
-	lastLog       string
+	totalItems  int
+	processed   int
+	activeCount int
+	nodeName    string
+	spinner     spinner.Model
+	progress    progress.Model
+	width       int
+	done        bool
+	lastLog     string
 }
 
 // ItemFinishedMsg signals that a worker has finished an item
@@ -67,20 +67,20 @@ func (m ParallelModel) View() string {
 	// While running
 	spin := m.spinner.View()
 	bar := m.progress.View()
-	
+
 	// Percentage
 	percent := 0.0
 	if m.totalItems > 0 {
 		percent = float64(m.processed) / float64(m.totalItems)
 	}
 	percentStr := fmt.Sprintf("%.0f%%", percent*100)
-	
+
 	// Counts: "(6/12)"
 	countStr := fmt.Sprintf("(%d/%d)", m.processed, m.totalItems)
-	
+
 	// Active: "• 5 active"
 	activeStr := fmt.Sprintf("• %d active", m.activeCount)
-	
+
 	// Styles
 	// Increased width to 40 to accommodate longer node names without wrapping
 	nodeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Bold(true).Width(40).Align(lipgloss.Left)
@@ -95,15 +95,15 @@ func (m ParallelModel) View() string {
 	}
 
 	// Format: ⣻  add_review_comment  [██████░░░░░░]  50%  (6/12) • 5 active
-	view := fmt.Sprintf("%s %s %s %s %s %s", 
+	view := fmt.Sprintf("%s %s %s %s %s %s",
 		spin,
-		nodeStyle.Render(displayName), 
-		bar, 
-		percentStyle.Render(percentStr), 
+		nodeStyle.Render(displayName),
+		bar,
+		percentStyle.Render(percentStr),
 		countStyle.Render(countStr),
 		activeStyle.Render(activeStr),
 	)
-	
+
 	if m.lastLog != "" {
 		logStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Italic(true)
 		// Truncate log if too long
@@ -113,7 +113,7 @@ func (m ParallelModel) View() string {
 		}
 		view += "\n  " + logStyle.Render(log)
 	}
-	
+
 	return view
 }
 
@@ -140,11 +140,11 @@ func (m ParallelModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update progress bar
 		cmd := m.progress.SetPercent(float64(m.processed) / float64(m.totalItems))
 		return m, cmd
-		
+
 	case ActiveCountMsg:
 		m.activeCount = int(msg)
 		return m, nil
-		
+
 	case ItemLogMsg:
 		m.lastLog = string(msg)
 		return m, nil

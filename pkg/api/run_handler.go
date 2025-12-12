@@ -229,7 +229,7 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	SendSSE(w, flusher, "status", map[string]string{"status": "running"})
 
 	var lastNodeName string
-	var currentNodeType string  // Track node type for conditional streaming
+	var currentNodeType string // Track node type for conditional streaming
 
 	for event, err := range rnr.Run(ctx, req.SessionID, sess.ID(), userMsg, adkagent.RunConfig{}) {
 		if err != nil {
@@ -262,7 +262,7 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 					lastNodeName = nodeName
 					// Also check node_type if available (sometimes implicit)
 					nodeType, _ := delta["node_type"].(string)
-					currentNodeType = nodeType  // Update for streaming filter
+					currentNodeType = nodeType // Update for streaming filter
 					SendSSE(w, flusher, "node", map[string]string{
 						"node": nodeName,
 						"type": nodeType,
@@ -276,23 +276,23 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 					attempt := 0
 					maxRetries := 3
 					reason := ""
-					
+
 					if a, ok := retryInfo["attempt"].(int); ok {
 						attempt = a
 					} else if a, ok := retryInfo["attempt"].(float64); ok {
 						attempt = int(a)
 					}
-					
+
 					if m, ok := retryInfo["max_retries"].(int); ok {
 						maxRetries = m
 					} else if m, ok := retryInfo["max_retries"].(float64); ok {
 						maxRetries = int(m)
 					}
-					
+
 					if r, ok := retryInfo["reason"].(string); ok {
 						reason = r
 					}
-					
+
 					SendSSE(w, flusher, "retry", map[string]interface{}{
 						"attempt":    attempt,
 						"maxRetries": maxRetries,
@@ -308,7 +308,7 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 					reason, _ := failureInfo["reason"].(string)
 					originalError, _ := failureInfo["original_error"].(string)
 					suggestion, _ := failureInfo["suggestion"].(string)
-					
+
 					SendSSE(w, flusher, "error_info", map[string]interface{}{
 						"title":         title,
 						"reason":        reason,

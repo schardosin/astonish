@@ -13,7 +13,7 @@ type Model struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
 	Pricing struct {
-		Prompt    string `json:"prompt"`
+		Prompt     string `json:"prompt"`
 		Completion string `json:"completion"`
 	} `json:"pricing"`
 }
@@ -71,7 +71,7 @@ func ListModels(apiKey string) ([]DisplayModel, error) {
 
 		// Check if free
 		isFree := strings.Contains(m.ID, ":free")
-		
+
 		// Format Display Name
 		displayName := m.Name
 		if isFree {

@@ -12,56 +12,56 @@ import (
 
 // ListModels fetches available models from the xAI API.
 func ListModels(ctx context.Context, apiKey string) ([]string, error) {
-    if apiKey == "" {
-        apiKey = os.Getenv("XAI_API_KEY")
-    }
-    if apiKey == "" {
-        return nil, fmt.Errorf("XAI_API_KEY not set")
-    }
+	if apiKey == "" {
+		apiKey = os.Getenv("XAI_API_KEY")
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("XAI_API_KEY not set")
+	}
 
-    // xAI uses standard OpenAI-compatible endpoints
-    url := "https://api.x.ai/v1/models"
-    
-    req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-    if err != nil {
-        return nil, fmt.Errorf("failed to create request: %w", err)
-    }
+	// xAI uses standard OpenAI-compatible endpoints
+	url := "https://api.x.ai/v1/models"
 
-    req.Header.Set("Authorization", "Bearer "+apiKey)
-    req.Header.Set("Content-Type", "application/json")
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
 
-    client := &http.Client{}
-    resp, err := client.Do(req)
-    if err != nil {
-        return nil, fmt.Errorf("failed to fetch models: %w", err)
-    }
-    defer resp.Body.Close()
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
 
-    if resp.StatusCode != http.StatusOK {
-        body, _ := io.ReadAll(resp.Body)
-        return nil, fmt.Errorf("failed to fetch models: %s - %s", resp.Status, string(body))
-    }
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
+	}
+	defer resp.Body.Close()
 
-    // xAI follows the OpenAI JSON schema for model listing
-    var result struct {
-        Data []struct {
-            ID string `json:"id"`
-        } `json:"data"`
-    }
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to fetch models: %s - %s", resp.Status, string(body))
+	}
 
-    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-        return nil, fmt.Errorf("failed to decode response: %w", err)
-    }
+	// xAI follows the OpenAI JSON schema for model listing
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
 
-    var models []string
-    for _, m := range result.Data {
-        models = append(models, m.ID)
-    }
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
 
-    if len(models) == 0 {
-        return nil, fmt.Errorf("no models found from xAI API")
-    }
+	var models []string
+	for _, m := range result.Data {
+		models = append(models, m.ID)
+	}
 
-    sort.Strings(models)
-    return models, nil
+	if len(models) == 0 {
+		return nil, fmt.Errorf("no models found from xAI API")
+	}
+
+	sort.Strings(models)
+	return models, nil
 }

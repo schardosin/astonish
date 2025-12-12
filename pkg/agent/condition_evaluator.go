@@ -47,7 +47,7 @@ func EvaluateExpression(expr string, state map[string]interface{}) (interface{},
 	env := starlark.StringDict{
 		"x": starlarkDict,
 	}
-	
+
 	// Also expose top-level keys directly
 	for k, v := range state {
 		env[k] = toStarlarkValue(v)
@@ -113,7 +113,7 @@ func toStarlarkValue(v interface{}) starlark.Value {
 			}
 			return starlark.NewList(list)
 		}
-		
+
 		// For unknown types, convert to string
 		return starlark.String(fmt.Sprintf("%v", val))
 	}

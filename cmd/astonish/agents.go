@@ -66,7 +66,7 @@ func handleRunCommand(args []string) error {
 	useBrowser := runCmd.Bool("browser", false, "Launch with embedded web browser UI")
 	port := runCmd.Int("port", 8080, "Port for web server (only used with --browser)")
 	debugMode := runCmd.Bool("debug", false, "Enable debug mode to show tool inputs and responses")
-	
+
 	var params stringArray
 	runCmd.Var(&params, "p", "Parameter to pass to the agent in key=value format (can be used multiple times)")
 
@@ -74,7 +74,7 @@ func handleRunCommand(args []string) error {
 	// We extract the first non-flag argument as the agent name
 	var agentName string
 	var flagArgs []string
-	
+
 	skipNext := false
 	for _, arg := range args {
 		if skipNext {
@@ -194,7 +194,7 @@ func handleRunCommand(args []string) error {
 					goto Found
 				}
 			}
-			
+
 			// 4. Check in local dev path (fallback)
 			agentPath = fmt.Sprintf("agents/%s.yaml", agentName)
 			if _, err := os.Stat(agentPath); os.IsNotExist(err) {
@@ -268,7 +268,7 @@ func handleListCommand() error {
 		for _, entry := range entries {
 			if !entry.IsDir() && filepath.Ext(entry.Name()) == ".yaml" {
 				name := entry.Name()[:len(entry.Name())-5]
-				// Only process if not already found (prioritize system over local or vice versa? 
+				// Only process if not already found (prioritize system over local or vice versa?
 				// The previous logic prioritized System then Local, but map overwrite would mean Local wins if processed second.
 				// Let's check existence to respect priority order: System first, then Local.
 				if _, exists := agents[name]; !exists {
@@ -329,16 +329,16 @@ func handleListCommand() error {
 
 	for _, name := range keys {
 		info := agents[name]
-		
+
 		// Render the name with fixed width padding
 		// %-*s means: Left justify (-), pad to width (*), string (s)
-		paddedName := fmt.Sprintf("%-*s", maxLen + 4, name) 
-		
+		paddedName := fmt.Sprintf("%-*s", maxLen+4, name)
+
 		row := lipgloss.JoinHorizontal(lipgloss.Left,
 			nameStyle.Render(paddedName),
 			descStyle.Render(info.Description),
 		)
-		
+
 		fmt.Println(row)
 	}
 
@@ -368,7 +368,7 @@ func handleFlowCommand(args []string) error {
 					goto Found
 				}
 			}
-			
+
 			// 4. Check in local dev path (fallback)
 			agentPath = fmt.Sprintf("agents/%s.yaml", agentName)
 			if _, err := os.Stat(agentPath); os.IsNotExist(err) {
@@ -394,7 +394,7 @@ func handleEditCommand(args []string) error {
 	}
 
 	agentName := args[0]
-	
+
 	// Find the agent file path (reusing same logic as run/flow)
 	agentPath := agentName
 	if _, err := os.Stat(agentPath); os.IsNotExist(err) {
@@ -410,7 +410,7 @@ func handleEditCommand(args []string) error {
 					goto Found
 				}
 			}
-			
+
 			// Check in local dev path (fallback)
 			agentPath = fmt.Sprintf("agents/%s.yaml", agentName)
 			if _, err := os.Stat(agentPath); os.IsNotExist(err) {

@@ -8,7 +8,7 @@ import (
 )
 
 type AppConfig struct {
-	General   GeneralConfig              `yaml:"general"`
+	General   GeneralConfig             `yaml:"general"`
 	Providers map[string]ProviderConfig `yaml:"providers"`
 }
 

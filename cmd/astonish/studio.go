@@ -44,5 +44,3 @@ func printStudioUsage() {
 	fmt.Println("  -h, --help            show this help message and exit")
 	fmt.Println("  --port PORT           Port to run the studio server on (default: 9393)")
 }
-
-

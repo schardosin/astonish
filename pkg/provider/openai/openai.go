@@ -34,7 +34,7 @@ func NewProvider(client *openai.Client, modelName string, supportsJSONMode bool)
 func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, streaming bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
 		messages := p.toOpenAIMessages(req)
-		
+
 		// Extract tools if present
 		var tools []openai.Tool
 		if req.Config != nil && len(req.Config.Tools) > 0 {
@@ -95,7 +95,7 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 				// Handle tool call deltas
 				if len(resp.Choices) > 0 {
 					choice := resp.Choices[0]
-					
+
 					// Accumulate tool calls
 					for _, tc := range choice.Delta.ToolCalls {
 						if tc.Index != nil {
@@ -107,7 +107,7 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 										Name:      tc.Function.Name,
 										Arguments: tc.Function.Arguments,
 									},
-									ID: tc.ID,
+									ID:   tc.ID,
 									Type: tc.Type,
 								}
 							} else {
@@ -126,12 +126,12 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 					}
 
 					// Check for finish reason
-					if choice.FinishReason == openai.FinishReasonToolCalls || 
-					   (choice.FinishReason == openai.FinishReasonStop && len(toolCallAccumulator) > 0) {
-						
+					if choice.FinishReason == openai.FinishReasonToolCalls ||
+						(choice.FinishReason == openai.FinishReasonStop && len(toolCallAccumulator) > 0) {
+
 						// Emit all accumulated tool calls
 						var parts []*genai.Part
-						
+
 						// Sort by index to maintain order? Map iteration is random.
 						// Let's just iterate.
 						for _, tc := range toolCallAccumulator {
@@ -140,7 +140,7 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 								// Try to recover or just use empty
 								args = make(map[string]any)
 							}
-							
+
 							parts = append(parts, &genai.Part{
 								FunctionCall: &genai.FunctionCall{
 									Name: tc.Function.Name,
@@ -149,7 +149,7 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 								},
 							})
 						}
-						
+
 						if len(parts) > 0 {
 							yield(&model.LLMResponse{
 								Content: &genai.Content{
@@ -181,11 +181,11 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 		}
 	}
 }
+
 // Name implements model.LLM.
 func (p *Provider) Name() string {
 	return p.model
 }
-
 
 func (p *Provider) toOpenAIMessages(req *model.LLMRequest) []openai.ChatCompletionMessage {
 	var messages []openai.ChatCompletionMessage
@@ -236,7 +236,7 @@ func (p *Provider) toOpenAIMessages(req *model.LLMRequest) []openai.ChatCompleti
 					} else {
 						content = string(contentBytes)
 					}
-					
+
 					// Response is map[string]any
 					m := part.FunctionResponse.Response
 					if res, ok := m["result"]; ok {
@@ -248,7 +248,7 @@ func (p *Provider) toOpenAIMessages(req *model.LLMRequest) []openai.ChatCompleti
 							content = string(resBytes)
 						}
 					}
-					
+
 					// Use real ID if available
 					id := part.FunctionResponse.ID
 					if id == "" {
@@ -279,13 +279,13 @@ func (p *Provider) toOpenAIMessages(req *model.LLMRequest) []openai.ChatCompleti
 				if part.FunctionCall != nil {
 					// Marshal args to JSON string
 					argsBytes, _ := json.Marshal(part.FunctionCall.Args)
-					
+
 					// Use real ID if available
 					id := part.FunctionCall.ID
 					if id == "" {
 						id = "call_" + part.FunctionCall.Name
 					}
-					
+
 					// Store ID for matching response
 					lastToolCallIDs[part.FunctionCall.Name] = id
 
@@ -293,7 +293,7 @@ func (p *Provider) toOpenAIMessages(req *model.LLMRequest) []openai.ChatCompleti
 						ID:   id,
 						Type: openai.ToolTypeFunction,
 						Function: openai.FunctionCall{
-							Name: part.FunctionCall.Name,
+							Name:      part.FunctionCall.Name,
 							Arguments: string(argsBytes),
 						},
 					})
@@ -318,12 +318,12 @@ func (p *Provider) toLLMResponse(resp openai.ChatCompletionResponse) *model.LLMR
 		return &model.LLMResponse{}
 	}
 	choice := resp.Choices[0]
-	
+
 	var parts []*genai.Part
 	if choice.Message.Content != "" {
 		parts = append(parts, &genai.Part{Text: choice.Message.Content})
 	}
-	
+
 	for _, tc := range choice.Message.ToolCalls {
 		var args map[string]any
 		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
@@ -351,14 +351,14 @@ func (p *Provider) toLLMResponseStream(resp openai.ChatCompletionStreamResponse)
 		return &model.LLMResponse{}
 	}
 	choice := resp.Choices[0]
-	
+
 	var parts []*genai.Part
 	if choice.Delta.Content != "" {
 		parts = append(parts, &genai.Part{Text: choice.Delta.Content})
 	}
-	
+
 	// Note: We do NOT handle tool calls here anymore, as they are accumulated in GenerateContent
-	
+
 	return &model.LLMResponse{
 		Content: &genai.Content{
 			Role:  "model",

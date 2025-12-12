@@ -82,7 +82,7 @@ func TestReActFallbackDirect(t *testing.T) {
 	maxSteps := 50
 	deadline := time.Now().Add(2 * time.Second)
 
-		for ev, err := range agent.Run(ctx) {
+	for ev, err := range agent.Run(ctx) {
 		steps++
 		if time.Now().After(deadline) {
 			t.Fatalf("timeout waiting for fallback completion; steps=%d", steps)
@@ -239,8 +239,8 @@ type MockInvocationContext struct {
 	StateVal session.State
 }
 
-func (m *MockInvocationContext) AgentName() string                    { return "test_agent" }
-func (m *MockInvocationContext) AppName() string                      { return "test_app" }
+func (m *MockInvocationContext) AgentName() string { return "test_agent" }
+func (m *MockInvocationContext) AppName() string   { return "test_app" }
 func (m *MockInvocationContext) UserContent() *genai.Content {
 	return &genai.Content{
 		Parts: []*genai.Part{},
@@ -263,10 +263,10 @@ func (m *MockInvocationContext) Agent() agent.Agent         { return nil }
 func (m *MockInvocationContext) EndInvocation()             {}
 func (m *MockInvocationContext) Ended() bool                { return false }
 func (m *MockInvocationContext) Memory() agent.Memory       { return nil }
-func (m *MockInvocationContext) RunConfig() *agent.RunConfig { 
+func (m *MockInvocationContext) RunConfig() *agent.RunConfig {
 	return &agent.RunConfig{}
 }
-func (m *MockInvocationContext) Session() session.Session   { return &MockSession{StateVal: m.StateVal} }
+func (m *MockInvocationContext) Session() session.Session { return &MockSession{StateVal: m.StateVal} }
 
 func TestReActFallbackTrigger(t *testing.T) {
 	t.Skip("Skip trigger path due to ADK llmagent nil deref in Flow.callLLM; covered by TestReActFallbackDirect")
@@ -300,10 +300,10 @@ func TestReActFallbackTrigger(t *testing.T) {
 		Description: "Test Agent",
 		Nodes: []config.Node{
 			{
-				Name:           "test_node",
-				Type:           "llm",
-				Prompt:         "Hello",
-				Tools:          false,
+				Name:   "test_node",
+				Type:   "llm",
+				Prompt: "Hello",
+				Tools:  false,
 				// ToolsSelection: []string{"mock_tool"},
 			},
 		},
@@ -325,31 +325,31 @@ func TestReActFallbackTrigger(t *testing.T) {
 	// tools := []tool.Tool{mockTool}
 
 	agent := &AstonishAgent{
-		Config:    cfg,
-		LLM:       mockLLM,
+		Config: cfg,
+		LLM:    mockLLM,
 		// Tools:     tools,
 		DebugMode: true,
 	}
 
 	// Mock session service
 	state := NewMockState()
-	
+
 	mockSession := &MockSessionService{
 		State: state,
 	}
 	agent.SessionService = mockSession
-	
+
 	// Execute
 	ctx := &MockInvocationContext{
 		Context:  context.Background(),
 		StateVal: state,
 	}
-	
+
 	// Run the agent and consume events safely using range over the sequence.
 	fmt.Println("DEBUG: Consuming iterator (range)...")
 	for event, err := range agent.Run(ctx) {
 		fmt.Printf("DEBUG: range received event=%v, err=%v\n", event, err)
-		
+
 		// Check if fallback is set
 		val, _ := state.Get("_use_react_fallback")
 		if b, ok := val.(bool); ok && b {
@@ -358,14 +358,14 @@ func TestReActFallbackTrigger(t *testing.T) {
 		}
 		// Do not fail immediately on interim errors; allow fallback flag to be set
 	}
-	
+
 	// Verify
 	// Check state
 	val, err := state.Get("_use_react_fallback")
 	if err != nil {
 		t.Fatalf("Expected _use_react_fallback to be set")
 	}
-	
+
 	if boolVal, ok := val.(bool); !ok || !boolVal {
 		t.Errorf("Expected _use_react_fallback to be true")
 	}
@@ -405,15 +405,15 @@ type MockSession struct {
 	StateVal session.State
 }
 
-func (m *MockSession) ID() string { return "mock_session" }
-func (m *MockSession) AppName() string { return "test_app" }
-func (m *MockSession) AgentName() string { return "test_agent" }
-func (m *MockSession) UserID() string { return "test_user" }
-func (m *MockSession) State() session.State { return m.StateVal }
-func (m *MockSession) History() []*session.Event { return nil }
+func (m *MockSession) ID() string                               { return "mock_session" }
+func (m *MockSession) AppName() string                          { return "test_app" }
+func (m *MockSession) AgentName() string                        { return "test_agent" }
+func (m *MockSession) UserID() string                           { return "test_user" }
+func (m *MockSession) State() session.State                     { return m.StateVal }
+func (m *MockSession) History() []*session.Event                { return nil }
 func (m *MockSession) AddHistoryItem(item *session.Event) error { return nil }
-func (m *MockSession) ClearHistory() error { return nil }
-func (m *MockSession) LastUpdateTime() time.Time { return time.Now() }
+func (m *MockSession) ClearHistory() error                      { return nil }
+func (m *MockSession) LastUpdateTime() time.Time                { return time.Now() }
 func (m *MockSession) Events() session.Events {
 	return &MockEvents{}
 }
@@ -435,8 +435,8 @@ func (m *MockEvents) Len() int {
 
 type MockAgent struct{}
 
-func (m *MockAgent) Name() string { return "mock_agent" }
-func (m *MockAgent) Description() string { return "Mock Agent" }
+func (m *MockAgent) Name() string             { return "mock_agent" }
+func (m *MockAgent) Description() string      { return "Mock Agent" }
 func (m *MockAgent) SubAgents() []agent.Agent { return nil }
 func (m *MockAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
 	return func(yield func(*session.Event, error) bool) {}

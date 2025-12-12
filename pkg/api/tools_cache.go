@@ -11,9 +11,9 @@ import (
 
 // ToolsCache holds cached tool information to avoid re-initializing MCP on every request
 type ToolsCache struct {
-	tools     []ToolInfo
-	loaded    bool
-	mu        sync.RWMutex
+	tools  []ToolInfo
+	loaded bool
+	mu     sync.RWMutex
 }
 
 var globalToolsCache = &ToolsCache{}
@@ -22,13 +22,13 @@ var globalToolsCache = &ToolsCache{}
 func InitToolsCache(ctx context.Context) {
 	globalToolsCache.mu.Lock()
 	defer globalToolsCache.mu.Unlock()
-	
+
 	if globalToolsCache.loaded {
 		return
 	}
-	
+
 	var allTools []ToolInfo
-	
+
 	// Get internal tools
 	internalTools, err := tools.GetInternalTools()
 	if err != nil {
@@ -42,7 +42,7 @@ func InitToolsCache(ctx context.Context) {
 			})
 		}
 	}
-	
+
 	// Get MCP tools
 	mcpManager, err := mcp.NewManager()
 	if err != nil {
@@ -52,10 +52,10 @@ func InitToolsCache(ctx context.Context) {
 			log.Printf("Warning: failed to initialize MCP toolsets: %v", err)
 		} else {
 			toolsets := mcpManager.GetToolsets()
-			
+
 			// Create minimal context for fetching tools
 			minimalCtx := &minimalReadonlyContext{Context: ctx}
-			
+
 			for _, toolset := range toolsets {
 				serverName := toolset.Name()
 				mcpToolsList, err := toolset.Tools(minimalCtx)
@@ -73,7 +73,7 @@ func InitToolsCache(ctx context.Context) {
 			}
 		}
 	}
-	
+
 	globalToolsCache.tools = allTools
 	globalToolsCache.loaded = true
 	log.Printf("Tools cache initialized with %d tools", len(allTools))
@@ -83,11 +83,11 @@ func InitToolsCache(ctx context.Context) {
 func GetCachedTools() []ToolInfo {
 	globalToolsCache.mu.RLock()
 	defer globalToolsCache.mu.RUnlock()
-	
+
 	if !globalToolsCache.loaded {
 		return nil
 	}
-	
+
 	// Return a copy to avoid race conditions
 	result := make([]ToolInfo, len(globalToolsCache.tools))
 	copy(result, globalToolsCache.tools)
@@ -99,6 +99,6 @@ func RefreshToolsCache(ctx context.Context) {
 	globalToolsCache.mu.Lock()
 	globalToolsCache.loaded = false
 	globalToolsCache.mu.Unlock()
-	
+
 	InitToolsCache(ctx)
 }

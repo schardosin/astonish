@@ -52,20 +52,20 @@ func ValidateFlowYAML(yamlStr string, availableTools []ToolInfo) FlowValidationR
 				result.Errors = append(result.Errors, fmt.Sprintf("Node %d: invalid node format", i))
 				continue
 			}
-			
+
 			nodeName, _ := node["name"].(string)
 			if nodeName == "" {
 				result.Errors = append(result.Errors, fmt.Sprintf("Node %d: missing required field 'name'", i))
 			} else {
 				nodeNames[nodeName] = true
 			}
-			
+
 			nodeType, _ := node["type"].(string)
 			if nodeType == "" {
 				result.Errors = append(result.Errors, fmt.Sprintf("Node '%s': missing required field 'type'", nodeName))
 				continue
 			}
-			
+
 			// Validate node type specific fields
 			switch nodeType {
 			case "input":
@@ -115,7 +115,7 @@ func ValidateFlowYAML(yamlStr string, availableTools []ToolInfo) FlowValidationR
 				_, hasOutputModel := node["output_model"]
 				_, hasSourceVar := node["source_variable"]
 				_, hasValue := node["value"]
-				
+
 				if !hasUpdates && !(hasAction && hasOutputModel && (hasSourceVar || hasValue)) {
 					result.Errors = append(result.Errors, fmt.Sprintf("Node '%s' (update_state): requires either 'updates' field OR 'action' + 'output_model' + ('source_variable' OR 'value')", nodeName))
 				}
@@ -123,7 +123,7 @@ func ValidateFlowYAML(yamlStr string, availableTools []ToolInfo) FlowValidationR
 				result.Errors = append(result.Errors, fmt.Sprintf("Node '%s': unknown node type '%s'. Valid types: input, llm, output, tool, update_state", nodeName, nodeType))
 			}
 		}
-		
+
 		// Validate flow edges
 		flowEdges, ok := flow["flow"].([]interface{})
 		if !ok {
@@ -135,17 +135,17 @@ func ValidateFlowYAML(yamlStr string, availableTools []ToolInfo) FlowValidationR
 					result.Errors = append(result.Errors, fmt.Sprintf("Flow edge %d: invalid edge format", i))
 					continue
 				}
-				
+
 				from, _ := edge["from"].(string)
 				to, _ := edge["to"].(string)
-				
+
 				// Validate 'from' references
 				if from == "" {
 					result.Errors = append(result.Errors, fmt.Sprintf("Flow edge %d: missing 'from' field", i))
 				} else if from != "START" && !nodeNames[from] {
 					result.Errors = append(result.Errors, fmt.Sprintf("Flow edge %d: 'from' references unknown node '%s'", i, from))
 				}
-				
+
 				// Validate 'to' references (for simple edges)
 				if to != "" {
 					if to != "END" && !nodeNames[to] {

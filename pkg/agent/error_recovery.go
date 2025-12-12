@@ -13,15 +13,15 @@ import (
 // ErrorContext captures the context of an error for recovery analysis
 type ErrorContext struct {
 	NodeName       string         `json:"node_name"`
-	NodeType       string         `json:"node_type"`        // "llm", "tool", etc.
-	ErrorType      string         `json:"error_type"`       // "tool_error", "parse_error", "llm_error", etc.
-	ErrorMessage   string         `json:"error_message"`    // The actual error message
-	AttemptCount   int            `json:"attempt_count"`    // Current retry attempt (1-indexed)
-	MaxRetries     int            `json:"max_retries"`      // Configured maximum retries
-	PreviousErrors []string       `json:"previous_errors"`  // History of error messages
-	ToolName       string         `json:"tool_name,omitempty"`        // If tool error
-	ToolArgs       map[string]any `json:"tool_args,omitempty"`        // If tool error
-	OriginalInput  map[string]any `json:"original_input,omitempty"`   // Original node inputs
+	NodeType       string         `json:"node_type"`                // "llm", "tool", etc.
+	ErrorType      string         `json:"error_type"`               // "tool_error", "parse_error", "llm_error", etc.
+	ErrorMessage   string         `json:"error_message"`            // The actual error message
+	AttemptCount   int            `json:"attempt_count"`            // Current retry attempt (1-indexed)
+	MaxRetries     int            `json:"max_retries"`              // Configured maximum retries
+	PreviousErrors []string       `json:"previous_errors"`          // History of error messages
+	ToolName       string         `json:"tool_name,omitempty"`      // If tool error
+	ToolArgs       map[string]any `json:"tool_args,omitempty"`      // If tool error
+	OriginalInput  map[string]any `json:"original_input,omitempty"` // Original node inputs
 }
 
 // RecoveryDecision represents the decision made by the error recovery system
@@ -62,7 +62,7 @@ func (e *ErrorRecoveryNode) Decide(ctx context.Context, errCtx ErrorContext) (*R
 
 	// Create request - combine system prompt and user prompt
 	combinedPrompt := fmt.Sprintf("%s\n\n%s", systemPrompt, userPrompt)
-	
+
 	req := &model.LLMRequest{
 		Contents: []*genai.Content{
 			{
@@ -82,7 +82,7 @@ func (e *ErrorRecoveryNode) Decide(ctx context.Context, errCtx ErrorContext) (*R
 			// Fallback to simple heuristic
 			return e.fallbackDecision(errCtx), nil
 		}
-		
+
 		// Extract response text from each chunk
 		if resp.Content != nil && len(resp.Content.Parts) > 0 {
 			responseText += resp.Content.Parts[0].Text
@@ -163,7 +163,7 @@ Do not include any other text, markdown, or explanations outside the JSON object
 // buildUserPrompt creates the user prompt with error context
 func (e *ErrorRecoveryNode) buildUserPrompt(errCtx ErrorContext) string {
 	var sb strings.Builder
-	
+
 	sb.WriteString("**Error Analysis Request**\n\n")
 	sb.WriteString(fmt.Sprintf("**Node Information:**\n"))
 	sb.WriteString(fmt.Sprintf("- Name: %s\n", errCtx.NodeName))
@@ -172,14 +172,14 @@ func (e *ErrorRecoveryNode) buildUserPrompt(errCtx ErrorContext) string {
 	sb.WriteString(fmt.Sprintf("- Current Attempt: %d of %d\n", errCtx.AttemptCount, errCtx.MaxRetries))
 	sb.WriteString(fmt.Sprintf("- Error Type: %s\n", errCtx.ErrorType))
 	sb.WriteString(fmt.Sprintf("- Error Message: %s\n", errCtx.ErrorMessage))
-	
+
 	if len(errCtx.PreviousErrors) > 0 {
 		sb.WriteString(fmt.Sprintf("\n**Previous Errors:**\n"))
 		for i, prevErr := range errCtx.PreviousErrors {
 			sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, prevErr))
 		}
 	}
-	
+
 	if errCtx.ToolName != "" {
 		sb.WriteString(fmt.Sprintf("\n**Tool Information:**\n"))
 		sb.WriteString(fmt.Sprintf("- Tool Name: %s\n", errCtx.ToolName))
@@ -188,9 +188,9 @@ func (e *ErrorRecoveryNode) buildUserPrompt(errCtx ErrorContext) string {
 			sb.WriteString(fmt.Sprintf("- Tool Arguments:\n  %s\n", string(argsJSON)))
 		}
 	}
-	
+
 	sb.WriteString(fmt.Sprintf("\n**Question:** Should the system RETRY or ABORT?"))
-	
+
 	return sb.String()
 }
 
@@ -198,7 +198,7 @@ func (e *ErrorRecoveryNode) buildUserPrompt(errCtx ErrorContext) string {
 func (e *ErrorRecoveryNode) parseDecision(response string) (*RecoveryDecision, error) {
 	// Clean the response (remove markdown code blocks if present)
 	cleaned := strings.TrimSpace(response)
-	
+
 	// Remove markdown code blocks
 	if strings.HasPrefix(cleaned, "```json") {
 		cleaned = strings.TrimPrefix(cleaned, "```json")
@@ -209,22 +209,22 @@ func (e *ErrorRecoveryNode) parseDecision(response string) (*RecoveryDecision, e
 		cleaned = strings.TrimSuffix(cleaned, "```")
 		cleaned = strings.TrimSpace(cleaned)
 	}
-	
+
 	// Find JSON object
 	startIdx := strings.Index(cleaned, "{")
 	endIdx := strings.LastIndex(cleaned, "}")
-	
+
 	if startIdx == -1 || endIdx == -1 || endIdx <= startIdx {
 		return nil, fmt.Errorf("no valid JSON object found in response")
 	}
-	
+
 	jsonStr := cleaned[startIdx : endIdx+1]
-	
+
 	var decision RecoveryDecision
 	if err := json.Unmarshal([]byte(jsonStr), &decision); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
-	
+
 	return &decision, nil
 }
 
@@ -232,19 +232,19 @@ func (e *ErrorRecoveryNode) parseDecision(response string) (*RecoveryDecision, e
 func (e *ErrorRecoveryNode) fallbackDecision(errCtx ErrorContext) *RecoveryDecision {
 	// Simple heuristics for common error patterns
 	errorLower := strings.ToLower(errCtx.ErrorMessage)
-	
+
 	// Check for non-recoverable errors
 	nonRecoverablePatterns := map[string]string{
-		"401":                    "Authentication Required",
-		"403":                    "Access Forbidden",
-		"unauthorized":           "Authentication Required",
-		"forbidden":              "Access Forbidden",
-		"404":                    "Resource Not Found",
-		"not found":              "Resource Not Found",
-		"invalid configuration":  "Invalid Configuration",
-		"authentication failed":  "Authentication Failed",
+		"401":                   "Authentication Required",
+		"403":                   "Access Forbidden",
+		"unauthorized":          "Authentication Required",
+		"forbidden":             "Access Forbidden",
+		"404":                   "Resource Not Found",
+		"not found":             "Resource Not Found",
+		"invalid configuration": "Invalid Configuration",
+		"authentication failed": "Authentication Failed",
 	}
-	
+
 	for pattern, title := range nonRecoverablePatterns {
 		if strings.Contains(errorLower, pattern) {
 			oneLiner := title
@@ -260,20 +260,20 @@ func (e *ErrorRecoveryNode) fallbackDecision(errCtx ErrorContext) *RecoveryDecis
 			}
 		}
 	}
-	
+
 	// Check for recoverable errors
 	recoverablePatterns := map[string]string{
-		"429":                  "Rate Limit Exceeded",
-		"rate limit":           "Rate Limit Exceeded",
-		"503":                  "Service Temporarily Unavailable",
-		"service unavailable":  "Service Temporarily Unavailable",
-		"timeout":              "Request Timeout",
-		"connection":           "Connection Error",
-		"temporary":            "Temporary Error",
-		"parse":                "Parsing Error",
-		"parsing":              "Parsing Error",
+		"429":                 "Rate Limit Exceeded",
+		"rate limit":          "Rate Limit Exceeded",
+		"503":                 "Service Temporarily Unavailable",
+		"service unavailable": "Service Temporarily Unavailable",
+		"timeout":             "Request Timeout",
+		"connection":          "Connection Error",
+		"temporary":           "Temporary Error",
+		"parse":               "Parsing Error",
+		"parsing":             "Parsing Error",
 	}
-	
+
 	for pattern, title := range recoverablePatterns {
 		if strings.Contains(errorLower, pattern) {
 			oneLiner := title
@@ -289,7 +289,7 @@ func (e *ErrorRecoveryNode) fallbackDecision(errCtx ErrorContext) *RecoveryDecis
 			}
 		}
 	}
-	
+
 	// Default: retry if not at max attempts, otherwise abort
 	if errCtx.AttemptCount < errCtx.MaxRetries {
 		return &RecoveryDecision{
@@ -300,7 +300,7 @@ func (e *ErrorRecoveryNode) fallbackDecision(errCtx ErrorContext) *RecoveryDecis
 			Suggestion:  "Attempting retry with same parameters",
 		}
 	}
-	
+
 	return &RecoveryDecision{
 		ShouldRetry: false,
 		Title:       "Max Retries Exceeded",

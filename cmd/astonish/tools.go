@@ -90,37 +90,37 @@ func handleToolsListCommand(args []string) error {
 		Tools []ToolInfo
 	}
 	var mcpServers []MCPServerInfo
-	
+
 	if err == nil {
 		if err := mcpManager.InitializeToolsets(ctx); err == nil {
 			// Get server names from config
 			mcpConfig := mcpManager.GetConfig()
 			toolsets := mcpManager.GetToolsets()
-			
+
 			// Create minimal context for fetching tools
 			minimalCtx := &minimalReadonlyContext{Context: ctx}
-			
+
 			// Match servers with toolsets
 			serverNames := make([]string, 0, len(mcpConfig.MCPServers))
 			for name := range mcpConfig.MCPServers {
 				serverNames = append(serverNames, name)
 			}
 			sort.Strings(serverNames) // Sort server names
-			
+
 			// Map toolsets by name for easier lookup if possible, or just iterate
 			// The mcpManager.GetToolsets() returns a slice, likely in order of initialization
-			// But we want to group by server name. 
+			// But we want to group by server name.
 			// Let's iterate toolsets and try to match names or just list them.
-			
+
 			// Actually, let's just iterate the toolsets we have
 			for _, toolset := range toolsets {
 				serverName := toolset.Name()
-				
+
 				serverInfo := MCPServerInfo{
 					Name:  serverName,
 					Tools: []ToolInfo{},
 				}
-				
+
 				// Fetch tools from this toolset
 				mcpTools, err := toolset.Tools(minimalCtx)
 				if err == nil {
@@ -136,7 +136,7 @@ func handleToolsListCommand(args []string) error {
 				sort.Slice(serverInfo.Tools, func(i, j int) bool {
 					return serverInfo.Tools[i].Name < serverInfo.Tools[j].Name
 				})
-				
+
 				mcpServers = append(mcpServers, serverInfo)
 			}
 			// Sort servers by name
@@ -162,7 +162,7 @@ func handleToolsListCommand(args []string) error {
 			maxLen = len(t.Name)
 		}
 	}
-	
+
 	// Add MCP tools
 	for _, server := range mcpServers {
 		allTools = append(allTools, server.Tools...)
@@ -204,7 +204,7 @@ func handleToolsListCommand(args []string) error {
 		// Internal Tools
 		if len(internalTools) > 0 {
 			fmt.Println(sectionStyle.Render("Internal Tools"))
-			
+
 			// Sort internal tools
 			sortedInternal := make([]tool.Tool, len(internalTools))
 			copy(sortedInternal, internalTools)
@@ -213,7 +213,7 @@ func handleToolsListCommand(args []string) error {
 			})
 
 			for _, tool := range sortedInternal {
-				paddedName := fmt.Sprintf("%-*s", maxLen + 4, tool.Name())
+				paddedName := fmt.Sprintf("%-*s", maxLen+4, tool.Name())
 				row := lipgloss.JoinHorizontal(lipgloss.Left,
 					nameStyle.Render(paddedName),
 					descStyle.Render(tool.Description()),
@@ -226,10 +226,10 @@ func handleToolsListCommand(args []string) error {
 		if len(mcpServers) > 0 {
 			for _, server := range mcpServers {
 				fmt.Println(sectionStyle.Render(fmt.Sprintf("MCP Server: %s", server.Name)))
-				
+
 				if len(server.Tools) > 0 {
 					for _, tool := range server.Tools {
-						paddedName := fmt.Sprintf("%-*s", maxLen + 4, tool.Name)
+						paddedName := fmt.Sprintf("%-*s", maxLen+4, tool.Name)
 						row := lipgloss.JoinHorizontal(lipgloss.Left,
 							nameStyle.Render(paddedName),
 							descStyle.Render(tool.Description),
@@ -247,12 +247,12 @@ func handleToolsListCommand(args []string) error {
 		for _, server := range mcpServers {
 			totalMCPTools += len(server.Tools)
 		}
-		
+
 		footerStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("240")). // Dark Grey
 			PaddingTop(1)
-			
-		fmt.Println(footerStyle.Render(fmt.Sprintf("Total: %d internal tools, %d MCP servers with %d tools", 
+
+		fmt.Println(footerStyle.Render(fmt.Sprintf("Total: %d internal tools, %d MCP servers with %d tools",
 			len(internalTools), len(mcpServers), totalMCPTools)))
 	}
 

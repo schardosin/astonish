@@ -16,7 +16,7 @@ import (
 
 // AgentListItem represents an agent in the list response
 type AgentListItem struct {
-	ID          string `json:"id"`
+	ID           string `json:"id"`
 	Name         string `json:"name"`
 	Description  string `json:"description"`
 	Source       string `json:"source"` // "system" or "local"
@@ -31,10 +31,10 @@ type AgentListResponse struct {
 
 // AgentDetailResponse is the response for GET /api/agents/:name
 type AgentDetailResponse struct {
-	Name        string              `json:"name"`
-	Source      string              `json:"source"`
-	YAML        string              `json:"yaml"`
-	Config      *config.AgentConfig `json:"config,omitempty"`
+	Name   string              `json:"name"`
+	Source string              `json:"source"`
+	YAML   string              `json:"yaml"`
+	Config *config.AgentConfig `json:"config,omitempty"`
 }
 
 // scanAgentsDir scans a directory for agent YAML files
@@ -183,7 +183,7 @@ func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to get agents directory", http.StatusInternalServerError)
 		return
 	}
-	
+
 	path := filepath.Join(sysDir, name+".yaml")
 
 	// Ensure directory exists
@@ -239,7 +239,7 @@ type ToolsListResponse struct {
 func ListToolsHandler(w http.ResponseWriter, r *http.Request) {
 	// Use cached tools (initialized at startup)
 	allTools := GetCachedTools()
-	
+
 	// If cache not ready, return empty list
 	if allTools == nil {
 		allTools = []ToolInfo{}
@@ -276,18 +276,17 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/agents/{name}", DeleteAgentHandler).Methods("DELETE")
 	router.HandleFunc("/api/tools", ListToolsHandler).Methods("GET")
 	router.HandleFunc("/api/ai/chat", AIChatHandler).Methods("POST")
-	
+
 	// Settings endpoints
 	router.HandleFunc("/api/settings/config", GetSettingsHandler).Methods("GET")
 	router.HandleFunc("/api/settings/config", UpdateSettingsHandler).Methods("PUT")
 	router.HandleFunc("/api/settings/mcp", GetMCPSettingsHandler).Methods("GET")
 	router.HandleFunc("/api/settings/mcp", UpdateMCPSettingsHandler).Methods("PUT")
 	router.HandleFunc("/api/settings/status", GetSetupStatusHandler).Methods("GET")
-	
+
 	// Provider endpoints
 	router.HandleFunc("/api/providers/{providerId}/models", ListProviderModelsHandler).Methods("GET")
-	
+
 	// Execution endpoints
 	router.HandleFunc("/api/chat", HandleChat).Methods("POST")
 }
-

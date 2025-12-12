@@ -32,8 +32,8 @@ type Node struct {
 	Value             interface{}            `yaml:"value,omitempty"`
 	SourceVariable    string                 `yaml:"source_variable,omitempty"`
 	Parallel          *ParallelConfig        `yaml:"parallel,omitempty"`
-	OutputAction      string                 `yaml:"output_action,omitempty"` // "append" or other aggregation strategies
-	MaxRetries        int                    `yaml:"max_retries,omitempty"`   // Maximum retry attempts (default: 3)
+	OutputAction      string                 `yaml:"output_action,omitempty"`  // "append" or other aggregation strategies
+	MaxRetries        int                    `yaml:"max_retries,omitempty"`    // Maximum retry attempts (default: 3)
 	RetryStrategy     string                 `yaml:"retry_strategy,omitempty"` // "intelligent" or "simple" (default: intelligent)
 }
 

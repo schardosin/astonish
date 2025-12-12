@@ -85,7 +85,7 @@ func RunSimpleWeb(ctx context.Context, cfg *SimpleWebConfig) error {
 	}
 
 	router := mux.NewRouter()
-	
+
 	// API endpoints
 	router.HandleFunc("/api/chat", server.handleChat).Methods("POST")
 	router.HandleFunc("/", server.handleIndex).Methods("GET")
@@ -93,7 +93,7 @@ func RunSimpleWeb(ctx context.Context, cfg *SimpleWebConfig) error {
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Starting simple web UI on http://localhost:%d", cfg.Port)
 	log.Printf("Open your browser to access the chat interface")
-	
+
 	return http.ListenAndServe(addr, router)
 }
 

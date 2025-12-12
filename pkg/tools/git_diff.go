@@ -62,9 +62,9 @@ func GitDiffAddLineNumbers(ctx tool.Context, args GitDiffAddLineNumbersArgs) (Gi
 
 		for _, hunk := range file.Hunks {
 			// Reconstruct hunk header
-			header := fmt.Sprintf("@@ -%d,%d +%d,%d @@ %s", 
-				hunk.SourceStart, hunk.SourceLength, 
-				hunk.TargetStart, hunk.TargetLength, 
+			header := fmt.Sprintf("@@ -%d,%d +%d,%d @@ %s",
+				hunk.SourceStart, hunk.SourceLength,
+				hunk.TargetStart, hunk.TargetLength,
 				hunk.SectionHeader)
 			header = strings.TrimRight(header, " ")
 			formattedDiffParts = append(formattedDiffParts, header)
@@ -96,20 +96,20 @@ func GitDiffAddLineNumbers(ctx tool.Context, args GitDiffAddLineNumbersArgs) (Gi
 // --- Diff Parser Implementation ---
 
 type DiffFile struct {
-	Header      string
-	SourceFile  string
-	TargetFile  string
-	IsBinary    bool
-	Hunks       []DiffHunk
+	Header     string
+	SourceFile string
+	TargetFile string
+	IsBinary   bool
+	Hunks      []DiffHunk
 }
 
 type DiffHunk struct {
-	SourceStart  int
-	SourceLength int
-	TargetStart  int
-	TargetLength int
+	SourceStart   int
+	SourceLength  int
+	TargetStart   int
+	TargetLength  int
 	SectionHeader string
-	Lines        []DiffLine
+	Lines         []DiffLine
 }
 
 type DiffLine struct {
@@ -124,7 +124,7 @@ func parseUnifiedDiff(diff string) ([]DiffFile, error) {
 	var files []DiffFile
 	var currentFile *DiffFile
 	var currentHunk *DiffHunk
-	
+
 	sourceLineNo := 0
 	targetLineNo := 0
 
@@ -136,7 +136,7 @@ func parseUnifiedDiff(diff string) ([]DiffFile, error) {
 
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
-		
+
 		// Check for file header start (git diff)
 		if strings.HasPrefix(line, "diff --git") {
 			if currentFile != nil {
@@ -154,7 +154,7 @@ func parseUnifiedDiff(diff string) ([]DiffFile, error) {
 				target = matches[2]
 			}
 			currentFile = &DiffFile{
-				Header: line, // We might append more lines to header
+				Header:     line, // We might append more lines to header
 				SourceFile: source,
 				TargetFile: target,
 			}
@@ -220,7 +220,7 @@ func parseUnifiedDiff(diff string) ([]DiffFile, error) {
 			if currentHunk != nil {
 				currentFile.Hunks = append(currentFile.Hunks, *currentHunk)
 			}
-			
+
 			matches := hunkHeaderRegex.FindStringSubmatch(line)
 			if len(matches) >= 4 {
 				sStart, _ := strconv.Atoi(matches[1])
@@ -239,10 +239,10 @@ func parseUnifiedDiff(diff string) ([]DiffFile, error) {
 				}
 
 				currentHunk = &DiffHunk{
-					SourceStart: sStart,
-					SourceLength: sLen,
-					TargetStart: tStart,
-					TargetLength: tLen,
+					SourceStart:   sStart,
+					SourceLength:  sLen,
+					TargetStart:   tStart,
+					TargetLength:  tLen,
 					SectionHeader: section,
 				}
 				sourceLineNo = sStart
@@ -256,9 +256,9 @@ func parseUnifiedDiff(diff string) ([]DiffFile, error) {
 			if len(line) > 0 {
 				typeChar := string(line[0])
 				content := line[1:]
-				
+
 				diffLine := DiffLine{
-					Type: typeChar,
+					Type:    typeChar,
 					Content: content,
 				}
 

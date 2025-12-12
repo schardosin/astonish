@@ -42,7 +42,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	if !cfg.DebugMode {
 		log.SetOutput(io.Discard)
 	}
-	
+
 	// Initialize LLM
 	if cfg.DebugMode {
 		fmt.Println("Initializing LLM provider...")
@@ -73,7 +73,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	if cfg.DebugMode {
 		fmt.Println("Initializing MCP servers...")
 	}
-	
+
 	mcpManager, err := mcp.NewManager()
 	var mcpToolsets []tool.Toolset
 	if err != nil {
@@ -126,8 +126,6 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		fmt.Println("✓ Agent created")
 	}
 
-
-
 	// Create session
 	if cfg.DebugMode {
 		fmt.Println("Creating session...")
@@ -164,8 +162,6 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		fmt.Println("✓ Runner created")
 	}
 
-
-
 	// ANSI color codes
 	const (
 		ColorReset  = "\033[0m"
@@ -176,8 +172,6 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		ColorCyan   = "\033[36m"
 		ColorGray   = "\033[90m"
 	)
-
-
 
 	// Start with empty message to let agent initialize and show first prompt
 	var userMsg *genai.Content
@@ -204,7 +198,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 			}
 			spinnerProgram = nil
 			spinnerDone = nil
-			
+
 			if markDone && currentSpinnerText != "" {
 				if success {
 					fmt.Printf("✓ %s\n", currentSpinnerText)
@@ -236,7 +230,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		// Run the agent
 		// Only print the AI prefix if we are actually going to print something from the AI
 		aiPrefixPrinted := false
-		
+
 		// State tracking for input nodes
 		isInputNode := false
 		isOutputNode := false
@@ -245,12 +239,11 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		var approvalOptions []string
 		var inputOptions []string
 		isAutoApproved := false
-		
+
 		// Declare suppression variables here so they are accessible throughout the loop and after
 		suppressStreaming := false
 		var userMessageFields []string
 
-		
 		for event, err := range r.Run(ctx, userID, sess.ID(), userMsg, adkagent.RunConfig{
 			StreamingMode: adkagent.StreamingModeSSE,
 		}) {
@@ -258,8 +251,6 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				fmt.Printf("\nERROR: %v\n", err)
 				return err
 			}
-
-
 
 			// Debug logging for tool calls and responses
 			if cfg.DebugMode && event.LLMResponse.Content != nil {
@@ -288,7 +279,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 
 			// Check if we should suppress streaming output based on UserMessage OR OutputModel config
 			// suppressStreaming is now declared outside the loop
-			
+
 			// Check if we should suppress streaming output based on UserMessage OR OutputModel config
 			// suppressStreaming is now declared outside the loop and updated in the node change block below.
 
@@ -297,23 +288,23 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				if _, hasMarker := event.Actions.StateDelta["_user_message_display"]; hasMarker {
 					// This is a user_message event - print Agent prefix before the text
 					stopSpinner(true, true)
-					
+
 					if !aiPrefixPrinted {
 						fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
 						aiPrefixPrinted = true
 					}
-					
+
 					// The text content will be printed by the normal text processing below
 					// We just needed to ensure the prefix is printed first
 				}
-				
+
 				// Check for error_message display marker - these MUST be shown even if streaming is suppressed
 				if _, hasMarker := event.Actions.StateDelta["_error_message_display"]; hasMarker {
 					// This is an error message that must be displayed
 					// Temporarily disable suppression for this event only
 					suppressStreaming = false
 					stopSpinner(true, false)
-					
+
 					// Check if this is a processing info message (no Agent: prefix)
 					if _, isProcessingInfo := event.Actions.StateDelta["_processing_info"]; !isProcessingInfo {
 						if !aiPrefixPrinted {
@@ -322,7 +313,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						}
 					}
 				}
-				
+
 				// Check for spinner text update
 				if spinnerText, ok := event.Actions.StateDelta["_spinner_text"].(string); ok {
 					startSpinner(spinnerText)
@@ -332,16 +323,16 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				if retryInfoVal, ok := event.Actions.StateDelta["_retry_info"]; ok {
 					if retryInfo, ok := retryInfoVal.(map[string]any); ok {
 						stopSpinner(false, true)
-						
+
 						// Extract fields
 						var attempt, maxRetries int
-						
+
 						if a, ok := retryInfo["attempt"].(int); ok {
 							attempt = a
 						} else if a, ok := retryInfo["attempt"].(float64); ok {
 							attempt = int(a)
 						}
-						
+
 						if m, ok := retryInfo["max_retries"].(int); ok {
 							maxRetries = m
 						} else if m, ok := retryInfo["max_retries"].(float64); ok {
@@ -349,10 +340,10 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						}
 
 						reason := retryInfo["reason"].(string)
-						
+
 						// Render badge
 						badge := ui.RenderRetryBadge(attempt, maxRetries, reason)
-						
+
 						// Print with indentation (3 spaces) - no leading newline
 						fmt.Printf("   %s\n", badge)
 					}
@@ -362,22 +353,22 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				if failureInfoVal, ok := event.Actions.StateDelta["_failure_info"]; ok {
 					if failureInfo, ok := failureInfoVal.(map[string]any); ok {
 						stopSpinner(true, false)
-						
+
 						// Extract fields
 						title := failureInfo["title"].(string)
 						reason := failureInfo["reason"].(string)
 						originalError := failureInfo["original_error"].(string)
 						suggestion, _ := failureInfo["suggestion"].(string) // Optional
-						
+
 						// Render error box
 						box := ui.RenderErrorBox(title, reason, suggestion, originalError)
-						
+
 						// Print directly (no SmartRender - we want raw ANSI codes to pass through)
 						fmt.Print(box)
 					}
 				}
 			}
-			
+
 			// Update current node from StateDelta if present
 			if event.Actions.StateDelta != nil {
 				if node, ok := event.Actions.StateDelta["current_node"].(string); ok {
@@ -387,7 +378,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						if !suppressStreaming {
 							// Stop spinner before printing flush content
 							stopSpinner(true, true)
-							
+
 							// Flush lineBuffer
 							if lineBuffer != "" {
 								rendered := ui.SmartRender(lineBuffer)
@@ -397,7 +388,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 								}
 								lineBuffer = ""
 							}
-							
+
 							// Flush textBuffer
 							if textBuffer.Len() > 0 {
 								rendered := ui.SmartRender(textBuffer.String())
@@ -416,12 +407,12 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						if suppressStreaming {
 							lineBuffer = ""
 						}
-						
+
 						currentNodeName = node
 						// Re-evaluate suppression when node changes
 						suppressStreaming = false
 						userMessageFields = nil
-						
+
 						// Determine if this is an input node or parallel node and setup suppression
 						isInputNode = false
 						isOutputNode = false
@@ -429,7 +420,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						hasUserMessage := false
 						hasOutputModel := false
 						isAutoApproved = false
-						
+
 						for _, n := range cfg.AgentConfig.Nodes {
 							if n.Name == currentNodeName {
 								if n.Type == "input" {
@@ -442,10 +433,10 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 									if n.Parallel != nil {
 										isParallel = true
 									}
-									
+
 									hasUserMessage = len(n.UserMessage) > 0
 									hasOutputModel = len(n.OutputModel) > 0
-									
+
 									if hasUserMessage {
 										suppressStreaming = true
 										userMessageFields = n.UserMessage
@@ -459,7 +450,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 								break
 							}
 						}
-						
+
 						// Manage Spinner
 						if isInputNode || isParallel {
 							stopSpinner(true, true)
@@ -473,20 +464,19 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					}
 				}
 
-
 				// Check for approval state
 				if awaitingVal, ok := event.Actions.StateDelta["awaiting_approval"]; ok {
 					if awaiting, ok := awaitingVal.(bool); ok && awaiting {
 						waitingForApproval = true
 					}
 				}
-				
+
 				// Check for auto-approval - handle IMMEDIATELY
 				if autoApprovedVal, ok := event.Actions.StateDelta["auto_approved"]; ok {
 					if auto, ok := autoApprovedVal.(bool); ok && auto {
 						// Stop spinner before printing
 						stopSpinner(true, true)
-						
+
 						// Print the tool info from the event content
 						// Note: formatToolApprovalRequest already returns ANSI-formatted output
 						// from ui.RenderToolBox, so we print it directly without SmartRender
@@ -497,21 +487,21 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 								}
 							}
 						}
-						
+
 						// Print Auto-Approved Badge
 						fmt.Println(ui.RenderStatusBadge("Auto Approved", true))
-						
+
 						// Simulate "Yes" selection
 						userMsg = genai.NewContentFromText("Yes", genai.RoleUser)
-						
+
 						// Reset flags
 						waitingForApproval = false
 						isAutoApproved = false
-						
+
 						continue
 					}
 				}
-				
+
 				// Check for approval options
 				if optsVal, ok := event.Actions.StateDelta["approval_options"]; ok {
 					if opts, ok := optsVal.([]string); ok {
@@ -522,7 +512,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						}
 					}
 				}
-				
+
 				// Check for input options
 				if optsVal, ok := event.Actions.StateDelta["input_options"]; ok {
 					if opts, ok := optsVal.([]string); ok {
@@ -544,7 +534,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 							break
 						}
 					}
-					
+
 					// If we have user_message content, ensure Agent prefix is printed first
 					if hasUserMessageContent {
 						// Stop spinner before printing
@@ -555,7 +545,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 							fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
 							aiPrefixPrinted = true
 						}
-						
+
 						// Now print each field
 						for _, field := range userMessageFields {
 							if val, ok := event.Actions.StateDelta[field]; ok {
@@ -587,7 +577,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 								}
 							}
 						}
-						
+
 						// CRITICAL: Clear text buffer to prevent duplicate display
 						// Since we've already displayed the user_message content from StateDelta,
 						// we don't want the text content from the event to be displayed again
@@ -609,30 +599,30 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 
 			if chunk != "" {
 				lineBuffer += chunk
-				
+
 				// Process complete lines
 				for {
 					newlineIdx := strings.Index(lineBuffer, "\n")
 					if newlineIdx == -1 {
 						break
 					}
-					
+
 					line := lineBuffer[:newlineIdx+1] // Include newline
 					lineBuffer = lineBuffer[newlineIdx+1:]
-					
+
 					// Check for Tool Block Start (Internal XML)
 					if strings.Contains(line, "<tool_use>") {
 						inToolBlock = true
 					}
-					
+
 					// Check for Tool Box Start (Visual UI)
 					if strings.Contains(line, "╭") {
 						inToolBox = true
 					}
-					
+
 					shouldPrint := false
 					isSystemMsg := false
-					
+
 					if inToolBlock {
 						shouldPrint = false
 					} else if inToolBox {
@@ -665,12 +655,12 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 							shouldPrint = true
 						}
 					}
-					
+
 					// Check for Tool Block End
 					if strings.Contains(line, "</tool_use>") {
 						inToolBlock = false
 					}
-					
+
 					// Check for Tool Box End
 					if strings.Contains(line, "╰") {
 						inToolBox = false
@@ -680,7 +670,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						// Only mark as done if it's NOT a system message (e.g. tool box, approval)
 						// If it IS a system message, we just want to pause/clear it temporarily
 						stopSpinner(!isSystemMsg, true)
-						
+
 						if isSystemMsg {
 							// FLUSH TEXT BUFFER before printing system message
 							if textBuffer.Len() > 0 {
@@ -694,7 +684,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 								}
 								textBuffer.Reset()
 							}
-							
+
 							// Print System Message
 							toPrint := line
 							// If we are suppressing streaming, but the line contains a tool box start,
@@ -711,13 +701,13 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 								}
 							}
 							fmt.Print(toPrint)
-							
+
 							// Reset prefix state for next AI output (since we interrupted with system msg)
 							aiPrefixPrinted = false
 						} else {
 							// Buffer regular text
 							textBuffer.WriteString(line)
-							
+
 							// Flush immediately for streaming effect
 							// Note: SmartRender might be less effective on single lines for things like tables,
 							// but it's necessary for real-time feedback.
@@ -729,7 +719,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 								} else {
 									rendered = ui.SmartRender(textBuffer.String())
 								}
-								
+
 								if rendered != "" {
 									if !aiPrefixPrinted {
 										fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
@@ -754,7 +744,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				}
 			}
 		}
-		
+
 		// Flush any remaining content in lineBuffer
 		if lineBuffer != "" {
 			// Only flush if NOT suppressed OR if it's an input node (to capture prompt)
@@ -763,7 +753,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 			}
 			lineBuffer = ""
 		}
-		
+
 		// Flush text buffer at the end of the turn
 		// If we are waiting for input, we CAPTURE the text buffer as the prompt instead of printing it
 		if waitingForInput || waitingForApproval {
@@ -776,7 +766,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				ansiRegex := regexp.MustCompile(`\x1b\[[0-9;]*m`)
 				cleanText := ansiRegex.ReplaceAllString(rawRendered, "")
 				promptText := strings.TrimSpace(cleanText)
-				
+
 				parts := strings.SplitN(promptText, "\n", 2)
 				if len(parts) > 0 {
 					title = strings.TrimSpace(parts[0])
@@ -797,29 +787,29 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						description = strings.Join(descLines[start:end], "\n")
 					}
 				}
-				
+
 				// Clear text buffer as we've consumed it
 				textBuffer.Reset()
 			}
-			
+
 			// Stop spinner before showing input
 			stopSpinner(true, true)
-			
+
 			// Check for CLI parameter override for input nodes
 			if waitingForInput && cfg.Parameters != nil {
 				if val, ok := cfg.Parameters[currentNodeName]; ok {
 					// Print confirmation
 					fmt.Printf("✓ Using provided value for '%s': %s\n", currentNodeName, val)
-					
+
 					// Create user message with provided value
 					userMsg = genai.NewContentFromText(val, genai.RoleUser)
-					
+
 					// Reset state and continue loop
 					waitingForInput = false
 					continue
 				}
 			}
-			
+
 			// Show input dialog
 			if waitingForApproval {
 				// Handle Auto-Approval
@@ -828,13 +818,13 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					if description != "" {
 						fmt.Println(description)
 					}
-					
+
 					// Print Auto-Approved Badge
 					fmt.Println(ui.RenderStatusBadge("Auto Approved", true))
-					
+
 					// Simulate "Yes" selection
 					userMsg = genai.NewContentFromText("Yes", genai.RoleUser)
-					
+
 					// Reset state
 					waitingForApproval = false
 					approvalOptions = nil
@@ -846,17 +836,17 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				if len(approvalOptions) > 0 {
 					opts = approvalOptions
 				}
-				
+
 				// Default title if empty
 				if title == "" {
 					title = "Approval Required"
 				}
-				
+
 				selection, err := ui.ReadSelection(opts, title, description)
 				if err != nil {
 					return err
 				}
-				
+
 				// Send selection back to agent
 				if selection == "Yes" {
 					fmt.Println(ui.RenderStatusBadge("Command approved", true))
@@ -865,7 +855,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				}
 				userMsg = genai.NewContentFromText(selection, genai.RoleUser)
 				continue
-				
+
 				// Reset state
 				waitingForApproval = false
 				approvalOptions = nil
@@ -875,7 +865,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				if title == "" {
 					title = "Input Required"
 				}
-				
+
 				// Check if we have options for selection
 				if len(inputOptions) > 0 {
 					selection, err := ui.ReadSelection(inputOptions, title, description)
@@ -899,7 +889,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					userMsg = genai.NewContentFromText(input, genai.RoleUser)
 					continue
 				}
-				
+
 				// Reset state
 				waitingForInput = false
 				inputOptions = nil
@@ -930,7 +920,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				textBuffer.Reset()
 			}
 		}
-		
+
 		// If we broke out of the loop (e.g. END node), stop spinner
 		if currentNodeName == "END" {
 			stopSpinner(true, true)
@@ -939,7 +929,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 			}
 			break
 		}
-		
+
 		// Agent completed without needing input
 	}
 	return nil

@@ -30,7 +30,7 @@ func ReadSelection(options []string, title string, description string) (string, 
 	}
 
 	var selected string
-	
+
 	// Create huh options
 	huhOptions := make([]huh.Option[string], len(options))
 	for i, opt := range options {
@@ -63,25 +63,25 @@ func readSelectionFallback(options []string, title string, description string) (
 		fmt.Println(description)
 	}
 	fmt.Println()
-	
+
 	for i, opt := range options {
 		fmt.Printf("%d. %s\n", i+1, opt)
 	}
-	
+
 	fmt.Print("\nEnter your choice (1-", len(options), "): ")
-	
+
 	reader := bufio.NewReader(os.Stdin)
 	input, err := reader.ReadString('\n')
 	if err != nil {
 		return "", err
 	}
-	
+
 	input = strings.TrimSpace(input)
 	choice, err := strconv.Atoi(input)
 	if err != nil || choice < 1 || choice > len(options) {
 		return "", fmt.Errorf("invalid choice: %s", input)
 	}
-	
+
 	return options[choice-1], nil
 }
 
@@ -118,12 +118,12 @@ func readInputFallback(title string, description string) (string, error) {
 		fmt.Println(description)
 	}
 	fmt.Print("\nInput: ")
-	
+
 	reader := bufio.NewReader(os.Stdin)
 	input, err := reader.ReadString('\n')
 	if err != nil {
 		return "", err
 	}
-	
+
 	return strings.TrimSpace(input), nil
 }

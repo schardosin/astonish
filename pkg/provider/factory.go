@@ -106,7 +106,7 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 		if modelName == "" {
 			return nil, fmt.Errorf("model name required for openrouter")
 		}
-		
+
 		config := openai.DefaultConfig(apiKey)
 		config.BaseURL = "https://openrouter.ai/api/v1"
 		client := openai.NewClientWithConfig(config)
@@ -183,7 +183,7 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 		if modelName == "" {
 			modelName = "grok-beta"
 		}
-		
+
 		config := openai.DefaultConfig(apiKey)
 		config.BaseURL = "https://api.x.ai/v1"
 		client := openai.NewClientWithConfig(config)

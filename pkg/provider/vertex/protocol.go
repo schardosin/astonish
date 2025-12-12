@@ -252,7 +252,7 @@ func ParseStream(reader io.Reader) iter.Seq2[*model.LLMResponse, error] {
 							}
 							parts = append(parts, part)
 						}
-						
+
 						if len(parts) > 0 {
 							if !yield(&model.LLMResponse{
 								Content: &genai.Content{

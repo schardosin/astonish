@@ -52,7 +52,7 @@ func (p *ReActPlanner) Run(ctx context.Context, input string, systemInstruction 
 	// Check if we're resuming from a paused state
 	var history string
 	var startStep int
-	
+
 	if p.State != nil {
 		if savedHistory, err := p.State.Get("_react_history"); err == nil {
 			if h, ok := savedHistory.(string); ok {
@@ -68,20 +68,20 @@ func (p *ReActPlanner) Run(ctx context.Context, input string, systemInstruction 
 			}
 		}
 	}
-	
+
 	// If not resuming, construct initial system prompt
 	var currentSystemPrompt string
 	if history == "" {
 		// 1. Construct System Prompt (First Run)
 		toolDescriptions := p.getToolDescriptions()
 		toolNames := p.getToolNames()
-		
+
 		// Incorporate the agent's system instruction if provided
 		var systemContext string
 		if systemInstruction != "" {
 			systemContext = fmt.Sprintf("%s\n\n", systemInstruction)
 		}
-		
+
 		currentSystemPrompt = fmt.Sprintf(`%sAnswer the following questions as best you can. You have access to the following tools:
 
 %s
@@ -104,12 +104,12 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 
 		history = currentSystemPrompt
 	}
-	
+
 	maxSteps := 10
 
 	// Helper for float32 pointer
 	temp := float32(0.0)
-	
+
 	for i := startStep; i < maxSteps; i++ {
 		// If we are past the first step (and not resuming from a state where we already switched),
 		// switch to the full system prompt.
@@ -118,12 +118,12 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 			// Construct Full System Prompt
 			toolDescriptions := p.getToolDescriptions()
 			toolNames := p.getToolNames()
-			
+
 			var systemContext string
 			if systemInstruction != "" {
 				systemContext = fmt.Sprintf("%s\n\n", systemInstruction)
 			}
-			
+
 			fullSystemPrompt := fmt.Sprintf(`%sAnswer the following questions as best you can. You have access to the following tools:
 
 %s
@@ -170,11 +170,11 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 							actionInput = inp
 						}
 					}
-					
+
 					// Clear the pending state so we don't loop forever
 					p.State.Set("_react_pending_action", nil)
 					p.State.Set("_react_pending_input", nil)
-					
+
 					skipLLM = true
 					if p.DebugMode {
 						fmt.Printf("[ReAct] Resuming execution of pending tool: %s\n", action)
@@ -185,125 +185,125 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 
 		if !skipLLM {
 			// 2. Call LLM
-		req := &model.LLMRequest{
-			Contents: []*genai.Content{
-				{
-					Role: "user",
-					Parts: []*genai.Part{
-						{Text: history},
+			req := &model.LLMRequest{
+				Contents: []*genai.Content{
+					{
+						Role: "user",
+						Parts: []*genai.Part{
+							{Text: history},
+						},
 					},
 				},
-			},
-			Config: &genai.GenerateContentConfig{
-				Temperature:     &temp, // Deterministic for planning
-				StopSequences:   []string{"Observation:"}, // Stop at observation to let us execute tool
-			},
-		}
-
-		var responseText string
-		// We use non-streaming for simplicity in the loop, or we could stream and buffer.
-		// Let's consume the stream to get the full text.
-		for resp, err := range p.LLM.GenerateContent(ctx, req, false) {
-			if err != nil {
-				return "", fmt.Errorf("LLM generation failed: %w", err)
+				Config: &genai.GenerateContentConfig{
+					Temperature:   &temp,                    // Deterministic for planning
+					StopSequences: []string{"Observation:"}, // Stop at observation to let us execute tool
+				},
 			}
-			if resp.Content != nil {
-				for _, part := range resp.Content.Parts {
-					responseText += part.Text
+
+			var responseText string
+			// We use non-streaming for simplicity in the loop, or we could stream and buffer.
+			// Let's consume the stream to get the full text.
+			for resp, err := range p.LLM.GenerateContent(ctx, req, false) {
+				if err != nil {
+					return "", fmt.Errorf("LLM generation failed: %w", err)
+				}
+				if resp.Content != nil {
+					for _, part := range resp.Content.Parts {
+						responseText += part.Text
+					}
 				}
 			}
-		}
-		
-		// CRITICAL: Truncate everything after "STOP HERE" to prevent the model from hallucinating
-		// the observation and final answer. The model should ONLY generate up to the Action Input,
-		// then we execute the tool and provide the real observation.
-		if stopIdx := strings.Index(responseText, "STOP HERE"); stopIdx != -1 {
-			// Keep everything up to and including "STOP HERE"
-			responseText = responseText[:stopIdx+9] // 9 = len("STOP HERE")
+
+			// CRITICAL: Truncate everything after "STOP HERE" to prevent the model from hallucinating
+			// the observation and final answer. The model should ONLY generate up to the Action Input,
+			// then we execute the tool and provide the real observation.
+			if stopIdx := strings.Index(responseText, "STOP HERE"); stopIdx != -1 {
+				// Keep everything up to and including "STOP HERE"
+				responseText = responseText[:stopIdx+9] // 9 = len("STOP HERE")
+				if p.DebugMode {
+					fmt.Println("[ReAct DEBUG] Truncated output after STOP HERE")
+				}
+			}
+
+			// Sanitize response: Remove repeated "Question:" if present
+			// The model sometimes repeats the question at the start of its response.
+			// We want to keep the history clean.
+			if strings.HasPrefix(strings.TrimSpace(responseText), "Question:") {
+				// Find the first "Thought:" or "Action:"
+				thoughtIdx := strings.Index(responseText, "Thought:")
+				if thoughtIdx != -1 {
+					responseText = responseText[thoughtIdx:]
+				} else {
+					actionIdx := strings.Index(responseText, "Action:")
+					if actionIdx != -1 {
+						responseText = responseText[actionIdx:]
+					}
+				}
+			}
+
 			if p.DebugMode {
-				fmt.Println("[ReAct DEBUG] Truncated output after STOP HERE")
+				fmt.Printf("[ReAct] Step %d LLM Output: %s\n", i+1, responseText)
 			}
-		}
-		
-		// Sanitize response: Remove repeated "Question:" if present
-		// The model sometimes repeats the question at the start of its response.
-		// We want to keep the history clean.
-		if strings.HasPrefix(strings.TrimSpace(responseText), "Question:") {
-			// Find the first "Thought:" or "Action:"
-			thoughtIdx := strings.Index(responseText, "Thought:")
-			if thoughtIdx != -1 {
-				responseText = responseText[thoughtIdx:]
-			} else {
-				actionIdx := strings.Index(responseText, "Action:")
-				if actionIdx != -1 {
-					responseText = responseText[actionIdx:]
+
+			// Update history with the LLM's response
+			history += responseText
+
+			// 3. Check for Final Answer
+			if strings.Contains(responseText, "Final Answer:") {
+				// Extract final answer
+				parts := strings.Split(responseText, "Final Answer:")
+				if len(parts) >= 2 {
+					answer := strings.TrimSpace(parts[1])
+					// Clear saved state
+					if p.State != nil {
+						p.State.Set("_react_history", nil)
+						p.State.Set("_react_step", nil)
+					}
+					return answer, nil
 				}
 			}
-		}
 
-		if p.DebugMode {
-			fmt.Printf("[ReAct] Step %d LLM Output: %s\n", i+1, responseText)
-		}
-		
-		// Update history with the LLM's response
-		history += responseText
-
-		// 3. Check for Final Answer
-		if strings.Contains(responseText, "Final Answer:") {
-			// Extract final answer
-			parts := strings.Split(responseText, "Final Answer:")
-			if len(parts) >= 2 {
-				answer := strings.TrimSpace(parts[1])
-				// Clear saved state
-				if p.State != nil {
-					p.State.Set("_react_history", nil)
-					p.State.Set("_react_step", nil)
+			// Parse Action
+			// Allow hyphens, dots, or other safe chars in tool names (non-whitespace)
+			cleanedResponse := removeThinkTags(responseText)
+			actionRegex := regexp.MustCompile(`Action:\s*([^\s]+)`)
+			actionMatch := actionRegex.FindStringSubmatch(cleanedResponse)
+			if len(actionMatch) < 2 {
+				// Heuristic: If it wrote "Action Input" but missed "Action", or if the text is very long, it failed.
+				if strings.Contains(cleanedResponse, "Action Input:") {
+					history += "\n\nObservation: Error: Invalid Format. You provided an Input but no Action. Please use the 'Action: <ToolName>' format.\n\nThought: "
+					continue
 				}
-				return answer, nil
-			}
-		}
-		
-		// Parse Action
-		// Allow hyphens, dots, or other safe chars in tool names (non-whitespace)
-		cleanedResponse := removeThinkTags(responseText)
-		actionRegex := regexp.MustCompile(`Action:\s*([^\s]+)`)
-		actionMatch := actionRegex.FindStringSubmatch(cleanedResponse)
-		if len(actionMatch) < 2 {
-			// Heuristic: If it wrote "Action Input" but missed "Action", or if the text is very long, it failed.
-			if strings.Contains(cleanedResponse, "Action Input:") {
-				history += "\n\nObservation: Error: Invalid Format. You provided an Input but no Action. Please use the 'Action: <ToolName>' format.\n\nThought: "
+				// No action found - might be just thinking, continue
+				// The responseText is already added to history, so just continue.
 				continue
 			}
-			// No action found - might be just thinking, continue
-			// The responseText is already added to history, so just continue.
-			continue
-		}
-		action = strings.Trim(actionMatch[1], "`\"'")
-		
-		// Parse Action Input - it might be multiline or contain code blocks
-		// Look for "Action Input:" and capture everything until "STOP HERE", "Observation:", or end
-		actionInputRegex := regexp.MustCompile(`(?s)Action Input:\s*(.*?)(?:\n\nSTOP HERE|\n\nObservation:|$)`)
-		inputMatch := actionInputRegex.FindStringSubmatch(cleanedResponse)
-		if len(inputMatch) >= 2 {
-			actionInput = strings.TrimSpace(inputMatch[1])
-			
-			// Strip markdown code blocks if present
-			// Handle ```python\ncode\n``` or ```\ncode\n```
-			if strings.HasPrefix(actionInput, "```") {
-				// Find the first newline after ```
-				lines := strings.Split(actionInput, "\n")
-				if len(lines) > 1 {
-					// Skip first line (```python or ```)
-					codeLines := lines[1:]
-					// Remove last line if it's ```
-					if len(codeLines) > 0 && strings.TrimSpace(codeLines[len(codeLines)-1]) == "```" {
-						codeLines = codeLines[:len(codeLines)-1]
+			action = strings.Trim(actionMatch[1], "`\"'")
+
+			// Parse Action Input - it might be multiline or contain code blocks
+			// Look for "Action Input:" and capture everything until "STOP HERE", "Observation:", or end
+			actionInputRegex := regexp.MustCompile(`(?s)Action Input:\s*(.*?)(?:\n\nSTOP HERE|\n\nObservation:|$)`)
+			inputMatch := actionInputRegex.FindStringSubmatch(cleanedResponse)
+			if len(inputMatch) >= 2 {
+				actionInput = strings.TrimSpace(inputMatch[1])
+
+				// Strip markdown code blocks if present
+				// Handle ```python\ncode\n``` or ```\ncode\n```
+				if strings.HasPrefix(actionInput, "```") {
+					// Find the first newline after ```
+					lines := strings.Split(actionInput, "\n")
+					if len(lines) > 1 {
+						// Skip first line (```python or ```)
+						codeLines := lines[1:]
+						// Remove last line if it's ```
+						if len(codeLines) > 0 && strings.TrimSpace(codeLines[len(codeLines)-1]) == "```" {
+							codeLines = codeLines[:len(codeLines)-1]
+						}
+						actionInput = strings.Join(codeLines, "\n")
 					}
-					actionInput = strings.Join(codeLines, "\n")
 				}
+				actionInput = strings.TrimSpace(actionInput)
 			}
-			actionInput = strings.TrimSpace(actionInput)
-		}
 		} // End of !skipLLM block
 
 		// Execute tool
@@ -318,7 +318,7 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 				if p.State != nil {
 					p.State.Set("_react_history", history)
 					p.State.Set("_react_step", i)
-					
+
 					// NEW: Save the pending action details
 					p.State.Set("_react_pending_action", action)
 					p.State.Set("_react_pending_input", actionInput)
@@ -334,11 +334,11 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 			// Other errors - treat as observation
 			observation = fmt.Sprintf("Error: %v", err)
 		}
-		
+
 		if p.DebugMode {
 			fmt.Printf("[ReAct] Observation: %s\n", observation)
 		}
-		
+
 		// Append observation to history
 		history += fmt.Sprintf("\n\nObservation: %s\n\nThought: ", observation)
 	}
@@ -353,7 +353,7 @@ func (p *ReActPlanner) FormatOutput(ctx context.Context, reactResult string, out
 		// No schema, return as-is
 		return reactResult, nil
 	}
-	
+
 	// Build schema description
 	var schemaDesc strings.Builder
 	schemaDesc.WriteString("{\n")
@@ -361,13 +361,13 @@ func (p *ReActPlanner) FormatOutput(ctx context.Context, reactResult string, out
 		schemaDesc.WriteString(fmt.Sprintf("  \"%s\": <%s>,\n", key, typeName))
 	}
 	schemaDesc.WriteString("}")
-	
+
 	// Create formatting prompt
 	var systemContext string
 	if systemInstruction != "" {
 		systemContext = fmt.Sprintf("Context: %s\n\n", systemInstruction)
 	}
-	
+
 	formatPrompt := fmt.Sprintf(`%sYou are a data formatter. Take the following result and format it as a JSON object matching this schema:
 
 %s
@@ -404,7 +404,7 @@ Return ONLY the JSON object, no other text or markdown.`, systemContext, schemaD
 			}
 		}
 	}
-	
+
 	responseText = removeThinkTags(responseText)
 
 	// Clean up markdown if present
@@ -413,7 +413,7 @@ Return ONLY the JSON object, no other text or markdown.`, systemContext, schemaD
 	responseText = strings.TrimPrefix(responseText, "```")
 	responseText = strings.TrimSuffix(responseText, "```")
 	responseText = strings.TrimSpace(responseText)
-	
+
 	return responseText, nil
 }
 
@@ -442,11 +442,11 @@ func (p *ReActPlanner) executeTool(ctx context.Context, name string, inputJSON s
 			break
 		}
 	}
-	
+
 	if selectedTool == nil {
 		return fmt.Sprintf("Error: Tool '%s' not found. Available tools: %s", name, p.getToolNames()), nil
 	}
-	
+
 	// Parse input
 	// Parse input
 	var args map[string]any
@@ -509,7 +509,7 @@ func (p *ReActPlanner) executeTool(ctx context.Context, name string, inputJSON s
 			args["global_variables"] = map[string]any{}
 		}
 	}
-	
+
 	// Check for approval if callback is set
 	if p.ApprovalCallback != nil {
 		approved, err := p.ApprovalCallback(name, args)
@@ -522,7 +522,7 @@ func (p *ReActPlanner) executeTool(ctx context.Context, name string, inputJSON s
 			return "APPROVAL_REQUIRED", fmt.Errorf("tool approval required")
 		}
 	}
-	
+
 	// Execute the tool using ADK's Run method
 	// tool.Tool is an interface, but concrete implementations have a Run method
 	// We need to use type assertion or reflection to call it
@@ -531,23 +531,23 @@ func (p *ReActPlanner) executeTool(ctx context.Context, name string, inputJSON s
 		Context: ctx,
 		state:   p.State,
 	}
-	
+
 	// Try to call Run using reflection or type assertion
 	// Most ADK tools implement a Run(tool.Context, any) (map[string]any, error) method
 	type runnableTool interface {
 		Run(tool.Context, any) (map[string]any, error)
 	}
-	
+
 	runnable, ok := selectedTool.(runnableTool)
 	if !ok {
 		return fmt.Sprintf("Error: Tool '%s' does not implement Run method", name), nil
 	}
-	
+
 	result, err := runnable.Run(toolCtx, args)
 	if err != nil {
 		return fmt.Sprintf("Error executing tool: %v", err), nil
 	}
-	
+
 	// Marshal result to string
 	resultBytes, err := json.Marshal(result)
 	if err != nil {

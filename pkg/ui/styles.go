@@ -90,12 +90,12 @@ func RenderToolBox(toolName string, args map[string]interface{}) string {
 
 	// 5. Join everything
 	body := lipgloss.JoinVertical(lipgloss.Left, rows...)
-	
-	content := lipgloss.JoinVertical(lipgloss.Left, 
-        header, 
-        divider.String(), // The new divider
-        body,
-    )
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		header,
+		divider.String(), // The new divider
+		body,
+	)
 
 	return boxStyle.Render(content) + "\n"
 }

@@ -248,4 +248,3 @@ Always add user_message when the user should see the output:
 func GetFlowSchema() string {
 	return FlowSchema
 }
-

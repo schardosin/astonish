@@ -2937,6 +2937,10 @@ func (a *AstonishAgent) getNextNode(current string, state session.State) (string
 			}
 		}
 	}
+	// If START has no outgoing connection, gracefully go to END
+	if current == "START" {
+		return "END", nil
+	}
 	return "", fmt.Errorf("no transition found from node: %s", current)
 }
 

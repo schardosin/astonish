@@ -16,6 +16,7 @@ const NODE_TEMPLATES = {
   llm: (name) => ({
     name,
     type: 'llm',
+    system: 'You are a helpful assistant.',
     prompt: 'Enter your prompt here',
     output_model: {
       response: 'str'

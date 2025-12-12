@@ -1,8 +1,8 @@
-import { Play, Code, LogOut, Loader, Undo2, Redo2 } from 'lucide-react'
+import { Play, Code, LogOut, Undo2, Redo2 } from 'lucide-react'
 import { snakeToTitleCase } from '../utils/formatters'
 
 export default function Header({ 
-  agentName, showYaml, onToggleYaml, isRunning, onRun, onStop, onExit, onSave, isSaving, theme,
+  agentName, showYaml, onToggleYaml, isRunning, onRun, onStop, onExit, theme,
   canUndo, canRedo, onUndo, onRedo
 }) {
   const displayName = snakeToTitleCase(agentName) || agentName
@@ -56,17 +56,6 @@ export default function Header({
             >
               <Code size={18} />
               {showYaml ? 'Hide Source' : 'View Source'}
-            </button>
-
-            {/* Save Button */}
-            <button 
-              onClick={onSave}
-              disabled={isSaving}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-            >
-              {isSaving && <Loader size={16} className="animate-spin" />}
-              {isSaving ? 'Saving...' : 'Save'}
             </button>
           </>
         )}

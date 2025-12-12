@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { X, Save, Edit3, Brain, Wrench, Settings, MessageSquare, Plus, Trash2, AlertCircle, Sparkles } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { X, Edit3, Brain, Wrench, Settings, MessageSquare, Plus, Trash2, AlertCircle, Sparkles } from 'lucide-react'
 
 // Node type icons
 const NODE_ICONS = {
@@ -879,20 +879,25 @@ export default function NodeEditor({ node, onSave, onClose, theme, availableTool
     }
   }, [node])
   
+  // Save and close - called when user clicks Done, X, or clicks outside
+  const handleClose = useCallback(() => {
+    if (node) {
+      const nodeType = node.data?.nodeType || node.type
+      const savedData = {
+        ...editedData,
+        name: nodeName,
+        type: nodeType === 'updateState' ? 'update_state' : nodeType,
+      }
+      onSave(node.id, savedData)
+    }
+    onClose()
+  }, [node, editedData, nodeName, onSave, onClose])
+  
   if (!node) return null
   
   const nodeType = node.data?.nodeType || node.type
   const Icon = NODE_ICONS[nodeType] || Brain
   const color = NODE_COLORS[nodeType] || '#6B46C1'
-  
-  const handleSave = () => {
-    const savedData = {
-      ...editedData,
-      name: nodeName,
-      type: nodeType === 'updateState' ? 'update_state' : nodeType,
-    }
-    onSave(node.id, savedData)
-  }
   
   // Render type-specific form
   const renderForm = () => {
@@ -984,21 +989,13 @@ export default function NodeEditor({ node, onSave, onClose, theme, availableTool
             </button>
           )}
           <button
-            onClick={onClose}
-            className="px-3 py-1.5 rounded text-sm font-medium transition-colors hover:bg-gray-500/20"
-            style={{ color: 'var(--text-secondary)' }}
+            onClick={handleClose}
+            className="px-3 py-1.5 rounded text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 transition-colors"
           >
-            Cancel
+            Done
           </button>
           <button
-            onClick={handleSave}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 transition-colors"
-          >
-            <Save size={14} />
-            Save
-          </button>
-          <button
-            onClick={onClose}
+            onClick={handleClose}
             className="p-1 rounded hover:bg-gray-500/20 ml-2"
             style={{ color: 'var(--text-muted)' }}
           >

@@ -43,7 +43,6 @@ function App() {
   const [isRunning, setIsRunning] = useState(false)
   const [selectedNodeId, setSelectedNodeId] = useState(null)
   const [editingNode, setEditingNode] = useState(null)
-  const [isSaving, setIsSaving] = useState(false)
   
   // UI State
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -59,6 +58,7 @@ function App() {
   const currentFlowNodesRef = useRef([])
   const currentFlowEdgesRef = useRef([])
   const abortControllerRef = useRef(null)
+  const autoSaveTimerRef = useRef(null)  // Debounce timer for auto-save
   
   // Chat State
   const [chatMessages, setChatMessages] = useState([
@@ -189,21 +189,55 @@ function App() {
     setHistoryIndex(prev => Math.min(prev + 1, MAX_HISTORY - 1))
   }, [historyIndex])
 
+  // Debounced auto-save to disk (300ms delay)
+  const debouncedAutoSave = useCallback((newYaml) => {
+    if (!selectedAgent) return
+    
+    // Clear any pending save
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current)
+    }
+    
+    // Schedule new save
+    autoSaveTimerRef.current = setTimeout(async () => {
+      try {
+        await saveAgent(selectedAgent.id, newYaml)
+        console.log('[Auto-save] Saved successfully')
+      } catch (err) {
+        console.error('[Auto-save] Failed:', err)
+      }
+    }, 300)
+  }, [selectedAgent])
+
+  // Unified function to update YAML - handles state, history, and auto-save
+  const updateYaml = useCallback((newYaml, skipHistory = false) => {
+    if (!newYaml) return
+    setYamlContent(newYaml)
+    if (!skipHistory) {
+      pushToHistory(newYaml)
+    }
+    debouncedAutoSave(newYaml)
+  }, [pushToHistory, debouncedAutoSave])
+
   // Undo: go back in history
   const handleUndo = useCallback(() => {
     if (historyIndex > 0) {
+      const prevYaml = yamlHistory[historyIndex - 1]
       setHistoryIndex(prev => prev - 1)
-      setYamlContent(yamlHistory[historyIndex - 1])
+      setYamlContent(prevYaml)
+      debouncedAutoSave(prevYaml)  // Auto-save the undone state
     }
-  }, [historyIndex, yamlHistory])
+  }, [historyIndex, yamlHistory, debouncedAutoSave])
 
   // Redo: go forward in history
   const handleRedo = useCallback(() => {
     if (historyIndex < yamlHistory.length - 1) {
+      const nextYaml = yamlHistory[historyIndex + 1]
       setHistoryIndex(prev => prev + 1)
-      setYamlContent(yamlHistory[historyIndex + 1])
+      setYamlContent(nextYaml)
+      debouncedAutoSave(nextYaml)  // Auto-save the redone state
     }
-  }, [historyIndex, yamlHistory])
+  }, [historyIndex, yamlHistory, debouncedAutoSave])
 
   // Keyboard shortcuts for undo/redo
   useEffect(() => {
@@ -539,35 +573,27 @@ flow:
   // Add standalone node
   const handleAddNode = useCallback((nodeType) => {
     const newYaml = addStandaloneNode(yamlContent, nodeType)
-    setYamlContent(newYaml)
-  }, [yamlContent])
+    updateYaml(newYaml)
+  }, [yamlContent, updateYaml])
 
   // Handle new connection
   const handleConnect = useCallback((sourceId, targetId) => {
     const newYaml = addConnection(yamlContent, sourceId, targetId)
-    setYamlContent(newYaml)
-  }, [yamlContent])
+    updateYaml(newYaml)
+  }, [yamlContent, updateYaml])
 
   // Handle edge removal
   const handleEdgeRemove = useCallback((sourceId, targetId) => {
     const newYaml = removeConnection(yamlContent, sourceId, targetId)
-    setYamlContent(newYaml)
-    // Auto-save after edge removal
-    if (selectedAgent) {
-      saveAgent(selectedAgent.id, newYaml).then(() => {
-        console.log('Auto-saved after edge removal')
-      }).catch(err => {
-        console.error('Failed to auto-save after edge removal:', err)
-      })
-    }
-  }, [yamlContent, selectedAgent])
+    updateYaml(newYaml)
+  }, [yamlContent, updateYaml])
 
-  // Save node edits
+  // Save node edits (called from NodeEditor on every change)
   const handleNodeSave = useCallback((nodeId, newData) => {
     const newYaml = updateNode(yamlContent, nodeId, newData)
-    setYamlContent(newYaml)
-    setEditingNode(null)
-  }, [yamlContent])
+    updateYaml(newYaml)
+    // Don't close editor here - it auto-saves continuously, user closes via Done button
+  }, [yamlContent, updateYaml])
 
   // Close node editor
   const handleNodeEditorClose = useCallback(() => {
@@ -618,7 +644,7 @@ flow:
         sortKeys: false
       })
       
-      setYamlContent(newYaml)
+      updateYaml(newYaml)
       
       // Also update local nodes/edges state to keep in sync
       setNodes(prev => prev.filter(n => n.id !== nodeId))
@@ -627,102 +653,39 @@ flow:
     } catch (err) {
       console.error('Failed to delete node from YAML:', err)
     }
-  }, [yamlContent])
+  }, [yamlContent, updateYaml])
 
-  // Save agent to backend (including layout)
-  const handleSave = useCallback(async () => {
-    if (!selectedAgent) return
+  // Save layout and sync to disk (used before running and periodically)
+  const saveLayoutAndSync = useCallback(async () => {
+    if (!selectedAgent || !yamlContent) return
     
-    setIsSaving(true)
     try {
-      // Parse current YAML
       const parsed = yaml.load(yamlContent) || {}
-      
-      // Extract layout from current flow state
       const layout = extractLayout(currentFlowNodesRef.current, currentFlowEdgesRef.current)
-      
-      // Merge layout into parsed YAML
       parsed.layout = layout
-      
-      // Sync node deletions: only keep nodes that exist in the current flow
-      // (handles case where user deleted nodes in the UI)
-      const currentFlowNodeIds = new Set(
-        currentFlowNodesRef.current
-          ?.filter(n => !['start', 'end', 'waypoint'].includes(n.type))
-          .map(n => n.id) || []
-      )
-      
-      if (parsed.nodes && Array.isArray(parsed.nodes)) {
-        // Filter out nodes that were deleted
-        const originalNodeCount = parsed.nodes.length
-        parsed.nodes = parsed.nodes.filter(node => currentFlowNodeIds.has(node.name))
-        
-        if (parsed.nodes.length !== originalNodeCount) {
-          console.log(`[SAVE] Synced node deletions: ${originalNodeCount} -> ${parsed.nodes.length} nodes`)
-          
-          // Also clean up flow edges that reference deleted nodes
-          if (parsed.flow && Array.isArray(parsed.flow)) {
-            const validNodeNames = new Set(['START', 'END', ...parsed.nodes.map(n => n.name)])
-            parsed.flow = parsed.flow.filter(edge => {
-              const fromValid = validNodeNames.has(edge.from)
-              const toValid = !edge.to || validNodeNames.has(edge.to)
-              const edgesValid = !edge.edges || edge.edges.every(e => !e.to || validNodeNames.has(e.to))
-              return fromValid && toValid && edgesValid
-            })
-          }
-        }
-      }
-      
-      // Convert back to YAML string
       const updatedYaml = yaml.dump(parsed, { 
-        indent: 2, 
-        lineWidth: -1, // Don't wrap lines
-        noRefs: true,
-        sortKeys: false // Preserve order
+        indent: 2,
+        lineWidth: -1, 
+        noRefs: true, 
+        sortKeys: false 
       })
-      
-      const result = await saveAgent(selectedAgent.id, updatedYaml)
-      
-      // Update local YAML content with layout
+      await saveAgent(selectedAgent.id, updatedYaml)
       setYamlContent(updatedYaml)
-      
-      // If this was a new agent, mark it as saved (no longer new)
-      if (selectedAgent.isNew) {
-        setSelectedAgent({ ...selectedAgent, isNew: false })
-      }
-      
-      // Refresh agent list in case description changed
-      loadAgents()
     } catch (err) {
-      console.error('Failed to save agent:', err)
-      alert('Failed to save agent: ' + err.message)
-    } finally {
-      setIsSaving(false)
+      console.error('Layout save failed:', err)
     }
   }, [selectedAgent, yamlContent])
 
   const handleStartRun = useCallback(async () => {
-    // Silent save before running (without loadAgents which would reset state)
-    if (selectedAgent && yamlContent) {
-      try {
-        const parsed = yaml.load(yamlContent) || {}
-        const layout = extractLayout(currentFlowNodesRef.current, currentFlowEdgesRef.current)
-        parsed.layout = layout
-        const updatedYaml = yaml.dump(parsed, { lineWidth: -1, noRefs: true, quotingType: '"' })
-        await saveAgent(selectedAgent.id, updatedYaml)
-        setYamlContent(updatedYaml)
-      } catch (err) {
-        console.error('Auto-save before run failed:', err)
-        // Continue with run even if save fails
-      }
-    }
+    // Save layout before running
+    await saveLayoutAndSync()
     
     setChatMessages([{ type: 'system', content: 'Execution started...' }])
     setRunningNodeId(null)
     const newSessionId = `session-${Date.now()}`
     setSessionId(newSessionId)
     connectToChat(newSessionId)
-  }, [connectToChat, selectedAgent, yamlContent])
+  }, [connectToChat, saveLayoutAndSync])
 
   // Delete agent
   const handleDeleteAgent = useCallback((agent) => {
@@ -820,8 +783,6 @@ flow:
             onRun={handleRun}
             onStop={handleStopRun}
             onExit={handleExitRun}
-            onSave={handleSave}
-            isSaving={isSaving}
             theme={theme}
             canUndo={historyIndex > 0}
             canRedo={historyIndex < yamlHistory.length - 1}

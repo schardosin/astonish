@@ -612,18 +612,39 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
                     spellCheck={false}
                   />
                   <button
-                    onClick={() => {
+                    onClick={async () => {
                       try {
                         const parsed = JSON.parse(mcpSourceText)
                         if (parsed.mcpServers && typeof parsed.mcpServers === 'object') {
+                          // Save directly to backend
+                          setSaving(true)
+                          await saveMCPConfig({ mcpServers: parsed.mcpServers })
+                          
+                          // Update local state to match
                           setMcpServers(parsed.mcpServers)
+                          
+                          // Update name and args tracking state
+                          const names = {}
+                          const args = {}
+                          Object.entries(parsed.mcpServers).forEach(([name, server]) => {
+                            names[name] = name
+                            args[name] = Array.isArray(server.args) ? server.args.join(', ') : ''
+                          })
+                          setMcpServerNames(names)
+                          setMcpServerArgs(args)
+                          
                           setMcpSourceError(null)
-                          handleSaveMCP()
+                          setMcpHasChanges(false)
+                          setSaveSuccess(true)
+                          if (onToolsRefresh) onToolsRefresh()
+                          setTimeout(() => setSaveSuccess(false), 2000)
+                          setSaving(false)
                         } else {
                           setMcpSourceError('Invalid format: expected { "mcpServers": { ... } }')
                         }
                       } catch (e) {
                         setMcpSourceError(`Invalid JSON: ${e.message}`)
+                        setSaving(false)
                       }
                     }}
                     disabled={saving}

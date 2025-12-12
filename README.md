@@ -184,12 +184,19 @@ Astonish occupies a unique middle ground: **the visual ease of n8n** with **the 
 ### 1. Install
 
 ```bash
-# macOS/Linux (Homebrew)
+# macOS/Linux (Homebrew) - Recommended
 brew install schardosin/astonish/astonish
 
-# Or with Go
-go install github.com/schardosin/astonish/cmd/astonish@latest
+# Or download pre-built binaries from GitHub Releases
+# https://github.com/schardosin/astonish/releases
+
+# Or build from source
+git clone https://github.com/schardosin/astonish.git
+cd astonish
+make build-all  # Builds UI + Go binary
 ```
+
+> **Note:** `go install` is not supported as the web UI must be built separately before embedding into the binary.
 
 ### 2. Launch Studio
 

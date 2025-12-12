@@ -93,7 +93,7 @@ Use the following format STRICTLY for this FIRST RUN ONLY:
 Question: the input question you must answer
 Thought: Analyze the question and available tools. Do I have the answer, or do I need a tool? If I need a tool, which one is best, and what arguments does it need?
 Action: the action to take, should be one of [%s]
-Action Input: the input to the action
+Action Input: a JSON object with the tool parameters, e.g. {"owner": "user", "repo": "myrepo"}
 
 IMPORTANT: For this FIRST RUN, DO NOT include Observation or Final Answer. The system will execute your chosen Action and provide the Observation in the next run.
 
@@ -135,7 +135,7 @@ Use the following format:
 Question: the input question you must answer
 Thought: you should always think about what to do
 Action: the action to take, should be one of [%s]
-Action Input: the input to the action
+Action Input: a JSON object with the tool parameters, e.g. {"owner": "user", "repo": "myrepo"}
 Observation: the result of the action
 ... (this Thought/Action/Action Input/Observation cycle can repeat N times)
 
@@ -418,9 +418,75 @@ Return ONLY the JSON object, no other text or markdown.`, systemContext, schemaD
 }
 
 func (p *ReActPlanner) getToolDescriptions() string {
+	// Interface for tools that have declarations
+	type ToolWithDeclaration interface {
+		Declaration() *genai.FunctionDeclaration
+	}
+
 	var sb strings.Builder
 	for _, t := range p.Tools {
-		sb.WriteString(fmt.Sprintf("%s: %s\n", t.Name(), t.Description()))
+		sb.WriteString(fmt.Sprintf("%s: %s", t.Name(), t.Description()))
+
+		// Try to get parameter information from the tool's declaration
+		if declTool, ok := t.(ToolWithDeclaration); ok {
+			decl := declTool.Declaration()
+			if decl != nil && decl.ParametersJsonSchema != nil {
+				// Try to extract parameter details
+				if schema, ok := decl.ParametersJsonSchema.(*genai.Schema); ok {
+					if schema.Type == genai.TypeObject && len(schema.Properties) > 0 {
+						sb.WriteString("\n  Parameters:")
+						for propName, propSchema := range schema.Properties {
+							required := ""
+							for _, req := range schema.Required {
+								if req == propName {
+									required = " (required)"
+									break
+								}
+							}
+							propType := string(propSchema.Type)
+							desc := propSchema.Description
+							if desc != "" {
+								sb.WriteString(fmt.Sprintf("\n    - %s: %s - %s%s", propName, propType, desc, required))
+							} else {
+								sb.WriteString(fmt.Sprintf("\n    - %s: %s%s", propName, propType, required))
+							}
+						}
+					}
+				} else if schemaMap, ok := decl.ParametersJsonSchema.(map[string]interface{}); ok {
+					// Handle map-based schema
+					if props, ok := schemaMap["properties"].(map[string]interface{}); ok && len(props) > 0 {
+						var required []string
+						if reqList, ok := schemaMap["required"].([]interface{}); ok {
+							for _, r := range reqList {
+								if rs, ok := r.(string); ok {
+									required = append(required, rs)
+								}
+							}
+						}
+						sb.WriteString("\n  Parameters:")
+						for propName, propVal := range props {
+							isReq := ""
+							for _, r := range required {
+								if r == propName {
+									isReq = " (required)"
+									break
+								}
+							}
+							if propMap, ok := propVal.(map[string]interface{}); ok {
+								propType, _ := propMap["type"].(string)
+								desc, _ := propMap["description"].(string)
+								if desc != "" {
+									sb.WriteString(fmt.Sprintf("\n    - %s: %s - %s%s", propName, propType, desc, isReq))
+								} else {
+									sb.WriteString(fmt.Sprintf("\n    - %s: %s%s", propName, propType, isReq))
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		sb.WriteString("\n")
 	}
 	return sb.String()
 }

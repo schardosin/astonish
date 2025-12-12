@@ -87,6 +87,12 @@ Examples:
 - Are conditional edges based on INPUT options (reliable) not LLM output (unreliable)?
 - Does every LLM response the user should see have user_message?
 
+### Step 6: Tool Usage Check (CRITICAL!)
+- **NEVER use standalone "tool" nodes** - they execute blindly without intelligence
+- **ALWAYS use LLM nodes with tools: true** - the LLM can reason, adapt, handle errors
+- Tool nodes are ONLY for rare cases of fixed/deterministic operations
+- Example: Instead of type: tool, use type: llm with tools_selection and tools: true
+
 ## IMPORTANT: Judge the Request Type
 
 **ACTION REQUEST** (user wants to create/modify something):

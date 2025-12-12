@@ -240,7 +240,9 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		// Stream LLM Text chunks (only for appropriate node types)
 		// Suppress for: update_state (internal state changes), tool (internal processing)
 		// Allow for: llm, output, input (prompts should be visible to users)
-		shouldStream := currentNodeType == "" || currentNodeType == "llm" || currentNodeType == "output" || currentNodeType == "input"
+		// EXCEPTION: Always stream tool approval requests (they contain approval_options)
+		isApprovalRequest := event.Actions.StateDelta != nil && event.Actions.StateDelta["approval_options"] != nil
+		shouldStream := currentNodeType == "" || currentNodeType == "llm" || currentNodeType == "output" || currentNodeType == "input" || isApprovalRequest
 		if shouldStream && event.LLMResponse.Content != nil {
 			for _, part := range event.LLMResponse.Content.Parts {
 				if part.Text != "" {

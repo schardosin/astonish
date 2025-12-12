@@ -2989,14 +2989,21 @@ func (a *AstonishAgent) renderString(tmpl string, state session.State) string {
 		// Try to evaluate the expression using Starlark
 		val, err := EvaluateExpression(expr, stateMap)
 		if err != nil {
-			// If evaluation fails, try simple lookup as fallback (or just return match)
-			// The original logic just did state.Get(key)
-			// If EvaluateExpression failed, it might be because it's not a valid expression or key missing
-			return match
+			// If evaluation fails, the placeholder doesn't exist in state
+			// Convert {var} to <var> to prevent ADK from trying to process it
+			// This allows example text like "PR #{number}: {title}" to remain readable
+			if a.DebugMode {
+				fmt.Printf("[DEBUG] renderString: Converting '{%s}' to '<%s>' (not in state)\n", expr, expr)
+			}
+			return "<" + expr + ">"
 		}
 
 		if val == nil {
-			return match
+			// Value is nil, convert to angle brackets
+			if a.DebugMode {
+				fmt.Printf("[DEBUG] renderString: Converting '{%s}' to '<%s>' (value is nil)\n", expr, expr)
+			}
+			return "<" + expr + ">"
 		}
 
 		formatted := ui.FormatAsYamlLike(val, 0)

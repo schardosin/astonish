@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm'
 export default function ChatPanel({ messages, onSendMessage, onStartRun, onStop, theme, isWaitingForInput, hasActiveSession }) {
   const [input, setInput] = useState('')
   const scrollRef = useRef(null)
+  const inputRef = useRef(null)
 
   // Auto-scroll to bottom directly, without smooth behavior for instant feedback
   useEffect(() => {
@@ -13,6 +14,18 @@ export default function ChatPanel({ messages, onSendMessage, onStartRun, onStop,
        scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
   }, [messages])
+
+  // Auto-focus input when waiting for free-text input
+  useEffect(() => {
+    if (isWaitingForInput && inputRef.current) {
+      // Check if there are selection options (buttons) - if so, don't focus
+      const lastMessage = messages[messages.length - 1]
+      const hasSelectionOptions = lastMessage?.type === 'input_request' && lastMessage?.options?.length > 0
+      if (!hasSelectionOptions) {
+        inputRef.current.focus()
+      }
+    }
+  }, [isWaitingForInput, messages])
 
   const handleSubmit = (e) => {
     e.preventDefault()
@@ -203,6 +216,7 @@ export default function ChatPanel({ messages, onSendMessage, onStartRun, onStop,
               )}
               <div className="relative flex-1">
                 <input
+                  ref={inputRef}
                   type="text"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}

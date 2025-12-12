@@ -53,6 +53,7 @@ function FlowCanvasInner({
   onConnect: onConnectCallback,
   onEdgeRemove,
   onLayoutChange,
+  onLayoutSave,
   onOpenAIChat,
   onNodeDelete,
   runningNodeId
@@ -118,14 +119,8 @@ function FlowCanvasInner({
       setNodes((currentNodes) => {
         // Add selected state to prop nodes
         const nodesWithSelection = propNodes.map(node => {
-          // Check if we have a current position for this node to preserve dragged position
-          // But only if the node ID matches (to avoid using position from different agent's node)
-          const currentNode = currentNodes.find(n => n.id === node.id)
-          const position = currentNode ? currentNode.position : node.position
-          
           return {
             ...node,
-            position,
             selected: node.id === selectedNodeId,
             data: {
               ...node.data,
@@ -253,12 +248,17 @@ function FlowCanvasInner({
   }, [nodes.length])
 
   // Recenter flow horizontally when isRunning changes (container size changes)
+  // NOTE: We use a ref to access nodes to avoid running this when nodes change
+  const nodesRef = useRef(nodes)
+  nodesRef.current = nodes
+  
   useEffect(() => {
     // Small delay to let the container resize complete
     const timer = setTimeout(() => {
       const viewport = getViewport()
       const containerWidth = containerRef.current?.offsetWidth || 800
-      const startNode = nodes.find(n => n.id === 'START')
+      const currentNodes = nodesRef.current
+      const startNode = currentNodes.find(n => n.id === 'START')
       if (startNode && startNode.position) {
         // Calculate X to center START node horizontally, keep same Y and zoom
         const centerX = -(startNode.position.x - containerWidth / 2 + 60) * viewport.zoom
@@ -266,7 +266,10 @@ function FlowCanvasInner({
       }
     }, 100)
     return () => clearTimeout(timer)
-  }, [isRunning, getViewport, setViewport, nodes])
+  }, [isRunning, getViewport, setViewport]) // Removed nodes from dependencies
+
+
+
 
   // Handle double-click on edge to add waypoint
   const onEdgeDoubleClick = useCallback((event, edge) => {
@@ -495,6 +498,20 @@ function FlowCanvasInner({
     type: 'smoothstep',
   }), [])
 
+
+
+  const { getNodes, getEdges } = useReactFlow()
+
+  // Handle node drag stop to save layout immediately
+  const handleNodeDragStop = useCallback((event, node, draggedNodes) => {
+    if (onLayoutSave) {
+      // Use getNodes() to get the current state of ALL nodes
+      // The 'draggedNodes' argument (3rd arg) only contains nodes that were dragged
+      const currentNodes = getNodes()
+      onLayoutSave(currentNodes, edges) 
+    }
+  }, [onLayoutSave, edges, getNodes])
+
   return (
     <div ref={containerRef} className="w-full h-full" style={{ background: theme === 'dark' ? '#0d121f' : '#F7F5FB' }}>
       <ReactFlow
@@ -526,6 +543,7 @@ function FlowCanvasInner({
         colorMode={theme}
         minZoom={0.1}
         maxZoom={2}
+        onNodeDragStop={handleNodeDragStop}
       >
         <Background color={theme === 'dark' ? '#374151' : '#E2E8F0'} gap={20} />
         <Controls className="rounded-lg shadow-md" style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }} />
@@ -648,17 +666,10 @@ function FlowCanvasInner({
   )
 }
 
-// Wrapper component that provides a key to force re-mount when flow structure changes dramatically
-export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelect, onNodeDoubleClick, selectedNodeId, runningNodeId, onAddNode, onConnect, onEdgeRemove, onLayoutChange, onOpenAIChat, onNodeDelete }) {
-  // Generate a key based on node IDs to force re-mount when nodes change completely
-  const flowKey = useMemo(() => {
-    if (!nodes || nodes.length === 0) return 'empty'
-    return nodes.map(n => n.id).sort().join(',')
-  }, [nodes])
-
+// Wrapper component - agent changes handled by key prop in App.jsx
+export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelect, onNodeDoubleClick, selectedNodeId, runningNodeId, onAddNode, onConnect, onEdgeRemove, onLayoutChange, onLayoutSave, onOpenAIChat, onNodeDelete }) {
   return (
     <FlowCanvasInner
-      key={flowKey}
       nodes={nodes}
       edges={edges}
       isRunning={isRunning}
@@ -670,6 +681,7 @@ export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelec
       onConnect={onConnect}
       onEdgeRemove={onEdgeRemove}
       onLayoutChange={onLayoutChange}
+      onLayoutSave={onLayoutSave}
       onOpenAIChat={onOpenAIChat}
       onNodeDelete={onNodeDelete}
       runningNodeId={runningNodeId}

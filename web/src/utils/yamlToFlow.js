@@ -144,12 +144,20 @@ export function parseNodes(yamlData, savedLayout = null) {
     })
   }
   
+    // user_message is required for output nodes and should be an array
+    // ... validation continues ...
+  
   // Add END node
   const endPos = nodePositions['END']
+  if (!endPos) {
+    // Silent default
+  }
+    
   nodes.push({
     id: 'END',
     type: 'end',
-    position: endPos ? { x: endPos.x, y: endPos.y } : { x: 0, y: 0 },
+    // Default Y to 300 to avoid overlapping START if layout missing
+    position: endPos ? { x: endPos.x, y: endPos.y } : { x: 0, y: 300 },
     data: { label: 'END' }
   })
   
@@ -265,7 +273,14 @@ export function parseEdges(yamlData, waypointEdgeMap = {}, nodePositions = {}) {
   }
   
   if (yamlData.flow && Array.isArray(yamlData.flow)) {
+    // Check if we have real logic (more than just START->END)
+    const hasOtherLogic = yamlData.flow.length > 1
+
     yamlData.flow.forEach((flowItem, index) => {
+      // Filter out START->END if we have other logic (it causes visual clutter and is usually a legacy artifact)
+      if (hasOtherLogic && flowItem.from === 'START' && flowItem.to === 'END') {
+          return 
+      }
       const from = flowItem.from
       
       if (flowItem.to) {
@@ -481,6 +496,10 @@ export function parseEdges(yamlData, waypointEdgeMap = {}, nodePositions = {}) {
     })
   }
   
+  if (edges.length === 0) {
+      console.log('[yamlToFlow] No edges generated')
+  }
+
   return edges
 }
 

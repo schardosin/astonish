@@ -27,9 +27,7 @@ const defaultYaml = `description: New Agent
 
 nodes: []
 
-flow:
-  - from: START
-    to: END
+flow: []
 `
 
 function App() {
@@ -59,6 +57,7 @@ function App() {
   const currentFlowEdgesRef = useRef([])
   const abortControllerRef = useRef(null)
   const autoSaveTimerRef = useRef(null)  // Debounce timer for auto-save
+  const layoutSaveTimerRef = useRef(null) // Debounce timer for layout changes
   
   // Chat State
   const [chatMessages, setChatMessages] = useState([
@@ -580,23 +579,48 @@ flow:
     }
   }, [nodes])
 
+  // Helper to merge current accumulated layout changes into YAML string
+  const getYamlWithLayout = useCallback((baseYaml) => {
+    try {
+      if (!currentFlowNodesRef.current || currentFlowNodesRef.current.length === 0) return baseYaml
+      
+      const parsed = yaml.load(baseYaml) || {}
+      const layout = extractLayout(currentFlowNodesRef.current, currentFlowEdgesRef.current)
+      parsed.layout = layout
+      
+      return yaml.dump(parsed, { 
+        indent: 2,
+        lineWidth: -1, 
+        noRefs: true, 
+        sortKeys: false 
+      })
+    } catch (e) {
+      console.error('Failed to merge layout:', e)
+      return baseYaml
+    }
+  }, [])
+
   // Add standalone node
   const handleAddNode = useCallback((nodeType) => {
-    const newYaml = addStandaloneNode(yamlContent, nodeType)
+    // First merge current layout so positions are preserved
+    const currentYaml = getYamlWithLayout(yamlContent)
+    const newYaml = addStandaloneNode(currentYaml, nodeType)
     updateYaml(newYaml)
-  }, [yamlContent, updateYaml])
+  }, [yamlContent, updateYaml, getYamlWithLayout])
 
   // Handle new connection
   const handleConnect = useCallback((sourceId, targetId) => {
-    const newYaml = addConnection(yamlContent, sourceId, targetId)
+    const currentYaml = getYamlWithLayout(yamlContent)
+    const newYaml = addConnection(currentYaml, sourceId, targetId)
     updateYaml(newYaml)
-  }, [yamlContent, updateYaml])
+  }, [yamlContent, updateYaml, getYamlWithLayout])
 
   // Handle edge removal
   const handleEdgeRemove = useCallback((sourceId, targetId) => {
-    const newYaml = removeConnection(yamlContent, sourceId, targetId)
+    const currentYaml = getYamlWithLayout(yamlContent)
+    const newYaml = removeConnection(currentYaml, sourceId, targetId)
     updateYaml(newYaml)
-  }, [yamlContent, updateYaml])
+  }, [yamlContent, updateYaml, getYamlWithLayout])
 
   // Save node edits (called from NodeEditor on every change)
   const handleNodeSave = useCallback((nodeId, newData) => {
@@ -611,10 +635,25 @@ flow:
   }, [])
 
   // Track layout changes from FlowCanvas
+  // Track layout changes from FlowCanvas (keep refs in sync during drag)
   const handleLayoutChange = useCallback((flowNodes, flowEdges) => {
     currentFlowNodesRef.current = flowNodes
     currentFlowEdgesRef.current = flowEdges
   }, [])
+
+  // Handle immediate layout save (called on node drag stop)
+  const handleLayoutSave = useCallback((flowNodes, flowEdges) => {
+    // Ensure refs are up to date
+    currentFlowNodesRef.current = flowNodes
+    currentFlowEdgesRef.current = flowEdges
+    
+    // Save immediately without history
+    const newYaml = getYamlWithLayout(yamlContent)
+    if (newYaml !== yamlContent) {
+      updateYaml(newYaml, true)
+      console.log('[Layout] Saved positions on drag stop')
+    }
+  }, [yamlContent, getYamlWithLayout, updateYaml])
 
   // Handle node deletion from FlowCanvas - update YAML immediately
   const handleNodeDelete = useCallback((nodeId) => {
@@ -818,6 +857,7 @@ flow:
                 onConnect={handleConnect}
                 onEdgeRemove={handleEdgeRemove}
                 onLayoutChange={handleLayoutChange}
+                onLayoutSave={handleLayoutSave}
                 onNodeDelete={handleNodeDelete}
                 onOpenAIChat={(options) => {
                   if (options?.context === 'multi_node' && options?.nodeIds) {

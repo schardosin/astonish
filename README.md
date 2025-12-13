@@ -75,25 +75,6 @@ Use **Astonish Studio** to design flows visually, then run the exact same YAML f
 
 ---
 
-## The Solution: Astonish
-
-Astonish is a **declarative AI agent engine** that lets you design, test, and run production-grade agents with zero code.
-
-```bash
-# Install
-brew install schardosin/astonish/astonish
-
-# Design your agent visually
-astonish studio
-
-# Or run agents directly from CLI
-astonish agents run my_agent
-```
-
-**That's it.** No web servers. No Docker. No complex deployments. Just a single binary that runs anywhere—your laptop, a cron job, or a CI/CD pipeline.
-
----
-
 ## ✨ Astonish Studio
 
 <div align="center">
@@ -111,6 +92,58 @@ astonish agents run my_agent
 - ⚡ **One-click execution** with real-time streaming output
 - 🔧 **Connect any MCP server** — GitHub, Slack, databases, or your own custom servers
 - 💾 **Instant save** to YAML—version control your agents like code
+
+---
+
+## 🚀 Quick Start
+
+### 1. Install
+
+```bash
+# macOS/Linux (Homebrew)
+brew install schardosin/astonish/astonish
+
+# Or via curl
+curl -fsSL https://raw.githubusercontent.com/schardosin/astonish/refs/heads/main/install.sh | sh
+
+# Or download pre-built binaries from GitHub Releases
+# https://github.com/schardosin/astonish/releases
+
+# Or build from source
+git clone https://github.com/schardosin/astonish.git
+cd astonish
+make build-all  # Builds UI + Go binary
+```
+
+> **Note:** `go install` is not supported as the web UI must be built separately before embedding into the binary.
+
+### 2. Launch Studio
+
+```bash
+astonish studio
+```
+
+Opens a local web UI at `http://localhost:9393` where you can:
+- **Configure providers** — A built-in setup wizard guides you through connecting AI providers (Gemini, Claude, GPT-4, Ollama, etc.)
+- **Design flows visually** — Drag-and-drop nodes, connect edges, test in real-time
+- **Manage MCP servers** — Add GitHub, Slack, databases, or custom tools
+
+> **Prefer command line?** Run `astonish setup` for CLI-based configuration instead.
+
+### 3. Run from CLI
+
+Once configured, run your agents anywhere:
+
+```bash
+# Interactive mode
+astonish agents run my_agent
+
+# With injected variables
+astonish agents run summarizer -p file_path="/path/to/document.txt"
+
+# Perfect for cron jobs and automation
+0 9 * * * /usr/local/bin/astonish agents run daily_report >> /var/log/report.log
+```
 
 ---
 
@@ -176,55 +209,6 @@ Astonish occupies a unique middle ground: **the visual ease of n8n** with **the 
 - 🚀 **Portable Agents** — Write once, run on your MacBook, Raspberry Pi, or GitHub Actions pipeline
 - 🎯 **No Context Pollution** — Structured State Blackboard passes exact data between steps, not messy chat history
 - ⚡ **Performance** — Written in Go with Goroutines. Run 50 parallel tasks faster and with less memory than Python
-
----
-
-## 🚀 Quick Start
-
-### 1. Install
-
-```bash
-# macOS/Linux (Homebrew) - Recommended
-brew install schardosin/astonish/astonish
-
-# Or download pre-built binaries from GitHub Releases
-# https://github.com/schardosin/astonish/releases
-
-# Or build from source
-git clone https://github.com/schardosin/astonish.git
-cd astonish
-make build-all  # Builds UI + Go binary
-```
-
-> **Note:** `go install` is not supported as the web UI must be built separately before embedding into the binary.
-
-### 2. Launch Studio
-
-```bash
-astonish studio
-```
-
-Opens a local web UI at `http://localhost:9393` where you can:
-- **Configure providers** — A built-in setup wizard guides you through connecting AI providers (Gemini, Claude, GPT-4, Ollama, etc.)
-- **Design flows visually** — Drag-and-drop nodes, connect edges, test in real-time
-- **Manage MCP servers** — Add GitHub, Slack, databases, or custom tools
-
-> **Prefer command line?** Run `astonish setup` for CLI-based configuration instead.
-
-### 3. Run from CLI
-
-Once configured, run your agents anywhere:
-
-```bash
-# Interactive mode
-astonish agents run my_agent
-
-# With injected variables
-astonish agents run summarizer -p file_path="/path/to/document.txt"
-
-# Perfect for cron jobs and automation
-0 9 * * * /usr/local/bin/astonish agents run daily_report >> /var/log/report.log
-```
 
 ---
 
@@ -351,14 +335,26 @@ astonish agents run pr_description_generator
 Connect your agents to any MCP-compatible server:
 
 ```bash
-# Add MCP servers via setup
-astonish setup
+# Add MCP servers via studio
+astonish studio
 
-# Or configure manually in ~/.astonish/mcp_config.json
+# Or via command line
+astonish tools edit
+
+# Add Tavily server MCP Server Example
 {
-  "github": {
-    "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-github"]
+  "mcpServers": {
+    "tavily-mcp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "tavily-mcp@0.1.2"
+      ],
+      "env": {
+        "TAVILY_API_KEY": "<your-tavily-api-key>"
+      },
+      "transport": "stdio"
+    }
   }
 }
 ```

@@ -211,7 +211,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	}
 
 	startSpinner := func(text string) {
-		stopSpinner(true, true) // Mark previous as done before starting new one
+		stopSpinner(false, true) // Just stop previous spinner without marking as done
 		currentSpinnerText = text
 		spinnerDone = make(chan struct{})
 		model := ui.NewSpinner(text)
@@ -243,6 +243,8 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		// Declare suppression variables here so they are accessible throughout the loop and after
 		suppressStreaming := false
 		var userMessageFields []string
+		nodeJustChanged := false // Flag to skip userMessage processing on initial node change event
+		turnHadUserMessageFields := false // Track if any node in this turn had userMessageFields (persists across node changes)
 
 		for event, err := range r.Run(ctx, userID, sess.ID(), userMsg, adkagent.RunConfig{
 			StreamingMode: adkagent.StreamingModeSSE,
@@ -251,6 +253,10 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				fmt.Printf("\nERROR: %v\n", err)
 				return err
 			}
+
+			// Reset the nodeJustChanged flag at start of each event
+			// It will be set to true only if this event triggers a node change
+			nodeJustChanged = false
 
 			// Debug logging for tool calls and responses
 			if cfg.DebugMode && event.LLMResponse.Content != nil {
@@ -279,23 +285,19 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 
 			// Check if we should suppress streaming output based on UserMessage OR OutputModel config
 			// suppressStreaming is now declared outside the loop
-
-			// Check if we should suppress streaming output based on UserMessage OR OutputModel config
 			// suppressStreaming is now declared outside the loop and updated in the node change block below.
 
-			// Check for user_message display marker first
+			// Check for user_message display marker - this indicates user_message text will be in this event
 			if event.Actions.StateDelta != nil {
 				if _, hasMarker := event.Actions.StateDelta["_user_message_display"]; hasMarker {
-					// This is a user_message event - print Agent prefix before the text
+					// Stop spinner and print Agent: prefix before the user_message content
 					stopSpinner(true, true)
-
 					if !aiPrefixPrinted {
 						fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
 						aiPrefixPrinted = true
 					}
-
-					// The text content will be printed by the normal text processing below
-					// We just needed to ensure the prefix is printed first
+					// Force suppressStreaming to false so the text content is displayed
+					suppressStreaming = false
 				}
 
 				// Check for error_message display marker - these MUST be shown even if streaming is suppressed
@@ -374,46 +376,18 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				if node, ok := event.Actions.StateDelta["current_node"].(string); ok {
 					// Only process if node actually changed
 					if node != currentNodeName {
-						// Flush buffer if we were streaming
-						if !suppressStreaming {
-							// Stop spinner before printing flush content
-							stopSpinner(true, true)
-
-							// Flush lineBuffer
-							if lineBuffer != "" {
-								rendered := ui.SmartRender(lineBuffer)
-								fmt.Print(rendered)
-								if !strings.HasSuffix(rendered, "\n") {
-									fmt.Println()
-								}
-								lineBuffer = ""
-							}
-
-							// Flush textBuffer
-							if textBuffer.Len() > 0 {
-								rendered := ui.SmartRender(textBuffer.String())
-								if rendered != "" {
-									if !aiPrefixPrinted {
-										fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
-										aiPrefixPrinted = true
-									}
-									fmt.Print(rendered)
-								}
-								textBuffer.Reset()
-							}
-						}
-
-						// If we were suppressing, clear the line buffer to prevent leakage of partial lines from the previous node
-						if suppressStreaming {
-							lineBuffer = ""
-						}
-
+						// Mark that we're in a node change event - skip userMessage processing on this event
+						nodeJustChanged = true
+						
+						// FIRST: Compute new node settings BEFORE any flush decisions
 						currentNodeName = node
-						// Re-evaluate suppression when node changes
+
+						// Store OLD suppression state for buffer handling
+						wasSupressing := suppressStreaming
+
+						// Reset and re-evaluate suppression for the NEW node
 						suppressStreaming = false
 						userMessageFields = nil
-
-						// Determine if this is an input node or parallel node and setup suppression
 						isInputNode = false
 						isOutputNode = false
 						isParallel := false
@@ -440,6 +414,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 									if hasUserMessage {
 										suppressStreaming = true
 										userMessageFields = n.UserMessage
+										turnHadUserMessageFields = true // Remember this turn had user_message
 									} else if hasOutputModel {
 										suppressStreaming = true
 									}
@@ -451,7 +426,41 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 							}
 						}
 
-						// Manage Spinner
+						// NOW flush buffers if the PREVIOUS node wasn't suppressing
+						if !wasSupressing {
+							// Stop spinner before printing flush content
+							stopSpinner(true, true)
+
+							// Flush lineBuffer
+							if lineBuffer != "" {
+								rendered := ui.SmartRender(lineBuffer)
+								fmt.Print(rendered)
+								if !strings.HasSuffix(rendered, "\n") {
+									fmt.Println()
+								}
+								lineBuffer = ""
+							}
+
+							// Flush textBuffer
+							if textBuffer.Len() > 0 {
+								rendered := ui.SmartRender(textBuffer.String())
+								if rendered != "" {
+									if !aiPrefixPrinted {
+										fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
+										aiPrefixPrinted = true
+									}
+									fmt.Print(rendered)
+								}
+								textBuffer.Reset()
+							}
+							} else {
+								// If we were suppressing, clear BOTH buffers to prevent leakage
+								// The userMessage block handles display from StateDelta
+								lineBuffer = ""
+								textBuffer.Reset()
+							}
+
+						// Manage Spinner for new node
 						if isInputNode || isParallel {
 							stopSpinner(true, true)
 						} else {
@@ -525,7 +534,9 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				}
 
 				// Check for UserMessage fields in StateDelta and print them if found
-				if len(userMessageFields) > 0 {
+				// Only run this if we're in user_message mode (suppressStreaming with userMessageFields)
+				// IMPORTANT: Skip on events that just triggered a node change - wait for actual LLM response
+				if len(userMessageFields) > 0 && suppressStreaming && !nodeJustChanged {
 					// Check if any fields are present in this event
 					hasUserMessageContent := false
 					for _, field := range userMessageFields {
@@ -618,6 +629,25 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					// Check for Tool Box Start (Visual UI)
 					if strings.Contains(line, "╭") {
 						inToolBox = true
+						// FLUSH TEXT BUFFER - show any text that came BEFORE the tool box
+						// This captures the LLM's greeting/explanation message
+						if textBuffer.Len() > 0 {
+							rendered := ui.SmartRender(textBuffer.String())
+							// Only print Agent: if there's actual content to show
+							if rendered != "" {
+								stopSpinner(true, true)
+								if !aiPrefixPrinted {
+									fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
+									aiPrefixPrinted = true
+								}
+								fmt.Print(rendered)
+								// Add newline if not present
+								if !strings.HasSuffix(rendered, "\n") {
+									fmt.Println()
+								}
+							}
+							textBuffer.Reset()
+						}
 					}
 
 					shouldPrint := false
@@ -649,10 +679,16 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						shouldPrint = true
 					} else {
 						// Regular LLM Output: Check suppression
-						// If it's an input node, we WANT to process (buffer) the text so we can use it as the prompt,
-						// even though we suppress streaming printing.
+						// We ALWAYS buffer text, even when suppressing, so we can flush it
+						// when a tool box appears (to show the LLM's greeting/explanation before tools)
+						// If it's an input node, we also want to process (buffer) the text as the prompt.
 						if !suppressStreaming || isInputNode {
 							shouldPrint = true
+						} else {
+							// Even if not printing, we still want to buffer for potential tool box flush
+							// We set shouldPrint to true to enter the buffering logic, but the text
+							// won't be immediately rendered because suppressStreaming is checked at render time
+							shouldPrint = true // Buffer it - will only be printed if tool box appears
 						}
 					}
 
@@ -667,69 +703,82 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					}
 
 					if shouldPrint {
-						// Only mark as done if it's NOT a system message (e.g. tool box, approval)
-						// If it IS a system message, we just want to pause/clear it temporarily
-						stopSpinner(!isSystemMsg, true)
-
-						if isSystemMsg {
-							// FLUSH TEXT BUFFER before printing system message
-							if textBuffer.Len() > 0 {
-								rendered := ui.SmartRender(textBuffer.String())
-								if rendered != "" {
-									if !aiPrefixPrinted {
-										fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
-									}
-									fmt.Print(rendered)
+					if isSystemMsg {
+						// Stop spinner before printing system message (tool box, approval, etc.)
+						// Mark as NOT done (false) since we're just pausing for system output
+						stopSpinner(false, true)
+						
+						// FLUSH TEXT BUFFER before printing system message
+						if textBuffer.Len() > 0 {
+							rendered := ui.SmartRender(textBuffer.String())
+							if rendered != "" {
+								if !aiPrefixPrinted {
+									fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
 								}
-								textBuffer.Reset()
+								fmt.Print(rendered)
 							}
+							textBuffer.Reset()
+						}
 
-							// Print System Message
-							toPrint := line
-							// If we are suppressing streaming, but the line contains a tool box start,
-							// we must trim any text before the tool box to prevent leakage,
-							// BUT we must preserve the ANSI color codes that immediately precede the box.
-							if suppressStreaming && strings.Contains(line, "╭") {
-								// Regex to find the tool box start and any immediately preceding ANSI color codes
-								// This matches: (optional ANSI codes) followed by "╭"
-								re := regexp.MustCompile(`((?:\x1b\[[0-9;]*m)*)╭`)
-								loc := re.FindStringIndex(line)
-								if loc != nil {
-									// loc[0] is the start of the match (including the ANSI codes)
-									toPrint = line[loc[0]:]
-								}
-							}
-							fmt.Print(toPrint)
-
-							// Reset prefix state for next AI output (since we interrupted with system msg)
-							aiPrefixPrinted = false
-						} else {
-							// Buffer regular text
-							textBuffer.WriteString(line)
-
-							// Flush immediately for streaming effect
-							// Note: SmartRender might be less effective on single lines for things like tables,
-							// but it's necessary for real-time feedback.
-							if !suppressStreaming && textBuffer.Len() > 0 {
-								var rendered string
-								if isOutputNode {
-									// For output nodes, bypass SmartRender to preserve formatting (e.g. JSON)
-									rendered = textBuffer.String()
-								} else {
-									rendered = ui.SmartRender(textBuffer.String())
-								}
-
-								if rendered != "" {
+						// Print System Message
+						toPrint := line
+						// If we are suppressing streaming, but the line contains a tool box start,
+						// we should print any text BEFORE the tool box (greeting/explanation from LLM)
+						// BUT we must preserve the ANSI color codes that immediately precede the box.
+						if suppressStreaming && strings.Contains(line, "╭") {
+							// Regex to find the tool box start and any immediately preceding ANSI color codes
+							// This matches: (optional ANSI codes) followed by "╭"
+							re := regexp.MustCompile(`((?:\x1b\[[0-9;]*m)*)╭`)
+							loc := re.FindStringIndex(line)
+							if loc != nil && loc[0] > 0 {
+								// There's text BEFORE the tool box - this is likely a greeting from the LLM
+								// Print it as regular AI output
+								priorText := line[:loc[0]]
+								if strings.TrimSpace(priorText) != "" {
+									stopSpinner(true, true)
 									if !aiPrefixPrinted {
 										fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
 										aiPrefixPrinted = true
 									}
-									fmt.Print(rendered)
+									fmt.Print(ui.SmartRender(priorText))
 								}
-								textBuffer.Reset()
+								// loc[0] is the start of the match (including the ANSI codes)
+								toPrint = line[loc[0]:]
 							}
 						}
+						fmt.Print(toPrint)
+
+						// Reset prefix state for next AI output (since we interrupted with system msg)
+						aiPrefixPrinted = false
+					} else {
+						// Buffer regular text
+						textBuffer.WriteString(line)
+
+						// Flush immediately for streaming effect (only when not suppressing)
+						if !suppressStreaming && textBuffer.Len() > 0 {
+							// Stop spinner ONLY when we're actually going to print
+							stopSpinner(true, true)
+							
+							var rendered string
+							if isOutputNode {
+								// For output nodes, bypass SmartRender to preserve formatting (e.g. JSON)
+								rendered = textBuffer.String()
+							} else {
+								rendered = ui.SmartRender(textBuffer.String())
+							}
+
+							if rendered != "" {
+								if !aiPrefixPrinted {
+									fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
+									aiPrefixPrinted = true
+								}
+								fmt.Print(rendered)
+							}
+							textBuffer.Reset()
+						}
+						// When suppressing, text stays in buffer until tool box appears
 					}
+				}
 				}
 			}
 
@@ -896,8 +945,10 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		} else {
 			// Normal flush at end of turn
 			if textBuffer.Len() > 0 {
-				// Only print if not suppressed
-				if !suppressStreaming {
+				// Only print if not suppressed AND not a user_message node
+				// For user_message nodes, the userMessage block handles display from StateDelta
+				// turnHadUserMessageFields persists even after userMessageFields is reset on node change
+				if !suppressStreaming && !turnHadUserMessageFields {
 					stopSpinner(true, true)
 					var rendered string
 					if isOutputNode {

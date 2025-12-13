@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2 } from 'lucide-react'
+import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package } from 'lucide-react'
+import MCPStoreModal from './MCPStoreModal'
 
 // API functions
 const fetchSettings = async () => {
@@ -63,6 +64,8 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
   const [mcpServerArgs, setMcpServerArgs] = useState({})
   // Track if MCP config has unsaved changes (e.g., deletions)
   const [mcpHasChanges, setMcpHasChanges] = useState(false)
+  // MCP Store modal
+  const [showMCPStore, setShowMCPStore] = useState(false)
   
   // Model selection state
   const [availableModels, setAvailableModels] = useState([])
@@ -470,13 +473,23 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
               {/* Editor View */}
               {mcpViewMode === 'editor' && (
                 <>
-                  <button
-                    onClick={handleAddMcpServer}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-medium transition-colors"
-                  >
-                    <Plus size={16} />
-                    Add MCP Server
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => setShowMCPStore(true)}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-medium transition-colors"
+                    >
+                      <Package size={16} />
+                      Browse Store
+                    </button>
+                    <button
+                      onClick={handleAddMcpServer}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg border hover:bg-gray-600/20 font-medium transition-colors"
+                      style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}
+                    >
+                      <Plus size={16} />
+                      Add Manual
+                    </button>
+                  </div>
 
                   {Object.entries(mcpServers).map(([name, server]) => (
                     <div
@@ -659,6 +672,16 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
           )}
         </div>
       </div>
+
+      {/* MCP Store Modal */}
+      <MCPStoreModal
+        isOpen={showMCPStore}
+        onClose={() => setShowMCPStore(false)}
+        onInstall={() => {
+          loadData()
+          if (onToolsRefresh) onToolsRefresh()
+        }}
+      />
     </div>
   )
 }

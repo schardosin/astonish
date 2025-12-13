@@ -1020,7 +1020,19 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 
 		// Node failed - decide whether to retry
 		if err == nil {
-			// No error but failed (shouldn't happen, but handle it)
+			// No error but failed - check if we're pausing for user approval
+			// This is a valid pause state, not a failure!
+			awaitingApproval, _ := state.Get("awaiting_approval")
+			if isAwaiting, ok := awaitingApproval.(bool); ok && isAwaiting {
+				if a.DebugMode {
+					fmt.Printf("[RETRY] Pausing for user approval (not a failure)\n")
+				}
+				// This is a pause, not a failure - ensure _has_error is false
+				// so the main loop will pause (return) instead of going to END
+				state.Set("_has_error", false)
+				return false // Pause - main loop will return when _has_error=false
+			}
+			// Truly failed with no error (shouldn't happen, but handle it)
 			return false
 		}
 
@@ -1800,12 +1812,9 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 	// Reset the pause flag before starting
 	state.Set("force_pause", false)
 
-	// Determine if we should display LLM text output to the user
-	// Logic:
-	// - If output_model is defined: Suppress streaming (data extraction mode)
-	// - If user_message is defined: Suppress streaming (controlled output mode)
-	// - If neither is defined: Show streaming text (conversational mode)
-	shouldDisplayText := len(node.OutputModel) == 0 && len(node.UserMessage) == 0
+	// NOTE: Text suppression is now handled by console.go buffering logic.
+	// We allow all text to flow through so greetings before tool calls are visible.
+	// The console.go will buffer and only show relevant text (before tool boxes).
 
 	// Run the agent - ADK handles everything (native function calling)
 	var fullResponse strings.Builder
@@ -2289,6 +2298,16 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			}
 		}
 
+
+		// Accumulate text response for output_model (Unconditionally at start of loop)
+		if event.LLMResponse.Content != nil {
+			for _, part := range event.LLMResponse.Content.Parts {
+				if part.Text != "" {
+					fullResponse.WriteString(part.Text)
+				}
+			}
+		}
+
 		// Count tool calls to prevent infinite loops
 		if event.LLMResponse.Content != nil {
 			for _, part := range event.LLMResponse.Content.Parts {
@@ -2321,9 +2340,11 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				}
 			}
 
-			// Suppress text-only events if user_message is not defined
-			// This prevents unwanted LLM conversational output from being displayed
-			if isTextOnly && !shouldDisplayText {
+			// Suppress text-only events when node has output_model AND tools have been called
+			// This prevents raw JSON from being displayed (final response after tools).
+			// Text BEFORE tools (greeting) still flows through when toolCallCount == 0.
+			// The JSON is parsed and values are distributed to StateDelta for display.
+			if isTextOnly && len(node.OutputModel) > 0 && toolCallCount > 0 {
 				shouldYieldEvent = false
 			}
 		}
@@ -2349,15 +2370,6 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			return false, nil // Stops the loop, effectively pausing the agent
 		}
 
-		// 3. Accumulate text response for output_model (if needed)
-		if event.Content != nil {
-
-			for _, part := range event.Content.Parts {
-				if part.Text != "" {
-					fullResponse.WriteString(part.Text)
-				}
-			}
-		}
 
 		// 4. Handle raw_tool_output state updates
 		if event.LLMResponse.Content != nil {

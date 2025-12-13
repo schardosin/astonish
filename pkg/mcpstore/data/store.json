@@ -1,0 +1,4055 @@
+[
+  {
+    "mcpId": "github.com/contextstream/mcp-server",
+    "name": "ContextStream",
+    "description": "A universal memory and semantic search system for AI coding assistants that provides persistent context, decision tracking, and codebase understanding across different AI tools and sessions.",
+    "author": "contextstream",
+    "githubUrl": "https://github.com/contextstream/mcp-server",
+    "tags": [
+      "ai-memory",
+      "semantic-search",
+      "code-intelligence",
+      "context-tracking",
+      "team-collaboration"
+    ],
+    "githubStars": 0,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@contextstream/mcp-server"
+      ],
+      "env": {
+        "CONTEXTSTREAM_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/semgrep/semgrep/tree/develop/cli/src/semgrep/mcp/",
+    "name": "Semgrep",
+    "description": "Scans code for security vulnerabilities using Semgrep's semantic analysis engine, supporting multiple languages and over 5,000 security rules.",
+    "author": "semgrep",
+    "githubUrl": "https://github.com/semgrep/semgrep/tree/develop/cli/src/semgrep/mcp/",
+    "tags": [
+      "static-analysis",
+      "code-scanning",
+      "vulnerability-detection",
+      "security-rules",
+      "code-security"
+    ],
+    "githubStars": 13587,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "semgrep-mcp"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/sveltejs/mcp",
+    "name": "Svelte",
+    "description": "Official Svelte MCP server providing embeddings support and integration capabilities for Svelte applications, with features for development inspection and database management.",
+    "author": "sveltejs",
+    "githubUrl": "https://github.com/sveltejs/mcp",
+    "tags": [
+      "svelte",
+      "web-framework",
+      "embeddings",
+      "development",
+      "database"
+    ],
+    "githubStars": 125,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/aws/mcp-proxy-for-aws",
+    "name": "AWS Proxy",
+    "description": "A proxy and library for connecting AI applications to MCP servers on AWS, handling SigV4 authentication and enabling integration with popular AI frameworks like LangChain and LlamaIndex.",
+    "author": "aws",
+    "githubUrl": "https://github.com/aws/mcp-proxy-for-aws",
+    "tags": [
+      "aws",
+      "authentication",
+      "proxy",
+      "sigv4",
+      "ai-integration"
+    ],
+    "githubStars": 204,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/path/to/mcp_proxy_for_aws",
+        "run",
+        "server.py"
+      ],
+      "env": {
+        "AWS_ACCESS_KEY_ID": "",
+        "AWS_REGION": "",
+        "AWS_SECRET_ACCESS_KEY": "",
+        "AWS_SESSION_TOKEN": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/googleapis/genai-toolbox",
+    "name": "Database Toolbox",
+    "description": "A server for securely connecting AI assistants to databases with features like connection pooling, authentication, and observability support.",
+    "author": "googleapis",
+    "githubUrl": "https://github.com/googleapis/genai-toolbox",
+    "tags": [
+      "database-management",
+      "security",
+      "connection-pooling",
+      "observability",
+      "authentication"
+    ],
+    "githubStars": 11701,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/universal-tool-calling-protocol/code-mode",
+    "name": "Code Mode",
+    "description": "A TypeScript-based code execution library that enables AI agents to execute complex tool workflows through code instead of individual tool calls, offering improved efficiency and performance.",
+    "author": "universal-tool-calling-protocol",
+    "githubUrl": "https://github.com/universal-tool-calling-protocol/code-mode",
+    "tags": [
+      "code-execution",
+      "tool-integration",
+      "typescript",
+      "automation",
+      "ai-development"
+    ],
+    "githubStars": 1155,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "@utcp/code-mode-mcp"
+      ],
+      "env": {
+        "UTCP_CONFIG_FILE": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/appium/appium-mcp",
+    "name": "Appium",
+    "description": "Mobile automation server for testing iOS and Android applications, featuring intelligent locator generation, cross-platform support, and automated test creation through natural language interactions.",
+    "author": "appium",
+    "githubUrl": "https://github.com/appium/appium-mcp",
+    "tags": [
+      "mobile-testing",
+      "automation",
+      "ios",
+      "android",
+      "appium"
+    ],
+    "githubStars": 111,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "appium-mcp@latest"
+      ],
+      "env": {
+        "ANDROID_HOME": "/Users/xyz/Library/Android/sdk",
+        "CAPABILITIES_CONFIG": "/path/to/your/capabilities.json"
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/openocean-finance/openocean-mcp",
+    "name": "OpenOcean DEX",
+    "description": "Enables interaction with decentralized exchanges (DEXs) for getting quotes, executing swaps, managing transactions, and accessing token information across multiple blockchain networks.",
+    "author": "openocean-finance",
+    "githubUrl": "https://github.com/openocean-finance/openocean-mcp",
+    "tags": [
+      "defi",
+      "cryptocurrency",
+      "blockchain",
+      "token-swaps",
+      "decentralized-exchange"
+    ],
+    "githubStars": 1,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/parallel-web/task-mcp",
+    "name": "Parallel Tasks",
+    "description": "Enables initiating deep research and task groups through Parallel's APIs, allowing for quick experiments and exploration of capabilities directly from LLM clients.",
+    "author": "parallel-web",
+    "githubUrl": "https://github.com/parallel-web/task-mcp",
+    "tags": [
+      "task-management",
+      "research",
+      "api-integration",
+      "automation",
+      "parallel-api"
+    ],
+    "githubStars": 5,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/parallel-web/search-mcp",
+    "name": "Parallel Search",
+    "description": "Enables web search capabilities within MCP-compatible LLM clients using the Parallel Search API, designed for everyday search tasks and queries.",
+    "author": "parallel-web",
+    "githubUrl": "https://github.com/parallel-web/search-mcp",
+    "tags": [
+      "web-search",
+      "api-integration",
+      "search-engine",
+      "information-retrieval",
+      "parallel-api"
+    ],
+    "githubStars": 5,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/aws-knowledge-mcp-server",
+    "name": "AWS Knowledge",
+    "description": "Provides real-time access to comprehensive AWS documentation, including API references, best practices, regional availability information, and architectural guidance for cloud development.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/aws-knowledge-mcp-server",
+    "tags": [
+      "aws",
+      "cloud-documentation",
+      "api-reference",
+      "architecture",
+      "infrastructure"
+    ],
+    "githubStars": 7574,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/railwayapp/railway-mcp-server",
+    "name": "Railway",
+    "description": "Manages Railway cloud infrastructure through CLI integration, providing tools for project deployment, service management, environment configuration, and monitoring of Railway resources.",
+    "author": "railwayapp",
+    "githubUrl": "https://github.com/railwayapp/railway-mcp-server",
+    "tags": [
+      "deployment",
+      "infrastructure",
+      "cloud-management",
+      "devops",
+      "cli-tools"
+    ],
+    "githubStars": 94,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@railway/mcp-server"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/maestro-org/maestro-mcp-server",
+    "name": "Bitcoin Explorer",
+    "description": "Interact with Bitcoin blockchain through Maestro API platform, enabling exploration of blocks, transactions, addresses, mempool monitoring, and market data across mainnet and testnet networks.",
+    "author": "maestro-org",
+    "githubUrl": "https://github.com/maestro-org/maestro-mcp-server",
+    "tags": [
+      "bitcoin",
+      "blockchain",
+      "cryptocurrency",
+      "transactions",
+      "wallet-management"
+    ],
+    "githubStars": 19,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/binadox-public/binadox-terraform-mcp",
+    "name": "Terraform Validator",
+    "description": "Validates, secures, and estimates cloud costs for Terraform configurations, providing automated analysis and completion of infrastructure-as-code with built-in security checks and cost estimation.",
+    "author": "binadox-public",
+    "githubUrl": "https://github.com/binadox-public/binadox-terraform-mcp",
+    "tags": [
+      "terraform",
+      "infrastructure-as-code",
+      "cloud-cost",
+      "security-analysis",
+      "validation"
+    ],
+    "githubStars": 1,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/microsoft/mcp/tree/main/servers/Azure.Mcp.Server",
+    "name": "Azure",
+    "description": "A comprehensive server that provides access to 40+ Azure services, enabling AI agents to interact with Azure resources through natural language commands for cloud management, deployment, and monitoring.",
+    "author": "microsoft",
+    "githubUrl": "https://github.com/microsoft/mcp/tree/main/servers/Azure.Mcp.Server",
+    "tags": [
+      "azure",
+      "cloud-services",
+      "infrastructure-management",
+      "devops",
+      "cloud-automation"
+    ],
+    "githubStars": 2267,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@azure/mcp@latest",
+        "server",
+        "start"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/microsoft/azure-devops-mcp",
+    "name": "Azure DevOps",
+    "description": "Enables interaction with Azure DevOps services through MCP, providing tools for managing projects, work items, repositories, wikis, pipelines, and test plans.",
+    "author": "microsoft",
+    "githubUrl": "https://github.com/microsoft/azure-devops-mcp",
+    "tags": [
+      "azure-devops",
+      "project-management",
+      "ci-cd",
+      "version-control",
+      "work-tracking"
+    ],
+    "githubStars": 1073,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@azure-devops/mcp"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/matlab/matlab-mcp-core-server",
+    "name": "MATLAB Core",
+    "description": "Official MATLAB integration server enabling AI applications to execute MATLAB code, perform static analysis, run tests, and manage MATLAB sessions with comprehensive toolbox detection.",
+    "author": "matlab",
+    "githubUrl": "https://github.com/matlab/matlab-mcp-core-server",
+    "tags": [
+      "matlab",
+      "scientific-computing",
+      "code-analysis",
+      "testing",
+      "numerical-computing"
+    ],
+    "githubStars": 80,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/snyk/snyk-ls",
+    "name": "Snyk Security",
+    "description": "Scans code, dependencies, and infrastructure configurations for security vulnerabilities and license issues, providing real-time security feedback during development",
+    "author": "snyk",
+    "githubUrl": "https://github.com/snyk/snyk-ls",
+    "tags": [
+      "vulnerability-scanning",
+      "security-testing",
+      "dependency-analysis",
+      "license-compliance",
+      "code-security"
+    ],
+    "githubStars": 70,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/chroma-core/chroma",
+    "name": "chroma",
+    "description": "Open-source search and retrieval database for AI applications.",
+    "author": "chroma",
+    "githubUrl": "https://github.com/chroma-core/chroma",
+    "tags": [
+      "web-scraping",
+      "data-extraction",
+      "automation",
+      "actor-management",
+      "apify-platform"
+    ],
+    "githubStars": 24878,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/campfirein/cipher",
+    "name": "Byterover Cipher",
+    "description": "Byterover Cipher is an opensource memory layer specifically designed for coding agents. Compatible with Cursor, Windsurf, Claude Code, Cline, Claude Desktop, Gemini CLI, AWS's Kiro, VS Code, Roo Code, Trae, Amp Code and Warp through MCP.",
+    "author": "campfirein",
+    "githubUrl": "https://github.com/campfirein/cipher",
+    "tags": [
+      "memory-management"
+    ],
+    "githubStars": 3297,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "."
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/graphlit/graphlit-mcp-server",
+    "name": "Graphlit",
+    "description": "Create a personalized knowledge base from tools like Linear, GitHub, Jira, and Discord, and empower AI Agents to retrieve associated content with built-in reranking for enhanced relevance.",
+    "author": "graphlit",
+    "githubUrl": "https://github.com/graphlit/graphlit-mcp-server",
+    "tags": [
+      "content-management",
+      "data-ingestion",
+      "document-processing",
+      "search-retrieval",
+      "multi-platform"
+    ],
+    "githubStars": 366,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "graphlit-mcp-server"
+      ],
+      "env": {
+        "DISCORD_BOT_TOKEN": "",
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "",
+        "GOOGLE_EMAIL_CLIENT_ID": "",
+        "GOOGLE_EMAIL_CLIENT_SECRET": "",
+        "GOOGLE_EMAIL_REFRESH_TOKEN": "",
+        "GRAPHLIT_ENVIRONMENT_ID": "",
+        "GRAPHLIT_JWT_SECRET": "",
+        "GRAPHLIT_ORGANIZATION_ID": "",
+        "JIRA_EMAIL": "",
+        "JIRA_TOKEN": "",
+        "LINEAR_API_KEY": "",
+        "NOTION_API_KEY": "",
+        "SLACK_BOT_TOKEN": "",
+        "TWITTER_TOKEN": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/modelcontextprotocol/servers/tree/main/src/memory",
+    "name": "Knowledge Graph Memory",
+    "description": "A persistent memory system using a local knowledge graph that enables AI assistants to remember information about users across conversations through entities, relations, and observations.",
+    "author": "modelcontextprotocol",
+    "githubUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory",
+    "tags": [
+      "knowledge-graph",
+      "persistent-memory",
+      "entity-management",
+      "graph-database",
+      "memory-storage"
+    ],
+    "githubStars": 74251,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/pashpashpash/mcp-atlassian",
+    "name": "Atlassian",
+    "description": "Integrates with Atlassian Cloud products (Confluence and Jira) to enable searching, accessing, and managing pages, spaces, issues, and projects via their respective APIs.",
+    "author": "pashpashpash",
+    "githubUrl": "https://github.com/pashpashpash/mcp-atlassian",
+    "tags": [
+      "atlassian",
+      "confluence",
+      "jira",
+      "project-management",
+      "documentation"
+    ],
+    "githubStars": 13,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "path/to/build/index.js"
+      ],
+      "env": {
+        "CONFLUENCE_API_TOKEN": "",
+        "JIRA_API_TOKEN": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/jean-technologies/mcp-writer-substack",
+    "name": "Substack Writer",
+    "description": "Connect to your Substack/Medium blogs, allowing Cline to become an expert writer tailored to your writing style.",
+    "author": "jean-technologies",
+    "githubUrl": "https://github.com/jean-technologies/mcp-writer-substack",
+    "tags": [
+      "content-analysis",
+      "writing",
+      "semantic-search",
+      "blog-integration",
+      "embeddings"
+    ],
+    "githubStars": 25,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "$(pwd)",
+        "run",
+        "writer_tool.py"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/planetscale/cli",
+    "name": "PlanetScale",
+    "description": "Enables AI tools to interact with PlanetScale databases, providing capabilities for managing organizations, databases, branches, and executing SQL queries with proper authentication.",
+    "author": "planetscale",
+    "githubUrl": "https://github.com/planetscale/cli",
+    "tags": [
+      "mysql",
+      "database-management",
+      "sql",
+      "branching",
+      "planetscale-api"
+    ],
+    "githubStars": 632,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/auth0/auth0-mcp-server",
+    "name": "Auth0",
+    "description": "Allows AI assistants to manage Auth0 resources through natural language, including applications, resource servers, actions, forms, and logs management via the Auth0 Management API.",
+    "author": "auth0",
+    "githubUrl": "https://github.com/auth0/auth0-mcp-server",
+    "tags": [
+      "authentication",
+      "authorization",
+      "identity-management",
+      "oauth",
+      "access-control"
+    ],
+    "githubStars": 81,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "@auth0/auth0-mcp-server",
+        "init"
+      ],
+      "env": {
+        "DEBUG": "auth0-mcp"
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/21st-dev/magic-mcp",
+    "name": "Magic UI",
+    "description": "Create modern UI components instantly through natural language descriptions, with IDE integrations and access to a vast library of pre-built, customizable components.",
+    "author": "21st-dev",
+    "githubUrl": "https://github.com/21st-dev/magic-mcp",
+    "tags": [
+      "ui-generation",
+      "component-library",
+      "ide-integration",
+      "typescript",
+      "react"
+    ],
+    "githubStars": 4011,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@21st-dev/magic@latest"
+      ],
+      "env": {
+        "API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/syntheticdata-mcp-server",
+    "name": "Synthetic Data",
+    "description": "Generates, validates, and manages synthetic data with features for business-driven generation, safe pandas code execution, data validation, and integration with storage systems like S3.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/syntheticdata-mcp-server",
+    "tags": [
+      "data-generation",
+      "validation",
+      "pandas",
+      "synthetic-data",
+      "aws-integration"
+    ],
+    "githubStars": 7548,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.syntheticdata-mcp-server"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": "",
+        "FASTMCP_LOG_LEVEL": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/e2b-dev/mcp-server",
+    "name": "Code Interpreter",
+    "description": "Adds secure code execution capabilities to Claude Desktop using E2B Sandbox, supporting both JavaScript and Python environments.",
+    "author": "e2b-dev",
+    "githubUrl": "https://github.com/e2b-dev/mcp-server",
+    "tags": [
+      "code-execution",
+      "sandbox",
+      "javascript",
+      "python",
+      "claude-integration"
+    ],
+    "githubStars": 352,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/cline/linear-mcp",
+    "name": "Linear",
+    "description": "Facilitates project management with the Linear API, enabling issue tracking, project organization, and team management through comprehensive tools for creating, updating, and managing work items.",
+    "author": "cline",
+    "githubUrl": "https://github.com/cline/linear-mcp",
+    "tags": [
+      "project-management",
+      "issue-tracking",
+      "team-collaboration",
+      "linear-api",
+      "workflow"
+    ],
+    "githubStars": 120,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "/path/to/linear-mcp/build/index.js"
+      ],
+      "env": {
+        "LINEAR_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/apify/actors-mcp-server",
+    "name": "Apify Actors",
+    "description": "Enables AI assistants to interact with Apify's web scraping and automation actors, providing access to tools for data extraction, web searching, social media analysis, and more.",
+    "author": "apify",
+    "githubUrl": "https://github.com/apify/actors-mcp-server",
+    "tags": [
+      "web-scraping",
+      "data-extraction",
+      "automation",
+      "actor-management",
+      "apify-platform"
+    ],
+    "githubStars": 620,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "@apify/actors-mcp-server"
+      ],
+      "env": {
+        "APIFY_TOKEN": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/axiomhq/mcp-server-axiom",
+    "name": "Axiom",
+    "description": "Query and analyze data using Axiom Processing Language (APL), enabling AI agents to interact with Axiom datasets through natural language.",
+    "author": "axiomhq",
+    "githubUrl": "https://github.com/axiomhq/mcp-server-axiom",
+    "tags": [
+      "data-query",
+      "log-analysis",
+      "apl",
+      "datasets",
+      "analytics"
+    ],
+    "githubStars": 57,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/modelcontextprotocol/servers/tree/main/src/sentry",
+    "name": "Sentry",
+    "description": "Retrieves and analyzes error reports, stacktraces, and debugging information from Sentry.io, enabling AI assistants to inspect and understand application issues.",
+    "author": "modelcontextprotocol",
+    "githubUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/sentry",
+    "tags": [
+      "error-tracking",
+      "debugging",
+      "stacktraces",
+      "issue-monitoring",
+      "application-monitoring"
+    ],
+    "githubStars": 74070,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/brave/brave-search-mcp-server",
+    "name": "Brave Search",
+    "description": "Integrates Brave Search API to provide comprehensive web and local search capabilities with smart filtering, pagination, and automatic fallbacks.",
+    "author": "modelcontextprotocol",
+    "githubUrl": "https://github.com/brave/brave-search-mcp-server",
+    "tags": [
+      "search-engine",
+      "local-search",
+      "web-search",
+      "brave-api",
+      "content-discovery"
+    ],
+    "githubStars": 402,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@brave/brave-search-mcp-server",
+        "--transport",
+        "stdio"
+      ],
+      "env": {
+        "BRAVE_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/pashpashpash/iterm-mcp",
+    "name": "iTerm",
+    "description": "Provides direct access to iTerm terminal sessions, enabling command execution, REPL interaction, and terminal output inspection with efficient token usage and control character support.",
+    "author": "pashpashpash",
+    "githubUrl": "https://github.com/pashpashpash/iterm-mcp",
+    "tags": [
+      "terminal",
+      "iterm",
+      "command-execution",
+      "repl",
+      "automation"
+    ],
+    "githubStars": 16,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "path/to/build/index.js"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/MindscapeHQ/mcp-server-raygun",
+    "name": "Raygun",
+    "description": "Provides comprehensive access to Raygun's error tracking, crash reporting, and real user monitoring features through API integration, enabling management of applications, errors, deployments, and performance metrics.",
+    "author": "MindscapeHQ",
+    "githubUrl": "https://github.com/MindscapeHQ/mcp-server-raygun",
+    "tags": [
+      "error-tracking",
+      "crash-reporting",
+      "performance-monitoring",
+      "debugging",
+      "application-monitoring"
+    ],
+    "githubStars": 19,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/cdk-mcp-server",
+    "name": "AWS CDK Assistant",
+    "description": "Provides guidance on AWS CDK best practices, infrastructure patterns, and security compliance through CDK Nag integration and AWS Solutions Constructs.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/cdk-mcp-server",
+    "tags": [
+      "aws-cdk",
+      "infrastructure-as-code",
+      "security-compliance",
+      "cloud-architecture",
+      "aws"
+    ],
+    "githubStars": 7576,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.cdk-mcp-server@latest"
+      ],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "ERROR"
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/modelcontextprotocol/servers/tree/main/src/redis",
+    "name": "Redis",
+    "description": "Provides access to Redis key-value stores, enabling operations like setting, getting, deleting, and listing keys with optional expiration time support.",
+    "author": "modelcontextprotocol",
+    "githubUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/redis",
+    "tags": [
+      "redis",
+      "key-value-store",
+      "caching",
+      "data-storage",
+      "database-operations"
+    ],
+    "githubStars": 74331,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/lambda-tool-mcp-server",
+    "name": "Lambda Bridge",
+    "description": "Enables secure access to AWS Lambda functions as MCP tools, allowing AI models to interact with private resources, AWS services, and networks without direct access credentials.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/lambda-tool-mcp-server",
+    "tags": [
+      "aws-lambda",
+      "serverless",
+      "security",
+      "aws-integration",
+      "function-management"
+    ],
+    "githubStars": 7571,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.lambda-tool-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": "",
+        "FUNCTION_INPUT_SCHEMA_ARN_TAG_KEY": "",
+        "FUNCTION_LIST": "",
+        "FUNCTION_PREFIX": "",
+        "FUNCTION_TAG_KEY": "",
+        "FUNCTION_TAG_VALUE": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/lharries/whatsapp-mcp",
+    "name": "WhatsApp",
+    "description": "Enables searching personal WhatsApp messages, managing contacts, and sending messages to individuals or groups through WhatsApp Web's multidevice API with local message storage.",
+    "author": "lharries",
+    "githubUrl": "https://github.com/lharries/whatsapp-mcp",
+    "tags": [
+      "messaging",
+      "chat-history",
+      "contacts",
+      "whatsapp",
+      "message-search"
+    ],
+    "githubStars": 5132,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "{{PATH_TO_SRC}}/whatsapp-mcp/whatsapp-mcp-server",
+        "run",
+        "main.py"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/pashpashpash/mcp-taskmanager",
+    "name": "Task Manager",
+    "description": "A queue-based task management system that enables planning, execution, and tracking of tasks with support for task lists, execution plans, and completion feedback.",
+    "author": "pashpashpash",
+    "githubUrl": "https://github.com/pashpashpash/mcp-taskmanager",
+    "tags": [
+      "task-management",
+      "queue-system",
+      "workflow",
+      "task-tracking",
+      "automation"
+    ],
+    "githubStars": 30,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "path/to/mcp-taskmanager/dist/index.js"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/postgres-mcp-server",
+    "name": "Aurora Postgres",
+    "description": "Enables natural language interactions with Aurora Postgres databases through AWS RDS Data API, supporting SQL query generation and execution with configurable read/write permissions.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/postgres-mcp-server",
+    "tags": [
+      "postgres",
+      "aurora",
+      "aws",
+      "sql",
+      "database-management"
+    ],
+    "githubStars": 7632,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.postgres-mcp-server@latest",
+        "--allow_write_query"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": "",
+        "FASTMCP_LOG_LEVEL": "ERROR"
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/upstash/context7-mcp",
+    "name": "Context7",
+    "description": "Provides up-to-date library documentation and code examples directly in LLM prompts, ensuring accurate and current programming assistance.",
+    "author": "upstash",
+    "githubUrl": "https://github.com/upstash/context7-mcp",
+    "tags": [
+      "documentation",
+      "code-examples",
+      "api-reference",
+      "library-docs",
+      "programming-help"
+    ],
+    "githubStars": 39042,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ],
+      "env": {
+        "CONTEXT7_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/cost-analysis-mcp-server",
+    "name": "Cost Analysis",
+    "description": "Analyzes AWS service costs and generates cost reports with natural language querying capabilities and visualization tools for cost optimization.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/cost-analysis-mcp-server",
+    "tags": [
+      "aws-costs",
+      "cost-optimization",
+      "cloud-pricing",
+      "reporting",
+      "analytics"
+    ],
+    "githubStars": 7492,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.cost-analysis-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "FASTMCP_LOG_LEVEL": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/canvrno/ProxmoxMCP",
+    "name": "Proxmox Manager",
+    "description": "A server for managing Proxmox hypervisors, providing tools to control nodes, VMs, containers, storage, and execute console commands in virtual machines.",
+    "author": "canvrno",
+    "githubUrl": "https://github.com/canvrno/ProxmoxMCP",
+    "tags": [
+      "proxmox",
+      "virtualization",
+      "vm-management",
+      "server-management",
+      "infrastructure"
+    ],
+    "githubStars": 181,
+    "requiresApiKey": false,
+    "config": {
+      "command": "python",
+      "args": [
+        "-m",
+        "proxmox_mcp.server"
+      ],
+      "env": {
+        "LOG_LEVEL": "",
+        "PROXMOX_HOST": "",
+        "PROXMOX_MCP_CONFIG": "",
+        "PROXMOX_PORT": "",
+        "PROXMOX_SERVICE": "",
+        "PROXMOX_TOKEN_NAME": "",
+        "PROXMOX_TOKEN_VALUE": "",
+        "PROXMOX_USER": "",
+        "PROXMOX_VERIFY_SSL": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/Garoth/wolframalpha-llm-mcp",
+    "name": "WolframAlpha",
+    "description": "Provides access to WolframAlpha's LLM API for answering complex mathematical, scientific, and general knowledge questions with structured responses.",
+    "author": "Garoth",
+    "githubUrl": "https://github.com/Garoth/wolframalpha-llm-mcp",
+    "tags": [
+      "mathematics",
+      "scientific-computing",
+      "knowledge-base",
+      "wolfram-api",
+      "computation"
+    ],
+    "githubStars": 46,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "/path/to/wolframalpha-mcp-server/build/index.js"
+      ],
+      "env": {
+        "WOLFRAM_LLM_APP_ID": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/sendaifun/solana-mcp",
+    "name": "Solana Agent Kit",
+    "description": "Provides tools for interacting with the Solana blockchain, enabling operations like token management, NFT minting, trading, and wallet interactions through a standardized interface.",
+    "author": "sendaifun",
+    "githubUrl": "https://github.com/sendaifun/solana-mcp",
+    "tags": [
+      "blockchain",
+      "solana",
+      "cryptocurrency",
+      "web3",
+      "tokens"
+    ],
+    "githubStars": 136,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "solana-mcp"
+      ],
+      "env": {
+        "OPENAI_API_KEY": "",
+        "RPC_URL": "",
+        "SOLANA_PRIVATE_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/mysql-mcp-server",
+    "name": "Aurora MySQL",
+    "description": "Enables natural language to SQL query conversion and execution for Aurora MySQL databases through AWS RDS Data API, with configurable read-only mode and secure credential management.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/mysql-mcp-server",
+    "tags": [
+      "aurora",
+      "mysql",
+      "aws",
+      "sql",
+      "data-api"
+    ],
+    "githubStars": 7617,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.mysql-mcp-server@latest",
+        "--resource_arn",
+        "[your data]",
+        "--secret_arn",
+        "[your data]",
+        "--database",
+        "[your data]",
+        "--region",
+        "[your data]",
+        "--readonly",
+        "True"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": "",
+        "FASTMCP_LOG_LEVEL": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/zcaceres/markdownify-mcp",
+    "name": "Markdownify",
+    "description": "Converts various file types and web content (PDFs, images, audio, Office documents, web pages) into standardized Markdown format for easy reading and sharing.",
+    "author": "zcaceres",
+    "githubUrl": "https://github.com/zcaceres/markdownify-mcp",
+    "tags": [
+      "file-conversion",
+      "markdown",
+      "document-processing",
+      "content-transformation",
+      "format-conversion"
+    ],
+    "githubStars": 2290,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "/path/to/dist/index.js"
+      ],
+      "env": {
+        "UV_PATH": "/path/to/uv"
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/modelcontextprotocol/servers/tree/main/src/git",
+    "name": "Git Tools",
+    "description": "Provides Git repository interaction and automation tools for reading, searching, and manipulating Git repositories through commands like status, diff, commit, branch management, and more.",
+    "author": "modelcontextprotocol",
+    "githubUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/git",
+    "tags": [
+      "git",
+      "version-control",
+      "repository-management",
+      "source-control",
+      "development"
+    ],
+    "githubStars": 74236,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-git"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/pashpashpash/perplexity-mcp",
+    "name": "Perplexity Research",
+    "description": "Leverages Perplexity's Sonar Pro API to provide comprehensive research capabilities, including documentation search, API discovery, and code deprecation analysis with chain-of-thought reasoning.",
+    "author": "pashpashpash",
+    "githubUrl": "https://github.com/pashpashpash/perplexity-mcp",
+    "tags": [
+      "research",
+      "documentation",
+      "api-discovery",
+      "code-analysis",
+      "perplexity"
+    ],
+    "githubStars": 37,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "path/to/perplexity-mcp/build/index.js"
+      ],
+      "env": {
+        "PERPLEXITY_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/zcaceres/fetch-mcp",
+    "name": "Fetch",
+    "description": "Provides functionality to fetch web content in various formats, including HTML, JSON, plain text, and Markdown, with support for custom headers and content transformation.",
+    "author": "zcaceres",
+    "githubUrl": "https://github.com/zcaceres/fetch-mcp",
+    "tags": [
+      "web-fetching",
+      "html",
+      "json",
+      "markdown",
+      "content-extraction"
+    ],
+    "githubStars": 655,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "mcp-fetch-server"
+      ],
+      "env": {
+        "DEFAULT_LIMIT": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/domdomegg/airtable-mcp-server",
+    "name": "Airtable",
+    "description": "Provides read and write access to Airtable databases, enabling schema inspection, record management, and table operations through comprehensive API integration.",
+    "author": "domdomegg",
+    "githubUrl": "https://github.com/domdomegg/airtable-mcp-server",
+    "tags": [
+      "airtable",
+      "database-management",
+      "records",
+      "schemas",
+      "crud"
+    ],
+    "githubStars": 362,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "airtable-mcp-server"
+      ],
+      "env": {
+        "AIRTABLE_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/smithery-ai/mcp-obsidian",
+    "name": "Obsidian",
+    "description": "Enables reading and searching of Markdown notes directories (like Obsidian vaults), allowing AI assistants to access and query local knowledge bases.",
+    "author": "smithery-ai",
+    "githubUrl": "https://github.com/smithery-ai/mcp-obsidian",
+    "tags": [
+      "markdown",
+      "knowledge-base",
+      "notes",
+      "search",
+      "obsidian"
+    ],
+    "githubStars": 1228,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-obsidian",
+        "${input:vaultPath}"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/ahujasid/blender-mcp",
+    "name": "Blender",
+    "description": "Enables AI assistants to control Blender for 3D modeling, scene creation, and asset management through socket-based communication, with support for Poly Haven assets and Hyper3D Rodin models.",
+    "author": "ahujasid",
+    "githubUrl": "https://github.com/ahujasid/blender-mcp",
+    "tags": [
+      "3d-modeling",
+      "blender",
+      "asset-management",
+      "scene-creation",
+      "visualization"
+    ],
+    "githubStars": 14425,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "blender-mcp"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/Garoth/echo-mcp",
+    "name": "Echo",
+    "description": "A simple testing utility that echoes back any message it receives, useful for validating MCP functionality and connections.",
+    "author": "Garoth",
+    "githubUrl": "https://github.com/Garoth/echo-mcp",
+    "tags": [
+      "testing",
+      "debugging",
+      "validation",
+      "echo",
+      "development"
+    ],
+    "githubStars": 12,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "/path/to/echo-server/build/index.js"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/amazon-kendra-index-mcp-server",
+    "name": "Amazon Kendra Index",
+    "description": "Enables RAG capabilities by integrating with Amazon Kendra indices, allowing AI assistants to query and retrieve context from enterprise documents and knowledge bases.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/amazon-kendra-index-mcp-server",
+    "tags": [
+      "rag",
+      "search",
+      "aws",
+      "knowledge-base",
+      "enterprise-search"
+    ],
+    "githubStars": 7537,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.amazon-kendra-index-mcp-server"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": "",
+        "FASTMCP_LOG_LEVEL": "",
+        "KENDRA_INDEX_ID": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/NightTrek/Ollama-mcp",
+    "name": "Ollama",
+    "description": "Enables seamless integration with Ollama's local LLM capabilities, providing model management, chat completion, and custom model creation with OpenAI-compatible API.",
+    "author": "NightTrek",
+    "githubUrl": "https://github.com/NightTrek/Ollama-mcp",
+    "tags": [
+      "llm",
+      "model-management",
+      "local-ai",
+      "chat-completion",
+      "ollama-api"
+    ],
+    "githubStars": 74,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "/path/to/ollama-server/build/index.js"
+      ],
+      "env": {
+        "OLLAMA_HOST": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/modelcontextprotocol/servers/tree/main/src/aws-kb-retrieval-server",
+    "name": "AWS Knowledge Base (Archived)",
+    "description": "Retrieves information from AWS Knowledge Base using Bedrock Agent Runtime, supporting RAG-based queries with customizable result counts.",
+    "author": "modelcontextprotocol",
+    "githubUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/aws-kb-retrieval-server",
+    "tags": [
+      "aws",
+      "bedrock",
+      "rag",
+      "knowledge-retrieval",
+      "search"
+    ],
+    "githubStars": 73860,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/cloudwatch-logs-mcp-server",
+    "name": "CloudWatch Logs",
+    "description": "Enables analysis of AWS CloudWatch logs through log group discovery and Log Insights queries, supporting anomaly detection and pattern analysis across accounts.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/cloudwatch-logs-mcp-server",
+    "tags": [
+      "aws",
+      "log-analysis",
+      "cloud-monitoring",
+      "observability",
+      "analytics"
+    ],
+    "githubStars": 7574,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.cloudwatch-logs-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": "",
+        "FASTMCP_LOG_LEVEL": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/JetBrains/mcp-jetbrains",
+    "name": "JetBrains IDE",
+    "description": "Proxies requests between AI assistants and JetBrains IDEs, enabling direct interaction with the IDE's built-in webserver for development tasks.",
+    "author": "JetBrains",
+    "githubUrl": "https://github.com/JetBrains/mcp-jetbrains",
+    "tags": [
+      "ide-integration",
+      "jetbrains",
+      "development",
+      "proxy",
+      "automation"
+    ],
+    "githubStars": 933,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/mobile-next/mobile-mcp",
+    "name": "Mobile Next",
+    "description": "Platform-agnostic mobile automation server for iOS and Android that enables AI assistants to interact with mobile apps through accessibility snapshots and coordinate-based interactions on simulators and physical devices.",
+    "author": "mobile-next",
+    "githubUrl": "https://github.com/mobile-next/mobile-mcp",
+    "tags": [
+      "mobile-automation",
+      "ios-android",
+      "app-testing",
+      "device-control",
+      "accessibility"
+    ],
+    "githubStars": 2628,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@mobilenext/mobile-mcp@latest"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/pinecone-io/assistant-mcp",
+    "name": "Pinecone Assistant",
+    "description": "Enables retrieval of information from Pinecone Assistant with configurable result limits and API integration.",
+    "author": "pinecone-io",
+    "githubUrl": "https://github.com/pinecone-io/assistant-mcp",
+    "tags": [
+      "vector-database",
+      "information-retrieval",
+      "pinecone",
+      "data-query",
+      "knowledge-base"
+    ],
+    "githubStars": 39,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/openapi-mcp-server",
+    "name": "OpenAPI Dynamic Tools",
+    "description": "Creates MCP tools and resources dynamically from OpenAPI specifications, enabling LLMs to interact with APIs through intelligent route mapping and optimized prompts.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/openapi-mcp-server",
+    "tags": [
+      "openapi",
+      "api-integration",
+      "dynamic-tools",
+      "aws",
+      "automation"
+    ],
+    "githubStars": 7564,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.openapi-mcp-server@latest"
+      ],
+      "env": {
+        "API_BASE_URL": "",
+        "API_NAME": "",
+        "API_SPEC_URL": "",
+        "ENABLE_OPERATION_PROMPTS": "",
+        "ENABLE_PROMETHEUS": "",
+        "LOG_LEVEL": "",
+        "UVICORN_GRACEFUL_SHUTDOWN": "",
+        "UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/esignaturescom/mcp-server-esignatures",
+    "name": "eSignatures",
+    "description": "Manages digital contract workflows including creation, sending, and template management for electronic signatures through the eSignatures platform.",
+    "author": "esignaturescom",
+    "githubUrl": "https://github.com/esignaturescom/mcp-server-esignatures",
+    "tags": [
+      "digital-signatures",
+      "contracts",
+      "document-management",
+      "templates",
+      "collaboration"
+    ],
+    "githubStars": 30,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-esignatures"
+      ],
+      "env": {
+        "ESIGNATURES_SECRET_TOKEN": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/nova-canvas-mcp-server",
+    "name": "Nova Canvas",
+    "description": "Generates AI images using Amazon Nova Canvas, supporting text prompts and color palettes with customizable dimensions, quality options, and multi-image generation.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/nova-canvas-mcp-server",
+    "tags": [
+      "image-generation",
+      "ai-art",
+      "aws",
+      "text-to-image",
+      "color-palettes"
+    ],
+    "githubStars": 7574,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.nova-canvas-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": "",
+        "FASTMCP_LOG_LEVEL": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/Saik0s/mcp-browser-use",
+    "name": "Browser Use",
+    "description": "AI-driven browser automation server enabling natural language control of web browsers with features like page navigation, form filling, visual understanding, and session persistence.",
+    "author": "Saik0s",
+    "githubUrl": "https://github.com/Saik0s/mcp-browser-use",
+    "tags": [
+      "browser-automation",
+      "web-interaction",
+      "visual-analysis",
+      "session-management",
+      "multi-llm"
+    ],
+    "githubStars": 850,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-browser-use@latest"
+      ],
+      "env": {
+        "MCP_BROWSER_HEADLESS": "true",
+        "MCP_LLM_GOOGLE_API_KEY": "",
+        "MCP_LLM_MODEL_NAME": "gemini-2.5-flash-preview-04-17",
+        "MCP_LLM_PROVIDER": "google"
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/amazon-keyspaces-mcp-server",
+    "name": "Amazon Keyspaces",
+    "description": "Enables natural language interaction with Amazon Keyspaces and Apache Cassandra databases, supporting schema exploration, query execution, and performance analysis.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/amazon-keyspaces-mcp-server",
+    "tags": [
+      "cassandra",
+      "aws",
+      "database-management",
+      "query-analysis",
+      "schema-exploration"
+    ],
+    "githubStars": 7384,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.amazon-keyspaces-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": "",
+        "FASTMCP_LOG_LEVEL": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/cline/cline-community",
+    "name": "Cline Community",
+    "description": "Streamlines Cline issue reporting with automatic system information collection, preview functionality, and direct submission via GitHub CLI integration.",
+    "author": "cline",
+    "githubUrl": "https://github.com/cline/cline-community",
+    "tags": [
+      "github-integration",
+      "issue-tracking",
+      "bug-reporting",
+      "automation",
+      "cli-tools"
+    ],
+    "githubStars": 17,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "/path/to/cline-community/build/index.js"
+      ],
+      "env": {
+        "GH_TOKEN": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/kagisearch/kagimcp",
+    "name": "Kagi Search",
+    "description": "Integrates Kagi's advanced search API to provide AI assistants with up-to-date web search capabilities and accurate information retrieval.",
+    "author": "kagisearch",
+    "githubUrl": "https://github.com/kagisearch/kagimcp",
+    "tags": [
+      "web-search",
+      "information-retrieval",
+      "kagi-api",
+      "real-time-data",
+      "search-engine"
+    ],
+    "githubStars": 234,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "kagimcp"
+      ],
+      "env": {
+        "KAGI_API_KEY": "",
+        "KAGI_SUMMARIZER_ENGINE": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/modelcontextprotocol/servers/tree/main/src/postgres",
+    "name": "PostgreSQL Reader",
+    "description": "Provides read-only access to PostgreSQL databases, allowing LLMs to inspect database schemas and execute read-only queries within protected transactions.",
+    "author": "modelcontextprotocol",
+    "githubUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/postgres",
+    "tags": [
+      "postgresql",
+      "database-queries",
+      "schema-inspection",
+      "read-only",
+      "sql"
+    ],
+    "githubStars": 74307,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/amazon-neptune-mcp-server",
+    "name": "Neptune Query",
+    "description": "Query Amazon Neptune databases and analytics using openCypher and Gremlin, with support for schema retrieval and status checking.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/amazon-neptune-mcp-server",
+    "tags": [
+      "graph-database",
+      "aws-neptune",
+      "cypher",
+      "gremlin",
+      "query-execution"
+    ],
+    "githubStars": 7458,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.amazon-neptune-mcp-server@latest"
+      ],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "",
+        "NEPTUNE_ENDPOINT": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/webflow/mcp-server",
+    "name": "Webflow",
+    "description": "Enables AI agents to interact with Webflow's APIs for managing sites, pages, and CMS content through features like publishing, content updates, and collection management.",
+    "author": "webflow",
+    "githubUrl": "https://github.com/webflow/mcp-server",
+    "tags": [
+      "webflow",
+      "cms",
+      "web-development",
+      "content-management",
+      "site-builder"
+    ],
+    "githubStars": 88,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "webflow-mcp-server@latest"
+      ],
+      "env": {
+        "WEBFLOW_TOKEN": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/MiniMax-AI/MiniMax-MCP",
+    "name": "MiniMax Media Studio",
+    "description": "Provides powerful media generation capabilities including text-to-speech, voice cloning, video generation, and image creation through MiniMax's API suite.",
+    "author": "MiniMax-AI",
+    "githubUrl": "https://github.com/MiniMax-AI/MiniMax-MCP",
+    "tags": [
+      "text-to-speech",
+      "video-generation",
+      "image-generation",
+      "voice-cloning",
+      "media-creation"
+    ],
+    "githubStars": 1109,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "minimax-mcp",
+        "-y"
+      ],
+      "env": {
+        "MINIMAX_API_HOST": "",
+        "MINIMAX_API_KEY": "",
+        "MINIMAX_API_RESOURCE_MODE": "",
+        "MINIMAX_MCP_BASE_PATH": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/Garoth/dalle-mcp",
+    "name": "DALL-E",
+    "description": "Generate, edit, and create variations of images using OpenAI's DALL-E 2 and DALL-E 3 APIs, with support for customizable parameters and local image saving.",
+    "author": "Garoth",
+    "githubUrl": "https://github.com/Garoth/dalle-mcp",
+    "tags": [
+      "image-generation",
+      "dall-e",
+      "ai-art",
+      "image-editing",
+      "openai"
+    ],
+    "githubStars": 10,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "/path/to/dalle-mcp-server/build/index.js"
+      ],
+      "env": {
+        "OPENAI_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/Dhravya/apple-mcp",
+    "name": "Apple Native Tools",
+    "description": "Comprehensive suite of macOS native tools enabling AI assistants to interact with Messages, Notes, Contacts, Email, Reminders, Calendar, Maps, and web search functionality.",
+    "author": "Dhravya",
+    "githubUrl": "https://github.com/Dhravya/apple-mcp",
+    "tags": [
+      "macos",
+      "automation",
+      "productivity",
+      "apple-services",
+      "system-integration"
+    ],
+    "githubStars": 2854,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/core-mcp-server",
+    "name": "Core Server",
+    "description": "Manages and coordinates MCP servers, providing automated installation, configuration management, and orchestration of AWS Labs servers with centralized logging and environment control.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/core-mcp-server",
+    "tags": [
+      "server-management",
+      "configuration",
+      "aws-integration",
+      "automation",
+      "orchestration"
+    ],
+    "githubStars": 7635,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.core-mcp-server@latest"
+      ],
+      "env": {
+        "FASTMCP_LOG_LEVEL": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/ykhli/mcp-send-email",
+    "name": "Email Sender",
+    "description": "Sends emails directly through Resend's API, enabling AI assistants to compose and send emails without manual copying and pasting.",
+    "author": "ykhli",
+    "githubUrl": "https://github.com/ykhli/mcp-send-email",
+    "tags": [
+      "email",
+      "resend-api",
+      "messaging",
+      "automation",
+      "communication"
+    ],
+    "githubStars": 417,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "ABSOLUTE_PATH_TO_MCP_SEND_EMAIL_PROJECT/build/index.js"
+      ],
+      "env": {
+        "RESEND_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/tavily-ai/tavily-mcp",
+    "name": "Tavily",
+    "description": "Enables real-time web search and data extraction capabilities through Tavily's API, providing AI assistants with filtered search results and intelligent content extraction from web pages.",
+    "author": "tavily-ai",
+    "githubUrl": "https://github.com/tavily-ai/tavily-mcp",
+    "tags": [
+      "web-search",
+      "data-extraction",
+      "real-time-information",
+      "content-filtering",
+      "news-search"
+    ],
+    "githubStars": 969,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "tavily-mcp@latest"
+      ],
+      "env": {
+        "TAVILY_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/GLips/Figma-Context-MCP",
+    "name": "Figma",
+    "description": "Provides AI assistants with access to Figma design data, enabling accurate code generation from design files by fetching and simplifying Figma API responses for optimal context.",
+    "author": "GLips",
+    "githubUrl": "https://github.com/GLips/Figma-Context-MCP",
+    "tags": [
+      "figma",
+      "design",
+      "ui-development",
+      "code-generation",
+      "cursor-integration"
+    ],
+    "githubStars": 12168,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "figma-developer-mcp",
+        "--stdio"
+      ],
+      "env": {
+        "FIGMA_API_KEY": "",
+        "PORT": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/modelcontextprotocol/servers/tree/main/src/google-maps",
+    "name": "Google Maps",
+    "description": "Provides comprehensive access to Google Maps services including geocoding, place search, directions, distance calculations, and elevation data through the Google Maps API.",
+    "author": "modelcontextprotocol",
+    "githubUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/google-maps",
+    "tags": [
+      "maps",
+      "geocoding",
+      "navigation",
+      "places-api",
+      "location-data"
+    ],
+    "githubStars": 73835,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/NightTrek/Serper-search-mcp",
+    "name": "Serper Search",
+    "description": "Provides Google search capabilities through Serper API, delivering rich search results including knowledge graphs, organic results, related questions, and customizable search parameters.",
+    "author": "NightTrek",
+    "githubUrl": "https://github.com/NightTrek/Serper-search-mcp",
+    "tags": [
+      "google-search",
+      "serper-api",
+      "web-search",
+      "knowledge-graph",
+      "search-results"
+    ],
+    "githubStars": 44,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "/path/to/serper-search-server/build/index.js"
+      ],
+      "env": {
+        "SERPER_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/exa-labs/exa-mcp-server",
+    "name": "Exa Search",
+    "description": "Enables AI assistants to perform real-time web searches using Exa's AI Search API, providing structured results with titles, URLs, and content snippets.",
+    "author": "exa-labs",
+    "githubUrl": "https://github.com/exa-labs/exa-mcp-server",
+    "tags": [
+      "web-search",
+      "exa-api",
+      "real-time-data",
+      "content-discovery",
+      "information-retrieval"
+    ],
+    "githubStars": 3361,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "exa-mcp-server"
+      ],
+      "env": {
+        "EXA_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/memcached-mcp-server",
+    "name": "ElastiCache Memcached",
+    "description": "Enables secure interaction with Amazon ElastiCache Memcached, supporting full protocol operations, SSL/TLS encryption, connection pooling, and optional read-only mode.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/memcached-mcp-server",
+    "tags": [
+      "memcached",
+      "caching",
+      "aws",
+      "elasticache",
+      "key-value-store"
+    ],
+    "githubStars": 5324,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.memcached-mcp-server@latest"
+      ],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "",
+        "MEMCACHED_HOST": "",
+        "MEMCACHED_PORT": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/Verodat/verodat-mcp-server",
+    "name": "Verodat",
+    "description": "Enables AI systems to interact with Verodat's data management platform, providing capabilities for dataset creation, querying, and AI-powered analysis across workspaces and accounts.",
+    "author": "Verodat",
+    "githubUrl": "https://github.com/Verodat/verodat-mcp-server",
+    "tags": [
+      "data-management",
+      "dataset-operations",
+      "workspace-management",
+      "data-validation",
+      "ai-integration"
+    ],
+    "githubStars": 3,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "path/to/verodat-mcp-server/build/src/consume.js"
+      ],
+      "env": {
+        "VERODAT_AI_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/code-doc-gen-mcp-server",
+    "name": "Code Documentation Generator",
+    "description": "Automatically analyzes repository structure and generates comprehensive documentation for code projects using repomix, supporting multiple document types and project analysis.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/code-doc-gen-mcp-server",
+    "tags": [
+      "documentation",
+      "code-analysis",
+      "project-structure",
+      "automation",
+      "repomix"
+    ],
+    "githubStars": 7576,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.code-doc-gen-mcp-server@latest"
+      ],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "ERROR"
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/aws-serverless-mcp-server",
+    "name": "AWS Serverless",
+    "description": "Provides AI-powered tools for building, deploying, and managing serverless applications on AWS, including SAM deployment, web application hosting, observability, and serverless architecture guidance.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/aws-serverless-mcp-server",
+    "tags": [
+      "aws",
+      "serverless",
+      "lambda",
+      "deployment",
+      "infrastructure"
+    ],
+    "githubStars": 7559,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.aws-serverless-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/elasticache-mcp-server",
+    "name": "ElastiCache",
+    "description": "Manages AWS ElastiCache resources including serverless caches, replication groups, and cache clusters with comprehensive monitoring and cost analysis capabilities.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/elasticache-mcp-server",
+    "tags": [
+      "aws",
+      "caching",
+      "redis",
+      "memcached",
+      "cloud-infrastructure"
+    ],
+    "githubStars": 7598,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.elasticache-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_PROFILE": "default",
+        "AWS_REGION": "us-west-2",
+        "FASTMCP_LOG_LEVEL": "ERROR"
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/snaggle-ai/openapi-mcp-server",
+    "name": "OpenAPI Proxy",
+    "description": "Creates a proxy server that converts any OpenAPI v3.1 compliant API into Claude-compatible tools, enabling natural language interaction with APIs including file upload support.",
+    "author": "snaggle-ai",
+    "githubUrl": "https://github.com/snaggle-ai/openapi-mcp-server",
+    "tags": [
+      "openapi",
+      "api-integration",
+      "proxy",
+      "file-upload",
+      "documentation"
+    ],
+    "githubStars": 859,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "@modelcontextprotocol/inspector"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/supabase-community/mcp-supabase/tree/HEAD/packages/mcp-server-postgrest",
+    "name": "Postgrest",
+    "description": "Enables database operations on PostgreSQL through PostgREST, supporting SQL-to-REST conversion and direct API requests for querying and modifying data.",
+    "author": "supabase-community",
+    "githubUrl": "https://github.com/supabase-community/mcp-supabase/tree/HEAD/packages/mcp-server-postgrest",
+    "tags": [
+      "postgresql",
+      "postgrest",
+      "database-api",
+      "sql",
+      "supabase"
+    ],
+    "githubStars": 2311,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/pashpashpash/mcp-webresearch",
+    "name": "Web Research",
+    "description": "Enables comprehensive web research with Google search integration, webpage content extraction, session tracking, and screenshot capabilities for real-time information gathering.",
+    "author": "pashpashpash",
+    "githubUrl": "https://github.com/pashpashpash/mcp-webresearch",
+    "tags": [
+      "web-research",
+      "google-search",
+      "content-extraction",
+      "screenshots",
+      "session-tracking"
+    ],
+    "githubStars": 26,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "path/to/mcp-webresearch/dist/index.js"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/base/base-mcp",
+    "name": "Base",
+    "description": "Enables blockchain interactions with Base and Coinbase APIs, providing tools for wallet management, fund transfers, smart contract deployment, and testnet operations.",
+    "author": "base",
+    "githubUrl": "https://github.com/base/base-mcp",
+    "tags": [
+      "blockchain",
+      "coinbase",
+      "web3",
+      "smart-contracts",
+      "crypto-wallet"
+    ],
+    "githubStars": 328,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "base-mcp@latest"
+      ],
+      "env": {
+        "ALCHEMY_API_KEY": "",
+        "CHAIN_ID": "",
+        "COINBASE_API_KEY_NAME": "",
+        "COINBASE_API_PRIVATE_KEY": "",
+        "COINBASE_PROJECT_ID": "",
+        "NEYNAR_API_KEY": "",
+        "OPENROUTER_API_KEY": "",
+        "SEED_PHRASE": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/amazon-qindex-mcp-server",
+    "name": "Amazon Q Search",
+    "description": "Enables ISVs to search enterprise customer data through Amazon Q Business's SearchRelevantContent API with secure authentication and cross-account capabilities.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/amazon-qindex-mcp-server",
+    "tags": [
+      "amazon-q",
+      "enterprise-search",
+      "oauth",
+      "cross-account",
+      "aws"
+    ],
+    "githubStars": 7597,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.amazon-qindex-mcp-server"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/modelcontextprotocol/servers/tree/main/src/sqlite",
+    "name": "SQLite",
+    "description": "Provides database interaction and business intelligence capabilities through SQLite, enabling SQL queries, data analysis, and automated business insight generation.",
+    "author": "modelcontextprotocol",
+    "githubUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/sqlite",
+    "tags": [
+      "sql",
+      "data-analysis",
+      "business-intelligence",
+      "database-management",
+      "sqlite"
+    ],
+    "githubStars": 73942,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/neo4j-contrib/mcp-neo4j",
+    "name": "Neo4j",
+    "description": "Enables natural language interactions with Neo4j graph databases, supporting Cypher query generation and knowledge graph memory management for LLMs.",
+    "author": "neo4j-contrib",
+    "githubUrl": "https://github.com/neo4j-contrib/mcp-neo4j",
+    "tags": [
+      "graph-database",
+      "cypher",
+      "knowledge-graph",
+      "memory-storage",
+      "neo4j-aura"
+    ],
+    "githubStars": 842,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/justinpbarnett/unity-mcp",
+    "name": "Unity Bridge",
+    "description": "Enables bidirectional communication between Unity and LLMs, allowing programmatic control of Unity Editor features including asset management, scene control, and editor automation.",
+    "author": "justinpbarnett",
+    "githubUrl": "https://github.com/justinpbarnett/unity-mcp",
+    "tags": [
+      "unity",
+      "game-development",
+      "asset-management",
+      "automation",
+      "editor-tools"
+    ],
+    "githubStars": 4185,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/CoplayDev/unity-mcp@v8.1.0#subdirectory=Server",
+        "mcp-for-unity",
+        "--transport",
+        "http",
+        "--http-url",
+        "http://localhost:8080"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/aws-bedrock-data-automation-mcp-server",
+    "name": "Bedrock Data Automation",
+    "description": "Enables analysis of documents, images, videos, and audio files using Amazon Bedrock Data Automation projects, with support for project management and S3 integration.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/aws-bedrock-data-automation-mcp-server",
+    "tags": [
+      "aws",
+      "data-analysis",
+      "content-processing",
+      "automation",
+      "document-analysis"
+    ],
+    "githubStars": 7605,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.aws-bedrock-data-automation-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_BUCKET_NAME": "",
+        "AWS_PROFILE": "",
+        "AWS_REGION": "",
+        "BASE_DIR": "",
+        "FASTMCP_LOG_LEVEL": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/codegen-sh/codegen-sdk/tree/develop/codegen-examples/examples/codegen-mcp-server",
+    "name": "Codegen",
+    "description": "Enables parsing codebases and executing codemods through standardized model inference, supporting various LLM providers via integration with the Codegen SDK.",
+    "author": "codegen-sh",
+    "githubUrl": "https://github.com/codegen-sh/codegen-sdk/tree/develop/codegen-examples/examples/codegen-mcp-server",
+    "tags": [
+      "code-generation",
+      "codemod",
+      "code-parsing",
+      "sdk-integration",
+      "llm-tools"
+    ],
+    "githubStars": 512,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/documentdb-mcp-server",
+    "name": "DocumentDB",
+    "description": "Enables AI assistants to interact with AWS DocumentDB databases, providing tools for querying, managing collections, and analyzing schemas with optional read-only security mode.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/documentdb-mcp-server",
+    "tags": [
+      "aws",
+      "documentdb",
+      "mongodb",
+      "database-management",
+      "nosql"
+    ],
+    "githubStars": 7539,
+    "requiresApiKey": false,
+    "config": {
+      "command": "python",
+      "args": [
+        "-m",
+        "awslabs.documentdb_mcp_server.server"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/elevenlabs/elevenlabs-mcp",
+    "name": "ElevenLabs",
+    "description": "Enables AI assistants to interact with ElevenLabs' Text-to-Speech and audio processing APIs, supporting voice cloning, speech generation, transcription, and audio manipulation.",
+    "author": "elevenlabs",
+    "githubUrl": "https://github.com/elevenlabs/elevenlabs-mcp",
+    "tags": [
+      "text-to-speech",
+      "voice-cloning",
+      "audio-processing",
+      "transcription",
+      "voice-design"
+    ],
+    "githubStars": 1084,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "elevenlabs-mcp"
+      ],
+      "env": {
+        "ELEVENLABS_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/motherduckdb/mcp-server-motherduck",
+    "name": "MotherDuck",
+    "description": "Enables database operations with MotherDuck and local DuckDB, providing tools for connection initialization, schema reading, and query execution.",
+    "author": "motherduckdb",
+    "githubUrl": "https://github.com/motherduckdb/mcp-server-motherduck",
+    "tags": [
+      "duckdb",
+      "motherduck",
+      "sql",
+      "database-management",
+      "query-execution"
+    ],
+    "githubStars": 368,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-motherduck",
+        "--db-path",
+        "/path/to/local.db",
+        "--read-only"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/browserbase/mcp-server-browserbase",
+    "name": "Browserbase",
+    "description": "Cloud browser automation server enabling LLMs to interact with web pages, take screenshots, extract data, and execute JavaScript using Browserbase and Puppeteer.",
+    "author": "browserbase",
+    "githubUrl": "https://github.com/browserbase/mcp-server-browserbase",
+    "tags": [
+      "web-automation",
+      "puppeteer",
+      "screenshot-capture",
+      "data-extraction",
+      "javascript-execution"
+    ],
+    "githubStars": 2881,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "@browserbasehq/mcp-server-browserbase"
+      ],
+      "env": {
+        "BROWSERBASE_API_KEY": "",
+        "BROWSERBASE_PROJECT_ID": "",
+        "GEMINI_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/aws-diagram-mcp-server",
+    "name": "AWS Diagrams",
+    "description": "Creates professional AWS architecture diagrams, sequence diagrams, flow charts, and class diagrams using Python code and the Diagrams package DSL.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/aws-diagram-mcp-server",
+    "tags": [
+      "diagrams",
+      "aws-architecture",
+      "visualization",
+      "documentation",
+      "python"
+    ],
+    "githubStars": 7597,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.aws-diagram-mcp-server"
+      ],
+      "env": {
+        "FASTMCP_LOG_LEVEL": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/pashpashpash/mcp-dice",
+    "name": "Dice Roller",
+    "description": "A server for rolling dice using standard dice notation, providing individual rolls, sums, and modifiers with timestamp tracking.",
+    "author": "pashpashpash",
+    "githubUrl": "https://github.com/pashpashpash/mcp-dice",
+    "tags": [
+      "dice-rolling",
+      "random-generation",
+      "gaming",
+      "probability",
+      "tabletop"
+    ],
+    "githubStars": 3,
+    "requiresApiKey": false,
+    "config": {
+      "command": "python",
+      "args": [
+        "-m",
+        "mcp_dice"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/pashpashpash/mcp-discord",
+    "name": "Discord",
+    "description": "Provides comprehensive Discord server management capabilities including message handling, channel management, role administration, and webhook integration.",
+    "author": "pashpashpash",
+    "githubUrl": "https://github.com/pashpashpash/mcp-discord",
+    "tags": [
+      "discord",
+      "chat",
+      "server-management",
+      "webhooks",
+      "messaging"
+    ],
+    "githubStars": 9,
+    "requiresApiKey": false,
+    "config": {
+      "command": "python",
+      "args": [
+        "-m",
+        "mcp-discord"
+      ],
+      "env": {
+        "DISCORD_TOKEN": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/modelcontextprotocol/servers/tree/main/src/gitlab",
+    "name": "GitLab",
+    "description": "Enables comprehensive GitLab project management including file operations, issue tracking, merge requests, and repository management through the GitLab API.",
+    "author": "modelcontextprotocol",
+    "githubUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/gitlab",
+    "tags": [
+      "gitlab",
+      "git",
+      "repository-management",
+      "collaboration",
+      "ci-cd"
+    ],
+    "githubStars": 73960,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
+    "name": "File System",
+    "description": "Provides comprehensive filesystem operations including reading, writing, moving files, directory management, and advanced file editing with pattern matching and formatting capabilities.",
+    "author": "modelcontextprotocol",
+    "githubUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
+    "tags": [
+      "filesystem",
+      "file-management",
+      "directory-operations",
+      "file-search",
+      "file-editing"
+    ],
+    "githubStars": 74214,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/Users/username/Desktop",
+        "/path/to/other/allowed/dir"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/pashpashpash/google-calendar-mcp",
+    "name": "Google Calendar",
+    "description": "Enables AI assistants to read, create, and manage Google Calendar events, including processing events from screenshots and coordinating schedules across multiple calendars.",
+    "author": "pashpashpash",
+    "githubUrl": "https://github.com/pashpashpash/google-calendar-mcp",
+    "tags": [
+      "google-calendar",
+      "scheduling",
+      "event-management",
+      "calendar-automation",
+      "oauth"
+    ],
+    "githubStars": 19,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "build/index.js"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/browserbase/mcp-server-browserbase/tree/main/stagehand",
+    "name": "Stagehand",
+    "description": "Provides AI-powered web automation capabilities using a real browser environment, enabling interaction with web pages, action performance, data extraction, and action observation.",
+    "author": "browserbase",
+    "githubUrl": "https://github.com/browserbase/mcp-server-browserbase/tree/main/stagehand",
+    "tags": [
+      "web-automation",
+      "browser-control",
+      "data-extraction",
+      "web-interaction",
+      "screenshots"
+    ],
+    "githubStars": 2870,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "path/to/mcp-server-browserbase/stagehand/dist/index.js"
+      ],
+      "env": {
+        "LOCAL_CDP_URL": "",
+        "OPENAI_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/NightTrek/Software-planning-mcp",
+    "name": "Software Planning",
+    "description": "Interactive tool for breaking down software projects into manageable tasks, tracking implementation progress, and maintaining detailed development plans with complexity scoring and code examples.",
+    "author": "NightTrek",
+    "githubUrl": "https://github.com/NightTrek/Software-planning-mcp",
+    "tags": [
+      "project-planning",
+      "task-management",
+      "software-development",
+      "todo-tracking",
+      "documentation"
+    ],
+    "githubStars": 392,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "/path/to/software-planning-tool/build/index.js"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/ahujasid/ableton-mcp",
+    "name": "Ableton Live",
+    "description": "Controls Ableton Live through socket-based communication, enabling AI-assisted music production with features like track creation, MIDI manipulation, instrument selection, and session control.",
+    "author": "ahujasid",
+    "githubUrl": "https://github.com/ahujasid/ableton-mcp",
+    "tags": [
+      "music-production",
+      "midi",
+      "audio-editing",
+      "daw-control",
+      "ableton"
+    ],
+    "githubStars": 2044,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "ableton-mcp"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/supabase-community/supabase-mcp",
+    "name": "Supabase",
+    "description": "Enables AI assistants to interact with Supabase projects, providing tools for database management, project configuration, migrations, and TypeScript type generation.",
+    "author": "supabase-community",
+    "githubUrl": "https://github.com/supabase-community/supabase-mcp",
+    "tags": [
+      "supabase",
+      "postgresql",
+      "database-management",
+      "migrations",
+      "project-management"
+    ],
+    "githubStars": 2318,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/stepfunctions-tool-mcp-server",
+    "name": "Step Functions",
+    "description": "Enables AI models to execute and manage AWS Step Functions state machines as tools, supporting both Standard and Express workflows with input validation via EventBridge Schema Registry.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/stepfunctions-tool-mcp-server",
+    "tags": [
+      "aws",
+      "workflows",
+      "automation",
+      "state-machines",
+      "serverless"
+    ],
+    "githubStars": 7581,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.stepfunctions-tool-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": "",
+        "STATE_MACHINE_INPUT_SCHEMA_ARN_TAG_KEY": "",
+        "STATE_MACHINE_LIST": "",
+        "STATE_MACHINE_PREFIX": "",
+        "STATE_MACHINE_TAG_KEY": "",
+        "STATE_MACHINE_TAG_VALUE": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/neondatabase/mcp-server-neon",
+    "name": "Neon Database",
+    "description": "Enables natural language interaction with Neon PostgreSQL databases, supporting project management, schema migrations, SQL queries, and database operations through the Neon API.",
+    "author": "neondatabase",
+    "githubUrl": "https://github.com/neondatabase/mcp-server-neon",
+    "tags": [
+      "postgresql",
+      "database-management",
+      "migrations",
+      "sql",
+      "neon-api"
+    ],
+    "githubStars": 525,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@neondatabase/mcp-server-neon",
+        "start"
+      ],
+      "env": {
+        "NEON_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/Azure/azure-mcp",
+    "name": "Azure Services (archived)",
+    "description": "Comprehensive management interface for Azure cloud services, providing tools for storage, databases, monitoring, security, and resource management through the Model Context Protocol.",
+    "author": "Azure",
+    "githubUrl": "https://github.com/Azure/azure-mcp",
+    "tags": [
+      "azure",
+      "cloud-management",
+      "infrastructure",
+      "devops",
+      "monitoring"
+    ],
+    "githubStars": 1190,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@azure/mcp@latest",
+        "server",
+        "start"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/PixVerseAI/PixVerse-MCP",
+    "name": "PixVerse",
+    "description": "Generate high-quality videos from text descriptions using PixVerse's video generation models, supporting customizable parameters like quality, duration, and aspect ratio.",
+    "author": "PixVerseAI",
+    "githubUrl": "https://github.com/PixVerseAI/PixVerse-MCP",
+    "tags": [
+      "video-generation",
+      "text-to-video",
+      "ai-video",
+      "creative-tools",
+      "media-creation"
+    ],
+    "githubStars": 31,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "pixverse-mcp"
+      ],
+      "env": {
+        "PIXVERSE_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/posthog/mcp",
+    "name": "PostHog",
+    "description": "Integrates with PostHog analytics platform for managing feature flags, tracking errors, and analyzing user behavior through natural language interactions.",
+    "author": "posthog",
+    "githubUrl": "https://github.com/posthog/mcp",
+    "tags": [
+      "analytics",
+      "feature-flags",
+      "error-tracking",
+      "user-behavior",
+      "posthog-api"
+    ],
+    "githubStars": 139,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "@posthog/wizard@latest",
+        "mcp",
+        "add"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/antvis/mcp-server-chart",
+    "name": "Chart Generator",
+    "description": "Creates various types of charts and visualizations using AntV, supporting 15+ chart types including line, bar, pie, radar, network graphs, and more with customizable deployment options.",
+    "author": "antvis",
+    "githubUrl": "https://github.com/antvis/mcp-server-chart",
+    "tags": [
+      "data-visualization",
+      "charts",
+      "graphs",
+      "antv",
+      "image-generation"
+    ],
+    "githubStars": 3284,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@antv/mcp-server-chart"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/paypal/agent-toolkit",
+    "name": "PayPal",
+    "description": "Enables integration with PayPal APIs for creating invoices, managing orders, and handling transactions through multiple agent frameworks and function calling.",
+    "author": "paypal",
+    "githubUrl": "https://github.com/paypal/agent-toolkit",
+    "tags": [
+      "payments",
+      "invoicing",
+      "transactions",
+      "paypal-api",
+      "financial-services"
+    ],
+    "githubStars": 170,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/pashpashpash/mcp-server-asana",
+    "name": "Asana",
+    "description": "Enables AI assistants to interact with Asana workspaces, providing comprehensive task and project management capabilities including creation, search, updates, and status tracking.",
+    "author": "pashpashpash",
+    "githubUrl": "https://github.com/pashpashpash/mcp-server-asana",
+    "tags": [
+      "project-management",
+      "task-tracking",
+      "team-collaboration",
+      "workflow",
+      "asana-api"
+    ],
+    "githubStars": 5,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "path/to/build/index.js"
+      ],
+      "env": {
+        "ASANA_ACCESS_TOKEN": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/magnitudedev/magnitude/tree/main/packages/magnitude-mcp",
+    "name": "Magnitude",
+    "description": "Users will leave if your app keeps breaking - Magnitude enables effortless end-to-end testing with visual AI agents that find bugs by navigating your app like real users.",
+    "author": "magnitudedev",
+    "githubUrl": "https://github.com/magnitudedev/magnitude/tree/main/packages/magnitude-mcp",
+    "tags": [
+      "testing",
+      "automation",
+      "quality-assurance",
+      "cli-integration",
+      "test-cases"
+    ],
+    "githubStars": 3796,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "magnitude-mcp"
+      ],
+      "env": {
+        "MAGNITUDE_MCP_PROFILE_DIR": "",
+        "MAGNITUDE_MCP_STEALTH": "",
+        "MAGNITUDE_MCP_VIEWPORT_HEIGHT": "",
+        "MAGNITUDE_MCP_VIEWPORT_WIDTH": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/Operative-Sh/web-eval-agent",
+    "name": "Web Eval Agent",
+    "description": "Autonomous web testing and debugging agent that executes and validates web applications directly in your code editor, with network traffic monitoring and console error detection.",
+    "author": "Operative-Sh",
+    "githubUrl": "https://github.com/Operative-Sh/web-eval-agent",
+    "tags": [
+      "web-testing",
+      "debugging",
+      "automation",
+      "browser-control",
+      "qa-automation"
+    ],
+    "githubStars": 1224,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "--with",
+        "playwright",
+        "playwright",
+        "install",
+        "--with-deps"
+      ],
+      "env": {
+        "OPERATIVE_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/aws-documentation-mcp-server",
+    "name": "AWS Documentation",
+    "description": "Access and search AWS documentation, fetch pages in markdown format, and get content recommendations for AWS documentation pages.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/aws-documentation-mcp-server",
+    "tags": [
+      "aws",
+      "documentation",
+      "search",
+      "recommendations",
+      "technical-docs"
+    ],
+    "githubStars": 7631,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.aws-documentation-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_DOCUMENTATION_PARTITION": "",
+        "FASTMCP_LOG_LEVEL": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/timestream-for-influxdb-mcp-server",
+    "name": "Timestream InfluxDB",
+    "description": "Manages AWS Timestream for InfluxDB resources, enabling database cluster/instance management, parameter configuration, and data operations using InfluxDB APIs.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/timestream-for-influxdb-mcp-server",
+    "tags": [
+      "aws",
+      "timestream",
+      "influxdb",
+      "time-series",
+      "database-management"
+    ],
+    "githubStars": 7462,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.timestream-for-influxdb-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": "",
+        "FASTMCP_LOG_LEVEL": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/amazon-sns-sqs-mcp-server",
+    "name": "SNS/SQS Manager",
+    "description": "Enables secure management of Amazon SNS topics and SQS queues, with resource tagging, access controls, and messaging capabilities for AWS messaging services.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/amazon-sns-sqs-mcp-server",
+    "tags": [
+      "aws",
+      "messaging",
+      "queue-management",
+      "pub-sub",
+      "cloud-messaging"
+    ],
+    "githubStars": 7560,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.amazon-sns-sqs-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/cloudflare/mcp-server-cloudflare",
+    "name": "Cloudflare",
+    "description": "Manages Cloudflare resources including Workers, KV stores, R2 storage, D1 databases, and analytics through natural language interactions.",
+    "author": "cloudflare",
+    "githubUrl": "https://github.com/cloudflare/mcp-server-cloudflare",
+    "tags": [
+      "cloudflare",
+      "serverless",
+      "edge-computing",
+      "cloud-storage",
+      "database-management"
+    ],
+    "githubStars": 3194,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/makenotion/notion-mcp-server",
+    "name": "Notion",
+    "description": "Enables AI assistants to interact with Notion workspaces through the official API, supporting page creation, comments, content retrieval, and search functionality.",
+    "author": "makenotion",
+    "githubUrl": "https://github.com/makenotion/notion-mcp-server",
+    "tags": [
+      "notion",
+      "documentation",
+      "knowledge-base",
+      "collaboration",
+      "workspace"
+    ],
+    "githubStars": 3555,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@notionhq/notion-mcp-server"
+      ],
+      "env": {
+        "NOTION_TOKEN": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/eks-mcp-server",
+    "name": "Amazon EKS Manager",
+    "description": "Manages Amazon EKS clusters and Kubernetes resources through natural language interactions, providing tools for cluster creation, application deployment, resource management, monitoring, and troubleshooting.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/eks-mcp-server",
+    "tags": [
+      "kubernetes",
+      "aws",
+      "containerization",
+      "cluster-management",
+      "devops"
+    ],
+    "githubStars": 7605,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.eks-mcp-server@latest",
+        "--allow-write",
+        "--allow-sensitive-data-access"
+      ],
+      "env": {
+        "FASTMCP_LOG_LEVEL": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/cost-explorer-mcp-server",
+    "name": "Cost Explorer",
+    "description": "Analyzes AWS costs and usage data through the Cost Explorer API, providing natural language querying of spending patterns, cost breakdowns, and usage trends across services and regions.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/cost-explorer-mcp-server",
+    "tags": [
+      "aws",
+      "cost-analysis",
+      "cloud-billing",
+      "expense-tracking",
+      "reporting"
+    ],
+    "githubStars": 7576,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.cost-explorer-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": "",
+        "FASTMCP_LOG_LEVEL": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/modelcontextprotocol/servers/tree/main/src/puppeteer",
+    "name": "Puppeteer",
+    "description": "Provides browser automation capabilities using Puppeteer, enabling web page interaction, screenshots, and JavaScript execution in a real browser environment.",
+    "author": "modelcontextprotocol",
+    "githubUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer",
+    "tags": [
+      "web-automation",
+      "screenshots",
+      "browser-control",
+      "javascript",
+      "testing"
+    ],
+    "githubStars": 74253,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/executeautomation/mcp-playwright",
+    "name": "Playwright",
+    "description": "Browser automation server that enables LLMs to interact with web pages, take screenshots, and execute JavaScript in a real browser environment using Playwright.",
+    "author": "executeautomation",
+    "githubUrl": "https://github.com/executeautomation/mcp-playwright",
+    "tags": [
+      "browser-automation",
+      "web-testing",
+      "screenshots",
+      "javascript",
+      "playwright"
+    ],
+    "githubStars": 5049,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@executeautomation/playwright-mcp-server"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/stripe/agent-toolkit",
+    "name": "Stripe",
+    "description": "Enables AI agents to interact with Stripe APIs, supporting operations like customer management, payment processing, product creation, and invoice handling through function calling.",
+    "author": "stripe",
+    "githubUrl": "https://github.com/stripe/agent-toolkit",
+    "tags": [
+      "payments",
+      "billing",
+      "invoicing",
+      "stripe-api",
+      "financial-services"
+    ],
+    "githubStars": 1138,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@stripe/mcp",
+        "--tools=all"
+      ],
+      "env": {
+        "YOUR_STRIPE_SECRET_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/riza-io/riza-mcp",
+    "name": "Riza",
+    "description": "Provides a secure code interpreter for executing LLM-generated code, with features for creating, saving, managing, and executing code tools in an isolated environment.",
+    "author": "riza-io",
+    "githubUrl": "https://github.com/riza-io/riza-mcp",
+    "tags": [
+      "code-execution",
+      "sandbox",
+      "code-interpreter",
+      "tool-management",
+      "security"
+    ],
+    "githubStars": 12,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "@riza-io/riza-mcp"
+      ],
+      "env": {
+        "RIZA_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/qdrant/mcp-server-qdrant",
+    "name": "Qdrant",
+    "description": "A semantic memory layer enabling storage and retrieval of vector-based memories using the Qdrant vector search engine, with support for both cloud and local deployments.",
+    "author": "qdrant",
+    "githubUrl": "https://github.com/qdrant/mcp-server-qdrant",
+    "tags": [
+      "vector-search",
+      "semantic-memory",
+      "embeddings",
+      "storage",
+      "retrieval"
+    ],
+    "githubStars": 1112,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-qdrant"
+      ],
+      "env": {
+        "COLLECTION_NAME": "",
+        "EMBEDDING_MODEL": "sentence-transformers/all-MiniLM-L6-v2",
+        "QDRANT_LOCAL_PATH": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/nickbaumann98/everart-forge-mcp",
+    "name": "EverArt Forge",
+    "description": "Advanced image generation server integrating EverArt's AI models for creating vector and raster images, supporting multiple formats and styles with flexible storage options.",
+    "author": "nickbaumann98",
+    "githubUrl": "https://github.com/nickbaumann98/everart-forge-mcp",
+    "tags": [
+      "image-generation",
+      "vector-graphics",
+      "ai-models",
+      "file-conversion",
+      "content-creation"
+    ],
+    "githubStars": 10,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/everart-forge-mcp/build/index.js"
+      ],
+      "env": {
+        "EVERART_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/alexander-zuev/supabase-mcp-server",
+    "name": "Supabase",
+    "description": "Enables direct interaction with Supabase PostgreSQL databases, providing database management tools including schema exploration, SQL query validation, and secure read-only access.",
+    "author": "alexander-zuev",
+    "githubUrl": "https://github.com/alexander-zuev/supabase-mcp-server",
+    "tags": [
+      "postgresql",
+      "supabase",
+      "database-management",
+      "sql",
+      "schema-exploration"
+    ],
+    "githubStars": 813,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uv",
+      "args": [
+        "pip",
+        "install",
+        "supabase-mcp-server"
+      ],
+      "env": {
+        "QUERY_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/metoro-io/metoro-mcp-server",
+    "name": "Kubernetes Observer",
+    "description": "Enables interaction with Kubernetes clusters through Metoro's observability platform, providing eBPF-based telemetry and monitoring capabilities via natural language queries.",
+    "author": "metoro-io",
+    "githubUrl": "https://github.com/metoro-io/metoro-mcp-server",
+    "tags": [
+      "kubernetes",
+      "observability",
+      "ebpf",
+      "telemetry",
+      "microservices"
+    ],
+    "githubStars": 45,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/pashpashpash/mcp-spotify",
+    "name": "Spotify",
+    "description": "Enables interaction with Spotify's music catalog, including search, artist information, playlist management, and audiobook access through the Spotify Web API.",
+    "author": "pashpashpash",
+    "githubUrl": "https://github.com/pashpashpash/mcp-spotify",
+    "tags": [
+      "music",
+      "spotify-api",
+      "playlist-management",
+      "audiobooks",
+      "streaming"
+    ],
+    "githubStars": 6,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "path/to/mcp-spotify/dist/index.js"
+      ],
+      "env": {
+        "SPOTIFY_CLIENT_ID": "",
+        "SPOTIFY_CLIENT_SECRET": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/fireproof-storage/mcp-database-server",
+    "name": "Fireproof",
+    "description": "A JSON document store server providing CRUD operations and field-based sorting queries, powered by Fireproof database for seamless integration with AI systems.",
+    "author": "fireproof-storage",
+    "githubUrl": "https://github.com/fireproof-storage/mcp-database-server",
+    "tags": [
+      "document-store",
+      "json",
+      "crud",
+      "database",
+      "storage"
+    ],
+    "githubStars": 29,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/cfn-mcp-server",
+    "name": "CloudFormation",
+    "description": "Enables natural language management of AWS resources through Cloud Control API and IaC Generator, supporting creation, modification, and templating of over 1,100 AWS services.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/cfn-mcp-server",
+    "tags": [
+      "aws",
+      "infrastructure-as-code",
+      "cloud-control",
+      "resource-management",
+      "cloudformation"
+    ],
+    "githubStars": 7559,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.cfn-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_PROFILE": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/oxylabs/oxylabs-mcp",
+    "name": "Oxylabs Scraper",
+    "description": "Advanced web scraping tool using Oxylabs Web Scraper API, supporting JavaScript rendering, HTML parsing, and content transformation with flexible parsing options.",
+    "author": "oxylabs",
+    "githubUrl": "https://github.com/oxylabs/oxylabs-mcp",
+    "tags": [
+      "web-scraping",
+      "content-extraction",
+      "javascript-rendering",
+      "html-parsing",
+      "data-collection"
+    ],
+    "githubStars": 76,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "oxylabs-mcp"
+      ],
+      "env": {
+        "OXYLABS_AI_STUDIO_API_KEY": "",
+        "OXYLABS_PASSWORD": "",
+        "OXYLABS_USERNAME": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/terraform-mcp-server",
+    "name": "AWS Terraform",
+    "description": "Provides Terraform best practices, security compliance scanning with Checkov, and AWS infrastructure management tools with focus on security and AWS Well-Architected guidance.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/terraform-mcp-server",
+    "tags": [
+      "terraform",
+      "aws",
+      "infrastructure-as-code",
+      "security-compliance",
+      "checkov"
+    ],
+    "githubStars": 7594,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.terraform-mcp-server@latest"
+      ],
+      "env": {
+        "FASTMCP_LOG_LEVEL": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/mendableai/firecrawl-mcp-server",
+    "name": "FireCrawl",
+    "description": "Advanced web scraping and crawling server with JavaScript rendering, batch processing, smart content filtering, and structured data extraction capabilities.",
+    "author": "mendableai",
+    "githubUrl": "https://github.com/mendableai/firecrawl-mcp-server",
+    "tags": [
+      "web-scraping",
+      "crawling",
+      "data-extraction",
+      "batch-processing",
+      "content-filtering"
+    ],
+    "githubStars": 5052,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "firecrawl-mcp"
+      ],
+      "env": {
+        "FIRECRAWL_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/modelcontextprotocol/servers/tree/main/src/slack",
+    "name": "Slack",
+    "description": "Enables AI assistants to interact with Slack workspaces, providing tools for messaging, channel management, reactions, user profiles, and thread management.",
+    "author": "modelcontextprotocol",
+    "githubUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/slack",
+    "tags": [
+      "slack",
+      "messaging",
+      "team-collaboration",
+      "chat",
+      "workspace-management"
+    ],
+    "githubStars": 74158,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/AgentDeskAI/browser-tools-mcp",
+    "name": "Browser Tools",
+    "description": "A browser monitoring and interaction toolkit that enables AI tools to capture screenshots, analyze console logs, track network activity, perform audits, and interact with DOM elements via Chrome extension.",
+    "author": "AgentDeskAI",
+    "githubUrl": "https://github.com/AgentDeskAI/browser-tools-mcp",
+    "tags": [
+      "chrome-extension",
+      "debugging",
+      "web-auditing",
+      "monitoring",
+      "automation"
+    ],
+    "githubStars": 6897,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "@agentdeskai/browser-tools-mcp@latest"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/bedrock-kb-retrieval-mcp-server",
+    "name": "Bedrock Knowledge Base",
+    "description": "Enables natural language querying of Amazon Bedrock Knowledge Bases with features for discovery, filtering, and result reranking.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/bedrock-kb-retrieval-mcp-server",
+    "tags": [
+      "aws-bedrock",
+      "knowledge-base",
+      "search",
+      "retrieval",
+      "document-management"
+    ],
+    "githubStars": 7564,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.bedrock-kb-retrieval-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": "",
+        "BEDROCK_KB_RERANKING_ENABLED": "",
+        "FASTMCP_LOG_LEVEL": "",
+        "KB_INCLUSION_TAG_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/needle-ai/needle-mcp",
+    "name": "Needle Search",
+    "description": "Enables document management and natural language search capabilities through the Needle platform, allowing users to organize, store, and retrieve documents using Claude's language model.",
+    "author": "needle-ai",
+    "githubUrl": "https://github.com/needle-ai/needle-mcp",
+    "tags": [
+      "document-management",
+      "search",
+      "knowledge-base",
+      "needle-api",
+      "content-organization"
+    ],
+    "githubStars": 85,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/path/to/needle-mcp",
+        "run",
+        "needle-mcp"
+      ],
+      "env": {
+        "NEEDLE_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/IBM/wxflows/tree/main/examples/mcp/javascript",
+    "name": "WatsonX Flows",
+    "description": "Enables integration with watsonx.ai Flows Engine, providing tools for Google Books and Wikipedia searches through a TypeScript-based MCP server implementation.",
+    "author": "IBM",
+    "githubUrl": "https://github.com/IBM/wxflows/tree/main/examples/mcp/javascript",
+    "tags": [
+      "watsonx",
+      "flows-engine",
+      "tool-integration",
+      "search-tools",
+      "ibm-cloud"
+    ],
+    "githubStars": 110,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "/path/to/wxflows-server/build/index.js"
+      ],
+      "env": {
+        "WXFLOWS_APIKEY": "",
+        "WXFLOWS_ENDPOINT": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/firebase/genkit/tree/HEAD/js/plugins/mcp",
+    "name": "Genkit Integration",
+    "description": "Enables bi-directional integration with Model Context Protocol, allowing applications to both consume MCP tools/prompts as a client and expose Genkit tools/prompts as an MCP server.",
+    "author": "firebase",
+    "githubUrl": "https://github.com/firebase/genkit/tree/HEAD/js/plugins/mcp",
+    "tags": [
+      "mcp-integration",
+      "client-server",
+      "tools-prompts",
+      "plugin",
+      "genkit"
+    ],
+    "githubStars": 5113,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/path/to/current/directory"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/finch-mcp-server",
+    "name": "Finch Container Tools",
+    "description": "Build and push container images through Finch CLI, with support for ECR repositories and automated VM management for macOS and Windows.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/finch-mcp-server",
+    "tags": [
+      "containers",
+      "docker",
+      "ecr",
+      "image-building",
+      "devops"
+    ],
+    "githubStars": 7610,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.finch-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": "",
+        "FASTMCP_LOG_LEVEL": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/amazon-mq-mcp-server",
+    "name": "Amazon MQ",
+    "description": "Enables management of RabbitMQ and ActiveMQ message brokers through Amazon MQ, providing secure broker creation, configuration, and administration capabilities.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/amazon-mq-mcp-server",
+    "tags": [
+      "message-brokers",
+      "aws",
+      "rabbitmq",
+      "activemq",
+      "cloud-messaging"
+    ],
+    "githubStars": 7537,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.amazon-mq-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/hyperbrowserai/mcp",
+    "name": "Hyperbrowser",
+    "description": "Advanced web automation server providing tools for web scraping, structured data extraction, and browser automation with support for multiple AI agents including OpenAI's CUA and Claude's Computer Use.",
+    "author": "hyperbrowserai",
+    "githubUrl": "https://github.com/hyperbrowserai/mcp",
+    "tags": [
+      "web-scraping",
+      "browser-automation",
+      "data-extraction",
+      "web-crawling",
+      "search"
+    ],
+    "githubStars": 646,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "hyperbrowser-mcp"
+      ],
+      "env": {
+        "HYPERBROWSER_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/Flux159/mcp-server-kubernetes",
+    "name": "Kubernetes",
+    "description": "Connects to and manages Kubernetes clusters, enabling pod, service, and deployment operations through kubectl integration.",
+    "author": "Flux159",
+    "githubUrl": "https://github.com/Flux159/mcp-server-kubernetes",
+    "tags": [
+      "kubernetes",
+      "containers",
+      "cluster-management",
+      "kubectl",
+      "deployments"
+    ],
+    "githubStars": 1209,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "mcp-server-kubernetes"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/Garoth/sleep-mcp",
+    "name": "Sleep",
+    "description": "Provides timing control with configurable delays between operations, useful for rate limiting, API call spacing, and testing eventually consistent systems.",
+    "author": "Garoth",
+    "githubUrl": "https://github.com/Garoth/sleep-mcp",
+    "tags": [
+      "timing",
+      "rate-limiting",
+      "delays",
+      "testing",
+      "automation"
+    ],
+    "githubStars": 18,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "/path/to/sleep-server/build/index.js"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/valkey-mcp-server",
+    "name": "Valkey",
+    "description": "Interact with Amazon ElastiCache and MemoryDB Valkey datastores, supporting multiple data types like strings, lists, sets, hashes, streams, and JSON documents with advanced features like clustering and SSL/TLS security.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/valkey-mcp-server",
+    "tags": [
+      "cache",
+      "redis",
+      "aws",
+      "datastore",
+      "key-value"
+    ],
+    "githubStars": 6833,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.valkey-mcp-server@latest"
+      ],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "",
+        "VALKEY_HOST": "",
+        "VALKEY_PORT": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
+    "name": "Sequential Thinking",
+    "description": "A structured problem-solving tool that enables step-by-step analysis, thought revision, and branching logic for complex reasoning tasks.",
+    "author": "modelcontextprotocol",
+    "githubUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
+    "tags": [
+      "problem-solving",
+      "reasoning",
+      "analysis",
+      "structured-thinking",
+      "decision-making"
+    ],
+    "githubStars": 74213,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/frontend-mcp-server",
+    "name": "React Development Guide",
+    "description": "Provides comprehensive documentation and tools for modern React application development with AWS integrations, including setup guides, authentication, routing, and troubleshooting.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/frontend-mcp-server",
+    "tags": [
+      "react",
+      "aws-integration",
+      "web-development",
+      "documentation",
+      "frontend"
+    ],
+    "githubStars": 7569,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.frontend-mcp-server@latest"
+      ],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "ERROR"
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/dynamodb-mcp-server",
+    "name": "DynamoDB",
+    "description": "Comprehensive suite of tools for managing AWS DynamoDB resources, including table operations, item management, querying, backups, TTL settings, and resource policies.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/dynamodb-mcp-server",
+    "tags": [
+      "aws",
+      "dynamodb",
+      "nosql",
+      "database-management",
+      "cloud-database"
+    ],
+    "githubStars": 7611,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.dynamodb-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": "",
+        "FASTMCP_LOG_LEVEL": "",
+        "MYSQL_CLUSTER_ARN": "",
+        "MYSQL_DATABASE": "",
+        "MYSQL_MAX_QUERY_RESULTS": "",
+        "MYSQL_SECRET_ARN": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/anaisbetts/mcp-youtube",
+    "name": "YouTube Subtitles",
+    "description": "Downloads and extracts YouTube video subtitles using yt-dlp, enabling AI assistants to analyze and summarize video content through subtitle text.",
+    "author": "anaisbetts",
+    "githubUrl": "https://github.com/anaisbetts/mcp-youtube",
+    "tags": [
+      "youtube",
+      "subtitles",
+      "video-analysis",
+      "content-summarization",
+      "yt-dlp"
+    ],
+    "githubStars": 476,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/aurora-dsql-mcp-server",
+    "name": "Aurora DSQL",
+    "description": "Enables natural language to SQL query conversion and execution against Aurora DSQL databases, with configurable read/write access and connection pooling.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/aurora-dsql-mcp-server",
+    "tags": [
+      "aurora",
+      "postgresql",
+      "sql",
+      "aws",
+      "database-queries"
+    ],
+    "githubStars": 7607,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.aurora-dsql-mcp-server@latest",
+        "--cluster_endpoint",
+        "[your dsql cluster endpoint]",
+        "--region",
+        "[your dsql cluster region, e.g. us-east-1]",
+        "--database_user",
+        "[your dsql username]",
+        "--profile",
+        "default"
+      ],
+      "env": {
+        "FASTMCP_LOG_LEVEL": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/modelcontextprotocol/servers/tree/main/src/gdrive",
+    "name": "Google Drive",
+    "description": "Enables searching, listing, and reading files from Google Drive, with automatic export of Google Workspace files to common formats like Markdown, CSV, and PNG.",
+    "author": "modelcontextprotocol",
+    "githubUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/gdrive",
+    "tags": [
+      "google-drive",
+      "file-management",
+      "document-storage",
+      "workspace",
+      "file-search"
+    ],
+    "githubStars": 74073,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/pashpashpash/shopify-mcp-server",
+    "name": "Shopify",
+    "description": "Integrates with Shopify's GraphQL Admin API to manage store data, including products, customers, orders, collections, discounts, and webhooks.",
+    "author": "pashpashpash",
+    "githubUrl": "https://github.com/pashpashpash/shopify-mcp-server",
+    "tags": [
+      "shopify",
+      "ecommerce",
+      "store-management",
+      "graphql",
+      "retail"
+    ],
+    "githubStars": 33,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "path/to/shopify-mcp-server/dist/index.js"
+      ],
+      "env": {
+        "MYSHOPIFY_DOMAIN": "",
+        "SHOPIFY_ACCESS_TOKEN": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/aliyun/alibaba-cloud-ops-mcp-server",
+    "name": "Alibaba Cloud Ops",
+    "description": "Manages Alibaba Cloud resources including ECS, VPC, RDS, OSS and CloudMonitor, providing comprehensive cloud infrastructure management through API and OOS automation.",
+    "author": "aliyun",
+    "githubUrl": "https://github.com/aliyun/alibaba-cloud-ops-mcp-server",
+    "tags": [
+      "alibaba-cloud",
+      "infrastructure-management",
+      "cloud-automation",
+      "monitoring",
+      "resource-management"
+    ],
+    "githubStars": 86,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "alibaba-cloud-ops-mcp-server@latest"
+      ],
+      "env": {
+        "ALIBABA_CLOUD_ACCESS_KEY_ID": "",
+        "ALIBABA_CLOUD_ACCESS_KEY_SECRET": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/aws-location-mcp-server",
+    "name": "Amazon Location",
+    "description": "Provides location-based services including place search, geocoding, route calculation, and nearby points of interest using Amazon Location Service.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/aws-location-mcp-server",
+    "tags": [
+      "geocoding",
+      "route-planning",
+      "places-search",
+      "aws",
+      "location-services"
+    ],
+    "githubStars": 7481,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.aws-location-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": "",
+        "FASTMCP_LOG_LEVEL": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/git-repo-research-mcp-server",
+    "name": "Git Repo Research",
+    "description": "Enables semantic search and exploration of Git repositories using FAISS and Amazon Bedrock, allowing natural language querying of code without local cloning.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/git-repo-research-mcp-server",
+    "tags": [
+      "semantic-search",
+      "git",
+      "repository-analysis",
+      "code-research",
+      "bedrock"
+    ],
+    "githubStars": 7621,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "awslabs.git-repo-research-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": "",
+        "FASTMCP_LOG_LEVEL": "",
+        "GITHUB_TOKEN": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/modelcontextprotocol/servers/tree/main/src/time",
+    "name": "Time",
+    "description": "Provides time and timezone conversion capabilities using IANA timezone names, with automatic system timezone detection and support for current time queries.",
+    "author": "modelcontextprotocol",
+    "githubUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/time",
+    "tags": [
+      "timezone",
+      "time-conversion",
+      "datetime",
+      "scheduling",
+      "automation"
+    ],
+    "githubStars": 74298,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-time"
+      ]
+    }
+  },
+  {
+    "mcpId": "github.com/github/github-mcp-server",
+    "name": "GitHub",
+    "description": "Provides comprehensive GitHub API integration for repository management, issues, pull requests, and code operations with authentication and enterprise support.",
+    "author": "github",
+    "githubUrl": "https://github.com/github/github-mcp-server",
+    "tags": [
+      "github",
+      "repository-management",
+      "code-collaboration",
+      "git",
+      "source-control"
+    ],
+    "githubStars": 25077,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/prometheus-mcp-server",
+    "name": "Prometheus Query",
+    "description": "Enables querying and monitoring with AWS Managed Prometheus, supporting PromQL queries, metric listing, and server information retrieval with AWS SigV4 authentication.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/prometheus-mcp-server",
+    "tags": [
+      "prometheus",
+      "metrics",
+      "aws",
+      "monitoring",
+      "promql"
+    ],
+    "githubStars": 7517,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uv",
+      "args": [
+        "tool",
+        "run",
+        "--from",
+        "awslabs.prometheus-mcp-server@latest",
+        "awslabs.prometheus-mcp-server.exe"
+      ],
+      "env": {
+        "AWS_PROFILE": "",
+        "AWS_REGION": "",
+        "FASTMCP_LOG_LEVEL": "ERROR"
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/supermemoryai/supermemory-mcp",
+    "name": "Supermemory",
+    "description": "Universal memory system that makes personal context and memories available across different LLMs, enabling seamless memory transfer without logins or paywalls.",
+    "author": "supermemoryai",
+    "githubUrl": "https://github.com/supermemoryai/supermemory-mcp",
+    "tags": [
+      "memory-management",
+      "llm-integration",
+      "context-sharing",
+      "persistence",
+      "knowledge-base"
+    ],
+    "githubStars": 1559,
+    "requiresApiKey": false
+  },
+  {
+    "mcpId": "github.com/Garoth/sendgrid-mcp",
+    "name": "SendGrid",
+    "description": "Provides email marketing and contact management capabilities through SendGrid's Marketing API, enabling dynamic templates, contact list management, and bulk email sending.",
+    "author": "Garoth",
+    "githubUrl": "https://github.com/Garoth/sendgrid-mcp",
+    "tags": [
+      "email-marketing",
+      "contact-management",
+      "templates",
+      "bulk-email",
+      "sendgrid-api"
+    ],
+    "githubStars": 21,
+    "requiresApiKey": false,
+    "config": {
+      "command": "node",
+      "args": [
+        "/path/to/sendgrid-mcp/build/index.js"
+      ],
+      "env": {
+        "SENDGRID_API_KEY": ""
+      }
+    }
+  },
+  {
+    "mcpId": "github.com/awslabs/mcp/tree/main/src/aws-support-mcp-server",
+    "name": "AWS Support",
+    "description": "Enables programmatic management of AWS support cases, including creation, communication, and resolution, with automatic determination of issue types and severity levels.",
+    "author": "awslabs",
+    "githubUrl": "https://github.com/awslabs/mcp/tree/main/src/aws-support-mcp-server",
+    "tags": [
+      "aws",
+      "support-cases",
+      "ticket-management",
+      "cloud-support",
+      "case-resolution"
+    ],
+    "githubStars": 7560,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "-m",
+        "awslabs.aws-support-mcp-server@latest",
+        "--debug",
+        "--log-file",
+        "./logs/mcp_support_server.log"
+      ],
+      "env": {
+        "AWS_PROFILE": ""
+      }
+    }
+  }
+]

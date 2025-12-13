@@ -171,8 +171,7 @@ func (p *ProtectedTool) Run(ctx tool.Context, args any) (map[string]any, error) 
 
 	// 1. Check if we already have approval
 	if approved, _ := p.State.Get(approvalKey); approved == true {
-		// Consume approval
-		p.State.Set(approvalKey, false)
+		// Note: Do NOT consume approval here - it needs to persist for retries
 
 		// We use a broader interface check here to be safe
 		if rt, ok := p.Tool.(interface {
@@ -1458,6 +1457,12 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 
 	var internalTools []tool.Tool
 	if node.Tools {
+		// Add universal instruction for tool-enabled nodes to prevent repeating completed work
+		// This helps models like GPT that may not correctly interpret conversation history
+		instruction += "\n\nIMPORTANT: When executing tools, check the conversation history first. " +
+			"If a tool has already been called and returned a successful result (not 'pending_approval'), " +
+			"do NOT call that tool again. Proceed only with tools that haven't completed successfully yet."
+
 		// Prepare internal tools (no wrapping needed - callback handles approval)
 		if len(nodeTools) > 0 {
 			internalTools = append(internalTools, nodeTools...)
@@ -1609,8 +1614,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 					}
 
 					if approved {
-						// Consume approval
-						state.Set(approvalKey, false)
+						// Note: Do NOT consume approval here - it needs to persist for retries
 						if a.DebugMode {
 							fmt.Printf("[DEBUG] Tool approved! Allowing execution to proceed.\n")
 						}
@@ -1691,14 +1695,15 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 					yield(&session.Event{
 						LLMResponse: model.LLMResponse{
 							Content: &genai.Content{
-								Parts: []*genai.Part{{Text: prompt}},
+				Parts: []*genai.Part{{Text: prompt}},
 								Role:  "model",
 							},
 						},
 						Actions: session.EventActions{
 							StateDelta: map[string]any{
 								"auto_approved": true,
-								"approval_tool": toolName,
+								// Note: Do NOT set approval_tool here - it would clobber
+								// the value set by subsequent tools that need approval
 							},
 						},
 					}, nil)
@@ -1882,8 +1887,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				}
 
 				if approved {
-					// Consume approval
-					state.Set(approvalKey, false)
+					// Note: Do NOT consume approval here - it needs to persist for retries
 					if a.DebugMode {
 						fmt.Printf("[ReAct DEBUG] Tool %s approved! Allowing execution.\n", toolName)
 					}
@@ -2097,7 +2101,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 							approved = true
 						}
 						if approved {
-							state.Set(approvalKey, false)
+							// Note: Do NOT consume approval here - it needs to persist for retries
 							if a.DebugMode {
 								fmt.Printf("[ReAct DEBUG] Tool %s approved!\n", toolName)
 							}
@@ -2893,9 +2897,10 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 		}
 	}
 
-	// Clear approval state
+	// Clear awaiting_approval state (but NOT the tool's approval - that should persist)
 	state.Set("awaiting_approval", false)
-	state.Set(fmt.Sprintf("approval:%s", toolName), false)
+	// Note: Do NOT clear approval:toolName here - if we restart the node for another tool's approval,
+	// we need previously approved tools to remain approved
 
 	// Yield result event
 	yield(&session.Event{

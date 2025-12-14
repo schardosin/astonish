@@ -4,6 +4,7 @@ package mcpstore
 import (
 	"embed"
 	"encoding/json"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -52,6 +53,11 @@ func loadServers() ([]Server, error) {
 			loadErr = err
 			return
 		}
+
+		// Sort by GitHub stars (descending) so most popular appear first
+		sort.Slice(servers, func(i, j int) bool {
+			return servers[i].GithubStars > servers[j].GithubStars
+		})
 	})
 	return servers, loadErr
 }

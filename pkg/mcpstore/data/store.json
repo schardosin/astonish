@@ -95,22 +95,6 @@
     }
   },
   {
-    "mcpId": "github.com/googleapis/genai-toolbox",
-    "name": "Database Toolbox",
-    "description": "A server for securely connecting AI assistants to databases with features like connection pooling, authentication, and observability support.",
-    "author": "googleapis",
-    "githubUrl": "https://github.com/googleapis/genai-toolbox",
-    "tags": [
-      "database-management",
-      "security",
-      "connection-pooling",
-      "observability",
-      "authentication"
-    ],
-    "githubStars": 11774,
-    "requiresApiKey": false
-  },
-  {
     "mcpId": "github.com/universal-tool-calling-protocol/code-mode",
     "name": "Code Mode",
     "description": "A TypeScript-based code execution library that enables AI agents to execute complex tool workflows through code instead of individual tool calls, offering improved efficiency and performance.",
@@ -1560,20 +1544,35 @@
     }
   },
   {
-    "mcpId": "github.com/modelcontextprotocol/servers/tree/main/src/postgres",
-    "name": "PostgreSQL Reader",
-    "description": "Provides read-only access to PostgreSQL databases, allowing LLMs to inspect database schemas and execute read-only queries within protected transactions.",
-    "author": "modelcontextprotocol",
-    "githubUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/postgres",
+    "mcpId": "github.com/googleapis/genai-toolbox",
+    "name": "MCP Toolbox for Databases",
+    "description": "Open source MCP server for databases by Google Cloud. Connects AI agents to enterprise data securely with support for PostgreSQL, MySQL, Cloud SQL, AlloyDB, Spanner, and more.",
+    "author": "googleapis",
+    "githubUrl": "https://github.com/googleapis/genai-toolbox",
     "tags": [
+      "database",
       "postgresql",
-      "database-queries",
-      "schema-inspection",
-      "read-only",
-      "sql"
+      "mysql",
+      "cloud-sql",
+      "alloydb",
+      "spanner",
+      "google-cloud",
+      "enterprise"
     ],
-    "githubStars": 74402,
-    "requiresApiKey": false
+    "githubStars": 2500,
+    "requiresApiKey": false,
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y", 
+        "@toolbox-sdk/server", 
+        "--tools-file", 
+        "${TOOLBOX_TOOLS_FILE}"
+      ],
+      "env": {
+        "TOOLBOX_TOOLS_FILE": "/path/to/tools.yaml"
+      }
+    }
   },
   {
     "mcpId": "github.com/awslabs/mcp/tree/main/src/amazon-neptune-mcp-server",

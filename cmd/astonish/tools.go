@@ -98,42 +98,27 @@ func handleToolsListCommand(args []string) error {
 
 	if err == nil {
 		if err := mcpManager.InitializeToolsets(ctx); err == nil {
-			// Get server names from config
-			mcpConfig := mcpManager.GetConfig()
-			toolsets := mcpManager.GetToolsets()
+			// Get named toolsets with their server names
+			namedToolsets := mcpManager.GetNamedToolsets()
 
 			// Create minimal context for fetching tools
 			minimalCtx := &minimalReadonlyContext{Context: ctx}
 
-			// Match servers with toolsets
-			serverNames := make([]string, 0, len(mcpConfig.MCPServers))
-			for name := range mcpConfig.MCPServers {
-				serverNames = append(serverNames, name)
-			}
-			sort.Strings(serverNames) // Sort server names
-
-			// Map toolsets by name for easier lookup if possible, or just iterate
-			// The mcpManager.GetToolsets() returns a slice, likely in order of initialization
-			// But we want to group by server name.
-			// Let's iterate toolsets and try to match names or just list them.
-
-			// Actually, let's just iterate the toolsets we have
-			for _, toolset := range toolsets {
-				serverName := toolset.Name()
-
+			// Iterate toolsets with their proper names
+			for _, namedToolset := range namedToolsets {
 				serverInfo := MCPServerInfo{
-					Name:  serverName,
+					Name:  namedToolset.Name,
 					Tools: []ToolInfo{},
 				}
 
 				// Fetch tools from this toolset
-				mcpTools, err := toolset.Tools(minimalCtx)
+				mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
 				if err == nil {
 					for _, tool := range mcpTools {
 						serverInfo.Tools = append(serverInfo.Tools, ToolInfo{
 							Name:        tool.Name(),
 							Description: tool.Description(),
-							Source:      serverName,
+							Source:      namedToolset.Name,
 						})
 					}
 				}
@@ -351,6 +336,11 @@ func handleToolsStoreCommand() error {
 	selectedServer, err := mcpstore.GetServer(selectedMcpId)
 	if err != nil || selectedServer == nil {
 		return fmt.Errorf("failed to get server details: %w", err)
+	}
+
+	// Verify server has config
+	if selectedServer.Config == nil {
+		return fmt.Errorf("server '%s' has no configuration available", selectedServer.Name)
 	}
 
 	// Prepare env variables

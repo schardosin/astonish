@@ -14,8 +14,15 @@ import (
 
 // Manager handles MCP server lifecycle and toolset creation
 type Manager struct {
-	config   *config.MCPConfig
-	toolsets []tool.Toolset
+	config        *config.MCPConfig
+	toolsets      []tool.Toolset
+	namedToolsets []NamedToolset
+}
+
+// NamedToolset pairs a toolset with its server name
+type NamedToolset struct {
+	Name    string
+	Toolset tool.Toolset
 }
 
 // NewManager creates a new MCP manager
@@ -26,8 +33,9 @@ func NewManager() (*Manager, error) {
 	}
 
 	return &Manager{
-		config:   cfg,
-		toolsets: make([]tool.Toolset, 0),
+		config:        cfg,
+		toolsets:      make([]tool.Toolset, 0),
+		namedToolsets: make([]NamedToolset, 0),
 	}, nil
 }
 
@@ -56,6 +64,10 @@ func (m *Manager) InitializeToolsets(ctx context.Context) error {
 		}
 
 		m.toolsets = append(m.toolsets, toolset)
+		m.namedToolsets = append(m.namedToolsets, NamedToolset{
+			Name:    serverName,
+			Toolset: toolset,
+		})
 		log.Printf("Successfully initialized MCP server: %s", serverName)
 	}
 
@@ -65,6 +77,11 @@ func (m *Manager) InitializeToolsets(ctx context.Context) error {
 // GetToolsets returns all initialized MCP toolsets
 func (m *Manager) GetToolsets() []tool.Toolset {
 	return m.toolsets
+}
+
+// GetNamedToolsets returns all toolsets with their server names
+func (m *Manager) GetNamedToolsets() []NamedToolset {
+	return m.namedToolsets
 }
 
 // createTransport creates the appropriate MCP transport based on configuration

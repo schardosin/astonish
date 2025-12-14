@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/schardosin/astonish/cmd/astonish"
@@ -8,6 +9,7 @@ import (
 
 func main() {
 	if err := astonish.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }

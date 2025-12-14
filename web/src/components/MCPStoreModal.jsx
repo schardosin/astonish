@@ -16,7 +16,11 @@ const installMCPServer = async (mcpId, env = {}) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ env })
   })
-  if (!res.ok) throw new Error('Failed to install MCP server')
+  if (!res.ok) {
+    // Try to get error message from response body
+    const errorText = await res.text()
+    throw new Error(errorText || `Failed to install MCP server (${res.status})`)
+  }
   return res.json()
 }
 

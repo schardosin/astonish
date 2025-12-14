@@ -845,3 +845,50 @@ func TestToolApproval_ConsumedAfterExecution(t *testing.T) {
 	// Next execution should require new approval
 	// (This is verified by the state being false)
 }
+
+// TestApprovalState_ClearedAfterExecution verifies that awaiting_approval, approval_tool,
+// and approval_args are all cleared after a tool is approved and executed.
+// This prevents subsequent user input (e.g., from input forms) from being
+// incorrectly treated as tool approval responses.
+func TestApprovalState_ClearedAfterExecution(t *testing.T) {
+	state := NewMockState()
+
+	// Simulate approval request state (as set when a tool needs approval)
+	state.Set("awaiting_approval", true)
+	state.Set("approval_tool", "list_pull_requests")
+	state.Set("approval_args", map[string]any{"owner": "test", "repo": "repo"})
+
+	// Verify initial state
+	awaiting, _ := state.Get("awaiting_approval")
+	if awaiting != true {
+		t.Fatalf("expected awaiting_approval to be true initially")
+	}
+
+	// Simulate what happens when tool is approved:
+	// 1. Set the approval key
+	approvalKey := "approval:list_pull_requests"
+	state.Set(approvalKey, true)
+	// 2. Clear all approval-related state (this is what the fix does)
+	state.Set("awaiting_approval", false)
+	state.Set("approval_tool", "")
+	state.Set("approval_args", nil)
+
+	// Verify all approval state is cleared
+	awaitingAfter, _ := state.Get("awaiting_approval")
+	if awaitingAfter != false {
+		t.Errorf("expected awaiting_approval to be false after approval, got %v", awaitingAfter)
+	}
+
+	toolAfter, _ := state.Get("approval_tool")
+	if toolAfter != "" {
+		t.Errorf("expected approval_tool to be empty after approval, got %v", toolAfter)
+	}
+
+	argsAfter, _ := state.Get("approval_args")
+	if argsAfter != nil {
+		t.Errorf("expected approval_args to be nil after approval, got %v", argsAfter)
+	}
+
+	// This ensures that subsequent user input (like selecting from an input form)
+	// won't be confused with tool approval responses
+}

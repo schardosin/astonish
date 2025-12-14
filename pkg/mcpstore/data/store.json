@@ -3778,8 +3778,8 @@
   },
   {
     "mcpId": "github.com/github/github-mcp-server",
-    "name": "GitHub",
-    "description": "Provides comprehensive GitHub API integration for repository management, issues, pull requests, and code operations with authentication and enterprise support.",
+    "name": "GitHub MCP Server",
+    "description": "GitHub's official MCP Server. Connects AI tools directly to GitHub's platform for repository management, issues, pull requests, code operations, and workflow automation.",
     "author": "github",
     "githubUrl": "https://github.com/github/github-mcp-server",
     "tags": [
@@ -3790,7 +3790,24 @@
       "source-control"
     ],
     "githubStars": 25154,
-    "requiresApiKey": false
+    "requiresApiKey": true,
+    "config": {
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "-e",
+        "GITHUB_HOST",
+        "ghcr.io/github/github-mcp-server"
+      ],
+      "env": {
+        "GITHUB_HOST": "https://github.com",
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "<your_github_token>"
+      }
+    }
   },
   {
     "mcpId": "github.com/awslabs/mcp/tree/main/src/prometheus-mcp-server",
@@ -3891,6 +3908,29 @@
       "env": {
         "AWS_PROFILE": ""
       }
+    }
+  },
+  {
+    "mcpId": "github.com/pydantic/mcp-run-python",
+    "name": "MCP Run Python",
+    "description": "MCP server to run Python code in a secure sandbox. Code is executed using Pyodide in Deno, isolated from the rest of the operating system.",
+    "author": "pydantic",
+    "githubUrl": "https://github.com/pydantic/mcp-run-python",
+    "tags": [
+      "python",
+      "code-execution",
+      "sandbox",
+      "pyodide",
+      "deno"
+    ],
+    "githubStars": 500,
+    "requiresApiKey": false,
+    "config": {
+      "command": "uvx",
+      "args": [
+        "mcp-run-python",
+        "stdio"
+      ]
     }
   }
 ]

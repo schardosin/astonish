@@ -280,6 +280,8 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 		}
 
 		// Fallback: Check event history if state is missing
+		// BUT only check recent events - stop if we find awaiting_approval=false 
+		// (which means approval was resolved)
 		if !awaiting {
 			events := ctx.Session().Events()
 			// Look backwards for the last model event with state delta
@@ -290,12 +292,19 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				}
 				if ev.Actions.StateDelta != nil {
 					if val, ok := ev.Actions.StateDelta["awaiting_approval"]; ok {
-						if b, ok := val.(bool); ok && b {
-							awaiting = true
-							if toolVal, ok := ev.Actions.StateDelta["approval_tool"]; ok {
-								state.Set("approval_tool", toolVal)
+						if b, ok := val.(bool); ok {
+							if b {
+								// Found awaiting_approval=true
+								awaiting = true
+								if toolVal, ok := ev.Actions.StateDelta["approval_tool"]; ok {
+									state.Set("approval_tool", toolVal)
+								}
+								break
+							} else {
+								// Found awaiting_approval=false - this means approval was resolved
+								// Stop looking, we don't want to find older approval requests
+								break
 							}
-							break
 						}
 					}
 				}
@@ -339,10 +348,9 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				}
 			}
 
-			// Clear waiting state
-			state.Set("awaiting_approval", false)
-			state.Set("approval_tool", "")
-			state.Set("approval_args", nil)
+			// NOTE: Do NOT clear awaiting_approval, approval_tool, or approval_args here!
+			// Let handleToolApproval handle the cleanup so it can inject the retry prompt.
+			// The handleToolApproval function (at line 410+) will process these and clear them.
 		}
 	}
 
@@ -907,6 +915,17 @@ func (a *AstonishAgent) handleToolApproval(ctx agent.InvocationContext, state se
 		approvalKey := fmt.Sprintf("approval:%s", toolName)
 		state.Set(approvalKey, true)
 		state.Set("awaiting_approval", false)
+		state.Set("approval_tool", "")
+		state.Set("approval_args", nil)
+
+		// Emit state delta event so history fallback sees approval was resolved
+		yield(&session.Event{
+			Actions: session.EventActions{
+				StateDelta: map[string]any{
+					"awaiting_approval": false,
+				},
+			},
+		}, nil)
 
 		// [MCP-SPECIFIC FIX] Inject a very specific instruction for MCP tools
 		// MCP tools are sensitive to exact arguments - must retry with same args
@@ -920,27 +939,12 @@ func (a *AstonishAgent) handleToolApproval(ctx agent.InvocationContext, state se
 			Text: retryPrompt,
 		}}
 
-		// Emit approval confirmation
-		event := &session.Event{
-			LLMResponse: model.LLMResponse{
-				Content: &genai.Content{
-					Parts: []*genai.Part{{
-						Text: "[ℹ️ Info] Tool execution approved. Resuming...\n",
-					}},
-					Role: "model",
-				},
-			},
-			Actions: session.EventActions{
-				StateDelta: map[string]any{
-					approvalKey:         true,
-					"awaiting_approval": false,
-				},
-			},
-		}
-		return yield(event, nil)
+		return true // Continue execution with retry prompt
 	} else {
 		// User denied - move to next node
 		state.Set("awaiting_approval", false)
+		state.Set("approval_tool", "")
+		state.Set("approval_args", nil)
 
 		event := &session.Event{
 			LLMResponse: model.LLMResponse{

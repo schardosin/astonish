@@ -275,8 +275,9 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		shouldStream := currentNodeType == "" || currentNodeType == "llm" || currentNodeType == "output" || currentNodeType == "input" || isApprovalRequest || isUserMessageDisplay
 
 		// For output_model nodes, suppress ALL text (raw JSON will be parsed and displayed via user_message)
-		// Only allow _user_message_display events and approval requests
-		if hasOutputModel && !isUserMessageDisplay && !isApprovalRequest {
+		// Only allow _user_message_display events, approval requests, and input prompts
+		isInputRequest := event.Actions.StateDelta != nil && event.Actions.StateDelta["input_options"] != nil
+		if hasOutputModel && !isUserMessageDisplay && !isApprovalRequest && !isInputRequest {
 			shouldStream = false
 		}
 

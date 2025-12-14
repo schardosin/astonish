@@ -1260,28 +1260,6 @@
     }
   },
   {
-    "mcpId": "github.com/Garoth/echo-mcp",
-    "name": "Echo",
-    "description": "A simple testing utility that echoes back any message it receives, useful for validating MCP functionality and connections.",
-    "author": "Garoth",
-    "githubUrl": "https://github.com/Garoth/echo-mcp",
-    "tags": [
-      "testing",
-      "debugging",
-      "validation",
-      "echo",
-      "development"
-    ],
-    "githubStars": 12,
-    "requiresApiKey": false,
-    "config": {
-      "command": "node",
-      "args": [
-        "/path/to/echo-server/build/index.js"
-      ]
-    }
-  },
-  {
     "mcpId": "github.com/awslabs/mcp/tree/main/src/amazon-kendra-index-mcp-server",
     "name": "Amazon Kendra Index",
     "description": "Enables RAG capabilities by integrating with Amazon Kendra indices, allowing AI assistants to query and retrieve context from enterprise documents and knowledge bases.",
@@ -1333,22 +1311,6 @@
         "OLLAMA_HOST": ""
       }
     }
-  },
-  {
-    "mcpId": "github.com/modelcontextprotocol/servers/tree/main/src/aws-kb-retrieval-server",
-    "name": "AWS Knowledge Base (Archived)",
-    "description": "Retrieves information from AWS Knowledge Base using Bedrock Agent Runtime, supporting RAG-based queries with customizable result counts.",
-    "author": "modelcontextprotocol",
-    "githubUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/aws-kb-retrieval-server",
-    "tags": [
-      "aws",
-      "bedrock",
-      "rag",
-      "knowledge-retrieval",
-      "search"
-    ],
-    "githubStars": 73860,
-    "requiresApiKey": false
   },
   {
     "mcpId": "github.com/awslabs/mcp/tree/main/src/cloudwatch-logs-mcp-server",
@@ -1568,31 +1530,6 @@
         "AWS_PROFILE": "",
         "AWS_REGION": "",
         "FASTMCP_LOG_LEVEL": ""
-      }
-    }
-  },
-  {
-    "mcpId": "github.com/cline/cline-community",
-    "name": "Cline Community",
-    "description": "Streamlines Cline issue reporting with automatic system information collection, preview functionality, and direct submission via GitHub CLI integration.",
-    "author": "cline",
-    "githubUrl": "https://github.com/cline/cline-community",
-    "tags": [
-      "github-integration",
-      "issue-tracking",
-      "bug-reporting",
-      "automation",
-      "cli-tools"
-    ],
-    "githubStars": 17,
-    "requiresApiKey": false,
-    "config": {
-      "command": "node",
-      "args": [
-        "/path/to/cline-community/build/index.js"
-      ],
-      "env": {
-        "GH_TOKEN": ""
       }
     }
   },
@@ -1955,31 +1892,6 @@
         "FASTMCP_LOG_LEVEL": "",
         "MEMCACHED_HOST": "",
         "MEMCACHED_PORT": ""
-      }
-    }
-  },
-  {
-    "mcpId": "github.com/Verodat/verodat-mcp-server",
-    "name": "Verodat",
-    "description": "Enables AI systems to interact with Verodat's data management platform, providing capabilities for dataset creation, querying, and AI-powered analysis across workspaces and accounts.",
-    "author": "Verodat",
-    "githubUrl": "https://github.com/Verodat/verodat-mcp-server",
-    "tags": [
-      "data-management",
-      "dataset-operations",
-      "workspace-management",
-      "data-validation",
-      "ai-integration"
-    ],
-    "githubStars": 3,
-    "requiresApiKey": false,
-    "config": {
-      "command": "node",
-      "args": [
-        "path/to/verodat-mcp-server/build/src/consume.js"
-      ],
-      "env": {
-        "VERODAT_AI_API_KEY": ""
       }
     }
   },
@@ -2411,29 +2323,6 @@
     }
   },
   {
-    "mcpId": "github.com/pashpashpash/mcp-dice",
-    "name": "Dice Roller",
-    "description": "A server for rolling dice using standard dice notation, providing individual rolls, sums, and modifiers with timestamp tracking.",
-    "author": "pashpashpash",
-    "githubUrl": "https://github.com/pashpashpash/mcp-dice",
-    "tags": [
-      "dice-rolling",
-      "random-generation",
-      "gaming",
-      "probability",
-      "tabletop"
-    ],
-    "githubStars": 3,
-    "requiresApiKey": false,
-    "config": {
-      "command": "python",
-      "args": [
-        "-m",
-        "mcp_dice"
-      ]
-    }
-  },
-  {
     "mcpId": "github.com/pashpashpash/mcp-discord",
     "name": "Discord",
     "description": "Provides comprehensive Discord server management capabilities including message handling, channel management, role administration, and webhook integration.",
@@ -2664,31 +2553,6 @@
       "env": {
         "NEON_API_KEY": ""
       }
-    }
-  },
-  {
-    "mcpId": "github.com/Azure/azure-mcp",
-    "name": "Azure Services (archived)",
-    "description": "Comprehensive management interface for Azure cloud services, providing tools for storage, databases, monitoring, security, and resource management through the Model Context Protocol.",
-    "author": "Azure",
-    "githubUrl": "https://github.com/Azure/azure-mcp",
-    "tags": [
-      "azure",
-      "cloud-management",
-      "infrastructure",
-      "devops",
-      "monitoring"
-    ],
-    "githubStars": 1190,
-    "requiresApiKey": false,
-    "config": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@azure/mcp@latest",
-        "server",
-        "start"
-      ]
     }
   },
   {
@@ -3610,28 +3474,6 @@
       "command": "npx",
       "args": [
         "mcp-server-kubernetes"
-      ]
-    }
-  },
-  {
-    "mcpId": "github.com/Garoth/sleep-mcp",
-    "name": "Sleep",
-    "description": "Provides timing control with configurable delays between operations, useful for rate limiting, API call spacing, and testing eventually consistent systems.",
-    "author": "Garoth",
-    "githubUrl": "https://github.com/Garoth/sleep-mcp",
-    "tags": [
-      "timing",
-      "rate-limiting",
-      "delays",
-      "testing",
-      "automation"
-    ],
-    "githubStars": 18,
-    "requiresApiKey": false,
-    "config": {
-      "command": "node",
-      "args": [
-        "/path/to/sleep-server/build/index.js"
       ]
     }
   },

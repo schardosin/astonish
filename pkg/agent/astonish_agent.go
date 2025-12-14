@@ -171,7 +171,8 @@ func (p *ProtectedTool) Run(ctx tool.Context, args any) (map[string]any, error) 
 
 	// 1. Check if we already have approval
 	if approved, _ := p.State.Get(approvalKey); approved == true {
-		// Note: Do NOT consume approval here - it needs to persist for retries
+		// Consume approval - each execution requires new approval
+		p.State.Set(approvalKey, false)
 
 		// We use a broader interface check here to be safe
 		if rt, ok := p.Tool.(interface {
@@ -1614,7 +1615,8 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 					}
 
 					if approved {
-						// Note: Do NOT consume approval here - it needs to persist for retries
+						// Consume approval - each execution requires new approval
+						state.Set(approvalKey, false)
 						if a.DebugMode {
 							fmt.Printf("[DEBUG] Tool approved! Allowing execution to proceed.\n")
 						}
@@ -1887,7 +1889,8 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				}
 
 				if approved {
-					// Note: Do NOT consume approval here - it needs to persist for retries
+					// Consume approval - each execution requires new approval
+					state.Set(approvalKey, false)
 					if a.DebugMode {
 						fmt.Printf("[ReAct DEBUG] Tool %s approved! Allowing execution.\n", toolName)
 					}
@@ -2101,7 +2104,8 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 							approved = true
 						}
 						if approved {
-							// Note: Do NOT consume approval here - it needs to persist for retries
+							// Consume approval - each execution requires new approval
+							state.Set(approvalKey, false)
 							if a.DebugMode {
 								fmt.Printf("[ReAct DEBUG] Tool %s approved!\n", toolName)
 							}

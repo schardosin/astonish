@@ -8,9 +8,11 @@ import (
 	"os"
 	"sort"
 
+	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcp"
+	"github.com/schardosin/astonish/pkg/mcpstore"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
@@ -42,19 +44,22 @@ func handleToolsCommand(args []string) error {
 		return handleToolsListCommand(args[1:])
 	case "edit":
 		return handleToolsEditCommand()
+	case "store":
+		return handleToolsStoreCommand()
 	default:
 		return fmt.Errorf("unknown tools command: %s", args[0])
 	}
 }
 
 func printToolsUsage() {
-	fmt.Println("usage: astonish tools [-h] {list,edit} ...")
+	fmt.Println("usage: astonish tools [-h] {list,edit,store} ...")
 	fmt.Println("")
 	fmt.Println("positional arguments:")
-	fmt.Println("  {list,edit}")
+	fmt.Println("  {list,edit,store}")
 	fmt.Println("                        Tools management commands")
 	fmt.Println("    list                List available tools (internal + MCP)")
 	fmt.Println("    edit                Edit MCP configuration")
+	fmt.Println("    store               Browse and install MCP servers from the store")
 	fmt.Println("")
 	fmt.Println("options:")
 	fmt.Println("  -h, --help            show this help message and exit")
@@ -281,3 +286,147 @@ func handleToolsEditCommand() error {
 	fmt.Printf("Opening MCP configuration at: %s\n", mcpConfigPath)
 	return openInEditor(mcpConfigPath)
 }
+
+func handleToolsStoreCommand() error {
+	// Load servers from store (already sorted by stars)
+	servers, err := mcpstore.ListServers()
+	if err != nil {
+		return fmt.Errorf("failed to load MCP store: %w", err)
+	}
+
+	if len(servers) == 0 {
+		fmt.Println("No MCP servers available in store.")
+		return nil
+	}
+
+	// Create options for selection
+	options := make([]huh.Option[string], 0, len(servers))
+	for _, srv := range servers {
+		// Skip servers without config (can't be installed)
+		if srv.Config == nil || srv.Config.Command == "" {
+			continue
+		}
+
+		// Format: Name (★ stars) - description (truncated)
+		desc := srv.Description
+		if len(desc) > 60 {
+			desc = desc[:57] + "..."
+		}
+
+		starsStr := ""
+		if srv.GithubStars > 0 {
+			if srv.GithubStars >= 1000 {
+				starsStr = fmt.Sprintf("★%.1fk", float64(srv.GithubStars)/1000)
+			} else {
+				starsStr = fmt.Sprintf("★%d", srv.GithubStars)
+			}
+		}
+
+		label := fmt.Sprintf("%s (%s) - %s", srv.Name, starsStr, desc)
+		options = append(options, huh.NewOption(label, srv.McpId))
+	}
+
+	if len(options) == 0 {
+		fmt.Println("No installable MCP servers available.")
+		return nil
+	}
+
+	// Server selection
+	var selectedMcpId string
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select an MCP server to install").
+				Description("Type to filter the list").
+				Options(options...).
+				Value(&selectedMcpId),
+		),
+	).Run()
+
+	if err != nil {
+		return fmt.Errorf("selection cancelled: %w", err)
+	}
+
+	// Get the selected server
+	selectedServer, err := mcpstore.GetServer(selectedMcpId)
+	if err != nil || selectedServer == nil {
+		return fmt.Errorf("failed to get server details: %w", err)
+	}
+
+	// Prepare env variables
+	envVars := make(map[string]string)
+	if selectedServer.Config != nil && len(selectedServer.Config.Env) > 0 {
+		// Collect env var keys and create string pointers for each
+		type envVarPair struct {
+			Key   string
+			Value string
+		}
+		var envPairs []envVarPair
+		for key, defaultVal := range selectedServer.Config.Env {
+			envPairs = append(envPairs, envVarPair{Key: key, Value: defaultVal})
+		}
+
+		// Create input form for each env variable
+		var fields []huh.Field
+		for i := range envPairs {
+			fields = append(fields, huh.NewInput().
+				Title(envPairs[i].Key).
+				Description(fmt.Sprintf("Environment variable for %s", selectedServer.Name)).
+				Value(&envPairs[i].Value))
+		}
+
+		if len(fields) > 0 {
+			err = huh.NewForm(
+				huh.NewGroup(fields...).
+					Title(fmt.Sprintf("Configure %s", selectedServer.Name)),
+			).Run()
+
+			if err != nil {
+				return fmt.Errorf("configuration cancelled: %w", err)
+			}
+
+			// Copy values back to map
+			for _, pair := range envPairs {
+				envVars[pair.Key] = pair.Value
+			}
+		}
+	}
+
+	// Load existing MCP config
+	mcpConfig, err := config.LoadMCPConfig()
+	if err != nil {
+		// Create new config if it doesn't exist
+		mcpConfig = &config.MCPConfig{
+			MCPServers: make(map[string]config.MCPServerConfig),
+		}
+	}
+
+	// Build server config
+	serverConfig := config.MCPServerConfig{
+		Command: selectedServer.Config.Command,
+		Args:    selectedServer.Config.Args,
+	}
+	if len(envVars) > 0 {
+		serverConfig.Env = envVars
+	}
+
+	// Use server name as key (sanitized)
+	serverKey := selectedServer.Name
+	mcpConfig.MCPServers[serverKey] = serverConfig
+
+	// Save config
+	if err := config.SaveMCPConfig(mcpConfig); err != nil {
+		return fmt.Errorf("failed to save MCP config: %w", err)
+	}
+
+	// Success message
+	successStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("42")). // Green
+		Bold(true)
+
+	fmt.Println(successStyle.Render(fmt.Sprintf("✓ %s installed successfully!", selectedServer.Name)))
+	fmt.Printf("  Run 'astonish tools list' to see available tools.\n")
+
+	return nil
+}
+

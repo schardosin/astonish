@@ -2344,11 +2344,11 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				}
 			}
 
-			// Suppress text-only events when node has output_model AND tools have been called
-			// This prevents raw JSON from being displayed (final response after tools).
-			// Text BEFORE tools (greeting) still flows through when toolCallCount == 0.
-			// The JSON is parsed and values are distributed to StateDelta for display.
-			if isTextOnly && len(node.OutputModel) > 0 && toolCallCount > 0 {
+		// Suppress text-only events when node has output_model
+			// This prevents raw JSON from being displayed to the user.
+			// The JSON is parsed and values are distributed to StateDelta.
+			// If user_message is defined, it will handle displaying content from state.
+			if isTextOnly && len(node.OutputModel) > 0 {
 				shouldYieldEvent = false
 			}
 		}
@@ -2518,6 +2518,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 
 			// Emit event with text content AND a special marker in StateDelta
 			// The marker tells console.go this is a user_message that needs the "Agent:" prefix
+			// Note: Field values are NOT included here - they are already in the output_model StateDelta event
 			userMessageEvent := &session.Event{
 				LLMResponse: model.LLMResponse{
 					Content: &genai.Content{

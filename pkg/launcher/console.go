@@ -296,8 +296,9 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
 						aiPrefixPrinted = true
 					}
-					// Force suppressStreaming to false so the text content is displayed
-					suppressStreaming = false
+					// Note: Do NOT set suppressStreaming = false here
+					// The text will be printed via the StateDelta-based mechanism (lines 539+)
+					// which handles formatting properly
 				}
 
 				// Check for error_message display marker - these MUST be shown even if streaming is suppressed
@@ -677,19 +678,15 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					} else if strings.Contains(line, "> Yes") || strings.Contains(line, "  No") {
 						isSystemMsg = true
 						shouldPrint = true
-					} else {
+				} else {
 						// Regular LLM Output: Check suppression
-						// We ALWAYS buffer text, even when suppressing, so we can flush it
-						// when a tool box appears (to show the LLM's greeting/explanation before tools)
-						// If it's an input node, we also want to process (buffer) the text as the prompt.
+						// For output_model/user_message nodes, we suppress completely
+						// The user_message mechanism will handle proper output display
 						if !suppressStreaming || isInputNode {
 							shouldPrint = true
-						} else {
-							// Even if not printing, we still want to buffer for potential tool box flush
-							// We set shouldPrint to true to enter the buffering logic, but the text
-							// won't be immediately rendered because suppressStreaming is checked at render time
-							shouldPrint = true // Buffer it - will only be printed if tool box appears
 						}
+						// When suppressing, do NOT buffer text - prevents double output
+						// The _user_message_display event will handle display properly
 					}
 
 					// Check for Tool Block End

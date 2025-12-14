@@ -274,9 +274,9 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		isApprovalRequest := event.Actions.StateDelta != nil && event.Actions.StateDelta["approval_options"] != nil
 		shouldStream := currentNodeType == "" || currentNodeType == "llm" || currentNodeType == "output" || currentNodeType == "input" || isApprovalRequest || isUserMessageDisplay
 
-		// For output_model nodes, suppress text AFTER tool calls (this is raw JSON)
-		// But allow text BEFORE tools (greeting) and _user_message_display events
-		if hasOutputModel && toolCallCount > 0 && !isUserMessageDisplay && !isApprovalRequest {
+		// For output_model nodes, suppress ALL text (raw JSON will be parsed and displayed via user_message)
+		// Only allow _user_message_display events and approval requests
+		if hasOutputModel && !isUserMessageDisplay && !isApprovalRequest {
 			shouldStream = false
 		}
 

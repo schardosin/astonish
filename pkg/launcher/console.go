@@ -735,7 +735,6 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 									stopSpinner(true, true)
 									if !aiPrefixPrinted {
 										fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
-										aiPrefixPrinted = true
 									}
 									fmt.Print(ui.SmartRender(priorText))
 								}

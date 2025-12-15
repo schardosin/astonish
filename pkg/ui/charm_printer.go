@@ -30,7 +30,6 @@ var (
 	// Other styles
 	conditionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("246")).Italic(true)
 	loopStyle      = lipgloss.NewStyle().Foreground(colorGray).Italic(true)
-	lineStyle      = lipgloss.NewStyle().Foreground(colorGray)
 )
 
 // Max lengths for truncation to prevent overflow

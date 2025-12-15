@@ -1,0 +1,38 @@
+# golangci-lint configuration v2
+# Focus on bugs and real issues, not style preferences
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  # Disable default linters and enable only what we want
+  default: none
+  enable:
+    # Bug finders - these catch real issues
+    - govet         # Go vet - catches serious issues
+    - ineffassign   # Detects unused variable assignments
+    - unused        # Finds unused code
+    
+    # Staticcheck for real bugs (not style)
+    - staticcheck
+
+  settings:
+    # Disable unreachable code check in govet (often false positives in complex flows)
+    govet:
+      disable:
+        - unreachable
+    
+    staticcheck:
+      checks:
+        - "all"
+        # Disable style rules (ST*)
+        - "-ST*"
+        # Disable code simplification suggestions (S*)
+        - "-S*"
+        # Disable quickfix suggestions (QF*)
+        - "-QF*"
+        # Disable empty branch warnings (intentional in some cases)
+        - "-SA9003"
+        # Disable deprecation warnings (will fix gradually)
+        - "-SA1019"

@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/launcher"
 	"github.com/schardosin/astonish/pkg/ui"
 	"google.golang.org/adk/session"
@@ -31,13 +32,15 @@ func handleFlowsCommand(args []string) error {
 		return handleShowCommand(args[1:])
 	case "edit":
 		return handleEditCommand(args[1:])
+	case "store":
+		return handleStoreCommand(args[1:])
 	default:
 		return fmt.Errorf("unknown flows command: %s", args[0])
 	}
 }
 
 func printFlowsUsage() {
-	fmt.Println("usage: astonish flows [-h] {run,list,show,edit} ...")
+	fmt.Println("usage: astonish flows [-h] {run,list,show,edit,store} ...")
 	fmt.Println("")
 	fmt.Println("Design and run AI flows - powerful automation workflows")
 	fmt.Println("powered by LLMs with visual design and CLI execution.")
@@ -47,6 +50,7 @@ func printFlowsUsage() {
 	fmt.Println("  list                List available flows")
 	fmt.Println("  show                Visualize flow structure")
 	fmt.Println("  edit                Edit a flow YAML file")
+	fmt.Println("  store               Browse and install flows from stores")
 	fmt.Println("")
 	fmt.Println("options:")
 	fmt.Println("  -h, --help          Show this help message")
@@ -186,7 +190,7 @@ func handleRunCommand(args []string) error {
 		// 2. Check with .yaml extension
 		agentPath = fmt.Sprintf("%s.yaml", agentName)
 		if _, err := os.Stat(agentPath); os.IsNotExist(err) {
-			// 3. Check in standard system agents directory
+			// 3. Check in standard system agents directory (legacy)
 			agentsDir, err := config.GetAgentsDir()
 			if err == nil {
 				sysAgentPath := filepath.Join(agentsDir, fmt.Sprintf("%s.yaml", agentName))
@@ -196,10 +200,45 @@ func handleRunCommand(args []string) error {
 				}
 			}
 
-			// 4. Check in local dev path (fallback)
+			// 4. Check in new flows directory
+			flowsDir, err := flowstore.GetFlowsDir()
+			if err == nil {
+				flowPath := filepath.Join(flowsDir, fmt.Sprintf("%s.yaml", agentName))
+				if _, err := os.Stat(flowPath); err == nil {
+					agentPath = flowPath
+					goto Found
+				}
+			}
+
+			// 5. Check in store cache (for installed flows)
+			store, err := flowstore.NewStore()
+			if err == nil {
+				// Parse the flow reference first
+				tapName, flowName := parseFlowRef(agentName)
+				
+				// Check installed flows for this specific tap
+				if path, ok := store.GetInstalledFlowPath(tapName, flowName); ok {
+					agentPath = path
+					goto Found
+				}
+
+				// Try to fetch from store
+				// - Bare names (no /) only check official store
+				// - Prefixed names (tap/flow) check specific tap
+				fmt.Printf("Flow not found locally, checking %s store...\n", tapName)
+				if err := store.InstallFlow(tapName, flowName); err == nil {
+					if path, ok := store.GetInstalledFlowPath(tapName, flowName); ok {
+						fmt.Printf("✓ Downloaded from %s store\n", tapName)
+						agentPath = path
+						goto Found
+					}
+				}
+			}
+
+			// 7. Check in local dev path (fallback)
 			agentPath = fmt.Sprintf("agents/%s.yaml", agentName)
 			if _, err := os.Stat(agentPath); os.IsNotExist(err) {
-				return fmt.Errorf("agent file not found: %s", agentName)
+				return fmt.Errorf("flow not found: %s\nTip: Run 'astonish flows store list' to see available flows", agentName)
 			}
 		}
 	}
@@ -423,4 +462,340 @@ func handleEditCommand(args []string) error {
 Found:
 	fmt.Printf("Opening %s in editor...\n", agentPath)
 	return openInEditor(agentPath)
+}
+
+// Store command handlers
+
+func handleStoreCommand(args []string) error {
+	if len(args) < 1 || args[0] == "--help" || args[0] == "-h" {
+		printStoreUsage()
+		return nil
+	}
+
+	switch args[0] {
+	case "tap":
+		return handleStoreTapCommand(args[1:])
+	case "list":
+		return handleStoreListCommand()
+	case "install":
+		return handleStoreInstallCommand(args[1:])
+	case "uninstall":
+		return handleStoreUninstallCommand(args[1:])
+	case "update":
+		return handleStoreUpdateCommand()
+	case "search":
+		return handleStoreSearchCommand(args[1:])
+	default:
+		return fmt.Errorf("unknown store command: %s", args[0])
+	}
+}
+
+func printStoreUsage() {
+	fmt.Println("usage: astonish flows store [-h] {tap,list,install,uninstall,update,search} ...")
+	fmt.Println("")
+	fmt.Println("Browse and install flows from community stores.")
+	fmt.Println("")
+	fmt.Println("commands:")
+	fmt.Println("  tap                 Manage flow store taps (add/remove/list)")
+	fmt.Println("  list                List all available flows from stores")
+	fmt.Println("  install             Install a flow from a store")
+	fmt.Println("  uninstall           Remove an installed flow")
+	fmt.Println("  update              Update all store manifests")
+	fmt.Println("  search              Search for flows")
+	fmt.Println("")
+	fmt.Println("options:")
+	fmt.Println("  -h, --help          Show this help message")
+}
+
+func handleStoreTapCommand(args []string) error {
+	if len(args) < 1 {
+		fmt.Println("usage: astonish flows store tap {add,remove,list} ...")
+		return nil
+	}
+
+	store, err := flowstore.NewStore()
+	if err != nil {
+		return fmt.Errorf("failed to initialize store: %w", err)
+	}
+
+	switch args[0] {
+	case "add":
+		if len(args) < 2 {
+			fmt.Println("usage: astonish flows store tap add <owner>[/repo] [--as <alias>]")
+			fmt.Println("")
+			fmt.Println("Examples:")
+			fmt.Println("  tap add company              # assumes company/astonish-flows, tap name: company")
+			fmt.Println("  tap add company/my-flows     # tap name: company-my-flows")
+			fmt.Println("  tap add company/flows --as c # tap name: c")
+			return fmt.Errorf("no repository specified")
+		}
+		
+		// Parse --as flag
+		urlArg := args[1]
+		alias := ""
+		for i := 2; i < len(args); i++ {
+			if args[i] == "--as" && i+1 < len(args) {
+				alias = args[i+1]
+				break
+			}
+		}
+		
+		tapName, err := store.AddTap(urlArg, alias)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("✓ Added tap: %s\n", tapName)
+		fmt.Printf("  Use flows with: astonish flows run %s/<flow>\n", tapName)
+		return nil
+
+	case "remove":
+		if len(args) < 2 {
+			fmt.Println("usage: astonish flows store tap remove <tap-name>")
+			return fmt.Errorf("no tap name specified")
+		}
+		if err := store.RemoveTap(args[1]); err != nil {
+			return err
+		}
+		fmt.Printf("✓ Removed tap: %s\n", args[1])
+		return nil
+
+	case "list":
+		taps := store.GetAllTaps()
+		
+		headerStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("63")).
+			Bold(true)
+		
+		fmt.Println(headerStyle.Render("FLOW STORE TAPS"))
+		fmt.Println()
+		
+		for _, tap := range taps {
+			marker := ""
+			if tap.Name == flowstore.OfficialStoreName {
+				marker = " (official)"
+			}
+			fmt.Printf("  %s%s\n", tap.Name, marker)
+			fmt.Printf("    └─ %s\n", tap.URL)
+		}
+		return nil
+
+	default:
+		return fmt.Errorf("unknown tap command: %s", args[0])
+	}
+}
+
+func handleStoreListCommand() error {
+	store, err := flowstore.NewStore()
+	if err != nil {
+		return fmt.Errorf("failed to initialize store: %w", err)
+	}
+
+	// Update manifests
+	fmt.Println("Fetching flow store manifests...")
+	if err := store.UpdateAllManifests(); err != nil {
+		fmt.Printf("Warning: %v\n", err)
+	}
+
+	flows := store.ListAllFlows()
+	if len(flows) == 0 {
+		fmt.Println("No flows found in stores.")
+		fmt.Println("Tip: Make sure the store repositories have a valid manifest.yaml")
+		return nil
+	}
+
+	// Group by tap
+	byTap := make(map[string][]flowstore.Flow)
+	for _, f := range flows {
+		byTap[f.TapName] = append(byTap[f.TapName], f)
+	}
+
+	headerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("63")).
+		Bold(true)
+
+	nameStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("205")).
+		Bold(true)
+
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252"))
+
+	installedStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("42"))
+
+	// Print official first, then others
+	printTapFlows := func(tapName string, flows []flowstore.Flow, isOfficial bool) {
+		var label string
+		if isOfficial {
+			label = "OFFICIAL STORE (use bare flow names)"
+		} else {
+			label = fmt.Sprintf("%s (use: %s/<flow>)", tapName, tapName)
+		}
+		fmt.Println(headerStyle.Render(label))
+		
+		for _, f := range flows {
+			status := ""
+			if f.Installed {
+				status = installedStyle.Render(" [installed]")
+			}
+			
+			// Show full name for community, bare name for official
+			displayName := f.Name
+			if !isOfficial {
+				displayName = fmt.Sprintf("%s/%s", tapName, f.Name)
+			}
+			
+			fmt.Printf("  %s%s\n", nameStyle.Render(displayName), status)
+			fmt.Printf("    %s\n", descStyle.Render(f.Description))
+		}
+		fmt.Println()
+	}
+
+	// Official first
+	if official, ok := byTap[flowstore.OfficialStoreName]; ok {
+		printTapFlows(flowstore.OfficialStoreName, official, true)
+	}
+
+	// Then custom taps
+	for tapName, tapFlows := range byTap {
+		if tapName != flowstore.OfficialStoreName {
+			printTapFlows(tapName, tapFlows, false)
+		}
+	}
+
+	fmt.Println("Tip: Run 'astonish flows run <flow>' for official or '<tap>/<flow>' for community")
+	return nil
+}
+
+func handleStoreInstallCommand(args []string) error {
+	if len(args) < 1 {
+		fmt.Println("usage: astonish flows store install <tap>/<flow>")
+		fmt.Println("       astonish flows store install <flow>  (from official store)")
+		return fmt.Errorf("no flow specified")
+	}
+
+	store, err := flowstore.NewStore()
+	if err != nil {
+		return fmt.Errorf("failed to initialize store: %w", err)
+	}
+
+	// Parse tap/flow
+	tapName, flowName := parseFlowRef(args[0])
+
+	fmt.Printf("Installing %s/%s...\n", tapName, flowName)
+	if err := store.InstallFlow(tapName, flowName); err != nil {
+		return fmt.Errorf("failed to install flow: %w", err)
+	}
+
+	fmt.Printf("✓ Installed flow: %s\n", flowName)
+	fmt.Printf("  Run with: astonish flows run %s\n", flowName)
+	return nil
+}
+
+func handleStoreUninstallCommand(args []string) error {
+	if len(args) < 1 {
+		fmt.Println("usage: astonish flows store uninstall <tap>/<flow>")
+		return fmt.Errorf("no flow specified")
+	}
+
+	store, err := flowstore.NewStore()
+	if err != nil {
+		return fmt.Errorf("failed to initialize store: %w", err)
+	}
+
+	// Parse tap/flow
+	tapName, flowName := parseFlowRef(args[0])
+
+	if err := store.UninstallFlow(tapName, flowName); err != nil {
+		return err
+	}
+
+	fmt.Printf("✓ Uninstalled flow: %s\n", flowName)
+	return nil
+}
+
+func handleStoreUpdateCommand() error {
+	store, err := flowstore.NewStore()
+	if err != nil {
+		return fmt.Errorf("failed to initialize store: %w", err)
+	}
+
+	fmt.Println("Updating all store manifests...")
+	if err := store.UpdateAllManifests(); err != nil {
+		return err
+	}
+
+	fmt.Println("✓ All stores updated")
+	return nil
+}
+
+func handleStoreSearchCommand(args []string) error {
+	if len(args) < 1 {
+		fmt.Println("usage: astonish flows store search <query>")
+		return fmt.Errorf("no search query specified")
+	}
+
+	store, err := flowstore.NewStore()
+	if err != nil {
+		return fmt.Errorf("failed to initialize store: %w", err)
+	}
+
+	// Update manifests
+	if err := store.UpdateAllManifests(); err != nil {
+		fmt.Printf("Warning: %v\n", err)
+	}
+
+	query := strings.ToLower(strings.Join(args, " "))
+	flows := store.ListAllFlows()
+
+	var matches []flowstore.Flow
+	for _, f := range flows {
+		matched := false
+		
+		// Check name and description
+		if strings.Contains(strings.ToLower(f.Name), query) ||
+			strings.Contains(strings.ToLower(f.Description), query) {
+			matched = true
+		}
+		
+		// Check tags
+		if !matched {
+			for _, tag := range f.Tags {
+				if strings.Contains(strings.ToLower(tag), query) {
+					matched = true
+					break
+				}
+			}
+		}
+		
+		if matched {
+			matches = append(matches, f)
+		}
+	}
+
+	if len(matches) == 0 {
+		fmt.Printf("No flows found matching '%s'\n", query)
+		return nil
+	}
+
+	nameStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("205")).
+		Bold(true)
+
+	fmt.Printf("Flows matching '%s':\n\n", query)
+	for _, f := range matches {
+		fmt.Printf("  %s/%s\n", f.TapName, nameStyle.Render(f.Name))
+		fmt.Printf("    %s\n", f.Description)
+	}
+
+	return nil
+}
+
+// parseFlowRef parses "tap/flow" or "flow" (defaults to official)
+func parseFlowRef(ref string) (tapName, flowName string) {
+	if strings.Contains(ref, "/") {
+		parts := strings.SplitN(ref, "/", 2)
+		return parts[0], parts[1]
+	}
+	return flowstore.OfficialStoreName, ref
 }

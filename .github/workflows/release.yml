@@ -54,6 +54,7 @@ jobs:
           npm run build
       
       - name: Verify frontend build
+        shell: bash
         run: |
           echo "Checking web/dist contents..."
           ls -la web/dist/
@@ -68,6 +69,7 @@ jobs:
           cache: true
 
       - name: Build binary
+        shell: bash
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}

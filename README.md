@@ -7,7 +7,7 @@
   
   *Design visually. Run anywhere. No servers required.*
   
-  [![Go Report Card](https://goreportcard.com/badge/github.com/schardosin/astonish)](https://goreportcard.com/report/github.com/schardosin/astonish)
+  [![Lint](https://github.com/schardosin/astonish/actions/workflows/lint.yml/badge.svg)](https://github.com/schardosin/astonish/actions/workflows/lint.yml)
   [![Build Status](https://github.com/schardosin/astonish/actions/workflows/build.yml/badge.svg)](https://github.com/schardosin/astonish/actions/workflows/build.yml)
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 

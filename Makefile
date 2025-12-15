@@ -32,8 +32,17 @@ build-ui:
 	@echo "React UI built successfully: $(WEB_DIR)/dist"
 
 # Build everything: UI first, then Go binary
-build-all: build-ui build
+build-all: setup-hooks build-ui build
 	@echo "Full build complete!"
+
+# Setup git hooks (runs automatically on first build)
+setup-hooks:
+	@if [ ! -f .git/hooks/pre-commit ]; then \
+		echo "Installing git hooks..."; \
+		cp .githooks/pre-commit .git/hooks/pre-commit; \
+		chmod +x .git/hooks/pre-commit; \
+		echo "✓ Git hooks installed"; \
+	fi
 
 # Run the application
 run:
@@ -80,5 +89,5 @@ update-mcp-stars:
 	GITHUB_TOKEN=$$(gh auth token) python3 scripts/update-mcp-stars.py
 	@echo "Star counts updated!"
 
-.PHONY: all help build build-ui build-all run studio studio-dev test install clean update-mcp-stars
+.PHONY: all help build build-ui build-all run studio studio-dev test install clean update-mcp-stars setup-hooks
 

@@ -8,15 +8,16 @@ all: build-all
 # Help
 help:
 	@echo "Usage:"
-	@echo "  make build        - Build the Go binary only"
-	@echo "  make build-ui     - Build the React UI (web/dist)"
-	@echo "  make build-all    - Build UI first, then Go binary"
-	@echo "  make run          - Run the Go application"
-	@echo "  make studio       - Run Astonish Studio (dev mode)"
-	@echo "  make studio-dev   - Run Studio with live UI reload"
-	@echo "  make test         - Run Go tests"
-	@echo "  make install      - Install the binary to ~/bin"
-	@echo "  make clean        - Clean up build artifacts"
+	@echo "  make build           - Build the Go binary only"
+	@echo "  make build-ui        - Build the React UI (web/dist)"
+	@echo "  make build-all       - Build UI first, then Go binary"
+	@echo "  make run             - Run the Go application"
+	@echo "  make studio          - Run Astonish Studio (dev mode)"
+	@echo "  make studio-dev      - Run Studio with live UI reload"
+	@echo "  make test            - Run Go tests"
+	@echo "  make install         - Install the binary to ~/bin"
+	@echo "  make clean           - Clean up build artifacts"
+	@echo "  make update-mcp-stars - Update MCP store GitHub star counts"
 
 # Build the Go binary only
 build:
@@ -73,4 +74,11 @@ clean:
 	rm -rf $(WEB_DIR)/node_modules
 	@echo "Cleanup complete!"
 
-.PHONY: all help build build-ui build-all run studio studio-dev test install clean
+# Update MCP store star counts from GitHub
+update-mcp-stars:
+	@echo "Updating MCP server star counts..."
+	GITHUB_TOKEN=$$(gh auth token) python3 scripts/update-mcp-stars.py
+	@echo "Star counts updated!"
+
+.PHONY: all help build build-ui build-all run studio studio-dev test install clean update-mcp-stars
+

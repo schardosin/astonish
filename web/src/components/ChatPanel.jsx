@@ -1,12 +1,32 @@
 import { useState, useEffect, useRef } from 'react'
-import { Send, Brain, Wrench, Loader, RotateCcw, Square } from 'lucide-react'
+import { Send, Brain, Wrench, Loader, RotateCcw, Square, Code, Copy, Check } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 export default function ChatPanel({ messages, onSendMessage, onStartRun, onStop, theme, isWaitingForInput, hasActiveSession }) {
   const [input, setInput] = useState('')
+  const [rawViewIndices, setRawViewIndices] = useState(new Set()) // Track which messages show raw
+  const [copiedIndex, setCopiedIndex] = useState(null) // Track which message was just copied
   const scrollRef = useRef(null)
   const inputRef = useRef(null)
+
+  const toggleRawView = (index) => {
+    setRawViewIndices(prev => {
+      const next = new Set(prev)
+      if (next.has(index)) {
+        next.delete(index)
+      } else {
+        next.add(index)
+      }
+      return next
+    })
+  }
+
+  const copyToClipboard = async (content, index) => {
+    await navigator.clipboard.writeText(content)
+    setCopiedIndex(index)
+    setTimeout(() => setCopiedIndex(null), 2000)
+  }
 
   // Auto-scroll to bottom directly, without smooth behavior for instant feedback
   useEffect(() => {
@@ -68,7 +88,29 @@ export default function ChatPanel({ messages, onSendMessage, onStartRun, onStop,
           <div key={index}>
             {message.type === 'agent' && (
               <div className="space-y-2">
-                <div className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Agent</div>
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Agent</div>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => toggleRawView(index)}
+                      className="p-1 rounded hover:bg-white/10 transition-colors"
+                      title={rawViewIndices.has(index) ? "Show formatted" : "Show raw markdown"}
+                    >
+                      <Code size={14} className={rawViewIndices.has(index) ? "text-purple-400" : "text-gray-500"} />
+                    </button>
+                    <button
+                      onClick={() => copyToClipboard(message.content, index)}
+                      className="p-1 rounded hover:bg-white/10 transition-colors"
+                      title="Copy markdown"
+                    >
+                      {copiedIndex === index ? (
+                        <Check size={14} className="text-green-400" />
+                      ) : (
+                        <Copy size={14} className="text-gray-500" />
+                      )}
+                    </button>
+                  </div>
+                </div>
                 <div 
                   className="p-4 rounded-lg max-w-[90%]"
                   style={{ 
@@ -76,11 +118,20 @@ export default function ChatPanel({ messages, onSendMessage, onStartRun, onStop,
                     border: `1px solid var(--border-color)` 
                   }}
                 >
-                  <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {rawViewIndices.has(index) ? (
+                    <pre 
+                      className="text-sm whitespace-pre-wrap break-words font-mono"
+                      style={{ color: 'var(--text-primary)' }}
+                    >
                       {message.content}
-                    </ReactMarkdown>
-                  </div>
+                    </pre>
+                  ) : (
+                    <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {message.content}
+                      </ReactMarkdown>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

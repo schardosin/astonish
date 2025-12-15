@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,11 +39,17 @@ type SessionManager struct {
 }
 
 var globalSessionManager *SessionManager
-var once sync.Once
+var sessionOnce sync.Once
+
+// Global MCP manager to maintain browser sessions across requests
+var globalMCPManager *mcp.Manager
+var globalMCPToolsets []tool.Toolset
+var mcpOnce sync.Once
+var mcpMu sync.RWMutex
 
 // GetSessionManager returns the singleton session manager
 func GetSessionManager() *SessionManager {
-	once.Do(func() {
+	sessionOnce.Do(func() {
 		baseService := session.InMemoryService()
 		globalSessionManager = &SessionManager{
 			service:  common.NewAutoInitService(baseService),
@@ -50,6 +57,28 @@ func GetSessionManager() *SessionManager {
 		}
 	})
 	return globalSessionManager
+}
+
+// GetMCPToolsets returns the cached MCP toolsets, initializing if needed
+func GetMCPToolsets(ctx context.Context) []tool.Toolset {
+	mcpOnce.Do(func() {
+		var err error
+		globalMCPManager, err = mcp.NewManager()
+		if err != nil {
+			fmt.Printf("[MCP] Failed to create manager: %v\n", err)
+			return
+		}
+		if err := globalMCPManager.InitializeToolsets(ctx); err != nil {
+			fmt.Printf("[MCP] Failed to initialize toolsets: %v\n", err)
+			return
+		}
+		globalMCPToolsets = globalMCPManager.GetToolsets()
+		fmt.Printf("[MCP] Initialized %d toolsets (browser sessions will persist)\n", len(globalMCPToolsets))
+	})
+	
+	mcpMu.RLock()
+	defer mcpMu.RUnlock()
+	return globalMCPToolsets
 }
 
 // SendSSE sends a Server-Sent Event
@@ -165,14 +194,8 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Initialize MCP
-	var mcpToolsets []tool.Toolset
-	mcpManager, err := mcp.NewManager()
-	if err == nil {
-		if err := mcpManager.InitializeToolsets(ctx); err == nil {
-			mcpToolsets = mcpManager.GetToolsets()
-		}
-	}
+	// Initialize MCP (using global cache to persist browser sessions)
+	mcpToolsets := GetMCPToolsets(ctx)
 
 	// 5. Create Astonish Agent & ADK Agent
 	astonishAgent := agent.NewAstonishAgentWithToolsets(cfg, llm, internalTools, mcpToolsets)
@@ -230,6 +253,8 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 
 	var lastNodeName string
 	var currentNodeType string // Track node type for conditional streaming
+	var hasOutputModel bool    // Track if current node has output_model
+	var toolCallCount int      // Track tool calls for text suppression
 
 	for event, err := range rnr.Run(ctx, req.SessionID, sess.ID(), userMsg, adkagent.RunConfig{}) {
 		if err != nil {
@@ -237,18 +262,41 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Check for _user_message_display marker - this event has proper display content
+		isUserMessageDisplay := event.Actions.StateDelta != nil && event.Actions.StateDelta["_user_message_display"] != nil
+
 		// Stream LLM Text chunks (only for appropriate node types)
 		// Suppress for: update_state (internal state changes), tool (internal processing)
 		// Allow for: llm, output, input (prompts should be visible to users)
 		// EXCEPTION: Always stream tool approval requests (they contain approval_options)
+		// EXCEPTION: Always stream _user_message_display events (properly formatted output)
+		// SUPPRESS: Text after tool calls for output_model nodes (raw JSON)
 		isApprovalRequest := event.Actions.StateDelta != nil && event.Actions.StateDelta["approval_options"] != nil
-		shouldStream := currentNodeType == "" || currentNodeType == "llm" || currentNodeType == "output" || currentNodeType == "input" || isApprovalRequest
+		shouldStream := currentNodeType == "" || currentNodeType == "llm" || currentNodeType == "output" || currentNodeType == "input" || isApprovalRequest || isUserMessageDisplay
+
+		// For output_model nodes, suppress ALL text (raw JSON will be parsed and displayed via user_message)
+		// Only allow _user_message_display events, approval requests, and input prompts
+		isInputRequest := event.Actions.StateDelta != nil && event.Actions.StateDelta["input_options"] != nil
+		if hasOutputModel && !isUserMessageDisplay && !isApprovalRequest && !isInputRequest {
+			shouldStream = false
+		}
+
 		if shouldStream && event.LLMResponse.Content != nil {
 			for _, part := range event.LLMResponse.Content.Parts {
 				if part.Text != "" {
 					SendSSE(w, flusher, "text", map[string]string{
 						"text": part.Text,
 					})
+				}
+			}
+		}
+
+		// Track tool calls AFTER processing text for this event
+		// This ensures greeting text in the same event as tool call is sent first
+		if event.LLMResponse.Content != nil {
+			for _, part := range event.LLMResponse.Content.Parts {
+				if part.FunctionCall != nil {
+					toolCallCount++
 				}
 			}
 		}
@@ -265,6 +313,19 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 					// Also check node_type if available (sometimes implicit)
 					nodeType, _ := delta["node_type"].(string)
 					currentNodeType = nodeType // Update for streaming filter
+
+					// Reset tool call count for new node
+					toolCallCount = 0
+
+					// Check if this node has output_model (from config)
+					hasOutputModel = false
+					for _, node := range cfg.Nodes {
+						if node.Name == nodeName && len(node.OutputModel) > 0 {
+							hasOutputModel = true
+							break
+						}
+					}
+
 					SendSSE(w, flusher, "node", map[string]string{
 						"node": nodeName,
 						"type": nodeType,

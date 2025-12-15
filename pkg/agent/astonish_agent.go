@@ -171,7 +171,7 @@ func (p *ProtectedTool) Run(ctx tool.Context, args any) (map[string]any, error) 
 
 	// 1. Check if we already have approval
 	if approved, _ := p.State.Get(approvalKey); approved == true {
-		// Consume approval
+		// Consume approval - each execution requires new approval
 		p.State.Set(approvalKey, false)
 
 		// We use a broader interface check here to be safe
@@ -280,6 +280,8 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 		}
 
 		// Fallback: Check event history if state is missing
+		// BUT only check recent events - stop if we find awaiting_approval=false 
+		// (which means approval was resolved)
 		if !awaiting {
 			events := ctx.Session().Events()
 			// Look backwards for the last model event with state delta
@@ -290,12 +292,19 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				}
 				if ev.Actions.StateDelta != nil {
 					if val, ok := ev.Actions.StateDelta["awaiting_approval"]; ok {
-						if b, ok := val.(bool); ok && b {
-							awaiting = true
-							if toolVal, ok := ev.Actions.StateDelta["approval_tool"]; ok {
-								state.Set("approval_tool", toolVal)
+						if b, ok := val.(bool); ok {
+							if b {
+								// Found awaiting_approval=true
+								awaiting = true
+								if toolVal, ok := ev.Actions.StateDelta["approval_tool"]; ok {
+									state.Set("approval_tool", toolVal)
+								}
+								break
+							} else {
+								// Found awaiting_approval=false - this means approval was resolved
+								// Stop looking, we don't want to find older approval requests
+								break
 							}
-							break
 						}
 					}
 				}
@@ -339,10 +348,9 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				}
 			}
 
-			// Clear waiting state
-			state.Set("awaiting_approval", false)
-			state.Set("approval_tool", "")
-			state.Set("approval_args", nil)
+			// NOTE: Do NOT clear awaiting_approval, approval_tool, or approval_args here!
+			// Let handleToolApproval handle the cleanup so it can inject the retry prompt.
+			// The handleToolApproval function (at line 410+) will process these and clear them.
 		}
 	}
 
@@ -907,6 +915,17 @@ func (a *AstonishAgent) handleToolApproval(ctx agent.InvocationContext, state se
 		approvalKey := fmt.Sprintf("approval:%s", toolName)
 		state.Set(approvalKey, true)
 		state.Set("awaiting_approval", false)
+		state.Set("approval_tool", "")
+		state.Set("approval_args", nil)
+
+		// Emit state delta event so history fallback sees approval was resolved
+		yield(&session.Event{
+			Actions: session.EventActions{
+				StateDelta: map[string]any{
+					"awaiting_approval": false,
+				},
+			},
+		}, nil)
 
 		// [MCP-SPECIFIC FIX] Inject a very specific instruction for MCP tools
 		// MCP tools are sensitive to exact arguments - must retry with same args
@@ -920,27 +939,12 @@ func (a *AstonishAgent) handleToolApproval(ctx agent.InvocationContext, state se
 			Text: retryPrompt,
 		}}
 
-		// Emit approval confirmation
-		event := &session.Event{
-			LLMResponse: model.LLMResponse{
-				Content: &genai.Content{
-					Parts: []*genai.Part{{
-						Text: "[ℹ️ Info] Tool execution approved. Resuming...\n",
-					}},
-					Role: "model",
-				},
-			},
-			Actions: session.EventActions{
-				StateDelta: map[string]any{
-					approvalKey:         true,
-					"awaiting_approval": false,
-				},
-			},
-		}
-		return yield(event, nil)
+		return true // Continue execution with retry prompt
 	} else {
 		// User denied - move to next node
 		state.Set("awaiting_approval", false)
+		state.Set("approval_tool", "")
+		state.Set("approval_args", nil)
 
 		event := &session.Event{
 			LLMResponse: model.LLMResponse{
@@ -1020,7 +1024,19 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 
 		// Node failed - decide whether to retry
 		if err == nil {
-			// No error but failed (shouldn't happen, but handle it)
+			// No error but failed - check if we're pausing for user approval
+			// This is a valid pause state, not a failure!
+			awaitingApproval, _ := state.Get("awaiting_approval")
+			if isAwaiting, ok := awaitingApproval.(bool); ok && isAwaiting {
+				if a.DebugMode {
+					fmt.Printf("[RETRY] Pausing for user approval (not a failure)\n")
+				}
+				// This is a pause, not a failure - ensure _has_error is false
+				// so the main loop will pause (return) instead of going to END
+				state.Set("_has_error", false)
+				return false // Pause - main loop will return when _has_error=false
+			}
+			// Truly failed with no error (shouldn't happen, but handle it)
 			return false
 		}
 
@@ -1446,6 +1462,12 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 
 	var internalTools []tool.Tool
 	if node.Tools {
+		// Add universal instruction for tool-enabled nodes to prevent repeating completed work
+		// This helps models like GPT that may not correctly interpret conversation history
+		instruction += "\n\nIMPORTANT: When executing tools, check the conversation history first. " +
+			"If a tool has already been called and returned a successful result (not 'pending_approval'), " +
+			"do NOT call that tool again. Proceed only with tools that haven't completed successfully yet."
+
 		// Prepare internal tools (no wrapping needed - callback handles approval)
 		if len(nodeTools) > 0 {
 			internalTools = append(internalTools, nodeTools...)
@@ -1597,7 +1619,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 					}
 
 					if approved {
-						// Consume approval
+						// Consume approval - each execution requires new approval
 						state.Set(approvalKey, false)
 						if a.DebugMode {
 							fmt.Printf("[DEBUG] Tool approved! Allowing execution to proceed.\n")
@@ -1679,14 +1701,15 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 					yield(&session.Event{
 						LLMResponse: model.LLMResponse{
 							Content: &genai.Content{
-								Parts: []*genai.Part{{Text: prompt}},
+				Parts: []*genai.Part{{Text: prompt}},
 								Role:  "model",
 							},
 						},
 						Actions: session.EventActions{
 							StateDelta: map[string]any{
 								"auto_approved": true,
-								"approval_tool": toolName,
+								// Note: Do NOT set approval_tool here - it would clobber
+								// the value set by subsequent tools that need approval
 							},
 						},
 					}, nil)
@@ -1800,12 +1823,9 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 	// Reset the pause flag before starting
 	state.Set("force_pause", false)
 
-	// Determine if we should display LLM text output to the user
-	// Logic:
-	// - If output_model is defined: Suppress streaming (data extraction mode)
-	// - If user_message is defined: Suppress streaming (controlled output mode)
-	// - If neither is defined: Show streaming text (conversational mode)
-	shouldDisplayText := len(node.OutputModel) == 0 && len(node.UserMessage) == 0
+	// NOTE: Text suppression is now handled by console.go buffering logic.
+	// We allow all text to flow through so greetings before tool calls are visible.
+	// The console.go will buffer and only show relevant text (before tool boxes).
 
 	// Run the agent - ADK handles everything (native function calling)
 	var fullResponse strings.Builder
@@ -1873,7 +1893,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				}
 
 				if approved {
-					// Consume approval
+					// Consume approval - each execution requires new approval
 					state.Set(approvalKey, false)
 					if a.DebugMode {
 						fmt.Printf("[ReAct DEBUG] Tool %s approved! Allowing execution.\n", toolName)
@@ -2088,6 +2108,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 							approved = true
 						}
 						if approved {
+							// Consume approval - each execution requires new approval
 							state.Set(approvalKey, false)
 							if a.DebugMode {
 								fmt.Printf("[ReAct DEBUG] Tool %s approved!\n", toolName)
@@ -2289,6 +2310,16 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			}
 		}
 
+
+		// Accumulate text response for output_model (Unconditionally at start of loop)
+		if event.LLMResponse.Content != nil {
+			for _, part := range event.LLMResponse.Content.Parts {
+				if part.Text != "" {
+					fullResponse.WriteString(part.Text)
+				}
+			}
+		}
+
 		// Count tool calls to prevent infinite loops
 		if event.LLMResponse.Content != nil {
 			for _, part := range event.LLMResponse.Content.Parts {
@@ -2321,9 +2352,11 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				}
 			}
 
-			// Suppress text-only events if user_message is not defined
-			// This prevents unwanted LLM conversational output from being displayed
-			if isTextOnly && !shouldDisplayText {
+		// Suppress text-only events when node has output_model
+			// This prevents raw JSON from being displayed to the user.
+			// The JSON is parsed and values are distributed to StateDelta.
+			// If user_message is defined, it will handle displaying content from state.
+			if isTextOnly && len(node.OutputModel) > 0 {
 				shouldYieldEvent = false
 			}
 		}
@@ -2349,15 +2382,6 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			return false, nil // Stops the loop, effectively pausing the agent
 		}
 
-		// 3. Accumulate text response for output_model (if needed)
-		if event.Content != nil {
-
-			for _, part := range event.Content.Parts {
-				if part.Text != "" {
-					fullResponse.WriteString(part.Text)
-				}
-			}
-		}
 
 		// 4. Handle raw_tool_output state updates
 		if event.LLMResponse.Content != nil {
@@ -2502,6 +2526,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 
 			// Emit event with text content AND a special marker in StateDelta
 			// The marker tells console.go this is a user_message that needs the "Agent:" prefix
+			// Note: Field values are NOT included here - they are already in the output_model StateDelta event
 			userMessageEvent := &session.Event{
 				LLMResponse: model.LLMResponse{
 					Content: &genai.Content{
@@ -2881,9 +2906,10 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 		}
 	}
 
-	// Clear approval state
+	// Clear awaiting_approval state (but NOT the tool's approval - that should persist)
 	state.Set("awaiting_approval", false)
-	state.Set(fmt.Sprintf("approval:%s", toolName), false)
+	// Note: Do NOT clear approval:toolName here - if we restart the node for another tool's approval,
+	// we need previously approved tools to remain approved
 
 	// Yield result event
 	yield(&session.Event{

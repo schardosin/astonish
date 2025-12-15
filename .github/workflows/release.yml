@@ -52,6 +52,14 @@ jobs:
           cd web
           npm ci
           npm run build
+      
+      - name: Verify frontend build
+        run: |
+          echo "Checking web/dist contents..."
+          ls -la web/dist/
+          echo "Verifying index.html exists..."
+          test -f web/dist/index.html || (echo "ERROR: web/dist/index.html not found!" && exit 1)
+          echo "Frontend build verified successfully"
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -64,6 +72,8 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
+          # Clean any cached builds to ensure fresh embed
+          go clean -cache
           go build -ldflags="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=${{ github.ref_name }}" -o astonish-${{ matrix.suffix }} .
 
       - name: Upload artifact

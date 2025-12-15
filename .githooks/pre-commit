@@ -1,0 +1,31 @@
+#!/bin/sh
+# Pre-commit hook to run golangci-lint
+# Install: cp .githooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+
+echo "Running golangci-lint..."
+
+# Check if golangci-lint is installed
+if ! command -v golangci-lint &> /dev/null; then
+    echo "⚠️  golangci-lint not found, skipping lint check"
+    echo "   Install with: brew install golangci-lint"
+    exit 0
+fi
+
+# Run lint on staged Go files only for speed
+STAGED_GO_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.go$' || true)
+
+if [ -z "$STAGED_GO_FILES" ]; then
+    echo "✓ No Go files staged, skipping lint"
+    exit 0
+fi
+
+# Run golangci-lint
+if golangci-lint run --timeout=2m; then
+    echo "✓ Lint passed"
+    exit 0
+else
+    echo ""
+    echo "❌ Lint failed! Fix the issues above before committing."
+    echo "   To skip this check: git commit --no-verify"
+    exit 1
+fi

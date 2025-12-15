@@ -16,9 +16,9 @@ import (
 	"google.golang.org/adk/session"
 )
 
-func handleAgentsCommand(args []string) error {
+func handleFlowsCommand(args []string) error {
 	if len(args) < 1 || args[0] == "--help" || args[0] == "-h" {
-		printAgentsUsage()
+		printFlowsUsage()
 		return nil
 	}
 
@@ -27,28 +27,29 @@ func handleAgentsCommand(args []string) error {
 		return handleRunCommand(args[1:])
 	case "list":
 		return handleListCommand()
-	case "flow":
-		return handleFlowCommand(args[1:])
+	case "show":
+		return handleShowCommand(args[1:])
 	case "edit":
 		return handleEditCommand(args[1:])
 	default:
-		return fmt.Errorf("unknown agents command: %s", args[0])
+		return fmt.Errorf("unknown flows command: %s", args[0])
 	}
 }
 
-func printAgentsUsage() {
-	fmt.Println("usage: astonish agents [-h] {run,list,flow,edit} ...")
+func printFlowsUsage() {
+	fmt.Println("usage: astonish flows [-h] {run,list,show,edit} ...")
 	fmt.Println("")
-	fmt.Println("positional arguments:")
-	fmt.Println("  {run,list,flow,edit}")
-	fmt.Println("                        Agent management commands")
-	fmt.Println("    run                 Run an agent")
-	fmt.Println("    list                List available agents")
-	fmt.Println("    flow                Visualize the agent flow")
-	fmt.Println("    edit                Edit an agent YAML file")
+	fmt.Println("Design and run AI flows - powerful automation workflows")
+	fmt.Println("powered by LLMs with visual design and CLI execution.")
+	fmt.Println("")
+	fmt.Println("commands:")
+	fmt.Println("  run                 Execute a flow")
+	fmt.Println("  list                List available flows")
+	fmt.Println("  show                Visualize flow structure")
+	fmt.Println("  edit                Edit a flow YAML file")
 	fmt.Println("")
 	fmt.Println("options:")
-	fmt.Println("  -h, --help            show this help message and exit")
+	fmt.Println("  -h, --help          Show this help message")
 }
 
 func handleRunCommand(args []string) error {
@@ -172,7 +173,7 @@ func handleRunCommand(args []string) error {
 		if runCmd.NArg() > 0 {
 			agentName = runCmd.Arg(0)
 		} else {
-			fmt.Println("Usage: astonish agents run [flags] <agent_name>")
+			fmt.Println("Usage: astonish flows run [flags] <flow_name>")
 			runCmd.PrintDefaults()
 			return fmt.Errorf("no agent name provided")
 		}
@@ -345,10 +346,10 @@ func handleListCommand() error {
 	return nil
 }
 
-func handleFlowCommand(args []string) error {
+func handleShowCommand(args []string) error {
 	if len(args) < 1 {
-		fmt.Println("Usage: astonish agents flow <agent_name>")
-		return fmt.Errorf("no agent name provided")
+		fmt.Println("Usage: astonish flows show <flow_name>")
+		return fmt.Errorf("no flow name provided")
 	}
 
 	agentName := args[0]
@@ -389,7 +390,7 @@ Found:
 
 func handleEditCommand(args []string) error {
 	if len(args) < 1 {
-		fmt.Println("Usage: astonish agents edit <agent_name>")
+		fmt.Println("Usage: astonish flows edit <flow_name>")
 		return fmt.Errorf("no agent name provided")
 	}
 

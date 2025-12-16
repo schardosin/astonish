@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package } from 'lucide-react'
+import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package, Store } from 'lucide-react'
 import MCPStoreModal from './MCPStoreModal'
+import FlowStorePanel from './FlowStorePanel'
 
 // API functions
 const fetchSettings = async () => {
@@ -222,6 +223,7 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
     { id: 'general', label: 'General', icon: Settings },
     { id: 'providers', label: 'Providers', icon: Key },
     { id: 'mcp', label: 'MCP Servers', icon: Server },
+    { id: 'flows', label: 'Flow Store', icon: Store },
   ]
 
   if (loading) {
@@ -669,6 +671,10 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
                 </div>
               )}
             </div>
+          )}
+
+          {activeSection === 'flows' && (
+            <FlowStorePanel />
           )}
         </div>
       </div>

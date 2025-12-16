@@ -749,6 +749,26 @@ flow:
     setDeleteTarget(agent)
   }, [])
 
+  // Copy store agent to local
+  const handleCopyToLocal = useCallback(async (agent) => {
+    try {
+      const res = await fetch(`/api/agents/${encodeURIComponent(agent.id)}/copy-to-local`, {
+        method: 'POST'
+      })
+      if (!res.ok) {
+        const errorText = await res.text()
+        throw new Error(errorText || 'Failed to copy agent')
+      }
+      const data = await res.json()
+      alert(`Flow copied to local: ${data.newName}\nYou can now edit it.`)
+      // Refresh agent list
+      loadAgents()
+    } catch (err) {
+      console.error('Failed to copy agent:', err)
+      alert('Failed to copy agent: ' + err.message)
+    }
+  }, [loadAgents])
+
   const confirmDelete = useCallback(async () => {
     if (!deleteTarget) return
     
@@ -815,6 +835,7 @@ flow:
             onAgentSelect={handleAgentSelect}
             onCreateNew={handleCreateNew}
             onDeleteAgent={handleDeleteAgent}
+            onCopyToLocal={handleCopyToLocal}
             isLoading={isLoadingAgents}
           />
 

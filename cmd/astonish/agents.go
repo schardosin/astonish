@@ -296,32 +296,37 @@ func handleListCommand() error {
 	type AgentInfo struct {
 		Name        string
 		Description string
+		Source      string // "local", "official", or tap name
 	}
-	agents := make(map[string]AgentInfo)
+	
+	var localAgents []AgentInfo
+	var officialAgents []AgentInfo
+	tapAgents := make(map[string][]AgentInfo) // tapName -> agents
 
-	// Helper to scan directory
+	// Helper to scan directory for local agents
 	scanDir := func(dir string) {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
-			return // Ignore errors
+			return
 		}
+		seen := make(map[string]bool)
 		for _, entry := range entries {
 			if !entry.IsDir() && filepath.Ext(entry.Name()) == ".yaml" {
 				name := entry.Name()[:len(entry.Name())-5]
-				// Only process if not already found (prioritize system over local or vice versa?
-				// The previous logic prioritized System then Local, but map overwrite would mean Local wins if processed second.
-				// Let's check existence to respect priority order: System first, then Local.
-				if _, exists := agents[name]; !exists {
-					path := filepath.Join(dir, entry.Name())
-					cfg, err := config.LoadAgent(path)
-					if err != nil {
-						continue // Skip invalid agents
-					}
-					agents[name] = AgentInfo{
-						Name:        name,
-						Description: cfg.Description,
-					}
+				if seen[name] {
+					continue
 				}
+				seen[name] = true
+				path := filepath.Join(dir, entry.Name())
+				cfg, err := config.LoadAgent(path)
+				if err != nil {
+					continue
+				}
+				localAgents = append(localAgents, AgentInfo{
+					Name:        name,
+					Description: cfg.Description,
+					Source:      "local",
+				})
 			}
 		}
 	}
@@ -334,54 +339,122 @@ func handleListCommand() error {
 	// 2. Scan Local Directory
 	scanDir("agents")
 
-	if len(agents) == 0 {
-		fmt.Println("No agents found.")
-		return nil
+	// 3. Scan User Flows Directory
+	if flowsDir, err := flowstore.GetFlowsDir(); err == nil {
+		scanDir(flowsDir)
 	}
 
-	// 1. Styles
-	headerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("63")). // Purple
-		Bold(true).
-		PaddingBottom(1) // Space after header
+	// 4. Scan Store (installed flows)
+	if store, err := flowstore.NewStore(); err == nil {
+		for _, tap := range store.GetAllTaps() {
+			storeDir := store.GetStoreDir()
+			tapDir := filepath.Join(storeDir, tap.Name)
+			entries, err := os.ReadDir(tapDir)
+			if err != nil {
+				continue
+			}
+			for _, entry := range entries {
+				if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
+					continue
+				}
+				if entry.Name() == "manifest.yaml" {
+					continue
+				}
+				name := entry.Name()[:len(entry.Name())-5]
+				path := filepath.Join(tapDir, entry.Name())
+				cfg, err := config.LoadAgent(path)
+				desc := "(Installed from store)"
+				if err == nil && cfg.Description != "" {
+					desc = cfg.Description
+				}
+				
+				info := AgentInfo{
+					Name:        name,
+					Description: desc,
+					Source:      tap.Name,
+				}
+				
+				if tap.Name == flowstore.OfficialStoreName {
+					officialAgents = append(officialAgents, info)
+				} else {
+					tapAgents[tap.Name] = append(tapAgents[tap.Name], info)
+				}
+			}
+		}
+	}
+
+	// Styles
+	sectionStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("63")).
+		Bold(true)
 
 	nameStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("205")). // Pinkish
+		Foreground(lipgloss.Color("205")).
 		Bold(true)
 
 	descStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252")) // White/Grey
+		Foreground(lipgloss.Color("252"))
 
-	// 2. Find longest name for padding
-	var maxLen int
-	var keys []string
-	for k := range agents {
-		if len(k) > maxLen {
-			maxLen = len(k)
+	storeStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("39")).
+		Bold(true)
+
+	tapStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("42")).
+		Bold(true)
+
+	// Print sections
+	printSection := func(title string, agents []AgentInfo, style lipgloss.Style) {
+		if len(agents) == 0 {
+			return
 		}
-		keys = append(keys, k)
-	}
-	sort.Strings(keys) // Always sort!
-
-	// 3. Render
-	// Print Header
-	fmt.Println(headerStyle.Render("AVAILABLE AGENTS"))
-
-	for _, name := range keys {
-		info := agents[name]
-
-		// Render the name with fixed width padding
-		// %-*s means: Left justify (-), pad to width (*), string (s)
-		paddedName := fmt.Sprintf("%-*s", maxLen+4, name)
-
-		row := lipgloss.JoinHorizontal(lipgloss.Left,
-			nameStyle.Render(paddedName),
-			descStyle.Render(info.Description),
-		)
-
-		fmt.Println(row)
+		
+		// Sort by name
+		sort.Slice(agents, func(i, j int) bool {
+			return agents[i].Name < agents[j].Name
+		})
+		
+		fmt.Println(style.Render(fmt.Sprintf("\n%s (%d)", title, len(agents))))
+		
+		for _, a := range agents {
+			fmt.Printf("  %s\n", nameStyle.Render(a.Name))
+			if a.Description != "" {
+				fmt.Printf("    %s\n", descStyle.Render(a.Description))
+			}
+		}
 	}
 
+	// Check if anything exists
+	totalCount := len(localAgents) + len(officialAgents)
+	for _, t := range tapAgents {
+		totalCount += len(t)
+	}
+	
+	if totalCount == 0 {
+		fmt.Println("No flows found.")
+		fmt.Println("\nTip: Run 'astonish flows store list' to browse available flows")
+		return nil
+	}
+
+	fmt.Println(lipgloss.NewStyle().Bold(true).Render("AVAILABLE FLOWS"))
+
+	// Print Local first
+	printSection("📁 LOCAL", localAgents, sectionStyle)
+	
+	// Print Official Store
+	printSection("🏪 OFFICIAL STORE", officialAgents, storeStyle)
+	
+	// Print Custom Taps
+	var tapNames []string
+	for tapName := range tapAgents {
+		tapNames = append(tapNames, tapName)
+	}
+	sort.Strings(tapNames)
+	for _, tapName := range tapNames {
+		printSection("📦 "+tapName, tapAgents[tapName], tapStyle)
+	}
+
+	fmt.Println()
 	return nil
 }
 
@@ -687,8 +760,13 @@ func handleStoreInstallCommand(args []string) error {
 		return fmt.Errorf("failed to install flow: %w", err)
 	}
 
-	fmt.Printf("✓ Installed flow: %s\n", flowName)
-	fmt.Printf("  Run with: astonish flows run %s\n", flowName)
+	// Show appropriate run command based on tap
+	runName := flowName
+	if tapName != flowstore.OfficialStoreName {
+		runName = tapName + "/" + flowName
+	}
+	fmt.Printf("✓ Installed flow: %s\n", runName)
+	fmt.Printf("  Run with: astonish flows run %s\n", runName)
 	return nil
 }
 

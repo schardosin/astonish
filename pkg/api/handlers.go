@@ -371,9 +371,17 @@ func CopyAgentToLocalHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine destination: use the flow name (without tap prefix)
+	// Determine destination: extract just the flow name
+	// Handle store:tap:name format (e.g., "store:official:my_flow" -> "my_flow")
 	destName := name
-	if idx := containsSlash(name); idx {
+	if strings.HasPrefix(name, "store:") {
+		// Parse store:tap:flowName format
+		parts := strings.SplitN(name, ":", 3)
+		if len(parts) == 3 {
+			destName = parts[2] // Just the flow name
+		}
+	} else if containsSlash(name) {
+		// Handle legacy tap/flow format
 		parts := splitFirst(name, "/")
 		if len(parts) == 2 {
 			destName = parts[1]

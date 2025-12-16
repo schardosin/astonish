@@ -45,6 +45,7 @@ function FlowCanvasInner({
   nodes: propNodes, 
   edges: propEdges, 
   isRunning, 
+  readOnly,
   theme, 
   onNodeSelect, 
   onNodeDoubleClick,
@@ -595,8 +596,8 @@ function FlowCanvasInner({
           </Panel>
         )}
         
-        {/* Empty Canvas State - Create with AI */}
-        {!isRunning && isEmptyCanvas && onOpenAIChat && (
+        {/* Empty Canvas State - Create with AI - hidden in read-only mode */}
+        {!isRunning && !readOnly && isEmptyCanvas && onOpenAIChat && (
           <div 
             className="absolute inset-0 flex items-center justify-center pointer-events-none"
             style={{ zIndex: 10 }}
@@ -645,8 +646,8 @@ function FlowCanvasInner({
           </Panel>
         )}
         
-        {/* Multi-Selection AI Assist Button */}
-        {!isRunning && hasMultiSelection && onOpenAIChat && (
+        {/* Multi-Selection AI Assist Button - hidden in read-only mode */}
+        {!isRunning && !readOnly && hasMultiSelection && onOpenAIChat && (
           <Panel position="bottom-center" className="mb-4">
             <button
               onClick={() => onOpenAIChat({ context: 'multi_node', nodeIds: selectedRealNodes })}
@@ -667,12 +668,13 @@ function FlowCanvasInner({
 }
 
 // Wrapper component - agent changes handled by key prop in App.jsx
-export default function FlowCanvas({ nodes, edges, isRunning, theme, onNodeSelect, onNodeDoubleClick, selectedNodeId, runningNodeId, onAddNode, onConnect, onEdgeRemove, onLayoutChange, onLayoutSave, onOpenAIChat, onNodeDelete }) {
+export default function FlowCanvas({ nodes, edges, isRunning, readOnly, theme, onNodeSelect, onNodeDoubleClick, selectedNodeId, runningNodeId, onAddNode, onConnect, onEdgeRemove, onLayoutChange, onLayoutSave, onOpenAIChat, onNodeDelete }) {
   return (
     <FlowCanvasInner
       nodes={nodes}
       edges={edges}
       isRunning={isRunning}
+      readOnly={readOnly}
       theme={theme}
       onNodeSelect={onNodeSelect}
       onNodeDoubleClick={onNodeDoubleClick}

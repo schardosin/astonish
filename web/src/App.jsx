@@ -20,6 +20,7 @@ import { yamlToFlowAsync, extractLayout } from './utils/yamlToFlow'
 import { addStandaloneNode, addConnection, removeConnection, updateNode } from './utils/flowToYaml'
 import { fetchAgents, fetchAgent, saveAgent, deleteAgent, fetchTools } from './api/agents'
 import { snakeToTitleCase } from './utils/formatters'
+import { Store, Lock, Copy, Loader2 } from 'lucide-react'
 import './index.css'
 
 // Default YAML for new agents
@@ -191,6 +192,12 @@ function App() {
   // Debounced auto-save to disk (300ms delay) - includes layout extraction
   const debouncedAutoSave = useCallback((newYaml) => {
     if (!selectedAgent) return
+    
+    // Skip saving for store flows (read-only)
+    if (selectedAgent.source === 'store') {
+      console.log('[Auto-save] Skipped - store flow is read-only')
+      return
+    }
     
     // Clear any pending save
     if (autoSaveTimerRef.current) {
@@ -715,6 +722,8 @@ flow:
   // Save layout and sync to disk (used before running and periodically)
   const saveLayoutAndSync = useCallback(async () => {
     if (!selectedAgent || !yamlContent) return
+    // Skip saving for store flows (read-only)
+    if (selectedAgent.source === 'store') return
     
     try {
       const parsed = yaml.load(yamlContent) || {}
@@ -773,7 +782,25 @@ flow:
     if (!deleteTarget) return
     
     try {
-      await deleteAgent(deleteTarget.id)
+      if (deleteTarget.source === 'store') {
+        // Uninstall store flow - parse the store:tap:name ID format
+        const parts = deleteTarget.id.split(':')
+        if (parts.length === 3) {
+          const [, tapName, flowName] = parts
+          const res = await fetch(`/api/flow-store/${encodeURIComponent(tapName)}/${encodeURIComponent(flowName)}`, {
+            method: 'DELETE'
+          })
+          if (!res.ok) {
+            const errorText = await res.text()
+            throw new Error(errorText || 'Failed to uninstall flow')
+          }
+        } else {
+          throw new Error('Invalid store flow ID format')
+        }
+      } else {
+        // Delete local agent
+        await deleteAgent(deleteTarget.id)
+      }
       // Refresh agent list
       loadAgents()
       // If we deleted the selected agent, clear selection
@@ -787,7 +814,7 @@ flow:
     } finally {
       setDeleteTarget(null)
     }
-  }, [deleteTarget, selectedAgent])
+  }, [deleteTarget, selectedAgent, loadAgents])
 
   return (
     <ReactFlowProvider>
@@ -855,6 +882,8 @@ flow:
           <>
           <Header
             agentName={selectedAgent?.name || 'Select Agent'}
+            agentSource={selectedAgent?.source}
+            agentTapName={selectedAgent?.tapName}
             showYaml={showYaml}
             onToggleYaml={() => setShowYaml(!showYaml)}
             isRunning={isRunning}
@@ -868,6 +897,28 @@ flow:
             onRedo={handleRedo}
           />
 
+          {/* Store Flow Banner */}
+          {selectedAgent?.source === 'store' && (
+            <div 
+              className="px-4 py-2 flex items-center justify-between"
+              style={{ background: 'linear-gradient(90deg, rgba(59, 130, 246, 0.15), rgba(16, 185, 129, 0.15))', borderBottom: '1px solid var(--border-color)' }}
+            >
+              <div className="flex items-center gap-2">
+                <Lock size={16} className="text-blue-400" />
+                <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                  <strong className="text-blue-400">Read-only</strong> — This flow is from the store. Copy to local to make changes.
+                </span>
+              </div>
+              <button
+                onClick={() => handleCopyToLocal(selectedAgent)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors bg-blue-500 text-white hover:bg-blue-600"
+              >
+                <Copy size={14} />
+                Copy to Local
+              </button>
+            </div>
+          )}
+
           {/* Flow + Chat Area */}
           <div className={`flex-1 flex overflow-hidden ${!isRunning && (editingNode || showYaml) ? 'h-1/2' : ''}`}>
             {/* Flow Canvas */}
@@ -877,6 +928,7 @@ flow:
                 nodes={nodes}
                 edges={edges}
                 isRunning={isRunning}
+                readOnly={selectedAgent?.source === 'store'}
                 theme={theme}
                 onNodeSelect={handleNodeSelect}
                 onNodeDoubleClick={handleNodeDoubleClick}
@@ -932,6 +984,7 @@ flow:
                   onClose={handleNodeEditorClose}
                   theme={theme}
                   availableTools={availableTools}
+                  readOnly={selectedAgent?.source === 'store'}
                   onAIAssist={(node, nodeName, nodeData) => {
                     setAIChatContext('node_config')
                     setAIFocusedNode({ name: nodeName, type: node.data?.nodeType || node.type, data: nodeData })
@@ -967,6 +1020,7 @@ flow:
         onClose={() => setDeleteTarget(null)}
         onConfirm={confirmDelete}
         agentName={deleteTarget ? snakeToTitleCase(deleteTarget.name) : ''}
+        isStoreFlow={deleteTarget?.source === 'store'}
       />
 
       {/* AI Chat Panel */}
@@ -983,8 +1037,8 @@ flow:
           setYamlContent(newYaml)
           // Push new state to history (for undo)
           pushToHistory(newYaml)
-          // Auto-save after applying
-          if (selectedAgent) {
+          // Auto-save after applying (skip for store flows)
+          if (selectedAgent && selectedAgent.source !== 'store') {
             saveAgent(selectedAgent.id, newYaml).then(() => {
               console.log('Auto-saved after AI changes')
             }).catch(err => {
@@ -994,8 +1048,8 @@ flow:
         }}
       />
 
-      {/* AI Chat Toggle Button */}
-      {selectedAgent && !isRunning && (
+      {/* AI Chat Toggle Button - hidden for store flows (read-only) */}
+      {selectedAgent && !isRunning && selectedAgent.source !== 'store' && (
         <button
           onClick={() => {
             // Detect if flow has existing nodes

@@ -91,7 +91,8 @@ export default function Sidebar({
             title={agent.description || ''}
           >
             <div className="font-medium text-sm truncate">
-              {snakeToTitleCase(agent.name)}
+              {/* For store flows with tap prefix, show just the flow name since it's already under the tap section */}
+              {snakeToTitleCase(agent.name.includes('/') ? agent.name.split('/').pop() : agent.name)}
             </div>
             {agent.description && (
               <div 
@@ -106,12 +107,12 @@ export default function Sidebar({
             <button
               onClick={(e) => {
                 e.stopPropagation()
-                if (onCopyToLocal) onCopyToLocal(agent)
+                if (onDeleteAgent) onDeleteAgent(agent)
               }}
-              className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-blue-500/20 transition-all flex-shrink-0"
-              title="Copy to local for editing"
+              className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/20 transition-all flex-shrink-0"
+              title="Uninstall flow"
             >
-              <Copy size={14} className="text-blue-400" />
+              <Trash2 size={14} className="text-red-400" />
             </button>
           ) : (
             <button

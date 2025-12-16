@@ -897,8 +897,8 @@ flow:
             onRedo={handleRedo}
           />
 
-          {/* Store Flow Banner */}
-          {selectedAgent?.source === 'store' && (
+          {/* Store Flow Banner - hidden during run mode */}
+          {selectedAgent?.source === 'store' && !isRunning && (
             <div 
               className="px-4 py-2 flex items-center justify-between"
               style={{ background: 'linear-gradient(90deg, rgba(59, 130, 246, 0.15), rgba(16, 185, 129, 0.15))', borderBottom: '1px solid var(--border-color)' }}

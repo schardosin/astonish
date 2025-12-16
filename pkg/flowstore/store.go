@@ -4,10 +4,15 @@ package flowstore
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -111,10 +116,62 @@ func (s *Store) GetAllTaps() []*Tap {
 	return taps
 }
 
+// validateTapRepository checks that a tap repository exists and contains a valid manifest.yaml
+func validateTapRepository(tap Tap) error {
+	// Build the raw GitHub URL for manifest.yaml
+	// URL format: github.com/owner/repo -> https://raw.githubusercontent.com/owner/repo/branch/manifest.yaml
+	url := tap.URL
+	if strings.Contains(url, "github.com") {
+		// Remove github.com prefix and build raw URL
+		path := strings.TrimPrefix(url, "github.com/")
+		url = fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/manifest.yaml", path, tap.Branch)
+	} else {
+		return fmt.Errorf("only GitHub repositories are supported (got: %s)", tap.URL)
+	}
+
+	// Create HTTP client with timeout
+	client := &http.Client{Timeout: 10 * time.Second}
+	
+	resp, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to connect to repository: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 404 {
+		return fmt.Errorf("repository not found or missing manifest.yaml (check that the repo exists and contains a manifest.yaml file)")
+	}
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("unexpected response from GitHub: %s", resp.Status)
+	}
+
+	// Read and validate the manifest
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read manifest.yaml: %w", err)
+	}
+
+	var manifest Manifest
+	if err := yaml.Unmarshal(body, &manifest); err != nil {
+		return fmt.Errorf("invalid manifest.yaml format: %w", err)
+	}
+
+	// Validate manifest has required fields
+	if manifest.Name == "" {
+		return fmt.Errorf("manifest.yaml is missing required 'name' field")
+	}
+	if len(manifest.Flows) == 0 {
+		return fmt.Errorf("manifest.yaml has no flows defined")
+	}
+
+	return nil
+}
+
 // AddTap adds a new tap by GitHub URL with smart naming:
 // - "owner" → assumes owner/astonish-flows, tap name = "owner"
 // - "owner/repo" → if repo != "astonish-flows", tap name = "owner-repo"
 // - alias parameter overrides the tap name
+// Validates that the repository exists and contains a manifest.yaml
 func (s *Store) AddTap(urlOrShorthand string, alias string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -138,6 +195,11 @@ func (s *Store) AddTap(urlOrShorthand string, alias string) (string, error) {
 		Name:   name,
 		URL:    url,
 		Branch: "main",
+	}
+
+	// Validate the tap by fetching its manifest
+	if err := validateTapRepository(tap); err != nil {
+		return "", fmt.Errorf("invalid tap repository: %w", err)
 	}
 
 	s.config.Taps = append(s.config.Taps, tap)

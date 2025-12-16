@@ -47,6 +47,7 @@ function App() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showAIChat, setShowAIChat] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [toast, setToast] = useState(null) // { message, type: 'success' | 'error' }
   
   // Flow State
   const [availableTools, setAvailableTools] = useState([])
@@ -758,6 +759,12 @@ flow:
     setDeleteTarget(agent)
   }, [])
 
+  // Toast notification helper
+  const showToast = useCallback((message, type = 'success') => {
+    setToast({ message, type })
+    setTimeout(() => setToast(null), 4000) // Auto-dismiss after 4 seconds
+  }, [])
+
   // Copy store agent to local
   const handleCopyToLocal = useCallback(async (agent) => {
     try {
@@ -769,14 +776,14 @@ flow:
         throw new Error(errorText || 'Failed to copy agent')
       }
       const data = await res.json()
-      alert(`Flow copied to local: ${data.newName}\nYou can now edit it.`)
+      showToast(`Flow copied to local: ${data.newName}`, 'success')
       // Refresh agent list
       loadAgents()
     } catch (err) {
       console.error('Failed to copy agent:', err)
-      alert('Failed to copy agent: ' + err.message)
+      showToast('Failed to copy: ' + err.message, 'error')
     }
-  }, [loadAgents])
+  }, [loadAgents, showToast])
 
   const confirmDelete = useCallback(async () => {
     if (!deleteTarget) return
@@ -1083,6 +1090,42 @@ flow:
           theme={theme}
           onToolsRefresh={loadTools}
         />
+      )}
+
+      {/* Toast Notification */}
+      {toast && (
+        <div 
+          className="fixed bottom-6 right-6 z-[100] animate-slide-up"
+          style={{ animation: 'slide-up 0.3s ease-out' }}
+        >
+          <div 
+            className={`flex items-center gap-3 px-5 py-3 rounded-xl shadow-2xl backdrop-blur-sm ${
+              toast.type === 'error' 
+                ? 'bg-red-500/90 text-white' 
+                : 'bg-gradient-to-r from-emerald-500/90 to-teal-500/90 text-white'
+            }`}
+            style={{ minWidth: '280px' }}
+          >
+            {toast.type === 'error' ? (
+              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            ) : (
+              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            )}
+            <span className="text-sm font-medium">{toast.message}</span>
+            <button 
+              onClick={() => setToast(null)}
+              className="ml-auto p-1 hover:bg-white/20 rounded-lg transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
       )}
     </ReactFlowProvider>
   )

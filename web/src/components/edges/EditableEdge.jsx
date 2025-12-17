@@ -77,11 +77,92 @@ export default function EditableEdge({
 
     const isHorizontal = Math.abs(start.y - end.y) < Math.abs(start.x - end.x)
 
-    // Capture initial state
+    // --- DRAG START LOGIC ---
+    // We determine if we need to isolate the segment from Fixed Nodes (Source/Target)
+    // to allow orthogonal movement without creating diagonals.
+    
+    let currentPoints = [...points]
+    let activeLeftIndex = index - 1 // Index in 'currentPoints' of the start of the dragged segment
+    let activeRightIndex = index    // Index in 'currentPoints' of the end of the dragged segment
+    
+    const STUB_LEN = 30
+    
+    // 1. Isolate FROM SOURCE if needed
+    if (activeLeftIndex === -1) {
+      // Connected to Source. We need to insert a stub to preserve Source connection direction.
+      // Direction: If dragging Horizontal, segment is Horizontal. 
+      // We assume Source allows Horizontal connection.
+      // If we move Y, we need: Source -> Stub(Fixed Y) -> Corner(Moving Y) -> ...
+      
+      const dirX = Math.sign(targetX - sourceX) || 1
+      const dirY = Math.sign(targetY - sourceY) || 1
+      
+      let pStub, pCorner
+      
+      if (isHorizontal) {
+         // Horizontal Drag (Moving Y). Original segment S->P0 is Horizontal.
+         // Insert Horizontal stub: (Sx + len, Sy)
+         pStub = { x: sourceX + (dirX * STUB_LEN), y: sourceY }
+         pCorner = { x: sourceX + (dirX * STUB_LEN), y: sourceY } // Initially same Y, will move
+      } else {
+         // Vertical Drag (Moving X). Original segment S->P0 is Vertical.
+         // Insert Vertical stub: (Sx, Sy + len)
+         pStub = { x: sourceX, y: sourceY + (dirY * STUB_LEN) }
+         pCorner = { x: sourceX, y: sourceY + (dirY * STUB_LEN) }
+      }
+      
+      currentPoints.unshift(pStub, pCorner)
+      activeLeftIndex += 2
+      activeRightIndex += 2
+    }
+    
+    // 2. Isolate FROM TARGET if needed
+    if (activeRightIndex === points.length) { // points.length is passed from closure, but 'currentPoints' might have changed size?
+      // Wait, 'points' closure variable is unchanged. 'activeRightIndex' is relative to 'currentPoints'.
+      // If we unshifted 2, activeRightIndex increased by 2.
+      // But we need to check if it matches the *end* of the array.
+      // Original check: index === points.length. 
+      // Now: activeRightIndex === currentPoints.length? YES.
+    }
+    
+    // Actually simpler: re-check against currentPoints using the shifted index
+    if (activeRightIndex === currentPoints.length) {
+       // Connected to Target.
+       const dirX = Math.sign(sourceX - targetX) || -1 // backwards from target
+       const dirY = Math.sign(sourceY - targetY) || -1
+       
+       let pStub, pCorner
+       
+       if (isHorizontal) {
+         // Horizontal Drag. T is fixed.
+         // Segment ...->T is Horizontal.
+         // We need: ... -> Corner(Moving Y) -> Stub(Fixed Y) -> T
+         pStub = { x: targetX + (dirX * STUB_LEN), y: targetY }
+         pCorner = { x: targetX + (dirX * STUB_LEN), y: targetY }
+       } else {
+         // Vertical Drag.
+         pStub = { x: targetX, y: targetY + (dirY * STUB_LEN) }
+         pCorner = { x: targetX, y: targetY + (dirY * STUB_LEN) }
+       }
+       
+       currentPoints.push(pCorner, pStub)
+       // Indices don't shift for right-side insertion
+    }
+
+    // Apply insertions immediately so the user sees the 'break'
+    if (currentPoints.length !== points.length) {
+       setEdges(edges => edges.map(edge => {
+        if (edge.id === id) return { ...edge, data: { ...edge.data, points: currentPoints } }
+        return edge
+      }))
+    }
+    
+    // Capture state for dragging
     const startX = e.clientX
     const startY = e.clientY
-    const initialPoints = [...points]
-    let currentDragPoints = [...initialPoints] // specific variable to track latest state for mouseUp
+    // map currentPoints to ensure deep copy for base calculation
+    const initialDragPoints = currentPoints.map(p => ({...p})) 
+    let currentDragPoints = [...initialDragPoints]
 
     const handleMouseMove = (moveEvent) => {
       const currentFlow = screenToFlowPosition({ x: moveEvent.clientX, y: moveEvent.clientY })
@@ -90,27 +171,27 @@ export default function EditableEdge({
       const deltaX = currentFlow.x - startFlow.x
       const deltaY = currentFlow.y - startFlow.y
 
-      const newPoints = initialPoints.map(p => ({ ...p }))
+      const newPoints = initialDragPoints.map(p => ({ ...p }))
 
       if (isHorizontal) {
-        // Moving Horizontal Segment UP/DOWN
-        if (index > 0) {
-           newPoints[index - 1].y = initialPoints[index - 1].y + deltaY
+        // Move Y
+        if (activeLeftIndex >= 0) {
+           newPoints[activeLeftIndex].y = initialDragPoints[activeLeftIndex].y + deltaY
         }
-        if (index < points.length) {
-           newPoints[index].y = initialPoints[index].y + deltaY
+        if (activeRightIndex < newPoints.length) {
+           newPoints[activeRightIndex].y = initialDragPoints[activeRightIndex].y + deltaY
         }
       } else {
-        // Moving Vertical Segment LEFT/RIGHT
-        if (index > 0) {
-           newPoints[index - 1].x = initialPoints[index - 1].x + deltaX
+        // Move X
+        if (activeLeftIndex >= 0) {
+           newPoints[activeLeftIndex].x = initialDragPoints[activeLeftIndex].x + deltaX
         }
-        if (index < points.length) {
-           newPoints[index].x = initialPoints[index].x + deltaX
+        if (activeRightIndex < newPoints.length) {
+           newPoints[activeRightIndex].x = initialDragPoints[activeRightIndex].x + deltaX
         }
       }
       
-      currentDragPoints = newPoints // update latest
+      currentDragPoints = newPoints
 
       setEdges(edges => edges.map(edge => {
         if (edge.id === id) {

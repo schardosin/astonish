@@ -224,13 +224,15 @@ export default function Sidebar({
 
             {/* Custom Taps */}
             {Object.entries(groupedAgents.taps).map(([tapName, tapAgents]) => (
-              renderSection(
-                tapName,
-                tapAgents,
-                <Store size={12} />,
-                `tap-${tapName}`,
-                'var(--text-secondary)'
-              )
+              <div key={`tap-${tapName}`}>
+                {renderSection(
+                  tapName,
+                  tapAgents,
+                  <Store size={12} />,
+                  `tap-${tapName}`,
+                  'var(--text-secondary)'
+                )}
+              </div>
             ))}
 
             {/* Empty state */}

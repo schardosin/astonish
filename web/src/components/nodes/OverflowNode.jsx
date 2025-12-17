@@ -137,6 +137,21 @@ export default function OverflowNode({
           }}
         />
       )}
+      
+      {/* Hidden handles for back-edges (loops that go upward) */}
+      <Handle 
+        type="source" 
+        position={Position.Top} 
+        id="top-source" 
+        className="!opacity-0 !w-1 !h-1" 
+        style={{ left: '30%' }} 
+      />
+      <Handle 
+        type="target" 
+        position={Position.Left} 
+        id="left" 
+        className="!opacity-0 !w-1 !h-1" 
+      />
     </div>
   )
 }

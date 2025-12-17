@@ -73,7 +73,7 @@ const removeTap = async (name) => {
   return res.json()
 }
 
-export default function SettingsPage({ onClose, theme, activeSection = 'general', onSectionChange, onToolsRefresh }) {
+export default function SettingsPage({ onClose, activeSection = 'general', onSectionChange, onToolsRefresh }) {
   // Use prop for active section, default to 'general'
   const [settings, setSettings] = useState(null)
   const [mcpConfig, setMcpConfig] = useState(null)
@@ -86,7 +86,6 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
   const [generalForm, setGeneralForm] = useState({ default_provider: '', default_model: '' })
   const [providerForms, setProviderForms] = useState({})
   const [mcpServers, setMcpServers] = useState({})
-  const [editingMcpServer, setEditingMcpServer] = useState(null)
   const [mcpViewMode, setMcpViewMode] = useState('editor') // 'editor' or 'source'
   const [mcpSourceText, setMcpSourceText] = useState('')
   const [mcpSourceError, setMcpSourceError] = useState(null)
@@ -253,7 +252,6 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
     })
     setMcpServerNames({ ...mcpServerNames, [newName]: newName })
     setMcpServerArgs({ ...mcpServerArgs, [newName]: '' })
-    setEditingMcpServer(newName)
   }
 
   const handleDeleteMcpServer = (name) => {
@@ -293,14 +291,14 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
           <h2 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>Settings</h2>
           <button
             onClick={onClose}
-            className="p-1 rounded hover:bg-gray-600/30"
-            style={{ color: 'var(--text-muted)' }}
+            className="p-1.5 rounded-lg transition-colors"
+            style={{ color: 'var(--text-muted)', border: '1px solid var(--border-color)', background: 'var(--bg-tertiary)' }}
           >
-            <X size={20} />
+            <X size={18} />
           </button>
         </div>
-        
-        <nav className="flex-1 p-2">
+
+        <nav className="flex-1 p-2 space-y-1">
           {menuItems.map(item => {
             const Icon = item.icon
             const isActive = activeSection === item.id
@@ -308,19 +306,21 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
               <button
                 key={item.id}
                 onClick={() => onSectionChange ? onSectionChange(item.id) : null}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-all ${
-                  isActive ? 'bg-purple-600/20 text-purple-400' : 'hover:bg-gray-600/20'
-                }`}
-                style={{ color: isActive ? undefined : 'var(--text-secondary)' }}
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all"
+                style={{
+                  background: isActive ? 'var(--accent-soft)' : 'transparent',
+                  color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
+                  border: `1px solid ${isActive ? 'rgba(95, 79, 178, 0.25)' : 'transparent'}`
+                }}
               >
                 <Icon size={18} />
-                <span className="font-medium">{item.label}</span>
+                <span className="font-medium text-sm">{item.label}</span>
                 {isActive && <ChevronRight size={16} className="ml-auto" />}
               </button>
             )
           })}
         </nav>
-        
+
         {/* UI Version */}
         <div className="p-3 border-t text-xs" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
           <div className="opacity-60">UI Version: {__UI_VERSION__}</div>
@@ -330,7 +330,7 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
       {/* Right Content */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="p-4 border-b flex items-center justify-between" style={{ borderColor: 'var(--border-color)' }}>
+        <div className="p-4 border-b flex items-center justify-between" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
           <h3 className="text-xl font-semibold" style={{ color: 'var(--text-primary)' }}>
             {menuItems.find(m => m.id === activeSection)?.label}
           </h3>
@@ -341,7 +341,7 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
             </div>
           )}
           {error && (
-            <div className="flex items-center gap-2 text-red-400 text-sm">
+            <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--danger)' }}>
               <AlertCircle size={16} />
               {error}
             </div>
@@ -411,12 +411,12 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
                   </select>
                   {loadingModels && (
                     <div className="absolute right-10 top-1/2 -translate-y-1/2">
-                      <Loader2 size={16} className="animate-spin text-purple-400" />
+                      <Loader2 size={16} className="animate-spin" style={{ color: 'var(--accent)' }} />
                     </div>
                   )}
                 </div>
                 {modelsError && (
-                  <p className="text-xs text-red-400 mt-1">{modelsError}</p>
+                  <p className="text-xs mt-1" style={{ color: 'var(--danger)' }}>{modelsError}</p>
                 )}
                 <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
                   Click the dropdown to load available models from the provider
@@ -426,7 +426,8 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
               <button
                 onClick={handleSaveGeneral}
                 disabled={saving}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-medium transition-colors disabled:opacity-50"
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-white font-medium transition-colors disabled:opacity-50"
+                style={{ background: 'var(--accent)' }}
               >
                 <Save size={16} />
                 {saving ? 'Saving...' : 'Save Changes'}
@@ -448,9 +449,9 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
                         {provider.display_name || provider.name}
                       </span>
                       {provider.configured ? (
-                        <span className="px-2 py-0.5 text-xs rounded bg-green-500/20 text-green-400">Configured</span>
+                        <span className="px-2 py-0.5 text-xs rounded" style={{ background: 'rgba(20,150,71,0.12)', color: '#149647' }}>Configured</span>
                       ) : (
-                        <span className="px-2 py-0.5 text-xs rounded bg-gray-500/20 text-gray-400">Not configured</span>
+                        <span className="px-2 py-0.5 text-xs rounded" style={{ background: 'rgba(107,114,128,0.15)', color: '#6b7280' }}>Not configured</span>
                       )}
                     </div>
                   </div>
@@ -479,7 +480,8 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
                   <button
                     onClick={() => handleSaveProvider(provider.name)}
                     disabled={saving}
-                    className="mt-4 flex items-center gap-2 px-3 py-1.5 rounded bg-purple-600 hover:bg-purple-500 text-white text-sm font-medium transition-colors disabled:opacity-50"
+                    className="mt-4 flex items-center gap-2 px-3 py-1.5 rounded text-white text-sm font-medium transition-colors disabled:opacity-50"
+                    style={{ background: 'var(--accent)' }}
                   >
                     <Save size={14} />
                     Save
@@ -500,11 +502,11 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
                       setMcpSourceError(null)
                     }}
                     className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium transition-colors ${
-                      mcpViewMode === 'editor' 
-                        ? 'bg-purple-600 text-white' 
+                      mcpViewMode === 'editor'
+                        ? 'text-white'
                         : 'hover:bg-gray-600/20'
                     }`}
-                    style={{ color: mcpViewMode !== 'editor' ? 'var(--text-secondary)' : undefined }}
+                    style={{ background: mcpViewMode === 'editor' ? 'var(--accent)' : 'transparent', color: mcpViewMode !== 'editor' ? 'var(--text-secondary)' : undefined }}
                   >
                     <LayoutGrid size={14} />
                     Editor
@@ -516,11 +518,14 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
                       setMcpSourceError(null)
                     }}
                     className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium transition-colors ${
-                      mcpViewMode === 'source' 
-                        ? 'bg-purple-600 text-white' 
+                      mcpViewMode === 'source'
+                        ? 'text-white'
                         : 'hover:bg-gray-600/20'
                     }`}
-                    style={{ color: mcpViewMode !== 'source' ? 'var(--text-secondary)' : undefined }}
+                    style={{
+                      background: mcpViewMode === 'source' ? 'var(--accent)' : undefined,
+                      color: mcpViewMode !== 'source' ? 'var(--text-secondary)' : undefined
+                    }}
                   >
                     <Code size={14} />
                     Source
@@ -534,15 +539,16 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
                   <div className="flex items-center gap-3">
                     <button
                       onClick={() => setShowMCPStore(true)}
-                      className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-medium transition-colors"
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors"
+                      style={{ background: 'linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%)', color: '#fff' }}
                     >
                       <Package size={16} />
                       Browse Store
                     </button>
                     <button
                       onClick={handleAddMcpServer}
-                      className="flex items-center gap-2 px-4 py-2 rounded-lg border hover:bg-gray-600/20 font-medium transition-colors"
-                      style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg border font-medium transition-colors"
+                      style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)', background: 'var(--bg-tertiary)' }}
                     >
                       <Plus size={16} />
                       Add Manual
@@ -642,10 +648,11 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
                     <button
                       onClick={handleSaveMCP}
                       disabled={saving}
-                      className="flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-medium transition-colors disabled:opacity-50"
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
+                      style={{ background: 'var(--accent)', color: '#fff' }}
                     >
                       <Save size={16} />
-                      {saving ? 'Saving...' : 'Save MCP Configuration'}
+                      {saving ? 'Saving...' : 'Save Changes'}
                     </button>
                   )}
 
@@ -666,7 +673,7 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
                     Edit the raw JSON configuration below. Changes will be synced when you save or switch back to Editor view.
                   </p>
                   {mcpSourceError && (
-                    <div className="flex items-center gap-2 text-red-400 text-sm">
+                    <div className="flex items-center gap-2" style={{ color: 'var(--danger)' }}>
                       <AlertCircle size={16} />
                       {mcpSourceError}
                     </div>
@@ -675,10 +682,10 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
                     value={mcpSourceText}
                     onChange={(e) => setMcpSourceText(e.target.value)}
                     className="w-full h-96 px-4 py-3 rounded-lg border text-sm font-mono resize-y"
-                    style={{ 
-                      background: 'var(--bg-secondary)', 
-                      borderColor: mcpSourceError ? '#f87171' : 'var(--border-color)', 
-                      color: 'var(--text-primary)' 
+                    style={{
+                      background: 'var(--bg-secondary)',
+                      borderColor: mcpSourceError ? '#f87171' : 'var(--border-color)',
+                      color: 'var(--text-primary)'
                     }}
                     spellCheck={false}
                   />
@@ -687,14 +694,9 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
                       try {
                         const parsed = JSON.parse(mcpSourceText)
                         if (parsed.mcpServers && typeof parsed.mcpServers === 'object') {
-                          // Save directly to backend
                           setSaving(true)
                           await saveMCPConfig({ mcpServers: parsed.mcpServers })
-                          
-                          // Update local state to match
                           setMcpServers(parsed.mcpServers)
-                          
-                          // Update name and args tracking state
                           const names = {}
                           const args = {}
                           Object.entries(parsed.mcpServers).forEach(([name, server]) => {
@@ -703,7 +705,6 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
                           })
                           setMcpServerNames(names)
                           setMcpServerArgs(args)
-                          
                           setMcpSourceError(null)
                           setMcpHasChanges(false)
                           setSaveSuccess(true)
@@ -719,7 +720,8 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
                       }
                     }}
                     disabled={saving}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-medium transition-colors disabled:opacity-50"
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
+                    style={{ background: 'var(--accent)', color: '#fff' }}
                   >
                     <Save size={16} />
                     {saving ? 'Saving...' : 'Apply & Save'}
@@ -785,7 +787,8 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
                       }
                     }}
                     disabled={tapsLoading || !newTapUrl}
-                    className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+                    style={{ background: 'var(--accent)', color: '#fff' }}
                   >
                     {tapsLoading ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
                     Add Repository

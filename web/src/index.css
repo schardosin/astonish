@@ -1,26 +1,26 @@
 @import "tailwindcss";
 
 :root {
-  --bg-primary: #f7f9fc;
+  --bg-primary: #fafbfe;
   --bg-secondary: #ffffff;
-  --bg-tertiary: #eef1f8;
-  --surface-muted: #e2e8f0;
+  --bg-tertiary: #f1f3f9;
+  --surface-muted: #e5e9f2;
   --text-primary: #0b1222;
-  --text-secondary: #3b4558;
+  --text-secondary: #3e4655;
   --text-muted: #6b7280;
-  --border-color: #e4e7ed;
-  --accent: #6b46c1;
-  --accent-strong: #5b34b0;
-  --accent-soft: #ede9fe;
-  --success: #16a34a;
-  --warning: #f59e0b;
-  --danger: #ef4444;
-  --node-input: #c7d2fe;
-  --node-llm: #6b46c1;
-  --node-tool: #7c3aed;
-  --node-output: #9f7aea;
+  --border-color: #e5e8f0;
+  --accent: #5f4fb2;
+  --accent-strong: #4b3f9c;
+  --accent-soft: #eeebff;
+  --success: #149647;
+  --warning: #e49425;
+  --danger: #e74c3c;
+  --node-input: #dfe5ff;
+  --node-llm: #5f4fb2;
+  --node-tool: #6a3fb0;
+  --node-output: #8f7edb;
 
-  --shadow-soft: 0 8px 28px rgba(15, 23, 42, 0.12);
+  --shadow-soft: 0 8px 28px rgba(15, 23, 42, 0.1);
   --radius-lg: 14px;
   --radius-md: 10px;
   --radius-sm: 8px;
@@ -31,19 +31,19 @@
   --bg-secondary: #0f172a;
   --bg-tertiary: #111b30;
   --surface-muted: #1f2937;
-  --text-primary: #f8fafc;
-  --text-secondary: #d1d5db;
+  --text-primary: #f6f7fb;
+  --text-secondary: #d3d7e3;
   --text-muted: #9ca3af;
   --border-color: rgba(255, 255, 255, 0.08);
-  --accent: #9f7aea;
-  --accent-strong: #805ad5;
-  --accent-soft: rgba(159, 122, 234, 0.12);
-  --node-input: #3749a6;
-  --node-llm: #9f7aea;
-  --node-tool: #7c3aed;
-  --node-output: #c084fc;
+  --accent: #8d7ae0;
+  --accent-strong: #7262ce;
+  --accent-soft: rgba(141, 122, 224, 0.12);
+  --node-input: #35448f;
+  --node-llm: #8d7ae0;
+  --node-tool: #7b66d1;
+  --node-output: #a998ef;
 
-  --shadow-soft: 0 10px 32px rgba(0, 0, 0, 0.45);
+  --shadow-soft: 0 10px 32px rgba(0, 0, 0, 0.42);
 }
 
 body {
@@ -87,7 +87,7 @@ button, input, select, textarea {
 }
 
 .react-flow__node.selected > div {
-  box-shadow: 0 0 0 3px rgba(107, 70, 193, 0.4), var(--shadow-soft) !important;
+  box-shadow: 0 0 0 3px rgba(95, 79, 178, 0.28), var(--shadow-soft) !important;
 }
 
 .react-flow__edge-path {
@@ -111,24 +111,24 @@ button, input, select, textarea {
 }
 
 .node-input {
-  background: #f1f5ff;
+  background: #f3f5ff;
   border: 1px solid #d7ddff;
 }
 
 .node-llm {
-  background: linear-gradient(135deg, #6b46c1 0%, #4c2d9f 100%);
+  background: linear-gradient(135deg, #5f4fb2 0%, #4b3f9c 100%);
   color: white;
   border: none;
 }
 
 .node-tool {
-  background: linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%);
+  background: linear-gradient(135deg, #6a3fb0 0%, #523295 100%);
   color: white;
   border: none;
 }
 
 .node-output {
-  background: linear-gradient(135deg, #9f7aea 0%, #7c3aed 100%);
+  background: linear-gradient(135deg, #8f7edb 0%, #6f5fc7 100%);
   color: white;
   border: none;
 }
@@ -140,19 +140,19 @@ button, input, select, textarea {
 }
 
 .node-end {
-  background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%);
+  background: linear-gradient(135deg, #e74c3c 0%, #b8322a 100%);
   color: white;
   border: none;
 }
 
 .node-active {
-  box-shadow: 0 0 0 2px rgba(107, 70, 193, 0.4), 0 0 16px rgba(107, 70, 193, 0.35);
+  box-shadow: 0 0 0 2px rgba(95, 79, 178, 0.3), 0 0 16px rgba(95, 79, 178, 0.28);
   animation: pulse 2s infinite;
 }
 
 @keyframes pulse {
-  0%, 100% { box-shadow: 0 0 0 2px rgba(107, 70, 193, 0.45), 0 0 16px rgba(107, 70, 193, 0.3); }
-  50% { box-shadow: 0 0 0 4px rgba(107, 70, 193, 0.6), 0 0 24px rgba(107, 70, 193, 0.45); }
+  0%, 100% { box-shadow: 0 0 0 2px rgba(95, 79, 178, 0.35), 0 0 16px rgba(95, 79, 178, 0.24); }
+  50% { box-shadow: 0 0 0 4px rgba(95, 79, 178, 0.48), 0 0 24px rgba(95, 79, 178, 0.36); }
 }
 
 .chat-bubble-user {
@@ -168,15 +168,15 @@ button, input, select, textarea {
 }
 
 .thinking-indicator {
-  background: rgba(245, 158, 11, 0.12);
-  border: 1px solid rgba(245, 158, 11, 0.4);
-  color: #f59e0b;
+  background: rgba(228, 148, 37, 0.15);
+  border: 1px solid rgba(228, 148, 37, 0.35);
+  color: #e49425;
   border-radius: var(--radius-sm);
 }
 
 .tool-indicator {
   background: rgba(59, 130, 246, 0.12);
-  border: 1px solid rgba(59, 130, 246, 0.3);
+  border: 1px solid rgba(59, 130, 246, 0.28);
   color: #2563eb;
   border-radius: var(--radius-sm);
 }
@@ -201,15 +201,9 @@ button, input, select, textarea {
 .markdown-body h3 { font-size: 1.1em; }
 .markdown-body h4 { font-size: 1em; }
 
-.markdown-body p {
-  margin-top: 0;
-  margin-bottom: 1em;
-}
+.markdown-body p { margin-top: 0; margin-bottom: 1em; }
 
-.markdown-body ul, .markdown-body ol {
-  padding-left: 2em;
-  margin-bottom: 1em;
-}
+.markdown-body ul, .markdown-body ol { padding-left: 2em; margin-bottom: 1em; }
 
 .markdown-body code {
   padding: 0.2em 0.4em;

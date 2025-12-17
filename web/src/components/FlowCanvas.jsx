@@ -245,6 +245,21 @@ function FlowCanvasInner({
     return () => clearTimeout(timer)
   }, [storeEdges, storeNodes, onLayoutSave])
 
+  // Listener for immediate save on edge drag stop (custom event from EditableEdge)
+  useEffect(() => {
+    if (!onLayoutSave) return
+
+    const handleEdgeDragStop = () => {
+      // Small timeout to ensure store update has propagated
+      setTimeout(() => {
+        onLayoutSave(storeNodes, storeEdges)
+      }, 50) 
+    }
+
+    window.addEventListener('astonish:edge-drag-stop', handleEdgeDragStop)
+    return () => window.removeEventListener('astonish:edge-drag-stop', handleEdgeDragStop)
+  }, [storeNodes, storeEdges, onLayoutSave])
+
   // Get React Flow instance for coordinate conversion and viewport control
   const { screenToFlowPosition, setViewport, getViewport } = useReactFlow()
   const hasCentered = useRef(false)

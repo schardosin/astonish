@@ -81,6 +81,7 @@ export default function EditableEdge({
     const startX = e.clientX
     const startY = e.clientY
     const initialPoints = [...points]
+    let currentDragPoints = [...initialPoints] // specific variable to track latest state for mouseUp
 
     const handleMouseMove = (moveEvent) => {
       const currentFlow = screenToFlowPosition({ x: moveEvent.clientX, y: moveEvent.clientY })
@@ -93,13 +94,6 @@ export default function EditableEdge({
 
       if (isHorizontal) {
         // Moving Horizontal Segment UP/DOWN
-        // We need to move the 'y' of both endpoints of this segment.
-        
-        // If start is Source (index 0), we can't move SourceY!
-        // But maybe we handle that by just not doing anything? 
-        // Or users expect it to move? If attached to a node, usually fixed.
-        
-        // Let's try to update 'y' for the involved internal points.
         if (index > 0) {
            newPoints[index - 1].y = initialPoints[index - 1].y + deltaY
         }
@@ -115,6 +109,8 @@ export default function EditableEdge({
            newPoints[index].x = initialPoints[index].x + deltaX
         }
       }
+      
+      currentDragPoints = newPoints // update latest
 
       setEdges(edges => edges.map(edge => {
         if (edge.id === id) {
@@ -127,6 +123,61 @@ export default function EditableEdge({
     const handleMouseUp = () => {
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
+      
+      // Simplify path: Remove collinear or overlapping points
+      if (currentDragPoints.length > 0) {
+        const simplified = []
+        // We need coordinates of Source and Target to check full path
+        // but Source/Target props might be stale if we relied on them changing? 
+        // No, sourceX/targetX are from current render cycle. 
+        // We assume they haven't moved during the drag (user is dragging edge, not node).
+        
+        const fullPath = [
+          { x: sourceX, y: sourceY }, 
+          ...currentDragPoints, 
+          { x: targetX, y: targetY }
+        ]
+        
+        // Check internal points (indices 1 to length-2 in fullPath)
+        // Corresponds to indices 0 to length-1 in currentDragPoints
+        for (let i = 1; i < fullPath.length - 1; i++) {
+          const prev = fullPath[i-1]
+          const curr = fullPath[i]
+          const next = fullPath[i+1]
+          
+          // 1. Check if point is very close to previous (redundant)
+          if (Math.hypot(curr.x - prev.x, curr.y - prev.y) < 5) {
+             continue // Drop curr
+          }
+           // 2. Check if point is very close to next (redundant)
+          if (Math.hypot(curr.x - next.x, curr.y - next.y) < 5) {
+             continue // Drop curr
+          }
+          
+          // 3. Check collinearity
+          const isCollinearHorizontal = Math.abs(prev.y - curr.y) < 2 && Math.abs(curr.y - next.y) < 2
+          const isCollinearVertical = Math.abs(prev.x - curr.x) < 2 && Math.abs(curr.x - next.x) < 2
+          
+          if (isCollinearHorizontal || isCollinearVertical) {
+            continue // Drop curr
+          }
+          
+          simplified.push(curr)
+        }
+        
+        // If we simplified anything, update store
+        if (simplified.length !== currentDragPoints.length) {
+           setEdges(edges => edges.map(edge => {
+            if (edge.id === id) {
+              return { ...edge, data: { ...edge.data, points: simplified } }
+            }
+            return edge
+          }))
+        }
+      }
+      
+      // Dispatch event to trigger immediate save (handled in FlowCanvas)
+      window.dispatchEvent(new CustomEvent('astonish:edge-drag-stop'))
     }
 
     document.addEventListener('mousemove', handleMouseMove)
@@ -136,39 +187,37 @@ export default function EditableEdge({
 
 
   // 4. Calculate Handle Positions (Midpoints of segments)
+  // 4. Calculate Handle Positions (Midpoints of segments)
   const handles = []
+  const MIN_SEGMENT_LENGTH = 30
+  
+  // Helper to add handle if segment is long enough
+  const addHandleIfLongEnough = (p1, p2, index) => {
+    const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y)
+    if (dist >= MIN_SEGMENT_LENGTH) {
+      handles.push({
+        x: (p1.x + p2.x) / 2,
+        y: (p1.y + p2.y) / 2,
+        index
+      })
+    }
+  }
   
   // Segment 0: Source -> P[0]
   if (points.length > 0) {
-    handles.push({
-      x: (sourceX + points[0].x) / 2,
-      y: (sourceY + points[0].y) / 2,
-      index: 0
-    })
+    addHandleIfLongEnough({ x: sourceX, y: sourceY }, points[0], 0)
     
     // Internal Segments
     for (let i = 0; i < points.length - 1; i++) {
-      handles.push({
-        x: (points[i].x + points[i+1].x) / 2,
-        y: (points[i].y + points[i+1].y) / 2,
-        index: i + 1
-      })
+      addHandleIfLongEnough(points[i], points[i+1], i + 1)
     }
     
     // Last Segment: P[last] -> Target
     const lastP = points[points.length - 1]
-    handles.push({
-      x: (lastP.x + targetX) / 2,
-      y: (lastP.y + targetY) / 2,
-      index: points.length
-    })
+    addHandleIfLongEnough(lastP, { x: targetX, y: targetY }, points.length)
   } else {
      // No points -> Source -> Target direct
-     handles.push({
-        x: (sourceX + targetX) / 2,
-        y: (sourceY + targetY) / 2,
-        index: 0
-     })
+     addHandleIfLongEnough({ x: sourceX, y: sourceY }, { x: targetX, y: targetY }, 0)
   }
 
   return (

@@ -61,11 +61,12 @@ jobs:
         run: |
           echo "Checking web/dist contents..."
           ls -la web/dist/
-          echo "Version info:"
-          cat web/dist/.version.json
-          echo ""
+          VERSION_DIR=$(ls web/dist/)
+          echo "Version folder: $VERSION_DIR"
+          echo "Contents of web/dist/$VERSION_DIR:"
+          ls -la "web/dist/$VERSION_DIR/"
           echo "Verifying index.html exists..."
-          test -f web/dist/index.html || (echo "ERROR: web/dist/index.html not found!" && exit 1)
+          test -f "web/dist/$VERSION_DIR/index.html" || (echo "ERROR: index.html not found!" && exit 1)
           echo "Frontend build verified successfully"
 
       - name: Set up Go

@@ -32,6 +32,7 @@ type Server struct {
 	GithubStars    int           `json:"githubStars"`
 	RequiresApiKey bool          `json:"requiresApiKey"`
 	Config         *ServerConfig `json:"config,omitempty"`
+	Source         string        `json:"source,omitempty"` // "official" or tap name
 }
 
 var (
@@ -65,6 +66,51 @@ func loadServers() ([]Server, error) {
 // ListServers returns all servers in the store
 func ListServers() ([]Server, error) {
 	return loadServers()
+}
+
+// TappedMCPInput represents MCP data from flowstore taps
+type TappedMCPInput struct {
+	Name        string
+	Description string
+	Command     string
+	Args        []string
+	Env         map[string]string
+	Tags        []string
+	TapName     string
+}
+
+// ListServersWithTapped returns all servers merged with additional MCPs from taps
+// Official curated servers come first, then tapped servers grouped by tap
+func ListServersWithTapped(tappedMCPs []TappedMCPInput) ([]Server, error) {
+	embedded, err := loadServers()
+	if err != nil {
+		return nil, err
+	}
+
+	// Mark embedded servers as "official"
+	result := make([]Server, 0, len(embedded)+len(tappedMCPs))
+	for _, srv := range embedded {
+		srv.Source = "official"
+		result = append(result, srv)
+	}
+
+	// Add tapped MCPs
+	for _, mcp := range tappedMCPs {
+		result = append(result, Server{
+			McpId:       mcp.TapName + "/" + mcp.Name,
+			Name:        mcp.Name,
+			Description: mcp.Description,
+			Tags:        mcp.Tags,
+			Source:      mcp.TapName,
+			Config: &ServerConfig{
+				Command: mcp.Command,
+				Args:    mcp.Args,
+				Env:     mcp.Env,
+			},
+		})
+	}
+
+	return result, nil
 }
 
 // ListInstallableServers returns only servers that have a valid config (can be installed)

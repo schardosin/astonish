@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package, Store } from 'lucide-react'
+import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package, Store, GitBranch, RefreshCw } from 'lucide-react'
 import MCPStoreModal from './MCPStoreModal'
 import FlowStorePanel from './FlowStorePanel'
 
@@ -42,6 +42,37 @@ const fetchProviderModels = async (providerId) => {
   return res.json()
 }
 
+// Taps API functions
+const fetchTaps = async () => {
+  const res = await fetch('/api/taps')
+  if (!res.ok) throw new Error('Failed to fetch taps')
+  return res.json()
+}
+
+const addTap = async (url, alias = '') => {
+  const res = await fetch('/api/taps', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, alias })
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || 'Failed to add tap')
+  }
+  return res.json()
+}
+
+const removeTap = async (name) => {
+  const res = await fetch(`/api/taps/${encodeURIComponent(name)}`, {
+    method: 'DELETE'
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || 'Failed to remove tap')
+  }
+  return res.json()
+}
+
 export default function SettingsPage({ onClose, theme, activeSection = 'general', onSectionChange, onToolsRefresh }) {
   // Use prop for active section, default to 'general'
   const [settings, setSettings] = useState(null)
@@ -73,9 +104,28 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
   const [loadingModels, setLoadingModels] = useState(false)
   const [modelsError, setModelsError] = useState(null)
 
+  // Taps state
+  const [taps, setTaps] = useState([])
+  const [tapsLoading, setTapsLoading] = useState(false)
+  const [newTapUrl, setNewTapUrl] = useState('')
+  const [newTapAlias, setNewTapAlias] = useState('')
+  const [tapsError, setTapsError] = useState(null)
+
   useEffect(() => {
     loadData()
   }, [])
+
+  // Load taps when the taps section is opened
+  useEffect(() => {
+    if (activeSection === 'taps') {
+      setTapsLoading(true)
+      fetchTaps()
+        .then(data => setTaps(data.taps || []))
+        .catch(err => setTapsError(err.message))
+        .finally(() => setTapsLoading(false))
+    }
+  }, [activeSection])
+
 
   const loadData = async () => {
     setLoading(true)
@@ -223,6 +273,7 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
     { id: 'general', label: 'General', icon: Settings },
     { id: 'providers', label: 'Providers', icon: Key },
     { id: 'mcp', label: 'MCP Servers', icon: Server },
+    { id: 'taps', label: 'Repositories', icon: GitBranch },
     { id: 'flows', label: 'Flow Store', icon: Store },
   ]
 
@@ -675,6 +726,136 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
                   </button>
                 </div>
               )}
+            </div>
+          )}
+
+          {activeSection === 'taps' && (
+            <div className="max-w-2xl space-y-6">
+              <p style={{ color: 'var(--text-muted)' }}>
+                Manage extension repositories (taps) that provide flows and MCP servers.
+              </p>
+
+              {/* Add Tap Form */}
+              <div className="p-4 rounded-lg border" style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
+                <h4 className="font-medium mb-3" style={{ color: 'var(--text-primary)' }}>Add Repository</h4>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary)' }}>Repository URL or owner/repo</label>
+                    <input
+                      type="text"
+                      value={newTapUrl}
+                      onChange={(e) => setNewTapUrl(e.target.value)}
+                      placeholder="schardosin/astonish-flows"
+                      className="w-full px-3 py-2 rounded border"
+                      style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary)' }}>Alias (optional)</label>
+                    <input
+                      type="text"
+                      value={newTapAlias}
+                      onChange={(e) => setNewTapAlias(e.target.value)}
+                      placeholder="my-flows"
+                      className="w-full px-3 py-2 rounded border"
+                      style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                    />
+                  </div>
+                  {tapsError && (
+                    <div className="text-red-400 text-sm flex items-center gap-2">
+                      <AlertCircle size={14} />
+                      {tapsError}
+                    </div>
+                  )}
+                  <button
+                    onClick={async () => {
+                      if (!newTapUrl) return
+                      setTapsError(null)
+                      setTapsLoading(true)
+                      try {
+                        await addTap(newTapUrl, newTapAlias)
+                        setNewTapUrl('')
+                        setNewTapAlias('')
+                        const data = await fetchTaps()
+                        setTaps(data.taps || [])
+                      } catch (err) {
+                        setTapsError(err.message)
+                      } finally {
+                        setTapsLoading(false)
+                      }
+                    }}
+                    disabled={tapsLoading || !newTapUrl}
+                    className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
+                  >
+                    {tapsLoading ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
+                    Add Repository
+                  </button>
+                </div>
+              </div>
+
+              {/* Tap List */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-medium" style={{ color: 'var(--text-primary)' }}>Configured Repositories</h4>
+                  <button
+                    onClick={async () => {
+                      setTapsLoading(true)
+                      try {
+                        const data = await fetchTaps()
+                        setTaps(data.taps || [])
+                      } catch (err) {
+                        setTapsError(err.message)
+                      } finally {
+                        setTapsLoading(false)
+                      }
+                    }}
+                    className="p-1 rounded hover:bg-gray-600/30"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    <RefreshCw size={16} className={tapsLoading ? 'animate-spin' : ''} />
+                  </button>
+                </div>
+                {taps.length === 0 ? (
+                  <div className="text-sm p-4 rounded border border-dashed" 
+                       style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
+                    No repositories configured. Add one above or click refresh.
+                  </div>
+                ) : (
+                  taps.map((tap) => (
+                    <div 
+                      key={tap.name} 
+                      className="flex items-center justify-between p-3 rounded-lg border"
+                      style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
+                    >
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium" style={{ color: 'var(--text-primary)' }}>{tap.name}</span>
+                          {tap.name === 'official' && (
+                            <span className="text-xs px-2 py-0.5 rounded bg-purple-600/20 text-purple-400">official</span>
+                          )}
+                        </div>
+                        <div className="text-sm" style={{ color: 'var(--text-muted)' }}>{tap.url}</div>
+                      </div>
+                      {tap.name !== 'official' && (
+                        <button
+                          onClick={async () => {
+                            try {
+                              await removeTap(tap.name)
+                              const data = await fetchTaps()
+                              setTaps(data.taps || [])
+                            } catch (err) {
+                              setTapsError(err.message)
+                            }
+                          }}
+                          className="p-2 text-red-400 hover:bg-red-600/20 rounded"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           )}
 

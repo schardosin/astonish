@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Search, Download, Check, AlertCircle, Loader2, Package, Plus, Trash2, RefreshCw, Store, X, Tag } from 'lucide-react'
+import { Search, Download, Check, AlertCircle, Loader2, Package, RefreshCw, X, Tag, Trash2 } from 'lucide-react'
 
 // API functions for Flow Store
 const fetchFlowStore = async () => {
@@ -8,29 +8,6 @@ const fetchFlowStore = async () => {
   return res.json()
 }
 
-const addTap = async (url, alias = '') => {
-  const res = await fetch('/api/flow-store/taps', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, alias })
-  })
-  if (!res.ok) {
-    const errorText = await res.text()
-    throw new Error(errorText || 'Failed to add tap')
-  }
-  return res.json()
-}
-
-const removeTap = async (name) => {
-  const res = await fetch(`/api/flow-store/taps/${encodeURIComponent(name)}`, {
-    method: 'DELETE'
-  })
-  if (!res.ok) {
-    const errorText = await res.text()
-    throw new Error(errorText || 'Failed to remove tap')
-  }
-  return res.json()
-}
 
 const installFlow = async (tapName, flowName) => {
   const res = await fetch(`/api/flow-store/${encodeURIComponent(tapName)}/${encodeURIComponent(flowName)}/install`, {
@@ -68,10 +45,6 @@ export default function FlowStorePanel() {
   const [searchQuery, setSearchQuery] = useState('')
   const [installing, setInstalling] = useState(null)
   const [installSuccess, setInstallSuccess] = useState(null)
-  const [activeTab, setActiveTab] = useState('flows')
-  const [newTapUrl, setNewTapUrl] = useState('')
-  const [newTapAlias, setNewTapAlias] = useState('')
-  const [addingTap, setAddingTap] = useState(false)
   const [selectedTags, setSelectedTags] = useState([])
 
   // Collect all unique tags from flows
@@ -131,32 +104,6 @@ export default function FlowStorePanel() {
     }
   }
 
-  const handleAddTap = async () => {
-    if (!newTapUrl.trim()) return
-    setAddingTap(true)
-    setError(null)
-    try {
-      await addTap(newTapUrl.trim(), newTapAlias.trim())
-      setNewTapUrl('')
-      setNewTapAlias('')
-      await loadStore()
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setAddingTap(false)
-    }
-  }
-
-  const handleRemoveTap = async (name) => {
-    setError(null)
-    try {
-      await removeTap(name)
-      await loadStore()
-    } catch (err) {
-      setError(err.message)
-    }
-  }
-
   const handleRefresh = async () => {
     setLoading(true)
     setError(null)
@@ -195,33 +142,14 @@ export default function FlowStorePanel() {
 
   return (
     <div className="h-full flex flex-col">
-      {/* Tabs */}
+      {/* Header */}
       <div className="flex items-center gap-4 mb-4">
-        <div className="flex rounded-lg overflow-hidden border" style={{ borderColor: 'var(--border-color)' }}>
-          <button
-            onClick={() => setActiveTab('flows')}
-            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium transition-colors ${
-              activeTab === 'flows' 
-                ? 'bg-blue-600 text-white' 
-                : 'hover:bg-gray-600/20'
-            }`}
-            style={{ color: activeTab !== 'flows' ? 'var(--text-secondary)' : undefined }}
-          >
-            <Package size={16} />
-            Browse Flows
-          </button>
-          <button
-            onClick={() => setActiveTab('taps')}
-            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium transition-colors ${
-              activeTab === 'taps' 
-                ? 'bg-blue-600 text-white' 
-                : 'hover:bg-gray-600/20'
-            }`}
-            style={{ color: activeTab !== 'taps' ? 'var(--text-secondary)' : undefined }}
-          >
-            <Store size={16} />
-            Manage Taps ({taps.length})
-          </button>
+        <div className="flex items-center gap-2">
+          <Package size={18} style={{ color: 'var(--text-secondary)' }} />
+          <span className="font-medium" style={{ color: 'var(--text-primary)' }}>Browse Flows</span>
+          <span className="text-xs px-2 py-0.5 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>
+            {flows.length} flows from {taps.length} repos
+          </span>
         </div>
         
         <button
@@ -246,8 +174,7 @@ export default function FlowStorePanel() {
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
-        {activeTab === 'flows' ? (
-          <div className="h-full flex flex-col">
+        <div className="h-full flex flex-col">
             {/* Search */}
             <div className="mb-4">
               <div className="relative">
@@ -408,81 +335,6 @@ export default function FlowStorePanel() {
               )}
             </div>
           </div>
-        ) : (
-          /* Taps Management */
-          <div className="h-full flex flex-col">
-            {/* Add Tap Form */}
-            <div className="mb-4 p-4 rounded-lg border" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
-              <h3 className="font-medium mb-3" style={{ color: 'var(--text-primary)' }}>Add New Tap</h3>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="owner or owner/repo"
-                  value={newTapUrl}
-                  onChange={(e) => setNewTapUrl(e.target.value)}
-                  className="flex-1 px-3 py-2 rounded-lg border bg-transparent outline-none focus:border-blue-500"
-                  style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-                />
-                <input
-                  type="text"
-                  placeholder="alias (optional)"
-                  value={newTapAlias}
-                  onChange={(e) => setNewTapAlias(e.target.value)}
-                  className="w-32 px-3 py-2 rounded-lg border bg-transparent outline-none focus:border-blue-500"
-                  style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-                />
-                <button
-                  onClick={handleAddTap}
-                  disabled={addingTap || !newTapUrl.trim()}
-                  className="px-4 py-2 rounded-lg font-medium transition-colors bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50"
-                >
-                  {addingTap ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
-                </button>
-              </div>
-              <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
-                Enter "owner" to add owner/astonish-flows, or "owner/repo" for custom repos
-              </p>
-            </div>
-
-            {/* Taps List */}
-            <div className="flex-1 overflow-y-auto">
-              <div className="grid gap-2">
-                {taps.map(tap => (
-                  <div
-                    key={tap.name}
-                    className="p-3 rounded-lg border flex items-center justify-between"
-                    style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}
-                  >
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium" style={{ color: 'var(--text-primary)' }}>
-                          {tap.name}
-                        </span>
-                        {tap.isOfficial && (
-                          <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">
-                            official
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                        {tap.url}
-                      </span>
-                    </div>
-                    {!tap.isOfficial && (
-                      <button
-                        onClick={() => handleRemoveTap(tap.name)}
-                        className="p-2 rounded-lg text-red-400 hover:bg-red-500/20 transition-colors"
-                        title="Remove tap"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   )

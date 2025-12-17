@@ -495,6 +495,12 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/mcp-store/{id:.*}/install", InstallMCPStoreServerHandler).Methods("POST")
 	router.HandleFunc("/api/mcp-store/{id:.*}", GetMCPStoreServerHandler).Methods("GET")
 
+	// Unified Taps endpoints (new)
+	router.HandleFunc("/api/taps", ListTapsHandler).Methods("GET")
+	router.HandleFunc("/api/taps", AddTapHandler).Methods("POST")
+	router.HandleFunc("/api/taps/{name}", RemoveTapHandler).Methods("DELETE")
+	router.HandleFunc("/api/taps/update", UpdateFlowStoreHandler).Methods("POST")
+
 	// Flow Store endpoints
 	router.HandleFunc("/api/flow-store", ListFlowStoreHandler).Methods("GET")
 	router.HandleFunc("/api/flow-store/update", UpdateFlowStoreHandler).Methods("POST")

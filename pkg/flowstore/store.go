@@ -425,16 +425,15 @@ func (s *Store) saveConfig() error {
 		return err
 	}
 
-	// Safety check: if we're about to write an empty taps list but file exists with content,
-	// create a backup first to prevent accidental data loss
+	// Safety check: NEVER overwrite existing taps with an empty list
+	// This prevents accidental data loss from bugs or failed loads
 	if len(s.config.Taps) == 0 {
 		if existingData, err := os.ReadFile(path); err == nil {
 			var existingConfig StoreConfig
 			if json.Unmarshal(existingData, &existingConfig) == nil && len(existingConfig.Taps) > 0 {
-				// File has taps but we're about to save with empty taps - create backup
-				backupPath := path + ".backup"
-				_ = os.WriteFile(backupPath, existingData, 0644)
-				fmt.Fprintf(os.Stderr, "Warning: saving empty taps config, backup saved to %s\n", backupPath)
+				// File has taps but we're about to save empty - refuse and warn
+				fmt.Fprintf(os.Stderr, "Warning: refusing to overwrite %d existing taps with empty config\n", len(existingConfig.Taps))
+				return nil // Don't overwrite, just return success
 			}
 		}
 	}

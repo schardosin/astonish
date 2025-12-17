@@ -1,14 +1,13 @@
 import { useState, useMemo } from 'react'
-import { Users, Plus, Trash2, Store, Copy, Search, ChevronDown, ChevronRight, FolderOpen } from 'lucide-react'
+import { Plus, Trash2, Store, Search, ChevronDown, ChevronRight, FolderOpen } from 'lucide-react'
 import { snakeToTitleCase } from '../utils/formatters'
 
-export default function Sidebar({ 
-  agents, 
-  selectedAgent, 
-  onAgentSelect, 
-  onCreateNew, 
+export default function Sidebar({
+  agents,
+  selectedAgent,
+  onAgentSelect,
+  onCreateNew,
   onDeleteAgent,
-  onCopyToLocal,
   isLoading
 }) {
   const [searchQuery, setSearchQuery] = useState('')
@@ -73,7 +72,7 @@ export default function Sidebar({
     }))
   }
 
-  const renderAgentList = (agentList, sectionKey) => (
+  const renderAgentList = (agentList) => (
     <div className="space-y-0.5">
       {agentList.map((agent) => (
         <div
@@ -109,7 +108,7 @@ export default function Sidebar({
                 e.stopPropagation()
                 if (onDeleteAgent) onDeleteAgent(agent)
               }}
-              className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/20 transition-all flex-shrink-0"
+              className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/20 transition-all shrink-0"
               title="Uninstall flow"
             >
               <Trash2 size={14} className="text-red-400" />
@@ -120,7 +119,7 @@ export default function Sidebar({
                 e.stopPropagation()
                 onDeleteAgent(agent)
               }}
-              className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/20 transition-all flex-shrink-0"
+              className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/20 transition-all shrink-0"
               title="Delete agent"
             >
               <Trash2 size={14} className="text-red-400" />
@@ -147,7 +146,7 @@ export default function Sidebar({
           <span>{title}</span>
           <span className="ml-auto text-[10px] opacity-60">{agents.length}</span>
         </button>
-        {!isCollapsed && renderAgentList(agents, sectionKey)}
+        {!isCollapsed && renderAgentList(agents)}
       </div>
     )
   }
@@ -158,10 +157,11 @@ export default function Sidebar({
       <div className="p-3" style={{ borderBottom: '1px solid var(--border-color)' }}>
         <button
           onClick={onCreateNew}
-          className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-[#805AD5] hover:bg-[#6B46C1] text-white font-medium rounded-lg transition-colors shadow-sm text-sm"
+          className="w-full flex items-center justify-center gap-2 py-2.5 px-4 text-white font-semibold rounded-lg transition-colors shadow-sm text-sm"
+          style={{ background: 'var(--accent)' }}
         >
           <Plus size={18} />
-          Create New Flow
+          New Flow
         </button>
       </div>
 
@@ -172,32 +172,32 @@ export default function Sidebar({
           <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
             type="text"
-            placeholder="Search flows..."
+            placeholder="Search flows"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-8 pr-3 py-1.5 rounded-lg border bg-transparent text-sm outline-none focus:border-purple-500 transition-colors"
-            style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+            className="w-full pl-8 pr-3 py-2 rounded-lg bg-transparent text-sm outline-none"
+            style={{ border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}
           />
         </div>
-        
+
         {/* Filter */}
         <select
           value={sourceFilter}
           onChange={(e) => setSourceFilter(e.target.value)}
-          className="w-full px-2.5 py-1.5 rounded-lg border text-sm bg-transparent outline-none cursor-pointer"
-          style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}
+          className="w-full px-2.5 py-2 rounded-lg text-sm bg-transparent outline-none cursor-pointer"
+          style={{ border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}
         >
           <option value="all">All Sources</option>
-          <option value="local">📁 Local Only</option>
-          <option value="official">🏪 Official Store</option>
+          <option value="local">Local</option>
+          <option value="official">Official Store</option>
           {sources.filter(s => s !== 'local' && s !== 'official').map(tap => (
-            <option key={tap} value={tap}>📦 {tap}</option>
+            <option key={tap} value={tap}>{tap}</option>
           ))}
         </select>
       </div>
 
       {/* Agent List */}
-      <div className="flex-1 overflow-y-auto p-2">
+      <div className="flex-1 overflow-y-auto p-2 space-y-3">
         {isLoading ? (
           <div className="text-center py-8" style={{ color: 'var(--text-muted)' }}>
             <span className="text-sm">Loading flows...</span>
@@ -210,7 +210,7 @@ export default function Sidebar({
               groupedAgents.local,
               <FolderOpen size={12} />,
               'local',
-              '#9F7AEA'
+              'var(--text-secondary)'
             )}
 
             {/* Official Store Section */}
@@ -229,13 +229,13 @@ export default function Sidebar({
                 tapAgents,
                 <Store size={12} />,
                 `tap-${tapName}`,
-                '#22C55E'
+                'var(--text-secondary)'
               )
             ))}
 
             {/* Empty state */}
-            {groupedAgents.local.length === 0 && 
-             groupedAgents.official.length === 0 && 
+            {groupedAgents.local.length === 0 &&
+             groupedAgents.official.length === 0 &&
              Object.keys(groupedAgents.taps).length === 0 && (
               <div className="text-center py-8" style={{ color: 'var(--text-muted)' }}>
                 <span className="text-sm">

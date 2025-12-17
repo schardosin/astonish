@@ -32,19 +32,42 @@ export default function EditableEdge({
   const { setEdges, screenToFlowPosition } = useReactFlow()
 
   // 1. Get points or initialize defaults
-  const points = useMemo(() => {
+  const rawPoints = useMemo(() => {
     if (data?.points && Array.isArray(data.points) && data.points.length > 0) {
       return data.points
     }
-    // Default: Center Step (Z-shape)
-    const midX = (sourceX + targetX) / 2
+    // Default: Vertical Step (Standard Flowchart)
+    // Source(Bottom) -> Vertical -> Horizontal -> Vertical -> Target(Top)
+    const midY = (sourceY + targetY) / 2
     return [
-      { x: midX, y: sourceY },
-      { x: midX, y: targetY }
+      { x: sourceX, y: midY },
+      { x: targetX, y: midY }
     ]
   }, [data?.points, sourceX, sourceY, targetX, targetY])
 
-  // 2. Build Path and Label Position
+  // 2. Enforce Vertical Connection Constraints (Snap to Node X)
+  // This ensures that when nodes move, the vertical segments attached to them
+  // stay vertical and move with the node.
+  const points = useMemo(() => {
+    if (rawPoints.length === 0) return []
+    
+    // Create copy
+    const snapped = rawPoints.map(p => ({...p}))
+    
+    // Force first point X to match Source X (Vertical drop from Source)
+    if (snapped.length > 0) {
+       snapped[0].x = sourceX
+    }
+    
+    // Force last point X to match Target X (Vertical drop to Target)
+    if (snapped.length > 0) {
+       snapped[snapped.length - 1].x = targetX
+    }
+    
+    return snapped
+  }, [rawPoints, sourceX, targetX])
+
+  // 3. Build Path and Label Position
   const { path, labelX, labelY } = useMemo(() => {
     let p = `M ${sourceX} ${sourceY}`
     const allPoints = [{x: sourceX, y: sourceY}, ...points, {x: targetX, y: targetY}]

@@ -50,14 +50,20 @@ jobs:
       - name: Build frontend
         run: |
           cd web
+          rm -rf dist  # Clean any old dist folders
           npm ci
           npm run build
+          # Show version folder created
+          echo "Built to: $(ls dist/)"
       
       - name: Verify frontend build
         shell: bash
         run: |
           echo "Checking web/dist contents..."
           ls -la web/dist/
+          echo "Version info:"
+          cat web/dist/.version.json
+          echo ""
           echo "Verifying index.html exists..."
           test -f web/dist/index.html || (echo "ERROR: web/dist/index.html not found!" && exit 1)
           echo "Frontend build verified successfully"

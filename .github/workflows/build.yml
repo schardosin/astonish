@@ -25,8 +25,10 @@ jobs:
       - name: Build frontend
         run: |
           cd web
+          rm -rf dist  # Clean any old dist folders
           npm ci
           npm run build
+          echo "Built to: $(ls dist/)"
 
       - name: Set up Go
         uses: actions/setup-go@v5

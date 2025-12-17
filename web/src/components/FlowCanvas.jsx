@@ -7,7 +7,10 @@ import {
   useNodesState,
   useEdgesState,
   useReactFlow,
+  useNodes,
+  useEdges,
   Panel,
+  ReactFlowProvider,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { Edit3, Brain, Wrench, Settings, MessageSquare, Sparkles } from 'lucide-react'
@@ -20,6 +23,7 @@ import ToolNode from './nodes/ToolNode'
 import OutputNode from './nodes/OutputNode'
 import UpdateStateNode from './nodes/UpdateStateNode'
 import WaypointNode from './nodes/WaypointNode'
+import EditableEdge from './edges/EditableEdge'
 
 const nodeTypes = {
   start: StartNode,
@@ -32,6 +36,10 @@ const nodeTypes = {
   waypoint: WaypointNode,
 }
 
+// Custom edge types
+const edgeTypes = {
+  editable: EditableEdge,
+}
 // Node type definitions for toolbar - matches Overflow node styling
 const NODE_TYPES = [
   { type: 'input', label: 'Input', icon: Edit3, iconColor: '#a78bfa' },
@@ -214,11 +222,28 @@ function FlowCanvasInner({
   }, [propEdges])
 
   // Notify parent of layout changes (for saving)
+  // Get reactive state from store to ensure we capture updates from custom edges/nodes
+  // that modify the store directly (like EditableEdge)
+  const storeNodes = useNodes()
+  const storeEdges = useEdges()
+
+  // Notify parent of layout changes (for saving)
   useEffect(() => {
-    if (onLayoutChange && nodes.length > 0) {
-      onLayoutChange(nodes, edges)
+    if (onLayoutChange && storeNodes.length > 0) {
+      onLayoutChange(storeNodes, storeEdges)
     }
-  }, [nodes, edges, onLayoutChange])
+  }, [storeNodes, storeEdges, onLayoutChange])
+
+  // Debounced save for edge changes (since EditableEdge updates do not trigger onNodeDragStop)
+  useEffect(() => {
+    if (!onLayoutSave || storeEdges.length === 0) return
+
+    const timer = setTimeout(() => {
+      onLayoutSave(storeNodes, storeEdges)
+    }, 1000) // Debounce 1s to avoid excessive YAML (re)generation during drag
+
+    return () => clearTimeout(timer)
+  }, [storeEdges, storeNodes, onLayoutSave])
 
   // Get React Flow instance for coordinate conversion and viewport control
   const { screenToFlowPosition, setViewport, getViewport } = useReactFlow()
@@ -496,7 +521,7 @@ function FlowCanvasInner({
 
   const defaultEdgeOptions = useMemo(() => ({
     style: { stroke: '#805AD5', strokeWidth: 2 },
-    type: 'smoothstep',
+    type: 'editable',  // Use custom editable edge with inline waypoints
   }), [])
 
 
@@ -524,7 +549,6 @@ function FlowCanvasInner({
         onEdgesDelete={onEdgesDelete}
         onNodeClick={onNodeClick}
         onNodeDoubleClick={handleNodeDoubleClick}
-        onEdgeDoubleClick={onEdgeDoubleClick}
         onPaneClick={onPaneClick}
         onSelectionChange={onSelectionChange}
         selectionOnDrag={false}
@@ -534,6 +558,7 @@ function FlowCanvasInner({
         selectionKeyCode="Shift"
         multiSelectionKeyCode="Shift"
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         defaultEdgeOptions={defaultEdgeOptions}
         defaultViewport={{ x: 50, y: 30, zoom: 1 }}
         proOptions={{ hideAttribution: true }}
@@ -679,26 +704,11 @@ function FlowCanvasInner({
 }
 
 // Wrapper component - agent changes handled by key prop in App.jsx
-export default function FlowCanvas({ nodes, edges, isRunning, readOnly, theme, onNodeSelect, onNodeDoubleClick, selectedNodeId, runningNodeId, onAddNode, onConnect, onEdgeRemove, onLayoutChange, onLayoutSave, onOpenAIChat, onNodeDelete }) {
+export default function FlowCanvas(props) {
   return (
-    <FlowCanvasInner
-      nodes={nodes}
-      edges={edges}
-      isRunning={isRunning}
-      readOnly={readOnly}
-      theme={theme}
-      onNodeSelect={onNodeSelect}
-      onNodeDoubleClick={onNodeDoubleClick}
-      selectedNodeId={selectedNodeId}
-      onAddNode={onAddNode}
-      onConnect={onConnect}
-      onEdgeRemove={onEdgeRemove}
-      onLayoutChange={onLayoutChange}
-      onLayoutSave={onLayoutSave}
-      onOpenAIChat={onOpenAIChat}
-      onNodeDelete={onNodeDelete}
-      runningNodeId={runningNodeId}
-    />
+    <ReactFlowProvider>
+      <FlowCanvasInner {...props} />
+    </ReactFlowProvider>
   )
 }
 

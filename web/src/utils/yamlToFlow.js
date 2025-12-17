@@ -247,7 +247,7 @@ function parseWaypoints(savedLayout) {
  * @param {Object} nodePositions - Map of node ID to position { x, y }
  * @returns {Array} React Flow edges
  */
-export function parseEdges(yamlData, waypointEdgeMap = {}, nodePositions = {}) {
+export function parseEdges(yamlData, waypointEdgeMap = {}, nodePositions = {}, savedEdges = {}) {
   const edges = []
   
   // Helper to determine handles based on relative Y positions
@@ -330,7 +330,7 @@ export function parseEdges(yamlData, waypointEdgeMap = {}, nodePositions = {}) {
               targetHandle: tgtHandle,
               animated: true,
               style: { stroke: '#805AD5', strokeWidth: 2 },
-              type: 'smoothstep',
+              type: 'editable',
             })
             prevNodeId = wp.id
             prevY = wpY
@@ -358,7 +358,7 @@ export function parseEdges(yamlData, waypointEdgeMap = {}, nodePositions = {}) {
             targetHandle: finalTgtHandle,
             animated: true,
             style: { stroke: '#805AD5', strokeWidth: 2 },
-            type: 'smoothstep',
+            type: 'editable',
           })
         } else {
           // No waypoints - normal edge
@@ -371,7 +371,8 @@ export function parseEdges(yamlData, waypointEdgeMap = {}, nodePositions = {}) {
             targetHandle: handles.targetHandle,
             animated: true,
             style: { stroke: '#805AD5', strokeWidth: 2 },
-            type: 'smoothstep',
+            type: 'editable',
+            data: { points: savedEdges[`${from}-${flowItem.to}`] || savedEdges[`${from}->${flowItem.to}`] }
           })
         }
       } else if (flowItem.edges && Array.isArray(flowItem.edges)) {
@@ -435,7 +436,7 @@ export function parseEdges(yamlData, waypointEdgeMap = {}, nodePositions = {}) {
                 targetHandle: tgtHandle,
                 animated: true,
                 style: { stroke: '#805AD5', strokeWidth: 2 },
-                type: 'smoothstep',
+                type: 'editable',
                 label: wpIndex === 0 ? label : '',
                 labelStyle: { fill: '#9CA3AF', fontSize: 10 },
                 labelBgStyle: { fill: '#1a1a2e', fillOpacity: 0.8 },
@@ -465,7 +466,7 @@ export function parseEdges(yamlData, waypointEdgeMap = {}, nodePositions = {}) {
               targetHandle: finalTgtHandle,
               animated: true,
               style: { stroke: '#805AD5', strokeWidth: 2 },
-              type: 'smoothstep',
+              type: 'editable',
             })
           } else {
             edges.push({
@@ -474,11 +475,12 @@ export function parseEdges(yamlData, waypointEdgeMap = {}, nodePositions = {}) {
               target: edge.to,
               animated: true,
               style: { stroke: '#805AD5', strokeWidth: 2 },
-              type: 'smoothstep',
+              type: 'editable',
               label: label,
               labelStyle: { fill: '#9CA3AF', fontSize: 10 },
               labelBgStyle: { fill: '#1a1a2e', fillOpacity: 0.8 },
               labelBgPadding: [4, 2],
+              data: { points: savedEdges[`${from}->${edge.to}`] }
             })
           }
         })
@@ -592,7 +594,7 @@ export async function yamlToFlowAsync(yamlData) {
   waypointNodes.forEach(wp => { nodePositions[wp.id] = wp.position })
   
   // Parse edges considering waypoints and positions for handles
-  const edges = parseEdges(yamlData, waypointEdgeMap, nodePositions)
+  const edges = parseEdges(yamlData, waypointEdgeMap, nodePositions, savedLayout?.edges)
   
   let finalNodes
   if (hasLayout) {
@@ -628,7 +630,7 @@ export function yamlToFlow(yamlData) {
   nodes.forEach(n => { nodePositions[n.id] = n.position })
   waypointNodes.forEach(wp => { nodePositions[wp.id] = wp.position })
   
-  const edges = parseEdges(yamlData, waypointEdgeMap, nodePositions)
+  const edges = parseEdges(yamlData, waypointEdgeMap, nodePositions, savedLayout?.edges)
   
   let finalNodes
   if (hasLayout) {
@@ -705,6 +707,17 @@ export function extractLayout(nodes, edges) {
         x: Math.round(node.position.x),
         y: Math.round(node.position.y)
       }
+    }
+  })
+
+  // Extract edge points
+  layout.edges = {}
+  edges.forEach((edge) => {
+    if (edge.data?.points && Array.isArray(edge.data.points) && edge.data.points.length > 0) {
+      layout.edges[`${edge.source}->${edge.target}`] = edge.data.points.map(p => ({
+        x: Math.round(p.x),
+        y: Math.round(p.y)
+      }))
     }
   })
   

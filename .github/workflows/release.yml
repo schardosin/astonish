@@ -48,6 +48,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       - name: Build frontend
+        shell: bash
         run: |
           cd web
           rm -rf dist  # Clean any old dist folders

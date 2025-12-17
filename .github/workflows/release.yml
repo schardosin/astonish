@@ -74,8 +74,13 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
+          # Force Go to see embed.go as modified so it re-embeds the dist folder
+          touch web/embed.go
+          
           # Clean any cached builds to ensure fresh embed
           go clean -cache
+          
+          # Build with fresh embed
           go build -ldflags="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=${{ github.ref_name }}" -o astonish-${{ matrix.suffix }} .
 
       - name: Upload artifact

@@ -20,6 +20,7 @@ import { yamlToFlowAsync, extractLayout } from './utils/yamlToFlow'
 import { addStandaloneNode, addConnection, removeConnection, updateNode } from './utils/flowToYaml'
 import { fetchAgents, fetchAgent, saveAgent, deleteAgent, fetchTools } from './api/agents'
 import { snakeToTitleCase } from './utils/formatters'
+import { Store, Lock, Copy, Loader2 } from 'lucide-react'
 import './index.css'
 
 // Default YAML for new agents
@@ -46,6 +47,7 @@ function App() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showAIChat, setShowAIChat] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [toast, setToast] = useState(null) // { message, type: 'success' | 'error' }
   
   // Flow State
   const [availableTools, setAvailableTools] = useState([])
@@ -191,6 +193,12 @@ function App() {
   // Debounced auto-save to disk (300ms delay) - includes layout extraction
   const debouncedAutoSave = useCallback((newYaml) => {
     if (!selectedAgent) return
+    
+    // Skip saving for store flows (read-only)
+    if (selectedAgent.source === 'store') {
+      console.log('[Auto-save] Skipped - store flow is read-only')
+      return
+    }
     
     // Clear any pending save
     if (autoSaveTimerRef.current) {
@@ -715,6 +723,8 @@ flow:
   // Save layout and sync to disk (used before running and periodically)
   const saveLayoutAndSync = useCallback(async () => {
     if (!selectedAgent || !yamlContent) return
+    // Skip saving for store flows (read-only)
+    if (selectedAgent.source === 'store') return
     
     try {
       const parsed = yaml.load(yamlContent) || {}
@@ -749,11 +759,55 @@ flow:
     setDeleteTarget(agent)
   }, [])
 
+  // Toast notification helper
+  const showToast = useCallback((message, type = 'success') => {
+    setToast({ message, type })
+    setTimeout(() => setToast(null), 4000) // Auto-dismiss after 4 seconds
+  }, [])
+
+  // Copy store agent to local
+  const handleCopyToLocal = useCallback(async (agent) => {
+    try {
+      const res = await fetch(`/api/agents/${encodeURIComponent(agent.id)}/copy-to-local`, {
+        method: 'POST'
+      })
+      if (!res.ok) {
+        const errorText = await res.text()
+        throw new Error(errorText || 'Failed to copy agent')
+      }
+      const data = await res.json()
+      showToast(`Flow copied to local: ${data.newName}`, 'success')
+      // Refresh agent list
+      loadAgents()
+    } catch (err) {
+      console.error('Failed to copy agent:', err)
+      showToast('Failed to copy: ' + err.message, 'error')
+    }
+  }, [loadAgents, showToast])
+
   const confirmDelete = useCallback(async () => {
     if (!deleteTarget) return
     
     try {
-      await deleteAgent(deleteTarget.id)
+      if (deleteTarget.source === 'store') {
+        // Uninstall store flow - parse the store:tap:name ID format
+        const parts = deleteTarget.id.split(':')
+        if (parts.length === 3) {
+          const [, tapName, flowName] = parts
+          const res = await fetch(`/api/flow-store/${encodeURIComponent(tapName)}/${encodeURIComponent(flowName)}`, {
+            method: 'DELETE'
+          })
+          if (!res.ok) {
+            const errorText = await res.text()
+            throw new Error(errorText || 'Failed to uninstall flow')
+          }
+        } else {
+          throw new Error('Invalid store flow ID format')
+        }
+      } else {
+        // Delete local agent
+        await deleteAgent(deleteTarget.id)
+      }
       // Refresh agent list
       loadAgents()
       // If we deleted the selected agent, clear selection
@@ -767,7 +821,7 @@ flow:
     } finally {
       setDeleteTarget(null)
     }
-  }, [deleteTarget, selectedAgent])
+  }, [deleteTarget, selectedAgent, loadAgents])
 
   return (
     <ReactFlowProvider>
@@ -815,6 +869,7 @@ flow:
             onAgentSelect={handleAgentSelect}
             onCreateNew={handleCreateNew}
             onDeleteAgent={handleDeleteAgent}
+            onCopyToLocal={handleCopyToLocal}
             isLoading={isLoadingAgents}
           />
 
@@ -834,6 +889,8 @@ flow:
           <>
           <Header
             agentName={selectedAgent?.name || 'Select Agent'}
+            agentSource={selectedAgent?.source}
+            agentTapName={selectedAgent?.tapName}
             showYaml={showYaml}
             onToggleYaml={() => setShowYaml(!showYaml)}
             isRunning={isRunning}
@@ -847,6 +904,28 @@ flow:
             onRedo={handleRedo}
           />
 
+          {/* Store Flow Banner - hidden during run mode */}
+          {selectedAgent?.source === 'store' && !isRunning && (
+            <div 
+              className="px-4 py-2 flex items-center justify-between"
+              style={{ background: 'linear-gradient(90deg, rgba(59, 130, 246, 0.15), rgba(16, 185, 129, 0.15))', borderBottom: '1px solid var(--border-color)' }}
+            >
+              <div className="flex items-center gap-2">
+                <Lock size={16} className="text-blue-400" />
+                <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                  <strong className="text-blue-400">Read-only</strong> — This flow is from the store. Copy to local to make changes.
+                </span>
+              </div>
+              <button
+                onClick={() => handleCopyToLocal(selectedAgent)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors bg-blue-500 text-white hover:bg-blue-600"
+              >
+                <Copy size={14} />
+                Copy to Local
+              </button>
+            </div>
+          )}
+
           {/* Flow + Chat Area */}
           <div className={`flex-1 flex overflow-hidden ${!isRunning && (editingNode || showYaml) ? 'h-1/2' : ''}`}>
             {/* Flow Canvas */}
@@ -856,6 +935,7 @@ flow:
                 nodes={nodes}
                 edges={edges}
                 isRunning={isRunning}
+                readOnly={selectedAgent?.source === 'store'}
                 theme={theme}
                 onNodeSelect={handleNodeSelect}
                 onNodeDoubleClick={handleNodeDoubleClick}
@@ -911,6 +991,7 @@ flow:
                   onClose={handleNodeEditorClose}
                   theme={theme}
                   availableTools={availableTools}
+                  readOnly={selectedAgent?.source === 'store'}
                   onAIAssist={(node, nodeName, nodeData) => {
                     setAIChatContext('node_config')
                     setAIFocusedNode({ name: nodeName, type: node.data?.nodeType || node.type, data: nodeData })
@@ -946,6 +1027,7 @@ flow:
         onClose={() => setDeleteTarget(null)}
         onConfirm={confirmDelete}
         agentName={deleteTarget ? snakeToTitleCase(deleteTarget.name) : ''}
+        isStoreFlow={deleteTarget?.source === 'store'}
       />
 
       {/* AI Chat Panel */}
@@ -962,8 +1044,8 @@ flow:
           setYamlContent(newYaml)
           // Push new state to history (for undo)
           pushToHistory(newYaml)
-          // Auto-save after applying
-          if (selectedAgent) {
+          // Auto-save after applying (skip for store flows)
+          if (selectedAgent && selectedAgent.source !== 'store') {
             saveAgent(selectedAgent.id, newYaml).then(() => {
               console.log('Auto-saved after AI changes')
             }).catch(err => {
@@ -973,8 +1055,8 @@ flow:
         }}
       />
 
-      {/* AI Chat Toggle Button */}
-      {selectedAgent && !isRunning && (
+      {/* AI Chat Toggle Button - hidden for store flows (read-only) */}
+      {selectedAgent && !isRunning && selectedAgent.source !== 'store' && (
         <button
           onClick={() => {
             // Detect if flow has existing nodes
@@ -1008,6 +1090,42 @@ flow:
           theme={theme}
           onToolsRefresh={loadTools}
         />
+      )}
+
+      {/* Toast Notification */}
+      {toast && (
+        <div 
+          className="fixed bottom-6 right-6 z-[100] animate-slide-up"
+          style={{ animation: 'slide-up 0.3s ease-out' }}
+        >
+          <div 
+            className={`flex items-center gap-3 px-5 py-3 rounded-xl shadow-2xl backdrop-blur-sm ${
+              toast.type === 'error' 
+                ? 'bg-red-500/90 text-white' 
+                : 'bg-gradient-to-r from-emerald-500/90 to-teal-500/90 text-white'
+            }`}
+            style={{ minWidth: '280px' }}
+          >
+            {toast.type === 'error' ? (
+              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            ) : (
+              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            )}
+            <span className="text-sm font-medium">{toast.message}</span>
+            <button 
+              onClick={() => setToast(null)}
+              className="ml-auto p-1 hover:bg-white/20 rounded-lg transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
       )}
     </ReactFlowProvider>
   )

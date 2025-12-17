@@ -2,17 +2,25 @@ import { Play, Code, LogOut, Undo2, Redo2 } from 'lucide-react'
 import { snakeToTitleCase } from '../utils/formatters'
 
 export default function Header({ 
-  agentName, showYaml, onToggleYaml, isRunning, onRun, onStop, onExit, theme,
+  agentName, agentSource, agentTapName, showYaml, onToggleYaml, isRunning, onRun, onStop, onExit, theme,
   canUndo, canRedo, onUndo, onRedo
 }) {
-  const displayName = snakeToTitleCase(agentName) || agentName
+  // Format display name: for store flows with tap, show "tap - Flow Name"
+  let displayName = agentName
+  if (agentSource === 'store' && agentName.includes('/')) {
+    // Extract tap and flow name from "tap/flow_name" format
+    const [tap, flowName] = agentName.split('/')
+    displayName = `${tap.toLowerCase()} - ${snakeToTitleCase(flowName)}`
+  } else {
+    displayName = snakeToTitleCase(agentName) || agentName
+  }
   
   return (
     <div className="h-14 flex items-center justify-between px-6" style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)' }}>
       {/* Left: Agent Title */}
       <div className="flex items-center gap-4">
         <h1 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
-          {isRunning ? 'Run an Agent' : 'Edit Agent'}
+          {isRunning ? 'Run an Agent' : (agentSource === 'store' ? 'View Agent' : 'Edit Agent')}
         </h1>
         <span style={{ color: 'var(--text-muted)' }}>|</span>
         <span style={{ color: 'var(--text-secondary)' }}>{displayName}</span>

@@ -2,9 +2,9 @@ import { useEffect, useRef } from 'react'
 import { X, AlertTriangle } from 'lucide-react'
 
 /**
- * Confirmation dialog for deleting an agent
+ * Confirmation dialog for deleting an agent or uninstalling a store flow
  */
-export default function ConfirmDeleteModal({ isOpen, onClose, onConfirm, agentName }) {
+export default function ConfirmDeleteModal({ isOpen, onClose, onConfirm, agentName, isStoreFlow }) {
   const cancelRef = useRef(null)
 
   // Focus cancel button when modal opens
@@ -21,6 +21,12 @@ export default function ConfirmDeleteModal({ isOpen, onClose, onConfirm, agentNa
   }
 
   if (!isOpen) return null
+
+  const title = isStoreFlow ? 'Uninstall Flow' : 'Delete Agent'
+  const actionText = isStoreFlow ? 'Uninstall Flow' : 'Delete Agent'
+  const description = isStoreFlow 
+    ? 'This will remove the flow from your installed store flows.'
+    : 'This will permanently remove the agent file from your system.'
 
   return (
     <div 
@@ -51,7 +57,7 @@ export default function ConfirmDeleteModal({ isOpen, onClose, onConfirm, agentNa
                 <AlertTriangle size={20} className="text-white" />
               </div>
               <div>
-                <h2 className="text-lg font-semibold text-white">Delete Agent</h2>
+                <h2 className="text-lg font-semibold text-white">{title}</h2>
                 <p className="text-sm text-white/70">This action cannot be undone</p>
               </div>
             </div>
@@ -67,10 +73,10 @@ export default function ConfirmDeleteModal({ isOpen, onClose, onConfirm, agentNa
         {/* Content */}
         <div className="p-6">
           <p style={{ color: 'var(--text-secondary)' }}>
-            Are you sure you want to delete <strong style={{ color: 'var(--text-primary)' }}>{agentName}</strong>?
+            Are you sure you want to {isStoreFlow ? 'uninstall' : 'delete'} <strong style={{ color: 'var(--text-primary)' }}>{agentName}</strong>?
           </p>
           <p className="text-sm mt-2" style={{ color: 'var(--text-muted)' }}>
-            This will permanently remove the agent file from your system.
+            {description}
           </p>
 
           {/* Actions */}
@@ -93,7 +99,7 @@ export default function ConfirmDeleteModal({ isOpen, onClose, onConfirm, agentNa
                 background: 'linear-gradient(135deg, #DC2626 0%, #EF4444 100%)'
               }}
             >
-              Delete Agent
+              {actionText}
             </button>
           </div>
         </div>
@@ -101,3 +107,4 @@ export default function ConfirmDeleteModal({ isOpen, onClose, onConfirm, agentNa
     </div>
   )
 }
+

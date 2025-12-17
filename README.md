@@ -91,6 +91,7 @@ Use **Astonish Studio** to design flows visually, then run the exact same YAML f
 - 🎨 **Drag-and-drop** flow designer with visual node connections
 - ⚡ **One-click execution** with real-time streaming output
 - 🔧 **Connect any MCP server** — GitHub, Slack, databases, or your own custom servers
+- 🏪 **Flow Store** — Browse, install, and share community agent flows with Homebrew-style taps
 - 💾 **Instant save** to YAML—version control your agents like code
 
 ---
@@ -360,6 +361,105 @@ astonish tools edit
 ```
 
 Your agents can now interact with GitHub, read files, query databases, and more.
+
+---
+
+## 🏪 Flow Store
+
+**Share and discover agent flows with the community.**
+
+Astonish includes a built-in **Flow Store** — a Homebrew-inspired system for sharing and discovering AI agent flows. Install community-built flows with a single command, or publish your own to share with others.
+
+### Browse & Install Flows
+
+```bash
+# List available flows from the official store
+astonish flows store list
+
+# Install a flow
+astonish flows store install github_pr_description_generator
+
+# Run the installed flow
+astonish flows run github_pr_description_generator
+```
+
+### Add Community Taps
+
+Just like Homebrew taps, you can add third-party flow repositories:
+
+```bash
+# Add a community tap (GitHub username or full repo)
+astonish flows store tap rschardosin
+
+# Or with a custom repo name
+astonish flows store tap myuser/my-custom-flows
+
+# List flows from all taps
+astonish flows store list
+
+# Install from a specific tap
+astonish flows store install rschardosin/my_cool_agent
+```
+
+### Share Your Flows
+
+Create your own tap to share flows with the community:
+
+1. **Create a GitHub repository** with a `manifest.yaml`:
+
+```yaml
+name: My Awesome Flows
+author: your-username
+description: A collection of useful AI agent flows
+
+flows:
+  code_reviewer:
+    description: Reviews code and suggests improvements
+    tags: [development, code-quality]
+  
+  daily_standup:
+    description: Generates daily standup summaries
+    tags: [productivity, team]
+```
+
+2. **Add your flow YAML files** to the repo (e.g., `code_reviewer.yaml`, `daily_standup.yaml`)
+
+3. **Others can now tap your repo**:
+```bash
+astonish flows store tap your-username/your-repo
+astonish flows store install your-username/code_reviewer
+```
+
+### Manage in Studio
+
+The Flow Store is also accessible in **Astonish Studio** under Settings → Flows:
+- Browse the official store and community taps
+- Install flows with one click
+- View installed store flows (read-only) and copy to local for customization
+
+### Enterprise GitHub
+
+Use taps from private GitHub Enterprise instances:
+
+```bash
+# Set your enterprise GitHub token
+export GITHUB_ENTERPRISE_TOKEN=ghp_xxxxx
+
+# Add an enterprise tap (use full URL)
+astonish flows store tap github.mycompany.com/team/flows
+
+# Install flows from enterprise
+astonish flows store install team-flows/internal_agent
+```
+
+**Environment Variables:**
+
+| Variable | Purpose |
+|----------|---------|
+| `GITHUB_TOKEN` | Public GitHub authentication (optional for public repos) |
+| `GITHUB_ENTERPRISE_TOKEN` | Enterprise GitHub authentication (required for private repos) |
+
+> **Note:** If `GITHUB_ENTERPRISE_TOKEN` is not set, Astonish will fallback to `GITHUB_TOKEN`.
 
 ---
 

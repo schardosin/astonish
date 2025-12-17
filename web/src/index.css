@@ -264,3 +264,19 @@ body {
 .markdown-body table tr:nth-child(2n) {
   background-color: var(--bg-tertiary);
 }
+
+/* Toast Notification Animation */
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.3s ease-out;
+}

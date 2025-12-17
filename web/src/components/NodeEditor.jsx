@@ -867,7 +867,7 @@ function OutputNodeForm({ data, onChange, theme }) {
 /**
  * Main Node Editor Component - Horizontal Bottom Layout
  */
-export default function NodeEditor({ node, onSave, onClose, theme, availableTools = [], onAIAssist }) {
+export default function NodeEditor({ node, onSave, onClose, theme, availableTools = [], readOnly, onAIAssist }) {
   const [editedData, setEditedData] = useState({})
   const [nodeName, setNodeName] = useState('')
   
@@ -939,7 +939,7 @@ export default function NodeEditor({ node, onSave, onClose, theme, availableTool
               <Icon size={14} className="text-white" />
             </div>
             <span className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
-              Edit Node
+              {readOnly ? 'View Node' : 'Edit Node'}
             </span>
           </div>
           
@@ -950,8 +950,9 @@ export default function NodeEditor({ node, onSave, onClose, theme, availableTool
               type="text"
               value={nodeName}
               onChange={(e) => setNodeName(e.target.value)}
+              readOnly={readOnly}
               className="px-2 py-1 rounded border font-mono text-sm w-40"
-              style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+              style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)', opacity: readOnly ? 0.7 : 1 }}
             />
           </div>
           
@@ -978,7 +979,8 @@ export default function NodeEditor({ node, onSave, onClose, theme, availableTool
         
         {/* Actions */}
         <div className="flex items-center gap-2">
-          {onAIAssist && (
+          {/* AI Assist - hidden in read-only mode */}
+          {onAIAssist && !readOnly && (
             <button
               onClick={() => onAIAssist(node, nodeName, editedData)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white transition-all"

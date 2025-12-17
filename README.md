@@ -364,16 +364,16 @@ Your agents can now interact with GitHub, read files, query databases, and more.
 
 ---
 
-## 🏪 Flow Store
+## 🏪 Flow Store & Extension Repositories
 
-**Share and discover agent flows with the community.**
+**Share and discover agent flows and MCP servers with the community.**
 
-Astonish includes a built-in **Flow Store** — a Homebrew-inspired system for sharing and discovering AI agent flows. Install community-built flows with a single command, or publish your own to share with others.
+Astonish includes a built-in **Flow Store** and unified **tap system** — a Homebrew-inspired approach for sharing AI agent flows and MCP server configurations. Install community-built extensions with a single command, or publish your own.
 
 ### Browse & Install Flows
 
 ```bash
-# List available flows from the official store
+# List available flows from all repositories
 astonish flows store list
 
 # Install a flow
@@ -383,34 +383,49 @@ astonish flows store install github_pr_description_generator
 astonish flows run github_pr_description_generator
 ```
 
-### Add Community Taps
+### Manage Extension Repositories (Taps)
 
-Just like Homebrew taps, you can add third-party flow repositories:
+Taps are GitHub repositories that provide flows and/or MCP servers:
 
 ```bash
-# Add a community tap (GitHub username or full repo)
-astonish flows store tap rschardosin
+# Add a community repository
+astonish tap add schardosin/astonish-flows
 
-# Or with a custom repo name
-astonish flows store tap myuser/my-custom-flows
+# Add with a custom alias
+astonish tap add mycompany/ai-tools --as company
 
-# List flows from all taps
-astonish flows store list
+# List all configured repositories
+astonish tap list
 
-# Install from a specific tap
-astonish flows store install rschardosin/my_cool_agent
+# Remove a repository
+astonish tap remove company
+
+# Update all repository manifests
+astonish tap update
 ```
 
-### Share Your Flows
+### Browse MCP Servers from Taps
 
-Create your own tap to share flows with the community:
+MCP servers from taps are automatically available in the MCP Store:
+
+```bash
+# List all MCP servers (official + from taps)
+astonish tools store list
+
+# Interactive MCP server installer
+astonish tools store install
+```
+
+### Share Your Extensions
+
+Create your own tap to share flows and MCP servers:
 
 1. **Create a GitHub repository** with a `manifest.yaml`:
 
 ```yaml
-name: My Awesome Flows
+name: My Awesome Extensions
 author: your-username
-description: A collection of useful AI agent flows
+description: A collection of flows and MCP servers
 
 flows:
   code_reviewer:
@@ -420,22 +435,32 @@ flows:
   daily_standup:
     description: Generates daily standup summaries
     tags: [productivity, team]
+
+mcps:
+  my-database-server:
+    description: Custom database integration
+    command: npx
+    args: ["-y", "my-database-mcp@latest"]
+    env:
+      DB_HOST: ""
+      DB_PASSWORD: ""
+    tags: [database, integration]
 ```
 
-2. **Add your flow YAML files** to the repo (e.g., `code_reviewer.yaml`, `daily_standup.yaml`)
+2. **Add your flow YAML files** to the repo (e.g., `code_reviewer.yaml`)
 
 3. **Others can now tap your repo**:
 ```bash
-astonish flows store tap your-username/your-repo
+astonish tap add your-username/your-repo
 astonish flows store install your-username/code_reviewer
 ```
 
 ### Manage in Studio
 
-The Flow Store is also accessible in **Astonish Studio** under Settings → Flows:
-- Browse the official store and community taps
-- Install flows with one click
-- View installed store flows (read-only) and copy to local for customization
+Taps are also manageable in **Astonish Studio** under Settings:
+- **Repositories** — Add, remove, and manage taps
+- **Flow Store** — Browse and install flows from all taps
+- **MCP Servers** — Install MCPs from official store + taps
 
 ### Enterprise GitHub
 
@@ -446,10 +471,10 @@ Use taps from private GitHub Enterprise instances:
 export GITHUB_ENTERPRISE_TOKEN=ghp_xxxxx
 
 # Add an enterprise tap (use full URL)
-astonish flows store tap github.mycompany.com/team/flows
+astonish tap add github.mycompany.com/team/extensions
 
 # Install flows from enterprise
-astonish flows store install team-flows/internal_agent
+astonish flows store install team-extensions/internal_agent
 ```
 
 **Environment Variables:**

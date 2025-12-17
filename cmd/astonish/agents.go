@@ -546,8 +546,6 @@ func handleStoreCommand(args []string) error {
 	}
 
 	switch args[0] {
-	case "tap":
-		return handleStoreTapCommand(args[1:])
 	case "list":
 		return handleStoreListCommand(args[1:])
 	case "install":
@@ -564,91 +562,21 @@ func handleStoreCommand(args []string) error {
 }
 
 func printStoreUsage() {
-	fmt.Println("usage: astonish flows store [-h] {tap,list,install,uninstall,update,search} ...")
+	fmt.Println("usage: astonish flows store [-h] {list,install,uninstall,update,search} ...")
 	fmt.Println("")
-	fmt.Println("Browse and install flows from community stores.")
+	fmt.Println("Browse and install flows from community repositories (taps).")
 	fmt.Println("")
 	fmt.Println("commands:")
-	fmt.Println("  tap                 Manage flow store taps (add/remove/list)")
-	fmt.Println("  list                List all available flows from stores")
-	fmt.Println("  install             Install a flow from a store")
+	fmt.Println("  list                List all available flows from taps")
+	fmt.Println("  install             Install a flow from a tap")
 	fmt.Println("  uninstall           Remove an installed flow")
-	fmt.Println("  update              Update all store manifests")
+	fmt.Println("  update              Update all tap manifests")
 	fmt.Println("  search              Search for flows")
 	fmt.Println("")
 	fmt.Println("options:")
 	fmt.Println("  -h, --help          Show this help message")
-}
-
-func handleStoreTapCommand(args []string) error {
-	if len(args) < 1 {
-		fmt.Println("usage: astonish flows store tap {add,remove,list} ...")
-		return nil
-	}
-
-	store, err := flowstore.NewStore()
-	if err != nil {
-		return fmt.Errorf("failed to initialize store: %w", err)
-	}
-
-	switch args[0] {
-	case "add":
-		if len(args) < 2 {
-			fmt.Println("usage: astonish flows store tap add <owner>[/repo] [--as <alias>]")
-			fmt.Println("       astonish flows store tap add <alias> <url>")
-			fmt.Println("")
-			fmt.Println("Examples:")
-			fmt.Println("  tap add company                  # assumes company/astonish-flows, tap name: company")
-			fmt.Println("  tap add company/my-flows         # tap name: company-my-flows")
-			fmt.Println("  tap add company/flows --as c     # tap name: c")
-			fmt.Println("  tap add myalias github.company.com/team/flows  # enterprise with alias")
-			return fmt.Errorf("no repository specified")
-		}
-		
-		urlArg, alias := parseTapAddArgs(args[1:])
-		
-		tapName, err := store.AddTap(urlArg, alias)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("✓ Added tap: %s\n", tapName)
-		fmt.Printf("  Use flows with: astonish flows run %s/<flow>\n", tapName)
-		return nil
-
-	case "remove":
-		if len(args) < 2 {
-			fmt.Println("usage: astonish flows store tap remove <tap-name>")
-			return fmt.Errorf("no tap name specified")
-		}
-		if err := store.RemoveTap(args[1]); err != nil {
-			return err
-		}
-		fmt.Printf("✓ Removed tap: %s\n", args[1])
-		return nil
-
-	case "list":
-		taps := store.GetAllTaps()
-		
-		headerStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("63")).
-			Bold(true)
-		
-		fmt.Println(headerStyle.Render("FLOW STORE TAPS"))
-		fmt.Println()
-		
-		for _, tap := range taps {
-			marker := ""
-			if tap.Name == flowstore.OfficialStoreName {
-				marker = " (official)"
-			}
-			fmt.Printf("  %s%s\n", tap.Name, marker)
-			fmt.Printf("    └─ %s\n", tap.URL)
-		}
-		return nil
-
-	default:
-		return fmt.Errorf("unknown tap command: %s", args[0])
-	}
+	fmt.Println("")
+	fmt.Println("Tip: Use 'astonish tap add <repo>' to add repositories")
 }
 
 func handleStoreListCommand(args []string) error {

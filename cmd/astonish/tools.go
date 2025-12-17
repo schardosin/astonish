@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/mcpstore"
 	"github.com/schardosin/astonish/pkg/tools"
@@ -45,7 +47,7 @@ func handleToolsCommand(args []string) error {
 	case "edit":
 		return handleToolsEditCommand()
 	case "store":
-		return handleToolsStoreCommand()
+		return handleToolsStoreCommand(args[1:])
 	default:
 		return fmt.Errorf("unknown tools command: %s", args[0])
 	}
@@ -272,11 +274,139 @@ func handleToolsEditCommand() error {
 	return openInEditor(mcpConfigPath)
 }
 
-func handleToolsStoreCommand() error {
+func handleToolsStoreCommand(args []string) error {
+	// If no args or "install", run interactive installer
+	if len(args) == 0 || args[0] == "install" {
+		return handleToolsStoreInstall()
+	}
+
+	switch args[0] {
+	case "list":
+		return handleToolsStoreList()
+	default:
+		fmt.Println("usage: astonish tools store [list|install]")
+		fmt.Println("")
+		fmt.Println("commands:")
+		fmt.Println("  list      List all available MCP servers (official + tapped)")
+		fmt.Println("  install   Interactive MCP server installer (default)")
+		return nil
+	}
+}
+
+func handleToolsStoreList() error {
+	// Load curated servers
+	servers, err := mcpstore.ListServers()
+	if err != nil {
+		return fmt.Errorf("failed to load MCP store: %w", err)
+	}
+
+	// Load tapped MCPs
+	store, err := flowstore.NewStore()
+	var tappedMCPs []flowstore.TappedMCP
+	if err == nil {
+		// Update manifests first
+		_ = store.UpdateAllManifests()
+		tappedMCPs = store.ListAllMCPs()
+	}
+
+	// Styles
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("5"))
+	nameStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	sourceStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	starsStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+
+	// Group curated servers
+	fmt.Println(headerStyle.Render("OFFICIAL MCP STORE (curated)"))
+	fmt.Println(strings.Repeat("─", 60))
+
+	installableCount := 0
+	for _, srv := range servers {
+		if srv.Config == nil || srv.Config.Command == "" {
+			continue
+		}
+		installableCount++
+
+		starsStr := ""
+		if srv.GithubStars > 0 {
+			if srv.GithubStars >= 1000 {
+				starsStr = fmt.Sprintf(" ★%.1fk", float64(srv.GithubStars)/1000)
+			} else {
+				starsStr = fmt.Sprintf(" ★%d", srv.GithubStars)
+			}
+		}
+
+		desc := srv.Description
+		if len(desc) > 50 {
+			desc = desc[:47] + "..."
+		}
+
+		fmt.Printf("  %s%s\n", nameStyle.Render(srv.Name), starsStyle.Render(starsStr))
+		fmt.Printf("    %s\n", descStyle.Render(desc))
+	}
+	fmt.Printf("\n  %d installable servers\n", installableCount)
+
+	// Group tapped MCPs by tap
+	if len(tappedMCPs) > 0 {
+		fmt.Println("")
+
+		// Group by tap
+		tapGroups := make(map[string][]flowstore.TappedMCP)
+		for _, mcp := range tappedMCPs {
+			tapGroups[mcp.TapName] = append(tapGroups[mcp.TapName], mcp)
+		}
+
+		for tapName, mcps := range tapGroups {
+			fmt.Println(headerStyle.Render(fmt.Sprintf("\n%s (from tap)", strings.ToUpper(tapName))))
+			fmt.Println(strings.Repeat("─", 60))
+
+			for _, mcp := range mcps {
+				desc := mcp.Description
+				if len(desc) > 50 {
+					desc = desc[:47] + "..."
+				}
+
+				fmt.Printf("  %s %s\n", nameStyle.Render(mcp.Name), sourceStyle.Render("["+mcp.TapName+"]"))
+				fmt.Printf("    %s\n", descStyle.Render(desc))
+			}
+		}
+	}
+
+	fmt.Println("")
+	fmt.Println("Tip: Run 'astonish tools store install' to install a server")
+	fmt.Println("     Run 'astonish tap add <repo>' to add more repositories")
+
+	return nil
+}
+
+func handleToolsStoreInstall() error {
 	// Load servers from store (already sorted by stars)
 	servers, err := mcpstore.ListServers()
 	if err != nil {
 		return fmt.Errorf("failed to load MCP store: %w", err)
+	}
+
+	// Load tapped MCPs
+	store, err := flowstore.NewStore()
+	if err == nil {
+		_ = store.UpdateAllManifests()
+		tappedMCPs := store.ListAllMCPs()
+
+		// Convert tapped MCPs to mcpstore format and append
+		for _, mcp := range tappedMCPs {
+			servers = append(servers, mcpstore.Server{
+				McpId:       mcp.TapName + "/" + mcp.Name,
+				Name:        mcp.Name,
+				Description: mcp.Description,
+				Source:      mcp.TapName,
+				Tags:        mcp.Tags,
+				Config: &mcpstore.ServerConfig{
+					Command: mcp.Command,
+					Args:    mcp.Args,
+					Env:     mcp.Env,
+				},
+			})
+		}
 	}
 
 	if len(servers) == 0 {
@@ -307,7 +437,13 @@ func handleToolsStoreCommand() error {
 			}
 		}
 
-		label := fmt.Sprintf("%s (%s) - %s", srv.Name, starsStr, desc)
+		// Add source indicator for tapped MCPs
+		sourceIndicator := ""
+		if srv.Source != "" && srv.Source != "official" {
+			sourceIndicator = fmt.Sprintf(" [%s]", srv.Source)
+		}
+
+		label := fmt.Sprintf("%s%s (%s) - %s", srv.Name, sourceIndicator, starsStr, desc)
 		options = append(options, huh.NewOption(label, srv.McpId))
 	}
 
@@ -332,10 +468,16 @@ func handleToolsStoreCommand() error {
 		return fmt.Errorf("selection cancelled: %w", err)
 	}
 
-	// Get the selected server
-	selectedServer, err := mcpstore.GetServer(selectedMcpId)
-	if err != nil || selectedServer == nil {
-		return fmt.Errorf("failed to get server details: %w", err)
+	// Find the selected server
+	var selectedServer *mcpstore.Server
+	for i := range servers {
+		if servers[i].McpId == selectedMcpId {
+			selectedServer = &servers[i]
+			break
+		}
+	}
+	if selectedServer == nil {
+		return fmt.Errorf("failed to find selected server")
 	}
 
 	// Verify server has config

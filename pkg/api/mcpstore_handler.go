@@ -7,6 +7,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/mcpstore"
 )
 
@@ -25,6 +26,7 @@ type MCPStoreInstallRequest struct {
 // ListMCPStoreHandler handles GET /api/mcp-store
 // Supports query parameter ?q=<search query>
 // Only returns servers with valid configs (installable)
+// Includes MCPs from tapped repos with source field set
 func ListMCPStoreHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
 
@@ -38,9 +40,12 @@ func ListMCPStoreHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Failed to load MCP store: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// Filter to servers with configs
+		// Filter to servers with configs and set source
 		for _, srv := range allMatches {
 			if srv.Config != nil && srv.Config.Command != "" {
+				if srv.Source == "" {
+					srv.Source = "official"
+				}
 				servers = append(servers, srv)
 			}
 		}
@@ -51,6 +56,40 @@ func ListMCPStoreHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "Failed to load MCP store: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// Mark official servers with source
+	for i := range servers {
+		if servers[i].Source == "" {
+			servers[i].Source = "official"
+		}
+	}
+
+	// Add tapped MCPs
+	store, storeErr := flowstore.NewStore()
+	if storeErr == nil {
+		// Update manifests
+		_ = store.UpdateAllManifests()
+		tappedMCPs := store.ListAllMCPs()
+
+		for _, mcp := range tappedMCPs {
+			// Skip if there's no command
+			if mcp.Command == "" {
+				continue
+			}
+			servers = append(servers, mcpstore.Server{
+				McpId:       mcp.TapName + "/" + mcp.Name,
+				Name:        mcp.Name,
+				Description: mcp.Description,
+				Tags:        mcp.Tags,
+				Source:      mcp.TapName,
+				Config: &mcpstore.ServerConfig{
+					Command: mcp.Command,
+					Args:    mcp.Args,
+					Env:     mcp.Env,
+				},
+			})
+		}
 	}
 
 	response := MCPStoreListResponse{

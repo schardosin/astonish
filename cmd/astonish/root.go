@@ -25,6 +25,8 @@ func Execute() error {
 	switch command {
 	case "flows", "agents": // "agents" is a hidden alias for backwards compatibility
 		return handleFlowsCommand(os.Args[2:])
+	case "tap":
+		return handleTapCommand(os.Args[2:])
 	case "studio":
 		return handleStudioCommand(os.Args[2:])
 	case "setup":
@@ -40,12 +42,13 @@ func Execute() error {
 }
 
 func printUsage() {
-	fmt.Println("usage: astonish [-h] [-v] {flows,studio,config,setup,tools} ...")
+	fmt.Println("usage: astonish [-h] [-v] {flows,tap,studio,config,setup,tools} ...")
 	fmt.Println("")
 	fmt.Println("positional arguments:")
-	fmt.Println("  {flows,studio,config,setup,tools}")
+	fmt.Println("  {flows,tap,studio,config,setup,tools}")
 	fmt.Println("                        Astonish CLI commands")
 	fmt.Println("    flows               Design and run AI flows")
+	fmt.Println("    tap                 Manage extension repositories")
 	fmt.Println("    studio              Launch the visual editor")
 	fmt.Println("    config              Manage configuration")
 	fmt.Println("    setup               Run interactive setup")
@@ -55,3 +58,4 @@ func printUsage() {
 	fmt.Println("  -h, --help            show this help message and exit")
 	fmt.Println("  -v, --version         show version information and exit")
 }
+

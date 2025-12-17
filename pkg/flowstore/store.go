@@ -24,16 +24,26 @@ const (
 
 // Manifest represents the required manifest.yaml in a tap repository
 type Manifest struct {
-	Name        string                 `yaml:"name" json:"name"`
-	Author      string                 `yaml:"author" json:"author"`
-	Description string                 `yaml:"description" json:"description"`
-	Flows       map[string]FlowMeta    `yaml:"flows" json:"flows"`
+	Name        string              `yaml:"name" json:"name"`
+	Author      string              `yaml:"author" json:"author"`
+	Description string              `yaml:"description" json:"description"`
+	Flows       map[string]FlowMeta `yaml:"flows" json:"flows"`
+	MCPs        map[string]MCPMeta  `yaml:"mcps" json:"mcps"` // MCP servers from this tap
 }
 
 // FlowMeta contains metadata about a flow from the manifest
 type FlowMeta struct {
 	Description string   `yaml:"description" json:"description"`
 	Tags        []string `yaml:"tags" json:"tags"`
+}
+
+// MCPMeta contains metadata about an MCP server from the manifest
+type MCPMeta struct {
+	Description string            `yaml:"description" json:"description"`
+	Command     string            `yaml:"command" json:"command"`
+	Args        []string          `yaml:"args" json:"args"`
+	Env         map[string]string `yaml:"env" json:"env"`
+	Tags        []string          `yaml:"tags" json:"tags"`
 }
 
 // Tap represents a flow store repository
@@ -52,6 +62,17 @@ type Flow struct {
 	TapName     string   `json:"tap_name"`     // Which tap this flow belongs to
 	Installed   bool     `json:"installed"`    // Whether it's installed locally
 	LocalPath   string   `json:"local_path"`   // Path if installed
+}
+
+// TappedMCP represents an MCP server available from a tapped repository
+type TappedMCP struct {
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Command     string            `json:"command"`
+	Args        []string          `json:"args"`
+	Env         map[string]string `json:"env"`
+	Tags        []string          `json:"tags"`
+	TapName     string            `json:"tap_name"` // Which tap this MCP belongs to
 }
 
 // StoreConfig is persisted in config.yaml
@@ -320,6 +341,48 @@ func (s *Store) ListAllFlows() []Flow {
 	}
 
 	return flows
+}
+
+// ListAllMCPs returns all MCP servers from all taps (requires manifests to be loaded)
+func (s *Store) ListAllMCPs() []TappedMCP {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var mcps []TappedMCP
+
+	// Add official MCPs
+	if s.official.Manifest != nil && s.official.Manifest.MCPs != nil {
+		for name, meta := range s.official.Manifest.MCPs {
+			mcps = append(mcps, TappedMCP{
+				Name:        name,
+				Description: meta.Description,
+				Command:     meta.Command,
+				Args:        meta.Args,
+				Env:         meta.Env,
+				Tags:        meta.Tags,
+				TapName:     OfficialStoreName,
+			})
+		}
+	}
+
+	// Add custom tap MCPs
+	for _, tap := range s.config.Taps {
+		if tap.Manifest != nil && tap.Manifest.MCPs != nil {
+			for name, meta := range tap.Manifest.MCPs {
+				mcps = append(mcps, TappedMCP{
+					Name:        name,
+					Description: meta.Description,
+					Command:     meta.Command,
+					Args:        meta.Args,
+					Env:         meta.Env,
+					Tags:        meta.Tags,
+					TapName:     tap.Name,
+				})
+			}
+		}
+	}
+
+	return mcps
 }
 
 // GetStoreDir returns the store directory

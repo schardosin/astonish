@@ -171,7 +171,10 @@ function FlowCanvasInner({
       if (propsHaveWaypointEdges) {
         // propEdges already has waypoint edges from YAML - clear split tracking and use them directly
         splitEdgesRef.current.clear()
-        setEdges(propEdges)
+        setEdges(current => {
+          const selectedIds = new Set(current.filter(e => e.selected).map(e => e.id))
+          return propEdges.map(e => ({...e, selected: selectedIds.has(e.id)}))
+        })
         return
       }
       
@@ -206,6 +209,13 @@ function FlowCanvasInner({
           }
           
           return true
+        }).map(e => {
+           // PRESERVE SELECTION: Check if this edge was selected in current state
+           const currentEdge = currentEdges.find(ce => ce.id === e.id)
+           if (currentEdge?.selected) {
+             return { ...e, selected: true }
+           }
+           return e
         })
         
         // Preserve any local edges (non-waypoint edges that aren't in propEdges)

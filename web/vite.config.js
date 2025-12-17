@@ -10,6 +10,10 @@ const version = pkg.version || '0.0.0'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  define: {
+    // Expose UI version as a global constant
+    __UI_VERSION__: JSON.stringify(version)
+  },
   server: {
     proxy: {
       '/api': 'http://localhost:9393'

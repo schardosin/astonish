@@ -269,6 +269,11 @@ export default function SettingsPage({ onClose, theme, activeSection = 'general'
             )
           })}
         </nav>
+        
+        {/* UI Version */}
+        <div className="p-3 border-t text-xs" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
+          <div className="opacity-60">UI Version: {__UI_VERSION__}</div>
+        </div>
       </div>
 
       {/* Right Content */}

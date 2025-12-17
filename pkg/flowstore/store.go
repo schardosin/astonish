@@ -86,7 +86,10 @@ func NewStore() (*Store, error) {
 
 	// Load existing config
 	if err := s.loadConfig(); err != nil {
-		// Config doesn't exist yet, that's fine
+		// Only ignore "file not found" errors - other errors should be logged
+		if !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "Warning: failed to load store config: %v\n", err)
+		}
 	}
 
 	return s, nil
@@ -357,6 +360,20 @@ func (s *Store) saveConfig() error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
+	}
+
+	// Safety check: if we're about to write an empty taps list but file exists with content,
+	// create a backup first to prevent accidental data loss
+	if len(s.config.Taps) == 0 {
+		if existingData, err := os.ReadFile(path); err == nil {
+			var existingConfig StoreConfig
+			if json.Unmarshal(existingData, &existingConfig) == nil && len(existingConfig.Taps) > 0 {
+				// File has taps but we're about to save with empty taps - create backup
+				backupPath := path + ".backup"
+				_ = os.WriteFile(backupPath, existingData, 0644)
+				fmt.Fprintf(os.Stderr, "Warning: saving empty taps config, backup saved to %s\n", backupPath)
+			}
+		}
 	}
 
 	data, err := json.MarshalIndent(s.config, "", "  ")

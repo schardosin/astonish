@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Search, Download, Check, AlertCircle, Loader2, Package, Plus, Trash2, RefreshCw, Store } from 'lucide-react'
+import { useState, useEffect, useMemo } from 'react'
+import { Search, Download, Check, AlertCircle, Loader2, Package, Plus, Trash2, RefreshCw, Store, X, Tag } from 'lucide-react'
 
 // API functions for Flow Store
 const fetchFlowStore = async () => {
@@ -72,6 +72,18 @@ export default function FlowStorePanel() {
   const [newTapUrl, setNewTapUrl] = useState('')
   const [newTapAlias, setNewTapAlias] = useState('')
   const [addingTap, setAddingTap] = useState(false)
+  const [selectedTags, setSelectedTags] = useState([])
+
+  // Collect all unique tags from flows
+  const allTags = useMemo(() => {
+    const tagSet = new Set()
+    flows.forEach(f => {
+      if (f.tags) {
+        f.tags.forEach(t => tagSet.add(t.toLowerCase()))
+      }
+    })
+    return Array.from(tagSet).sort()
+  }, [flows])
 
   useEffect(() => {
     loadStore()
@@ -158,12 +170,28 @@ export default function FlowStorePanel() {
     }
   }
 
-  // Filter flows by search
-  const filteredFlows = flows.filter(f => 
-    f.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    f.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (f.tags && f.tags.some(t => t.toLowerCase().includes(searchQuery.toLowerCase())))
-  )
+  // Filter flows by search and selected tags
+  const filteredFlows = flows.filter(f => {
+    // Search filter
+    const matchesSearch = !searchQuery || 
+      f.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      f.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (f.tags && f.tags.some(t => t.toLowerCase().includes(searchQuery.toLowerCase())))
+    
+    // Tag filter (OR logic)
+    const matchesTags = selectedTags.length === 0 || 
+      (f.tags && f.tags.some(t => selectedTags.includes(t.toLowerCase())))
+    
+    return matchesSearch && matchesTags
+  })
+
+  const toggleTag = (tag) => {
+    setSelectedTags(prev => 
+      prev.includes(tag) 
+        ? prev.filter(t => t !== tag)
+        : [...prev, tag]
+    )
+  }
 
   return (
     <div className="h-full flex flex-col">
@@ -235,6 +263,47 @@ export default function FlowStorePanel() {
               </div>
             </div>
 
+            {/* Tag Filters */}
+            {allTags.length > 0 && (
+              <div className="mb-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Tag size={14} style={{ color: 'var(--text-muted)' }} />
+                  <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
+                    Filter by tag:
+                  </span>
+                  {selectedTags.length > 0 && (
+                    <button
+                      onClick={() => setSelectedTags([])}
+                      className="text-xs px-2 py-0.5 rounded hover:bg-gray-600/20 transition-colors"
+                      style={{ color: 'var(--text-secondary)' }}
+                    >
+                      Clear all
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {allTags.map(tag => {
+                    const isSelected = selectedTags.includes(tag)
+                    return (
+                      <button
+                        key={tag}
+                        onClick={() => toggleTag(tag)}
+                        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all ${
+                          isSelected
+                            ? 'bg-blue-500 text-white'
+                            : 'bg-gray-500/20 hover:bg-gray-500/30'
+                        }`}
+                        style={!isSelected ? { color: 'var(--text-secondary)' } : undefined}
+                      >
+                        {tag}
+                        {isSelected && <X size={12} />}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* Flow List */}
             <div className="flex-1 overflow-y-auto">
               {loading ? (
@@ -273,6 +342,26 @@ export default function FlowStorePanel() {
                           <p className="text-sm mt-1 line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
                             {flow.description}
                           </p>
+                          {/* Tags */}
+                          {flow.tags && flow.tags.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {flow.tags.map(tag => (
+                                <button
+                                  key={tag}
+                                  onClick={() => toggleTag(tag.toLowerCase())}
+                                  className={`text-xs px-2 py-0.5 rounded-full transition-colors ${
+                                    selectedTags.includes(tag.toLowerCase())
+                                      ? 'bg-blue-500/30 text-blue-400'
+                                      : 'bg-gray-500/20 hover:bg-gray-500/30'
+                                  }`}
+                                  style={!selectedTags.includes(tag.toLowerCase()) ? { color: 'var(--text-muted)' } : undefined}
+                                  title={`Filter by "${tag}"`}
+                                >
+                                  {tag}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
                           {flow.installed ? (

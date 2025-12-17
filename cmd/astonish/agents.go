@@ -549,7 +549,7 @@ func handleStoreCommand(args []string) error {
 	case "tap":
 		return handleStoreTapCommand(args[1:])
 	case "list":
-		return handleStoreListCommand()
+		return handleStoreListCommand(args[1:])
 	case "install":
 		return handleStoreInstallCommand(args[1:])
 	case "uninstall":
@@ -651,7 +651,16 @@ func handleStoreTapCommand(args []string) error {
 	}
 }
 
-func handleStoreListCommand() error {
+func handleStoreListCommand(args []string) error {
+	// Parse --tag / -t flags
+	var tagFilters []string
+	for i := 0; i < len(args); i++ {
+		if (args[i] == "--tag" || args[i] == "-t") && i+1 < len(args) {
+			tagFilters = append(tagFilters, strings.ToLower(args[i+1]))
+			i++ // Skip next arg
+		}
+	}
+
 	store, err := flowstore.NewStore()
 	if err != nil {
 		return fmt.Errorf("failed to initialize store: %w", err)
@@ -668,6 +677,22 @@ func handleStoreListCommand() error {
 		fmt.Println("No flows found in stores.")
 		fmt.Println("Tip: Make sure the store repositories have a valid manifest.yaml")
 		return nil
+	}
+
+	// Filter by tags if specified (OR logic)
+	if len(tagFilters) > 0 {
+		var filtered []flowstore.Flow
+		for _, f := range flows {
+			if flowMatchesTags(f, tagFilters) {
+				filtered = append(filtered, f)
+			}
+		}
+		flows = filtered
+		if len(flows) == 0 {
+			fmt.Printf("No flows found matching tags: %s\n", strings.Join(tagFilters, ", "))
+			return nil
+		}
+		fmt.Printf("Filtering by tags: %s\n\n", strings.Join(tagFilters, ", "))
 	}
 
 	// Group by tap
@@ -689,6 +714,9 @@ func handleStoreListCommand() error {
 
 	installedStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("42"))
+
+	tagStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("39"))
 
 	// Print official first, then others
 	printTapFlows := func(tapName string, flows []flowstore.Flow, isOfficial bool) {
@@ -712,7 +740,13 @@ func handleStoreListCommand() error {
 				displayName = fmt.Sprintf("%s/%s", tapName, f.Name)
 			}
 			
-			fmt.Printf("  %s%s\n", nameStyle.Render(displayName), status)
+			// Show tags if any
+			tagDisplay := ""
+			if len(f.Tags) > 0 {
+				tagDisplay = tagStyle.Render(" [" + strings.Join(f.Tags, ", ") + "]")
+			}
+			
+			fmt.Printf("  %s%s%s\n", nameStyle.Render(displayName), status, tagDisplay)
 			fmt.Printf("    %s\n", descStyle.Render(f.Description))
 		}
 		fmt.Println()
@@ -731,7 +765,20 @@ func handleStoreListCommand() error {
 	}
 
 	fmt.Println("Tip: Run 'astonish flows run <flow>' for official or '<tap>/<flow>' for community")
+	fmt.Println("     Use --tag <tag> to filter by tag")
 	return nil
+}
+
+// flowMatchesTags checks if a flow matches any of the given tags (OR logic)
+func flowMatchesTags(f flowstore.Flow, tags []string) bool {
+	for _, filterTag := range tags {
+		for _, flowTag := range f.Tags {
+			if strings.ToLower(flowTag) == filterTag {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func handleStoreInstallCommand(args []string) error {

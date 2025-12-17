@@ -20,6 +20,15 @@
   --node-tool: #6a3fb0;
   --node-output: #8f7edb;
 
+  /* Overflow-style node colors - Light Mode */
+  --overflow-node-bg: #f8f7fc;
+  --overflow-node-border: rgba(0, 0, 0, 0.08);
+  --overflow-icon-bg: #ede9fe;
+  --overflow-node-title: #1f2937;
+  --overflow-node-subtitle: #6b7280;
+  --overflow-handle-bg: #9ca3af;
+  --overflow-handle-border: #f8f7fc;
+
   --shadow-soft: 0 8px 28px rgba(15, 23, 42, 0.1);
   --radius-lg: 14px;
   --radius-md: 10px;
@@ -42,6 +51,15 @@
   --node-llm: #8d7ae0;
   --node-tool: #7b66d1;
   --node-output: #a998ef;
+
+  /* Overflow-style node colors - Dark Mode */
+  --overflow-node-bg: #2A2A34;
+  --overflow-node-border: rgba(255, 255, 255, 0.08);
+  --overflow-icon-bg: #1e1e28;
+  --overflow-node-title: #ffffff;
+  --overflow-node-subtitle: #9ca3af;
+  --overflow-handle-bg: #6b7280;
+  --overflow-handle-border: #2A2A34;
 
   --shadow-soft: 0 10px 32px rgba(0, 0, 0, 0.42);
 }

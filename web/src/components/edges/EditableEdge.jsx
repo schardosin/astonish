@@ -21,20 +21,22 @@ export default function EditableEdge({
   markerEnd,
   selected,
   data,
+  // Label props
+  label,
+  labelStyle,
+  labelShowBg = true, 
+  labelBgStyle,
+  labelBgPadding,
+  labelBgBorderRadius,
 }) {
   const { setEdges, screenToFlowPosition } = useReactFlow()
 
   // 1. Get points or initialize defaults
-  // We don't save defaults back immediately to avoid infinite loops, 
-  // we just calculate them for render if missing.
-  // Actually, for interaction we need them stable. 
-  // Let's use memoized points calculation.
   const points = useMemo(() => {
     if (data?.points && Array.isArray(data.points) && data.points.length > 0) {
       return data.points
     }
     // Default: Center Step (Z-shape)
-    // Horizontal start -> Vertical mid -> Horizontal end
     const midX = (sourceX + targetX) / 2
     return [
       { x: midX, y: sourceY },
@@ -42,22 +44,51 @@ export default function EditableEdge({
     ]
   }, [data?.points, sourceX, sourceY, targetX, targetY])
 
-  // 2. Build Path
-  // Path goes: Source -> Point[0] -> Point[1] -> ... -> Target
-  const path = useMemo(() => {
+  // 2. Build Path and Label Position
+  const { path, labelX, labelY } = useMemo(() => {
     let p = `M ${sourceX} ${sourceY}`
+    const allPoints = [{x: sourceX, y: sourceY}, ...points, {x: targetX, y: targetY}]
     
-    // Safety check
-    if (!points.length) {
-       p += ` L ${targetX} ${targetY}`
-       return p
-    }
-
-    for (const point of points) {
-      p += ` L ${point.x} ${point.y}`
+    // Build path string
+    for (let i = 0; i < points.length; i++) {
+      p += ` L ${points[i].x} ${points[i].y}`
     }
     p += ` L ${targetX} ${targetY}`
-    return p
+    
+    // Calculate Label Position (Polyline Midpoint)
+    let totalLen = 0
+    const segmentLens = []
+    
+    // Calculate lengths
+    for (let i=0; i<allPoints.length-1; i++) {
+        const p1 = allPoints[i]
+        const p2 = allPoints[i+1]
+        const d = Math.hypot(p2.x - p1.x, p2.y - p1.y)
+        segmentLens.push(d)
+        totalLen += d
+    }
+    
+    let targetLen = totalLen / 2
+    let currentLen = 0
+    let lx = (sourceX + targetX) / 2
+    let ly = (sourceY + targetY) / 2
+    
+    // Find point
+    for (let i=0; i<allPoints.length-1; i++) {
+        const len = segmentLens[i]
+        if (currentLen + len >= targetLen) {
+            const remaining = targetLen - currentLen
+            const ratio = len === 0 ? 0 : remaining / len
+            const p1 = allPoints[i]
+            const p2 = allPoints[i+1]
+            lx = p1.x + (p2.x - p1.x) * ratio
+            ly = p1.y + (p2.y - p1.y) * ratio
+            break
+        }
+        currentLen += len
+    }
+
+    return { path: p, labelX: lx, labelY: ly }
   }, [sourceX, sourceY, targetX, targetY, points])
 
   // 3. Handle Drag Logic
@@ -312,6 +343,14 @@ export default function EditableEdge({
           stroke: selected ? '#5b21b6' : style.stroke || '#805AD5' // Use theme colors ideally
         }}
         interactionWidth={20}
+        label={label}
+        labelX={labelX}
+        labelY={labelY}
+        labelStyle={labelStyle}
+        labelShowBg={labelShowBg}
+        labelBgStyle={labelBgStyle}
+        labelBgPadding={labelBgPadding}
+        labelBgBorderRadius={labelBgBorderRadius}
       />
       
       {/* Invisible wider path for easier selection */}

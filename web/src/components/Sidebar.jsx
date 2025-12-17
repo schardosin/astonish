@@ -157,8 +157,8 @@ export default function Sidebar({
       <div className="p-3" style={{ borderBottom: '1px solid var(--border-color)' }}>
         <button
           onClick={onCreateNew}
-          className="w-full flex items-center justify-center gap-2 py-2.5 px-4 text-white font-semibold rounded-lg transition-colors shadow-sm text-sm"
-          style={{ background: 'var(--accent)' }}
+          className="w-full flex items-center justify-center gap-2 py-2.5 px-4 text-white font-semibold rounded-lg transition-all shadow-md hover:shadow-lg hover:scale-[1.02]"
+          style={{ background: 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)' }}
         >
           <Plus size={18} />
           New Flow

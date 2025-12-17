@@ -310,7 +310,8 @@ export default function FlowStorePanel() {
                             <button
                               onClick={() => handleInstall(flow)}
                               disabled={installing === flow.fullName}
-                              className="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors bg-blue-500 text-white hover:bg-blue-600"
+                              className="px-3 py-1.5 rounded-lg text-sm font-medium transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-95 text-white disabled:opacity-50"
+                              style={{ background: 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)' }}
                             >
                               {installing === flow.fullName ? (
                                 <Loader2 size={14} className="animate-spin" />

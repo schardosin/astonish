@@ -68,8 +68,8 @@ export default function Header({
         {!isRunning && (
           <button
             onClick={onRun}
-            className="flex items-center gap-2 px-5 py-2 text-white font-semibold rounded-lg transition-colors"
-            style={{ background: 'var(--accent)' }}
+            className="flex items-center gap-2 px-5 py-2 text-white font-semibold rounded-lg transition-all shadow-md hover:shadow-lg hover:scale-[1.02]"
+            style={{ background: 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)' }}
           >
             <Play size={18} />
             Run

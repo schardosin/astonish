@@ -426,8 +426,8 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
               <button
                 onClick={handleSaveGeneral}
                 disabled={saving}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg text-white font-medium transition-colors disabled:opacity-50"
-                style={{ background: 'var(--accent)' }}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-white font-medium transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-95 disabled:opacity-50"
+                style={{ background: 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)' }}
               >
                 <Save size={16} />
                 {saving ? 'Saving...' : 'Save Changes'}
@@ -480,8 +480,8 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                   <button
                     onClick={() => handleSaveProvider(provider.name)}
                     disabled={saving}
-                    className="mt-4 flex items-center gap-2 px-3 py-1.5 rounded text-white text-sm font-medium transition-colors disabled:opacity-50"
-                    style={{ background: 'var(--accent)' }}
+                    className="mt-4 flex items-center gap-2 px-3 py-1.5 rounded text-white text-sm font-medium transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-95 disabled:opacity-50"
+                    style={{ background: 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)' }}
                   >
                     <Save size={14} />
                     Save
@@ -503,10 +503,13 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                     }}
                     className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium transition-colors ${
                       mcpViewMode === 'editor'
-                        ? 'text-white'
+                        ? 'text-white shadow-sm'
                         : 'hover:bg-gray-600/20'
                     }`}
-                    style={{ background: mcpViewMode === 'editor' ? 'var(--accent)' : 'transparent', color: mcpViewMode !== 'editor' ? 'var(--text-secondary)' : undefined }}
+                    style={{ 
+                      background: mcpViewMode === 'editor' ? 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)' : 'transparent',
+                      color: mcpViewMode !== 'editor' ? 'var(--text-secondary)' : undefined 
+                    }}
                   >
                     <LayoutGrid size={14} />
                     Editor
@@ -517,13 +520,13 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                       setMcpSourceText(JSON.stringify({ mcpServers }, null, 2))
                       setMcpSourceError(null)
                     }}
-                    className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium transition-colors ${
+                    className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium transition-all ${
                       mcpViewMode === 'source'
-                        ? 'text-white'
+                        ? 'text-white shadow-sm'
                         : 'hover:bg-gray-600/20'
                     }`}
                     style={{
-                      background: mcpViewMode === 'source' ? 'var(--accent)' : undefined,
+                      background: mcpViewMode === 'source' ? 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)' : undefined,
                       color: mcpViewMode !== 'source' ? 'var(--text-secondary)' : undefined
                     }}
                   >
@@ -539,8 +542,8 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                   <div className="flex items-center gap-3">
                     <button
                       onClick={() => setShowMCPStore(true)}
-                      className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors"
-                      style={{ background: 'linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%)', color: '#fff' }}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-95"
+                      style={{ background: 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)', color: '#fff' }}
                     >
                       <Package size={16} />
                       Browse Store
@@ -648,8 +651,8 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                     <button
                       onClick={handleSaveMCP}
                       disabled={saving}
-                      className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
-                      style={{ background: 'var(--accent)', color: '#fff' }}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-95 disabled:opacity-50"
+                      style={{ background: 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)', color: '#fff' }}
                     >
                       <Save size={16} />
                       {saving ? 'Saving...' : 'Save Changes'}
@@ -720,8 +723,8 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                       }
                     }}
                     disabled={saving}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
-                    style={{ background: 'var(--accent)', color: '#fff' }}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-95 disabled:opacity-50"
+                    style={{ background: 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)', color: '#fff' }}
                   >
                     <Save size={16} />
                     {saving ? 'Saving...' : 'Apply & Save'}
@@ -787,8 +790,8 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                       }
                     }}
                     disabled={tapsLoading || !newTapUrl}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
-                    style={{ background: 'var(--accent)', color: '#fff' }}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-95 disabled:opacity-50"
+                    style={{ background: 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)', color: '#fff' }}
                   >
                     {tapsLoading ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
                     Add Repository

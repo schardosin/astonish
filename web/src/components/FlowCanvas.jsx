@@ -32,13 +32,13 @@ const nodeTypes = {
   waypoint: WaypointNode,
 }
 
-// Node type definitions for toolbar
+// Node type definitions for toolbar - matches Overflow node styling
 const NODE_TYPES = [
-  { type: 'input', label: 'Input', icon: Edit3, color: '#E9D5FF', darkColor: '#3B2667' },
-  { type: 'llm', label: 'LLM', icon: Brain, color: '#6B46C1', darkColor: '#6B46C1' },
-  { type: 'tool', label: 'Tool', icon: Wrench, color: '#805AD5', darkColor: '#805AD5' },
-  { type: 'updateState', label: 'State', icon: Settings, color: '#4A5568', darkColor: '#4A5568' },
-  { type: 'output', label: 'Output', icon: MessageSquare, color: '#9F7AEA', darkColor: '#9F7AEA' },
+  { type: 'input', label: 'Input', icon: Edit3, iconColor: '#a78bfa' },
+  { type: 'llm', label: 'LLM', icon: Brain, iconColor: '#8b5cf6' },
+  { type: 'tool', label: 'Tool', icon: Wrench, iconColor: '#7c3aed' },
+  { type: 'updateState', label: 'State', icon: Settings, iconColor: '#8b5cf6' },
+  { type: 'output', label: 'Output', icon: MessageSquare, iconColor: '#9f7aea' },
 ]
 
 function FlowCanvasInner({ 
@@ -570,26 +570,37 @@ function FlowCanvasInner({
         {!isRunning && (
           <Panel position="top-right" className="m-2">
             <div 
-              className="flex flex-col gap-2 p-2 rounded-lg shadow-lg"
+              className="flex flex-col gap-2 p-2 rounded-xl shadow-lg"
               style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}
             >
               <div className="text-xs text-center mb-1" style={{ color: 'var(--text-muted)' }}>
                 Add Node
               </div>
-              {NODE_TYPES.map(({ type, label, icon: Icon, color, darkColor }) => (
+              {NODE_TYPES.map(({ type, label, icon: Icon, iconColor }) => (
                 <button
                   key={type}
                   onClick={() => onAddNode && onAddNode(type)}
-                  className="flex flex-col items-center gap-1 p-2 rounded-lg transition-all hover:scale-110"
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg transition-all hover:scale-105"
                   style={{ 
-                    background: theme === 'dark' ? darkColor : color,
-                    color: type === 'input' && theme !== 'dark' ? '#1F2937' : 'white',
-                    minWidth: '48px'
+                    background: 'var(--overflow-node-bg)',
+                    border: '1px solid var(--overflow-node-border)',
+                    minWidth: '80px'
                   }}
-                  title={`Add ${label} node (standalone)`}
+                  title={`Add ${label} node`}
                 >
-                  <Icon size={18} />
-                  <span className="text-[10px] font-medium">{label}</span>
+                  <div 
+                    style={{
+                      background: 'var(--overflow-icon-bg)',
+                      borderRadius: '6px',
+                      padding: '6px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Icon size={14} style={{ color: iconColor }} />
+                  </div>
+                  <span className="text-xs font-medium" style={{ color: 'var(--overflow-node-title)' }}>{label}</span>
                 </button>
               ))}
             </div>

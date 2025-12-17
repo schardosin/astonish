@@ -8,7 +8,7 @@ export default function UpdateStateNode({ data, selected }) {
       selected={selected}
       icon={Settings} 
       nodeType="State"
-      iconColor="#6b7280"
+      iconColor="#8b5cf6"
     />
   )
 }

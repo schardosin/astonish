@@ -28,8 +28,8 @@ func newTestStore(t *testing.T) (*Store, string) {
 	return store, tmpDir
 }
 
-// TestValidateTapRepository tests the validateTapRepository function
-// which validates that a GitHub repository contains a valid manifest.yaml
+// TestValidateTapRepositoryNonGitHub tests that non-github URLs are handled
+// (they now get "invalid GitHub URL format" error from buildRawGitHubURL)
 func TestValidateTapRepositoryNonGitHub(t *testing.T) {
 	tap := Tap{
 		Name:   "gitlab-tap",
@@ -39,14 +39,13 @@ func TestValidateTapRepositoryNonGitHub(t *testing.T) {
 
 	err := validateTapRepository(tap)
 	if err == nil {
-		t.Error("Expected error for non-GitHub URL, got nil")
+		t.Error("Expected error for non-GitHub compatible URL, got nil")
 	}
-	if !strings.Contains(err.Error(), "only GitHub repositories are supported") {
-		t.Errorf("Expected 'only GitHub repositories are supported' error, got: %v", err)
-	}
+	// Error comes from buildRawGitHubURL for enterprise-like URLs
+	// or from HTTP request failure
 }
 
-// TestValidateTapRepositoryBitbucket tests validation rejects Bitbucket URLs
+// TestValidateTapRepositoryBitbucket tests validation handles Bitbucket URLs
 func TestValidateTapRepositoryBitbucket(t *testing.T) {
 	tap := Tap{
 		Name:   "bitbucket-tap",
@@ -58,9 +57,7 @@ func TestValidateTapRepositoryBitbucket(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for Bitbucket URL, got nil")
 	}
-	if !strings.Contains(err.Error(), "only GitHub repositories are supported") {
-		t.Errorf("Expected 'only GitHub repositories are supported' error, got: %v", err)
-	}
+	// Error comes from HTTP request to bitbucket (treated as enterprise)
 }
 
 // TestParseTapURL tests the URL parsing and naming logic
@@ -100,6 +97,31 @@ func TestParseTapURL(t *testing.T) {
 			input:        "https://github.com/dev/flows-collection",
 			expectedName: "dev-flows-collection",
 			expectedURL:  "github.com/dev/flows-collection",
+		},
+		// Enterprise GitHub URLs
+		{
+			name:         "enterprise with just owner assumes default repo",
+			input:        "github.enterprise.com/myteam",
+			expectedName: "myteam",
+			expectedURL:  "github.enterprise.com/myteam/astonish-flows",
+		},
+		{
+			name:         "enterprise with owner and default repo",
+			input:        "github.enterprise.com/myteam/astonish-flows",
+			expectedName: "myteam",
+			expectedURL:  "github.enterprise.com/myteam/astonish-flows",
+		},
+		{
+			name:         "enterprise with owner and custom repo",
+			input:        "github.enterprise.com/myteam/custom-flows",
+			expectedName: "myteam-custom-flows",
+			expectedURL:  "github.enterprise.com/myteam/custom-flows",
+		},
+		{
+			name:         "enterprise with https prefix",
+			input:        "https://github.mycompany.com/org/flows",
+			expectedName: "org-flows",
+			expectedURL:  "github.mycompany.com/org/flows",
 		},
 	}
 
@@ -401,3 +423,110 @@ func TestValidateTapRepositoryURLConstruction(t *testing.T) {
 	}
 }
 
+// TestBuildRawGitHubURL tests the URL building logic for public and enterprise GitHub
+func TestBuildRawGitHubURL(t *testing.T) {
+	tests := []struct {
+		name        string
+		repoURL     string
+		branch      string
+		filePath    string
+		expectedURL string
+		expectError bool
+	}{
+		{
+			name:        "public github",
+			repoURL:     "github.com/owner/repo",
+			branch:      "main",
+			filePath:    "manifest.yaml",
+			expectedURL: "https://raw.githubusercontent.com/owner/repo/main/manifest.yaml",
+			expectError: false,
+		},
+		{
+			name:        "public github with https prefix",
+			repoURL:     "https://github.com/owner/repo",
+			branch:      "main",
+			filePath:    "flows/test.yaml",
+			expectedURL: "https://raw.githubusercontent.com/owner/repo/main/flows/test.yaml",
+			expectError: false,
+		},
+		{
+			name:        "enterprise github",
+			repoURL:     "github.enterprise.com/team/flows",
+			branch:      "main",
+			filePath:    "manifest.yaml",
+			expectedURL: "https://github.enterprise.com/raw/team/flows/main/manifest.yaml",
+			expectError: false,
+		},
+		{
+			name:        "enterprise github with different branch",
+			repoURL:     "github.mycompany.com/org/repo",
+			branch:      "develop",
+			filePath:    "manifest.yaml",
+			expectedURL: "https://github.mycompany.com/raw/org/repo/develop/manifest.yaml",
+			expectError: false,
+		},
+		{
+			name:        "invalid URL without slash",
+			repoURL:     "justahostname",
+			branch:      "main",
+			filePath:    "manifest.yaml",
+			expectedURL: "",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			url, _, err := buildRawGitHubURL(tt.repoURL, tt.branch, tt.filePath)
+			
+			if tt.expectError {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				return
+			}
+			
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+			
+			if url != tt.expectedURL {
+				t.Errorf("URL = %q, expected %q", url, tt.expectedURL)
+			}
+		})
+	}
+}
+
+// TestBuildRawGitHubURLTokenSelection tests token selection logic
+func TestBuildRawGitHubURLTokenSelection(t *testing.T) {
+	// Save and restore environment
+	origGHToken := os.Getenv("GITHUB_TOKEN")
+	origGHEToken := os.Getenv("GITHUB_ENTERPRISE_TOKEN")
+	defer func() {
+		os.Setenv("GITHUB_TOKEN", origGHToken)
+		os.Setenv("GITHUB_ENTERPRISE_TOKEN", origGHEToken)
+	}()
+
+	// Test public GitHub uses GITHUB_TOKEN
+	os.Setenv("GITHUB_TOKEN", "public-token")
+	os.Setenv("GITHUB_ENTERPRISE_TOKEN", "enterprise-token")
+	
+	_, token, _ := buildRawGitHubURL("github.com/owner/repo", "main", "file")
+	if token != "public-token" {
+		t.Errorf("Public GitHub should use GITHUB_TOKEN, got: %q", token)
+	}
+
+	// Test enterprise GitHub uses GITHUB_ENTERPRISE_TOKEN
+	_, token, _ = buildRawGitHubURL("github.enterprise.com/owner/repo", "main", "file")
+	if token != "enterprise-token" {
+		t.Errorf("Enterprise GitHub should use GITHUB_ENTERPRISE_TOKEN, got: %q", token)
+	}
+
+	// Test enterprise falls back to GITHUB_TOKEN if GITHUB_ENTERPRISE_TOKEN not set
+	os.Unsetenv("GITHUB_ENTERPRISE_TOKEN")
+	_, token, _ = buildRawGitHubURL("github.enterprise.com/owner/repo", "main", "file")
+	if token != "public-token" {
+		t.Errorf("Enterprise should fallback to GITHUB_TOKEN, got: %q", token)
+	}
+}

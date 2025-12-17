@@ -595,23 +595,17 @@ func handleStoreTapCommand(args []string) error {
 	case "add":
 		if len(args) < 2 {
 			fmt.Println("usage: astonish flows store tap add <owner>[/repo] [--as <alias>]")
+			fmt.Println("       astonish flows store tap add <alias> <url>")
 			fmt.Println("")
 			fmt.Println("Examples:")
-			fmt.Println("  tap add company              # assumes company/astonish-flows, tap name: company")
-			fmt.Println("  tap add company/my-flows     # tap name: company-my-flows")
-			fmt.Println("  tap add company/flows --as c # tap name: c")
+			fmt.Println("  tap add company                  # assumes company/astonish-flows, tap name: company")
+			fmt.Println("  tap add company/my-flows         # tap name: company-my-flows")
+			fmt.Println("  tap add company/flows --as c     # tap name: c")
+			fmt.Println("  tap add myalias github.company.com/team/flows  # enterprise with alias")
 			return fmt.Errorf("no repository specified")
 		}
 		
-		// Parse --as flag
-		urlArg := args[1]
-		alias := ""
-		for i := 2; i < len(args); i++ {
-			if args[i] == "--as" && i+1 < len(args) {
-				alias = args[i+1]
-				break
-			}
-		}
+		urlArg, alias := parseTapAddArgs(args[1:])
 		
 		tapName, err := store.AddTap(urlArg, alias)
 		if err != nil {
@@ -876,4 +870,34 @@ func parseFlowRef(ref string) (tapName, flowName string) {
 		return parts[0], parts[1]
 	}
 	return flowstore.OfficialStoreName, ref
+}
+
+// parseTapAddArgs parses the arguments for "tap add" command
+// Supports two formats:
+// 1. add <url> [--as <alias>]
+// 2. add <alias> <url> (when second arg contains a dot, indicating a hostname)
+func parseTapAddArgs(args []string) (urlArg, alias string) {
+	if len(args) == 0 {
+		return "", ""
+	}
+	
+	urlArg = args[0]
+	alias = ""
+	
+	// Check if second arg exists and looks like a URL (contains a dot)
+	if len(args) >= 2 && strings.Contains(args[1], ".") {
+		// Format: <alias> <url>
+		alias = args[0]
+		urlArg = args[1]
+	} else {
+		// Format: <url> [--as <alias>]
+		for i := 1; i < len(args); i++ {
+			if args[i] == "--as" && i+1 < len(args) {
+				alias = args[i+1]
+				break
+			}
+		}
+	}
+	
+	return urlArg, alias
 }

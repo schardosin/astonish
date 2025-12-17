@@ -437,6 +437,30 @@ The Flow Store is also accessible in **Astonish Studio** under Settings → Flow
 - Install flows with one click
 - View installed store flows (read-only) and copy to local for customization
 
+### Enterprise GitHub
+
+Use taps from private GitHub Enterprise instances:
+
+```bash
+# Set your enterprise GitHub token
+export GITHUB_ENTERPRISE_TOKEN=ghp_xxxxx
+
+# Add an enterprise tap (use full URL)
+astonish flows store tap github.mycompany.com/team/flows
+
+# Install flows from enterprise
+astonish flows store install team-flows/internal_agent
+```
+
+**Environment Variables:**
+
+| Variable | Purpose |
+|----------|---------|
+| `GITHUB_TOKEN` | Public GitHub authentication (optional for public repos) |
+| `GITHUB_ENTERPRISE_TOKEN` | Enterprise GitHub authentication (required for private repos) |
+
+> **Note:** If `GITHUB_ENTERPRISE_TOKEN` is not set, Astonish will fallback to `GITHUB_TOKEN`.
+
 ---
 
 ## 🎯 Use Cases

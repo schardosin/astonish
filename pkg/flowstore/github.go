@@ -1,8 +1,6 @@
 package flowstore
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -38,21 +36,18 @@ func (s *Store) FetchManifest(tap *Tap) (*Manifest, error) {
 		return cached, nil
 	}
 
-	// Fetch from GitHub
-	owner, repo := parseGitHubURL(tap.URL)
-	if owner == "" || repo == "" {
-		return nil, fmt.Errorf("invalid GitHub URL: %s", tap.URL)
-	}
-
 	branch := tap.Branch
 	if branch == "" {
 		branch = "main"
 	}
 
-	// Fetch manifest.yaml
-	url := fmt.Sprintf("%s/repos/%s/%s/contents/manifest.yaml?ref=%s", githubAPIBase, owner, repo, branch)
-	
-	manifest, err := s.fetchAndParseManifest(url)
+	// Use raw file URL (works for both public and enterprise GitHub)
+	rawURL, token, err := buildRawGitHubURL(tap.URL, branch, "manifest.yaml")
+	if err != nil {
+		return nil, fmt.Errorf("invalid repository URL: %w", err)
+	}
+
+	manifest, err := s.fetchAndParseManifestRaw(rawURL, token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch manifest from %s: %w", tap.Name, err)
 	}
@@ -69,21 +64,19 @@ func (s *Store) FetchManifest(tap *Tap) (*Manifest, error) {
 
 // FetchFlow downloads a specific flow YAML file from a tap
 func (s *Store) FetchFlow(tap *Tap, flowName string) ([]byte, error) {
-	owner, repo := parseGitHubURL(tap.URL)
-	if owner == "" || repo == "" {
-		return nil, fmt.Errorf("invalid GitHub URL: %s", tap.URL)
-	}
-
 	branch := tap.Branch
 	if branch == "" {
 		branch = "main"
 	}
 
-	// Fetch flows/{flowName}.yaml
-	url := fmt.Sprintf("%s/repos/%s/%s/contents/flows/%s.yaml?ref=%s", 
-		githubAPIBase, owner, repo, flowName, branch)
-	
-	content, err := s.fetchFileContent(url)
+	// Use raw file URL (works for both public and enterprise GitHub)
+	filePath := fmt.Sprintf("flows/%s.yaml", flowName)
+	rawURL, token, err := buildRawGitHubURL(tap.URL, branch, filePath)
+	if err != nil {
+		return nil, fmt.Errorf("invalid repository URL: %w", err)
+	}
+
+	content, err := s.fetchRawFileContent(rawURL, token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch flow '%s' from %s: %w", flowName, tap.Name, err)
 	}
@@ -176,9 +169,47 @@ func (s *Store) UpdateAllManifests() error {
 	return nil
 }
 
-// fetchAndParseManifest fetches a manifest from GitHub API and parses it
-func (s *Store) fetchAndParseManifest(url string) (*Manifest, error) {
-	content, err := s.fetchFileContent(url)
+// fetchRawFileContent fetches raw file content from a URL with optional auth
+func (s *Store) fetchRawFileContent(url string, token string) ([]byte, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("User-Agent", userAgent)
+
+	// Add authorization header if token is available
+	if token != "" {
+		req.Header.Set("Authorization", "token "+token)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		return nil, fmt.Errorf("authentication required (status %d) - set GITHUB_TOKEN or GITHUB_ENTERPRISE_TOKEN environment variable", resp.StatusCode)
+	}
+
+	if resp.StatusCode == 404 {
+		return nil, fmt.Errorf("file not found (404)")
+	}
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP error %d: %s", resp.StatusCode, string(body))
+	}
+
+	return io.ReadAll(resp.Body)
+}
+
+// fetchAndParseManifestRaw fetches a manifest from a raw URL and parses it
+func (s *Store) fetchAndParseManifestRaw(url string, token string) (*Manifest, error) {
+	content, err := s.fetchRawFileContent(url, token)
 	if err != nil {
 		return nil, err
 	}
@@ -189,55 +220,6 @@ func (s *Store) fetchAndParseManifest(url string) (*Manifest, error) {
 	}
 
 	return &manifest, nil
-}
-
-// fetchFileContent fetches file content from GitHub API
-func (s *Store) fetchFileContent(url string) ([]byte, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
-
-	// Use GITHUB_TOKEN if available (for higher rate limits)
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 404 {
-		return nil, fmt.Errorf("file not found (404)")
-	}
-
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API error %d: %s", resp.StatusCode, string(body))
-	}
-
-	var file GitHubFile
-	if err := json.NewDecoder(resp.Body).Decode(&file); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	// GitHub returns base64-encoded content
-	if file.Encoding == "base64" {
-		decoded, err := base64.StdEncoding.DecodeString(file.Content)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode base64 content: %w", err)
-		}
-		return decoded, nil
-	}
-
-	return []byte(file.Content), nil
 }
 
 // loadCachedManifest loads a cached manifest from disk
@@ -283,19 +265,4 @@ func (s *Store) cacheManifest(tap *Tap, manifest *Manifest) error {
 	}
 
 	return os.WriteFile(manifestPath, data, 0644)
-}
-
-// parseGitHubURL extracts owner and repo from a GitHub URL
-func parseGitHubURL(url string) (owner, repo string) {
-	url = strings.TrimPrefix(url, "https://")
-	url = strings.TrimPrefix(url, "http://")
-	url = strings.TrimPrefix(url, "github.com/")
-	url = strings.TrimSuffix(url, ".git")
-	url = strings.TrimSuffix(url, "/")
-
-	parts := strings.Split(url, "/")
-	if len(parts) >= 2 {
-		return parts[0], parts[1]
-	}
-	return "", ""
 }

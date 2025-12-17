@@ -119,25 +119,32 @@ func (s *Store) GetAllTaps() []*Tap {
 // validateTapRepository checks that a tap repository exists and contains a valid manifest.yaml
 func validateTapRepository(tap Tap) error {
 	// Build the raw GitHub URL for manifest.yaml
-	// URL format: github.com/owner/repo -> https://raw.githubusercontent.com/owner/repo/branch/manifest.yaml
-	url := tap.URL
-	if strings.Contains(url, "github.com") {
-		// Remove github.com prefix and build raw URL
-		path := strings.TrimPrefix(url, "github.com/")
-		url = fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/manifest.yaml", path, tap.Branch)
-	} else {
-		return fmt.Errorf("only GitHub repositories are supported (got: %s)", tap.URL)
+	rawURL, token, err := buildRawGitHubURL(tap.URL, tap.Branch, "manifest.yaml")
+	if err != nil {
+		return err
 	}
 
-	// Create HTTP client with timeout
+	// Create HTTP request with timeout
 	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", rawURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Add authorization header if token is available
+	if token != "" {
+		req.Header.Set("Authorization", "token "+token)
+	}
 	
-	resp, err := client.Get(url)
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to connect to repository: %w", err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		return fmt.Errorf("authentication required (status %d) - set GITHUB_TOKEN or GITHUB_ENTERPRISE_TOKEN environment variable", resp.StatusCode)
+	}
 	if resp.StatusCode == 404 {
 		return fmt.Errorf("repository not found or missing manifest.yaml (check that the repo exists and contains a manifest.yaml file)")
 	}
@@ -165,6 +172,47 @@ func validateTapRepository(tap Tap) error {
 	}
 
 	return nil
+}
+
+// buildRawGitHubURL constructs the raw content URL for a GitHub file and returns the auth token if available
+// Supports both public GitHub (github.com) and GitHub Enterprise instances
+func buildRawGitHubURL(repoURL, branch, filePath string) (rawURL string, token string, err error) {
+	// Normalize URL - remove https:// prefix if present
+	repoURL = strings.TrimPrefix(repoURL, "https://")
+	repoURL = strings.TrimPrefix(repoURL, "http://")
+	
+	// Check if this is public GitHub or enterprise
+	isPublicGitHub := strings.HasPrefix(repoURL, "github.com/")
+	
+	if isPublicGitHub {
+		// Public GitHub: use raw.githubusercontent.com
+		path := strings.TrimPrefix(repoURL, "github.com/")
+		rawURL = fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s", path, branch, filePath)
+		token = os.Getenv("GITHUB_TOKEN")
+	} else if strings.Contains(repoURL, "/") {
+		// Enterprise GitHub: extract host and path
+		// Format: github.enterprise.com/owner/repo
+		parts := strings.SplitN(repoURL, "/", 2)
+		if len(parts) != 2 {
+			return "", "", fmt.Errorf("invalid GitHub URL format: %s", repoURL)
+		}
+		host := parts[0]
+		repoPath := parts[1]
+		
+		// Enterprise GitHub raw URL format
+		// https://github.enterprise.com/raw/owner/repo/branch/file
+		rawURL = fmt.Sprintf("https://%s/raw/%s/%s/%s", host, repoPath, branch, filePath)
+		token = os.Getenv("GITHUB_ENTERPRISE_TOKEN")
+		
+		// Fallback to GITHUB_TOKEN if enterprise token not set
+		if token == "" {
+			token = os.Getenv("GITHUB_TOKEN")
+		}
+	} else {
+		return "", "", fmt.Errorf("invalid GitHub URL format: %s (expected: github.com/owner/repo or github.enterprise.com/owner/repo)", repoURL)
+	}
+	
+	return rawURL, token, nil
 }
 
 // AddTap adds a new tap by GitHub URL with smart naming:
@@ -342,37 +390,70 @@ func getStoreConfigPath() (string, error) {
 // - "owner" → assumes owner/astonish-flows, name = "owner"
 // - "owner/astonish-flows" → name = "owner" (default repo)
 // - "owner/custom-repo" → name = "owner-custom-repo"
+// - "github.enterprise.com/owner" → assumes owner/astonish-flows on enterprise
+// - "github.enterprise.com/owner/repo" → full enterprise URL
 func parseTapURL(input string) (name, url string) {
 	input = strings.TrimPrefix(input, "https://")
 	input = strings.TrimPrefix(input, "http://")
-	input = strings.TrimPrefix(input, "github.com/")
 	input = strings.TrimSuffix(input, ".git")
 	input = strings.TrimSuffix(input, "/")
 
 	const defaultRepo = "astonish-flows"
 	
-	parts := strings.Split(input, "/")
+	// Check if this is an enterprise URL (contains a host with dots before the path)
+	// e.g., github.enterprise.com/owner or github.mycompany.com/owner/repo
+	isEnterprise := strings.Contains(input, ".") && !strings.HasPrefix(input, "github.com/")
 	
-	var owner, repo string
-	if len(parts) == 1 {
-		// Just owner, assume default repo
-		owner = parts[0]
-		repo = defaultRepo
+	var host, owner, repo string
+	
+	if isEnterprise {
+		// Enterprise: host/owner or host/owner/repo
+		parts := strings.SplitN(input, "/", 3)
+		if len(parts) < 2 {
+			// Invalid format, return as-is
+			return sanitizeName(input), input
+		}
+		host = parts[0]
+		owner = parts[1]
+		if len(parts) == 3 && parts[2] != "" {
+			repo = parts[2]
+		} else {
+			repo = defaultRepo
+		}
+		
+		// Build tap name
+		if repo == defaultRepo {
+			name = owner
+		} else {
+			name = owner + "-" + repo
+		}
+		
+		url = host + "/" + owner + "/" + repo
 	} else {
-		owner = parts[0]
-		repo = parts[1]
+		// Public GitHub: strip github.com/ prefix if present
+		input = strings.TrimPrefix(input, "github.com/")
+		
+		parts := strings.Split(input, "/")
+		
+		if len(parts) == 1 {
+			// Just owner, assume default repo
+			owner = parts[0]
+			repo = defaultRepo
+		} else {
+			owner = parts[0]
+			repo = parts[1]
+		}
+		
+		// Determine tap name based on repo
+		if repo == defaultRepo {
+			name = owner
+		} else {
+			name = owner + "-" + repo
+		}
+		
+		url = "github.com/" + owner + "/" + repo
 	}
 	
-	// Determine tap name based on repo
-	if repo == defaultRepo {
-		// Default repo: just use owner name
-		name = owner
-	} else {
-		// Custom repo: use owner-repo
-		name = owner + "-" + repo
-	}
-	
-	url = "github.com/" + owner + "/" + repo
 	return name, url
 }
 

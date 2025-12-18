@@ -1,6 +1,6 @@
 import { Moon, Sun, Settings, Cpu, Grid, Home, Sparkles } from 'lucide-react'
 
-export default function TopBar({ theme, onToggleTheme, onOpenSettings, defaultProvider, defaultModel }) {
+export default function TopBar({ theme, onToggleTheme, onOpenSettings, defaultProvider, defaultModel, currentView, onNavigate }) {
   const navBackground = theme === 'dark' ? 'rgba(15, 23, 42, 0.92)' : 'rgba(255,255,255,0.86)'
   const navBorder = theme === 'dark' ? 'rgba(255,255,255,0.08)' : 'var(--border-color)'
 
@@ -15,18 +15,42 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, defaultPr
       }}
     >
       <div className="flex items-center gap-2">
-        <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}>
-          <Sparkles size={16} />
-          <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Astonish Studio</span>
+        <div className="flex items-center gap-2 pr-3 rounded-xl" style={{ color: 'var(--accent)' }}>
+          <img src="/astonish-logo.svg" alt="Astonish" className="w-6 h-6" />
+          <span className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>Astonish Studio</span>
         </div>
-        <div className="hidden md:flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background: theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
-          <Grid size={14} />
-          <span className="text-xs">Canvas</span>
-        </div>
-        <div className="hidden md:flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background: theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
+        
+        <button 
+          onClick={() => onNavigate && onNavigate('home')}
+          className={`hidden md:flex items-center gap-2 px-3 py-2 rounded-xl transition-all ${
+            currentView === 'home' 
+              ? '' 
+              : 'hover:bg-purple-500/10'
+          }`}
+          style={{ 
+            background: currentView === 'home' ? 'var(--accent)' : (theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'var(--bg-tertiary)'), 
+            color: currentView === 'home' ? '#fff' : 'var(--text-secondary)' 
+          }}
+        >
           <Home size={14} />
-          <span className="text-xs">Home</span>
-        </div>
+          <span className="text-xs font-medium">Home</span>
+        </button>
+
+        <button 
+          onClick={() => onNavigate && onNavigate('canvas')}
+          className={`hidden md:flex items-center gap-2 px-3 py-2 rounded-xl transition-all ${
+            currentView === 'canvas' 
+              ? '' 
+              : 'hover:bg-purple-500/10'
+          }`}
+          style={{ 
+            background: currentView === 'canvas' ? 'var(--accent)' : (theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'var(--bg-tertiary)'), 
+            color: currentView === 'canvas' ? '#fff' : 'var(--text-secondary)' 
+          }}
+        >
+          <Grid size={14} />
+          <span className="text-xs font-medium">Flows</span>
+        </button>
       </div>
 
       {(defaultProvider || defaultModel) && (

@@ -36,14 +36,9 @@ export default function EditableEdge({
     if (data?.points && Array.isArray(data.points) && data.points.length > 0) {
       return data.points
     }
-    // Default: Vertical Step (Standard Flowchart)
-    // Source(Bottom) -> Vertical -> Horizontal -> Vertical -> Target(Top)
-    const midY = (sourceY + targetY) / 2
-    return [
-      { x: sourceX, y: midY },
-      { x: targetX, y: midY }
-    ]
-  }, [data?.points, sourceX, sourceY, targetX, targetY])
+    // Default: Straight line (no explicit points)
+    return []
+  }, [data?.points])
 
   // 2. Enforce Vertical Connection Constraints (Snap to Node X)
   // This ensures that when nodes move, the vertical segments attached to them
@@ -118,6 +113,9 @@ export default function EditableEdge({
   const onHandleMouseDown = useCallback((e, index) => {
     e.stopPropagation()
     e.preventDefault()
+    
+    // Signal drag start to prevent prop sync
+    window.dispatchEvent(new CustomEvent('astonish:edge-drag-start'))
 
     // Determine segment we are dragging
     // Segments: 
@@ -132,9 +130,6 @@ export default function EditableEdge({
     const isHorizontal = Math.abs(start.y - end.y) < Math.abs(start.x - end.x)
 
     // --- DRAG START LOGIC ---
-    // We determine if we need to isolate the segment from Fixed Nodes (Source/Target)
-    // to allow orthogonal movement without creating diagonals.
-    
     let currentPoints = [...points]
     let activeLeftIndex = index - 1 // Index in 'currentPoints' of the start of the dragged segment
     let activeRightIndex = index    // Index in 'currentPoints' of the end of the dragged segment
@@ -143,24 +138,15 @@ export default function EditableEdge({
     
     // 1. Isolate FROM SOURCE if needed
     if (activeLeftIndex === -1) {
-      // Connected to Source. We need to insert a stub to preserve Source connection direction.
-      // Direction: If dragging Horizontal, segment is Horizontal. 
-      // We assume Source allows Horizontal connection.
-      // If we move Y, we need: Source -> Stub(Fixed Y) -> Corner(Moving Y) -> ...
-      
       const dirX = Math.sign(targetX - sourceX) || 1
       const dirY = Math.sign(targetY - sourceY) || 1
       
       let pStub, pCorner
       
       if (isHorizontal) {
-         // Horizontal Drag (Moving Y). Original segment S->P0 is Horizontal.
-         // Insert Horizontal stub: (Sx + len, Sy)
          pStub = { x: sourceX + (dirX * STUB_LEN), y: sourceY }
-         pCorner = { x: sourceX + (dirX * STUB_LEN), y: sourceY } // Initially same Y, will move
+         pCorner = { x: sourceX + (dirX * STUB_LEN), y: sourceY }
       } else {
-         // Vertical Drag (Moving X). Original segment S->P0 is Vertical.
-         // Insert Vertical stub: (Sx, Sy + len)
          pStub = { x: sourceX, y: sourceY + (dirY * STUB_LEN) }
          pCorner = { x: sourceX, y: sourceY + (dirY * STUB_LEN) }
       }
@@ -171,39 +157,24 @@ export default function EditableEdge({
     }
     
     // 2. Isolate FROM TARGET if needed
-    if (activeRightIndex === points.length) { // points.length is passed from closure, but 'currentPoints' might have changed size?
-      // Wait, 'points' closure variable is unchanged. 'activeRightIndex' is relative to 'currentPoints'.
-      // If we unshifted 2, activeRightIndex increased by 2.
-      // But we need to check if it matches the *end* of the array.
-      // Original check: index === points.length. 
-      // Now: activeRightIndex === currentPoints.length? YES.
-    }
-    
-    // Actually simpler: re-check against currentPoints using the shifted index
     if (activeRightIndex === currentPoints.length) {
-       // Connected to Target.
-       const dirX = Math.sign(sourceX - targetX) || -1 // backwards from target
+       const dirX = Math.sign(sourceX - targetX) || -1 
        const dirY = Math.sign(sourceY - targetY) || -1
        
        let pStub, pCorner
        
        if (isHorizontal) {
-         // Horizontal Drag. T is fixed.
-         // Segment ...->T is Horizontal.
-         // We need: ... -> Corner(Moving Y) -> Stub(Fixed Y) -> T
          pStub = { x: targetX + (dirX * STUB_LEN), y: targetY }
          pCorner = { x: targetX + (dirX * STUB_LEN), y: targetY }
        } else {
-         // Vertical Drag.
          pStub = { x: targetX, y: targetY + (dirY * STUB_LEN) }
          pCorner = { x: targetX, y: targetY + (dirY * STUB_LEN) }
        }
        
        currentPoints.push(pCorner, pStub)
-       // Indices don't shift for right-side insertion
     }
 
-    // Apply insertions immediately so the user sees the 'break'
+    // Apply insertions immediately
     if (currentPoints.length !== points.length) {
        setEdges(edges => edges.map(edge => {
         if (edge.id === id) return { ...edge, data: { ...edge.data, points: currentPoints } }
@@ -214,7 +185,6 @@ export default function EditableEdge({
     // Capture state for dragging
     const startX = e.clientX
     const startY = e.clientY
-    // map currentPoints to ensure deep copy for base calculation
     const initialDragPoints = currentPoints.map(p => ({...p})) 
     let currentDragPoints = [...initialDragPoints]
 
@@ -262,45 +232,28 @@ export default function EditableEdge({
       // Simplify path: Remove collinear or overlapping points
       if (currentDragPoints.length > 0) {
         const simplified = []
-        // We need coordinates of Source and Target to check full path
-        // but Source/Target props might be stale if we relied on them changing? 
-        // No, sourceX/targetX are from current render cycle. 
-        // We assume they haven't moved during the drag (user is dragging edge, not node).
-        
         const fullPath = [
           { x: sourceX, y: sourceY }, 
           ...currentDragPoints, 
           { x: targetX, y: targetY }
         ]
         
-        // Check internal points (indices 1 to length-2 in fullPath)
-        // Corresponds to indices 0 to length-1 in currentDragPoints
         for (let i = 1; i < fullPath.length - 1; i++) {
           const prev = fullPath[i-1]
           const curr = fullPath[i]
           const next = fullPath[i+1]
           
-          // 1. Check if point is very close to previous (redundant)
-          if (Math.hypot(curr.x - prev.x, curr.y - prev.y) < 5) {
-             continue // Drop curr
-          }
-           // 2. Check if point is very close to next (redundant)
-          if (Math.hypot(curr.x - next.x, curr.y - next.y) < 5) {
-             continue // Drop curr
-          }
+          if (Math.hypot(curr.x - prev.x, curr.y - prev.y) < 5) continue
+          if (Math.hypot(curr.x - next.x, curr.y - next.y) < 5) continue
           
-          // 3. Check collinearity
           const isCollinearHorizontal = Math.abs(prev.y - curr.y) < 2 && Math.abs(curr.y - next.y) < 2
           const isCollinearVertical = Math.abs(prev.x - curr.x) < 2 && Math.abs(curr.x - next.x) < 2
           
-          if (isCollinearHorizontal || isCollinearVertical) {
-            continue // Drop curr
-          }
+          if (isCollinearHorizontal || isCollinearVertical) continue
           
           simplified.push(curr)
         }
         
-        // If we simplified anything, update store
         if (simplified.length !== currentDragPoints.length) {
            setEdges(edges => edges.map(edge => {
             if (edge.id === id) {
@@ -311,7 +264,7 @@ export default function EditableEdge({
         }
       }
       
-      // Dispatch event to trigger immediate save (handled in FlowCanvas)
+      // Dipatch event to trigger save and signal drag end
       window.dispatchEvent(new CustomEvent('astonish:edge-drag-stop'))
     }
 
@@ -322,11 +275,9 @@ export default function EditableEdge({
 
 
   // 4. Calculate Handle Positions (Midpoints of segments)
-  // 4. Calculate Handle Positions (Midpoints of segments)
   const handles = []
   const MIN_SEGMENT_LENGTH = 30
   
-  // Helper to add handle if segment is long enough
   const addHandleIfLongEnough = (p1, p2, index) => {
     const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y)
     if (dist >= MIN_SEGMENT_LENGTH) {
@@ -341,13 +292,9 @@ export default function EditableEdge({
   // Segment 0: Source -> P[0]
   if (points.length > 0) {
     addHandleIfLongEnough({ x: sourceX, y: sourceY }, points[0], 0)
-    
-    // Internal Segments
     for (let i = 0; i < points.length - 1; i++) {
       addHandleIfLongEnough(points[i], points[i+1], i + 1)
     }
-    
-    // Last Segment: P[last] -> Target
     const lastP = points[points.length - 1]
     addHandleIfLongEnough(lastP, { x: targetX, y: targetY }, points.length)
   } else {
@@ -363,7 +310,7 @@ export default function EditableEdge({
         style={{
           ...style,
           strokeWidth: selected ? 3 : 2,
-          stroke: selected ? '#5b21b6' : style.stroke || '#805AD5' // Use theme colors ideally
+          stroke: selected ? '#5b21b6' : style.stroke || '#805AD5'
         }}
         interactionWidth={20}
         label={label}
@@ -376,7 +323,6 @@ export default function EditableEdge({
         labelBgBorderRadius={labelBgBorderRadius}
       />
       
-      {/* Invisible wider path for easier selection */}
       <path
         d={path}
         fill="none"
@@ -385,7 +331,6 @@ export default function EditableEdge({
         style={{ cursor: 'pointer' }}
       />
       
-      {/* Handles */}
       {selected && (
         <EdgeLabelRenderer>
           {handles.map((handle, i) => (

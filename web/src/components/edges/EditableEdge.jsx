@@ -136,6 +136,12 @@ export default function EditableEdge({
     
     const STUB_LEN = 30
     
+    // Capture state for dragging
+    const startX = e.clientX
+    const startY = e.clientY
+    // Calculate Flow Position for initial corner alignment
+    const startFlow = screenToFlowPosition({ x: startX, y: startY })
+    
     // 1. Isolate FROM SOURCE if needed
     if (activeLeftIndex === -1) {
       const dirX = Math.sign(targetX - sourceX) || 1
@@ -145,10 +151,12 @@ export default function EditableEdge({
       
       if (isHorizontal) {
          pStub = { x: sourceX + (dirX * STUB_LEN), y: sourceY }
-         pCorner = { x: sourceX + (dirX * STUB_LEN), y: sourceY }
+         // Use Mouse Y for Corner Y to enforce orthogonal drag immediately
+         pCorner = { x: sourceX + (dirX * STUB_LEN), y: startFlow.y }
       } else {
          pStub = { x: sourceX, y: sourceY + (dirY * STUB_LEN) }
-         pCorner = { x: sourceX, y: sourceY + (dirY * STUB_LEN) }
+         // Use Mouse X for Corner X
+         pCorner = { x: startFlow.x, y: sourceY + (dirY * STUB_LEN) }
       }
       
       currentPoints.unshift(pStub, pCorner)
@@ -165,10 +173,10 @@ export default function EditableEdge({
        
        if (isHorizontal) {
          pStub = { x: targetX + (dirX * STUB_LEN), y: targetY }
-         pCorner = { x: targetX + (dirX * STUB_LEN), y: targetY }
+         pCorner = { x: targetX + (dirX * STUB_LEN), y: startFlow.y }
        } else {
          pStub = { x: targetX, y: targetY + (dirY * STUB_LEN) }
-         pCorner = { x: targetX, y: targetY + (dirY * STUB_LEN) }
+         pCorner = { x: startFlow.x, y: targetY + (dirY * STUB_LEN) }
        }
        
        currentPoints.push(pCorner, pStub)
@@ -182,18 +190,15 @@ export default function EditableEdge({
       }))
     }
     
-    // Capture state for dragging
-    const startX = e.clientX
-    const startY = e.clientY
     const initialDragPoints = currentPoints.map(p => ({...p})) 
     let currentDragPoints = [...initialDragPoints]
 
     const handleMouseMove = (moveEvent) => {
       const currentFlow = screenToFlowPosition({ x: moveEvent.clientX, y: moveEvent.clientY })
-      const startFlow = screenToFlowPosition({ x: startX, y: startY })
+      const startFlowRel = screenToFlowPosition({ x: startX, y: startY })
       
-      const deltaX = currentFlow.x - startFlow.x
-      const deltaY = currentFlow.y - startFlow.y
+      const deltaX = currentFlow.x - startFlowRel.x
+      const deltaY = currentFlow.y - startFlowRel.y
 
       const newPoints = initialDragPoints.map(p => ({ ...p }))
 

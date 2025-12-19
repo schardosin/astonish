@@ -239,6 +239,45 @@ func buildRawGitHubURL(repoURL, branch, filePath string) (rawURL string, token s
 	return rawURL, token, nil
 }
 
+// buildRawGitHubURLWithRefs uses refs/heads/ format which bypasses CDN caching
+// Format: https://raw.githubusercontent.com/{owner}/{repo}/refs/heads/{branch}/{file}
+func buildRawGitHubURLWithRefs(repoURL, branch, filePath string) (rawURL string, token string, err error) {
+	// Normalize URL - remove https:// prefix if present
+	repoURL = strings.TrimPrefix(repoURL, "https://")
+	repoURL = strings.TrimPrefix(repoURL, "http://")
+	
+	// Check if this is public GitHub or enterprise
+	isPublicGitHub := strings.HasPrefix(repoURL, "github.com/")
+	
+	if isPublicGitHub {
+		// Public GitHub: use refs/heads/ format to bypass CDN
+		path := strings.TrimPrefix(repoURL, "github.com/")
+		rawURL = fmt.Sprintf("https://raw.githubusercontent.com/%s/refs/heads/%s/%s", path, branch, filePath)
+		token = os.Getenv("GITHUB_TOKEN")
+	} else if strings.Contains(repoURL, "/") {
+		// Enterprise GitHub: use refs/heads/ format
+		parts := strings.SplitN(repoURL, "/", 2)
+		if len(parts) != 2 {
+			return "", "", fmt.Errorf("invalid GitHub URL format: %s", repoURL)
+		}
+		host := parts[0]
+		repoPath := parts[1]
+		
+		// Enterprise GitHub raw URL with refs format
+		rawURL = fmt.Sprintf("https://%s/raw/%s/refs/heads/%s/%s", host, repoPath, branch, filePath)
+		token = os.Getenv("GITHUB_ENTERPRISE_TOKEN")
+		
+		// Fallback to GITHUB_TOKEN if enterprise token not set
+		if token == "" {
+			token = os.Getenv("GITHUB_TOKEN")
+		}
+	} else {
+		return "", "", fmt.Errorf("invalid GitHub URL format: %s (expected: github.com/owner/repo or github.enterprise.com/owner/repo)", repoURL)
+	}
+	
+	return rawURL, token, nil
+}
+
 // AddTap adds a new tap by GitHub URL with smart naming:
 // - "owner" → assumes owner/astonish-flows, tap name = "owner"
 // - "owner/repo" → if repo != "astonish-flows", tap name = "owner-repo"

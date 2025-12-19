@@ -4,6 +4,7 @@ export default function HomePage({
   onCreateAgent, 
   onOpenSettings, 
   onOpenMCP,
+  onBrowseFlows,
   defaultProvider,
   defaultModel,
   theme 
@@ -43,7 +44,28 @@ export default function HomePage({
       </div>
 
       {/* Quick Actions */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl w-full">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl w-full">
+        {/* Browse Flows */}
+        <button
+          onClick={onBrowseFlows}
+          className="group p-6 rounded-2xl text-left transition-all hover:scale-[1.02] hover:shadow-xl"
+          style={{ 
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border-color)'
+          }}
+        >
+          <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-indigo-600 to-blue-600 flex items-center justify-center mb-4 shadow-lg group-hover:shadow-indigo-500/20 transition-all">
+            <Settings size={28} className="text-white transform rotate-90" /> {/* Using Settings rotated as a placeholder or import Layout/Folder */}
+          </div>
+          <h3 className="text-xl font-semibold mb-2 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+            Browse Flows
+            <ArrowRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity text-indigo-400" />
+          </h3>
+          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+            View and manage your existing library of AI agent flows.
+          </p>
+        </button>
+
         {/* Create Agent */}
         <button
           onClick={onCreateAgent}
@@ -61,7 +83,7 @@ export default function HomePage({
             <ArrowRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity text-purple-400" />
           </h3>
           <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-            Build a new AI agent flow from scratch or use the AI assistant to generate one.
+            Build a new AI agent flow from scratch or use the AI assistant.
           </p>
         </button>
 
@@ -82,7 +104,7 @@ export default function HomePage({
             <ArrowRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400" />
           </h3>
           <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-            Configure AI providers, API keys, and default models for your agents.
+            Configure AI providers, API keys, and default models.
           </p>
         </button>
 
@@ -103,7 +125,7 @@ export default function HomePage({
             <ArrowRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity text-teal-400" />
           </h3>
           <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-            Connect external tools via Model Context Protocol for enhanced capabilities.
+            Connect external tools via Model Context Protocol.
           </p>
         </button>
       </div>

@@ -62,6 +62,117 @@ func (s *Store) FetchManifest(tap *Tap) (*Manifest, error) {
 	return manifest, nil
 }
 
+// FetchManifestForceRefresh fetches the manifest from GitHub, bypassing CDN cache
+// Uses the commit SHA instead of branch name to guarantee no CDN caching
+func (s *Store) FetchManifestForceRefresh(tap *Tap) (*Manifest, error) {
+	branch := tap.Branch
+	if branch == "" {
+		branch = "main"
+	}
+
+	// Get the latest commit SHA for the branch
+	sha, token, err := s.getLatestCommitSHA(tap.URL, branch)
+	if err != nil {
+		// Fall back to refs/heads format if SHA lookup fails
+		fmt.Fprintf(os.Stderr, "Warning: Could not get latest SHA, falling back to refs/heads: %v\n", err)
+		rawURL, token, err := buildRawGitHubURLWithRefs(tap.URL, branch, "manifest.yaml")
+		if err != nil {
+			return nil, fmt.Errorf("invalid repository URL: %w", err)
+		}
+		manifest, err := s.fetchAndParseManifestRawFresh(rawURL, token)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch manifest from %s: %w", tap.Name, err)
+		}
+		if err := s.cacheManifest(tap, manifest); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to cache manifest: %v\n", err)
+		}
+		tap.Manifest = manifest
+		return manifest, nil
+	}
+
+	// Build URL using SHA (bypasses all CDN caching)
+	repoURL := strings.TrimPrefix(tap.URL, "https://")
+	repoURL = strings.TrimPrefix(repoURL, "http://")
+	
+	var rawURL string
+	if strings.HasPrefix(repoURL, "github.com/") {
+		path := strings.TrimPrefix(repoURL, "github.com/")
+		rawURL = fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/manifest.yaml", path, sha)
+	} else {
+		// Enterprise: use refs/heads as fallback
+		rawURL, token, _ = buildRawGitHubURLWithRefs(tap.URL, branch, "manifest.yaml")
+	}
+
+	manifest, err := s.fetchAndParseManifestRawFresh(rawURL, token)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch manifest from %s: %w", tap.Name, err)
+	}
+
+	// Cache the manifest
+	if err := s.cacheManifest(tap, manifest); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to cache manifest: %v\n", err)
+	}
+
+	tap.Manifest = manifest
+	return manifest, nil
+}
+
+// getLatestCommitSHA gets the latest commit SHA for a branch using GitHub API
+func (s *Store) getLatestCommitSHA(repoURL, branch string) (sha string, token string, err error) {
+	repoURL = strings.TrimPrefix(repoURL, "https://")
+	repoURL = strings.TrimPrefix(repoURL, "http://")
+	
+	var apiURL string
+	
+	if strings.HasPrefix(repoURL, "github.com/") {
+		path := strings.TrimPrefix(repoURL, "github.com/")
+		apiURL = fmt.Sprintf("https://api.github.com/repos/%s/commits/%s", path, branch)
+		token = os.Getenv("GITHUB_TOKEN")
+	} else {
+		// Enterprise GitHub
+		parts := strings.SplitN(repoURL, "/", 2)
+		if len(parts) != 2 {
+			return "", "", fmt.Errorf("invalid GitHub URL format")
+		}
+		host := parts[0]
+		repoPath := parts[1]
+		apiURL = fmt.Sprintf("https://%s/api/v3/repos/%s/commits/%s", host, repoPath, branch)
+		token = os.Getenv("GITHUB_ENTERPRISE_TOKEN")
+		if token == "" {
+			token = os.Getenv("GITHUB_TOKEN")
+		}
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return "", "", err
+	}
+	
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Accept", "application/vnd.github.sha")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", "", fmt.Errorf("failed to get commit SHA: HTTP %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", "", err
+	}
+
+	return strings.TrimSpace(string(body)), token, nil
+}
+
 // FetchFlow downloads a specific flow YAML file from a tap
 func (s *Store) FetchFlow(tap *Tap, flowName string) ([]byte, error) {
 	branch := tap.Branch
@@ -169,8 +280,52 @@ func (s *Store) UpdateAllManifests() error {
 	return nil
 }
 
+// ForceRefreshAllManifests fetches manifests from remote, ignoring all caches
+// including GitHub CDN cache by fetching via commit SHA
+func (s *Store) ForceRefreshAllManifests() error {
+	var errors []string
+
+	// Force refresh official
+	s.clearCachedManifest(s.official)
+	if _, err := s.FetchManifestForceRefresh(s.official); err != nil {
+		errors = append(errors, fmt.Sprintf("official: %v", err))
+	}
+
+	// Force refresh custom taps
+	for i := range s.config.Taps {
+		tap := &s.config.Taps[i]
+		s.clearCachedManifest(tap)
+		if _, err := s.FetchManifestForceRefresh(tap); err != nil {
+			errors = append(errors, fmt.Sprintf("%s: %v", tap.Name, err))
+		}
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("errors refreshing manifests:\n  %s", strings.Join(errors, "\n  "))
+	}
+
+	return nil
+}
+
+// clearCachedManifest removes the cached manifest for a tap
+func (s *Store) clearCachedManifest(tap *Tap) {
+	tapCacheDir := filepath.Join(s.storeDir, sanitizeName(tap.Name))
+	manifestPath := filepath.Join(tapCacheDir, "manifest.yaml")
+	os.Remove(manifestPath)
+}
+
 // fetchRawFileContent fetches raw file content from a URL with optional auth
 func (s *Store) fetchRawFileContent(url string, token string) ([]byte, error) {
+	return s.fetchRawFileContentWithOptions(url, token, false)
+}
+
+// fetchRawFileContentFresh fetches raw file content, bypassing all caches
+func (s *Store) fetchRawFileContentFresh(url string, token string) ([]byte, error) {
+	return s.fetchRawFileContentWithOptions(url, token, true)
+}
+
+// fetchRawFileContentWithOptions fetches raw file content with cache control
+func (s *Store) fetchRawFileContentWithOptions(url string, token string, noCache bool) ([]byte, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -183,6 +338,13 @@ func (s *Store) fetchRawFileContent(url string, token string) ([]byte, error) {
 	// Add authorization header if token is available
 	if token != "" {
 		req.Header.Set("Authorization", "token "+token)
+	}
+
+	// Add cache-busting headers to bypass any HTTP caching
+	if noCache {
+		req.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		req.Header.Set("Pragma", "no-cache")
+		req.Header.Set("Expires", "0")
 	}
 
 	resp, err := client.Do(req)
@@ -210,6 +372,21 @@ func (s *Store) fetchRawFileContent(url string, token string) ([]byte, error) {
 // fetchAndParseManifestRaw fetches a manifest from a raw URL and parses it
 func (s *Store) fetchAndParseManifestRaw(url string, token string) (*Manifest, error) {
 	content, err := s.fetchRawFileContent(url, token)
+	if err != nil {
+		return nil, err
+	}
+
+	var manifest Manifest
+	if err := yaml.Unmarshal(content, &manifest); err != nil {
+		return nil, fmt.Errorf("failed to parse manifest: %w", err)
+	}
+
+	return &manifest, nil
+}
+
+// fetchAndParseManifestRawFresh fetches and parses manifest, bypassing all caches
+func (s *Store) fetchAndParseManifestRawFresh(url string, token string) (*Manifest, error) {
+	content, err := s.fetchRawFileContentFresh(url, token)
 	if err != nil {
 		return nil, err
 	}

@@ -89,7 +89,7 @@ export function addStandaloneNode(yamlContent, nodeType) {
     
     // Calculate a default position for the new node
     // Place it to the right of existing nodes
-    yamlData.layout = yamlData.layout || { nodes: {}, waypoints: [] }
+    yamlData.layout = yamlData.layout || { nodes: {}, edges: {} }
     yamlData.layout.nodes = yamlData.layout.nodes || {}
     
     // Find the rightmost node position

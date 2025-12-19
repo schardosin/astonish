@@ -219,6 +219,7 @@ func UninstallFlowHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // UpdateFlowStoreHandler handles POST /api/flow-store/update
+// Forces a refresh from remote, bypassing the cache
 func UpdateFlowStoreHandler(w http.ResponseWriter, r *http.Request) {
 	store, err := flowstore.NewStore()
 	if err != nil {
@@ -226,14 +227,15 @@ func UpdateFlowStoreHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := store.UpdateAllManifests(); err != nil {
-		http.Error(w, "Failed to update manifests: "+err.Error(), http.StatusInternalServerError)
+	// Force refresh ignoring cache
+	if err := store.ForceRefreshAllManifests(); err != nil {
+		http.Error(w, "Failed to refresh manifests: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":  "ok",
-		"message": "All stores updated successfully",
+		"message": "All stores refreshed from remote",
 	})
 }

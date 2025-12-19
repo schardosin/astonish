@@ -1,90 +1,86 @@
-import { Play, Code, LogOut, Undo2, Redo2 } from 'lucide-react'
+import { Play, Code, LogOut, Undo2, Redo2, CircleDot } from 'lucide-react'
 import { snakeToTitleCase } from '../utils/formatters'
 
-export default function Header({ 
-  agentName, agentSource, agentTapName, showYaml, onToggleYaml, isRunning, onRun, onStop, onExit, theme,
+export default function Header({
+  agentName, agentSource, showYaml, onToggleYaml, isRunning, onRun, onExit,
   canUndo, canRedo, onUndo, onRedo
 }) {
-  // Format display name: for store flows with tap, show "tap - Flow Name"
   let displayName = agentName
   if (agentSource === 'store' && agentName.includes('/')) {
-    // Extract tap and flow name from "tap/flow_name" format
     const [tap, flowName] = agentName.split('/')
     displayName = `${tap.toLowerCase()} - ${snakeToTitleCase(flowName)}`
   } else {
     displayName = snakeToTitleCase(agentName) || agentName
   }
-  
+
   return (
-    <div className="h-14 flex items-center justify-between px-6" style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)' }}>
-      {/* Left: Agent Title */}
-      <div className="flex items-center gap-4">
-        <h1 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
-          {isRunning ? 'Run an Agent' : (agentSource === 'store' ? 'View Agent' : 'Edit Agent')}
-        </h1>
-        <span style={{ color: 'var(--text-muted)' }}>|</span>
-        <span style={{ color: 'var(--text-secondary)' }}>{displayName}</span>
+    <div className="h-14 flex items-center justify-between px-5" style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)' }}>
+      <div className="flex items-center gap-3">
+        <div className="px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-2" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}>
+          <CircleDot size={14} />
+          {isRunning ? 'Run mode' : 'Design mode'}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+            {displayName}
+          </span>
+          <span className="text-xs px-2 py-1 rounded-full" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
+            {agentSource === 'store' ? 'Store' : 'Local'}
+          </span>
+        </div>
       </div>
 
-      {/* Right: Actions */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2">
         {!isRunning && (
-          <>
-            {/* Undo/Redo Buttons */}
-            <div className="flex items-center gap-1 mr-2">
-              <button
-                onClick={onUndo}
-                disabled={!canUndo}
-                className="p-2 rounded-lg transition-colors disabled:opacity-30"
-                style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-                title="Undo (Cmd+Z)"
-              >
-                <Undo2 size={18} />
-              </button>
-              <button
-                onClick={onRedo}
-                disabled={!canRedo}
-                className="p-2 rounded-lg transition-colors disabled:opacity-30"
-                style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-                title="Redo (Cmd+Shift+Z)"
-              >
-                <Redo2 size={18} />
-              </button>
-            </div>
-
-            {/* View Source Toggle */}
+          <div className="flex items-center gap-1 mr-2">
             <button
-              onClick={onToggleYaml}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                showYaml
-                  ? 'bg-purple-500/20 text-purple-400'
-                  : ''
-              }`}
-              style={!showYaml ? { background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' } : {}}
+              onClick={onUndo}
+              disabled={!canUndo}
+              className="p-2 rounded-full transition-colors disabled:opacity-30"
+              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+              title="Undo"
             >
-              <Code size={18} />
-              {showYaml ? 'Hide Source' : 'View Source'}
+              <Undo2 size={18} />
             </button>
-          </>
+            <button
+              onClick={onRedo}
+              disabled={!canRedo}
+              className="p-2 rounded-full transition-colors disabled:opacity-30"
+              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+              title="Redo"
+            >
+              <Redo2 size={18} />
+            </button>
+          </div>
         )}
 
-        {/* Run Button (only when not running) */}
+        {!isRunning && (
+          <button
+            onClick={onToggleYaml}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            style={{ background: showYaml ? 'var(--accent-soft)' : 'var(--bg-tertiary)', color: showYaml ? 'var(--accent)' : 'var(--text-secondary)' }}
+          >
+            <Code size={18} />
+            {showYaml ? 'Hide Source' : 'View Source'}
+          </button>
+        )}
+
         {!isRunning && (
           <button
             onClick={onRun}
-            className="flex items-center gap-2 px-5 py-2 bg-[#805AD5] hover:bg-[#6B46C1] text-white font-medium rounded-lg transition-colors shadow-sm"
+            className="flex items-center gap-2 px-5 py-2 text-white font-semibold rounded-lg transition-all shadow-md hover:shadow-lg hover:scale-[1.02]"
+            style={{ background: 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)' }}
           >
             <Play size={18} />
             Run
           </button>
         )}
 
-        {/* Exit Button (when running) */}
         {isRunning && (
-          <button 
+          <button
             onClick={onExit}
-            className="p-2 hover:bg-gray-700/50 rounded-lg transition-colors" 
-            style={{ color: 'var(--text-muted)' }}
+            className="p-2 rounded-full transition-colors"
+            style={{ color: 'var(--text-muted)', border: '1px solid var(--border-color)' }}
             title="Exit Run Mode"
           >
             <LogOut size={20} />

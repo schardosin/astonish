@@ -86,6 +86,7 @@ function App() {
   // Setup wizard state
   const [showSetupWizard, setShowSetupWizard] = useState(false)
   const [isCheckingSetup, setIsCheckingSetup] = useState(true)
+  const [view, setView] = useState('home')
 
   // Check if setup is required on mount
   useEffect(() => {
@@ -147,13 +148,12 @@ function App() {
         const urlAgent = agentsList.find(a => a.id === urlAgentName || a.name === urlAgentName)
         if (urlAgent) {
           handleAgentSelectInternal(urlAgent, false) // Don't update URL, already there
+          setView('canvas')
         } else if (agentsList.length > 0) {
           // Agent not found, select first and update URL
           handleAgentSelectInternal(agentsList[0], true)
+          setView('canvas')
         }
-      } else if (agentsList.length > 0 && !selectedAgent && path.view !== 'settings') {
-        // No URL agent, auto-select first
-        handleAgentSelectInternal(agentsList[0], true)
       }
     } catch (err) {
       console.error('Failed to load agents:', err)
@@ -357,6 +357,7 @@ function App() {
   // Public agent select (always updates URL)
   const handleAgentSelect = useCallback(async (agent) => {
     await handleAgentSelectInternal(agent, true)
+    setView('canvas')
   }, [handleAgentSelectInternal])
 
   const handleCreateNew = useCallback(() => {
@@ -858,34 +859,43 @@ flow:
           onOpenSettings={() => navigate(buildPath('settings', { section: 'general' }))}
           defaultProvider={defaultProvider}
           defaultModel={defaultModel}
+          currentView={view}
+          onNavigate={setView}
         />
 
         {/* Main Content Area */}
         <div className="flex flex-1 overflow-hidden">
-          {/* Sidebar */}
-          <Sidebar
-            agents={agents}
-            selectedAgent={selectedAgent}
-            onAgentSelect={handleAgentSelect}
-            onCreateNew={handleCreateNew}
-            onDeleteAgent={handleDeleteAgent}
-            onCopyToLocal={handleCopyToLocal}
-            isLoading={isLoadingAgents}
-          />
+          {/* Sidebar - Show only in Canvas View */}
+          {view === 'canvas' && (
+            <Sidebar
+              agents={agents}
+              selectedAgent={selectedAgent}
+              onAgentSelect={handleAgentSelect}
+              onCreateNew={handleCreateNew}
+              onDeleteAgent={handleDeleteAgent}
+              onCopyToLocal={handleCopyToLocal}
+              isLoading={isLoadingAgents}
+            />
+          )}
 
         {/* Main Content */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Show HomePage when no agent is selected */}
-          {!selectedAgent ? (
+          {view === 'home' ? (
             <HomePage
               onCreateAgent={handleCreateNew}
               onOpenSettings={() => navigate(buildPath('settings', { section: 'general' }))}
               onOpenMCP={() => navigate(buildPath('settings', { section: 'mcp' }))}
+              onBrowseFlows={() => setView('canvas')}
               defaultProvider={defaultProvider}
               defaultModel={defaultModel}
               theme={theme}
             />
+          ) : !selectedAgent ? (
+             <div className="flex-1 flex items-center justify-center p-8 text-center" style={{ color: 'var(--text-muted)' }}>
+               Select a flow from the sidebar to continue
+             </div>
           ) : (
+
           <>
           <Header
             agentName={selectedAgent?.name || 'Select Agent'}

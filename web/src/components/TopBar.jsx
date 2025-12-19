@@ -24,11 +24,11 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, defaultPr
           onClick={() => onNavigate && onNavigate('home')}
           className={`hidden md:flex items-center gap-2 px-3 py-2 rounded-xl transition-all ${
             currentView === 'home' 
-              ? '' 
+              ? 'shadow-md' 
               : 'hover:bg-purple-500/10'
           }`}
           style={{ 
-            background: currentView === 'home' ? 'var(--accent)' : (theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'var(--bg-tertiary)'), 
+            background: currentView === 'home' ? 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)' : (theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'var(--bg-tertiary)'), 
             color: currentView === 'home' ? '#fff' : 'var(--text-secondary)' 
           }}
         >
@@ -40,11 +40,11 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, defaultPr
           onClick={() => onNavigate && onNavigate('canvas')}
           className={`hidden md:flex items-center gap-2 px-3 py-2 rounded-xl transition-all ${
             currentView === 'canvas' 
-              ? '' 
+              ? 'shadow-md' 
               : 'hover:bg-purple-500/10'
           }`}
           style={{ 
-            background: currentView === 'canvas' ? 'var(--accent)' : (theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'var(--bg-tertiary)'), 
+            background: currentView === 'canvas' ? 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)' : (theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'var(--bg-tertiary)'), 
             color: currentView === 'canvas' ? '#fff' : 'var(--text-secondary)' 
           }}
         >

@@ -39,6 +39,9 @@ export default function MCPStoreModal({ isOpen, onClose, onInstall }) {
 
   useEffect(() => {
     if (isOpen) {
+      // Reset filters to defaults when modal opens
+      setSearchQuery('')
+      setSelectedSource('all')
       loadServers()
     }
   }, [isOpen])

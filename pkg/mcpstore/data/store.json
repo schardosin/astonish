@@ -12,7 +12,7 @@
       "context-tracking",
       "team-collaboration"
     ],
-    "githubStars": 2,
+    "githubStars": 5,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -38,7 +38,7 @@
       "security-rules",
       "code-security"
     ],
-    "githubStars": 13599,
+    "githubStars": 13643,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -60,7 +60,7 @@
       "development",
       "database"
     ],
-    "githubStars": 126,
+    "githubStars": 128,
     "requiresApiKey": false
   },
   {
@@ -76,7 +76,7 @@
       "sigv4",
       "ai-integration"
     ],
-    "githubStars": 205,
+    "githubStars": 211,
     "requiresApiKey": false,
     "config": {
       "command": "uv",
@@ -107,7 +107,7 @@
       "automation",
       "ai-development"
     ],
-    "githubStars": 1182,
+    "githubStars": 1202,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -132,7 +132,7 @@
       "android",
       "appium"
     ],
-    "githubStars": 117,
+    "githubStars": 118,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -174,7 +174,7 @@
       "automation",
       "parallel-api"
     ],
-    "githubStars": 5,
+    "githubStars": 7,
     "requiresApiKey": false
   },
   {
@@ -206,7 +206,7 @@
       "architecture",
       "infrastructure"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false
   },
   {
@@ -277,7 +277,7 @@
       "devops",
       "cloud-automation"
     ],
-    "githubStars": 2299,
+    "githubStars": 2325,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -302,7 +302,7 @@
       "version-control",
       "work-tracking"
     ],
-    "githubStars": 1087,
+    "githubStars": 1098,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -325,7 +325,7 @@
       "testing",
       "numerical-computing"
     ],
-    "githubStars": 91,
+    "githubStars": 94,
     "requiresApiKey": false
   },
   {
@@ -341,7 +341,7 @@
       "license-compliance",
       "code-security"
     ],
-    "githubStars": 70,
+    "githubStars": 71,
     "requiresApiKey": false
   },
   {
@@ -357,7 +357,7 @@
       "actor-management",
       "apify-platform"
     ],
-    "githubStars": 24917,
+    "githubStars": 25031,
     "requiresApiKey": false
   },
   {
@@ -369,7 +369,7 @@
     "tags": [
       "memory-management"
     ],
-    "githubStars": 3335,
+    "githubStars": 3349,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -393,7 +393,7 @@
       "search-retrieval",
       "multi-platform"
     ],
-    "githubStars": 366,
+    "githubStars": 367,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -432,7 +432,7 @@
       "graph-database",
       "memory-storage"
     ],
-    "githubStars": 74401,
+    "githubStars": 74671,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -522,7 +522,7 @@
       "oauth",
       "access-control"
     ],
-    "githubStars": 82,
+    "githubStars": 83,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -548,7 +548,7 @@
       "typescript",
       "react"
     ],
-    "githubStars": 4018,
+    "githubStars": 4025,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -574,7 +574,7 @@
       "synthetic-data",
       "aws-integration"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -601,7 +601,7 @@
       "python",
       "claude-integration"
     ],
-    "githubStars": 356,
+    "githubStars": 358,
     "requiresApiKey": false
   },
   {
@@ -642,7 +642,7 @@
       "actor-management",
       "apify-platform"
     ],
-    "githubStars": 637,
+    "githubStars": 645,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -683,7 +683,7 @@
       "issue-monitoring",
       "application-monitoring"
     ],
-    "githubStars": 74402,
+    "githubStars": 74671,
     "requiresApiKey": false
   },
   {
@@ -699,7 +699,7 @@
       "brave-api",
       "content-discovery"
     ],
-    "githubStars": 406,
+    "githubStars": 424,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -765,7 +765,7 @@
       "cloud-architecture",
       "aws"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -790,7 +790,7 @@
       "data-storage",
       "database-operations"
     ],
-    "githubStars": 74402,
+    "githubStars": 74671,
     "requiresApiKey": false
   },
   {
@@ -806,7 +806,7 @@
       "aws-integration",
       "function-management"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -837,7 +837,7 @@
       "whatsapp",
       "message-search"
     ],
-    "githubStars": 5136,
+    "githubStars": 5142,
     "requiresApiKey": false,
     "config": {
       "command": "uv",
@@ -884,7 +884,7 @@
       "sql",
       "database-management"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -912,7 +912,7 @@
       "library-docs",
       "programming-help"
     ],
-    "githubStars": 39268,
+    "githubStars": 39590,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -938,7 +938,7 @@
       "reporting",
       "analytics"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -964,7 +964,7 @@
       "server-management",
       "infrastructure"
     ],
-    "githubStars": 184,
+    "githubStars": 188,
     "requiresApiKey": false,
     "config": {
       "command": "python",
@@ -1050,7 +1050,7 @@
       "sql",
       "data-api"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -1087,7 +1087,7 @@
       "content-transformation",
       "format-conversion"
     ],
-    "githubStars": 2302,
+    "githubStars": 2309,
     "requiresApiKey": false,
     "config": {
       "command": "node",
@@ -1112,7 +1112,7 @@
       "source-control",
       "development"
     ],
-    "githubStars": 74402,
+    "githubStars": 74671,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -1159,7 +1159,7 @@
       "markdown",
       "content-extraction"
     ],
-    "githubStars": 657,
+    "githubStars": 658,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -1184,7 +1184,7 @@
       "schemas",
       "crud"
     ],
-    "githubStars": 368,
+    "githubStars": 370,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -1210,7 +1210,7 @@
       "search",
       "obsidian"
     ],
-    "githubStars": 1235,
+    "githubStars": 1240,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -1234,7 +1234,7 @@
       "scene-creation",
       "visualization"
     ],
-    "githubStars": 14507,
+    "githubStars": 14560,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -1256,7 +1256,7 @@
       "knowledge-base",
       "enterprise-search"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -1309,7 +1309,7 @@
       "observability",
       "analytics"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -1336,7 +1336,7 @@
       "proxy",
       "automation"
     ],
-    "githubStars": 938,
+    "githubStars": 939,
     "requiresApiKey": false
   },
   {
@@ -1352,7 +1352,7 @@
       "device-control",
       "accessibility"
     ],
-    "githubStars": 2705,
+    "githubStars": 2741,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -1391,7 +1391,7 @@
       "aws",
       "automation"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -1448,7 +1448,7 @@
       "text-to-image",
       "color-palettes"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -1475,7 +1475,7 @@
       "session-management",
       "multi-llm"
     ],
-    "githubStars": 851,
+    "githubStars": 852,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -1503,7 +1503,7 @@
       "query-analysis",
       "schema-exploration"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -1559,14 +1559,14 @@
       "google-cloud",
       "enterprise"
     ],
-    "githubStars": 2500,
+    "githubStars": 11817,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
       "args": [
-        "-y", 
-        "@toolbox-sdk/server", 
-        "--tools-file", 
+        "-y",
+        "@toolbox-sdk/server",
+        "--tools-file",
         "${TOOLBOX_TOOLS_FILE}"
       ],
       "env": {
@@ -1587,7 +1587,7 @@
       "gremlin",
       "query-execution"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -1613,7 +1613,7 @@
       "content-management",
       "site-builder"
     ],
-    "githubStars": 90,
+    "githubStars": 91,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -1639,7 +1639,7 @@
       "voice-cloning",
       "media-creation"
     ],
-    "githubStars": 1116,
+    "githubStars": 1120,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -1693,7 +1693,7 @@
       "apple-services",
       "system-integration"
     ],
-    "githubStars": 2892,
+    "githubStars": 2904,
     "requiresApiKey": false
   },
   {
@@ -1709,7 +1709,7 @@
       "automation",
       "orchestration"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -1759,7 +1759,7 @@
       "content-filtering",
       "news-search"
     ],
-    "githubStars": 995,
+    "githubStars": 1010,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -1785,7 +1785,7 @@
       "code-generation",
       "cursor-integration"
     ],
-    "githubStars": 12198,
+    "githubStars": 12254,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -1813,7 +1813,7 @@
       "places-api",
       "location-data"
     ],
-    "githubStars": 74402,
+    "githubStars": 74671,
     "requiresApiKey": false
   },
   {
@@ -1829,7 +1829,7 @@
       "knowledge-graph",
       "search-results"
     ],
-    "githubStars": 44,
+    "githubStars": 45,
     "requiresApiKey": false,
     "config": {
       "command": "node",
@@ -1854,7 +1854,7 @@
       "content-discovery",
       "information-retrieval"
     ],
-    "githubStars": 3397,
+    "githubStars": 3417,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -1880,7 +1880,7 @@
       "elasticache",
       "key-value-store"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -1907,7 +1907,7 @@
       "automation",
       "repomix"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -1932,7 +1932,7 @@
       "deployment",
       "infrastructure"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -1958,7 +1958,7 @@
       "memcached",
       "cloud-infrastructure"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -1985,7 +1985,7 @@
       "file-upload",
       "documentation"
     ],
-    "githubStars": 861,
+    "githubStars": 862,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -2007,7 +2007,7 @@
       "sql",
       "supabase"
     ],
-    "githubStars": 2324,
+    "githubStars": 2334,
     "requiresApiKey": false
   },
   {
@@ -2045,7 +2045,7 @@
       "smart-contracts",
       "crypto-wallet"
     ],
-    "githubStars": 329,
+    "githubStars": 331,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -2078,7 +2078,7 @@
       "cross-account",
       "aws"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -2104,7 +2104,7 @@
       "database-management",
       "sqlite"
     ],
-    "githubStars": 74402,
+    "githubStars": 74671,
     "requiresApiKey": false
   },
   {
@@ -2120,7 +2120,7 @@
       "memory-storage",
       "neo4j-aura"
     ],
-    "githubStars": 847,
+    "githubStars": 852,
     "requiresApiKey": false
   },
   {
@@ -2136,7 +2136,7 @@
       "automation",
       "editor-tools"
     ],
-    "githubStars": 4265,
+    "githubStars": 4320,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -2164,7 +2164,7 @@
       "automation",
       "document-analysis"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -2193,7 +2193,7 @@
       "sdk-integration",
       "llm-tools"
     ],
-    "githubStars": 513,
+    "githubStars": 514,
     "requiresApiKey": false
   },
   {
@@ -2209,7 +2209,7 @@
       "database-management",
       "nosql"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "python",
@@ -2232,7 +2232,7 @@
       "transcription",
       "voice-design"
     ],
-    "githubStars": 1094,
+    "githubStars": 1097,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -2257,7 +2257,7 @@
       "database-management",
       "query-execution"
     ],
-    "githubStars": 372,
+    "githubStars": 376,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -2282,7 +2282,7 @@
       "data-extraction",
       "javascript-execution"
     ],
-    "githubStars": 2921,
+    "githubStars": 2940,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -2309,7 +2309,7 @@
       "documentation",
       "python"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -2360,7 +2360,7 @@
       "collaboration",
       "ci-cd"
     ],
-    "githubStars": 74402,
+    "githubStars": 74671,
     "requiresApiKey": false
   },
   {
@@ -2376,7 +2376,7 @@
       "file-search",
       "file-editing"
     ],
-    "githubStars": 74402,
+    "githubStars": 74671,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -2423,7 +2423,7 @@
       "web-interaction",
       "screenshots"
     ],
-    "githubStars": 2921,
+    "githubStars": 2940,
     "requiresApiKey": false,
     "config": {
       "command": "node",
@@ -2449,7 +2449,7 @@
       "todo-tracking",
       "documentation"
     ],
-    "githubStars": 393,
+    "githubStars": 395,
     "requiresApiKey": false,
     "config": {
       "command": "node",
@@ -2471,7 +2471,7 @@
       "daw-control",
       "ableton"
     ],
-    "githubStars": 2057,
+    "githubStars": 2062,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -2493,7 +2493,7 @@
       "migrations",
       "project-management"
     ],
-    "githubStars": 2324,
+    "githubStars": 2334,
     "requiresApiKey": false
   },
   {
@@ -2509,7 +2509,7 @@
       "state-machines",
       "serverless"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -2540,7 +2540,7 @@
       "sql",
       "neon-api"
     ],
-    "githubStars": 527,
+    "githubStars": 528,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -2616,7 +2616,7 @@
       "antv",
       "image-generation"
     ],
-    "githubStars": 3306,
+    "githubStars": 3336,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -2680,7 +2680,7 @@
       "cli-integration",
       "test-cases"
     ],
-    "githubStars": 3815,
+    "githubStars": 3823,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -2737,7 +2737,7 @@
       "recommendations",
       "technical-docs"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -2763,7 +2763,7 @@
       "time-series",
       "database-management"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -2790,7 +2790,7 @@
       "pub-sub",
       "cloud-messaging"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -2816,7 +2816,7 @@
       "cloud-storage",
       "database-management"
     ],
-    "githubStars": 3204,
+    "githubStars": 3211,
     "requiresApiKey": false
   },
   {
@@ -2832,7 +2832,7 @@
       "collaboration",
       "workspace"
     ],
-    "githubStars": 3584,
+    "githubStars": 3598,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -2858,7 +2858,7 @@
       "cluster-management",
       "devops"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -2885,7 +2885,7 @@
       "expense-tracking",
       "reporting"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -2912,7 +2912,7 @@
       "javascript",
       "testing"
     ],
-    "githubStars": 74402,
+    "githubStars": 74671,
     "requiresApiKey": false
   },
   {
@@ -2928,7 +2928,7 @@
       "javascript",
       "playwright"
     ],
-    "githubStars": 5060,
+    "githubStars": 5070,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -2951,7 +2951,7 @@
       "stripe-api",
       "financial-services"
     ],
-    "githubStars": 1152,
+    "githubStars": 1159,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -3003,7 +3003,7 @@
       "storage",
       "retrieval"
     ],
-    "githubStars": 1120,
+    "githubStars": 1129,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -3140,7 +3140,7 @@
       "resource-management",
       "cloudformation"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -3192,7 +3192,7 @@
       "security-compliance",
       "checkov"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -3217,7 +3217,7 @@
       "batch-processing",
       "content-filtering"
     ],
-    "githubStars": 5068,
+    "githubStars": 5091,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -3243,7 +3243,7 @@
       "chat",
       "workspace-management"
     ],
-    "githubStars": 74402,
+    "githubStars": 74671,
     "requiresApiKey": false
   },
   {
@@ -3259,7 +3259,7 @@
       "monitoring",
       "automation"
     ],
-    "githubStars": 6901,
+    "githubStars": 6912,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -3281,7 +3281,7 @@
       "retrieval",
       "document-management"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -3338,7 +3338,7 @@
       "search-tools",
       "ibm-cloud"
     ],
-    "githubStars": 110,
+    "githubStars": 111,
     "requiresApiKey": false,
     "config": {
       "command": "node",
@@ -3364,7 +3364,7 @@
       "plugin",
       "genkit"
     ],
-    "githubStars": 5204,
+    "githubStars": 5227,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -3388,7 +3388,7 @@
       "image-building",
       "devops"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -3415,7 +3415,7 @@
       "activemq",
       "cloud-messaging"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -3441,7 +3441,7 @@
       "web-crawling",
       "search"
     ],
-    "githubStars": 650,
+    "githubStars": 658,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -3467,7 +3467,7 @@
       "kubectl",
       "deployments"
     ],
-    "githubStars": 1215,
+    "githubStars": 1220,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -3489,7 +3489,7 @@
       "datastore",
       "key-value"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -3516,7 +3516,7 @@
       "structured-thinking",
       "decision-making"
     ],
-    "githubStars": 74402,
+    "githubStars": 74671,
     "requiresApiKey": false,
     "config": {
       "command": "npx",
@@ -3539,7 +3539,7 @@
       "documentation",
       "frontend"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -3564,7 +3564,7 @@
       "database-management",
       "cloud-database"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -3595,7 +3595,7 @@
       "content-summarization",
       "yt-dlp"
     ],
-    "githubStars": 475,
+    "githubStars": 478,
     "requiresApiKey": false
   },
   {
@@ -3611,7 +3611,7 @@
       "aws",
       "database-queries"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -3644,7 +3644,7 @@
       "workspace",
       "file-search"
     ],
-    "githubStars": 74402,
+    "githubStars": 74672,
     "requiresApiKey": false
   },
   {
@@ -3712,7 +3712,7 @@
       "aws",
       "location-services"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -3739,7 +3739,7 @@
       "code-research",
       "bedrock"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -3767,7 +3767,7 @@
       "scheduling",
       "automation"
     ],
-    "githubStars": 74402,
+    "githubStars": 74672,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -3789,7 +3789,7 @@
       "git",
       "source-control"
     ],
-    "githubStars": 25154,
+    "githubStars": 25272,
     "requiresApiKey": true,
     "config": {
       "command": "docker",
@@ -3822,7 +3822,7 @@
       "monitoring",
       "promql"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uv",
@@ -3853,7 +3853,7 @@
       "persistence",
       "knowledge-base"
     ],
-    "githubStars": 1565,
+    "githubStars": 1568,
     "requiresApiKey": false
   },
   {
@@ -3894,7 +3894,7 @@
       "cloud-support",
       "case-resolution"
     ],
-    "githubStars": 7648,
+    "githubStars": 7690,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",
@@ -3923,7 +3923,7 @@
       "pyodide",
       "deno"
     ],
-    "githubStars": 500,
+    "githubStars": 152,
     "requiresApiKey": false,
     "config": {
       "command": "uvx",

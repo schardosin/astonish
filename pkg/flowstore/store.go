@@ -39,11 +39,19 @@ type FlowMeta struct {
 
 // MCPMeta contains metadata about an MCP server from the manifest
 type MCPMeta struct {
-	Description string            `yaml:"description" json:"description"`
-	Command     string            `yaml:"command" json:"command"`
-	Args        []string          `yaml:"args" json:"args"`
-	Env         map[string]string `yaml:"env" json:"env"`
-	Tags        []string          `yaml:"tags" json:"tags"`
+	ID             string            `yaml:"id" json:"id"`                         // Unique identifier (e.g., "github.com/owner/repo")
+	Name           string            `yaml:"name" json:"name"`                     // Display name (can have spaces)
+	Description    string            `yaml:"description" json:"description"`
+	Author         string            `yaml:"author" json:"author"`
+	GithubUrl      string            `yaml:"githubUrl" json:"githubUrl"`
+	GithubStars    int               `yaml:"githubStars" json:"githubStars"`
+	RequiresApiKey bool              `yaml:"requiresApiKey" json:"requiresApiKey"`
+	Command        string            `yaml:"command" json:"command"`
+	Args           []string          `yaml:"args" json:"args"`
+	Env            map[string]string `yaml:"env" json:"env"`
+	Tags           []string          `yaml:"tags" json:"tags"`
+	Transport      string            `yaml:"transport" json:"transport"` // "stdio" or "sse"
+	URL            string            `yaml:"url" json:"url"`             // For SSE transport
 }
 
 // Tap represents a flow store repository
@@ -66,13 +74,20 @@ type Flow struct {
 
 // TappedMCP represents an MCP server available from a tapped repository
 type TappedMCP struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Command     string            `json:"command"`
-	Args        []string          `json:"args"`
-	Env         map[string]string `json:"env"`
-	Tags        []string          `json:"tags"`
-	TapName     string            `json:"tap_name"` // Which tap this MCP belongs to
+	ID             string            `json:"id"`              // Unique identifier
+	Name           string            `json:"name"`            // Display name
+	Description    string            `json:"description"`
+	Author         string            `json:"author"`
+	GithubUrl      string            `json:"githubUrl"`
+	GithubStars    int               `json:"githubStars"`
+	RequiresApiKey bool              `json:"requiresApiKey"`
+	Command        string            `json:"command"`
+	Args           []string          `json:"args"`
+	Env            map[string]string `json:"env"`
+	Tags           []string          `json:"tags"`
+	Transport      string            `json:"transport"` // "stdio" or "sse"
+	URL            string            `json:"url"`       // For SSE transport
+	TapName        string            `json:"tap_name"` // Which tap this MCP belongs to
 }
 
 // StoreConfig is persisted in config.yaml
@@ -391,15 +406,32 @@ func (s *Store) ListAllMCPs() []TappedMCP {
 
 	// Add official MCPs
 	if s.official.Manifest != nil && s.official.Manifest.MCPs != nil {
-		for name, meta := range s.official.Manifest.MCPs {
+		for key, meta := range s.official.Manifest.MCPs {
+			// Use meta.ID if set, otherwise use map key
+			id := meta.ID
+			if id == "" {
+				id = key
+			}
+			// Use meta.Name if set, otherwise use map key
+			name := meta.Name
+			if name == "" {
+				name = key
+			}
 			mcps = append(mcps, TappedMCP{
-				Name:        name,
-				Description: meta.Description,
-				Command:     meta.Command,
-				Args:        meta.Args,
-				Env:         meta.Env,
-				Tags:        meta.Tags,
-				TapName:     OfficialStoreName,
+				ID:             id,
+				Name:           name,
+				Description:    meta.Description,
+				Author:         meta.Author,
+				GithubUrl:      meta.GithubUrl,
+				GithubStars:    meta.GithubStars,
+				RequiresApiKey: meta.RequiresApiKey,
+				Command:        meta.Command,
+				Args:           meta.Args,
+				Env:            meta.Env,
+				Tags:           meta.Tags,
+				Transport:      meta.Transport,
+				URL:            meta.URL,
+				TapName:        OfficialStoreName,
 			})
 		}
 	}
@@ -407,15 +439,30 @@ func (s *Store) ListAllMCPs() []TappedMCP {
 	// Add custom tap MCPs
 	for _, tap := range s.config.Taps {
 		if tap.Manifest != nil && tap.Manifest.MCPs != nil {
-			for name, meta := range tap.Manifest.MCPs {
+			for key, meta := range tap.Manifest.MCPs {
+				id := meta.ID
+				if id == "" {
+					id = key
+				}
+				name := meta.Name
+				if name == "" {
+					name = key
+				}
 				mcps = append(mcps, TappedMCP{
-					Name:        name,
-					Description: meta.Description,
-					Command:     meta.Command,
-					Args:        meta.Args,
-					Env:         meta.Env,
-					Tags:        meta.Tags,
-					TapName:     tap.Name,
+					ID:             id,
+					Name:           name,
+					Description:    meta.Description,
+					Author:         meta.Author,
+					GithubUrl:      meta.GithubUrl,
+					GithubStars:    meta.GithubStars,
+					RequiresApiKey: meta.RequiresApiKey,
+					Command:        meta.Command,
+					Args:           meta.Args,
+					Env:            meta.Env,
+					Tags:           meta.Tags,
+					Transport:      meta.Transport,
+					URL:            meta.URL,
+					TapName:        tap.Name,
 				})
 			}
 		}

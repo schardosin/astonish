@@ -74,6 +74,39 @@ func (m *Manager) InitializeToolsets(ctx context.Context) error {
 	return nil
 }
 
+// InitializeSingleToolset creates ADK mcptoolset for a specific server by name
+// Returns the named toolset if successful, nil if failed
+func (m *Manager) InitializeSingleToolset(ctx context.Context, serverName string) (*NamedToolset, error) {
+	serverConfig, exists := m.config.MCPServers[serverName]
+	if !exists {
+		return nil, fmt.Errorf("server '%s' not found in config", serverName)
+	}
+
+	transport, err := createTransport(serverConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create transport: %w", err)
+	}
+
+	// Create ADK mcptoolset
+	toolset, err := mcptoolset.New(mcptoolset.Config{
+		Transport: transport,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create toolset: %w", err)
+	}
+
+	namedToolset := &NamedToolset{
+		Name:    serverName,
+		Toolset: toolset,
+	}
+
+	m.toolsets = append(m.toolsets, toolset)
+	m.namedToolsets = append(m.namedToolsets, *namedToolset)
+	log.Printf("Successfully initialized single MCP server: %s", serverName)
+
+	return namedToolset, nil
+}
+
 // GetToolsets returns all initialized MCP toolsets
 func (m *Manager) GetToolsets() []tool.Toolset {
 	return m.toolsets

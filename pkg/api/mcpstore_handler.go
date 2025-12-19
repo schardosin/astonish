@@ -2,12 +2,15 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/flowstore"
+	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/mcpstore"
 )
 
@@ -24,76 +27,63 @@ type MCPStoreInstallRequest struct {
 	Env        map[string]string `json:"env,omitempty"`        // Optional: environment variable overrides
 }
 
+// loadAllServersFromTaps loads all MCP servers from taps (including official)
+func loadAllServersFromTaps() ([]mcpstore.Server, error) {
+	store, err := flowstore.NewStore()
+	if err != nil {
+		return nil, err
+	}
+
+	_ = store.UpdateAllManifests()
+	tappedMCPs := store.ListAllMCPs()
+
+	var inputs []mcpstore.TappedMCPInput
+	for _, mcp := range tappedMCPs {
+		// Skip MCPs that have neither command nor URL (not installable)
+		if mcp.Command == "" && mcp.URL == "" {
+			continue
+		}
+		inputs = append(inputs, mcpstore.TappedMCPInput{
+			ID:             mcp.ID,
+			Name:           mcp.Name,
+			Description:    mcp.Description,
+			Author:         mcp.Author,
+			GithubUrl:      mcp.GithubUrl,
+			GithubStars:    mcp.GithubStars,
+			RequiresApiKey: mcp.RequiresApiKey,
+			Command:        mcp.Command,
+			Args:           mcp.Args,
+			Env:            mcp.Env,
+			Tags:           mcp.Tags,
+			Transport:      mcp.Transport,
+			URL:            mcp.URL,
+			TapName:        mcp.TapName,
+		})
+	}
+
+	return mcpstore.ListServers(inputs), nil
+}
+
 // ListMCPStoreHandler handles GET /api/mcp-store
 // Supports query parameters:
 // - ?q=<search query> for text search
 // - ?source=<source name> to filter by source (e.g., "official", tap name, or "all")
 // Only returns servers with valid configs (installable)
-// Includes MCPs from tapped repos with source field set
+// All MCPs come from tapped repos (including official tap)
 func ListMCPStoreHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
 	sourceFilter := r.URL.Query().Get("source")
 
-	var servers []mcpstore.Server
-	var err error
-
-	if query != "" {
-		// Search and filter to installable only
-		allMatches, err := mcpstore.SearchServers(query)
-		if err != nil {
-			http.Error(w, "Failed to load MCP store: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		// Filter to servers with configs and set source
-		for _, srv := range allMatches {
-			if srv.Config != nil && srv.Config.Command != "" {
-				if srv.Source == "" {
-					srv.Source = "official"
-				}
-				servers = append(servers, srv)
-			}
-		}
-	} else {
-		servers, err = mcpstore.ListInstallableServers()
-	}
-
+	// Load all servers from taps
+	servers, err := loadAllServersFromTaps()
 	if err != nil {
-		http.Error(w, "Failed to load MCP store: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Failed to load servers: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Mark official servers with source
-	for i := range servers {
-		if servers[i].Source == "" {
-			servers[i].Source = "official"
-		}
-	}
-
-	// Add tapped MCPs
-	store, storeErr := flowstore.NewStore()
-	if storeErr == nil {
-		// Load manifests from cache (user can click Settings > Repositories > Refresh to update from remote)
-		_ = store.UpdateAllManifests()
-		tappedMCPs := store.ListAllMCPs()
-
-		for _, mcp := range tappedMCPs {
-			// Skip if there's no command
-			if mcp.Command == "" {
-				continue
-			}
-			servers = append(servers, mcpstore.Server{
-				McpId:       mcp.TapName + "/" + mcp.Name,
-				Name:        mcp.Name,
-				Description: mcp.Description,
-				Tags:        mcp.Tags,
-				Source:      mcp.TapName,
-				Config: &mcpstore.ServerConfig{
-					Command: mcp.Command,
-					Args:    mcp.Args,
-					Env:     mcp.Env,
-				},
-			})
-		}
+	// Apply search filter if specified
+	if query != "" {
+		servers = mcpstore.SearchServers(servers, query)
 	}
 
 	// Collect unique sources for the dropdown
@@ -137,19 +127,18 @@ func GetMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 	// URL decode the ID (it may contain slashes encoded as %2F)
 	id = strings.ReplaceAll(id, "%2F", "/")
 
-	server, err := mcpstore.GetServer(id)
+	// Load all servers from taps
+	servers, err := loadAllServersFromTaps()
 	if err != nil {
-		http.Error(w, "Failed to get server: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Failed to load servers: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	// Search by ID first
+	server := mcpstore.GetServer(servers, id)
 	if server == nil {
 		// Try by name
-		server, err = mcpstore.GetServerByName(id)
-		if err != nil {
-			http.Error(w, "Failed to get server: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
+		server = mcpstore.GetServerByName(servers, id)
 	}
 
 	if server == nil {
@@ -170,20 +159,18 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 	// URL decode the ID
 	id = strings.ReplaceAll(id, "%2F", "/")
 
-	// Get the server from the store
-	server, err := mcpstore.GetServer(id)
+	// Load all servers from taps
+	servers, err := loadAllServersFromTaps()
 	if err != nil {
-		http.Error(w, "Failed to get server: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Failed to load servers: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	// Search by ID first
+	server := mcpstore.GetServer(servers, id)
 	if server == nil {
 		// Try by name
-		server, err = mcpstore.GetServerByName(id)
-		if err != nil {
-			http.Error(w, "Failed to get server: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
+		server = mcpstore.GetServerByName(servers, id)
 	}
 
 	if server == nil {
@@ -263,23 +250,72 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 	// Re-setup environment variables
 	config.SetupMCPEnv(mcpCfg)
 
-	// Refresh tools cache
-	RefreshToolsCache(r.Context())
+	// Incrementally load just this server's tools (synchronous, should be fast for one server)
+	toolsLoaded := 0
+	toolError := ""
+	mcpManager, err := mcp.NewManager()
+	if err != nil {
+		toolError = fmt.Sprintf("Failed to create MCP manager: %v", err)
+		log.Printf("Warning: %s", toolError)
+	} else {
+		namedToolset, err := mcpManager.InitializeSingleToolset(r.Context(), serverName)
+		if err != nil {
+			toolError = fmt.Sprintf("Failed to initialize server: %v", err)
+			log.Printf("Warning: %s", toolError)
+		} else {
+			// Get tools from this server and add to cache
+			minimalCtx := &minimalReadonlyContext{Context: r.Context()}
+			mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
+			if err != nil {
+				toolError = fmt.Sprintf("Server started but failed to get tools: %v", err)
+				log.Printf("Warning: %s", toolError)
+			} else {
+				var newTools []ToolInfo
+				for _, t := range mcpTools {
+					newTools = append(newTools, ToolInfo{
+						Name:        t.Name(),
+						Description: t.Description(),
+						Source:      serverName,
+					})
+				}
+				AddServerToolsToCache(serverName, newTools)
+				toolsLoaded = len(newTools)
+			}
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":     "ok",
-		"serverName": serverName,
-		"message":    "Server installed successfully",
-	})
+	response := map[string]interface{}{
+		"status":      "ok",
+		"serverName":  serverName,
+		"message":     "Server installed successfully",
+		"toolsLoaded": toolsLoaded,
+	}
+	if toolError != "" {
+		response["toolError"] = toolError
+	}
+	json.NewEncoder(w).Encode(response)
 }
 
 // GetMCPStoreTagsHandler handles GET /api/mcp-store/tags
 func GetMCPStoreTagsHandler(w http.ResponseWriter, r *http.Request) {
-	tags, err := mcpstore.GetAllTags()
+	// Load all servers from taps
+	servers, err := loadAllServersFromTaps()
 	if err != nil {
-		http.Error(w, "Failed to get tags: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Failed to load servers: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// Extract unique tags
+	tagSet := make(map[string]bool)
+	for _, srv := range servers {
+		for _, tag := range srv.Tags {
+			tagSet[tag] = true
+		}
+	}
+	tags := make([]string, 0, len(tagSet))
+	for tag := range tagSet {
+		tags = append(tags, tag)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

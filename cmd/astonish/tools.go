@@ -294,20 +294,40 @@ func handleToolsStoreCommand(args []string) error {
 }
 
 func handleToolsStoreList() error {
-	// Load curated servers
-	servers, err := mcpstore.ListServers()
+	// Load servers from taps
+	store, err := flowstore.NewStore()
 	if err != nil {
-		return fmt.Errorf("failed to load MCP store: %w", err)
+		return fmt.Errorf("failed to load flow store: %w", err)
+	}
+	_ = store.UpdateAllManifests()
+	tappedMCPs := store.ListAllMCPs()
+
+	// Convert to mcpstore inputs
+	var inputs []mcpstore.TappedMCPInput
+	for _, mcp := range tappedMCPs {
+		// Skip MCPs that have neither command nor URL (not installable)
+		if mcp.Command == "" && mcp.URL == "" {
+			continue
+		}
+		inputs = append(inputs, mcpstore.TappedMCPInput{
+			ID:             mcp.ID,
+			Name:           mcp.Name,
+			Description:    mcp.Description,
+			Author:         mcp.Author,
+			GithubUrl:      mcp.GithubUrl,
+			GithubStars:    mcp.GithubStars,
+			RequiresApiKey: mcp.RequiresApiKey,
+			Command:        mcp.Command,
+			Args:           mcp.Args,
+			Env:            mcp.Env,
+			Tags:           mcp.Tags,
+			Transport:      mcp.Transport,
+			URL:            mcp.URL,
+			TapName:        mcp.TapName,
+		})
 	}
 
-	// Load tapped MCPs
-	store, err := flowstore.NewStore()
-	var tappedMCPs []flowstore.TappedMCP
-	if err == nil {
-		// Update manifests first
-		_ = store.UpdateAllManifests()
-		tappedMCPs = store.ListAllMCPs()
-	}
+	servers := mcpstore.ListServers(inputs)
 
 	// Styles
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("5"))
@@ -316,59 +336,37 @@ func handleToolsStoreList() error {
 	sourceStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	starsStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 
-	// Group curated servers
-	fmt.Println(headerStyle.Render("OFFICIAL MCP STORE (curated)"))
-	fmt.Println(strings.Repeat("─", 60))
-
-	installableCount := 0
+	// Group servers by source
+	sourceGroups := make(map[string][]mcpstore.Server)
 	for _, srv := range servers {
-		if srv.Config == nil || srv.Config.Command == "" {
+		// Skip servers without config or without command/URL (not installable)
+		if srv.Config == nil || (srv.Config.Command == "" && srv.Config.URL == "") {
 			continue
 		}
-		installableCount++
-
-		starsStr := ""
-		if srv.GithubStars > 0 {
-			if srv.GithubStars >= 1000 {
-				starsStr = fmt.Sprintf(" ★%.1fk", float64(srv.GithubStars)/1000)
-			} else {
-				starsStr = fmt.Sprintf(" ★%d", srv.GithubStars)
-			}
-		}
-
-		desc := srv.Description
-		if len(desc) > 50 {
-			desc = desc[:47] + "..."
-		}
-
-		fmt.Printf("  %s%s\n", nameStyle.Render(srv.Name), starsStyle.Render(starsStr))
-		fmt.Printf("    %s\n", descStyle.Render(desc))
+		sourceGroups[srv.Source] = append(sourceGroups[srv.Source], srv)
 	}
-	fmt.Printf("\n  %d installable servers\n", installableCount)
 
-	// Group tapped MCPs by tap
-	if len(tappedMCPs) > 0 {
-		fmt.Println("")
+	for source, srvs := range sourceGroups {
+		fmt.Println(headerStyle.Render(fmt.Sprintf("\n%s", strings.ToUpper(source))))
+		fmt.Println(strings.Repeat("─", 60))
 
-		// Group by tap
-		tapGroups := make(map[string][]flowstore.TappedMCP)
-		for _, mcp := range tappedMCPs {
-			tapGroups[mcp.TapName] = append(tapGroups[mcp.TapName], mcp)
-		}
-
-		for tapName, mcps := range tapGroups {
-			fmt.Println(headerStyle.Render(fmt.Sprintf("\n%s (from tap)", strings.ToUpper(tapName))))
-			fmt.Println(strings.Repeat("─", 60))
-
-			for _, mcp := range mcps {
-				desc := mcp.Description
-				if len(desc) > 50 {
-					desc = desc[:47] + "..."
+		for _, srv := range srvs {
+			starsStr := ""
+			if srv.GithubStars > 0 {
+				if srv.GithubStars >= 1000 {
+					starsStr = fmt.Sprintf(" ★%.1fk", float64(srv.GithubStars)/1000)
+				} else {
+					starsStr = fmt.Sprintf(" ★%d", srv.GithubStars)
 				}
-
-				fmt.Printf("  %s %s\n", nameStyle.Render(mcp.Name), sourceStyle.Render("["+mcp.TapName+"]"))
-				fmt.Printf("    %s\n", descStyle.Render(desc))
 			}
+
+			desc := srv.Description
+			if len(desc) > 50 {
+				desc = desc[:47] + "..."
+			}
+
+			fmt.Printf("  %s%s %s\n", nameStyle.Render(srv.Name), starsStyle.Render(starsStr), sourceStyle.Render("["+srv.Source+"]"))
+			fmt.Printf("    %s\n", descStyle.Render(desc))
 		}
 	}
 
@@ -380,34 +378,40 @@ func handleToolsStoreList() error {
 }
 
 func handleToolsStoreInstall() error {
-	// Load servers from store (already sorted by stars)
-	servers, err := mcpstore.ListServers()
-	if err != nil {
-		return fmt.Errorf("failed to load MCP store: %w", err)
-	}
-
-	// Load tapped MCPs
+	// Load servers from taps
 	store, err := flowstore.NewStore()
-	if err == nil {
-		_ = store.UpdateAllManifests()
-		tappedMCPs := store.ListAllMCPs()
-
-		// Convert tapped MCPs to mcpstore format and append
-		for _, mcp := range tappedMCPs {
-			servers = append(servers, mcpstore.Server{
-				McpId:       mcp.TapName + "/" + mcp.Name,
-				Name:        mcp.Name,
-				Description: mcp.Description,
-				Source:      mcp.TapName,
-				Tags:        mcp.Tags,
-				Config: &mcpstore.ServerConfig{
-					Command: mcp.Command,
-					Args:    mcp.Args,
-					Env:     mcp.Env,
-				},
-			})
-		}
+	if err != nil {
+		return fmt.Errorf("failed to load flow store: %w", err)
 	}
+	_ = store.UpdateAllManifests()
+	tappedMCPs := store.ListAllMCPs()
+
+	// Convert to mcpstore inputs
+	var inputs []mcpstore.TappedMCPInput
+	for _, mcp := range tappedMCPs {
+		// Skip MCPs that have neither command nor URL (not installable)
+		if mcp.Command == "" && mcp.URL == "" {
+			continue
+		}
+		inputs = append(inputs, mcpstore.TappedMCPInput{
+			ID:             mcp.ID,
+			Name:           mcp.Name,
+			Description:    mcp.Description,
+			Author:         mcp.Author,
+			GithubUrl:      mcp.GithubUrl,
+			GithubStars:    mcp.GithubStars,
+			RequiresApiKey: mcp.RequiresApiKey,
+			Command:        mcp.Command,
+			Args:           mcp.Args,
+			Env:            mcp.Env,
+			Tags:           mcp.Tags,
+			Transport:      mcp.Transport,
+			URL:            mcp.URL,
+			TapName:        mcp.TapName,
+		})
+	}
+
+	servers := mcpstore.ListServers(inputs)
 
 	if len(servers) == 0 {
 		fmt.Println("No MCP servers available in store.")
@@ -417,8 +421,8 @@ func handleToolsStoreInstall() error {
 	// Create options for selection
 	options := make([]huh.Option[string], 0, len(servers))
 	for _, srv := range servers {
-		// Skip servers without config (can't be installed)
-		if srv.Config == nil || srv.Config.Command == "" {
+		// Skip servers without config or without command/URL (not installable)
+		if srv.Config == nil || (srv.Config.Command == "" && srv.Config.URL == "") {
 			continue
 		}
 

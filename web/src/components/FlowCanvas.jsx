@@ -13,7 +13,7 @@ import {
   ReactFlowProvider,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Edit3, Brain, Wrench, Settings, MessageSquare, Sparkles } from 'lucide-react'
+import { Edit3, Brain, Wrench, Settings, MessageSquare, Sparkles, LayoutDashboard } from 'lucide-react'
 
 import StartNode from './nodes/StartNode'
 import EndNode from './nodes/EndNode'
@@ -65,6 +65,7 @@ function FlowCanvasInner({
   onLayoutSave,
   onOpenAIChat,
   onNodeDelete,
+  onAutoLayout,
   runningNodeId
 }) {
   const { getNodes, getEdges } = useReactFlow()
@@ -303,7 +304,30 @@ function FlowCanvasInner({
     }
     // Also clear multi-selection
     setSelectedNodeIds([])
+    // Close context menu if open
+    setContextMenu(null)
   }, [onNodeSelect])
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState(null)
+
+  // Handle right-click on pane for context menu
+  const onPaneContextMenu = useCallback((event) => {
+    event.preventDefault()
+    if (isRunning || readOnly) return
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+    })
+  }, [isRunning, readOnly])
+
+  // Handle auto layout
+  const handleAutoLayout = useCallback(() => {
+    setContextMenu(null)
+    if (onAutoLayout) {
+      onAutoLayout()
+    }
+  }, [onAutoLayout])
 
   const defaultEdgeOptions = useMemo(() => ({
     style: { stroke: '#805AD5', strokeWidth: 2 },
@@ -336,6 +360,7 @@ function FlowCanvasInner({
         onNodeClick={onNodeClick}
         onNodeDoubleClick={handleNodeDoubleClick}
         onPaneClick={onPaneClick}
+        onPaneContextMenu={onPaneContextMenu}
         onSelectionChange={onSelectionChange}
         selectionOnDrag={false}
         selectNodesOnDrag={false}
@@ -485,6 +510,29 @@ function FlowCanvasInner({
           </Panel>
         )}
       </ReactFlow>
+      
+      {/* Context Menu */}
+      {contextMenu && (
+        <div
+          className="fixed z-50 py-1 rounded-lg shadow-xl"
+          style={{
+            left: contextMenu.x,
+            top: contextMenu.y,
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border-color)',
+            minWidth: '160px'
+          }}
+        >
+          <button
+            onClick={handleAutoLayout}
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-purple-500/15 transition-colors"
+            style={{ color: 'var(--text-primary)' }}
+          >
+            <LayoutDashboard size={16} className="text-purple-400" />
+            Auto Layout
+          </button>
+        </div>
+      )}
     </div>
   )
 }

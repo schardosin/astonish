@@ -744,6 +744,36 @@ flow:
     }
   }, [selectedAgent, yamlContent])
 
+  // Handle auto layout - remove stored positions to let ELK recalculate
+  const handleAutoLayout = useCallback(() => {
+    try {
+      const parsed = yaml.load(yamlContent) || {}
+      
+      // Remove the entire layout section
+      if (parsed.layout) {
+        delete parsed.layout
+      }
+      
+      const newYaml = yaml.dump(parsed, { 
+        indent: 2, 
+        lineWidth: -1,
+        noRefs: true,
+        sortKeys: false
+      })
+      
+      updateYaml(newYaml)
+      
+      // Also save to disk
+      if (selectedAgent && selectedAgent.source !== 'store') {
+        saveAgent(selectedAgent.id, newYaml).catch(err => {
+          console.error('Failed to save after auto layout:', err)
+        })
+      }
+    } catch (err) {
+      console.error('Failed to apply auto layout:', err)
+    }
+  }, [yamlContent, updateYaml, selectedAgent])
+
   const handleStartRun = useCallback(async () => {
     // Save layout before running
     await saveLayoutAndSync()
@@ -957,6 +987,7 @@ flow:
                 onLayoutChange={handleLayoutChange}
                 onLayoutSave={handleLayoutSave}
                 onNodeDelete={handleNodeDelete}
+                onAutoLayout={handleAutoLayout}
                 onOpenAIChat={(options) => {
                   if (options?.context === 'multi_node' && options?.nodeIds) {
                     // Multi-node context

@@ -47,14 +47,14 @@ func loadToolsInternal(ctx context.Context) []ToolInfo {
 		if err := mcpManager.InitializeToolsets(ctx); err != nil {
 			log.Printf("Warning: failed to initialize MCP toolsets: %v", err)
 		} else {
-			toolsets := mcpManager.GetToolsets()
+		toolsets := mcpManager.GetNamedToolsets()
 
 			// Create minimal context for fetching tools
 			minimalCtx := &minimalReadonlyContext{Context: ctx}
 
-			for _, toolset := range toolsets {
-				serverName := toolset.Name()
-				mcpToolsList, err := toolset.Tools(minimalCtx)
+			for _, namedToolset := range toolsets {
+				serverName := namedToolset.Name
+				mcpToolsList, err := namedToolset.Toolset.Tools(minimalCtx)
 				if err != nil {
 					log.Printf("Warning: failed to get tools from %s: %v", serverName, err)
 					continue

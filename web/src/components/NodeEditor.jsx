@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { X, Edit3, Brain, Wrench, Settings, MessageSquare, Plus, Trash2, AlertCircle, Sparkles } from 'lucide-react'
+import ToolSelector from './ToolSelector'
 
 // Node type icons
 const NODE_ICONS = {
@@ -468,54 +469,23 @@ function LlmNodeForm({ data, onChange, theme, availableTools = [] }) {
                     Tools Selection
                   </label>
                   
-                  {/* Selected tools */}
-                  <div className="space-y-1 mb-2">
-                    {currentTools.map((tool, idx) => {
-                      const isInvalid = !toolNames.includes(tool)
-                      return (
-                        <div 
-                          key={idx} 
-                          className={`flex items-center justify-between px-3 py-1.5 rounded border ${isInvalid ? 'border-red-500 bg-red-500/10' : ''}`}
-                          style={!isInvalid ? { background: 'var(--bg-primary)', borderColor: 'var(--border-color)' } : {}}
-                        >
-                          <div className="flex items-center gap-2">
-                            {isInvalid && <AlertCircle size={14} className="text-red-400" />}
-                            <span className="text-sm font-mono" style={{ color: isInvalid ? '#F87171' : 'var(--text-primary)' }}>
-                              {tool}
-                            </span>
-                            {isInvalid && (
-                              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>(not found)</span>
-                            )}
-                          </div>
-                          <button
-                            onClick={() => handleRemoveTool(tool)}
-                            className="p-1 text-red-400 hover:text-red-300"
-                          >
-                            <Trash2 size={12} />
-                          </button>
-                        </div>
-                      )
-                    })}
-                  </div>
+                  <ToolSelector
+                    availableTools={availableTools}
+                    selectedTools={currentTools}
+                    onAddTool={handleAddTool}
+                    onRemoveTool={handleRemoveTool}
+                    placeholder="Search tools..."
+                  />
                   
-                  {/* Dropdown to add new tool */}
-                  <select
-                    value=""
-                    onChange={(e) => handleAddTool(e.target.value)}
-                    className="w-full px-3 py-2 rounded border text-sm"
-                    style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-                  >
-                    <option value="">+ Add a tool...</option>
-                    {availableTools.map((tool) => (
-                      <option 
-                        key={tool.name} 
-                        value={tool.name}
-                        disabled={currentTools.includes(tool.name)}
-                      >
-                        {tool.name} ({tool.source})
-                      </option>
-                    ))}
-                  </select>
+                  {/* Show invalid tools warning */}
+                  {currentTools.some(t => !toolNames.includes(t)) && (
+                    <div className="mt-2 p-2 rounded border border-red-500 bg-red-500/10">
+                      <div className="flex items-center gap-2 text-xs text-red-400">
+                        <AlertCircle size={12} />
+                        <span>Some selected tools are not available</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 
                 <div className="w-48 flex items-center justify-between">
@@ -621,54 +591,23 @@ function ToolNodeForm({ data, onChange, theme, availableTools = [] }) {
             Tools Selection
           </label>
           
-          {/* Selected tools */}
-          <div className="space-y-1 mb-2">
-            {currentTools.map((tool, idx) => {
-              const isInvalid = !toolNames.includes(tool)
-              return (
-                <div 
-                  key={idx} 
-                  className={`flex items-center justify-between px-3 py-1.5 rounded border ${isInvalid ? 'border-red-500 bg-red-500/10' : ''}`}
-                  style={!isInvalid ? { background: 'var(--bg-primary)', borderColor: 'var(--border-color)' } : {}}
-                >
-                  <div className="flex items-center gap-2">
-                    {isInvalid && <AlertCircle size={14} className="text-red-400" />}
-                    <span className="text-sm font-mono" style={{ color: isInvalid ? '#F87171' : 'var(--text-primary)' }}>
-                      {tool}
-                    </span>
-                    {isInvalid && (
-                      <span className="text-xs" style={{ color: 'var(--text-muted)' }}>(not found)</span>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => handleRemoveTool(tool)}
-                    className="p-1 text-red-400 hover:text-red-300"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              )
-            })}
-          </div>
+          <ToolSelector
+            availableTools={availableTools}
+            selectedTools={currentTools}
+            onAddTool={handleAddTool}
+            onRemoveTool={handleRemoveTool}
+            placeholder="Search tools..."
+          />
           
-          {/* Dropdown to add new tool */}
-          <select
-            value=""
-            onChange={(e) => handleAddTool(e.target.value)}
-            className="w-full px-3 py-2 rounded border text-sm"
-            style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-          >
-            <option value="">+ Add a tool...</option>
-            {availableTools.map((tool) => (
-              <option 
-                key={tool.name} 
-                value={tool.name}
-                disabled={currentTools.includes(tool.name)}
-              >
-                {tool.name} ({tool.source})
-              </option>
-            ))}
-          </select>
+          {/* Show invalid tools warning */}
+          {hasInvalidTool && (
+            <div className="mt-2 p-2 rounded border border-red-500 bg-red-500/10">
+              <div className="flex items-center gap-2 text-xs text-red-400">
+                <AlertCircle size={12} />
+                <span>Some selected tools are not available</span>
+              </div>
+            </div>
+          )}
         </div>
         
         <div className="flex items-center justify-between">

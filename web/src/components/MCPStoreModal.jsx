@@ -26,6 +26,8 @@ const installMCPServer = async (mcpId, env = {}) => {
 
 export default function MCPStoreModal({ isOpen, onClose, onInstall }) {
   const [servers, setServers] = useState([])
+  const [sources, setSources] = useState([]) // Available sources for dropdown
+  const [selectedSource, setSelectedSource] = useState('all') // Current source filter
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -46,18 +48,28 @@ export default function MCPStoreModal({ isOpen, onClose, onInstall }) {
       clearTimeout(searchDebounce)
     }
     const timeout = setTimeout(() => {
-      loadServers(searchQuery)
+      loadServers(searchQuery, selectedSource)
     }, 300)
     setSearchDebounce(timeout)
     return () => clearTimeout(timeout)
-  }, [searchQuery])
+  }, [searchQuery, selectedSource])
 
-  const loadServers = async (query = '') => {
+  const loadServers = async (query = '', source = 'all') => {
     setLoading(true)
     setError(null)
     try {
-      const data = await fetchMCPStore(query)
+      // Build URL with optional params
+      const params = new URLSearchParams()
+      if (query) params.set('q', query)
+      if (source && source !== 'all') params.set('source', source)
+      const url = params.toString() ? `/api/mcp-store?${params}` : '/api/mcp-store'
+      
+      const res = await fetch(url)
+      if (!res.ok) throw new Error('Failed to fetch MCP store')
+      const data = await res.json()
+      
       setServers(data.servers || [])
+      setSources(data.sources || [])
     } catch (err) {
       setError(err.message)
     } finally {
@@ -108,22 +120,40 @@ export default function MCPStoreModal({ isOpen, onClose, onInstall }) {
           </button>
         </div>
 
-        {/* Search Bar */}
+        {/* Search Bar and Source Filter */}
         <div className="p-4 border-b" style={{ borderColor: 'var(--border-color)' }}>
-          <div className="relative">
-            <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search MCP servers..."
-              className="w-full pl-10 pr-4 py-2.5 rounded-lg border text-sm"
+          <div className="flex gap-3">
+            <div className="relative flex-1">
+              <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search MCP servers..."
+                className="w-full pl-10 pr-4 py-2.5 rounded-lg border text-sm"
+                style={{ 
+                  background: 'var(--bg-secondary)', 
+                  borderColor: 'var(--border-color)', 
+                  color: 'var(--text-primary)' 
+                }}
+              />
+            </div>
+            <select
+              value={selectedSource}
+              onChange={(e) => setSelectedSource(e.target.value)}
+              className="px-3 py-2.5 rounded-lg border text-sm"
               style={{ 
                 background: 'var(--bg-secondary)', 
                 borderColor: 'var(--border-color)', 
-                color: 'var(--text-primary)' 
+                color: 'var(--text-primary)',
+                minWidth: '140px'
               }}
-            />
+            >
+              <option value="all">All Sources</option>
+              {sources.map(source => (
+                <option key={source} value={source}>{source}</option>
+              ))}
+            </select>
           </div>
         </div>
 

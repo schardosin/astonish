@@ -106,6 +106,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
   // Taps state
   const [taps, setTaps] = useState([])
   const [tapsLoading, setTapsLoading] = useState(false)
+  const [tapsSuccess, setTapsSuccess] = useState(null) // Success message for refresh
   const [newTapUrl, setNewTapUrl] = useState('')
   const [newTapAlias, setNewTapAlias] = useState('')
   const [tapsError, setTapsError] = useState(null)
@@ -803,23 +804,41 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <h4 className="font-medium" style={{ color: 'var(--text-primary)' }}>Configured Repositories</h4>
-                  <button
-                    onClick={async () => {
-                      setTapsLoading(true)
-                      try {
-                        const data = await fetchTaps()
-                        setTaps(data.taps || [])
-                      } catch (err) {
-                        setTapsError(err.message)
-                      } finally {
-                        setTapsLoading(false)
-                      }
-                    }}
-                    className="p-1 rounded hover:bg-gray-600/30"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    <RefreshCw size={16} className={tapsLoading ? 'animate-spin' : ''} />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {tapsSuccess && (
+                      <span className="flex items-center gap-1 text-sm text-green-400">
+                        <Check size={14} />
+                        {tapsSuccess}
+                      </span>
+                    )}
+                    <button
+                      onClick={async () => {
+                        setTapsLoading(true)
+                        setTapsError(null)
+                        setTapsSuccess(null)
+                        try {
+                          // First refresh manifests from remote
+                          await fetch('/api/taps/update', { method: 'POST' })
+                          // Then fetch updated taps list
+                          const data = await fetchTaps()
+                          setTaps(data.taps || [])
+                          setTapsSuccess('Updated!')
+                          setTimeout(() => setTapsSuccess(null), 3000)
+                        } catch (err) {
+                          setTapsError(err.message)
+                        } finally {
+                          setTapsLoading(false)
+                        }
+                      }}
+                      disabled={tapsLoading}
+                      className="flex items-center gap-1.5 px-2 py-1 rounded text-sm hover:bg-gray-600/30 transition-colors disabled:opacity-50"
+                      style={{ color: 'var(--text-muted)' }}
+                      title="Refresh manifests from remote"
+                    >
+                      <RefreshCw size={14} className={tapsLoading ? 'animate-spin' : ''} />
+                      {tapsLoading ? 'Refreshing...' : 'Refresh'}
+                    </button>
+                  </div>
                 </div>
                 {taps.length === 0 ? (
                   <div className="text-sm p-4 rounded border border-dashed" 

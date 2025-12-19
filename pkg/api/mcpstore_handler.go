@@ -14,6 +14,7 @@ import (
 // MCPStoreListResponse is the response for GET /api/mcp-store
 type MCPStoreListResponse struct {
 	Servers []mcpstore.Server `json:"servers"`
+	Sources []string          `json:"sources"` // Available sources for filtering
 	Total   int               `json:"total"`
 }
 
@@ -24,11 +25,14 @@ type MCPStoreInstallRequest struct {
 }
 
 // ListMCPStoreHandler handles GET /api/mcp-store
-// Supports query parameter ?q=<search query>
+// Supports query parameters:
+// - ?q=<search query> for text search
+// - ?source=<source name> to filter by source (e.g., "official", tap name, or "all")
 // Only returns servers with valid configs (installable)
 // Includes MCPs from tapped repos with source field set
 func ListMCPStoreHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
+	sourceFilter := r.URL.Query().Get("source")
 
 	var servers []mcpstore.Server
 	var err error
@@ -68,7 +72,7 @@ func ListMCPStoreHandler(w http.ResponseWriter, r *http.Request) {
 	// Add tapped MCPs
 	store, storeErr := flowstore.NewStore()
 	if storeErr == nil {
-		// Update manifests
+		// Load manifests from cache (user can click Settings > Repositories > Refresh to update from remote)
 		_ = store.UpdateAllManifests()
 		tappedMCPs := store.ListAllMCPs()
 
@@ -92,8 +96,32 @@ func ListMCPStoreHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Collect unique sources for the dropdown
+	sourceSet := make(map[string]bool)
+	for _, srv := range servers {
+		if srv.Source != "" {
+			sourceSet[srv.Source] = true
+		}
+	}
+	sources := make([]string, 0, len(sourceSet))
+	for source := range sourceSet {
+		sources = append(sources, source)
+	}
+
+	// Apply source filter if specified (and not "all")
+	if sourceFilter != "" && sourceFilter != "all" {
+		var filtered []mcpstore.Server
+		for _, srv := range servers {
+			if srv.Source == sourceFilter {
+				filtered = append(filtered, srv)
+			}
+		}
+		servers = filtered
+	}
+
 	response := MCPStoreListResponse{
 		Servers: servers,
+		Sources: sources,
 		Total:   len(servers),
 	}
 

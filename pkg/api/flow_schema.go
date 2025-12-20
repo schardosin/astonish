@@ -11,7 +11,6 @@ An agent flow is defined in YAML with nodes (processing steps) and flow (edges c
 ` + "```yaml" + `
 name: agent_name
 description: What this agent does
-model: gemini-2.0-flash  # or gpt-4o, claude-3-5-sonnet, etc.
 
 nodes:
   - name: node_name

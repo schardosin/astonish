@@ -9,8 +9,8 @@ export function orderYamlKeys(data) {
     return data
   }
   
-  // Define the preferred key order
-  const keyOrder = ['name', 'description', 'model', 'nodes', 'flow', 'layout']
+  // Define the preferred key order (model is NOT included - engine uses global config)
+  const keyOrder = ['name', 'description', 'nodes', 'flow', 'layout']
   
   const ordered = {}
   

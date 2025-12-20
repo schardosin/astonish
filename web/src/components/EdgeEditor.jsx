@@ -26,6 +26,9 @@ export default function EdgeEditor({
   // Advanced mode state
   const [rawCondition, setRawCondition] = useState('')
   
+  // Track if the current condition is too complex for Visual mode
+  const [isUnparseable, setIsUnparseable] = useState(false)
+  
   // Track if initial load has completed (to prevent auto-save on mount)
   const hasInitialized = useRef(false)
   
@@ -34,22 +37,26 @@ export default function EdgeEditor({
     hasInitialized.current = false // Reset on edge change
     const existingCondition = edge?.data?.condition || ''
     
+    // Always set rawCondition first to preserve it
+    setRawCondition(existingCondition)
+    
     if (existingCondition) {
       const parsed = parseLambda(existingCondition)
-      if (parsed) {
-        setRules(parsed.rules.length > 0 ? parsed.rules : [createEmptyRule()])
+      if (parsed && parsed.rules.length > 0) {
+        setRules(parsed.rules)
         setLogic(parsed.logic)
-        setRawCondition(existingCondition) // Also set raw for Advanced mode
+        setIsUnparseable(false)
         setMode('visual')
       } else {
         // Unparseable - use advanced mode
-        setRawCondition(existingCondition)
+        setRules([createEmptyRule()])
+        setIsUnparseable(true)
         setMode('advanced')
       }
     } else {
       setRules([createEmptyRule()])
       setLogic('and')
-      setRawCondition('')
+      setIsUnparseable(false)
       setMode('visual')
     }
     
@@ -113,7 +120,14 @@ export default function EdgeEditor({
   
   const handleClose = () => {
     // Final save before closing
-    const condition = mode === 'advanced' ? rawCondition : generateLambda(rules, logic)
+    // If condition is unparseable OR we're in advanced mode, use rawCondition
+    // Otherwise generate from visual rules
+    let condition
+    if (isUnparseable || mode === 'advanced') {
+      condition = rawCondition
+    } else {
+      condition = generateLambda(rules, logic)
+    }
     onSave(edge.id, { condition })
     onClose()
   }
@@ -159,12 +173,16 @@ export default function EdgeEditor({
           >
             <button
               onClick={() => {
-                // When switching from Advanced to Visual, parse the rawCondition
+                // When switching from Advanced to Visual, try to parse the rawCondition
                 if (mode === 'advanced' && rawCondition) {
                   const parsed = parseLambda(rawCondition)
                   if (parsed && parsed.rules.length > 0) {
                     setRules(parsed.rules)
                     setLogic(parsed.logic)
+                    setIsUnparseable(false)
+                  } else {
+                    // Can't parse - mark as unparseable but still switch to Visual to show message
+                    setIsUnparseable(true)
                   }
                 }
                 setMode('visual')
@@ -179,9 +197,13 @@ export default function EdgeEditor({
             </button>
             <button
               onClick={() => {
-                // Sync rawCondition with current visual rules before switching
-                if (mode === 'visual') {
-                  setRawCondition(generateLambda(rules, logic))
+                // Only sync rawCondition from visual rules if not working with an unparseable condition
+                if (mode === 'visual' && !isUnparseable) {
+                  const generated = generateLambda(rules, logic)
+                  if (generated) {
+                    setRawCondition(generated)
+                  }
+                  // If generated is empty and rawCondition has content, keep rawCondition
                 }
                 setMode('advanced')
               }}
@@ -226,29 +248,58 @@ export default function EdgeEditor({
       <div className="flex-1 overflow-y-auto p-4">
         {mode === 'visual' ? (
           <div className="space-y-4">
-            {/* Logic selector (only show if multiple rules) */}
-            {rules.length > 1 && (
-              <div className="flex items-center gap-2 mb-4">
-                <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                  Match
-                </span>
-                <select
-                  value={logic}
-                  onChange={(e) => setLogic(e.target.value)}
-                  className="px-3 py-1.5 rounded-lg border text-sm"
-                  style={{ 
-                    background: 'var(--bg-primary)', 
-                    borderColor: 'var(--border-color)', 
-                    color: 'var(--text-primary)' 
-                  }}
-                  disabled={readOnly}
-                >
-                  {LOGIC_OPERATORS.map(op => (
-                    <option key={op.value} value={op.value}>{op.label} of the following</option>
-                  ))}
-                </select>
+            {/* Unparseable condition fallback */}
+            {isUnparseable && rawCondition ? (
+              <div 
+                className="p-4 rounded-lg border"
+                style={{ 
+                  background: 'var(--bg-primary)', 
+                  borderColor: 'var(--border-color)' 
+                }}
+              >
+                <div className="flex items-start gap-3">
+                  <AlertCircle size={18} className="text-amber-500 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <p className="text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
+                      Complex Condition
+                    </p>
+                    <p className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>
+                      This condition uses advanced logic that can only be edited in Advanced mode.
+                    </p>
+                    <code 
+                      className="text-xs font-mono block p-2 rounded overflow-x-auto"
+                      style={{ background: 'var(--bg-secondary)', color: '#a855f7' }}
+                    >
+                      {rawCondition}
+                    </code>
+                  </div>
+                </div>
               </div>
-            )}
+            ) : (
+              <>
+                {/* Logic selector (only show if multiple rules) */}
+                {rules.length > 1 && (
+                  <div className="flex items-center gap-2 mb-4">
+                    <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                      Match
+                    </span>
+                    <select
+                      value={logic}
+                      onChange={(e) => setLogic(e.target.value)}
+                      className="px-3 py-1.5 rounded-lg border text-sm"
+                      style={{ 
+                        background: 'var(--bg-primary)', 
+                        borderColor: 'var(--border-color)', 
+                        color: 'var(--text-primary)' 
+                      }}
+                      disabled={readOnly}
+                    >
+                      {LOGIC_OPERATORS.map(op => (
+                        <option key={op.value} value={op.value}>{op.label} of the following</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
             
             {/* Rules */}
             <div className="space-y-3">
@@ -337,6 +388,8 @@ export default function EdgeEditor({
                 <Plus size={16} />
                 <span className="text-sm">Add condition</span>
               </button>
+            )}
+              </>
             )}
           </div>
         ) : (

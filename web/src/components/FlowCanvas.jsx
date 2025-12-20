@@ -57,6 +57,7 @@ function FlowCanvasInner({
   theme, 
   onNodeSelect, 
   onNodeDoubleClick,
+  onEdgeSelect,
   selectedNodeId, 
   onAddNode,
   onConnect: onConnectCallback,
@@ -291,6 +292,13 @@ function FlowCanvasInner({
     }
   }, [onNodeDoubleClick])
 
+  // Handle edge double-click for editing conditions
+  const handleEdgeDoubleClick = useCallback((event, edge) => {
+    if (onEdgeSelect) {
+      onEdgeSelect(edge)
+    }
+  }, [onEdgeSelect])
+
   // Handle selection changes from React Flow
   const onSelectionChange = useCallback(({ nodes: selectedNodes }) => {
     const ids = selectedNodes?.map(n => n.id) || []
@@ -366,6 +374,7 @@ function FlowCanvasInner({
         onEdgesDelete={onEdgesDelete}
         onNodeClick={onNodeClick}
         onNodeDoubleClick={handleNodeDoubleClick}
+        onEdgeDoubleClick={handleEdgeDoubleClick}
         onPaneClick={onPaneClick}
         onPaneContextMenu={onPaneContextMenu}
         onSelectionChange={onSelectionChange}

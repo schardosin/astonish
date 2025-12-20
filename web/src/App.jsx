@@ -8,6 +8,7 @@ import ChatPanel from './components/ChatPanel'
 import YamlDrawer from './components/YamlDrawer'
 import Header from './components/Header'
 import NodeEditor from './components/NodeEditor'
+import EdgeEditor from './components/EdgeEditor'
 import CreateAgentModal from './components/CreateAgentModal'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import AIChatPanel from './components/AIChatPanel'
@@ -42,6 +43,7 @@ function App() {
   const [isRunning, setIsRunning] = useState(false)
   const [selectedNodeId, setSelectedNodeId] = useState(null)
   const [editingNode, setEditingNode] = useState(null)
+  const [editingEdge, setEditingEdge] = useState(null)
   
   // UI State
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -612,8 +614,15 @@ flow:
     const node = nodes.find(n => n.id === nodeId)
     if (node && node.type !== 'start' && node.type !== 'end') {
       setEditingNode(node)
+      setEditingEdge(null) // Close edge editor if open
     }
   }, [nodes])
+
+  // Click on edge to open edge editor
+  const handleEdgeSelect = useCallback((edge) => {
+    setEditingEdge(edge)
+    setEditingNode(null) // Close node editor if open
+  }, [])
 
   // Helper to merge current accumulated layout changes into YAML string
   const getYamlWithLayout = useCallback((baseYaml) => {
@@ -676,6 +685,80 @@ flow:
   // Close node editor
   const handleNodeEditorClose = useCallback(() => {
     setEditingNode(null)
+  }, [])
+
+  // Save edge condition
+  const handleEdgeSave = useCallback((edgeId, { condition }) => {
+    // Get source and target from the editing edge (which was passed full edge object)
+    const edge = editingEdge
+    if (!edge) return
+    
+    const sourceId = edge.source
+    const targetId = edge.target
+    
+    try {
+      const parsed = yaml.load(yamlContent) || {}
+      const flow = parsed.flow || []
+      
+      // Find and update the flow entry
+      let updated = false
+      for (let i = 0; i < flow.length; i++) {
+        const entry = flow[i]
+        if (entry.from === sourceId) {
+          // Check if this is a simple edge or has edges array
+          if (entry.to === targetId) {
+            // Simple edge - convert to edges array if condition is set
+            if (condition) {
+              delete entry.to
+              entry.edges = [{ to: targetId, condition }]
+            }
+            updated = true
+            break
+          } else if (entry.edges) {
+            // Has edges array - find and update specific edge
+            for (let j = 0; j < entry.edges.length; j++) {
+              if (entry.edges[j].to === targetId) {
+                if (condition) {
+                  entry.edges[j].condition = condition
+                } else {
+                  delete entry.edges[j].condition
+                }
+                updated = true
+                break
+              }
+            }
+          }
+        }
+      }
+      
+      if (updated) {
+        const newYaml = yaml.dump(orderYamlKeys(parsed), { 
+          indent: 2,
+          lineWidth: -1, 
+          noRefs: true, 
+          sortKeys: false 
+        })
+        updateYaml(newYaml)
+        setEditingEdge(null)
+      }
+    } catch (e) {
+      console.error('Failed to save edge condition:', e)
+    }
+  }, [yamlContent, updateYaml, editingEdge])
+
+  // Delete edge
+  const handleEdgeDelete = useCallback((edgeId) => {
+    // Get source and target from the editing edge
+    const edge = editingEdge
+    if (!edge) return
+    
+    handleEdgeRemove(edge.source, edge.target)
+    setEditingEdge(null)
+  }, [handleEdgeRemove, editingEdge])
+
+  // Close edge editor
+  const handleEdgeEditorClose = useCallback(() => {
+    setEditingEdge(null)
   }, [])
 
   // Track layout changes from FlowCanvas
@@ -1006,6 +1089,7 @@ flow:
                 theme={theme}
                 onNodeSelect={handleNodeSelect}
                 onNodeDoubleClick={handleNodeDoubleClick}
+                onEdgeSelect={handleEdgeSelect}
                 selectedNodeId={selectedNodeId}
                 runningNodeId={runningNodeId}
                 onAddNode={handleAddNode}
@@ -1049,8 +1133,8 @@ flow:
             )}
           </div>
 
-          {/* Bottom Panel - Node Editor OR YAML Drawer */}
-          {!isRunning && (editingNode || showYaml) && (
+          {/* Bottom Panel - Node Editor OR Edge Editor OR YAML Drawer */}
+          {!isRunning && (editingNode || editingEdge || showYaml) && (
             <div className="h-1/2" style={{ borderTop: '1px solid var(--border-color)' }}>
               {editingNode ? (
                 <NodeEditor
@@ -1066,6 +1150,18 @@ flow:
                     setAIFocusedNode({ name: nodeName, type: node.data?.nodeType || node.type, data: nodeData })
                     setShowAIChat(true)
                   }}
+                />
+              ) : editingEdge ? (
+                <EdgeEditor
+                  edge={editingEdge}
+                  sourceNode={nodes.find(n => n.id === editingEdge.source)}
+                  targetNode={nodes.find(n => n.id === editingEdge.target)}
+                  onSave={handleEdgeSave}
+                  onDelete={handleEdgeDelete}
+                  onClose={handleEdgeEditorClose}
+                  theme={theme}
+                  availableVariables={availableVariables}
+                  readOnly={selectedAgent?.source === 'store'}
                 />
               ) : (
                 <YamlDrawer

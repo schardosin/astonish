@@ -199,9 +199,15 @@ export function parseEdges(yamlData, nodePositions = {}, savedEdges = {}) {
           if (edge.condition) {
             const match = edge.condition.match(/x\['(\w+)'\]\s*==\s*'([^']+)'/)
             if (match) {
-              label = `${match[1]} = "${match[2]}"`
+              label = `${match[1]} == "${match[2]}"`
             } else {
-              label = edge.condition.replace(/lambda\s+x:\s*/, '').slice(0, 30)
+              // Try newer format: str(x.get('var')) == 'val'
+              const newMatch = edge.condition.match(/x\.get\('([^']+)'\).*?==\s*'([^']+)'/)
+              if (newMatch) {
+                label = `${newMatch[1]} == "${newMatch[2]}"`
+              } else {
+                label = edge.condition.replace(/lambda\s+x:\s*/, '').slice(0, 30)
+              }
             }
           }
           
@@ -216,7 +222,10 @@ export function parseEdges(yamlData, nodePositions = {}, savedEdges = {}) {
             labelStyle: { fill: '#9CA3AF', fontSize: 10 },
             labelBgStyle: { fill: '#1a1a2e', fillOpacity: 0.8 },
             labelBgPadding: [4, 2],
-            data: { points: savedEdges[`${from}->${edge.to}`] }
+            data: { 
+              points: savedEdges[`${from}->${edge.to}`],
+              condition: edge.condition || ''
+            }
           })
         })
       }

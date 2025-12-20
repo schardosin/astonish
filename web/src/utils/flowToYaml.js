@@ -1,6 +1,39 @@
 import yaml from 'js-yaml'
 
 /**
+ * Enforce consistent YAML key ordering
+ * Order: name, description, model, nodes, flow, layout, then any remaining keys alphabetically
+ */
+export function orderYamlKeys(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return data
+  }
+  
+  // Define the preferred key order
+  const keyOrder = ['name', 'description', 'model', 'nodes', 'flow', 'layout']
+  
+  const ordered = {}
+  
+  // First, add keys in preferred order
+  for (const key of keyOrder) {
+    if (key in data) {
+      ordered[key] = data[key]
+    }
+  }
+  
+  // Then add any remaining keys alphabetically
+  const remainingKeys = Object.keys(data)
+    .filter(k => !keyOrder.includes(k))
+    .sort()
+  
+  for (const key of remainingKeys) {
+    ordered[key] = data[key]
+  }
+  
+  return ordered
+}
+
+/**
  * Default YAML content templates for each node type
  */
 const NODE_TEMPLATES = {
@@ -109,7 +142,7 @@ export function addStandaloneNode(yamlContent, nodeType) {
       y: Math.round(avgY)
     }
     
-    return yaml.dump(yamlData, { 
+    return yaml.dump(orderYamlKeys(yamlData), { 
       lineWidth: -1,
       noRefs: true,
       quotingType: '"',
@@ -172,7 +205,7 @@ export function addConnection(yamlContent, sourceId, targetId) {
       }
     }
     
-    return yaml.dump(yamlData, { 
+    return yaml.dump(orderYamlKeys(yamlData), { 
       lineWidth: -1,
       noRefs: true,
       quotingType: '"',
@@ -219,7 +252,7 @@ export function removeConnection(yamlContent, sourceId, targetId) {
       }
     }
     
-    return yaml.dump(yamlData, { 
+    return yaml.dump(orderYamlKeys(yamlData), { 
       lineWidth: -1,
       noRefs: true,
       quotingType: '"',
@@ -253,7 +286,7 @@ export function removeNode(yamlContent, nodeId) {
       return true
     })
     
-    return yaml.dump(yamlData, { 
+    return yaml.dump(orderYamlKeys(yamlData), { 
       lineWidth: -1,
       noRefs: true,
       quotingType: '"',
@@ -302,7 +335,7 @@ export function updateNode(yamlContent, nodeId, newNodeData) {
       yamlData.nodes[nodeIndex] = newNodeData
     }
     
-    return yaml.dump(yamlData, { 
+    return yaml.dump(orderYamlKeys(yamlData), { 
       lineWidth: -1,
       noRefs: true,
       quotingType: '"',

@@ -17,7 +17,7 @@ import HomePage from './components/HomePage'
 import { useTheme } from './hooks/useTheme'
 import { useHashRouter, buildPath } from './hooks/useHashRouter'
 import { yamlToFlowAsync, extractLayout } from './utils/yamlToFlow'
-import { addStandaloneNode, addConnection, removeConnection, updateNode } from './utils/flowToYaml'
+import { addStandaloneNode, addConnection, removeConnection, updateNode, orderYamlKeys } from './utils/flowToYaml'
 import { fetchAgents, fetchAgent, saveAgent, deleteAgent, fetchTools } from './api/agents'
 import { snakeToTitleCase } from './utils/formatters'
 import { Store, Lock, Copy, Loader2 } from 'lucide-react'
@@ -231,7 +231,7 @@ function App() {
         const parsed = yaml.load(newYaml) || {}
         const layout = extractLayout(currentFlowNodesRef.current, currentFlowEdgesRef.current)
         parsed.layout = layout
-        const yamlWithLayout = yaml.dump(parsed, { 
+        const yamlWithLayout = yaml.dump(orderYamlKeys(parsed), { 
           indent: 2,
           lineWidth: -1, 
           noRefs: true, 
@@ -616,7 +616,7 @@ flow:
       const layout = extractLayout(currentFlowNodesRef.current, currentFlowEdgesRef.current)
       parsed.layout = layout
       
-      return yaml.dump(parsed, { 
+      return yaml.dump(orderYamlKeys(parsed), { 
         indent: 2,
         lineWidth: -1, 
         noRefs: true, 
@@ -722,7 +722,7 @@ flow:
         delete parsed.layout.nodes[nodeId]
       }
       
-      const newYaml = yaml.dump(parsed, { 
+      const newYaml = yaml.dump(orderYamlKeys(parsed), { 
         indent: 2, 
         lineWidth: -1,
         noRefs: true,
@@ -750,7 +750,7 @@ flow:
       const parsed = yaml.load(yamlContent) || {}
       const layout = extractLayout(currentFlowNodesRef.current, currentFlowEdgesRef.current)
       parsed.layout = layout
-      const updatedYaml = yaml.dump(parsed, { 
+      const updatedYaml = yaml.dump(orderYamlKeys(parsed), { 
         indent: 2,
         lineWidth: -1, 
         noRefs: true, 
@@ -773,7 +773,7 @@ flow:
         delete parsed.layout
       }
       
-      const newYaml = yaml.dump(parsed, { 
+      const newYaml = yaml.dump(orderYamlKeys(parsed), { 
         indent: 2, 
         lineWidth: -1,
         noRefs: true,

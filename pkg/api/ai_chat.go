@@ -357,7 +357,7 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string, selectedNodeNames []str
 		}
 
 		flow["nodes"] = flowNodes
-		result, err := yaml.Marshal(flow)
+		result, err := yaml.Marshal(OrderYamlKeys(flow))
 		if err != nil {
 			return "", fmt.Errorf("failed to marshal updated flow: %w", err)
 		}
@@ -503,7 +503,7 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string, selectedNodeNames []str
 	}
 
 	// Marshal back to YAML
-	result, err := yaml.Marshal(flow)
+	result, err := yaml.Marshal(OrderYamlKeys(flow))
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal updated flow: %w", err)
 	}

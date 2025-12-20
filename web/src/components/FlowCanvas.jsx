@@ -13,7 +13,7 @@ import {
   ReactFlowProvider,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Edit3, Brain, Wrench, Settings, MessageSquare, Sparkles, LayoutDashboard } from 'lucide-react'
+import { Edit3, Brain, Wrench, Settings, MessageSquare, Sparkles, LayoutDashboard, Maximize } from 'lucide-react'
 
 import StartNode from './nodes/StartNode'
 import EndNode from './nodes/EndNode'
@@ -218,7 +218,7 @@ function FlowCanvasInner({
         // Calculate X to center START node horizontally
         const centerX = -(startNode.position.x - containerWidth / 2 + 60)
         // Set viewport: center horizontally, keep top visible
-        setViewport({ x: centerX, y: 30, zoom: 1 }, { duration: 0 })
+        setViewport({ x: centerX, y: 30, zoom: 0.9 }, { duration: 0 })
         hasCentered.current = true
       }
     }
@@ -329,6 +329,13 @@ function FlowCanvasInner({
     }
   }, [onAutoLayout])
 
+  // Handle reset zoom
+  const handleResetZoom = useCallback(() => {
+    setContextMenu(null)
+    const viewport = getViewport()
+    setViewport({ x: viewport.x, y: viewport.y, zoom: 0.9 }, { duration: 300 })
+  }, [getViewport, setViewport])
+
   const defaultEdgeOptions = useMemo(() => ({
     style: { stroke: '#805AD5', strokeWidth: 2 },
     type: 'editable',  // Use custom editable edge with inline waypoints
@@ -371,7 +378,7 @@ function FlowCanvasInner({
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         defaultEdgeOptions={defaultEdgeOptions}
-        defaultViewport={{ x: 50, y: 30, zoom: 1 }}
+        defaultViewport={{ x: 50, y: 30, zoom: 0.8 }}
         proOptions={{ hideAttribution: true }}
         nodesDraggable={!isRunning}
         nodesConnectable={!isRunning}
@@ -530,6 +537,14 @@ function FlowCanvasInner({
           >
             <LayoutDashboard size={16} className="text-purple-400" />
             Auto Layout
+          </button>
+          <button
+            onClick={handleResetZoom}
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-purple-500/15 transition-colors"
+            style={{ color: 'var(--text-primary)' }}
+          >
+            <Maximize size={16} className="text-purple-400" />
+            Reset Zoom
           </button>
         </div>
       )}

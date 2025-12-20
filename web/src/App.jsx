@@ -83,6 +83,25 @@ function App() {
   const showSettings = path.view === 'settings'
   const settingsSection = path.params.section || 'general'
 
+  // Extract available variables from all nodes' output_model, grouped by node
+  const availableVariables = useMemo(() => {
+    const grouped = []
+    nodes.forEach(node => {
+      const outputModel = node.data?.yaml?.output_model
+      if (outputModel && typeof outputModel === 'object') {
+        const vars = Object.keys(outputModel)
+        if (vars.length > 0) {
+          grouped.push({
+            nodeName: node.data?.label || node.id,
+            nodeType: node.data?.nodeType || node.type,
+            variables: vars.sort()
+          })
+        }
+      }
+    })
+    return grouped
+  }, [nodes])
+
   // Setup wizard state
   const [showSetupWizard, setShowSetupWizard] = useState(false)
   const [isCheckingSetup, setIsCheckingSetup] = useState(true)
@@ -1032,6 +1051,7 @@ flow:
                   onClose={handleNodeEditorClose}
                   theme={theme}
                   availableTools={availableTools}
+                  availableVariables={availableVariables}
                   readOnly={selectedAgent?.source === 'store'}
                   onAIAssist={(node, nodeName, nodeData) => {
                     setAIChatContext('node_config')

@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
-import { X, Edit3, Brain, Wrench, Settings, MessageSquare, Plus, Trash2, AlertCircle, Sparkles } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { X, Edit3, Brain, Wrench, Settings, MessageSquare, Plus, Trash2, AlertCircle, Sparkles, Link, ChevronRight, ChevronDown } from 'lucide-react'
 import ToolSelector from './ToolSelector'
 
 // Node type icons
@@ -20,6 +20,140 @@ const NODE_COLORS = {
   updateState: '#4A5568',
   update_state: '#4A5568',
   output: '#9F7AEA',
+}
+
+/**
+ * VariablePanel - Left sidebar showing variables grouped by node
+ * Inserts variables into the currently focused textarea
+ */
+function VariablePanel({ variableGroups, activeTextareaRef, getValue, setValue }) {
+  const [filterNode, setFilterNode] = useState('all')
+  const [collapsed, setCollapsed] = useState({})
+  
+  if (!variableGroups || variableGroups.length === 0) {
+    return (
+      <div className="w-48 flex-shrink-0 border-r pr-3 mr-3" style={{ borderColor: 'var(--border-color)' }}>
+        <div className="text-xs font-medium mb-2" style={{ color: 'var(--text-muted)' }}>
+          Variables
+        </div>
+        <div className="text-xs italic" style={{ color: 'var(--text-muted)' }}>
+          No variables available. Add output_model to nodes to create variables.
+        </div>
+      </div>
+    )
+  }
+  
+  const insertVariable = (varName) => {
+    const textarea = activeTextareaRef?.current
+    const currentValue = getValue() || ''
+    
+    if (!textarea) {
+      // Fallback: append to end
+      setValue(currentValue + `{${varName}}`)
+      return
+    }
+    
+    const start = textarea.selectionStart || 0
+    const end = textarea.selectionEnd || 0
+    const insertion = `{${varName}}`
+    const newValue = currentValue.slice(0, start) + insertion + currentValue.slice(end)
+    setValue(newValue)
+    
+    // Restore cursor after insertion
+    setTimeout(() => {
+      textarea.focus()
+      const newPos = start + insertion.length
+      textarea.setSelectionRange(newPos, newPos)
+    }, 0)
+  }
+  
+  const toggleCollapse = (nodeName) => {
+    setCollapsed(prev => ({ ...prev, [nodeName]: !prev[nodeName] }))
+  }
+  
+  const filteredGroups = filterNode === 'all' 
+    ? variableGroups 
+    : variableGroups.filter(g => g.nodeName === filterNode)
+  
+  return (
+    <div className="w-56 flex-shrink-0 border-r pr-3 mr-3 flex flex-col overflow-hidden" style={{ borderColor: 'var(--border-color)', maxHeight: '100%' }}>
+      {/* Header */}
+      <div className="flex items-center gap-2 mb-2">
+        <Link size={12} style={{ color: 'var(--text-muted)' }} />
+        <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+          Variables
+        </span>
+      </div>
+      
+      {/* Node Filter */}
+      <select
+        value={filterNode}
+        onChange={(e) => setFilterNode(e.target.value)}
+        className="w-full px-2 py-1 rounded text-xs mb-2"
+        style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
+      >
+        <option value="all">All nodes</option>
+        {variableGroups.map(g => (
+          <option key={g.nodeName} value={g.nodeName}>
+            {g.nodeName} ({g.variables.length})
+          </option>
+        ))}
+      </select>
+      
+      {/* Variable List */}
+      <div className="flex-1 overflow-y-auto space-y-2">
+        {filteredGroups.map(group => (
+          <div key={group.nodeName}>
+            {/* Node Header - only show if not filtered to single node */}
+            {filterNode === 'all' && (
+              <button
+                onClick={() => toggleCollapse(group.nodeName)}
+                className="w-full flex items-center gap-1 text-xs font-medium py-1 hover:bg-purple-500/10 rounded transition-colors"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                {collapsed[group.nodeName] ? (
+                  <ChevronRight size={12} />
+                ) : (
+                  <ChevronDown size={12} />
+                )}
+                <span className="truncate flex-1 text-left">{group.nodeName}</span>
+                <span className="text-xs px-1 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>
+                  {group.variables.length}
+                </span>
+              </button>
+            )}
+            
+            {/* Variables */}
+            {(!collapsed[group.nodeName] || filterNode !== 'all') && (
+              <div className={`flex flex-wrap gap-1 ${filterNode === 'all' ? 'pl-4' : ''}`}>
+                {group.variables.map(v => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => insertVariable(v)}
+                    className="px-2 py-0.5 text-xs font-mono rounded transition-all hover:scale-105 hover:bg-purple-500/30"
+                    style={{ 
+                      background: 'rgba(168, 85, 247, 0.15)', 
+                      color: '#c084fc',
+                      border: '1px solid rgba(168, 85, 247, 0.25)'
+                    }}
+                    title={`Insert {${v}} at cursor`}
+                  >
+                    {v}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      
+      {/* Help text */}
+      <div className="text-xs mt-2 pt-2 border-t" style={{ color: 'var(--text-muted)', borderColor: 'var(--border-color)' }}>
+        Click to insert at cursor
+      </div>
+    </div>
+  )
 }
 
 /**
@@ -282,8 +416,11 @@ function InputNodeForm({ data, onChange, theme }) {
 /**
  * LLM Node Form - Horizontal layout with tabs
  */
-function LlmNodeForm({ data, onChange, theme, availableTools = [] }) {
+function LlmNodeForm({ data, onChange, theme, availableTools = [], availableVariables = [] }) {
   const [activeTab, setActiveTab] = useState('prompts')
+  const [activeField, setActiveField] = useState('prompt') // 'system' or 'prompt'
+  const systemPromptRef = useRef(null)
+  const userPromptRef = useRef(null)
   
   const currentTools = data.tools_selection || []
   const toolNames = availableTools.map(t => t.name)
@@ -296,6 +433,17 @@ function LlmNodeForm({ data, onChange, theme, availableTools = [] }) {
   
   const handleRemoveTool = (toolName) => {
     onChange({ ...data, tools_selection: currentTools.filter(t => t !== toolName) })
+  }
+  
+  // Get the currently active textarea ref based on focus tracking
+  const getActiveRef = () => activeField === 'system' ? systemPromptRef : userPromptRef
+  const getActiveValue = () => activeField === 'system' ? (data.system || '') : (data.prompt || '')
+  const setActiveValue = (val) => {
+    if (activeField === 'system') {
+      onChange({ ...data, system: val || undefined })
+    } else {
+      onChange({ ...data, prompt: val })
+    }
   }
   
   const tabs = [
@@ -324,35 +472,50 @@ function LlmNodeForm({ data, onChange, theme, availableTools = [] }) {
       </div>
       
       {/* Tab Content */}
-      <div className="flex-1">
+      <div className="flex-1 overflow-hidden">
         {activeTab === 'prompts' && (
-          <div className="flex gap-4 h-full">
-            {/* System Prompt */}
-            <div className="flex-1 flex flex-col">
-              <label className="text-sm font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>
-                System Prompt (optional)
-              </label>
-              <textarea
-                value={data.system || ''}
-                onChange={(e) => onChange({ ...data, system: e.target.value || undefined })}
-                className="w-full flex-1 min-h-[120px] px-3 py-2 rounded border font-mono text-sm resize-none"
-                style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-                placeholder="Enter system instructions..."
-              />
-            </div>
+          <div className="flex h-full overflow-hidden">
+            {/* Variable Panel - Left Sidebar */}
+            <VariablePanel
+              variableGroups={availableVariables}
+              activeTextareaRef={getActiveRef()}
+              getValue={getActiveValue}
+              setValue={setActiveValue}
+            />
             
-            {/* User Prompt */}
-            <div className="flex-1 flex flex-col">
-              <label className="text-sm font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>
-                Prompt
-              </label>
-              <textarea
-                value={data.prompt || ''}
-                onChange={(e) => onChange({ ...data, prompt: e.target.value })}
-                className="w-full flex-1 min-h-[120px] px-3 py-2 rounded border font-mono text-sm resize-none"
-                style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-                placeholder="Enter the LLM prompt. Use {variable} for state references..."
-              />
+            {/* Prompts - Right side */}
+            <div className="flex-1 flex gap-4">
+              {/* System Prompt */}
+              <div className="flex-1 flex flex-col">
+                <label className="text-sm font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>
+                  System Prompt (optional)
+                </label>
+                <textarea
+                  ref={systemPromptRef}
+                  value={data.system || ''}
+                  onChange={(e) => onChange({ ...data, system: e.target.value || undefined })}
+                  onFocus={() => setActiveField('system')}
+                  className={`w-full flex-1 min-h-[120px] px-3 py-2 rounded border font-mono text-sm resize-none transition-colors ${activeField === 'system' ? 'ring-1 ring-purple-500' : ''}`}
+                  style={{ background: 'var(--bg-primary)', borderColor: activeField === 'system' ? '#7c3aed' : 'var(--border-color)', color: 'var(--text-primary)' }}
+                  placeholder="Enter system instructions..."
+                />
+              </div>
+              
+              {/* User Prompt */}
+              <div className="flex-1 flex flex-col">
+                <label className="text-sm font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>
+                  Prompt
+                </label>
+                <textarea
+                  ref={userPromptRef}
+                  value={data.prompt || ''}
+                  onChange={(e) => onChange({ ...data, prompt: e.target.value })}
+                  onFocus={() => setActiveField('prompt')}
+                  className={`w-full flex-1 min-h-[120px] px-3 py-2 rounded border font-mono text-sm resize-none transition-colors ${activeField === 'prompt' ? 'ring-1 ring-purple-500' : ''}`}
+                  style={{ background: 'var(--bg-primary)', borderColor: activeField === 'prompt' ? '#7c3aed' : 'var(--border-color)', color: 'var(--text-primary)' }}
+                  placeholder="Enter the LLM prompt. Use {variable} for state references..."
+                />
+              </div>
             </div>
           </div>
         )}
@@ -806,7 +969,7 @@ function OutputNodeForm({ data, onChange, theme }) {
 /**
  * Main Node Editor Component - Horizontal Bottom Layout
  */
-export default function NodeEditor({ node, onSave, onClose, theme, availableTools = [], readOnly, onAIAssist }) {
+export default function NodeEditor({ node, onSave, onClose, theme, availableTools = [], availableVariables = [], readOnly, onAIAssist }) {
   const [editedData, setEditedData] = useState({})
   const [nodeName, setNodeName] = useState('')
   
@@ -841,7 +1004,7 @@ export default function NodeEditor({ node, onSave, onClose, theme, availableTool
   
   // Render type-specific form
   const renderForm = () => {
-    const props = { data: editedData, onChange: setEditedData, theme }
+    const props = { data: editedData, onChange: setEditedData, theme, availableVariables }
     
     switch (nodeType) {
       case 'update_state':

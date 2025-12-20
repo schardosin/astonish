@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { X, Edit3, Brain, Wrench, Settings, MessageSquare, Plus, Trash2, AlertCircle, Sparkles, Link, ChevronRight, ChevronDown } from 'lucide-react'
 import ToolSelector from './ToolSelector'
 
@@ -155,6 +155,115 @@ function VariablePanel({ variableGroups, activeTextareaRef, getValue, setValue }
     </div>
   )
 }
+
+/**
+ * HighlightedTextarea - Textarea with variable highlighting overlay
+ * Uses a transparent textarea over a highlighted pre element
+ */
+const HighlightedTextarea = React.forwardRef(function HighlightedTextarea(
+  { value, onChange, onFocus, isActive, placeholder, className, style, validVariables = [] },
+  ref
+) {
+  const containerRef = useRef(null)
+  const [scrollTop, setScrollTop] = useState(0)
+  
+  // Get flat list of all valid variable names
+  const allValidVars = validVariables.flatMap(g => g.variables || [])
+  
+  // Highlight {variables} in the text - only valid ones, exclude {{double braces}}
+  const getHighlightedContent = () => {
+    if (!value) return <span style={{ color: 'var(--text-muted)' }}>{placeholder}</span>
+    
+    // Match {variable} but NOT {{escaped}} - use negative lookbehind/lookahead
+    // Split by single braces pattern, preserving the delimiter
+    const parts = value.split(/(\{[^{}]+\})/g)
+    
+    return parts.map((part, i) => {
+      // Check if it's a {variable} pattern (single braces only)
+      const match = part.match(/^\{([^{}]+)\}$/)
+      if (match) {
+        const varName = match[1]
+        // Only highlight if it's a valid variable
+        if (allValidVars.includes(varName)) {
+          return (
+            <span 
+              key={i}
+              style={{ 
+                background: 'rgba(168, 85, 247, 0.3)',
+                color: '#c084fc',
+                borderRadius: '2px',
+              }}
+            >
+              {part}
+            </span>
+          )
+        }
+      }
+      return <span key={i}>{part}</span>
+    })
+  }
+  
+  const handleScroll = (e) => {
+    setScrollTop(e.target.scrollTop)
+  }
+  
+  // Common styles for exact alignment
+  const commonStyles = {
+    fontFamily: 'ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace',
+    fontSize: '0.875rem',
+    lineHeight: '1.25rem',
+    padding: '0.5rem 0.75rem',
+    margin: 0,
+    border: '1px solid',
+    borderRadius: '0.25rem',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    overflowWrap: 'break-word',
+    letterSpacing: 'normal',
+  }
+  
+  return (
+    <div 
+      ref={containerRef}
+      className="relative flex-1"
+      style={{ minHeight: '120px' }}
+    >
+      {/* Highlighted background layer */}
+      <div
+        className={`absolute inset-0 overflow-hidden pointer-events-none ${isActive ? 'ring-1 ring-purple-500' : ''}`}
+        style={{ 
+          ...commonStyles,
+          background: 'var(--bg-primary)', 
+          borderColor: isActive ? '#7c3aed' : 'var(--border-color)', 
+          color: 'var(--text-primary)',
+        }}
+      >
+        <div style={{ transform: `translateY(-${scrollTop}px)` }}>
+          {getHighlightedContent()}
+        </div>
+      </div>
+      
+      {/* Transparent textarea on top for editing */}
+      <textarea
+        ref={ref}
+        value={value || ''}
+        onChange={onChange}
+        onFocus={onFocus}
+        onScroll={handleScroll}
+        className="absolute inset-0 w-full h-full resize-none"
+        style={{ 
+          ...commonStyles,
+          background: 'transparent',
+          color: 'transparent',
+          caretColor: 'var(--text-primary)',
+          borderColor: 'transparent',
+          outline: 'none',
+        }}
+        placeholder=""
+      />
+    </div>
+  )
+})
 
 /**
  * Output Model Editor - key-value list for output_model field
@@ -490,14 +599,14 @@ function LlmNodeForm({ data, onChange, theme, availableTools = [], availableVari
                 <label className="text-sm font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>
                   System Prompt (optional)
                 </label>
-                <textarea
+                <HighlightedTextarea
                   ref={systemPromptRef}
                   value={data.system || ''}
                   onChange={(e) => onChange({ ...data, system: e.target.value || undefined })}
                   onFocus={() => setActiveField('system')}
-                  className={`w-full flex-1 min-h-[120px] px-3 py-2 rounded border font-mono text-sm resize-none transition-colors ${activeField === 'system' ? 'ring-1 ring-purple-500' : ''}`}
-                  style={{ background: 'var(--bg-primary)', borderColor: activeField === 'system' ? '#7c3aed' : 'var(--border-color)', color: 'var(--text-primary)' }}
+                  isActive={activeField === 'system'}
                   placeholder="Enter system instructions..."
+                  validVariables={availableVariables}
                 />
               </div>
               
@@ -506,14 +615,14 @@ function LlmNodeForm({ data, onChange, theme, availableTools = [], availableVari
                 <label className="text-sm font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>
                   Prompt
                 </label>
-                <textarea
+                <HighlightedTextarea
                   ref={userPromptRef}
                   value={data.prompt || ''}
                   onChange={(e) => onChange({ ...data, prompt: e.target.value })}
                   onFocus={() => setActiveField('prompt')}
-                  className={`w-full flex-1 min-h-[120px] px-3 py-2 rounded border font-mono text-sm resize-none transition-colors ${activeField === 'prompt' ? 'ring-1 ring-purple-500' : ''}`}
-                  style={{ background: 'var(--bg-primary)', borderColor: activeField === 'prompt' ? '#7c3aed' : 'var(--border-color)', color: 'var(--text-primary)' }}
+                  isActive={activeField === 'prompt'}
                   placeholder="Enter the LLM prompt. Use {variable} for state references..."
+                  validVariables={availableVariables}
                 />
               </div>
             </div>

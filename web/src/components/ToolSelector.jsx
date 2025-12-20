@@ -113,23 +113,55 @@ export default function ToolSelector({
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full px-3 py-2 rounded border text-sm text-left flex items-center justify-between transition-colors hover:border-purple-500/50"
+        className="w-full px-3 py-2 rounded border text-sm text-left flex items-start justify-between transition-colors hover:border-purple-500/50 min-h-[38px]"
         style={{ 
           background: 'var(--bg-primary)', 
           borderColor: isOpen ? 'rgba(124, 58, 237, 0.5)' : 'var(--border-color)', 
           color: 'var(--text-primary)' 
         }}
       >
-        <span className="flex items-center gap-2">
-          <Wrench size={14} style={{ color: 'var(--text-muted)' }} />
-          {selectedCount > 0 
-            ? `${selectedCount} tool${selectedCount > 1 ? 's' : ''} selected`
-            : 'Select tools...'
-          }
-        </span>
+        <div className="flex items-center gap-2 flex-1 flex-wrap">
+          <Wrench size={14} style={{ color: 'var(--text-muted)' }} className="flex-shrink-0 mt-0.5" />
+          
+          {selectedCount > 0 ? (
+            <div className="flex flex-wrap gap-1.5 flex-1">
+              {selectedTools.slice(0, 3).map(tool => (
+                <span 
+                  key={tool}
+                  className="inline-flex items-center text-xs px-1.5 py-0.5 rounded border truncate max-w-[120px]"
+                  style={{ 
+                    background: 'rgba(124, 58, 237, 0.1)', 
+                    color: '#a855f7',
+                    borderColor: 'rgba(124, 58, 237, 0.2)'
+                  }}
+                  title={tool}
+                >
+                  {tool}
+                </span>
+              ))}
+              
+              {selectedTools.length > 3 && (
+                <span 
+                  className="inline-flex items-center text-xs px-1.5 py-0.5 rounded border cursor-help"
+                  style={{ 
+                    background: 'var(--bg-secondary)', 
+                    color: 'var(--text-muted)',
+                    borderColor: 'var(--border-color)'
+                  }}
+                  title={selectedTools.slice(3).join(', ')}
+                >
+                  +{selectedTools.length - 3}
+                </span>
+              )}
+            </div>
+          ) : (
+            <span style={{ color: 'var(--text-muted)' }}>Select tools...</span>
+          )}
+        </div>
+        
         <ChevronDown 
           size={16} 
-          className={`transition-transform ${isOpen ? 'rotate-180' : ''}`}
+          className={`transition-transform flex-shrink-0 ml-2 mt-0.5 ${isOpen ? 'rotate-180' : ''}`}
           style={{ color: 'var(--text-muted)' }}
         />
       </button>

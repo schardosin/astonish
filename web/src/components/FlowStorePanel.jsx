@@ -46,6 +46,7 @@ export default function FlowStorePanel() {
   const [installing, setInstalling] = useState(null)
   const [installSuccess, setInstallSuccess] = useState(null)
   const [selectedTags, setSelectedTags] = useState([])
+  const [selectedRepo, setSelectedRepo] = useState('all') // 'all' or specific tap name
 
   // Collect all unique tags from flows
   const allTags = useMemo(() => {
@@ -117,8 +118,11 @@ export default function FlowStorePanel() {
     }
   }
 
-  // Filter flows by search and selected tags
+  // Filter flows by search, selected tags, and selected repo
   const filteredFlows = flows.filter(f => {
+    // Repo filter
+    const matchesRepo = selectedRepo === 'all' || f.tapName === selectedRepo
+    
     // Search filter
     const matchesSearch = !searchQuery || 
       f.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -129,7 +133,7 @@ export default function FlowStorePanel() {
     const matchesTags = selectedTags.length === 0 || 
       (f.tags && f.tags.some(t => selectedTags.includes(t.toLowerCase())))
     
-    return matchesSearch && matchesTags
+    return matchesRepo && matchesSearch && matchesTags
   })
 
   const toggleTag = (tag) => {
@@ -175,9 +179,25 @@ export default function FlowStorePanel() {
       {/* Content */}
       <div className="flex-1 overflow-hidden">
         <div className="h-full flex flex-col">
-            {/* Search */}
-            <div className="mb-4">
-              <div className="relative">
+            {/* Search and Repo Filter */}
+            <div className="mb-4 flex gap-3">
+              {/* Repo Filter Dropdown */}
+              <select
+                value={selectedRepo}
+                onChange={(e) => setSelectedRepo(e.target.value)}
+                className="px-3 py-2 rounded-lg border bg-transparent outline-none focus:border-blue-500 transition-colors"
+                style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)', background: 'var(--bg-primary)' }}
+              >
+                <option value="all">All Repositories</option>
+                {taps.map(tap => (
+                  <option key={tap.name} value={tap.name}>
+                    {tap.name} ({flows.filter(f => f.tapName === tap.name).length})
+                  </option>
+                ))}
+              </select>
+              
+              {/* Search */}
+              <div className="relative flex-1">
                 <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="text"

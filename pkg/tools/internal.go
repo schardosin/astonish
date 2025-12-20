@@ -14,7 +14,7 @@ import (
 )
 
 type ReadFileArgs struct {
-	Path string `json:"path" jsonschema_description:"path to the file to read"`
+	Path string `json:"path" jsonschema:"The path to the file to read"`
 }
 
 type ReadFileResult struct {
@@ -32,8 +32,8 @@ func ReadFile(ctx tool.Context, args ReadFileArgs) (ReadFileResult, error) {
 // --- Write File Tool ---
 
 type WriteFileArgs struct {
-	FilePath string      `json:"file_path" jsonschema_description:"The path to the file where content will be written."`
-	Content  interface{} `json:"content" jsonschema_description:"The content to write to the file. Can be a single string or a list of strings (each list item will be a new line)."`
+	FilePath string      `json:"file_path" jsonschema:"The path to the file where content will be written."`
+	Content  interface{} `json:"content" jsonschema:"The content to write to the file. Can be a single string or a list of strings."`
 }
 
 type WriteFileResult struct {
@@ -110,7 +110,7 @@ func WriteFile(ctx tool.Context, args WriteFileArgs) (WriteFileResult, error) {
 }
 
 type ShellCommandArgs struct {
-	Command string `json:"command" jsonschema_description:"shell command to execute"`
+	Command string `json:"command" jsonschema:"The shell command to execute"`
 }
 
 type ShellCommandResult struct {
@@ -130,8 +130,8 @@ func ShellCommand(ctx tool.Context, args ShellCommandArgs) (ShellCommandResult, 
 // --- Filter JSON Tool ---
 
 type FilterJsonArgs struct {
-	JsonData        interface{} `json:"json_data" jsonschema_description:"The JSON data to filter. Can be a JSON string, a list of dicts, or a dict."`
-	FieldsToExtract []string    `json:"fields_to_extract" jsonschema_description:"A list of fields to extract. Use dot notation for nested fields."`
+	JsonData        interface{} `json:"json_data" jsonschema:"The JSON data to filter. Can be a JSON string, a list of dicts, or a dict."`
+	FieldsToExtract []string    `json:"fields_to_extract" jsonschema:"A list of fields to extract. Use dot notation for nested fields."`
 }
 
 type FilterJsonResult struct {
@@ -280,7 +280,7 @@ func FilterJson(ctx tool.Context, args FilterJsonArgs) (FilterJsonResult, error)
 
 func GetInternalTools() ([]tool.Tool, error) {
 	readFileTool, err := functiontool.New(functiontool.Config{
-		Name:        "read_file_content",
+		Name:        "read_file",
 		Description: "Read the contents of a file",
 	}, ReadFile)
 	if err != nil {
@@ -333,10 +333,10 @@ func ExecuteTool(ctx context.Context, name string, args map[string]interface{}) 
 	}
 
 	switch name {
-	case "read_file_content":
+	case "read_file":
 		var toolArgs ReadFileArgs
 		if err := toStruct(args, &toolArgs); err != nil {
-			return nil, fmt.Errorf("invalid args for read_file_content: %w", err)
+			return nil, fmt.Errorf("invalid args for read_file: %w", err)
 		}
 		// We need a tool.Context. For now, we can pass a dummy or the real one if available.
 		// But ReadFile expects tool.Context.

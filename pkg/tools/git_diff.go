@@ -11,7 +11,7 @@ import (
 
 // GitDiffAddLineNumbersArgs defines arguments for git_diff_add_line_numbers
 type GitDiffAddLineNumbersArgs struct {
-	DiffContent string `json:"diff_content"`
+	DiffContent string `json:"diff_content" jsonschema:"The diff or patch content to add line numbers to"`
 }
 
 // GitDiffAddLineNumbersResult defines the result for git_diff_add_line_numbers

@@ -138,15 +138,22 @@ func ConvertRequest(req *model.LLMRequest, maxOutputTokens int) (*Request, error
 			for _, fd := range t.FunctionDeclarations {
 				// Sanitize parameters schema - Vertex AI rejects $schema
 				params := fd.ParametersJsonSchema
-				if paramsMap, ok := params.(map[string]interface{}); ok {
-					// Create a copy to avoid modifying the original
-					newParams := make(map[string]interface{})
-					for k, v := range paramsMap {
-						if k != "$schema" {
-							newParams[k] = v
+				
+				// Ensure params is a map so we can sanitize it
+				// The schema can be various types (struct, map, etc.) from ADK
+				schemaBytes, err := json.Marshal(params)
+				if err == nil {
+					var paramsMap map[string]interface{}
+					if err := json.Unmarshal(schemaBytes, &paramsMap); err == nil {
+						// Create a copy to avoid modifying the original
+						newParams := make(map[string]interface{})
+						for k, v := range paramsMap {
+							if k != "$schema" && k != "additionalProperties" {
+								newParams[k] = v
+							}
 						}
+						params = newParams
 					}
-					params = newParams
 				}
 
 				fds = append(fds, FunctionDeclaration{
@@ -159,6 +166,20 @@ func ConvertRequest(req *model.LLMRequest, maxOutputTokens int) (*Request, error
 				FunctionDeclarations: fds,
 			})
 		}
+	}
+
+	// Convert ToolConfig (FunctionCallingConfig)
+	if req.Config != nil && req.Config.ToolConfig != nil {
+		vertexReq.ToolConfig = &ToolConfig{
+			FunctionCallingConfig: &FunctionCallingConfig{
+				Mode: string(req.Config.ToolConfig.FunctionCallingConfig.Mode),
+			},
+		}
+		if len(req.Config.ToolConfig.FunctionCallingConfig.AllowedFunctionNames) > 0 {
+			vertexReq.ToolConfig.FunctionCallingConfig.AllowedFunctionNames = req.Config.ToolConfig.FunctionCallingConfig.AllowedFunctionNames
+		}
+	} else {
+		// fmt.Println("[VERTEX DEBUG] No ToolConfig found in request")
 	}
 
 	return vertexReq, nil

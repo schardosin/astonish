@@ -165,16 +165,21 @@ func ConvertRequest(req *model.LLMRequest, maxTokens int) (*Request, error) {
 				// Convert JSON schema to Bedrock format
 				if funcDecl.ParametersJsonSchema != nil {
 					bedrockTool.InputSchema["type"] = "object"
-					if schemaMap, ok := funcDecl.ParametersJsonSchema.(map[string]interface{}); ok {
-						if props, ok := schemaMap["properties"].(map[string]interface{}); ok {
-							bedrockTool.InputSchema["properties"] = props
-						}
-						if required, ok := schemaMap["required"].([]interface{}); ok {
-							bedrockTool.InputSchema["required"] = required
+
+					// The schema can be various types (struct, map, etc.)
+					// JSON round-trip to normalize it to map[string]interface{}
+					schemaBytes, err := json.Marshal(funcDecl.ParametersJsonSchema)
+					if err == nil {
+						var schemaMap map[string]interface{}
+						if err := json.Unmarshal(schemaBytes, &schemaMap); err == nil {
+							if props, ok := schemaMap["properties"].(map[string]interface{}); ok {
+								bedrockTool.InputSchema["properties"] = props
+							}
+							if required, ok := schemaMap["required"].([]interface{}); ok {
+								bedrockTool.InputSchema["required"] = required
+							}
 						}
 					}
-				} else {
-					fmt.Printf("[BEDROCK DEBUG] WARNING: ParametersJsonSchema is nil for %s\n", funcDecl.Name)
 				}
 
 				bedrockReq.Tools = append(bedrockReq.Tools, bedrockTool)

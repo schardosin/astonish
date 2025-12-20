@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,52 +34,169 @@ type ChatRequest struct {
 
 // SessionManager manages active sessions
 type SessionManager struct {
-	service  session.Service
-	sessions map[string]session.Session
-	mu       sync.RWMutex
+	service      session.Service
+	sessions     map[string]session.Session
+	mcpManagers  map[string]*mcp.Manager // MCP manager per session
+	lastActivity map[string]time.Time    // Last activity time per session
+	mu           sync.RWMutex
 }
+
+// Session timeout - cleanup sessions with no activity for this duration
+const sessionTimeout = 2 * time.Minute
 
 var globalSessionManager *SessionManager
 var sessionOnce sync.Once
-
-// Global MCP manager to maintain browser sessions across requests
-var globalMCPManager *mcp.Manager
-var globalMCPToolsets []tool.Toolset
-var mcpOnce sync.Once
-var mcpMu sync.RWMutex
 
 // GetSessionManager returns the singleton session manager
 func GetSessionManager() *SessionManager {
 	sessionOnce.Do(func() {
 		baseService := session.InMemoryService()
 		globalSessionManager = &SessionManager{
-			service:  common.NewAutoInitService(baseService),
-			sessions: make(map[string]session.Session),
+			service:      common.NewAutoInitService(baseService),
+			sessions:     make(map[string]session.Session),
+			mcpManagers:  make(map[string]*mcp.Manager),
+			lastActivity: make(map[string]time.Time),
 		}
+		// Start background cleanup goroutine
+		go globalSessionManager.cleanupStaleSessionsLoop()
 	})
 	return globalSessionManager
 }
 
-// GetMCPToolsets returns the cached MCP toolsets, initializing if needed
-func GetMCPToolsets(ctx context.Context) []tool.Toolset {
-	mcpOnce.Do(func() {
-		var err error
-		globalMCPManager, err = mcp.NewManager()
-		if err != nil {
-			fmt.Printf("[MCP] Failed to create manager: %v\n", err)
-			return
+// cleanupStaleSessionsLoop periodically cleans up sessions with no recent activity
+func (sm *SessionManager) cleanupStaleSessionsLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		sm.cleanupStaleSessions()
+	}
+}
+
+// cleanupStaleSessions removes sessions that have been inactive for too long
+func (sm *SessionManager) cleanupStaleSessions() {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	now := time.Now()
+	for sessionID, lastActive := range sm.lastActivity {
+		if now.Sub(lastActive) > sessionTimeout {
+			// Cleanup MCP manager
+			if mgr, exists := sm.mcpManagers[sessionID]; exists {
+				mgr.Cleanup()
+				delete(sm.mcpManagers, sessionID)
+			}
+			delete(sm.sessions, sessionID)
+			delete(sm.lastActivity, sessionID)
+			fmt.Printf("[Session] Cleaned up stale session: %s (inactive for %v)\n", sessionID, now.Sub(lastActive))
 		}
-		if err := globalMCPManager.InitializeToolsets(ctx); err != nil {
-			fmt.Printf("[MCP] Failed to initialize toolsets: %v\n", err)
-			return
+	}
+}
+
+// TouchSession updates the last activity time for a session
+func (sm *SessionManager) TouchSession(sessionID string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.lastActivity[sessionID] = time.Now()
+}
+
+// GetOrCreateMCPManager returns the MCP manager for a session, creating if needed
+func (sm *SessionManager) GetOrCreateMCPManager(ctx context.Context, sessionID string, requiredServers []string) (*mcp.Manager, []tool.Toolset) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	// Update activity timestamp
+	sm.lastActivity[sessionID] = time.Now()
+
+	// Check if we already have an MCP manager for this session
+	if mgr, exists := sm.mcpManagers[sessionID]; exists {
+		return mgr, mgr.GetToolsets()
+	}
+
+	// No servers needed
+	if len(requiredServers) == 0 {
+		return nil, nil
+	}
+
+	// Create new MCP manager for this session
+	mgr, err := mcp.NewManager()
+	if err != nil {
+		fmt.Printf("[MCP] Warning: Failed to create manager: %v\n", err)
+		return nil, nil
+	}
+
+	if err := mgr.InitializeSelectiveToolsets(ctx, requiredServers); err != nil {
+		fmt.Printf("[MCP] Warning: Failed to initialize toolsets: %v\n", err)
+		return nil, nil
+	}
+
+	sm.mcpManagers[sessionID] = mgr
+	return mgr, mgr.GetToolsets()
+}
+
+// CleanupSession removes a session and its MCP manager
+func (sm *SessionManager) CleanupSession(sessionID string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if mgr, exists := sm.mcpManagers[sessionID]; exists {
+		mgr.Cleanup()
+		delete(sm.mcpManagers, sessionID)
+	}
+	delete(sm.sessions, sessionID)
+}
+
+// HandleStopSession handles POST /api/session/{id}/stop - cleans up session and MCP
+func HandleStopSession(w http.ResponseWriter, r *http.Request) {
+	// Extract session ID from URL
+	path := r.URL.Path
+	// Expected format: /api/session/{sessionId}/stop
+	parts := strings.Split(path, "/")
+	if len(parts) < 4 {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	sessionID := parts[3] // /api/session/{id}/stop
+
+	sm := GetSessionManager()
+	sm.CleanupSession(sessionID)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]bool{"stopped": true})
+}
+
+// getRequiredMCPServers extracts the list of MCP server names needed for this flow
+// It maps tool names from nodes' ToolsSelection to their source MCP server names
+func getRequiredMCPServers(cfg *config.AgentConfig) []string {
+	// Collect all required tools from the flow
+	toolsNeeded := make(map[string]bool)
+	for _, node := range cfg.Nodes {
+		for _, toolName := range node.ToolsSelection {
+			toolsNeeded[toolName] = true
 		}
-		globalMCPToolsets = globalMCPManager.GetToolsets()
-		fmt.Printf("[MCP] Initialized %d toolsets (browser sessions will persist)\n", len(globalMCPToolsets))
-	})
-	
-	mcpMu.RLock()
-	defer mcpMu.RUnlock()
-	return globalMCPToolsets
+	}
+
+
+	if len(toolsNeeded) == 0 {
+		return nil
+	}
+
+	// Map tool names to MCP server names using cached tool info
+	cachedTools := GetCachedTools()
+	serversNeeded := make(map[string]bool)
+	for _, t := range cachedTools {
+		if toolsNeeded[t.Name] && t.Source != "internal" {
+			serversNeeded[t.Source] = true
+		}
+	}
+
+	// Convert to slice
+	var servers []string
+	for server := range serversNeeded {
+		servers = append(servers, server)
+	}
+	return servers
 }
 
 // SendSSE sends a Server-Sent Event
@@ -135,6 +253,9 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	sm := GetSessionManager()
+
+	// Update session activity timestamp
+	sm.TouchSession(req.SessionID)
 
 	// 1. Load Agent Config
 	agentPath, _, err := findAgentPath(req.AgentID)
@@ -194,8 +315,9 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Initialize MCP (using global cache to persist browser sessions)
-	mcpToolsets := GetMCPToolsets(ctx)
+	// Initialize MCP - per-session, only servers needed for this flow
+	requiredServers := getRequiredMCPServers(cfg)
+	_, mcpToolsets := sm.GetOrCreateMCPManager(ctx, req.SessionID, requiredServers)
 
 	// 5. Create Astonish Agent & ADK Agent
 	astonishAgent := agent.NewAstonishAgentWithToolsets(cfg, llm, internalTools, mcpToolsets)
@@ -413,6 +535,11 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 			// Send full state delta for UI variables view
 			SendSSE(w, flusher, "state", delta)
 		}
+	}
+
+	// Check if flow reached END node - cleanup MCP for this session
+	if lastNodeName == "END" {
+		sm.CleanupSession(req.SessionID)
 	}
 
 	SendSSE(w, flusher, "done", map[string]bool{"done": true})

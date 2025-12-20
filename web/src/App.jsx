@@ -580,16 +580,24 @@ flow:
       setRunningNodeId(null)
       setIsWaitingForInput(false)
     }
-  }, [isWaitingForInput])
+    // Cleanup MCP on server side
+    if (sessionId) {
+      fetch(`/api/session/${sessionId}/stop`, { method: 'POST' }).catch(() => {})
+    }
+  }, [isWaitingForInput, sessionId])
 
   const handleExitRun = useCallback(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
     }
+    // Cleanup MCP on server side
+    if (sessionId) {
+      fetch(`/api/session/${sessionId}/stop`, { method: 'POST' }).catch(() => {})
+    }
     setIsRunning(false)
     setRunningNodeId(null)
     setChatMessages([])
-  }, [])
+  }, [sessionId])
 
   const handleYamlChange = useCallback((newYaml) => {
     setYamlContent(newYaml)

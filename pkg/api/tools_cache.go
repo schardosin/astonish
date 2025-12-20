@@ -68,6 +68,8 @@ func loadToolsInternal(ctx context.Context) []ToolInfo {
 				}
 			}
 		}
+		// Cleanup after fetching tool info - don't keep MCP servers running
+		mcpManager.Cleanup()
 	}
 
 	return allTools

@@ -512,4 +512,5 @@ func RegisterRoutes(router *mux.Router) {
 
 	// Execution endpoints
 	router.HandleFunc("/api/chat", HandleChat).Methods("POST")
+	router.HandleFunc("/api/session/{id}/stop", HandleStopSession).Methods("POST")
 }

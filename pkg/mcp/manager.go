@@ -17,6 +17,7 @@ type Manager struct {
 	config        *config.MCPConfig
 	toolsets      []tool.Toolset
 	namedToolsets []NamedToolset
+	transports    []mcp.Transport // Track transports for cleanup
 }
 
 // NamedToolset pairs a toolset with its server name
@@ -36,6 +37,7 @@ func NewManager() (*Manager, error) {
 		config:        cfg,
 		toolsets:      make([]tool.Toolset, 0),
 		namedToolsets: make([]NamedToolset, 0),
+		transports:    make([]mcp.Transport, 0),
 	}, nil
 }
 
@@ -68,6 +70,7 @@ func (m *Manager) InitializeToolsets(ctx context.Context) error {
 			Name:    serverName,
 			Toolset: toolset,
 		})
+		m.transports = append(m.transports, transport)
 		log.Printf("Successfully initialized MCP server: %s", serverName)
 	}
 
@@ -115,6 +118,68 @@ func (m *Manager) GetToolsets() []tool.Toolset {
 // GetNamedToolsets returns all toolsets with their server names
 func (m *Manager) GetNamedToolsets() []NamedToolset {
 	return m.namedToolsets
+}
+
+// InitializeSelectiveToolsets creates ADK mcptoolset instances only for specified servers
+// This is more efficient when a flow only needs a subset of configured MCP servers
+func (m *Manager) InitializeSelectiveToolsets(ctx context.Context, serverNames []string) error {
+	if len(serverNames) == 0 {
+		log.Println("No MCP servers requested for this flow")
+		return nil
+	}
+
+	// Create a set for fast lookup
+	needed := make(map[string]bool)
+	for _, name := range serverNames {
+		needed[name] = true
+	}
+
+	for serverName, serverConfig := range m.config.MCPServers {
+		if !needed[serverName] {
+			continue // Skip servers not needed for this flow
+		}
+
+		transport, err := createTransport(serverConfig)
+		if err != nil {
+			log.Printf("Warning: Failed to create transport for MCP server '%s': %v", serverName, err)
+			continue
+		}
+
+		toolset, err := mcptoolset.New(mcptoolset.Config{
+			Transport: transport,
+		})
+		if err != nil {
+			log.Printf("Warning: Failed to create toolset for MCP server '%s': %v", serverName, err)
+			continue
+		}
+
+		m.toolsets = append(m.toolsets, toolset)
+		m.namedToolsets = append(m.namedToolsets, NamedToolset{
+			Name:    serverName,
+			Toolset: toolset,
+		})
+		m.transports = append(m.transports, transport)
+		log.Printf("Initialized MCP server for flow: %s", serverName)
+	}
+
+	log.Printf("Selectively initialized %d/%d requested MCP servers", len(m.toolsets), len(serverNames))
+	return nil
+}
+
+// Cleanup closes all MCP transports and clears the manager state
+// Should be called when the flow run completes
+func (m *Manager) Cleanup() {
+	for i, transport := range m.transports {
+		if closer, ok := transport.(interface{ Close() error }); ok {
+			if err := closer.Close(); err != nil {
+				log.Printf("Warning: Failed to close transport %d: %v", i, err)
+			}
+		}
+	}
+	m.transports = nil
+	m.toolsets = nil
+	m.namedToolsets = nil
+	log.Println("MCP manager cleaned up")
 }
 
 // createTransport creates the appropriate MCP transport based on configuration

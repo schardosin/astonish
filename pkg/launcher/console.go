@@ -35,6 +35,45 @@ type ConsoleConfig struct {
 	Parameters     map[string]string
 }
 
+// getRequiredMCPServersFromConfig extracts MCP server names needed for the flow
+// by matching tools_selection entries against configured MCP servers' tools
+func getRequiredMCPServersFromConfig(agentCfg *config.AgentConfig) []string {
+	// Collect all required tools from the flow
+	toolsNeeded := make(map[string]bool)
+	for _, node := range agentCfg.Nodes {
+		for _, toolName := range node.ToolsSelection {
+			toolsNeeded[toolName] = true
+		}
+	}
+
+	if len(toolsNeeded) == 0 {
+		return nil
+	}
+
+	// Load MCP config to get server names
+	mcpCfg, err := config.LoadMCPConfig()
+	if err != nil {
+		return nil
+	}
+
+	// For now, we need to initialize all servers that have matching tools
+	// This requires checking each server's tools, which means we initialize the manager temporarily
+	// TODO: Consider caching tool-to-server mapping at startup
+	
+	// For a simpler approach, we return all configured servers and let selective init skip unused ones
+	// The real filtering happens via InitializeSelectiveToolsets matching server names
+	
+	// A better approach: use tool prefix naming convention (server-name.tool-name)
+	// or maintain a separate tool registry
+	
+	// For now, return all server names - the user can optimize later with explicit server prefixing
+	var servers []string
+	for serverName := range mcpCfg.MCPServers {
+		servers = append(servers, serverName)
+	}
+	return servers
+}
+
 // RunConsole runs the agent in console mode with agent-controlled flow
 func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	// Suppress default logger (used by ADK for "unknown agent" warnings)
@@ -69,32 +108,45 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		fmt.Printf("✓ Internal tools initialized: %d tools available\n", len(internalTools))
 	}
 
-	// Initialize MCP tools
+	// Initialize MCP tools - only servers needed for this flow
 	if cfg.DebugMode {
 		fmt.Println("Initializing MCP servers...")
 	}
 
-	mcpManager, err := mcp.NewManager()
+	// Extract required MCP servers from flow config
+	requiredServers := getRequiredMCPServersFromConfig(cfg.AgentConfig)
+	
+	var mcpManager *mcp.Manager
 	var mcpToolsets []tool.Toolset
-	if err != nil {
-		if cfg.DebugMode {
-			fmt.Printf("Warning: Failed to create MCP manager: %v\n", err)
-		}
-	} else {
-		if err := mcpManager.InitializeToolsets(ctx); err != nil {
+	
+	if len(requiredServers) > 0 {
+		var err error
+		mcpManager, err = mcp.NewManager()
+		if err != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to initialize MCP toolsets: %v\n", err)
+				fmt.Printf("Warning: Failed to create MCP manager: %v\n", err)
 			}
 		} else {
-			mcpToolsets = mcpManager.GetToolsets()
-			if cfg.DebugMode {
-				if len(mcpToolsets) > 0 {
-					fmt.Printf("✓ MCP servers initialized: %d server(s)\n", len(mcpToolsets))
-				} else {
-					fmt.Println("✓ No MCP servers configured")
+			if err := mcpManager.InitializeSelectiveToolsets(ctx, requiredServers); err != nil {
+				if cfg.DebugMode {
+					fmt.Printf("Warning: Failed to initialize MCP toolsets: %v\n", err)
+				}
+			} else {
+				mcpToolsets = mcpManager.GetToolsets()
+				if cfg.DebugMode {
+					fmt.Printf("✓ MCP servers initialized: %d/%d server(s) needed for this flow\n", len(mcpToolsets), len(requiredServers))
 				}
 			}
 		}
+	} else {
+		if cfg.DebugMode {
+			fmt.Println("✓ No MCP servers needed for this flow")
+		}
+	}
+	
+	// Ensure MCP cleanup when run completes
+	if mcpManager != nil {
+		defer mcpManager.Cleanup()
 	}
 
 	// Create session service

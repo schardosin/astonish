@@ -1,4 +1,4 @@
-import { Plus, Settings, Plug, Cpu, ArrowRight } from 'lucide-react'
+import { Plus, Settings, Plug, Cpu, ArrowRight, Sparkles } from 'lucide-react'
 
 export default function HomePage({ 
   onCreateAgent, 
@@ -55,7 +55,7 @@ export default function HomePage({
           }}
         >
           <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-indigo-600 to-blue-600 flex items-center justify-center mb-4 shadow-lg group-hover:shadow-indigo-500/20 transition-all">
-            <Settings size={28} className="text-white transform rotate-90" /> {/* Using Settings rotated as a placeholder or import Layout/Folder */}
+            <Sparkles size={28} className="text-white" />
           </div>
           <h3 className="text-xl font-semibold mb-2 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
             Browse Flows

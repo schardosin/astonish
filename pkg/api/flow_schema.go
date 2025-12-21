@@ -134,32 +134,45 @@ Note: LLM responses are shown automatically, so output nodes are mainly for form
 ` + "```" + `
 
 ### 5. Update State Node
-Modify state variables. Use source_variable OR value to set data, action to control how (overwrite/append), 
-and output_model to define the target variable and its type.
+**ONLY use for APPENDING to lists.** For overwriting values, use output_model on LLM/tool nodes instead.
+
+The update_state node is specifically designed for accumulating data over iterations, such as:
+- Building conversation history
+- Collecting items across a loop
+- Aggregating results from multiple iterations
+
+**DO NOT use update_state just to copy or overwrite variables** - that's what output_model does automatically.
+
 ` + "```yaml" + `
-# Overwrite a variable with a value
-- name: set_flag
+# CORRECT: Append to a list (building history across loop iterations)
+- name: update_history
   type: update_state
-  value: "true"
-  action: overwrite
+  source_variable: ai_message   # The variable to append
+  action: append                # APPEND to the list
   output_model:
-    is_processed: string
+    history: list               # Target list that grows each iteration
 
-# Copy from one variable to another
-- name: save_result
-  type: update_state
-  source_variable: llm_response
-  action: overwrite
-  output_model:
-    saved_answer: string
+# Example: Simple conversation loop with history
+# 1. Get user input -> output_model: {user_message: str}
+# 2. LLM generates response -> output_model: {ai_message: str} + user_message: [ai_message]
+# 3. Append to history -> source_variable: ai_message, action: append, output_model: {history: list}
+# 4. Loop back to step 1
+` + "```" + `
 
-# Append to a list
-- name: add_to_history
+**Anti-patterns - DO NOT DO:**
+` + "```yaml" + `
+# WRONG: Using update_state to overwrite - just use output_model on the LLM node instead!
+- name: make_turn
   type: update_state
-  source_variable: current_item
-  action: append
+  action: overwrite        # Don't use update_state for overwrite!
+  value:
+    user: '{user_message}'
+    assistant: '{ai_message}'
   output_model:
-    history_list: list
+    last_turn: dict
+
+# CORRECT: The LLM's output_model already saves variables to state automatically
+# No extra node needed - output_model on LLM/tool nodes handles overwriting
 ` + "```" + `
 
 ## Flow Edges

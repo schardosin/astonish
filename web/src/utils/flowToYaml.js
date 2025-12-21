@@ -2,7 +2,7 @@ import yaml from 'js-yaml'
 
 /**
  * Enforce consistent YAML key ordering
- * Order: name, description, model, nodes, flow, layout, then any remaining keys alphabetically
+ * Order: name, description, nodes, flow, layout, then any remaining keys alphabetically
  */
 export function orderYamlKeys(data) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
@@ -11,6 +11,9 @@ export function orderYamlKeys(data) {
   
   // Define the preferred key order (model is NOT included - engine uses global config)
   const keyOrder = ['name', 'description', 'nodes', 'flow', 'layout']
+  
+  // Keys to explicitly exclude from output (deprecated or invalid fields)
+  const excludedKeys = ['model']
   
   const ordered = {}
   
@@ -21,9 +24,9 @@ export function orderYamlKeys(data) {
     }
   }
   
-  // Then add any remaining keys alphabetically
+  // Then add any remaining keys alphabetically (excluding deprecated keys)
   const remainingKeys = Object.keys(data)
-    .filter(k => !keyOrder.includes(k))
+    .filter(k => !keyOrder.includes(k) && !excludedKeys.includes(k))
     .sort()
   
   for (const key of remainingKeys) {

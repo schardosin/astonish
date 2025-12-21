@@ -1,9 +1,9 @@
-import { Play, Code, LogOut, Undo2, Redo2, CircleDot } from 'lucide-react'
+import { Play, Code, LogOut, Undo2, Redo2, CircleDot, Copy, Lock } from 'lucide-react'
 import { snakeToTitleCase } from '../utils/formatters'
 
 export default function Header({
   agentName, agentSource, showYaml, onToggleYaml, isRunning, onRun, onExit,
-  canUndo, canRedo, onUndo, onRedo
+  canUndo, canRedo, onUndo, onRedo, readOnly, onCopyToLocal
 }) {
   let displayName = agentName
   if (agentSource === 'store' && agentName.includes('/')) {
@@ -13,12 +13,27 @@ export default function Header({
     displayName = snakeToTitleCase(agentName) || agentName
   }
 
+  // Determine mode text and styling
+  const getModeInfo = () => {
+    if (isRunning) return { text: 'Run mode', icon: CircleDot, color: 'var(--accent)' }
+    if (readOnly) return { text: 'Read Only', icon: Lock, color: '#f59e0b' }
+    return { text: 'Design mode', icon: CircleDot, color: 'var(--accent)' }
+  }
+  const modeInfo = getModeInfo()
+  const ModeIcon = modeInfo.icon
+
   return (
     <div className="h-14 flex items-center justify-between px-5" style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)' }}>
       <div className="flex items-center gap-3">
-        <div className="px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-2" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}>
-          <CircleDot size={14} />
-          {isRunning ? 'Run mode' : 'Design mode'}
+        <div 
+          className="px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-2" 
+          style={{ 
+            background: readOnly ? 'rgba(245, 158, 11, 0.15)' : 'var(--accent-soft)', 
+            color: modeInfo.color 
+          }}
+        >
+          <ModeIcon size={14} />
+          {modeInfo.text}
         </div>
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
@@ -73,6 +88,18 @@ export default function Header({
           >
             <Play size={18} />
             Run
+          </button>
+        )}
+
+        {/* Copy to Local button for read-only store flows */}
+        {!isRunning && readOnly && onCopyToLocal && (
+          <button
+            onClick={onCopyToLocal}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors text-white"
+            style={{ background: 'linear-gradient(135deg, #3b82f6 0%, #10b981 100%)' }}
+          >
+            <Copy size={16} />
+            Copy to Local
           </button>
         )}
 

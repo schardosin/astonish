@@ -1081,29 +1081,9 @@ flow:
             canRedo={historyIndex < yamlHistory.length - 1}
             onUndo={handleUndo}
             onRedo={handleRedo}
+            readOnly={selectedAgent?.source === 'store'}
+            onCopyToLocal={() => handleCopyToLocal(selectedAgent)}
           />
-
-          {/* Store Flow Banner - hidden during run mode */}
-          {selectedAgent?.source === 'store' && !isRunning && (
-            <div 
-              className="px-4 py-2 flex items-center justify-between"
-              style={{ background: 'linear-gradient(90deg, rgba(59, 130, 246, 0.15), rgba(16, 185, 129, 0.15))', borderBottom: '1px solid var(--border-color)' }}
-            >
-              <div className="flex items-center gap-2">
-                <Lock size={16} className="text-blue-400" />
-                <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                  <strong className="text-blue-400">Read-only</strong> — This flow is from the store. Copy to local to make changes.
-                </span>
-              </div>
-              <button
-                onClick={() => handleCopyToLocal(selectedAgent)}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors bg-blue-500 text-white hover:bg-blue-600"
-              >
-                <Copy size={14} />
-                Copy to Local
-              </button>
-            </div>
-          )}
 
           {/* Flow + Chat Area */}
           <div className={`flex-1 flex overflow-hidden ${!isRunning && (editingNode || showYaml) ? 'h-1/2' : ''}`}>

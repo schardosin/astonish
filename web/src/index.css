@@ -222,6 +222,8 @@ button, input, select, textarea {
 .markdown-body p { margin-top: 0; margin-bottom: 1em; }
 
 .markdown-body ul, .markdown-body ol { padding-left: 2em; margin-bottom: 1em; }
+.markdown-body ul { list-style-type: disc; }
+.markdown-body ol { list-style-type: decimal; }
 
 .markdown-body code {
   padding: 0.2em 0.4em;

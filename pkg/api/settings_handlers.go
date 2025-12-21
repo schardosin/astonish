@@ -163,27 +163,40 @@ func GetMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 // UpdateMCPSettingsHandler handles PUT /api/settings/mcp
 func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
-	var cfg config.MCPConfig
-	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+	var newCfg config.MCPConfig
+	if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
+	// Load existing config to detect removed servers
+	oldCfg, _ := config.LoadMCPConfig()
+
 	// Set default transport to "stdio" if not specified
-	for name, server := range cfg.MCPServers {
+	for name, server := range newCfg.MCPServers {
 		if server.Transport == "" {
 			server.Transport = "stdio"
-			cfg.MCPServers[name] = server
+			newCfg.MCPServers[name] = server
 		}
 	}
 
-	if err := config.SaveMCPConfig(&cfg); err != nil {
+	// Detect removed servers and invalidate their tools from cache
+	if oldCfg != nil && oldCfg.MCPServers != nil {
+		for serverName := range oldCfg.MCPServers {
+			if _, exists := newCfg.MCPServers[serverName]; !exists {
+				// Server was removed - clear its tools from cache
+				RemoveServerToolsFromCache(serverName)
+			}
+		}
+	}
+
+	if err := config.SaveMCPConfig(&newCfg); err != nil {
 		http.Error(w, "Failed to save MCP config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	// Re-setup environment variables
-	config.SetupMCPEnv(&cfg)
+	config.SetupMCPEnv(&newCfg)
 
 	// Refresh the tools cache to pick up new MCP servers
 	RefreshToolsCache(r.Context())

@@ -478,6 +478,7 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/agents/{name:.*}/copy-to-local", CopyAgentToLocalHandler).Methods("POST")
 	router.HandleFunc("/api/tools", ListToolsHandler).Methods("GET")
 	router.HandleFunc("/api/ai/chat", AIChatHandler).Methods("POST")
+	router.HandleFunc("/api/ai/tool-search", AIToolSearchHandler).Methods("POST")
 
 	// Settings endpoints
 	router.HandleFunc("/api/settings/config", GetSettingsHandler).Methods("GET")

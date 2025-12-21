@@ -173,6 +173,58 @@ button, input, select, textarea {
   50% { box-shadow: 0 0 0 4px rgba(95, 79, 178, 0.48), 0 0 24px rgba(95, 79, 178, 0.36); }
 }
 
+/* Spinning border animation for running nodes */
+.node-running {
+  position: relative;
+}
+
+.node-running::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 14px;
+  padding: 3px;
+  background: conic-gradient(
+    from var(--spin-angle, 0deg),
+    #8b5cf6 0deg,
+    #6366f1 90deg,
+    transparent 180deg,
+    transparent 270deg,
+    #8b5cf6 360deg
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  animation: spin-border 1.5s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes spin-border {
+  to {
+    --spin-angle: 360deg;
+  }
+}
+
+/* Fallback for browsers that don't support CSS custom properties in animations */
+@supports not (animation: spin-border 1s) {
+  .node-running::before {
+    animation: spin-border-fallback 1.5s linear infinite;
+  }
+  
+  @keyframes spin-border-fallback {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+}
+
+/* Register the custom property for animation (modern browsers) */
+@property --spin-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
 .chat-bubble-user {
   background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
   color: white;

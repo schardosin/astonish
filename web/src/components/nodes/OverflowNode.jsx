@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Handle, Position } from '@xyflow/react'
-import { AlertTriangle, Check, Plus } from 'lucide-react'
+import { AlertTriangle, Plus } from 'lucide-react'
 
 /**
  * Base node component with Overflow-style design
@@ -25,13 +25,7 @@ export default function OverflowNode({
     if (hasError) {
       return <AlertTriangle size={20} style={{ color: '#ef4444' }} />
     }
-    if (isActive) {
-      return (
-        <div className="w-6 h-6 rounded-full bg-white flex items-center justify-center">
-          <Check size={16} style={{ color: '#6B46C1' }} />
-        </div>
-      )
-    }
+    // Always show the normal icon - running state is indicated by the spinning border
     return <Icon size={20} style={{ color: iconColor }} />
   }
 
@@ -50,7 +44,7 @@ export default function OverflowNode({
 
   return (
     <div 
-      className="overflow-node"
+      className={`overflow-node ${isActive ? 'node-running' : ''}`}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       style={{
@@ -60,15 +54,21 @@ export default function OverflowNode({
           ? '2px solid #ef4444' 
           : selected 
             ? '2px solid var(--accent)'
-            : '1px solid var(--overflow-node-border)',
+            : isActive
+              ? '2px solid transparent'  // Border handled by pseudo-element
+              : '1px solid var(--overflow-node-border)',
         boxShadow: hasError 
           ? '0 0 10px rgba(239, 68, 68, 0.4)' 
           : selected 
             ? '0 0 0 2px var(--accent-soft), 0 4px 12px rgba(0,0,0,0.15)' 
-            : '0 4px 12px rgba(0,0,0,0.1)',
+            : isActive
+              ? '0 0 20px rgba(139, 92, 246, 0.4)'
+              : '0 4px 12px rgba(0,0,0,0.1)',
         minWidth: '180px',
         maxWidth: '220px',
         padding: '14px 16px',
+        position: 'relative',
+        overflow: 'visible',
       }}
     >
       {/* Top Handle */}

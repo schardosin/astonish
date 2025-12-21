@@ -1,11 +1,13 @@
+import { useState } from 'react'
 import { Handle, Position } from '@xyflow/react'
-import { AlertTriangle, Check } from 'lucide-react'
+import { AlertTriangle, Check, Plus } from 'lucide-react'
 
 /**
  * Base node component with Overflow-style design
  * Uses CSS variables for theme-aware colors (light/dark)
  */
 export default function OverflowNode({ 
+  id,
   data, 
   selected, 
   icon: Icon, 
@@ -14,6 +16,7 @@ export default function OverflowNode({
   hasBottomHandle = true,
   iconColor = '#8b5cf6'  // Purple accent (can be overridden per node type)
 }) {
+  const [isHovered, setIsHovered] = useState(false)
   const hasError = data.hasError
   const isActive = data.isActive
 
@@ -32,9 +35,24 @@ export default function OverflowNode({
     return <Icon size={20} style={{ color: iconColor }} />
   }
 
+  const handleAddClick = (e) => {
+    e.stopPropagation()
+    // Get the node's bounding rect to position the popover
+    const rect = e.currentTarget.closest('.overflow-node').getBoundingClientRect()
+    // Dispatch custom event for FlowCanvas to handle
+    window.dispatchEvent(new CustomEvent('astonish:add-node-click', { 
+      detail: { 
+        sourceId: id, 
+        position: { x: rect.left + rect.width / 2, y: rect.bottom + 10 } 
+      } 
+    }))
+  }
+
   return (
     <div 
       className="overflow-node"
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
       style={{
         background: 'var(--overflow-node-bg)',
         borderRadius: '12px',
@@ -124,19 +142,38 @@ export default function OverflowNode({
         </p>
       )}
       
-      {/* Bottom Handle */}
-      {hasBottomHandle && (
-        <Handle 
-          type="source" 
-          position={Position.Bottom} 
-          className="!w-2 !h-2"
-          style={{ 
-            background: 'var(--overflow-handle-bg)',
-            borderWidth: '2px',
-            borderColor: 'var(--overflow-handle-border)',
-          }}
-        />
-      )}
+      {/* Bottom Handle - styled as + button, works for both click and drag */}
+      {hasBottomHandle && (() => {
+        // Show expanded + button when: no connection (always) or hovered (if has connection)
+        const hasConnection = data.hasOutgoingConnection
+        const showExpanded = !hasConnection || isHovered
+        
+        return (
+          <Handle 
+            type="source" 
+            position={Position.Bottom}
+            onClick={handleAddClick}
+            className="!cursor-pointer"
+            style={{ 
+              width: showExpanded ? '22px' : '10px',
+              height: showExpanded ? '22px' : '10px',
+              background: showExpanded 
+                ? 'linear-gradient(135deg, #7c3aed 0%, #6366f1 100%)' 
+                : 'var(--overflow-handle-bg)',
+              border: showExpanded 
+                ? '2px solid var(--bg-secondary)' 
+                : '2px solid var(--overflow-handle-border)',
+              borderRadius: '50%',
+              transition: 'all 0.15s ease',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            {showExpanded && <Plus size={12} className="text-white pointer-events-none" />}
+          </Handle>
+        )
+      })()}
       
       {/* Hidden handles for back-edges (loops that go upward) */}
       <Handle 

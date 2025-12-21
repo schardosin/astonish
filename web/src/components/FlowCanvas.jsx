@@ -23,6 +23,7 @@ import ToolNode from './nodes/ToolNode'
 import OutputNode from './nodes/OutputNode'
 import UpdateStateNode from './nodes/UpdateStateNode'
 import EditableEdge from './edges/EditableEdge'
+import NodeTypePopover from './NodeTypePopover'
 
 
 const nodeTypes = {
@@ -67,7 +68,8 @@ function FlowCanvasInner({
   onOpenAIChat,
   onNodeDelete,
   onAutoLayout,
-  runningNodeId
+  runningNodeId,
+  onCreateConnectedNode  // Callback for quick node creation from + button
 }) {
   const { getNodes, getEdges } = useReactFlow()
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([])
@@ -96,6 +98,35 @@ function FlowCanvasInner({
       window.removeEventListener('astonish:edge-drag-stop', onDragStop)
     }
   }, [onLayoutSave, getNodes, getEdges])
+
+  // State for quick add node popover
+  const [addNodePopover, setAddNodePopover] = useState(null) // { sourceId, position: {x, y} }
+
+  // Listen for add-node-click events from nodes
+  useEffect(() => {
+    const handleAddNodeClick = (e) => {
+      if (!readOnly) {
+        setAddNodePopover(e.detail)
+      }
+    }
+    
+    window.addEventListener('astonish:add-node-click', handleAddNodeClick)
+    return () => window.removeEventListener('astonish:add-node-click', handleAddNodeClick)
+  }, [readOnly])
+
+  // Handle node type selection from popover
+  const handleNodeTypeSelect = useCallback((nodeType) => {
+    if (addNodePopover && onCreateConnectedNode) {
+      // Find source node to get its position
+      const sourceNode = nodes.find(n => n.id === addNodePopover.sourceId)
+      const position = sourceNode 
+        ? { x: sourceNode.position.x, y: sourceNode.position.y + 150 }
+        : { x: 300, y: 300 }
+      
+      onCreateConnectedNode(addNodePopover.sourceId, nodeType, position)
+    }
+    setAddNodePopover(null)
+  }, [addNodePopover, nodes, onCreateConnectedNode])
 
   
   // Wrap node change handler to detect deletions and notify parent
@@ -140,6 +171,12 @@ function FlowCanvasInner({
   // Sync nodes from props - update selection state
   useEffect(() => {
     if (propNodes && propNodes.length > 0) {
+      // Build set of nodes that have outgoing connections
+      const nodesWithOutgoing = new Set()
+      if (propEdges) {
+        propEdges.forEach(edge => nodesWithOutgoing.add(edge.source))
+      }
+      
       setNodes((currentNodes) => {
         // Add selected state to prop nodes
         return propNodes.map(node => {
@@ -149,13 +186,14 @@ function FlowCanvasInner({
             data: {
               ...node.data,
               isSelected: node.id === selectedNodeId,
-              isActive: node.id === runningNodeId
+              isActive: node.id === runningNodeId,
+              hasOutgoingConnection: nodesWithOutgoing.has(node.id)
             }
           }
         })
       })
     }
-  }, [propNodes, selectedNodeId, runningNodeId])
+  }, [propNodes, propEdges, selectedNodeId, runningNodeId])
 
   // Sync edges from props
   // Sync edges from props
@@ -556,6 +594,16 @@ function FlowCanvasInner({
             Reset Zoom
           </button>
         </div>
+      )}
+      
+      {/* Quick Add Node Popover */}
+      {addNodePopover && (
+        <NodeTypePopover
+          position={addNodePopover.position}
+          onSelect={handleNodeTypeSelect}
+          onClose={() => setAddNodePopover(null)}
+          theme={theme}
+        />
       )}
     </div>
   )

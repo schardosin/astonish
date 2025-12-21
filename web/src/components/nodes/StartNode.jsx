@@ -1,9 +1,10 @@
 import { Play } from 'lucide-react'
 import OverflowNode from './OverflowNode'
 
-export default function StartNode({ data, selected }) {
+export default function StartNode({ id, data, selected }) {
   return (
     <OverflowNode 
+      id={id}
       data={data} 
       selected={selected}
       icon={Play} 

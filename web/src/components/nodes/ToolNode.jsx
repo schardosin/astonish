@@ -1,9 +1,10 @@
 import { Wrench } from 'lucide-react'
 import OverflowNode from './OverflowNode'
 
-export default function ToolNode({ data, selected }) {
+export default function ToolNode({ id, data, selected }) {
   return (
     <OverflowNode 
+      id={id}
       data={data} 
       selected={selected}
       icon={Wrench} 

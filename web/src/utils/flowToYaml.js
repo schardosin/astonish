@@ -73,6 +73,15 @@ const NODE_TEMPLATES = {
     }
   }),
   
+  // Alias for update_state (popover uses snake_case)
+  update_state: (name) => ({
+    name,
+    type: 'update_state',
+    updates: {
+      key: 'value'
+    }
+  }),
+  
   output: (name) => ({
     name,
     type: 'output',

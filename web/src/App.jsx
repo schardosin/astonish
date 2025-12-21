@@ -653,6 +653,35 @@ flow:
     updateYaml(newYaml)
   }, [yamlContent, updateYaml, getYamlWithLayout])
 
+  // Create a new connected node from the + button on an existing node
+  const handleCreateConnectedNode = useCallback((sourceId, nodeType, position) => {
+    // First add the standalone node
+    const currentYaml = getYamlWithLayout(yamlContent)
+    let newYaml = addStandaloneNode(currentYaml, nodeType)
+    
+    // Parse the new YAML to get the new node's name
+    const parsedYaml = yaml.load(newYaml)
+    const newNodeName = parsedYaml?.nodes?.[parsedYaml.nodes.length - 1]?.name
+    
+    if (newNodeName) {
+      // Update position for the new node
+      if (position && parsedYaml.layout?.nodes) {
+        parsedYaml.layout.nodes[newNodeName] = {
+          x: Math.round(position.x),
+          y: Math.round(position.y)
+        }
+        newYaml = yaml.dump(orderYamlKeys(parsedYaml), { 
+          lineWidth: -1, noRefs: true, quotingType: '"', forceQuotes: false 
+        })
+      }
+      
+      // Add the connection from source to new node
+      newYaml = addConnection(newYaml, sourceId, newNodeName)
+    }
+    
+    updateYaml(newYaml)
+  }, [yamlContent, updateYaml, getYamlWithLayout])
+
   // Handle new connection
   const handleConnect = useCallback((sourceId, targetId) => {
     const currentYaml = getYamlWithLayout(yamlContent)
@@ -1099,6 +1128,7 @@ flow:
                 onLayoutSave={handleLayoutSave}
                 onNodeDelete={handleNodeDelete}
                 onAutoLayout={handleAutoLayout}
+                onCreateConnectedNode={handleCreateConnectedNode}
                 onOpenAIChat={(options) => {
                   if (options?.context === 'multi_node' && options?.nodeIds) {
                     // Multi-node context

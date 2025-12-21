@@ -1,9 +1,10 @@
 import { Brain } from 'lucide-react'
 import OverflowNode from './OverflowNode'
 
-export default function LlmNode({ data, selected }) {
+export default function LlmNode({ id, data, selected }) {
   return (
     <OverflowNode 
+      id={id}
       data={data} 
       selected={selected}
       icon={Brain} 

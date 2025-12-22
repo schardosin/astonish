@@ -1,11 +1,15 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/provider"
 )
 
@@ -175,7 +179,7 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Load existing config to detect removed servers
+	// Load existing config to detect added/removed servers
 	oldCfg, _ := config.LoadMCPConfig()
 
 	// Set default transport to "stdio" if not specified
@@ -186,12 +190,35 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Detect removed servers and invalidate their tools from cache
+	// Detect removed servers and remove from persistent cache
 	if oldCfg != nil && oldCfg.MCPServers != nil {
 		for serverName := range oldCfg.MCPServers {
 			if _, exists := newCfg.MCPServers[serverName]; !exists {
-				// Server was removed - clear its tools from cache
-				RemoveServerToolsFromCache(serverName)
+				// Server was removed - clear its tools from persistent cache
+				cache.RemoveServer(serverName)
+				RemoveServerToolsFromCache(serverName) // Also update in-memory cache
+				log.Printf("[Cache] Removed server '%s' from persistent cache", serverName)
+			}
+		}
+	}
+
+	// Detect added or changed servers
+	addedOrChanged := make(map[string]config.MCPServerConfig)
+	for serverName, serverCfg := range newCfg.MCPServers {
+		if oldCfg == nil || oldCfg.MCPServers == nil {
+			addedOrChanged[serverName] = serverCfg
+			continue
+		}
+		oldServer, existed := oldCfg.MCPServers[serverName]
+		if !existed {
+			// New server
+			addedOrChanged[serverName] = serverCfg
+		} else {
+			// Check if config changed using checksum
+			oldChecksum := cache.ComputeServerChecksum(oldServer.Command, oldServer.Args, oldServer.Env)
+			newChecksum := cache.ComputeServerChecksum(serverCfg.Command, serverCfg.Args, serverCfg.Env)
+			if oldChecksum != newChecksum {
+				addedOrChanged[serverName] = serverCfg
 			}
 		}
 	}
@@ -204,11 +231,81 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	// Re-setup environment variables
 	config.SetupMCPEnv(&newCfg)
 
-	// Refresh the tools cache to pick up new MCP servers
+	// Update persistent cache for added/changed servers
+	if len(addedOrChanged) > 0 {
+		log.Printf("[Cache] Detected %d added/changed servers: %v", len(addedOrChanged), keysOf(addedOrChanged))
+		// Use background context since request context gets cancelled
+		go updatePersistentCacheForServers(context.Background(), addedOrChanged)
+	}
+
+	// Save persistent cache after removals
+	if err := cache.SaveCache(); err != nil {
+		log.Printf("[Cache] Warning: Failed to save persistent cache: %v", err)
+	}
+
+	// Refresh in-memory tools cache
 	RefreshToolsCache(r.Context())
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// updatePersistentCacheForServers initializes specific servers and adds their tools to persistent cache
+func updatePersistentCacheForServers(ctx context.Context, servers map[string]config.MCPServerConfig) {
+	mcpManager, err := mcp.NewManager()
+	if err != nil {
+		log.Printf("[Cache] Failed to create MCP manager: %v", err)
+		return
+	}
+	defer mcpManager.Cleanup()
+
+	for serverName, serverCfg := range servers {
+		log.Printf("[Cache] Updating cache for server: %s", serverName)
+		
+		// Initialize just this server
+		namedToolset, err := mcpManager.InitializeSingleToolset(ctx, serverName)
+		if err != nil {
+			log.Printf("[Cache] Failed to initialize server '%s': %v", serverName, err)
+			continue
+		}
+
+		// Get its tools
+		minimalCtx := &minimalReadonlyContext{Context: ctx}
+		mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
+		if err != nil {
+			log.Printf("[Cache] Failed to get tools from '%s': %v", serverName, err)
+			continue
+		}
+
+		// Build tool entries
+		var toolEntries []cache.ToolEntry
+		for _, t := range mcpTools {
+			toolEntries = append(toolEntries, cache.ToolEntry{
+				Name:        t.Name(),
+				Description: t.Description(),
+				Source:      serverName,
+			})
+		}
+
+		// Compute checksum and add to cache
+		checksum := cache.ComputeServerChecksum(serverCfg.Command, serverCfg.Args, serverCfg.Env)
+		cache.AddServerTools(serverName, toolEntries, checksum)
+		log.Printf("[Cache] Added %d tools from server '%s' to persistent cache", len(toolEntries), serverName)
+	}
+
+	// Save the updated cache
+	if err := cache.SaveCache(); err != nil {
+		log.Printf("[Cache] Failed to save persistent cache: %v", err)
+	}
+}
+
+// keysOf returns the keys of a map for logging
+func keysOf(m map[string]config.MCPServerConfig) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // ListProviderModelsHandler handles GET /api/providers/{providerId}/models

@@ -477,8 +477,12 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/agents/{name}", DeleteAgentHandler).Methods("DELETE")
 	router.HandleFunc("/api/agents/{name:.*}/copy-to-local", CopyAgentToLocalHandler).Methods("POST")
 	router.HandleFunc("/api/tools", ListToolsHandler).Methods("GET")
+	router.HandleFunc("/api/tools/web-capable", WebCapableToolsHandler).Methods("GET")
 	router.HandleFunc("/api/ai/chat", AIChatHandler).Methods("POST")
 	router.HandleFunc("/api/ai/tool-search", AIToolSearchHandler).Methods("POST")
+	router.HandleFunc("/api/ai/tool-search-internet", AIToolSearchInternetHandler).Methods("POST")
+	router.HandleFunc("/api/ai/url-extract", URLExtractHandler).Methods("POST")
+	router.HandleFunc("/api/mcp-internet-install", InternetMCPInstallHandler).Methods("POST")
 
 	// Settings endpoints
 	router.HandleFunc("/api/settings/config", GetSettingsHandler).Methods("GET")

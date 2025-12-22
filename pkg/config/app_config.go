@@ -13,8 +13,10 @@ type AppConfig struct {
 }
 
 type GeneralConfig struct {
-	DefaultProvider string `yaml:"default_provider"`
-	DefaultModel    string `yaml:"default_model"`
+	DefaultProvider string `yaml:"default_provider" json:"default_provider"`
+	DefaultModel    string `yaml:"default_model" json:"default_model"`
+	WebSearchTool   string `yaml:"web_search_tool" json:"web_search_tool"`
+	WebExtractTool  string `yaml:"web_extract_tool" json:"web_extract_tool"`
 }
 
 type ProviderConfig map[string]string

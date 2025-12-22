@@ -14,6 +14,8 @@ type GeneralSettings struct {
 	DefaultProvider            string `json:"default_provider"`
 	DefaultProviderDisplayName string `json:"default_provider_display_name"`
 	DefaultModel               string `json:"default_model"`
+	WebSearchTool              string `json:"web_search_tool"`
+	WebExtractTool             string `json:"web_extract_tool"`
 }
 
 // ProviderSettings represents a provider's configuration (masked)
@@ -86,6 +88,8 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 			DefaultProvider:            cfg.General.DefaultProvider,
 			DefaultProviderDisplayName: provider.GetProviderDisplayName(cfg.General.DefaultProvider),
 			DefaultModel:               cfg.General.DefaultModel,
+			WebSearchTool:              cfg.General.WebSearchTool,
+			WebExtractTool:             cfg.General.WebExtractTool,
 		},
 		Providers: providers,
 	}
@@ -112,6 +116,8 @@ func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	if req.General != nil {
 		cfg.General.DefaultProvider = req.General.DefaultProvider
 		cfg.General.DefaultModel = req.General.DefaultModel
+		cfg.General.WebSearchTool = req.General.WebSearchTool
+		cfg.General.WebExtractTool = req.General.WebExtractTool
 	}
 
 	// Update provider settings if provided

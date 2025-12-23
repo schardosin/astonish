@@ -16,9 +16,10 @@ import (
 
 // Provider implements model.LLM for OpenAI.
 type Provider struct {
-	client           *openai.Client
-	model            string
-	supportsJSONMode bool
+	client              *openai.Client
+	model               string
+	supportsJSONMode    bool
+	maxCompletionTokens int // If > 0, sets max_completion_tokens in the request
 }
 
 // NewProvider creates a new OpenAI provider.
@@ -27,6 +28,17 @@ func NewProvider(client *openai.Client, modelName string, supportsJSONMode bool)
 		client:           client,
 		model:            modelName,
 		supportsJSONMode: supportsJSONMode,
+	}
+}
+
+// NewProviderWithMaxTokens creates a new OpenAI provider with explicit max_completion_tokens.
+// This is needed for providers like OpenRouter where we fetch the limit from API metadata.
+func NewProviderWithMaxTokens(client *openai.Client, modelName string, supportsJSONMode bool, maxCompletionTokens int) *Provider {
+	return &Provider{
+		client:              client,
+		model:               modelName,
+		supportsJSONMode:    supportsJSONMode,
+		maxCompletionTokens: maxCompletionTokens,
 	}
 }
 
@@ -56,6 +68,12 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 			Model:    p.model,
 			Messages: messages,
 			Tools:    tools,
+		}
+
+		// Apply max_completion_tokens if configured
+		// This is critical for OpenRouter to avoid their low defaults
+		if p.maxCompletionTokens > 0 {
+			openAIReq.MaxCompletionTokens = p.maxCompletionTokens
 		}
 
 		if req.Config != nil && len(req.Config.StopSequences) > 0 {

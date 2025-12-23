@@ -1,4 +1,4 @@
-package groq
+package poe
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const modelsURL = "https://api.groq.com/openai/v1/models"
+const baseURL = "https://api.poe.com/v1"
 
 // Cache for models metadata
 var (
@@ -22,42 +22,39 @@ var (
 	modelCacheTTL  = 1 * time.Hour
 )
 
-// ModelInfo represents enhanced model metadata for Groq
+// ModelInfo represents enhanced model metadata for Poe
 type ModelInfo struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	OwnedBy       string `json:"owned_by,omitempty"`
-	ContextWindow int    `json:"context_length,omitempty"`
-	Active        bool   `json:"active,omitempty"`
-	CreatedAt     int64  `json:"created_at,omitempty"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	OwnedBy   string `json:"owned_by,omitempty"`
+	CreatedAt int64  `json:"created_at,omitempty"`
 }
 
-// groqModelResponse represents a single model from Groq API
-type groqModelResponse struct {
-	ID            string `json:"id"`
-	Object        string `json:"object"`
-	Created       int64  `json:"created"`
-	OwnedBy       string `json:"owned_by"`
-	Active        bool   `json:"active"`
-	ContextWindow int    `json:"context_window"`
+// poeModelResponse represents a single model from Poe API
+type poeModelResponse struct {
+	ID      string `json:"id"`
+	Object  string `json:"object"`
+	Created int64  `json:"created"`
+	OwnedBy string `json:"owned_by"`
 }
 
-// groqModelsResponse represents the API response
-type groqModelsResponse struct {
-	Object string              `json:"object"`
-	Data   []groqModelResponse `json:"data"`
+// poeModelsResponse represents the API response
+type poeModelsResponse struct {
+	Object string             `json:"object"`
+	Data   []poeModelResponse `json:"data"`
 }
 
-// fetchModels fetches models from Groq API
+// fetchModels fetches models from Poe API
 func fetchModels(ctx context.Context, apiKey string) ([]ModelInfo, error) {
 	if apiKey == "" {
-		apiKey = os.Getenv("GROQ_API_KEY")
+		apiKey = os.Getenv("POE_API_KEY")
 	}
 	if apiKey == "" {
-		return nil, fmt.Errorf("GROQ_API_KEY not set")
+		return nil, fmt.Errorf("POE_API_KEY not set")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", modelsURL, nil)
+	url := fmt.Sprintf("%s/models", baseURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -77,25 +74,18 @@ func fetchModels(ctx context.Context, apiKey string) ([]ModelInfo, error) {
 		return nil, fmt.Errorf("failed to fetch models: %s - %s", resp.Status, string(body))
 	}
 
-	var result groqModelsResponse
+	var result poeModelsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	var models []ModelInfo
 	for _, m := range result.Data {
-		// Only include active models
-		if !m.Active {
-			continue
-		}
-
 		models = append(models, ModelInfo{
-			ID:            m.ID,
-			Name:          m.ID, // Groq uses ID as display name
-			OwnedBy:       m.OwnedBy,
-			ContextWindow: m.ContextWindow,
-			Active:        m.Active,
-			CreatedAt:     m.Created,
+			ID:        m.ID,
+			Name:      m.ID, // Poe uses ID as display name
+			OwnedBy:   m.OwnedBy,
+			CreatedAt: m.Created,
 		})
 	}
 
@@ -107,7 +97,7 @@ func fetchModels(ctx context.Context, apiKey string) ([]ModelInfo, error) {
 	return models, nil
 }
 
-// ListModelsWithMetadata fetches models with full metadata and caching
+// ListModelsWithMetadata fetches models with metadata and caching
 func ListModelsWithMetadata(ctx context.Context, apiKey string) ([]ModelInfo, error) {
 	// Check cache first
 	modelCacheMu.RLock()
@@ -133,7 +123,7 @@ func ListModelsWithMetadata(ctx context.Context, apiKey string) ([]ModelInfo, er
 	return models, nil
 }
 
-// ListModels fetches available models from Groq API (backward compatible).
+// ListModels fetches available models from Poe API (backward compatible).
 func ListModels(ctx context.Context, apiKey string) ([]string, error) {
 	models, err := ListModelsWithMetadata(ctx, apiKey)
 	if err != nil {
@@ -145,9 +135,11 @@ func ListModels(ctx context.Context, apiKey string) ([]string, error) {
 		ids = append(ids, m.ID)
 	}
 
-	if len(ids) == 0 {
-		return nil, fmt.Errorf("no models found from Groq API")
-	}
-
+	sort.Strings(ids)
 	return ids, nil
+}
+
+// GetBaseURL returns the base URL for the Poe API.
+func GetBaseURL() string {
+	return baseURL
 }

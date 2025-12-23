@@ -33,6 +33,9 @@ var ProviderEnvMapping = map[string]map[string]string{
 	"openrouter": {
 		"api_key": "OPENROUTER_API_KEY",
 	},
+	"poe": {
+		"api_key": "POE_API_KEY",
+	},
 	"ollama": {
 		"base_url": "OLLAMA_BASE_URL",
 	},

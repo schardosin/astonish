@@ -5,12 +5,23 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/provider"
+	"github.com/schardosin/astonish/pkg/provider/anthropic"
+	"github.com/schardosin/astonish/pkg/provider/google"
+	"github.com/schardosin/astonish/pkg/provider/groq"
+	"github.com/schardosin/astonish/pkg/provider/lmstudio"
+	"github.com/schardosin/astonish/pkg/provider/ollama"
+	openai_provider "github.com/schardosin/astonish/pkg/provider/openai"
+	"github.com/schardosin/astonish/pkg/provider/openrouter"
+	"github.com/schardosin/astonish/pkg/provider/poe"
+	"github.com/schardosin/astonish/pkg/provider/sap"
+	"github.com/schardosin/astonish/pkg/provider/xai"
 )
 
 // GeneralSettings represents the general app settings
@@ -54,7 +65,7 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	providers := []ProviderSettings{}
 
 	// List all known providers (alphabetically ordered)
-	knownProviders := []string{"anthropic", "gemini", "groq", "lm_studio", "ollama", "openai", "openrouter", "sap_ai_core", "xai"}
+	knownProviders := []string{"anthropic", "gemini", "groq", "lm_studio", "ollama", "openai", "openrouter", "poe", "sap_ai_core", "xai"}
 
 	for _, name := range knownProviders {
 		providerCfg, exists := cfg.Providers[name]
@@ -357,7 +368,7 @@ func GetSetupStatusHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Check for configured providers
 	var configuredProviders []string
-	knownProviders := []string{"anthropic", "gemini", "groq", "lm_studio", "ollama", "openai", "openrouter", "sap_ai_core", "xai"}
+	knownProviders := []string{"anthropic", "gemini", "groq", "lm_studio", "ollama", "openai", "openrouter", "poe", "sap_ai_core", "xai"}
 
 	for _, name := range knownProviders {
 		if providerCfg, exists := cfg.Providers[name]; exists {
@@ -383,5 +394,303 @@ func GetSetupStatusHandler(w http.ResponseWriter, r *http.Request) {
 		HasDefaultProvider:  hasDefaultProvider,
 		HasDefaultModel:     hasDefaultModel,
 		ConfiguredProviders: configuredProviders,
+	})
+}
+
+// ListProviderModelsWithMetadataHandler handles GET /api/providers/{providerId}/models-metadata
+// Returns enhanced model information with pricing for OpenRouter, basic info for others
+func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	providerID := vars["providerId"]
+
+	cfg, err := config.LoadAppConfig()
+	if err != nil {
+		http.Error(w, "Failed to load config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// For OpenRouter, return full metadata with pricing
+	if providerID == "openrouter" {
+		apiKey := ""
+		if cfg.Providers["openrouter"] != nil {
+			apiKey = cfg.Providers["openrouter"]["api_key"]
+		}
+
+		models, err := openrouter.ListModelsWithMetadata(r.Context(), apiKey)
+		if err != nil {
+			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"provider":     providerID,
+			"has_metadata": true,
+			"models":       models,
+		})
+		return
+	}
+
+	// For Anthropic, return model metadata with display names
+	if providerID == "anthropic" {
+		apiKey := ""
+		if cfg.Providers["anthropic"] != nil {
+			apiKey = cfg.Providers["anthropic"]["api_key"]
+		}
+		if apiKey == "" {
+			apiKey = os.Getenv("ANTHROPIC_API_KEY")
+		}
+
+		models, err := anthropic.ListModelsWithMetadata(r.Context(), apiKey)
+		if err != nil {
+			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"provider":     providerID,
+			"has_metadata": true,
+			"models":       models,
+		})
+		return
+	}
+
+	// For Google AI (Gemini), return model metadata with token limits
+	if providerID == "gemini" {
+		apiKey := ""
+		if cfg.Providers["gemini"] != nil {
+			apiKey = cfg.Providers["gemini"]["api_key"]
+		}
+		if apiKey == "" {
+			apiKey = os.Getenv("GOOGLE_API_KEY")
+		}
+
+		models, err := google.ListModelsWithMetadata(r.Context(), apiKey)
+		if err != nil {
+			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"provider":     providerID,
+			"has_metadata": true,
+			"models":       models,
+		})
+		return
+	}
+
+	// For Groq, return model metadata with context window
+	if providerID == "groq" {
+		apiKey := ""
+		if cfg.Providers["groq"] != nil {
+			apiKey = cfg.Providers["groq"]["api_key"]
+		}
+		if apiKey == "" {
+			apiKey = os.Getenv("GROQ_API_KEY")
+		}
+
+		models, err := groq.ListModelsWithMetadata(r.Context(), apiKey)
+		if err != nil {
+			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"provider":     providerID,
+			"has_metadata": true,
+			"models":       models,
+		})
+		return
+	}
+
+	// For OpenAI, return model metadata
+	if providerID == "openai" {
+		apiKey := ""
+		if cfg.Providers["openai"] != nil {
+			apiKey = cfg.Providers["openai"]["api_key"]
+		}
+		if apiKey == "" {
+			apiKey = os.Getenv("OPENAI_API_KEY")
+		}
+
+		models, err := openai_provider.ListModelsWithMetadata(r.Context(), apiKey)
+		if err != nil {
+			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"provider":     providerID,
+			"has_metadata": true,
+			"models":       models,
+		})
+		return
+	}
+
+	// For Poe, return model metadata
+	if providerID == "poe" {
+		apiKey := ""
+		if cfg.Providers["poe"] != nil {
+			apiKey = cfg.Providers["poe"]["api_key"]
+		}
+		if apiKey == "" {
+			apiKey = os.Getenv("POE_API_KEY")
+		}
+
+		models, err := poe.ListModelsWithMetadata(r.Context(), apiKey)
+		if err != nil {
+			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"provider":     providerID,
+			"has_metadata": true,
+			"models":       models,
+		})
+		return
+	}
+
+	// For SAP AI Core, return model metadata with context window and max tokens
+	if providerID == "sap_ai_core" {
+		clientID := ""
+		clientSecret := ""
+		authURL := ""
+		baseURL := ""
+		resourceGroup := ""
+		if cfg.Providers["sap_ai_core"] != nil {
+			clientID = cfg.Providers["sap_ai_core"]["client_id"]
+			clientSecret = cfg.Providers["sap_ai_core"]["client_secret"]
+			authURL = cfg.Providers["sap_ai_core"]["auth_url"]
+			baseURL = cfg.Providers["sap_ai_core"]["base_url"]
+			resourceGroup = cfg.Providers["sap_ai_core"]["resource_group"]
+		}
+		if clientID == "" {
+			clientID = os.Getenv("AICORE_CLIENT_ID")
+		}
+		if clientSecret == "" {
+			clientSecret = os.Getenv("AICORE_CLIENT_SECRET")
+		}
+		if authURL == "" {
+			authURL = os.Getenv("AICORE_AUTH_URL")
+		}
+		if baseURL == "" {
+			baseURL = os.Getenv("AICORE_BASE_URL")
+		}
+		if resourceGroup == "" {
+			resourceGroup = os.Getenv("AICORE_RESOURCE_GROUP")
+		}
+
+		models, err := sap.ListModelsWithMetadata(r.Context(), clientID, clientSecret, authURL, baseURL, resourceGroup)
+		if err != nil {
+			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"provider":     providerID,
+			"has_metadata": true,
+			"models":       models,
+		})
+		return
+	}
+
+	// For xAI, return model metadata
+	if providerID == "xai" {
+		apiKey := ""
+		if cfg.Providers["xai"] != nil {
+			apiKey = cfg.Providers["xai"]["api_key"]
+		}
+		if apiKey == "" {
+			apiKey = os.Getenv("XAI_API_KEY")
+		}
+
+		models, err := xai.ListModelsWithMetadata(r.Context(), apiKey)
+		if err != nil {
+			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"provider":     providerID,
+			"has_metadata": true,
+			"models":       models,
+		})
+		return
+	}
+
+	// For LM Studio, return model metadata
+	if providerID == "lm_studio" {
+		baseURL := ""
+		if cfg.Providers["lm_studio"] != nil {
+			baseURL = cfg.Providers["lm_studio"]["base_url"]
+		}
+
+		models, err := lmstudio.ListModelsWithMetadata(r.Context(), baseURL)
+		if err != nil {
+			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"provider":     providerID,
+			"has_metadata": true,
+			"models":       models,
+		})
+		return
+
+	}
+
+	// For Ollama, return model metadata
+	if providerID == "ollama" {
+		baseURL := ""
+		if cfg.Providers["ollama"] != nil {
+			baseURL = cfg.Providers["ollama"]["base_url"]
+		}
+
+		models, err := ollama.ListModelsWithMetadata(r.Context(), baseURL)
+		if err != nil {
+			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"provider":     providerID,
+			"has_metadata": true,
+			"models":       models,
+		})
+		return
+	}
+
+	// For other providers, return basic model list wrapped as ModelInfo
+	models, err := provider.ListModelsForProvider(r.Context(), providerID, cfg)
+	if err != nil {
+		http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Convert string list to basic ModelInfo format
+	var modelInfos []map[string]interface{}
+	for _, m := range models {
+		modelInfos = append(modelInfos, map[string]interface{}{
+			"id":   m,
+			"name": m,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"provider":     providerID,
+		"has_metadata": false,
+		"models":       modelInfos,
 	})
 }

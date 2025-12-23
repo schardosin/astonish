@@ -19,6 +19,7 @@ import (
 	"github.com/schardosin/astonish/pkg/provider/ollama"
 	openai_provider "github.com/schardosin/astonish/pkg/provider/openai"
 	"github.com/schardosin/astonish/pkg/provider/openrouter"
+	"github.com/schardosin/astonish/pkg/provider/poe"
 	"github.com/schardosin/astonish/pkg/provider/sap"
 	"github.com/schardosin/astonish/pkg/provider/xai"
 )
@@ -47,6 +48,7 @@ func handleSetupCommand() error {
 		huh.NewOption(provider.GetProviderDisplayName("ollama"), "ollama"),
 		huh.NewOption(provider.GetProviderDisplayName("openai"), "openai"),
 		huh.NewOption(provider.GetProviderDisplayName("openrouter"), "openrouter"),
+                huh.NewOption(provider.GetProviderDisplayName("poe"), "poe"),
 		huh.NewOption(provider.GetProviderDisplayName("sap_ai_core"), "sap_ai_core"),
 		huh.NewOption(provider.GetProviderDisplayName("xai"), "xai"),
 	}
@@ -158,6 +160,17 @@ func handleSetupCommand() error {
 				return nil
 			}
 			fmt.Printf("Warning: Failed to fetch/select OpenRouter models: %v\n", err)
+		} else {
+			goto SaveConfig
+		}
+	case "poe":
+		runAPIKeyForm("Poe API Key", "api_key", pCfg)
+		if err := fetchAndSelectPoeModel(pCfg, cfg); err != nil {
+			if isUserAborted(err) {
+				fmt.Println("Setup aborted by user; no changes were saved.")
+				return nil
+			}
+			fmt.Printf("Warning: Failed to fetch/select Poe models: %v\n", err)
 		} else {
 			goto SaveConfig
 		}
@@ -706,7 +719,7 @@ func fetchAndSelectAnthropicModel(pCfg config.ProviderConfig, appCfg *config.App
 	fmt.Println("Fetching available models from Anthropic...")
 	runSpinner("Connecting to Anthropic...")
 
-	models, err := anthropic.ListModels(apiKey)
+	models, err := anthropic.ListModels(context.Background(), apiKey)
 	if err != nil {
 		return err
 	}
@@ -773,6 +786,47 @@ func fetchAndSelectXAIModel(pCfg config.ProviderConfig, appCfg *config.AppConfig
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Select an xAI Model").
+				Options(options...).
+				Value(&selectedModel),
+		),
+	).Run()
+
+	if err != nil {
+		return err
+	}
+
+	// Save selected model as default
+	appCfg.General.DefaultModel = selectedModel
+	fmt.Printf("Selected default model: %s\n", selectedModel)
+
+	return nil
+}
+
+func fetchAndSelectPoeModel(pCfg config.ProviderConfig, appCfg *config.AppConfig) error {
+	fmt.Println("Fetching available models from Poe...")
+	runSpinner("Connecting to Poe...")
+
+	ctx := context.Background()
+	models, err := poe.ListModels(ctx, pCfg["api_key"])
+	if err != nil {
+		return fmt.Errorf("failed to fetch models: %w", err)
+	}
+
+	if len(models) == 0 {
+		return fmt.Errorf("no models available from Poe")
+	}
+
+	// Create options for huh.Select
+	options := make([]huh.Option[string], len(models))
+	for i, m := range models {
+		options[i] = huh.NewOption(m, m)
+	}
+
+	var selectedModel string
+	err = huh.NewForm(
+huh.NewGroup(
+huh.NewSelect[string]().
+				Title("Select a Poe Model").
 				Options(options...).
 				Value(&selectedModel),
 		),

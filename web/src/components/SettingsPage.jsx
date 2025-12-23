@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package, Store, GitBranch, RefreshCw } from 'lucide-react'
+import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package, Store, GitBranch, RefreshCw, Search } from 'lucide-react'
 import MCPStoreModal from './MCPStoreModal'
 import FlowStorePanel from './FlowStorePanel'
+import ProviderModelSelector from './ProviderModelSelector'
 
 // API functions
 const fetchSettings = async () => {
@@ -80,7 +81,7 @@ const removeTap = async (name) => {
   return res.json()
 }
 
-export default function SettingsPage({ onClose, activeSection = 'general', onSectionChange, onToolsRefresh }) {
+export default function SettingsPage({ onClose, activeSection = 'general', onSectionChange, onToolsRefresh, onSettingsSaved }) {
   // Use prop for active section, default to 'general'
   const [settings, setSettings] = useState(null)
   const [mcpConfig, setMcpConfig] = useState(null)
@@ -118,6 +119,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
   const [availableModels, setAvailableModels] = useState([])
   const [loadingModels, setLoadingModels] = useState(false)
   const [modelsError, setModelsError] = useState(null)
+  const [showModelSelector, setShowModelSelector] = useState(false)
 
   // Web-capable tools state
   const [webCapableTools, setWebCapableTools] = useState({ webSearch: [], webExtract: [] })
@@ -193,6 +195,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
     try {
       await saveSettings({ general: generalForm })
       setSaveSuccess(true)
+      if (onSettingsSaved) onSettingsSaved()
       setTimeout(() => setSaveSuccess(false), 2000)
     } catch (err) {
       setError(err.message)
@@ -207,9 +210,10 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
     try {
       await saveSettings({ providers: { [providerName]: providerForms[providerName] } })
       setSaveSuccess(true)
-      setTimeout(() => setSaveSuccess(false), 2000)
       // Reload to get masked values
       loadData()
+      if (onSettingsSaved) onSettingsSaved()
+      setTimeout(() => setSaveSuccess(false), 2000)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -449,51 +453,80 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                 <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
                   Default Model
                 </label>
-                <div className="relative">
-                  <select
-                    value={generalForm.default_model}
-                    onChange={(e) => setGeneralForm({ ...generalForm, default_model: e.target.value })}
-                    onFocus={() => {
-                      if (generalForm.default_provider && availableModels.length === 0 && !loadingModels) {
-                        loadModelsForProvider(generalForm.default_provider)
-                      }
-                    }}
-                    className="w-full px-4 py-2.5 rounded-lg border text-sm"
-                    style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-                    disabled={!generalForm.default_provider}
-                  >
-                    {!generalForm.default_provider && (
-                      <option value="">Select a provider first...</option>
-                    )}
-                    {generalForm.default_provider && availableModels.length === 0 && !loadingModels && (
-                      <option value={generalForm.default_model || ''}>
-                        {generalForm.default_model || 'Click to load models...'}
-                      </option>
-                    )}
+                
+                {/* Providers with enhanced selector */}
+                {['openrouter', 'anthropic', 'gemini', 'groq', 'openai', 'poe', 'sap_ai_core', 'xai', 'lm_studio', 'ollama'].includes(generalForm.default_provider) ? (
+                  <div>
+                    <button
+                      onClick={() => setShowModelSelector(true)}
+                      className="w-full px-4 py-2.5 rounded-lg border text-sm text-left flex items-center justify-between"
+                      style={{ 
+                        background: 'var(--bg-secondary)', 
+                        borderColor: 'var(--border-color)', 
+                        color: generalForm.default_model ? 'var(--text-primary)' : 'var(--text-muted)' 
+                      }}
+                    >
+                      <span className="truncate">
+                        {generalForm.default_model || 'Click to select a model...'}
+                      </span>
+                      <Search size={16} style={{ color: 'var(--text-muted)' }} />
+                    </button>
+                    <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                      {generalForm.default_provider === 'openrouter' 
+                        ? 'Click to open model browser with pricing info'
+                        : ['gemini', 'groq'].includes(generalForm.default_provider)
+                          ? 'Click to open model browser with context window'
+                          : 'Click to open model browser'}
+                    </p>
+                  </div>
+                ) : (
+                  /* Other providers: Standard dropdown */
+                  <div className="relative">
+                    <select
+                      value={generalForm.default_model}
+                      onChange={(e) => setGeneralForm({ ...generalForm, default_model: e.target.value })}
+                      onFocus={() => {
+                        if (generalForm.default_provider && availableModels.length === 0 && !loadingModels) {
+                          loadModelsForProvider(generalForm.default_provider)
+                        }
+                      }}
+                      className="w-full px-4 py-2.5 rounded-lg border text-sm"
+                      style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                      disabled={!generalForm.default_provider}
+                    >
+                      {!generalForm.default_provider && (
+                        <option value="">Select a provider first...</option>
+                      )}
+                      {generalForm.default_provider && availableModels.length === 0 && !loadingModels && (
+                        <option value={generalForm.default_model || ''}>
+                          {generalForm.default_model || 'Click to load models...'}
+                        </option>
+                      )}
+                      {loadingModels && (
+                        <option value="">Loading models...</option>
+                      )}
+                      {availableModels.length > 0 && (
+                        <>
+                          <option value="">Select a model...</option>
+                          {availableModels.map(model => (
+                            <option key={model} value={model}>{model}</option>
+                          ))}
+                        </>
+                      )}
+                    </select>
                     {loadingModels && (
-                      <option value="">Loading models...</option>
+                      <div className="absolute right-10 top-1/2 -translate-y-1/2">
+                        <Loader2 size={16} className="animate-spin" style={{ color: 'var(--accent)' }} />
+                      </div>
                     )}
-                    {availableModels.length > 0 && (
-                      <>
-                        <option value="">Select a model...</option>
-                        {availableModels.map(model => (
-                          <option key={model} value={model}>{model}</option>
-                        ))}
-                      </>
+                    {modelsError && (
+                      <p className="text-xs mt-1" style={{ color: 'var(--danger)' }}>{modelsError}</p>
                     )}
-                  </select>
-                  {loadingModels && (
-                    <div className="absolute right-10 top-1/2 -translate-y-1/2">
-                      <Loader2 size={16} className="animate-spin" style={{ color: 'var(--accent)' }} />
-                    </div>
-                  )}
-                </div>
-                {modelsError && (
-                  <p className="text-xs mt-1" style={{ color: 'var(--danger)' }}>{modelsError}</p>
+                    <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                      Click the dropdown to load available models from the provider
+                    </p>
+                  </div>
                 )}
-                <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                  Click the dropdown to load available models from the provider
-                </p>
               </div>
 
               {/* Web Tools Section */}
@@ -1208,6 +1241,15 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
           loadData()
           if (onToolsRefresh) onToolsRefresh()
         }}
+      />
+
+      {/* Enhanced Model Selector */}
+      <ProviderModelSelector
+        isOpen={showModelSelector}
+        onClose={() => setShowModelSelector(false)}
+        onSelect={(modelId) => setGeneralForm({ ...generalForm, default_model: modelId })}
+        currentModel={generalForm.default_model}
+        provider={generalForm.default_provider}
       />
     </div>
   )

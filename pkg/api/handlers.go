@@ -493,6 +493,7 @@ func RegisterRoutes(router *mux.Router) {
 
 	// Provider endpoints
 	router.HandleFunc("/api/providers/{providerId}/models", ListProviderModelsHandler).Methods("GET")
+	router.HandleFunc("/api/providers/{providerId}/models-metadata", ListProviderModelsWithMetadataHandler).Methods("GET")
 
 	// MCP Store endpoints
 	router.HandleFunc("/api/mcp-store", ListMCPStoreHandler).Methods("GET")

@@ -8,10 +8,44 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"sync"
+	"time"
 )
 
-// ListModels fetches available models from the xAI API.
-func ListModels(ctx context.Context, apiKey string) ([]string, error) {
+const modelsURL = "https://api.x.ai/v1/models"
+
+// Cache for models metadata
+var (
+	modelCacheMu   sync.RWMutex
+	modelCache     []ModelInfo
+	modelCacheTime time.Time
+	modelCacheTTL  = 1 * time.Hour
+)
+
+// ModelInfo represents enhanced model metadata for xAI
+type ModelInfo struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	OwnedBy   string `json:"owned_by,omitempty"`
+	CreatedAt int64  `json:"created_at,omitempty"`
+}
+
+// xaiModelResponse represents a single model from xAI API
+type xaiModelResponse struct {
+	ID      string `json:"id"`
+	Object  string `json:"object"`
+	Created int64  `json:"created"`
+	OwnedBy string `json:"owned_by"`
+}
+
+// xaiModelsResponse represents the API response
+type xaiModelsResponse struct {
+	Object string             `json:"object"`
+	Data   []xaiModelResponse `json:"data"`
+}
+
+// fetchModels fetches models from xAI API
+func fetchModels(ctx context.Context, apiKey string) ([]ModelInfo, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv("XAI_API_KEY")
 	}
@@ -19,10 +53,7 @@ func ListModels(ctx context.Context, apiKey string) ([]string, error) {
 		return nil, fmt.Errorf("XAI_API_KEY not set")
 	}
 
-	// xAI uses standard OpenAI-compatible endpoints
-	url := "https://api.x.ai/v1/models"
-
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", modelsURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -42,26 +73,71 @@ func ListModels(ctx context.Context, apiKey string) ([]string, error) {
 		return nil, fmt.Errorf("failed to fetch models: %s - %s", resp.Status, string(body))
 	}
 
-	// xAI follows the OpenAI JSON schema for model listing
-	var result struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-
+	var result xaiModelsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	var models []string
+	var models []ModelInfo
 	for _, m := range result.Data {
-		models = append(models, m.ID)
+		models = append(models, ModelInfo{
+			ID:        m.ID,
+			Name:      m.ID, // xAI uses ID as display name
+			OwnedBy:   m.OwnedBy,
+			CreatedAt: m.Created,
+		})
 	}
 
-	if len(models) == 0 {
+	// Sort by ID
+	sort.Slice(models, func(i, j int) bool {
+		return models[i].ID < models[j].ID
+	})
+
+	return models, nil
+}
+
+// ListModelsWithMetadata fetches models with metadata and caching
+func ListModelsWithMetadata(ctx context.Context, apiKey string) ([]ModelInfo, error) {
+	// Check cache first
+	modelCacheMu.RLock()
+	if len(modelCache) > 0 && time.Since(modelCacheTime) < modelCacheTTL {
+		cached := make([]ModelInfo, len(modelCache))
+		copy(cached, modelCache)
+		modelCacheMu.RUnlock()
+		return cached, nil
+	}
+	modelCacheMu.RUnlock()
+
+	models, err := fetchModels(ctx, apiKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// Update cache
+	modelCacheMu.Lock()
+	modelCache = models
+	modelCacheTime = time.Now()
+	modelCacheMu.Unlock()
+
+	return models, nil
+}
+
+// ListModels fetches available models from the xAI API (backward compatible).
+func ListModels(ctx context.Context, apiKey string) ([]string, error) {
+	models, err := ListModelsWithMetadata(ctx, apiKey)
+	if err != nil {
+		return nil, err
+	}
+
+	var ids []string
+	for _, m := range models {
+		ids = append(ids, m.ID)
+	}
+
+	if len(ids) == 0 {
 		return nil, fmt.Errorf("no models found from xAI API")
 	}
 
-	sort.Strings(models)
-	return models, nil
+	sort.Strings(ids)
+	return ids, nil
 }

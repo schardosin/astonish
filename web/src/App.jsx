@@ -1264,6 +1264,7 @@ flow:
           onSectionChange={(section) => replaceHash(buildPath('settings', { section }))}
           theme={theme}
           onToolsRefresh={loadTools}
+          onSettingsSaved={loadSettings}
         />
       )}
 

@@ -265,6 +265,109 @@ const HighlightedTextarea = React.forwardRef(function HighlightedTextarea(
   )
 })
 
+
+
+
+/**
+ * Raw Tool Output Editor - Checkbox toggle with details
+ */
+function RawToolOutputEditor({ value, onChange }) {
+  // raw_tool_output is a map, but we only support one key for now
+  const existingKey = value ? (Object.keys(value)[0] || '') : ''
+  const isEnabled = value !== undefined
+
+  const handleToggle = (e) => {
+    if (e.target.checked) {
+      // Enable with empty map
+      onChange({})
+    } else {
+      // Disable (remove field)
+      onChange(undefined)
+    }
+  }
+
+  const handleKeyChange = (newKey) => {
+    if (!newKey) {
+      onChange({})
+    } else {
+      // Preserve existing type if available, otherwise default to 'any'
+      const currentType = value ? (Object.values(value)[0] || 'any') : 'any'
+      onChange({ [newKey]: currentType })
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <input 
+          type="checkbox"
+          checked={isEnabled}
+          onChange={handleToggle}
+          id="raw-tool-output-toggle"
+          className="w-4 h-4 accent-purple-600 rounded"
+        />
+        <label 
+          htmlFor="raw-tool-output-toggle" 
+          className="text-sm font-medium cursor-pointer" 
+          style={{ color: 'var(--text-secondary)' }}
+        >
+          Raw Tool Output
+        </label>
+      </div>
+      
+      {isEnabled && (
+        <div className="pl-6 space-y-2 animate-in fade-in slide-in-from-top-1 duration-200">
+           <div className="text-xs p-3 rounded border border-blue-500/20" style={{ background: 'rgba(59, 130, 246, 0.05)', color: 'var(--text-muted)' }}>
+            <p className="mb-1 font-medium text-blue-400 flex items-center gap-1">
+              <Sparkles size={10} /> Context Optimization
+            </p>
+            <p>
+              Store large tool outputs directly in state without sending them to the LLM. 
+              The LLM will only see a success message.
+            </p>
+            <p className="mt-2 text-blue-400/80 italic">
+              Use this when data is large and will be processed by subsequent nodes. 
+              This isolates the data in state, avoiding unnecessary LLM round-trips and context overhead.
+            </p>
+          </div>
+
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={existingKey}
+              onChange={(e) => handleKeyChange(e.target.value)}
+              className="flex-1 px-3 py-2 text-sm rounded border"
+              style={{ 
+                background: 'var(--bg-primary)', 
+                borderColor: 'var(--border-color)',
+                color: 'var(--text-primary)'
+              }}
+              placeholder="Enter state variable name..."
+            />
+            <select
+              value={value && existingKey ? value[existingKey] : 'any'}
+              onChange={(e) => onChange({ [existingKey]: e.target.value })}
+              className="px-3 py-2 text-sm rounded border w-24"
+              style={{ 
+                background: 'var(--bg-primary)', 
+                borderColor: 'var(--border-color)',
+                color: 'var(--text-primary)'
+              }}
+            >
+              <option value="any">any</option>
+              <option value="str">str</option>
+              <option value="list">list</option>
+              <option value="dict">dict</option>
+              <option value="int">int</option>
+              <option value="bool">bool</option>
+            </select>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 /**
  * Output Model Editor - key-value list for output_model field
  */
@@ -653,14 +756,25 @@ function LlmNodeForm({ data, onChange, theme, availableTools = [], availableVari
                   Add
                 </button>
               </div>
-              <OutputModelEditor
-                value={data.output_model}
-                onChange={(newModel) => onChange({ ...data, output_model: newModel })}
-                theme={theme}
-                hideLabel={true}
-              />
+              <div className="space-y-6">
+                <OutputModelEditor
+                  value={data.output_model}
+                  onChange={(newModel) => onChange({ ...data, output_model: newModel })}
+                  theme={theme}
+                  hideLabel={true}
+                />
+                
+                <div className="pt-4 border-t" style={{ borderColor: 'var(--border-color)' }}>
+                  <RawToolOutputEditor 
+                      value={data.raw_tool_output}
+                      onChange={(val) => onChange({ ...data, raw_tool_output: val })}
+                  />
+                </div>
+              </div>
             </div>
             
+            <div className="w-px self-stretch bg-[var(--border-color)] mx-2"></div>
+
             {/* Right column - User Message */}
             <div className="flex-1">
               <div className="flex items-center justify-between mb-3">
@@ -882,6 +996,8 @@ function ToolNodeForm({ data, onChange, theme, availableTools = [] }) {
           )}
         </div>
         
+
+        
         <div className="flex items-center justify-between">
           <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
             Auto-approve
@@ -891,6 +1007,13 @@ function ToolNodeForm({ data, onChange, theme, availableTools = [] }) {
             checked={data.tools_auto_approval === true}
             onChange={(e) => onChange({ ...data, tools_auto_approval: e.target.checked || undefined })}
             className="w-4 h-4 accent-purple-600"
+          />
+        </div>
+
+        <div className="pt-4 border-t" style={{ borderColor: 'var(--border-color)' }}>
+          <RawToolOutputEditor 
+            value={data.raw_tool_output}
+            onChange={(val) => onChange({ ...data, raw_tool_output: val })}
           />
         </div>
       </div>

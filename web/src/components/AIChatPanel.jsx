@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { MessageSquare, Send, X, Sparkles, Loader2, Check, Eye, Maximize2, Minimize2 } from 'lucide-react'
+import { MessageSquare, Send, X, Sparkles, Loader2, Check, Eye, Maximize2, Minimize2, Download, Package, Settings, Globe } from 'lucide-react'
 
 // API function to chat with AI
 async function sendChatMessage(message, context, currentYaml, selectedNodes, history) {
@@ -15,6 +15,546 @@ async function sendChatMessage(message, context, currentYaml, selectedNodes, his
     }),
   })
   return response.json()
+}
+
+// API function to search for tools in the store using AI semantic search
+async function searchToolsInStore(requirement) {
+  const response = await fetch('/api/ai/tool-search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ requirement }),
+  })
+  return response.json()
+}
+
+// API function to search for MCP servers on the internet (uses AI knowledge)
+async function searchToolsOnInternet(requirement) {
+  const response = await fetch('/api/ai/tool-search-internet', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ requirement }),
+  })
+  return response.json()
+}
+
+// API function to extract MCP server info from a URL (uses tavily-extract)
+async function extractMCPServerFromURL(url) {
+  const response = await fetch('/api/ai/url-extract', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  })
+  return response.json()
+}
+
+// Helper to detect GitHub/MCP URLs in text
+function detectMCPURL(text) {
+  // Match GitHub URLs and npm package URLs
+  const urlPatterns = [
+    /https?:\/\/github\.com\/[\w-]+\/[\w.-]+/gi,
+    /https?:\/\/www\.npmjs\.com\/package\/[@\w/-]+/gi,
+  ]
+  for (const pattern of urlPatterns) {
+    const match = text.match(pattern)
+    if (match) return match[0]
+  }
+  return null
+}
+
+// API function to install a tool from the store
+async function installToolFromStore(toolId, serverName, env = {}) {
+  const response = await fetch(`/api/mcp-store/${encodeURIComponent(toolId)}/install`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ serverName, env }),
+  })
+  return response.json()
+}
+
+// API function to install MCP server from internet search result
+async function installInternetMCP(result, env = {}) {
+  const response = await fetch('/api/mcp-internet-install', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: result.name,
+      command: result.command,
+      args: result.args || [],
+      env: env,
+    }),
+  })
+  return response.json()
+}
+
+// Detect if AI response offers to help find tools (stores pending requirement)
+// Returns the tool requirement if AI is offering help, null otherwise
+function detectToolOfferFromAI(text) {
+  const lower = text.toLowerCase()
+  
+  // Check if AI is offering to help find/install tools
+  const offerPatterns = [
+    'would you like me to help you find',
+    'would you like me to help you install',
+    'would you like me to find and install',
+    'shall i search for',
+    'shall i help you find',
+    'want me to search',
+    'want me to find',
+  ]
+  
+  // Check if AI mentions missing tools AND offers help
+  const missingPatterns = [
+    'tools that are not currently installed',
+    'tools that are not installed',
+    'would need the following tools',
+    'would need a tool for',
+    'need a tool for',
+    'not currently installed',
+    'i would need',
+  ]
+  
+  const isMissingMentioned = missingPatterns.some(p => lower.includes(p))
+  const isOfferingHelp = offerPatterns.some(p => lower.includes(p))
+  
+  if (isMissingMentioned) {
+    // Extract the tool requirement description
+    const toolMatches = []
+    
+    // Pattern 1: Bullet points (- tool: for reason)
+    const bulletPattern = /[-•*]\s*\*?\*?([^:\n*]{5,100})\*?\*?(?::\s*(?:for|to)\s+([^\n]+))?/gi
+    let match
+    while ((match = bulletPattern.exec(text)) !== null) {
+      let desc = (match[1] + (match[2] ? ' ' + match[2] : '')).trim()
+      const excludePatterns = ['would you', 'let me', 'i can', 'you can', 'please', 'strictly following']
+      if (!excludePatterns.some(p => desc.toLowerCase().includes(p)) && desc.length > 5) {
+        toolMatches.push(desc)
+      }
+    }
+    
+    // Pattern 2: Inline mentions like "I would need a tool for X"
+    if (toolMatches.length === 0) {
+      const inlinePatterns = [
+        /(?:would need|need)\s+(?:a\s+)?tool\s+for\s+([^.(]+)/gi,
+        /(?:would need|need)\s+(?:a\s+)?([^.]+?)\s+tool/gi,
+        /tool\s+(?:for\s+)?(?:general\s+)?([^.(,]+?)(?:\s+that|\s+is|\.|,)/gi,
+        /`([a-z-]+(?:-[a-z]+)*)`\s*(?:or similar|tool)?/gi,  // backtick tool names like `tavily-search`
+      ]
+      
+      for (const pattern of inlinePatterns) {
+        let inlineMatch
+        while ((inlineMatch = pattern.exec(text)) !== null) {
+          let desc = inlineMatch[1].trim()
+          // Clean up and validate
+          if (desc.length > 3 && desc.length < 100 && !desc.includes('available tools')) {
+            toolMatches.push(desc)
+          }
+        }
+      }
+    }
+    
+    if (toolMatches.length > 0) {
+      // Deduplicate and join
+      const unique = [...new Set(toolMatches.map(t => t.toLowerCase()))]
+      return {
+        requirement: unique.join('; '),
+        isAskingUser: isOfferingHelp
+      }
+    }
+  }
+  
+  return null
+}
+
+// Detect if user is confirming they want help finding tools
+// Now also detects late requests like "search for it" even without pendingToolRequirement
+function isUserConfirmingToolSearch(text) {
+  const lower = text.toLowerCase().trim()
+  const confirmPatterns = [
+    'yes', 'yep', 'yeah', 'sure', 'ok', 'okay', 'please', 
+    'go ahead', 'do it', 'yes please', 'find them', 'search for them',
+    'install them', 'help me find', 'yes, help',
+    // Late requests - user changed their mind
+    'search for it', 'find it', 'check the store', 'check store', 
+    'look for it', 'search the store', 'search store', 'install it',
+    'changed my mind', 'i changed my mind', 'do it now', 'let\'s do it'
+  ]
+  return confirmPatterns.some(p => lower.startsWith(p) || lower === p || lower.includes(p))
+}
+
+// Detect if user is rejecting store results and wants internet search
+function isUserRequestingInternetSearch(text) {
+  const lower = text.toLowerCase().trim()
+  const rejectionPatterns = [
+    // Direct rejection of results
+    'not what i need', 'won\'t work', 'don\'t work', 'not right',
+    'none of these', 'not any of', 'not the right', 'wrong tools',
+    'not useful', 'not helpful', 'need something else',
+    // Direct internet search requests
+    'search online', 'search the internet', 'search internet',
+    'look online', 'find online', 'search the web', 'web search',
+    'search github', 'check online', 'check the internet'
+  ]
+  return rejectionPatterns.some(p => lower.includes(p))
+}
+
+// Detect if user is providing feedback to refine search results
+// Returns the refinement hint if detected, null otherwise
+function detectSearchRefinementFeedback(text) {
+  const lower = text.toLowerCase().trim()
+  
+  // Patterns that indicate user is providing refinement feedback
+  const refinementPatterns = [
+    /(?:try|look for|search for|find|check)\s+(?:the\s+)?(.+?)\s+(?:repo|repository|server|package|instead)/i,
+    /(?:i believe|i think|maybe|try)\s+(.+?)\s+(?:has|have|is|might)/i,
+    /(?:modelcontextprotocol|anthropic|github)\s*[\/]?\s*(.+)/i,
+    /(?:better option|better server|the right one)\s+(?:is|called|named)\s+(.+)/i,
+    /(?:search.*for|look.*for|try.*finding)\s+(.+)/i,
+    /(.+?)\s+(?:is what i need|is the one|is better)/i
+  ]
+  
+  for (const pattern of refinementPatterns) {
+    const match = text.match(pattern)
+    if (match && match[1]) {
+      return match[1].trim()
+    }
+  }
+  
+  // If message contains specific terms and internet results are shown, use it as refinement
+  const containsRefinementHints = 
+    lower.includes('sqlite') || 
+    lower.includes('modelcontextprotocol') ||
+    lower.includes('anthropic') ||
+    lower.includes('official') ||
+    lower.includes('local') ||
+    lower.includes('not cloud') ||
+    lower.includes('better option')
+  
+  if (containsRefinementHints) {
+    // Extract the main nouns/identifiers from the message
+    return text.replace(/[^a-zA-Z0-9\s-]/g, ' ').trim()
+  }
+  
+  return null
+}
+
+// Component for a tool install card with optional env var configuration
+function ToolInstallCard({ tool, installingTool, onInstall }) {
+  const [envValues, setEnvValues] = useState({})
+  const [showConfig, setShowConfig] = useState(false)
+  
+  // Check if tool requires configuration
+  const hasEnvVars = tool.envVars && Object.keys(tool.envVars).length > 0
+  const needsConfig = hasEnvVars || tool.requiresApiKey
+  
+  // Format env var name for display (e.g., TAVILY_API_KEY -> "Tavily API Key")
+  const formatEnvName = (envName) => {
+    return envName
+      .replace(/_/g, ' ')
+      .toLowerCase()
+      .replace(/\b\w/g, c => c.toUpperCase())
+  }
+  
+  const handleInstallClick = () => {
+    if (needsConfig && !showConfig) {
+      // First click: show config inputs
+      setShowConfig(true)
+    } else {
+      // Install with collected env values
+      onInstall({ ...tool, collectedEnv: envValues })
+    }
+  }
+  
+  const handleEnvChange = (key, value) => {
+    setEnvValues(prev => ({ ...prev, [key]: value }))
+  }
+  
+  const isInstalling = installingTool === tool.id
+  
+  // Check if all required env vars are filled
+  const allEnvFilled = !hasEnvVars || Object.keys(tool.envVars).every(key => envValues[key]?.trim())
+  
+  return (
+    <div className="bg-[var(--bg-primary)]/50 rounded-lg p-3 space-y-2">
+      {/* Tool info header */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          <div className="font-medium text-sm text-[var(--text-primary)]">
+            {tool.name}
+            {needsConfig && (
+              <span className="ml-2 text-xs text-yellow-400">⚙️ Config required</span>
+            )}
+          </div>
+          <div className="text-xs text-[var(--text-secondary)] mt-0.5">
+            {tool.description}
+          </div>
+          <div className="text-xs text-purple-400 mt-0.5">
+            Source: {tool.source}
+          </div>
+        </div>
+        
+        {!showConfig && (
+          <button
+            onClick={handleInstallClick}
+            disabled={isInstalling}
+            className="flex items-center gap-1 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition-colors whitespace-nowrap"
+          >
+            {isInstalling ? (
+              <>
+                <Loader2 size={12} className="animate-spin" />
+                Installing...
+              </>
+            ) : (
+              <>
+                <Download size={12} />
+                Install
+              </>
+            )}
+          </button>
+        )}
+      </div>
+      
+      {/* Config inputs - shown when tool needs config and user clicked Configure */}
+      {showConfig && hasEnvVars && (
+        <div className="border-t border-white/10 pt-2 space-y-2">
+          <div className="text-xs text-[var(--text-muted)]">
+            Enter the required configuration:
+          </div>
+          {Object.entries(tool.envVars).map(([key, placeholder]) => (
+            <div key={key} className="flex flex-col gap-1">
+              <label className="text-xs text-[var(--text-secondary)]">
+                {formatEnvName(key)}
+              </label>
+              <input
+                type={key.toLowerCase().includes('key') || key.toLowerCase().includes('token') || key.toLowerCase().includes('password') || key.toLowerCase().includes('secret') ? 'password' : 'text'}
+                value={envValues[key] || ''}
+                onChange={(e) => handleEnvChange(key, e.target.value)}
+                placeholder={placeholder || `Enter ${formatEnvName(key)}`}
+                className="px-2 py-1.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)]"
+              />
+            </div>
+          ))}
+          
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={() => setShowConfig(false)}
+              className="flex-1 px-3 py-1.5 bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)] text-[var(--text-secondary)] text-xs font-medium rounded-lg transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleInstallClick}
+              disabled={isInstalling || !allEnvFilled}
+              className="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition-colors"
+            >
+              {isInstalling ? (
+                <>
+                  <Loader2 size={12} className="animate-spin" />
+                  Installing...
+                </>
+              ) : (
+                <>
+                  <Download size={12} />
+                  Install
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Component for the store results panel with expandable list
+function StoreResultsPanel({ storeResults, installingTool, onInstall, onSearchOnline }) {
+  const [isExpanded, setIsExpanded] = useState(false)
+  const INITIAL_COUNT = 5
+  
+  const displayedTools = isExpanded ? storeResults : storeResults.slice(0, INITIAL_COUNT)
+  const hasMore = storeResults.length > INITIAL_COUNT
+  
+  return (
+    <div className="bg-gradient-to-r from-purple-600/20 to-blue-600/20 border border-purple-500/30 rounded-lg p-3 space-y-3">
+      <div className="flex items-center gap-2 text-sm font-medium text-purple-300">
+        <Package size={16} />
+        <span>Found {storeResults.length} matching tools in store:</span>
+      </div>
+      <div className="space-y-3">
+        {displayedTools.map((tool) => (
+          <ToolInstallCard 
+            key={tool.id}
+            tool={tool}
+            installingTool={installingTool}
+            onInstall={onInstall}
+          />
+        ))}
+      </div>
+      {hasMore && (
+        <button
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="w-full text-xs text-purple-400 hover:text-purple-300 transition-colors py-1"
+        >
+          {isExpanded ? (
+            <>▲ Show less</>
+          ) : (
+            <>▼ Show {storeResults.length - INITIAL_COUNT} more tools</>
+          )}
+        </button>
+      )}
+      
+      {/* Always offer internet search as fallback */}
+      {onSearchOnline && (
+        <div className="border-t border-purple-500/20 pt-2 mt-2">
+          <button
+            onClick={onSearchOnline}
+            className="w-full text-xs text-blue-400 hover:text-blue-300 transition-colors flex items-center justify-center gap-1"
+          >
+            <Globe size={12} />
+            <span>Not what you need? Search online for more options...</span>
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Component for displaying internet search results (AI-found MCP servers)
+function InternetResultsPanel({ results, onClear, onInstall, installingTool }) {
+  const [isExpanded, setIsExpanded] = useState(false)
+  const [expandedResult, setExpandedResult] = useState(null)
+  const [envValues, setEnvValues] = useState({})
+  const INITIAL_COUNT = 3
+  
+  const displayedResults = isExpanded ? results : results.slice(0, INITIAL_COUNT)
+  const hasMore = results.length > INITIAL_COUNT
+  
+  // Format confidence as percentage
+  const formatConfidence = (conf) => Math.round((conf || 0) * 100) + '%'
+  
+  const handleInstallClick = (result, idx) => {
+    const hasEnvVars = result.envVars && Object.keys(result.envVars).length > 0
+    if (hasEnvVars && expandedResult !== idx) {
+      // Expand to show env var inputs
+      setExpandedResult(idx)
+      // Initialize env values with placeholders
+      const initial = {}
+      Object.keys(result.envVars).forEach(k => initial[k] = '')
+      setEnvValues(initial)
+    } else {
+      // Install with collected env vars
+      onInstall(result, envValues)
+    }
+  }
+  
+  const allEnvFilled = (result) => {
+    if (!result.envVars) return true
+    return Object.keys(result.envVars).every(k => envValues[k]?.trim())
+  }
+  
+  return (
+    <div className="bg-gradient-to-r from-blue-600/20 to-cyan-600/20 border border-blue-500/30 rounded-lg p-3 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm font-medium text-blue-300">
+          <Globe size={16} />
+          <span>Found {results.length} MCP servers online:</span>
+        </div>
+        <button
+          onClick={onClear}
+          className="text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+        >
+          ✕ Clear
+        </button>
+      </div>
+      
+      <div className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
+        ⚠️ These are AI suggestions. Verify before installing.
+      </div>
+      
+      <div className="space-y-3">
+        {displayedResults.map((result, idx) => (
+          <div 
+            key={idx}
+            className="bg-[var(--bg-primary)]/50 rounded-lg p-3 space-y-2"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex-1 min-w-0">
+                <div className="font-medium text-sm text-[var(--text-primary)]">
+                  {result.name}
+                  <span className="ml-2 text-xs text-blue-400">
+                    {formatConfidence(result.confidence)} match
+                  </span>
+                </div>
+                <div className="text-xs text-[var(--text-secondary)] mt-0.5">
+                  {result.description}
+                </div>
+              </div>
+              {/* Install button */}
+              <button
+                onClick={() => handleInstallClick(result, idx)}
+                disabled={installingTool === result.name || (expandedResult === idx && !allEnvFilled(result))}
+                className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-50 flex items-center gap-1"
+              >
+                {installingTool === result.name ? (
+                  <><Loader2 size={12} className="animate-spin" /> Installing...</>
+                ) : (
+                  <><Download size={12} /> Install</>
+                )}
+              </button>
+            </div>
+            
+            {/* Install command preview */}
+            <div className="text-xs bg-[var(--bg-secondary)] p-2 rounded font-mono text-[var(--text-muted)]">
+              {result.command} {(result.args || []).join(' ')}
+            </div>
+            
+            {/* Expanded env var inputs */}
+            {expandedResult === idx && result.envVars && Object.keys(result.envVars).length > 0 && (
+              <div className="space-y-2 pt-2 border-t border-blue-500/20">
+                <div className="text-xs text-yellow-400">Configure required environment variables:</div>
+                {Object.entries(result.envVars).map(([key, placeholder]) => (
+                  <div key={key} className="flex items-center gap-2">
+                    <label className="text-xs text-[var(--text-secondary)] min-w-[100px]">{key}:</label>
+                    <input
+                      type={key.toLowerCase().includes('key') || key.toLowerCase().includes('token') || key.toLowerCase().includes('secret') ? 'password' : 'text'}
+                      placeholder={placeholder}
+                      value={envValues[key] || ''}
+                      onChange={(e) => setEnvValues(prev => ({ ...prev, [key]: e.target.value }))}
+                      className="flex-1 text-xs bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded px-2 py-1 text-[var(--text-primary)]"
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+            
+            {/* URL link */}
+            {result.url && (
+              <a 
+                href={result.url} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-xs text-blue-400 hover:underline"
+              >
+                View on GitHub →
+              </a>
+            )}
+          </div>
+        ))}
+      </div>
+      
+      {hasMore && (
+        <button
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="w-full text-xs text-blue-400 hover:text-blue-300 transition-colors py-1"
+        >
+          {isExpanded ? (
+            <>▲ Show less</>
+          ) : (
+            <>▼ Show {results.length - INITIAL_COUNT} more</>
+          )}
+        </button>
+      )}
+    </div>
+  )
 }
 
 export default function AIChatPanel({ 
@@ -34,6 +574,12 @@ export default function AIChatPanel({
   const [isLoading, setIsLoading] = useState(false)
   const [pendingYaml, setPendingYaml] = useState(null)
   const [isExpanded, setIsExpanded] = useState(false)
+  const [storeResults, setStoreResults] = useState(null) // Store search results
+  const [internetResults, setInternetResults] = useState(null) // Internet search results
+  const [installingTool, setInstallingTool] = useState(null) // Tool being installed
+  const [pendingToolRequirement, setPendingToolRequirement] = useState(null) // Stores requirement when AI asks for confirmation
+  const [originalRequest, setOriginalRequest] = useState(null) // Stores original user request for auto-continue after install
+  const [currentRequirement, setCurrentRequirement] = useState(null) // Current tool requirement being searched
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   
@@ -45,7 +591,7 @@ export default function AIChatPanel({
   // Scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+  }, [messages, storeResults])
 
   // Focus input when panel opens
   useEffect(() => {
@@ -58,6 +604,7 @@ export default function AIChatPanel({
   useEffect(() => {
     setFlowMessages([])
     setPendingYaml(null)
+    setStoreResults(null)
   }, [agentId])
 
   // Reset node refiner when focused node changes (fresh start per node)
@@ -65,8 +612,211 @@ export default function AIChatPanel({
     if (focusedNode) {
       setNodeMessages([])
       setPendingYaml(null)
+      setStoreResults(null)
     }
   }, [focusedNode])
+
+  // Handle tool installation
+  const handleInstallTool = async (tool) => {
+    setInstallingTool(tool.id)
+    try {
+      // Pass collected env vars if any
+      const envVars = tool.collectedEnv || {}
+      const result = await installToolFromStore(tool.id, tool.name.toLowerCase().replace(/\s+/g, '-'), envVars)
+      if (result.status === 'ok') {
+        setMessages(prev => [...prev, { 
+          role: 'system', 
+          content: `✓ Installed ${tool.name}! ${result.toolsLoaded} tools loaded.`
+        }])
+        setStoreResults(null) // Clear results after successful install
+        
+        // Auto-continue: retry the original request now that tool is installed
+        if (originalRequest) {
+          setMessages(prev => [...prev, { 
+            role: 'system', 
+            content: '↻ Retrying your original request with the new tool...'
+          }])
+          
+          // Small delay to let the message appear, then retry
+          setTimeout(async () => {
+            setIsLoading(true)
+            try {
+              const history = messages.map(m => ({ role: m.role, content: m.content }))
+              const response = await sendChatMessage(
+                originalRequest,
+                context,
+                currentYaml,
+                selectedNodes,
+                history
+              )
+              
+              if (!response.error && response.proposedYaml && onApplyYaml) {
+                setMessages(prev => [...prev, { 
+                  role: 'assistant', 
+                  content: response.message,
+                  proposedYaml: response.proposedYaml,
+                }])
+                onApplyYaml(response.proposedYaml)
+                setMessages(prev => [...prev, { 
+                  role: 'system', 
+                  content: '✓ Flow created! Use Undo (⌘Z) to revert if needed.' 
+                }])
+              } else if (response.message) {
+                setMessages(prev => [...prev, { 
+                  role: 'assistant', 
+                  content: response.message,
+                }])
+              }
+            } catch (err) {
+              console.error('Auto-continue failed:', err)
+            } finally {
+              setIsLoading(false)
+              setOriginalRequest(null)
+            }
+          }, 500)
+        }
+      } else {
+        setMessages(prev => [...prev, { 
+          role: 'system', 
+          content: `⚠️ Installation issue: ${result.toolError || 'Unknown error'}`,
+          isError: true
+        }])
+      }
+    } catch (err) {
+      setMessages(prev => [...prev, { 
+        role: 'system', 
+        content: `Error installing tool: ${err.message}`,
+        isError: true
+      }])
+    } finally {
+      setInstallingTool(null)
+    }
+  }
+  
+  // Handler for installing MCP server from internet search result
+  const handleInstallInternetMCP = async (result, envValues) => {
+    setInstallingTool(result.name)
+    try {
+      const response = await installInternetMCP(result, envValues)
+      if (response.status === 'ok') {
+        setMessages(prev => [...prev, { 
+          role: 'system', 
+          content: `✓ Installed ${result.name}! ${response.toolsLoaded || 0} tools loaded.`
+        }])
+        setInternetResults(null) // Clear results after successful install
+        
+        // Auto-continue: retry the original request now that tool is installed
+        if (originalRequest) {
+          setMessages(prev => [...prev, { 
+            role: 'system', 
+            content: '↻ Retrying your original request with the new tool...'
+          }])
+          
+          // Small delay to let the message appear, then retry
+          setTimeout(async () => {
+            setIsLoading(true)
+            try {
+              const history = messages.map(m => ({ role: m.role, content: m.content }))
+              const chatResponse = await sendChatMessage(
+                originalRequest,
+                context,
+                currentYaml,
+                selectedNodes,
+                history
+              )
+              
+              if (!chatResponse.error && chatResponse.proposedYaml && onApplyYaml) {
+                setMessages(prev => [...prev, { 
+                  role: 'assistant', 
+                  content: chatResponse.message,
+                  proposedYaml: chatResponse.proposedYaml,
+                }])
+                onApplyYaml(chatResponse.proposedYaml)
+                setMessages(prev => [...prev, { 
+                  role: 'system', 
+                  content: '✓ Flow created! Use Undo (⌘Z) to revert if needed.' 
+                }])
+              } else if (chatResponse.message) {
+                setMessages(prev => [...prev, { 
+                  role: 'assistant', 
+                  content: chatResponse.message,
+                }])
+              }
+            } catch (err) {
+              console.error('Auto-continue failed:', err)
+            } finally {
+              setIsLoading(false)
+              setOriginalRequest(null)
+            }
+          }, 500)
+        }
+      } else {
+        setMessages(prev => [...prev, { 
+          role: 'system', 
+          content: `⚠️ Installation issue: ${response.error || 'Unknown error'}`,
+          isError: true
+        }])
+      }
+    } catch (err) {
+      setMessages(prev => [...prev, { 
+        role: 'system', 
+        content: `Error installing ${result.name}: ${err.message}`,
+        isError: true
+      }])
+    } finally {
+      setInstallingTool(null)
+    }
+  }
+  
+  // Handler for triggering internet search from store results panel
+  const handleSearchOnline = async () => {
+    if (!currentRequirement) return
+    
+    setStoreResults(null) // Clear store results
+    setIsLoading(true)
+    
+    // Show searching message immediately
+    setMessages(prev => [...prev, { 
+      role: 'system', 
+      content: `🔍 Searching for MCP servers...`,
+      isSearching: true
+    }])
+    
+    try {
+      const internetResult = await searchToolsOnInternet(currentRequirement)
+      const toolName = internetResult.toolUsed || 'websearch'
+      const actualQuery = internetResult.searchQuery || currentRequirement
+      
+      if (internetResult.results && internetResult.results.length > 0) {
+        setInternetResults(internetResult.results)
+        setMessages(prev => [...prev, { 
+          role: 'system', 
+          content: `✅ Found ${internetResult.results.length} MCP servers via ${toolName}`,
+          searchInfo: { tool: toolName, query: actualQuery }
+        }])
+      } else if (!internetResult.tavilyAvailable) {
+        setMessages(prev => [...prev, { 
+          role: 'system', 
+          content: internetResult.message || 'No web search tool configured.'
+        }])
+      } else {
+        setMessages(prev => [...prev, { 
+          role: 'system', 
+          content: `No MCP servers found via ${toolName}`,
+          searchInfo: { tool: toolName, query: actualQuery }
+        }])
+      }
+    } catch (err) {
+      console.error('Internet search failed:', err)
+      setMessages(prev => [...prev, { 
+        role: 'system', 
+        content: `Internet search failed: ${err.message}`,
+        isError: true
+      }])
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return
@@ -75,6 +825,256 @@ export default function AIChatPanel({
     setInput('')
     setMessages(prev => [...prev, { role: 'user', content: userMessage }])
     setIsLoading(true)
+    setStoreResults(null) // Clear previous store results
+
+    // PRIORITY 0: Check if user pasted a GitHub/npm URL for MCP server extraction
+    const detectedURL = detectMCPURL(userMessage)
+    if (detectedURL) {
+      setMessages(prev => [...prev, { 
+        role: 'system', 
+        content: `🔍 Extracting MCP server info from URL...`
+      }])
+      try {
+        const extractResult = await extractMCPServerFromURL(detectedURL)
+        if (extractResult.found && extractResult.mcpServer) {
+          // Show as internet result for easy installation
+          setInternetResults([extractResult.mcpServer])
+          const toolInfo = extractResult.toolUsed ? ` via ${extractResult.toolUsed}` : ''
+          setMessages(prev => [...prev, { 
+            role: 'system', 
+            content: `✅ Found MCP server${toolInfo}: ${extractResult.mcpServer.name}`
+          }])
+        } else {
+          setMessages(prev => [...prev, { 
+            role: 'system', 
+            content: extractResult.message || 'No MCP server configuration found at this URL.'
+          }])
+        }
+      } catch (err) {
+        console.error('URL extraction failed:', err)
+        setMessages(prev => [...prev, { 
+          role: 'system', 
+          content: `URL extraction failed: ${err.message}`,
+          isError: true
+        }])
+      } finally {
+        setIsLoading(false)
+      }
+      return // Don't send to AI, we handled it
+    }
+
+
+    // PRIORITY 0.5: Check if user is providing refinement feedback on internet search results
+    // When internet results are shown and user provides feedback, refine the search
+    if (internetResults && internetResults.length > 0 && currentRequirement) {
+      const refinementHint = detectSearchRefinementFeedback(userMessage)
+      if (refinementHint) {
+        // Combine original requirement with user's refinement feedback
+        const refinedQuery = `${currentRequirement} ${refinementHint}`
+        setCurrentRequirement(refinedQuery) // Update requirement for future refinements
+        
+        try {
+          setMessages(prev => [...prev, { 
+            role: 'system', 
+            content: `Refining search with your feedback...`
+          }])
+          
+          const internetResult = await searchToolsOnInternet(refinedQuery)
+          if (internetResult.results && internetResult.results.length > 0) {
+            setInternetResults(internetResult.results)
+            const toolInfo = internetResult.toolUsed ? ` (via ${internetResult.toolUsed})` : ''
+            setMessages(prev => [...prev, { 
+              role: 'system', 
+              content: `✅ Found ${internetResult.results.length} MCP servers with refined search${toolInfo}!`
+            }])
+          } else {
+            const toolInfo = internetResult.toolUsed ? ` (searched via ${internetResult.toolUsed})` : ''
+            setMessages(prev => [...prev, { 
+              role: 'system', 
+              content: `No additional servers found with that refinement${toolInfo}. Try different keywords.`
+            }])
+          }
+        } catch (err) {
+          console.error('Refined search failed:', err)
+          setMessages(prev => [...prev, { 
+            role: 'system', 
+            content: `Refined search failed: ${err.message}`,
+            isError: true
+          }])
+        } finally {
+          setIsLoading(false)
+        }
+        return // Don't send to AI, we handled it
+      }
+    }
+
+    // PRIORITY 1: Check if user is confirming internet search (after seeing "search for MCP servers online?")
+    // This must come BEFORE the general store search confirmation to avoid loops
+    const lastSystemMsg = messages.filter(m => m.role === 'system').slice(-1)[0]
+    if (lastSystemMsg?.content?.includes('search for MCP servers online') && 
+        isUserConfirmingToolSearch(userMessage) && 
+        currentRequirement) {
+      // User confirmed internet search - show searching placeholder
+      setMessages(prev => [...prev, { 
+        role: 'system', 
+        content: `🔍 Searching for MCP servers...`,
+        isSearching: true
+      }])
+      try {
+        const internetResult = await searchToolsOnInternet(currentRequirement)
+        // Update the searching message with actual tool and query info
+        const toolName = internetResult.toolUsed || 'websearch'
+        const actualQuery = internetResult.searchQuery || currentRequirement
+        
+        if (internetResult.results && internetResult.results.length > 0) {
+          setInternetResults(internetResult.results)
+          setMessages(prev => [...prev, { 
+            role: 'system', 
+            content: `✅ Found ${internetResult.results.length} MCP servers via ${toolName}`,
+            searchInfo: { tool: toolName, query: actualQuery }
+          }])
+        } else if (!internetResult.tavilyAvailable) {
+          setMessages(prev => [...prev, { 
+            role: 'system', 
+            content: internetResult.message || 'No web search tool configured. Go to Settings → General to configure one.'
+          }])
+        } else {
+          const toolInfo = internetResult.toolUsed ? ` (searched via ${internetResult.toolUsed})` : ''
+          setMessages(prev => [...prev, { 
+            role: 'system', 
+            content: `No MCP servers found online for this requirement${toolInfo}.`
+          }])
+        }
+      } catch (err) {
+        console.error('Internet search failed:', err)
+        setMessages(prev => [...prev, { 
+          role: 'system', 
+          content: `Internet search failed: ${err.message}`,
+          isError: true
+        }])
+      } finally {
+        setIsLoading(false)
+      }
+      return // Don't send to AI, we handled it
+    }
+
+    // PRIORITY 2: Check if user is confirming a tool search (either with pending or late confirmation)
+    if (isUserConfirmingToolSearch(userMessage)) {
+      let requirement = pendingToolRequirement
+      
+      // If no pending requirement, try to extract from recent AI messages
+      if (!requirement) {
+        // Look through recent messages for tool offers
+        for (let i = messages.length - 1; i >= 0 && i >= messages.length - 10; i--) {
+          const msg = messages[i]
+          if (msg.role === 'assistant') {
+            const toolOffer = detectToolOfferFromAI(msg.content)
+            if (toolOffer) {
+              requirement = toolOffer.requirement
+              // Also restore originalRequest from the first user message in conversation
+              if (!originalRequest && messages.length > 0) {
+                const firstUserMsg = messages.find(m => m.role === 'user')
+                if (firstUserMsg) {
+                  setOriginalRequest(firstUserMsg.content)
+                }
+              }
+              break
+            }
+          }
+        }
+      }
+      
+      if (requirement) {
+        // User confirmed - search for tools now
+        setCurrentRequirement(requirement) // Save requirement for internet search
+        setInternetResults(null) // Clear internet results
+        try {
+          const searchResult = await searchToolsInStore(requirement)
+          if (searchResult.results && searchResult.results.length > 0) {
+            setStoreResults(searchResult.results.filter(r => r.installable))
+            setMessages(prev => [...prev, { 
+              role: 'system', 
+              content: `Found ${searchResult.results.length} matching tools! See options below.`
+            }])
+          } else {
+            // No store results - offer internet search
+            setMessages(prev => [...prev, { 
+              role: 'system', 
+              content: 'No matching tools found in the MCP store. Would you like me to search for MCP servers online?'
+            }])
+            // Store the requirement for potential internet search
+            setPendingToolRequirement(requirement)
+          }
+        } catch (err) {
+          console.error('Store search failed:', err)
+          setMessages(prev => [...prev, { 
+            role: 'system', 
+            content: 'Failed to search the store.',
+            isError: true
+          }])
+        } finally {
+          setPendingToolRequirement(null) // Clear pending
+          setIsLoading(false)
+        }
+        return // Don't send to AI, we handled it
+      }
+    }
+    
+    // Check if user is rejecting store results and wants internet search
+    if ((storeResults && storeResults.length > 0 || currentRequirement) && 
+        isUserRequestingInternetSearch(userMessage)) {
+      // User rejected store results or asked for internet search
+      const requirement = currentRequirement || pendingToolRequirement
+      if (requirement) {
+        setStoreResults(null) // Clear store results
+        // Show searching message immediately
+        setMessages(prev => [...prev, { 
+          role: 'system', 
+          content: `🔍 Searching for MCP servers...`,
+          isSearching: true
+        }])
+        try {
+          const internetResult = await searchToolsOnInternet(requirement)
+          const toolName = internetResult.toolUsed || 'websearch'
+          const actualQuery = internetResult.searchQuery || requirement
+          
+          if (internetResult.results && internetResult.results.length > 0) {
+            setInternetResults(internetResult.results)
+            setMessages(prev => [...prev, { 
+              role: 'system', 
+              content: `✅ Found ${internetResult.results.length} MCP servers via ${toolName}`,
+              searchInfo: { tool: toolName, query: actualQuery }
+            }])
+          } else if (!internetResult.tavilyAvailable) {
+            setMessages(prev => [...prev, { 
+              role: 'system', 
+              content: internetResult.message || 'No web search tool configured. Go to Settings → General to configure one.'
+            }])
+          } else {
+            setMessages(prev => [...prev, { 
+              role: 'system', 
+              content: `No MCP servers found via ${toolName}`,
+              searchInfo: { tool: toolName, query: actualQuery }
+            }])
+          }
+        } catch (err) {
+          console.error('Internet search failed:', err)
+          setMessages(prev => [...prev, { 
+            role: 'system', 
+            content: `Internet search failed: ${err.message}`,
+            isError: true
+          }])
+        } finally {
+          setIsLoading(false)
+        }
+        return // Don't send to AI, we handled it
+      }
+    }
+    
+    // Clear pending if user sends something else
+    if (pendingToolRequirement) {
+      setPendingToolRequirement(null)
+    }
 
     try {
       // Build history for API (exclude current message)
@@ -101,6 +1101,29 @@ export default function AIChatPanel({
           proposedYaml: response.proposedYaml,
           action: response.action,
         }])
+        
+        // Check if AI mentioned missing tools
+        const toolOffer = detectToolOfferFromAI(response.message)
+        if (toolOffer) {
+          // Store the original request so we can retry after tool installation
+          setOriginalRequest(userMessage)
+          
+          if (toolOffer.isAskingUser) {
+            // AI is asking user for confirmation - store the requirement for later
+            setPendingToolRequirement(toolOffer.requirement)
+            // Don't search yet, wait for user to say "yes"
+          } else {
+            // AI mentioned missing tools but didn't ask - auto-search
+            try {
+              const searchResult = await searchToolsInStore(toolOffer.requirement)
+              if (searchResult.results && searchResult.results.length > 0) {
+                setStoreResults(searchResult.results.filter(r => r.installable))
+              }
+            } catch (err) {
+              console.error('Store search failed:', err)
+            }
+          }
+        }
         
         // Auto-apply YAML changes when received
         if (response.proposedYaml && onApplyYaml) {
@@ -334,6 +1357,26 @@ export default function AIChatPanel({
               <Loader2 size={16} className="animate-spin text-purple-400" />
             </div>
           </div>
+        )}
+        
+        {/* Store Results Panel - shown when tools are found */}
+        {storeResults && storeResults.length > 0 && (
+          <StoreResultsPanel 
+            storeResults={storeResults}
+            installingTool={installingTool}
+            onInstall={handleInstallTool}
+            onSearchOnline={currentRequirement ? handleSearchOnline : null}
+          />
+        )}
+        
+        {/* Internet Results Panel - shown when AI finds MCP servers online */}
+        {internetResults && internetResults.length > 0 && (
+          <InternetResultsPanel 
+            results={internetResults}
+            onClear={() => setInternetResults(null)}
+            onInstall={handleInstallInternetMCP}
+            installingTool={installingTool}
+          />
         )}
         
         <div ref={messagesEndRef} />

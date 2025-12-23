@@ -42,6 +42,13 @@ const fetchProviderModels = async (providerId) => {
   return res.json()
 }
 
+// Fetch tools that have 'websearch' or 'webextract' in their name
+const fetchWebCapableTools = async () => {
+  const res = await fetch('/api/tools/web-capable')
+  if (!res.ok) throw new Error('Failed to fetch web-capable tools')
+  return res.json()
+}
+
 // Taps API functions
 const fetchTaps = async () => {
   const res = await fetch('/api/taps')
@@ -83,7 +90,12 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
   const [error, setError] = useState(null)
 
   // Form state
-  const [generalForm, setGeneralForm] = useState({ default_provider: '', default_model: '' })
+  const [generalForm, setGeneralForm] = useState({ 
+    default_provider: '', 
+    default_model: '',
+    web_search_tool: '',
+    web_extract_tool: ''
+  })
   const [providerForms, setProviderForms] = useState({})
   const [mcpServers, setMcpServers] = useState({})
   const [mcpViewMode, setMcpViewMode] = useState('editor') // 'editor' or 'source'
@@ -106,6 +118,9 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
   const [availableModels, setAvailableModels] = useState([])
   const [loadingModels, setLoadingModels] = useState(false)
   const [modelsError, setModelsError] = useState(null)
+
+  // Web-capable tools state
+  const [webCapableTools, setWebCapableTools] = useState({ webSearch: [], webExtract: [] })
 
   // Taps state
   const [taps, setTaps] = useState([])
@@ -134,15 +149,19 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
   const loadData = async () => {
     setLoading(true)
     try {
-      const [settingsData, mcpData] = await Promise.all([
+      const [settingsData, mcpData, webTools] = await Promise.all([
         fetchSettings(),
-        fetchMCPConfig()
+        fetchMCPConfig(),
+        fetchWebCapableTools().catch(() => ({ webSearch: [], webExtract: [] }))
       ])
       setSettings(settingsData)
       setMcpConfig(mcpData)
+      setWebCapableTools(webTools)
       setGeneralForm({
         default_provider: settingsData.general.default_provider || '',
-        default_model: settingsData.general.default_model || ''
+        default_model: settingsData.general.default_model || '',
+        web_search_tool: settingsData.general.web_search_tool || '',
+        web_extract_tool: settingsData.general.web_extract_tool || ''
       })
       // Initialize provider forms
       const pForms = {}
@@ -475,6 +494,67 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                 <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
                   Click the dropdown to load available models from the provider
                 </p>
+              </div>
+
+              {/* Web Tools Section */}
+              <div className="pt-4 border-t" style={{ borderColor: 'var(--border-color)' }}>
+                <h4 className="text-sm font-medium mb-3" style={{ color: 'var(--text-primary)' }}>
+                  AI Assist Web Tools
+                </h4>
+                <p className="text-xs mb-4 p-2 rounded" style={{ 
+                  color: 'var(--text-muted)', 
+                  background: 'rgba(168, 85, 247, 0.1)',
+                  border: '1px solid rgba(168, 85, 247, 0.2)'
+                }}>
+                  ℹ️ Only MCP servers with <code style={{ color: 'var(--accent)' }}>websearch</code> in their name are shown below. 
+                  Rename your tool following this convention (e.g., tavily-websearch) to use it with AI Assist.
+                </p>
+                
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
+                      Web Search Tool
+                    </label>
+                    <select
+                      value={generalForm.web_search_tool}
+                      onChange={(e) => setGeneralForm({ ...generalForm, web_search_tool: e.target.value })}
+                      className="w-full px-4 py-2.5 rounded-lg border text-sm"
+                      style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                    >
+                      <option value="">None (disabled)</option>
+                      {webCapableTools.webSearch.map(t => (
+                        <option key={t.name} value={t.source}>
+                          {t.source} ({t.name})
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                      Used for internet search when finding MCP servers online
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
+                      Web Extract Tool
+                    </label>
+                    <select
+                      value={generalForm.web_extract_tool}
+                      onChange={(e) => setGeneralForm({ ...generalForm, web_extract_tool: e.target.value })}
+                      className="w-full px-4 py-2.5 rounded-lg border text-sm"
+                      style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                    >
+                      <option value="">None (disabled)</option>
+                      {webCapableTools.webExtract.map(t => (
+                        <option key={t.name} value={t.source}>
+                          {t.source} ({t.name})
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                      Used to extract content from URLs when user provides a link
+                    </p>
+                  </div>
+                </div>
               </div>
 
               <button

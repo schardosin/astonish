@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/provider"
@@ -35,43 +36,184 @@ type ConsoleConfig struct {
 	Parameters     map[string]string
 }
 
+// minimalReadonlyContext implements agent.ReadonlyContext for tool discovery
+type minimalReadonlyContext struct {
+	context.Context
+}
+
+func (m *minimalReadonlyContext) AgentName() string                    { return "cache-refresh" }
+func (m *minimalReadonlyContext) AppName() string                      { return "astonish" }
+func (m *minimalReadonlyContext) UserContent() *genai.Content          { return nil }
+func (m *minimalReadonlyContext) InvocationID() string                 { return "" }
+func (m *minimalReadonlyContext) ReadonlyState() session.ReadonlyState { return nil }
+func (m *minimalReadonlyContext) UserID() string                       { return "" }
+func (m *minimalReadonlyContext) SessionID() string                    { return "" }
+func (m *minimalReadonlyContext) Branch() string                       { return "" }
+
 // getRequiredMCPServersFromConfig extracts MCP server names needed for the flow
-// by matching tools_selection entries against configured MCP servers' tools
-func getRequiredMCPServersFromConfig(agentCfg *config.AgentConfig) []string {
-	// Collect all required tools from the flow
+// by matching tools_selection entries against the persistent tools cache
+func getRequiredMCPServersFromConfig(ctx context.Context, agentCfg *config.AgentConfig, verbose bool) []string {
+	// Load MCP config first to get server names
+	mcpCfg, err := config.LoadMCPConfig()
+	if err != nil || len(mcpCfg.MCPServers) == 0 {
+		return nil
+	}
+
+	// Collect all required tools/servers from the flow
 	toolsNeeded := make(map[string]bool)
+	hasToolsEnabled := false
+	
 	for _, node := range agentCfg.Nodes {
+		// If node has tools: true, it potentially needs MCP servers
+		if node.Tools {
+			hasToolsEnabled = true
+		}
 		for _, toolName := range node.ToolsSelection {
 			toolsNeeded[toolName] = true
 		}
 	}
 
-	if len(toolsNeeded) == 0 {
+	// If no tools enabled at all, no servers needed
+	if !hasToolsEnabled && len(toolsNeeded) == 0 {
 		return nil
 	}
 
-	// Load MCP config to get server names
-	mcpCfg, err := config.LoadMCPConfig()
-	if err != nil {
-		return nil
+	// If tools: true but no tools_selection, we need all servers
+	if hasToolsEnabled && len(toolsNeeded) == 0 {
+		var servers []string
+		for serverName := range mcpCfg.MCPServers {
+			servers = append(servers, serverName)
+		}
+		return servers
 	}
 
-	// For now, we need to initialize all servers that have matching tools
-	// This requires checking each server's tools, which means we initialize the manager temporarily
-	// TODO: Consider caching tool-to-server mapping at startup
+	// Load persistent cache for tool→server lookup
+	persistentCache, _ := cache.LoadCache()
 	
-	// For a simpler approach, we return all configured servers and let selective init skip unused ones
-	// The real filtering happens via InitializeSelectiveToolsets matching server names
+	// Validate checksums and refresh any changed servers (synchronously for CLI)
+	needsRefresh, removed := cache.ValidateChecksums(verbose)
 	
-	// A better approach: use tool prefix naming convention (server-name.tool-name)
-	// or maintain a separate tool registry
+	// Remove stale servers from cache
+	for _, serverName := range removed {
+		cache.RemoveServer(serverName)
+	}
 	
-	// For now, return all server names - the user can optimize later with explicit server prefixing
+	// Refresh changed servers synchronously
+	if len(needsRefresh) > 0 {
+		if verbose {
+			fmt.Printf("[Cache] Refreshing %d servers: %v\n", len(needsRefresh), needsRefresh)
+		}
+		refreshServers(ctx, mcpCfg, needsRefresh, verbose)
+		// Reload cache after refresh
+		persistentCache, _ = cache.LoadCache()
+	}
+
+	requiredServers := make(map[string]bool)
+	
+	for toolName := range toolsNeeded {
+		// Try 1: Check if server name is directly in tools_selection
+		if _, isServer := mcpCfg.MCPServers[toolName]; isServer {
+			requiredServers[toolName] = true
+			continue
+		}
+		
+		// Try 2: Check if tool is prefixed with server name (server-name.tool-name)
+		foundPrefix := false
+		for serverName := range mcpCfg.MCPServers {
+			if strings.HasPrefix(toolName, serverName+".") {
+				requiredServers[serverName] = true
+				foundPrefix = true
+				break
+			}
+		}
+		if foundPrefix {
+			continue
+		}
+		
+		// Try 3: Look up bare tool name in persistent cache
+		if serverName := cache.GetServerForTool(toolName); serverName != "" {
+			requiredServers[serverName] = true
+			log.Printf("[Cache] Found tool '%s' → server '%s' from persistent cache", toolName, serverName)
+			continue
+		}
+		
+		// Tool not found in cache - this shouldn't happen if cache is up to date
+		// Fall back to including all servers
+		log.Printf("[Cache] Tool '%s' not found in persistent cache, will load all servers", toolName)
+		for serverName := range mcpCfg.MCPServers {
+			requiredServers[serverName] = true
+		}
+		break
+	}
+
+	// If cache was empty but we have tools_selection, load all servers
+	if persistentCache == nil || len(persistentCache.Tools) == 0 {
+		if len(toolsNeeded) > 0 {
+			for serverName := range mcpCfg.MCPServers {
+				requiredServers[serverName] = true
+			}
+		}
+	}
+
+	// Convert to slice
 	var servers []string
-	for serverName := range mcpCfg.MCPServers {
+	for serverName := range requiredServers {
 		servers = append(servers, serverName)
 	}
 	return servers
+}
+
+// refreshServers initializes the given servers and updates the cache
+func refreshServers(ctx context.Context, mcpCfg *config.MCPConfig, servers []string, verbose bool) {
+	mcpManager, err := mcp.NewManager()
+	if err != nil {
+		if verbose {
+			fmt.Printf("[Cache] Warning: Failed to create MCP manager for refresh: %v\n", err)
+		}
+		return
+	}
+
+	for _, serverName := range servers {
+		namedToolset, err := mcpManager.InitializeSingleToolset(ctx, serverName)
+		if err != nil {
+			if verbose {
+				fmt.Printf("[Cache] Warning: Failed to initialize server '%s': %v\n", serverName, err)
+			}
+			continue
+		}
+
+		// Get tools from this server
+		minimalCtx := &minimalReadonlyContext{Context: ctx}
+		mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
+		if err != nil {
+			if verbose {
+				fmt.Printf("[Cache] Warning: Failed to get tools from server '%s': %v\n", serverName, err)
+			}
+			continue
+		}
+
+		// Update persistent cache
+		persistentTools := make([]cache.ToolEntry, 0, len(mcpTools))
+		for _, t := range mcpTools {
+			persistentTools = append(persistentTools, cache.ToolEntry{
+				Name:        t.Name(),
+				Description: t.Description(),
+				Source:      serverName,
+			})
+		}
+		serverCfg := mcpCfg.MCPServers[serverName]
+		checksum := cache.ComputeServerChecksum(serverCfg.Command, serverCfg.Args, serverCfg.Env)
+		cache.AddServerTools(serverName, persistentTools, checksum)
+		if verbose {
+			fmt.Printf("[Cache] Refreshed server '%s': %d tools\n", serverName, len(persistentTools))
+		}
+	}
+
+	if err := cache.SaveCache(); err != nil {
+		if verbose {
+			fmt.Printf("[Cache] Warning: Failed to save persistent cache after refresh: %v\n", err)
+		}
+	}
 }
 
 // RunConsole runs the agent in console mode with agent-controlled flow
@@ -113,8 +255,8 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		fmt.Println("Initializing MCP servers...")
 	}
 
-	// Extract required MCP servers from flow config
-	requiredServers := getRequiredMCPServersFromConfig(cfg.AgentConfig)
+	// Extract required MCP servers from flow config (validates cache and refreshes if needed)
+	requiredServers := getRequiredMCPServersFromConfig(ctx, cfg.AgentConfig, cfg.DebugMode)
 	
 	var mcpManager *mcp.Manager
 	var mcpToolsets []tool.Toolset

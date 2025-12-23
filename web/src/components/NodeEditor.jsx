@@ -764,12 +764,7 @@ function LlmNodeForm({ data, onChange, theme, availableTools = [], availableVari
                   hideLabel={true}
                 />
                 
-                <div className="pt-4 border-t" style={{ borderColor: 'var(--border-color)' }}>
-                  <RawToolOutputEditor 
-                      value={data.raw_tool_output}
-                      onChange={(val) => onChange({ ...data, raw_tool_output: val })}
-                  />
-                </div>
+
               </div>
             </div>
             
@@ -835,8 +830,9 @@ function LlmNodeForm({ data, onChange, theme, availableTools = [], availableVari
         )}
         
         {activeTab === 'tools' && (
-          <div className="flex gap-6">
-            <div className="w-48 flex items-center justify-between">
+          <div className="space-y-6">
+            {/* Row 1: Enable Tools */}
+            <div className="flex items-center gap-2">
               <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
                 Enable Tools
               </label>
@@ -847,45 +843,55 @@ function LlmNodeForm({ data, onChange, theme, availableTools = [], availableVari
                 className="w-4 h-4 accent-purple-600"
               />
             </div>
-            
+
             {data.tools && (
-              <>
-                <div className="flex-1 max-w-md">
-                  <label className="text-sm font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>
-                    Tools Selection
-                  </label>
-                  
-                  <ToolSelector
-                    availableTools={availableTools}
-                    selectedTools={currentTools}
-                    onAddTool={handleAddTool}
-                    onRemoveTool={handleRemoveTool}
-                    placeholder="Search tools..."
-                  />
-                  
-                  {/* Show invalid tools warning */}
-                  {currentTools.some(t => !toolNames.includes(t)) && (
-                    <div className="mt-2 p-2 rounded border border-red-500 bg-red-500/10">
-                      <div className="flex items-center gap-2 text-xs text-red-400">
-                        <AlertCircle size={12} />
-                        <span>Some selected tools are not available</span>
+              <div className="space-y-6 animate-in fade-in slide-in-from-top-2 duration-200">
+                {/* Row 2: Tool Selection + Auto Approve */}
+                <div className="flex gap-6">
+                  <div className="flex-1 max-w-2xl">
+                    <label className="text-sm font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>
+                      Tools Selection
+                    </label>
+                    <ToolSelector
+                      availableTools={availableTools}
+                      selectedTools={currentTools}
+                      onAddTool={handleAddTool}
+                      onRemoveTool={handleRemoveTool}
+                      placeholder="Select tools..."
+                    />
+                    {currentTools.some(t => !toolNames.includes(t)) && (
+                      <div className="mt-2 p-2 rounded border border-red-500 bg-red-500/10">
+                        <div className="flex items-center gap-2 text-xs text-red-400">
+                          <AlertCircle size={12} />
+                          <span>Some selected tools are not available</span>
+                        </div>
                       </div>
+                    )}
+                  </div>
+
+                  <div className="w-40 pt-6"> {/* pt-6 aligns checkbox with input field */}
+                    <div className="flex items-center gap-2">
+                      <label className="text-sm font-medium whitespace-nowrap" style={{ color: 'var(--text-secondary)' }}>
+                        Auto-approve
+                      </label>
+                      <input
+                        type="checkbox"
+                        checked={data.tools_auto_approval === true}
+                        onChange={(e) => onChange({ ...data, tools_auto_approval: e.target.checked || undefined })}
+                        className="w-4 h-4 accent-purple-600"
+                      />
                     </div>
-                  )}
+                  </div>
                 </div>
-                
-                <div className="w-48 flex items-center justify-between">
-                  <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
-                    Auto-approve
-                  </label>
-                  <input
-                    type="checkbox"
-                    checked={data.tools_auto_approval === true}
-                    onChange={(e) => onChange({ ...data, tools_auto_approval: e.target.checked || undefined })}
-                    className="w-4 h-4 accent-purple-600"
+
+                {/* Row 3: Raw Tool Output */}
+                <div className="max-w-2xl">
+                  <RawToolOutputEditor 
+                    value={data.raw_tool_output}
+                    onChange={(val) => onChange({ ...data, raw_tool_output: val })}
                   />
                 </div>
-              </>
+              </div>
             )}
           </div>
         )}
@@ -1010,12 +1016,7 @@ function ToolNodeForm({ data, onChange, theme, availableTools = [] }) {
           />
         </div>
 
-        <div className="pt-4 border-t" style={{ borderColor: 'var(--border-color)' }}>
-          <RawToolOutputEditor 
-            value={data.raw_tool_output}
-            onChange={(val) => onChange({ ...data, raw_tool_output: val })}
-          />
-        </div>
+
       </div>
       
       {/* Right column - Args */}

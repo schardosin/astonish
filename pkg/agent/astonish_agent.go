@@ -1402,8 +1402,14 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 	}
 
 	// Inject tool use instruction if tools are enabled
+	// Inject tool use instruction if tools are enabled
 	if node.Tools {
 		instruction += "\n\nIMPORTANT: You have access to tools that you MUST use to complete this task. Do not describe what you would do or say you are waiting for results. Instead, immediately call the appropriate tool with the required parameters. The tools are available and ready to use right now."
+	}
+
+	// Inject instruction for raw_tool_output
+	if len(node.RawToolOutput) > 0 {
+		instruction += "\n\nIMPORTANT: The tool will return the raw content directly to the state. Your final task for this step is to confirm its retrieval."
 	}
 
 	// Build OutputSchema from output_model if defined

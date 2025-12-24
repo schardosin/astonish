@@ -417,6 +417,61 @@ func ListModels(ctx context.Context, clientID, clientSecret, authURL, baseURL, r
 	return models, nil
 }
 
+// ModelInfo represents enhanced model metadata for SAP AI Core
+type ModelInfo struct {
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	ContextLength    int    `json:"context_length,omitempty"`
+	MaxOutputTokens  int    `json:"max_completion_tokens,omitempty"`
+}
+
+// Model cache for SAP AI Core
+var (
+	sapModelCacheMu   sync.RWMutex
+	sapModelCache     []ModelInfo
+	sapModelCacheTime time.Time
+	sapModelCacheTTL  = 1 * time.Hour
+)
+
+// ListModelsWithMetadata fetches running deployments and enriches with ModelConfigs metadata
+func ListModelsWithMetadata(ctx context.Context, clientID, clientSecret, authURL, baseURL, resourceGroup string) ([]ModelInfo, error) {
+	// Check cache first
+	sapModelCacheMu.RLock()
+	if len(sapModelCache) > 0 && time.Since(sapModelCacheTime) < sapModelCacheTTL {
+		cached := make([]ModelInfo, len(sapModelCache))
+		copy(cached, sapModelCache)
+		sapModelCacheMu.RUnlock()
+		return cached, nil
+	}
+	sapModelCacheMu.RUnlock()
+
+	// Fetch model IDs using existing ListModels
+	modelIDs, err := ListModels(ctx, clientID, clientSecret, authURL, baseURL, resourceGroup)
+	if err != nil {
+		return nil, err
+	}
+
+	// Enrich with ModelConfigs metadata
+	var models []ModelInfo
+	for _, id := range modelIDs {
+		config := GetModelConfig(id)
+		models = append(models, ModelInfo{
+			ID:              id,
+			Name:            id,
+			ContextLength:   config.ContextWindow,
+			MaxOutputTokens: config.MaxTokens,
+		})
+	}
+
+	// Update cache
+	sapModelCacheMu.Lock()
+	sapModelCache = models
+	sapModelCacheTime = time.Now()
+	sapModelCacheMu.Unlock()
+
+	return models, nil
+}
+
 func (p *Provider) generateBedrockContent(ctx context.Context, req *model.LLMRequest, streaming bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
 		// Get model-specific config

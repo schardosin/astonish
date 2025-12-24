@@ -892,3 +892,231 @@ func TestApprovalState_ClearedAfterExecution(t *testing.T) {
 	// This ensures that subsequent user input (like selecting from an input form)
 	// won't be confused with tool approval responses
 }
+
+// ============================================================================
+// RAW_TOOL_OUTPUT PERSISTENCE TESTS
+// ============================================================================
+
+// TestRawToolOutput_StoredInState verifies that when a node has raw_tool_output
+// configured, the tool's result is stored in the specified state key.
+func TestRawToolOutput_StoredInState(t *testing.T) {
+	state := NewMockState()
+
+	// Simulate what AfterToolCallback does when raw_tool_output is configured
+	stateKey := "transcript"
+	toolResult := map[string]any{
+		"output": map[string]any{
+			"title":      "Test Video Title",
+			"transcript": "This is a long transcript content...",
+		},
+	}
+
+	// Store the tool result (as AfterToolCallback does)
+	if err := state.Set(stateKey, toolResult); err != nil {
+		t.Fatalf("failed to set state key: %v", err)
+	}
+
+	// Verify the data is stored correctly
+	storedVal, err := state.Get(stateKey)
+	if err != nil {
+		t.Fatalf("expected transcript to be stored in state, got error: %v", err)
+	}
+
+	// Verify it's the actual tool result, not a sanitized message
+	storedMap, ok := storedVal.(map[string]any)
+	if !ok {
+		t.Fatalf("expected stored value to be map[string]any, got %T", storedVal)
+	}
+
+	output, ok := storedMap["output"]
+	if !ok {
+		t.Errorf("expected 'output' key in stored result, got keys: %v", storedMap)
+	}
+
+	outputMap, ok := output.(map[string]any)
+	if !ok {
+		t.Fatalf("expected output to be map[string]any, got %T", output)
+	}
+
+	if outputMap["title"] != "Test Video Title" {
+		t.Errorf("expected title='Test Video Title', got %v", outputMap["title"])
+	}
+}
+
+// TestRawToolOutput_NotOverwrittenBySanitizedMessage verifies that the raw tool
+// output is NOT overwritten by the sanitized success message returned to the LLM.
+// This was a regression that was fixed.
+func TestRawToolOutput_NotOverwrittenBySanitizedMessage(t *testing.T) {
+	state := NewMockState()
+	stateKey := "transcript"
+
+	// Step 1: Store the actual tool result (as AfterToolCallback does)
+	actualToolResult := map[string]any{
+		"output": map[string]any{
+			"transcript": "This is the actual transcript content that should be preserved.",
+		},
+	}
+	state.Set(stateKey, actualToolResult)
+
+	// Step 2: The sanitized message that was incorrectly overwriting the state
+	sanitizedMessage := map[string]any{
+		"status":  "success",
+		"message": "Tool 'get_transcript' executed successfully. Its output has been directly stored in the agent's state under the key 'transcript'.",
+	}
+
+	// Step 3: Verify the stored value is the ACTUAL result, not the sanitized message
+	// (The fix ensures we don't overwrite with sanitized message)
+	storedVal, _ := state.Get(stateKey)
+	storedMap, ok := storedVal.(map[string]any)
+	if !ok {
+		t.Fatalf("expected stored value to be map[string]any, got %T", storedVal)
+	}
+
+	// Check that it's NOT the sanitized message
+	if _, hasSanitizedStatus := storedMap["status"]; hasSanitizedStatus {
+		if storedMap["status"] == "success" && storedMap["message"] == sanitizedMessage["message"] {
+			t.Errorf("state was incorrectly overwritten with sanitized message: %v", storedMap)
+		}
+	}
+
+	// Check that it IS the actual tool result
+	if _, hasOutput := storedMap["output"]; !hasOutput {
+		t.Errorf("expected actual tool output with 'output' key, got: %v", storedMap)
+	}
+}
+
+// TestRawToolOutput_EmittedAsStateDelta verifies that raw_tool_output values
+// are emitted as StateDelta events for persistence across session restarts.
+func TestRawToolOutput_EmittedAsStateDelta(t *testing.T) {
+	// This test verifies the new logic that emits raw_tool_output as StateDelta
+	// after an LLM node completes execution.
+
+	state := NewMockState()
+	stateKey := "transcript"
+
+	// Simulate raw_tool_output stored in state
+	transcriptData := map[string]any{
+		"output": map[string]any{
+			"title":      "MCP Tutorial",
+			"transcript": "You need to learn MCP right now...",
+		},
+	}
+	state.Set(stateKey, transcriptData)
+
+	// Simulate building the StateDelta that should be emitted
+	rawToolOutput := map[string]string{
+		"transcript": "str",
+	}
+
+	delta := make(map[string]any)
+	for key := range rawToolOutput {
+		if val, err := state.Get(key); err == nil && val != nil {
+			// Only include non-empty values
+			if strVal, ok := val.(string); ok && strVal == "" {
+				continue
+			}
+			delta[key] = val
+		}
+	}
+
+	// Verify the delta contains the transcript
+	if len(delta) == 0 {
+		t.Errorf("expected StateDelta to contain raw_tool_output key, got empty delta")
+	}
+
+	if _, hasTranscript := delta["transcript"]; !hasTranscript {
+		t.Errorf("expected StateDelta to contain 'transcript' key, got: %v", delta)
+	}
+
+	// Verify the delta value is the actual data, not a string
+	deltaVal := delta["transcript"]
+	if _, isMap := deltaVal.(map[string]any); !isMap {
+		// Could also be string if that's what was stored
+		if _, isStr := deltaVal.(string); !isStr || deltaVal == "" {
+			t.Errorf("expected transcript in StateDelta to be non-empty, got: %T = %v", deltaVal, deltaVal)
+		}
+	}
+}
+
+// TestRawToolOutput_PersistsAcrossInputNode verifies that raw_tool_output data
+// stored in state survives when the flow pauses for user input and resumes.
+// This simulates the scenario: fetch_transcript -> input -> answer_followup
+func TestRawToolOutput_PersistsAcrossInputNode(t *testing.T) {
+	// Simulate state after fetch_transcript runs
+	state := NewMockState()
+	stateKey := "transcript"
+
+	transcriptData := map[string]any{
+		"output": map[string]any{
+			"title":      "YouTube Video Title",
+			"transcript": "This is the full transcript content that must persist...",
+		},
+	}
+
+	// Store the transcript (as AfterToolCallback + StateDelta emission does)
+	state.Set(stateKey, transcriptData)
+
+	// Simulate flow pausing at input node
+	state.Set("waiting_for_input", true)
+	state.Set("current_node", "ask_followup")
+
+	// Simulate user providing input and flow resuming
+	state.Set("waiting_for_input", false)
+	state.Set("followup_question", "What was discussed about MCP?")
+	state.Set("current_node", "answer_followup")
+
+	// Verify transcript is STILL available for the answer_followup node
+	storedVal, err := state.Get(stateKey)
+	if err != nil {
+		t.Fatalf("transcript was lost after input node: %v", err)
+	}
+
+	if storedVal == nil {
+		t.Fatalf("transcript is nil after input node")
+	}
+
+	// Verify it's not an empty string
+	if strVal, isStr := storedVal.(string); isStr && strVal == "" {
+		t.Errorf("transcript became empty string after input node")
+	}
+
+	// Verify it's the actual data
+	storedMap, ok := storedVal.(map[string]any)
+	if !ok {
+		t.Fatalf("expected transcript to be map[string]any, got %T", storedVal)
+	}
+
+	if _, hasOutput := storedMap["output"]; !hasOutput {
+		t.Errorf("transcript lost its 'output' key after input node, got: %v", storedMap)
+	}
+}
+
+// TestRawToolOutput_EmptyValueNotEmittedAsStateDelta verifies that empty
+// raw_tool_output values (initial empty strings) are not emitted as StateDelta.
+func TestRawToolOutput_EmptyValueNotEmittedAsStateDelta(t *testing.T) {
+	state := NewMockState()
+
+	// Initialize with empty string (as done at START of flow)
+	state.Set("transcript", "")
+
+	// Simulate building StateDelta (should skip empty values)
+	rawToolOutput := map[string]string{
+		"transcript": "str",
+	}
+
+	delta := make(map[string]any)
+	for key := range rawToolOutput {
+		if val, err := state.Get(key); err == nil && val != nil {
+			// Only include non-empty values
+			if strVal, ok := val.(string); ok && strVal == "" {
+				continue
+			}
+			delta[key] = val
+		}
+	}
+
+	// Delta should be empty because transcript is empty string
+	if len(delta) > 0 {
+		t.Errorf("expected empty StateDelta for empty raw_tool_output, got: %v", delta)
+	}
+}

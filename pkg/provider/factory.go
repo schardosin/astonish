@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 
 	"github.com/sashabaranov/go-openai"
@@ -14,6 +15,7 @@ import (
 	"github.com/schardosin/astonish/pkg/provider/ollama"
 	openai_provider "github.com/schardosin/astonish/pkg/provider/openai"
 	"github.com/schardosin/astonish/pkg/provider/openrouter"
+	"github.com/schardosin/astonish/pkg/provider/poe"
 	"github.com/schardosin/astonish/pkg/provider/sap"
 	"github.com/schardosin/astonish/pkg/provider/xai"
 	"google.golang.org/adk/model"
@@ -30,6 +32,7 @@ var ProviderDisplayNames = map[string]string{
 	"ollama":      "Ollama",
 	"openai":      "OpenAI",
 	"openrouter":  "Openrouter",
+	"poe":         "Poe",
 	"sap_ai_core": "SAP AI Core",
 	"xai":         "xAI",
 }
@@ -109,6 +112,31 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 
 		config := openai.DefaultConfig(apiKey)
 		config.BaseURL = "https://openrouter.ai/api/v1"
+		client := openai.NewClientWithConfig(config)
+
+		// Fetch max_completion_tokens from OpenRouter API metadata
+		// This avoids OpenRouter's low defaults that can truncate output
+		maxTokens := openrouter.GetMaxCompletionTokens(ctx, apiKey, modelName)
+		if maxTokens > 0 {
+			log.Printf("[OpenRouter] Model %s: setting max_completion_tokens=%d", modelName, maxTokens)
+			return openai_provider.NewProviderWithMaxTokens(client, modelName, true, maxTokens), nil
+		}
+		return openai_provider.NewProvider(client, modelName, true), nil
+
+	case "poe":
+		apiKey := os.Getenv("POE_API_KEY")
+		if apiKey == "" && cfg != nil {
+			apiKey = cfg.Providers["poe"]["api_key"]
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("POE_API_KEY not set")
+		}
+		if modelName == "" {
+			modelName = "gpt-4o"
+		}
+
+		config := openai.DefaultConfig(apiKey)
+		config.BaseURL = poe.GetBaseURL()
 		client := openai.NewClientWithConfig(config)
 		return openai_provider.NewProvider(client, modelName, true), nil
 
@@ -209,7 +237,7 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 		if apiKey == "" {
 			return nil, fmt.Errorf("Anthropic API key not configured")
 		}
-		return anthropic.ListModels(apiKey)
+		return anthropic.ListModels(ctx, apiKey)
 
 	case "google_genai", "gemini":
 		apiKey := ""
@@ -296,6 +324,19 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 			modelNames = append(modelNames, m.ID)
 		}
 		return modelNames, nil
+
+	case "poe":
+		apiKey := ""
+		if cfg != nil && cfg.Providers["poe"] != nil {
+			apiKey = cfg.Providers["poe"]["api_key"]
+		}
+		if apiKey == "" {
+			apiKey = os.Getenv("POE_API_KEY")
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("Poe API key not configured")
+		}
+		return poe.ListModels(ctx, apiKey)
 
 	case "sap_ai_core":
 		if cfg == nil || cfg.Providers["sap_ai_core"] == nil {

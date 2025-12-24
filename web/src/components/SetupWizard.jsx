@@ -58,6 +58,15 @@ const PROVIDERS = [
     defaultModel: 'google/gemini-2.0-flash-001'
   },
   {
+    id: 'poe',
+    name: 'Poe',
+    description: 'Access multiple AI models via Poe',
+    icon: '💬',
+    color: 'from-cyan-500 to-blue-400',
+    fields: [{ key: 'api_key', label: 'API Key', placeholder: 'Enter your Poe API key' }],
+    defaultModel: 'gpt-4o'
+  },
+  {
     id: 'xai',
     name: 'xAI Grok',
     description: 'Grok models from xAI',

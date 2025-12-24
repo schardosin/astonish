@@ -166,6 +166,27 @@ func HandleStopSession(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"stopped": true})
 }
 
+// HandleSessionKeepalive handles POST /api/session/{id}/keepalive - extends session lifetime
+// The UI should call this every 30 seconds while a flow is active to prevent timeout
+func HandleSessionKeepalive(w http.ResponseWriter, r *http.Request) {
+	// Extract session ID from URL
+	path := r.URL.Path
+	// Expected format: /api/session/{sessionId}/keepalive
+	parts := strings.Split(path, "/")
+	if len(parts) < 4 {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	sessionID := parts[3] // /api/session/{id}/keepalive
+
+	sm := GetSessionManager()
+	sm.TouchSession(sessionID)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
 // getRequiredMCPServers extracts the list of MCP server names needed for this flow
 // It maps tool names from nodes' ToolsSelection to their source MCP server names
 func getRequiredMCPServers(cfg *config.AgentConfig) []string {

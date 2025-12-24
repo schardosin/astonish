@@ -82,10 +82,6 @@ export function parseNodes(yamlData, savedLayout = null) {
           validationErrors.push(`'output_model' is required for '${node.type}' nodes to store results in state`)
         }
         
-        // prompt is required for input nodes
-        if (node.type === 'input' && !node.prompt) {
-          validationErrors.push(`'prompt' is required for input nodes to show the user what to enter`)
-        }
         
         // system and prompt are required for llm nodes
         if (node.type === 'llm') {
@@ -153,8 +149,8 @@ export function parseNodes(yamlData, savedLayout = null) {
   nodes.push({
     id: 'END',
     type: 'end',
-    // Default Y to 300 to avoid overlapping START if layout missing
-    position: endPos ? { x: endPos.x, y: endPos.y } : { x: 0, y: 300 },
+    // Default Y to 500 to give plenty of space from START for adding nodes
+    position: endPos ? { x: endPos.x, y: endPos.y } : { x: 0, y: 500 },
     data: { label: 'END' }
   })
   

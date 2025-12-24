@@ -1402,8 +1402,14 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 	}
 
 	// Inject tool use instruction if tools are enabled
+	// Inject tool use instruction if tools are enabled
 	if node.Tools {
 		instruction += "\n\nIMPORTANT: You have access to tools that you MUST use to complete this task. Do not describe what you would do or say you are waiting for results. Instead, immediately call the appropriate tool with the required parameters. The tools are available and ready to use right now."
+	}
+
+	// Inject instruction for raw_tool_output
+	if len(node.RawToolOutput) > 0 {
+		instruction += "\n\nIMPORTANT: The tool will return the raw content directly to the state. Your final task for this step is to confirm its retrieval."
 	}
 
 	// Build OutputSchema from output_model if defined
@@ -1759,6 +1765,8 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 
 				// Handle raw_tool_output: Store actual result in state, return sanitized message to LLM
 				// This prevents large tool outputs from polluting the LLM's context window
+				// Handle raw_tool_output: Store actual result in state, return sanitized message to LLM
+				// This prevents large tool outputs from polluting the LLM's context window
 				if len(node.RawToolOutput) == 1 {
 					// Get the state key to store the raw output
 					var stateKey string
@@ -1767,13 +1775,28 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 						break
 					}
 
+					if a.DebugMode {
+						resultSummary := "empty"
+						if len(result) > 0 {
+							// Just show keys or a truncated string to verify it's the big object
+							keys := make([]string, 0, len(result))
+							for k := range result {
+								keys = append(keys, k)
+							}
+							resultSummary = fmt.Sprintf("keys=%v", keys)
+						}
+						fmt.Printf("[DEBUG] raw_tool_output: Attempting to store result in '%s'. Result summary: %s\n", stateKey, resultSummary)
+					}
+
 					// Store the actual tool result in state
 					if err := state.Set(stateKey, result); err != nil {
 						return result, fmt.Errorf("failed to set raw_tool_output state key %s: %w", stateKey, err)
 					}
 
+					// Verify storage immediatley
 					if a.DebugMode {
-						fmt.Printf("[DEBUG] raw_tool_output: Stored tool result in state key '%s'\n", stateKey)
+						storedVal, err := state.Get(stateKey)
+						fmt.Printf("[DEBUG] raw_tool_output: Verification - State.Get('%s') err=%v, type=%T\n", stateKey, err, storedVal)
 					}
 
 					// Return sanitized message to LLM instead of raw data
@@ -1782,6 +1805,11 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 						"status":  "success",
 						"message": fmt.Sprintf("Tool '%s' executed successfully. Its output has been directly stored in the agent's state under the key '%s'.", toolName, stateKey),
 					}
+					
+					if a.DebugMode {
+						fmt.Printf("[DEBUG] raw_tool_output: Returning sanitized result to LLM: %+v\n", sanitizedResult)
+					}
+
 					return sanitizedResult, nil
 				}
 
@@ -2412,28 +2440,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 						fmt.Printf("[DEBUG] Tool Response for %s: %s\n", part.FunctionResponse.Name, string(respJSON))
 					}
 
-					// Handle raw_tool_output if configured
-					if len(node.RawToolOutput) == 1 {
-						// Get the state key to update
-						var stateKey string
-						for k := range node.RawToolOutput {
-							stateKey = k
-							break
-						}
 
-						// Update state with the response map
-						response := part.FunctionResponse.Response
-
-						if err := state.Set(stateKey, response); err != nil {
-							return false, fmt.Errorf("failed to set state key %s: %w", stateKey, err)
-						}
-
-						// Add to StateDelta so UI updates
-						if event.Actions.StateDelta == nil {
-							event.Actions.StateDelta = make(map[string]any)
-						}
-						event.Actions.StateDelta[stateKey] = response
-					}
 				}
 			}
 		}
@@ -2517,6 +2524,36 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				fmt.Printf("[DEBUG] executeLLMNode: Response text is empty, required for output_model extraction\n")
 			}
 			return false, fmt.Errorf("LLM returned empty response but output_model requires JSON output with keys: %v", getKeysStr(node.OutputModel))
+		}
+	}
+
+	// Emit raw_tool_output values as StateDelta for persistence across session restarts
+	// The AfterToolCallback stores the data in state, but we must also emit it as StateDelta
+	// so it's preserved in event history when the session pauses for user input
+	if len(node.RawToolOutput) > 0 {
+		delta := make(map[string]any)
+		for stateKey := range node.RawToolOutput {
+			if val, err := state.Get(stateKey); err == nil && val != nil {
+				// Only include non-empty values (empty string means not yet populated)
+				if strVal, ok := val.(string); ok && strVal == "" {
+					continue
+				}
+				delta[stateKey] = val
+				if a.DebugMode {
+					fmt.Printf("[DEBUG] executeLLMNode: Including raw_tool_output '%s' in StateDelta for persistence\n", stateKey)
+				}
+			}
+		}
+
+		if len(delta) > 0 {
+			if a.DebugMode {
+				fmt.Printf("[DEBUG] executeLLMNode: Emitting raw_tool_output StateDelta with keys: %v\n", getKeys(delta))
+			}
+			yield(&session.Event{
+				Actions: session.EventActions{
+					StateDelta: delta,
+				},
+			}, nil)
 		}
 	}
 

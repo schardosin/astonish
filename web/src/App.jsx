@@ -85,20 +85,30 @@ function App() {
   const showSettings = path.view === 'settings'
   const settingsSection = path.params.section || 'general'
 
-  // Extract available variables from all nodes' output_model, grouped by node
+  // Extract available variables from all nodes' output_model and raw_tool_output, grouped by node
   const availableVariables = useMemo(() => {
     const grouped = []
     nodes.forEach(node => {
       const outputModel = node.data?.yaml?.output_model
+      const rawToolOutput = node.data?.yaml?.raw_tool_output
+      
+      // Collect variables from both output_model and raw_tool_output
+      const vars = new Set()
+      
       if (outputModel && typeof outputModel === 'object') {
-        const vars = Object.keys(outputModel)
-        if (vars.length > 0) {
-          grouped.push({
-            nodeName: node.data?.label || node.id,
-            nodeType: node.data?.nodeType || node.type,
-            variables: vars.sort()
-          })
-        }
+        Object.keys(outputModel).forEach(key => vars.add(key))
+      }
+      
+      if (rawToolOutput && typeof rawToolOutput === 'object') {
+        Object.keys(rawToolOutput).forEach(key => vars.add(key))
+      }
+      
+      if (vars.size > 0) {
+        grouped.push({
+          nodeName: node.data?.label || node.id,
+          nodeType: node.data?.nodeType || node.type,
+          variables: Array.from(vars).sort()
+        })
       }
     })
     return grouped
@@ -390,9 +400,16 @@ function App() {
 
 nodes: []
 
-flow:
-  - from: START
-    to: END
+flow: []
+
+layout:
+  nodes:
+    START:
+      x: 200
+      y: 50
+    END:
+      x: 200
+      y: 250
 `
     
     setSelectedAgent({ id, name, description: description || name, isNew: true })
@@ -600,6 +617,19 @@ flow:
     setRunningNodeId(null)
     setChatMessages([])
   }, [sessionId])
+
+  // Keepalive: Ping server every 30 seconds while session is active to prevent timeout
+  // This keeps the session and MCP servers alive while user is interacting with the flow
+  useEffect(() => {
+    if (!sessionId || !isRunning) return
+
+    const keepaliveInterval = setInterval(() => {
+      fetch(`/api/session/${sessionId}/keepalive`, { method: 'POST' })
+        .catch(err => console.warn('Keepalive ping failed:', err))
+    }, 30000) // 30 seconds
+
+    return () => clearInterval(keepaliveInterval)
+  }, [sessionId, isRunning])
 
   const handleYamlChange = useCallback((newYaml) => {
     setYamlContent(newYaml)
@@ -1264,6 +1294,7 @@ flow:
           onSectionChange={(section) => replaceHash(buildPath('settings', { section }))}
           theme={theme}
           onToolsRefresh={loadTools}
+          onSettingsSaved={loadSettings}
         />
       )}
 

@@ -57,6 +57,26 @@ AI processing with optional tool use.
     - search_result  # Show the result to user
 ` + "```" + `
 
+#### Advanced: Raw Tool Output (CONTEXT OPTIMIZATION)
+**WARNING:** Only use this when explicitly requested by the user for large data handling.
+This bypasses the LLM for tool output, storing it directly in state.
+Useful for large datasets processed by subsequent nodes to save context/costs.
+
+**CRITICAL:** do NOT use this unless the user specifically asks for 'raw output', 'direct state storage', or 'optimization for large data'. For normal flows, use ` + "`" + `output_model` + "`" + `.
+
+When using ` + "`" + `raw_tool_output` + "`" + `, it is highly recommended to also use ` + "`" + `output_model` + "`" + ` to export a status field (e.g., ` + "`" + `<node_context>_status` + "`" + `) to confirm the operation's success/failure for subsequent nodes.
+
+` + "```yaml" + `
+- name: fetch_large_dataset
+  type: llm
+  prompt: "Fetch the data"
+  tools: true
+  tools_selection: [big_data_tool]
+  # output_model is NOT used here because we use raw_tool_output
+  raw_tool_output:
+    my_large_variable: any  # Stores the raw tool result directly in 'my_large_variable'
+` + "```" + `
+
 ### 2. Input Node
 Collect user input. output_model is REQUIRED to store input in state.
 

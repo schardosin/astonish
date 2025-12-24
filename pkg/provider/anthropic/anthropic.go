@@ -10,14 +10,25 @@ import (
 	"iter"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
 )
 
 const (
-	apiURL     = "https://api.anthropic.com/v1/messages"
-	apiVersion = "2023-06-01"
+	apiURL      = "https://api.anthropic.com/v1/messages"
+	modelsURL   = "https://api.anthropic.com/v1/models"
+	apiVersion  = "2023-06-01"
+)
+
+// Model cache for avoiding repeated API calls
+var (
+	modelCacheMu   sync.RWMutex
+	modelCache     []ModelInfo
+	modelCacheTime time.Time
+	modelCacheTTL  = 1 * time.Hour
 )
 
 // Provider implements model.LLM for Anthropic.
@@ -346,4 +357,127 @@ type StreamDelta struct {
 	Type        string `json:"type"`
 	Text        string `json:"text,omitempty"`
 	PartialJson string `json:"partial_json,omitempty"` // For tool_use input delta
+}
+
+// ModelInfo represents model information for UI display
+type ModelInfo struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	CreatedAt   string `json:"created_at,omitempty"`
+}
+
+// ModelsAPIResponse represents the response from /v1/models
+type ModelsAPIResponse struct {
+	Data    []ModelsAPIModel `json:"data"`
+	HasMore bool             `json:"has_more"`
+	FirstID string           `json:"first_id"`
+	LastID  string           `json:"last_id"`
+}
+
+// ModelsAPIModel represents a single model in the API response
+type ModelsAPIModel struct {
+	ID          string `json:"id"`
+	CreatedAt   string `json:"created_at"`
+	DisplayName string `json:"display_name"`
+	Type        string `json:"type"`
+}
+
+// fetchModels fetches all models from the Anthropic API, handling pagination
+func fetchModels(ctx context.Context, apiKey string) ([]ModelInfo, error) {
+	var allModels []ModelInfo
+	afterID := ""
+
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	for {
+		url := modelsURL
+		if afterID != "" {
+			url = fmt.Sprintf("%s?after_id=%s", modelsURL, afterID)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+
+		req.Header.Set("x-api-key", apiKey)
+		req.Header.Set("anthropic-version", apiVersion)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch models: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("API error: %s - %s", resp.Status, string(body))
+		}
+
+		var modelsResp ModelsAPIResponse
+		if err := json.NewDecoder(resp.Body).Decode(&modelsResp); err != nil {
+			return nil, fmt.Errorf("failed to decode response: %w", err)
+		}
+
+		for _, m := range modelsResp.Data {
+			allModels = append(allModels, ModelInfo{
+				ID:          m.ID,
+				Name:        m.DisplayName, // Use display name as the main name
+				DisplayName: m.DisplayName,
+				CreatedAt:   m.CreatedAt,
+			})
+		}
+
+		if !modelsResp.HasMore {
+			break
+		}
+		afterID = modelsResp.LastID
+	}
+
+	return allModels, nil
+}
+
+// ListModelsWithMetadata returns all models with metadata, using cache
+func ListModelsWithMetadata(ctx context.Context, apiKey string) ([]ModelInfo, error) {
+	modelCacheMu.RLock()
+	if modelCache != nil && time.Since(modelCacheTime) < modelCacheTTL {
+		result := modelCache
+		modelCacheMu.RUnlock()
+		return result, nil
+	}
+	modelCacheMu.RUnlock()
+
+	// Fetch fresh data
+	modelCacheMu.Lock()
+	defer modelCacheMu.Unlock()
+
+	// Double-check after acquiring write lock
+	if modelCache != nil && time.Since(modelCacheTime) < modelCacheTTL {
+		return modelCache, nil
+	}
+
+	models, err := fetchModels(ctx, apiKey)
+	if err != nil {
+		return nil, err
+	}
+
+	modelCache = models
+	modelCacheTime = time.Now()
+
+	return models, nil
+}
+
+// ListModels returns a simple list of model IDs for backward compatibility
+func ListModels(ctx context.Context, apiKey string) ([]string, error) {
+	models, err := ListModelsWithMetadata(ctx, apiKey)
+	if err != nil {
+		return nil, err
+	}
+
+	var ids []string
+	for _, m := range models {
+		ids = append(ids, m.ID)
+	}
+	return ids, nil
 }

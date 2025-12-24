@@ -85,20 +85,30 @@ function App() {
   const showSettings = path.view === 'settings'
   const settingsSection = path.params.section || 'general'
 
-  // Extract available variables from all nodes' output_model, grouped by node
+  // Extract available variables from all nodes' output_model and raw_tool_output, grouped by node
   const availableVariables = useMemo(() => {
     const grouped = []
     nodes.forEach(node => {
       const outputModel = node.data?.yaml?.output_model
+      const rawToolOutput = node.data?.yaml?.raw_tool_output
+      
+      // Collect variables from both output_model and raw_tool_output
+      const vars = new Set()
+      
       if (outputModel && typeof outputModel === 'object') {
-        const vars = Object.keys(outputModel)
-        if (vars.length > 0) {
-          grouped.push({
-            nodeName: node.data?.label || node.id,
-            nodeType: node.data?.nodeType || node.type,
-            variables: vars.sort()
-          })
-        }
+        Object.keys(outputModel).forEach(key => vars.add(key))
+      }
+      
+      if (rawToolOutput && typeof rawToolOutput === 'object') {
+        Object.keys(rawToolOutput).forEach(key => vars.add(key))
+      }
+      
+      if (vars.size > 0) {
+        grouped.push({
+          nodeName: node.data?.label || node.id,
+          nodeType: node.data?.nodeType || node.type,
+          variables: Array.from(vars).sort()
+        })
       }
     })
     return grouped

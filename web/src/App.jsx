@@ -400,9 +400,16 @@ function App() {
 
 nodes: []
 
-flow:
-  - from: START
-    to: END
+flow: []
+
+layout:
+  nodes:
+    START:
+      x: 200
+      y: 50
+    END:
+      x: 200
+      y: 250
 `
     
     setSelectedAgent({ id, name, description: description || name, isNew: true })

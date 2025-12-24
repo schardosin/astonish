@@ -23,7 +23,7 @@ type AgentListItem struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
 	Description  string `json:"description"`
-	Source       string `json:"source"`              // "system", "local", or "store"
+	Source       string `json:"source"` // "system", "local", or "store"
 	HasError     bool   `json:"hasError,omitempty"`
 	ErrorMessage string `json:"errorMessage,omitempty"`
 	IsReadOnly   bool   `json:"isReadOnly,omitempty"` // True for store flows
@@ -141,7 +141,7 @@ func findAgentPath(name string) (string, string, error) {
 				flowName = parts[1]
 			}
 		}
-		
+
 		if tapName != "" && flowName != "" {
 			if path, ok := store.GetInstalledFlowPath(tapName, flowName); ok {
 				return path, "store", nil
@@ -207,23 +207,23 @@ func ListAgentsHandler(w http.ResponseWriter, r *http.Request) {
 					continue // Skip manifest
 				}
 				name := entry.Name()[:len(entry.Name())-5]
-				
+
 				// Build display name: tap/flow for community, just flow for official
 				displayName := name
 				if tap.Name != flowstore.OfficialStoreName {
 					displayName = tap.Name + "/" + name
 				}
-				
+
 				// Use source-prefixed ID to avoid conflicts with local copies
 				storeID := "store:" + tap.Name + ":" + name
-				
+
 				path := filepath.Join(tapDir, entry.Name())
 				cfg, err := config.LoadAgent(path)
 				desc := "(Installed from store)"
 				if err == nil && cfg.Description != "" {
 					desc = cfg.Description
 				}
-				
+
 				agents[storeID] = AgentListItem{
 					ID:          storeID,
 					Name:        displayName,
@@ -317,9 +317,14 @@ func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 			storeServers, _ := loadAllServersFromTaps()
 
 			// Resolve dependencies
-			deps := ResolveMCPDependencies(tools, cachedTools, storeServers)
+			deps := ResolveMCPDependencies(tools, cachedTools, storeServers, agentConfig.MCPDependencies)
 
-			if len(deps) > 0 {
+			// Check if mcp_dependencies section already exists
+			hasMcpDeps := len(agentConfig.MCPDependencies) > 0
+
+			// Only add deps if we have them AND section doesn't exist yet
+			// (Avoids re-encoding when deps already exist, preserving formatting)
+			if len(deps) > 0 && !hasMcpDeps {
 				// Parse as yaml.Node to preserve ordering
 				var rootNode yaml.Node
 				if err := yaml.Unmarshal([]byte(request.YAML), &rootNode); err == nil && rootNode.Kind == yaml.DocumentNode && len(rootNode.Content) > 0 {
@@ -526,10 +531,10 @@ func CopyAgentToLocalHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"status":   "ok",
-		"newName":  destName,
-		"path":     destPath,
-		"message":  "Flow copied to local. You can now edit it.",
+		"status":  "ok",
+		"newName": destName,
+		"path":    destPath,
+		"message": "Flow copied to local. You can now edit it.",
 	})
 }
 
@@ -592,12 +597,14 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/ai/tool-search-internet", AIToolSearchInternetHandler).Methods("POST")
 	router.HandleFunc("/api/ai/url-extract", URLExtractHandler).Methods("POST")
 	router.HandleFunc("/api/mcp-internet-install", InternetMCPInstallHandler).Methods("POST")
+	router.HandleFunc("/api/mcp-dependencies/check", CheckMCPDependenciesHandler).Methods("POST")
 
 	// Settings endpoints
 	router.HandleFunc("/api/settings/config", GetSettingsHandler).Methods("GET")
 	router.HandleFunc("/api/settings/config", UpdateSettingsHandler).Methods("PUT")
 	router.HandleFunc("/api/settings/mcp", GetMCPSettingsHandler).Methods("GET")
 	router.HandleFunc("/api/settings/mcp", UpdateMCPSettingsHandler).Methods("PUT")
+	router.HandleFunc("/api/mcp/install-inline", InstallInlineMCPServerHandler).Methods("POST")
 	router.HandleFunc("/api/settings/status", GetSetupStatusHandler).Methods("GET")
 
 	// Provider endpoints

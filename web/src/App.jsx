@@ -15,11 +15,13 @@ import AIChatPanel from './components/AIChatPanel'
 import SettingsPage from './components/SettingsPage'
 import SetupWizard from './components/SetupWizard'
 import HomePage from './components/HomePage'
+import MCPDependenciesPanel from './components/MCPDependenciesPanel'
+import InstallMcpModal from './components/InstallMcpModal'
 import { useTheme } from './hooks/useTheme'
 import { useHashRouter, buildPath } from './hooks/useHashRouter'
 import { yamlToFlowAsync, extractLayout } from './utils/yamlToFlow'
 import { addStandaloneNode, addConnection, removeConnection, updateNode, orderYamlKeys } from './utils/flowToYaml'
-import { fetchAgents, fetchAgent, saveAgent, deleteAgent, fetchTools } from './api/agents'
+import { fetchAgents, fetchAgent, saveAgent, deleteAgent, fetchTools, checkMcpDependencies, installMcpServer, getMcpStoreServer, installInlineMcpServer } from './api/agents'
 import { snakeToTitleCase } from './utils/formatters'
 import { Store, Lock, Copy, Loader2 } from 'lucide-react'
 import './index.css'
@@ -75,6 +77,11 @@ function App() {
   const [runningNodeId, setRunningNodeId] = useState(null)
   const [sessionId, setSessionId] = useState(null)
   const [isWaitingForInput, setIsWaitingForInput] = useState(false)
+  
+  // MCP Dependencies State
+  const [mcpDependencies, setMcpDependencies] = useState(null) // {dependencies: [], all_installed: bool, missing: int}
+  const [installingDep, setInstallingDep] = useState(null) // server name being installed
+  const [installModalServer, setInstallModalServer] = useState(null)
   
   // Undo/Redo History (max 100 versions)
   const [yamlHistory, setYamlHistory] = useState([])
@@ -150,6 +157,16 @@ function App() {
     }
   }, [showSetupWizard, isCheckingSetup])
 
+  // Auto-dismiss toast after 3 seconds
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => {
+        setToast(null)
+      }, 3000)
+      return () => clearTimeout(timer)
+    }
+  }, [toast])
+
   const loadSettings = async () => {
     try {
       const res = await fetch('/api/settings/config')
@@ -175,8 +192,8 @@ function App() {
       const urlAgentName = path.view === 'agent' ? path.params.agentName : null
       
       if (urlAgentName && agentsList.length > 0) {
-        // Try to find the agent from URL
-        const urlAgent = agentsList.find(a => a.id === urlAgentName || a.name === urlAgentName)
+        // Try to find the agent from URL - prioritize exact ID match
+        const urlAgent = agentsList.find(a => a.id === urlAgentName) || agentsList.find(a => a.name === urlAgentName)
         if (urlAgent) {
           handleAgentSelectInternal(urlAgent, false) // Don't update URL, already there
           setView('canvas')
@@ -221,7 +238,7 @@ function App() {
     setHistoryIndex(prev => Math.min(prev + 1, MAX_HISTORY - 1))
   }, [historyIndex])
 
-  // Debounced auto-save to disk (300ms delay) - includes layout extraction
+  // Debounced auto-save to disk (1000ms delay) - sends YAML directly without reformatting
   const debouncedAutoSave = useCallback((newYaml) => {
     if (!selectedAgent) return
     
@@ -236,31 +253,38 @@ function App() {
       clearTimeout(autoSaveTimerRef.current)
     }
     
-    // Schedule new save
+    // Schedule new save with longer debounce (1s) to avoid interrupting editing
     autoSaveTimerRef.current = setTimeout(async () => {
       try {
-        // Extract current layout from flow nodes and merge into YAML
-        const parsed = yaml.load(newYaml) || {}
-        const layout = extractLayout(currentFlowNodesRef.current, currentFlowEdgesRef.current)
-        parsed.layout = layout
-        const yamlWithLayout = yaml.dump(orderYamlKeys(parsed), { 
-          indent: 2,
-          lineWidth: -1, 
-          noRefs: true, 
-          sortKeys: false 
-        })
-        const result = await saveAgent(selectedAgent.id, yamlWithLayout)
-        console.log('[Auto-save] Saved with layout')
+        // Save the user's YAML as-is (no reformatting)
+        // Layout is saved separately via handleLayoutSave when canvas changes
+        const result = await saveAgent(selectedAgent.id, newYaml)
+        console.log('[Auto-save] Saved')
         
-        // If server returned updated YAML (with mcp_dependencies), update local state
-        if (result.yaml && result.yaml !== yamlWithLayout) {
-          setYamlContent(result.yaml)
-          console.log('[Auto-save] Updated with server-generated mcp_dependencies')
+        // If server returned YAML with NEW content (like mcp_dependencies), update local state
+        // Compare parsed content to avoid triggering on format-only differences
+        if (result.yaml) {
+          try {
+            const serverParsed = yaml.load(result.yaml)
+            const localParsed = yaml.load(newYaml)
+            
+            // Check if mcp_dependencies actually changed (the main reason server modifies YAML)
+            const serverDeps = JSON.stringify(serverParsed?.mcp_dependencies || null)
+            const localDeps = JSON.stringify(localParsed?.mcp_dependencies || null)
+            
+            if (serverDeps !== localDeps) {
+              setYamlContent(result.yaml)
+              console.log('[Auto-save] Updated with server-generated mcp_dependencies')
+            }
+          } catch (parseErr) {
+            // If parse fails, fall back to not updating
+            console.warn('[Auto-save] Could not compare YAML:', parseErr)
+          }
         }
       } catch (err) {
         console.error('[Auto-save] Failed:', err)
       }
-    }, 300)
+    }, 1000)
   }, [selectedAgent])
 
   // Unified function to update YAML - handles state, history, and auto-save
@@ -315,7 +339,8 @@ function App() {
   // React to URL path changes (hash navigation)
   useEffect(() => {
     if (path.view === 'agent' && path.params.agentName && agents.length > 0) {
-      const targetAgent = agents.find(a => a.id === path.params.agentName || a.name === path.params.agentName)
+      // Prioritize exact ID match over name match
+      const targetAgent = agents.find(a => a.id === path.params.agentName) || agents.find(a => a.name === path.params.agentName)
       // Only switch if it's a different agent than currently selected
       if (targetAgent && targetAgent.id !== selectedAgent?.id) {
         handleAgentSelectInternal(targetAgent, false)
@@ -383,11 +408,26 @@ function App() {
       // Initialize history with loaded state
       setYamlHistory([loadedYaml])
       setHistoryIndex(0)
+      
+      // Check MCP dependencies
+      try {
+        const parsed = yaml.load(loadedYaml)
+        if (parsed?.mcp_dependencies && parsed.mcp_dependencies.length > 0) {
+          const depStatus = await checkMcpDependencies(parsed.mcp_dependencies)
+          setMcpDependencies(depStatus)
+        } else {
+          setMcpDependencies(null)
+        }
+      } catch (depErr) {
+        console.error('Failed to check MCP dependencies:', depErr)
+        setMcpDependencies(null)
+      }
     } catch (err) {
       console.error('Failed to load agent:', err)
       setYamlContent(defaultYaml)
       setYamlHistory([defaultYaml])
       setHistoryIndex(0)
+      setMcpDependencies(null)
     }
   }, [navigate])
 
@@ -673,7 +713,8 @@ layout:
         indent: 2,
         lineWidth: -1, 
         noRefs: true, 
-        sortKeys: false 
+        sortKeys: false,
+        styles: { '!!str': 'literal' }  // Force block scalars for multiline strings
       })
     } catch (e) {
       console.error('Failed to merge layout:', e)
@@ -1119,6 +1160,144 @@ layout:
             onRedo={handleRedo}
             readOnly={selectedAgent?.source === 'store'}
             onCopyToLocal={() => handleCopyToLocal(selectedAgent)}
+          />
+
+          {/* MCP Dependencies Warning Panel */}
+          {mcpDependencies && !mcpDependencies.all_installed && (
+            <MCPDependenciesPanel
+              dependencies={mcpDependencies}
+              onDismiss={() => setMcpDependencies(null)}
+              isInstalling={installingDep}
+              onInstall={async (dep) => {
+                // Handle inline dependencies (embedded config in YAML)
+                if (dep.source === 'inline') {
+                  if (!dep.config || (!dep.config.command && !dep.config.url)) {
+                    setToast({ message: `Cannot install ${dep.server}: Missing configuration. Please add it manually in Settings > MCP.`, type: 'error' })
+                    return
+                  }
+                  
+                  setInstallingDep(dep.server)
+                  try {
+                    // For inline, show modal with the embedded config for env var input
+                    if (dep.config.env && Object.keys(dep.config.env).length > 0) {
+                      setInstallModalServer({
+                        name: dep.server,
+                        description: `Inline MCP server required by this flow`,
+                        config: dep.config,
+                        _depContext: dep,
+                        _isInline: true
+                      })
+                      setInstallingDep(null)
+                      return
+                    }
+                    
+                    // No env vars needed, install directly
+                    await installInlineMcpServer(dep.server, dep.config)
+                    
+                    // Refresh tools and check dependencies
+                    const toolsData = await fetchTools()
+                    setAvailableTools(toolsData.tools || [])
+                    
+                    const parsed = yaml.load(yamlContent)
+                    if (parsed?.mcp_dependencies) {
+                      const newStatus = await checkMcpDependencies(parsed.mcp_dependencies)
+                      setMcpDependencies(newStatus)
+                    }
+                    
+                    setToast({ message: `Successfully installed ${dep.server}`, type: 'success' })
+                  } catch (err) {
+                    console.error('Failed to install inline server:', err)
+                    setToast({ message: `Failed to install ${dep.server}: ${err.message}`, type: 'error' })
+                  } finally {
+                    setInstallingDep(null)
+                  }
+                  return
+                }
+                
+                // Support both store and tap sources (both use the same install API)
+                if (!dep.store_id || (dep.source !== 'store' && dep.source !== 'tap')) {
+                  // For unknown sources
+                  console.log('Unsupported install source:', dep)
+                  setToast({ message: `Cannot install ${dep.server}: Unknown source type`, type: 'error' })
+                  return
+                }
+                
+                setInstallingDep(dep.server)
+                try {
+                  // Fetch server details first to check for env vars
+                  const serverDetails = await getMcpStoreServer(dep.store_id)
+                  
+                  // If server requires env vars, show modal
+                  if (serverDetails.config && serverDetails.config.env && Object.keys(serverDetails.config.env).length > 0) {
+                    setInstallModalServer({
+                      ...serverDetails,
+                      _depContext: dep
+                    })
+                    setInstallingDep(null)
+                    return
+                  }
+                  
+                  // No env vars needed, proceed with install
+                  await installMcpServer(dep.store_id)
+                  
+                  // Refresh tools and check dependencies
+                  const toolsData = await fetchTools()
+                  setAvailableTools(toolsData.tools || [])
+                  
+                  const parsed = yaml.load(yamlContent)
+                  if (parsed?.mcp_dependencies) {
+                    const newStatus = await checkMcpDependencies(parsed.mcp_dependencies)
+                    setMcpDependencies(newStatus)
+                  }
+                  
+                  setToast({ message: `Successfully installed ${dep.server}`, type: 'success' })
+                } catch (err) {
+                  console.error('Failed to install:', err)
+                  setToast({ message: `Failed to install ${dep.server}: ${err.message}`, type: 'error' })
+                } finally {
+                  setInstallingDep(null)
+                }
+              }}
+            />
+          )}
+
+          <InstallMcpModal 
+            isOpen={!!installModalServer}
+            server={installModalServer}
+            onClose={() => setInstallModalServer(null)}
+            onInstall={async (env) => {
+              const dep = installModalServer._depContext
+              const isInline = installModalServer._isInline
+              try {
+                if (isInline) {
+                  // For inline servers, merge env vars with the config
+                  const configWithEnv = {
+                    ...installModalServer.config,
+                    env: { ...installModalServer.config.env, ...env }
+                  }
+                  await installInlineMcpServer(dep.server, configWithEnv)
+                } else {
+                  // For store/tap servers
+                  await installMcpServer(dep.store_id, env)
+                }
+                
+                // Refresh tools and check dependencies
+                const toolsData = await fetchTools()
+                setAvailableTools(toolsData.tools || [])
+                
+                const parsed = yaml.load(yamlContent)
+                if (parsed?.mcp_dependencies) {
+                  const newStatus = await checkMcpDependencies(parsed.mcp_dependencies)
+                  setMcpDependencies(newStatus)
+                }
+                
+                setToast({ message: `Successfully installed ${dep.server}`, type: 'success' })
+              } catch (err) {
+                console.error('Failed to install with env:', err)
+                setToast({ message: `Failed to install ${dep.server}: ${err.message}`, type: 'error' })
+                throw err // InstallMcpModal will handle error display
+              }
+            }}
           />
 
           {/* Flow + Chat Area */}

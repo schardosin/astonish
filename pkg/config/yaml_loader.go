@@ -17,11 +17,11 @@ type AgentConfig struct {
 // MCPDependency represents a required MCP server for the flow.
 // Source can be: "store" (official MCP store), "tap" (same tap repo), or "inline" (embedded config).
 type MCPDependency struct {
-	Server  string           `yaml:"server"`             // MCP server name
-	Tools   []string         `yaml:"tools,omitempty"`    // Which tools from this server are used
-	Source  string           `yaml:"source"`             // "store", "tap", or "inline"
-	StoreID string           `yaml:"store_id,omitempty"` // For store source: the store entry ID
-	Config  *MCPServerConfig `yaml:"config,omitempty"`   // For inline source: uses MCPServerConfig from mcp_config.go
+	Server  string           `yaml:"server" json:"server"`                         // MCP server name
+	Tools   []string         `yaml:"tools,omitempty" json:"tools,omitempty"`       // Which tools from this server are used
+	Source  string           `yaml:"source" json:"source"`                         // "store", "tap", or "inline"
+	StoreID string           `yaml:"store_id,omitempty" json:"store_id,omitempty"` // For store source: the store entry ID
+	Config  *MCPServerConfig `yaml:"config,omitempty" json:"config,omitempty"`     // For inline source: uses MCPServerConfig from mcp_config.go
 }
 
 // Node represents a single step in the agent's execution.

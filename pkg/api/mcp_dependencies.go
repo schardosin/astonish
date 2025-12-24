@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/json"
+	"net/http"
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/config"
@@ -13,15 +15,31 @@ import (
 // - store: official MCP store (or custom tap in the store)
 // - tap: a tapped repository
 // - inline: user's locally configured server (fallback)
-func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, storeServers []mcpstore.Server) []config.MCPDependency {
+// ResolveMCPDependencies analyzes tools used in a flow and resolves them to MCP server dependencies.
+// It looks up each tool's source server and determines if it comes from:
+// - store: official MCP store (or custom tap in the store)
+// - tap: a tapped repository
+// - inline: user's locally configured server (fallback)
+func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, storeServers []mcpstore.Server, existingDeps []config.MCPDependency) []config.MCPDependency {
 	if len(toolsSelection) == 0 {
 		return nil
 	}
 
 	// Build a map of tool name -> server source
 	toolToServer := make(map[string]string)
+	
+	// 1. First populate from system cache (installed tools)
 	for _, tool := range cachedTools {
 		toolToServer[tool.Name] = tool.Source
+	}
+
+	// 2. Fallback: populate from existing YAML configuration (for uninstalled tools)
+	for _, dep := range existingDeps {
+		for _, toolName := range dep.Tools {
+			if _, exists := toolToServer[toolName]; !exists {
+				toolToServer[toolName] = dep.Server
+			}
+		}
 	}
 
 	// Load user's MCP config
@@ -49,38 +67,17 @@ func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, sto
 		var matchedServer *mcpstore.Server
 		var matchSource string
 
-		// First, try to match by comparing user's server config to store server configs
-		if mcpConfig != nil {
-			if userServerCfg, found := mcpConfig.MCPServers[serverName]; found {
-				// Build a signature from command + args for matching
-				userSig := buildServerSignature(userServerCfg.Command, userServerCfg.Args)
-				
-				for i := range storeServers {
-					srv := &storeServers[i]
-					if srv.Config != nil {
-						storeSig := buildServerSignature(srv.Config.Command, srv.Config.Args)
-						if userSig == storeSig {
-							matchedServer = srv
-							matchSource = srv.Source
-							break
-						}
-					}
-				}
-			}
-		}
-
-		// Second fallback: try matching by name (case-insensitive, partial)
-		if matchedServer == nil {
-			serverLower := strings.ToLower(serverName)
-			for i := range storeServers {
-				srv := &storeServers[i]
-				nameLower := strings.ToLower(srv.Name)
-				// Try exact match first, then partial
-				if serverLower == nameLower || strings.Contains(serverLower, nameLower) || strings.Contains(nameLower, serverLower) {
-					matchedServer = srv
-					matchSource = srv.Source
-					break
-				}
+		// Match by exact server name (case-insensitive) against store servers
+		// This is the ONLY matching method to avoid false positives
+		serverLower := strings.ToLower(serverName)
+		for i := range storeServers {
+			srv := &storeServers[i]
+			nameLower := strings.ToLower(srv.Name)
+			// Exact match only - no partial matching to avoid false positives
+			if serverLower == nameLower {
+				matchedServer = srv
+				matchSource = srv.Source
+				break
 			}
 		}
 
@@ -90,6 +87,7 @@ func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, sto
 				dep.StoreID = matchedServer.McpId
 			} else {
 				dep.Source = "tap"
+				dep.StoreID = matchedServer.McpId // Also set for taps to enable installation
 			}
 		} else if mcpConfig != nil {
 			// Fallback to inline from user's config
@@ -119,24 +117,6 @@ func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, sto
 	return deps
 }
 
-// buildServerSignature creates a normalized signature from command and args for matching
-func buildServerSignature(command string, args []string) string {
-	// Normalize the signature: command + sorted/cleaned args
-	sig := strings.ToLower(command)
-	for _, arg := range args {
-		// Skip version-specific parts and paths
-		argLower := strings.ToLower(arg)
-		if !strings.HasPrefix(argLower, "/") && !strings.Contains(argLower, "@") {
-			sig += "|" + argLower
-		} else if strings.Contains(argLower, "@") {
-			// Extract package name without version
-			parts := strings.Split(argLower, "@")
-			sig += "|" + parts[0]
-		}
-	}
-	return sig
-}
-
 // CollectToolsFromNodes extracts all tools_selection from all nodes in an agent config.
 func CollectToolsFromNodes(nodes []config.Node) []string {
 	toolSet := make(map[string]bool)
@@ -151,4 +131,86 @@ func CollectToolsFromNodes(nodes []config.Node) []string {
 		tools = append(tools, tool)
 	}
 	return tools
+}
+
+// MCPDependencyStatus represents the status of a single MCP dependency
+type MCPDependencyStatus struct {
+	Server    string                   `json:"server"`
+	Tools     []string                 `json:"tools"`
+	Source    string                   `json:"source"`   // store, tap, inline
+	StoreID   string                   `json:"store_id,omitempty"`
+	Config    *config.MCPServerConfig  `json:"config,omitempty"`
+	Installed bool                     `json:"installed"`
+}
+
+// CheckMCPDependenciesRequest is the request body for checking dependencies
+type CheckMCPDependenciesRequest struct {
+	Dependencies []config.MCPDependency `json:"dependencies"`
+}
+
+// CheckMCPDependenciesResponse is the response for the check endpoint
+type CheckMCPDependenciesResponse struct {
+	Dependencies []MCPDependencyStatus `json:"dependencies"`
+	AllInstalled bool                  `json:"all_installed"`
+	Missing      int                   `json:"missing"`
+}
+
+// CheckMCPDependenciesHandler handles POST /api/mcp-dependencies/check
+// Checks which MCP servers from the dependency list are installed
+func CheckMCPDependenciesHandler(w http.ResponseWriter, r *http.Request) {
+	var req CheckMCPDependenciesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Load user's MCP config to check installed servers
+	mcpConfig, err := config.LoadMCPConfig()
+	if err != nil {
+		mcpConfig = &config.MCPConfig{MCPServers: make(map[string]config.MCPServerConfig)}
+	}
+
+	// Load store servers for resolving store_id if missing
+	storeServers, _ := loadAllServersFromTaps()
+
+	// Check each dependency
+	var statuses []MCPDependencyStatus
+	missing := 0
+	for _, dep := range req.Dependencies {
+		status := MCPDependencyStatus{
+			Server:  dep.Server,
+			Tools:   dep.Tools,
+			Source:  dep.Source,
+			StoreID: dep.StoreID,
+			Config:  dep.Config,
+		}
+
+		// If store_id is missing but source is tap or store, try to resolve it
+		if status.StoreID == "" && (status.Source == "tap" || status.Source == "store") {
+			serverLower := strings.ToLower(dep.Server)
+			for _, srv := range storeServers {
+				nameLower := strings.ToLower(srv.Name)
+				if serverLower == nameLower || strings.Contains(serverLower, nameLower) || strings.Contains(nameLower, serverLower) {
+					status.StoreID = srv.McpId
+					break
+				}
+			}
+		}
+
+		// Check if server is installed
+		_, installed := mcpConfig.MCPServers[dep.Server]
+		status.Installed = installed
+		if !installed {
+			missing++
+		}
+
+		statuses = append(statuses, status)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(CheckMCPDependenciesResponse{
+		Dependencies: statuses,
+		AllInstalled: missing == 0,
+		Missing:      missing,
+	})
 }

@@ -159,7 +159,8 @@ export function addStandaloneNode(yamlContent, nodeType) {
       lineWidth: -1,
       noRefs: true,
       quotingType: '"',
-      forceQuotes: false
+      forceQuotes: false,
+      styles: { '!!str': 'literal' }
     })
   } catch (e) {
     console.error('Error adding standalone node:', e)
@@ -222,7 +223,8 @@ export function addConnection(yamlContent, sourceId, targetId) {
       lineWidth: -1,
       noRefs: true,
       quotingType: '"',
-      forceQuotes: false
+      forceQuotes: false,
+      styles: { '!!str': 'literal' }
     })
   } catch (e) {
     console.error('Error adding connection:', e)
@@ -269,7 +271,8 @@ export function removeConnection(yamlContent, sourceId, targetId) {
       lineWidth: -1,
       noRefs: true,
       quotingType: '"',
-      forceQuotes: false
+      forceQuotes: false,
+      styles: { '!!str': 'literal' }
     })
   } catch (e) {
     console.error('Error removing connection:', e)
@@ -303,7 +306,8 @@ export function removeNode(yamlContent, nodeId) {
       lineWidth: -1,
       noRefs: true,
       quotingType: '"',
-      forceQuotes: false
+      forceQuotes: false,
+      styles: { '!!str': 'literal' }
     })
   } catch (e) {
     console.error('Error removing node:', e)
@@ -352,7 +356,8 @@ export function updateNode(yamlContent, nodeId, newNodeData) {
       lineWidth: -1,
       noRefs: true,
       quotingType: '"',
-      forceQuotes: false
+      forceQuotes: false,
+      styles: { '!!str': 'literal' }
     })
   } catch (e) {
     console.error('Error updating node:', e)

@@ -75,3 +75,79 @@ export async function fetchTools() {
   }
   return response.json()
 }
+
+/**
+ * Check MCP dependencies installation status
+ * @param {Array<{server: string, tools: string[], source: string, store_id?: string, config?: object}>} dependencies
+ * @returns {Promise<{dependencies: Array, all_installed: boolean, missing: number}>}
+ */
+export async function checkMcpDependencies(dependencies) {
+  const response = await fetch(`${API_BASE}/mcp-dependencies/check`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ dependencies }),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to check dependencies: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+/**
+ * Fetch details for a specific MCP server from the store
+ * @param {string} storeId - The MCP store ID
+ * @returns {Promise<object>}
+ */
+export async function getMcpStoreServer(storeId) {
+  const encodedId = encodeURIComponent(storeId).replace(/%2F/g, '/')
+  const response = await fetch(`${API_BASE}/mcp-store/${encodedId}`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch server details (${response.status})`)
+  }
+  return response.json()
+}
+
+/**
+ * Install an MCP server from the store
+ * @param {string} storeId - The MCP store ID (e.g., "github.com/user/repo")
+ * @param {object} env - Optional environment variable overrides
+ * @returns {Promise<{status: string, serverName: string, toolsLoaded: number}>}
+ */
+export async function installMcpServer(storeId, env = {}) {
+  const encodedId = encodeURIComponent(storeId).replace(/%2F/g, '/')
+  const response = await fetch(`${API_BASE}/mcp-store/${encodedId}/install`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ env }),
+  })
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(errorText || `Failed to install MCP server (${response.status})`)
+  }
+  return response.json()
+}
+
+/**
+ * Install an inline MCP server (from flow's embedded config)
+ * @param {string} serverName - The server name
+ * @param {object} config - The server configuration (command, args, env, transport)
+ * @returns {Promise<{status: string, serverName: string}>}
+ */
+export async function installInlineMcpServer(serverName, config) {
+  const response = await fetch(`${API_BASE}/mcp/install-inline`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ serverName, config }),
+  })
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(errorText || `Failed to install MCP server (${response.status})`)
+  }
+  return response.json()
+}

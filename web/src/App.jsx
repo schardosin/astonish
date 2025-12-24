@@ -601,6 +601,19 @@ flow:
     setChatMessages([])
   }, [sessionId])
 
+  // Keepalive: Ping server every 30 seconds while session is active to prevent timeout
+  // This keeps the session and MCP servers alive while user is interacting with the flow
+  useEffect(() => {
+    if (!sessionId || !isRunning) return
+
+    const keepaliveInterval = setInterval(() => {
+      fetch(`/api/session/${sessionId}/keepalive`, { method: 'POST' })
+        .catch(err => console.warn('Keepalive ping failed:', err))
+    }, 30000) // 30 seconds
+
+    return () => clearInterval(keepaliveInterval)
+  }, [sessionId, isRunning])
+
   const handleYamlChange = useCallback((newYaml) => {
     setYamlContent(newYaml)
   }, [])

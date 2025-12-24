@@ -249,8 +249,14 @@ function App() {
           noRefs: true, 
           sortKeys: false 
         })
-        await saveAgent(selectedAgent.id, yamlWithLayout)
+        const result = await saveAgent(selectedAgent.id, yamlWithLayout)
         console.log('[Auto-save] Saved with layout')
+        
+        // If server returned updated YAML (with mcp_dependencies), update local state
+        if (result.yaml && result.yaml !== yamlWithLayout) {
+          setYamlContent(result.yaml)
+          console.log('[Auto-save] Updated with server-generated mcp_dependencies')
+        }
       } catch (err) {
         console.error('[Auto-save] Failed:', err)
       }

@@ -8,9 +8,20 @@ import (
 
 // AgentConfig represents the top-level structure of the agent YAML.
 type AgentConfig struct {
-	Description string     `yaml:"description"`
-	Nodes       []Node     `yaml:"nodes"`
-	Flow        []FlowItem `yaml:"flow"`
+	Description     string          `yaml:"description"`
+	Nodes           []Node          `yaml:"nodes"`
+	Flow            []FlowItem      `yaml:"flow"`
+	MCPDependencies []MCPDependency `yaml:"mcp_dependencies,omitempty"`
+}
+
+// MCPDependency represents a required MCP server for the flow.
+// Source can be: "store" (official MCP store), "tap" (same tap repo), or "inline" (embedded config).
+type MCPDependency struct {
+	Server  string           `yaml:"server"`             // MCP server name
+	Tools   []string         `yaml:"tools,omitempty"`    // Which tools from this server are used
+	Source  string           `yaml:"source"`             // "store", "tap", or "inline"
+	StoreID string           `yaml:"store_id,omitempty"` // For store source: the store entry ID
+	Config  *MCPServerConfig `yaml:"config,omitempty"`   // For inline source: uses MCPServerConfig from mcp_config.go
 }
 
 // Node represents a single step in the agent's execution.

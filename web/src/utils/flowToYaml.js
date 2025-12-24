@@ -10,7 +10,8 @@ export function orderYamlKeys(data) {
   }
   
   // Define the preferred key order (model is NOT included - engine uses global config)
-  const keyOrder = ['name', 'description', 'nodes', 'flow', 'layout']
+  // mcp_dependencies goes before layout, layout is always last
+  const keyOrder = ['name', 'description', 'nodes', 'flow', 'mcp_dependencies', 'layout']
   
   // Keys to explicitly exclude from output (deprecated or invalid fields)
   const excludedKeys = ['model']

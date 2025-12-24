@@ -556,7 +556,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                     >
                       <option value="">None (disabled)</option>
                       {webCapableTools.webSearch.map(t => (
-                        <option key={t.name} value={t.source}>
+                        <option key={t.name} value={`${t.source}:${t.name}`}>
                           {t.source} ({t.name})
                         </option>
                       ))}
@@ -578,7 +578,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                     >
                       <option value="">None (disabled)</option>
                       {webCapableTools.webExtract.map(t => (
-                        <option key={t.name} value={t.source}>
+                        <option key={t.name} value={`${t.source}:${t.name}`}>
                           {t.source} ({t.name})
                         </option>
                       ))}

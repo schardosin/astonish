@@ -366,6 +366,8 @@ type URLExtractResponse struct {
 }
 
 // IsWebSearchConfigured checks if a web search tool is configured in settings
+// Returns (configured, serverName, toolName)
+// The setting value format is "serverName:toolName" to uniquely identify tools
 func IsWebSearchConfigured() (bool, string) {
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
@@ -374,10 +376,17 @@ func IsWebSearchConfigured() (bool, string) {
 	if appCfg.General.WebSearchTool == "" {
 		return false, ""
 	}
-	return true, appCfg.General.WebSearchTool
+	// Parse the format "serverName:toolName" - we return just the server name for MCP initialization
+	serverName := appCfg.General.WebSearchTool
+	if idx := strings.Index(serverName, ":"); idx > 0 {
+		serverName = serverName[:idx]
+	}
+	return true, serverName
 }
 
 // IsWebExtractConfigured checks if a web extract tool is configured in settings
+// Returns (configured, serverName)
+// The setting value format is "serverName:toolName" to uniquely identify tools
 func IsWebExtractConfigured() (bool, string) {
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
@@ -386,7 +395,12 @@ func IsWebExtractConfigured() (bool, string) {
 	if appCfg.General.WebExtractTool == "" {
 		return false, ""
 	}
-	return true, appCfg.General.WebExtractTool
+	// Parse the format "serverName:toolName" - we return just the server name for MCP initialization
+	serverName := appCfg.General.WebExtractTool
+	if idx := strings.Index(serverName, ":"); idx > 0 {
+		serverName = serverName[:idx]
+	}
+	return true, serverName
 }
 
 // AIToolSearchInternetHandler handles POST /api/ai/tool-search-internet

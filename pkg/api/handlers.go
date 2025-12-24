@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"github.com/schardosin/astonish/pkg/flowstore"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
+	"gopkg.in/yaml.v3"
 )
 
 // AgentListItem represents an agent in the list response
@@ -300,6 +302,113 @@ func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parse the incoming YAML to analyze tools and resolve dependencies
+	finalYAML := request.YAML
+	var agentConfig config.AgentConfig
+	if err := yaml.Unmarshal([]byte(request.YAML), &agentConfig); err == nil {
+		// Collect all tools used in the flow
+		tools := CollectToolsFromNodes(agentConfig.Nodes)
+
+		if len(tools) > 0 {
+			// Get cached tools and store servers for resolution
+			cachedTools := GetCachedTools()
+
+			// Get MCP store servers (from all taps)
+			storeServers, _ := loadAllServersFromTaps()
+
+			// Resolve dependencies
+			deps := ResolveMCPDependencies(tools, cachedTools, storeServers)
+
+			if len(deps) > 0 {
+				// Parse as yaml.Node to preserve ordering
+				var rootNode yaml.Node
+				if err := yaml.Unmarshal([]byte(request.YAML), &rootNode); err == nil && rootNode.Kind == yaml.DocumentNode && len(rootNode.Content) > 0 {
+					mapNode := rootNode.Content[0]
+					if mapNode.Kind == yaml.MappingNode {
+						// Find and remove existing mcp_dependencies, and find layout index
+						var layoutIndex = -1
+						var mcpDepsIndex = -1
+						for i := 0; i < len(mapNode.Content); i += 2 {
+							if mapNode.Content[i].Value == "mcp_dependencies" {
+								mcpDepsIndex = i
+							}
+							if mapNode.Content[i].Value == "layout" {
+								layoutIndex = i
+							}
+						}
+
+						// Remove existing mcp_dependencies if present
+						if mcpDepsIndex >= 0 {
+							mapNode.Content = append(mapNode.Content[:mcpDepsIndex], mapNode.Content[mcpDepsIndex+2:]...)
+							// Adjust layout index if it was after mcp_dependencies
+							if layoutIndex > mcpDepsIndex {
+								layoutIndex -= 2
+							}
+						}
+
+						// Marshal deps to yaml.Node
+						depsBytes, _ := yaml.Marshal(deps)
+						var depsNode yaml.Node
+						yaml.Unmarshal(depsBytes, &depsNode)
+
+						// Create key node
+						keyNode := &yaml.Node{
+							Kind:  yaml.ScalarNode,
+							Tag:   "!!str",
+							Value: "mcp_dependencies",
+						}
+
+						// Insert before layout if layout exists, otherwise append
+						if layoutIndex >= 0 {
+							// Insert before layout
+							newContent := make([]*yaml.Node, 0, len(mapNode.Content)+2)
+							newContent = append(newContent, mapNode.Content[:layoutIndex]...)
+							newContent = append(newContent, keyNode, depsNode.Content[0])
+							newContent = append(newContent, mapNode.Content[layoutIndex:]...)
+							mapNode.Content = newContent
+						} else {
+							// Append at end
+							mapNode.Content = append(mapNode.Content, keyNode, depsNode.Content[0])
+						}
+
+						// Re-marshal with 2-space indentation to match frontend
+						var buf bytes.Buffer
+						encoder := yaml.NewEncoder(&buf)
+						encoder.SetIndent(2)
+						if err := encoder.Encode(&rootNode); err == nil {
+							finalYAML = buf.String()
+						}
+						encoder.Close()
+					}
+				}
+			}
+		} else {
+			// No tools - remove mcp_dependencies if it exists
+			var rootNode yaml.Node
+			if err := yaml.Unmarshal([]byte(request.YAML), &rootNode); err == nil && rootNode.Kind == yaml.DocumentNode && len(rootNode.Content) > 0 {
+				mapNode := rootNode.Content[0]
+				if mapNode.Kind == yaml.MappingNode {
+					// Find mcp_dependencies
+					for i := 0; i < len(mapNode.Content); i += 2 {
+						if mapNode.Content[i].Value == "mcp_dependencies" {
+							// Remove it
+							mapNode.Content = append(mapNode.Content[:i], mapNode.Content[i+2:]...)
+							// Re-marshal
+							var buf bytes.Buffer
+							encoder := yaml.NewEncoder(&buf)
+							encoder.SetIndent(2)
+							if err := encoder.Encode(&rootNode); err == nil {
+								finalYAML = buf.String()
+							}
+							encoder.Close()
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Save to system directory (~/.config/astonish/agents/)
 	sysDir, err := config.GetAgentsDir()
 	if err != nil {
@@ -316,13 +425,13 @@ func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write file
-	if err := os.WriteFile(path, []byte(request.YAML), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(finalYAML), 0644); err != nil {
 		http.Error(w, "Failed to save agent file", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "path": path})
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "path": path, "yaml": finalYAML})
 }
 
 // DeleteAgentHandler handles DELETE /api/agents/{name}

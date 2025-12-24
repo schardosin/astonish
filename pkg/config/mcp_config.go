@@ -9,11 +9,11 @@ import (
 
 // MCPServerConfig represents the configuration for a single MCP server
 type MCPServerConfig struct {
-	Command   string            `json:"command"`
-	Args      []string          `json:"args"`
-	Env       map[string]string `json:"env"`
-	Transport string            `json:"transport"`     // "stdio" or "sse"
-	URL       string            `json:"url,omitempty"` // For SSE transport
+	Command   string            `json:"command" yaml:"command"`
+	Args      []string          `json:"args" yaml:"args,omitempty"`
+	Env       map[string]string `json:"env" yaml:"env,omitempty"`
+	Transport string            `json:"transport" yaml:"transport,omitempty"`     // "stdio" or "sse"
+	URL       string            `json:"url,omitempty" yaml:"url,omitempty"` // For SSE transport
 }
 
 // MCPConfig represents the entire MCP configuration

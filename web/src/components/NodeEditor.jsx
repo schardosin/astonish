@@ -927,26 +927,6 @@ function LlmNodeForm({ data, onChange, theme, availableTools = [], availableVari
                 min={0}
               />
             </div>
-            
-            <div className="w-36 flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={data.print_state !== false}
-                onChange={(e) => onChange({ ...data, print_state: e.target.checked ? undefined : false })}
-                className="w-4 h-4 accent-purple-600"
-              />
-              <label className="text-sm" style={{ color: 'var(--text-secondary)' }}>Print State</label>
-            </div>
-            
-            <div className="w-36 flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={data.print_prompt !== false}
-                onChange={(e) => onChange({ ...data, print_prompt: e.target.checked ? undefined : false })}
-                className="w-4 h-4 accent-purple-600"
-              />
-              <label className="text-sm" style={{ color: 'var(--text-secondary)' }}>Print Prompt</label>
-            </div>
           </div>
         )}
       </div>

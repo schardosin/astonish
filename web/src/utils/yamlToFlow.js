@@ -82,10 +82,6 @@ export function parseNodes(yamlData, savedLayout = null) {
           validationErrors.push(`'output_model' is required for '${node.type}' nodes to store results in state`)
         }
         
-        // prompt is required for input nodes
-        if (node.type === 'input' && !node.prompt) {
-          validationErrors.push(`'prompt' is required for input nodes to show the user what to enter`)
-        }
         
         // system and prompt are required for llm nodes
         if (node.type === 'llm') {

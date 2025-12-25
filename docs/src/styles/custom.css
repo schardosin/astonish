@@ -398,7 +398,7 @@ a:not([class]):hover {
 /* ===== Full-Viewport Storytelling Section ===== */
 .story-section {
   position: relative;
-  min-height: 100vh;
+  height: calc(100vh - 4rem); /* Fixed height minus header to keep nav within viewport */
   background: linear-gradient(180deg, var(--slate-50) 0%, #f8f7fc 100%);
   overflow: hidden;
   display: flex;
@@ -461,7 +461,7 @@ a:not([class]):hover {
   margin: 0 auto;
   display: grid;
   grid-template-areas: "stack";
-  align-items: center;
+  align-items: start; /* Changed from center to pull content up */
 }
 
 /* Individual Slide */
@@ -471,7 +471,7 @@ a:not([class]):hover {
   height: 100%;
   
   display: flex;
-  align-items: center;
+  align-items: flex-start; /* Changed from center to pull content up */
   justify-content: center;
   padding: 1rem;
   
@@ -493,11 +493,11 @@ a:not([class]):hover {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: space-between; /* Distribute space between visual and text */
+  justify-content: flex-start; /* Changed from space-between to pull content up */
   gap: 1rem;
   width: 100%;
   max-width: 1200px;
-  height: 100%;
+  height: auto; /* Changed from 100% to auto */
   max-height: 100%;
 }
 
@@ -674,7 +674,7 @@ a:not([class]):hover {
   color: #94a3b8;
 }
 
-/* Navigation Controls - Fixed at Bottom */
+/* Navigation Controls - In normal flow, pushed to bottom with margin-top: auto */
 .story-nav {
   position: relative;
   z-index: 10;
@@ -684,7 +684,8 @@ a:not([class]):hover {
   justify-content: center;
   gap: 0.5rem;
   padding: 0.5rem 1.5rem 1.5rem;
-  flex: 0 0 auto;
+  margin-top: auto; /* Push to bottom of available space */
+  flex-shrink: 0; /* Don't shrink */
 }
 
 .story-nav-controls {

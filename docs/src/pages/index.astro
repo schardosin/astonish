@@ -58,6 +58,8 @@ import '../styles/custom.css';
     html {
       height: 100%;
       scroll-behavior: smooth;
+      scroll-snap-type: y mandatory;
+      scroll-padding-top: 60px;
     }
 
     body {
@@ -152,6 +154,7 @@ import '../styles/custom.css';
       padding: 6rem 1.5rem 4rem;
       position: relative;
       overflow: hidden;
+      scroll-snap-align: start;
     }
 
     .hero-bg {
@@ -344,10 +347,14 @@ import '../styles/custom.css';
     /* Section styles */
     .section {
       padding: 6rem 1.5rem;
+      min-height: 100vh;
+      scroll-snap-align: start;
     }
 
     .section-alt {
       background: var(--slate-50);
+      min-height: 100vh;
+      scroll-snap-align: start;
     }
 
     .section-inner {
@@ -512,6 +519,8 @@ import '../styles/custom.css';
       padding: 6rem 1.5rem;
       background: linear-gradient(135deg, var(--purple-600), var(--violet-600), var(--indigo-600));
       text-align: center;
+      min-height: 100vh;
+      scroll-snap-align: start;
     }
 
     .cta-title {

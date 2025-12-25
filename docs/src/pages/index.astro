@@ -400,9 +400,10 @@ const description = 'Design AI agent flows visually, run anywhere. No servers re
 
     .flow-connector {
       width: 2px;
-      height: 24px;
+      height: 40px;
       background: linear-gradient(to bottom, var(--purple-400), var(--purple-600));
       opacity: 0.6;
+      border-radius: 2px;
     }
 
     .flow-node {
@@ -464,6 +465,7 @@ const description = 'Design AI agent flows visually, run anywhere. No servers re
       color: var(--slate-300);
       line-height: 1.7;
       overflow-x: auto;
+      white-space: pre;
     }
 
     .code-key { color: var(--purple-400); }
@@ -854,53 +856,31 @@ const description = 'Design AI agent flows visually, run anywhere. No servers re
         <!-- Visual Flow -->
         <div class="flow-card reveal-left">
           <div class="flow-nodes" id="flow-visualization">
-            <!-- SVG Container for Connectors -->
-            <svg class="flow-connector-svg">
-              <defs>
-                <linearGradient id="connectorGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-                  <stop offset="0%" style="stop-color:var(--purple-400);stop-opacity:1" />
-                  <stop offset="100%" style="stop-color:var(--purple-600);stop-opacity:1" />
-                </linearGradient>
-              </defs>
-              <!-- Paths will be positioned by JS or fixed if layout is known. 
-                   Since layout is flex-col gap-4, we can approximate or use JS. 
-                   For now, we'll use a simple approach with simple relative paths if dimensions are predictable,
-                   but JS sizing is safer. Let's stick to the previous HTML structure but use SVG for lines 
-                   instead of divs, positioned absolutely. -->
-            </svg>
-
+            <!-- START Node -->
             <div class="flow-node flow-node-start">START</div>
-            <!-- Space for connector -->
-            <div style="height: 40px; width: 2px; position: relative;">
-               <svg style="position: absolute; top: 0; left: -1px; width: 4px; height: 100%; overflow: visible;">
-                 <line x1="2" y1="0" x2="2" y2="40" class="connector-path" stroke="url(#connectorGradient)" stroke-width="2" />
-               </svg>
-            </div>
             
+            <!-- Connector -->
+            <div class="flow-connector"></div>
+            
+            <!-- LLM Node -->
             <div class="flow-node flow-node-llm">
               🤖 analyze
               <div class="flow-node-label">LLM Node</div>
             </div>
             
-             <!-- Space for connector -->
-            <div style="height: 40px; width: 2px; position: relative;">
-               <svg style="position: absolute; top: 0; left: -1px; width: 4px; height: 100%; overflow: visible;">
-                 <line x1="2" y1="0" x2="2" y2="40" class="connector-path" stroke="url(#connectorGradient)" stroke-width="2" />
-               </svg>
-            </div>
+            <!-- Connector -->
+            <div class="flow-connector"></div>
 
+            <!-- Tool Node -->
             <div class="flow-node flow-node-tool">
               🔧 execute_tool
               <div class="flow-node-label">MCP Tool</div>
             </div>
 
-             <!-- Space for connector -->
-            <div style="height: 40px; width: 2px; position: relative;">
-               <svg style="position: absolute; top: 0; left: -1px; width: 4px; height: 100%; overflow: visible;">
-                 <line x1="2" y1="0" x2="2" y2="40" class="connector-path" stroke="url(#connectorGradient)" stroke-width="2" />
-               </svg>
-            </div>
+            <!-- Connector -->
+            <div class="flow-connector"></div>
 
+            <!-- END Node -->
             <div class="flow-node flow-node-end">END</div>
           </div>
         </div>

@@ -1,0 +1,1182 @@
+---
+// Custom landing page for Astonish
+const title = 'Astonish - Build Production AI Agents in Minutes';
+const description = 'Design AI agent flows visually, run anywhere. No servers required. A single Go binary with YAML-based workflows.';
+---
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{title}</title>
+  <meta name="description" content={description} />
+  <meta property="og:title" content={title} />
+  <meta property="og:description" content={description} />
+  <meta property="og:type" content="website" />
+  <link rel="icon" type="image/x-icon" href="/astonish/favicon.ico" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    /* Reset and base */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    
+    :root {
+      --purple-50: #f5f3ff;
+      --purple-100: #ede9fe;
+      --purple-200: #ddd6fe;
+      --purple-300: #c4b5fd;
+      --purple-400: #a78bfa;
+      --purple-500: #8b5cf6;
+      --purple-600: #7c3aed;
+      --purple-700: #6d28d9;
+      --purple-800: #5b21b6;
+      --purple-900: #4c1d95;
+      --violet-600: #7c3aed;
+      --indigo-600: #4f46e5;
+      --slate-50: #f8fafc;
+      --slate-100: #f1f5f9;
+      --slate-200: #e2e8f0;
+      --slate-300: #cbd5e1;
+      --slate-400: #94a3b8;
+      --slate-500: #64748b;
+      --slate-600: #475569;
+      --slate-700: #334155;
+      --slate-800: #1e293b;
+      --slate-900: #0f172a;
+      --green-400: #4ade80;
+      --green-500: #22c55e;
+      --green-600: #16a34a;
+      --red-500: #ef4444;
+      --yellow-500: #eab308;
+      --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    body {
+      font-family: var(--font);
+      background: #fafbfe;
+      color: #1e293b;
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    a { text-decoration: none; color: inherit; }
+
+    /* Navigation */
+    .nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 50;
+      backdrop-filter: blur(12px);
+      background: rgba(255, 255, 255, 0.9);
+      border-bottom: 1px solid var(--slate-200);
+    }
+
+    .nav-inner {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 1rem 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--slate-900);
+    }
+
+    .nav-brand img {
+      width: 32px;
+      height: 32px;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+    }
+
+    .nav-link {
+      color: var(--slate-600);
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+
+    .nav-link:hover {
+      color: var(--purple-600);
+    }
+
+    .nav-btn {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      background: var(--slate-900);
+      color: white;
+      border-radius: 8px;
+      font-weight: 500;
+      transition: background 0.2s;
+    }
+
+    .nav-btn:hover {
+      background: var(--slate-700);
+    }
+
+    .nav-btn svg {
+      width: 20px;
+      height: 20px;
+    }
+
+    /* Hero Section */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6rem 1.5rem 4rem;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero-bg {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, var(--purple-50) 0%, white 50%, #eef2ff 100%);
+    }
+
+    .hero-blob {
+      position: absolute;
+      width: 400px;
+      height: 400px;
+      border-radius: 50%;
+      filter: blur(80px);
+      opacity: 0.5;
+    }
+
+    .hero-blob-1 {
+      top: 20%;
+      left: 20%;
+      background: var(--purple-300);
+    }
+
+    .hero-blob-2 {
+      bottom: 20%;
+      right: 20%;
+      background: var(--indigo-600);
+      opacity: 0.3;
+    }
+
+    .hero-content {
+      position: relative;
+      z-index: 10;
+      max-width: 900px;
+      margin: 0 auto;
+      text-align: center;
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      background: var(--purple-100);
+      color: var(--purple-700);
+      border-radius: 100px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      margin-bottom: 2rem;
+    }
+
+    .hero-badge-dot {
+      width: 8px;
+      height: 8px;
+      background: var(--green-500);
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .hero-title {
+      font-size: clamp(2.5rem, 8vw, 4.5rem);
+      font-weight: 800;
+      color: var(--slate-900);
+      line-height: 1.1;
+      margin-bottom: 1.5rem;
+    }
+
+    .hero-title-gradient {
+      background: linear-gradient(135deg, var(--purple-600), var(--violet-600), var(--indigo-600));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-subtitle {
+      font-size: 1.25rem;
+      color: var(--slate-600);
+      max-width: 600px;
+      margin: 0 auto 2.5rem;
+    }
+
+    .hero-subtitle span {
+      color: var(--slate-500);
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      margin-bottom: 3rem;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.875rem 1.5rem;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 1rem;
+      transition: all 0.2s;
+    }
+
+    .btn svg {
+      width: 20px;
+      height: 20px;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--purple-600), var(--purple-700));
+      color: white;
+      box-shadow: 0 4px 14px rgba(124, 58, 237, 0.3);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(124, 58, 237, 0.4);
+    }
+
+    .btn-secondary {
+      background: white;
+      color: var(--slate-700);
+      border: 1px solid var(--slate-200);
+    }
+
+    .btn-secondary:hover {
+      background: var(--slate-50);
+      border-color: var(--slate-300);
+    }
+
+    /* Terminal */
+    .terminal {
+      max-width: 600px;
+      margin: 0 auto;
+      text-align: left;
+      background: var(--slate-900);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+    }
+
+    .terminal-header {
+      background: var(--slate-800);
+      padding: 0.75rem 1rem;
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .terminal-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+
+    .terminal-dot-red { background: var(--red-500); }
+    .terminal-dot-yellow { background: var(--yellow-500); }
+    .terminal-dot-green { background: var(--green-500); }
+
+    .terminal-body {
+      padding: 1.25rem;
+      font-family: var(--font-mono);
+      font-size: 0.875rem;
+      color: var(--slate-300);
+      line-height: 1.7;
+    }
+
+    .terminal-prompt {
+      color: var(--green-400);
+    }
+
+    .terminal-cmd {
+      color: white;
+    }
+
+    .terminal-output {
+      color: var(--slate-400);
+    }
+
+    .terminal-highlight {
+      color: var(--purple-400);
+    }
+
+    /* Section styles */
+    .section {
+      padding: 6rem 1.5rem;
+    }
+
+    .section-alt {
+      background: var(--slate-50);
+    }
+
+    .section-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .section-header {
+      text-align: center;
+      margin-bottom: 4rem;
+    }
+
+    .section-title {
+      font-size: clamp(2rem, 5vw, 3rem);
+      font-weight: 700;
+      color: var(--slate-900);
+      margin-bottom: 1rem;
+    }
+
+    .section-subtitle {
+      font-size: 1.125rem;
+      color: var(--slate-500);
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    /* Workflow Demo */
+    .workflow-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 3rem;
+      align-items: center;
+    }
+
+    @media (min-width: 768px) {
+      .workflow-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    .flow-card {
+      background: white;
+      border-radius: 16px;
+      padding: 2rem;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+      border: 1px solid var(--slate-200);
+      position: relative;
+    }
+
+    .flow-nodes {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1rem;
+      position: relative;
+    }
+
+    .flow-connector {
+      width: 2px;
+      height: 24px;
+      background: linear-gradient(to bottom, var(--purple-400), var(--purple-600));
+      opacity: 0.6;
+    }
+
+    .flow-node {
+      padding: 0.75rem 1.5rem;
+      border-radius: 10px;
+      font-weight: 600;
+      text-align: center;
+      min-width: 160px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
+    }
+
+    .flow-node-start {
+      background: linear-gradient(135deg, var(--green-500), var(--green-600));
+      color: white;
+    }
+
+    .flow-node-llm {
+      background: linear-gradient(135deg, var(--purple-500), var(--purple-700));
+      color: white;
+    }
+
+    .flow-node-tool {
+      background: linear-gradient(135deg, var(--violet-600), var(--indigo-600));
+      color: white;
+    }
+
+    .flow-node-end {
+      background: linear-gradient(135deg, var(--red-500), #dc2626);
+      color: white;
+    }
+
+    .flow-node-label {
+      font-size: 0.75rem;
+      opacity: 0.8;
+      margin-top: 0.25rem;
+      font-weight: 400;
+    }
+
+    /* Code block */
+    .code-card {
+      background: var(--slate-900);
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+
+    .code-header {
+      padding: 0.75rem 1rem;
+      background: var(--slate-800);
+      color: var(--slate-400);
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+    }
+
+    .code-body {
+      padding: 1.5rem;
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      color: var(--slate-300);
+      line-height: 1.7;
+      overflow-x: auto;
+    }
+
+    .code-key { color: var(--purple-400); }
+    .code-prop { color: var(--green-400); }
+    .code-string { color: #fcd34d; }
+
+    /* Features Grid */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.5rem;
+    }
+
+    .feature-card {
+      background: white;
+      border-radius: 16px;
+      padding: 2rem;
+      border: 1px solid var(--slate-200);
+      transition: all 0.3s;
+    }
+
+    .feature-card:hover {
+      box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.1);
+      transform: translateY(-4px);
+    }
+
+    .feature-icon {
+      width: 56px;
+      height: 56px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.75rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .feature-icon-green { background: #dcfce7; }
+    .feature-icon-purple { background: var(--purple-100); }
+    .feature-icon-blue { background: #dbeafe; }
+    .feature-icon-orange { background: #ffedd5; }
+    .feature-icon-red { background: #fee2e2; }
+    .feature-icon-indigo { background: #e0e7ff; }
+
+    .feature-title {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--slate-900);
+      margin-bottom: 0.75rem;
+    }
+
+    .feature-desc {
+      color: var(--slate-500);
+      line-height: 1.6;
+    }
+
+    /* Comparison Table */
+    .comparison-card {
+      background: white;
+      border-radius: 16px;
+      overflow: hidden;
+      border: 1px solid var(--slate-200);
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+
+    .comparison-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .comparison-table th,
+    .comparison-table td {
+      padding: 1rem 1.5rem;
+      text-align: left;
+    }
+
+    .comparison-table thead {
+      background: var(--slate-100);
+    }
+
+    .comparison-table th {
+      font-weight: 600;
+      color: var(--slate-700);
+    }
+
+    .comparison-table th:last-child {
+      color: var(--purple-600);
+    }
+
+    .comparison-table tbody tr {
+      border-top: 1px solid var(--slate-200);
+    }
+
+    .comparison-table td:first-child {
+      font-weight: 500;
+      color: var(--slate-800);
+    }
+
+    .comparison-table td:nth-child(2) {
+      color: var(--slate-500);
+    }
+
+    .comparison-table td:last-child {
+      color: var(--slate-800);
+      font-weight: 500;
+    }
+
+    /* CTA Section */
+    .cta-section {
+      padding: 6rem 1.5rem;
+      background: linear-gradient(135deg, var(--purple-600), var(--violet-600), var(--indigo-600));
+      text-align: center;
+    }
+
+    .cta-title {
+      font-size: clamp(2rem, 5vw, 3rem);
+      font-weight: 700;
+      color: white;
+      margin-bottom: 1rem;
+    }
+
+    .cta-subtitle {
+      font-size: 1.25rem;
+      color: rgba(255, 255, 255, 0.8);
+      margin-bottom: 2.5rem;
+    }
+
+    .cta-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+    }
+
+    .btn-white {
+      background: white;
+      color: var(--purple-700);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+    }
+
+    .btn-white:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    }
+
+    .btn-ghost {
+      background: rgba(255, 255, 255, 0.15);
+      color: white;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+    }
+
+    .btn-ghost:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+
+    /* Footer */
+    .footer {
+      padding: 3rem 1.5rem;
+      background: var(--slate-900);
+      color: var(--slate-400);
+    }
+
+    .footer-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1.5rem;
+    }
+
+    .footer-brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      color: white;
+      font-weight: 600;
+    }
+
+    .footer-brand img {
+      width: 32px;
+      height: 32px;
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 1.5rem;
+    }
+
+    .footer-link {
+      color: var(--slate-400);
+      transition: color 0.2s;
+    }
+
+    .footer-link:hover {
+      color: white;
+    }
+
+    .footer-credit {
+      font-size: 0.875rem;
+    }
+
+    .footer-credit a {
+      color: var(--purple-400);
+    }
+
+    .footer-credit a:hover {
+      color: var(--purple-300);
+    }
+
+    /* Scroll Animations */
+    .reveal {
+      opacity: 0;
+      transform: translateY(30px);
+      transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+    }
+
+    .reveal.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .reveal-left {
+      opacity: 0;
+      transform: translateX(-30px);
+      transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+    }
+
+    .reveal-left.visible {
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    .reveal-right {
+      opacity: 0;
+      transform: translateX(30px);
+      transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+    }
+
+    .reveal-right.visible {
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    .reveal-scale {
+      opacity: 0;
+      transform: scale(0.95);
+      transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+    }
+
+    .reveal-scale.visible {
+      opacity: 1;
+      transform: scale(1);
+    }
+
+    /* Staggered delays for feature cards */
+    .feature-card:nth-child(1) { transition-delay: 0.1s; }
+    .feature-card:nth-child(2) { transition-delay: 0.2s; }
+    .feature-card:nth-child(3) { transition-delay: 0.3s; }
+    .feature-card:nth-child(4) { transition-delay: 0.4s; }
+    .feature-card:nth-child(5) { transition-delay: 0.5s; }
+    .feature-card:nth-child(6) { transition-delay: 0.6s; }
+
+    /* Flow node animation */
+    .flow-node, .flow-connector {
+      opacity: 0;
+      transform: translateY(20px);
+      transition: opacity 0.4s ease-out, transform 0.4s ease-out;
+    }
+
+    .flow-nodes.visible .flow-node,
+    .flow-nodes.visible .flow-connector {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .flow-nodes.visible .flow-node:nth-child(1) { transition-delay: 0.1s; }
+    .flow-nodes.visible .flow-connector:nth-child(2) { transition-delay: 0.2s; }
+    .flow-nodes.visible .flow-node:nth-child(3) { transition-delay: 0.3s; }
+    .flow-nodes.visible .flow-connector:nth-child(4) { transition-delay: 0.4s; }
+    .flow-nodes.visible .flow-node:nth-child(5) { transition-delay: 0.5s; }
+    .flow-nodes.visible .flow-connector:nth-child(6) { transition-delay: 0.6s; }
+    .flow-nodes.visible .flow-node:nth-child(7) { transition-delay: 0.7s; }
+
+    /* Terminal typing animation */
+    @keyframes typing {
+      from { width: 0; }
+      to { width: 100%; }
+    }
+
+    @keyframes blink {
+      0%, 100% { border-color: var(--green-400); }
+      50% { border-color: transparent; }
+    }
+
+    .terminal-line {
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
+    /* Reduced motion preference */
+    @media (prefers-reduced-motion: reduce) {
+      .reveal, .reveal-left, .reveal-right, .reveal-scale,
+      .flow-node, .flow-connector, .feature-card {
+        opacity: 1;
+        transform: none;
+        transition: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="/astonish/" class="nav-brand">
+        <img src="/astonish/logo.svg" alt="Astonish" />
+        Astonish
+      </a>
+      <div class="nav-links">
+        <a href="/astonish/getting-started/introduction/" class="nav-link">Docs</a>
+        <a href="https://github.com/schardosin/astonish" class="nav-btn">
+          <svg fill="currentColor" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+          GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="hero-bg">
+      <div class="hero-blob hero-blob-1"></div>
+      <div class="hero-blob hero-blob-2"></div>
+    </div>
+    <div class="hero-content">
+      <div class="hero-badge">
+        <span class="hero-badge-dot"></span>
+        Built with Google ADK
+      </div>
+      
+      <h1 class="hero-title">
+        Build Production AI Agents<br>
+        <span class="hero-title-gradient">in Minutes, Not Months</span>
+      </h1>
+      
+      <p class="hero-subtitle">
+        Design visually. Run anywhere. No servers required.<br>
+        <span>A single Go binary with YAML-based workflows.</span>
+      </p>
+      
+      <div class="hero-actions">
+        <a href="/astonish/getting-started/installation/" class="btn btn-primary">
+          Get Started
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
+        </a>
+        <a href="https://github.com/schardosin/astonish" class="btn btn-secondary">
+          <svg fill="currentColor" viewBox="0 0 24 24" width="20" height="20"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+          View on GitHub
+        </a>
+      </div>
+
+      <!-- Terminal Demo -->
+      <div class="terminal">
+        <div class="terminal-header">
+          <span class="terminal-dot terminal-dot-red"></span>
+          <span class="terminal-dot terminal-dot-yellow"></span>
+          <span class="terminal-dot terminal-dot-green"></span>
+        </div>
+        <div class="terminal-body" id="terminal-demo">
+          <!-- Content will be injected by JS -->
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Workflow Section -->
+  <section class="section section-alt" id="workflow">
+    <div class="section-inner">
+      <div class="section-header reveal">
+        <h2 class="section-title">Agent Flows, Visualized</h2>
+        <p class="section-subtitle">Design your AI agents like a flowchart. Each node is a step.</p>
+      </div>
+
+      <div class="workflow-grid">
+        <!-- Visual Flow -->
+        <div class="flow-card reveal-left">
+          <div class="flow-nodes" id="flow-visualization">
+            <!-- SVG Container for Connectors -->
+            <svg class="flow-connector-svg">
+              <defs>
+                <linearGradient id="connectorGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" style="stop-color:var(--purple-400);stop-opacity:1" />
+                  <stop offset="100%" style="stop-color:var(--purple-600);stop-opacity:1" />
+                </linearGradient>
+              </defs>
+              <!-- Paths will be positioned by JS or fixed if layout is known. 
+                   Since layout is flex-col gap-4, we can approximate or use JS. 
+                   For now, we'll use a simple approach with simple relative paths if dimensions are predictable,
+                   but JS sizing is safer. Let's stick to the previous HTML structure but use SVG for lines 
+                   instead of divs, positioned absolutely. -->
+            </svg>
+
+            <div class="flow-node flow-node-start">START</div>
+            <!-- Space for connector -->
+            <div style="height: 40px; width: 2px; position: relative;">
+               <svg style="position: absolute; top: 0; left: -1px; width: 4px; height: 100%; overflow: visible;">
+                 <line x1="2" y1="0" x2="2" y2="40" class="connector-path" stroke="url(#connectorGradient)" stroke-width="2" />
+               </svg>
+            </div>
+            
+            <div class="flow-node flow-node-llm">
+              🤖 analyze
+              <div class="flow-node-label">LLM Node</div>
+            </div>
+            
+             <!-- Space for connector -->
+            <div style="height: 40px; width: 2px; position: relative;">
+               <svg style="position: absolute; top: 0; left: -1px; width: 4px; height: 100%; overflow: visible;">
+                 <line x1="2" y1="0" x2="2" y2="40" class="connector-path" stroke="url(#connectorGradient)" stroke-width="2" />
+               </svg>
+            </div>
+
+            <div class="flow-node flow-node-tool">
+              🔧 execute_tool
+              <div class="flow-node-label">MCP Tool</div>
+            </div>
+
+             <!-- Space for connector -->
+            <div style="height: 40px; width: 2px; position: relative;">
+               <svg style="position: absolute; top: 0; left: -1px; width: 4px; height: 100%; overflow: visible;">
+                 <line x1="2" y1="0" x2="2" y2="40" class="connector-path" stroke="url(#connectorGradient)" stroke-width="2" />
+               </svg>
+            </div>
+
+            <div class="flow-node flow-node-end">END</div>
+          </div>
+        </div>
+
+        <!-- YAML Code -->
+        <div class="code-card reveal-right">
+          <div class="code-header">agent.yaml</div>
+          <div class="code-body"><span class="code-key">nodes:</span>
+  - <span class="code-prop">name:</span> analyze
+    <span class="code-prop">type:</span> llm
+    <span class="code-prop">prompt:</span> <span class="code-string">"Analyze &#123;input&#125;"</span>
+    <span class="code-prop">tools:</span> true
+    <span class="code-prop">tools_selection:</span>
+      - shell_command
+
+  - <span class="code-prop">name:</span> execute_tool
+    <span class="code-prop">type:</span> tool
+    <span class="code-prop">tool_name:</span> shell_command
+
+<span class="code-key">flow:</span>
+  - <span class="code-prop">from:</span> START
+    <span class="code-prop">to:</span> analyze
+  - <span class="code-prop">from:</span> analyze
+    <span class="code-prop">to:</span> execute_tool
+  - <span class="code-prop">from:</span> execute_tool
+    <span class="code-prop">to:</span> END</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features Section -->
+  <section class="section">
+    <div class="section-inner">
+      <div class="section-header reveal">
+        <h2 class="section-title">Why Astonish?</h2>
+        <p class="section-subtitle">The simplicity of no-code with the power of code-level control.</p>
+      </div>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon feature-icon-green">📦</div>
+          <h3 class="feature-title">Single Binary, Zero Infrastructure</h3>
+          <p class="feature-desc">No web servers. No cloud subscriptions. Run on your laptop, Raspberry Pi, or in CI/CD. Just download and go.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon feature-icon-purple">📄</div>
+          <h3 class="feature-title">YAML as Source of Truth</h3>
+          <p class="feature-desc">Your agent logic lives in simple YAML files. Version control them. Review in PRs. No platform lock-in.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon feature-icon-blue">🎨</div>
+          <h3 class="feature-title">Design Visually, Run Anywhere</h3>
+          <p class="feature-desc">Use Astonish Studio to design flows visually, then run the exact same YAML from the command line.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon feature-icon-orange">🔌</div>
+          <h3 class="feature-title">MCP Integration</h3>
+          <p class="feature-desc">Connect to any MCP server—GitHub, Slack, databases, or custom tools. Your flows stay clean; capabilities plug in.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon feature-icon-red">🏪</div>
+          <h3 class="feature-title">Flow Store & Taps</h3>
+          <p class="feature-desc">Browse, install, and share community flows with Homebrew-style taps. One command to add any extension.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon feature-icon-indigo">🤖</div>
+          <h3 class="feature-title">AI Assistant</h3>
+          <p class="feature-desc">Describe what you want in plain English. The AI generates the flow, refines nodes, and optimizes sequences.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Comparison Section -->
+  <section class="section section-alt">
+    <div class="section-inner" style="max-width: 900px;">
+      <div class="section-header reveal">
+        <h2 class="section-title">When to Choose Astonish</h2>
+        <p class="section-subtitle">The visual ease of n8n with the portable execution of a CLI tool.</p>
+      </div>
+
+      <div class="comparison-card reveal-scale">
+        <table class="comparison-table">
+          <thead>
+            <tr>
+              <th>Feature</th>
+              <th>n8n</th>
+              <th>Astonish</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Infrastructure</td>
+              <td>Server-based (Docker)</td>
+              <td>Single binary, run anywhere</td>
+            </tr>
+            <tr>
+              <td>Storage</td>
+              <td>Database</td>
+              <td>YAML files (Git-friendly)</td>
+            </tr>
+            <tr>
+              <td>Use Case</td>
+              <td>Webhook triggers, app-to-app</td>
+              <td>On-demand tasks, cron jobs</td>
+            </tr>
+            <tr>
+              <td>Complexity</td>
+              <td>Full server to maintain</td>
+              <td>Zero infrastructure</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA Section -->
+  <section class="cta-section">
+    <h2 class="cta-title">Ready to build your first agent?</h2>
+    <p class="cta-subtitle">Install in seconds. Design in minutes. Run forever.</p>
+    <div class="cta-actions">
+      <a href="/astonish/getting-started/installation/" class="btn btn-white">
+        Get Started
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="20" height="20"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
+      </a>
+      <a href="/astonish/tutorials/first-agent/" class="btn btn-ghost">
+        Build Your First Agent
+      </a>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <img src="/astonish/logo.svg" alt="Astonish" />
+        Astonish
+      </div>
+      <div class="footer-links">
+        <a href="/astonish/getting-started/introduction/" class="footer-link">Docs</a>
+        <a href="https://github.com/schardosin/astonish" class="footer-link">GitHub</a>
+        <a href="https://github.com/schardosin/astonish/issues" class="footer-link">Issues</a>
+      </div>
+      <p class="footer-credit">
+        Built with ❤️ using <a href="https://google.github.io/adk-go/">Google ADK</a>
+      </p>
+    </div>
+  </footer>
+
+  <script>
+    // Intersection Observer for scroll animations
+    document.addEventListener('DOMContentLoaded', () => {
+      const revealElements = document.querySelectorAll('.reveal, .reveal-left, .reveal-right, .reveal-scale');
+      const flowNodes = document.querySelector('.flow-nodes');
+      const featuresGrid = document.querySelector('.features-grid');
+
+      const observerOptions = {
+        root: null,
+        rootMargin: '0px',
+        threshold: 0.1
+      };
+
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('visible');
+            
+            // For workflow container, trigger children animations
+            if (entry.target.classList.contains('flow-nodes')) {
+                // The CSS handles the stagger for direct children and paths
+            }
+
+            // For features grid, add visible to all children
+            if (entry.target.classList.contains('features-grid')) {
+              entry.target.querySelectorAll('.feature-card').forEach(card => {
+                card.classList.add('reveal');
+                card.classList.add('visible');
+              });
+            }
+          }
+        });
+      }, observerOptions);
+
+      revealElements.forEach(el => observer.observe(el));
+      if (flowNodes) observer.observe(flowNodes);
+      if (featuresGrid) observer.observe(featuresGrid);
+
+      // Terminal Typewriter Effect
+      const terminalDemo = document.getElementById('terminal-demo');
+      
+      const commands = [
+        { type: 'input', text: 'brew install schardosin/astonish/astonish' },
+        { type: 'output', text: '🍺 Installing astonish...' },
+        { type: 'output', text: '✓ Installed to /usr/local/bin/astonish' },
+        { type: 'input', text: 'astonish studio' },
+        { type: 'output', html: '🚀 <span class="terminal-highlight">Astonish Studio</span> running at http://localhost:9393' }
+      ];
+
+      async function typeWriter(text, element, speed = 30) {
+        return new Promise(resolve => {
+          let i = 0;
+          element.innerHTML = '<span class="prompt">$</span> ';
+          const span = document.createElement('span');
+          span.className = 'terminal-cmd';
+          element.appendChild(span);
+          
+          const cursor = document.createElement('span');
+          cursor.className = 'cursor';
+          element.appendChild(cursor);
+
+          function type() {
+            if (i < text.length) {
+              span.textContent += text.charAt(i);
+              i++;
+              setTimeout(type, speed);
+            } else {
+              cursor.remove();
+              resolve();
+            }
+          }
+          type();
+        });
+      }
+
+      async function runTerminalDemo() {
+        if (!terminalDemo) return;
+        terminalDemo.innerHTML = '';
+        
+        for (const cmd of commands) {
+          const div = document.createElement('div');
+          
+          if (cmd.type === 'input') {
+            div.style.marginBottom = '0.5rem';
+            terminalDemo.appendChild(div);
+            await typeWriter(cmd.text, div);
+          } else {
+            div.className = 'terminal-output';
+            div.style.marginBottom = '0.2rem';
+            if (cmd.html) {
+              div.innerHTML = cmd.html;
+            } else {
+              div.textContent = cmd.text;
+            }
+            terminalDemo.appendChild(div);
+            // small pause after output
+            await new Promise(r => setTimeout(r, 400));
+          }
+          
+          // Pause between commands
+          if (cmd.type === 'input') {
+             await new Promise(r => setTimeout(r, 800));
+          }
+        }
+      }
+
+      // Start terminal demo when it comes into view
+      const terminalObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            runTerminalDemo();
+            terminalObserver.unobserve(entry.target);
+          }
+        });
+      }, { threshold: 0.5 });
+      
+      if (terminalDemo) {
+        terminalObserver.observe(terminalDemo);
+      }
+    });
+  </script>
+</body>
+</html>

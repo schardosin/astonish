@@ -7,6 +7,7 @@
   
   *Design visually. Run anywhere. No servers required.*
   
+  [![Documentation](https://img.shields.io/badge/Documentation-Astonish-purple.svg)](https://schardosin.github.io/astonish/)
   [![Lint](https://github.com/schardosin/astonish/actions/workflows/lint.yml/badge.svg)](https://github.com/schardosin/astonish/actions/workflows/lint.yml)
   [![Build Status](https://github.com/schardosin/astonish/actions/workflows/build.yml/badge.svg)](https://github.com/schardosin/astonish/actions/workflows/build.yml)
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -501,7 +502,7 @@ astonish flows store install team-extensions/internal_agent
 
 ## 📖 Documentation
 
-- [Full Documentation](https://github.com/schardosin/astonish/wiki)
+- [Full Documentation](https://schardosin.github.io/astonish/)
 - [Agent Examples](https://github.com/schardosin/astonish/tree/main/agents)
 - [MCP Server Setup](https://github.com/schardosin/astonish/wiki/MCP-Setup)
 

@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
-import { Search, ChevronDown, ChevronRight, Check, Server, Wrench } from 'lucide-react'
+import { Search, ChevronDown, ChevronRight, Check, Server, Wrench, X } from 'lucide-react'
 
 /**
  * ToolSelector - Grouped, searchable tool selection component
@@ -125,10 +125,10 @@ export default function ToolSelector({
           
           {selectedCount > 0 ? (
             <div className="flex flex-wrap gap-1.5 flex-1">
-              {selectedTools.slice(0, 3).map(tool => (
+              {selectedTools.map(tool => (
                 <span 
                   key={tool}
-                  className="inline-flex items-center text-xs px-1.5 py-0.5 rounded border truncate max-w-[120px]"
+                  className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border max-w-[150px] group"
                   style={{ 
                     background: 'rgba(124, 58, 237, 0.1)', 
                     color: '#a855f7',
@@ -136,23 +136,20 @@ export default function ToolSelector({
                   }}
                   title={tool}
                 >
-                  {tool}
+                  <span className="truncate">{tool}</span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onRemoveTool(tool)
+                    }}
+                    className="flex-shrink-0 hover:bg-purple-500/30 rounded p-0.5 transition-colors"
+                    title={`Remove ${tool}`}
+                  >
+                    <X size={10} />
+                  </button>
                 </span>
               ))}
-              
-              {selectedTools.length > 3 && (
-                <span 
-                  className="inline-flex items-center text-xs px-1.5 py-0.5 rounded border cursor-help"
-                  style={{ 
-                    background: 'var(--bg-secondary)', 
-                    color: 'var(--text-muted)',
-                    borderColor: 'var(--border-color)'
-                  }}
-                  title={selectedTools.slice(3).join(', ')}
-                >
-                  +{selectedTools.length - 3}
-                </span>
-              )}
             </div>
           ) : (
             <span style={{ color: 'var(--text-muted)' }}>Select tools...</span>
@@ -222,7 +219,8 @@ export default function ToolSelector({
               </div>
             ) : (
               filteredGroups.map(([source, tools]) => {
-                const isExpanded = expandedGroups[source] !== false // Default to expanded
+                // Default to collapsed (when no search), expanded when searching
+                const isExpanded = searchQuery.trim() ? expandedGroups[source] !== false : expandedGroups[source] === true
                 const selectedInGroup = tools.filter(t => selectedTools.includes(t.name)).length
                 
                 return (

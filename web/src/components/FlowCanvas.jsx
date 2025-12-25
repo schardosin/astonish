@@ -216,16 +216,10 @@ function FlowCanvasInner({
     }
   }, [storeNodes, storeEdges, onLayoutChange])
 
-  // Debounced save for edge changes (since EditableEdge updates do not trigger onNodeDragStop)
-  useEffect(() => {
-    if (!onLayoutSave || storeEdges.length === 0) return
-
-    const timer = setTimeout(() => {
-      onLayoutSave(storeNodes, storeEdges)
-    }, 1000) // Debounce 1s to avoid excessive YAML (re)generation during drag
-
-    return () => clearTimeout(timer)
-  }, [storeEdges, storeNodes, onLayoutSave])
+  // NOTE: Layout saving is now handled ONLY by explicit user interactions:
+  // - onNodeDragStop (line 394) for node positions
+  // - edge-drag-stop event (line 231) for edge waypoints
+  // This avoids reformatting YAML when user edits the source view directly.
 
   // Listener for immediate save on edge drag stop (custom event from EditableEdge)
   useEffect(() => {

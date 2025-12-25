@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -259,6 +260,124 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// InstallInlineMCPServerRequest is the request for POST /api/mcp/install-inline
+type InstallInlineMCPServerRequest struct {
+	ServerName string                  `json:"serverName"`
+	Config     config.MCPServerConfig  `json:"config"`
+}
+
+// InstallInlineMCPServerHandler handles POST /api/mcp/install-inline
+// Adds an inline MCP server configuration to the user's MCP config
+func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
+	var req InstallInlineMCPServerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.ServerName == "" {
+		http.Error(w, "Server name is required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Config.Command == "" && req.Config.URL == "" {
+		http.Error(w, "Server config must have either command or URL", http.StatusBadRequest)
+		return
+	}
+
+	// Load current MCP config
+	mcpCfg, err := config.LoadMCPConfig()
+	if err != nil {
+		mcpCfg = &config.MCPConfig{MCPServers: make(map[string]config.MCPServerConfig)}
+	}
+
+	// Set default transport
+	if req.Config.Transport == "" {
+		req.Config.Transport = "stdio"
+	}
+
+	// Initialize map if nil
+	if mcpCfg.MCPServers == nil {
+		mcpCfg.MCPServers = make(map[string]config.MCPServerConfig)
+	}
+
+	// Add the server
+	mcpCfg.MCPServers[req.ServerName] = req.Config
+
+	// Save config
+	if err := config.SaveMCPConfig(mcpCfg); err != nil {
+		http.Error(w, "Failed to save MCP config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Setup environment variables
+	config.SetupMCPEnv(mcpCfg)
+
+	// Synchronously load this server's tools (should be fast for one server)
+	toolsLoaded := 0
+	toolError := ""
+	mcpManager, err := mcp.NewManager()
+	if err != nil {
+		toolError = fmt.Sprintf("Failed to create MCP manager: %v", err)
+		log.Printf("Warning: %s", toolError)
+	} else {
+		namedToolset, err := mcpManager.InitializeSingleToolset(r.Context(), req.ServerName)
+		if err != nil {
+			toolError = fmt.Sprintf("Failed to initialize server: %v", err)
+			log.Printf("Warning: %s", toolError)
+		} else {
+			// Get tools from this server and add to cache
+			minimalCtx := &minimalReadonlyContext{Context: r.Context()}
+			mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
+			if err != nil {
+				toolError = fmt.Sprintf("Server started but failed to get tools: %v", err)
+				log.Printf("Warning: %s", toolError)
+			} else {
+				var newTools []ToolInfo
+				for _, t := range mcpTools {
+					newTools = append(newTools, ToolInfo{
+						Name:        t.Name(),
+						Description: t.Description(),
+						Source:      req.ServerName,
+					})
+				}
+				AddServerToolsToCache(req.ServerName, newTools)
+				toolsLoaded = len(newTools)
+
+				// Also update persistent cache
+				persistentTools := make([]cache.ToolEntry, 0, len(newTools))
+				for _, t := range newTools {
+					persistentTools = append(persistentTools, cache.ToolEntry{
+						Name:        t.Name,
+						Description: t.Description,
+						Source:      t.Source,
+					})
+				}
+				checksum := cache.ComputeServerChecksum(req.Config.Command, req.Config.Args, req.Config.Env)
+				cache.AddServerTools(req.ServerName, persistentTools, checksum)
+				if err := cache.SaveCache(); err != nil {
+					log.Printf("[Cache] Warning: Failed to save persistent cache: %v", err)
+				} else {
+					log.Printf("[Cache] Saved %d tools for server '%s' to persistent cache", len(persistentTools), req.ServerName)
+				}
+			}
+		}
+	}
+
+	log.Printf("[MCP Install] Installed inline server: %s", req.ServerName)
+
+	w.Header().Set("Content-Type", "application/json")
+	response := map[string]interface{}{
+		"status":      "installed",
+		"serverName":  req.ServerName,
+		"toolsLoaded": toolsLoaded,
+	}
+	if toolError != "" {
+		response["toolError"] = toolError
+	}
+	json.NewEncoder(w).Encode(response)
 }
 
 // updatePersistentCacheForServers initializes specific servers and adds their tools to persistent cache

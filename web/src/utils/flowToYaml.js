@@ -10,7 +10,8 @@ export function orderYamlKeys(data) {
   }
   
   // Define the preferred key order (model is NOT included - engine uses global config)
-  const keyOrder = ['name', 'description', 'nodes', 'flow', 'layout']
+  // mcp_dependencies goes before layout, layout is always last
+  const keyOrder = ['name', 'description', 'nodes', 'flow', 'mcp_dependencies', 'layout']
   
   // Keys to explicitly exclude from output (deprecated or invalid fields)
   const excludedKeys = ['model']
@@ -158,7 +159,8 @@ export function addStandaloneNode(yamlContent, nodeType) {
       lineWidth: -1,
       noRefs: true,
       quotingType: '"',
-      forceQuotes: false
+      forceQuotes: false,
+      styles: { '!!str': 'literal' }
     })
   } catch (e) {
     console.error('Error adding standalone node:', e)
@@ -221,7 +223,8 @@ export function addConnection(yamlContent, sourceId, targetId) {
       lineWidth: -1,
       noRefs: true,
       quotingType: '"',
-      forceQuotes: false
+      forceQuotes: false,
+      styles: { '!!str': 'literal' }
     })
   } catch (e) {
     console.error('Error adding connection:', e)
@@ -268,7 +271,8 @@ export function removeConnection(yamlContent, sourceId, targetId) {
       lineWidth: -1,
       noRefs: true,
       quotingType: '"',
-      forceQuotes: false
+      forceQuotes: false,
+      styles: { '!!str': 'literal' }
     })
   } catch (e) {
     console.error('Error removing connection:', e)
@@ -302,7 +306,8 @@ export function removeNode(yamlContent, nodeId) {
       lineWidth: -1,
       noRefs: true,
       quotingType: '"',
-      forceQuotes: false
+      forceQuotes: false,
+      styles: { '!!str': 'literal' }
     })
   } catch (e) {
     console.error('Error removing node:', e)
@@ -351,7 +356,8 @@ export function updateNode(yamlContent, nodeId, newNodeData) {
       lineWidth: -1,
       noRefs: true,
       quotingType: '"',
-      forceQuotes: false
+      forceQuotes: false,
+      styles: { '!!str': 'literal' }
     })
   } catch (e) {
     console.error('Error updating node:', e)

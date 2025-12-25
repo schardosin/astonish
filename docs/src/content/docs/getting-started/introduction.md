@@ -1,6 +1,6 @@
 ---
 title: Introduction
-description: Learn what Astonish is and how it can help you build production AI agents
+description: Learn what Astonish is and how it can help you build production AI agents 
 ---
 
 # Welcome to Astonish

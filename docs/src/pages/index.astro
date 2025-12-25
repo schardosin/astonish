@@ -2,6 +2,7 @@
 // Custom landing page for Astonish
 const title = 'Astonish - Build Production AI Agents in Minutes';
 const description = 'Design AI agent flows visually, run anywhere. No servers required. A single Go binary with YAML-based workflows.';
+import '../styles/custom.css';
 ---
 
 <!DOCTYPE html>
@@ -54,12 +55,18 @@ const description = 'Design AI agent flows visually, run anywhere. No servers re
       --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
 
+    html {
+      height: 100%;
+      scroll-behavior: smooth;
+    }
+
     body {
       font-family: var(--font);
       background: #fafbfe;
       color: #1e293b;
       line-height: 1.6;
       overflow-x: hidden;
+      min-height: 100%;
     }
 
     a { text-decoration: none; color: inherit; }
@@ -367,92 +374,7 @@ const description = 'Design AI agent flows visually, run anywhere. No servers re
       margin: 0 auto;
     }
 
-    /* Workflow Demo */
-    .workflow-grid {
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 3rem;
-      align-items: center;
-    }
 
-    @media (min-width: 768px) {
-      .workflow-grid {
-        grid-template-columns: 1fr 1fr;
-      }
-    }
-
-    .flow-card {
-      background: white;
-      border-radius: 16px;
-      padding: 2rem;
-      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-      border: 1px solid var(--slate-200);
-      position: relative;
-    }
-
-    .flow-nodes {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 1rem;
-      position: relative;
-    }
-
-    .flow-connector {
-      width: 2px;
-      height: 40px;
-      background: linear-gradient(to bottom, var(--purple-400), var(--purple-600));
-      opacity: 0.6;
-      border-radius: 2px;
-    }
-
-    .flow-node {
-      padding: 0.75rem 1.5rem;
-      border-radius: 10px;
-      font-weight: 600;
-      text-align: center;
-      min-width: 160px;
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
-    }
-
-    .flow-node-start {
-      background: linear-gradient(135deg, var(--green-500), var(--green-600));
-      color: white;
-    }
-
-    .flow-node-llm {
-      background: linear-gradient(135deg, var(--purple-500), var(--purple-700));
-      color: white;
-    }
-
-    .flow-node-tool {
-      background: linear-gradient(135deg, var(--violet-600), var(--indigo-600));
-      color: white;
-    }
-
-    .flow-node-end {
-      background: linear-gradient(135deg, var(--red-500), #dc2626);
-      color: white;
-    }
-
-    .flow-node-label {
-      font-size: 0.75rem;
-      opacity: 0.8;
-      margin-top: 0.25rem;
-      font-weight: 400;
-    }
-
-    .flow-image-container {
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      width: 100%;
-    }
-
-    .flow-visual-image {
-      height: auto;
-      border-radius: 12px;
-    }
 
     /* Code block */
     .code-card {
@@ -857,50 +779,198 @@ const description = 'Design AI agent flows visually, run anywhere. No servers re
   </section>
 
   <!-- Workflow Section -->
-  <section class="section section-alt" id="workflow">
-    <div class="section-inner">
-      <div class="section-header reveal">
-        <h2 class="section-title">Agent Flows, Visualized</h2>
-        <p class="section-subtitle">Design your AI agents like a flowchart. Each node is a step.</p>
-      </div>
+  <!-- The Astonish Experience - Full Viewport Storytelling -->
+  <section class="story-section" id="experience">
+    <div class="story-header">
+      <h2 class="section-title">The Astonish Experience</h2>
+      <p class="section-subtitle">Discover how Astonish transforms your AI workflow</p>
+    </div>
 
-      <div class="workflow-grid">
-        <!-- Visual Flow -->
-          <div class="flow-image-container reveal-left">
-             <img src="/astonish/images/flow-visual.png" alt="Astonish Agent Flow" class="flow-visual-image" width="40%"  />
-          </div>
+    <div class="story-slides" id="story-slides">
+      <!-- Step 1: Design Your Flow (Two-Column Visual) -->
+      <div class="story-slide active" data-step="1">
+        <div class="story-slide-inner">
+          <!-- Visual on top (split: flow image + yaml code) -->
+          <div class="story-visual story-visual-split">
+            <div class="story-visual-container">
+              <img src="/astonish/images/flow-visual.png" alt="Visual flow diagram showing connected nodes" />
+            </div>
+            <div class="story-visual-container code-visual">
+              <div class="code-header">agent.yaml</div>
+              <div class="code-body">
+<span class="code-key">name:</span> <span class="code-string">pr-description-generator</span>
+<span class="code-key">model:</span> <span class="code-string">anthropic/claude-sonnet</span>
 
-        <!-- YAML Code -->
-        <div class="code-card reveal-right">
-          <div class="code-header">agent.yaml</div>
-          <pre class="code-body"><span class="code-key">name:</span> simple_search
-<span class="code-key">description:</span> Simple internet search flow using Tavily
 <span class="code-key">nodes:</span>
-  - <span class="code-prop">name:</span> get_query
-    <span class="code-prop">type:</span> input
-    <span class="code-prop">prompt:</span> What would you like to search for?
-    <span class="code-prop">output_model:</span>
-      <span class="code-prop">query:</span> str
-  - <span class="code-prop">name:</span> search
-    <span class="code-prop">type:</span> llm
-    <span class="code-prop">system:</span> You are a helpful search assistant. Use the tavily-search tool to find information and provide a clear, concise summary.
-    <span class="code-prop">prompt:</span> <span class="code-string">'Search for: &#123;query&#125;'</span>
-    <span class="code-prop">tools:</span> true
-    <span class="code-prop">tools_selection:</span>
-      - tavily-search
-    <span class="code-prop">output_model:</span>
-      <span class="code-prop">result:</span> str
-    <span class="code-prop">user_message:</span>
-      - result
-<span class="code-key">flow:</span>
-  - <span class="code-prop">from:</span> START
-    <span class="code-prop">to:</span> get_query
-  - <span class="code-prop">from:</span> get_query
-    <span class="code-prop">to:</span> search
-  - <span class="code-prop">from:</span> search
-    <span class="code-prop">to:</span> END</pre>
+  - <span class="code-prop">id:</span> <span class="code-string">get_diff</span>
+    <span class="code-prop">type:</span> <span class="code-string">mcp_tool</span>
+    <span class="code-prop">server:</span> <span class="code-string">github</span>
+
+  - <span class="code-prop">id:</span> <span class="code-string">generate</span>
+    <span class="code-prop">type:</span> <span class="code-string">llm</span>
+    <span class="code-prop">prompt:</span> <span class="code-string">"Write a PR description..."</span>
+              </div>
+            </div>
+          </div>
+          <!-- Text on bottom -->
+          <div class="story-text">
+            <div class="story-step-badge">
+              <span class="step-number">1</span>
+              YAML Design
+            </div>
+            <h3 class="story-title">Design Your Flow</h3>
+            <p class="story-description">Create AI agent workflows visually or with YAML. Git-friendly, version-controlled, and portable across any environment.</p>
+          </div>
         </div>
       </div>
+
+      <!-- Step 2: AI Creates For You -->
+      <div class="story-slide" data-step="2">
+        <div class="story-slide-inner">
+          <div class="story-visual">
+            <div class="story-visual-container">
+              <img src="/astonish/images/ai-creation.gif" onerror="this.src='/astonish/images/flow-visual.png'" alt="AI generating a flow from natural language" />
+            </div>
+          </div>
+          <div class="story-text">
+            <div class="story-step-badge">
+              <span class="step-number">2</span>
+              AI Powered
+            </div>
+            <h3 class="story-title">AI Creates For You</h3>
+            <p class="story-description">Describe what you want in plain English. The AI Assistant understands your intent and builds the complete flow in seconds—no manual configuration needed.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3: Connect to Anything -->
+      <div class="story-slide" data-step="3">
+        <div class="story-slide-inner">
+          <div class="story-visual">
+            <div class="story-visual-container">
+              <img src="/astonish/images/mcp-integrations.png" onerror="this.src='/astonish/images/flow-visual.png'" alt="Integration diagram showing MCP connections" />
+            </div>
+          </div>
+          <div class="story-text">
+            <div class="story-step-badge">
+              <span class="step-number">3</span>
+              Integrations
+            </div>
+            <h3 class="story-title">Connect to Anything</h3>
+            <p class="story-description">Browse the web, query databases, read files, run code—all through MCP Servers. Your flow stays clean and focused while capabilities plug in seamlessly.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 4: MCP Store -->
+      <div class="story-slide" data-step="4">
+        <div class="story-slide-inner">
+          <div class="story-visual">
+            <div class="story-visual-container">
+               <img src="/astonish/images/mcp-store.png" onerror="this.src='/astonish/images/flow-visual.png'" alt="MCP Store interface" />
+            </div>
+          </div>
+          <div class="story-text">
+            <div class="story-step-badge">
+              <span class="step-number">4</span>
+              Store
+            </div>
+            <h3 class="story-title">MCP Store</h3>
+            <p class="story-description">Hundreds of ready-to-use MCP servers at your fingertips. Browse by category, search by name, and install with a single click—no configuration required.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 5: Smart Suggestions -->
+      <div class="story-slide" data-step="5">
+        <div class="story-slide-inner">
+          <div class="story-visual">
+            <div class="story-visual-container">
+              <img src="/astonish/images/ai-suggestions.png" onerror="this.src='/astonish/images/flow-visual.png'" alt="AI suggesting MCP servers to install" />
+            </div>
+          </div>
+          <div class="story-text">
+            <div class="story-step-badge">
+              <span class="step-number">5</span>
+              Suggestions
+            </div>
+            <h3 class="story-title">Smart Suggestions</h3>
+            <p class="story-description">AI Assistant identifies which MCP servers your flow needs and installs them automatically. Not in the store? It finds alternatives online and configures them for you.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 6: Share & Discover -->
+      <div class="story-slide" data-step="6">
+        <div class="story-slide-inner">
+          <div class="story-visual">
+            <div class="story-visual-container">
+              <img src="/astonish/images/community-loops.png" onerror="this.src='/astonish/images/flow-visual.png'" alt="Community sharing flows with tap mechanism" />
+            </div>
+          </div>
+          <div class="story-text">
+            <div class="story-step-badge">
+              <span class="step-number">6</span>
+              Community
+            </div>
+            <h3 class="story-title">Share & Discover</h3>
+            <p class="story-description">Share your flows via Taps—like Homebrew for AI agents. Every flow includes all MCP dependencies for one-command install. Join the community and discover powerful flows others have built.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 7: Run Anywhere -->
+      <div class="story-slide" data-step="7">
+        <div class="story-slide-inner">
+          <div class="story-visual">
+            <div class="story-visual-container code-visual">
+              <img src="/astonish/images/terminal-run.png" onerror="this.src='/astonish/images/flow-visual.png'" alt="Terminal execution of Astonish flow" />
+            </div>
+          </div>
+          <div class="story-text">
+            <div class="story-step-badge">
+              <span class="step-number">7</span>
+              Execute
+            </div>
+            <h3 class="story-title">Run Anywhere</h3>
+            <p class="story-description">Once ready, run your flows in the terminal, CI/CD, or anywhere with a single binary. No infrastructure management, just pure execution.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Navigation Controls -->
+    <div class="story-nav">
+      
+      <div class="story-nav-controls">
+        <button class="story-nav-btn" id="story-prev" aria-label="Previous step" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="15 18 9 12 15 6"></polyline>
+          </svg>
+        </button>
+        
+        <div class="story-step-indicator">
+          Step <span id="current-step">1</span> of 7
+        </div>
+
+        <button class="story-nav-btn" id="story-next" aria-label="Next step">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 18 15 12 9 6"></polyline>
+          </svg>
+        </button>
+      </div>
+
+      <div class="story-progress-container" id="story-progress">
+        <span class="story-progress-dot active" data-step="1" title="Design"></span>
+        <span class="story-progress-dot" data-step="2" title="AI Create"></span>
+        <span class="story-progress-dot" data-step="3" title="Integrate"></span>
+        <span class="story-progress-dot" data-step="4" title="Store"></span>
+        <span class="story-progress-dot" data-step="5" title="Suggest"></span>
+        <span class="story-progress-dot" data-step="6" title="Share"></span>
+        <span class="story-progress-dot" data-step="7" title="Run"></span>
+      </div>
+
     </div>
   </section>
 
@@ -1147,6 +1217,156 @@ const description = 'Design AI agent flows visually, run anywhere. No servers re
       
       if (terminalDemo) {
         terminalObserver.observe(terminalDemo);
+      }
+
+      // ===== Story Section Navigation =====
+      const storySlides = document.querySelectorAll('.story-slide');
+      const storyPrev = document.getElementById('story-prev');
+      const storyNext = document.getElementById('story-next');
+      const currentStepSpan = document.getElementById('current-step');
+      const progressDots = document.querySelectorAll('.story-progress-dot');
+      
+      let currentStep = 1;
+      const totalSteps = storySlides.length;
+
+      // Ensure we have slides before running logic
+      if (totalSteps > 0) {
+        function showSlide(step) {
+          // Clamp step to valid range
+          step = Math.max(1, Math.min(step, totalSteps));
+          currentStep = step;
+          
+          // Update slide visibility
+          storySlides.forEach((slide, index) => {
+            if (index + 1 === step) {
+              slide.classList.add('active');
+            } else {
+              slide.classList.remove('active');
+            }
+          });
+          
+          // Update progress dots
+          progressDots.forEach((dot, index) => {
+            if (index + 1 === step) {
+              dot.classList.add('active');
+            } else {
+              dot.classList.remove('active');
+            }
+          });
+          
+          // Update step counter
+          if (currentStepSpan) currentStepSpan.textContent = step;
+          
+          // Update button states
+          if (storyPrev) storyPrev.disabled = step === 1;
+          if (storyNext) storyNext.disabled = step === totalSteps;
+        }
+
+        // Navigation button handlers
+        if (storyPrev) {
+          storyPrev.addEventListener('click', () => {
+            if (currentStep > 1) {
+              showSlide(currentStep - 1);
+            }
+          });
+        }
+
+        if (storyNext) {
+          storyNext.addEventListener('click', () => {
+            if (currentStep < totalSteps) {
+              showSlide(currentStep + 1);
+            }
+          });
+        }
+
+        // Progress dot click handlers
+        progressDots.forEach(dot => {
+          dot.addEventListener('click', () => {
+            const step = parseInt(dot.dataset.step);
+            showSlide(step);
+          });
+        });
+
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+          const storySection = document.getElementById('experience');
+          if (!storySection) return;
+          
+          const rect = storySection.getBoundingClientRect();
+          // Check if section is somewhat visible in viewport
+          const isVisible = rect.top < window.innerHeight && rect.bottom > 0;
+          
+          if (isVisible) {
+            if (e.key === 'ArrowLeft' && currentStep > 1) {
+              showSlide(currentStep - 1);
+            } else if (e.key === 'ArrowRight' && currentStep < totalSteps) {
+              showSlide(currentStep + 1);
+            }
+          }
+        });
+
+        // Scroll wheel lock & slide transition
+        const storySection = document.getElementById('experience');
+        let isLocked = false;
+        let scrollAccumulator = 0;
+        const scrollThreshold = 120; // Pixels of accumulated scroll to trigger slide change
+        let lastScrollTime = 0;
+        const scrollCooldown = 400; // ms between slide changes
+        
+        if (storySection) {
+          // Check if section is in "locked" position (centered in viewport)
+          function isSectionLocked() {
+            const rect = storySection.getBoundingClientRect();
+            // Section is locked if it's close to filling the viewport
+            return rect.top <= 10 && rect.bottom >= window.innerHeight - 10;
+          }
+          
+          // Wheel handler for slide transitions
+          document.addEventListener('wheel', (e) => {
+            const rect = storySection.getBoundingClientRect();
+            const now = Date.now();
+            
+            // Only intercept if section is visible and locked in position
+            if (isSectionLocked()) {
+              // Scrolling down (positive deltaY)
+              if (e.deltaY > 0) {
+                if (currentStep < totalSteps) {
+                  e.preventDefault();
+                  scrollAccumulator += Math.abs(e.deltaY);
+                  
+                  if (scrollAccumulator >= scrollThreshold && now - lastScrollTime > scrollCooldown) {
+                    showSlide(currentStep + 1);
+                    scrollAccumulator = 0;
+                    lastScrollTime = now;
+                  }
+                }
+                // If at last step, don't prevent default - allow scrolling out
+              }
+              // Scrolling up (negative deltaY)
+              else if (e.deltaY < 0) {
+                if (currentStep > 1) {
+                  e.preventDefault();
+                  scrollAccumulator += Math.abs(e.deltaY);
+                  
+                  if (scrollAccumulator >= scrollThreshold && now - lastScrollTime > scrollCooldown) {
+                    showSlide(currentStep - 1);
+                    scrollAccumulator = 0;
+                    lastScrollTime = now;
+                  }
+                }
+                // If at first step, don't prevent default - allow scrolling out
+              }
+            }
+          }, { passive: false });
+          
+          // Reset accumulator when mouse leaves section
+          storySection.addEventListener('mouseleave', () => {
+            scrollAccumulator = 0;
+          });
+        }
+
+        // Initialize first slide
+        showSlide(1);
       }
     });
   </script>

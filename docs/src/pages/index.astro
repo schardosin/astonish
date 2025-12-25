@@ -970,15 +970,6 @@ import '../styles/custom.css';
         </button>
       </div>
 
-      <div class="story-progress-container" id="story-progress">
-        <span class="story-progress-dot active" data-step="1" title="Design"></span>
-        <span class="story-progress-dot" data-step="2" title="AI Create"></span>
-        <span class="story-progress-dot" data-step="3" title="Integrate"></span>
-        <span class="story-progress-dot" data-step="4" title="Store"></span>
-        <span class="story-progress-dot" data-step="5" title="Suggest"></span>
-        <span class="story-progress-dot" data-step="6" title="Share"></span>
-        <span class="story-progress-dot" data-step="7" title="Run"></span>
-      </div>
 
     </div>
   </section>
@@ -1233,7 +1224,6 @@ import '../styles/custom.css';
       const storyPrev = document.getElementById('story-prev');
       const storyNext = document.getElementById('story-next');
       const currentStepSpan = document.getElementById('current-step');
-      const progressDots = document.querySelectorAll('.story-progress-dot');
       
       let currentStep = 1;
       const totalSteps = storySlides.length;
@@ -1254,14 +1244,6 @@ import '../styles/custom.css';
             }
           });
           
-          // Update progress dots
-          progressDots.forEach((dot, index) => {
-            if (index + 1 === step) {
-              dot.classList.add('active');
-            } else {
-              dot.classList.remove('active');
-            }
-          });
           
           // Update step counter
           if (currentStepSpan) currentStepSpan.textContent = step;
@@ -1288,13 +1270,6 @@ import '../styles/custom.css';
           });
         }
 
-        // Progress dot click handlers
-        progressDots.forEach(dot => {
-          dot.addEventListener('click', () => {
-            const step = parseInt(dot.dataset.step);
-            showSlide(step);
-          });
-        });
 
         // Keyboard navigation
         document.addEventListener('keydown', (e) => {

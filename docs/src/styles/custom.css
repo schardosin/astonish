@@ -398,8 +398,7 @@ a:not([class]):hover {
 /* ===== Full-Viewport Storytelling Section ===== */
 .story-section {
   position: relative;
-  height: 100dvh; /* Dynamic viewport height (accounts for mobile browser chrome) */
-  max-height: 100dvh;
+  min-height: 100vh;
   background: linear-gradient(180deg, var(--slate-50) 0%, #f8f7fc 100%);
   overflow: hidden;
   display: flex;
@@ -683,8 +682,8 @@ a:not([class]):hover {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 1rem;
-  padding: 1rem 1.5rem 3rem;
+  gap: 0.5rem;
+  padding: 0.5rem 1.5rem 1.5rem;
   flex: 0 0 auto;
 }
 
@@ -749,39 +748,6 @@ a:not([class]):hover {
   color: #94a3b8;
 }
 
-/* Progress Dots & Timeline */
-.story-progress-container {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  margin-top: 0.5rem;
-}
-
-.story-progress-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--slate-300);
-  border: 2px solid transparent;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  position: relative;
-}
-
-:root[data-theme='dark'] .story-progress-dot {
-  background: #475569;
-}
-
-.story-progress-dot:hover {
-  background: var(--purple-400);
-  transform: scale(1.2);
-}
-
-.story-progress-dot.active {
-  background: var(--purple-600);
-  transform: scale(1.3);
-  box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.2);
-}
 
 /* Responsive Handling */
 @media (max-width: 1024px) {

@@ -523,6 +523,30 @@ import '../styles/custom.css';
       scroll-snap-align: start;
     }
 
+    /* Combined Final Section - Both parts in one viewport */
+    .combined-final-section {
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+      scroll-snap-align: start;
+    }
+
+    .comparison-part {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      padding: 4rem 1.5rem 2rem;
+      background: var(--slate-50);
+    }
+
+    .cta-part {
+      flex: 0 0 auto;
+      padding: 3rem 1.5rem;
+      background: linear-gradient(135deg, var(--purple-600), var(--violet-600), var(--indigo-600));
+      text-align: center;
+    }
+
     .cta-title {
       font-size: clamp(2rem, 5vw, 3rem);
       font-weight: 700;
@@ -1025,62 +1049,65 @@ import '../styles/custom.css';
     </div>
   </section>
 
-  <!-- Comparison Section -->
-  <section class="section section-alt">
-    <div class="section-inner" style="max-width: 900px;">
-      <div class="section-header reveal">
-        <h2 class="section-title">When to Choose Astonish</h2>
-        <p class="section-subtitle">The visual ease of n8n with the portable execution of a CLI tool.</p>
-      </div>
+  <!-- Combined Comparison + CTA Section -->
+  <section class="combined-final-section">
+    <!-- Comparison Part -->
+    <div class="comparison-part">
+      <div class="section-inner" style="max-width: 900px;">
+        <div class="section-header reveal">
+          <h2 class="section-title">When to Choose Astonish</h2>
+          <p class="section-subtitle">The visual ease of n8n with the portable execution of a CLI tool.</p>
+        </div>
 
-      <div class="comparison-card reveal-scale">
-        <table class="comparison-table">
-          <thead>
-            <tr>
-              <th>Feature</th>
-              <th>n8n</th>
-              <th>Astonish</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Infrastructure</td>
-              <td>Server-based (Docker)</td>
-              <td>Single binary, run anywhere</td>
-            </tr>
-            <tr>
-              <td>Storage</td>
-              <td>Database</td>
-              <td>YAML files (Git-friendly)</td>
-            </tr>
-            <tr>
-              <td>Use Case</td>
-              <td>Webhook triggers, app-to-app</td>
-              <td>On-demand tasks, cron jobs</td>
-            </tr>
-            <tr>
-              <td>Complexity</td>
-              <td>Full server to maintain</td>
-              <td>Zero infrastructure</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="comparison-card reveal-scale">
+          <table class="comparison-table">
+            <thead>
+              <tr>
+                <th>Feature</th>
+                <th>n8n</th>
+                <th>Astonish</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Infrastructure</td>
+                <td>Server-based (Docker)</td>
+                <td>Single binary, run anywhere</td>
+              </tr>
+              <tr>
+                <td>Storage</td>
+                <td>Database</td>
+                <td>YAML files (Git-friendly)</td>
+              </tr>
+              <tr>
+                <td>Use Case</td>
+                <td>Webhook triggers, app-to-app</td>
+                <td>On-demand tasks, cron jobs</td>
+              </tr>
+              <tr>
+                <td>Complexity</td>
+                <td>Full server to maintain</td>
+                <td>Zero infrastructure</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
-  </section>
 
-  <!-- CTA Section -->
-  <section class="cta-section">
-    <h2 class="cta-title">Ready to build your first agent?</h2>
-    <p class="cta-subtitle">Install in seconds. Design in minutes. Run forever.</p>
-    <div class="cta-actions">
-      <a href="/astonish/getting-started/installation/" class="btn btn-white">
-        Get Started
-        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="20" height="20"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
-      </a>
-      <a href="/astonish/tutorials/first-agent/" class="btn btn-ghost">
-        Build Your First Agent
-      </a>
+    <!-- CTA Part -->
+    <div class="cta-part">
+      <h2 class="cta-title">Ready to build your first agent?</h2>
+      <p class="cta-subtitle">Install in seconds. Design in minutes. Run forever.</p>
+      <div class="cta-actions">
+        <a href="/astonish/getting-started/installation/" class="btn btn-white">
+          Get Started
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="20" height="20"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
+        </a>
+        <a href="/astonish/tutorials/first-agent/" class="btn btn-ghost">
+          Build Your First Agent
+        </a>
+      </div>
     </div>
   </section>
 

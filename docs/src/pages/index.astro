@@ -442,6 +442,18 @@ const description = 'Design AI agent flows visually, run anywhere. No servers re
       font-weight: 400;
     }
 
+    .flow-image-container {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      width: 100%;
+    }
+
+    .flow-visual-image {
+      height: auto;
+      border-radius: 12px;
+    }
+
     /* Code block */
     .code-card {
       background: var(--slate-900);
@@ -854,59 +866,9 @@ const description = 'Design AI agent flows visually, run anywhere. No servers re
 
       <div class="workflow-grid">
         <!-- Visual Flow -->
-        <div class="flow-card reveal-left">
-          <div class="flow-nodes" id="flow-visualization">
-            <!-- START Node -->
-            <div class="flow-node flow-node-card">
-              <div class="flow-icon flow-icon-start">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l14 9-14 9V3z" /></svg>
-              </div>
-              <div class="flow-content">
-                <div class="flow-title">Start</div>
-                <div class="flow-subtitle">START</div>
-              </div>
-            </div>
-            
-            <div class="flow-connector-dotted"></div>
-            
-            <!-- INPUT Node -->
-            <div class="flow-node flow-node-card">
-              <div class="flow-icon flow-icon-input">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
-              </div>
-              <div class="flow-content">
-                <div class="flow-title">Input</div>
-                <div class="flow-subtitle">get_query</div>
-              </div>
-            </div>
-            
-            <div class="flow-connector-dotted"></div>
-
-            <!-- LLM Node -->
-            <div class="flow-node flow-node-card">
-               <div class="flow-icon flow-icon-llm">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10H12V2z" /><path d="M12 2a10 10 0 0 1 10 10" opacity="0.5"/></svg>
-              </div>
-              <div class="flow-content">
-                <div class="flow-title">LLM</div>
-                <div class="flow-subtitle">search</div>
-              </div>
-            </div>
-
-            <div class="flow-connector-dotted"></div>
-
-            <!-- END Node -->
-            <div class="flow-node flow-node-card">
-              <div class="flow-icon flow-icon-end">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2" /></svg>
-              </div>
-              <div class="flow-content">
-                <div class="flow-title">End</div>
-                <div class="flow-subtitle">END</div>
-              </div>
-            </div>
+          <div class="flow-image-container reveal-left">
+             <img src="/astonish/images/flow-visual.png" alt="Astonish Agent Flow" class="flow-visual-image" width="40%"  />
           </div>
-        </div>
 
         <!-- YAML Code -->
         <div class="code-card reveal-right">

@@ -44,6 +44,20 @@ a:not([class]):hover {
   color: var(--sl-color-accent-high);
   text-decoration: underline;
 }
+
+.flow-image-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+}
+
+.flow-visual-image {
+  height: auto;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.1);
+  display: block;
+}
     /* Flow Node Cards */
     .flow-node-card {
       display: flex;

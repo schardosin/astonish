@@ -44,6 +44,83 @@ a:not([class]):hover {
   color: var(--sl-color-accent-high);
   text-decoration: underline;
 }
+    /* Flow Node Cards */
+    .flow-node-card {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      background: white;
+      border: 1px solid var(--slate-200);
+      border-radius: 12px;
+      padding: 1rem 1.5rem;
+      width: 280px;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+      transition: all 0.3s ease;
+      text-align: left;
+    }
+
+    .flow-node-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+    }
+
+    .flow-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    
+    .flow-icon svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    .flow-icon-start { background: #dcfce7; color: #16a34a; }
+    .flow-icon-input { background: #f3e8ff; color: #9333ea; }
+    .flow-icon-llm { background: #f3e8ff; color: #7c3aed; }
+    .flow-icon-end { background: #fee2e2; color: #dc2626; }
+
+    .flow-content {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .flow-title {
+      font-weight: 700;
+      color: var(--slate-900);
+      font-size: 1rem;
+    }
+
+    .flow-subtitle {
+      color: var(--slate-500);
+      font-size: 0.875rem;
+      font-family: var(--font-mono);
+    }
+
+    .flow-connector-dotted {
+      width: 2px;
+      height: 40px;
+      border-left: 2px dotted #c4b5fd;
+      position: relative;
+    }
+
+    .flow-connector-dotted::before,
+    .flow-connector-dotted::after {
+      content: '';
+      position: absolute;
+      left: -4px;
+      width: 6px;
+      height: 6px;
+      background: #c4b5fd;
+      border-radius: 50%;
+    }
+    
+    .flow-connector-dotted::before { top: -3px; }
+    .flow-connector-dotted::after { bottom: -3px; }
 
 /* Custom badge styling */
 .sl-badge {
@@ -112,23 +189,7 @@ a:not([class]):hover {
   border: 1px solid var(--sl-color-hairline);
 }
 
-.flow-node-llm {
-  background: linear-gradient(135deg, #5f4fb2 0%, #4b3f9c 100%);
-  color: white;
-  border: none;
-}
-
-.flow-node-start {
-  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
-  color: white;
-  border: none;
-}
-
-.flow-node-end {
-  background: linear-gradient(135deg, #e74c3c 0%, #b8322a 100%);
-  color: white;
-  border: none;
-}
+/* Removed obsolete color classes */
 
 /* Terminal demo styling */
 .terminal-demo {

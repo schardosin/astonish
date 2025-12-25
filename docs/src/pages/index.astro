@@ -857,55 +857,85 @@ const description = 'Design AI agent flows visually, run anywhere. No servers re
         <div class="flow-card reveal-left">
           <div class="flow-nodes" id="flow-visualization">
             <!-- START Node -->
-            <div class="flow-node flow-node-start">START</div>
+            <div class="flow-node flow-node-card">
+              <div class="flow-icon flow-icon-start">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l14 9-14 9V3z" /></svg>
+              </div>
+              <div class="flow-content">
+                <div class="flow-title">Start</div>
+                <div class="flow-subtitle">START</div>
+              </div>
+            </div>
             
-            <!-- Connector -->
-            <div class="flow-connector"></div>
+            <div class="flow-connector-dotted"></div>
             
+            <!-- INPUT Node -->
+            <div class="flow-node flow-node-card">
+              <div class="flow-icon flow-icon-input">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+              </div>
+              <div class="flow-content">
+                <div class="flow-title">Input</div>
+                <div class="flow-subtitle">get_query</div>
+              </div>
+            </div>
+            
+            <div class="flow-connector-dotted"></div>
+
             <!-- LLM Node -->
-            <div class="flow-node flow-node-llm">
-              🤖 analyze
-              <div class="flow-node-label">LLM Node</div>
-            </div>
-            
-            <!-- Connector -->
-            <div class="flow-connector"></div>
-
-            <!-- Tool Node -->
-            <div class="flow-node flow-node-tool">
-              🔧 execute_tool
-              <div class="flow-node-label">MCP Tool</div>
+            <div class="flow-node flow-node-card">
+               <div class="flow-icon flow-icon-llm">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10H12V2z" /><path d="M12 2a10 10 0 0 1 10 10" opacity="0.5"/></svg>
+              </div>
+              <div class="flow-content">
+                <div class="flow-title">LLM</div>
+                <div class="flow-subtitle">search</div>
+              </div>
             </div>
 
-            <!-- Connector -->
-            <div class="flow-connector"></div>
+            <div class="flow-connector-dotted"></div>
 
             <!-- END Node -->
-            <div class="flow-node flow-node-end">END</div>
+            <div class="flow-node flow-node-card">
+              <div class="flow-icon flow-icon-end">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2" /></svg>
+              </div>
+              <div class="flow-content">
+                <div class="flow-title">End</div>
+                <div class="flow-subtitle">END</div>
+              </div>
+            </div>
           </div>
         </div>
 
         <!-- YAML Code -->
         <div class="code-card reveal-right">
           <div class="code-header">agent.yaml</div>
-          <pre class="code-body"><span class="code-key">nodes:</span>
-  - <span class="code-prop">name:</span> analyze
+          <pre class="code-body"><span class="code-key">name:</span> simple_search
+<span class="code-key">description:</span> Simple internet search flow using Tavily
+<span class="code-key">nodes:</span>
+  - <span class="code-prop">name:</span> get_query
+    <span class="code-prop">type:</span> input
+    <span class="code-prop">prompt:</span> What would you like to search for?
+    <span class="code-prop">output_model:</span>
+      <span class="code-prop">query:</span> str
+  - <span class="code-prop">name:</span> search
     <span class="code-prop">type:</span> llm
-    <span class="code-prop">prompt:</span> <span class="code-string">"Analyze &#123;input&#125;"</span>
+    <span class="code-prop">system:</span> You are a helpful search assistant. Use the tavily-search tool to find information and provide a clear, concise summary.
+    <span class="code-prop">prompt:</span> <span class="code-string">'Search for: &#123;query&#125;'</span>
     <span class="code-prop">tools:</span> true
     <span class="code-prop">tools_selection:</span>
-      - shell_command
-
-  - <span class="code-prop">name:</span> execute_tool
-    <span class="code-prop">type:</span> tool
-    <span class="code-prop">tool_name:</span> shell_command
-
+      - tavily-search
+    <span class="code-prop">output_model:</span>
+      <span class="code-prop">result:</span> str
+    <span class="code-prop">user_message:</span>
+      - result
 <span class="code-key">flow:</span>
   - <span class="code-prop">from:</span> START
-    <span class="code-prop">to:</span> analyze
-  - <span class="code-prop">from:</span> analyze
-    <span class="code-prop">to:</span> execute_tool
-  - <span class="code-prop">from:</span> execute_tool
+    <span class="code-prop">to:</span> get_query
+  - <span class="code-prop">from:</span> get_query
+    <span class="code-prop">to:</span> search
+  - <span class="code-prop">from:</span> search
     <span class="code-prop">to:</span> END</pre>
         </div>
       </div>

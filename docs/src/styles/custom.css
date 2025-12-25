@@ -455,13 +455,14 @@ a:not([class]):hover {
 /* Slides Container - Using Grid for 'stack' layout */
 .story-slides {
   position: relative;
-  flex: 1;
+  flex: 0 0 auto; /* Only take space needed, don't expand */
+  min-height: 0;
   width: 100%;
   max-width: 1400px;
   margin: 0 auto;
   display: grid;
   grid-template-areas: "stack";
-  align-items: start; /* Changed from center to pull content up */
+  align-items: start;
 }
 
 /* Individual Slide */
@@ -503,7 +504,7 @@ a:not([class]):hover {
 
 /* Visual Area (Top) - Default full-width */
 .story-visual {
-  flex: 0 1 55vh; /* Take up to 55% of viewport height */
+  flex: 0 1 50vh; /* Take up to 55% of viewport height */
   width: 100%;
   max-width: 900px;
   position: relative;
@@ -685,7 +686,7 @@ a:not([class]):hover {
   color: #94a3b8;
 }
 
-/* Navigation Controls - In normal flow, pushed to bottom with margin-top: auto */
+/* Navigation Controls - Flows naturally after content */
 .story-nav {
   position: relative;
   z-index: 10;
@@ -694,8 +695,7 @@ a:not([class]):hover {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  padding: 0.5rem 1.5rem 1.5rem;
-  margin-top: auto; /* Push to bottom of available space */
+  padding: 0.5rem 1.5rem 1rem;
   flex-shrink: 0; /* Don't shrink */
 }
 

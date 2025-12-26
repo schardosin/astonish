@@ -344,6 +344,75 @@ import '../styles/custom.css';
       color: var(--purple-400);
     }
 
+    /* Demo Terminal for Step 7 */
+    .demo-terminal {
+      width: 100%;
+      text-align: left;
+      background: var(--slate-900);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+      font-size: 0.75rem;
+    }
+
+    .demo-terminal-header {
+      background: var(--slate-800);
+      padding: 0.5rem 0.75rem;
+      display: flex;
+      gap: 0.4rem;
+    }
+
+    .demo-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .demo-dot-red { background: var(--red-500); }
+    .demo-dot-yellow { background: var(--yellow-500); }
+    .demo-dot-green { background: var(--green-500); }
+
+    .demo-terminal-body {
+      padding: 1rem;
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--slate-300);
+      line-height: 1.6;
+      height: 450px;
+      overflow-y: hidden;
+    }
+
+    .demo-success { color: var(--green-400); }
+    .demo-agent-label { color: var(--yellow-400); font-weight: bold; }
+    .demo-agent-text { color: var(--slate-300); }
+    .demo-cmd { color: white; }
+
+    .demo-tool-box {
+      display: inline-block;
+      border: 1px solid var(--slate-600);
+      border-radius: 6px;
+      margin: 0.3rem 0;
+      padding: 0.5rem 0.75rem;
+      background: var(--slate-800);
+      min-width: 200px;
+      max-width: 300px;
+      font-size: 0.65rem;
+    }
+
+    .demo-tool-box-header {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      margin-bottom: 0.3rem;
+      padding-bottom: 0.3rem;
+      border-bottom: 1px solid var(--slate-600);
+    }
+
+    .demo-tool-box-name { color: #fb923c; font-weight: bold; }
+    .demo-tool-box-params { color: var(--slate-400); }
+    .demo-tool-box-params .param-key { color: #94a3b8; }
+    .demo-tool-box-params .param-value { color: #22d3ee; }
+
     /* Section styles */
     .section {
       padding: 6rem 1.5rem;
@@ -959,8 +1028,16 @@ import '../styles/custom.css';
       <div class="story-slide" data-step="7">
         <div class="story-slide-inner">
           <div class="story-visual">
-            <div class="story-visual-container code-visual">
-              <img src="/astonish/images/terminal_execution.gif" onerror="this.src='/astonish/images/flow-visual.png'" alt="Terminal execution of Astonish flow" />
+            <div class="story-visual-container code-visual" style="overflow: visible;">
+              <!-- Embedded Terminal Demo -->
+              <div class="demo-terminal">
+                <div class="demo-terminal-header">
+                  <span class="demo-dot demo-dot-red"></span>
+                  <span class="demo-dot demo-dot-yellow"></span>
+                  <span class="demo-dot demo-dot-green"></span>
+                </div>
+                <div class="demo-terminal-body" id="step7-terminal-demo"></div>
+              </div>
             </div>
           </div>
           <div class="story-text">
@@ -1249,6 +1326,95 @@ import '../styles/custom.css';
         terminalObserver.observe(terminalDemo);
       }
 
+      // ===== Step 7 Terminal Demo =====
+      const step7Events = [
+        { type: 'command', text: "./astonish flows run simple_web_search -p get_query=\"Apple News December 2025\"" },
+        { type: 'success', text: "✓ Using provided value for 'get_query': Apple News December 2025" },
+        { type: 'success', text: "✓ Processing search..." },
+        { type: 'tool_box', text: `<div style="display: inline-block; border: 1px solid #475569; border-radius: 6px; margin: 0.3rem 0; padding: 0.5rem 0.75rem; background: #1e293b; min-width: 200px; max-width: 300px; font-size: 0.65rem;">
+          <div style="display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.3rem; padding-bottom: 0.3rem; border-bottom: 1px solid #475569;">
+            <span>🛠</span>
+            <span style="color: #fb923c; font-weight: bold;">tavily-search</span>
+          </div>
+          <div style="color: #94a3b8;">
+            <div><span style="color: #64748b;">max_results:</span> <span style="color: #22d3ee;">5</span></div>
+            <div><span style="color: #64748b;">query:</span> <span style="color: #22d3ee;">Apple news December 2025</span></div>
+            <div><span style="color: #64748b;">search_depth:</span> <span style="color: #22d3ee;">basic</span></div>
+            <div><span style="color: #64748b;">topic:</span> <span style="color: #22d3ee;">news</span></div>
+          </div>
+        </div>` },
+        { type: 'success', text: "✓ Auto Approved" },
+        { type: 'agent', text: "" },
+        { type: 'agent_text', text: "- Apple entered December 2025 with strong iPhone 17 demand and expectations for new AI capabilities." },
+        { type: 'agent_text', text: "- Wall Street raised Apple's price target to $315, driven by AI roadmap optimism." },
+        { type: 'agent_text', text: "- Global regulation focused on the App Store intensified." },
+        { type: 'agent_text', text: "- Apple maintained 25% market share in China." },
+        { type: 'success', text: "✓ Processing END..." }
+      ];
+
+      async function step7TypeWriter(text, element, speed = 25) {
+        return new Promise(resolve => {
+          let i = 0;
+          const span = document.createElement('span');
+          span.className = 'demo-cmd';
+          element.appendChild(span);
+          
+          const cursor = document.createElement('span');
+          cursor.className = 'cursor';
+          element.appendChild(cursor);
+
+          function type() {
+            if (i < text.length) {
+              span.textContent += text.charAt(i);
+              i++;
+              setTimeout(type, speed);
+            } else {
+              cursor.remove();
+              resolve();
+            }
+          }
+          type();
+        });
+      }
+
+      async function runStep7Demo() {
+        const terminal = document.getElementById('step7-terminal-demo');
+        if (!terminal) return;
+        terminal.innerHTML = '';
+        
+        for (const event of step7Events) {
+          await new Promise(r => setTimeout(r, 400));
+
+          const div = document.createElement('div');
+          div.style.marginBottom = '0.2rem';
+          terminal.appendChild(div);
+
+          switch(event.type) {
+            case 'command':
+              div.innerHTML = '<span style="color: #4ade80; font-weight: bold;">$</span> ';
+              await step7TypeWriter(event.text, div, 20);
+              break;
+            case 'success':
+              div.style.color = '#4ade80';
+              div.textContent = event.text;
+              break;
+            case 'agent':
+              div.innerHTML = '<span style="color: #facc15; font-weight: bold;">Agent:</span>';
+              break;
+            case 'agent_text':
+              div.style.color = '#cbd5e1';
+              div.textContent = event.text;
+              break;
+            case 'tool_box':
+              div.innerHTML = event.text;
+              break;
+          }
+        }
+      }
+
+      // Step 7 demo will be triggered from showSlide function
+      let step7DemoRan = false;
+
       // ===== Story Section Navigation =====
       const storySlides = document.querySelectorAll('.story-slide');
       const storyPrev = document.getElementById('story-prev');
@@ -1281,6 +1447,12 @@ import '../styles/custom.css';
           // Update button states
           if (storyPrev) storyPrev.disabled = step === 1;
           if (storyNext) storyNext.disabled = step === totalSteps;
+
+          // Trigger step 7 demo when navigating to step 7
+          if (step === 7 && !step7DemoRan) {
+            step7DemoRan = true;
+            runStep7Demo();
+          }
         }
 
         // Navigation button handlers

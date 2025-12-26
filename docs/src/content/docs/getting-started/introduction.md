@@ -11,13 +11,17 @@ sidebar:
 
 ## What is Astonish?
 
-Astonish is an open-source tool that lets you create AI-powered automation workflows called **flows**. Each flow is a series of connected steps that can:
+Astonish is a **community-based, open-source AI agentic tool** that lets you create AI-powered automation workflows called **flows**. Each flow is a series of connected steps that can:
 
 - 🤖 Call AI models (GPT-4, Claude, Gemini, Ollama, and more)
 - 🔧 Use tools via the [MCP protocol](https://modelcontextprotocol.io/)
 - 📥 Collect user input
 - 🔀 Branch based on conditions
 - 📤 Output results
+
+### 🌐 Share and Run Agents
+
+Build an agent once, share it with the community. When you share an agent, you share everything needed to run it—including its MCP server dependencies. Others can tap your repository (similar to Homebrew taps) and execute your agents instantly, no additional setup required.
 
 ## Why Astonish?
 
@@ -60,19 +64,19 @@ flow:
 
 Use **Astonish Studio** to design flows visually, then run the exact same YAML from the command line.
 
-![Astonish Studio Interface](/src/assets/placeholder.png)
+![Astonish Studio Interface](/src/assets/introduction-canvas.webp)
 *Design your AI flows with the visual editor*
 
-## Two Ways to Use Astonish
+## Build Visually, Run Anywhere
 
-Astonish gives you flexibility in how you work:
+Astonish is designed for a seamless workflow: **design in the Studio, execute anywhere.**
 
-| Approach | Best For |
-|----------|----------|
-| **Astonish Studio** | Visual learners, rapid prototyping, exploring |
-| **CLI + YAML** | Power users, automation, CI/CD integration |
+| Phase | Tool | What You Do |
+|-------|------|-------------|
+| **Build** | Astonish Studio | Design flows visually, use AI assist to generate nodes, test and iterate quickly |
+| **Run** | CLI (Headless Mode) | Execute your flows anywhere—scripts, cron jobs, CI/CD pipelines, containers |
 
-Both approaches use the same YAML format—start visually and switch to CLI, or vice versa.
+This isn't an either/or choice. Use the Studio to leverage visual editing and AI assistance while building your flows, then run them headlessly via the command line wherever you need.
 
 ## What's Next?
 

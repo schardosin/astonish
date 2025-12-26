@@ -1,190 +1,325 @@
 ---
-title: YAML Configuration
-description: Complete reference for Astonish YAML flow configuration
+title: YAML Reference
+description: Complete YAML schema for Astonish flows
+sidebar:
+  order: 6
 ---
 
-# YAML Configuration
+# YAML Reference
 
-Every Astonish agent is defined in a YAML file. This page covers the complete configuration reference.
+Complete reference for Astonish flow YAML files.
 
-## File Structure
+## Basic Structure
 
 ```yaml
-name: my_agent                    # Agent name (required)
-description: What this agent does # Description (optional)
+name: flow-name                  # Required
+description: What this flow does # Optional
 
-nodes:                            # List of processing nodes
+nodes:                          # Required
   - name: node_name
-    type: llm
-    # ... node configuration
+    type: node_type
+    # ... node properties
 
-flow:                             # How nodes connect
+flow:                           # Required
   - from: START
-    to: node_name
-  - from: node_name
+    to: first_node
+  - from: first_node
     to: END
 
-mcp_dependencies:                 # Required MCP servers (auto-generated)
-  - server: tavily-mcp
-    tools: [search_web]
+layout:                         # Optional (Studio only)
+  positions:
+    node_name: [x, y]
+
+mcp_dependencies:               # Optional
+  - server_name
 ```
 
-## Node Types
+## Top-Level Properties
 
-### LLM Node
+| Property | Required | Type | Description |
+|----------|----------|------|-------------|
+| `name` | Yes | string | Unique flow identifier |
+| `description` | No | string | Human-readable description |
+| `nodes` | Yes | array | List of node definitions |
+| `flow` | Yes | array | Edge connections |
+| `layout` | No | object | Node positions (Studio) |
+| `mcp_dependencies` | No | array | Required MCP servers |
 
-Calls an AI language model:
+---
+
+## Node Schema
+
+All nodes share these properties:
 
 ```yaml
-- name: analyze
-  type: llm
-  system: "You are a helpful assistant."
-  prompt: "Analyze this data: {input}"
-  tools: true                     # Enable tool use
-  tools_selection:                # Specific tools to allow
-    - search_web
-    - read_file
-  output_model:                   # Structured output
-    analysis: str
-    sentiment: str
+- name: unique_name    # Required
+  type: node_type      # Required
+  # ... type-specific properties
 ```
 
 ### Input Node
 
-Request user input:
+```yaml
+- name: get_input
+  type: input
+  prompt: "What would you like?"
+  options:             # Optional
+    - Option 1
+    - Option 2
+  output_model:        # Required
+    variable_name: str
+```
+
+| Property | Required | Description |
+|----------|----------|-------------|
+| `prompt` | Yes | Text shown to user |
+| `options` | No | List of choices |
+| `output_model` | Yes | Variables to store response |
+
+### LLM Node
 
 ```yaml
-- name: get_confirmation
-  type: input
-  prompt: "Please confirm (yes/no):"
-  output_model:
-    confirmation: str
+- name: process
+  type: llm
+  prompt: "Process {input}"
+  system: "You are helpful."    # Optional
+  tools: true                   # Optional
+  tools_selection:              # Optional
+    - tool_name
+  output_model:                 # Optional
+    summary: str
+    score: float
+  user_message:                 # Optional
+    - "Processing complete"
 ```
+
+| Property | Required | Description |
+|----------|----------|-------------|
+| `prompt` | Yes | User message to AI |
+| `system` | No | System prompt |
+| `tools` | No | Enable tool calling |
+| `tools_selection` | No | Whitelist tools |
+| `output_model` | No | Parse structured output |
+| `user_message` | No | Display after execution |
 
 ### Tool Node
 
-Execute a specific tool:
-
 ```yaml
-- name: execute_search
+- name: search
   type: tool
-  tool_name: search_web
-  output_model:
-    results: str
+  tools_selection:
+    - web_search
 ```
 
-## Output Models
+| Property | Required | Description |
+|----------|----------|-------------|
+| `tools_selection` | Yes | Tools to call |
 
-Output models define the structure of data a node produces. They're written to the state blackboard.
+### Output Node
+
+```yaml
+- name: display
+  type: output
+  user_message:
+    - "Result:"
+    - result_variable
+```
+
+| Property | Required | Description |
+|----------|----------|-------------|
+| `user_message` | Yes | Array of strings/variables |
+
+### Update State Node
+
+```yaml
+- name: set_defaults
+  type: update_state
+  updates:
+    counter: 0
+    status: "ready"
+```
+
+| Property | Required | Description |
+|----------|----------|-------------|
+| `updates` | Yes | Key-value pairs to set |
+
+---
+
+## Flow Schema
+
+### Sequential Edge
+
+```yaml
+flow:
+  - from: node_a
+    to: node_b
+```
+
+### Conditional Edges
+
+```yaml
+flow:
+  - from: decision
+    edges:
+      - to: path_a
+        condition: "lambda x: x['choice'] == 'a'"
+      - to: path_b
+        condition: "lambda x: x['choice'] == 'b'"
+```
+
+### Edge Properties
+
+| Property | Required | Description |
+|----------|----------|-------------|
+| `from` | Yes | Source node name |
+| `to` | Yes* | Target node (simple edge) |
+| `edges` | Yes* | Array of conditional edges |
+| `condition` | No | Python lambda expression |
+
+*Use `to` for simple edges, `edges` for conditional.
+
+---
+
+## Output Model Types
 
 ```yaml
 output_model:
-  title: str           # String
-  count: int           # Integer
-  is_valid: bool       # Boolean
-  items: list          # List
-  metadata: dict       # Dictionary
+  text: str       # String
+  count: int      # Integer
+  score: float    # Decimal
+  valid: bool     # Boolean
+  items: list     # Array
+  data: dict      # Object
 ```
 
-## Flow Edges
+---
 
-Edges define how nodes connect.
+## Variable Syntax
 
-### Simple Edge
+Reference variables with curly braces:
 
 ```yaml
-flow:
-  - from: START
-    to: first_node
-  - from: first_node
-    to: second_node
-  - from: second_node
-    to: END
+prompt: "Hello {name}, analyze {topic}"
 ```
 
-### Conditional Edge
+In user_message arrays:
 
 ```yaml
-flow:
-  - from: decision_node
-    to: path_a
-    condition: choice == "a"
-  - from: decision_node
-    to: path_b
-    condition: choice == "b"
+user_message:
+  - "Static text"
+  - variable_name    # Variable reference (no braces)
+  - "More text"
 ```
 
-## Variable Substitution
+---
 
-Reference state variables using `{variable_name}`:
+## Condition Syntax
 
-```yaml
-prompt: "Summarize this article: {article_content}"
+Python lambda expressions:
+
+```python
+# String comparison
+"lambda x: x['status'] == 'approved'"
+
+# Numeric comparison
+"lambda x: x['score'] > 0.5"
+
+# Boolean check
+"lambda x: x['is_valid']"
+
+# Not check
+"lambda x: not x['error']"
+
+# Contains
+"lambda x: 'error' in x['response']"
 ```
 
-Variables are read from the state blackboard, populated by previous nodes.
+---
 
-## MCP Dependencies
+## Layout Schema
 
-The `mcp_dependencies` section is automatically generated when you save a flow. It lists which MCP servers are required:
+For Studio positioning:
 
 ```yaml
-mcp_dependencies:
-  - server: github-mcp
-    tools:
-      - list_pull_requests
-      - get_pr_diff
-    source: store
-    store_id: official/github-mcp
+layout:
+  positions:
+    START: [0, 0]
+    node_a: [200, 100]
+    node_b: [400, 100]
+    END: [600, 0]
 ```
 
-## Full Example
+---
+
+## Complete Example
 
 ```yaml
-name: pr_description_generator
-description: Generate PR descriptions from code changes
+name: code_reviewer
+description: Reviews code and provides feedback
 
 nodes:
-  - name: get_prs
-    type: llm
-    prompt: List open PRs using the gh CLI
-    tools: true
-    tools_selection: [shell_command]
-    output_model:
-      prs: str
-
-  - name: select_pr
+  - name: get_code
     type: input
-    prompt: "Select a PR number:\n{prs}"
+    prompt: "Paste your code:"
     output_model:
-      pr_number: int
+      code: str
 
-  - name: get_diff
+  - name: analyze
     type: llm
-    prompt: Get the diff for PR #{pr_number}
-    tools: true
-    tools_selection: [shell_command]
-    output_model:
-      diff: str
-
-  - name: generate_description
-    type: llm
-    system: You are a technical writer.
+    system: "You are an expert code reviewer."
     prompt: |
-      Generate a clear PR description for this diff:
-      {diff}
+      Review this code for:
+      - Bugs
+      - Performance issues
+      - Best practices
+      
+      Code:
+      {code}
     output_model:
-      description: str
+      review: str
+      has_issues: bool
+
+  - name: show_review
+    type: output
+    user_message:
+      - "## Code Review"
+      - review
 
 flow:
   - from: START
-    to: get_prs
-  - from: get_prs
-    to: select_pr
-  - from: select_pr
-    to: get_diff
-  - from: get_diff
-    to: generate_description
-  - from: generate_description
+    to: get_code
+  - from: get_code
+    to: analyze
+  - from: analyze
+    to: show_review
+  - from: show_review
     to: END
+
+layout:
+  positions:
+    START: [0, 0]
+    get_code: [200, 0]
+    analyze: [400, 0]
+    show_review: [600, 0]
+    END: [800, 0]
 ```
+
+---
+
+## Validation
+
+Validate your YAML with:
+
+```bash
+# Check syntax
+python -c "import yaml; yaml.safe_load(open('flow.yaml'))"
+
+# Or use Studio's YAML view
+astonish studio
+```
+
+## Next Steps
+
+- **[Flows](/concepts/flows/)** — Flow concepts
+- **[Nodes](/concepts/nodes/)** — Node types
+- **[State](/concepts/state/)** — Data flow

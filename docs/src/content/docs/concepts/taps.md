@@ -1,151 +1,185 @@
 ---
-title: Flow Store & Taps
-description: Share and discover agent flows with Homebrew-style repositories
+title: Taps
+description: Understanding tap repositories in Astonish
+sidebar:
+  order: 5
 ---
 
-# Flow Store & Taps
+# Taps
 
-Astonish includes a **Flow Store** and **Tap system**—a Homebrew-inspired approach for sharing AI agent flows and MCP server configurations.
+**Taps** are extension repositories that provide flows and MCP server configurations. They're like package registries for Astonish content.
 
-## What are Taps?
+## What is a Tap?
 
-Taps are GitHub repositories that provide:
-- **Flows**: Ready-to-use agent configurations
-- **MCP Servers**: Tool configurations and dependencies
+A tap is a GitHub repository containing:
+- **Flows** — Ready-to-use AI workflows
+- **MCP Configs** — Pre-configured tool integrations
+- **Manifest** — Index of available content
 
-Think of them like Homebrew taps, but for AI agents.
+```
+my-tap/
+├── manifest.yaml
+├── flows/
+│   ├── summarizer.yaml
+│   └── analyzer.yaml
+└── mcp/
+    └── custom-tool.json
+```
 
-## Using the Flow Store
+## How Taps Work
 
-### Browse Available Flows
+```
+┌──────────────────┐     ┌──────────────────┐
+│  GitHub Repo     │ ──► │  Local Storage   │
+│  (your-tap)      │     │  ~/.astonish/    │
+└──────────────────┘     └──────────────────┘
+         │                        │
+    manifest.yaml           store/<tap>/
+    flows/*.yaml           installed flows
+```
+
+1. You add a tap with `astonish tap add`
+2. Astonish fetches the manifest
+3. You browse and install flows
+4. Flows are copied locally
+
+## The Official Tap
+
+Maintained by the Astonish team:
 
 ```bash
-# List flows from all repositories
+astonish tap add schardosin
+```
+
+Repository: `schardosin/astonish-flows`
+
+Contains curated example flows and MCP configs.
+
+## Tap Commands
+
+| Command | Description |
+|---------|-------------|
+| `astonish tap add <repo>` | Add a tap |
+| `astonish tap list` | List configured taps |
+| `astonish tap remove <name>` | Remove a tap |
+| `astonish tap update` | Refresh all manifests |
+
+## Adding Taps
+
+### Basic syntax
+
+```bash
+astonish tap add owner/repository
+```
+
+### Shorthand
+
+```bash
+astonish tap add owner
+# Expands to: owner/astonish-flows
+```
+
+### With Alias
+
+```bash
+astonish tap add mycompany/internal-flows --as internal
+```
+
+### Enterprise GitHub
+
+```bash
+astonish tap add github.enterprise.com/team/flows --as team
+```
+
+## Browsing Content
+
+### List All Flows
+
+```bash
 astonish flows store list
 ```
 
-In Astonish Studio, browse the **Flow Store** in the sidebar.
-
-### Install a Flow
+### Search
 
 ```bash
-# Install a flow
-astonish flows store install github_pr_description_generator
-
-# Run the installed flow
-astonish agents run github_pr_description_generator
+astonish flows store search "github"
 ```
 
-## Managing Taps
-
-### Add a Repository
+### Install
 
 ```bash
-# Add a community tap
-astonish tap add schardosin/astonish-flows
-
-# Add with a custom alias
-astonish tap add mycompany/ai-tools --as company
-
-# Add from GitHub Enterprise
-astonish tap add github.mycompany.com/team/extensions
+astonish flows store install owner/flow-name
 ```
 
-### List Taps
+## Creating Taps
 
-```bash
-astonish tap list
+Share your flows by creating a tap:
+
+### 1. Create Repository
+
+Create a GitHub repo (e.g., `your-username/astonish-flows`)
+
+### 2. Add Content
+
+```
+your-tap/
+├── manifest.yaml
+├── flows/
+│   └── my-flow.yaml
+└── mcp/
+    └── my-tool.json
 ```
 
-### Remove a Tap
-
-```bash
-astonish tap remove company
-```
-
-### Update All Taps
-
-```bash
-astonish tap update
-```
-
-## Creating Your Own Tap
-
-Share your flows and MCP servers with the community!
-
-### 1. Create a Repository
-
-Create a GitHub repository with a `manifest.yaml`:
+### 3. Create Manifest
 
 ```yaml
-name: My Awesome Extensions
+name: your-flows
+description: My collection of flows
 author: your-username
-description: A collection of flows and MCP servers
 
 flows:
-  code_reviewer:
-    description: Reviews code and suggests improvements
-    tags: [development, code-quality]
-  
-  daily_standup:
-    description: Generates daily standup summaries
-    tags: [productivity, team]
+  - name: my-flow
+    file: flows/my-flow.yaml
+    description: Does something useful
 
-mcps:
-  my-database-server:
-    description: Custom database integration
-    command: npx
-    args: ["-y", "my-database-mcp@latest"]
-    env:
-      DB_HOST: ""
-      DB_PASSWORD: ""
-    tags: [database, integration]
+mcp_servers:
+  - name: my-tool
+    file: mcp/my-tool.json
+    description: Custom tool integration
 ```
 
-### 2. Add Flow Files
-
-Add your flow YAML files to the repository:
-
-```
-your-repo/
-├── manifest.yaml
-├── code_reviewer.yaml
-├── daily_standup.yaml
-└── README.md
-```
-
-### 3. Share It
-
-Others can now tap your repository:
+### 4. Share
 
 ```bash
-astonish tap add your-username/your-repo
-astonish flows store install your-username/code_reviewer
+astonish tap add your-username
 ```
 
-## Enterprise GitHub
+## Tap Storage
 
-For private repositories on GitHub Enterprise:
+| File/Directory | Purpose |
+|----------------|---------|
+| `~/.astonish/store.json` | Configured tap list |
+| `~/.astonish/store/<tap>/` | Installed content |
 
+## Private Taps
+
+For team use:
+
+1. Use a private GitHub repository
+2. Ensure team members have access
+3. Set token:
 ```bash
-# Set your enterprise token
-export GITHUB_ENTERPRISE_TOKEN=ghp_xxxxx
-
-# Add the tap
-astonish tap add github.mycompany.com/team/extensions
+export GITHUB_TOKEN="ghp_xxx"
 ```
 
-### Environment Variables
+## Best Practices
 
-| Variable | Purpose |
-|----------|---------|
-| `GITHUB_TOKEN` | Public GitHub authentication |
-| `GITHUB_ENTERPRISE_TOKEN` | Enterprise GitHub authentication |
+1. **Version your manifests** — Track changes
+2. **Document flows** — Clear descriptions
+3. **Test before sharing** — Ensure flows work
+4. **Use semantic names** — `github_pr_reviewer` not `flow1`
 
-## Studio Integration
+## Next Steps
 
-Taps are also manageable in **Astonish Studio**:
-
-- **Settings → Repositories**: Add, remove, and manage taps
-- **Flow Store**: Browse and install flows from all taps
-- **MCP Servers**: Install MCPs from official store + taps
+- **[Manage Taps](/using-the-app/manage-taps/)** — Detailed tap management
+- **[Share Your Flows](/using-the-app/share-flows/)** — Create your own tap

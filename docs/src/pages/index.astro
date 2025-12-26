@@ -924,7 +924,7 @@ import '../styles/custom.css';
               YAML Design
             </div>
             <h3 class="story-title">Design Your Flow</h3>
-            <p class="story-description">Create AI agent workflows visually or with YAML. Git-friendly, version-controlled, and portable across any environment.</p>
+            <p class="story-description">Design AI agent workflows visually. Every flow becomes a portable YAML file, git-friendly, version-controlled, and ready to run anywhere.</p>
           </div>
         </div>
       </div>
@@ -1328,7 +1328,7 @@ import '../styles/custom.css';
 
       // ===== Step 7 Terminal Demo =====
       const step7Events = [
-        { type: 'command', text: "./astonish flows run simple_web_search -p get_query=\"Apple News December 2025\"" },
+        { type: 'command', text: "astonish flows run simple_web_search -p get_query=\"Apple News December 2025\"" },
         { type: 'success', text: "✓ Using provided value for 'get_query': Apple News December 2025" },
         { type: 'success', text: "✓ Processing search..." },
         { type: 'tool_box', text: `<div style="display: inline-block; border: 1px solid #475569; border-radius: 6px; margin: 0.3rem 0; padding: 0.5rem 0.75rem; background: #1e293b; min-width: 200px; max-width: 300px; font-size: 0.65rem;">
@@ -1352,11 +1352,11 @@ import '../styles/custom.css';
         { type: 'success', text: "✓ Processing END..." }
       ];
 
-      async function step7TypeWriter(text, element, speed = 25) {
+      async function step7TypeWriter(text, element, speed = 25, signal = null) {
         return new Promise(resolve => {
           let i = 0;
           const span = document.createElement('span');
-          span.className = 'demo-cmd';
+          span.style.color = 'white';
           element.appendChild(span);
           
           const cursor = document.createElement('span');
@@ -1364,6 +1364,11 @@ import '../styles/custom.css';
           element.appendChild(cursor);
 
           function type() {
+            if (signal && signal.aborted) {
+              cursor.remove();
+              resolve();
+              return;
+            }
             if (i < text.length) {
               span.textContent += text.charAt(i);
               i++;
@@ -1377,13 +1382,24 @@ import '../styles/custom.css';
         });
       }
 
+      let step7AbortController = null;
+
       async function runStep7Demo() {
+        // Cancel any previous running animation
+        if (step7AbortController) {
+          step7AbortController.abort();
+        }
+        step7AbortController = new AbortController();
+        const signal = step7AbortController.signal;
+
         const terminal = document.getElementById('step7-terminal-demo');
         if (!terminal) return;
         terminal.innerHTML = '';
         
         for (const event of step7Events) {
+          if (signal.aborted) return;
           await new Promise(r => setTimeout(r, 400));
+          if (signal.aborted) return;
 
           const div = document.createElement('div');
           div.style.marginBottom = '0.2rem';
@@ -1392,7 +1408,7 @@ import '../styles/custom.css';
           switch(event.type) {
             case 'command':
               div.innerHTML = '<span style="color: #4ade80; font-weight: bold;">$</span> ';
-              await step7TypeWriter(event.text, div, 20);
+              await step7TypeWriter(event.text, div, 20, signal);
               break;
             case 'success':
               div.style.color = '#4ade80';
@@ -1411,9 +1427,6 @@ import '../styles/custom.css';
           }
         }
       }
-
-      // Step 7 demo will be triggered from showSlide function
-      let step7DemoRan = false;
 
       // ===== Story Section Navigation =====
       const storySlides = document.querySelectorAll('.story-slide');
@@ -1449,8 +1462,7 @@ import '../styles/custom.css';
           if (storyNext) storyNext.disabled = step === totalSteps;
 
           // Trigger step 7 demo when navigating to step 7
-          if (step === 7 && !step7DemoRan) {
-            step7DemoRan = true;
+          if (step === 7) {
             runStep7Demo();
           }
         }

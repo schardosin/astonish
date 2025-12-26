@@ -35,6 +35,8 @@ func Execute() error {
 		return handleConfigCommand(os.Args[2:])
 	case "tools":
 		return handleToolsCommand(os.Args[2:])
+	case "demo":
+		return handleDemoCommand(os.Args[2:])
 	default:
 		printUsage()
 		return fmt.Errorf("unknown command: %s", command)

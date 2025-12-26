@@ -47,3 +47,4 @@ mcp_servers/
 
 # Binary
 astonish
+!/astonish/

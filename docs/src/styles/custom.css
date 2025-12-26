@@ -620,40 +620,63 @@ a:not([class]):hover {
   color: #e2e8f0;
 }
 
+
 .story-step-badge {
   display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  background: var(--purple-100);
+  align-items: stretch;
+  gap: 0;
+  background: white;
   border: 1px solid var(--purple-200);
-  padding: 0.5rem 1rem;
+  padding: 0;
   border-radius: 100px;
-  font-size: 0.875rem;
-  color: var(--purple-600);
+  font-size: 0.8rem;
   margin-bottom: 1rem;
-  font-weight: 600;
+  overflow: hidden;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+
+:root[data-theme='dark'] .story-step-badge {
+  background: transparent;
+  border-color: rgba(139, 92, 246, 0.3);
+  box-shadow: none;
+}
+
+.step-count {
+  background: var(--purple-100);
+  color: var(--purple-700);
+  padding: 0.4rem 1rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  border-right: 1px solid var(--purple-200);
+  font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
 
-:root[data-theme='dark'] .story-step-badge {
+:root[data-theme='dark'] .step-count {
   background: rgba(139, 92, 246, 0.2);
-  border-color: rgba(139, 92, 246, 0.3);
   color: #c4b5fd;
+  border-color: rgba(139, 92, 246, 0.3);
 }
 
-.story-step-badge .step-number {
+.step-label {
+  padding: 0.4rem 1rem;
+  color: var(--purple-600);
+  background: white;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
   display: flex;
   align-items: center;
-  justify-content: center;
-  min-width: 24px;
-  height: 24px;
-  background: linear-gradient(135deg, var(--purple-500), var(--purple-700));
-  border-radius: 50%;
-  font-weight: 700;
-  font-size: 0.75rem;
-  color: white;
 }
+
+:root[data-theme='dark'] .step-label {
+  background: rgba(30, 41, 59, 0.4);
+  color: #e2e8f0;
+}
+
+
 
 .story-title {
   font-size: clamp(1.75rem, 3vw, 2.5rem);
@@ -686,79 +709,73 @@ a:not([class]):hover {
   color: #94a3b8;
 }
 
-/* Navigation Controls - Flows naturally after content */
-.story-nav {
-  position: relative;
-  z-index: 10;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  padding: 0.5rem 1.5rem 1rem;
-  flex-shrink: 0; /* Don't shrink */
+/* Overlay Navigation Controls */
+.story-nav-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none; /* Allow clicks through except on buttons */
+  z-index: 20;
 }
 
-.story-nav-controls {
-  display: flex;
-  align-items: center;
-  gap: 2rem;
-}
-
-.story-nav-btn {
+.story-nav-overlay .story-nav-btn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 56px;
-  height: 56px;
-  background: white;
+  width: 48px;
+  height: 48px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(8px);
   border: 1px solid var(--slate-200);
   border-radius: 50%;
   cursor: pointer;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   color: var(--slate-600);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  pointer-events: auto; /* Re-enable clicks on buttons */
 }
 
-:root[data-theme='dark'] .story-nav-btn {
-  background: #1e293b;
-  border-color: #334155;
+.story-nav-overlay .story-nav-prev {
+  left: 1rem;
+}
+
+.story-nav-overlay .story-nav-next {
+  right: 1rem;
+}
+
+:root[data-theme='dark'] .story-nav-overlay .story-nav-btn {
+  background: rgba(30, 41, 59, 0.9);
+  border-color: #475569;
   color: #cbd5e1;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
-.story-nav-btn:hover:not(:disabled) {
+.story-nav-overlay .story-nav-btn:hover:not(:disabled) {
   background: var(--purple-600);
   border-color: var(--purple-600);
   color: white;
-  transform: scale(1.1);
-  box-shadow: 0 8px 20px rgba(124, 58, 237, 0.3);
+  transform: translateY(-50%) scale(1.1);
+  box-shadow: 0 8px 20px rgba(124, 58, 237, 0.4);
 }
 
-.story-nav-btn:disabled {
-  opacity: 0.4;
+.story-nav-overlay .story-nav-btn:disabled {
+  opacity: 0.3;
   cursor: not-allowed;
-  transform: none;
+  transform: translateY(-50%);
   box-shadow: none;
 }
 
-.story-nav-btn svg {
-  width: 24px;
-  height: 24px;
+.story-nav-overlay .story-nav-btn svg {
+  width: 20px;
+  height: 20px;
 }
 
-.story-step-indicator {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--slate-500);
-  min-width: 80px;
-  text-align: center;
-  letter-spacing: 0.05em;
-}
 
-:root[data-theme='dark'] .story-step-indicator {
-  color: #94a3b8;
-}
 
 
 /* Responsive Handling */

@@ -920,8 +920,8 @@ import '../styles/custom.css';
           <!-- Text on bottom -->
           <div class="story-text">
             <div class="story-step-badge">
-              <span class="step-number">1</span>
-              YAML Design
+              <span class="step-count">Step 1 of 6</span>
+              <span class="step-label">YAML Design</span>
             </div>
             <h3 class="story-title">Design Your Flow</h3>
             <p class="story-description">Design AI agent workflows visually. Every flow becomes a portable YAML file, git-friendly, version-controlled, and ready to run anywhere.</p>
@@ -939,8 +939,8 @@ import '../styles/custom.css';
           </div>
           <div class="story-text">
             <div class="story-step-badge">
-              <span class="step-number">2</span>
-              AI Powered
+              <span class="step-count">Step 2 of 6</span>
+              <span class="step-label">AI Powered</span>
             </div>
             <h3 class="story-title">AI Creates For You</h3>
             <p class="story-description">Describe what you want in plain English. The AI Assistant understands your intent and builds the complete flow in seconds—no manual configuration needed.</p>
@@ -948,37 +948,20 @@ import '../styles/custom.css';
         </div>
       </div>
 
-      <!-- Step 3: Connect to Anything -->
+
+
+      <!-- Step 3: MCP Store -->
       <div class="story-slide" data-step="3">
         <div class="story-slide-inner">
           <div class="story-visual">
             <div class="story-visual-container">
-              <img src="/astonish/images/mcp-integrations.png" onerror="this.src='/astonish/images/flow-visual.png'" alt="Integration diagram showing MCP connections" />
+               <img src="/astonish/images/mcp-store.gif" onerror="this.src='/astonish/images/flow-visual.png'" alt="MCP Store interface" />
             </div>
           </div>
           <div class="story-text">
             <div class="story-step-badge">
-              <span class="step-number">3</span>
-              Integrations
-            </div>
-            <h3 class="story-title">Connect to Anything</h3>
-            <p class="story-description">Browse the web, query databases, read files, run code—all through MCP Servers. Your flow stays clean and focused while capabilities plug in seamlessly.</p>
-          </div>
-        </div>
-      </div>
-
-      <!-- Step 4: MCP Store -->
-      <div class="story-slide" data-step="4">
-        <div class="story-slide-inner">
-          <div class="story-visual">
-            <div class="story-visual-container">
-               <img src="/astonish/images/mcp-store.png" onerror="this.src='/astonish/images/flow-visual.png'" alt="MCP Store interface" />
-            </div>
-          </div>
-          <div class="story-text">
-            <div class="story-step-badge">
-              <span class="step-number">4</span>
-              Store
+              <span class="step-count">Step 3 of 6</span>
+              <span class="step-label">Store</span>
             </div>
             <h3 class="story-title">MCP Store</h3>
             <p class="story-description">Hundreds of ready-to-use MCP servers at your fingertips. Browse by category, search by name, and install with a single click—no configuration required.</p>
@@ -986,18 +969,18 @@ import '../styles/custom.css';
         </div>
       </div>
 
-      <!-- Step 5: Smart Suggestions -->
-      <div class="story-slide" data-step="5">
+      <!-- Step 4: Smart Suggestions -->
+      <div class="story-slide" data-step="4">
         <div class="story-slide-inner">
           <div class="story-visual">
             <div class="story-visual-container">
-              <img src="/astonish/images/ai-suggestions.png" onerror="this.src='/astonish/images/flow-visual.png'" alt="AI suggesting MCP servers to install" />
+              <img src="/astonish/images/ai-suggestions.gif" onerror="this.src='/astonish/images/flow-visual.png'" alt="AI suggesting MCP servers to install" />
             </div>
           </div>
           <div class="story-text">
             <div class="story-step-badge">
-              <span class="step-number">5</span>
-              Suggestions
+              <span class="step-count">Step 4 of 6</span>
+              <span class="step-label">Suggestions</span>
             </div>
             <h3 class="story-title">Smart Suggestions</h3>
             <p class="story-description">AI Assistant identifies which MCP servers your flow needs and installs them automatically. Not in the store? It finds alternatives online and configures them for you.</p>
@@ -1005,8 +988,8 @@ import '../styles/custom.css';
         </div>
       </div>
 
-      <!-- Step 6: Share & Discover -->
-      <div class="story-slide" data-step="6">
+      <!-- Step 5: Share & Discover -->
+      <div class="story-slide" data-step="5">
         <div class="story-slide-inner">
           <div class="story-visual">
             <div class="story-visual-container">
@@ -1015,8 +998,8 @@ import '../styles/custom.css';
           </div>
           <div class="story-text">
             <div class="story-step-badge">
-              <span class="step-number">6</span>
-              Community
+              <span class="step-count">Step 5 of 6</span>
+              <span class="step-label">Community</span>
             </div>
             <h3 class="story-title">Share & Discover</h3>
             <p class="story-description">Share your flows via Taps—like Homebrew for AI agents. Every flow includes all MCP dependencies for one-command install. Join the community and discover powerful flows others have built.</p>
@@ -1024,8 +1007,8 @@ import '../styles/custom.css';
         </div>
       </div>
 
-      <!-- Step 7: Run Anywhere -->
-      <div class="story-slide" data-step="7">
+      <!-- Step 6: Run Anywhere -->
+      <div class="story-slide" data-step="6">
         <div class="story-slide-inner">
           <div class="story-visual">
             <div class="story-visual-container code-visual" style="overflow: visible;">
@@ -1036,14 +1019,15 @@ import '../styles/custom.css';
                   <span class="demo-dot demo-dot-yellow"></span>
                   <span class="demo-dot demo-dot-green"></span>
                 </div>
-                <div class="demo-terminal-body" id="step7-terminal-demo"></div>
+                <!-- ID updated to match validation logic if any, though mostly visual -->
+                <div class="demo-terminal-body" id="step6-terminal-demo"></div>
               </div>
             </div>
           </div>
           <div class="story-text">
             <div class="story-step-badge">
-              <span class="step-number">7</span>
-              Execute
+              <span class="step-count">Step 6 of 6</span>
+              <span class="step-label">Execute</span>
             </div>
             <h3 class="story-title">Run Anywhere</h3>
             <p class="story-description">Once ready, run your flows in the terminal, CI/CD, or anywhere with a single binary. No infrastructure management, just pure execution.</p>
@@ -1053,28 +1037,19 @@ import '../styles/custom.css';
 
     </div>
 
-    <!-- Navigation Controls -->
-    <div class="story-nav">
+    <!-- Overlay Navigation Controls -->
+    <div class="story-nav-overlay">
+      <button class="story-nav-btn story-nav-prev" id="story-prev" aria-label="Previous step" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="15 18 9 12 15 6"></polyline>
+        </svg>
+      </button>
       
-      <div class="story-nav-controls">
-        <button class="story-nav-btn" id="story-prev" aria-label="Previous step" disabled>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="15 18 9 12 15 6"></polyline>
-          </svg>
-        </button>
-        
-        <div class="story-step-indicator">
-          Step <span id="current-step">1</span> of 7
-        </div>
-
-        <button class="story-nav-btn" id="story-next" aria-label="Next step">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="9 18 15 12 9 6"></polyline>
-          </svg>
-        </button>
-      </div>
-
-
+      <button class="story-nav-btn story-nav-next" id="story-next" aria-label="Next step">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="9 18 15 12 9 6"></polyline>
+        </svg>
+      </button>
     </div>
   </section>
 
@@ -1326,8 +1301,8 @@ import '../styles/custom.css';
         terminalObserver.observe(terminalDemo);
       }
 
-      // ===== Step 7 Terminal Demo =====
-      const step7Events = [
+      // ===== Step 6 Terminal Demo =====
+      const step6Events = [
         { type: 'command', text: "astonish flows run simple_web_search -p get_query=\"Apple News December 2025\"" },
         { type: 'success', text: "✓ Using provided value for 'get_query': Apple News December 2025" },
         { type: 'success', text: "✓ Processing search..." },
@@ -1382,21 +1357,21 @@ import '../styles/custom.css';
         });
       }
 
-      let step7AbortController = null;
+      let step6AbortController = null;
 
-      async function runStep7Demo() {
+      async function runStep6Demo() {
         // Cancel any previous running animation
-        if (step7AbortController) {
-          step7AbortController.abort();
+        if (step6AbortController) {
+          step6AbortController.abort();
         }
-        step7AbortController = new AbortController();
-        const signal = step7AbortController.signal;
+        step6AbortController = new AbortController();
+        const signal = step6AbortController.signal;
 
-        const terminal = document.getElementById('step7-terminal-demo');
+        const terminal = document.getElementById('step6-terminal-demo');
         if (!terminal) return;
         terminal.innerHTML = '';
         
-        for (const event of step7Events) {
+        for (const event of step6Events) {
           if (signal.aborted) return;
           await new Promise(r => setTimeout(r, 400));
           if (signal.aborted) return;
@@ -1468,9 +1443,9 @@ import '../styles/custom.css';
           if (storyPrev) storyPrev.disabled = step === 1;
           if (storyNext) storyNext.disabled = step === totalSteps;
 
-          // Trigger step 7 demo when navigating to step 7
-          if (step === 7) {
-            runStep7Demo();
+          // Trigger step 6 demo when navigating to step 6
+          if (step === 6) {
+            runStep6Demo();
           }
         }
 

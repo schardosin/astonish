@@ -1448,6 +1448,13 @@ import '../styles/custom.css';
           storySlides.forEach((slide, index) => {
             if (index + 1 === step) {
               slide.classList.add('active');
+              // Restart any GIF animations in the active slide
+              const gifs = slide.querySelectorAll('img[src$=".gif"]');
+              gifs.forEach(gif => {
+                const src = gif.src;
+                gif.src = '';
+                gif.src = src;
+              });
             } else {
               slide.classList.remove('active');
             }

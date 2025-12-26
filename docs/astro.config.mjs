@@ -2,6 +2,7 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import tailwindcss from '@tailwindcss/vite';
+import six from '@six-tech/starlight-theme-six';
 
 // https://astro.build/config
 export default defineConfig({
@@ -10,6 +11,7 @@ export default defineConfig({
   
   integrations: [
     starlight({
+      plugins: [six({})],
       title: 'Astonish',
       description: 'Build Production AI Agents in Minutes, Not Months',
       logo: {
@@ -64,7 +66,7 @@ export default defineConfig({
           ],
         },
         {
-          label: 'Tutorials',
+          label: 'Using the App',
           collapsed: true,
           items: [
             { label: 'Configure Providers', slug: 'using-the-app/configure-providers' },

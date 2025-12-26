@@ -18,17 +18,10 @@ brew tap schardosin/astonish
 brew install astonish
 ```
 
-### Linux / macOS (Direct Download)
+### Linux / macOS (Install Script)
 
 ```bash
-# Download the latest release for your platform
-curl -fsSL https://github.com/schardosin/astonish/releases/latest/download/astonish-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m) -o astonish
-
-# Make it executable
-chmod +x astonish
-
-# Move to your PATH
-sudo mv astonish /usr/local/bin/
+curl -fsSL https://raw.githubusercontent.com/schardosin/astonish/refs/heads/main/install.sh | sh
 ```
 
 ### Windows
@@ -52,15 +45,9 @@ Astonish v0.x.x
 If you prefer to build from source:
 
 ```bash
-# Clone the repository
 git clone https://github.com/schardosin/astonish.git
 cd astonish
-
-# Build
-go build -o astonish ./cmd/astonish
-
-# Install
-sudo mv astonish /usr/local/bin/
+make build-all
 ```
 
 **Requirements:**

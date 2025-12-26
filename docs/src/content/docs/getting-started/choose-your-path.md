@@ -1,100 +1,119 @@
 ---
-title: Choose Your Path
-description: Visual learner or CLI power user? Pick your adventure.
+title: The Astonish Workflow
+description: Design flows visually, run them anywhere
 sidebar:
   order: 3
 ---
 
-# Choose Your Path
+# The Astonish Workflow
 
-Astonish offers two equally powerful ways to build AI agents. Both use the same underlying YAML format, so you can switch between them anytime.
+Astonish is designed around a simple but powerful workflow: **build in the Studio, run anywhere with the CLI**.
 
-## 🎨 Visual Learner → Astonish Studio
+## The Recommended Approach
 
-**Best for:**
-- First-time users exploring the concepts
-- Rapid prototyping and experimentation
-- Seeing how nodes connect visually
-- Teams who prefer low-code tools
+```mermaid
+flowchart TB
+    subgraph STUDIO["🎨 Astonish Studio"]
+        direction TB
+        S1["Design your flow visually"]
+        S2["Use AI to help build nodes"]
+        S3["Test and iterate in real-time"]
+    end
+    
+    subgraph CLI["🚀 CLI (Headless Mode)"]
+        direction TB
+        C1["Run anywhere"]
+        C2["Schedule with cron"]
+        C3["Integrate with CI/CD"]
+    end
+    
+    STUDIO -->|"Same YAML file"| CLI
+    
+    style STUDIO fill:#4f46e5,stroke:#6366f1,color:#fff
+    style CLI fill:#059669,stroke:#10b981,color:#fff
+```
 
-**What you'll do:**
-1. Launch Studio with `astonish studio`
-2. Drag and drop nodes on a canvas
-3. Configure nodes through forms
-4. Run and test in real-time
-5. Save as YAML automatically
+### 🎨 Build in the Studio
 
-![Astonish Studio Interface](/src/assets/placeholder.png)
-*The visual flow editor*
+Use **Astonish Studio** to design your flows. This is where you leverage:
 
-**[→ Start with Studio Quickstart](/getting-started/quickstart/studio/)**
-
----
-
-## ⌨️ CLI Power User → Terminal
-
-**Best for:**
-- Developers comfortable with YAML
-- Automation and CI/CD pipelines
-- Version-controlled workflows
-- Headless/server environments
-
-**What you'll do:**
-1. Create YAML files directly
-2. Run flows with `astonish flows run`
-3. Pass parameters via command line
-4. Integrate with cron, scripts, CI/CD
+- **Visual canvas** — Drag, drop, and connect nodes to build your logic
+- **AI assistance** — Let AI help generate and refine your flows
+- **Real-time testing** — Run and debug flows instantly
+- **Form-based configuration** — No need to remember YAML syntax
 
 ```bash
-# Run a flow with parameters
+# Launch the Studio
+astonish studio
+```
+
+![Astonish Studio Interface](/src/assets/introduction-ai_assist.webp)
+*Design your flows visually with AI assistance*
+
+### 🚀 Run Anywhere with CLI
+
+Once your flow is ready, run it anywhere using **headless mode**. The CLI gives you:
+
+- **Zero dependencies** — Same single binary, no UI overhead
+- **Full capabilities** — Every feature works in headless mode
+- **Automation ready** — Scripts, cron jobs, CI/CD pipelines
+- **Portable** — Containers, servers, Raspberry Pi, anywhere
+
+```bash
+# Run a flow
+astonish flows run my_agent
+
+# Pass parameters
 astonish flows run my_agent -p input="Hello world"
 
 # Schedule with cron
-0 9 * * * astonish flows run daily_report
+0 9 * * * astonish flows run daily_report >> /var/log/report.log
 ```
 
-**[→ Start with CLI Quickstart](/getting-started/quickstart/cli/)**
+## Why This Workflow?
 
----
+| Approach | Experience |
+|----------|------------|
+| **Studio only** | Great for building, but limited for automation |
+| **CLI only** | Possible, but you lose visual design and AI assist |
+| **Studio + CLI** | Best of both — visual power for building, CLI flexibility for running |
 
-## The Best of Both Worlds
+The Studio creates standard YAML files. These same files run identically in headless mode — no conversion, no export, no differences.
 
-You don't have to choose just one:
+## Can I Skip the Studio?
 
-1. **Start visually** — Use Studio to design and understand flows
-2. **Switch to CLI** — Run the same YAML in production scripts
-3. **Edit YAML directly** — Fine-tune details when needed
-4. **Back to Studio** — Visualize and debug complex flows
+Technically, yes. You can write YAML files by hand and run them directly with the CLI:
 
-The YAML is always the source of truth. Studio reads and writes the same files you'd edit by hand.
-
-```yaml
-# This file works in both Studio and CLI
-name: hybrid-workflow
+```bash
+# Create a flow manually
+cat > my-flow.yaml << 'EOF'
+name: my-flow
 nodes:
-  - name: process
+  - name: greet
     type: llm
-    prompt: "Process {input}"
+    prompt: "Say hello"
 flow:
   - from: START
-    to: process
-  - from: process
+    to: greet
+  - from: greet
     to: END
+EOF
+
+# Import it
+astonish flows import my-flow.yaml
+
+# Run it
+astonish flows run my-flow
 ```
 
-## Quick Comparison
+But this is **not recommended**. You'll miss out on:
+- Visual feedback of how your flow connects
+- AI assistance for building nodes
+- Real-time testing and debugging
+- Easier configuration through forms
 
-| Feature | Studio | CLI |
-|---------|--------|-----|
-| Learning curve | Gentle | Steeper |
-| Visual debugging | ✅ Yes | Limited |
-| Automation friendly | Limited | ✅ Yes |
-| CI/CD integration | ❌ No | ✅ Yes |
-| Same YAML format | ✅ Yes | ✅ Yes |
+Start with the Studio, even for simple flows.
 
-## Ready?
+## Ready to Start?
 
-Pick your adventure:
-
-- **[Studio Quickstart](/getting-started/quickstart/studio/)** — 5-minute visual walkthrough
-- **[CLI Quickstart](/getting-started/quickstart/cli/)** — 5-minute command-line guide
+**[→ Continue to Quickstart](/getting-started/quickstart/studio/)** — Build your first flow in 5 minutes

@@ -3,6 +3,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import tailwindcss from '@tailwindcss/vite';
 import six from '@six-tech/starlight-theme-six';
+import mermaid from 'astro-mermaid';
 
 // https://astro.build/config
 export default defineConfig({
@@ -10,6 +11,9 @@ export default defineConfig({
   base: '/astonish/',
   
   integrations: [
+    mermaid({
+      autoTheme: true,
+    }),
     starlight({
       plugins: [six({})],
       title: 'Astonish',

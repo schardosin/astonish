@@ -26,7 +26,7 @@ astonish studio
 
 This starts the visual editor at **http://localhost:9393**. Open it in your browser.
 
-![Studio Launch](/src/assets/wizard-welcome.webp)
+![Studio Launch](/astonish/images/wizard-welcome.webp)
 *Astonish Studio welcome screen*
 
 ## 2. Configure Your Provider
@@ -64,7 +64,7 @@ We recommend **OpenRouter** for beginners—it gives you access to multiple mode
 
 You'll see an empty canvas with **START** and **END** nodes.
 
-![Empty Canvas](/src/assets/introduction-empty_canvas.webp)
+![Empty Canvas](/astonish/images/introduction-empty_canvas.webp)
 *A new flow with START and END nodes*
 
 ## 4. Add an LLM Node
@@ -89,7 +89,7 @@ Switch to the **Output** tab:
 3. Enter `response` — this displays the saved reply to the user
 4. Click **Done** to close the panel
 
-![LLM Output Configuration](/src/assets/introduction-flow_node_user_message.webp)
+![LLM Output Configuration](/astonish/images/introduction-flow_node_user_message.webp)
 *Configure the Output tab to display the response to the user*
 
 ## 5. Connect to END
@@ -99,7 +99,7 @@ Switch to the **Output** tab:
 
 Your flow is now complete: **START → greet → END**
 
-![Complete Flow with Node Configuration](/src/assets/introduction-flow_node_dialog.webp)
+![Complete Flow with Node Configuration](/astonish/images/introduction-flow_node_dialog.webp)
 *The complete flow with the LLM node configured*
 
 ## 6. Run Your Flow
@@ -108,7 +108,7 @@ Your flow is now complete: **START → greet → END**
 2. Watch the execution in the chat panel on the right
 3. The AI will greet you!
 
-![Flow Execution](/src/assets/introduction-flow_run.webp)
+![Flow Execution](/astonish/images/introduction-flow_run.webp)
 *Seeing your flow run in real-time*
 
 ## What You Built

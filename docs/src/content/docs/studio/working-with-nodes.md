@@ -25,7 +25,7 @@ Nodes are the building blocks of flows. Each node performs a specific action—c
 
 The most common node type. Sends a prompt to an AI model and receives a response.
 
-![LLM Node Configuration](/src/assets/placeholder.png)
+![LLM Node Configuration](/astonish/images/placeholder.png)
 *Configuring an LLM node*
 
 ### Properties
@@ -76,7 +76,7 @@ These become variables for later nodes.
 
 Pauses execution to collect input from the user.
 
-![Input Node Configuration](/src/assets/placeholder.png)
+![Input Node Configuration](/astonish/images/placeholder.png)
 *Configuring an Input node*
 
 ### Properties
@@ -120,7 +120,7 @@ Add **Options** to create a dropdown:
 
 Calls an MCP tool directly without AI involvement.
 
-![Tool Node Configuration](/src/assets/placeholder.png)
+![Tool Node Configuration](/astonish/images/placeholder.png)
 *Configuring a Tool node*
 
 ### Properties

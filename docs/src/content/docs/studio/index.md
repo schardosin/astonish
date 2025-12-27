@@ -9,7 +9,7 @@ sidebar:
 
 Astonish Studio is the visual interface for designing, testing, and managing AI flows. It transforms complex agent logic into intuitive drag-and-drop workflows.
 
-![Astonish Studio Interface](/src/assets/introduction-canvas.webp)
+![Astonish Studio Interface](/astonish/images/introduction-canvas.webp)
 *The Astonish Studio workspace*
 
 ## Why Use Studio?

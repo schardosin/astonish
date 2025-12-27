@@ -34,7 +34,7 @@ The easiest way to configure providers:
 astonish setup
 ```
 
-![Setup Wizard](/src/assets/placeholder.png)
+![Setup Wizard](/astonish/images/placeholder.png)
 *Interactive provider selection*
 
 1. Select a provider from the list

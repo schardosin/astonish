@@ -31,9 +31,7 @@ Output streams to your terminal in real-time.
 | `-p key=value` | Pass parameter(s) | — |
 | `-model <name>` | Override model | Config default |
 | `-provider <name>` | Override provider | Config default |
-| `-debug` | Verbose output | false |
-| `-browser` | Web UI mode | false |
-| `-port <num>` | Port for web UI | 8080 |
+| `--debug` | Verbose output | false |
 
 ## Passing Parameters
 
@@ -72,7 +70,7 @@ astonish flows run summarizer -provider anthropic -model claude-3-sonnet
 See detailed execution info:
 
 ```bash
-astonish flows run my_agent -debug
+astonish flows run --debug my_agent
 ```
 
 Shows:
@@ -80,22 +78,6 @@ Shows:
 - State changes
 - Tool call details
 - Condition evaluations
-
-## Browser Mode
-
-Run with a web UI:
-
-```bash
-astonish flows run my_agent -browser
-```
-
-Opens a chat interface at `http://localhost:8080`.
-
-Custom port:
-
-```bash
-astonish flows run my_agent -browser -port 3000
-```
 
 ## Listing Flows
 
@@ -122,10 +104,13 @@ AVAILABLE FLOWS
 
 ## Flow Locations
 
-The CLI searches for flows in:
+To find where flows are stored, run:
 
-1. **Local flows:** `~/.astonish/agents/`
-2. **Installed flows:** `~/.astonish/store/<tap-name>/`
+```bash
+astonish config directory
+```
+
+Flows are in the `flows/` subdirectory. Installed taps are in `taps/`.
 
 ## Showing Flow Structure
 
@@ -141,12 +126,6 @@ Open a flow in your default editor:
 
 ```bash
 astonish flows edit summarizer
-```
-
-Or edit directly:
-
-```bash
-code ~/.astonish/agents/summarizer.yaml
 ```
 
 ## Exit Codes

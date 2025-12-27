@@ -62,18 +62,18 @@ Example:
 astonish flows store install community/translator
 ```
 
-The flow is copied to `~/.astonish/store/<tap-name>/`.
+The flow is installed to your local taps directory.
 
 ## Uninstalling Flows
 
 Remove an installed flow:
 
 ```bash
-astonish flows store uninstall translator
+astonish flows store uninstall community/translator
 ```
 
 :::caution
-Only removes installed tap flows. Local flows in `~/.astonish/agents/` must be deleted manually.
+Only removes installed tap flows. Local flows must be deleted manually from your flows directory.
 :::
 
 ## Updating Flows
@@ -88,41 +88,17 @@ This refreshes the list of available flows from all your taps.
 
 ## Creating a New Flow
 
-### Method 1: Edit Command
+Create a YAML file and import it:
 
 ```bash
-astonish flows edit new_flow
+astonish flows import my_flow.yaml
 ```
 
-Opens your default editor with an empty template.
+The flow is added to your flows directory and appears in `astonish flows list`.
 
-### Method 2: Copy Existing
-
-```bash
-cp ~/.astonish/agents/existing.yaml ~/.astonish/agents/new_flow.yaml
-```
-
-Then edit the name and contents.
-
-### Method 3: Create Manually
-
-```bash
-cat > ~/.astonish/agents/hello.yaml << 'EOF'
-name: hello
-description: A simple greeting flow
-
-nodes:
-  - name: greet
-    type: llm
-    prompt: "Say hello to the user warmly."
-
-flow:
-  - from: START
-    to: greet
-  - from: greet
-    to: END
-EOF
-```
+:::tip[Prefer Visual?]
+Use `astonish studio` to create flows with a visual editor instead.
+:::
 
 ## Viewing Flow Details
 
@@ -136,16 +112,21 @@ Displays the flow as a text diagram.
 
 ### View Raw YAML
 
+Use the edit command to view the raw file:
+
 ```bash
-cat ~/.astonish/agents/translator.yaml
+astonish flows edit translator
 ```
 
 ## Flow File Locations
 
-| Type | Location |
-|------|----------|
-| Local flows | `~/.astonish/agents/` |
-| Installed flows | `~/.astonish/store/<tap-name>/` |
+To find where flows are stored:
+
+```bash
+astonish config directory
+```
+
+Local flows are in `flows/`, installed taps are in `taps/`.
 
 ## Organizing Flows
 
@@ -170,7 +151,7 @@ my_agent
 Track your local flows with Git:
 
 ```bash
-cd ~/.astonish/agents
+cd <flows-directory>/flows  # from: astonish config directory
 git init
 git add .
 git commit -m "Initial flows"
@@ -179,11 +160,11 @@ git commit -m "Initial flows"
 ### Backup
 
 ```bash
-# Backup all flows
-cp -r ~/.astonish/agents ~/flows-backup-$(date +%Y%m%d)
+# Get your flows directory path
+astonish config directory
 
-# Or zip them
-zip -r flows.zip ~/.astonish/agents
+# Backup all flows
+cp -r <flows-directory>/flows ~/flows-backup-$(date +%Y%m%d)
 ```
 
 ## Next Steps

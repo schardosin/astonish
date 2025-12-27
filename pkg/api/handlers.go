@@ -414,19 +414,26 @@ func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Save to system directory (~/.config/astonish/agents/)
-	sysDir, err := config.GetAgentsDir()
-	if err != nil {
-		http.Error(w, "Failed to get agents directory", http.StatusInternalServerError)
-		return
-	}
+	// Determine save path: check if flow already exists somewhere
+	var path string
+	existingPath, _, findErr := findAgentPath(name)
+	if findErr == nil && existingPath != "" {
+		// Flow exists - save to original location
+		path = existingPath
+	} else {
+		// New flow - save to flows directory (~/.config/astonish/flows/)
+		flowsDir, err := flowstore.GetFlowsDir()
+		if err != nil {
+			http.Error(w, "Failed to get flows directory", http.StatusInternalServerError)
+			return
+		}
+		path = filepath.Join(flowsDir, name+".yaml")
 
-	path := filepath.Join(sysDir, name+".yaml")
-
-	// Ensure directory exists
-	if err := os.MkdirAll(sysDir, 0755); err != nil {
-		http.Error(w, "Failed to create agents directory", http.StatusInternalServerError)
-		return
+		// Ensure directory exists
+		if err := os.MkdirAll(flowsDir, 0755); err != nil {
+			http.Error(w, "Failed to create flows directory", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// Write file
@@ -502,14 +509,14 @@ func CopyAgentToLocalHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Save to system directory (~/.config/astonish/agents/)
-	sysDir, err := config.GetAgentsDir()
+	// Save to flows directory (~/.config/astonish/flows/)
+	flowsDir, err := flowstore.GetFlowsDir()
 	if err != nil {
-		http.Error(w, "Failed to get agents directory", http.StatusInternalServerError)
+		http.Error(w, "Failed to get flows directory", http.StatusInternalServerError)
 		return
 	}
 
-	destPath := filepath.Join(sysDir, destName+".yaml")
+	destPath := filepath.Join(flowsDir, destName+".yaml")
 
 	// Check if already exists
 	if _, err := os.Stat(destPath); err == nil {
@@ -518,8 +525,8 @@ func CopyAgentToLocalHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Ensure directory exists
-	if err := os.MkdirAll(sysDir, 0755); err != nil {
-		http.Error(w, "Failed to create agents directory", http.StatusInternalServerError)
+	if err := os.MkdirAll(flowsDir, 0755); err != nil {
+		http.Error(w, "Failed to create flows directory", http.StatusInternalServerError)
 		return
 	}
 

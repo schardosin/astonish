@@ -488,7 +488,17 @@ func handleShowCommand(args []string) error {
 				}
 			}
 
-			// 4. Check in local dev path (fallback)
+			// 4. Check in flows directory
+			flowsDir, err := flowstore.GetFlowsDir()
+			if err == nil {
+				flowPath := filepath.Join(flowsDir, fmt.Sprintf("%s.yaml", agentName))
+				if _, err := os.Stat(flowPath); err == nil {
+					agentPath = flowPath
+					goto Found
+				}
+			}
+
+			// 5. Check in local dev path (fallback)
 			agentPath = fmt.Sprintf("agents/%s.yaml", agentName)
 			if _, err := os.Stat(agentPath); os.IsNotExist(err) {
 				return fmt.Errorf("agent file not found: %s", agentName)
@@ -526,6 +536,16 @@ func handleEditCommand(args []string) error {
 				sysAgentPath := filepath.Join(agentsDir, fmt.Sprintf("%s.yaml", agentName))
 				if _, err := os.Stat(sysAgentPath); err == nil {
 					agentPath = sysAgentPath
+					goto Found
+				}
+			}
+
+			// Check in flows directory
+			flowsDir, err := flowstore.GetFlowsDir()
+			if err == nil {
+				flowPath := filepath.Join(flowsDir, fmt.Sprintf("%s.yaml", agentName))
+				if _, err := os.Stat(flowPath); err == nil {
+					agentPath = flowPath
 					goto Found
 				}
 			}

@@ -13,19 +13,25 @@ Nodes are the building blocks of flows. Each node performs a specific action—c
 
 | Type | Purpose | When to Use |
 |------|---------|-------------|
-| **LLM** | Call an AI model | When you need AI to process, analyze, or generate |
-| **Input** | Get user input | When you need data from the user |
-| **Tool** | Call MCP tool directly | When running a specific tool without AI |
-| **Output** | Display message | When showing results to the user |
-| **Update State** | Modify variables | When transforming or setting data |
+| **Input** | Capture user input | When you need information from the user |
+| **LLM** | Call an AI model | The most versatile node—handles AI, tools, and user messages |
+| **Tool** | Call MCP tool directly | When you know exactly what tool to call (saves tokens) |
+| **State** | Modify variables | When aggregating data, like appending to a list |
+| **Output** | Display a message | When showing results from earlier steps at a different point |
 
 ---
 
 ## LLM Node
 
-The most common node type. Sends a prompt to an AI model and receives a response.
+The **LLM node** is the most versatile and commonly used node type. It can:
 
-![LLM Node Configuration](/astonish/images/placeholder.png)
+- Call AI models to process, analyze, or generate content
+- Use MCP tools when enabled
+- Display messages directly to the user via **User Message**
+
+In most cases, the LLM node handles everything you need.
+
+![LLM Node Configuration](/astonish/images/nodes_llm.webp)
 *Configuring an LLM node*
 
 ### Properties
@@ -76,7 +82,7 @@ These become variables for later nodes.
 
 Pauses execution to collect input from the user.
 
-![Input Node Configuration](/astonish/images/placeholder.png)
+![Input Node Configuration](/astonish/images/nodes_input.webp)
 *Configuring an Input node*
 
 ### Properties
@@ -118,9 +124,9 @@ Add **Options** to create a dropdown:
 
 ## Tool Node
 
-Calls an MCP tool directly without AI involvement.
+Calls an MCP tool directly without AI inference. This saves tokens when you know exactly which tool to call with specific parameters.
 
-![Tool Node Configuration](/astonish/images/placeholder.png)
+![Tool Node Configuration](/astonish/images/nodes_tool.webp)
 *Configuring a Tool node*
 
 ### Properties
@@ -128,69 +134,87 @@ Calls an MCP tool directly without AI involvement.
 | Property | Required | Description |
 |----------|----------|-------------|
 | **Name** | Yes | Unique identifier |
-| **Tool Selection** | Yes | Which tool(s) to call |
+| **Tool Selection** | Yes | Which tool to call |
 
 ### When to Use
 
-- Running a specific tool with known parameters
-- Avoiding AI overhead when the action is deterministic
-- Chaining tool calls in sequence
+- You know exactly which tool to call (no AI decision needed)
+- The parameters are determined by previous steps
+- You want to save tokens by skipping inference
 
 ---
 
 ## Output Node
 
-Displays a message to the user without AI processing.
+Displays a message to the user from state variables. Useful when you want to show results from earlier steps at a different point in your flow.
 
 ### Properties
 
 | Property | Required | Description |
 |----------|----------|-------------|
 | **Name** | Yes | Unique identifier |
-| **User Message** | Yes | Lines to display |
+| **User Message** | Yes | State variables to display |
+
+### When to Use
+
+- Showing results collected from multiple earlier steps
+- Displaying a summary after processing is complete
+- Outputting data that was saved to state earlier in the flow
 
 ### Message Format
 
-**User Message** is an array of strings and variable references:
+Reference state variables to display:
 
 ```yaml
-user_message:
-  - "Your analysis is complete."
-  - "Result:"
-  - result_variable
+- name: show_results
+  type: output
+  user_message:
+    - summary
+    - analysis_result
 ```
 
 ---
 
-## Update State Node
+## State Node
 
-Modifies the flow's state variables.
+Modifies the flow's state variables directly. Great for aggregating data across multiple steps.
 
 ### Properties
 
 | Property | Required | Description |
 |----------|----------|-------------|
 | **Name** | Yes | Unique identifier |
-| **Updates** | Yes | Variable assignments |
+| **Source Variable** | Yes | The variable to read from |
+| **Action** | Yes | Operation to perform (e.g., `append`) |
+| **Output Model** | Yes | Where to store the result |
 
-### Example
+### When to Use
+
+- Appending items to a list (e.g., collecting results from a loop)
+- Aggregating data from multiple iterations
+- Building up a collection of results
+
+### Example: Appending to a List
 
 ```yaml
-- name: set_defaults
+- name: update_search_history
   type: update_state
-  updates:
-    counter: 0
-    status: "pending"
+  source_variable: search_query
+  action: append
+  output_model:
+    search_history: list
 ```
+
+This takes the `search_query` variable and appends it to the `search_history` list.
 
 ---
 
-## Selecting a Node
+## Editing a Node
 
-Click any node on the canvas to:
-- Open the editor panel (right side)
-- See its connections
-- Access configuration options
+Double-click any node on the canvas to open the editor dialog at the bottom of the screen. From here you can:
+- Configure the node's properties
+- Set prompts and parameters
+- Choose tools and outputs
 
 ## Moving Nodes
 

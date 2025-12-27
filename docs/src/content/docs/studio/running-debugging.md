@@ -17,8 +17,8 @@ Studio provides real-time execution and debugging tools to test your flows befor
 2. Click the **▶ Run** button in the top bar
 3. The chat panel opens on the right
 
-![Run Button](/astonish/images/placeholder.png)
-*The Run button in the top bar*
+![Run Button](/astonish/images/studio-flow_run.webp)
+*The Run Dialog*
 
 ### Execution Flow
 
@@ -32,17 +32,18 @@ Studio provides real-time execution and debugging tools to test your flows befor
 
 The right panel shows execution in real-time:
 
-![Chat Panel](/astonish/images/placeholder.png)
+![Chat Panel](/astonish/images/studio-flow_run_execution.webp)
 *The chat panel during execution*
 
 ### What You'll See
 
 | Element | Meaning |
 |---------|---------|
-| **AI:** | LLM node response |
-| **User:** | Your input (for Input nodes) |
-| **Tool:** | Tool call results |
-| **Node: [name]** | Current node being executed |
+| **Execution started...** | Flow has begun |
+| **Agent** | Prompts from Input nodes or responses from LLM nodes |
+| **User** | Your input responses |
+| **✦ Executing Node: [name]** | Shows which node is currently running |
+| **Start Again** | Button to restart the flow from the beginning |
 
 ## Interactive Input
 
@@ -52,26 +53,9 @@ When the flow reaches an **Input** node:
 2. Type your response
 3. Press **Enter** to continue
 
-If the Input node has **Options**, you'll see a dropdown instead.
+If the Input node has **Options**, each option appears as a button you can click.
 
-## Debug Mode
 
-Enable debug mode for verbose output:
-
-1. Click the **Settings** icon (⚙️) next to Run
-2. Toggle **Debug Mode** on
-3. Run the flow
-
-### Debug Information
-
-Debug mode shows:
-- Node execution order
-- State changes between nodes
-- Tool call inputs and responses
-- Condition evaluations
-
-![Debug Output](/astonish/images/placeholder.png)
-*Verbose debug output*
 
 ## Common Issues
 
@@ -124,28 +108,14 @@ To run again:
 2. Previous state is cleared
 3. Execution starts fresh from START
 
-## Viewing State
 
-During execution, you can inspect the current state:
-
-1. Enable Debug Mode
-2. State is printed after each node
-
-Example:
-```
-[State] {
-  "user_question": "What is AI?",
-  "analysis": "AI is...",
-  "confidence": 0.95
-}
-```
 
 ## Tips for Debugging
 
-1. **Add Output nodes** — Print intermediate values
-2. **Use simple flows first** — Test nodes individually
-3. **Check the YAML** — Sometimes visual issues hide there
-4. **Enable Debug** — When in doubt, verbose mode helps
+1. **Add Output nodes** — Display intermediate values to see what's happening
+2. **Test simple flows first** — Verify nodes work individually before building complex flows
+3. **Check the YAML** — Click **View Source** to see the raw flow definition
+4. **Use CLI debug mode** — Run `astonish flows run --debug <name>` for verbose output
 
 ## Next Steps
 

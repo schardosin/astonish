@@ -63,11 +63,23 @@ All nodes share these properties:
 - name: get_input
   type: input
   prompt: "What would you like?"
-  options:             # Optional
+  options:             # Optional (static or dynamic)
     - Option 1
     - Option 2
   output_model:        # Required
     variable_name: str
+```
+
+Dynamic options from state:
+
+```yaml
+- name: select_branch
+  type: input
+  prompt: "Select a branch:"
+  options:
+    - branches         # References state.branches list
+  output_model:
+    selected_branch: str
 ```
 
 | Property | Required | Description |
@@ -105,15 +117,21 @@ All nodes share these properties:
 ### Tool Node
 
 ```yaml
-- name: search
+- name: run_command
   type: tool
   tools_selection:
-    - web_search
+    - shell_command
+  args:
+    command: "echo 'Hello {name}'"
+  output_model:
+    result: str
 ```
 
 | Property | Required | Description |
 |----------|----------|-------------|
 | `tools_selection` | Yes | Tools to call |
+| `args` | No | Arguments to pass to tool |
+| `output_model` | No | Variables to store result |
 
 ### Output Node
 
@@ -129,19 +147,43 @@ All nodes share these properties:
 |----------|----------|-------------|
 | `user_message` | Yes | Array of strings/variables |
 
-### Update State Node
+#### Simple Updates (Legacy)
 
 ```yaml
 - name: set_defaults
   type: update_state
   updates:
-    counter: 0
+    counter: "0"
     status: "ready"
+```
+
+#### With Action
+
+```yaml
+- name: append_item
+  type: update_state
+  source_variable: new_item
+  action: append
+  output_model:
+    items: list
+```
+
+```yaml
+- name: overwrite_status
+  type: update_state
+  value: "completed"
+  action: overwrite
+  output_model:
+    status: str
 ```
 
 | Property | Required | Description |
 |----------|----------|-------------|
-| `updates` | Yes | Key-value pairs to set |
+| `updates` | No | Key-value pairs (legacy mode) |
+| `action` | No | `append` or `overwrite` |
+| `source_variable` | No | Variable to read value from |
+| `value` | No | Literal value to use |
+| `output_model` | No | Target variable (exactly 1 key) |
 
 ---
 
@@ -242,11 +284,17 @@ For Studio positioning:
 
 ```yaml
 layout:
-  positions:
-    START: [0, 0]
-    node_a: [200, 100]
-    node_b: [400, 100]
-    END: [600, 0]
+  nodes:
+    START:
+      x: 488
+      'y': 12
+    get_code:
+      x: 486
+      'y': 162
+    analyze:
+      x: 450
+      'y': 312
+  edges: {}
 ```
 
 ---

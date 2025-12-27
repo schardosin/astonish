@@ -89,11 +89,11 @@ The visual, browser-based editor for creating and editing flows. Launch with `as
 A GitHub repository that provides flows and MCP configurations. Managed with `astonish tap` commands.
 
 ### Tool
-A capability provided by an MCP server that flows can use. Examples: `web_search`, `create_issue`, `read_file`.
+A capability provided by an MCP server or built into Astonish. Internal tools: `shell_command`, `read_file`, `write_file`. External tools come from MCP servers.
 
 ---
 
 ## Y
 
 ### YAML
-The file format used for flow definitions. All flows are stored as `.yaml` files in `~/.astonish/agents/`.
+The file format used for flow definitions. All flows are stored as `.yaml` files in `~/.config/astonish/flows/`.

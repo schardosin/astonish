@@ -1,113 +1,172 @@
 ---
-title: Agent Flows
-description: Understanding how agent flows work in Astonish
+title: Flows
+description: Understanding AI flows in Astonish
+sidebar:
+  order: 1
 ---
 
-# Agent Flows
+# Flows
 
-In Astonish, an **agent** is defined as a **flow**—a directed graph of nodes connected by edges. Each flow has a clear path from `START` to `END`, with processing happening at each node along the way.
+A **flow** is a sequence of connected steps that process data and produce output. Flows are the core building block of Astonish.
 
-## The Flow Model
+## What is a Flow?
 
-```mermaid
-graph TD
-    START((START)) --> A[Node A]
-    A --> B[Node B]
-    B --> C{Decision}
-    C -->|Yes| D[Node D]
-    C -->|No| E[Node E]
-    D --> END((END))
-    E --> END
+A flow is a directed graph where:
+- **Nodes** perform actions (AI calls, user input, tool execution)
+- **Edges** connect nodes and control execution order
+- **State** carries data between nodes
+
+```
+START → input → process → output → END
 ```
 
-### Key Concepts
+## Flow Lifecycle
 
-| Concept | Description |
-|---------|-------------|
-| **START** | Every flow begins here. The entry point. |
-| **END** | Every flow ends here. Multiple paths can lead to END. |
-| **Node** | A processing step: LLM call, tool execution, user input, etc. |
-| **Edge** | A connection from one node to another. |
-| **State** | Data passed between nodes (the "blackboard"). |
+1. **START** — Execution begins
+2. **Nodes execute** — Each performs its action
+3. **State updates** — Output stored for later nodes
+4. **Edges followed** — Next node is determined
+5. **END** — Execution completes
 
-## Types of Flows
+## Flow as Code (YAML)
 
-### Sequential Flow
+Every flow is a YAML file:
 
-The simplest pattern—one node after another:
+```yaml
+name: my-flow
+description: What this flow does
+
+nodes:
+  - name: greet
+    type: llm
+    prompt: "Say hello to the user."
+
+flow:
+  - from: START
+    to: greet
+  - from: greet
+    to: END
+```
+
+This file is the **source of truth**—both Studio and CLI read the same format.
+
+## Flow Components
+
+### Nodes
+
+Processing steps in your flow:
+
+| Type | Purpose |
+|------|---------|
+| `llm` | Call an AI model |
+| `input` | Get user input |
+| `tool` | Call an MCP tool |
+| `output` | Display a message |
+| `update_state` | Modify variables |
+
+See **[Nodes](/concepts/nodes/)** for details.
+
+### Edges
+
+Connections between nodes:
 
 ```yaml
 flow:
-  - from: START
-    to: analyze
-  - from: analyze
-    to: summarize
-  - from: summarize
-    to: END
+  - from: node_a
+    to: node_b
 ```
 
-### Conditional Flow
-
-Branch based on conditions:
+Edges can have conditions for branching:
 
 ```yaml
 flow:
-  - from: START
-    to: check_input
-  - from: check_input
-    to: process_text
-    condition: input_type == "text"
-  - from: check_input
-    to: process_code
-    condition: input_type == "code"
-  - from: process_text
-    to: END
-  - from: process_code
-    to: END
+  - from: check
+    edges:
+      - to: approve
+        condition: "lambda x: x['ok']"
+      - to: reject
+        condition: "lambda x: not x['ok']"
 ```
 
-### Looping Flow
+### State
 
-Iterate until a condition is met:
-
-```yaml
-flow:
-  - from: START
-    to: attempt_task
-  - from: attempt_task
-    to: verify_result
-  - from: verify_result
-    to: END
-    condition: is_valid
-  - from: verify_result
-    to: attempt_task
-    condition: "!is_valid"
-```
-
-## State Blackboard
-
-Nodes communicate through a shared state object called the **Blackboard**. When a node produces output, it writes to the blackboard. Subsequent nodes can read from it.
+Variables that carry data between nodes:
 
 ```yaml
 nodes:
-  - name: fetch_data
-    type: llm
-    prompt: "Fetch the weather for {city}"
+  - name: ask
+    type: input
+    prompt: "What's your name?"
     output_model:
-      weather: str  # Writes to blackboard
+      name: str  # Stored in state
 
-  - name: summarize
+  - name: greet
     type: llm
-    prompt: "Summarize this weather: {weather}"  # Reads from blackboard
+    prompt: "Say hello to {name}"  # Read from state
 ```
 
-## Visual Design
+See **[State](/concepts/state/)** for details.
 
-In **Astonish Studio**, you can:
+## Flow Patterns
 
-- Drag nodes onto the canvas
-- Connect them by dragging from output handles to input handles
-- Configure each node's properties
-- Run and debug in real-time
+### Linear
 
-The visual design and the YAML are always in sync—what you see is what runs.
+```
+START → A → B → C → END
+```
+
+### Branching
+
+```
+        ┌→ B
+START → A ┤
+        └→ C
+```
+
+### Merge
+
+```
+B ┐
+  ├→ D → END
+C ┘
+```
+
+### Loop
+
+```
+START → process ←─┐
+           │      │
+           ▼      │
+        check ────┘ (if retry)
+           │
+           ▼
+          END (if done)
+```
+
+## Flow Storage
+
+| Location | Purpose |
+|----------|---------|
+| `~/.astonish/agents/` | Your local flows |
+| `~/.astonish/store/<tap>/` | Installed tap flows |
+
+## Creating Flows
+
+- **Studio:** Visual drag-and-drop
+- **CLI:** Write YAML directly
+
+Both produce the same YAML format.
+
+## Best Practices
+
+1. **Name descriptively** — `github_pr_reviewer` not `flow1`
+2. **Keep flows focused** — One task per flow
+3. **Document** — Add a description field
+4. **Test incrementally** — Build step by step
+5. **Version control** — Track changes with Git
+
+## Next Steps
+
+- **[Nodes](/concepts/nodes/)** — Learn all node types
+- **[State](/concepts/state/)** — Understand data flow
+- **[YAML Reference](/concepts/yaml/)** — Complete schema

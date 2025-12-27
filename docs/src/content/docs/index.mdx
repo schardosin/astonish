@@ -1,40 +1,57 @@
 ---
-title: Welcome to Starlight
-description: Get started building your docs site with Starlight.
-template: splash # Remove or comment out this line to display the site sidebar on this page.
+title: Astonish Documentation
+description: Build powerful AI agents with visual flows or YAML - your choice, same magic.
+template: splash
 hero:
-  tagline: Congrats on setting up a new Starlight project!
+  tagline: Design AI workflows visually in Studio or craft them in YAML. Run anywhere, share everywhere.
   image:
     file: ../../assets/houston.webp
   actions:
-    - text: Example Guide
-      link: /guides/example/
+    - text: Get Started
+      link: /getting-started/introduction/
       icon: right-arrow
-    - text: Read the Starlight docs
-      link: https://starlight.astro.build
+    - text: View on GitHub
+      link: https://github.com/schardosin/astonish
       icon: external
       variant: minimal
 ---
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
-## Next steps
+## Choose Your Way to Build AI Agents
 
 <CardGrid stagger>
-	<Card title="Update content" icon="pencil">
-		Edit `src/content/docs/index.mdx` to see this page change.
+	<Card title="Visual Studio" icon="puzzle">
+		Design flows with a drag-and-drop canvas. Perfect for rapid prototyping and visual thinkers.
+		[Launch Studio →](/studio/)
 	</Card>
-	<Card title="Change page layout" icon="document">
-		Delete `template: splash` in `src/content/docs/index.mdx` to display a
-		sidebar on this page.
+	<Card title="Command Line" icon="terminal">
+		Write YAML flows and run them from the terminal. Ideal for automation and power users.
+		[Explore CLI →](/cli/)
 	</Card>
-	<Card title="Add new content" icon="add-document">
-		Add Markdown or MDX files to `src/content/docs` to create new pages.
+	<Card title="Extend with Tools" icon="add-document">
+		Connect MCP servers, add repositories, and extend Astonish with powerful integrations.
+		[Add Tools →](/using-the-app/add-mcp-servers/)
 	</Card>
-	<Card title="Configure your site" icon="setting">
-		Edit your `sidebar` and other config in `astro.config.mjs`.
+	<Card title="Understand Concepts" icon="open-book">
+		Learn about flows, nodes, state management, and the YAML schema that powers everything.
+		[Key Concepts →](/concepts/flows/)
 	</Card>
-	<Card title="Read the docs" icon="open-book">
-		Learn more in [the Starlight Docs](https://starlight.astro.build/).
+</CardGrid>
+
+## Why Astonish?
+
+<CardGrid>
+	<Card title="One Source of Truth" icon="document">
+		Both Studio and CLI work with the same YAML files. Design visually, run anywhere.
+	</Card>
+	<Card title="Multi-Provider Support" icon="setting">
+		Connect to OpenAI, Anthropic, Google, Ollama, and 8+ other AI providers.
+	</Card>
+	<Card title="MCP Integration" icon="puzzle">
+		Leverage the Model Context Protocol for extensible, standard tool integrations.
+	</Card>
+	<Card title="Share & Collaborate" icon="rocket">
+		Use taps to share flows and tools with your team or the community.
 	</Card>
 </CardGrid>

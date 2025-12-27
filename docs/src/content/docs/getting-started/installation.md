@@ -1,64 +1,79 @@
 ---
 title: Installation
-description: How to install Astonish on your system
+description: Install Astonish on macOS, Linux, or Windows
+sidebar:
+  order: 2
 ---
 
 # Installation
 
-Astonish is a single binary with no external dependencies. Choose your preferred installation method.
+Astonish is distributed as a single binary with no dependencies. Choose your preferred installation method.
 
-## Homebrew (macOS/Linux)
+## Quick Install (Recommended)
 
-The easiest way to install Astonish:
+### macOS (Homebrew)
 
 ```bash
-brew install schardosin/astonish/astonish
+brew tap schardosin/astonish
+brew install astonish
 ```
 
-## cURL Script
-
-Download and install with a single command:
+### Linux / macOS (Install Script)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/schardosin/astonish/refs/heads/main/install.sh | sh
 ```
 
-## Pre-built Binaries
+### Windows
 
-Download pre-built binaries from [GitHub Releases](https://github.com/schardosin/astonish/releases):
-
-1. Go to the releases page
-2. Download the binary for your OS/architecture
-3. Make it executable: `chmod +x astonish`
-4. Move to your PATH: `sudo mv astonish /usr/local/bin/`
-
-## Build from Source
-
-For developers who want to build from source:
-
-```bash
-git clone https://github.com/schardosin/astonish.git
-cd astonish
-make build-all  # Builds UI + Go binary
-```
-
-:::note
-`go install` is not supported as the web UI must be built separately before embedding into the binary.
-:::
+Download the latest `astonish-windows-amd64.exe` from the [releases page](https://github.com/schardosin/astonish/releases) and add it to your PATH.
 
 ## Verify Installation
-
-After installation, verify it works:
 
 ```bash
 astonish --version
 ```
 
-You should see the version number printed.
+You should see output like:
+
+```
+Astonish v0.x.x
+```
+
+## Build from Source
+
+If you prefer to build from source:
+
+```bash
+git clone https://github.com/schardosin/astonish.git
+cd astonish
+make build-all
+```
+
+**Requirements:**
+- Go 1.21 or later
+- Node.js 18+ (for Studio development only)
+
+## Configuration Directory
+
+Astonish stores its configuration in:
+
+| Platform | Location |
+|----------|----------|
+| macOS | `~/Library/Application Support/astonish/` |
+| Linux | `~/.config/astonish/` |
+| Windows | `%APPDATA%\astonish\` |
+
+You can verify this with:
+
+```bash
+astonish config directory
+```
 
 ## Next Steps
 
 Now that Astonish is installed:
 
-1. [Launch Astonish Studio](/getting-started/quick-start/) to design your first flow
-2. Or configure providers via CLI with `astonish setup`
+1. **[Choose Your Path](/getting-started/choose-your-path/)** — Decide how you want to work
+2. **[Studio Quickstart](/getting-started/quickstart/studio/)** — Visual approach
+3. **[CLI Quickstart](/getting-started/quickstart/cli/)** — Command-line approach

@@ -44,7 +44,3 @@ node_modules/
 
 # MCP server directories (runtime)
 mcp_servers/
-
-# Binary
-astonish
-!/astonish/

@@ -1,133 +1,225 @@
 ---
-title: Nodes & Edges
-description: Understanding the building blocks of Astonish flows
+title: Nodes
+description: Understanding node types in Astonish flows
+sidebar:
+  order: 2
 ---
 
-# Nodes & Edges
+# Nodes
 
-Nodes are the building blocks of your agent flows. Each node performs a specific task, and edges define how data flows between them.
+Nodes are the building blocks of flows. Each node performs a specific action and passes data to the next.
 
-## Node Types
+## Node Types Overview
 
-### LLM Node
+| Type | Purpose | Key Properties |
+|------|---------|----------------|
+| **START** | Entry point | Automatic |
+| **END** | Exit point | Automatic |
+| **input** | Get user input | `prompt`, `options` |
+| **llm** | Call AI model | `prompt`, `system`, `tools` |
+| **tool** | Execute MCP tool | `tools_selection` |
+| **output** | Display message | `user_message` |
+| **update_state** | Modify variables | `updates` |
 
-The most common node type. Calls an AI language model to process data.
+---
+
+## START & END
+
+Every flow has these automatically. You don't define them in YAML.
+
+- **START** — First node, receives initial parameters
+- **END** — Final node, flow completes here
+
+---
+
+## Input Node
+
+Pauses execution to collect user input.
+
+```yaml
+- name: get_topic
+  type: input
+  prompt: "What would you like to learn about?"
+  output_model:
+    topic: str
+```
+
+### With Options
+
+```yaml
+- name: choose_action
+  type: input
+  prompt: "Select an action:"
+  options:
+    - Summarize
+    - Translate
+    - Analyze
+  output_model:
+    action: str
+```
+
+### Properties
+
+| Property | Description |
+|----------|-------------|
+| `prompt` | Text shown to user |
+| `options` | Optional list of choices |
+| `output_model` | Variables to store response |
+
+---
+
+## LLM Node
+
+Calls an AI model with a prompt.
 
 ```yaml
 - name: analyze
   type: llm
-  system: "You are an expert analyst."
-  prompt: "Analyze: {input}"
-  tools: true
-  tools_selection:
-    - search_web
-  output_model:
-    analysis: str
-    confidence: int
+  prompt: "Analyze this text: {input}"
+  system: "You are a helpful analyst."
 ```
 
-**Properties:**
+### With Tools
+
+```yaml
+- name: research
+  type: llm
+  prompt: "Find information about {topic}"
+  tools: true
+  tools_selection:
+    - web_search
+```
+
+### Structured Output
+
+```yaml
+- name: extract
+  type: llm
+  prompt: "Extract key information from {text}"
+  output_model:
+    summary: str
+    sentiment: str
+    confidence: float
+```
+
+### Properties
 
 | Property | Description |
 |----------|-------------|
-| `system` | System prompt for the LLM |
-| `prompt` | User prompt (supports `{variables}`) |
-| `tools` | Enable tool calling (true/false) |
-| `tools_selection` | List of allowed tools |
-| `output_model` | Structured output schema |
-| `user_message` | Fields to display to user |
+| `prompt` | User message to AI |
+| `system` | System prompt (personality/instructions) |
+| `tools` | Enable tool calling |
+| `tools_selection` | Whitelist specific tools |
+| `output_model` | Parse structured output |
+| `user_message` | Display message after execution |
 
-### Input Node
+---
 
-Pauses execution to get user input.
+## Tool Node
 
-```yaml
-- name: ask_user
-  type: input
-  prompt: "What would you like to analyze?"
-  output_model:
-    user_response: str
-```
-
-### Tool Node
-
-Directly executes a specific tool without LLM involvement.
+Calls an MCP tool directly without AI.
 
 ```yaml
-- name: run_shell
+- name: search
   type: tool
-  tool_name: shell_command
-  tool_input:
-    command: "ls -la"
-  output_model:
-    output: str
+  tools_selection:
+    - web_search
 ```
 
-## Special Nodes
+Use when:
+- Action is deterministic
+- No AI reasoning needed
+- Performance is critical
 
-### START
+### Properties
 
-Every flow begins with START. It's implicit—you don't define it, just reference it in edges.
+| Property | Description |
+|----------|-------------|
+| `tools_selection` | Which tool(s) to call |
 
-### END
+---
 
-Every flow must end at END. Multiple paths can lead to END.
+## Output Node
 
-## Edges
-
-Edges connect nodes and define the flow of execution.
-
-### Simple Edges
+Displays a message to the user without AI processing.
 
 ```yaml
-flow:
-  - from: START
-    to: first_node
-  - from: first_node
-    to: second_node
+- name: show_result
+  type: output
+  user_message:
+    - "Analysis complete!"
+    - "Result:"
+    - result_variable
 ```
 
-### Conditional Edges
+### User Message Format
 
-Branch based on state variables:
+An array of strings and variable names:
 
 ```yaml
-flow:
-  - from: decision
-    to: approve
-    condition: status == "good"
-  - from: decision
-    to: reject
-    condition: status == "bad"
+user_message:
+  - "Static text"
+  - variable_name      # Replaced with variable value
+  - "More static text"
 ```
 
-### Multiple Targets
+### Properties
 
-A node can have multiple outgoing edges:
+| Property | Description |
+|----------|-------------|
+| `user_message` | Array of strings/variables to display |
+
+---
+
+## Update State Node
+
+Modifies variables directly without AI.
 
 ```yaml
-flow:
-  - from: router
-    to: path_a
-    condition: route == "a"
-  - from: router
-    to: path_b
-    condition: route == "b"
-  - from: router
-    to: path_c
-    condition: route == "c"
+- name: initialize
+  type: update_state
+  updates:
+    counter: 0
+    status: "pending"
 ```
 
-## Visual Representation
+Use for:
+- Setting default values
+- Resetting counters
+- Transforming data
 
-In Astonish Studio, nodes are represented as colored cards:
+### Properties
 
-| Node Type | Color |
-|-----------|-------|
-| START | Green |
-| LLM | Purple |
-| Tool | Purple (darker) |
-| Input | Blue |
-| END | Red |
+| Property | Description |
+|----------|-------------|
+| `updates` | Key-value pairs to set |
 
-Edges are drawn as connecting lines with animated dots showing data flow direction.
+---
+
+## Common Properties
+
+All nodes share:
+
+| Property | Required | Description |
+|----------|----------|-------------|
+| `name` | Yes | Unique identifier |
+| `type` | Yes | Node type |
+
+## Variable References
+
+Use `{variable}` syntax in prompts:
+
+```yaml
+prompt: "Hello {name}, analyze {topic}"
+```
+
+Variables come from:
+- Parameters passed at runtime
+- Previous node outputs
+- State updates
+
+## Next Steps
+
+- **[State](/concepts/state/)** — How data flows between nodes
+- **[Flows](/concepts/flows/)** — Full flow structure
+- **[YAML Reference](/concepts/yaml/)** — Complete syntax

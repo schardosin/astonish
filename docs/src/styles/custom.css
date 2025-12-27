@@ -12,6 +12,26 @@
   --sl-color-accent-high: #4b3f9c;
 }
 
+/* Site Title Styling - Match Astonish Studio branding */
+.site-title {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif !important;
+  font-weight: 600 !important;
+  font-size: 1.3rem !important;
+  letter-spacing: -0.01em;
+  display: flex !important;
+  align-items: center !important;
+  gap: 0.5rem !important;
+}
+
+.site-title span {
+  color: #000000 !important;
+  transform: translateY(3px);
+}
+
+:root[data-theme='dark'] .site-title span {
+  color: #ffffff !important;
+}
+
 :root[data-theme='dark'] {
   --sl-color-accent-low: rgba(141, 122, 224, 0.15);
   --sl-color-accent: #8d7ae0;
@@ -29,6 +49,11 @@ header.header {
 /* Improve sidebar styling */
 .sidebar-content {
   background: var(--sl-color-bg-sidebar);
+}
+
+/* Fix sidebar selected item text color in dark mode */
+:root[data-theme='dark'] .sidebar-content a[aria-current="page"] {
+  color: #1e1b4b; /* Dark purple text for contrast on purple background */
 }
 
 /* Better code block styling */
@@ -838,3 +863,5 @@ a:not([class]):hover {
     height: 48px;
   }
 }
+
+

@@ -31,39 +31,39 @@ This launches an interactive wizard:
 3. Choose a default model
 4. Done!
 
-Your configuration is saved to `~/.config/astonish/config.yaml`.
+To find where your configuration is stored, run:
 
-:::tip[Quick Setup for OpenRouter]
 ```bash
-# Set API key directly
-export OPENROUTER_API_KEY="your-key-here"
+astonish config directory
 ```
-:::
 
 ## 2. Create Your Flow YAML
 
 Create a file called `hello_world.yaml`:
 
-```bash
-# Create the flows directory if needed
-mkdir -p ~/.astonish/agents
-
-# Create your flow
-cat > ~/.astonish/agents/hello_world.yaml << 'EOF'
-name: hello_world
-description: My first Astonish agent
-
+```yaml
+description: hello_world
 nodes:
   - name: greet
     type: llm
+    system: You are a helpful assistant.
     prompt: Greet the user warmly and ask how you can help them today.
+    output_model:
+      response: str
+    user_message:
+      - response
 
 flow:
   - from: START
     to: greet
   - from: greet
     to: END
-EOF
+```
+
+Import it into Astonish:
+
+```bash
+astonish flows import hello_world.yaml
 ```
 
 ## 3. Run Your Flow
@@ -97,34 +97,54 @@ AVAILABLE FLOWS
 
 ## 5. Add Parameters
 
-Make your flow accept input:
+Parameters come from **input nodes**. Without `-p`, Astonish prompts interactively. With `-p`, you provide values upfront.
+
+Create a new flow called `personalized_greeting.yaml`:
 
 ```yaml
-name: greeter
-description: Greets a user by name
-
+description: personalized_greeting
 nodes:
-  - name: greet
+  - name: get_name
+    type: input
+    prompt: What's your name?
+    output_model:
+      user_name: str
+  - name: greet_user
     type: llm
-    prompt: "Greet {name} warmly and wish them a great day."
+    system: You are a helpful assistant.
+    prompt: Greet the user warmly by their name '{user_name}' and ask how you can help them today.
+    output_model:
+      response: str
+    user_message:
+      - response
 
 flow:
   - from: START
-    to: greet
-  - from: greet
+    to: get_name
+  - from: get_name
+    to: greet_user
+  - from: greet_user
     to: END
 ```
 
-Run with parameters:
+Import and run with a parameter:
 
 ```bash
-astonish flows run greeter -p name="Alice"
+astonish flows import personalized_greeting.yaml
+astonish flows run personalized_greeting -p get_name=Rafael
 ```
 
 Output:
 ```
-AI: Hello Alice! 🌟 I hope you're having a wonderful day...
+✓ Using provided value for 'get_name': Rafael
+✓ Processing greet_user...
+
+Agent:
+Hello Rafael! It's wonderful to connect with you today. How can I assist you?
+✓ Processing END...
 ```
+
+Without `-p`, Astonish would prompt: *"What's your name?"*
 
 ## 6. Use a Different Model
 

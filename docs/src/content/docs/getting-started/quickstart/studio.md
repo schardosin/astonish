@@ -26,7 +26,7 @@ astonish studio
 
 This starts the visual editor at **http://localhost:9393**. Open it in your browser.
 
-![Studio Launch](/src/assets/placeholder.png)
+![Studio Launch](/src/assets/wizard-welcome.webp)
 *Astonish Studio welcome screen*
 
 ## 2. Configure Your Provider
@@ -59,45 +59,48 @@ We recommend **OpenRouter** for beginners—it gives you access to multiple mode
 ## 3. Create a New Flow
 
 1. Click **+ New Flow** in the sidebar (or press `N`)
-2. Enter a name: `hello_world`
+2. Enter a name: `hello world`
 3. Click **Create**
 
 You'll see an empty canvas with **START** and **END** nodes.
 
-![Empty Canvas](/src/assets/placeholder.png)
+![Empty Canvas](/src/assets/introduction-empty_canvas.webp)
 *A new flow with START and END nodes*
 
 ## 4. Add an LLM Node
 
-1. Click anywhere on the canvas between START and END
+1. Click the **+** button on the **START** node
 2. Select **LLM** from the node type menu
-3. A new LLM node appears
+3. A new LLM node appears, already connected to START
 
-### Configure the Node
+### Configure the Prompt
 
 Click the node to open the editor panel:
 
 1. **Name:** `greet`
 2. **Prompt:** `Greet the user warmly and ask how you can help them today.`
-3. Close the panel
 
-![LLM Node Configuration](/src/assets/placeholder.png)
-*Configuring an LLM node*
+### Configure the Output
 
-## 5. Connect the Nodes
+Switch to the **Output** tab:
 
-1. Hover over the **START** node's output handle (bottom)
-2. Click and drag to the `greet` node's input handle (top)
-3. Repeat: drag from `greet` to **END**
+1. The **Output Model** already has `response` — this saves the AI's reply to state
+2. Under **User Message**, click **+ Add**
+3. Enter `response` — this displays the saved reply to the user
+4. Click **Done** to close the panel
 
-Your flow should now look like:
+![LLM Output Configuration](/src/assets/introduction-flow_node_user_message.webp)
+*Configure the Output tab to display the response to the user*
 
-```
-START → greet → END
-```
+## 5. Connect to END
 
-![Connected Flow](/src/assets/placeholder.png)
-*A complete flow with connections*
+1. Click the **+** button on the `greet` node
+2. Select **End** from the node type menu
+
+Your flow is now complete: **START → greet → END**
+
+![Complete Flow with Node Configuration](/src/assets/introduction-flow_node_dialog.webp)
+*The complete flow with the LLM node configured*
 
 ## 6. Run Your Flow
 
@@ -105,28 +108,26 @@ START → greet → END
 2. Watch the execution in the chat panel on the right
 3. The AI will greet you!
 
-![Flow Execution](/src/assets/placeholder.png)
+![Flow Execution](/src/assets/introduction-flow_run.webp)
 *Seeing your flow run in real-time*
 
-## 7. Save Your Work
-
-Press **Cmd+S** (Mac) or **Ctrl+S** (Windows/Linux) to save.
-
-Your flow is saved as a YAML file at:
-```
-~/.astonish/agents/hello_world.yaml
-```
-
 ## What You Built
+
+Your flow is automatically saved as a YAML file at `~/.astonish/agents/hello_world.yaml`.
 
 Here's the YAML that Studio generated:
 
 ```yaml
-name: hello_world
+description: hello world
 nodes:
   - name: greet
     type: llm
-    prompt: Greet the user warmly and ask how you can help them today.
+    system: You are a helpful assistant.
+    prompt: Greet the user warmly and ask how you can help them today
+    output_model:
+      response: str
+    user_message:
+      - response
 flow:
   - from: START
     to: greet

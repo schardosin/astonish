@@ -126,7 +126,7 @@ astonish studio
 ```
 
 Opens a local web UI at `http://localhost:9393` where you can:
-- **Configure providers** — A built-in setup wizard guides you through connecting AI providers (Gemini, Claude, GPT-4, Ollama, etc.)
+- **Configure providers** — A built-in setup wizard guides you through connecting AI providers (Gemini, Claude, GPT, Ollama, etc.)
 - **Design flows visually** — Drag-and-drop nodes, connect edges, test in real-time
 - **Manage MCP servers** — Add GitHub, Slack, databases, or custom tools
 
@@ -250,7 +250,7 @@ flowchart TB
     subgraph Providers["☁️ AI Providers"]
         Gemini["Gemini"]
         Claude["Claude"]
-        GPT["GPT-4"]
+        GPT["GPT"]
         More["..."]
     end
 ```
@@ -322,7 +322,7 @@ astonish agents run pr_description_generator
 |----------|------|--------|
 | Google Gemini | Cloud | ✅ |
 | Anthropic Claude | Cloud | ✅ |
-| OpenAI GPT-4 | Cloud | ✅ |
+| OpenAI GPT | Cloud | ✅ |
 | SAP AI Core | Enterprise | ✅ |
 | Groq | Cloud | ✅ |
 | OpenRouter | Cloud | ✅ |

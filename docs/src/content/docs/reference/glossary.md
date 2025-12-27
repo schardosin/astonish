@@ -35,7 +35,7 @@ A directed graph of nodes and edges that defines an AI workflow. Flows are store
 ## L
 
 ### LLM
-**Large Language Model**. An AI model that generates text, such as GPT-4, Claude, or Gemini. LLM nodes call these models.
+**Large Language Model**. An AI model that generates text, such as GPT, Claude, or Gemini. LLM nodes call these models.
 
 ---
 

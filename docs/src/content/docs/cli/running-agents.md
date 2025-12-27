@@ -54,7 +54,7 @@ These become available as `{input}`, `{topic}`, `{format}` in your prompts.
 Run with a different model:
 
 ```bash
-astonish flows run summarizer -model gpt-4
+astonish flows run summarizer -model gpt-5
 ```
 
 ## Override Provider
@@ -62,7 +62,7 @@ astonish flows run summarizer -model gpt-4
 Switch providers at runtime:
 
 ```bash
-astonish flows run summarizer -provider anthropic -model claude-3-sonnet
+astonish flows run summarizer -provider anthropic -model claude-4.5-sonnet
 ```
 
 ## Debug Mode

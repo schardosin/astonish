@@ -14,8 +14,8 @@ Astonish supports multiple AI providers. Configure one or more to power your flo
 | Provider | Type | Best For |
 |----------|------|----------|
 | **OpenRouter** | Cloud | Access to many models with one key |
-| **OpenAI** | Cloud | GPT-4, GPT-3.5 |
-| **Anthropic** | Cloud | Claude 3 family |
+| **OpenAI** | Cloud | GPT-5, GPT-4, GPT-3.5 |
+| **Anthropic** | Cloud | Claude 4 family |
 | **Google Gemini** | Cloud | Gemini Pro, Flash |
 | **Groq** | Cloud | Fast inference |
 | **xAI** | Cloud | Grok models |
@@ -192,7 +192,7 @@ general:
 Override at runtime:
 
 ```bash
-astonish flows run my_flow -provider openai -model gpt-4
+astonish flows run my_flow -provider openai -model gpt-5
 ```
 
 ## Environment Variables

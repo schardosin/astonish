@@ -15,7 +15,7 @@ Astonish supports multiple AI providers. Configure one or more to power your flo
 |----------|------|----------|
 | **OpenRouter** | Cloud | Access to many models with one key |
 | **OpenAI** | Cloud | GPT-5, GPT-4, GPT-3.5 |
-| **Anthropic** | Cloud | Claude 4 family |
+| **Anthropic** | Cloud | Claude, Haiku and Opus family |
 | **Google Gemini** | Cloud | Gemini Pro, Flash |
 | **Groq** | Cloud | Fast inference |
 | **xAI** | Cloud | Grok models |
@@ -34,7 +34,7 @@ The easiest way to configure providers:
 astonish setup
 ```
 
-![Setup Wizard](/astonish/images/placeholder.png)
+![Setup Wizard](/astonish/images/cli-setup.webp)
 *Interactive provider selection*
 
 1. Select a provider from the list
@@ -42,44 +42,21 @@ astonish setup
 3. Choose a default model
 4. Done!
 
-## Method 2: Edit Config
+## Method 2: Studio Settings
 
-Open the configuration file:
-
-```bash
-astonish config edit
-```
-
-Or edit directly:
+Configure providers through the visual interface:
 
 ```bash
-# macOS
-code ~/Library/Application\ Support/astonish/config.yaml
-
-# Linux
-code ~/.config/astonish/config.yaml
+astonish studio
 ```
 
-### Config Structure
+1. Open the **Settings** menu (gear icon)
+2. Navigate to **Providers** and add your API key
+3. Navigate to **General** to set your default provider and model
+   - A dialog opens with all available models for configured providers
+   - Use the search bar to find models quickly
 
-```yaml
-general:
-  default_provider: openrouter
-  default_model: anthropic/claude-3-sonnet
-
-providers:
-  openrouter:
-    api_key: sk-or-v1-...
-  
-  openai:
-    api_key: sk-...
-  
-  anthropic:
-    api_key: sk-ant-...
-  
-  ollama:
-    # No API key needed for local
-```
+The Studio provides validation and auto-completion for model names.
 
 ## Provider Configuration
 

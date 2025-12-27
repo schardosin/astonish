@@ -891,6 +891,51 @@ func (a *AstonishAgent) handleUpdateStateNode(ctx agent.InvocationContext, node 
 		}
 		stateDelta[targetVar] = list
 
+	case "increment":
+		// Get increment amount from value field (default to 1)
+		incrementBy := 1
+		if node.Value != nil {
+			switch v := node.Value.(type) {
+			case int:
+				incrementBy = v
+			case float64:
+				incrementBy = int(v)
+			case string:
+				// Try to parse as int
+				if parsed, err := strconv.Atoi(v); err == nil {
+					incrementBy = parsed
+				}
+			}
+		}
+
+		// Get current value (from source_variable or target)
+		var currentVal int
+		sourceVar := node.SourceVariable
+		if sourceVar == "" {
+			sourceVar = targetVar // If no source, use target as both source and dest
+		}
+		if existing, err := state.Get(sourceVar); err == nil && existing != nil {
+			switch v := existing.(type) {
+			case int:
+				currentVal = v
+			case float64:
+				currentVal = int(v)
+			case string:
+				if parsed, err := strconv.Atoi(v); err == nil {
+					currentVal = parsed
+				}
+			}
+		}
+
+		// Increment
+		newVal := currentVal + incrementBy
+
+		if err := state.Set(targetVar, newVal); err != nil {
+			yield(nil, fmt.Errorf("failed to set state variable %s: %w", targetVar, err))
+			return false
+		}
+		stateDelta[targetVar] = newVal
+
 	default:
 		yield(nil, fmt.Errorf("unsupported action: %s", node.Action))
 		return false

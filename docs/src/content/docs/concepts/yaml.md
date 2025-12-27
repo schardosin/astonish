@@ -177,12 +177,21 @@ Dynamic options from state:
     status: str
 ```
 
+```yaml
+- name: increment_counter
+  type: update_state
+  action: increment
+  value: 1
+  output_model:
+    counter: int
+```
+
 | Property | Required | Description |
 |----------|----------|-------------|
 | `updates` | No | Key-value pairs (legacy mode) |
-| `action` | No | `append` or `overwrite` |
+| `action` | No | `append`, `overwrite`, or `increment` |
 | `source_variable` | No | Variable to read value from |
-| `value` | No | Literal value to use |
+| `value` | No | Literal value (or increment amount) |
 | `output_model` | No | Target variable (exactly 1 key) |
 
 ---

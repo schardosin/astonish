@@ -154,17 +154,15 @@ Note: LLM responses are shown automatically, so output nodes are mainly for form
 ` + "```" + `
 
 ### 5. Update State Node
-**ONLY use for APPENDING to lists.** For overwriting values, use output_model on LLM/tool nodes instead.
+Modify state directly without AI. Supports three actions: **append**, **increment**, and **overwrite**.
 
-The update_state node is specifically designed for accumulating data over iterations, such as:
-- Building conversation history
-- Collecting items across a loop
-- Aggregating results from multiple iterations
-
-**DO NOT use update_state just to copy or overwrite variables** - that's what output_model does automatically.
+**Primary use cases:**
+- **append**: Building lists over iterations (conversation history, collected items)
+- **increment**: Counting loop iterations or tracking numeric progress
+- **overwrite**: Copying values between variables (use sparingly - output_model usually handles this)
 
 ` + "```yaml" + `
-# CORRECT: Append to a list (building history across loop iterations)
+# APPEND: Build a list over iterations (e.g., conversation history)
 - name: update_history
   type: update_state
   source_variable: ai_message   # The variable to append
@@ -172,28 +170,58 @@ The update_state node is specifically designed for accumulating data over iterat
   output_model:
     history: list               # Target list that grows each iteration
 
-# Example: Simple conversation loop with history
-# 1. Get user input -> output_model: {user_message: str}
-# 2. LLM generates response -> output_model: {ai_message: str} + user_message: [ai_message]
-# 3. Append to history -> source_variable: ai_message, action: append, output_model: {history: list}
-# 4. Loop back to step 1
-` + "```" + `
-
-**Anti-patterns - DO NOT DO:**
-` + "```yaml" + `
-# WRONG: Using update_state to overwrite - just use output_model on the LLM node instead!
-- name: make_turn
+# INCREMENT: Count loop iterations
+- name: increment_counter
   type: update_state
-  action: overwrite        # Don't use update_state for overwrite!
-  value:
-    user: '{user_message}'
-    assistant: '{ai_message}'
+  action: increment
+  value: 1                      # Amount to add (default: 1)
   output_model:
-    last_turn: dict
+    counter: int                # Variable to increment
 
-# CORRECT: The LLM's output_model already saves variables to state automatically
-# No extra node needed - output_model on LLM/tool nodes handles overwriting
+# INCREMENT with source: Copy and increment
+- name: step_counter
+  type: update_state
+  source_variable: current      # Read current value from here
+  action: increment
+  value: 1
+  output_model:
+    total: int                  # Store result here
 ` + "```" + `
+
+**CRITICAL: Two separate modes - DO NOT MIX!**
+
+Mode 1: **Legacy mode** (uses ` + "`" + `updates` + "`" + `) - for setting initial values:
+` + "```yaml" + `
+- name: init
+  type: update_state
+  updates:              # Use updates for initialization
+    counter: "0"        # No action field!
+    status: "pending"
+` + "```" + `
+
+Mode 2: **Action mode** (uses ` + "`" + `action` + "`" + ` + ` + "`" + `value` + "`" + `/` + "`" + `source_variable` + "`" + `) - for append/increment/overwrite:
+` + "```yaml" + `
+- name: increment
+  type: update_state
+  action: increment     # Requires value OR source_variable
+  value: 1              # No updates field!
+  output_model:
+    counter: int
+` + "```" + `
+
+**WRONG - mixing modes will cause errors:**
+` + "```yaml" + `
+# ❌ WRONG: action + updates = ERROR!
+- name: bad_init
+  type: update_state
+  action: overwrite
+  updates:              # This is IGNORED when action is set!
+    counter: "0"
+  output_model:
+    counter: int
+` + "```" + `
+
+**DO NOT use update_state just to copy or overwrite variables** - that's what output_model does automatically.
 
 ## Flow Edges
 

@@ -179,39 +179,59 @@ nodes:
     prompt: "Combine {result1} and {result2}"
 ```
 
-### Loops with Accumulation
+### Loops with Counters
 
-Use `append` to track iterations:
+Use `increment` to track iterations:
 
 ```yaml
 nodes:
+  - name: init
+    type: update_state
+    updates:
+      attempts: "0"
+
   - name: attempt
     type: llm
     prompt: "Try to solve {problem}"
     output_model:
       result: str
     
-  - name: track_attempt
+  - name: increment
     type: update_state
-    source_variable: result
-    action: append
+    action: increment
+    value: 1
     output_model:
-      attempts: list
+      attempts: int
 
 flow:
+  - from: START
+    to: init
+  - from: init
+    to: attempt
   - from: attempt
-    to: track_attempt
-  - from: track_attempt
+    to: increment
+  - from: increment
     edges:
       - to: END
-        condition: "lambda x: len(x.get('attempts', [])) >= 3"
+        condition: "lambda x: x.get('attempts', 0) >= 3"
       - to: attempt
-        condition: "lambda x: len(x.get('attempts', [])) < 3"
+        condition: "lambda x: x.get('attempts', 0) < 3"
 ```
 
-:::note
-`update_state` does **not** support arithmetic. Use list length for counting iterations.
-:::
+### Alternative: Loops with Accumulation
+
+Use `append` to track results and count by list length:
+
+```yaml
+- name: track_attempt
+  type: update_state
+  source_variable: result
+  action: append
+  output_model:
+    attempts: list
+
+# Then check: lambda x: len(x.get('attempts', [])) >= 3
+```
 
 ## Debugging State
 

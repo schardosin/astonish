@@ -265,7 +265,32 @@ Or copy from another variable:
     final_result: str
 ```
 
-### Mode 3: Simple Updates (Legacy)
+### Mode 3: Increment
+
+Increment a numeric counter:
+
+```yaml
+- name: increment_counter
+  type: update_state
+  action: increment
+  value: 1                # Increment by this amount (default: 1)
+  output_model:
+    counter: int          # Variable to increment
+```
+
+Or increment from one variable into another:
+
+```yaml
+- name: step_counter
+  type: update_state
+  source_variable: step   # Read current value from here
+  action: increment
+  value: 1
+  output_model:
+    total_steps: int      # Store result here
+```
+
+### Mode 4: Simple Updates (Legacy)
 
 Set multiple key-value pairs directly:
 
@@ -283,11 +308,11 @@ Values can use `{variable}` interpolation.
 
 | Property | Description |
 |----------|-------------|
-| `action` | `append` or `overwrite` (required for modes 1-2) |
+| `action` | `append`, `overwrite`, or `increment` |
 | `source_variable` | Variable to read from |
-| `value` | Literal value to use |
-| `output_model` | Target variable (exactly 1 key for modes 1-2) |
-| `updates` | Key-value map (for mode 3 only) |
+| `value` | Literal value (or increment amount for `increment`) |
+| `output_model` | Target variable (exactly 1 key) |
+| `updates` | Key-value map (legacy mode only) |
 
 ---
 

@@ -38,43 +38,52 @@ astonish flows run analyzer -p input="Hello, world!"
 astonish flows run processor -p config='{"debug": true}'
 ```
 
-## Using Parameters in Flows
+## How Parameters Work
 
-Reference parameters with curly braces:
+Parameters come from **input nodes** in your flow. The `-p` flag lets you provide values upfront instead of being prompted interactively.
+
+### Example Flow
 
 ```yaml
 nodes:
+  - name: get_input
+    type: input
+    prompt: "What would you like to analyze?"
+    output_model:
+      input: str
+
   - name: analyze
     type: llm
     prompt: "Analyze the following: {input}"
+
+flow:
+  - from: START
+    to: get_input
+  - from: get_input
+    to: analyze
+  - from: analyze
+    to: END
 ```
 
-When you run:
+### Running Interactively
+
+Without `-p`, the flow prompts you:
+
 ```bash
-astonish flows run analyzer -p input="Check this data"
+astonish flows run analyzer
+# > What would you like to analyze?
+# You type your input here
 ```
 
-The prompt becomes:
-```
-Analyze the following: Check this data
-```
+### Skipping Prompts with `-p`
 
-## Default Values
+Provide the value upfront:
 
-If a parameter isn't provided, the variable shows as-is:
-
-```yaml
-prompt: "Hello {name}, welcome!"
+```bash
+astonish flows run analyzer -p get_input="Check this data"
 ```
 
-Running without `-p name=...`:
-```
-Hello {name}, welcome!  # Literal text
-```
-
-:::tip
-Always provide required parameters or add defaults in your flow logic.
-:::
+The input node named `get_input` receives the value directly, skipping the interactive prompt.
 
 ## Parameter Types
 
@@ -138,14 +147,24 @@ echo "Result: $result"
 
 ## Conditional Runs
 
-Use parameters to control flow behavior:
+Use input nodes to control flow behavior based on user choices:
 
 ```yaml
 nodes:
-  - name: router
+  - name: get_mode
     type: input
+    prompt: "Choose mode"
+    options:
+      - "detailed"
+      - "quick"
     output_model:
       mode: str
+
+  - name: get_input
+    type: input
+    prompt: "What to analyze?"
+    output_model:
+      input: str
 
   - name: detailed_analysis
     type: llm
@@ -156,7 +175,11 @@ nodes:
     prompt: "Briefly summarize {input}"
 
 flow:
-  - from: router
+  - from: START
+    to: get_mode
+  - from: get_mode
+    to: get_input
+  - from: get_input
     edges:
       - to: detailed_analysis
         condition: "lambda x: x['mode'] == 'detailed'"
@@ -164,9 +187,9 @@ flow:
         condition: "lambda x: x['mode'] == 'quick'"
 ```
 
-Run:
+Run with parameters to skip prompts:
 ```bash
-astonish flows run analyzer -p mode="detailed" -p input="..."
+astonish flows run analyzer -p get_mode="detailed" -p get_input="My data"
 ```
 
 ## Best Practices

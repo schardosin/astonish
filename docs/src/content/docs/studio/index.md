@@ -9,18 +9,29 @@ sidebar:
 
 Astonish Studio is the visual interface for designing, testing, and managing AI flows. It transforms complex agent logic into intuitive drag-and-drop workflows.
 
-![Astonish Studio Interface](/src/assets/placeholder.png)
+![Astonish Studio Interface](/src/assets/introduction-canvas.webp)
 *The Astonish Studio workspace*
 
 ## Why Use Studio?
 
 | Feature | Benefit |
 |---------|---------|
+| **AI Assist** | Create or modify flows and nodes using natural language prompts |
 | **Visual Design** | See your entire flow at a glance |
 | **Real-time Testing** | Run and debug without leaving the editor |
 | **Node Configuration** | Forms instead of YAML syntax |
 | **MCP Store** | Browse and install tools visually |
 | **Flow Store** | Discover and install community flows |
+
+## AI Assist
+
+The **AI Assist** is one of Studio's most powerful features. Describe what you want in plain language, and it builds or modifies your flow for you.
+
+- **Create entire flows** — "Create a flow that summarizes a webpage and sends it to Slack"
+- **Add nodes** — "Add a condition to check if the response contains an error"
+- **Modify existing nodes** — "Change this prompt to be more formal"
+
+Click the **✨ AI Assist** button to open the assistant and start prompting.
 
 ## Launching Studio
 
@@ -38,7 +49,7 @@ astonish studio -port 8080
 
 ## Workspace Overview
 
-The Studio interface has four main areas:
+The Studio interface has five main areas:
 
 ### 1. Sidebar (Left)
 
@@ -62,15 +73,18 @@ When you select a node:
 ### 4. Top Bar
 
 - **Run** — Execute the current flow
-- **Save** — Save changes (Cmd/Ctrl+S)
-- **YAML** — View/edit raw YAML
+- **View Source** — View/edit raw YAML
+
+### 5. AI Assist Button (Bottom Right)
+
+The floating ✨ button in the bottom right corner opens the AI Assist panel. Use it to create or modify flows using natural language.
 
 ## What Studio Creates
 
-Everything you build in Studio is saved as a YAML file:
+Everything you build in Studio is automatically saved as a YAML file. To find your flows directory:
 
-```
-~/.astonish/agents/<flow-name>.yaml
+```bash
+astonish config directory
 ```
 
 These files can be:

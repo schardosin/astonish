@@ -14,13 +14,14 @@ Create a tap repository to share your flows and MCP configurations with your tea
 A tap is a GitHub repository containing:
 ```
 your-flows/
-├── manifest.yaml       # Index of your content
-├── flows/              # Your flow YAML files
-│   ├── summarizer.yaml
-│   └── analyzer.yaml
-└── mcp/                # Optional MCP configs
-    └── custom-tool.json
+├── manifest.yaml       # Index of flows and MCP servers
+├── README.md           # Documentation
+└── flows/              # All flow YAML files
+    ├── summarizer.yaml
+    └── analyzer.yaml
 ```
+
+The `manifest.yaml` lists your flows and defines MCP servers inline.
 
 ## Step 1: Create the Repository
 
@@ -30,19 +31,19 @@ Create a new GitHub repository:
 
 ## Step 2: Add Your Flows
 
-Copy your flow files to the repository:
+Create a `flows` folder and add your flow files:
 
 ```bash
 # Clone your new repo
 git clone https://github.com/your-username/astonish-flows.git
 cd astonish-flows
 
-# Create directories
-mkdir -p flows mcp
+# Create flows directory
+mkdir flows
 
 # Copy flows from your local Astonish
-cp ~/.astonish/agents/summarizer.yaml flows/
-cp ~/.astonish/agents/analyzer.yaml flows/
+cp ~/.config/astonish/flows/summarizer.yaml flows/
+cp ~/.config/astonish/flows/analyzer.yaml flows/
 ```
 
 ## Step 3: Create the Manifest
@@ -50,31 +51,38 @@ cp ~/.astonish/agents/analyzer.yaml flows/
 Create `manifest.yaml` at the repository root:
 
 ```yaml
-name: your-username-flows
-description: A collection of useful AI flows
+name: your-username Astonish Flows
 author: your-username
-version: 1.0.0
+description: A collection of useful AI flows
 
 flows:
-  - name: summarizer
-    file: flows/summarizer.yaml
+  summarizer:
     description: Summarizes long text into key points
-    tags:
-      - text
-      - summary
+    tags: [text, summary]
   
-  - name: analyzer
-    file: flows/analyzer.yaml
+  analyzer:
     description: Analyzes data and provides insights
-    tags:
-      - analysis
-      - data
+    tags: [analysis, data]
 
 # Optional: Include MCP server configurations
-mcp_servers:
-  - name: custom-tool
-    file: mcp/custom-tool.json
-    description: Custom MCP server for specific use case
+mcps:
+  tavily:
+    description: Enables real-time web search
+    command: npx
+    args:
+      - -y
+      - tavily-mcp@0.1.2
+    env:
+      TAVILY_API_KEY: ""
+    tags: [web-search, web-extraction]
+
+  python-sandbox:
+    description: Python Sandbox for code execution
+    command: uvx
+    args:
+      - mcp-run-python
+      - stdio
+    tags: [python, sandbox]
 ```
 
 ## Step 4: Push and Share
@@ -111,28 +119,41 @@ description: What this tap provides
 
 ```yaml
 author: your-name
-version: 1.0.0
-repository: https://github.com/you/repo
 ```
 
 ### Flow Entry
 
+Flows are defined as a map, where the key is the filename (without .yaml):
+
 ```yaml
 flows:
-  - name: flow-name          # Required
-    file: path/to/flow.yaml  # Required
-    description: ...         # Recommended
-    tags: [tag1, tag2]       # Optional
-    version: 1.0.0           # Optional
+  flow-name:                  # File: flows/flow-name.yaml
+    description: ...          # Recommended
+    tags: [tag1, tag2]        # Optional
+```
+
+The flow YAML file must be in the `flows/` folder:
+```
+flows/
+└── flow-name.yaml
 ```
 
 ### MCP Server Entry
 
+MCP servers are defined inline in the manifest:
+
 ```yaml
-mcp_servers:
-  - name: server-name         # Required
-    file: path/to/config.json # Required
-    description: ...          # Recommended
+mcps:
+  server-name:               # Server identifier
+    description: ...         # Recommended
+    command: npx             # npx, uvx, docker, etc.
+    args:                    # Command arguments
+      - -y
+      - package-name
+    env:                     # Environment variables
+      API_KEY: ""
+    tags: [tag1, tag2]       # Optional
+    transport: stdio         # stdio or sse
 ```
 
 ## Best Practices
@@ -177,7 +198,7 @@ Test your flows before sharing:
 
 ```bash
 # Run locally
-astonish flows run flows/summarizer.yaml
+astonish flows run summarizer/summarizer.yaml
 ```
 
 ## Private Taps
@@ -202,7 +223,6 @@ When you update flows:
 
 ```bash
 astonish tap update
-astonish flows store update
 ```
 
 ## Next Steps

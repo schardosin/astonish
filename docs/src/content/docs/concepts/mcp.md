@@ -20,11 +20,10 @@ Learn more: [modelcontextprotocol.io](https://modelcontextprotocol.io/)
 
 ## MCP in Astonish
 
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Flow      │ ──► │  MCP Server │ ──► │  External   │
-│   (LLM)     │ ◄── │  (Tools)    │ ◄── │  Service    │
-└─────────────┘     └─────────────┘     └─────────────┘
+```mermaid
+flowchart LR
+    A[Flow - LLM] <--> B[MCP Server - Tools]
+    B <--> C[External Service]
 ```
 
 1. Your flow calls an LLM with tools enabled
@@ -71,6 +70,18 @@ Servers are defined in `mcp_config.json`:
 | `args` | Command arguments |
 | `env` | Environment variables |
 | `transport` | `stdio` (standard) or `sse` (streaming) |
+
+## MCP Server Sources
+
+MCP servers can come from three sources:
+
+| Source | Description |
+|--------|-------------|
+| **Official MCP Store** | Built-in server store (`astonish tools store`) |
+| **Tap Store** | Defined in a tap's `manifest.yaml` |
+| **Inline** | Manually configured or embedded in flows |
+
+When you use an MCP server in a flow, Astonish tracks its source and embeds this in the flow YAML. This ensures shared flows include the information needed to install dependencies.
 
 ## Using Tools in Flows
 
@@ -141,8 +152,8 @@ MCP SERVERS (2)
 
 | Type | Source | Examples |
 |------|--------|----------|
-| Internal | Built into Astonish | web_search, web_extract |
-| External | MCP servers | GitHub, filesystem, custom |
+| Internal | Built into Astonish | shell_command, read_file, write_file |
+| External | MCP servers | GitHub, Tavily, filesystem, custom |
 
 ## Tool Flow
 

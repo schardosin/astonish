@@ -99,12 +99,12 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 		return openai_provider.NewProvider(client, modelName, true), nil
 
 	case "openrouter":
-		apiKey := ""
-		if cfg != nil {
+		apiKey := os.Getenv("OPENROUTER_API_KEY")
+		if apiKey == "" && cfg != nil {
 			apiKey = cfg.Providers["openrouter"]["api_key"]
 		}
 		if apiKey == "" {
-			return nil, fmt.Errorf("OpenRouter API Key not configured")
+			return nil, fmt.Errorf("OPENROUTER_API_KEY not set")
 		}
 		if modelName == "" {
 			return nil, fmt.Errorf("model name required for openrouter")
@@ -198,7 +198,36 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 		if modelName == "" {
 			return nil, fmt.Errorf("model name required for sap_ai_core")
 		}
-		return sap.NewProvider(ctx, modelName)
+		// Try environment variables first, then config
+		clientID := os.Getenv("AICORE_CLIENT_ID")
+		clientSecret := os.Getenv("AICORE_CLIENT_SECRET")
+		authURL := os.Getenv("AICORE_AUTH_URL")
+		baseURL := os.Getenv("AICORE_BASE_URL")
+		resourceGroup := os.Getenv("AICORE_RESOURCE_GROUP")
+		
+		if cfg != nil && cfg.Providers["sap_ai_core"] != nil {
+			pCfg := cfg.Providers["sap_ai_core"]
+			if clientID == "" {
+				clientID = pCfg["client_id"]
+			}
+			if clientSecret == "" {
+				clientSecret = pCfg["client_secret"]
+			}
+			if authURL == "" {
+				authURL = pCfg["auth_url"]
+			}
+			if baseURL == "" {
+				baseURL = pCfg["base_url"]
+			}
+			if resourceGroup == "" {
+				resourceGroup = pCfg["resource_group"]
+			}
+		}
+		
+		if clientID == "" || clientSecret == "" || authURL == "" || baseURL == "" {
+			return nil, fmt.Errorf("SAP AI Core configuration incomplete (need AICORE_CLIENT_ID, AICORE_CLIENT_SECRET, AICORE_AUTH_URL, AICORE_BASE_URL)")
+		}
+		return sap.NewProviderWithConfig(ctx, modelName, clientID, clientSecret, authURL, baseURL, resourceGroup)
 
 	case "xai", "grok":
 		apiKey := os.Getenv("XAI_API_KEY")
@@ -310,8 +339,8 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 		return lmstudio.ListModels(ctx, baseURL)
 
 	case "openrouter":
-		apiKey := ""
-		if cfg != nil && cfg.Providers["openrouter"] != nil {
+		apiKey := os.Getenv("OPENROUTER_API_KEY")
+		if apiKey == "" && cfg != nil && cfg.Providers["openrouter"] != nil {
 			apiKey = cfg.Providers["openrouter"]["api_key"]
 		}
 		models, err := openrouter.ListModels(apiKey)
@@ -339,16 +368,36 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 		return poe.ListModels(ctx, apiKey)
 
 	case "sap_ai_core":
-		if cfg == nil || cfg.Providers["sap_ai_core"] == nil {
-			return nil, fmt.Errorf("SAP AI Core not configured")
+		// Try environment variables first, then config
+		clientID := os.Getenv("AICORE_CLIENT_ID")
+		clientSecret := os.Getenv("AICORE_CLIENT_SECRET")
+		authURL := os.Getenv("AICORE_AUTH_URL")
+		baseURL := os.Getenv("AICORE_BASE_URL")
+		resourceGroup := os.Getenv("AICORE_RESOURCE_GROUP")
+		
+		if cfg != nil && cfg.Providers["sap_ai_core"] != nil {
+			pCfg := cfg.Providers["sap_ai_core"]
+			if clientID == "" {
+				clientID = pCfg["client_id"]
+			}
+			if clientSecret == "" {
+				clientSecret = pCfg["client_secret"]
+			}
+			if authURL == "" {
+				authURL = pCfg["auth_url"]
+			}
+			if baseURL == "" {
+				baseURL = pCfg["base_url"]
+			}
+			if resourceGroup == "" {
+				resourceGroup = pCfg["resource_group"]
+			}
 		}
-		pCfg := cfg.Providers["sap_ai_core"]
-		return sap.ListModels(ctx,
-			pCfg["client_id"],
-			pCfg["client_secret"],
-			pCfg["auth_url"],
-			pCfg["base_url"],
-			pCfg["resource_group"])
+		
+		if clientID == "" || clientSecret == "" || authURL == "" || baseURL == "" {
+			return nil, fmt.Errorf("SAP AI Core configuration incomplete")
+		}
+		return sap.ListModels(ctx, clientID, clientSecret, authURL, baseURL, resourceGroup)
 
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", providerID)

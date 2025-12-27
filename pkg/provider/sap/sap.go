@@ -44,6 +44,11 @@ func NewProvider(ctx context.Context, modelName string) (model.LLM, error) {
 		return nil, fmt.Errorf("missing SAP AI Core environment variables")
 	}
 
+	return NewProviderWithConfig(ctx, modelName, clientID, clientSecret, authURL, baseURL, resourceGroup)
+}
+
+// NewProviderWithConfig creates a new SAP AI Core provider with explicit configuration.
+func NewProviderWithConfig(ctx context.Context, modelName, clientID, clientSecret, authURL, baseURL, resourceGroup string) (model.LLM, error) {
 	if !strings.HasSuffix(baseURL, "/v2") {
 		if strings.HasSuffix(baseURL, "/") {
 			baseURL += "v2"
@@ -53,7 +58,7 @@ func NewProvider(ctx context.Context, modelName string) (model.LLM, error) {
 	}
 
 	// Resolve deployment ID
-	deploymentID, err := ResolveDeploymentID(ctx, modelName)
+	deploymentID, err := resolveDeploymentIDWithConfig(ctx, modelName, clientID, clientSecret, authURL, baseURL, resourceGroup)
 	if err != nil {
 		return nil, err
 	}
@@ -93,6 +98,78 @@ func NewProvider(ctx context.Context, modelName string) (model.LLM, error) {
 		modelName:    modelName,
 		authConfig:   transport,
 	}, nil
+}
+
+// resolveDeploymentIDWithConfig finds the deployment ID for a given model name using explicit config.
+func resolveDeploymentIDWithConfig(ctx context.Context, modelName, clientID, clientSecret, authURL, baseURL, resourceGroup string) (string, error) {
+	// Check map first
+	if mapped, ok := ModelIDMap[modelName]; ok {
+		modelName = mapped
+	}
+
+	t := &sapTransport{
+		base:          http.DefaultTransport,
+		clientID:      clientID,
+		clientSecret:  clientSecret,
+		authURL:       authURL,
+		resourceGroup: resourceGroup,
+	}
+
+	token, err := t.getToken()
+	if err != nil {
+		return "", fmt.Errorf("failed to get token for deployment lookup: %w", err)
+	}
+
+	if !strings.HasSuffix(baseURL, "/v2") {
+		baseURL += "/v2"
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", baseURL+"/lm/deployments", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("AI-Resource-Group", resourceGroup)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("failed to list deployments: %s, body: %s", resp.Status, string(body))
+	}
+
+	var result struct {
+		Resources []struct {
+			ID      string `json:"id"`
+			Details struct {
+				Resources struct {
+					BackendDetails struct {
+						Model struct {
+							Name string `json:"name"`
+						} `json:"model"`
+					} `json:"backendDetails"`
+				} `json:"resources"`
+			} `json:"details"`
+			Status string `json:"status"`
+		} `json:"resources"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+
+	for _, res := range result.Resources {
+		if res.Status == "RUNNING" && res.Details.Resources.BackendDetails.Model.Name == modelName {
+			return res.ID, nil
+		}
+	}
+
+	return "", fmt.Errorf("no running deployment found for model: %s", modelName)
 }
 
 func (p *Provider) Name() string {

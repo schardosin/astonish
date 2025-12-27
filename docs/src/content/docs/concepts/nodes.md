@@ -17,9 +17,9 @@ Nodes are the building blocks of flows. Each node performs a specific action and
 | **END** | Exit point | Automatic |
 | **input** | Get user input | `prompt`, `options` |
 | **llm** | Call AI model | `prompt`, `system`, `tools` |
-| **tool** | Execute MCP tool | `tools_selection` |
+| **tool** | Execute MCP tool | `tools_selection`, `args` |
 | **output** | Display message | `user_message` |
-| **update_state** | Modify variables | `updates` |
+| **update_state** | Modify variables | `source_variable`, `action` |
 
 ---
 
@@ -37,25 +37,41 @@ Every flow has these automatically. You don't define them in YAML.
 Pauses execution to collect user input.
 
 ```yaml
-- name: get_topic
+- name: get_repo
   type: input
-  prompt: "What would you like to learn about?"
+  prompt: 'Enter a GitHub repo (format: owner/repo):'
   output_model:
-    topic: str
+    repo: str
 ```
 
-### With Options
+### With Static Options
+
+Provide a list of fixed choices:
 
 ```yaml
-- name: choose_action
+- name: ask_continue
   type: input
-  prompt: "Select an action:"
-  options:
-    - Summarize
-    - Translate
-    - Analyze
+  prompt: What next?
   output_model:
-    action: str
+    choice: str
+  options:
+    - 'yes'
+    - search web
+    - 'no'
+```
+
+### With Dynamic Options
+
+Reference a state variable containing a list:
+
+```yaml
+- name: select_branch
+  type: input
+  prompt: 'Select a branch from the list above:'
+  output_model:
+    selected_branch: str
+  options:
+    - branches  # References state.branches list
 ```
 
 ### Properties
@@ -63,7 +79,7 @@ Pauses execution to collect user input.
 | Property | Description |
 |----------|-------------|
 | `prompt` | Text shown to user |
-| `options` | Optional list of choices |
+| `options` | Static list of choices OR reference to state variable |
 | `output_model` | Variables to store response |
 
 ---
@@ -75,27 +91,38 @@ Calls an AI model with a prompt.
 ```yaml
 - name: analyze
   type: llm
-  prompt: "Analyze this text: {input}"
-  system: "You are a helpful analyst."
+  system: You are a helpful analyst.
+  prompt: 'Analyze this text: {input}'
 ```
 
 ### With Tools
 
+Enable tool calling and specify which tools:
+
 ```yaml
-- name: research
+- name: list_branches_llm
   type: llm
-  prompt: "Find information about {topic}"
+  system: You are a GitHub assistant. Use the list_branches tool to fetch branches.
+  prompt: 'Repo: {repo}. List all branches and provide a short summary.'
   tools: true
   tools_selection:
-    - web_search
+    - list_branches
+  output_model:
+    branches: list
+    branch_summary: str
+  user_message:
+    - branch_summary
+    - branches
 ```
 
 ### Structured Output
 
+Define expected output structure:
+
 ```yaml
 - name: extract
   type: llm
-  prompt: "Extract key information from {text}"
+  prompt: 'Extract key information from {text}'
   output_model:
     summary: str
     sentiment: str
@@ -108,10 +135,10 @@ Calls an AI model with a prompt.
 |----------|-------------|
 | `prompt` | User message to AI |
 | `system` | System prompt (personality/instructions) |
-| `tools` | Enable tool calling |
+| `tools` | Enable tool calling (`true`/`false`) |
 | `tools_selection` | Whitelist specific tools |
 | `output_model` | Parse structured output |
-| `user_message` | Display message after execution |
+| `user_message` | Display values after execution |
 
 ---
 
@@ -120,10 +147,18 @@ Calls an AI model with a prompt.
 Calls an MCP tool directly without AI.
 
 ```yaml
-- name: search
+- name: demo_tool
   type: tool
   tools_selection:
-    - web_search
+    - shell_command
+  args:
+    command: |-
+      echo '=== DEMO TOOL EXECUTED ===
+      Repo: {repo}
+      Selected branch: {selected_branch}
+      =================='
+  output_model:
+    tool_output: str
 ```
 
 Use when:
@@ -136,6 +171,8 @@ Use when:
 | Property | Description |
 |----------|-------------|
 | `tools_selection` | Which tool(s) to call |
+| `args` | Arguments to pass to the tool |
+| `output_model` | Variables to store tool output |
 
 ---
 
@@ -147,9 +184,21 @@ Displays a message to the user without AI processing.
 - name: show_result
   type: output
   user_message:
-    - "Analysis complete!"
-    - "Result:"
-    - result_variable
+    - '=== Tool Node Result ==='
+    - tool_output
+```
+
+### With Variable Interpolation
+
+Mix static text and state variables:
+
+```yaml
+- name: final_output
+  type: output
+  user_message:
+    - '=== FINAL SUMMARY ==='
+    - 'All accumulated selections: {selections}'
+    - Thanks for demoing the flow!
 ```
 
 ### User Message Format
@@ -158,9 +207,9 @@ An array of strings and variable names:
 
 ```yaml
 user_message:
-  - "Static text"
+  - 'Static text'
   - variable_name      # Replaced with variable value
-  - "More static text"
+  - 'Text with {variable}'  # Interpolation
 ```
 
 ### Properties
@@ -173,26 +222,72 @@ user_message:
 
 ## Update State Node
 
-Modifies variables directly without AI.
+Modifies variables directly without AI. Two modes are supported:
+
+### Mode 1: Append to List
+
+Add a value from another variable to a list:
+
+```yaml
+- name: append_selection
+  type: update_state
+  source_variable: selected_branch  # Value to append
+  action: append
+  output_model:
+    selections: list                # Target list variable
+```
+
+:::note
+`output_model` must have **exactly 1 key** — the target variable name.
+:::
+
+### Mode 2: Overwrite
+
+Set a variable to a specific value:
+
+```yaml
+- name: set_status
+  type: update_state
+  value: "completed"
+  action: overwrite
+  output_model:
+    status: str
+```
+
+Or copy from another variable:
+
+```yaml
+- name: copy_result
+  type: update_state
+  source_variable: llm_response
+  action: overwrite
+  output_model:
+    final_result: str
+```
+
+### Mode 3: Simple Updates (Legacy)
+
+Set multiple key-value pairs directly:
 
 ```yaml
 - name: initialize
   type: update_state
   updates:
-    counter: 0
+    counter: "0"
     status: "pending"
 ```
 
-Use for:
-- Setting default values
-- Resetting counters
-- Transforming data
+Values can use `{variable}` interpolation.
 
 ### Properties
 
 | Property | Description |
 |----------|-------------|
-| `updates` | Key-value pairs to set |
+| `action` | `append` or `overwrite` (required for modes 1-2) |
+| `source_variable` | Variable to read from |
+| `value` | Literal value to use |
+| `output_model` | Target variable (exactly 1 key for modes 1-2) |
+| `updates` | Key-value map (for mode 3 only) |
 
 ---
 
@@ -210,7 +305,7 @@ All nodes share:
 Use `{variable}` syntax in prompts:
 
 ```yaml
-prompt: "Hello {name}, analyze {topic}"
+prompt: 'Hello {name}, analyze {topic}'
 ```
 
 Variables come from:

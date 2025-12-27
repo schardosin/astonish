@@ -32,7 +32,7 @@ Browse and install from the built-in store:
 3. Click **Browse Store**
 4. Select a server and click **Install**
 
-![MCP Store](/astonish/images/placeholder.png)
+![MCP Store](/astonish/images/studio-browse_mcp_store.webp)
 *The MCP Server Store in Studio*
 
 ## Method 2: CLI Store
@@ -47,13 +47,31 @@ astonish tools store install github-mcp-server
 
 ## Method 3: Manual Configuration
 
-Edit the MCP config file:
+### Using Studio
+
+1. Open Studio: `astonish studio`
+2. Go to **Settings** → **MCP Servers**
+3. Click **Add Manual**
+4. Fill in the form:
+   - **Server Name**: A unique identifier
+   - **Transport**: `stdio` (standard) or `sse` (streaming)
+   - **Command**: The executable (`npx`, `uvx`, `docker`)
+   - **Args**: Command arguments (comma-separated)
+   - **Environment**: JSON object with environment variables
+
+:::tip[Copy-Paste Configuration]
+Click the **Source** button at the top to paste MCP server JSON directly into the config file.
+:::
+
+### Using CLI
+
+Edit the MCP config file directly:
 
 ```bash
 astonish tools edit
 ```
 
-Or edit directly:
+Or edit manually:
 
 ```bash
 # macOS

@@ -37,15 +37,36 @@ astonish flows run <name> [flags]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-p key=value` | Pass parameter | — |
-| `-model <name>` | Override model | Config |
-| `-provider <name>` | Override provider | Config |
-| `-debug` | Verbose output | false |
-| `-browser` | Web UI mode | false |
-| `-port <num>` | Web UI port | 8080 |
+| `--model <name>` | Override model | Config |
+| `--provider <name>` | Override provider | Config |
+| `--debug` | Verbose output | false |
+| `--browser` | Web UI mode | false |
+| `--port <num>` | Web UI port | 8080 |
 
 Example:
 ```bash
-astonish flows run analyzer -p input="test" -debug
+astonish flows run analyzer -p input="test" --debug
+```
+
+### flows import
+
+Import a flow from a local YAML file.
+
+```bash
+astonish flows import <file.yaml> [--as <name>]
+```
+
+Example:
+```bash
+astonish flows import my-flow.yaml --as custom_flow
+```
+
+### flows remove
+
+Remove an installed flow.
+
+```bash
+astonish flows remove <name>
 ```
 
 ### flows list
@@ -221,13 +242,29 @@ Opens browser to `http://localhost:<port>`.
 
 ## Environment Variables
 
+### GitHub
+
 | Variable | Description |
 |----------|-------------|
 | `GITHUB_TOKEN` | GitHub API access |
 | `GITHUB_ENTERPRISE_TOKEN` | Enterprise GitHub |
-| `OPENROUTER_API_KEY` | OpenRouter API |
-| `OPENAI_API_KEY` | OpenAI API |
-| `ANTHROPIC_API_KEY` | Anthropic API |
+
+### AI Providers
+
+| Variable | Provider |
+|----------|----------|
+| `ANTHROPIC_API_KEY` | Anthropic (Claude) |
+| `GOOGLE_API_KEY` | Google (Gemini) |
+| `GROQ_API_KEY` | Groq |
+| `OPENAI_API_KEY` | OpenAI |
+| `OPENROUTER_API_KEY` | OpenRouter |
+| `POE_API_KEY` | Poe |
+| `XAI_API_KEY` | xAI (Grok) |
+| `AICORE_CLIENT_ID` | SAP AI Core |
+| `AICORE_CLIENT_SECRET` | SAP AI Core |
+| `AICORE_AUTH_URL` | SAP AI Core |
+| `AICORE_BASE_URL` | SAP AI Core |
+| `AICORE_RESOURCE_GROUP` | SAP AI Core (optional) |
 
 ---
 

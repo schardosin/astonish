@@ -152,7 +152,7 @@ Override the default model at runtime:
 
 ```bash
 # Use a specific model
-astonish flows run hello_world -model gpt-4
+astonish flows run hello_world -model gpt-5
 
 # Use a different provider
 astonish flows run hello_world -provider anthropic -model claude-3-opus

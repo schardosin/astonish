@@ -13,7 +13,7 @@ sidebar:
 
 Astonish is a **community-based, open-source AI agentic tool** that lets you create AI-powered automation workflows called **flows**. Each flow is a series of connected steps that can:
 
-- 🤖 Call AI models (GPT-4, Claude, Gemini, Ollama, and more)
+- 🤖 Call AI models (GPT, Claude, Gemini, Ollama, and more)
 - 🔧 Use tools via the [MCP protocol](https://modelcontextprotocol.io/)
 - 📥 Collect user input
 - 🔀 Branch based on conditions

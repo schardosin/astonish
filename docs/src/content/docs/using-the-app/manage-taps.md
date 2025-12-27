@@ -17,15 +17,74 @@ Taps are GitHub repositories containing:
 
 The official tap is `schardosin/astonish-flows`.
 
-## Adding Taps
+## Managing Repositories (Studio)
 
-### Basic Syntax
+### Adding a Repository
+
+1. Open Studio: `astonish studio`
+2. Go to **Settings** → **Repositories**
+3. Enter the repository URL or `owner/repo` format
+4. Optionally set an alias
+5. Click **Add Repository**
+
+![Repositories Settings](/astonish/images/studio-repositories.webp)
+*Managing tap repositories in Studio*
+
+### Enterprise GitHub
+
+Works with GitHub Enterprise — just enter the full URL:
+```
+github.enterprise.com/team/flows
+```
+
+For private repositories, set your token:
+```bash
+export GITHUB_ENTERPRISE_TOKEN="ghp_xxx"
+```
+
+## Flow Store
+
+Once repositories are added, browse and install flows from the Flow Store:
+
+1. Go to **Settings** → **Flow Store**
+2. Filter by repository or search
+3. Click **Install** on any flow
+
+![Flow Store](/astonish/images/studio-flow_store.webp)
+*Browse and install flows from all configured repositories*
+
+Installed flows appear in your flow list and can be run immediately.
+
+## MCP Dependency Detection
+
+When you open an installed flow, Astonish **automatically detects missing MCP servers** and offers one-click installation:
+
+![MCP Dependency Detection](/astonish/images/studio-mcp_dependency.webp)
+*Astonish detects missing MCP servers and offers installation*
+
+### MCP Server Sources
+
+MCP servers can come from three different sources:
+
+| Source | Description |
+|--------|-------------|
+| **Official MCP Store** | The built-in MCP server store |
+| **Tap Store** | Defined in a tap's `manifest.yaml` |
+| **Inline** | Custom configuration embedded in flows |
+
+When you use an MCP server in your flow, Astonish tracks its source and embeds this information in the flow YAML. This ensures that when you share a flow, recipients know exactly where to get the required MCP servers.
+
+---
+
+## Managing Repositories (CLI)
+
+### Adding Taps
 
 ```bash
 astonish tap add <repo>
 ```
 
-### Examples
+Examples:
 
 ```bash
 # Add the official tap
@@ -36,6 +95,9 @@ astonish tap add mycompany/astonish-flows
 
 # Add with an alias
 astonish tap add mycompany/astonish-flows --as company
+
+# Enterprise GitHub
+astonish tap add github.enterprise.com/team/flows --as internal
 ```
 
 ### Naming Rules
@@ -46,39 +108,13 @@ astonish tap add mycompany/astonish-flows --as company
 | `owner/repo` | `owner/repo` | `owner-repo` |
 | `owner/repo --as name` | `owner/repo` | `name` |
 
-### Enterprise GitHub
-
-Taps work with GitHub Enterprise:
-
-```bash
-astonish tap add github.enterprise.com/team/flows --as internal
-```
-
-Set your token:
-```bash
-export GITHUB_ENTERPRISE_TOKEN="ghp_xxx"
-```
-
-## Listing Taps
+### Listing Taps
 
 ```bash
 astonish tap list
 ```
 
-Output:
-```
-CONFIGURED TAPS
-
-  schardosin (official)
-    https://github.com/schardosin/astonish-flows
-    Branch: main
-
-  company
-    https://github.enterprise.com/team/flows
-    Branch: main
-```
-
-## Updating Taps
+### Updating Taps
 
 Refresh manifests from all taps:
 
@@ -86,22 +122,15 @@ Refresh manifests from all taps:
 astonish tap update
 ```
 
-This fetches the latest list of available flows.
-
-## Removing Taps
+### Removing Taps
 
 ```bash
 astonish tap remove <name>
 ```
 
-Example:
-```bash
-astonish tap remove company
-```
+## Browsing Content (CLI)
 
-## Browsing Tap Content
-
-### List Flows from Taps
+### List Flows
 
 ```bash
 astonish flows store list
@@ -124,19 +153,6 @@ astonish flows store install schardosin/text_to_speech
 ```bash
 astonish tools store list
 ```
-
-## The Official Tap
-
-The `schardosin/astonish-flows` tap is maintained by the Astonish team:
-
-```bash
-astonish tap add schardosin
-```
-
-Contains:
-- Curated example flows
-- Common MCP server configurations
-- Community contributions
 
 ## Creating Your Own Tap
 
@@ -172,18 +188,6 @@ astonish tap add yourname/your-repo
 ```
 
 See **[Share Your Flows](/using-the-app/share-flows/)** for detailed instructions.
-
-## Tap Storage
-
-Taps are tracked in:
-```
-~/.astonish/store.json
-```
-
-Installed flows go to:
-```
-~/.astonish/store/<tap-name>/
-```
 
 ## Next Steps
 

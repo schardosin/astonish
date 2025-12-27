@@ -17,26 +17,25 @@ This guide covers everything about creating and organizing flows in Astonish Stu
 2. Enter a name (e.g., `my_analyzer`)
 3. Click **Create**
 
-![New Flow Dialog](/src/assets/placeholder.png)
+![New Flow Dialog](/src/assets/introduction-flow_create.webp)
 *The new flow dialog*
-
-### Method 2: Keyboard Shortcut
-
-Press **N** to open the new flow dialog.
 
 ## Naming Conventions
 
-Flow names should be:
-- **Lowercase** with underscores: `my_flow_name`
-- **Descriptive**: `github_pr_reviewer` not `flow1`
-- **Unique**: No duplicate names
+Use descriptive names with spaces when creating flows:
 
-Good Examples:
 ```
-daily_report_generator
-code_reviewer
-slack_summarizer
+Hello World
+GitHub PR Reviewer
+Daily Report Generator
 ```
+
+Astonish automatically converts your flow name to a file-safe format:
+
+| You enter | Saved as | CLI command |
+|-----------|----------|-------------|
+| `Hello World` | `hello_world.yaml` | `astonish flows run hello_world` |
+| `GitHub PR Reviewer` | `github_pr_reviewer.yaml` | `astonish flows run github_pr_reviewer` |
 
 ## The Empty Canvas
 
@@ -54,70 +53,84 @@ START ────────────────────────�
 
 ## Adding Your First Node
 
-1. Click anywhere on the canvas between START and END
+1. Click the **+** button on the **START** node
 2. A node type menu appears
 3. Select a node type (e.g., **LLM**)
+4. The new node is automatically connected to START
 
-![Node Type Menu](/src/assets/placeholder.png)
+![Node Type Menu](/src/assets/introduction-flow_new_node.webp)
 *Selecting a node type*
 
 ### Available Node Types
 
-| Type | Icon | Purpose |
-|------|------|---------|
-| **LLM** | 🧠 | Call an AI model |
-| **Input** | 📥 | Get user input |
-| **Tool** | 🔧 | Call an MCP tool directly |
-| **Output** | 📤 | Display a message |
-| **Update State** | ⚙️ | Modify variables |
+| Type | Purpose |
+|------|---------|
+| **Input** | Capture user input and save it to state |
+| **LLM** | Call an AI model with tools and display messages |
+| **Tool** | Execute an MCP tool directly without AI inference |
+| **State** | Modify state variables (e.g., append to a list) |
+| **Output** | Display a message from state to the user |
+
+### Core Nodes: Input and LLM
+
+**Input** and **LLM** are the nodes you'll use most often:
+
+- **Input** — Prompts the user for information and saves it to state
+- **LLM** — The most versatile node. It can call AI models, use tools, and display messages to users. In most cases, the LLM node handles everything you need.
+
+### When to Use Other Nodes
+
+- **Tool** — Execute an MCP tool directly without AI inference. Useful when you know exactly which tool to call and want to save tokens.
+- **State** — Modify variables directly, like appending items to a list. Great for aggregating data across multiple steps.
+- **Output** — Display a message to the user from a state variable. Useful when you want to show results from earlier steps at a different point in the flow.
 
 ## Connecting Nodes
 
-After adding a node, connect it to the flow:
+When you add a node using the **+** button, it's automatically connected. To create additional connections:
 
-1. Hover over **START** node's output handle (bottom edge)
-2. Click and drag to your new node's input handle (top edge)
+1. Hover over a node's output handle (bottom edge)
+2. Click and drag to another node's input handle (top edge)
 3. Release to create the connection
-4. Repeat to connect your node to **END**
 
-![Creating Connections](/src/assets/placeholder.png)
+![Creating Connections](/src/assets/introduction-flow_connecting_nodes.webp)
 *Dragging to create an edge*
 
 ## Building a Complete Flow
 
-Here's a typical flow structure:
+Flows can range from simple to complex. A typical agentic flow might include:
 
+- **Multiple LLM nodes** — Each processing different information (fetching APIs, analyzing data)
+- **User input steps** — Asking for decisions, selections, or additional context
+- **Conditional branches** — Taking different paths based on results or user choices
+
+Here's an example of a multi-step flow:
+
+```mermaid
+flowchart TB
+    START([START])
+    input1[Input: What do you need?]
+    llm1[LLM: Analyze request]
+    llm2[LLM: Fetch relevant data]
+    input2[Input: Confirm selection]
+    llm3[LLM: Process and respond]
+    END([END])
+    
+    START --> input1
+    input1 --> llm1
+    llm1 --> llm2
+    llm2 --> input2
+    input2 --> llm3
+    llm3 --> END
 ```
-START
-  │
-  ▼
-┌─────────┐
-│  Input  │  ← Get user question
-└─────────┘
-  │
-  ▼
-┌─────────┐
-│   LLM   │  ← Process with AI
-└─────────┘
-  │
-  ▼
- END
-```
 
-## Saving Your Flow
+The key is to chain nodes together, gathering and processing information step by step until all requirements are met.
 
-### Auto-Save
+## Auto-Save
 
-Studio does **not** auto-save. Always save manually:
+Studio automatically saves your flow as you make changes. To find where your flows are stored:
 
-- **Cmd+S** (Mac) or **Ctrl+S** (Windows/Linux)
-- Click the **Save** button in the top bar
-
-### Save Location
-
-Flows are saved to:
-```
-~/.astonish/agents/<flow-name>.yaml
+```bash
+astonish config directory
 ```
 
 ## Opening Existing Flows
@@ -138,8 +151,8 @@ Currently, duplicate a flow by:
 
 ## Deleting Flows
 
-1. Right-click the flow in the sidebar
-2. Select **Delete**
+1. Hover over the flow in the sidebar
+2. Click the 🗑️ trash icon that appears
 3. Confirm the deletion
 
 :::caution
@@ -152,7 +165,7 @@ For large projects, consider:
 
 - **Naming prefixes**: `api_*`, `report_*`, `slack_*`
 - **Git version control**: Track changes to your YAML files
-- **Taps**: Share flows across machines
+- **Taps**: Share flows with your team or the community via GitHub repositories
 
 ## Next Steps
 

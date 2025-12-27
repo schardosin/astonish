@@ -16,8 +16,9 @@ A flow is a directed graph where:
 - **Edges** connect nodes and control execution order
 - **State** carries data between nodes
 
-```
-START → input → process → output → END
+```mermaid
+flowchart LR
+    START --> input --> process --> output --> END
 ```
 
 ## Flow Lifecycle
@@ -111,36 +112,37 @@ See **[State](/concepts/state/)** for details.
 
 ### Linear
 
-```
-START → A → B → C → END
+```mermaid
+flowchart LR
+    START --> A --> B --> C --> END
 ```
 
 ### Branching
 
-```
-        ┌→ B
-START → A ┤
-        └→ C
+```mermaid
+flowchart LR
+    START --> A
+    A --> B
+    A --> C
 ```
 
 ### Merge
 
-```
-B ┐
-  ├→ D → END
-C ┘
+```mermaid
+flowchart LR
+    B --> D
+    C --> D
+    D --> END
 ```
 
 ### Loop
 
-```
-START → process ←─┐
-           │      │
-           ▼      │
-        check ────┘ (if retry)
-           │
-           ▼
-          END (if done)
+```mermaid
+flowchart TD
+    START --> process
+    process --> check
+    check -->|retry| process
+    check -->|done| END
 ```
 
 ## Flow Storage

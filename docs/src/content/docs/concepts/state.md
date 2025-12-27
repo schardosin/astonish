@@ -11,20 +11,12 @@ sidebar:
 
 ## How State Works
 
-```
-START
-  │
-  ▼
-[Node A] ─→ Writes: {topic: "AI"}
-  │
-  ▼
-[Node B] ─→ Reads: {topic} → Writes: {analysis: "..."}
-  │
-  ▼
-[Node C] ─→ Reads: {topic}, {analysis}
-  │
-  ▼
- END
+```mermaid
+flowchart TD
+    START --> A["Node A writes: {topic: 'AI'}"]
+    A --> B["Node B reads: {topic}, writes: {analysis: '...'}"]
+    B --> C["Node C reads: {topic}, {analysis}"]
+    C --> END
 ```
 
 Each node can:
@@ -70,7 +62,7 @@ Direct assignment:
 - name: initialize
   type: update_state
   updates:
-    counter: 0
+    counter: "0"
     status: "ready"
 ```
 
@@ -187,41 +179,46 @@ nodes:
     prompt: "Combine {result1} and {result2}"
 ```
 
-### Loops with Counters
+### Loops with Accumulation
+
+Use `append` to track iterations:
 
 ```yaml
 nodes:
-  - name: init
-    type: update_state
-    updates:
-      attempts: 0
-
   - name: attempt
     type: llm
     prompt: "Try to solve {problem}"
+    output_model:
+      result: str
     
-  - name: increment
+  - name: track_attempt
     type: update_state
-    updates:
-      attempts: "{attempts} + 1"
+    source_variable: result
+    action: append
+    output_model:
+      attempts: list
 
 flow:
   - from: attempt
-    to: increment
-  - from: increment
+    to: track_attempt
+  - from: track_attempt
     edges:
       - to: END
-        condition: "lambda x: x['attempts'] >= 3"
+        condition: "lambda x: len(x.get('attempts', [])) >= 3"
       - to: attempt
-        condition: "lambda x: x['attempts'] < 3"
+        condition: "lambda x: len(x.get('attempts', [])) < 3"
 ```
+
+:::note
+`update_state` does **not** support arithmetic. Use list length for counting iterations.
+:::
 
 ## Debugging State
 
 Enable debug mode to see state:
 
 ```bash
-astonish flows run my_flow -debug
+astonish flows run --debug my_flow
 ```
 
 Output includes:

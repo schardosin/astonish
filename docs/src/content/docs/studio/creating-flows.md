@@ -17,7 +17,7 @@ This guide covers everything about creating and organizing flows in Astonish Stu
 2. Enter a name (e.g., `my_analyzer`)
 3. Click **Create**
 
-![New Flow Dialog](/src/assets/introduction-flow_create.webp)
+![New Flow Dialog](/astonish/images/introduction-flow_create.webp)
 *The new flow dialog*
 
 ## Naming Conventions
@@ -58,7 +58,7 @@ START ────────────────────────�
 3. Select a node type (e.g., **LLM**)
 4. The new node is automatically connected to START
 
-![Node Type Menu](/src/assets/introduction-flow_new_node.webp)
+![Node Type Menu](/astonish/images/introduction-flow_new_node.webp)
 *Selecting a node type*
 
 ### Available Node Types
@@ -92,7 +92,7 @@ When you add a node using the **+** button, it's automatically connected. To cre
 2. Click and drag to another node's input handle (top edge)
 3. Release to create the connection
 
-![Creating Connections](/src/assets/introduction-flow_connecting_nodes.webp)
+![Creating Connections](/astonish/images/introduction-flow_connecting_nodes.webp)
 *Dragging to create an edge*
 
 ## Building a Complete Flow

@@ -64,7 +64,7 @@ flow:
 
 Use **Astonish Studio** to design flows visually, then run the exact same YAML from the command line.
 
-![Astonish Studio Interface](/src/assets/introduction-canvas.webp)
+![Astonish Studio Interface](/astonish/images/introduction-canvas.webp)
 *Design your AI flows with the visual editor*
 
 ## Build Visually, Run Anywhere

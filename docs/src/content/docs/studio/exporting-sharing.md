@@ -26,7 +26,7 @@ To see the raw YAML in Studio:
 1. Click **YAML** in the top bar
 2. A drawer opens showing the full file
 
-![YAML Drawer](/src/assets/placeholder.png)
+![YAML Drawer](/astonish/images/placeholder.png)
 *The YAML drawer showing raw flow content*
 
 You can:

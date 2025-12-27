@@ -17,7 +17,7 @@ Edges define how your flow moves from one node to another. They can be simple co
 2. Click and drag toward another node
 3. Release on the target node's **input handle** (top edge)
 
-![Creating an Edge](/src/assets/placeholder.png)
+![Creating an Edge](/astonish/images/placeholder.png)
 *Dragging to create a connection*
 
 ### Connection Rules
@@ -75,7 +75,7 @@ flow:
 2. The Edge Editor panel opens
 3. Enter a **Condition** expression
 
-![Edge Editor](/src/assets/placeholder.png)
+![Edge Editor](/astonish/images/placeholder.png)
 *The edge editor panel with condition input*
 
 ### Condition Syntax

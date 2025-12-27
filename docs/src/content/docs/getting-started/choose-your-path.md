@@ -47,7 +47,7 @@ Use **Astonish Studio** to design your flows. This is where you leverage:
 astonish studio
 ```
 
-![Astonish Studio Interface](/src/assets/introduction-ai_assist.webp)
+![Astonish Studio Interface](/astonish/images/introduction-ai_assist.webp)
 *Design your flows visually with AI assistance*
 
 ### 🚀 Run Anywhere with CLI

@@ -17,7 +17,7 @@ Studio provides real-time execution and debugging tools to test your flows befor
 2. Click the **▶ Run** button in the top bar
 3. The chat panel opens on the right
 
-![Run Button](/src/assets/placeholder.png)
+![Run Button](/astonish/images/placeholder.png)
 *The Run button in the top bar*
 
 ### Execution Flow
@@ -32,7 +32,7 @@ Studio provides real-time execution and debugging tools to test your flows befor
 
 The right panel shows execution in real-time:
 
-![Chat Panel](/src/assets/placeholder.png)
+![Chat Panel](/astonish/images/placeholder.png)
 *The chat panel during execution*
 
 ### What You'll See
@@ -70,7 +70,7 @@ Debug mode shows:
 - Tool call inputs and responses
 - Condition evaluations
 
-![Debug Output](/src/assets/placeholder.png)
+![Debug Output](/astonish/images/placeholder.png)
 *Verbose debug output*
 
 ## Common Issues

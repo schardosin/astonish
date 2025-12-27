@@ -32,7 +32,7 @@ Browse and install from the built-in store:
 3. Click **Browse Store**
 4. Select a server and click **Install**
 
-![MCP Store](/src/assets/placeholder.png)
+![MCP Store](/astonish/images/placeholder.png)
 *The MCP Server Store in Studio*
 
 ## Method 2: CLI Store

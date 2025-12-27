@@ -32,6 +32,10 @@ func handleFlowsCommand(args []string) error {
 		return handleShowCommand(args[1:])
 	case "edit":
 		return handleEditCommand(args[1:])
+	case "import":
+		return handleImportCommand(args[1:])
+	case "remove":
+		return handleRemoveCommand(args[1:])
 	case "store":
 		return handleStoreCommand(args[1:])
 	default:
@@ -40,7 +44,7 @@ func handleFlowsCommand(args []string) error {
 }
 
 func printFlowsUsage() {
-	fmt.Println("usage: astonish flows [-h] {run,list,show,edit,store} ...")
+	fmt.Println("usage: astonish flows [-h] {run,list,show,edit,import,remove,store} ...")
 	fmt.Println("")
 	fmt.Println("Design and run AI flows - powerful automation workflows")
 	fmt.Println("powered by LLMs with visual design and CLI execution.")
@@ -50,6 +54,8 @@ func printFlowsUsage() {
 	fmt.Println("  list                List available flows")
 	fmt.Println("  show                Visualize flow structure")
 	fmt.Println("  edit                Edit a flow YAML file")
+	fmt.Println("  import              Import a flow from a local YAML file")
+	fmt.Println("  remove              Remove a flow")
 	fmt.Println("  store               Browse and install flows from stores")
 	fmt.Println("")
 	fmt.Println("options:")
@@ -535,6 +541,148 @@ func handleEditCommand(args []string) error {
 Found:
 	fmt.Printf("Opening %s in editor...\n", agentPath)
 	return openInEditor(agentPath)
+}
+
+func handleImportCommand(args []string) error {
+	if len(args) < 1 {
+		fmt.Println("usage: astonish flows import <file.yaml>")
+		fmt.Println("       astonish flows import <file.yaml> [--as <name>]")
+		return fmt.Errorf("no file specified")
+	}
+
+	sourcePath := args[0]
+
+	// Check if source file exists
+	if _, err := os.Stat(sourcePath); os.IsNotExist(err) {
+		return fmt.Errorf("file not found: %s", sourcePath)
+	}
+
+	// Validate it's a YAML file
+	if !strings.HasSuffix(strings.ToLower(sourcePath), ".yaml") && !strings.HasSuffix(strings.ToLower(sourcePath), ".yml") {
+		return fmt.Errorf("file must be a YAML file (.yaml or .yml)")
+	}
+
+	// Validate it's a valid flow config
+	if _, err := config.LoadAgent(sourcePath); err != nil {
+		return fmt.Errorf("invalid flow file: %w", err)
+	}
+
+	// Get the flows directory
+	flowsDir, err := flowstore.GetFlowsDir()
+	if err != nil {
+		return fmt.Errorf("failed to get flows directory: %w", err)
+	}
+
+	// Create flows directory if it doesn't exist
+	if err := os.MkdirAll(flowsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create flows directory: %w", err)
+	}
+
+	// Determine destination name
+	destName := filepath.Base(sourcePath)
+
+	// Check for --as flag
+	for i := 1; i < len(args); i++ {
+		if args[i] == "--as" && i+1 < len(args) {
+			destName = args[i+1]
+			if !strings.HasSuffix(destName, ".yaml") && !strings.HasSuffix(destName, ".yml") {
+				destName += ".yaml"
+			}
+			break
+		}
+	}
+
+	destPath := filepath.Join(flowsDir, destName)
+
+	// Check if destination already exists
+	if _, err := os.Stat(destPath); err == nil {
+		return fmt.Errorf("flow already exists: %s\nUse a different name with --as <name>", destName)
+	}
+
+	// Read source file
+	data, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return fmt.Errorf("failed to read file: %w", err)
+	}
+
+	// Write to destination
+	if err := os.WriteFile(destPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	flowName := strings.TrimSuffix(destName, filepath.Ext(destName))
+	fmt.Printf("✓ Imported flow: %s\n", flowName)
+	fmt.Printf("  Run with: astonish flows run %s\n", flowName)
+	return nil
+}
+
+func handleRemoveCommand(args []string) error {
+	if len(args) < 1 {
+		fmt.Println("usage: astonish flows remove <flow_name>")
+		return fmt.Errorf("no flow name specified")
+	}
+
+	flowName := args[0]
+
+	// Remove .yaml extension if provided
+	flowName = strings.TrimSuffix(flowName, ".yaml")
+	flowName = strings.TrimSuffix(flowName, ".yml")
+
+	// Search for the flow in various locations
+	var flowPath string
+	var flowSource string
+
+	// 1. Check in flows directory (primary location for imported flows)
+	if flowsDir, err := flowstore.GetFlowsDir(); err == nil {
+		path := filepath.Join(flowsDir, flowName+".yaml")
+		if _, err := os.Stat(path); err == nil {
+			flowPath = path
+			flowSource = "flows"
+		}
+	}
+
+	// 2. Check in agents directory (legacy)
+	if flowPath == "" {
+		if agentsDir, err := config.GetAgentsDir(); err == nil {
+			path := filepath.Join(agentsDir, flowName+".yaml")
+			if _, err := os.Stat(path); err == nil {
+				flowPath = path
+				flowSource = "agents"
+			}
+		}
+	}
+
+	// 3. Check if it's an installed store flow
+	if flowPath == "" {
+		if store, err := flowstore.NewStore(); err == nil {
+			tapName, name := parseFlowRef(flowName)
+			if path, ok := store.GetInstalledFlowPath(tapName, name); ok {
+				flowPath = path
+				flowSource = "store"
+			}
+		}
+	}
+
+	if flowPath == "" {
+		return fmt.Errorf("flow not found: %s", flowName)
+	}
+
+	// Confirm deletion
+	fmt.Printf("Remove flow '%s' from %s? [y/N]: ", flowName, flowSource)
+	var response string
+	fmt.Scanln(&response)
+	if strings.ToLower(response) != "y" {
+		fmt.Println("Cancelled.")
+		return nil
+	}
+
+	// Delete the file
+	if err := os.Remove(flowPath); err != nil {
+		return fmt.Errorf("failed to remove flow: %w", err)
+	}
+
+	fmt.Printf("✓ Removed flow: %s\n", flowName)
+	return nil
 }
 
 // Store command handlers

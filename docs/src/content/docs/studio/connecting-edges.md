@@ -17,7 +17,7 @@ Edges define how your flow moves from one node to another. They can be simple co
 2. Click and drag toward another node
 3. Release on the target node's **input handle** (top edge)
 
-![Creating an Edge](/astonish/images/placeholder.png)
+![Creating an Edge](/astonish/images/introduction-flow_connecting_nodes.webp)
 *Dragging to create a connection*
 
 ### Connection Rules
@@ -33,8 +33,10 @@ Edges define how your flow moves from one node to another. They can be simple co
 
 The simplest type—flow moves unconditionally to the next node:
 
-```
-START → process → END
+```mermaid
+flowchart LR
+    START([START]) --> process[process]
+    process --> END([END])
 ```
 
 In YAML:
@@ -50,10 +52,10 @@ flow:
 
 Create branches based on data:
 
-```
-         ┌─── yes ───→ approve
-check ───┤
-         └─── no ────→ reject
+```mermaid
+flowchart LR
+    check[check] -->|yes| approve[approve]
+    check -->|no| reject[reject]
 ```
 
 In YAML:
@@ -71,11 +73,11 @@ flow:
 
 ### In Studio
 
-1. Select an edge by clicking on it
-2. The Edge Editor panel opens
+1. Double-click on the connection line (edge)
+2. The Edge Editor panel opens at the bottom
 3. Enter a **Condition** expression
 
-![Edge Editor](/astonish/images/placeholder.png)
+![Edge Editor](/astonish/images/nodes_edit_connection.webp)
 *The edge editor panel with condition input*
 
 ### Condition Syntax
@@ -153,10 +155,10 @@ flow:
 
 Multiple paths converging:
 
-```
-path_a ───┐
-          ├───→ next_step
-path_b ───┘
+```mermaid
+flowchart LR
+    path_a[path_a] --> next_step[next_step]
+    path_b[path_b] --> next_step
 ```
 
 ```yaml

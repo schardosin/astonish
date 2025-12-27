@@ -185,7 +185,15 @@ func (p *ProtectedTool) ProcessRequest(ctx tool.Context, req *model.LLMRequest) 
 // Run intercepts the execution to check for approval
 func (p *ProtectedTool) Run(ctx tool.Context, args any) (map[string]any, error) {
 	toolName := p.Tool.Name()
-	approvalKey := fmt.Sprintf("approval:%s", toolName)
+	
+	// Get current node for node-scoped approval (prevents same tool in different nodes from sharing approval)
+	currentNode := ""
+	if nodeVal, err := p.State.Get("current_node"); err == nil && nodeVal != nil {
+		if nodeName, ok := nodeVal.(string); ok {
+			currentNode = nodeName
+		}
+	}
+	approvalKey := fmt.Sprintf("approval:%s:%s", currentNode, toolName)
 
 	// 1. Check if we already have approval
 	if approved, _ := p.State.Get(approvalKey); approved == true {
@@ -358,7 +366,14 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 			if strings.EqualFold(input, "Yes") {
 				// Approved!
 				if toolNameStr != "" {
-					approvalKey := fmt.Sprintf("approval:%s", toolNameStr)
+					// Get current node for node-scoped approval
+					currentNode := ""
+					if nodeVal, err := state.Get("current_node"); err == nil && nodeVal != nil {
+						if nodeName, ok := nodeVal.(string); ok {
+							currentNode = nodeName
+						}
+					}
+					approvalKey := fmt.Sprintf("approval:%s:%s", currentNode, toolNameStr)
 					state.Set(approvalKey, true)
 					if a.DebugMode {
 						fmt.Printf("[DEBUG] Run: Set approval for %s. Key=%s\n", toolNameStr, approvalKey)
@@ -974,8 +989,16 @@ func (a *AstonishAgent) handleToolApproval(ctx agent.InvocationContext, state se
 	approved := responseText == "yes" || responseText == "y" || responseText == "approve"
 
 	if approved {
-		// Grant approval using the tool-specific key
-		approvalKey := fmt.Sprintf("approval:%s", toolName)
+		// Get current node for node-scoped approval
+		currentNode := ""
+		if nodeVal, err := state.Get("current_node"); err == nil && nodeVal != nil {
+			if nodeName, ok := nodeVal.(string); ok {
+				currentNode = nodeName
+			}
+		}
+		
+		// Grant approval using the node-scoped key
+		approvalKey := fmt.Sprintf("approval:%s:%s", currentNode, toolName)
 		state.Set(approvalKey, true)
 		state.Set("awaiting_approval", false)
 		state.Set("approval_tool", "")
@@ -1613,7 +1636,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		var beforeToolCallbacks []llmagent.BeforeToolCallback
 		var afterToolCallbacks []llmagent.AfterToolCallback
 
-		if !node.ToolsAutoApproval {
+	if !node.ToolsAutoApproval {
 			beforeToolCallbacks = []llmagent.BeforeToolCallback{
 				func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 					toolName := t.Name()
@@ -1627,7 +1650,8 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 						fmt.Printf("[DEBUG] ===============================================\n\n")
 					}
 
-					approvalKey := fmt.Sprintf("approval:%s", toolName)
+					// Node-scoped approval key
+					approvalKey := fmt.Sprintf("approval:%s:%s", node.Name, toolName)
 
 					// Check if we already have approval for this tool
 					approvedVal, _ := state.Get(approvalKey)
@@ -1974,8 +1998,9 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		// Create approval callback if tools_auto_approval is false
 		var approvalCallback planner.ApprovalCallback
 		if !node.ToolsAutoApproval {
-			approvalCallback = func(toolName string, args map[string]any) (bool, error) {
-				approvalKey := fmt.Sprintf("approval:%s", toolName)
+		approvalCallback = func(toolName string, args map[string]any) (bool, error) {
+				// Node-scoped approval key
+				approvalKey := fmt.Sprintf("approval:%s:%s", node.Name, toolName)
 
 				// Check if we already have approval for this tool
 				approvedVal, _ := state.Get(approvalKey)
@@ -2193,7 +2218,8 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				var approvalCallback planner.ApprovalCallback
 				if !node.ToolsAutoApproval {
 					approvalCallback = func(toolName string, args map[string]any) (bool, error) {
-						approvalKey := fmt.Sprintf("approval:%s", toolName)
+						// Node-scoped approval key
+						approvalKey := fmt.Sprintf("approval:%s:%s", node.Name, toolName)
 						approvedVal, _ := state.Get(approvalKey)
 						approved := false
 						if b, ok := approvedVal.(bool); ok && b {
@@ -2695,7 +2721,8 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 		approved = true
 	} else {
 		// Check if we already have approval for this specific tool execution
-		approvalKey := fmt.Sprintf("approval:%s", toolName)
+		// Node-scoped approval key
+		approvalKey := fmt.Sprintf("approval:%s:%s", node.Name, toolName)
 		val, _ := state.Get(approvalKey)
 		if isApproved, ok := val.(bool); ok && isApproved {
 			approved = true

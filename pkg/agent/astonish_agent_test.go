@@ -822,7 +822,8 @@ func TestUserMessageEvent_OnlyHasMarker(t *testing.T) {
 // consumed after execution (each execution requires new approval).
 func TestToolApproval_ConsumedAfterExecution(t *testing.T) {
 	state := NewMockState()
-	approvalKey := "approval:test_tool"
+	// Node-scoped approval key format: approval:<node>:<tool>
+	approvalKey := "approval:test_node:test_tool"
 
 	// Set approval
 	state.Set(approvalKey, true)
@@ -865,8 +866,8 @@ func TestApprovalState_ClearedAfterExecution(t *testing.T) {
 	}
 
 	// Simulate what happens when tool is approved:
-	// 1. Set the approval key
-	approvalKey := "approval:list_pull_requests"
+	// 1. Set the approval key (node-scoped format: approval:<node>:<tool>)
+	approvalKey := "approval:tool_node:list_pull_requests"
 	state.Set(approvalKey, true)
 	// 2. Clear all approval-related state (this is what the fix does)
 	state.Set("awaiting_approval", false)

@@ -1422,14 +1422,12 @@ import '../styles/custom.css';
         const slidesArray = gsap.utils.toArray('.story-slide');
         const innerWrappers = gsap.utils.toArray('.story-slide-inner');
         
-        // Initial setup - hide all except first, set up for animation
+        // Initial setup - hide all except first (simple fade setup)
         slidesArray.forEach((slide, i) => {
           if (i === 0) {
-            gsap.set(slide, { autoAlpha: 1, zIndex: 1 });
-            gsap.set(innerWrappers[i], { xPercent: 0 });
+            gsap.set(slide, { autoAlpha: 1 });
           } else {
-            gsap.set(slide, { autoAlpha: 0, zIndex: 0 });
-            gsap.set(innerWrappers[i], { xPercent: 100 });
+            gsap.set(slide, { autoAlpha: 0 });
           }
         });
         
@@ -1449,9 +1447,9 @@ import '../styles/custom.css';
           const toIndex = targetStep - 1;
           const dFactor = direction;
           
-          // Create animation timeline
+          // Create animation timeline - simple fade transition
           const tl = gsap.timeline({
-            defaults: { duration: 1.0, ease: "power1.inOut" },
+            defaults: { duration: 0.5, ease: "power1.inOut" },
             onComplete: () => {
               storyAnimating = false;
               // Trigger step 6 demo
@@ -1461,20 +1459,13 @@ import '../styles/custom.css';
             }
           });
           
-          // Animate outgoing slide
+          // Fade out old slide
           if (fromIndex >= 0 && fromIndex < slidesArray.length) {
-            gsap.set(slidesArray[fromIndex], { zIndex: 0 });
-            tl.to(innerWrappers[fromIndex], { xPercent: -30 * dFactor }, 0)
-              .set(slidesArray[fromIndex], { autoAlpha: 0 });
+            tl.to(slidesArray[fromIndex], { autoAlpha: 0 }, 0);
           }
           
-          // Animate incoming slide
-          gsap.set(slidesArray[toIndex], { autoAlpha: 1, zIndex: 1 });
-          tl.fromTo(innerWrappers[toIndex], 
-            { xPercent: 100 * dFactor },
-            { xPercent: 0 }, 
-            0
-          );
+          // Fade in new slide
+          tl.to(slidesArray[toIndex], { autoAlpha: 1 }, 0);
           
           // Update step counter
           if (currentStepSpan) currentStepSpan.textContent = targetStep;

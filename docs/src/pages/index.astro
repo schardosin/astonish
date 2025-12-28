@@ -1602,7 +1602,7 @@ import '../styles/custom.css';
 
       Observer.create({
         target: window,
-        type: "wheel,touch,pointer",
+        type: "wheel,touch",
         wheelSpeed: -1,
         onDown: () => { // Scroll Up (Previous)
           if (animating) return;

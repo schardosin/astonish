@@ -995,6 +995,23 @@ function ToolNodeForm({ data, onChange, theme, availableTools = [] }) {
             className="w-4 h-4 accent-purple-600"
           />
         </div>
+        
+        <div className="flex items-center justify-between">
+          <div>
+            <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
+              Continue on Error
+            </label>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              Capture errors instead of stopping
+            </p>
+          </div>
+          <input
+            type="checkbox"
+            checked={data.continue_on_error === true}
+            onChange={(e) => onChange({ ...data, continue_on_error: e.target.checked || undefined })}
+            className="w-4 h-4 accent-purple-600"
+          />
+        </div>
 
 
       </div>

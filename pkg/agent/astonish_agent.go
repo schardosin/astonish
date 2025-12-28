@@ -709,7 +709,21 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				// Don't emit transition here - the main loop will do it
 
 			} else if node.Type == "tool" {
-				if !a.handleToolNode(ctx, node, state, yield) {
+				success := a.handleToolNode(ctx, node, state, yield)
+
+				// Check if node failed and set error flag (same pattern as LLM nodes)
+				if !success {
+					// Check if this failure should stop execution
+					hasError, _ := state.Get("_has_error")
+					if hasErrorBool, ok := hasError.(bool); ok && hasErrorBool {
+						// Error occurred and was handled - transition to END
+						if a.DebugMode {
+							fmt.Printf("[DEBUG] Tool node '%s' failed with _has_error=true, transitioning to END\n", currentNodeName)
+						}
+						currentNodeName = "END"
+						continue
+					}
+					// Node failed but no error flag - this is a pause (e.g., awaiting approval)
 					return
 				}
 
@@ -2923,8 +2937,76 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 
 	toolResult, err := runnable.Run(toolCtx, resolvedArgs)
 	if err != nil {
-		yield(nil, fmt.Errorf("tool execution failed: %w", err))
-		return false
+		if node.ContinueOnError {
+			// Capture error as result instead of failing
+			if a.DebugMode {
+				fmt.Printf("[DEBUG] Tool execution failed but continue_on_error=true: %v\n", err)
+			}
+			toolResult = map[string]any{
+				"error":   err.Error(),
+				"success": false,
+			}
+		} else {
+			// Use LLM-based error recovery (same as LLM nodes)
+			errCtx := ErrorContext{
+				NodeName:     node.Name,
+				NodeType:     "tool",
+				ErrorType:    "tool_execution_error",
+				ErrorMessage: err.Error(),
+				AttemptCount: 1,
+				MaxRetries:   1, // Tool nodes don't retry by default
+				ToolName:     toolName,
+				ToolArgs:     resolvedArgs,
+			}
+
+			// Use ErrorRecoveryNode to get intelligent analysis
+			recovery := NewErrorRecoveryNode(a.LLM, a.DebugMode)
+			decision, recoveryErr := recovery.Decide(ctx, errCtx)
+
+			var title, reason, suggestion string
+			if recoveryErr != nil {
+				// LLM analysis failed, use basic error info
+				title = "Tool Execution Failed"
+				reason = fmt.Sprintf("Tool '%s' failed to execute", toolName)
+				suggestion = ""
+			} else {
+				title = decision.Title
+				reason = decision.Reason
+				suggestion = decision.Suggestion
+			}
+
+			// Emit failure info with LLM analysis
+			yield(&session.Event{
+				Actions: session.EventActions{
+					StateDelta: map[string]any{
+						"_failure_info": map[string]any{
+							"title":          title,
+							"reason":         reason,
+							"suggestion":     suggestion,
+							"original_error": err.Error(),
+							"node":           node.Name,
+							"tool":           toolName,
+						},
+						"_processing_info": true,
+					},
+				},
+			}, nil)
+
+			// Store error details in state for error handler nodes
+			state.Set("_last_error", err.Error())
+			state.Set("_error_node", node.Name)
+			state.Set("_has_error", true)
+			state.Set("_error_analysis", reason)
+
+			// Return false to end the node gracefully (flow will transition to next node or END)
+			return false
+		}
+	} else if node.ContinueOnError {
+		// Add success indicator when continue_on_error is enabled
+		if toolResult == nil {
+			toolResult = make(map[string]any)
+		}
+		toolResult["success"] = true
 	}
 
 	// 5. Process Output

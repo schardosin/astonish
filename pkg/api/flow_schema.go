@@ -142,6 +142,23 @@ In most cases, prefer LLM node with tools: true instead.
     shell_result: str
 ` + "```" + `
 
+#### Error Handling with continue_on_error
+By default, tool failures stop the flow. Use ` + "`" + `continue_on_error: true` + "`" + ` to capture errors and continue:
+` + "```yaml" + `
+- name: check_tool_exists
+  type: tool
+  tools_selection:
+    - shell_command
+  args:
+    command: "yt-dlp --version"
+  continue_on_error: true  # If tool fails, capture error instead of stopping
+  output_model:
+    check_result: str      # Will contain version info OR error message
+` + "```" + `
+When ` + "`" + `continue_on_error` + "`" + ` is true, the result will include:
+- On success: ` + "`" + `{..., "success": true}` + "`" + `
+- On failure: ` + "`" + `{"error": "...", "success": false}` + "`" + `
+
 ### 4. Output Node
 Display messages to user. Use user_message array with strings and state variable names.
 Note: LLM responses are shown automatically, so output nodes are mainly for formatting/labeling.

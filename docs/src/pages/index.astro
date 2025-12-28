@@ -1105,41 +1105,52 @@ import '../styles/custom.css';
   <section class="combined-final-section">
     <!-- Comparison Part -->
     <div class="comparison-part">
-      <div class="section-inner" style="max-width: 900px;">
+      <div class="section-inner" style="max-width: 1100px;">
         <div class="section-header reveal">
           <h2 class="section-title">When to Choose Astonish</h2>
-          <p class="section-subtitle">The visual ease of n8n with the portable execution of a CLI tool.</p>
+          <p class="section-subtitle">Compare how different tools approach AI agent development.</p>
         </div>
 
-        <div class="comparison-card reveal-scale">
+        <div class="comparison-card reveal-scale" style="overflow-x: auto;">
           <table class="comparison-table">
             <thead>
               <tr>
-                <th>Feature</th>
+                <th>Aspect</th>
+                <th>LangChain / CrewAI</th>
                 <th>n8n</th>
-                <th>Astonish</th>
+                <th style="color: var(--purple-600);">Astonish</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td>Infrastructure</td>
-                <td>Server-based (Docker)</td>
-                <td>Single binary, run anywhere</td>
+                <td>Workflow Design</td>
+                <td>Write code from scratch</td>
+                <td>Visual editor (requires server)</td>
+                <td><strong>Built-in Studio or YAML files</strong></td>
               </tr>
               <tr>
-                <td>Storage</td>
-                <td>Database</td>
-                <td>YAML files (Git-friendly)</td>
+                <td>LLM Providers</td>
+                <td>Implement your own connections</td>
+                <td>Built-in integrations</td>
+                <td><strong>Built-in providers, easy config</strong></td>
               </tr>
               <tr>
-                <td>Use Case</td>
-                <td>Webhook triggers, app-to-app</td>
-                <td>On-demand tasks, cron jobs</td>
+                <td>Error Handling</td>
+                <td>Code it yourself</td>
+                <td>Built-in retry logic</td>
+                <td><strong>Built-in retries & fallbacks</strong></td>
               </tr>
               <tr>
-                <td>Complexity</td>
-                <td>Full server to maintain</td>
-                <td>Zero infrastructure</td>
+                <td>Portability</td>
+                <td>Python environment + deps</td>
+                <td>Docker + database required</td>
+                <td><strong>Single binary, runs anywhere</strong></td>
+              </tr>
+              <tr>
+                <td>Best For</td>
+                <td>Custom research, experiments</td>
+                <td>Server-based automations</td>
+                <td><strong>Production agents, CI/CD pipelines</strong></td>
               </tr>
             </tbody>
           </table>

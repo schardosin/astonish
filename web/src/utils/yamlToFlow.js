@@ -17,11 +17,14 @@ const NODE_TYPE_MAP = {
 const elkOptions = {
   'elk.algorithm': 'layered',
   'elk.direction': 'DOWN', // Top-to-Bottom
-  'elk.layered.spacing.nodeNodeBetweenLayers': '100', // Vertical gap between layers
-  'elk.spacing.nodeNode': '60', // Horizontal gap between parallel nodes
+  'elk.layered.spacing.nodeNodeBetweenLayers': '120', // Vertical gap between layers
+  'elk.spacing.nodeNode': '80', // Horizontal gap between parallel nodes
   'elk.edgeRouting': 'ORTHOGONAL', // Clean 90° edges
-  'elk.layered.nodePlacement.strategy': 'BRANDES_KOEPF', // Better for linear flows
+  'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX', // Better for branching flows
   'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
+  'elk.layered.crossingMinimization.thoroughness': '7', // Higher = fewer edge crossings
+  'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES', // Keep nodes in logical order
+  'elk.separateConnectedComponents': 'false', // Keep subgraphs together
 }
 
 /**

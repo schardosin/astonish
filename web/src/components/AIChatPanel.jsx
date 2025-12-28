@@ -259,8 +259,11 @@ function ToolInstallCard({ tool, installingTool, onInstall }) {
       // First click: show config inputs
       setShowConfig(true)
     } else {
-      // Install with collected env values
-      onInstall({ ...tool, collectedEnv: envValues })
+      // Install with only the filled env values (filter out empty ones)
+      const filledEnv = Object.fromEntries(
+        Object.entries(envValues).filter(([_, v]) => v?.trim())
+      )
+      onInstall({ ...tool, collectedEnv: filledEnv })
     }
   }
   
@@ -269,9 +272,6 @@ function ToolInstallCard({ tool, installingTool, onInstall }) {
   }
   
   const isInstalling = installingTool === tool.id
-  
-  // Check if all required env vars are filled
-  const allEnvFilled = !hasEnvVars || Object.keys(tool.envVars).every(key => envValues[key]?.trim())
   
   return (
     <div className="bg-[var(--bg-primary)]/50 rounded-lg p-3 space-y-2">
@@ -317,7 +317,7 @@ function ToolInstallCard({ tool, installingTool, onInstall }) {
       {showConfig && hasEnvVars && (
         <div className="border-t border-white/10 pt-2 space-y-2">
           <div className="text-xs text-[var(--text-muted)]">
-            Enter the required configuration:
+            Configure environment variables (optional - defaults will be used):
           </div>
           {Object.entries(tool.envVars).map(([key, placeholder]) => (
             <div key={key} className="flex flex-col gap-1">
@@ -343,7 +343,7 @@ function ToolInstallCard({ tool, installingTool, onInstall }) {
             </button>
             <button
               onClick={handleInstallClick}
-              disabled={isInstalling || !allEnvFilled}
+              disabled={isInstalling}
               className="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition-colors"
             >
               {isInstalling ? (
@@ -441,14 +441,12 @@ function InternetResultsPanel({ results, onClear, onInstall, installingTool }) {
       Object.keys(result.envVars).forEach(k => initial[k] = '')
       setEnvValues(initial)
     } else {
-      // Install with collected env vars
-      onInstall(result, envValues)
+      // Install with only the filled env vars (filter out empty ones)
+      const filledEnv = Object.fromEntries(
+        Object.entries(envValues).filter(([_, v]) => v?.trim())
+      )
+      onInstall(result, filledEnv)
     }
-  }
-  
-  const allEnvFilled = (result) => {
-    if (!result.envVars) return true
-    return Object.keys(result.envVars).every(k => envValues[k]?.trim())
   }
   
   return (
@@ -491,7 +489,7 @@ function InternetResultsPanel({ results, onClear, onInstall, installingTool }) {
               {/* Install button */}
               <button
                 onClick={() => handleInstallClick(result, idx)}
-                disabled={installingTool === result.name || (expandedResult === idx && !allEnvFilled(result))}
+                disabled={installingTool === result.name}
                 className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-50 flex items-center gap-1"
               >
                 {installingTool === result.name ? (
@@ -510,7 +508,7 @@ function InternetResultsPanel({ results, onClear, onInstall, installingTool }) {
             {/* Expanded env var inputs */}
             {expandedResult === idx && result.envVars && Object.keys(result.envVars).length > 0 && (
               <div className="space-y-2 pt-2 border-t border-blue-500/20">
-                <div className="text-xs text-yellow-400">Configure required environment variables:</div>
+                <div className="text-xs text-yellow-400">Configure environment variables (optional):</div>
                 {Object.entries(result.envVars).map(([key, placeholder]) => (
                   <div key={key} className="flex items-center gap-2">
                     <label className="text-xs text-[var(--text-secondary)] min-w-[100px]">{key}:</label>

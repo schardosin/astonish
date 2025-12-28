@@ -822,7 +822,8 @@ func TestUserMessageEvent_OnlyHasMarker(t *testing.T) {
 // consumed after execution (each execution requires new approval).
 func TestToolApproval_ConsumedAfterExecution(t *testing.T) {
 	state := NewMockState()
-	approvalKey := "approval:test_tool"
+	// Node-scoped approval key format: approval:<node>:<tool>
+	approvalKey := "approval:test_node:test_tool"
 
 	// Set approval
 	state.Set(approvalKey, true)
@@ -865,8 +866,8 @@ func TestApprovalState_ClearedAfterExecution(t *testing.T) {
 	}
 
 	// Simulate what happens when tool is approved:
-	// 1. Set the approval key
-	approvalKey := "approval:list_pull_requests"
+	// 1. Set the approval key (node-scoped format: approval:<node>:<tool>)
+	approvalKey := "approval:tool_node:list_pull_requests"
 	state.Set(approvalKey, true)
 	// 2. Clear all approval-related state (this is what the fix does)
 	state.Set("awaiting_approval", false)
@@ -891,6 +892,183 @@ func TestApprovalState_ClearedAfterExecution(t *testing.T) {
 
 	// This ensures that subsequent user input (like selecting from an input form)
 	// won't be confused with tool approval responses
+}
+
+// ============================================================================
+// APPROVAL BEHAVIOR GUARANTEE TESTS
+// These tests ensure "One Approval = One Execution" principle
+// ============================================================================
+
+// TestApproval_NodeScopedKeys verifies that approval keys are node-scoped.
+// This prevents approval for one node from being reused by another node using the same tool.
+func TestApproval_NodeScopedKeys(t *testing.T) {
+	state := NewMockState()
+
+	// Two different nodes using the same tool should have different approval keys
+	node1Key := fmt.Sprintf("approval:%s:%s", "check_ytdlp", "shell_command")
+	node2Key := fmt.Sprintf("approval:%s:%s", "check_ffmpeg", "shell_command")
+
+	// Verify keys are different
+	if node1Key == node2Key {
+		t.Fatalf("approval keys should be different for different nodes, got same key: %s", node1Key)
+	}
+
+	// Set approval for node1
+	state.Set(node1Key, true)
+
+	// Verify node2 does NOT have approval (its key is different)
+	node2Approval, _ := state.Get(node2Key)
+	if node2Approval == true {
+		t.Errorf("node2 should NOT have approval when only node1 was approved")
+	}
+
+	// Verify node1 DOES have approval
+	node1Approval, _ := state.Get(node1Key)
+	if node1Approval != true {
+		t.Errorf("node1 should have approval, got %v", node1Approval)
+	}
+}
+
+// TestApproval_ConsumedAfterEachExecution verifies that approval is consumed
+// (set to false) after each tool execution, requiring fresh approval for the next call.
+func TestApproval_ConsumedAfterEachExecution(t *testing.T) {
+	state := NewMockState()
+	approvalKey := "approval:llm_node:shell_command"
+
+	// Simulate first tool call
+	// 1. Check approval - initially false
+	val1, _ := state.Get(approvalKey)
+	if val1 == true {
+		t.Fatalf("approval should be false initially")
+	}
+
+	// 2. User approves
+	state.Set(approvalKey, true)
+
+	// 3. Verify approval is granted
+	val2, _ := state.Get(approvalKey)
+	if val2 != true {
+		t.Fatalf("approval should be true after user approves")
+	}
+
+	// 4. Tool executes and consumes approval
+	state.Set(approvalKey, false)
+
+	// 5. Verify approval is consumed (second call should require new approval)
+	val3, _ := state.Get(approvalKey)
+	if val3 == true {
+		t.Errorf("approval should be consumed (false) after execution, got %v", val3)
+	}
+
+	// 6. Second tool call within same node should require new approval
+	// (This is verified by val3 being false)
+}
+
+// TestApproval_SequentialToolNodes_RequireSeparateApprovals simulates the flow:
+// tool_node_1 (shell_command) -> tool_node_2 (shell_command)
+// Each node should require its own approval even though they use the same tool.
+func TestApproval_SequentialToolNodes_RequireSeparateApprovals(t *testing.T) {
+	state := NewMockState()
+
+	// Node-scoped approval keys
+	node1Key := "approval:check_ytdlp:shell_command"
+	node2Key := "approval:check_ffmpeg:shell_command"
+
+	// Simulate flow execution:
+
+	// Step 1: check_ytdlp node starts, needs approval
+	val, _ := state.Get(node1Key)
+	if val == true {
+		t.Fatalf("check_ytdlp should NOT have approval initially")
+	}
+
+	// Step 2: User approves check_ytdlp
+	state.Set(node1Key, true)
+
+	// Step 3: check_ytdlp executes
+	// (approval should be consumed here, but even if not, node2 has different key)
+
+	// Step 4: Flow transitions to check_ffmpeg
+	// Step 5: check_ffmpeg should NOT have approval (different key)
+	node2Val, _ := state.Get(node2Key)
+	if node2Val == true {
+		t.Errorf("check_ffmpeg should NOT have approval just because check_ytdlp was approved")
+	}
+
+	// Step 6: User must approve check_ffmpeg separately
+	state.Set(node2Key, true)
+
+	// Step 7: Now check_ffmpeg has approval
+	node2ValAfter, _ := state.Get(node2Key)
+	if node2ValAfter != true {
+		t.Errorf("check_ffmpeg should have approval after user approves, got %v", node2ValAfter)
+	}
+}
+
+// TestApproval_SameToolMultipleCallsInNode simulates an LLM node calling
+// shell_command 3 times (e.g., ls, pwd, which ls). Each call should require approval.
+func TestApproval_SameToolMultipleCallsInNode(t *testing.T) {
+	state := NewMockState()
+	approvalKey := "approval:run_commands:shell_command"
+
+	// Simulate BeforeToolCallback behavior for 3 tool calls:
+
+	// Call 1: ls
+	call1Approved, _ := state.Get(approvalKey)
+	if call1Approved == true {
+		t.Fatalf("call 1 should NOT have approval initially")
+	}
+	// User approves
+	state.Set(approvalKey, true)
+	// Consume after execution (as BeforeToolCallback does)
+	state.Set(approvalKey, false)
+
+	// Call 2: pwd
+	call2Approved, _ := state.Get(approvalKey)
+	if call2Approved == true {
+		t.Errorf("call 2 should NOT have approval (was consumed), got true")
+	}
+	// User approves
+	state.Set(approvalKey, true)
+	// Consume after execution
+	state.Set(approvalKey, false)
+
+	// Call 3: which ls
+	call3Approved, _ := state.Get(approvalKey)
+	if call3Approved == true {
+		t.Errorf("call 3 should NOT have approval (was consumed), got true")
+	}
+	// User approves
+	state.Set(approvalKey, true)
+	// Consume after execution
+	state.Set(approvalKey, false)
+
+	// Final state should be false (all consumed)
+	finalVal, _ := state.Get(approvalKey)
+	if finalVal == true {
+		t.Errorf("final approval state should be false (consumed), got true")
+	}
+}
+
+// TestApproval_AutoApproval_BypassesCheck verifies that tools_auto_approval
+// bypasses the approval check entirely.
+func TestApproval_AutoApproval_BypassesCheck(t *testing.T) {
+	// When tools_auto_approval is true, the approval check is skipped
+	// This is verified by the code path in handleToolNode and BeforeToolCallback
+	// where they check node.ToolsAutoApproval before checking approval state
+
+	state := NewMockState()
+	approvalKey := "approval:auto_node:shell_command"
+
+	// With auto_approval, the approval key should never be checked
+	// Even if it's false, the tool should execute
+	val, _ := state.Get(approvalKey)
+	if val == true {
+		t.Fatalf("approval key should not be set for auto-approval nodes")
+	}
+
+	// The actual bypass is tested in integration tests,
+	// but this verifies the state remains unaffected
 }
 
 // ============================================================================

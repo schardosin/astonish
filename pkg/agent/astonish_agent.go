@@ -185,7 +185,15 @@ func (p *ProtectedTool) ProcessRequest(ctx tool.Context, req *model.LLMRequest) 
 // Run intercepts the execution to check for approval
 func (p *ProtectedTool) Run(ctx tool.Context, args any) (map[string]any, error) {
 	toolName := p.Tool.Name()
-	approvalKey := fmt.Sprintf("approval:%s", toolName)
+	
+	// Get current node for node-scoped approval (prevents same tool in different nodes from sharing approval)
+	currentNode := ""
+	if nodeVal, err := p.State.Get("current_node"); err == nil && nodeVal != nil {
+		if nodeName, ok := nodeVal.(string); ok {
+			currentNode = nodeName
+		}
+	}
+	approvalKey := fmt.Sprintf("approval:%s:%s", currentNode, toolName)
 
 	// 1. Check if we already have approval
 	if approved, _ := p.State.Get(approvalKey); approved == true {
@@ -358,7 +366,14 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 			if strings.EqualFold(input, "Yes") {
 				// Approved!
 				if toolNameStr != "" {
-					approvalKey := fmt.Sprintf("approval:%s", toolNameStr)
+					// Get current node for node-scoped approval
+					currentNode := ""
+					if nodeVal, err := state.Get("current_node"); err == nil && nodeVal != nil {
+						if nodeName, ok := nodeVal.(string); ok {
+							currentNode = nodeName
+						}
+					}
+					approvalKey := fmt.Sprintf("approval:%s:%s", currentNode, toolNameStr)
 					state.Set(approvalKey, true)
 					if a.DebugMode {
 						fmt.Printf("[DEBUG] Run: Set approval for %s. Key=%s\n", toolNameStr, approvalKey)
@@ -694,7 +709,21 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				// Don't emit transition here - the main loop will do it
 
 			} else if node.Type == "tool" {
-				if !a.handleToolNode(ctx, node, state, yield) {
+				success := a.handleToolNode(ctx, node, state, yield)
+
+				// Check if node failed and set error flag (same pattern as LLM nodes)
+				if !success {
+					// Check if this failure should stop execution
+					hasError, _ := state.Get("_has_error")
+					if hasErrorBool, ok := hasError.(bool); ok && hasErrorBool {
+						// Error occurred and was handled - transition to END
+						if a.DebugMode {
+							fmt.Printf("[DEBUG] Tool node '%s' failed with _has_error=true, transitioning to END\n", currentNodeName)
+						}
+						currentNodeName = "END"
+						continue
+					}
+					// Node failed but no error flag - this is a pause (e.g., awaiting approval)
 					return
 				}
 
@@ -974,8 +1003,16 @@ func (a *AstonishAgent) handleToolApproval(ctx agent.InvocationContext, state se
 	approved := responseText == "yes" || responseText == "y" || responseText == "approve"
 
 	if approved {
-		// Grant approval using the tool-specific key
-		approvalKey := fmt.Sprintf("approval:%s", toolName)
+		// Get current node for node-scoped approval
+		currentNode := ""
+		if nodeVal, err := state.Get("current_node"); err == nil && nodeVal != nil {
+			if nodeName, ok := nodeVal.(string); ok {
+				currentNode = nodeName
+			}
+		}
+		
+		// Grant approval using the node-scoped key
+		approvalKey := fmt.Sprintf("approval:%s:%s", currentNode, toolName)
 		state.Set(approvalKey, true)
 		state.Set("awaiting_approval", false)
 		state.Set("approval_tool", "")
@@ -1613,7 +1650,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		var beforeToolCallbacks []llmagent.BeforeToolCallback
 		var afterToolCallbacks []llmagent.AfterToolCallback
 
-		if !node.ToolsAutoApproval {
+	if !node.ToolsAutoApproval {
 			beforeToolCallbacks = []llmagent.BeforeToolCallback{
 				func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 					toolName := t.Name()
@@ -1627,7 +1664,8 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 						fmt.Printf("[DEBUG] ===============================================\n\n")
 					}
 
-					approvalKey := fmt.Sprintf("approval:%s", toolName)
+					// Node-scoped approval key
+					approvalKey := fmt.Sprintf("approval:%s:%s", node.Name, toolName)
 
 					// Check if we already have approval for this tool
 					approvedVal, _ := state.Get(approvalKey)
@@ -1974,8 +2012,9 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		// Create approval callback if tools_auto_approval is false
 		var approvalCallback planner.ApprovalCallback
 		if !node.ToolsAutoApproval {
-			approvalCallback = func(toolName string, args map[string]any) (bool, error) {
-				approvalKey := fmt.Sprintf("approval:%s", toolName)
+		approvalCallback = func(toolName string, args map[string]any) (bool, error) {
+				// Node-scoped approval key
+				approvalKey := fmt.Sprintf("approval:%s:%s", node.Name, toolName)
 
 				// Check if we already have approval for this tool
 				approvedVal, _ := state.Get(approvalKey)
@@ -2193,7 +2232,8 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				var approvalCallback planner.ApprovalCallback
 				if !node.ToolsAutoApproval {
 					approvalCallback = func(toolName string, args map[string]any) (bool, error) {
-						approvalKey := fmt.Sprintf("approval:%s", toolName)
+						// Node-scoped approval key
+						approvalKey := fmt.Sprintf("approval:%s:%s", node.Name, toolName)
 						approvedVal, _ := state.Get(approvalKey)
 						approved := false
 						if b, ok := approvedVal.(bool); ok && b {
@@ -2695,7 +2735,8 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 		approved = true
 	} else {
 		// Check if we already have approval for this specific tool execution
-		approvalKey := fmt.Sprintf("approval:%s", toolName)
+		// Node-scoped approval key
+		approvalKey := fmt.Sprintf("approval:%s:%s", node.Name, toolName)
 		val, _ := state.Get(approvalKey)
 		if isApproved, ok := val.(bool); ok && isApproved {
 			approved = true
@@ -2896,8 +2937,76 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 
 	toolResult, err := runnable.Run(toolCtx, resolvedArgs)
 	if err != nil {
-		yield(nil, fmt.Errorf("tool execution failed: %w", err))
-		return false
+		if node.ContinueOnError {
+			// Capture error as result instead of failing
+			if a.DebugMode {
+				fmt.Printf("[DEBUG] Tool execution failed but continue_on_error=true: %v\n", err)
+			}
+			toolResult = map[string]any{
+				"error":   err.Error(),
+				"success": false,
+			}
+		} else {
+			// Use LLM-based error recovery (same as LLM nodes)
+			errCtx := ErrorContext{
+				NodeName:     node.Name,
+				NodeType:     "tool",
+				ErrorType:    "tool_execution_error",
+				ErrorMessage: err.Error(),
+				AttemptCount: 1,
+				MaxRetries:   1, // Tool nodes don't retry by default
+				ToolName:     toolName,
+				ToolArgs:     resolvedArgs,
+			}
+
+			// Use ErrorRecoveryNode to get intelligent analysis
+			recovery := NewErrorRecoveryNode(a.LLM, a.DebugMode)
+			decision, recoveryErr := recovery.Decide(ctx, errCtx)
+
+			var title, reason, suggestion string
+			if recoveryErr != nil {
+				// LLM analysis failed, use basic error info
+				title = "Tool Execution Failed"
+				reason = fmt.Sprintf("Tool '%s' failed to execute", toolName)
+				suggestion = ""
+			} else {
+				title = decision.Title
+				reason = decision.Reason
+				suggestion = decision.Suggestion
+			}
+
+			// Emit failure info with LLM analysis
+			yield(&session.Event{
+				Actions: session.EventActions{
+					StateDelta: map[string]any{
+						"_failure_info": map[string]any{
+							"title":          title,
+							"reason":         reason,
+							"suggestion":     suggestion,
+							"original_error": err.Error(),
+							"node":           node.Name,
+							"tool":           toolName,
+						},
+						"_processing_info": true,
+					},
+				},
+			}, nil)
+
+			// Store error details in state for error handler nodes
+			state.Set("_last_error", err.Error())
+			state.Set("_error_node", node.Name)
+			state.Set("_has_error", true)
+			state.Set("_error_analysis", reason)
+
+			// Return false to end the node gracefully (flow will transition to next node or END)
+			return false
+		}
+	} else if node.ContinueOnError {
+		// Add success indicator when continue_on_error is enabled
+		if toolResult == nil {
+			toolResult = make(map[string]any)
+		}
+		toolResult["success"] = true
 	}
 
 	// 5. Process Output
@@ -3882,7 +3991,7 @@ func (a *AstonishAgent) handleOutputNode(ctx agent.InvocationContext, node *conf
 		}
 	}
 
-	message := strings.Join(parts, " ")
+	message := strings.Join(parts, "\n")
 
 	// Emit message event
 	evt := &session.Event{

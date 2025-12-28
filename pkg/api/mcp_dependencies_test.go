@@ -101,6 +101,26 @@ func TestResolveMCPDependencies_ExactNameMatching(t *testing.T) {
 			},
 		},
 		{
+			name:           "store server with spaces matches installed server with hyphens",
+			toolsSelection: []string{"ytdlp_download_video"},
+			cachedTools: []ToolInfo{
+				// Installed with normalized name: spaces replaced with hyphens
+				{Name: "ytdlp_download_video", Source: "youtube-download"},
+			},
+			storeServers: []mcpstore.Server{
+				// Store has the name with spaces
+				{Name: "YouTube Download", McpId: "official/youtube-download", Source: flowstore.OfficialStoreName},
+			},
+			existingDeps: nil,
+			expectedDeps: []struct {
+				server  string
+				source  string
+				storeID string
+			}{
+				{server: "youtube-download", source: "store", storeID: "official/youtube-download"},
+			},
+		},
+		{
 			name:           "no false positive from partial name match",
 			toolsSelection: []string{"my_tool"},
 			cachedTools: []ToolInfo{

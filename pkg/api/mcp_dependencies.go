@@ -68,13 +68,14 @@ func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, sto
 		var matchSource string
 
 		// Match by exact server name (case-insensitive) against store servers
-		// This is the ONLY matching method to avoid false positives
+		// Normalize the same way as InstallMCPStoreServerHandler does: lowercase + spaces to hyphens
 		serverLower := strings.ToLower(serverName)
 		for i := range storeServers {
 			srv := &storeServers[i]
-			nameLower := strings.ToLower(srv.Name)
-			// Exact match only - no partial matching to avoid false positives
-			if serverLower == nameLower {
+			// Normalize store server name the same way as install handler:
+			// strings.ToLower(strings.ReplaceAll(server.Name, " ", "-"))
+			storeNameNormalized := strings.ToLower(strings.ReplaceAll(srv.Name, " ", "-"))
+			if serverLower == storeNameNormalized {
 				matchedServer = srv
 				matchSource = srv.Source
 				break

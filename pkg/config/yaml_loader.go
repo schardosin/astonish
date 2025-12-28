@@ -38,6 +38,7 @@ type Node struct {
 	Args              map[string]interface{} `yaml:"args,omitempty"`
 	RawToolOutput     map[string]string      `yaml:"raw_tool_output,omitempty"`
 	ToolsAutoApproval bool                   `yaml:"tools_auto_approval,omitempty"`
+	ContinueOnError   bool                   `yaml:"continue_on_error,omitempty"` // If true, tool errors are captured in output instead of stopping flow
 	Updates           map[string]string      `yaml:"updates,omitempty"`
 	Action            string                 `yaml:"action,omitempty"`
 	Value             interface{}            `yaml:"value,omitempty"`

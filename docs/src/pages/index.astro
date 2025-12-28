@@ -1449,7 +1449,7 @@ import '../styles/custom.css';
           
           // Create animation timeline - simple fade transition
           const tl = gsap.timeline({
-            defaults: { duration: 0.5, ease: "power1.inOut" },
+            defaults: { duration: 0.25, ease: "power1.inOut" },
             onComplete: () => {
               storyAnimating = false;
               // Trigger step 6 demo
@@ -1590,15 +1590,23 @@ import '../styles/custom.css';
       
       // Initialize index based on scroll position
       function initIndex() {
-        const scrollY = window.scrollY + 10;
+        const scrollY = window.scrollY + 100; // Larger offset for better detection
         for (let i = uniqueSections.length - 1; i >= 0; i--) {
            if (scrollY >= uniqueSections[i].offsetTop) {
              currentIndex = i;
              break;
            }
         }
+        console.log('GSAP Init: Current section index =', currentIndex);
       }
+      
+      // Init on script load
       initIndex();
+      
+      // Also re-init after full page load (in case of scroll restoration)
+      window.addEventListener('load', () => {
+        setTimeout(initIndex, 100);
+      });
 
       Observer.create({
         target: window,

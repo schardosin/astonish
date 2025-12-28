@@ -428,7 +428,7 @@ a:not([class]):hover {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  scroll-snap-align: start;
+  /* scroll-snap-align: start; - GSAP handles it */
   scroll-margin-top: 0; /* Ensure snapping accounts for any fixed header */
 }
 

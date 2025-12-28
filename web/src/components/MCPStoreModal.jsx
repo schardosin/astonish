@@ -195,7 +195,24 @@ export default function MCPStoreModal({ isOpen, onClose, onInstall }) {
                     background: 'var(--bg-secondary)', 
                     borderColor: selectedServer?.mcpId === server.mcpId ? undefined : 'var(--border-color)' 
                   }}
-                  onClick={() => setSelectedServer(selectedServer?.mcpId === server.mcpId ? null : server)}
+                  onClick={() => {
+                    if (selectedServer?.mcpId === server.mcpId) {
+                      setSelectedServer(null)
+                      setEnvOverrides({})
+                    } else {
+                      setSelectedServer(server)
+                      // Pre-populate env values with defaults from store (curated real values)
+                      if (server.config?.env) {
+                        const defaults = {}
+                        Object.entries(server.config.env).forEach(([key, defaultValue]) => {
+                          defaults[key] = defaultValue || ''
+                        })
+                        setEnvOverrides(defaults)
+                      } else {
+                        setEnvOverrides({})
+                      }
+                    }
+                  }}
                 >
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex-1 min-w-0">

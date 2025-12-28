@@ -256,8 +256,16 @@ function ToolInstallCard({ tool, installingTool, onInstall }) {
   
   const handleInstallClick = () => {
     if (needsConfig && !showConfig) {
-      // First click: show config inputs
+      // First click: show config inputs and pre-populate with defaults
       setShowConfig(true)
+      // Pre-populate env values with defaults from store (curated real values)
+      if (tool.envVars) {
+        const defaults = {}
+        Object.entries(tool.envVars).forEach(([key, defaultValue]) => {
+          defaults[key] = defaultValue || ''
+        })
+        setEnvValues(defaults)
+      }
     } else {
       // Install with only the filled env values (filter out empty ones)
       const filledEnv = Object.fromEntries(
@@ -436,7 +444,7 @@ function InternetResultsPanel({ results, onClear, onInstall, installingTool }) {
     if (hasEnvVars && expandedResult !== idx) {
       // Expand to show env var inputs
       setExpandedResult(idx)
-      // Initialize env values with placeholders
+      // Initialize env values empty (envVars contains instructional placeholders, not real defaults)
       const initial = {}
       Object.keys(result.envVars).forEach(k => initial[k] = '')
       setEnvValues(initial)
@@ -486,18 +494,20 @@ function InternetResultsPanel({ results, onClear, onInstall, installingTool }) {
                   {result.description}
                 </div>
               </div>
-              {/* Install button */}
-              <button
-                onClick={() => handleInstallClick(result, idx)}
-                disabled={installingTool === result.name}
-                className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-50 flex items-center gap-1"
-              >
-                {installingTool === result.name ? (
-                  <><Loader2 size={12} className="animate-spin" /> Installing...</>
-                ) : (
-                  <><Download size={12} /> Install</>
-                )}
-              </button>
+              {/* Install button - only show when NOT expanded */}
+              {expandedResult !== idx && (
+                <button
+                  onClick={() => handleInstallClick(result, idx)}
+                  disabled={installingTool === result.name}
+                  className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-50 flex items-center gap-1"
+                >
+                  {installingTool === result.name ? (
+                    <><Loader2 size={12} className="animate-spin" /> Installing...</>
+                  ) : (
+                    <><Download size={12} /> Install</>
+                  )}
+                </button>
+              )}
             </div>
             
             {/* Install command preview */}
@@ -505,22 +515,47 @@ function InternetResultsPanel({ results, onClear, onInstall, installingTool }) {
               {result.command} {(result.args || []).join(' ')}
             </div>
             
-            {/* Expanded env var inputs */}
-            {expandedResult === idx && result.envVars && Object.keys(result.envVars).length > 0 && (
-              <div className="space-y-2 pt-2 border-t border-blue-500/20">
-                <div className="text-xs text-yellow-400">Configure environment variables (optional):</div>
-                {Object.entries(result.envVars).map(([key, placeholder]) => (
-                  <div key={key} className="flex items-center gap-2">
-                    <label className="text-xs text-[var(--text-secondary)] min-w-[100px]">{key}:</label>
-                    <input
-                      type={key.toLowerCase().includes('key') || key.toLowerCase().includes('token') || key.toLowerCase().includes('secret') ? 'password' : 'text'}
-                      placeholder={placeholder}
-                      value={envValues[key] || ''}
-                      onChange={(e) => setEnvValues(prev => ({ ...prev, [key]: e.target.value }))}
-                      className="flex-1 text-xs bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded px-2 py-1 text-[var(--text-primary)]"
-                    />
+            {/* Expanded configuration section with env vars and Cancel/Install buttons */}
+            {expandedResult === idx && (
+              <div className="space-y-3 pt-2 border-t border-blue-500/20">
+                {result.envVars && Object.keys(result.envVars).length > 0 && (
+                  <div className="space-y-2">
+                    <div className="text-xs text-yellow-400">Configure environment variables (optional):</div>
+                    {Object.entries(result.envVars).map(([key, placeholder]) => (
+                      <div key={key} className="flex items-center gap-2">
+                        <label className="text-xs text-[var(--text-secondary)] min-w-[100px]">{key}:</label>
+                        <input
+                          type={key.toLowerCase().includes('key') || key.toLowerCase().includes('token') || key.toLowerCase().includes('secret') ? 'password' : 'text'}
+                          placeholder={placeholder}
+                          value={envValues[key] || ''}
+                          onChange={(e) => setEnvValues(prev => ({ ...prev, [key]: e.target.value }))}
+                          className="flex-1 text-xs bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded px-2 py-1 text-[var(--text-primary)]"
+                        />
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
+                
+                {/* Cancel/Install buttons at bottom */}
+                <div className="flex gap-2 pt-1">
+                  <button
+                    onClick={() => setExpandedResult(null)}
+                    className="flex-1 px-3 py-1.5 bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)] text-[var(--text-secondary)] text-xs font-medium rounded-lg transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => handleInstallClick(result, idx)}
+                    disabled={installingTool === result.name}
+                    className="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition-colors"
+                  >
+                    {installingTool === result.name ? (
+                      <><Loader2 size={12} className="animate-spin" /> Installing...</>
+                    ) : (
+                      <><Download size={12} /> Install</>
+                    )}
+                  </button>
+                </div>
               </div>
             )}
             

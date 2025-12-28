@@ -1182,6 +1182,8 @@ import '../styles/custom.css';
   </footer>
 
   <script>
+    import gsap from 'gsap';
+    
     // Intersection Observer for scroll animations
     document.addEventListener('DOMContentLoaded', () => {
       const revealElements = document.querySelectorAll('.reveal, .reveal-left, .reveal-right, .reveal-scale');
@@ -1414,54 +1416,95 @@ import '../styles/custom.css';
 
       // Ensure we have slides before running logic
       if (totalSteps > 0) {
-        function showSlide(step) {
+        let storyAnimating = false;
+        
+        // Initialize GSAP for slides
+        const slidesArray = gsap.utils.toArray('.story-slide');
+        const innerWrappers = gsap.utils.toArray('.story-slide-inner');
+        
+        // Initial setup - hide all except first, set up for animation
+        slidesArray.forEach((slide, i) => {
+          if (i === 0) {
+            gsap.set(slide, { autoAlpha: 1, zIndex: 1 });
+            gsap.set(innerWrappers[i], { xPercent: 0 });
+          } else {
+            gsap.set(slide, { autoAlpha: 0, zIndex: 0 });
+            gsap.set(innerWrappers[i], { xPercent: 100 });
+          }
+        });
+        
+        function showSlide(targetStep, direction = 1) {
           // Clamp step to valid range
-          step = Math.max(1, Math.min(step, totalSteps));
-          currentStep = step;
+          targetStep = Math.max(1, Math.min(targetStep, totalSteps));
           
-          // Update slide visibility
-          storySlides.forEach((slide, index) => {
-            if (index + 1 === step) {
-              slide.classList.add('active');
-              // Restart any GIF animations in the active slide
-              const gifs = slide.querySelectorAll('img[src$=".gif"]');
-              gifs.forEach(gif => {
-                const src = gif.src;
-                gif.src = '';
-                gif.src = src;
-              });
-            } else {
-              slide.classList.remove('active');
+          // Prevent rapid transitions
+          if (storyAnimating) return;
+          if (targetStep === currentStep) return;
+          
+          storyAnimating = true;
+          const fromStep = currentStep;
+          currentStep = targetStep;
+          
+          const fromIndex = fromStep - 1;
+          const toIndex = targetStep - 1;
+          const dFactor = direction;
+          
+          // Create animation timeline
+          const tl = gsap.timeline({
+            defaults: { duration: 1.0, ease: "power1.inOut" },
+            onComplete: () => {
+              storyAnimating = false;
+              // Trigger step 6 demo
+              if (targetStep === 6) {
+                runStep6Demo();
+              }
             }
           });
           
+          // Animate outgoing slide
+          if (fromIndex >= 0 && fromIndex < slidesArray.length) {
+            gsap.set(slidesArray[fromIndex], { zIndex: 0 });
+            tl.to(innerWrappers[fromIndex], { xPercent: -30 * dFactor }, 0)
+              .set(slidesArray[fromIndex], { autoAlpha: 0 });
+          }
+          
+          // Animate incoming slide
+          gsap.set(slidesArray[toIndex], { autoAlpha: 1, zIndex: 1 });
+          tl.fromTo(innerWrappers[toIndex], 
+            { xPercent: 100 * dFactor },
+            { xPercent: 0 }, 
+            0
+          );
           
           // Update step counter
-          if (currentStepSpan) currentStepSpan.textContent = step;
+          if (currentStepSpan) currentStepSpan.textContent = targetStep;
           
           // Update button states
-          if (storyPrev) storyPrev.disabled = step === 1;
-          if (storyNext) storyNext.disabled = step === totalSteps;
-
-          // Trigger step 6 demo when navigating to step 6
-          if (step === 6) {
-            runStep6Demo();
-          }
+          if (storyPrev) storyPrev.disabled = targetStep === 1;
+          if (storyNext) storyNext.disabled = targetStep === totalSteps;
+          
+          // Restart any GIF animations in the active slide
+          const gifs = slidesArray[toIndex].querySelectorAll('img[src$=".gif"]');
+          gifs.forEach(gif => {
+            const src = gif.src;
+            gif.src = '';
+            gif.src = src;
+          });
         }
 
         // Navigation button handlers
         if (storyPrev) {
           storyPrev.addEventListener('click', () => {
-            if (currentStep > 1) {
-              showSlide(currentStep - 1);
+            if (currentStep > 1 && !storyAnimating) {
+              showSlide(currentStep - 1, -1);
             }
           });
         }
 
         if (storyNext) {
           storyNext.addEventListener('click', () => {
-            if (currentStep < totalSteps) {
-              showSlide(currentStep + 1);
+            if (currentStep < totalSteps && !storyAnimating) {
+              showSlide(currentStep + 1, 1);
             }
           });
         }
@@ -1476,11 +1519,11 @@ import '../styles/custom.css';
           // Check if section is somewhat visible in viewport
           const isVisible = rect.top < window.innerHeight && rect.bottom > 0;
           
-          if (isVisible) {
+          if (isVisible && !storyAnimating) {
             if (e.key === 'ArrowLeft' && currentStep > 1) {
-              showSlide(currentStep - 1);
+              showSlide(currentStep - 1, -1);
             } else if (e.key === 'ArrowRight' && currentStep < totalSteps) {
-              showSlide(currentStep + 1);
+              showSlide(currentStep + 1, 1);
             }
           }
         });
@@ -1489,26 +1532,27 @@ import '../styles/custom.css';
         window.astonishStory = {
            get currentStep() { return currentStep; },
            get totalSteps() { return totalSteps; },
+           get animating() { return storyAnimating; },
            next: () => {
-             if (currentStep < totalSteps) {
-                showSlide(currentStep + 1);
+             if (currentStep < totalSteps && !storyAnimating) {
+                showSlide(currentStep + 1, 1);
                 return true;
              }
              return false;
            },
            prev: () => {
-             if (currentStep > 1) {
-                showSlide(currentStep - 1);
+             if (currentStep > 1 && !storyAnimating) {
+                showSlide(currentStep - 1, -1);
                 return true;
              }
              return false;
            },
-           canGoNext: () => currentStep < totalSteps,
-           canGoPrev: () => currentStep > 1
+           canGoNext: () => currentStep < totalSteps && !storyAnimating,
+           canGoPrev: () => currentStep > 1 && !storyAnimating
         };
 
-        // Initialize first slide
-        showSlide(1);
+        // Initialize first slide (already set up, just update state)
+        currentStepSpan.textContent = 1;
       }
     });
   </script>
@@ -1576,10 +1620,13 @@ import '../styles/custom.css';
           const isStory = currentSection && currentSection.classList.contains('story-section');
           
           if (isStory && window.astonishStory) {
+            // Block page navigation while story is animating
+            if (window.astonishStory.animating) return;
+            
             if (window.astonishStory.canGoPrev()) {
                window.astonishStory.prev();
                animating = true;
-               setTimeout(() => animating = false, 500);
+               setTimeout(() => animating = false, 1200); // Match animation duration
                return;
             }
           }
@@ -1593,10 +1640,13 @@ import '../styles/custom.css';
           const isStory = currentSection && currentSection.classList.contains('story-section');
           
           if (isStory && window.astonishStory) {
+            // Block page navigation while story is animating
+            if (window.astonishStory.animating) return;
+            
             if (window.astonishStory.canGoNext()) {
                window.astonishStory.next();
                animating = true;
-               setTimeout(() => animating = false, 500); 
+               setTimeout(() => animating = false, 1200); // Match animation duration
                return;
             }
           }

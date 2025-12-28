@@ -3991,7 +3991,7 @@ func (a *AstonishAgent) handleOutputNode(ctx agent.InvocationContext, node *conf
 		}
 	}
 
-	message := strings.Join(parts, " ")
+	message := strings.Join(parts, "\n")
 
 	// Emit message event
 	evt := &session.Event{

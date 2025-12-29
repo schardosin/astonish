@@ -4040,7 +4040,7 @@ func (a *AstonishAgent) handleOutputNode(ctx agent.InvocationContext, node *conf
 		}
 	}
 
-	message := strings.Join(parts, "\n\n")
+	message := strings.Join(parts, "\n")
 
 	// Emit message event with marker for frontend to preserve whitespace
 

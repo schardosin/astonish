@@ -433,7 +433,7 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 					payload := map[string]interface{}{
 						"text": part.Text,
 					}
-					if isOutputNode {
+					if isOutputNode || isUserMessageDisplay {
 						payload["preserveWhitespace"] = true
 					}
 					SendSSE(w, flusher, "text", payload)

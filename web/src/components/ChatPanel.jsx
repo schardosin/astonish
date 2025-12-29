@@ -127,7 +127,12 @@ export default function ChatPanel({ messages, onSendMessage, onStartRun, onStop,
                     </pre>
                   ) : (
                     <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      <ReactMarkdown 
+                        remarkPlugins={[remarkGfm]} 
+                        components={message.preserveWhitespace ? {
+                          p: ({node, ...props}) => <p style={{whiteSpace: 'pre-wrap'}} {...props} />
+                        } : undefined}
+                      >
                         {message.content}
                       </ReactMarkdown>
                     </div>

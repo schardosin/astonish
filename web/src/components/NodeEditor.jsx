@@ -520,6 +520,20 @@ function UpdateStateForm({ data, onChange, theme }) {
             <option value="value">Literal Value</option>
           </select>
         </div>
+        
+        {/* Silent Mode Toggle */}
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="silent"
+            checked={data.silent || false}
+            onChange={(e) => onChange({ ...data, silent: e.target.checked })}
+            className="w-4 h-4 rounded border accent-purple-500"
+          />
+          <label htmlFor="silent" className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+            Silent mode
+          </label>
+        </div>
       </div>
       
       {/* Right column - Source Variable or Value */}
@@ -927,6 +941,20 @@ function LlmNodeForm({ data, onChange, theme, availableTools = [], availableVari
                 min={0}
               />
             </div>
+            
+            {/* Silent Mode Toggle */}
+            <div className="flex items-center gap-2 pt-6">
+              <input
+                type="checkbox"
+                id="llm-silent"
+                checked={data.silent || false}
+                onChange={(e) => onChange({ ...data, silent: e.target.checked })}
+                className="w-4 h-4 rounded border accent-purple-500"
+              />
+              <label htmlFor="llm-silent" className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                Silent mode
+              </label>
+            </div>
           </div>
         )}
       </div>
@@ -1012,7 +1040,19 @@ function ToolNodeForm({ data, onChange, theme, availableTools = [] }) {
             className="w-4 h-4 accent-purple-600"
           />
         </div>
-
+        
+        {/* Silent Mode Toggle */}
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
+            Silent mode
+          </label>
+          <input
+            type="checkbox"
+            checked={data.silent || false}
+            onChange={(e) => onChange({ ...data, silent: e.target.checked })}
+            className="w-4 h-4 accent-purple-600"
+          />
+        </div>
 
       </div>
       

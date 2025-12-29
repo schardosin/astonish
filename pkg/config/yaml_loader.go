@@ -47,6 +47,7 @@ type Node struct {
 	OutputAction      string                 `yaml:"output_action,omitempty"`  // "append" or other aggregation strategies
 	MaxRetries        int                    `yaml:"max_retries,omitempty"`    // Maximum retry attempts (default: 3)
 	RetryStrategy     string                 `yaml:"retry_strategy,omitempty"` // "intelligent" or "simple" (default: intelligent)
+	Silent            bool                   `yaml:"silent,omitempty"`         // If true, node execution is not shown in UI/CLI
 }
 
 // ParallelConfig defines configuration for parallel execution.

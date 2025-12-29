@@ -327,6 +327,7 @@ Always add user_message when the user should see the output:
 7. ALWAYS include user_message on LLM nodes when user should see output
 8. For branching/loops, use INPUT with options - gives reliable condition values
 9. NEVER use LLM output in conditional edges - it's unpredictable
+10. Use ` + "`" + `silent: true` + "`" + ` on nodes you want to run without showing execution indicator
 `
 
 // GetFlowSchema returns the schema as a string for AI context

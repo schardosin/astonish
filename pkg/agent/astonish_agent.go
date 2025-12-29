@@ -813,6 +813,7 @@ func (a *AstonishAgent) emitNodeTransition(nodeName string, state session.State,
 				"temp:node_history": history,
 				"temp:node_type":    node.Type,
 				"node_type":         node.Type,
+			"silent":            node.Silent,
 			},
 		},
 	}

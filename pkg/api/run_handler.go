@@ -424,12 +424,19 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 			shouldStream = false
 		}
 
+		// Check for _output_node marker (from handleOutputNode)
+		isOutputNode := event.Actions.StateDelta != nil && event.Actions.StateDelta["_output_node"] != nil
+
 		if shouldStream && event.LLMResponse.Content != nil {
 			for _, part := range event.LLMResponse.Content.Parts {
 				if part.Text != "" {
-					SendSSE(w, flusher, "text", map[string]string{
+					payload := map[string]interface{}{
 						"text": part.Text,
-					})
+					}
+					if isOutputNode {
+						payload["preserveWhitespace"] = true
+					}
+					SendSSE(w, flusher, "text", payload)
 				}
 			}
 		}
@@ -469,9 +476,12 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 
-					SendSSE(w, flusher, "node", map[string]string{
-						"node": nodeName,
-						"type": nodeType,
+					// Always send node event, include silent flag for frontend filtering
+					isSilent, _ := delta["silent"].(bool)
+					SendSSE(w, flusher, "node", map[string]any{
+						"node":   nodeName,
+						"type":   nodeType,
+						"silent": isSilent,
 					})
 				}
 			}

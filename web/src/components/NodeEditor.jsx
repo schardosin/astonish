@@ -26,7 +26,7 @@ const NODE_COLORS = {
  * VariablePanel - Left sidebar showing variables grouped by node
  * Inserts variables into the currently focused textarea
  */
-function VariablePanel({ variableGroups, activeTextareaRef, getValue, setValue }) {
+function VariablePanel({ variableGroups, activeTextareaRef, getValue, setValue, onVariableClick }) {
   const [filterNode, setFilterNode] = useState('all')
   const [collapsed, setCollapsed] = useState({})
   
@@ -130,14 +130,14 @@ function VariablePanel({ variableGroups, activeTextareaRef, getValue, setValue }
                   <button
                     key={v}
                     type="button"
-                    onClick={() => insertVariable(v)}
+                    onClick={() => onVariableClick ? onVariableClick(v) : insertVariable(v)}
                     className="px-2 py-0.5 text-xs font-mono rounded transition-all hover:scale-105 hover:bg-purple-500/30"
                     style={{ 
                       background: 'rgba(168, 85, 247, 0.15)', 
                       color: '#c084fc',
                       border: '1px solid rgba(168, 85, 247, 0.25)'
                     }}
-                    title={`Insert {${v}} at cursor`}
+                    title={onVariableClick ? `Add {${v}} as new item` : `Insert {${v}} at cursor`}
                   >
                     {v}
                   </button>
@@ -150,7 +150,7 @@ function VariablePanel({ variableGroups, activeTextareaRef, getValue, setValue }
       
       {/* Help text */}
       <div className="text-xs mt-2 pt-2 border-t" style={{ color: 'var(--text-muted)', borderColor: 'var(--border-color)' }}>
-        Click to insert at cursor
+        {onVariableClick ? 'Click to add as new item' : 'Click to insert at cursor'}
       </div>
     </div>
   )
@@ -491,6 +491,7 @@ function UpdateStateForm({ data, onChange, theme }) {
           >
             <option value="overwrite">overwrite</option>
             <option value="append">append</option>
+            <option value="increment">increment</option>
           </select>
         </div>
         
@@ -519,6 +520,20 @@ function UpdateStateForm({ data, onChange, theme }) {
             <option value="variable">From Variable</option>
             <option value="value">Literal Value</option>
           </select>
+        </div>
+        
+        {/* Silent Mode Toggle */}
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="silent"
+            checked={data.silent || false}
+            onChange={(e) => onChange({ ...data, silent: e.target.checked })}
+            className="w-4 h-4 rounded border accent-purple-500"
+          />
+          <label htmlFor="silent" className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+            Silent mode
+          </label>
         </div>
       </div>
       
@@ -927,6 +942,20 @@ function LlmNodeForm({ data, onChange, theme, availableTools = [], availableVari
                 min={0}
               />
             </div>
+            
+            {/* Silent Mode Toggle */}
+            <div className="flex items-center gap-2 pt-6">
+              <input
+                type="checkbox"
+                id="llm-silent"
+                checked={data.silent || false}
+                onChange={(e) => onChange({ ...data, silent: e.target.checked })}
+                className="w-4 h-4 rounded border accent-purple-500"
+              />
+              <label htmlFor="llm-silent" className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                Silent mode
+              </label>
+            </div>
           </div>
         )}
       </div>
@@ -1012,7 +1041,19 @@ function ToolNodeForm({ data, onChange, theme, availableTools = [] }) {
             className="w-4 h-4 accent-purple-600"
           />
         </div>
-
+        
+        {/* Silent Mode Toggle */}
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
+            Silent mode
+          </label>
+          <input
+            type="checkbox"
+            checked={data.silent || false}
+            onChange={(e) => onChange({ ...data, silent: e.target.checked })}
+            className="w-4 h-4 accent-purple-600"
+          />
+        </div>
 
       </div>
       
@@ -1093,11 +1134,14 @@ function ToolNodeForm({ data, onChange, theme, availableTools = [] }) {
 /**
  * Output Node Form - with user_message array editor
  */
-function OutputNodeForm({ data, onChange, theme }) {
+function OutputNodeForm({ data, onChange, theme, availableVariables = [] }) {
   const userMessage = data.user_message || []
   
-  const handleAddItem = () => {
-    onChange({ ...data, user_message: [...userMessage, ''] })
+  // Get flat list of all valid variable names
+  const allValidVars = availableVariables.flatMap(g => g.variables || [])
+  
+  const handleAddItem = (initialValue = '') => {
+    onChange({ ...data, user_message: [...userMessage, initialValue] })
   }
   
   const handleRemoveItem = (index) => {
@@ -1111,24 +1155,20 @@ function OutputNodeForm({ data, onChange, theme }) {
     onChange({ ...data, user_message: newItems })
   }
   
+  // Check if a value matches a known state variable
+  const isVariable = (value) => {
+    const trimmed = value.trim()
+    return trimmed && allValidVars.includes(trimmed)
+  }
+  
   return (
     <div className="flex gap-6 h-full">
       {/* Left column - Info */}
-      <div className="w-64 space-y-4">
-        <div className="flex items-center gap-3" style={{ color: 'var(--text-muted)' }}>
-          <MessageSquare size={20} className="opacity-50" />
-          <div>
-            <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Output Display</p>
-            <p className="text-xs">Configure what to show</p>
-          </div>
-        </div>
-        <div className="text-xs space-y-2 p-3 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>
-          <p><strong>Tips:</strong></p>
-          <p>• Add literal text strings</p>
-          <p>• Reference state variables by name</p>
-          <p>• Items are joined with spaces</p>
-        </div>
-      </div>
+      {/* Left column - Variable Selector */}
+      <VariablePanel
+        variableGroups={availableVariables}
+        onVariableClick={(v) => handleAddItem(v)}
+      />
       
       {/* Right column - User Message Editor */}
       <div className="flex-1">
@@ -1155,31 +1195,47 @@ function OutputNodeForm({ data, onChange, theme }) {
             No items yet. Click "Add Item" to add a message part.
           </div>
         ) : (
-          <div className="space-y-2 max-h-48 overflow-y-auto">
+          <div className="space-y-3 max-h-64 overflow-y-auto">
             {userMessage.map((item, index) => (
-              <div key={index} className="flex items-center gap-2">
+              <div key={index} className="flex items-start gap-2">
                 <span 
-                  className="text-xs px-2 py-1 rounded" 
+                  className="text-xs px-2 py-1 rounded mt-2" 
                   style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}
                 >
                   {index + 1}
                 </span>
-                <input
-                  type="text"
-                  value={item}
-                  onChange={(e) => handleItemChange(index, e.target.value)}
-                  className="flex-1 px-3 py-2 rounded border text-sm"
-                  style={{ 
-                    background: 'var(--bg-primary)', 
-                    borderColor: 'var(--border-color)', 
-                    color: 'var(--text-primary)' 
-                  }}
-                  placeholder='Text or variable name (e.g., "Result:" or answer)'
-                />
+                <div className="flex-1 relative">
+                  <textarea
+                    value={item}
+                    onChange={(e) => handleItemChange(index, e.target.value)}
+                    className="w-full px-3 py-2 rounded border text-sm resize-none font-mono"
+                    style={{ 
+                      background: 'var(--bg-primary)', 
+                      borderColor: isVariable(item) ? '#a855f7' : 'var(--border-color)', 
+                      color: 'var(--text-primary)',
+                      minHeight: '60px'
+                    }}
+                    placeholder="Enter literal text or a state variable name..."
+                    rows={2}
+                  />
+                  {/* Variable indicator badge */}
+                  {item.trim() && (
+                    <span 
+                      className="absolute top-1 right-1 text-xs px-1.5 py-0.5 rounded"
+                      style={{ 
+                        background: isVariable(item) ? 'rgba(168, 85, 247, 0.2)' : 'rgba(100, 100, 100, 0.2)',
+                        color: isVariable(item) ? '#c084fc' : 'var(--text-muted)',
+                        border: isVariable(item) ? '1px solid rgba(168, 85, 247, 0.3)' : '1px solid transparent'
+                      }}
+                    >
+                      {isVariable(item) ? '📌 Variable' : '📝 Literal'}
+                    </span>
+                  )}
+                </div>
                 <button
                   type="button"
                   onClick={() => handleRemoveItem(index)}
-                  className="p-1 rounded hover:bg-red-500/20 text-red-500"
+                  className="p-1.5 rounded hover:bg-red-500/20 text-red-500 mt-2"
                 >
                   <Trash2 size={14} />
                 </button>
@@ -1189,12 +1245,13 @@ function OutputNodeForm({ data, onChange, theme }) {
         )}
         
         <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
-          Enter text strings or state variable names. Variables will be resolved at runtime.
+          Multi-line text is supported. Variables are resolved at runtime.
         </p>
       </div>
     </div>
   )
 }
+
 
 /**
  * Main Node Editor Component - Horizontal Bottom Layout

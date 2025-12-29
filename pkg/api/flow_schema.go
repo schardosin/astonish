@@ -161,13 +161,21 @@ When ` + "`" + `continue_on_error` + "`" + ` is true, the result will include:
 
 ### 4. Output Node
 Display messages to user. Use user_message array with strings and state variable names.
+Each item is displayed as a separate paragraph.
+
+**Behavior:**
+- If item matches a state variable name: its value is displayed
+- If item doesn't match any variable: treated as literal text
+- Multi-line text is preserved in each item
+
 Note: LLM responses are shown automatically, so output nodes are mainly for formatting/labeling.
 ` + "```yaml" + `
 - name: show_result
   type: output
   user_message:
-    - "Answer:"
-    - answer
+    - "Here is your answer:"   # Literal text
+    - answer                   # State variable (resolved at runtime)
+    - "Thank you for using our service!"  # More literal text
 ` + "```" + `
 
 ### 5. Update State Node
@@ -319,6 +327,7 @@ Always add user_message when the user should see the output:
 7. ALWAYS include user_message on LLM nodes when user should see output
 8. For branching/loops, use INPUT with options - gives reliable condition values
 9. NEVER use LLM output in conditional edges - it's unpredictable
+10. Use ` + "`" + `silent: true` + "`" + ` on nodes you want to run without showing execution indicator
 `
 
 // GetFlowSchema returns the schema as a string for AI context

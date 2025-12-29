@@ -535,14 +535,18 @@ layout:
                   // Determine if we should append to last agent message or create new one
                   setChatMessages(prev => {
                     const last = prev[prev.length - 1]
-                    if (last && last.type === 'agent') {
+                    if (last && last.type === 'agent' && !data.preserveWhitespace && !last.preserveWhitespace) {
+                      // Only append if both are streaming (not output node)
                       return [...prev.slice(0, -1), { ...last, content: last.content + data.text }]
                     }
-                    return [...prev, { type: 'agent', content: data.text }]
+                    return [...prev, { type: 'agent', content: data.text, preserveWhitespace: data.preserveWhitespace || false }]
                   })
                 } else if (data.node) {
                   setRunningNodeId(data.node)
-                  setChatMessages(prev => [...prev, { type: 'node', nodeName: data.node }])
+                  // Only add node message to chat if not silent
+                  if (!data.silent) {
+                    setChatMessages(prev => [...prev, { type: 'node', nodeName: data.node }])
+                  }
                   if (data.node === 'END') {
                      setRunningNodeId(null)
                      setChatMessages(prev => [...prev, { type: 'flow_complete' }])
@@ -889,34 +893,39 @@ layout:
   }, [yamlContent, getYamlWithLayout, updateYaml])
 
   // Handle node deletion from FlowCanvas - update YAML immediately
-  const handleNodeDelete = useCallback((nodeId) => {
-    console.log(`[NODE DELETE] Removing node: ${nodeId}`)
+  // Accepts an array of node IDs to delete (supports multi-select)
+  const handleNodeDelete = useCallback((nodeIds) => {
+    // Normalize to array if single ID passed
+    const idsToDelete = Array.isArray(nodeIds) ? nodeIds : [nodeIds]
+    console.log(`[NODE DELETE] Removing nodes: ${idsToDelete.join(', ')}`)
     
-    // Parse current YAML and remove the node
+    // Parse current YAML and remove all nodes at once
     try {
       const parsed = yaml.load(yamlContent) || {}
       
       if (parsed.nodes && Array.isArray(parsed.nodes)) {
-        parsed.nodes = parsed.nodes.filter(n => n.name !== nodeId)
+        parsed.nodes = parsed.nodes.filter(n => !idsToDelete.includes(n.name))
       }
       
-      // Also clean up flow edges that reference this node
+      // Also clean up flow edges that reference any deleted nodes
       if (parsed.flow && Array.isArray(parsed.flow)) {
         parsed.flow = parsed.flow.filter(edge => {
-          if (edge.from === nodeId) return false
-          if (edge.to === nodeId) return false
+          if (idsToDelete.includes(edge.from)) return false
+          if (idsToDelete.includes(edge.to)) return false
           // Handle conditional edges
           if (edge.edges && Array.isArray(edge.edges)) {
-            edge.edges = edge.edges.filter(e => e.to !== nodeId)
+            edge.edges = edge.edges.filter(e => !idsToDelete.includes(e.to))
             return edge.edges.length > 0 || edge.to
           }
           return true
         })
       }
       
-      // Clean up layout
+      // Clean up layout for all deleted nodes
       if (parsed.layout && parsed.layout.nodes) {
-        delete parsed.layout.nodes[nodeId]
+        idsToDelete.forEach(nodeId => {
+          delete parsed.layout.nodes[nodeId]
+        })
       }
       
       const newYaml = yaml.dump(orderYamlKeys(parsed), { 
@@ -929,11 +938,77 @@ layout:
       updateYaml(newYaml)
       
       // Also update local nodes/edges state to keep in sync
-      setNodes(prev => prev.filter(n => n.id !== nodeId))
-      setEdges(prev => prev.filter(e => e.source !== nodeId && e.target !== nodeId))
+      setNodes(prev => prev.filter(n => !idsToDelete.includes(n.id)))
+      setEdges(prev => prev.filter(e => !idsToDelete.includes(e.source) && !idsToDelete.includes(e.target)))
       
     } catch (err) {
-      console.error('Failed to delete node from YAML:', err)
+      console.error('Failed to delete nodes from YAML:', err)
+    }
+  }, [yamlContent, updateYaml])
+
+  // Handle node duplication (copy/paste)
+  // Accepts an array of node data to duplicate with new IDs
+  const handleDuplicateNodes = useCallback((nodesToDuplicate) => {
+    if (!nodesToDuplicate || nodesToDuplicate.length === 0) return
+    
+    console.log(`[DUPLICATE] Duplicating ${nodesToDuplicate.length} node(s)`)
+    
+    try {
+      const parsed = yaml.load(yamlContent) || {}
+      if (!parsed.nodes) parsed.nodes = []
+      if (!parsed.layout) parsed.layout = { nodes: {} }
+      if (!parsed.layout.nodes) parsed.layout.nodes = {}
+      
+      // Get existing node names to avoid conflicts
+      const existingNames = new Set(parsed.nodes.map(n => n.name))
+      
+      // Track new node names for selection after paste
+      const newNodeNames = []
+      
+      nodesToDuplicate.forEach((sourceNode, index) => {
+        // Find the original node data in YAML
+        const originalNode = parsed.nodes.find(n => n.name === sourceNode.id)
+        if (!originalNode) {
+          console.log(`[DUPLICATE] Original node not found: ${sourceNode.id}`)
+          return
+        }
+        
+        // Generate unique name
+        let copyNum = 1
+        let newName = `${originalNode.name}_copy`
+        while (existingNames.has(newName)) {
+          copyNum++
+          newName = `${originalNode.name}_copy${copyNum}`
+        }
+        existingNames.add(newName)
+        newNodeNames.push(newName)
+        
+        // Clone the node with new name
+        const newNode = { ...originalNode, name: newName }
+        parsed.nodes.push(newNode)
+        
+        // Set position (offset from original or from source position)
+        const sourcePos = sourceNode.position || parsed.layout.nodes[sourceNode.id]
+        if (sourcePos) {
+          parsed.layout.nodes[newName] = {
+            x: Math.round(sourcePos.x + 50 + index * 20),
+            y: Math.round(sourcePos.y + 50 + index * 20)
+          }
+        }
+      })
+      
+      const newYaml = yaml.dump(orderYamlKeys(parsed), { 
+        indent: 2, 
+        lineWidth: -1,
+        noRefs: true,
+        sortKeys: false
+      })
+      
+      updateYaml(newYaml)
+      console.log(`[DUPLICATE] Created ${newNodeNames.length} new node(s): ${newNodeNames.join(', ')}`)
+      
+    } catch (err) {
+      console.error('Failed to duplicate nodes:', err)
     }
   }, [yamlContent, updateYaml])
 
@@ -1324,6 +1399,7 @@ layout:
                 onNodeDelete={handleNodeDelete}
                 onAutoLayout={handleAutoLayout}
                 onCreateConnectedNode={handleCreateConnectedNode}
+                onDuplicateNodes={handleDuplicateNodes}
                 onOpenAIChat={(options) => {
                   if (options?.context === 'multi_node' && options?.nodeIds) {
                     // Multi-node context

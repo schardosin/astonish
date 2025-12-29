@@ -69,7 +69,8 @@ function FlowCanvasInner({
   onNodeDelete,
   onAutoLayout,
   runningNodeId,
-  onCreateConnectedNode  // Callback for quick node creation from + button
+  onCreateConnectedNode,  // Callback for quick node creation from + button
+  onDuplicateNodes        // Callback for duplicating nodes (copy/paste)
 }) {
   const { getNodes, getEdges } = useReactFlow()
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([])
@@ -77,6 +78,9 @@ function FlowCanvasInner({
   
   // Track edge dragging to prevent sync conflicts
   const isDraggingEdgeRef = useRef(false)
+  
+  // Clipboard for copy/paste functionality
+  const clipboardRef = useRef([])
 
   // Listen for edge drag events
   useEffect(() => {
@@ -140,8 +144,8 @@ function FlowCanvasInner({
         .filter(id => id !== 'START' && id !== 'END')
       
       if (removedIds.length > 0) {
-        // Notify parent of deletions BEFORE applying the change
-        removedIds.forEach(id => onNodeDelete(id))
+        // Notify parent of all deletions at once (pass array)
+        onNodeDelete(removedIds)
       }
     }
     
@@ -167,8 +171,64 @@ function FlowCanvasInner({
   
   const hasMultiSelection = selectedRealNodes.length >= 2
 
+  // Keyboard shortcuts: Cmd/Ctrl+A (select all), Cmd/Ctrl+C (copy), Cmd/Ctrl+V (paste)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Only handle if focus is on the canvas (not in an input/textarea)
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+      
+      // Check for Cmd+A (Mac) or Ctrl+A (Windows/Linux) - Select All
+      if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
+        e.preventDefault()
+        
+        // Select all nodes by marking them as selected
+        setNodes(currentNodes => 
+          currentNodes.map(node => ({
+            ...node,
+            selected: true
+          }))
+        )
+        
+        // Update selectedNodeIds for AI assist button visibility
+        setSelectedNodeIds(nodes.map(n => n.id))
+      }
+      
+      // Cmd+C - Copy selected nodes
+      if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
+        // Get selected nodes (excluding START and END)
+        const selectedNodes = nodes.filter(n => 
+          n.selected && n.id !== 'START' && n.id !== 'END'
+        )
+        
+        if (selectedNodes.length > 0) {
+          // Store node data in clipboard
+          clipboardRef.current = selectedNodes.map(n => ({
+            id: n.id,
+            type: n.type,
+            data: { ...n.data },
+            position: { ...n.position }
+          }))
+          console.log(`[Copy] Copied ${selectedNodes.length} node(s) to clipboard`)
+        }
+      }
+      
+      // Cmd+V - Paste nodes from clipboard
+      if ((e.metaKey || e.ctrlKey) && e.key === 'v') {
+        if (clipboardRef.current.length > 0 && onDuplicateNodes) {
+          e.preventDefault()
+          // Call parent handler with clipboard contents
+          onDuplicateNodes(clipboardRef.current)
+          console.log(`[Paste] Pasting ${clipboardRef.current.length} node(s)`)
+        }
+      }
+    }
+    
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [setNodes, nodes, onDuplicateNodes])
+
   // Sync nodes from props - update selection state
-  // Sync nodes from props - update selection state
+  // Sync nodes from props - preserve multi-selection when syncing
   useEffect(() => {
     if (propNodes && propNodes.length > 0) {
       // Build set of nodes that have outgoing connections
@@ -178,11 +238,20 @@ function FlowCanvasInner({
       }
       
       setNodes((currentNodes) => {
-        // Add selected state to prop nodes
+        // Build map of current selection states
+        const currentSelectionMap = new Map()
+        currentNodes.forEach(n => currentSelectionMap.set(n.id, n.selected))
+        
+        // Add selected state to prop nodes, preserving current multi-selection
         return propNodes.map(node => {
+          // Preserve existing selection, fallback to selectedNodeId for single-click selection
+          const isSelected = currentSelectionMap.has(node.id) 
+            ? currentSelectionMap.get(node.id) 
+            : node.id === selectedNodeId
+          
           return {
             ...node,
-            selected: node.id === selectedNodeId,
+            selected: isSelected,
             data: {
               ...node.data,
               isSelected: node.id === selectedNodeId,
@@ -385,8 +454,62 @@ function FlowCanvasInner({
 
 
 
+  // Track initial positions for multi-node drag to calculate delta
+  const dragStartPositionsRef = useRef(null)
+  
+  // Handle node drag start - store initial positions for delta calculation
+  const handleNodeDragStart = useCallback((event, node, draggedNodes) => {
+    // Store initial positions if multiple nodes are selected
+    if (draggedNodes && draggedNodes.length > 1) {
+      dragStartPositionsRef.current = {
+        nodes: new Map(draggedNodes.map(n => [n.id, { x: n.position.x, y: n.position.y }])),
+        edges: edges.map(e => ({ 
+          id: e.id, 
+          points: e.data?.points ? [...e.data.points.map(p => ({...p}))] : [] 
+        }))
+      }
+    }
+  }, [edges])
+  
+  // Handle node drag - update edge waypoints to follow nodes
+  const handleNodeDrag = useCallback((event, node, draggedNodes) => {
+    // Only update edge waypoints if multiple nodes are being dragged
+    if (!dragStartPositionsRef.current || !draggedNodes || draggedNodes.length <= 1) return
+    
+    // Calculate drag delta from any dragged node
+    const startPos = dragStartPositionsRef.current.nodes.get(node.id)
+    if (!startPos) return
+    
+    const deltaX = node.position.x - startPos.x
+    const deltaY = node.position.y - startPos.y
+    
+    // Update all edge waypoints by the same delta
+    setEdges(currentEdges => 
+      currentEdges.map((edge, idx) => {
+        const originalEdge = dragStartPositionsRef.current.edges[idx]
+        if (!originalEdge || !originalEdge.points || originalEdge.points.length === 0) {
+          return edge
+        }
+        
+        // Shift all waypoints by the drag delta
+        const newPoints = originalEdge.points.map(p => ({
+          x: p.x + deltaX,
+          y: p.y + deltaY
+        }))
+        
+        return {
+          ...edge,
+          data: { ...edge.data, points: newPoints }
+        }
+      })
+    )
+  }, [setEdges])
+
   // Handle node drag stop to save layout immediately
   const handleNodeDragStop = useCallback((event, node, draggedNodes) => {
+    // Clear drag start positions
+    dragStartPositionsRef.current = null
+    
     if (onLayoutSave) {
       // Use getNodes() to get the current state of ALL nodes
       // The 'draggedNodes' argument (3rd arg) only contains nodes that were dragged
@@ -428,6 +551,8 @@ function FlowCanvasInner({
         colorMode={theme}
         minZoom={0.1}
         maxZoom={2}
+        onNodeDragStart={handleNodeDragStart}
+        onNodeDrag={handleNodeDrag}
         onNodeDragStop={handleNodeDragStop}
       >
         <Background color={theme === 'dark' ? '#374151' : '#E2E8F0'} gap={20} />
@@ -536,7 +661,7 @@ function FlowCanvasInner({
               className="text-xs px-3 py-2 rounded-lg"
               style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-muted)' }}
             >
-              Drag from node handles to connect • Select edge + Delete to remove • Shift+drag to multi-select
+              Drag from handles to connect • ⌘A/Ctrl+A to select all • Shift+drag to multi-select
             </div>
           </Panel>
         )}

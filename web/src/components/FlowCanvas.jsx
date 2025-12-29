@@ -140,8 +140,8 @@ function FlowCanvasInner({
         .filter(id => id !== 'START' && id !== 'END')
       
       if (removedIds.length > 0) {
-        // Notify parent of deletions BEFORE applying the change
-        removedIds.forEach(id => onNodeDelete(id))
+        // Notify parent of all deletions at once (pass array)
+        onNodeDelete(removedIds)
       }
     }
     

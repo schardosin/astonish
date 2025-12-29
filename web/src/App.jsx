@@ -893,34 +893,39 @@ layout:
   }, [yamlContent, getYamlWithLayout, updateYaml])
 
   // Handle node deletion from FlowCanvas - update YAML immediately
-  const handleNodeDelete = useCallback((nodeId) => {
-    console.log(`[NODE DELETE] Removing node: ${nodeId}`)
+  // Accepts an array of node IDs to delete (supports multi-select)
+  const handleNodeDelete = useCallback((nodeIds) => {
+    // Normalize to array if single ID passed
+    const idsToDelete = Array.isArray(nodeIds) ? nodeIds : [nodeIds]
+    console.log(`[NODE DELETE] Removing nodes: ${idsToDelete.join(', ')}`)
     
-    // Parse current YAML and remove the node
+    // Parse current YAML and remove all nodes at once
     try {
       const parsed = yaml.load(yamlContent) || {}
       
       if (parsed.nodes && Array.isArray(parsed.nodes)) {
-        parsed.nodes = parsed.nodes.filter(n => n.name !== nodeId)
+        parsed.nodes = parsed.nodes.filter(n => !idsToDelete.includes(n.name))
       }
       
-      // Also clean up flow edges that reference this node
+      // Also clean up flow edges that reference any deleted nodes
       if (parsed.flow && Array.isArray(parsed.flow)) {
         parsed.flow = parsed.flow.filter(edge => {
-          if (edge.from === nodeId) return false
-          if (edge.to === nodeId) return false
+          if (idsToDelete.includes(edge.from)) return false
+          if (idsToDelete.includes(edge.to)) return false
           // Handle conditional edges
           if (edge.edges && Array.isArray(edge.edges)) {
-            edge.edges = edge.edges.filter(e => e.to !== nodeId)
+            edge.edges = edge.edges.filter(e => !idsToDelete.includes(e.to))
             return edge.edges.length > 0 || edge.to
           }
           return true
         })
       }
       
-      // Clean up layout
+      // Clean up layout for all deleted nodes
       if (parsed.layout && parsed.layout.nodes) {
-        delete parsed.layout.nodes[nodeId]
+        idsToDelete.forEach(nodeId => {
+          delete parsed.layout.nodes[nodeId]
+        })
       }
       
       const newYaml = yaml.dump(orderYamlKeys(parsed), { 
@@ -933,11 +938,11 @@ layout:
       updateYaml(newYaml)
       
       // Also update local nodes/edges state to keep in sync
-      setNodes(prev => prev.filter(n => n.id !== nodeId))
-      setEdges(prev => prev.filter(e => e.source !== nodeId && e.target !== nodeId))
+      setNodes(prev => prev.filter(n => !idsToDelete.includes(n.id)))
+      setEdges(prev => prev.filter(e => !idsToDelete.includes(e.source) && !idsToDelete.includes(e.target)))
       
     } catch (err) {
-      console.error('Failed to delete node from YAML:', err)
+      console.error('Failed to delete nodes from YAML:', err)
     }
   }, [yamlContent, updateYaml])
 

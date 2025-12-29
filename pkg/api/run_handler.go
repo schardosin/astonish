@@ -476,14 +476,13 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 
-					// Only send node event if not silent
+					// Always send node event, include silent flag for frontend filtering
 					isSilent, _ := delta["silent"].(bool)
-					if !isSilent {
-						SendSSE(w, flusher, "node", map[string]string{
-							"node": nodeName,
-							"type": nodeType,
-						})
-					}
+					SendSSE(w, flusher, "node", map[string]any{
+						"node":   nodeName,
+						"type":   nodeType,
+						"silent": isSilent,
+					})
 				}
 			}
 

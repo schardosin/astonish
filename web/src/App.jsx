@@ -543,7 +543,10 @@ layout:
                   })
                 } else if (data.node) {
                   setRunningNodeId(data.node)
-                  setChatMessages(prev => [...prev, { type: 'node', nodeName: data.node }])
+                  // Only add node message to chat if not silent
+                  if (!data.silent) {
+                    setChatMessages(prev => [...prev, { type: 'node', nodeName: data.node }])
+                  }
                   if (data.node === 'END') {
                      setRunningNodeId(null)
                      setChatMessages(prev => [...prev, { type: 'flow_complete' }])

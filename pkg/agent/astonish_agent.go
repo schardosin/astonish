@@ -4040,14 +4040,20 @@ func (a *AstonishAgent) handleOutputNode(ctx agent.InvocationContext, node *conf
 		}
 	}
 
-	message := strings.Join(parts, "\n")
+	message := strings.Join(parts, "\n\n")
 
-	// Emit message event
+	// Emit message event with marker for frontend to preserve whitespace
+
 	evt := &session.Event{
 		LLMResponse: model.LLMResponse{
 			Content: &genai.Content{
 				Parts: []*genai.Part{{Text: message}},
 				Role:  "model",
+			},
+		},
+		Actions: session.EventActions{
+			StateDelta: map[string]any{
+				"_output_node": true, // Marker for frontend to apply pre-wrap styling
 			},
 		},
 	}

@@ -535,10 +535,11 @@ layout:
                   // Determine if we should append to last agent message or create new one
                   setChatMessages(prev => {
                     const last = prev[prev.length - 1]
-                    if (last && last.type === 'agent') {
+                    if (last && last.type === 'agent' && !data.preserveWhitespace && !last.preserveWhitespace) {
+                      // Only append if both are streaming (not output node)
                       return [...prev.slice(0, -1), { ...last, content: last.content + data.text }]
                     }
-                    return [...prev, { type: 'agent', content: data.text }]
+                    return [...prev, { type: 'agent', content: data.text, preserveWhitespace: data.preserveWhitespace || false }]
                   })
                 } else if (data.node) {
                   setRunningNodeId(data.node)

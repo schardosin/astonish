@@ -1093,8 +1093,11 @@ function ToolNodeForm({ data, onChange, theme, availableTools = [] }) {
 /**
  * Output Node Form - with user_message array editor
  */
-function OutputNodeForm({ data, onChange, theme }) {
+function OutputNodeForm({ data, onChange, theme, availableVariables = [] }) {
   const userMessage = data.user_message || []
+  
+  // Get flat list of all valid variable names
+  const allValidVars = availableVariables.flatMap(g => g.variables || [])
   
   const handleAddItem = () => {
     onChange({ ...data, user_message: [...userMessage, ''] })
@@ -1111,6 +1114,12 @@ function OutputNodeForm({ data, onChange, theme }) {
     onChange({ ...data, user_message: newItems })
   }
   
+  // Check if a value matches a known state variable
+  const isVariable = (value) => {
+    const trimmed = value.trim()
+    return trimmed && allValidVars.includes(trimmed)
+  }
+  
   return (
     <div className="flex gap-6 h-full">
       {/* Left column - Info */}
@@ -1123,10 +1132,10 @@ function OutputNodeForm({ data, onChange, theme }) {
           </div>
         </div>
         <div className="text-xs space-y-2 p-3 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>
-          <p><strong>Tips:</strong></p>
-          <p>• Add literal text strings</p>
-          <p>• Reference state variables by name</p>
-          <p>• Items are joined with spaces</p>
+          <p><strong>How it works:</strong></p>
+          <p>• If text matches a state variable, its value is used</p>
+          <p>• Otherwise, text is shown as-is (literal)</p>
+          <p>• Items are joined with newlines</p>
         </div>
       </div>
       
@@ -1155,31 +1164,47 @@ function OutputNodeForm({ data, onChange, theme }) {
             No items yet. Click "Add Item" to add a message part.
           </div>
         ) : (
-          <div className="space-y-2 max-h-48 overflow-y-auto">
+          <div className="space-y-3 max-h-64 overflow-y-auto">
             {userMessage.map((item, index) => (
-              <div key={index} className="flex items-center gap-2">
+              <div key={index} className="flex items-start gap-2">
                 <span 
-                  className="text-xs px-2 py-1 rounded" 
+                  className="text-xs px-2 py-1 rounded mt-2" 
                   style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}
                 >
                   {index + 1}
                 </span>
-                <input
-                  type="text"
-                  value={item}
-                  onChange={(e) => handleItemChange(index, e.target.value)}
-                  className="flex-1 px-3 py-2 rounded border text-sm"
-                  style={{ 
-                    background: 'var(--bg-primary)', 
-                    borderColor: 'var(--border-color)', 
-                    color: 'var(--text-primary)' 
-                  }}
-                  placeholder='Text or variable name (e.g., "Result:" or answer)'
-                />
+                <div className="flex-1 relative">
+                  <textarea
+                    value={item}
+                    onChange={(e) => handleItemChange(index, e.target.value)}
+                    className="w-full px-3 py-2 rounded border text-sm resize-none font-mono"
+                    style={{ 
+                      background: 'var(--bg-primary)', 
+                      borderColor: isVariable(item) ? '#a855f7' : 'var(--border-color)', 
+                      color: 'var(--text-primary)',
+                      minHeight: '60px'
+                    }}
+                    placeholder="Enter literal text or a state variable name..."
+                    rows={2}
+                  />
+                  {/* Variable indicator badge */}
+                  {item.trim() && (
+                    <span 
+                      className="absolute top-1 right-1 text-xs px-1.5 py-0.5 rounded"
+                      style={{ 
+                        background: isVariable(item) ? 'rgba(168, 85, 247, 0.2)' : 'rgba(100, 100, 100, 0.2)',
+                        color: isVariable(item) ? '#c084fc' : 'var(--text-muted)',
+                        border: isVariable(item) ? '1px solid rgba(168, 85, 247, 0.3)' : '1px solid transparent'
+                      }}
+                    >
+                      {isVariable(item) ? '📌 Variable' : '📝 Literal'}
+                    </span>
+                  )}
+                </div>
                 <button
                   type="button"
                   onClick={() => handleRemoveItem(index)}
-                  className="p-1 rounded hover:bg-red-500/20 text-red-500"
+                  className="p-1.5 rounded hover:bg-red-500/20 text-red-500 mt-2"
                 >
                   <Trash2 size={14} />
                 </button>
@@ -1189,12 +1214,13 @@ function OutputNodeForm({ data, onChange, theme }) {
         )}
         
         <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
-          Enter text strings or state variable names. Variables will be resolved at runtime.
+          Multi-line text is supported. Variables are resolved at runtime.
         </p>
       </div>
     </div>
   )
 }
+
 
 /**
  * Main Node Editor Component - Horizontal Bottom Layout

@@ -125,6 +125,13 @@ export default function ChatPanel({ messages, onSendMessage, onStartRun, onStop,
                     >
                       {message.content}
                     </pre>
+                  ) : message.preserveWhitespace ? (
+                    <pre 
+                      className="text-sm whitespace-pre-wrap break-words"
+                      style={{ color: 'var(--text-primary)', fontFamily: 'inherit' }}
+                    >
+                      {message.content}
+                    </pre>
                   ) : (
                     <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>

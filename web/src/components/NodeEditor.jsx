@@ -26,7 +26,7 @@ const NODE_COLORS = {
  * VariablePanel - Left sidebar showing variables grouped by node
  * Inserts variables into the currently focused textarea
  */
-function VariablePanel({ variableGroups, activeTextareaRef, getValue, setValue }) {
+function VariablePanel({ variableGroups, activeTextareaRef, getValue, setValue, onVariableClick }) {
   const [filterNode, setFilterNode] = useState('all')
   const [collapsed, setCollapsed] = useState({})
   
@@ -130,14 +130,14 @@ function VariablePanel({ variableGroups, activeTextareaRef, getValue, setValue }
                   <button
                     key={v}
                     type="button"
-                    onClick={() => insertVariable(v)}
+                    onClick={() => onVariableClick ? onVariableClick(v) : insertVariable(v)}
                     className="px-2 py-0.5 text-xs font-mono rounded transition-all hover:scale-105 hover:bg-purple-500/30"
                     style={{ 
                       background: 'rgba(168, 85, 247, 0.15)', 
                       color: '#c084fc',
                       border: '1px solid rgba(168, 85, 247, 0.25)'
                     }}
-                    title={`Insert {${v}} at cursor`}
+                    title={onVariableClick ? `Add {${v}} as new item` : `Insert {${v}} at cursor`}
                   >
                     {v}
                   </button>
@@ -150,7 +150,7 @@ function VariablePanel({ variableGroups, activeTextareaRef, getValue, setValue }
       
       {/* Help text */}
       <div className="text-xs mt-2 pt-2 border-t" style={{ color: 'var(--text-muted)', borderColor: 'var(--border-color)' }}>
-        Click to insert at cursor
+        {onVariableClick ? 'Click to add as new item' : 'Click to insert at cursor'}
       </div>
     </div>
   )
@@ -1140,8 +1140,8 @@ function OutputNodeForm({ data, onChange, theme, availableVariables = [] }) {
   // Get flat list of all valid variable names
   const allValidVars = availableVariables.flatMap(g => g.variables || [])
   
-  const handleAddItem = () => {
-    onChange({ ...data, user_message: [...userMessage, ''] })
+  const handleAddItem = (initialValue = '') => {
+    onChange({ ...data, user_message: [...userMessage, initialValue] })
   }
   
   const handleRemoveItem = (index) => {
@@ -1164,21 +1164,11 @@ function OutputNodeForm({ data, onChange, theme, availableVariables = [] }) {
   return (
     <div className="flex gap-6 h-full">
       {/* Left column - Info */}
-      <div className="w-64 space-y-4">
-        <div className="flex items-center gap-3" style={{ color: 'var(--text-muted)' }}>
-          <MessageSquare size={20} className="opacity-50" />
-          <div>
-            <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Output Display</p>
-            <p className="text-xs">Configure what to show</p>
-          </div>
-        </div>
-        <div className="text-xs space-y-2 p-3 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>
-          <p><strong>How it works:</strong></p>
-          <p>• If text matches a state variable, its value is used</p>
-          <p>• Otherwise, text is shown as-is (literal)</p>
-          <p>• Items are joined with newlines</p>
-        </div>
-      </div>
+      {/* Left column - Variable Selector */}
+      <VariablePanel
+        variableGroups={availableVariables}
+        onVariableClick={(v) => handleAddItem(v)}
+      />
       
       {/* Right column - User Message Editor */}
       <div className="flex-1">

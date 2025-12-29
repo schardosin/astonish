@@ -946,6 +946,72 @@ layout:
     }
   }, [yamlContent, updateYaml])
 
+  // Handle node duplication (copy/paste)
+  // Accepts an array of node data to duplicate with new IDs
+  const handleDuplicateNodes = useCallback((nodesToDuplicate) => {
+    if (!nodesToDuplicate || nodesToDuplicate.length === 0) return
+    
+    console.log(`[DUPLICATE] Duplicating ${nodesToDuplicate.length} node(s)`)
+    
+    try {
+      const parsed = yaml.load(yamlContent) || {}
+      if (!parsed.nodes) parsed.nodes = []
+      if (!parsed.layout) parsed.layout = { nodes: {} }
+      if (!parsed.layout.nodes) parsed.layout.nodes = {}
+      
+      // Get existing node names to avoid conflicts
+      const existingNames = new Set(parsed.nodes.map(n => n.name))
+      
+      // Track new node names for selection after paste
+      const newNodeNames = []
+      
+      nodesToDuplicate.forEach((sourceNode, index) => {
+        // Find the original node data in YAML
+        const originalNode = parsed.nodes.find(n => n.name === sourceNode.id)
+        if (!originalNode) {
+          console.log(`[DUPLICATE] Original node not found: ${sourceNode.id}`)
+          return
+        }
+        
+        // Generate unique name
+        let copyNum = 1
+        let newName = `${originalNode.name}_copy`
+        while (existingNames.has(newName)) {
+          copyNum++
+          newName = `${originalNode.name}_copy${copyNum}`
+        }
+        existingNames.add(newName)
+        newNodeNames.push(newName)
+        
+        // Clone the node with new name
+        const newNode = { ...originalNode, name: newName }
+        parsed.nodes.push(newNode)
+        
+        // Set position (offset from original or from source position)
+        const sourcePos = sourceNode.position || parsed.layout.nodes[sourceNode.id]
+        if (sourcePos) {
+          parsed.layout.nodes[newName] = {
+            x: Math.round(sourcePos.x + 50 + index * 20),
+            y: Math.round(sourcePos.y + 50 + index * 20)
+          }
+        }
+      })
+      
+      const newYaml = yaml.dump(orderYamlKeys(parsed), { 
+        indent: 2, 
+        lineWidth: -1,
+        noRefs: true,
+        sortKeys: false
+      })
+      
+      updateYaml(newYaml)
+      console.log(`[DUPLICATE] Created ${newNodeNames.length} new node(s): ${newNodeNames.join(', ')}`)
+      
+    } catch (err) {
+      console.error('Failed to duplicate nodes:', err)
+    }
+  }, [yamlContent, updateYaml])
+
   // Save layout and sync to disk (used before running and periodically)
   const saveLayoutAndSync = useCallback(async () => {
     if (!selectedAgent || !yamlContent) return
@@ -1333,6 +1399,7 @@ layout:
                 onNodeDelete={handleNodeDelete}
                 onAutoLayout={handleAutoLayout}
                 onCreateConnectedNode={handleCreateConnectedNode}
+                onDuplicateNodes={handleDuplicateNodes}
                 onOpenAIChat={(options) => {
                   if (options?.context === 'multi_node' && options?.nodeIds) {
                     // Multi-node context

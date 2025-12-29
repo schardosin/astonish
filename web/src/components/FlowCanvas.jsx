@@ -69,7 +69,8 @@ function FlowCanvasInner({
   onNodeDelete,
   onAutoLayout,
   runningNodeId,
-  onCreateConnectedNode  // Callback for quick node creation from + button
+  onCreateConnectedNode,  // Callback for quick node creation from + button
+  onDuplicateNodes        // Callback for duplicating nodes (copy/paste)
 }) {
   const { getNodes, getEdges } = useReactFlow()
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([])
@@ -77,6 +78,9 @@ function FlowCanvasInner({
   
   // Track edge dragging to prevent sync conflicts
   const isDraggingEdgeRef = useRef(false)
+  
+  // Clipboard for copy/paste functionality
+  const clipboardRef = useRef([])
 
   // Listen for edge drag events
   useEffect(() => {
@@ -167,14 +171,14 @@ function FlowCanvasInner({
   
   const hasMultiSelection = selectedRealNodes.length >= 2
 
-  // Keyboard shortcut: Cmd/Ctrl+A to select all nodes
+  // Keyboard shortcuts: Cmd/Ctrl+A (select all), Cmd/Ctrl+C (copy), Cmd/Ctrl+V (paste)
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Check for Cmd+A (Mac) or Ctrl+A (Windows/Linux)
+      // Only handle if focus is on the canvas (not in an input/textarea)
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+      
+      // Check for Cmd+A (Mac) or Ctrl+A (Windows/Linux) - Select All
       if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
-        // Only handle if focus is on the canvas (not in an input/textarea)
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
-        
         e.preventDefault()
         
         // Select all nodes by marking them as selected
@@ -188,11 +192,40 @@ function FlowCanvasInner({
         // Update selectedNodeIds for AI assist button visibility
         setSelectedNodeIds(nodes.map(n => n.id))
       }
+      
+      // Cmd+C - Copy selected nodes
+      if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
+        // Get selected nodes (excluding START and END)
+        const selectedNodes = nodes.filter(n => 
+          n.selected && n.id !== 'START' && n.id !== 'END'
+        )
+        
+        if (selectedNodes.length > 0) {
+          // Store node data in clipboard
+          clipboardRef.current = selectedNodes.map(n => ({
+            id: n.id,
+            type: n.type,
+            data: { ...n.data },
+            position: { ...n.position }
+          }))
+          console.log(`[Copy] Copied ${selectedNodes.length} node(s) to clipboard`)
+        }
+      }
+      
+      // Cmd+V - Paste nodes from clipboard
+      if ((e.metaKey || e.ctrlKey) && e.key === 'v') {
+        if (clipboardRef.current.length > 0 && onDuplicateNodes) {
+          e.preventDefault()
+          // Call parent handler with clipboard contents
+          onDuplicateNodes(clipboardRef.current)
+          console.log(`[Paste] Pasting ${clipboardRef.current.length} node(s)`)
+        }
+      }
     }
     
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [setNodes, nodes])
+  }, [setNodes, nodes, onDuplicateNodes])
 
   // Sync nodes from props - update selection state
   // Sync nodes from props - preserve multi-selection when syncing

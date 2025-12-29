@@ -405,7 +405,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	}
 
 	startSpinner := func(text string) {
-		stopSpinner(false, true) // Just stop previous spinner without marking as done
+		stopSpinner(true, true) // Mark previous spinner as done before starting new one
 		currentSpinnerText = text
 		spinnerDone = make(chan struct{})
 		model := ui.NewSpinner(text)
@@ -586,6 +586,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						isInputNode = false
 						isOutputNode = false
 						isParallel := false
+						isSilent := false
 						hasUserMessage := false
 						hasOutputModel := false
 						isAutoApproved = false
@@ -601,6 +602,9 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 								} else {
 									if n.Parallel != nil {
 										isParallel = true
+									}
+									if n.Silent {
+										isSilent = true
 									}
 
 									hasUserMessage = len(n.UserMessage) > 0
@@ -656,7 +660,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 							}
 
 						// Manage Spinner for new node
-						if isInputNode || isParallel {
+						if isInputNode || isParallel || isSilent {
 							stopSpinner(true, true)
 						} else {
 							startSpinner(fmt.Sprintf("Processing %s...", currentNodeName))

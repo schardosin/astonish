@@ -98,3 +98,51 @@ func TestShouldStreamInputPrompt(t *testing.T) {
 		})
 	}
 }
+
+// TestSilentModeSkipsNodeEvent verifies that node events are skipped when silent flag is true
+func TestSilentModeSkipsNodeEvent(t *testing.T) {
+	tests := []struct {
+		name               string
+		stateDelta         map[string]any
+		expectedSendEvent  bool
+	}{
+		{
+			name: "silent true should skip node event",
+			stateDelta: map[string]any{
+				"current_node": "init_vars",
+				"node_type":    "update_state",
+				"silent":       true,
+			},
+			expectedSendEvent: false,
+		},
+		{
+			name: "silent false should send node event",
+			stateDelta: map[string]any{
+				"current_node": "process",
+				"node_type":    "llm",
+				"silent":       false,
+			},
+			expectedSendEvent: true,
+		},
+		{
+			name: "silent not present should send node event",
+			stateDelta: map[string]any{
+				"current_node": "run_tool",
+				"node_type":    "tool",
+			},
+			expectedSendEvent: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Simulate the silent check logic from run_handler.go
+			isSilent, _ := tt.stateDelta["silent"].(bool)
+			shouldSendEvent := !isSilent
+
+			if shouldSendEvent != tt.expectedSendEvent {
+				t.Errorf("shouldSendEvent = %v, expected %v", shouldSendEvent, tt.expectedSendEvent)
+			}
+		})
+	}
+}

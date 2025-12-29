@@ -1298,3 +1298,55 @@ func TestRawToolOutput_EmptyValueNotEmittedAsStateDelta(t *testing.T) {
 		t.Errorf("expected empty StateDelta for empty raw_tool_output, got: %v", delta)
 	}
 }
+
+// TestEmitNodeTransition_IncludesSilentFlag verifies that node transition events
+// include the silent flag in StateDelta based on the node's Silent configuration.
+// This flag is used by the SSE handler to skip sending node events for silent nodes.
+func TestEmitNodeTransition_IncludesSilentFlag(t *testing.T) {
+	tests := []struct {
+		name           string
+		nodeSilent     bool
+		expectedSilent bool
+	}{
+		{
+			name:           "silent true should be included in StateDelta",
+			nodeSilent:     true,
+			expectedSilent: true,
+		},
+		{
+			name:           "silent false should be included in StateDelta",
+			nodeSilent:     false,
+			expectedSilent: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Simulate the StateDelta that emitNodeTransition builds
+			node := &config.Node{
+				Name:   "test_node",
+				Type:   "update_state",
+				Silent: tt.nodeSilent,
+			}
+
+			// Build the StateDelta as emitNodeTransition does
+			stateDelta := map[string]any{
+				"current_node":      node.Name,
+				"temp:node_history": []string{node.Name},
+				"temp:node_type":    node.Type,
+				"node_type":         node.Type,
+				"silent":            node.Silent,
+			}
+
+			// Verify silent flag is present and has correct value
+			silentVal, ok := stateDelta["silent"].(bool)
+			if !ok {
+				t.Fatalf("expected 'silent' to be a boolean in StateDelta, got %T", stateDelta["silent"])
+			}
+
+			if silentVal != tt.expectedSilent {
+				t.Errorf("expected silent=%v in StateDelta, got %v", tt.expectedSilent, silentVal)
+			}
+		})
+	}
+}

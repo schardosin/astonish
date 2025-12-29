@@ -319,7 +319,35 @@ func GetInternalTools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
-	return []tool.Tool{readFileTool, writeFileTool, shellCommandTool, filterJsonTool, gitDiffAddLineNumbersTool}, nil
+	// Search tools
+	fileTreeTool, err := functiontool.New(functiontool.Config{
+		Name:        "file_tree",
+		Description: "Get a structured view of the directory tree. Use this to understand project structure. Returns JSON with paths, names, and file sizes.",
+	}, FileTree)
+	if err != nil {
+		return nil, err
+	}
+
+	grepSearchTool, err := functiontool.New(functiontool.Config{
+		Name:        "grep_search",
+		Description: "Search for text patterns in files. Returns file paths, line numbers, and matching content. Uses ripgrep when available for speed.",
+	}, GrepSearch)
+	if err != nil {
+		return nil, err
+	}
+
+	findFilesTool, err := functiontool.New(functiontool.Config{
+		Name:        "find_files",
+		Description: "Find files by name pattern using glob matching (e.g., '*.go', 'test_*.py'). Returns matching file paths with sizes.",
+	}, FindFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	return []tool.Tool{
+		readFileTool, writeFileTool, shellCommandTool, filterJsonTool, gitDiffAddLineNumbersTool,
+		fileTreeTool, grepSearchTool, findFilesTool,
+	}, nil
 }
 
 func ExecuteTool(ctx context.Context, name string, args map[string]interface{}) (any, error) {
@@ -368,6 +396,27 @@ func ExecuteTool(ctx context.Context, name string, args map[string]interface{}) 
 			return nil, fmt.Errorf("invalid args for git_diff_add_line_numbers: %w", err)
 		}
 		return GitDiffAddLineNumbers(nil, toolArgs)
+
+	case "file_tree":
+		var toolArgs FileTreeArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for file_tree: %w", err)
+		}
+		return FileTree(nil, toolArgs)
+
+	case "grep_search":
+		var toolArgs GrepSearchArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for grep_search: %w", err)
+		}
+		return GrepSearch(nil, toolArgs)
+
+	case "find_files":
+		var toolArgs FindFilesArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for find_files: %w", err)
+		}
+		return FindFiles(nil, toolArgs)
 
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)

@@ -45,6 +45,7 @@ In most cases, the LLM node handles everything you need.
 | **Tool Selection** | No | Whitelist specific tools |
 | **Output Model** | No | Define structured output variables |
 | **User Message** | No | Message to display after execution |
+| **Silent** | No | Hide execution details (show only "Thinking...") |
 
 ### Using Variables in Prompts
 
@@ -135,6 +136,7 @@ Calls an MCP tool directly without AI inference. This saves tokens when you know
 |----------|----------|-------------|
 | **Name** | Yes | Unique identifier |
 | **Tool Selection** | Yes | Which tool to call |
+| **Silent** | No | Hide execution details (show only "Thinking...") |
 
 ### When to Use
 
@@ -154,6 +156,10 @@ Displays a message to the user from state variables. Useful when you want to sho
 |----------|----------|-------------|
 | **Name** | Yes | Unique identifier |
 | **User Message** | Yes | State variables to display |
+
+### Variable Picker
+
+On the left side of the editor, you'll see a list of available variables grouped by node. Click any variable to add it to your message.
 
 ### When to Use
 
@@ -187,6 +193,7 @@ Modifies the flow's state variables directly. Great for aggregating data across 
 | **Source Variable** | Yes | The variable to read from |
 | **Action** | Yes | Operation to perform (e.g., `append`) |
 | **Output Model** | Yes | Where to store the result |
+| **Silent** | No | Hide execution details (show only "Thinking...") |
 
 ### When to Use
 
@@ -215,10 +222,14 @@ Double-click any node on the canvas to open the editor dialog at the bottom of t
 - Configure the node's properties
 - Set prompts and parameters
 - Choose tools and outputs
+- **Silent Mode**: Check "Silent" to hide execution details in the CLI and Chat (shows "Thinking..." indicator only).
+- **Variable Picker**: In LLM and Output nodes, click variables in the left panel to insert them.
 
-## Moving Nodes
+## Moving and Copying Nodes
 
-Click and drag to reposition nodes on the canvas.
+- **Move**: Click and drag to reposition nodes.
+- **Copy**: Select nodes and press **Cmd/Ctrl + C**.
+- **Paste**: Press **Cmd/Ctrl + V** to paste copied nodes (with new IDs).
 
 :::tip
 Positions are saved in the YAML under `layout`. They don't affect execution—only visual organization.

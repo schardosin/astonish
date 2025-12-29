@@ -29,7 +29,9 @@ Master these shortcuts to work faster in Astonish Studio.
 | Shortcut | Action |
 |----------|--------|
 | **Click** | Select node |
-| **Delete / Backspace** | Delete selected node |
+| **Cmd/Ctrl + C** | Copy selected node(s) |
+| **Cmd/Ctrl + V** | Paste nodes |
+| **Delete / Backspace** | Delete selected node(s) |
 | **Arrow keys** | Move selected node |
 
 ## Edge Operations

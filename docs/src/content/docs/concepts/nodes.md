@@ -324,6 +324,7 @@ All nodes share:
 |----------|----------|-------------|
 | `name` | Yes | Unique identifier |
 | `type` | Yes | Node type |
+| `silent` | No | Hide execution details (true/false) |
 
 ## Variable References
 

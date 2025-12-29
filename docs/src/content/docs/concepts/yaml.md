@@ -54,6 +54,7 @@ All nodes share these properties:
 ```yaml
 - name: unique_name    # Required
   type: node_type      # Required
+  silent: true         # Optional (default: false)
   # ... type-specific properties
 ```
 

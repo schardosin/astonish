@@ -15,8 +15,8 @@ require (
 	github.com/sashabaranov/go-openai v1.41.2
 	go.starlark.net v0.0.0-20251109183026-be02852a5e1f
 	golang.org/x/term v0.37.0
-	google.golang.org/adk v0.2.0
-	google.golang.org/genai v1.36.0
+	google.golang.org/adk v0.3.0
+	google.golang.org/genai v1.40.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -24,7 +24,7 @@ require (
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.17.0 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
-	github.com/a2aproject/a2a-go v0.3.0 // indirect
+	github.com/a2aproject/a2a-go v0.3.3 // indirect
 	github.com/alecthomas/chroma/v2 v2.14.0 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/awalterschulze/gographviz v2.0.3+incompatible // indirect

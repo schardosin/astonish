@@ -3159,10 +3159,16 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 		}
 	}
 
-	// Clear awaiting_approval state (but NOT the tool's approval - that should persist)
+	// Clear awaiting_approval state
 	state.Set("awaiting_approval", false)
-	// Note: Do NOT clear approval:toolName here - if we restart the node for another tool's approval,
-	// we need previously approved tools to remain approved
+	
+	// IMPORTANT: Clear tool approval AFTER execution to ensure loops require re-approval
+	// This is critical for circular flows where the same tool node is executed multiple
+	// times with different parameters (e.g., paginated API calls)
+	if !node.ToolsAutoApproval {
+		approvalKey := fmt.Sprintf("approval:%s:%s", node.Name, toolName)
+		state.Set(approvalKey, false)
+	}
 
 	// Yield result event
 	yield(&session.Event{

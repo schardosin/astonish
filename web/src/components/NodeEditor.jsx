@@ -491,6 +491,7 @@ function UpdateStateForm({ data, onChange, theme }) {
           >
             <option value="overwrite">overwrite</option>
             <option value="append">append</option>
+            <option value="increment">increment</option>
           </select>
         </div>
         

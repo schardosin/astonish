@@ -97,7 +97,11 @@ func InitToolsCache(ctx context.Context) {
 		
 		// Convert cache.ToolEntry to api.ToolInfo
 		var allTools []ToolInfo
+		hasInternalTools := false
 		for _, t := range persistentCache.Tools {
+			if t.Source == "internal" {
+				hasInternalTools = true
+			}
 			allTools = append(allTools, ToolInfo{
 				Name:        t.Name,
 				Description: t.Description,
@@ -105,15 +109,33 @@ func InitToolsCache(ctx context.Context) {
 			})
 		}
 		
-		// Also add internal tools (they're always available)
-		internalTools, err := tools.GetInternalTools()
-		if err == nil {
-			for _, t := range internalTools {
-				allTools = append(allTools, ToolInfo{
-					Name:        t.Name(),
-					Description: t.Description(),
-					Source:      "internal",
-				})
+		// If persistent cache doesn't have internal tools (old cache format),
+		// add them now and update the cache
+		if !hasInternalTools {
+			log.Printf("Adding internal tools to cache (not found in persistent cache)")
+			internalTools, err := tools.GetInternalTools()
+			if err == nil {
+				for _, t := range internalTools {
+					allTools = append(allTools, ToolInfo{
+						Name:        t.Name(),
+						Description: t.Description(),
+						Source:      "internal",
+					})
+				}
+				// Update persistent cache with internal tools
+				go func() {
+					internalEntries := make([]cache.ToolEntry, 0, len(internalTools))
+					for _, t := range internalTools {
+						internalEntries = append(internalEntries, cache.ToolEntry{
+							Name:        t.Name(),
+							Description: t.Description(),
+							Source:      "internal",
+						})
+					}
+					cache.AddServerTools("internal", internalEntries, "internal-tools-v1")
+					cache.SaveCache()
+					log.Printf("[Cache] Added %d internal tools to persistent cache", len(internalEntries))
+				}()
 			}
 		}
 		
@@ -159,9 +181,6 @@ func populatePersistentCache(ctx context.Context, allTools []ToolInfo) {
 	// Group tools by server
 	toolsByServer := make(map[string][]cache.ToolEntry)
 	for _, t := range allTools {
-		if t.Source == "internal" {
-			continue // Don't cache internal tools
-		}
 		toolsByServer[t.Source] = append(toolsByServer[t.Source], cache.ToolEntry{
 			Name:        t.Name,
 			Description: t.Description,
@@ -172,7 +191,10 @@ func populatePersistentCache(ctx context.Context, allTools []ToolInfo) {
 	// Add each server's tools in one call with computed checksum
 	for serverName, tools := range toolsByServer {
 		checksum := ""
-		if mcpCfg != nil && mcpCfg.MCPServers != nil {
+		if serverName == "internal" {
+			// Internal tools use a fixed checksum - they only change with code updates
+			checksum = "internal-tools-v1"
+		} else if mcpCfg != nil && mcpCfg.MCPServers != nil {
 			if serverCfg, ok := mcpCfg.MCPServers[serverName]; ok {
 				checksum = cache.ComputeServerChecksum(serverCfg.Command, serverCfg.Args, serverCfg.Env)
 			}

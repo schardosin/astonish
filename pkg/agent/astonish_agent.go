@@ -1851,6 +1851,20 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				// Handle raw_tool_output: Store actual result in state, return sanitized message to LLM
 				// This prevents large tool outputs from polluting the LLM's context window
 				if len(node.RawToolOutput) == 1 {
+					// IMPORTANT: Skip storing if this is an approval message, not actual tool output
+					// When a tool requires approval, the "result" contains pending_approval status
+					// We should NOT store this as the raw_tool_output - wait for actual tool result
+					if status, hasStatus := result["status"]; hasStatus {
+						if statusStr, ok := status.(string); ok && statusStr == "pending_approval" {
+							// This is an approval message, not the actual tool result
+							// Skip storing and let the approval flow handle things
+							if a.DebugMode {
+								fmt.Printf("[DEBUG] raw_tool_output: Skipping storage - result is pending_approval message\n")
+							}
+							return result, nil
+						}
+					}
+					
 					// Get the state key to store the raw output
 					var stateKey string
 					for k := range node.RawToolOutput {
@@ -1861,25 +1875,53 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 					if a.DebugMode {
 						resultSummary := "empty"
 						if len(result) > 0 {
-							// Just show keys or a truncated string to verify it's the big object
 							keys := make([]string, 0, len(result))
 							for k := range result {
 								keys = append(keys, k)
 							}
 							resultSummary = fmt.Sprintf("keys=%v", keys)
 						}
-						fmt.Printf("[DEBUG] raw_tool_output: Attempting to store result in '%s'. Result summary: %s\n", stateKey, resultSummary)
+						fmt.Printf("[DEBUG] raw_tool_output: Storing result in '%s'. Result summary: %s\n", stateKey, resultSummary)
 					}
 
-					// Store the actual tool result in state
+					// Store the actual tool result in state (in-memory)
 					if err := state.Set(stateKey, result); err != nil {
 						return result, fmt.Errorf("failed to set raw_tool_output state key %s: %w", stateKey, err)
 					}
 
-					// Verify storage immediatley
+					// Create the StateDelta event
+					stateEvent := &session.Event{
+						Actions: session.EventActions{
+							StateDelta: map[string]any{
+								stateKey: result,
+							},
+						},
+					}
+
+					// CRITICAL FIX: Emit StateDelta through yield for event stream
+					yield(stateEvent, nil)
+
+					// ALSO: Directly append event to session service for SYNCHRONOUS persistence
+					// This ensures the state is available in subsequent Run invocations
+					// even if async event processing hasn't completed
+					if a.SessionService != nil {
+						// Get session from context
+						if invCtx, ok := ctx.(agent.InvocationContext); ok {
+							sess := invCtx.Session()
+							// Try to append synchronously
+							if appendErr := a.SessionService.AppendEvent(ctx, sess, stateEvent); appendErr != nil {
+								// Log warning only in DebugMode - this is a fallback, yield should still work
+								if a.DebugMode {
+									fmt.Printf("[DEBUG] raw_tool_output: Failed to directly append event: %v\n", appendErr)
+								}
+							} else if a.DebugMode {
+								fmt.Printf("[DEBUG] raw_tool_output: Directly appended event to session service for '%s'\n", stateKey)
+							}
+						}
+					}
+
 					if a.DebugMode {
-						storedVal, err := state.Get(stateKey)
-						fmt.Printf("[DEBUG] raw_tool_output: Verification - State.Get('%s') err=%v, type=%T\n", stateKey, err, storedVal)
+						fmt.Printf("[DEBUG] raw_tool_output: Emitted StateDelta for '%s'\n", stateKey)
 					}
 
 					// Return sanitized message to LLM instead of raw data
@@ -2618,7 +2660,8 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 	if len(node.RawToolOutput) > 0 {
 		delta := make(map[string]any)
 		for stateKey := range node.RawToolOutput {
-			if val, err := state.Get(stateKey); err == nil && val != nil {
+			val, err := state.Get(stateKey)
+			if err == nil && val != nil {
 				// Only include non-empty values (empty string means not yet populated)
 				if strVal, ok := val.(string); ok && strVal == "" {
 					continue

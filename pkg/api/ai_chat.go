@@ -724,7 +724,7 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		// Call LLM
 		var responseText strings.Builder
-		for resp, err := range llm.GenerateContent(ctx, llmReq, false) {
+		for resp, err := range llm.GenerateContent(ctx, llmReq, true) {
 			if err != nil {
 				json.NewEncoder(w).Encode(AIChatResponse{
 					Error: "LLM error: " + err.Error(),

@@ -340,6 +340,12 @@ You have TWO tools available to find MCP servers:
 
 ## Process for Creating Flows with External Tools
 
+**IMPORTANT: Tool Already Installed Check**
+If the user says "install X" or "find X" or "get X mcp", FIRST check the "Available Tools" list above.
+If you find a tool with "X" in its name or source, the tool is ALREADY INSTALLED! Respond with:
+"Great news! The [tool name] is already installed and ready to use. Would you like me to create a flow that uses it?"
+Do NOT search the store or internet if the tool is already available.
+
 **Step 1: Check if needed tool is in Available Tools**
 Look at the "Available Tools" list above. If the tool the user needs is there, proceed to create the flow.
 

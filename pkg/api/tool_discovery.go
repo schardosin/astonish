@@ -385,22 +385,23 @@ func IsWebSearchConfigured() (bool, string) {
 }
 
 // IsWebExtractConfigured checks if a web extract tool is configured in settings
-// Returns (configured, serverName)
+// Returns (configured, serverName, toolName)
 // The setting value format is "serverName:toolName" to uniquely identify tools
-func IsWebExtractConfigured() (bool, string) {
+func IsWebExtractConfigured() (bool, string, string) {
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
-		return false, ""
+		return false, "", ""
 	}
 	if appCfg.General.WebExtractTool == "" {
-		return false, ""
+		return false, "", ""
 	}
-	// Parse the format "serverName:toolName" - we return just the server name for MCP initialization
-	serverName := appCfg.General.WebExtractTool
-	if idx := strings.Index(serverName, ":"); idx > 0 {
-		serverName = serverName[:idx]
+	// Parse the format "serverName:toolName"
+	parts := strings.SplitN(appCfg.General.WebExtractTool, ":", 2)
+	if len(parts) == 2 {
+		return true, parts[0], parts[1]
 	}
-	return true, serverName
+	// No tool name specified, return just server name
+	return true, parts[0], ""
 }
 
 // AIToolSearchInternetHandler handles POST /api/ai/tool-search-internet
@@ -525,10 +526,13 @@ func URLExtractHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[URL Extract] Starting extraction for: %s", req.URL)
 
 	// Check if web extract tool is configured
-	configured, toolName := IsWebExtractConfigured()
+	configured, serverName, extractToolName := IsWebExtractConfigured()
 	if !configured {
 		// Fall back to web search tool
-		configured, toolName = IsWebSearchConfigured()
+		var searchConfigured bool
+		searchConfigured, serverName = IsWebSearchConfigured()
+		extractToolName = "" // No specific tool name, will fallback to "extract" search
+		configured = searchConfigured
 	}
 	
 	if !configured {
@@ -541,17 +545,17 @@ func URLExtractHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[URL Extract] Using tool: %s", toolName)
+	log.Printf("[URL Extract] Using tool: %s (extract tool: %s)", serverName, extractToolName)
 
 	// Extract content from URL
-	mcpServer, err := extractMCPServerFromURL(ctx, req.URL, toolName)
+	mcpServer, err := extractMCPServerFromURL(ctx, req.URL, serverName, extractToolName)
 	if err != nil {
 		log.Printf("[URL Extract] Error: %v", err)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(URLExtractResponse{
 			Found:    false,
 			Message:  fmt.Sprintf("Failed to extract: %v", err),
-			ToolUsed: toolName,
+			ToolUsed: serverName,
 			URL:      req.URL,
 		})
 		return
@@ -562,7 +566,7 @@ func URLExtractHandler(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(URLExtractResponse{
 			Found:    false,
 			Message:  "No MCP server configuration found at this URL",
-			ToolUsed: toolName,
+			ToolUsed: serverName,
 			URL:      req.URL,
 		})
 		return
@@ -573,13 +577,13 @@ func URLExtractHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(URLExtractResponse{
 		Found:     true,
 		MCPServer: mcpServer,
-		ToolUsed:  toolName,
+		ToolUsed:  serverName,
 		URL:       req.URL,
 	})
 }
 
 // extractMCPServerFromURL uses the configured MCP tool to extract content and parse for MCP server config
-func extractMCPServerFromURL(ctx context.Context, url string, toolName string) (*InternetMCPResult, error) {
+func extractMCPServerFromURL(ctx context.Context, url string, serverName string, extractToolName string) (*InternetMCPResult, error) {
 	// Load app configuration
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
@@ -593,67 +597,67 @@ func extractMCPServerFromURL(ctx context.Context, url string, toolName string) (
 	}
 	defer mcpManager.Cleanup()
 
-	log.Printf("[URL Extract] Initializing MCP server: %s", toolName)
-	namedToolset, err := mcpManager.InitializeSingleToolset(ctx, toolName)
+	log.Printf("[URL Extract] Initializing MCP server: %s", serverName)
+	namedToolset, err := mcpManager.InitializeSingleToolset(ctx, serverName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize MCP server '%s': %w", toolName, err)
+		return nil, fmt.Errorf("failed to initialize MCP server '%s': %w", serverName, err)
 	}
 
 	// Get tools and find extract tool
 	roCtx := &minimalReadonlyContext{Context: ctx}
 	mcpTools, err := namedToolset.Toolset.Tools(roCtx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get tools from '%s': %w", toolName, err)
+		return nil, fmt.Errorf("failed to get tools from '%s': %w", serverName, err)
 	}
 
 	log.Printf("[URL Extract] Got %d tools from MCP server", len(mcpTools))
 
-	// Find extract tool (look for "extract" in the name)
+	// Find extract tool - use configured tool name if provided, otherwise search for "extract"
 	var extractTool tool.Tool
 	for _, t := range mcpTools {
 		log.Printf("[URL Extract] Found tool: %s", t.Name())
-		if strings.Contains(strings.ToLower(t.Name()), "extract") {
-			extractTool = t
-			break
+		if extractToolName != "" {
+			// Use the specifically configured tool
+			if t.Name() == extractToolName {
+				extractTool = t
+				break
+			}
+		} else {
+			// Fallback: search for "extract" in the name
+			if strings.Contains(strings.ToLower(t.Name()), "extract") {
+				extractTool = t
+				break
+			}
 		}
 	}
 
 	if extractTool == nil {
-		return nil, fmt.Errorf("no extract tool found in MCP server '%s'", toolName)
+		if extractToolName != "" {
+			return nil, fmt.Errorf("configured extract tool '%s' not found in MCP server '%s'", extractToolName, serverName)
+		}
+		return nil, fmt.Errorf("no extract tool found in MCP server '%s'", serverName)
 	}
 
 	log.Printf("[URL Extract] Using extract tool: %s", extractTool.Name())
 
-	// Call the extract tool
-	type runnableTool interface {
-		Run(tool.Context, any) (map[string]any, error)
+	// Get the tool's declaration (schema) for LLM
+	type toolWithDeclaration interface {
+		Declaration() *genai.FunctionDeclaration
 	}
-
-	runnable, ok := extractTool.(runnableTool)
+	
+	declTool, ok := extractTool.(toolWithDeclaration)
 	if !ok {
-		return nil, fmt.Errorf("extract tool does not implement Run method")
+		return nil, fmt.Errorf("extract tool does not expose its schema")
 	}
-
-	// Build args for extract tool (tavily-extract uses "urls" array)
-	extractArgs := map[string]any{
-		"urls": []string{url},
+	
+	declaration := declTool.Declaration()
+	if declaration == nil {
+		return nil, fmt.Errorf("extract tool has nil declaration")
 	}
+	
+	log.Printf("[URL Extract] Tool schema: %s - %s", declaration.Name, declaration.Description)
 
-	log.Printf("[URL Extract] Calling extract tool with URL...")
-	toolCtx := &minimalToolContext{Context: ctx}
-	extractResult, err := runnable.Run(toolCtx, extractArgs)
-	if err != nil {
-		return nil, fmt.Errorf("extract failed: %w", err)
-	}
-
-	// Convert result to JSON for AI processing
-	extractResultJSON, err := json.Marshal(extractResult)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal extract results: %w", err)
-	}
-	log.Printf("[URL Extract] Extracted content: %d bytes", len(extractResultJSON))
-
-	// Use AI to parse extracted content for MCP server config
+	// Get LLM provider for tool execution
 	providerName := appCfg.General.DefaultProvider
 	modelName := appCfg.General.DefaultModel
 	if providerName == "" {
@@ -668,6 +672,79 @@ func extractMCPServerFromURL(ctx context.Context, url string, toolName string) (
 		return nil, fmt.Errorf("failed to get LLM provider: %w", err)
 	}
 
+	// Step 1: Ask LLM to use the tool to extract content from the URL
+	// The LLM will see the tool schema and generate the correct parameters
+	extractPrompt := fmt.Sprintf(`You need to extract content from this URL: %s
+
+Use the available tool to fetch and extract the content from this URL. Call the tool with the appropriate parameters.`, url)
+
+	extractReq := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{
+				Role: "user",
+				Parts: []*genai.Part{
+					genai.NewPartFromText(extractPrompt),
+				},
+			},
+		},
+		Config: &genai.GenerateContentConfig{
+			Temperature: genai.Ptr(float32(0.1)),
+			Tools: []*genai.Tool{
+				{
+					FunctionDeclarations: []*genai.FunctionDeclaration{declaration},
+				},
+			},
+		},
+	}
+
+	log.Printf("[URL Extract] Asking LLM to call the extract tool...")
+	var functionCall *genai.FunctionCall
+	for resp, err := range llm.GenerateContent(ctx, extractReq, true) {
+		if err != nil {
+			return nil, fmt.Errorf("LLM tool call failed: %w", err)
+		}
+		if resp != nil && resp.Content != nil {
+			for _, part := range resp.Content.Parts {
+				if part.FunctionCall != nil {
+					functionCall = part.FunctionCall
+					break
+				}
+			}
+		}
+		if functionCall != nil {
+			break
+		}
+	}
+
+	if functionCall == nil {
+		return nil, fmt.Errorf("LLM did not call the extract tool")
+	}
+
+	log.Printf("[URL Extract] LLM wants to call: %s with args: %v", functionCall.Name, functionCall.Args)
+
+	// Step 2: Execute the tool with LLM-provided arguments
+	type runnableTool interface {
+		Run(tool.Context, any) (map[string]any, error)
+	}
+
+	runnable, ok := extractTool.(runnableTool)
+	if !ok {
+		return nil, fmt.Errorf("extract tool does not implement Run method")
+	}
+
+	toolCtx := &minimalToolContext{Context: ctx}
+	extractResult, err := runnable.Run(toolCtx, functionCall.Args)
+	if err != nil {
+		return nil, fmt.Errorf("extract tool execution failed: %w", err)
+	}
+
+	extractResultJSON, err := json.Marshal(extractResult)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal extract results: %w", err)
+	}
+	log.Printf("[URL Extract] Extracted content: %d bytes", len(extractResultJSON))
+
+	// Step 3: Parse the extracted content for MCP server info
 	prompt := fmt.Sprintf(`You are analyzing a web page to find MCP (Model Context Protocol) server configuration information.
 
 Extracted page content:
@@ -745,7 +822,7 @@ Respond ONLY with the JSON object or null.`, string(extractResultJSON), url)
 		return nil, nil
 	}
 
-	result.Source = toolName
+	result.Source = serverName
 	return &result, nil
 }
 

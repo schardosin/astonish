@@ -43,6 +43,7 @@ function App() {
   const [yamlContent, setYamlContent] = useState(defaultYaml)
   const [showYaml, setShowYaml] = useState(false)
   const [isRunning, setIsRunning] = useState(false)
+  const [autoApprove, setAutoApprove] = useState(false)
   const [selectedNodeId, setSelectedNodeId] = useState(null)
   const [editingNode, setEditingNode] = useState(null)
   const [editingEdge, setEditingEdge] = useState(null)
@@ -498,8 +499,9 @@ layout:
           agentId: selectedAgent.id,
           message: message,
           sessionId: currentSessionId,
-          provider: defaultProvider, // Use default or selected
-          model: defaultModel
+          provider: defaultProvider,
+          model: defaultModel,
+          autoApprove: autoApprove
         })
       })
 
@@ -618,7 +620,7 @@ layout:
     } finally {
       abortControllerRef.current = null
     }
-  }, [selectedAgent, defaultProvider, defaultModel])
+  }, [selectedAgent, defaultProvider, defaultModel, autoApprove])
 
   const handleRun = useCallback(() => {
     setIsRunning(true)
@@ -653,6 +655,7 @@ layout:
     if (sessionId) {
       fetch(`/api/session/${sessionId}/stop`, { method: 'POST' }).catch(() => {})
     }
+    setSessionId(null) // Clear session to re-enable auto-approve toggle
   }, [isWaitingForInput, sessionId])
 
   const handleExitRun = useCallback(() => {
@@ -666,6 +669,7 @@ layout:
     setIsRunning(false)
     setRunningNodeId(null)
     setChatMessages([])
+    setSessionId(null) // Clear session to re-enable auto-approve toggle
   }, [sessionId])
 
   // Keepalive: Ping server every 30 seconds while session is active to prevent timeout
@@ -1429,6 +1433,8 @@ layout:
                   isWaitingForInput={isWaitingForInput}
                   hasActiveSession={sessionId !== null}
                   theme={theme}
+                  autoApprove={autoApprove}
+                  onToggleAutoApprove={setAutoApprove}
                 />
               </div>
             )}

@@ -3,7 +3,7 @@ import { Send, Brain, Wrench, Loader, RotateCcw, Square, Code, Copy, Check } fro
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-export default function ChatPanel({ messages, onSendMessage, onStartRun, onStop, theme, isWaitingForInput, hasActiveSession }) {
+export default function ChatPanel({ messages, onSendMessage, onStartRun, onStop, theme, isWaitingForInput, hasActiveSession, autoApprove, onToggleAutoApprove }) {
   const [input, setInput] = useState('')
   const [rawViewIndices, setRawViewIndices] = useState(new Set()) // Track which messages show raw
   const [copiedIndex, setCopiedIndex] = useState(null) // Track which message was just copied
@@ -58,8 +58,22 @@ export default function ChatPanel({ messages, onSendMessage, onStartRun, onStop,
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--bg-secondary)' }}>
       {/* Header */}
-      <div className="p-4" style={{ borderBottom: '1px solid var(--border-color)' }}>
-        <h2 className="font-semibold" style={{ color: 'var(--text-primary)' }}>Chat</h2>
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]">
+        <div className="flex items-center gap-2">
+           <Brain size={18} className="text-[var(--accent)]" />
+           <span className="font-semibold text-[var(--text-primary)]">Agent Chat</span>
+        </div>
+        <label className={`flex items-center gap-2 px-2 py-1 rounded transition-colors select-none ${hasActiveSession ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-[var(--bg-secondary)]'}`}>
+             <input 
+               type="checkbox" 
+               checked={autoApprove} 
+               onChange={(e) => onToggleAutoApprove(e.target.checked)}
+               disabled={hasActiveSession}
+               className="w-3.5 h-3.5 rounded border-gray-600 text-purple-600 focus:ring-purple-500 bg-gray-700 disabled:opacity-50"
+             />
+             <span className="text-xs font-medium text-[var(--text-secondary)]">Auto-Approve</span>
+           </label>
       </div>
 
       {/* Messages */}

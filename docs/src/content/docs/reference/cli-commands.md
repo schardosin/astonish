@@ -40,6 +40,7 @@ astonish flows run <name> [flags]
 | `--model <name>` | Override model | Config |
 | `--provider <name>` | Override provider | Config |
 | `--debug` | Verbose output | false |
+| `--auto-approve` | Skip tool approvals | false |
 | `--browser` | Web UI mode | false |
 | `--port <num>` | Web UI port | 8080 |
 

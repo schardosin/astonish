@@ -30,6 +30,7 @@ type ChatRequest struct {
 	SessionID string `json:"sessionId"`
 	Provider  string `json:"provider,omitempty"`
 	Model     string `json:"model,omitempty"`
+	AutoApprove bool `json:"autoApprove,omitempty"` // Global auto-approve flag
 }
 
 // SessionManager manages active sessions
@@ -345,6 +346,7 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	astonishAgent.DebugMode = false // Disable verbose debug output
 	astonishAgent.IsWebMode = true  // Enable Web mode for UI (disables ANSI colors)
 	astonishAgent.SessionService = sm.service
+	astonishAgent.AutoApprove = req.AutoApprove
 
 	adkAgent, err := adkagent.New(adkagent.Config{
 		Name:        "astonish_agent",

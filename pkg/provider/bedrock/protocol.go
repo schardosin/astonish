@@ -163,21 +163,34 @@ func ConvertRequest(req *model.LLMRequest, maxTokens int) (*Request, error) {
 				}
 
 				// Convert JSON schema to Bedrock format
-				if funcDecl.ParametersJsonSchema != nil {
+				if funcDecl.Parameters != nil {
+					bedrockTool.InputSchema["type"] = "object"
+					
+					// Marshal and sanitize
+					schemaBytes, _ := json.Marshal(funcDecl.Parameters) // Error checked at source usually
+					var schemaMap map[string]interface{}
+					if err := json.Unmarshal(schemaBytes, &schemaMap); err == nil {
+						sanitizeSchema(schemaMap)
+						if props, ok := schemaMap["properties"].(map[string]interface{}); ok {
+							bedrockTool.InputSchema["properties"] = props
+						}
+						if required, ok := schemaMap["required"].([]interface{}); ok {
+							bedrockTool.InputSchema["required"] = required
+						}
+					}
+				} else if funcDecl.ParametersJsonSchema != nil {
 					bedrockTool.InputSchema["type"] = "object"
 
-					// The schema can be various types (struct, map, etc.)
-					// JSON round-trip to normalize it to map[string]interface{}
-					schemaBytes, err := json.Marshal(funcDecl.ParametersJsonSchema)
-					if err == nil {
-						var schemaMap map[string]interface{}
-						if err := json.Unmarshal(schemaBytes, &schemaMap); err == nil {
-							if props, ok := schemaMap["properties"].(map[string]interface{}); ok {
-								bedrockTool.InputSchema["properties"] = props
-							}
-							if required, ok := schemaMap["required"].([]interface{}); ok {
-								bedrockTool.InputSchema["required"] = required
-							}
+					// Marshal and sanitize
+					schemaBytes, _ := json.Marshal(funcDecl.ParametersJsonSchema)
+					var schemaMap map[string]interface{}
+					if err := json.Unmarshal(schemaBytes, &schemaMap); err == nil {
+						sanitizeSchema(schemaMap)
+						if props, ok := schemaMap["properties"].(map[string]interface{}); ok {
+							bedrockTool.InputSchema["properties"] = props
+						}
+						if required, ok := schemaMap["required"].([]interface{}); ok {
+							bedrockTool.InputSchema["required"] = required
 						}
 					}
 				}
@@ -188,6 +201,28 @@ func ConvertRequest(req *model.LLMRequest, maxTokens int) (*Request, error) {
 	}
 
 	return bedrockReq, nil
+}
+
+// sanitizeSchema recursively fixes schema types (upper -> lower) for Bedrock
+func sanitizeSchema(schema map[string]interface{}) {
+	// Fix type case (GenAI uses "STRING", JSON Schema uses "string")
+	if t, ok := schema["type"].(string); ok {
+		schema["type"] = strings.ToLower(t)
+	}
+	
+	// Recurse into properties
+	if props, ok := schema["properties"].(map[string]interface{}); ok {
+		for _, prop := range props {
+			if propMap, ok := prop.(map[string]interface{}); ok {
+				sanitizeSchema(propMap)
+			}
+		}
+	}
+	
+	// Recurse into array items
+	if items, ok := schema["items"].(map[string]interface{}); ok {
+		sanitizeSchema(items)
+	}
 }
 
 // ParseResponse converts a Bedrock Response body to an ADK LLMResponse.

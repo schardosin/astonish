@@ -1511,6 +1511,8 @@ layout:
         selectedNodes={aiSelectedNodeIds.length > 0 ? aiSelectedNodeIds : (selectedNodeId ? [selectedNodeId] : [])}
         focusedNode={aiFocusedNode}
         agentId={selectedAgent?.id}
+        tools={availableTools}
+        onToolsRefresh={loadTools}
         onApplyYaml={(newYaml) => {
           // Apply the new YAML
           setYamlContent(newYaml)

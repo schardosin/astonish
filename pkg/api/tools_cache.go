@@ -397,3 +397,62 @@ func RefreshToolsCache(ctx context.Context) {
 		globalToolsCache.mu.Unlock()
 	}
 }
+
+// RefreshSingleServer refreshes/adds a single server to the cache
+func RefreshSingleServer(ctx context.Context, serverName string) error {
+	log.Printf("RefreshSingleServer: Refreshing %s...", serverName)
+
+	mcpManager, err := mcp.NewManager()
+	if err != nil {
+		return err
+	}
+	defer mcpManager.Cleanup()
+
+	namedToolset, err := mcpManager.InitializeSingleToolset(ctx, serverName)
+	if err != nil {
+		return err
+	}
+
+	minimalCtx := &minimalReadonlyContext{Context: ctx}
+	mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
+	if err != nil {
+		return err
+	}
+
+	// Update in-memory cache
+	var newTools []ToolInfo
+	for _, t := range mcpTools {
+		newTools = append(newTools, ToolInfo{
+			Name:        t.Name(),
+			Description: t.Description(),
+			Source:      serverName,
+		})
+	}
+	
+	// Remove old tools for this server first (in case it's an update)
+	RemoveServerToolsFromCache(serverName)
+	AddServerToolsToCache(serverName, newTools)
+
+	// Update persistent cache
+	persistentTools := make([]cache.ToolEntry, 0, len(newTools))
+	for _, t := range newTools {
+		persistentTools = append(persistentTools, cache.ToolEntry{
+			Name:        t.Name,
+			Description: t.Description,
+			Source:      t.Source,
+		})
+	}
+
+	// Calculate checksum
+	mcpCfg, err := config.LoadMCPConfig()
+	checksum := ""
+	if err == nil && mcpCfg.MCPServers != nil {
+		serverCfg := mcpCfg.MCPServers[serverName]
+		checksum = cache.ComputeServerChecksum(serverCfg.Command, serverCfg.Args, serverCfg.Env)
+	}
+
+	cache.AddServerTools(serverName, persistentTools, checksum)
+	cache.SaveCache()
+	
+	return nil
+}

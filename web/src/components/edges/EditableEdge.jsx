@@ -31,14 +31,19 @@ export default function EditableEdge({
 }) {
   const { setEdges, screenToFlowPosition } = useReactFlow()
 
-  // 1. Get points or initialize defaults
+  // 1. Get points or initialize with orthogonal defaults
   const rawPoints = useMemo(() => {
     if (data?.points && Array.isArray(data.points) && data.points.length > 0) {
       return data.points
     }
-    // Default: Straight line (no explicit points)
-    return []
-  }, [data?.points])
+    // Default: Generate orthogonal path (step pattern)
+    // Creates: Source -> vertical drop -> horizontal -> vertical to Target
+    const midY = (sourceY + targetY) / 2
+    return [
+      { x: sourceX, y: midY },  // Drop down from source
+      { x: targetX, y: midY }   // Move horizontally to target column
+    ]
+  }, [data?.points, sourceX, sourceY, targetX, targetY])
 
   // 2. Enforce Vertical Connection Constraints (Snap to Node X)
   // This ensures that when nodes move, the vertical segments attached to them

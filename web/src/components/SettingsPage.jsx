@@ -170,19 +170,24 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
     }
   }, [activeSection])
 
+  const loadMcpServerStatus = async () => {
+    try {
+      const data = await fetchMCPStatus()
+      // Convert array to map by server name for easy lookup
+      const statusMap = {}
+      for (const server of (data.servers || [])) {
+        statusMap[server.name] = server
+      }
+      setMcpServerStatus(statusMap)
+    } catch (err) {
+      console.error('Failed to fetch MCP status:', err)
+    }
+  }
+
   // Load MCP server status when MCP section is opened
   useEffect(() => {
     if (activeSection === 'mcp') {
-      fetchMCPStatus()
-        .then(data => {
-          // Convert array to map by server name for easy lookup
-          const statusMap = {}
-          for (const server of (data.servers || [])) {
-            statusMap[server.name] = server
-          }
-          setMcpServerStatus(statusMap)
-        })
-        .catch(err => console.error('Failed to fetch MCP status:', err))
+      loadMcpServerStatus()
     }
   }, [activeSection])
 
@@ -279,6 +284,8 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
       setMcpHasChanges(false)
       // Refresh tools cache in the UI
       if (onToolsRefresh) onToolsRefresh()
+      // Refresh status to show loading/updated status
+      loadMcpServerStatus()
       setTimeout(() => setSaveSuccess(false), 2000)
     } catch (err) {
       setError(err.message)
@@ -334,14 +341,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
     try {
       await refreshMCPServer(serverName)
       // Re-fetch status to get latest details
-      const statusData = await fetchMCPStatus()
-      const statusMap = {}
-      if (statusData.servers) {
-        statusData.servers.forEach(s => {
-          statusMap[s.name] = s
-        })
-      }
-      setMcpServerStatus(statusMap)
+      loadMcpServerStatus()
       
       if (onToolsRefresh) onToolsRefresh()
     } catch (err) {
@@ -403,6 +403,8 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
       setMcpHasChanges(false)
       // Refresh tools cache in the UI
       if (onToolsRefresh) onToolsRefresh()
+      // Refresh status to show loading/updated status
+      loadMcpServerStatus()
       // Collapse the card after successful save
       setExpandedMcpServer(null)
     } catch (err) {
@@ -1377,6 +1379,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
           // Close modal and refresh data to show new server
           setShowMCPStore(false)
           loadData()
+          loadMcpServerStatus()
           if (onToolsRefresh) onToolsRefresh()
         }}
       />

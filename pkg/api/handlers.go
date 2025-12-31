@@ -613,6 +613,10 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/settings/mcp", GetMCPSettingsHandler).Methods("GET")
 	router.HandleFunc("/api/settings/mcp", UpdateMCPSettingsHandler).Methods("PUT")
 	router.HandleFunc("/api/mcp/install-inline", InstallInlineMCPServerHandler).Methods("POST")
+	router.HandleFunc("/api/mcp/status", MCPStatusHandler).Methods("GET")
+	router.HandleFunc("/api/mcp/{serverName}/tools", ListServerToolsHandler).Methods("GET")
+	router.HandleFunc("/api/mcp/{serverName}/tools/{toolName}/run", RunServerToolHandler).Methods("POST")
+	router.HandleFunc("/api/mcp/{name}/refresh", RefreshMCPServerHandler).Methods("POST")
 	router.HandleFunc("/api/settings/status", GetSetupStatusHandler).Methods("GET")
 
 	// Provider endpoints

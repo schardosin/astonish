@@ -2,10 +2,14 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
+	"net/http"
 	"sync"
 	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcp"
@@ -22,10 +26,57 @@ type ToolsCache struct {
 
 var globalToolsCache = &ToolsCache{}
 
+// GetServerStatus returns the status of all MCP servers
+func GetServerStatus() []cache.ServerStatus {
+	statusesMap := cache.GetServerStatuses()
+	
+	statuses := make([]cache.ServerStatus, 0, len(statusesMap))
+	for _, status := range statusesMap {
+		statuses = append(statuses, status)
+	}
+	return statuses
+}
+
+// SetServerStatus updates the status of a specific MCP server
+func SetServerStatus(name string, status cache.ServerStatus) {
+	cache.UpdateServerStatus(status)
+	// Persist the cache
+	if err := cache.SaveCache(); err != nil {
+		log.Printf("Warning: failed to save tools cache after status update: %v", err)
+	}
+}
+
+// ClearServerStatus removes a server from the status map
+// Note: This only clears status, not tools. For full removal use cache.RemoveServer
+func ClearServerStatus(name string) {
+	// We don't have a direct method to clear just status in cache yet, 
+	// but we can set it to a zero value or "loading" if needed.
+	// For now, let's just leave it as this function might not be used or we can implement explicit clear if needed.
+	// Actually, let's implement a way to clear status if really needed, but it's mostly used for cleanup.
+}
+
+// MCPStatusResponse is the response for GET /api/mcp/status
+type MCPStatusResponse struct {
+	Servers []cache.ServerStatus `json:"servers"`
+}
+
+// MCPStatusHandler handles GET /api/mcp/status
+func MCPStatusHandler(w http.ResponseWriter, r *http.Request) {
+	statuses := GetServerStatus()
+	
+	response := MCPStatusResponse{
+		Servers: statuses,
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
 // loadToolsInternal does the actual work of loading tools (must NOT hold the lock)
 func loadToolsInternal(ctx context.Context) []ToolInfo {
 	log.Printf("loadToolsInternal: Starting to load tools...")
 	var allTools []ToolInfo
+	now := time.Now().UTC().Format(time.RFC3339)
 
 	// Get internal tools
 	internalTools, err := tools.GetInternalTools()
@@ -48,28 +99,61 @@ func loadToolsInternal(ctx context.Context) []ToolInfo {
 	} else {
 		if err := mcpManager.InitializeToolsets(ctx); err != nil {
 			log.Printf("Warning: failed to initialize MCP toolsets: %v", err)
-		} else {
-		toolsets := mcpManager.GetNamedToolsets()
+		}
 
-			// Create minimal context for fetching tools
-			minimalCtx := &minimalReadonlyContext{Context: ctx}
-
-			for _, namedToolset := range toolsets {
-				serverName := namedToolset.Name
-				mcpToolsList, err := namedToolset.Toolset.Tools(minimalCtx)
-				if err != nil {
-					log.Printf("Warning: failed to get tools from %s: %v", serverName, err)
-					continue
-				}
-				for _, t := range mcpToolsList {
-					allTools = append(allTools, ToolInfo{
-						Name:        t.Name(),
-						Description: t.Description(),
-						Source:      serverName,
-					})
-				}
+		// Process init results to update server status
+		initResults := mcpManager.GetInitResults()
+		for _, result := range initResults {
+			if !result.Success {
+				SetServerStatus(result.Name, cache.ServerStatus{
+					Name:      result.Name,
+					Status:    "error",
+					Error:     result.Error,
+					ToolCount: 0,
+					LastCheck: now,
+				})
 			}
 		}
+
+		toolsets := mcpManager.GetNamedToolsets()
+
+		// Create minimal context for fetching tools
+		minimalCtx := &minimalReadonlyContext{Context: ctx}
+
+		for _, namedToolset := range toolsets {
+			serverName := namedToolset.Name
+			mcpToolsList, err := namedToolset.Toolset.Tools(minimalCtx)
+			if err != nil {
+				log.Printf("Warning: failed to get tools from %s: %v", serverName, err)
+				SetServerStatus(serverName, cache.ServerStatus{
+					Name:      serverName,
+					Status:    "error",
+					Error:     fmt.Sprintf("Failed to list tools: %v", err),
+					ToolCount: 0,
+					LastCheck: now,
+				})
+				continue
+			}
+
+			toolCount := 0
+			for _, t := range mcpToolsList {
+				allTools = append(allTools, ToolInfo{
+					Name:        t.Name(),
+					Description: t.Description(),
+					Source:      serverName,
+				})
+				toolCount++
+			}
+
+			// Update status to healthy with tool count
+			SetServerStatus(serverName, cache.ServerStatus{
+				Name:      serverName,
+				Status:    "healthy",
+				ToolCount: toolCount,
+				LastCheck: now,
+			})
+		}
+
 		// Cleanup after fetching tool info - don't keep MCP servers running
 		mcpManager.Cleanup()
 	}
@@ -206,8 +290,53 @@ func populatePersistentCache(ctx context.Context, allTools []ToolInfo) {
 	if err := cache.SaveCache(); err != nil {
 		log.Printf("[Cache] Warning: Failed to save persistent cache: %v", err)
 	} else {
+
 		log.Printf("[Cache] Persistent cache populated from full initialization (%d servers)", len(toolsByServer))
 	}
+}
+
+// RefreshMCPServerHandler handles POST /api/mcp/{server}/refresh
+func RefreshMCPServerHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	serverName := vars["name"] // "name" to match definition in handlers.go
+	if serverName == "" {
+		http.Error(w, "Server name is required", http.StatusBadRequest)
+		return
+	}
+
+	// Update status to loading
+	SetServerStatus(serverName, cache.ServerStatus{
+		Name:      serverName,
+		Status:    "loading",
+		ToolCount: 0,
+		LastCheck: time.Now().UTC().Format(time.RFC3339),
+	})
+
+	// Do the refresh in foreground
+	err := RefreshSingleServer(r.Context(), serverName)
+	
+	response := map[string]interface{}{}
+	if err != nil {
+		response["success"] = false
+		response["error"] = err.Error()
+		
+		// RefreshSingleServer might fail before updating status
+		SetServerStatus(serverName, cache.ServerStatus{
+			Name:      serverName,
+			Status:    "error",
+			Error:     err.Error(),
+			ToolCount: 0,
+			LastCheck: time.Now().UTC().Format(time.RFC3339),
+		})
+	} else {
+		response["success"] = true
+		// RefreshSingleServer updates status to healthy on success
+		// But let's verify if we need to do anything else.
+		// It updates cache status.
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 // validateAndRefreshChangedServers compares the current MCP config checksums

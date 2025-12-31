@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package, Store, GitBranch, RefreshCw, Search } from 'lucide-react'
+import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package, Store, GitBranch, RefreshCw, Search, Play } from 'lucide-react'
 import MCPStoreModal from './MCPStoreModal'
 import FlowStorePanel from './FlowStorePanel'
 import ProviderModelSelector from './ProviderModelSelector'
+import MCPInspector from './MCPInspector'
 
 // API functions
 const fetchSettings = async () => {
@@ -81,6 +82,24 @@ const removeTap = async (name) => {
   return res.json()
 }
 
+// Fetch MCP server status
+const fetchMCPStatus = async () => {
+  const res = await fetch('/api/mcp/status')
+  if (!res.ok) throw new Error('Failed to fetch MCP status')
+  return res.json()
+}
+
+const refreshMCPServer = async (serverName) => {
+  const res = await fetch(`/api/mcp/${encodeURIComponent(serverName)}/refresh`, {
+    method: 'POST'
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || 'Failed to refresh server')
+  }
+  return res.json()
+}
+
 export default function SettingsPage({ onClose, activeSection = 'general', onSectionChange, onToolsRefresh, onSettingsSaved }) {
   // Use prop for active section, default to 'general'
   const [settings, setSettings] = useState(null)
@@ -114,6 +133,10 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
   const [savingServer, setSavingServer] = useState(null)
   // MCP Store modal
   const [showMCPStore, setShowMCPStore] = useState(false)
+  // MCP server status (from /api/mcp/status)
+  const [mcpServerStatus, setMcpServerStatus] = useState({})
+  // MCP Inspector modal - which server to inspect
+  const [inspectServer, setInspectServer] = useState(null)
   
   // Model selection state
   const [availableModels, setAvailableModels] = useState([])
@@ -144,6 +167,22 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
         .then(data => setTaps(data.taps || []))
         .catch(err => setTapsError(err.message))
         .finally(() => setTapsLoading(false))
+    }
+  }, [activeSection])
+
+  // Load MCP server status when MCP section is opened
+  useEffect(() => {
+    if (activeSection === 'mcp') {
+      fetchMCPStatus()
+        .then(data => {
+          // Convert array to map by server name for easy lookup
+          const statusMap = {}
+          for (const server of (data.servers || [])) {
+            statusMap[server.name] = server
+          }
+          setMcpServerStatus(statusMap)
+        })
+        .catch(err => console.error('Failed to fetch MCP status:', err))
     }
   }, [activeSection])
 
@@ -283,6 +322,35 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
     setMcpServerArgs({ [newName]: '', ...mcpServerArgs })
     // Auto-expand the new card
     setExpandedMcpServer(newName)
+  }
+
+  const handleRefreshMcpServer = async (serverName) => {
+    // Optimistic update
+    setMcpServerStatus(prev => ({
+      ...prev,
+      [serverName]: { ...(prev?.[serverName] || {}), name: serverName, status: 'loading', error: null }
+    }))
+    
+    try {
+      await refreshMCPServer(serverName)
+      // Re-fetch status to get latest details
+      const statusData = await fetchMCPStatus()
+      const statusMap = {}
+      if (statusData.servers) {
+        statusData.servers.forEach(s => {
+          statusMap[s.name] = s
+        })
+      }
+      setMcpServerStatus(statusMap)
+      
+      if (onToolsRefresh) onToolsRefresh()
+    } catch (err) {
+      console.error("Failed to refresh server:", err)
+      setMcpServerStatus(prev => ({
+        ...prev,
+        [serverName]: { ...(prev?.[serverName] || {}), name: serverName, status: 'error', error: err.message }
+      }))
+    }
   }
 
   const handleDeleteMcpServer = async (name) => {
@@ -731,12 +799,15 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                       const isExpanded = expandedMcpServer === name
                       const displayName = mcpServerNames[name] || name
                       const isSaving = savingServer === name
+                      const serverStatus = mcpServerStatus[name]
+                      const hasError = serverStatus?.status === 'error'
                       
                       return (
                         <div
                           key={name}
                           className={`rounded-lg border cursor-pointer transition-all ${
-                            isExpanded ? 'border-purple-500 ring-1 ring-purple-500/30 md:col-span-2' : 'hover:border-purple-500/50'
+                            isExpanded ? 'border-purple-500 ring-1 ring-purple-500/30 md:col-span-2' : 
+                            hasError ? 'border-red-500/50' : 'hover:border-purple-500/50'
                           }`}
                           style={{ 
                             background: 'var(--bg-secondary)', 
@@ -749,15 +820,35 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                             onClick={() => setExpandedMcpServer(isExpanded ? null : name)}
                           >
                             <div className="flex items-start justify-between gap-3">
-                              {/* Server Icon */}
-                              <div 
-                                className="shrink-0 w-10 h-10 rounded-lg flex items-center justify-center"
-                                style={{ 
-                                  background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.2) 0%, rgba(124, 58, 237, 0.2) 100%)',
-                                  border: '1px solid rgba(168, 85, 247, 0.3)'
-                                }}
-                              >
-                                <Server size={18} style={{ color: '#a855f7' }} />
+                              {/* Server Icon with Status Indicator */}
+                              <div className="relative shrink-0">
+                                <div 
+                                  className="w-10 h-10 rounded-lg flex items-center justify-center"
+                                  style={{ 
+                                    background: hasError 
+                                      ? 'linear-gradient(135deg, rgba(239, 68, 68, 0.2) 0%, rgba(220, 38, 38, 0.2) 100%)'
+                                      : 'linear-gradient(135deg, rgba(168, 85, 247, 0.2) 0%, rgba(124, 58, 237, 0.2) 100%)',
+                                    border: hasError 
+                                      ? '1px solid rgba(239, 68, 68, 0.3)'
+                                      : '1px solid rgba(168, 85, 247, 0.3)'
+                                  }}
+                                >
+                                  <Server size={18} style={{ color: hasError ? '#ef4444' : '#a855f7' }} />
+                                </div>
+                                {/* Status dot */}
+                                {serverStatus && (
+                                  <div 
+                                    className="absolute -top-1 -right-1 w-3 h-3 rounded-full border-2"
+                                    style={{ 
+                                      background: serverStatus.status === 'healthy' ? '#22c55e' : 
+                                                  serverStatus.status === 'error' ? '#ef4444' : '#f59e0b',
+                                      borderColor: 'var(--bg-secondary)'
+                                    }}
+                                    title={serverStatus.status === 'healthy' 
+                                      ? `Healthy - ${serverStatus.tool_count} tools` 
+                                      : serverStatus.error || 'Unknown status'}
+                                  />
+                                )}
                               </div>
                               
                               <div className="flex-1 min-w-0">
@@ -827,8 +918,55 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                                     </div>
                                   </div>
                                 )}
+
+                                {/* Error message display */}
+                                {hasError && !isExpanded && (
+                                  <div 
+                                    className="flex items-start gap-2 mt-2 p-2 rounded text-xs"
+                                    style={{ 
+                                      background: 'rgba(239, 68, 68, 0.1)', 
+                                      border: '1px solid rgba(239, 68, 68, 0.2)',
+                                      color: '#f87171'
+                                    }}
+                                  >
+                                    <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                                    <div className="flex-1">
+                                      <div className="font-medium">Failed to load</div>
+                                      <div className="opacity-80 mt-0.5">{serverStatus.error}</div>
+                                    </div>
+                                    {serverStatus?.status === 'loading' ? (
+                                      <Loader2 size={14} className="animate-spin shrink-0 mt-0.5 opacity-50" />
+                                    ) : (
+                                      <button 
+                                        onClick={(e) => { e.stopPropagation(); handleRefreshMcpServer(name) }}
+                                        className="p-1 hover:bg-white/10 rounded transition-colors"
+                                        title="Retry"
+                                      >
+                                        <RefreshCw size={14} />
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
                               </div>
                               
+                              {/* Test button */}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setInspectServer(name)
+                                }}
+                                className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all hover:scale-[1.02]"
+                                style={{ 
+                                  background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.15) 0%, rgba(124, 58, 237, 0.15) 100%)',
+                                  color: '#a855f7',
+                                  border: '1px solid rgba(168, 85, 247, 0.3)'
+                                }}
+                                title="Test tools from this server"
+                              >
+                                <Play size={12} />
+                                Test
+                              </button>
+
                               <ChevronRight 
                                 size={20} 
                                 className={`transition-transform shrink-0 ${isExpanded ? 'rotate-90' : ''}`}
@@ -1251,6 +1389,14 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
         currentModel={generalForm.default_model}
         provider={generalForm.default_provider}
       />
+
+      {/* MCP Inspector Modal */}
+      {inspectServer && (
+        <MCPInspector
+          serverName={inspectServer}
+          onClose={() => setInspectServer(null)}
+        />
+      )}
     </div>
   )
 }

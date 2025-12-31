@@ -18,12 +18,20 @@ type Manager struct {
 	toolsets      []tool.Toolset
 	namedToolsets []NamedToolset
 	transports    []mcp.Transport // Track transports for cleanup
+	initResults   []InitResult    // Track initialization results per server
 }
 
 // NamedToolset pairs a toolset with its server name
 type NamedToolset struct {
 	Name    string
 	Toolset tool.Toolset
+}
+
+// InitResult tracks the result of initializing a single MCP server
+type InitResult struct {
+	Name    string
+	Success bool
+	Error   string
 }
 
 // NewManager creates a new MCP manager
@@ -38,6 +46,7 @@ func NewManager() (*Manager, error) {
 		toolsets:      make([]tool.Toolset, 0),
 		namedToolsets: make([]NamedToolset, 0),
 		transports:    make([]mcp.Transport, 0),
+		initResults:   make([]InitResult, 0),
 	}, nil
 }
 
@@ -51,7 +60,13 @@ func (m *Manager) InitializeToolsets(ctx context.Context) error {
 	for serverName, serverConfig := range m.config.MCPServers {
 		transport, err := createTransport(serverConfig)
 		if err != nil {
+			errMsg := fmt.Sprintf("Failed to create transport: %v", err)
 			log.Printf("Warning: Failed to create transport for MCP server '%s': %v", serverName, err)
+			m.initResults = append(m.initResults, InitResult{
+				Name:    serverName,
+				Success: false,
+				Error:   errMsg,
+			})
 			continue
 		}
 
@@ -61,7 +76,13 @@ func (m *Manager) InitializeToolsets(ctx context.Context) error {
 			// ToolFilter can be added here if needed to filter specific tools
 		})
 		if err != nil {
+			errMsg := fmt.Sprintf("Failed to create toolset: %v", err)
 			log.Printf("Warning: Failed to create toolset for MCP server '%s': %v", serverName, err)
+			m.initResults = append(m.initResults, InitResult{
+				Name:    serverName,
+				Success: false,
+				Error:   errMsg,
+			})
 			continue
 		}
 
@@ -71,6 +92,10 @@ func (m *Manager) InitializeToolsets(ctx context.Context) error {
 			Toolset: toolset,
 		})
 		m.transports = append(m.transports, transport)
+		m.initResults = append(m.initResults, InitResult{
+			Name:    serverName,
+			Success: true,
+		})
 		log.Printf("Successfully initialized MCP server: %s", serverName)
 	}
 
@@ -119,6 +144,12 @@ func (m *Manager) GetToolsets() []tool.Toolset {
 func (m *Manager) GetNamedToolsets() []NamedToolset {
 	return m.namedToolsets
 }
+
+// GetInitResults returns the initialization results for all servers
+func (m *Manager) GetInitResults() []InitResult {
+	return m.initResults
+}
+
 
 // InitializeSelectiveToolsets creates ADK mcptoolset instances only for specified servers
 // This is more efficient when a flow only needs a subset of configured MCP servers

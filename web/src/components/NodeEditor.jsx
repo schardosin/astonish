@@ -845,7 +845,7 @@ function LlmNodeForm({ data, onChange, theme, availableTools = [], availableVari
         )}
         
         {activeTab === 'tools' && (
-          <div className="space-y-6">
+          <div className="space-y-6 overflow-y-auto max-h-[calc(100vh-300px)]">
             {/* Row 1: Enable Tools */}
             <div className="flex items-center gap-2">
               <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>

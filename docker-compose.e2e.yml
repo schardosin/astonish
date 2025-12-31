@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  astonish:
+    build:
+      context: .
+      dockerfile: Dockerfile.e2e
+    ports:
+      - "9393:9393"
+    # Each container starts with a completely clean slate
+    # No volumes mounted = isolated config directory

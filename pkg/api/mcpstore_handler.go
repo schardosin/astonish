@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/cache"
@@ -251,6 +252,14 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 	// Re-setup environment variables
 	config.SetupMCPEnv(mcpCfg)
 
+	// Set initial status to loading
+	SetServerStatus(serverName, cache.ServerStatus{
+		Name:      serverName,
+		Status:    "loading",
+		ToolCount: 0,
+		LastCheck: time.Now().Format(time.RFC3339),
+	})
+
 	// Incrementally load just this server's tools (synchronous, should be fast for one server)
 	toolsLoaded := 0
 	toolError := ""
@@ -268,7 +277,12 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 			minimalCtx := &minimalReadonlyContext{Context: r.Context()}
 			mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
 			if err != nil {
-				toolError = fmt.Sprintf("Server started but failed to get tools: %v", err)
+				stderrOutput := mcp.GetStderr(namedToolset.Stderr)
+				if stderrOutput != "" && stderrOutput != "no stderr output" {
+					toolError = stderrOutput
+				} else {
+					toolError = fmt.Sprintf("Server started but failed to get tools: %v", err)
+				}
 				log.Printf("Warning: %s", toolError)
 			} else {
 				var newTools []ToolInfo
@@ -300,6 +314,24 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+	}
+
+	// Update final status based on result
+	if toolError != "" {
+		SetServerStatus(serverName, cache.ServerStatus{
+			Name:      serverName,
+			Status:    "error",
+			Error:     toolError,
+			ToolCount: 0,
+			LastCheck: time.Now().Format(time.RFC3339),
+		})
+	} else {
+		SetServerStatus(serverName, cache.ServerStatus{
+			Name:      serverName,
+			Status:    "healthy",
+			ToolCount: toolsLoaded,
+			LastCheck: time.Now().Format(time.RFC3339),
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")

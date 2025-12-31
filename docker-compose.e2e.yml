@@ -1,0 +1,9 @@
+services:
+  astonish:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "9393:9393"
+    # Each container starts with a completely clean slate
+    # No volumes mounted = isolated config directory

@@ -1,0 +1,16 @@
+services:
+  astonish:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: astonish:latest
+    ports:
+      - "9393:9393"
+    volumes:
+      # Map local data directory to container's config path
+      # We use .astonish-data in the current directory to store persistent data
+      - ./.astonish-data:/root/.config/astonish
+    environment:
+      # Optional: Override host if needed, but defaults work fine
+      - ASTONISH_HOST=0.0.0.0
+    restart: unless-stopped

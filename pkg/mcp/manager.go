@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -18,12 +19,21 @@ type Manager struct {
 	toolsets      []tool.Toolset
 	namedToolsets []NamedToolset
 	transports    []mcp.Transport // Track transports for cleanup
+	initResults   []InitResult    // Track initialization results per server
 }
 
-// NamedToolset pairs a toolset with its server name
+// NamedToolset wraps an ADK toolset with its server name and stderr buffer
 type NamedToolset struct {
 	Name    string
 	Toolset tool.Toolset
+	Stderr  *bytes.Buffer
+}
+
+// InitResult tracks the result of initializing a single MCP server
+type InitResult struct {
+	Name    string
+	Success bool
+	Error   string
 }
 
 // NewManager creates a new MCP manager
@@ -38,6 +48,7 @@ func NewManager() (*Manager, error) {
 		toolsets:      make([]tool.Toolset, 0),
 		namedToolsets: make([]NamedToolset, 0),
 		transports:    make([]mcp.Transport, 0),
+		initResults:   make([]InitResult, 0),
 	}, nil
 }
 
@@ -49,9 +60,15 @@ func (m *Manager) InitializeToolsets(ctx context.Context) error {
 	}
 
 	for serverName, serverConfig := range m.config.MCPServers {
-		transport, err := createTransport(serverConfig)
+		transport, stderrBuf, err := createTransport(serverConfig)
 		if err != nil {
+			errMsg := fmt.Sprintf("Failed to create transport: %v (Stderr: %s)", err, GetStderr(stderrBuf))
 			log.Printf("Warning: Failed to create transport for MCP server '%s': %v", serverName, err)
+			m.initResults = append(m.initResults, InitResult{
+				Name:    serverName,
+				Success: false,
+				Error:   errMsg,
+			})
 			continue
 		}
 
@@ -61,7 +78,13 @@ func (m *Manager) InitializeToolsets(ctx context.Context) error {
 			// ToolFilter can be added here if needed to filter specific tools
 		})
 		if err != nil {
+			errMsg := fmt.Sprintf("Failed to create toolset: %v (Stderr: %s)", err, GetStderr(stderrBuf))
 			log.Printf("Warning: Failed to create toolset for MCP server '%s': %v", serverName, err)
+			m.initResults = append(m.initResults, InitResult{
+				Name:    serverName,
+				Success: false,
+				Error:   errMsg,
+			})
 			continue
 		}
 
@@ -69,8 +92,13 @@ func (m *Manager) InitializeToolsets(ctx context.Context) error {
 		m.namedToolsets = append(m.namedToolsets, NamedToolset{
 			Name:    serverName,
 			Toolset: toolset,
+			Stderr:  stderrBuf,
 		})
 		m.transports = append(m.transports, transport)
+		m.initResults = append(m.initResults, InitResult{
+			Name:    serverName,
+			Success: true,
+		})
 		log.Printf("Successfully initialized MCP server: %s", serverName)
 	}
 
@@ -85,9 +113,9 @@ func (m *Manager) InitializeSingleToolset(ctx context.Context, serverName string
 		return nil, fmt.Errorf("server '%s' not found in config", serverName)
 	}
 
-	transport, err := createTransport(serverConfig)
+	transport, stderrBuf, err := createTransport(serverConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create transport: %w", err)
+		return nil, fmt.Errorf("failed to create transport: %w (Stderr: %s)", err, GetStderr(stderrBuf))
 	}
 
 	// Create ADK mcptoolset
@@ -95,12 +123,13 @@ func (m *Manager) InitializeSingleToolset(ctx context.Context, serverName string
 		Transport: transport,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create toolset: %w", err)
+		return nil, fmt.Errorf("failed to create toolset: %w (Stderr: %s)", err, GetStderr(stderrBuf))
 	}
 
 	namedToolset := &NamedToolset{
 		Name:    serverName,
 		Toolset: toolset,
+		Stderr:  stderrBuf,
 	}
 
 	m.toolsets = append(m.toolsets, toolset)
@@ -119,6 +148,12 @@ func (m *Manager) GetToolsets() []tool.Toolset {
 func (m *Manager) GetNamedToolsets() []NamedToolset {
 	return m.namedToolsets
 }
+
+// GetInitResults returns the initialization results for all servers
+func (m *Manager) GetInitResults() []InitResult {
+	return m.initResults
+}
+
 
 // InitializeSelectiveToolsets creates ADK mcptoolset instances only for specified servers
 // This is more efficient when a flow only needs a subset of configured MCP servers
@@ -139,9 +174,9 @@ func (m *Manager) InitializeSelectiveToolsets(ctx context.Context, serverNames [
 			continue // Skip servers not needed for this flow
 		}
 
-		transport, err := createTransport(serverConfig)
+		transport, stderrBuf, err := createTransport(serverConfig)
 		if err != nil {
-			log.Printf("Warning: Failed to create transport for MCP server '%s': %v", serverName, err)
+			log.Printf("Warning: Failed to create transport for selective server %s: %v (Stderr: %s)", serverName, err, GetStderr(stderrBuf))
 			continue
 		}
 
@@ -149,7 +184,7 @@ func (m *Manager) InitializeSelectiveToolsets(ctx context.Context, serverNames [
 			Transport: transport,
 		})
 		if err != nil {
-			log.Printf("Warning: Failed to create toolset for MCP server '%s': %v", serverName, err)
+			log.Printf("Warning: Failed to create toolset for selective server %s: %v (Stderr: %s)", serverName, err, GetStderr(stderrBuf))
 			continue
 		}
 
@@ -183,7 +218,7 @@ func (m *Manager) Cleanup() {
 }
 
 // createTransport creates the appropriate MCP transport based on configuration
-func createTransport(cfg config.MCPServerConfig) (mcp.Transport, error) {
+func createTransport(cfg config.MCPServerConfig) (mcp.Transport, *bytes.Buffer, error) {
 	// Default to stdio if not specified
 	transportType := cfg.Transport
 	if transportType == "" {
@@ -196,18 +231,22 @@ func createTransport(cfg config.MCPServerConfig) (mcp.Transport, error) {
 	case "sse":
 		return createSSETransport(cfg)
 	default:
-		return nil, fmt.Errorf("unsupported transport type: %s", transportType)
+		return nil, nil, fmt.Errorf("unsupported transport type: %s", transportType)
 	}
 }
 
 // createStdioTransport creates a CommandTransport for stdio-based MCP servers
-func createStdioTransport(cfg config.MCPServerConfig) (mcp.Transport, error) {
+func createStdioTransport(cfg config.MCPServerConfig) (mcp.Transport, *bytes.Buffer, error) {
 	if cfg.Command == "" {
-		return nil, fmt.Errorf("command is required for stdio transport")
+		return nil, nil, fmt.Errorf("command is required for stdio transport")
 	}
 
 	// Create the command
 	cmd := exec.Command(cfg.Command, cfg.Args...)
+
+	// Buffer to capture stderr
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
 
 	// Set environment variables
 	if len(cfg.Env) > 0 {
@@ -223,20 +262,32 @@ func createStdioTransport(cfg config.MCPServerConfig) (mcp.Transport, error) {
 	// Create CommandTransport - ADK will manage the subprocess lifecycle
 	return &mcp.CommandTransport{
 		Command: cmd,
-	}, nil
+	}, &stderrBuf, nil
 }
 
 // createSSETransport creates an SSE transport for remote MCP servers
-func createSSETransport(cfg config.MCPServerConfig) (mcp.Transport, error) {
+func createSSETransport(cfg config.MCPServerConfig) (mcp.Transport, *bytes.Buffer, error) {
 	if cfg.URL == "" {
-		return nil, fmt.Errorf("URL is required for SSE transport")
+		return nil, nil, fmt.Errorf("URL is required for SSE transport")
 	}
 
 	// Create SSE client transport
 	return &mcp.SSEClientTransport{
 		Endpoint: cfg.URL,
 		// HTTPClient can be customized here if needed (e.g., for auth)
-	}, nil
+	}, nil, nil
+}
+
+// Helper to safely get stderr string
+func GetStderr(buf *bytes.Buffer) string {
+	if buf == nil {
+		return ""
+	}
+	out := buf.String()
+	if out == "" {
+		return "no stderr output"
+	}
+	return out
 }
 
 // GetConfig returns the MCP configuration

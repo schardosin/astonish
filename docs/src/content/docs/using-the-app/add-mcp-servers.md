@@ -63,6 +63,36 @@ astonish tools store install github-mcp-server
 Click the **Source** button at the top to paste MCP server JSON directly into the config file.
 :::
 
+## Server Status & Testing
+
+After adding an MCP server, Studio shows its status:
+
+| Status | Indicator | Description |
+|--------|-----------|-------------|
+| **Loading** | 🟡 Yellow | Server is starting up |
+| **Healthy** | 🟢 Green | Server connected, tools available |
+| **Error** | 🔴 Red | Server failed to start or connect |
+
+### Testing Tools
+
+Click the **Test** button on any server card to open the **MCP Inspector**:
+
+1. Select a tool from the dropdown
+2. Fill in the required parameters
+3. Click **Execute** to test the tool
+4. View the JSON response
+
+This lets you verify tools work before using them in flows.
+
+### Troubleshooting Errors
+
+When a server fails, the error message shows detailed diagnostics:
+- Missing dependencies (e.g., "Git executable not found")
+- Invalid API keys
+- Network connection issues
+
+Click the **Refresh** button (🔄) to retry loading a failed server after fixing the issue.
+
 ### Using CLI
 
 Edit the MCP config file directly:

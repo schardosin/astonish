@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/cache"
@@ -246,6 +247,18 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	// Update persistent cache for added/changed servers
 	if len(addedOrChanged) > 0 {
 		log.Printf("[Cache] Detected %d added/changed servers: %v", len(addedOrChanged), keysOf(addedOrChanged))
+		
+		// Set initial status to "loading" for all added/changed servers
+		now := time.Now().UTC().Format(time.RFC3339)
+		for serverName := range addedOrChanged {
+			SetServerStatus(serverName, cache.ServerStatus{
+				Name:      serverName,
+				Status:    "loading",
+				ToolCount: 0,
+				LastCheck: now,
+			})
+		}
+
 		// Use background context since request context gets cancelled
 		go updatePersistentCacheForServers(context.Background(), addedOrChanged)
 	}
@@ -332,7 +345,12 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 			minimalCtx := &minimalReadonlyContext{Context: r.Context()}
 			mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
 			if err != nil {
-				toolError = fmt.Sprintf("Server started but failed to get tools: %v", err)
+				stderrOutput := mcp.GetStderr(namedToolset.Stderr)
+				if stderrOutput != "" && stderrOutput != "no stderr output" {
+					toolError = stderrOutput
+				} else {
+					toolError = fmt.Sprintf("Server started but failed to get tools: %v", err)
+				}
 				log.Printf("Warning: %s", toolError)
 			} else {
 				var newTools []ToolInfo
@@ -396,6 +414,14 @@ func updatePersistentCacheForServers(ctx context.Context, servers map[string]con
 		namedToolset, err := mcpManager.InitializeSingleToolset(ctx, serverName)
 		if err != nil {
 			log.Printf("[Cache] Failed to initialize server '%s': %v", serverName, err)
+			// Update status to error
+			SetServerStatus(serverName, cache.ServerStatus{
+				Name:      serverName,
+				Status:    "error",
+				Error:     err.Error(),
+				ToolCount: 0,
+				LastCheck: time.Now().UTC().Format(time.RFC3339),
+			})
 			continue
 		}
 
@@ -403,7 +429,20 @@ func updatePersistentCacheForServers(ctx context.Context, servers map[string]con
 		minimalCtx := &minimalReadonlyContext{Context: ctx}
 		mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
 		if err != nil {
-			log.Printf("[Cache] Failed to get tools from '%s': %v", serverName, err)
+			stderrOutput := mcp.GetStderr(namedToolset.Stderr)
+			log.Printf("[Cache] Failed to get tools from '%s': %v (Stderr: %s)", serverName, err, stderrOutput)
+			// Update status to error
+			errMsg := fmt.Sprintf("Failed to list tools: %v", err)
+			if stderrOutput != "" && stderrOutput != "no stderr output" {
+				errMsg = stderrOutput
+			}
+			SetServerStatus(serverName, cache.ServerStatus{
+				Name:      serverName,
+				Status:    "error",
+				Error:     errMsg,
+				ToolCount: 0,
+				LastCheck: time.Now().UTC().Format(time.RFC3339),
+			})
 			continue
 		}
 
@@ -421,6 +460,14 @@ func updatePersistentCacheForServers(ctx context.Context, servers map[string]con
 		checksum := cache.ComputeServerChecksum(serverCfg.Command, serverCfg.Args, serverCfg.Env)
 		cache.AddServerTools(serverName, toolEntries, checksum)
 		log.Printf("[Cache] Added %d tools from server '%s' to persistent cache", len(toolEntries), serverName)
+
+		// Update status to healthy
+		SetServerStatus(serverName, cache.ServerStatus{
+			Name:      serverName,
+			Status:    "healthy",
+			ToolCount: len(toolEntries),
+			LastCheck: time.Now().UTC().Format(time.RFC3339),
+		})
 	}
 
 	// Save the updated cache

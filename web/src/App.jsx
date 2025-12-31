@@ -1210,6 +1210,8 @@ layout:
               onCreateAgent={handleCreateNew}
               onOpenSettings={() => navigate(buildPath('settings', { section: 'general' }))}
               onOpenMCP={() => navigate(buildPath('settings', { section: 'mcp' }))}
+              onOpenRepositories={() => navigate(buildPath('settings', { section: 'taps' }))}
+              onOpenFlowStore={() => navigate(buildPath('settings', { section: 'flows' }))}
               onBrowseFlows={() => setView('canvas')}
               defaultProvider={defaultProvider}
               defaultModel={defaultModel}

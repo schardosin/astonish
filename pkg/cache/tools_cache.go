@@ -14,7 +14,7 @@ import (
 
 const (
 	cacheFileName = "tools_cache.json"
-	cacheVersion  = 1
+	cacheVersion  = 2
 )
 
 // ToolEntry represents a single tool in the cache
@@ -24,23 +24,46 @@ type ToolEntry struct {
 	Source      string `json:"source"` // MCP server name or "internal"
 }
 
+// ServerStatus represents the health and status of an MCP server
+type ServerStatus struct {
+	Name      string `json:"name"`
+	Status    string `json:"status"` // "healthy", "error", "loading"
+	Error     string `json:"error,omitempty"`
+	ToolCount int    `json:"tool_count"`
+	LastCheck string `json:"last_check"`
+}
+
 // PersistentToolsCache is the structure stored in the cache file
 type PersistentToolsCache struct {
-	Version         int               `json:"version"`
-	LastUpdated     time.Time         `json:"lastUpdated"`
-	Tools           []ToolEntry       `json:"tools"`
-	ServerChecksums map[string]string `json:"serverChecksums"` // server name -> config checksum
+	Version         int                     `json:"version"`
+	LastUpdated     time.Time               `json:"lastUpdated"`
+	Tools           []ToolEntry             `json:"tools"`
+	ServerChecksums map[string]string       `json:"serverChecksums"` // server name -> config checksum
+	ServerStatuses  map[string]ServerStatus `json:"serverStatuses"`  // server name -> status
 }
 
 // Global in-memory copy for fast access
 var (
-	memoryCache *PersistentToolsCache
-	cacheMu     sync.RWMutex
-	cacheLoaded bool
+	memoryCache    *PersistentToolsCache
+	cacheMu        sync.RWMutex
+	cacheLoaded    bool
+	customCacheDir string
 )
+
+// SetCacheDir sets a custom directory for the cache file (used for testing)
+func SetCacheDir(dir string) {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	customCacheDir = dir
+	memoryCache = nil
+	cacheLoaded = false
+}
 
 // getCachePath returns the path to the cache file using OS config directory
 func getCachePath() (string, error) {
+	if customCacheDir != "" {
+		return filepath.Join(customCacheDir, cacheFileName), nil
+	}
 	configDir, err := config.GetConfigDir()
 	if err != nil {
 		return "", err
@@ -72,6 +95,7 @@ func LoadCache() (*PersistentToolsCache, error) {
 			LastUpdated:     time.Now(),
 			Tools:           []ToolEntry{},
 			ServerChecksums: make(map[string]string),
+			ServerStatuses:  make(map[string]ServerStatus),
 		}
 		cacheLoaded = true
 		return memoryCache, nil
@@ -88,14 +112,18 @@ func LoadCache() (*PersistentToolsCache, error) {
 			LastUpdated:     time.Now(),
 			Tools:           []ToolEntry{},
 			ServerChecksums: make(map[string]string),
+			ServerStatuses:  make(map[string]ServerStatus),
 		}
 		cacheLoaded = true
 		return memoryCache, nil
 	}
 
-	// Initialize map if nil
+	// Initialize maps if nil
 	if cache.ServerChecksums == nil {
 		cache.ServerChecksums = make(map[string]string)
+	}
+	if cache.ServerStatuses == nil {
+		cache.ServerStatuses = make(map[string]ServerStatus)
 	}
 
 	memoryCache = &cache
@@ -198,6 +226,7 @@ func AddServerTools(serverName string, tools []ToolEntry, configChecksum string)
 			LastUpdated:     time.Now(),
 			Tools:           []ToolEntry{},
 			ServerChecksums: make(map[string]string),
+			ServerStatuses:  make(map[string]ServerStatus),
 		}
 	}
 
@@ -237,8 +266,44 @@ func RemoveServer(serverName string) {
 	}
 	memoryCache.Tools = filtered
 
-	// Remove checksum
+	// Remove checksum and status
 	delete(memoryCache.ServerChecksums, serverName)
+	delete(memoryCache.ServerStatuses, serverName)
+}
+
+// UpdateServerStatus updates the status for a server
+func UpdateServerStatus(status ServerStatus) {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+
+	if memoryCache == nil {
+		memoryCache = &PersistentToolsCache{
+			Version:         cacheVersion,
+			LastUpdated:     time.Now(),
+			Tools:           []ToolEntry{},
+			ServerChecksums: make(map[string]string),
+			ServerStatuses:  make(map[string]ServerStatus),
+		}
+	}
+
+	memoryCache.ServerStatuses[status.Name] = status
+}
+
+// GetServerStatuses returns all server statuses
+func GetServerStatuses() map[string]ServerStatus {
+	cacheMu.RLock()
+	defer cacheMu.RUnlock()
+
+	if memoryCache == nil {
+		return map[string]ServerStatus{}
+	}
+
+	// Return copy
+	result := make(map[string]ServerStatus)
+	for k, v := range memoryCache.ServerStatuses {
+		result[k] = v
+	}
+	return result
 }
 
 // GetServerChecksum returns the stored checksum for a server

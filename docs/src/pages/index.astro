@@ -897,9 +897,10 @@ import '../styles/custom.css';
             <div class="story-visual-container">
               <img src="/astonish/images/flow-visual.png" alt="Visual flow diagram showing connected nodes" />
             </div>
-            <div class="story-visual-container code-visual">
-              <div class="code-header">agent.yaml</div>
-              <div class="code-body"><pre set:html={`<span class="code-key">name:</span> <span class="code-string">simple_search</span>
+<div class="story-visual-container code-visual">
+  <div class="code-header">agent.yaml</div>
+  <div class="code-body">
+    <pre set:html={`<span class="code-key">name:</span> <span class="code-string">simple_search</span>
 <span class="code-key">description:</span> <span class="code-string">Simple internet search flow</span>
 <span class="code-key">nodes:</span>
   - <span class="code-prop">name:</span> <span class="code-string">get_query</span>
@@ -909,16 +910,24 @@ import '../styles/custom.css';
       <span class="code-prop">query:</span> <span class="code-string">str</span>
   - <span class="code-prop">name:</span> <span class="code-string">search</span>
     <span class="code-prop">type:</span> <span class="code-string">llm</span>
-    <span class="code-prop">prompt:</span> <span class="code-string">'Search for: &#123;query&#125;'</span>
+    <span class="code-prop">system:</span> <span class="code-string">You are a helpful assistant</span>
+    <span class="code-prop">prompt:</span> <span class="code-string">"Search for: {query}"</span>
     <span class="code-prop">tools:</span> <span class="code-string">true</span>
+    <span class="code-prop">tools_selection:</span>
+      - <span class="code-string">tavily-search</span>
+    <span class="code-prop">output_model:</span>
+      <span class="code-prop">output:</span> <span class="code-string">str</span>
+    <span class="code-prop">user_message:</span>
+      - <span class="code-string">output</span>
 <span class="code-key">flow:</span>
   - <span class="code-prop">from:</span> <span class="code-string">START</span>
     <span class="code-prop">to:</span> <span class="code-string">get_query</span>
   - <span class="code-prop">from:</span> <span class="code-string">get_query</span>
     <span class="code-prop">to:</span> <span class="code-string">search</span>
   - <span class="code-prop">from:</span> <span class="code-string">search</span>
-    <span class="code-prop">to:</span> <span class="code-string">END</span>`} /></div>
-            </div>
+    <span class="code-prop">to:</span> <span class="code-string">END</span>`} />
+  </div>
+</div>
           </div>
           <!-- Text on bottom -->
           <div class="story-text">

@@ -598,14 +598,15 @@ a:not([class]):hover {
 }
 
 .story-visual-container.code-visual .code-body {
-  padding: 1.5rem;
+  padding: 0 1.5rem;
   font-family: var(--font-mono);
   font-size: 0.8rem;
   color: #e2e8f0;
   line-height: 1.6;
   overflow: auto;
   flex: 1;
-  white-space: pre;
+  white-space: normal;
+  padding-top: 0.5rem;
 }
 
 .story-visual-container.code-visual .code-body pre {

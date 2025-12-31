@@ -126,14 +126,19 @@ func loadToolsInternal(ctx context.Context) []ToolInfo {
 			serverName := namedToolset.Name
 			mcpToolsList, err := namedToolset.Toolset.Tools(minimalCtx)
 			if err != nil {
-				log.Printf("Warning: failed to get tools from %s: %v", serverName, err)
+				stderrOutput := mcp.GetStderr(namedToolset.Stderr)
+				log.Printf("Warning: failed to get tools from %s: %v (Stderr: %s)", serverName, err, stderrOutput)
 				// Don't persist error status for context cancellation (transient timeout errors)
 				// These happen when the refresh times out, not when the server is broken
 				if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "context canceled") {
+					errMsg := fmt.Sprintf("Failed to list tools: %v", err)
+					if stderrOutput != "" && stderrOutput != "no stderr output" {
+						errMsg = stderrOutput
+					}
 					SetServerStatus(serverName, cache.ServerStatus{
 						Name:      serverName,
 						Status:    "error",
-						Error:     fmt.Sprintf("Failed to list tools: %v", err),
+						Error:     errMsg,
 						ToolCount: 0,
 						LastCheck: now,
 					})

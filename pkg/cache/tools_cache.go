@@ -44,13 +44,26 @@ type PersistentToolsCache struct {
 
 // Global in-memory copy for fast access
 var (
-	memoryCache *PersistentToolsCache
-	cacheMu     sync.RWMutex
-	cacheLoaded bool
+	memoryCache    *PersistentToolsCache
+	cacheMu        sync.RWMutex
+	cacheLoaded    bool
+	customCacheDir string
 )
+
+// SetCacheDir sets a custom directory for the cache file (used for testing)
+func SetCacheDir(dir string) {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	customCacheDir = dir
+	memoryCache = nil
+	cacheLoaded = false
+}
 
 // getCachePath returns the path to the cache file using OS config directory
 func getCachePath() (string, error) {
+	if customCacheDir != "" {
+		return filepath.Join(customCacheDir, cacheFileName), nil
+	}
 	configDir, err := config.GetConfigDir()
 	if err != nil {
 		return "", err

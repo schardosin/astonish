@@ -1,9 +1,26 @@
 package api
 
 import (
+	"os"
 	"sync"
 	"testing"
+
+	"github.com/schardosin/astonish/pkg/cache"
 )
+
+func testSetup(t *testing.T) func() {
+	t.Helper()
+	tmpDir, err := os.MkdirTemp("", "api-cache-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	cache.SetCacheDir(tmpDir)
+	
+	return func() {
+		os.RemoveAll(tmpDir)
+		cache.SetCacheDir("")
+	}
+}
 
 // TestGetCachedTools_EmptyCache verifies behavior when cache is not loaded
 func TestGetCachedTools_EmptyCache(t *testing.T) {
@@ -337,4 +354,34 @@ func TestGetCachedTools_ThreadSafety(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestSetServerStatus verifies setting and retrieving server status via API wrapper
+func TestSetServerStatus(t *testing.T) {
+	cleanup := testSetup(t)
+	defer cleanup()
+
+	status := cache.ServerStatus{
+		Name:      "api-test-server",
+		Status:    "error",
+		Error:     "API Error",
+		ToolCount: 0,
+		LastCheck: "2024-12-31T12:00:00Z",
+	}
+
+	SetServerStatus("api-test-server", status)
+
+	statuses := GetServerStatus()
+	found := false
+	for _, s := range statuses {
+		if s.Name == "api-test-server" {
+			found = true
+			if s.Status != "error" || s.Error != "API Error" {
+				t.Errorf("expected error status, got %+v", s)
+			}
+		}
+	}
+	if !found {
+		t.Error("status not found in GetServerStatus output")
+	}
 }

@@ -15,19 +15,13 @@ func testSetup(t *testing.T) (string, func()) {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 	
-	// Reset global cache state
-	cacheMu.Lock()
-	memoryCache = nil
-	cacheLoaded = false
-	cacheMu.Unlock()
+	// Set the cache directory to the temp dir
+	SetCacheDir(tmpDir)
 	
 	// Return cleanup function
 	cleanup := func() {
 		os.RemoveAll(tmpDir)
-		cacheMu.Lock()
-		memoryCache = nil
-		cacheLoaded = false
-		cacheMu.Unlock()
+		SetCacheDir("") // Reset to default
 	}
 	
 	return tmpDir, cleanup
@@ -510,3 +504,76 @@ func TestToolEntrySource(t *testing.T) {
 		}
 	}
 }
+
+// TestUpdateServerStatus tests updating and retrieving server status
+func TestUpdateServerStatus(t *testing.T) {
+	_, cleanup := testSetup(t)
+	defer cleanup()
+	
+	status := ServerStatus{
+		Name:      "test-server",
+		Status:    "healthy",
+		ToolCount: 5,
+		LastCheck: "2024-12-31T12:00:00Z",
+	}
+	
+	UpdateServerStatus(status)
+	
+	statuses := GetServerStatuses()
+	if len(statuses) != 1 {
+		t.Errorf("Expected 1 server status, got %d", len(statuses))
+	}
+	
+	got, ok := statuses["test-server"]
+	if !ok {
+		t.Fatal("Status for 'test-server' not found")
+	}
+	
+	if got.Status != "healthy" {
+		t.Errorf("Expected status 'healthy', got %q", got.Status)
+	}
+	if got.ToolCount != 5 {
+		t.Errorf("Expected 5 tools, got %d", got.ToolCount)
+	}
+}
+
+// TestServerStatusPersistence tests that status is persisted to disk
+func TestServerStatusPersistence(t *testing.T) {
+	_, cleanup := testSetup(t)
+	defer cleanup()
+	
+	status := ServerStatus{
+		Name:      "persistent-server",
+		Status:    "error",
+		Error:     "Connection failed",
+		ToolCount: 0,
+		LastCheck: "2024-12-31T12:00:00Z",
+	}
+	
+	UpdateServerStatus(status)
+	
+	// Force save and clear memory cache
+	if err := SaveCache(); err != nil {
+		t.Fatalf("SaveCache failed: %v", err)
+	}
+	
+	// Reset memory state but keep the file
+	memoryCache = nil
+	cacheLoaded = false
+	
+	// Reload from disk
+	reloaded, err := LoadCache()
+	if err != nil {
+		t.Fatalf("LoadCache failed: %v", err)
+	}
+	
+	if len(reloaded.ServerStatuses) != 1 {
+		t.Errorf("Expected 1 persisted status, got %d", len(reloaded.ServerStatuses))
+	}
+	
+	got := reloaded.ServerStatuses["persistent-server"]
+	if got.Status != "error" || got.Error != "Connection failed" {
+		t.Errorf("Persisted status mismatch: %+v", got)
+	}
+}
+

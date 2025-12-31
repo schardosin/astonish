@@ -64,8 +64,7 @@ export default function OverflowNode({
             : isActive
               ? '0 0 20px rgba(139, 92, 246, 0.4)'
               : '0 4px 12px rgba(0,0,0,0.1)',
-        minWidth: '180px',
-        maxWidth: '220px',
+        width: '180px',  // Fixed width for consistent ELK layout alignment
         padding: '14px 16px',
         position: 'relative',
         overflow: 'visible',

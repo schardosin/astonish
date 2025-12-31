@@ -17,6 +17,62 @@ async function sendChatMessage(message, context, currentYaml, selectedNodes, his
   return response.json()
 }
 
+// API function to chat with AI using streaming (Server-Sent Events)
+async function sendChatMessageStream(message, context, currentYaml, selectedNodes, history, onEvent) {
+  const response = await fetch('/api/ai/chat', {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream'
+    },
+    body: JSON.stringify({
+      message,
+      context,
+      currentYaml,
+      selectedNodes,
+      history,
+    }),
+  })
+
+  if (!response.ok) {
+    const errText = await response.text()
+    throw new Error(errText || response.statusText)
+  }
+
+  // Handle SSE stream
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() // Last line might be incomplete
+
+    let currentEvent = null
+    
+    for (const line of lines) {
+      if (line.startsWith('event: ')) {
+        currentEvent = line.slice(7).trim()
+      } else if (line.startsWith('data: ')) {
+        const dataStr = line.slice(6)
+        try {
+          const data = JSON.parse(dataStr)
+          if (onEvent && currentEvent) {
+            onEvent(currentEvent, data)
+          }
+        } catch (e) {
+          console.error('Failed to parse SSE JSON:', e)
+        }
+        currentEvent = null // Reset for next pair
+      }
+    }
+  }
+}
+
 // API function to search for tools in the store using AI semantic search
 async function searchToolsInStore(requirement) {
   const response = await fetch('/api/ai/tool-search', {
@@ -33,6 +89,19 @@ async function searchToolsOnInternet(requirement) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ requirement }),
+  })
+  return response.json()
+}
+
+// API function to classify user intent using LLM
+async function classifyIntent(message, tools = []) {
+  const response = await fetch('/api/ai/classify-intent', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ 
+      message,
+      tools: tools.map(t => t.name)
+    }),
   })
   return response.json()
 }
@@ -89,6 +158,7 @@ async function installInternetMCP(result, env = {}) {
 // Detect if AI response offers to help find tools (stores pending requirement)
 // Returns the tool requirement if AI is offering help, null otherwise
 function detectToolOfferFromAI(text) {
+  if (!text) return null
   const lower = text.toLowerCase()
   
   // Check if AI is offering to help find/install tools
@@ -279,7 +349,7 @@ function ToolInstallCard({ tool, installingTool, onInstall }) {
     setEnvValues(prev => ({ ...prev, [key]: value }))
   }
   
-  const isInstalling = installingTool === tool.id
+  const isInstalling = installingTool === (tool.id || tool.mcpId)
   
   return (
     <div className="bg-[var(--bg-primary)]/50 rounded-lg p-3 space-y-2">
@@ -388,9 +458,9 @@ function StoreResultsPanel({ storeResults, installingTool, onInstall, onSearchOn
         <span>Found {storeResults.length} matching tools in store:</span>
       </div>
       <div className="space-y-3">
-        {displayedTools.map((tool) => (
+        {displayedTools.map((tool, idx) => (
           <ToolInstallCard 
-            key={tool.id}
+            key={tool.id || tool.mcpId || idx}
             tool={tool}
             installingTool={installingTool}
             onInstall={onInstall}
@@ -599,6 +669,8 @@ export default function AIChatPanel({
   focusedNode = null,
   agentId = null,
   onApplyYaml,
+  tools = [],
+  onToolsRefresh,
 }) {
   // Separate message histories: flow chat preserves, node refiner resets
   const [flowMessages, setFlowMessages] = useState([])
@@ -672,6 +744,7 @@ export default function AIChatPanel({
           
           // Small delay to let the message appear, then retry
           setTimeout(async () => {
+            if (onToolsRefresh) await onToolsRefresh()
             setIsLoading(true)
             try {
               const history = messages.map(m => ({ role: m.role, content: m.content }))
@@ -747,6 +820,7 @@ export default function AIChatPanel({
           
           // Small delay to let the message appear, then retry
           setTimeout(async () => {
+            if (onToolsRefresh) await onToolsRefresh()
             setIsLoading(true)
             try {
               const history = messages.map(m => ({ role: m.role, content: m.content }))
@@ -860,41 +934,203 @@ export default function AIChatPanel({
     setIsLoading(true)
     setStoreResults(null) // Clear previous store results
 
-    // PRIORITY 0: Check if user pasted a GitHub/npm URL for MCP server extraction
-    const detectedURL = detectMCPURL(userMessage)
-    if (detectedURL) {
-      setMessages(prev => [...prev, { 
-        role: 'system', 
-        content: `🔍 Extracting MCP server info from URL...`
-      }])
-      try {
-        const extractResult = await extractMCPServerFromURL(detectedURL)
-        if (extractResult.found && extractResult.mcpServer) {
-          // Show as internet result for easy installation
-          setInternetResults([extractResult.mcpServer])
-          const toolInfo = extractResult.toolUsed ? ` via ${extractResult.toolUsed}` : ''
-          setMessages(prev => [...prev, { 
-            role: 'system', 
-            content: `✅ Found MCP server${toolInfo}: ${extractResult.mcpServer.name}`
-          }])
-        } else {
-          setMessages(prev => [...prev, { 
-            role: 'system', 
-            content: extractResult.message || 'No MCP server configuration found at this URL.'
-          }])
+
+
+    // PRIORITY 0.25: Use LLM to classify user intent
+    // This replaces naive regex detection - LLM can distinguish between:
+    // - "create a flow using X mcp" (create_flow intent)
+    // - "install X mcp server" (install_mcp intent)
+    try {
+      const intentResult = await classifyIntent(userMessage, tools)
+      
+      if (!intentResult.error && intentResult.intent) {
+        console.log('[Intent Classification]', intentResult)
+        
+        // Handle extract_mcp_url intent
+        if (intentResult.intent === 'extract_mcp_url' && intentResult.requirement) {
+          setMessages(prev => [...prev, { role: 'system', content: `🔍 Extracting MCP server info from URL...` }])
+          try {
+            // Requirement is the URL
+            const extractResult = await extractMCPServerFromURL(intentResult.requirement)
+            
+            if (extractResult.found && extractResult.mcpServer) {
+              setInternetResults([extractResult.mcpServer])
+              const toolInfo = extractResult.toolUsed ? ` via ${extractResult.toolUsed}` : ''
+              
+              setMessages(prev => [...prev, { 
+                role: 'system', 
+                content: `✅ Found MCP server${toolInfo}: ${extractResult.mcpServer.name}`
+              }, {
+                role: 'widget_internet',
+                data: [extractResult.mcpServer]
+              }])
+            } else {
+              setMessages(prev => [...prev, { 
+                role: 'system', 
+                content: extractResult.message || 'No MCP server found at this URL.'
+              }])
+            }
+          } catch (err) {
+            console.error('URL extraction failed:', err)
+            setMessages(prev => [...prev, { 
+              role: 'system', 
+              content: `URL extraction failed: ${err.message}`,
+              isError: true
+            }])
+          } finally {
+            setIsLoading(false)
+          }
+          return // Handled
         }
-      } catch (err) {
-        console.error('URL extraction failed:', err)
-        setMessages(prev => [...prev, { 
-          role: 'system', 
-          content: `URL extraction failed: ${err.message}`,
-          isError: true
-        }])
-      } finally {
-        setIsLoading(false)
+
+        // Handle install_mcp intent
+        if (intentResult.intent === 'install_mcp' && intentResult.requirement) {
+          setCurrentRequirement(intentResult.requirement)
+          setOriginalRequest(userMessage)
+          
+          // First search the store
+          setMessages(prev => [...prev, { 
+            role: 'system', 
+            content: `🔍 Searching MCP store for "${intentResult.requirement}"...`
+          }])
+          
+          try {
+            const storeResult = await searchToolsInStore(intentResult.requirement)
+            
+            if (storeResult.results && storeResult.results.length > 0) {
+              setStoreResults(storeResult.results)
+              setMessages(prev => [...prev, { 
+                role: 'system', 
+                content: `✅ Found ${storeResult.results.length} matching tools in the store:`
+              }, { 
+                role: 'widget_store', 
+                data: storeResult.results 
+              }])
+            } else {
+              // Not found in store, search internet
+              setMessages(prev => [...prev, { 
+                role: 'system', 
+                content: `Not found in store. 🌐 Searching the internet...`
+              }])
+              
+              const internetResult = await searchToolsOnInternet(intentResult.requirement)
+              if (internetResult.results && internetResult.results.length > 0) {
+                setInternetResults(internetResult.results)
+                const toolInfo = internetResult.toolUsed ? ` via ${internetResult.toolUsed}` : ''
+                setMessages(prev => [...prev, { 
+                  role: 'system', 
+                  content: `✅ Found ${internetResult.results.length} MCP servers online${toolInfo}:`
+                }, { 
+                  role: 'widget_internet', 
+                  data: internetResult.results 
+                }])
+              } else if (!internetResult.tavilyAvailable) {
+                setMessages(prev => [...prev, { 
+                  role: 'system', 
+                  content: internetResult.message || 'No web search tool configured. Go to Settings → General to configure one.'
+                }])
+              } else {
+                setMessages(prev => [...prev, { 
+                  role: 'system', 
+                  content: `No MCP servers found for "${intentResult.requirement}". Try a different search term or paste a GitHub URL.`
+                }])
+              }
+            }
+          } catch (err) {
+            console.error('Install search failed:', err)
+            setMessages(prev => [...prev, { 
+              role: 'system', 
+              content: `Search failed: ${err.message}`,
+              isError: true
+            }])
+          } finally {
+            setIsLoading(false)
+          }
+          return // Handled
+        }
+        
+        // Handle browse_mcp_store intent
+        if (intentResult.intent === 'browse_mcp_store') {
+          setMessages(prev => [...prev, { 
+            role: 'system', 
+            content: `🔍 Browsing available MCP tools...`
+          }])
+          
+          try {
+            const storeResult = await searchToolsInStore(intentResult.requirement || 'popular tools')
+            if (storeResult.results && storeResult.results.length > 0) {
+              setStoreResults(storeResult.results)
+              setMessages(prev => [...prev, { 
+                role: 'system', 
+                content: `✅ Found ${storeResult.results.length} tools available:`
+              }])
+            } else {
+              setMessages(prev => [...prev, { 
+                role: 'system', 
+                content: `No tools found. Check Settings → MCP Store to browse all available servers.`
+              }])
+            }
+          } catch (err) {
+            setMessages(prev => [...prev, { 
+              role: 'system', 
+              content: `Browse failed: ${err.message}`,
+              isError: true
+            }])
+          } finally {
+            setIsLoading(false)
+          }
+          return // Handled
+        }
+        
+        // Handle search_mcp_internet intent
+        if (intentResult.intent === 'search_mcp_internet' && intentResult.requirement) {
+          setCurrentRequirement(intentResult.requirement)
+          
+          setMessages(prev => [...prev, { 
+            role: 'system', 
+            content: `🌐 Searching the internet for "${intentResult.requirement}" MCP servers...`
+          }])
+          
+          try {
+            const internetResult = await searchToolsOnInternet(intentResult.requirement)
+            if (internetResult.results && internetResult.results.length > 0) {
+              setInternetResults(internetResult.results)
+              const toolInfo = internetResult.toolUsed ? ` via ${internetResult.toolUsed}` : ''
+              setMessages(prev => [...prev, { 
+                role: 'system', 
+                content: `✅ Found ${internetResult.results.length} MCP servers${toolInfo}:`
+              }])
+            } else if (!internetResult.tavilyAvailable) {
+              setMessages(prev => [...prev, { 
+                role: 'system', 
+                content: internetResult.message || 'No web search tool configured.'
+              }])
+            } else {
+              setMessages(prev => [...prev, { 
+                role: 'system', 
+                content: `No MCP servers found online for that search.`
+              }])
+            }
+          } catch (err) {
+            setMessages(prev => [...prev, { 
+              role: 'system', 
+              content: `Internet search failed: ${err.message}`,
+              isError: true
+            }])
+          } finally {
+            setIsLoading(false)
+          }
+          return // Handled
+        }
+        
+        // For create_flow and general_question, continue to AI chat below
+        // (No return, let it fall through to the AI chat call)
       }
-      return // Don't send to AI, we handled it
+    } catch (err) {
+      console.error('Intent classification failed, falling back to AI chat:', err)
+      // Continue to AI chat on classification error
     }
+
 
 
     // PRIORITY 0.5: Check if user is providing refinement feedback on internet search results
@@ -1113,27 +1349,115 @@ export default function AIChatPanel({
       // Build history for API (exclude current message)
       const history = messages.map(m => ({ role: m.role, content: m.content }))
       
-      const response = await sendChatMessage(
+      // Start streaming response
+      setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }])
+      
+      let assistantContent = ''
+      let finalResponse = null
+      
+      await sendChatMessageStream(
         userMessage,
         context,
         currentYaml,
         selectedNodes,
-        history
+        history,
+        (type, data) => {
+          if (type === 'chunk') {
+            // Robust deduplication: check if backend is sending full text or deltas
+            if (assistantContent.length > 0 && data.content.startsWith(assistantContent)) {
+                assistantContent = data.content // Accumulation detected, replace
+            } else {
+                assistantContent += data.content // Delta detected, append
+            }
+            
+            setMessages(prev => {
+              const lastIdx = prev.length - 1
+              const lastMsg = prev[lastIdx]
+              
+              if (lastMsg?.isStreaming) {
+                // Update existing streaming message
+                const newMsg = { ...lastMsg, content: assistantContent }
+                const newArr = [...prev]
+                newArr[lastIdx] = newMsg
+                return newArr
+              } else {
+                // Previous message was closed (e.g. by tool), start new one
+                return [...prev, { role: 'assistant', content: assistantContent, isStreaming: true }]
+              }
+            })
+          } else if (type === 'tool_start') {
+            // Capture requirement for "Search Internet" link
+            if (data.name.startsWith('search_mcp') && data.args?.query) {
+                setCurrentRequirement(data.args.query)
+            }
+            
+            setMessages(prev => {
+              // Close previous streaming message
+              const copy = [...prev]
+              if (copy[copy.length-1]?.isStreaming) {
+                 copy[copy.length-1].isStreaming = false
+              }
+              // Add tool banner
+              return [...copy, { role: 'system', content: `🔨 Executing: ${data.name}...` }]
+            })
+            assistantContent = '' // Reset buffer
+          } else if (type === 'tool_end') {
+            // Check for structured data to check for UI visualization
+            if (data.result_data) {
+                if (data.name === 'search_mcp_store' && data.result_data.length > 0) {
+                    // Inject widget message
+                    setMessages(prev => [...prev, { role: 'widget_store', data: data.result_data }])
+                } else if (data.name === 'search_mcp_internet' && data.result_data.length > 0) {
+                    // Inject widget message
+                    setMessages(prev => [...prev, { role: 'widget_internet', data: data.result_data }])
+                }
+            }
+
+
+            let resultInfo = 'Completed.'
+            if (data.result && (data.result.includes('found 0') || data.result.includes('No MCP'))) {
+                resultInfo = 'Found 0 results.'
+            } else if (data.result && data.result.includes('Found')) {
+                // Extract count usually "Found X..."
+                const match = data.result.match(/Found \d+/)
+                if (match) resultInfo = `${match[0]} results.`
+                else resultInfo = 'Found results.'
+            }
+            setMessages(prev => [...prev, { role: 'system', content: `✅ ${resultInfo}` }])
+          } else if (type === 'status') {
+            setMessages(prev => [...prev, { role: 'system', content: `ℹ️ ${data.message}` }])
+          } else if (type === 'error') {
+             setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${data.error}`, isError: true }])
+          } else if (type === 'complete') {
+             finalResponse = data
+          }
+        }
       )
 
-      if (response.error) {
-        setMessages(prev => [...prev, { 
-          role: 'assistant', 
-          content: `Error: ${response.error}`,
-          isError: true 
-        }])
-      } else {
-        setMessages(prev => [...prev, { 
-          role: 'assistant', 
-          content: response.message,
-          proposedYaml: response.proposedYaml,
-          action: response.action,
-        }])
+      if (finalResponse) {
+        // Finalize state
+        setMessages(prev => {
+           const copy = [...prev]
+           const lastIdx = copy.length - 1
+           if (copy[lastIdx]?.isStreaming) {
+               copy[lastIdx].isStreaming = false
+           }
+           // Attach YAML/Action to the very last message so UI renders preview
+           // Note: The last message might be a system message if tool ended last.
+           // We should attach to the last ASSISTANT message preferably, or just last message.
+           // Usually flow ends with text.
+           if (copy[lastIdx]) {
+               copy[lastIdx].proposedYaml = finalResponse.proposedYaml
+               copy[lastIdx].action = finalResponse.action
+           }
+           return copy
+        })
+        
+        const response = {
+            message: finalResponse.message, // Includes logs? We ignore for prompt history building usually
+            proposedYaml: finalResponse.proposedYaml
+        }
+
         
         // Check if AI mentioned missing tools
         const toolOffer = detectToolOfferFromAI(response.message)
@@ -1352,7 +1676,32 @@ export default function AIChatPanel({
           </div>
         )}
         
-        {messages.map((msg, idx) => (
+        {messages.map((msg, idx) => {
+          if (msg.role === 'widget_store') {
+             return (
+               <div key={idx} className="w-full my-4 pl-0 pr-2">
+                  <StoreResultsPanel 
+                    storeResults={msg.data}
+                    installingTool={installingTool}
+                    onInstall={handleInstallTool}
+                    onSearchOnline={currentRequirement ? handleSearchOnline : null}
+                  />
+               </div>
+             )
+          }
+          if (msg.role === 'widget_internet') {
+             return (
+               <div key={idx} className="w-full my-4 pl-0 pr-2">
+                  <InternetResultsPanel 
+                    results={msg.data}
+                    onInstall={handleInstallInternetMCP}
+                    installingTool={installingTool}
+                  />
+               </div>
+             )
+          }
+          
+          return (
           <div 
             key={idx} 
             className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -1377,12 +1726,13 @@ export default function AIChatPanel({
               {msg.proposedYaml && (
                 <div className="mt-2 pt-2 border-t border-white/10 text-xs flex items-center gap-1 text-purple-300">
                   <Check size={12} />
-                  YAML generated - use buttons below to preview/apply
+                  YAML generated
                 </div>
               )}
             </div>
           </div>
-        ))}
+          )
+        })}
         
         {isLoading && (
           <div className="flex justify-start">
@@ -1392,25 +1742,7 @@ export default function AIChatPanel({
           </div>
         )}
         
-        {/* Store Results Panel - shown when tools are found */}
-        {storeResults && storeResults.length > 0 && (
-          <StoreResultsPanel 
-            storeResults={storeResults}
-            installingTool={installingTool}
-            onInstall={handleInstallTool}
-            onSearchOnline={currentRequirement ? handleSearchOnline : null}
-          />
-        )}
-        
-        {/* Internet Results Panel - shown when AI finds MCP servers online */}
-        {internetResults && internetResults.length > 0 && (
-          <InternetResultsPanel 
-            results={internetResults}
-            onClear={() => setInternetResults(null)}
-            onInstall={handleInstallInternetMCP}
-            installingTool={installingTool}
-          />
-        )}
+        {/* Panels now rendered inline in messages map */}
         
         <div ref={messagesEndRef} />
       </div>

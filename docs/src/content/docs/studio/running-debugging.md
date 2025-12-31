@@ -45,6 +45,15 @@ The right panel shows execution in real-time:
 | **✦ Executing Node: [name]** | Shows which node is currently running |
 | **Start Again** | Button to restart the flow from the beginning |
 
+### Auto-Approve Toggle
+
+In the Chat Panel header, you'll see an **Auto-Approve** checkbox:
+
+- **Checked**: All tool executions proceed automatically without prompts
+- **Unchecked**: Tools require manual approval before executing
+
+This toggle is disabled while a flow is running. Set it before clicking **Run**.
+
 ## Interactive Input
 
 When the flow reaches an **Input** node:

@@ -77,6 +77,7 @@ func handleRunCommand(args []string) error {
 	useBrowser := runCmd.Bool("browser", false, "Launch with embedded web browser UI")
 	port := runCmd.Int("port", 8080, "Port for web server (only used with --browser)")
 	debugMode := runCmd.Bool("debug", false, "Enable debug mode to show tool inputs and responses")
+	autoApprove := runCmd.Bool("auto-approve", false, "Automatically approve all tool executions")
 
 	var params stringArray
 	runCmd.Var(&params, "p", "Parameter to pass to the agent in key=value format (can be used multiple times)")
@@ -271,6 +272,7 @@ Found:
 			ModelName:      *modelName,
 			SessionService: safeService,
 			Port:           *port,
+			AutoApprove:    *autoApprove,
 		})
 	}
 
@@ -282,6 +284,7 @@ Found:
 		ModelName:      *modelName,
 		SessionService: safeService,
 		DebugMode:      *debugMode,
+		AutoApprove:    *autoApprove,
 		Parameters:     parameters,
 	})
 }

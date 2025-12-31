@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/mcpstore"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/model"
@@ -38,6 +39,283 @@ type AIChatResponse struct {
 	Error        string `json:"error,omitempty"`
 }
 
+// IntentClassifyRequest is the request for intent classification
+type IntentClassifyRequest struct {
+	Message string   `json:"message"`
+	Tools   []string `json:"tools"` // List of installed tool names
+}
+
+// IntentClassifyResponse is the response for intent classification
+type IntentClassifyResponse struct {
+	Intent      string  `json:"intent"`      // "create_flow" | "install_mcp" | "browse_mcp_store" | "search_mcp_internet" | "general_question"
+	Requirement string  `json:"requirement"` // Extracted tool/search requirement (for install/search intents)
+	Confidence  float32 `json:"confidence"`  // 0.0-1.0 confidence score
+	Error       string  `json:"error,omitempty"`
+}
+
+// IntentClassifyHandler handles POST /api/ai/classify-intent
+func IntentClassifyHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var req IntentClassifyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Message == "" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(IntentClassifyResponse{
+			Intent:     "general_question",
+			Confidence: 0.5,
+		})
+		return
+	}
+
+	// Get LLM provider
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(IntentClassifyResponse{
+			Error: "Failed to load config: " + err.Error(),
+		})
+		return
+	}
+
+	providerName := appCfg.General.DefaultProvider
+	modelName := appCfg.General.DefaultModel
+	if providerName == "" {
+		providerName = "gemini"
+	}
+	if modelName == "" {
+		modelName = "gemini-2.0-flash"
+	}
+
+	llm, err := provider.GetProvider(ctx, providerName, modelName, appCfg)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(IntentClassifyResponse{
+			Error: "Failed to get LLM provider: " + err.Error(),
+		})
+		return
+	}
+
+	// Intent classification prompt
+	toolsContext := ""
+	if len(req.Tools) > 0 {
+		toolsContext = fmt.Sprintf("\nCURRENTLY INSTALLED TOOLS: %s\nCheck this list! If the user wants to use/switch to a tool that is ALREADY INSTALLED, classify as 'create_flow' (to modify the flow), NOT 'install_mcp'.\n", strings.Join(req.Tools, ", "))
+	}
+
+	classifyPrompt := fmt.Sprintf(`Classify the user's intent. Respond with ONLY a JSON object, no other text.
+
+User message: "%s"
+%s
+Classify into ONE of these intents:
+- "create_flow": User wants to CREATE, BUILD, DESIGN, or MODIFY an agent workflow/flow
+- "install_mcp": User wants to INSTALL, ADD, or GET a specific MCP server/tool
+- "browse_mcp_store": User wants to BROWSE, LIST, or SEE what tools are available
+- "search_mcp_internet": User wants to SEARCH the internet/web for MCP servers
+- "extract_mcp_url": User provides a GitHub/NPM URL to install/extract an MCP server from (e.g. "install from https://github.com/...")
+- "general_question": Questions about Astonish, flows, or how things work
+
+IMPORTANT DISTINCTION:
+- "create a flow that uses GitHub mcp" → create_flow (they want to CREATE a flow)
+- "install the GitHub mcp server" → install_mcp (they want to INSTALL a tool)
+- "find ui5 mcp server" → install_mcp (they want to FIND and likely install a tool)
+- "use https://github.com/foo/bar" → extract_mcp_url (URL provided)
+
+If install_mcp, search_mcp_internet, or extract_mcp_url, extract the tool name or URL as requirement.
+
+Response format:
+{"intent": "...", "requirement": "...", "confidence": 0.95}
+
+For create_flow or general_question, requirement should be empty string.`, req.Message, toolsContext)
+
+	llmReq := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{
+				Role: "user",
+				Parts: []*genai.Part{
+					genai.NewPartFromText(classifyPrompt),
+				},
+			},
+		},
+		Config: &genai.GenerateContentConfig{
+			Temperature: genai.Ptr(float32(0.1)), // Low temperature for classification
+		},
+	}
+
+	var responseText strings.Builder
+	for resp, err := range llm.GenerateContent(ctx, llmReq, true) {
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(IntentClassifyResponse{
+				Error: "LLM error: " + err.Error(),
+			})
+			return
+		}
+		if resp != nil && resp.Content != nil {
+			for _, part := range resp.Content.Parts {
+				if part.Text != "" {
+					responseText.WriteString(part.Text)
+				}
+			}
+		}
+	}
+
+	response := strings.TrimSpace(responseText.String())
+
+	// Parse JSON response
+	jsonStart := strings.Index(response, "{")
+	jsonEnd := strings.LastIndex(response, "}")
+	if jsonStart == -1 || jsonEnd == -1 || jsonEnd <= jsonStart {
+		// Fallback if JSON extraction fails
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(IntentClassifyResponse{
+			Intent:     "general_question",
+			Confidence: 0.5,
+		})
+		return
+	}
+	jsonStr := response[jsonStart : jsonEnd+1]
+
+	var result IntentClassifyResponse
+	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+		// Fallback if parsing fails
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(IntentClassifyResponse{
+			Intent:     "general_question",
+			Confidence: 0.5,
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+// getFlowCreationTools returns the tools available to AI during flow creation
+func getFlowCreationTools() []*genai.Tool {
+	return []*genai.Tool{{
+		FunctionDeclarations: []*genai.FunctionDeclaration{
+			{
+				Name:        "search_mcp_store",
+				Description: "Search the MCP store for servers/tools. Use this when the user needs a tool that is not in the Available Tools list.",
+				Parameters: &genai.Schema{
+					Type:        genai.TypeObject,
+					Description: "Parameters for store search",
+					Properties: map[string]*genai.Schema{
+						"query": {
+							Type:        genai.TypeString,
+							Description: "Search query for the MCP server/tool (e.g., 'ui5', 'github', 'web search')",
+						},
+					},
+					Required: []string{"query"},
+				},
+			},
+			{
+				Name:        "search_mcp_internet",
+				Description: "Search the internet for MCP servers. Use this when the tool is not found in the store.",
+				Parameters: &genai.Schema{
+					Type:        genai.TypeObject,
+					Description: "Parameters for internet search",
+					Properties: map[string]*genai.Schema{
+						"query": {
+							Type:        genai.TypeString,
+							Description: "Search query for the MCP server (e.g., 'ui5 mcp server')",
+						},
+					},
+					Required: []string{"query"},
+				},
+			},
+		},
+	}}
+}
+
+// executeFlowCreationTool executes a tool call from the AI and returns the result
+func executeFlowCreationTool(ctx context.Context, toolName string, args map[string]interface{}) (string, interface{}, error) {
+	switch toolName {
+	case "search_mcp_store":
+		query, _ := args["query"].(string)
+		if query == "" {
+			return "", nil, fmt.Errorf("query is required")
+		}
+		
+		// Load all servers from taps
+		servers, err := loadAllServersFromTaps()
+		if err != nil {
+			return fmt.Sprintf("Error loading store: %s", err.Error()), nil, nil
+		}
+		
+		// Filter to only installable servers
+		var installableServers []mcpstore.Server
+		var toolSummaries []string
+		for _, srv := range servers {
+			if srv.Config != nil {
+				installableServers = append(installableServers, srv)
+				tags := ""
+				if len(srv.Tags) > 0 {
+					tags = " [tags: " + strings.Join(srv.Tags, ", ") + "]"
+				}
+				toolSummaries = append(toolSummaries, fmt.Sprintf("- %s: %s%s", srv.Name, srv.Description, tags))
+			}
+		}
+		
+		// Use the same AI search logic
+		matchingTools := findToolsWithAI(ctx, query, toolSummaries, installableServers)
+		
+		if len(matchingTools) == 0 {
+			return fmt.Sprintf("No MCP servers found in the store matching '%s'. Try search_mcp_internet to search online.", query), nil, nil
+		}
+		
+		// Build result
+		var result strings.Builder
+		result.WriteString(fmt.Sprintf("Found %d MCP servers in the store:\n", len(matchingTools)))
+		for i, t := range matchingTools {
+			result.WriteString(fmt.Sprintf("%d. %s - %s (ID: %s)\n", i+1, t.Name, t.Description, t.ID))
+		}
+		result.WriteString("\nTell the user to install one of these servers before creating the flow.")
+		return result.String(), matchingTools, nil
+		
+	case "search_mcp_internet":
+		query, _ := args["query"].(string)
+		if query == "" {
+			return "", nil, fmt.Errorf("query is required")
+		}
+		
+		// Check if web search is configured
+		webSearchConfigured, serverName, toolName := IsWebSearchConfigured()
+		if !webSearchConfigured {
+			return "Internet search is not configured. Tell the user to configure a web search tool (like Tavily) in Settings.", nil, nil
+		}
+		
+		// Use the internet search function
+		results, err := searchInternetForMCPServers(ctx, serverName, toolName, query+" MCP server github npm")
+		if err != nil {
+			return fmt.Sprintf("Search error: %s", err.Error()), nil, nil
+		}
+		
+		if len(results) == 0 {
+			return fmt.Sprintf("No MCP servers found on the internet for '%s'.", query), nil, nil
+		}
+		
+		// Build result
+		var result strings.Builder
+		result.WriteString(fmt.Sprintf("Found %d MCP servers online:\n", len(results)))
+		for i, t := range results {
+			if i >= 5 {
+				break // Limit to 5 results
+			}
+			result.WriteString(fmt.Sprintf("%d. %s - %s\n   Install: %s\n", i+1, t.Name, t.Description, t.URL))
+		}
+		result.WriteString("\nTell the user to install one of these servers before creating the flow.")
+		return result.String(), results, nil
+		
+	default:
+		return "", nil, fmt.Errorf("unknown tool: %s", toolName)
+	}
+}
+
 // getSystemPrompt returns the system prompt based on context
 func getSystemPrompt(ctx string, availableTools []ToolInfo) string {
 	// Build tools list
@@ -51,70 +329,54 @@ func getSystemPrompt(ctx string, availableTools []ToolInfo) string {
 	switch ctx {
 	case "create_flow":
 		return basePrompt + `
-
+		
 # Your Task
-You are an AI assistant helping users create agent workflows.
+Create agent workflows. Be CONCISE and PROCESS-ORIENTED.
 
-## BEFORE GENERATING YAML, THINK THROUGH THESE STEPS:
+## You Have Tools
+You have TWO tools available to find MCP servers:
+1. search_mcp_store - Search the store for installed/installable MCP servers
+2. search_mcp_internet - Search the internet for MCP servers (use if not in store)
 
-### Step 0: Tool Requirements Analysis (DO THIS FIRST!)
-Before anything else, determine if external tools are needed for this request.
+## Process for Creating Flows with External Tools
 
-**Step 0a: Does the user mention a SPECIFIC tool by name?**
-If the user says things like:
-- "use the [X] MCP server" 
-- "using [X] tools"
-- "with [X] MCP"
-- "create a flow for [X] development"
+**IMPORTANT: Tool Already Installed Check**
+If the user says "install X" or "find X" or "get X mcp", FIRST check the "Available Tools" list above.
+If you find a tool with "X" in its name or source, the tool is ALREADY INSTALLED! Respond with:
+"Great news! The [tool name] is already installed and ready to use. Would you like me to create a flow that uses it?"
+Do NOT search the store or internet if the tool is already available.
 
-Then the user is requesting a SPECIFIC tool. Check if that exact tool (or something clearly matching) is in the Available Tools list.
+**Step 1: Check if needed tool is in Available Tools**
+Look at the "Available Tools" list above. If the tool the user needs is there, proceed to create the flow.
 
-**If the user requests a specific tool that is NOT in Available Tools:**
-→ STOP! Do NOT generate YAML. Do NOT substitute a different tool (like web search).
-→ Respond with EXACTLY this format (the system will auto-trigger the search):
-"To create this flow, I would need a tool for [specific capability] that is not currently installed.
+**Step 2: If tool is NOT available, CALL search_mcp_store**
+Call the search_mcp_store tool with the tool name. Example:
+- User wants "ui5 mcp" → call search_mcp_store(query: "ui5")
 
-Would you like me to help you find and install this tool from the store?"
+**CRITICAL: If search_mcp_store finds tools, STOP SEARCHING.** 
+If the store returns ANY results (even if not perfect matches), you MUST STOP.
+1. Present the store results to the user.
+2. Say: "I found potential tools in the store. Please install one if it fits."
+3. Say: "If none of these work, you can use the 'Search Internet' link below."
+4. Do NOT call search_mcp_internet. (The system prohibits this).
+5. Do NOT say "Let me search the internet".
+6. Do NOT offer unrelated alternatives (Shell Commands, Filesystem) at this stage. Focus on finding the tool.
 
-**If the user then says "yes", "ok", "find it", "search", etc.:**
-→ Do NOT give manual instructions. The system handles this automatically.
-→ Just respond: "Searching for [tool type] tools..."
-The frontend will automatically trigger the store/internet search.
+**Step 3: If not in store, CALL search_mcp_internet**
+If store search returns 0 results, call search_mcp_internet.
 
-**Step 0b: Do I need tools at all?**
-If Step 0a didn't apply (user didn't request a specific tool), then:
-Many flows do NOT need external tools:
-- Simple Q&A chatbots → No tools needed (LLM only)
-- Conversational flows → No tools needed
-- Text processing/summarization → No tools needed
-- Decision/routing flows → No tools needed
-- History accumulation flows → No tools needed
+**Step 4: Present results to user**
+After search, simply tell the user what was found.
+**CRITICAL:** Instruct the user to CLICK THE "INSTALL" BUTTON on the results card above.
+Do NOT ask "Which one would you like to install?" (because they must click the button).
+Just say: "Please examine the results above and click 'Install' on the server you want to use."
 
-Tools ARE needed when:
-- Interacting with external services (GitHub, databases, APIs)
-- File system operations (reading/writing files)
-- Web searches (searching the internet)
-- Running shell commands
+## When Creating the Flow
+- Generate complete YAML
+- Make reasonable assumptions (don't ask unnecessary questions)
+- Follow the flow schema exactly
 
-**Step 0c: If tools are needed, which specific ones?**
-Only if you determined tools ARE needed:
-1. Look at the Available Tools list above
-2. Identify which specific tools are required
-3. Check if ALL required tools are in the Available Tools list
-
-**Step 0d: Decision**
-- If NO tools needed → Proceed to design the flow
-- If tools needed AND all are in Available Tools → Proceed to design the flow
-- If tools needed BUT some are NOT in Available Tools → STOP! Do NOT generate YAML.
-  Instead, respond with:
-  "To create this flow, I would need the following tools that are not currently installed:
-  - [tool description]: for [purpose]
-  
-  Would you like me to help you find and install these tools from the store?"
-
-### Step 1: Understand the Goal
-- What does the user want to achieve?
-- What is the main purpose of this flow?
+## Design Guidelines
 
 ### Step 2: Design Minimal Flow
 - What is the MINIMUM number of nodes needed?
@@ -286,15 +548,32 @@ When adding new nodes between selected ones:
 		return basePrompt + `
 
 # Your Task
-You are the Astonish Flow Assistant, focused ONLY on helping users design agent workflows.
+You are the Astonish Flow Assistant with THREE main capabilities:
 
-## What You CAN Help With:
-- Designing and creating flows
-- Answering questions about flow design
-- Suggesting improvements to flows
-- Questions about available MCP tools
-- Installing MCP servers
-- Configuration guidance
+## Capability 1: Design and Create Agent Workflows
+Help users design, create, and modify agent workflows. Check if required tools are available before generating YAML.
+
+## Capability 2: Install MCP Servers
+When a user asks to install an MCP server (e.g., "install ui5 mcp server", "find github tool"):
+1. First, ALWAYS search the store by responding with:
+   "Let me search for [tool name] in the MCP store..."
+   (The system will automatically trigger a store search)
+2. If found in store, show results and let user install
+3. If NOT found in store, respond with:
+   "I couldn't find [tool name] in the store. Let me search the internet for it..."
+   (The system will automatically trigger an internet search)
+4. Show internet results and let user install from there
+
+## Capability 3: Search for MCP Servers
+When a user wants to find tools (e.g., "find a tool for screenshots", "what MCP servers exist for X"):
+1. First search the store for matching tools
+2. Then search the internet if needed
+3. Present options to the user
+
+## TASK DETECTION:
+- If user mentions "install", "find", "get", "add" + MCP/tool/server → Use Capability 2
+- If user asks to "create", "build", "design" + flow/workflow/agent → Use Capability 1
+- If user asks "what tools", "search for", "find tools for" → Use Capability 3
 
 ## What You CANNOT Help With:
 - General knowledge questions (history, science, etc.)
@@ -302,7 +581,7 @@ You are the Astonish Flow Assistant, focused ONLY on helping users design agent 
 - Anything unrelated to Astonish and AI agent workflows
 
 **If the user asks an off-topic question**, politely decline:
-"I'm your Astonish Flow Assistant. I can help you create and modify AI agent workflows, find and install MCP tools, and answer questions about flow design. What would you like to build?"
+"I'm your Astonish Flow Assistant. I can help you create AI agent workflows, find and install MCP tools, and answer questions about flow design. What would you like to do?"
 
 When providing YAML, wrap it in ` + "```yaml" + ` code blocks.`
 	}
@@ -611,9 +890,28 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check for streaming request
+	streaming := r.Header.Get("Accept") == "text/event-stream"
+	var flusher http.Flusher
+	if streaming {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		if f, ok := w.(http.Flusher); ok {
+			flusher = f
+			f.Flush()
+		}
+	} else {
+		w.Header().Set("Content-Type", "application/json")
+	}
+
 	// Load app config
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
+		if streaming {
+			sendSSE(w, flusher, "error", map[string]string{"error": "Failed to load config: " + err.Error()})
+			return
+		}
 		json.NewEncoder(w).Encode(AIChatResponse{
 			Error: "Failed to load config: " + err.Error(),
 		})
@@ -635,6 +933,10 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 	// Create LLM client
 	llm, err := provider.GetProvider(ctx, providerName, modelName, appCfg)
 	if err != nil {
+		if streaming {
+			sendSSE(w, flusher, "error", map[string]string{"error": "Failed to create LLM client: " + err.Error()})
+			return
+		}
 		json.NewEncoder(w).Encode(AIChatResponse{
 			Error: "Failed to create LLM client: " + err.Error(),
 		})
@@ -714,33 +1016,158 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 			Temperature: genai.Ptr(float32(0.7)),
 		},
 	}
+	
+	// Add tools for create_flow context so AI can search for missing tools
+	if req.Context == "create_flow" {
+		llmReq.Config.Tools = getFlowCreationTools()
+	}
 
 	// Call LLM with validation retry loop (max 3 attempts)
 	const maxRetries = 3
 	var fullResponse string
 	var proposedYAML string
 	var lastValidationErrors []string
+	var toolLogs strings.Builder
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		// Call LLM
-		var responseText strings.Builder
-		for resp, err := range llm.GenerateContent(ctx, llmReq, false) {
-			if err != nil {
-				json.NewEncoder(w).Encode(AIChatResponse{
-					Error: "LLM error: " + err.Error(),
-				})
-				return
-			}
-			if resp != nil && resp.Content != nil {
-				for _, part := range resp.Content.Parts {
-					if part.Text != "" {
-						responseText.WriteString(part.Text)
+		// Call LLM (with potential tool execution loop)
+		const maxToolCalls = 5 // Limit tool calls to prevent infinite loops
+		toolCallCount := 0
+		
+	foundStoreResults := false
+	toolLoop:
+		for {
+			var responseText strings.Builder
+			var functionCalls []*genai.FunctionCall
+			
+			for resp, err := range llm.GenerateContent(ctx, llmReq, true) {
+				if err != nil {
+					if streaming {
+						sendSSE(w, flusher, "error", map[string]string{"error": "LLM error: " + err.Error()})
+						return
+					}
+					json.NewEncoder(w).Encode(AIChatResponse{
+						Error: "LLM error: " + err.Error(),
+					})
+					return
+				}
+				if resp != nil && resp.Content != nil {
+					for _, part := range resp.Content.Parts {
+						if part.Text != "" {
+							responseText.WriteString(part.Text)
+							if streaming {
+								sendSSE(w, flusher, "chunk", map[string]string{"content": part.Text})
+							}
+						}
+						if part.FunctionCall != nil {
+							functionCalls = append(functionCalls, part.FunctionCall)
+						}
 					}
 				}
 			}
-		}
+			
+			// If no function calls, we have the final response
+			if len(functionCalls) == 0 {
+				fullResponse = responseText.String()
+				break toolLoop
+			}
+			
+			// Check tool call limit
+			toolCallCount++
+			if toolCallCount > maxToolCalls {
+				msg := "\n\n(Tool call limit reached)"
+				fullResponse = responseText.String() + msg
+				if streaming {
+					sendSSE(w, flusher, "chunk", map[string]string{"content": msg})
+				}
+				break toolLoop
+			}
+			
+			// Execute the function call and prepare response
+			for _, fc := range functionCalls {
+				// Convert args
+				args := make(map[string]interface{})
+				if fc.Args != nil {
+					for k, v := range fc.Args {
+						args[k] = v
+					}
+				}
+				
+				// Guard: If we found store results, prevent internet search
+				shouldSkip := fc.Name == "search_mcp_internet" && foundStoreResults
 
-		fullResponse = responseText.String()
+				// Stream tool start
+				if streaming && !shouldSkip {
+					sendSSE(w, flusher, "tool_start", map[string]interface{}{"name": fc.Name, "args": args})
+				}
+				
+				var result string
+				var data interface{}
+				var err error
+
+				if shouldSkip {
+					result = "Skipped: Store results already found. Please stop searching and present the store results to the user."
+					toolLogs.WriteString("> Skipped internet search (Store results found).\n\n")
+				} else {
+					// Log the action for user visibility (log buffer still used for history/legacy)
+					if fc.Name == "search_mcp_store" {
+						q, _ := args["query"].(string)
+						toolLogs.WriteString(fmt.Sprintf("> **Searching Store** for: `%s`...\n", q))
+					} else if fc.Name == "search_mcp_internet" {
+						q, _ := args["query"].(string)
+						toolLogs.WriteString(fmt.Sprintf("> **Searching Internet** for: `%s`...\n", q))
+					}
+					
+					// Execute the tool
+					result, data, err = executeFlowCreationTool(ctx, fc.Name, args)
+					if err != nil {
+						result = "Error executing tool: " + err.Error()
+						toolLogs.WriteString(fmt.Sprintf("> Error: %s\n\n", err.Error()))
+					} else {
+						// Track if store results found
+						if fc.Name == "search_mcp_store" && data != nil {
+							foundStoreResults = true
+						}
+
+						// Summarize result in logs
+						if strings.Contains(result, "No MCP servers found") {
+							toolLogs.WriteString("> found 0 results.\n\n")
+						} else {
+							lines := strings.Split(result, "\n")
+							if len(lines) > 0 {
+								toolLogs.WriteString(fmt.Sprintf("> %s\n\n", lines[0]))
+							} else {
+								toolLogs.WriteString("> Found results.\n\n")
+							}
+						}
+					}
+				}
+				
+				// Stream tool end
+				if streaming && !shouldSkip {
+					sendSSE(w, flusher, "tool_end", map[string]interface{}{"name": fc.Name, "result": result, "result_data": data})
+				}
+				
+				// Add assistant's function call and function response to history
+				llmReq.Contents = append(llmReq.Contents, &genai.Content{
+					Role: "model",
+					Parts: []*genai.Part{
+						{FunctionCall: fc},
+					},
+				})
+				llmReq.Contents = append(llmReq.Contents, &genai.Content{
+					Role: "user",
+					Parts: []*genai.Part{
+						{FunctionResponse: &genai.FunctionResponse{
+							ID:       fc.ID,
+							Name:     fc.Name,
+							Response: map[string]any{"result": result},
+						}},
+					},
+				})
+			}
+			// Continue loop to get AI's next response
+		}
 		proposedYAML = extractYAML(fullResponse)
 
 		// If no YAML was generated, no need to validate
@@ -752,6 +1179,11 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 		// (will be validated after merging into full flow)
 		if req.Context == "node_config" && isNodeSnippet(proposedYAML) {
 			break
+		}
+
+		// Info about validation
+		if streaming {
+			sendSSE(w, flusher, "status", map[string]string{"message": "Validating flow..."})
 		}
 
 		// Validate the YAML (for full flows)
@@ -767,6 +1199,11 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 		// If this was the last attempt, break and return with errors
 		if attempt == maxRetries {
 			break
+		}
+
+		// Info about retry
+		if streaming {
+			sendSSE(w, flusher, "status", map[string]string{"message": fmt.Sprintf("Validation failed, retrying (%d/%d)...", attempt, maxRetries)})
 		}
 
 		// Add the assistant's response and validation error to history for retry
@@ -828,12 +1265,42 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	
+	// Prepend tool logs if any
+	finalMessage := fullResponse
+	if toolLogs.Len() > 0 {
+		finalMessage = toolLogs.String() + "\n---\n" + fullResponse
+	}
+
+	if streaming {
+		sendSSE(w, flusher, "complete", AIChatResponse{
+			Message:      finalMessage,
+			ProposedYAML: proposedYAML,
+			Action:       action,
+		})
+		return
+	}
+
 	json.NewEncoder(w).Encode(AIChatResponse{
-		Message:      fullResponse,
+		Message:      finalMessage,
 		ProposedYAML: proposedYAML,
 		Action:       action,
 	})
 }
+
+// SSE Helper functions
+func sendSSE(w http.ResponseWriter, flusher http.Flusher, eventType string, data interface{}) {
+	payload, err := json.Marshal(data)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, string(payload))
+	if flusher != nil {
+		flusher.Flush()
+	}
+}
+
+
 
 // getAvailableTools fetches tools for AI context from cache
 func getAvailableTools(ctx context.Context) []ToolInfo {

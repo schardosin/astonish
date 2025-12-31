@@ -33,6 +33,7 @@ type ConsoleConfig struct {
 	ModelName      string
 	SessionService session.Service
 	DebugMode      bool
+	AutoApprove    bool
 	Parameters     map[string]string
 }
 
@@ -304,6 +305,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	}
 	astonishAgent := agent.NewAstonishAgentWithToolsets(cfg.AgentConfig, llm, internalTools, mcpToolsets)
 	astonishAgent.DebugMode = cfg.DebugMode
+	astonishAgent.AutoApprove = cfg.AutoApprove
 	astonishAgent.SessionService = sessionService
 
 	// Create ADK agent wrapper

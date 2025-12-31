@@ -17,13 +17,28 @@ const NODE_TYPE_MAP = {
 const elkOptions = {
   'elk.algorithm': 'layered',
   'elk.direction': 'DOWN', // Top-to-Bottom
-  'elk.layered.spacing.nodeNodeBetweenLayers': '120', // Vertical gap between layers
-  'elk.spacing.nodeNode': '80', // Horizontal gap between parallel nodes
+  
+  // SPACING - Generous space for readability
+  'elk.layered.spacing.nodeNodeBetweenLayers': '100', // Vertical gap between layers
+  'elk.spacing.nodeNode': '100', // Horizontal gap between parallel nodes
+  'elk.layered.spacing.edgeEdgeBetweenLayers': '30', // Space edges apart vertically
+  'elk.layered.spacing.edgeNodeBetweenLayers': '50', // Keep edges away from nodes
+  
+  // EDGE ROUTING - Clean orthogonal paths
   'elk.edgeRouting': 'ORTHOGONAL', // Clean 90° edges
-  'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX', // Better for branching flows
+  'elk.layered.edgeRouting.selfLoopDistribution': 'EQUALLY', // Distribute self-loops
+  
+  // NODE PLACEMENT - Better vertical alignment
+  'elk.layered.nodePlacement.strategy': 'BRANDES_KOEPF', // Better for clean vertical alignment
+  'elk.layered.nodePlacement.bk.fixedAlignment': 'BALANCED', // Center nodes on main axis
+  'elk.layered.nodePlacement.favorStraightEdges': 'true', // Prefer straight vertical edges
+  
+  // CROSSING MINIMIZATION - Fewer edge crossings
   'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
-  'elk.layered.crossingMinimization.thoroughness': '7', // Higher = fewer edge crossings
-  'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES', // Keep nodes in logical order
+  'elk.layered.crossingMinimization.thoroughness': '10', // Higher = fewer edge crossings
+  
+  // MODEL ORDER - Keep nodes in logical order
+  'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES',
   'elk.separateConnectedComponents': 'false', // Keep subgraphs together
 }
 
@@ -235,12 +250,13 @@ export function parseEdges(yamlData, nodePositions = {}, savedEdges = {}) {
 }
 
 /**
- * Calculate node dimensions based on label
+ * Calculate node dimensions for ELK layout
+ * Using fixed width for consistent vertical alignment
  */
 function getNodeDimensions(label) {
-  const baseWidth = 120
-  const charWidth = 8
-  const width = Math.max(baseWidth, label.length * charWidth + 60)
+  // Fixed width for consistent vertical alignment
+  // Nodes in React Flow can still display full labels with CSS overflow
+  const width = 180
   const height = 50
   return { width, height }
 }

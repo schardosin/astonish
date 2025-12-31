@@ -91,7 +91,7 @@ func NewProviderWithConfig(ctx context.Context, modelName, clientID, clientSecre
 		openaiProvider: op,
 		httpClient: &http.Client{
 			Transport: transport,
-			Timeout:   60 * time.Second,
+			// No timeout for streaming - data flows continuously
 		},
 		baseURL:      baseURL,
 		deploymentID: deploymentID,

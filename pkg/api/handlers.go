@@ -600,6 +600,7 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/tools", ListToolsHandler).Methods("GET")
 	router.HandleFunc("/api/tools/web-capable", WebCapableToolsHandler).Methods("GET")
 	router.HandleFunc("/api/ai/chat", AIChatHandler).Methods("POST")
+	router.HandleFunc("/api/ai/classify-intent", IntentClassifyHandler).Methods("POST")
 	router.HandleFunc("/api/ai/tool-search", AIToolSearchHandler).Methods("POST")
 	router.HandleFunc("/api/ai/tool-search-internet", AIToolSearchInternetHandler).Methods("POST")
 	router.HandleFunc("/api/ai/url-extract", URLExtractHandler).Methods("POST")

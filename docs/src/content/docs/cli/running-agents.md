@@ -32,6 +32,7 @@ Output streams to your terminal in real-time.
 | `-model <name>` | Override model | Config default |
 | `-provider <name>` | Override provider | Config default |
 | `--debug` | Verbose output | false |
+| `--auto-approve` | Auto-approve all tool executions | false |
 
 ## Passing Parameters
 
@@ -78,6 +79,21 @@ Shows:
 - State changes
 - Tool call details
 - Condition evaluations
+
+## Auto-Approve Mode
+
+Skip approval prompts for all tool executions:
+
+```bash
+astonish flows run --auto-approve my_agent
+```
+
+Useful for:
+- Automated pipelines
+- Trusted tool operations
+- Unattended execution
+
+> **Note:** Use with caution—tools will execute without confirmation.
 
 ## Listing Flows
 

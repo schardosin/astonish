@@ -26,6 +26,7 @@ type SimpleWebConfig struct {
 	ModelName      string
 	SessionService session.Service
 	Port           int
+	AutoApprove    bool
 }
 
 type chatServer struct {
@@ -51,6 +52,7 @@ func RunSimpleWeb(ctx context.Context, cfg *SimpleWebConfig) error {
 
 	// Create Astonish agent
 	astonishAgent := agent.NewAstonishAgent(cfg.AgentConfig, llm, internalTools)
+	astonishAgent.AutoApprove = cfg.AutoApprove
 
 	// Create ADK agent wrapper
 	adkAgent, err := adkagent.New(adkagent.Config{

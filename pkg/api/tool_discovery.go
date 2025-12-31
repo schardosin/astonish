@@ -66,6 +66,16 @@ func (m *minimalToolContext) SearchMemory(ctx context.Context, query string) (*m
 	return nil, nil
 }
 
+// normalizeToolName normalizes a tool name for fuzzy matching
+// Removes spaces, hyphens, underscores. Converts to lowercase.
+func normalizeToolName(name string) string {
+	normalized := strings.ToLower(name)
+	normalized = strings.ReplaceAll(normalized, " ", "")
+	normalized = strings.ReplaceAll(normalized, "-", "")
+	normalized = strings.ReplaceAll(normalized, "_", "")
+	return normalized
+}
+
 // AIToolSearchHandler handles POST /api/ai/tool-search
 // Uses AI to semantically evaluate which store tools can fulfill the requirement
 func AIToolSearchHandler(w http.ResponseWriter, r *http.Request) {
@@ -144,26 +154,28 @@ func findToolsWithAI(ctx context.Context, requirement string, toolSummaries []st
 
 	// Build prompt for tool matching
 	toolList := strings.Join(toolSummaries, "\n")
-	prompt := fmt.Sprintf(`You are evaluating which MCP tools can fulfill a user's requirement.
+	prompt := fmt.Sprintf(`You are searching for MCP tools that match a user's request.
 
-REQUIREMENT: %s
+USER REQUEST: %s
 
 AVAILABLE TOOLS:
 %s
 
-TASK: Identify which tools (if any) can fulfill this requirement. 
+TASK: Find ALL tools that could match this request. Be FLEXIBLE and GENEROUS.
 
-Respond in this exact JSON format:
-{"matches": [{"name": "Tool Name", "reason": "Brief explanation of how this tool fulfills the requirement"}]}
+MATCHING RULES:
+1. PARTIAL NAME: Match if the request contains part of a tool's name
+2. SYNONYMS: Match related concepts (e.g., "code" ↔ "programming", "files" ↔ "filesystem")
+3. PURPOSE: Match if the tool can accomplish the user's stated goal
+4. TAGS: Consider the tool's tags, not just its name
+5. WHEN IN DOUBT, INCLUDE IT - better to show more options
 
-If NO tools can fulfill the requirement, respond with:
-{"matches": []}
+Respond in JSON format:
+{"matches": [{"name": "EXACT Tool Name From Above List", "reason": "Why this matches"}]}
 
-IMPORTANT: 
-- Only include tools that can ACTUALLY fulfill the requirement
-- Consider the tool's capabilities based on its description and tags
-- For example, Puppeteer can take screenshots even if "screenshot" isn't in its name
-- Be selective - only return truly matching tools`, requirement, toolList)
+If absolutely NO tools match, respond: {"matches": []}
+
+CRITICAL: The "name" field MUST be copied EXACTLY from the AVAILABLE TOOLS list.`, requirement, toolList)
 
 	// Call LLM
 	llmReq := &model.LLMRequest{
@@ -181,7 +193,7 @@ IMPORTANT:
 	}
 
 	var responseText strings.Builder
-	for resp, err := range llm.GenerateContent(ctx, llmReq, false) {
+	for resp, err := range llm.GenerateContent(ctx, llmReq, true) {
 		if err != nil {
 			return nil
 		}
@@ -216,30 +228,67 @@ IMPORTANT:
 	}
 
 	// Build results by matching names back to servers
+	// Use fuzzy matching to handle LLM returning slightly different names
 	var results []ToolSearchResult
 	for _, match := range parsed.Matches {
 		matchNameLower := strings.ToLower(match.Name)
-		for _, srv := range servers {
-			if strings.ToLower(srv.Name) == matchNameLower {
-				// Extract env vars from config if present
-				var envVars map[string]string
-				if srv.Config != nil && len(srv.Config.Env) > 0 {
-					envVars = srv.Config.Env
-				}
-				
-				results = append(results, ToolSearchResult{
-					ID:             srv.McpId,
-					Name:           srv.Name,
-					Description:    srv.Description,
-					Source:         srv.Source,
-					Tags:           srv.Tags,
-					Installable:    true,
-					Reason:         match.Reason,
-					RequiresApiKey: srv.RequiresApiKey,
-					EnvVars:        envVars,
-				})
+		matchNameNormalized := normalizeToolName(match.Name)
+		
+		var bestMatch *mcpstore.Server
+		for i := range servers {
+			srv := &servers[i]
+			srvNameLower := strings.ToLower(srv.Name)
+			srvNameNormalized := normalizeToolName(srv.Name)
+			
+			// Exact match
+			if srvNameLower == matchNameLower {
+				bestMatch = srv
 				break
 			}
+			
+			// Normalized match (removes spaces, hyphens, underscores)
+			if srvNameNormalized == matchNameNormalized {
+				bestMatch = srv
+				break
+			}
+			
+			// Contains match (for partial matches)
+			if strings.Contains(srvNameLower, matchNameLower) || strings.Contains(matchNameLower, srvNameLower) {
+				bestMatch = srv
+				// Don't break - keep looking for better match
+			}
+		}
+		
+		if bestMatch != nil {
+			// Check if already added (avoid duplicates)
+			alreadyAdded := false
+			for _, r := range results {
+				if r.ID == bestMatch.McpId {
+					alreadyAdded = true
+					break
+				}
+			}
+			if alreadyAdded {
+				continue
+			}
+			
+			// Extract env vars from config if present
+			var envVars map[string]string
+			if bestMatch.Config != nil && len(bestMatch.Config.Env) > 0 {
+				envVars = bestMatch.Config.Env
+			}
+			
+			results = append(results, ToolSearchResult{
+				ID:             bestMatch.McpId,
+				Name:           bestMatch.Name,
+				Description:    bestMatch.Description,
+				Source:         bestMatch.Source,
+				Tags:           bestMatch.Tags,
+				Installable:    true,
+				Reason:         match.Reason,
+				RequiresApiKey: bestMatch.RequiresApiKey,
+				EnvVars:        envVars,
+			})
 		}
 	}
 
@@ -368,39 +417,41 @@ type URLExtractResponse struct {
 // IsWebSearchConfigured checks if a web search tool is configured in settings
 // Returns (configured, serverName, toolName)
 // The setting value format is "serverName:toolName" to uniquely identify tools
-func IsWebSearchConfigured() (bool, string) {
+func IsWebSearchConfigured() (bool, string, string) {
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
-		return false, ""
+		return false, "", ""
 	}
 	if appCfg.General.WebSearchTool == "" {
-		return false, ""
+		return false, "", ""
 	}
-	// Parse the format "serverName:toolName" - we return just the server name for MCP initialization
-	serverName := appCfg.General.WebSearchTool
-	if idx := strings.Index(serverName, ":"); idx > 0 {
-		serverName = serverName[:idx]
+	// Parse the format "serverName:toolName"
+	parts := strings.SplitN(appCfg.General.WebSearchTool, ":", 2)
+	if len(parts) == 2 {
+		return true, parts[0], parts[1]
 	}
-	return true, serverName
+	// No tool name specified, return just server name
+	return true, parts[0], ""
 }
 
 // IsWebExtractConfigured checks if a web extract tool is configured in settings
-// Returns (configured, serverName)
+// Returns (configured, serverName, toolName)
 // The setting value format is "serverName:toolName" to uniquely identify tools
-func IsWebExtractConfigured() (bool, string) {
+func IsWebExtractConfigured() (bool, string, string) {
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
-		return false, ""
+		return false, "", ""
 	}
 	if appCfg.General.WebExtractTool == "" {
-		return false, ""
+		return false, "", ""
 	}
-	// Parse the format "serverName:toolName" - we return just the server name for MCP initialization
-	serverName := appCfg.General.WebExtractTool
-	if idx := strings.Index(serverName, ":"); idx > 0 {
-		serverName = serverName[:idx]
+	// Parse the format "serverName:toolName"
+	parts := strings.SplitN(appCfg.General.WebExtractTool, ":", 2)
+	if len(parts) == 2 {
+		return true, parts[0], parts[1]
 	}
-	return true, serverName
+	// No tool name specified, return just server name
+	return true, parts[0], ""
 }
 
 // AIToolSearchInternetHandler handles POST /api/ai/tool-search-internet
@@ -414,8 +465,8 @@ func AIToolSearchInternetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if web search tool is configured
-	configured, toolName := IsWebSearchConfigured()
-	log.Printf("[Internet Search] Configured: %v, ToolName: %s", configured, toolName)
+	configured, serverName, searchToolName := IsWebSearchConfigured()
+	log.Printf("[Internet Search] Configured: %v, Server: %s, Tool: %s", configured, serverName, searchToolName)
 	if !configured {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(InternetSearchResponse{
@@ -479,14 +530,14 @@ func AIToolSearchInternetHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[Internet Search] Query: %s", searchQuery)
 
 	// Search the internet using the configured MCP tool
-	results, err := searchInternetForMCPServers(ctx, searchQuery, toolName)
+	results, err := searchInternetForMCPServers(ctx, serverName, searchToolName, searchQuery)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(InternetSearchResponse{
 			TavilyAvailable: true,
 			Results:         []InternetMCPResult{},
 			Message:         fmt.Sprintf("Search failed: %v", err),
-			ToolUsed:        toolName,
+			ToolUsed:        serverName,
 			SearchQuery:     searchQuery,
 		})
 		return
@@ -496,7 +547,7 @@ func AIToolSearchInternetHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(InternetSearchResponse{
 		TavilyAvailable: true,
 		Results:         results,
-		ToolUsed:        toolName,
+		ToolUsed:        serverName,
 		SearchQuery:     searchQuery,
 	})
 }
@@ -525,10 +576,15 @@ func URLExtractHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[URL Extract] Starting extraction for: %s", req.URL)
 
 	// Check if web extract tool is configured
-	configured, toolName := IsWebExtractConfigured()
+	configured, serverName, extractToolName := IsWebExtractConfigured()
 	if !configured {
 		// Fall back to web search tool
-		configured, toolName = IsWebSearchConfigured()
+		var searchConfigured bool
+		var searchToolName string
+		searchConfigured, serverName, searchToolName = IsWebSearchConfigured()
+		_ = searchToolName // Not used in fallback
+		extractToolName = "" // No specific tool name, will fallback to "extract" search
+		configured = searchConfigured
 	}
 	
 	if !configured {
@@ -541,17 +597,17 @@ func URLExtractHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[URL Extract] Using tool: %s", toolName)
+	log.Printf("[URL Extract] Using tool: %s (extract tool: %s)", serverName, extractToolName)
 
 	// Extract content from URL
-	mcpServer, err := extractMCPServerFromURL(ctx, req.URL, toolName)
+	mcpServer, err := extractMCPServerFromURL(ctx, req.URL, serverName, extractToolName)
 	if err != nil {
 		log.Printf("[URL Extract] Error: %v", err)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(URLExtractResponse{
 			Found:    false,
 			Message:  fmt.Sprintf("Failed to extract: %v", err),
-			ToolUsed: toolName,
+			ToolUsed: serverName,
 			URL:      req.URL,
 		})
 		return
@@ -562,7 +618,7 @@ func URLExtractHandler(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(URLExtractResponse{
 			Found:    false,
 			Message:  "No MCP server configuration found at this URL",
-			ToolUsed: toolName,
+			ToolUsed: serverName,
 			URL:      req.URL,
 		})
 		return
@@ -573,13 +629,13 @@ func URLExtractHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(URLExtractResponse{
 		Found:     true,
 		MCPServer: mcpServer,
-		ToolUsed:  toolName,
+		ToolUsed:  serverName,
 		URL:       req.URL,
 	})
 }
 
 // extractMCPServerFromURL uses the configured MCP tool to extract content and parse for MCP server config
-func extractMCPServerFromURL(ctx context.Context, url string, toolName string) (*InternetMCPResult, error) {
+func extractMCPServerFromURL(ctx context.Context, url string, serverName string, extractToolName string) (*InternetMCPResult, error) {
 	// Load app configuration
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
@@ -593,67 +649,67 @@ func extractMCPServerFromURL(ctx context.Context, url string, toolName string) (
 	}
 	defer mcpManager.Cleanup()
 
-	log.Printf("[URL Extract] Initializing MCP server: %s", toolName)
-	namedToolset, err := mcpManager.InitializeSingleToolset(ctx, toolName)
+	log.Printf("[URL Extract] Initializing MCP server: %s", serverName)
+	namedToolset, err := mcpManager.InitializeSingleToolset(ctx, serverName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize MCP server '%s': %w", toolName, err)
+		return nil, fmt.Errorf("failed to initialize MCP server '%s': %w", serverName, err)
 	}
 
 	// Get tools and find extract tool
 	roCtx := &minimalReadonlyContext{Context: ctx}
 	mcpTools, err := namedToolset.Toolset.Tools(roCtx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get tools from '%s': %w", toolName, err)
+		return nil, fmt.Errorf("failed to get tools from '%s': %w", serverName, err)
 	}
 
 	log.Printf("[URL Extract] Got %d tools from MCP server", len(mcpTools))
 
-	// Find extract tool (look for "extract" in the name)
+	// Find extract tool - use configured tool name if provided, otherwise search for "extract"
 	var extractTool tool.Tool
 	for _, t := range mcpTools {
 		log.Printf("[URL Extract] Found tool: %s", t.Name())
-		if strings.Contains(strings.ToLower(t.Name()), "extract") {
-			extractTool = t
-			break
+		if extractToolName != "" {
+			// Use the specifically configured tool
+			if t.Name() == extractToolName {
+				extractTool = t
+				break
+			}
+		} else {
+			// Fallback: search for "extract" in the name
+			if strings.Contains(strings.ToLower(t.Name()), "extract") {
+				extractTool = t
+				break
+			}
 		}
 	}
 
 	if extractTool == nil {
-		return nil, fmt.Errorf("no extract tool found in MCP server '%s'", toolName)
+		if extractToolName != "" {
+			return nil, fmt.Errorf("configured extract tool '%s' not found in MCP server '%s'", extractToolName, serverName)
+		}
+		return nil, fmt.Errorf("no extract tool found in MCP server '%s'", serverName)
 	}
 
 	log.Printf("[URL Extract] Using extract tool: %s", extractTool.Name())
 
-	// Call the extract tool
-	type runnableTool interface {
-		Run(tool.Context, any) (map[string]any, error)
+	// Get the tool's declaration (schema) for LLM
+	type toolWithDeclaration interface {
+		Declaration() *genai.FunctionDeclaration
 	}
-
-	runnable, ok := extractTool.(runnableTool)
+	
+	declTool, ok := extractTool.(toolWithDeclaration)
 	if !ok {
-		return nil, fmt.Errorf("extract tool does not implement Run method")
+		return nil, fmt.Errorf("extract tool does not expose its schema")
 	}
-
-	// Build args for extract tool (tavily-extract uses "urls" array)
-	extractArgs := map[string]any{
-		"urls": []string{url},
+	
+	declaration := declTool.Declaration()
+	if declaration == nil {
+		return nil, fmt.Errorf("extract tool has nil declaration")
 	}
+	
+	log.Printf("[URL Extract] Tool schema: %s - %s", declaration.Name, declaration.Description)
 
-	log.Printf("[URL Extract] Calling extract tool with URL...")
-	toolCtx := &minimalToolContext{Context: ctx}
-	extractResult, err := runnable.Run(toolCtx, extractArgs)
-	if err != nil {
-		return nil, fmt.Errorf("extract failed: %w", err)
-	}
-
-	// Convert result to JSON for AI processing
-	extractResultJSON, err := json.Marshal(extractResult)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal extract results: %w", err)
-	}
-	log.Printf("[URL Extract] Extracted content: %d bytes", len(extractResultJSON))
-
-	// Use AI to parse extracted content for MCP server config
+	// Get LLM provider for tool execution
 	providerName := appCfg.General.DefaultProvider
 	modelName := appCfg.General.DefaultModel
 	if providerName == "" {
@@ -668,6 +724,79 @@ func extractMCPServerFromURL(ctx context.Context, url string, toolName string) (
 		return nil, fmt.Errorf("failed to get LLM provider: %w", err)
 	}
 
+	// Step 1: Ask LLM to use the tool to extract content from the URL
+	// The LLM will see the tool schema and generate the correct parameters
+	extractPrompt := fmt.Sprintf(`You need to extract content from this URL: %s
+
+Use the available tool to fetch and extract the content from this URL. Call the tool with the appropriate parameters.`, url)
+
+	extractReq := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{
+				Role: "user",
+				Parts: []*genai.Part{
+					genai.NewPartFromText(extractPrompt),
+				},
+			},
+		},
+		Config: &genai.GenerateContentConfig{
+			Temperature: genai.Ptr(float32(0.1)),
+			Tools: []*genai.Tool{
+				{
+					FunctionDeclarations: []*genai.FunctionDeclaration{declaration},
+				},
+			},
+		},
+	}
+
+	log.Printf("[URL Extract] Asking LLM to call the extract tool...")
+	var functionCall *genai.FunctionCall
+	for resp, err := range llm.GenerateContent(ctx, extractReq, true) {
+		if err != nil {
+			return nil, fmt.Errorf("LLM tool call failed: %w", err)
+		}
+		if resp != nil && resp.Content != nil {
+			for _, part := range resp.Content.Parts {
+				if part.FunctionCall != nil {
+					functionCall = part.FunctionCall
+					break
+				}
+			}
+		}
+		if functionCall != nil {
+			break
+		}
+	}
+
+	if functionCall == nil {
+		return nil, fmt.Errorf("LLM did not call the extract tool")
+	}
+
+	log.Printf("[URL Extract] LLM wants to call: %s with args: %v", functionCall.Name, functionCall.Args)
+
+	// Step 2: Execute the tool with LLM-provided arguments
+	type runnableTool interface {
+		Run(tool.Context, any) (map[string]any, error)
+	}
+
+	runnable, ok := extractTool.(runnableTool)
+	if !ok {
+		return nil, fmt.Errorf("extract tool does not implement Run method")
+	}
+
+	toolCtx := &minimalToolContext{Context: ctx}
+	extractResult, err := runnable.Run(toolCtx, functionCall.Args)
+	if err != nil {
+		return nil, fmt.Errorf("extract tool execution failed: %w", err)
+	}
+
+	extractResultJSON, err := json.Marshal(extractResult)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal extract results: %w", err)
+	}
+	log.Printf("[URL Extract] Extracted content: %d bytes", len(extractResultJSON))
+
+	// Step 3: Parse the extracted content for MCP server info
 	prompt := fmt.Sprintf(`You are analyzing a web page to find MCP (Model Context Protocol) server configuration information.
 
 Extracted page content:
@@ -677,7 +806,8 @@ Look for:
 1. Package name (e.g., @ui5/mcp-server, @sap-ux/fiori-mcp-server)
 2. Installation command (usually npx or npm/node)
 3. Configuration examples (mcpServers JSON blocks)
-4. Required environment variables
+4. Required environment variables (API Keys, Tokens, Secrets). LOOK CLOSELY for mentions of API keys (e.g. OPENAI_API_KEY, HEYGEN_API_KEY).
+5. If the server requires authentication (API Key, Token), YOU MUST add it to envVars with an empty string or placeholder value.
 
 If you find an MCP server, respond with a JSON object:
 {
@@ -687,7 +817,7 @@ If you find an MCP server, respond with a JSON object:
   "installType": "npx",
   "command": "npx",
   "args": ["-y", "package-name"],
-  "envVars": {},
+  "envVars": {"API_KEY": ""},
   "confidence": 0.95
 }
 
@@ -745,7 +875,7 @@ Respond ONLY with the JSON object or null.`, string(extractResultJSON), url)
 		return nil, nil
 	}
 
-	result.Source = toolName
+	result.Source = serverName
 	return &result, nil
 }
 
@@ -822,7 +952,10 @@ func InternetMCPInstallHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	RefreshToolsCache(context.Background())
+	// Use incremental refresh logic to avoid full reload deadlocks and timeouts
+	if err := RefreshSingleServer(context.Background(), serverName); err != nil {
+		log.Printf("Warning: failed to refresh server %s: %v", serverName, err)
+	}
 
 	toolsLoaded := 0
 	cachedTools := GetCachedTools()
@@ -840,8 +973,8 @@ func InternetMCPInstallHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // searchInternetForMCPServers uses the configured MCP web search tool to find MCP servers
-func searchInternetForMCPServers(ctx context.Context, searchQuery string, toolName string) ([]InternetMCPResult, error) {
-	log.Printf("[searchInternetForMCPServers] Starting with toolName=%s, query=%s", toolName, searchQuery)
+func searchInternetForMCPServers(ctx context.Context, serverName string, searchToolName string, searchQuery string) ([]InternetMCPResult, error) {
+	log.Printf("[searchInternetForMCPServers] Starting with server=%s, tool=%s, query=%s", serverName, searchToolName, searchQuery)
 	
 	// Load app configuration
 	appCfg, err := config.LoadAppConfig()
@@ -856,37 +989,128 @@ func searchInternetForMCPServers(ctx context.Context, searchQuery string, toolNa
 	}
 	defer mcpManager.Cleanup()
 
-	log.Printf("[searchInternetForMCPServers] Initializing MCP server: %s", toolName)
+	log.Printf("[searchInternetForMCPServers] Initializing MCP server: %s", serverName)
 	// Initialize just the web search MCP server
-	namedToolset, err := mcpManager.InitializeSingleToolset(ctx, toolName)
+	namedToolset, err := mcpManager.InitializeSingleToolset(ctx, serverName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize web search MCP server '%s': %w", toolName, err)
+		return nil, fmt.Errorf("failed to initialize web search MCP server '%s': %w", serverName, err)
 	}
 
 	// Get the tools from this server using minimalReadonlyContext
 	roCtx := &minimalReadonlyContext{Context: ctx}
 	mcpTools, err := namedToolset.Toolset.Tools(roCtx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get tools from '%s': %w", toolName, err)
+		return nil, fmt.Errorf("failed to get tools from '%s': %w", serverName, err)
 	}
 	log.Printf("[searchInternetForMCPServers] Got %d tools from MCP server", len(mcpTools))
 
-	// Find a search tool (look for "search" in the name)
+	// Find search tool - use configured tool name if provided, otherwise search for "search"
 	var searchTool tool.Tool
 	for _, t := range mcpTools {
 		log.Printf("[searchInternetForMCPServers] Found tool: %s", t.Name())
-		if strings.Contains(strings.ToLower(t.Name()), "search") {
-			searchTool = t
-			break
+		if searchToolName != "" {
+			// Use the specifically configured tool
+			if t.Name() == searchToolName {
+				searchTool = t
+				break
+			}
+		} else {
+			// Fallback: search for "search" in the name
+			if strings.Contains(strings.ToLower(t.Name()), "search") {
+				searchTool = t
+				break
+			}
 		}
 	}
 
 	if searchTool == nil {
-		return nil, fmt.Errorf("no search tool found in MCP server '%s'", toolName)
+		if searchToolName != "" {
+			return nil, fmt.Errorf("configured search tool '%s' not found in MCP server '%s'", searchToolName, serverName)
+		}
+		return nil, fmt.Errorf("no search tool found in MCP server '%s'", serverName)
 	}
 	log.Printf("[searchInternetForMCPServers] Using search tool: %s", searchTool.Name())
 
-	// Call the search tool using the standard Run interface
+	// Get the tool's declaration (schema) for LLM
+	type toolWithDeclaration interface {
+		Declaration() *genai.FunctionDeclaration
+	}
+	
+	declTool, ok := searchTool.(toolWithDeclaration)
+	if !ok {
+		return nil, fmt.Errorf("search tool does not expose its schema")
+	}
+	
+	declaration := declTool.Declaration()
+	if declaration == nil {
+		return nil, fmt.Errorf("search tool has nil declaration")
+	}
+
+	// Get LLM provider for tool execution
+	providerName := appCfg.General.DefaultProvider
+	modelName := appCfg.General.DefaultModel
+	if providerName == "" {
+		providerName = "gemini"
+	}
+	if modelName == "" {
+		modelName = "gemini-2.0-flash"
+	}
+
+	llm, err := provider.GetProvider(ctx, providerName, modelName, appCfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get LLM provider: %w", err)
+	}
+
+	// Ask LLM to use the tool to search
+	searchPrompt := fmt.Sprintf(`You need to search the web for this query: %s
+
+Use the available tool to search the web. Call the tool with the appropriate parameters.`, searchQuery)
+
+	searchReq := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{
+				Role: "user",
+				Parts: []*genai.Part{
+					genai.NewPartFromText(searchPrompt),
+				},
+			},
+		},
+		Config: &genai.GenerateContentConfig{
+			Temperature: genai.Ptr(float32(0.1)),
+			Tools: []*genai.Tool{
+				{
+					FunctionDeclarations: []*genai.FunctionDeclaration{declaration},
+				},
+			},
+		},
+	}
+
+	log.Printf("[searchInternetForMCPServers] Asking LLM to call the search tool...")
+	var functionCall *genai.FunctionCall
+	for resp, err := range llm.GenerateContent(ctx, searchReq, true) {
+		if err != nil {
+			return nil, fmt.Errorf("LLM tool call failed: %w", err)
+		}
+		if resp != nil && resp.Content != nil {
+			for _, part := range resp.Content.Parts {
+				if part.FunctionCall != nil {
+					functionCall = part.FunctionCall
+					break
+				}
+			}
+		}
+		if functionCall != nil {
+			break
+		}
+	}
+
+	if functionCall == nil {
+		return nil, fmt.Errorf("LLM did not call the search tool")
+	}
+
+	log.Printf("[searchInternetForMCPServers] LLM wants to call: %s with args: %v", functionCall.Name, functionCall.Args)
+
+	// Execute the tool with LLM-provided arguments
 	type runnableTool interface {
 		Run(tool.Context, any) (map[string]any, error)
 	}
@@ -896,15 +1120,8 @@ func searchInternetForMCPServers(ctx context.Context, searchQuery string, toolNa
 		return nil, fmt.Errorf("search tool does not implement Run method")
 	}
 
-	// Build args for the search tool (common pattern for Tavily-like tools)
-	searchArgs := map[string]any{
-		"query": searchQuery,
-	}
-	log.Printf("[searchInternetForMCPServers] Calling search tool with query...")
-
-	// Create a minimal tool context
 	toolCtx := &minimalToolContext{Context: ctx}
-	searchResult, err := runnable.Run(toolCtx, searchArgs)
+	searchResult, err := runnable.Run(toolCtx, functionCall.Args)
 	if err != nil {
 		return nil, fmt.Errorf("web search failed: %w", err)
 	}
@@ -921,16 +1138,8 @@ func searchInternetForMCPServers(ctx context.Context, searchQuery string, toolNa
 	log.Printf("[searchInternetForMCPServers] Search result preview: %s", string(searchResultJSON[:previewLen]))
 
 	// Use AI to parse search results into MCP server suggestions
-	providerName := appCfg.General.DefaultProvider
-	modelName := appCfg.General.DefaultModel
-	if providerName == "" {
-		providerName = "gemini"
-	}
-	if modelName == "" {
-		modelName = "gemini-2.0-flash"
-	}
-
-	llm, err := provider.GetProvider(ctx, providerName, modelName, appCfg)
+	// Reuse the existing LLM provider
+	// (providerName, modelName, and llm already defined above)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get LLM provider: %w", err)
 	}
@@ -947,13 +1156,13 @@ Extract any MCP servers mentioned in these results. For each server found, provi
 - installType: "npx" for npm packages, "github" for GitHub repos
 - command: "npx" for npm, "node" for github
 - args: Installation arguments as JSON array (e.g., ["-y", "package-name"])
-- envVars: Required environment variables as JSON object
+- envVars: Required environment variables (API Keys, Tokens) as JSON object. Look for mentions of "requires API key" or specific variable names.
 - confidence: How confident you are (0.0-1.0)
 
 Respond ONLY with a JSON array. If no MCP servers found, return [].
 
 Example:
-[{"name": "mcp-server-sqlite", "description": "SQLite database access", "url": "https://github.com/modelcontextprotocol/servers", "installType": "npx", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-sqlite"], "envVars": {}, "confidence": 0.9}]`, string(searchResultJSON))
+[{"name": "mcp-server-sqlite", "description": "SQLite database access", "url": "https://github.com/modelcontextprotocol/servers", "installType": "npx", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-sqlite"], "envVars": {}, "confidence": 0.9}, {"name": "mcp-server-gpt", "description": "GPT Client", "url": "...", "installType": "npx", "command": "npx", "args": [...], "envVars": {"OPENAI_API_KEY": ""}, "confidence": 0.95}]`, string(searchResultJSON))
 
 	llmReq := &model.LLMRequest{
 		Contents: []*genai.Content{
@@ -1004,7 +1213,7 @@ Example:
 
 	log.Printf("[searchInternetForMCPServers] Parsed %d MCP server results", len(results))
 	for i := range results {
-		results[i].Source = toolName
+		results[i].Source = serverName
 	}
 
 	return results, nil

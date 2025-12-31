@@ -195,7 +195,18 @@ func (p *ProtectedTool) Run(ctx tool.Context, args any) (map[string]any, error) 
 	}
 	approvalKey := fmt.Sprintf("approval:%s:%s", currentNode, toolName)
 
-	// 1. Check if we already have approval
+	// 1. Check if we already have approval OR if global auto-approve is enabled
+	if p.Agent.AutoApprove {
+		// Auto-approve enabled, bypass check
+		// We use a broader interface check here to be safe
+		if rt, ok := p.Tool.(interface {
+			Run(tool.Context, any) (map[string]any, error)
+		}); ok {
+			return rt.Run(ctx, args)
+		}
+		return nil, fmt.Errorf("underlying tool does not implement Run")
+	}
+
 	if approved, _ := p.State.Get(approvalKey); approved == true {
 		// Consume approval - each execution requires new approval
 		p.State.Set(approvalKey, false)
@@ -254,6 +265,7 @@ type AstonishAgent struct {
 	Toolsets       []tool.Toolset
 	DebugMode      bool
 	IsWebMode      bool // If true, avoids ANSI codes in output
+	AutoApprove    bool // If true, automatically approves all tool executions
 	SessionService session.Service
 }
 
@@ -1651,7 +1663,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		var beforeToolCallbacks []llmagent.BeforeToolCallback
 		var afterToolCallbacks []llmagent.AfterToolCallback
 
-	if !node.ToolsAutoApproval {
+	if !node.ToolsAutoApproval && !a.AutoApprove {
 			beforeToolCallbacks = []llmagent.BeforeToolCallback{
 				func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 					toolName := t.Name()

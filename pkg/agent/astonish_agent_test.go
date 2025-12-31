@@ -1350,3 +1350,153 @@ func TestEmitNodeTransition_IncludesSilentFlag(t *testing.T) {
 		})
 	}
 }
+
+// ============================================================================
+// AUTO-APPROVE FEATURE TESTS
+// These tests verify the global AutoApprove flag behavior
+// ============================================================================
+
+// TestAutoApprove_ProtectedToolBypassesApproval verifies that when the agent's
+// AutoApprove flag is true, ProtectedTool.Run bypasses the approval process
+// and directly executes the underlying tool.
+func TestAutoApprove_ProtectedToolBypassesApproval(t *testing.T) {
+	state := NewMockState()
+
+	// Create a mock tool that tracks execution
+	toolExecuted := false
+	mockTool := &MockTool{
+		NameFunc:        func() string { return "test_tool" },
+		DescriptionFunc: func() string { return "A test tool" },
+		RunFunc: func(ctx tool.Context, args any) (map[string]any, error) {
+			toolExecuted = true
+			return map[string]any{"result": "success"}, nil
+		},
+	}
+
+	// Create agent with AutoApprove enabled
+	agent := &AstonishAgent{
+		AutoApprove: true,
+	}
+
+	// Create ProtectedTool wrapping the mock tool
+	protectedTool := &ProtectedTool{
+		Tool:  mockTool,
+		State: state,
+		Agent: agent,
+	}
+
+	// Create mock context
+	mockCtx := &MockInvocationContext{
+		Context:  context.Background(),
+		StateVal: state,
+	}
+
+	// Execute the tool - should bypass approval and execute directly
+	result, err := protectedTool.Run(mockCtx, map[string]any{"arg": "value"})
+
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if !toolExecuted {
+		t.Error("expected tool to be executed when AutoApprove is true")
+	}
+
+	if result["result"] != "success" {
+		t.Errorf("expected result 'success', got: %v", result["result"])
+	}
+
+	// Verify no approval state was set
+	awaitingApproval, _ := state.Get("awaiting_approval")
+	if awaitingApproval == true {
+		t.Error("expected awaiting_approval to NOT be set when AutoApprove is true")
+	}
+}
+
+// TestAutoApprove_DisabledRequiresApproval verifies that when the agent's
+// AutoApprove flag is false, ProtectedTool.Run follows the normal approval flow.
+func TestAutoApprove_DisabledRequiresApproval(t *testing.T) {
+	state := NewMockState()
+
+	// Create a mock tool that tracks execution
+	toolExecuted := false
+	mockTool := &MockTool{
+		NameFunc:        func() string { return "test_tool" },
+		DescriptionFunc: func() string { return "A test tool" },
+		RunFunc: func(ctx tool.Context, args any) (map[string]any, error) {
+			toolExecuted = true
+			return map[string]any{"result": "success"}, nil
+		},
+	}
+
+	// Create agent with AutoApprove disabled
+	agent := &AstonishAgent{
+		AutoApprove: false,
+	}
+
+	// Create ProtectedTool wrapping the mock tool with a mock YieldFunc
+	yieldCalled := false
+	protectedTool := &ProtectedTool{
+		Tool:  mockTool,
+		State: state,
+		Agent: agent,
+		YieldFunc: func(event *session.Event, err error) bool {
+			yieldCalled = true
+			return true
+		},
+	}
+
+	// Create mock context
+	mockCtx := &MockInvocationContext{
+		Context:  context.Background(),
+		StateVal: state,
+	}
+
+	// Execute the tool - should request approval (not execute tool directly)
+	result, err := protectedTool.Run(mockCtx, map[string]any{"arg": "value"})
+
+	// When AutoApprove is false, an interrupt error is returned to pause execution
+	if err == nil {
+		t.Fatal("expected an interrupt error when AutoApprove is false")
+	}
+	if !strings.Contains(err.Error(), "interrupt") {
+		t.Fatalf("expected error to contain 'interrupt', got: %v", err)
+	}
+
+	if toolExecuted {
+		t.Error("expected tool NOT to be executed when AutoApprove is false (without prior approval)")
+	}
+
+	// Verify approval was requested (yield was called)
+	if !yieldCalled {
+		t.Error("expected YieldFunc to be called to emit approval request")
+	}
+
+	// Verify approval state was set
+	awaitingApproval, _ := state.Get("awaiting_approval")
+	if awaitingApproval != true {
+		t.Error("expected awaiting_approval to be true when AutoApprove is false")
+	}
+
+	// Result may be nil when interrupt error is returned
+	if result != nil && result["status"] != "pending_approval" {
+		t.Errorf("expected status 'pending_approval' or nil result, got: %v", result)
+	}
+}
+
+// TestAutoApprove_StructFieldExists verifies that the AstonishAgent struct
+// has the AutoApprove field and it can be set.
+func TestAutoApprove_StructFieldExists(t *testing.T) {
+	agent := &AstonishAgent{}
+
+	// Default should be false
+	if agent.AutoApprove != false {
+		t.Error("expected AutoApprove to default to false")
+	}
+
+	// Should be settable to true
+	agent.AutoApprove = true
+	if agent.AutoApprove != true {
+		t.Error("expected AutoApprove to be settable to true")
+	}
+}

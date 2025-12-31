@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -125,13 +127,17 @@ func loadToolsInternal(ctx context.Context) []ToolInfo {
 			mcpToolsList, err := namedToolset.Toolset.Tools(minimalCtx)
 			if err != nil {
 				log.Printf("Warning: failed to get tools from %s: %v", serverName, err)
-				SetServerStatus(serverName, cache.ServerStatus{
-					Name:      serverName,
-					Status:    "error",
-					Error:     fmt.Sprintf("Failed to list tools: %v", err),
-					ToolCount: 0,
-					LastCheck: now,
-				})
+				// Don't persist error status for context cancellation (transient timeout errors)
+				// These happen when the refresh times out, not when the server is broken
+				if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "context canceled") {
+					SetServerStatus(serverName, cache.ServerStatus{
+						Name:      serverName,
+						Status:    "error",
+						Error:     fmt.Sprintf("Failed to list tools: %v", err),
+						ToolCount: 0,
+						LastCheck: now,
+					})
+				}
 				continue
 			}
 

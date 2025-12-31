@@ -37,8 +37,8 @@ RUN CGO_ENABLED=0 go build -o astonish .
 # Stage 3: Final minimal image
 FROM alpine:3.19
 
-# Install certificates, Node.js (includes npx), Python3, and uv (includes uvx)
-RUN apk add --no-cache ca-certificates nodejs npm python3 py3-pip && \
+# Install certificates, Node.js (includes npx), Python3, uv (includes uvx), and git
+RUN apk add --no-cache ca-certificates nodejs npm python3 py3-pip git && \
     pip3 install uv --break-system-packages
 
 WORKDIR /app

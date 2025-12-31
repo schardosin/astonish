@@ -1,5 +1,5 @@
-# Multi-stage build for Astonish test environment
-# Provides isolated, clean installation for testing
+# Multi-stage build for Astonish
+# Provides a clean, standalone container
 
 # Stage 1: Build web UI first
 FROM node:20-alpine AS web-builder
@@ -31,21 +31,24 @@ COPY . .
 RUN rm -rf ./web/dist
 COPY --from=web-builder /app/web/dist ./web/dist
 
-# Build with embedded UI
+# Build with embedded UI (CGO disabled for static binary)
 RUN CGO_ENABLED=0 go build -o astonish .
 
 # Stage 3: Final minimal image
 FROM alpine:3.19
 
-RUN apk add --no-cache ca-certificates
+# Install certificates, Node.js (includes npx), Python3, and uv (includes uvx)
+RUN apk add --no-cache ca-certificates nodejs npm python3 py3-pip && \
+    pip3 install uv --break-system-packages
 
 WORKDIR /app
 
 # Copy built binary (UI is embedded)
 COPY --from=builder /app/astonish /usr/local/bin/
 
-# Container has completely isolated config (default location)
+# Expose default port
 EXPOSE 9393
 
+# Set default entrypoint
 ENTRYPOINT ["astonish"]
 CMD ["studio"]

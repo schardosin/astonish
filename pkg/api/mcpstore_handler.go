@@ -277,7 +277,12 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 			minimalCtx := &minimalReadonlyContext{Context: r.Context()}
 			mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
 			if err != nil {
-				toolError = fmt.Sprintf("Server started but failed to get tools: %v", err)
+				stderrOutput := mcp.GetStderr(namedToolset.Stderr)
+				if stderrOutput != "" && stderrOutput != "no stderr output" {
+					toolError = stderrOutput
+				} else {
+					toolError = fmt.Sprintf("Server started but failed to get tools: %v", err)
+				}
 				log.Printf("Warning: %s", toolError)
 			} else {
 				var newTools []ToolInfo

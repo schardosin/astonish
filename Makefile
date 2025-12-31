@@ -23,6 +23,11 @@ help:
 	@echo "  make e2e-up          - Start isolated test environment"
 	@echo "  make e2e-down        - Stop test environment"
 	@echo "  make e2e-rebuild     - Rebuild and restart test environment"
+	@echo ""
+	@echo "Docker Production (Persistent Data):"
+	@echo "  make docker-up       - Start persistent container (maps ./.astonish-data)"
+	@echo "  make docker-down     - Stop persistent container"
+	@echo "  make docker-rebuild  - Rebuild and restart persistent container"
 
 # Build the Go binary only
 build:
@@ -94,7 +99,7 @@ update-mcp-stars:
 	GITHUB_TOKEN=$$(gh auth token) python3 scripts/update-mcp-stars.py
 	@echo "Star counts updated!"
 
-.PHONY: all help build build-ui build-all run studio studio-dev test install clean update-mcp-stars setup-hooks e2e-up e2e-down e2e-rebuild
+.PHONY: all help build build-ui build-all run studio studio-dev test install clean update-mcp-stars setup-hooks e2e-up e2e-down e2e-rebuild docker-up docker-down docker-rebuild
 
 # E2E Testing - Docker-based isolated environment
 e2e-up:
@@ -111,6 +116,25 @@ e2e-rebuild:
 	@echo "Rebuilding test environment..."
 	docker compose -f docker-compose.e2e.yml down
 	docker compose -f docker-compose.e2e.yml up -d --build
+	docker compose -f docker-compose.e2e.yml up -d --build
+	@echo "Astonish running at http://localhost:9393"
+
+# Docker Production - Persistent environment
+docker-up:
+	@echo "Starting persistent container..."
+	docker compose up -d --build
+	@echo "Astonish running at http://localhost:9393"
+	@echo "Data stored in ./.astonish-data"
+
+docker-down:
+	@echo "Stopping persistent container..."
+	docker compose down
+	@echo "Container stopped."
+
+docker-rebuild:
+	@echo "Rebuilding persistent container..."
+	docker compose down
+	docker compose up -d --build
 	@echo "Astonish running at http://localhost:9393"
 
 

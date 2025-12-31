@@ -399,7 +399,7 @@ func validateAndRefreshChangedServers(ctx context.Context, persistentCache *cach
 		minimalCtx := &minimalReadonlyContext{Context: ctx}
 		mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
 		if err != nil {
-			log.Printf("[Cache] Warning: Failed to get tools from server '%s': %v", serverName, err)
+			log.Printf("[Cache] Warning: Failed to get tools from server '%s': %v (Stderr: %s)", serverName, err, mcp.GetStderr(namedToolset.Stderr))
 			continue
 		}
 		

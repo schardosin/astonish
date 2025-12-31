@@ -2,7 +2,7 @@ services:
   astonish:
     build:
       context: .
-      dockerfile: Dockerfile.e2e
+      dockerfile: Dockerfile
     ports:
       - "9393:9393"
     # Each container starts with a completely clean slate

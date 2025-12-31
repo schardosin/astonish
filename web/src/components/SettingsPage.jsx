@@ -801,7 +801,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                       const isExpanded = expandedMcpServer === name
                       const displayName = mcpServerNames[name] || name
                       const isSaving = savingServer === name
-                      const serverStatus = mcpServerStatus[name]
+                      const serverStatus = mcpServerStatus[displayName]
                       const hasError = serverStatus?.status === 'error'
                       
                       return (
@@ -940,7 +940,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                                       <Loader2 size={14} className="animate-spin shrink-0 mt-0.5 opacity-50" />
                                     ) : (
                                       <button 
-                                        onClick={(e) => { e.stopPropagation(); handleRefreshMcpServer(name) }}
+                                        onClick={(e) => { e.stopPropagation(); handleRefreshMcpServer(displayName) }}
                                         className="p-1 hover:bg-white/10 rounded transition-colors"
                                         title="Retry"
                                       >
@@ -955,7 +955,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation()
-                                  setInspectServer(name)
+                                  setInspectServer(displayName)
                                 }}
                                 className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all hover:scale-[1.02]"
                                 style={{ 

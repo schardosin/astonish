@@ -177,70 +177,53 @@ flowchart TB
 A versatile agent that interacts with users, performs live web searches via MCP tools, and loops until the user is satisfied.
 
 ```yaml
-description: Simple Agent to Respond to User Questions with Web Search
+name: web_search_summarizer
+description: Search the internet and provide a summary of findings
+
 nodes:
-  - name: get_question
+  - name: get_query
     type: input
-    prompt: |
-      What is your question?
+    prompt: "What would you like me to search for?"
     output_model:
-      user_question: str
+      user_query: str
 
-  - name: search_web
+  - name: search_and_summarize
     type: llm
-    system: |
-      You are a web search assistant. Your goal is to find relevant and up-to-date information to answer the user's question.
-      Use clear keywords and aim to retrieve results that would be genuinely helpful for the user.
-    prompt: |
-      Please perform a web search to find useful and recent information to answer the following question:
-
-      Question: "{user_question}"
-
-      Make sure to include credible sources and provide a variety of perspectives if relevant.
-    output_model:
-      search_results: str
+    system: "You are a helpful research assistant. Search the web for the user's query and provide a comprehensive, well-organized summary of the findings. Include key facts, relevant details, and cite sources when possible."
+    prompt: "Search for: {user_query}"
     tools: true
     tools_selection:
       - tavily-search
-
-  - name: process_result
-    type: llm
-    system: |
-      Extract key info from a search result.
-    prompt: |
-      search_results:
-      {search_results}
-
-      Process the result in a format that is easy to understand. Use markdown formatting, adding headings, bullet points, and code blocks where appropriate. 
-
-      Use tavily-search for the search and tavily-extract for the extraction.
-    output_model: {}
-
-  - name: new_question
-    type: input
-    prompt: |
-      Do you have another question?
     output_model:
-      user_question: str
+      summary: str
+    user_message:
+      - summary
+
+  - name: ask_continue
+    type: input
+    prompt: "Would you like to search for something else?"
+    output_model:
+      choice: str
     options:
-      - 'yes'
-      - 'no'
+      - "yes"
+      - "no"
 
 flow:
   - from: START
-    to: get_question
-  - from: get_question
-    to: search_web
-  - from: search_web
-    to: process_result
-  - from: process_result
-    to: new_question
-  - from: new_question
+    to: get_query
+  
+  - from: get_query
+    to: search_and_summarize
+  
+  - from: search_and_summarize
+    to: ask_continue
+  
+  - from: ask_continue
     edges:
-      - to: get_question
-        condition: 'lambda x: x[''user_question''] == ''yes'''
+      - to: get_query
+        condition: "lambda x: x['choice'] == 'yes'"
       - to: END
-        condition: 'lambda x: x[''user_question''] == ''no'''
+        condition: "lambda x: x['choice'] == 'no'"
 ```
 
 Run it:

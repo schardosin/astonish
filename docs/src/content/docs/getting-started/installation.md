@@ -74,6 +74,6 @@ astonish config directory
 
 Now that Astonish is installed:
 
-1. **[Choose Your Path](/getting-started/choose-your-path/)** — Decide how you want to work
-2. **[Studio Quickstart](/getting-started/quickstart/studio/)** — Visual approach
-3. **[CLI Quickstart](/getting-started/quickstart/cli/)** — Command-line approach
+1. **[Choose Your Path](/astonish/getting-started/choose-your-path/)** — Decide how you want to work
+2. **[Studio Quickstart](/astonish/getting-started/quickstart/studio/)** — Visual approach
+3. **[CLI Quickstart](/astonish/getting-started/quickstart/cli/)** — Command-line approach

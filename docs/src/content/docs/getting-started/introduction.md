@@ -82,6 +82,6 @@ This isn't an either/or choice. Use the Studio to leverage visual editing and AI
 
 Ready to get started? Here's your path:
 
-1. **[Installation](/getting-started/installation/)** — Get Astonish running on your machine
-2. **[Choose Your Path](/getting-started/choose-your-path/)** — Visual or CLI? Pick your adventure
-3. **[Quickstart](/getting-started/quickstart/studio/)** — Build your first agent in 5 minutes
+1. **[Installation](/astonish/getting-started/installation/)** — Get Astonish running on your machine
+2. **[Choose Your Path](/astonish/getting-started/choose-your-path/)** — Visual or CLI? Pick your adventure
+3. **[Quickstart](/astonish/getting-started/quickstart/studio/)** — Build your first agent in 5 minutes

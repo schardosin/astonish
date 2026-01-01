@@ -116,4 +116,4 @@ Start with the Studio, even for simple flows.
 
 ## Ready to Start?
 
-**[→ Continue to Quickstart](/getting-started/quickstart/studio/)** — Build your first flow in 5 minutes
+**[→ Continue to Quickstart](/astonish/getting-started/quickstart/studio/)** — Build your first flow in 5 minutes

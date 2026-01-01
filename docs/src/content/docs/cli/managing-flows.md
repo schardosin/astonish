@@ -169,5 +169,5 @@ cp -r <flows-directory>/flows ~/flows-backup-$(date +%Y%m%d)
 
 ## Next Steps
 
-- **[Parameters & Variables](/cli/parameters/)** — Dynamic inputs
-- **[Automation](/cli/automation/)** — Scripts and scheduling
+- **[Parameters & Variables](/astonish/cli/parameters/)** — Dynamic inputs
+- **[Automation](/astonish/cli/automation/)** — Scripts and scheduling

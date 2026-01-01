@@ -187,9 +187,9 @@ mcp_servers:
 astonish tap add yourname/your-repo
 ```
 
-See **[Share Your Flows](/using-the-app/share-flows/)** for detailed instructions.
+See **[Share Your Flows](/astonish/using-the-app/share-flows/)** for detailed instructions.
 
 ## Next Steps
 
-- **[Share Your Flows](/using-the-app/share-flows/)** — Create your own tap
-- **[Troubleshooting](/using-the-app/troubleshooting/)** — Debug common issues
+- **[Share Your Flows](/astonish/using-the-app/share-flows/)** — Create your own tap
+- **[Troubleshooting](/astonish/using-the-app/troubleshooting/)** — Debug common issues

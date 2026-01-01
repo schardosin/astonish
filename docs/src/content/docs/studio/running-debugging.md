@@ -128,5 +128,5 @@ To run again:
 
 ## Next Steps
 
-- **[Keyboard Shortcuts](/studio/keyboard-shortcuts/)** — Speed up your workflow
-- **[Exporting & Sharing](/studio/exporting-sharing/)** — Share your flows
+- **[Keyboard Shortcuts](/astonish/studio/keyboard-shortcuts/)** — Speed up your workflow
+- **[Exporting & Sharing](/astonish/studio/exporting-sharing/)** — Share your flows

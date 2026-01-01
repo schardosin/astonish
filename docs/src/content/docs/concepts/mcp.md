@@ -191,6 +191,6 @@ astonish tools store install github-mcp-server
 
 ## Next Steps
 
-- **[Add MCP Servers](/using-the-app/add-mcp-servers/)** — Configure tools
-- **[Nodes](/concepts/nodes/)** — Using tools in nodes
-- **[YAML Reference](/concepts/yaml/)** — Tool syntax
+- **[Add MCP Servers](/astonish/using-the-app/add-mcp-servers/)** — Configure tools
+- **[Nodes](/astonish/concepts/nodes/)** — Using tools in nodes
+- **[YAML Reference](/astonish/concepts/yaml/)** — Tool syntax

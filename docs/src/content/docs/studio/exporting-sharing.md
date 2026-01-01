@@ -109,7 +109,7 @@ mcps:
     tags: [web-search]
 ```
 
-See **[Share Your Flows](/using-the-app/share-flows/)** for detailed instructions.
+See **[Share Your Flows](/astonish/using-the-app/share-flows/)** for detailed instructions.
 
 ## Importing Flows
 
@@ -171,5 +171,5 @@ ln -s ~/Dropbox/astonish-agents <original-flows-directory>
 
 ## Next Steps
 
-- **[Share Your Flows](/using-the-app/share-flows/)** — Create your own tap
-- **[Manage Tap Repositories](/using-the-app/manage-taps/)** — Browse community flows
+- **[Share Your Flows](/astonish/using-the-app/share-flows/)** — Create your own tap
+- **[Manage Tap Repositories](/astonish/using-the-app/manage-taps/)** — Browse community flows

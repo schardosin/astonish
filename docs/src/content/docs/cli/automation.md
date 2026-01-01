@@ -258,5 +258,5 @@ exit 0
 
 ## Next Steps
 
-- **[Configure Providers](/using-the-app/configure-providers/)** — Set up API keys
-- **[Troubleshooting](/using-the-app/troubleshooting/)** — Debug common issues
+- **[Configure Providers](/astonish/using-the-app/configure-providers/)** — Set up API keys
+- **[Troubleshooting](/astonish/using-the-app/troubleshooting/)** — Debug common issues

@@ -201,5 +201,5 @@ Studio validates your flow:
 
 ## Next Steps
 
-- **[Running & Debugging](/studio/running-debugging/)** — Test your branching logic
-- **[Key Concepts: Flows](/concepts/flows/)** — Deep dive into flow theory
+- **[Running & Debugging](/astonish/studio/running-debugging/)** — Test your branching logic
+- **[Key Concepts: Flows](/astonish/concepts/flows/)** — Deep dive into flow theory

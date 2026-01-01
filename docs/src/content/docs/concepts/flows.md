@@ -65,7 +65,7 @@ Processing steps in your flow:
 | `output` | Display a message |
 | `update_state` | Modify variables |
 
-See **[Nodes](/concepts/nodes/)** for details.
+See **[Nodes](/astonish/concepts/nodes/)** for details.
 
 ### Edges
 
@@ -106,7 +106,7 @@ nodes:
     prompt: "Say hello to {name}"  # Read from state
 ```
 
-See **[State](/concepts/state/)** for details.
+See **[State](/astonish/concepts/state/)** for details.
 
 ## Flow Patterns
 
@@ -169,6 +169,6 @@ Both produce the same YAML format.
 
 ## Next Steps
 
-- **[Nodes](/concepts/nodes/)** — Learn all node types
-- **[State](/concepts/state/)** — Understand data flow
-- **[YAML Reference](/concepts/yaml/)** — Complete schema
+- **[Nodes](/astonish/concepts/nodes/)** — Learn all node types
+- **[State](/astonish/concepts/state/)** — Understand data flow
+- **[YAML Reference](/astonish/concepts/yaml/)** — Complete schema

@@ -341,6 +341,6 @@ Variables come from:
 
 ## Next Steps
 
-- **[State](/concepts/state/)** — How data flows between nodes
-- **[Flows](/concepts/flows/)** — Full flow structure
-- **[YAML Reference](/concepts/yaml/)** — Complete syntax
+- **[State](/astonish/concepts/state/)** — How data flows between nodes
+- **[Flows](/astonish/concepts/flows/)** — Full flow structure
+- **[YAML Reference](/astonish/concepts/yaml/)** — Complete syntax

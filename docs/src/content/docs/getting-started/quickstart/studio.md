@@ -13,7 +13,7 @@ This guide walks you through creating and running your first AI agent using Asto
 
 ## Prerequisites
 
-- [Astonish installed](/getting-started/installation/)
+- [Astonish installed](/astonish/getting-started/installation/)
 - An API key from any supported provider (we'll set this up together)
 
 ## 1. Launch Studio
@@ -145,7 +145,7 @@ astonish flows run hello_world
 
 Now that you've built your first flow:
 
-- **[Working with Nodes](/studio/working-with-nodes/)** — Learn all node types
-- **[Connecting Edges](/studio/connecting-edges/)** — Add conditions and branches
-- **[Configure Providers](/using-the-app/configure-providers/)** — Add more AI providers
-- **[Add MCP Servers](/using-the-app/add-mcp-servers/)** — Connect tools like GitHub, Slack
+- **[Working with Nodes](/astonish/studio/working-with-nodes/)** — Learn all node types
+- **[Connecting Edges](/astonish/studio/connecting-edges/)** — Add conditions and branches
+- **[Configure Providers](/astonish/using-the-app/configure-providers/)** — Add more AI providers
+- **[Add MCP Servers](/astonish/using-the-app/add-mcp-servers/)** — Connect tools like GitHub, Slack

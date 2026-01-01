@@ -300,5 +300,5 @@ Run `astonish tools list` to verify the server is loaded and see available tools
 
 ## Next Steps
 
-- **[Manage Taps](/using-the-app/manage-taps/)** — Find community MCP configs
-- **[Key Concepts: MCP](/concepts/mcp/)** — Deep dive into MCP
+- **[Manage Taps](/astonish/using-the-app/manage-taps/)** — Find community MCP configs
+- **[Key Concepts: MCP](/astonish/concepts/mcp/)** — Deep dive into MCP

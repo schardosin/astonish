@@ -107,7 +107,7 @@ Both work with the same YAML format—use whichever fits your workflow.
 
 ## Next Steps
 
-- **[Creating Flows](/studio/creating-flows/)** — Build your first flow
-- **[Working with Nodes](/studio/working-with-nodes/)** — Learn all node types
-- **[Connecting Edges](/studio/connecting-edges/)** — Add logic and branching
-- **[Running & Debugging](/studio/running-debugging/)** — Test your flows
+- **[Creating Flows](/astonish/studio/creating-flows/)** — Build your first flow
+- **[Working with Nodes](/astonish/studio/working-with-nodes/)** — Learn all node types
+- **[Connecting Edges](/astonish/studio/connecting-edges/)** — Add logic and branching
+- **[Running & Debugging](/astonish/studio/running-debugging/)** — Test your flows

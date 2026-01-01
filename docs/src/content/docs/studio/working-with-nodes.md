@@ -245,5 +245,5 @@ Positions are saved in the YAML under `layout`. They don't affect execution—on
 
 ## Next Steps
 
-- **[Connecting Edges](/studio/connecting-edges/)** — Add logic and branching
-- **[Running & Debugging](/studio/running-debugging/)** — Test your flows
+- **[Connecting Edges](/astonish/studio/connecting-edges/)** — Add logic and branching
+- **[Running & Debugging](/astonish/studio/running-debugging/)** — Test your flows

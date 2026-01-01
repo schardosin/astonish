@@ -49,4 +49,4 @@ Master these shortcuts to work faster in Astonish Studio.
 
 ## Next Steps
 
-- **[Exporting & Sharing](/studio/exporting-sharing/)** — Share your flows
+- **[Exporting & Sharing](/astonish/studio/exporting-sharing/)** — Share your flows

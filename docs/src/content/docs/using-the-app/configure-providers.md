@@ -209,5 +209,5 @@ Best practices:
 
 ## Next Steps
 
-- **[Add MCP Servers](/using-the-app/add-mcp-servers/)** — Connect external tools
-- **[Manage Taps](/using-the-app/manage-taps/)** — Access community flows
+- **[Add MCP Servers](/astonish/using-the-app/add-mcp-servers/)** — Connect external tools
+- **[Manage Taps](/astonish/using-the-app/manage-taps/)** — Access community flows

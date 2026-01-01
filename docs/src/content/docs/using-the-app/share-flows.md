@@ -227,5 +227,5 @@ astonish tap update
 
 ## Next Steps
 
-- **[Manage Taps](/using-the-app/manage-taps/)** — Browse and install taps
-- **[Troubleshooting](/using-the-app/troubleshooting/)** — Debug common issues
+- **[Manage Taps](/astonish/using-the-app/manage-taps/)** — Browse and install taps
+- **[Troubleshooting](/astonish/using-the-app/troubleshooting/)** — Debug common issues

@@ -378,6 +378,6 @@ astonish studio
 
 ## Next Steps
 
-- **[Flows](/concepts/flows/)** — Flow concepts
-- **[Nodes](/concepts/nodes/)** — Node types
-- **[State](/concepts/state/)** — Data flow
+- **[Flows](/astonish/concepts/flows/)** — Flow concepts
+- **[Nodes](/astonish/concepts/nodes/)** — Node types
+- **[State](/astonish/concepts/state/)** — Data flow

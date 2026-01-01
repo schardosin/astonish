@@ -163,5 +163,5 @@ fi
 
 ## Next Steps
 
-- **[Parameters & Variables](/cli/parameters/)** — Advanced parameter handling
-- **[Automation](/cli/automation/)** — Cron jobs and CI/CD
+- **[Parameters & Variables](/astonish/cli/parameters/)** — Advanced parameter handling
+- **[Automation](/astonish/cli/automation/)** — Cron jobs and CI/CD

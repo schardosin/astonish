@@ -169,5 +169,5 @@ For large projects, consider:
 
 ## Next Steps
 
-- **[Working with Nodes](/studio/working-with-nodes/)** — Deep dive into each node type
-- **[Connecting Edges](/studio/connecting-edges/)** — Add conditions and branching
+- **[Working with Nodes](/astonish/studio/working-with-nodes/)** — Deep dive into each node type
+- **[Connecting Edges](/astonish/studio/connecting-edges/)** — Add conditions and branching

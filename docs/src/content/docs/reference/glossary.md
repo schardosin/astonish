@@ -45,7 +45,7 @@ A directed graph of nodes and edges that defines an AI workflow. Flows are store
 A `manifest.yaml` file in a tap repository that indexes available flows and MCP server configurations.
 
 ### MCP
-**Model Context Protocol**. An open standard for connecting AI models to external tools and data sources. See [MCP Concepts](/concepts/mcp/).
+**Model Context Protocol**. An open standard for connecting AI models to external tools and data sources. See [MCP Concepts](/astonish/concepts/mcp/).
 
 ### MCP Server
 A process that provides tools to Astonish via the MCP protocol. Configured in `mcp_config.json`.

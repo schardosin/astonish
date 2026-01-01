@@ -102,6 +102,6 @@ These flags are available on most commands:
 
 ## Next Steps
 
-- **[Running Flows](/cli/running-agents/)** — Execute your AI flows
-- **[Parameters & Variables](/cli/parameters/)** — Dynamic flow inputs
-- **[Automation](/cli/automation/)** — Scripts, cron, CI/CD
+- **[Running Flows](/astonish/cli/running-agents/)** — Execute your AI flows
+- **[Parameters & Variables](/astonish/cli/parameters/)** — Dynamic flow inputs
+- **[Automation](/astonish/cli/automation/)** — Scripts, cron, CI/CD

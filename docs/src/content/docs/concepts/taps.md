@@ -96,5 +96,5 @@ export GITHUB_ENTERPRISE_TOKEN="ghp_xxx"
 
 ## Next Steps
 
-- **[Manage Taps](/using-the-app/manage-taps/)** — UI and CLI guide for managing taps
-- **[Share Your Flows](/using-the-app/share-flows/)** — Create your own tap
+- **[Manage Taps](/astonish/using-the-app/manage-taps/)** — UI and CLI guide for managing taps
+- **[Share Your Flows](/astonish/using-the-app/share-flows/)** — Create your own tap

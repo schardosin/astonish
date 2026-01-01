@@ -13,7 +13,7 @@ This guide walks you through creating and running your first AI agent using the 
 
 ## Prerequisites
 
-- [Astonish installed](/getting-started/installation/)
+- [Astonish installed](/astonish/getting-started/installation/)
 - An API key from any supported provider
 
 ## 1. Run Interactive Setup
@@ -206,7 +206,7 @@ flow:                     # Required: how nodes connect
 
 Now that you're running flows from CLI:
 
-- **[Parameters & Variables](/cli/parameters/)** — Advanced parameter handling
-- **[Automation](/cli/automation/)** — Cron jobs, CI/CD integration
-- **[YAML Reference](/concepts/yaml/)** — Complete schema documentation
-- **[Add MCP Servers](/using-the-app/add-mcp-servers/)** — Connect tools like GitHub
+- **[Parameters & Variables](/astonish/cli/parameters/)** — Advanced parameter handling
+- **[Automation](/astonish/cli/automation/)** — Cron jobs, CI/CD integration
+- **[YAML Reference](/astonish/concepts/yaml/)** — Complete schema documentation
+- **[Add MCP Servers](/astonish/using-the-app/add-mcp-servers/)** — Connect tools like GitHub

@@ -259,5 +259,5 @@ Output includes:
 
 ## Next Steps
 
-- **[Nodes](/concepts/nodes/)** — How nodes produce state
-- **[YAML Reference](/concepts/yaml/)** — Complete syntax
+- **[Nodes](/astonish/concepts/nodes/)** — How nodes produce state
+- **[YAML Reference](/astonish/concepts/yaml/)** — Complete syntax

@@ -201,5 +201,5 @@ astonish flows run analyzer -p get_mode="detailed" -p get_input="My data"
 
 ## Next Steps
 
-- **[Automation](/cli/automation/)** — Use parameters in scripts
-- **[YAML Reference](/concepts/yaml/)** — Complete variable syntax
+- **[Automation](/astonish/cli/automation/)** — Use parameters in scripts
+- **[YAML Reference](/astonish/concepts/yaml/)** — Complete variable syntax

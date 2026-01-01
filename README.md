@@ -67,19 +67,20 @@ flow:
 
 Use **Astonish Studio** to design flows visually, then run the exact same YAML from the command line. There is no "export" step and no format conversion.
 
+---
+
 ## ✨ Astonish Studio
 
 <div align="center">
-<img src="https://github.com/user-attachments/assets/9b8b4ddf-67b3-43da-bec7-8685d203ab58" width="1000" alt="Astonish Studio">
 <p>Design your agent flows visually with the built-in <b>Astonish Studio</b></p>
+<img src="https://github.com/user-attachments/assets/9b8b4ddf-67b3-43da-bec7-8685d203ab58" width="1000" alt="Astonish Studio">
 </div>
-  
----  
-• 🤖 **AI Assistant**. Describe what you want and let AI generate or refine your entire DAG.  
-• 🎨 **Visual Designer**. Drag-and-drop nodes with real-time streaming execution output.  
-• 🔧 **MCP Native**. First-class support for any MCP server like GitHub, Slack, or Postgres.  
-• 🏪 **Flow Store**. Install community agent flows with Homebrew-style taps.  
-• 💾 **GitOps Ready**. Save directly to YAML for instant version control.  
+
+• 🤖 **AI Assistant**. Describe what you want and let AI generate or refine your entire DAG.
+• 🎨 **Visual Designer**. Drag-and-drop nodes with real-time streaming execution output.
+• 🔧 **MCP Native**. First-class support for any MCP server like GitHub, Slack, or Postgres.
+• 🏪 **Flow Store**. Install community agent flows with Homebrew-style taps.
+• 💾 **GitOps Ready**. Save directly to YAML for instant version control.
 
 ---
 
@@ -105,10 +106,20 @@ Opens a local UI at `http://localhost:9393` to configure providers (Gemini, Clau
 
 ### 3. Run from CLI
 
+Once configured, run your agents anywhere:
+
 ```bash
-# Run an agent with injected variables
-astonish agents run summarizer -p file_path="./notes.txt"
+# Interactive mode
+astonish flows run my_agent
+
+# With injected variables
+astonish flows run summarizer -p file_path="./notes.txt"
+
+# Perfect for cron jobs and automation
+0 9 * * * /usr/local/bin/astonish flows run daily_report >> /var/log/report.log
 ```
+
+---
 
 ## 🔍 Why Astonish?
 
@@ -233,9 +244,12 @@ flow:
 ```
 
 Run it:
+
 ```bash
-astonish agents run web_search_assistant
+astonish flows run web_search_assistant
 ```
+
+---
 
 ## 🏪 Flow Store & Taps
 
@@ -252,12 +266,17 @@ astonish flows store install technical_article_generator
 astonish flows run technical_article_generator
 ```
 
+---
+
 ## 🎯 Use Cases
 
-• **DevOps**. Automated PR reviews, incident response, and status reports.  
-• **Local Lab**. Scraping documentation, managing local files, and organizing homelab notes.  
-• **Support**. Building "Troubleshooting Blueprints" for support teams to run via CLI.  
-• **Scheduled Tasks**. Daily research summaries and AI-monitored alerts via `cron`.  
+• **Infrastructure Observability**. Automate routine CLI tasks, analyze Kubernetes logs, or troubleshoot cluster issues using local tools and AI reasoning.
+• **Personal Knowledge Base (RAG)**. Embed local documentation and source code to allow instant, private semantic search across your entire filesystem.
+• **CI/CD & GitOps Automation**. Run agents directly in GitHub Actions to perform deep code reviews, manage project boards, or automate repo maintenance.
+• **Engineering SOPs**. Transform manual troubleshooting guides into executable agents that anyone on the team can run via a single portable binary.
+• **Workflow Orchestration**. Bridge the gap between local scripts, MCP servers, and enterprise APIs using a single, versionable YAML definition.
+
+---
 
 ## 🤝 Contributing & Support
 

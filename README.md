@@ -72,7 +72,8 @@ Use **Astonish Studio** to design flows visually, then run the exact same YAML f
 ## ✨ Astonish Studio
 
 <div align="center">
-<img src="https://github.com/user-attachments/assets/9b8b4ddf-67b3-43da-bec7-8685d203ab58" width="1000" alt="Astonish Studio">
+<img src="https://github.com/user-attachments/assets/fafeb202-b864-4ff8-ba37-7ae9f1a5dd0c" width="1000" alt="Astonish Studio">
+
 <p>Design your agent flows visually with the built-in <b>Astonish Studio</b></p>
 </div>
 

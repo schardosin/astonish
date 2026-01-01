@@ -72,15 +72,15 @@ Use **Astonish Studio** to design flows visually, then run the exact same YAML f
 ## ✨ Astonish Studio
 
 <div align="center">
-<p>Design your agent flows visually with the built-in <b>Astonish Studio</b></p>
 <img src="https://github.com/user-attachments/assets/9b8b4ddf-67b3-43da-bec7-8685d203ab58" width="1000" alt="Astonish Studio">
+<p>Design your agent flows visually with the built-in <b>Astonish Studio</b></p>
 </div>
 
-• 🤖 **AI Assistant**. Describe what you want and let AI generate or refine your entire DAG.
-• 🎨 **Visual Designer**. Drag-and-drop nodes with real-time streaming execution output.
-• 🔧 **MCP Native**. First-class support for any MCP server like GitHub, Slack, or Postgres.
-• 🏪 **Flow Store**. Install community agent flows with Homebrew-style taps.
-• 💾 **GitOps Ready**. Save directly to YAML for instant version control.
+• 🤖 **AI Assistant**. Describe what you want and let AI generate or refine your entire DAG.  
+• 🎨 **Visual Designer**. Drag-and-drop nodes with real-time streaming execution output.  
+• 🔧 **MCP Native**. First-class support for any MCP server like GitHub, Slack, or Postgres.  
+• 🏪 **Flow Store**. Install community agent flows with Homebrew-style taps.  
+• 💾 **GitOps Ready**. Save directly to YAML for instant version control.  
 
 ---
 
@@ -270,11 +270,11 @@ astonish flows run technical_article_generator
 
 ## 🎯 Use Cases
 
-• **Infrastructure Observability**. Automate routine CLI tasks, analyze Kubernetes logs, or troubleshoot cluster issues using local tools and AI reasoning.
-• **Personal Knowledge Base (RAG)**. Embed local documentation and source code to allow instant, private semantic search across your entire filesystem.
-• **CI/CD & GitOps Automation**. Run agents directly in GitHub Actions to perform deep code reviews, manage project boards, or automate repo maintenance.
-• **Engineering SOPs**. Transform manual troubleshooting guides into executable agents that anyone on the team can run via a single portable binary.
-• **Workflow Orchestration**. Bridge the gap between local scripts, MCP servers, and enterprise APIs using a single, versionable YAML definition.
+• **Infrastructure Observability**. Automate routine CLI tasks, analyze Kubernetes logs, or troubleshoot cluster issues using local tools and AI reasoning.  
+• **Personal Knowledge Base (RAG)**. Embed local documentation and source code to allow instant, private semantic search across your entire filesystem.  
+• **CI/CD & GitOps Automation**. Run agents directly in GitHub Actions to perform deep code reviews, manage project boards, or automate repo maintenance.  
+• **Engineering SOPs**. Transform manual troubleshooting guides into executable agents that anyone on the team can run via a single portable binary.  
+• **Workflow Orchestration**. Bridge the gap between local scripts, MCP servers, and enterprise APIs using a single, versionable YAML definition.  
 
 ---
 

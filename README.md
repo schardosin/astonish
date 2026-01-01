@@ -70,15 +70,16 @@ Use **Astonish Studio** to design flows visually, then run the exact same YAML f
 ## ✨ Astonish Studio
 
 <div align="center">
-<p>Design your agent flows visually with the built-in <b>Astonish Studio</b></p>
 <img src="https://github.com/user-attachments/assets/9b8b4ddf-67b3-43da-bec7-8685d203ab58" width="1000" alt="Astonish Studio">
+<p>Design your agent flows visually with the built-in <b>Astonish Studio</b></p>
 </div>
-
-• 🤖 **AI Assistant**. Describe what you want and let AI generate or refine your entire DAG.
-• 🎨 **Visual Designer**. Drag-and-drop nodes with real-time streaming execution output.
-• 🔧 **MCP Native**. First-class support for any MCP server like GitHub, Slack, or Postgres.
-• 🏪 **Flow Store**. Install community agent flows with Homebrew-style taps.
-• 💾 **GitOps Ready**. Save directly to YAML for instant version control.
+  
+---  
+• 🤖 **AI Assistant**. Describe what you want and let AI generate or refine your entire DAG.  
+• 🎨 **Visual Designer**. Drag-and-drop nodes with real-time streaming execution output.  
+• 🔧 **MCP Native**. First-class support for any MCP server like GitHub, Slack, or Postgres.  
+• 🏪 **Flow Store**. Install community agent flows with Homebrew-style taps.  
+• 💾 **GitOps Ready**. Save directly to YAML for instant version control.  
 
 ---
 
@@ -253,10 +254,10 @@ astonish flows run technical_article_generator
 
 ## 🎯 Use Cases
 
-• **DevOps**. Automated PR reviews, incident response, and status reports.
-• **Local Lab**. Scraping documentation, managing local files, and organizing homelab notes.
-• **Support**. Building "Troubleshooting Blueprints" for support teams to run via CLI.
-• **Scheduled Tasks**. Daily research summaries and AI-monitored alerts via `cron`.
+• **DevOps**. Automated PR reviews, incident response, and status reports.  
+• **Local Lab**. Scraping documentation, managing local files, and organizing homelab notes.  
+• **Support**. Building "Troubleshooting Blueprints" for support teams to run via CLI.  
+• **Scheduled Tasks**. Daily research summaries and AI-monitored alerts via `cron`.  
 
 ## 🤝 Contributing & Support
 

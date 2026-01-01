@@ -82,6 +82,21 @@ func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, sto
 			}
 		}
 
+		// Fallback: match by config signature (command + args) if name didn't match
+		// This handles custom-named servers installed from the store
+		if matchedServer == nil && mcpConfig != nil {
+			if serverCfg, found := mcpConfig.MCPServers[serverName]; found {
+				for i := range storeServers {
+					srv := &storeServers[i]
+				if srv.Config != nil && srv.Config.Command != "" && configsMatch(serverCfg, *srv.Config) {
+						matchedServer = srv
+						matchSource = srv.Source
+						break
+					}
+				}
+			}
+		}
+
 		if matchedServer != nil {
 			if matchSource == flowstore.OfficialStoreName {
 				dep.Source = "store"
@@ -116,6 +131,27 @@ func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, sto
 	}
 
 	return deps
+}
+
+// configsMatch compares two MCP server configs to determine if they're from the same source
+// It compares command and args, ignoring env (which varies by user)
+func configsMatch(userCfg config.MCPServerConfig, storeCfg mcpstore.ServerConfig) bool {
+	// Command must match
+	if userCfg.Command != storeCfg.Command {
+		return false
+	}
+	
+	// Args must match exactly
+	if len(userCfg.Args) != len(storeCfg.Args) {
+		return false
+	}
+	for i, arg := range userCfg.Args {
+		if arg != storeCfg.Args[i] {
+			return false
+		}
+	}
+	
+	return true
 }
 
 // CollectToolsFromNodes extracts all tools_selection from all nodes in an agent config.

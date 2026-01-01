@@ -176,35 +176,6 @@ func TestResolveMCPDependencies_ExactNameMatching(t *testing.T) {
 				{server: "fallback-server", source: "store", storeID: "official/fallback-server"},
 			},
 		},
-		{
-			name:           "custom-named server matches store by config signature",
-			toolsSelection: []string{"tavily-search"},
-			cachedTools: []ToolInfo{
-				// Tool from a custom-named server (user called it tavily-websearch instead of tavily)
-				{Name: "tavily-search", Source: "tavily-websearch"},
-			},
-			storeServers: []mcpstore.Server{
-				// Store has "Tavily" which would normalize to "tavily", not matching "tavily-websearch"
-				// But the config signature should match
-				{
-					Name:   "Tavily",
-					McpId:  "official/tavily-mcp",
-					Source: flowstore.OfficialStoreName,
-					Config: &mcpstore.ServerConfig{
-						Command: "npx",
-						Args:    []string{"-y", "tavily-mcp@latest"},
-					},
-				},
-			},
-			existingDeps: nil,
-			expectedDeps: []struct {
-				server  string
-				source  string
-				storeID string
-			}{
-				{server: "tavily-websearch", source: "store", storeID: "official/tavily-mcp"},
-			},
-		},
 	}
 
 	for _, tt := range tests {

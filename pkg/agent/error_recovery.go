@@ -121,20 +121,23 @@ func (e *ErrorRecoveryNode) buildSystemPrompt() string {
 1. **RETRY** - If the error is transient, recoverable, or can be fixed with a different approach
 2. **ABORT** - If the error is permanent, unrecoverable, or indicates a fundamental problem
 
-**Guidelines for RETRY:**
+**Guidelines for RETRY (prefer RETRY when in doubt):**
 - Network timeouts, rate limiting (429), temporary unavailability (503)
 - Parsing errors where the LLM might produce better output on retry
-- Invalid arguments that the LLM can potentially fix
-- Tool execution errors that might succeed with retry
-- Any error where previous attempts show improvement
+- Invalid tool arguments or parameter errors - the AI CAN fix these on retry
+- Tool execution errors - even if repeated, the AI can adjust approach
+- Any error where the AI could potentially adjust its behavior
+- When not at max retry attempts, default to RETRY
 
-**Guidelines for ABORT:**
-- Authentication/Authorization failures (401, 403)
-- Resource not found (404) - indicates missing data
-- Invalid configuration or setup errors
-- Repeated identical errors with no improvement
-- Max retry attempts about to be exceeded
-- Errors that clearly indicate a bug or system misconfiguration
+**Guidelines for ABORT (use sparingly, only for truly unrecoverable errors):**
+- Authentication/Authorization failures (401, 403) - credentials won't change
+- Resource not found (404) where the resource genuinely doesn't exist
+- Invalid configuration or missing environment variables
+- Max retry attempts exceeded
+- User explicitly denied permission
+- Errors about missing system dependencies (not installed software)
+
+**IMPORTANT: Tool argument errors are ALWAYS retryable.** Even if the same error repeats, the AI can learn from each attempt and try different arguments. Only abort tool errors if they indicate a fundamental system problem (missing tool, auth failure).
 
 **Response Format:**
 You MUST respond with ONLY a JSON object in this exact format:

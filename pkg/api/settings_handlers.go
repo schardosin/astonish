@@ -67,7 +67,7 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	providers := []ProviderSettings{}
 
 	// List all known providers (alphabetically ordered)
-	knownProviders := []string{"anthropic", "gemini", "groq", "lm_studio", "ollama", "openai", "openrouter", "poe", "sap_ai_core", "xai"}
+	knownProviders := []string{"anthropic", "gemini", "groq", "litellm", "lm_studio", "ollama", "openai", "openrouter", "poe", "sap_ai_core", "xai"}
 
 	for _, name := range knownProviders {
 		providerCfg, exists := cfg.Providers[name]
@@ -247,7 +247,7 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	// Update persistent cache for added/changed servers
 	if len(addedOrChanged) > 0 {
 		log.Printf("[Cache] Detected %d added/changed servers: %v", len(addedOrChanged), keysOf(addedOrChanged))
-		
+
 		// Set initial status to "loading" for all added/changed servers
 		now := time.Now().UTC().Format(time.RFC3339)
 		for serverName := range addedOrChanged {
@@ -277,8 +277,8 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 // InstallInlineMCPServerRequest is the request for POST /api/mcp/install-inline
 type InstallInlineMCPServerRequest struct {
-	ServerName string                  `json:"serverName"`
-	Config     config.MCPServerConfig  `json:"config"`
+	ServerName string                 `json:"serverName"`
+	Config     config.MCPServerConfig `json:"config"`
 }
 
 // InstallInlineMCPServerHandler handles POST /api/mcp/install-inline
@@ -409,7 +409,7 @@ func updatePersistentCacheForServers(ctx context.Context, servers map[string]con
 
 	for serverName, serverCfg := range servers {
 		log.Printf("[Cache] Updating cache for server: %s", serverName)
-		
+
 		// Initialize just this server
 		namedToolset, err := mcpManager.InitializeSingleToolset(ctx, serverName)
 		if err != nil {
@@ -534,7 +534,7 @@ func GetSetupStatusHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Check for configured providers
 	var configuredProviders []string
-	knownProviders := []string{"anthropic", "gemini", "groq", "lm_studio", "ollama", "openai", "openrouter", "poe", "sap_ai_core", "xai"}
+	knownProviders := []string{"anthropic", "gemini", "groq", "litellm", "lm_studio", "ollama", "openai", "openrouter", "poe", "sap_ai_core", "xai"}
 
 	for _, name := range knownProviders {
 		if providerCfg, exists := cfg.Providers[name]; exists {

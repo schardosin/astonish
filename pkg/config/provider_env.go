@@ -42,6 +42,10 @@ var ProviderEnvMapping = map[string]map[string]string{
 	"lm_studio": {
 		"base_url": "LMSTUDIO_BASE_URL",
 	},
+	"litellm": {
+		"api_key":  "LITELLM_API_KEY",
+		"base_url": "LITELLM_BASE_URL",
+	},
 }
 
 // SetupProviderEnv sets environment variables from config for a specific provider

@@ -525,7 +525,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                 </label>
                 
                 {/* Providers with enhanced selector */}
-                {['openrouter', 'anthropic', 'gemini', 'groq', 'openai', 'poe', 'sap_ai_core', 'xai', 'lm_studio', 'ollama'].includes(generalForm.default_provider) ? (
+                {['openrouter', 'anthropic', 'gemini', 'groq', 'litellm', 'openai', 'poe', 'sap_ai_core', 'xai', 'lm_studio', 'ollama'].includes(generalForm.default_provider) ? (
                   <div>
                     <button
                       onClick={() => setShowModelSelector(true)}

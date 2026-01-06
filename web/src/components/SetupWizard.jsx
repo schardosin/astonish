@@ -85,6 +85,18 @@ const PROVIDERS = [
     defaultModel: 'local-model'
   },
   {
+    id: 'litellm',
+    name: 'LiteLLM',
+    description: 'Unified interface for 100+ LLM providers',
+    icon: '🌐',
+    color: 'from-emerald-500 to-teal-400',
+    fields: [
+      { key: 'api_key', label: 'API Key', placeholder: 'sk-...' },
+      { key: 'base_url', label: 'Base URL', placeholder: 'http://localhost:4000/v1' }
+    ],
+    defaultModel: 'gpt-4'
+  },
+  {
     id: 'sap_ai_core',
     name: 'SAP AI Core',
     description: 'Enterprise AI from SAP Business AI',

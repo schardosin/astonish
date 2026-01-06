@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/sashabaranov/go-openai"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/provider/anthropic"
 	"github.com/schardosin/astonish/pkg/provider/google"
 	"github.com/schardosin/astonish/pkg/provider/groq"
+	"github.com/schardosin/astonish/pkg/provider/litellm"
 	"github.com/schardosin/astonish/pkg/provider/lmstudio"
 	"github.com/schardosin/astonish/pkg/provider/ollama"
 	openai_provider "github.com/schardosin/astonish/pkg/provider/openai"
@@ -28,6 +30,7 @@ var ProviderDisplayNames = map[string]string{
 	"anthropic":   "Anthropic",
 	"gemini":      "Google GenAI",
 	"groq":        "Groq",
+	"litellm":     "LiteLLM",
 	"lm_studio":   "LM Studio",
 	"ollama":      "Ollama",
 	"openai":      "OpenAI",
@@ -194,6 +197,23 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 		client := openai.NewClientWithConfig(config)
 		return openai_provider.NewProvider(client, modelName, false), nil
 
+	case "litellm":
+		apiKey := os.Getenv("LITELLM_API_KEY")
+		if apiKey == "" && cfg != nil && cfg.Providers["litellm"] != nil {
+			apiKey = cfg.Providers["litellm"]["api_key"]
+		}
+
+		baseURL := "http://localhost:4000"
+		if cfg != nil && cfg.Providers["litellm"] != nil {
+			if val, ok := cfg.Providers["litellm"]["base_url"]; ok && val != "" {
+				baseURL = strings.TrimSuffix(val, "/v1")
+			}
+		}
+		if modelName == "" {
+			return nil, fmt.Errorf("model name required for litellm")
+		}
+		return litellm.NewProvider(apiKey, baseURL, modelName), nil
+
 	case "sap_ai_core":
 		if modelName == "" {
 			return nil, fmt.Errorf("model name required for sap_ai_core")
@@ -204,7 +224,7 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 		authURL := os.Getenv("AICORE_AUTH_URL")
 		baseURL := os.Getenv("AICORE_BASE_URL")
 		resourceGroup := os.Getenv("AICORE_RESOURCE_GROUP")
-		
+
 		if cfg != nil && cfg.Providers["sap_ai_core"] != nil {
 			pCfg := cfg.Providers["sap_ai_core"]
 			if clientID == "" {
@@ -223,7 +243,7 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 				resourceGroup = pCfg["resource_group"]
 			}
 		}
-		
+
 		if clientID == "" || clientSecret == "" || authURL == "" || baseURL == "" {
 			return nil, fmt.Errorf("SAP AI Core configuration incomplete (need AICORE_CLIENT_ID, AICORE_CLIENT_SECRET, AICORE_AUTH_URL, AICORE_BASE_URL)")
 		}
@@ -338,6 +358,20 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 		}
 		return lmstudio.ListModels(ctx, baseURL)
 
+	case "litellm":
+		apiKey := os.Getenv("LITELLM_API_KEY")
+		if apiKey == "" && cfg != nil && cfg.Providers["litellm"] != nil {
+			apiKey = cfg.Providers["litellm"]["api_key"]
+		}
+
+		baseURL := "http://localhost:4000/v1"
+		if cfg != nil && cfg.Providers["litellm"] != nil {
+			if val, ok := cfg.Providers["litellm"]["base_url"]; ok && val != "" {
+				baseURL = val
+			}
+		}
+		return litellm.ListModels(ctx, apiKey, baseURL)
+
 	case "openrouter":
 		apiKey := os.Getenv("OPENROUTER_API_KEY")
 		if apiKey == "" && cfg != nil && cfg.Providers["openrouter"] != nil {
@@ -374,7 +408,7 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 		authURL := os.Getenv("AICORE_AUTH_URL")
 		baseURL := os.Getenv("AICORE_BASE_URL")
 		resourceGroup := os.Getenv("AICORE_RESOURCE_GROUP")
-		
+
 		if cfg != nil && cfg.Providers["sap_ai_core"] != nil {
 			pCfg := cfg.Providers["sap_ai_core"]
 			if clientID == "" {
@@ -393,7 +427,7 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 				resourceGroup = pCfg["resource_group"]
 			}
 		}
-		
+
 		if clientID == "" || clientSecret == "" || authURL == "" || baseURL == "" {
 			return nil, fmt.Errorf("SAP AI Core configuration incomplete")
 		}

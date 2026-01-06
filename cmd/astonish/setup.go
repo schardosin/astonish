@@ -15,6 +15,7 @@ import (
 	"github.com/schardosin/astonish/pkg/provider/anthropic"
 	"github.com/schardosin/astonish/pkg/provider/google"
 	"github.com/schardosin/astonish/pkg/provider/groq"
+	"github.com/schardosin/astonish/pkg/provider/litellm"
 	"github.com/schardosin/astonish/pkg/provider/lmstudio"
 	"github.com/schardosin/astonish/pkg/provider/ollama"
 	openai_provider "github.com/schardosin/astonish/pkg/provider/openai"
@@ -44,11 +45,12 @@ func handleSetupCommand() error {
 		huh.NewOption(provider.GetProviderDisplayName("anthropic"), "anthropic"),
 		huh.NewOption(provider.GetProviderDisplayName("gemini"), "gemini"),
 		huh.NewOption(provider.GetProviderDisplayName("groq"), "groq"),
+		huh.NewOption(provider.GetProviderDisplayName("litellm"), "litellm"),
 		huh.NewOption(provider.GetProviderDisplayName("lm_studio"), "lm_studio"),
 		huh.NewOption(provider.GetProviderDisplayName("ollama"), "ollama"),
 		huh.NewOption(provider.GetProviderDisplayName("openai"), "openai"),
 		huh.NewOption(provider.GetProviderDisplayName("openrouter"), "openrouter"),
-                huh.NewOption(provider.GetProviderDisplayName("poe"), "poe"),
+		huh.NewOption(provider.GetProviderDisplayName("poe"), "poe"),
 		huh.NewOption(provider.GetProviderDisplayName("sap_ai_core"), "sap_ai_core"),
 		huh.NewOption(provider.GetProviderDisplayName("xai"), "xai"),
 	}
@@ -116,6 +118,18 @@ func handleSetupCommand() error {
 				return nil
 			}
 			fmt.Printf("Warning: Failed to fetch/select LM Studio models: %v\n", err)
+		} else {
+			goto SaveConfig
+		}
+	case "litellm":
+		runAPIKeyForm("LiteLLM API Key", "api_key", pCfg)
+		runBaseURLForm("LiteLLM Base URL", "http://localhost:4000/v1", pCfg)
+		if err := fetchAndSelectLiteLLMModel(pCfg, cfg); err != nil {
+			if isUserAborted(err) {
+				fmt.Println("Setup aborted by user; no changes were saved.")
+				return nil
+			}
+			fmt.Printf("Warning: Failed to fetch/select LiteLLM models: %v\n", err)
 		} else {
 			goto SaveConfig
 		}
@@ -824,9 +838,56 @@ func fetchAndSelectPoeModel(pCfg config.ProviderConfig, appCfg *config.AppConfig
 
 	var selectedModel string
 	err = huh.NewForm(
-huh.NewGroup(
-huh.NewSelect[string]().
+		huh.NewGroup(
+			huh.NewSelect[string]().
 				Title("Select a Poe Model").
+				Options(options...).
+				Value(&selectedModel),
+		),
+	).Run()
+
+	if err != nil {
+		return err
+	}
+
+	// Save selected model as default
+	appCfg.General.DefaultModel = selectedModel
+	fmt.Printf("Selected default model: %s\n", selectedModel)
+
+	return nil
+}
+
+func fetchAndSelectLiteLLMModel(pCfg config.ProviderConfig, appCfg *config.AppConfig) error {
+	apiKey := pCfg["api_key"]
+	baseURL := pCfg["base_url"]
+	if baseURL == "" {
+		baseURL = "http://localhost:4000/v1"
+	}
+
+	fmt.Println("Fetching available models from LiteLLM...")
+	runSpinner("Connecting to LiteLLM...")
+
+	models, err := litellm.ListModels(context.Background(), apiKey, baseURL)
+	if err != nil {
+		return err
+	}
+
+	if len(models) == 0 {
+		return fmt.Errorf("no models found")
+	}
+
+	// Create options for huh.Select
+	var options []huh.Option[string]
+	for _, m := range models {
+		options = append(options, huh.NewOption(m, m))
+	}
+
+	var selectedModel string
+
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select a LiteLLM Model").
 				Options(options...).
 				Value(&selectedModel),
 		),

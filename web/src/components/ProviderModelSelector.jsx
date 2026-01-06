@@ -90,10 +90,11 @@ export default function ProviderModelSelector({ isOpen, onClose, onSelect, curre
           style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}
         >
           <h2 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
-            {provider === 'openrouter' ? 'Select OpenRouter Model' : 
-             provider === 'anthropic' ? 'Select Anthropic Model' : 
+            {provider === 'openrouter' ? 'Select OpenRouter Model' :
+             provider === 'anthropic' ? 'Select Anthropic Model' :
              provider === 'gemini' ? 'Select Google AI Model' :
              provider === 'groq' ? 'Select Groq Model' :
+             provider === 'litellm' ? 'Select LiteLLM Model' :
              provider === 'openai' ? 'Select OpenAI Model' :
              provider === 'poe' ? 'Select Poe Model' :
              provider === 'sap_ai_core' ? 'Select SAP AI Core Model' :

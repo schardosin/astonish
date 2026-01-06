@@ -18,6 +18,7 @@ Astonish supports multiple AI providers. Configure one or more to power your flo
 | **Anthropic** | Cloud | Claude, Haiku and Opus family |
 | **Google Gemini** | Cloud | Gemini Pro, Flash |
 | **Groq** | Cloud | Fast inference |
+| **LiteLLM** | Cloud/Local | Unified interface for 100+ LLM providers |
 | **xAI** | Cloud | Grok models |
 | **Ollama** | Local | Self-hosted open models |
 | **LM Studio** | Local | Self-hosted with GUI |
@@ -156,6 +157,29 @@ providers:
 
 Download: [lmstudio.ai](https://lmstudio.ai/)
 
+### LiteLLM
+
+LiteLLM provides a unified interface for 100+ LLM providers, supporting both cloud and self-hosted models.
+
+```yaml
+providers:
+  litellm:
+    api_key: your_litellm_api_key
+    base_url: http://localhost:4000/v1
+```
+
+Get your API key at [litellm.ai](https://www.litellm.ai/).
+
+LiteLLM supports:
+- **Cloud providers**: OpenAI, Anthropic, Cohere, etc.
+- **Self-hosted models**: Ollama, vLLM, LocalAI, etc.
+- **Custom endpoints**: Any OpenAI-compatible API
+
+Example model names:
+- `gpt-4` (via OpenAI)
+- `claude-3-opus` (via Anthropic)
+- `llama3-70b` (via local model)
+
 ## Setting Defaults
 
 Configure your preferred provider and model:
@@ -180,6 +204,7 @@ Some providers support environment variables:
 export OPENAI_API_KEY="sk-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
 export OPENROUTER_API_KEY="sk-or-v1-..."
+export LITELLM_API_KEY="sk-..."
 ```
 
 ## Verifying Configuration

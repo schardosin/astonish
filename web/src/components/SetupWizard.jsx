@@ -12,6 +12,7 @@ const PROVIDERS = [
   { id: 'xai', name: 'xAI Grok', description: 'Grok models from xAI', icon: '🚀', fields: [{ key: 'api_key', label: 'API Key', placeholder: 'xai-...' }], defaultModel: 'grok-2-latest' },
   { id: 'lm_studio', name: 'LM Studio', description: 'Local models via LM Studio', icon: '💻', fields: [{ key: 'base_url', label: 'Base URL', placeholder: 'http://localhost:1234/v1' }], defaultModel: 'local-model' },
   { id: 'litellm', name: 'LiteLLM', description: 'Unified interface for 100+ LLM providers', icon: '🌐', fields: [{ key: 'api_key', label: 'API Key', placeholder: 'sk-...' }, { key: 'base_url', label: 'Base URL', placeholder: 'http://localhost:4000/v1' }], defaultModel: 'gpt-4' },
+  { id: 'openai_compat', name: 'OpenAI Compatible', description: 'Connect to any OpenAI-compatible API endpoint', icon: '🔄', fields: [{ key: 'api_key', label: 'API Key', placeholder: 'sk-...' }, { key: 'base_url', label: 'Base URL', placeholder: 'https://api.example.com/v1' }], defaultModel: 'gpt-4o' },
   { id: 'sap_ai_core', name: 'SAP AI Core', description: 'Enterprise AI from SAP Business AI', icon: '🏢', fields: [{ key: 'auth_url', label: 'Auth URL', placeholder: 'https://your-tenant.authentication.sap.hana.ondemand.com' }, { key: 'client_id', label: 'Client ID', placeholder: 'sb-xxx' }, { key: 'client_secret', label: 'Client Secret', placeholder: 'Your client secret' }, { key: 'base_url', label: 'Base URL', placeholder: 'https://api.ai.prod.region.aws.ml.hana.ondemand.com/v2' }, { key: 'resource_group', label: 'Resource Group', placeholder: 'default' }], defaultModel: 'gpt-4o' }
 ]
 
@@ -24,6 +25,16 @@ const fetchSettings = async () => {
 const saveProviderConfig = async (instanceName, config) => {
   const res = await fetch('/api/settings/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ providers: { [instanceName]: config } }) })
   if (!res.ok) throw new Error('Failed to save provider config')
+  return res.json()
+}
+
+const replaceAllProviders = async (providers) => {
+  const res = await fetch('/api/settings/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ providers: { '__replace_all__': { '__array__': JSON.stringify(providers) } } })
+  })
+  if (!res.ok) throw new Error('Failed to replace providers')
   return res.json()
 }
 
@@ -127,15 +138,33 @@ export default function SetupWizard({ onComplete }) {
 
   const handleProviderTypeSelect = (providerId) => { setSelectedProvider(providerId); setCredentials({}); setTestSuccess(false) }
 
+  const saveProviderInstance = async () => {
+    const provider = getProviderInfo(selectedProvider)
+    let configToSave = { ...credentials, type: selectedProvider }
+    if (provider.id === 'sap_ai_core' && !configToSave.resource_group) configToSave.resource_group = 'default'
+
+    const currentProviders = (settings?.providers || []).map(p => {
+      const prov = { name: p.name, type: p.type }
+      if (p.fields) {
+        for (const [key, val] of Object.entries(p.fields)) {
+          prov[key] = val
+        }
+      }
+      return prov
+    })
+
+    const updatedProviders = currentProviders.filter(p => p.name !== '__new_provider__' && p.name !== instanceName)
+    updatedProviders.push({ name: instanceName, ...configToSave })
+
+    await replaceAllProviders(updatedProviders)
+    setSelectedInstance(instanceName)
+  }
+
   const handleSaveProvider = async () => {
     setIsLoading(true)
     setError(null)
     try {
-      const provider = getProviderInfo(selectedProvider)
-      let configToSave = { ...credentials, type: selectedProvider }
-      if (provider.id === 'sap_ai_core' && !configToSave.resource_group) configToSave.resource_group = 'default'
-      await saveProviderConfig(instanceName, configToSave)
-      setSelectedInstance(instanceName)
+      await saveProviderInstance()
       setStep(3)
     } catch (err) { setError(err.message || 'Failed to save provider') }
     finally { setIsLoading(false) }
@@ -152,7 +181,19 @@ export default function SetupWizard({ onComplete }) {
     }
   }
 
-  const goNext = () => { if (canProceed()) { setStep(step + 1); setError(null) } }
+  const goNext = async () => {
+    if (!canProceed()) return
+    if (step === 3) {
+      try {
+        await saveProviderInstance()
+      } catch (err) {
+        setError(err.message || 'Failed to save provider')
+        return
+      }
+    }
+    setStep(step + 1)
+    setError(null)
+  }
   const goBack = () => { if (step > 0) { setStep(step - 1); setError(null) } }
 
   const StepIndicator = () => (

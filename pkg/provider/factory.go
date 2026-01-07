@@ -16,6 +16,7 @@ import (
 	"github.com/schardosin/astonish/pkg/provider/lmstudio"
 	"github.com/schardosin/astonish/pkg/provider/ollama"
 	openai_provider "github.com/schardosin/astonish/pkg/provider/openai"
+	openai_compat "github.com/schardosin/astonish/pkg/provider/openai_compat"
 	"github.com/schardosin/astonish/pkg/provider/openrouter"
 	"github.com/schardosin/astonish/pkg/provider/poe"
 	"github.com/schardosin/astonish/pkg/provider/sap"
@@ -27,17 +28,18 @@ import (
 // This is the centralized source of truth for how provider names should be displayed
 // in both the CLI and UI.
 var ProviderDisplayNames = map[string]string{
-	"anthropic":   "Anthropic",
-	"gemini":      "Google GenAI",
-	"groq":        "Groq",
-	"litellm":     "LiteLLM",
-	"lm_studio":   "LM Studio",
-	"ollama":      "Ollama",
-	"openai":      "OpenAI",
-	"openrouter":  "Openrouter",
-	"poe":         "Poe",
-	"sap_ai_core": "SAP AI Core",
-	"xai":         "xAI",
+	"anthropic":     "Anthropic",
+	"gemini":        "Google GenAI",
+	"groq":          "Groq",
+	"litellm":       "LiteLLM",
+	"lm_studio":     "LM Studio",
+	"ollama":        "Ollama",
+	"openai":        "OpenAI",
+	"openai_compat": "OpenAI Compatible",
+	"openrouter":    "Openrouter",
+	"poe":           "Poe",
+	"sap_ai_core":   "SAP AI Core",
+	"xai":           "xAI",
 }
 
 // GetProviderDisplayName returns the proper display name for a provider ID.
@@ -259,6 +261,20 @@ func GetProvider(ctx context.Context, instanceName string, modelName string, cfg
 		client := openai.NewClientWithConfig(config)
 		return openai_provider.NewProvider(client, modelName, true), nil
 
+	case "openai_compat":
+		apiKey := instance["api_key"]
+		if apiKey == "" {
+			return nil, fmt.Errorf("API key not set for OpenAI Compatible provider")
+		}
+		baseURL := instance["base_url"]
+		if baseURL == "" {
+			baseURL = "https://api.openai.com/v1"
+		}
+		if modelName == "" {
+			modelName = "gpt-4o"
+		}
+		return openai_compat.NewProvider(apiKey, baseURL, modelName), nil
+
 	default:
 		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
 	}
@@ -404,6 +420,17 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 			return nil, fmt.Errorf("SAP AI Core configuration incomplete")
 		}
 		return sap.ListModels(ctx, clientID, clientSecret, authURL, baseURL, resourceGroup)
+
+	case "openai_compat":
+		apiKey := instanceConfig["api_key"]
+		if apiKey == "" {
+			return nil, fmt.Errorf("API key not configured for OpenAI Compatible provider")
+		}
+		baseURL := instanceConfig["base_url"]
+		if baseURL == "" {
+			baseURL = "https://api.openai.com/v1"
+		}
+		return openai_compat.ListModels(ctx, apiKey, baseURL)
 
 	default:
 		return nil, fmt.Errorf("unsupported provider type: %s", providerType)

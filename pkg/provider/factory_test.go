@@ -45,7 +45,7 @@ func TestGetProviderIDs(t *testing.T) {
 		t.Error("GetProviderIDs returned empty slice")
 	}
 
-	expectedCount := 11
+	expectedCount := 12
 	if len(ids) != expectedCount {
 		t.Errorf("GetProviderIDs returned %d IDs, expected %d", len(ids), expectedCount)
 	}
@@ -58,7 +58,7 @@ func TestGetProviderIDs(t *testing.T) {
 		idSet[id] = true
 	}
 
-	expectedIDs := []string{"anthropic", "gemini", "groq", "litellm", "lm_studio", "ollama", "openai", "openrouter", "poe", "sap_ai_core", "xai"}
+	expectedIDs := []string{"anthropic", "gemini", "groq", "litellm", "lm_studio", "ollama", "openai", "openai_compat", "openrouter", "poe", "sap_ai_core", "xai"}
 	for _, expected := range expectedIDs {
 		if !idSet[expected] {
 			t.Errorf("expected provider ID %s not found", expected)

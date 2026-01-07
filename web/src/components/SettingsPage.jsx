@@ -22,6 +22,16 @@ const saveSettings = async (data) => {
   return res.json()
 }
 
+const replaceAllProviders = async (providers) => {
+  const res = await fetch('/api/settings/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ providers: { '__replace_all__': { '__array__': JSON.stringify(providers) } } })
+  })
+  if (!res.ok) throw new Error('Failed to replace providers')
+  return res.json()
+}
+
 const fetchMCPConfig = async () => {
   const res = await fetch('/api/settings/mcp')
   if (!res.ok) throw new Error('Failed to fetch MCP config')
@@ -257,18 +267,46 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
 
   const handleSaveProvider = async (providerName) => {
     setSaving(true)
-    setSaveSuccess(false)
     try {
-      await saveSettings({ providers: { [providerName]: providerForms[providerName] } })
+      const currentProviders = (settings?.providers || []).map(p => {
+        const provider = { name: p.name, type: p.type }
+        if (p.fields) {
+          for (const [key, val] of Object.entries(p.fields)) {
+            provider[key] = val
+          }
+        }
+        return provider
+      })
+
+      const existingProvider = settings?.providers?.find(p => p.name === providerName)
+      const existingType = existingProvider?.type || providerName
+      const newProviderConfig = { name: providerName, type: existingType }
+      for (const [key, value] of Object.entries(providerForms[providerName] || {})) {
+        if (value && key !== 'type') {
+          newProviderConfig[key] = value
+        }
+      }
+
+      let updatedProviders
+      const existingIndex = currentProviders.findIndex(p => p.name === providerName)
+      if (existingIndex >= 0) {
+        updatedProviders = [...currentProviders]
+        updatedProviders[existingIndex] = newProviderConfig
+      } else {
+        updatedProviders = [...currentProviders, newProviderConfig]
+      }
+
+      await replaceAllProviders(updatedProviders)
+
+      setExpandedProvider(providerName)
+      setSaving(false)
       setSaveSuccess(true)
-      // Reload to get masked values
+      setTimeout(() => setSaveSuccess(false), 2000)
       loadData()
       if (onSettingsSaved) onSettingsSaved()
-      setTimeout(() => setSaveSuccess(false), 2000)
     } catch (err) {
-      setError(err.message)
-    } finally {
       setSaving(false)
+      setError(err.message)
     }
   }
 
@@ -334,6 +372,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
     { value: 'lm_studio', label: 'LM Studio' },
     { value: 'ollama', label: 'Ollama' },
     { value: 'openai', label: 'OpenAI' },
+    { value: 'openai_compat', label: 'OpenAI Compatible' },
     { value: 'openrouter', label: 'OpenRouter' },
     { value: 'poe', label: 'Poe' },
     { value: 'sap_ai_core', label: 'SAP AI Core' },
@@ -372,29 +411,22 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
   const handleDeleteProvider = async (providerName) => {
     setDeletingProvider(providerName)
     try {
-      const cfg = await fetchSettings()
-      const newProvidersList = (cfg.providers || [])
-        .filter(p => p.name !== providerName)
-        .map(p => {
-          const provider = { name: p.name, type: p.type }
-          if (p.fields) {
-            for (const [key, val] of Object.entries(p.fields)) {
-              provider[key] = val
-            }
+      const currentProviders = (settings?.providers || []).map(p => {
+        const provider = { name: p.name, type: p.type }
+        if (p.fields) {
+          for (const [key, val] of Object.entries(p.fields)) {
+            provider[key] = val
           }
-          return provider
-        })
-      
-      await saveSettings({
-        providers: {
-          "__replace_all__": { "__array__": JSON.stringify(newProvidersList) }
         }
+        return provider
       })
-      
+      const updatedProviders = currentProviders.filter(p => p.name !== providerName)
+      await replaceAllProviders(updatedProviders)
+
       if (generalForm.default_provider === providerName) {
         setGeneralForm({ ...generalForm, default_provider: '', default_model: '' })
       }
-      
+
       loadData()
       if (onSettingsSaved) onSettingsSaved()
     } catch (err) {
@@ -416,6 +448,10 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
       ],
       lm_studio: [{ key: 'base_url', label: 'Base URL', type: 'text' }],
       ollama: [{ key: 'base_url', label: 'Base URL', type: 'text' }],
+      openai_compat: [
+        { key: 'api_key', label: 'API Key', type: 'password' },
+        { key: 'base_url', label: 'Base URL', type: 'text' }
+      ],
       openrouter: [{ key: 'api_key', label: 'API Key', type: 'password' }],
       poe: [{ key: 'api_key', label: 'API Key', type: 'password' }],
       sap_ai_core: [

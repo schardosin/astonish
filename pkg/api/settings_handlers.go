@@ -559,18 +559,31 @@ func GetSetupStatusHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check for configured providers
+	// For multi-instance support, check all provider instances in config
 	var configuredProviders []string
-	knownProviders := []string{"anthropic", "gemini", "groq", "litellm", "lm_studio", "ollama", "openai", "openrouter", "poe", "sap_ai_core", "xai"}
 
-	for _, name := range knownProviders {
-		if providerCfg, exists := cfg.Providers[name]; exists {
-			// Check if at least one field has a value
-			for _, val := range providerCfg {
-				if val != "" {
-					configuredProviders = append(configuredProviders, name)
-					break
-				}
+	for instanceName, providerCfg := range cfg.Providers {
+		if providerCfg == nil {
+			continue
+		}
+
+		// Check if this provider has a valid type
+		providerType := config.GetProviderType(instanceName, providerCfg)
+		if providerType == "" {
+			continue
+		}
+
+		// Check if at least one credential field has a value (excluding 'type')
+		hasCredentials := false
+		for key, val := range providerCfg {
+			if key != "type" && val != "" {
+				hasCredentials = true
+				break
 			}
+		}
+
+		if hasCredentials {
+			configuredProviders = append(configuredProviders, instanceName)
 		}
 	}
 

@@ -19,6 +19,7 @@ import (
 	"github.com/schardosin/astonish/pkg/provider/lmstudio"
 	"github.com/schardosin/astonish/pkg/provider/ollama"
 	openai_provider "github.com/schardosin/astonish/pkg/provider/openai"
+	"github.com/schardosin/astonish/pkg/provider/openai_compat"
 	"github.com/schardosin/astonish/pkg/provider/openrouter"
 	"github.com/schardosin/astonish/pkg/provider/poe"
 	"github.com/schardosin/astonish/pkg/provider/sap"
@@ -192,6 +193,18 @@ func handleSetupCommand() error {
 		} else {
 			goto SaveConfig
 		}
+	case "openai_compat":
+		runAPIKeyForm("API Key", "api_key", pCfg)
+		runBaseURLForm("Base URL", "https://api.openai.com/v1", pCfg)
+		if err := fetchAndSelectOpenAICompatModel(pCfg, cfg); err != nil {
+			if isUserAborted(err) {
+				fmt.Println("Setup aborted by user; no changes were saved.")
+				return nil
+			}
+			fmt.Printf("Warning: Failed to fetch/select models: %v\n", err)
+		} else {
+			goto SaveConfig
+		}
 	case "openrouter":
 		runAPIKeyForm("OpenRouter API Key", "api_key", pCfg)
 		if err := fetchAndSelectOpenRouterModel(pCfg, cfg); err != nil {
@@ -313,6 +326,7 @@ func selectProviderType() string {
 		huh.NewOption(provider.GetProviderDisplayName("lm_studio"), "lm_studio"),
 		huh.NewOption(provider.GetProviderDisplayName("ollama"), "ollama"),
 		huh.NewOption(provider.GetProviderDisplayName("openai"), "openai"),
+		huh.NewOption(provider.GetProviderDisplayName("openai_compat"), "openai_compat"),
 		huh.NewOption(provider.GetProviderDisplayName("openrouter"), "openrouter"),
 		huh.NewOption(provider.GetProviderDisplayName("poe"), "poe"),
 		huh.NewOption(provider.GetProviderDisplayName("sap_ai_core"), "sap_ai_core"),
@@ -989,6 +1003,53 @@ func fetchAndSelectLiteLLMModel(pCfg config.ProviderConfig, appCfg *config.AppCo
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Select a LiteLLM Model").
+				Options(options...).
+				Value(&selectedModel),
+		),
+	).Run()
+
+	if err != nil {
+		return err
+	}
+
+	// Save selected model as default
+	appCfg.General.DefaultModel = selectedModel
+	fmt.Printf("Selected default model: %s\n", selectedModel)
+
+	return nil
+}
+
+func fetchAndSelectOpenAICompatModel(pCfg config.ProviderConfig, appCfg *config.AppConfig) error {
+	apiKey := pCfg["api_key"]
+	baseURL := pCfg["base_url"]
+	if baseURL == "" {
+		baseURL = "https://api.openai.com/v1"
+	}
+
+	fmt.Println("Fetching available models...")
+	runSpinner("Connecting to OpenAI Compatible endpoint...")
+
+	models, err := openai_compat.ListModels(context.Background(), apiKey, baseURL)
+	if err != nil {
+		return err
+	}
+
+	if len(models) == 0 {
+		return fmt.Errorf("no models found")
+	}
+
+	// Create options for huh.Select
+	var options []huh.Option[string]
+	for _, m := range models {
+		options = append(options, huh.NewOption(m, m))
+	}
+
+	var selectedModel string
+
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select a Model").
 				Options(options...).
 				Value(&selectedModel),
 		),

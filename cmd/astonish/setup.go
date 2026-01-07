@@ -37,45 +37,71 @@ func handleSetupCommand() error {
 		}
 	}
 
-	// --- STEP 1: Provider Selection ---
-	var selectedProviderID string
+	// Build list of existing providers with their types
+	var existingOptions []huh.Option[string]
+	existingProviderTypes := make(map[string]string)
 
-	// Define options using centralized display names
-	options := []huh.Option[string]{
-		huh.NewOption(provider.GetProviderDisplayName("anthropic"), "anthropic"),
-		huh.NewOption(provider.GetProviderDisplayName("gemini"), "gemini"),
-		huh.NewOption(provider.GetProviderDisplayName("groq"), "groq"),
-		huh.NewOption(provider.GetProviderDisplayName("litellm"), "litellm"),
-		huh.NewOption(provider.GetProviderDisplayName("lm_studio"), "lm_studio"),
-		huh.NewOption(provider.GetProviderDisplayName("ollama"), "ollama"),
-		huh.NewOption(provider.GetProviderDisplayName("openai"), "openai"),
-		huh.NewOption(provider.GetProviderDisplayName("openrouter"), "openrouter"),
-		huh.NewOption(provider.GetProviderDisplayName("poe"), "poe"),
-		huh.NewOption(provider.GetProviderDisplayName("sap_ai_core"), "sap_ai_core"),
-		huh.NewOption(provider.GetProviderDisplayName("xai"), "xai"),
+	for name, pCfg := range cfg.Providers {
+		providerType := config.GetProviderType(name, pCfg)
+		displayName := provider.GetProviderDisplayName(providerType)
+		if displayName == "" {
+			displayName = name
+		}
+		label := fmt.Sprintf("%s (%s)", name, displayName)
+		existingOptions = append(existingOptions, huh.NewOption(label, name))
+		existingProviderTypes[name] = providerType
 	}
 
-	// Run selection form
+	// Sort existing options by name
+	sort.Slice(existingOptions, func(i, j int) bool {
+		return existingOptions[i].Value < existingOptions[j].Value
+	})
+
+	// Add "Add new provider" option at the end
+	const addNewValue = "__add_new__"
+	existingOptions = append(existingOptions, huh.NewOption("+ Add new provider", addNewValue))
+
+	// --- STEP 1: Select existing or add new ---
+	var selectedInstance string
+
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
-				Title("Select a provider to configure").
-				Options(options...).
-				Value(&selectedProviderID),
+				Title("Select a provider instance to configure").
+				Description("Choose an existing provider or add a new one").
+				Options(existingOptions...).
+				Value(&selectedInstance),
 		),
 	).Run()
 	if err != nil {
 		return err
 	}
 
-	// Initialize provider config if nil
-	if cfg.Providers[selectedProviderID] == nil {
-		cfg.Providers[selectedProviderID] = make(config.ProviderConfig)
+	var isNewProvider bool
+	var selectedProviderID string
+
+	if selectedInstance == addNewValue {
+		isNewProvider = true
+		// --- STEP 2: Provider Type (for new provider) ---
+		selectedProviderID = selectProviderType()
+		// Initialize provider config for new provider
+		cfg.Providers[addNewValue] = make(config.ProviderConfig)
+	} else {
+		// Editing existing provider
+		selectedProviderID = existingProviderTypes[selectedInstance]
+		if selectedProviderID == "" {
+			// Fallback: try to infer from instance name
+			selectedProviderID = selectedInstance
+		}
+		// Initialize provider config if nil
+		if cfg.Providers[selectedInstance] == nil {
+			cfg.Providers[selectedInstance] = make(config.ProviderConfig)
+		}
 	}
 
-	pCfg := cfg.Providers[selectedProviderID]
+	pCfg := cfg.Providers[selectedInstance]
 
-	// --- STEP 2: Configuration Form ---
+	// --- STEP 3: Configuration Form ---
 	switch selectedProviderID {
 	case "anthropic":
 		runAPIKeyForm("Anthropic API Key", "api_key", pCfg)
@@ -201,9 +227,12 @@ func handleSetupCommand() error {
 			// Skip generic model selection if we did it specifically for SAP
 			goto SaveConfig
 		}
+	default:
+		// Unknown provider type - ask for instance name to continue
+		selectedProviderID = selectProviderType()
 	}
 
-	// --- STEP 3: Default Model Selection (Generic) ---
+	// --- STEP 4: Default Model Selection (Generic) ---
 	// Only ask if not already handled (like in SAP AI Core)
 	{
 		var defaultModel string = cfg.General.DefaultModel
@@ -221,16 +250,88 @@ func handleSetupCommand() error {
 	}
 
 SaveConfig:
+	// For new providers, ask for instance name at the end
+	if isNewProvider {
+		var instanceName string
+		err = huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Provider Instance Name").
+					Description("Unique name for this provider instance").
+					Value(&instanceName),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
+		instanceName = strings.TrimSpace(instanceName)
+		if instanceName == "" {
+			return fmt.Errorf("instance name is required")
+		}
+
+		// Migrate config from temp key to final name
+		if instanceName != selectedInstance {
+			cfg.Providers[instanceName] = pCfg
+			cfg.Providers[instanceName]["type"] = selectedProviderID
+			delete(cfg.Providers, selectedInstance)
+			selectedInstance = instanceName
+		} else {
+			cfg.Providers[instanceName]["type"] = selectedProviderID
+		}
+	} else if cfg.Providers[selectedInstance] != nil {
+		// Ensure type is set for existing providers
+		if cfg.Providers[selectedInstance]["type"] == "" {
+			cfg.Providers[selectedInstance]["type"] = selectedProviderID
+		}
+	}
+
 	// Set as default provider
-	cfg.General.DefaultProvider = selectedProviderID
+	cfg.General.DefaultProvider = selectedInstance
 
 	// Save config
 	if err := config.SaveAppConfig(cfg); err != nil {
 		return fmt.Errorf("error saving config: %w", err)
 	}
 
-	printSuccess(fmt.Sprintf("%s configured successfully!", selectedProviderID))
+	displayName := provider.GetProviderDisplayName(selectedProviderID)
+	if displayName == "" {
+		displayName = selectedProviderID
+	}
+	printSuccess(fmt.Sprintf("%s (%s) configured successfully!", selectedInstance, displayName))
 	return nil
+}
+
+// selectProviderType shows the provider type selection and returns the selected type
+func selectProviderType() string {
+	var selectedProviderID string
+
+	providerTypeOptions := []huh.Option[string]{
+		huh.NewOption(provider.GetProviderDisplayName("anthropic"), "anthropic"),
+		huh.NewOption(provider.GetProviderDisplayName("gemini"), "gemini"),
+		huh.NewOption(provider.GetProviderDisplayName("groq"), "groq"),
+		huh.NewOption(provider.GetProviderDisplayName("litellm"), "litellm"),
+		huh.NewOption(provider.GetProviderDisplayName("lm_studio"), "lm_studio"),
+		huh.NewOption(provider.GetProviderDisplayName("ollama"), "ollama"),
+		huh.NewOption(provider.GetProviderDisplayName("openai"), "openai"),
+		huh.NewOption(provider.GetProviderDisplayName("openrouter"), "openrouter"),
+		huh.NewOption(provider.GetProviderDisplayName("poe"), "poe"),
+		huh.NewOption(provider.GetProviderDisplayName("sap_ai_core"), "sap_ai_core"),
+		huh.NewOption(provider.GetProviderDisplayName("xai"), "xai"),
+	}
+
+	err := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select provider type").
+				Options(providerTypeOptions...).
+				Value(&selectedProviderID),
+		),
+	).Run()
+	if err != nil {
+		return ""
+	}
+
+	return selectedProviderID
 }
 
 // Helper functions for forms

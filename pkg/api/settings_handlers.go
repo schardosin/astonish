@@ -38,6 +38,7 @@ type GeneralSettings struct {
 // ProviderSettings represents a provider's configuration (masked)
 type ProviderSettings struct {
 	Name        string            `json:"name"`
+	Type        string            `json:"type"`
 	DisplayName string            `json:"display_name"`
 	Configured  bool              `json:"configured"`
 	Fields      map[string]string `json:"fields"` // Masked values for display
@@ -63,38 +64,33 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build response with masked provider values
+	// Build response with all provider instances
 	providers := []ProviderSettings{}
 
-	// List all known providers (alphabetically ordered)
-	knownProviders := []string{"anthropic", "gemini", "groq", "litellm", "lm_studio", "ollama", "openai", "openrouter", "poe", "sap_ai_core", "xai"}
+	// List all provider instances (instance names are keys in cfg.Providers)
+	for instanceName, instanceConfig := range cfg.Providers {
+		// Determine provider type and display name
+		providerType := config.GetProviderType(instanceName, instanceConfig)
+		displayName := provider.GetProviderDisplayName(providerType)
+		if displayName == "" {
+			displayName = instanceName
+		}
 
-	for _, name := range knownProviders {
-		providerCfg, exists := cfg.Providers[name]
+		// Filter out "type" field from display (it's metadata, not a credential)
 		fields := make(map[string]string)
 		configured := false
 
-		// Get expected fields for this provider
-		if mapping, ok := config.ProviderEnvMapping[name]; ok {
-			for cfgKey := range mapping {
-				if exists && providerCfg[cfgKey] != "" {
-					// Mask the value (show last 4 chars)
-					val := providerCfg[cfgKey]
-					if len(val) > 4 {
-						fields[cfgKey] = "****" + val[len(val)-4:]
-					} else {
-						fields[cfgKey] = "****"
-					}
-					configured = true
-				} else {
-					fields[cfgKey] = ""
-				}
+		for key, val := range instanceConfig {
+			if key != "type" && val != "" {
+				fields[key] = val
+				configured = true
 			}
 		}
 
 		providers = append(providers, ProviderSettings{
-			Name:        name,
-			DisplayName: provider.GetProviderDisplayName(name),
+			Name:        instanceName,
+			Type:        providerType,
+			DisplayName: displayName,
 			Configured:  configured,
 			Fields:      fields,
 		})
@@ -139,17 +135,47 @@ func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Update provider settings if provided
 	if req.Providers != nil {
-		for providerName, providerFields := range req.Providers {
-			if cfg.Providers == nil {
-				cfg.Providers = make(map[string]config.ProviderConfig)
+		// Check if this is a full providers array replacement (DELETE + ADD workflow)
+		if len(req.Providers) > 0 {
+			firstKey := ""
+			for k := range req.Providers {
+				firstKey = k
+				break
 			}
-			if cfg.Providers[providerName] == nil {
-				cfg.Providers[providerName] = make(config.ProviderConfig)
-			}
-			for key, value := range providerFields {
-				// Only update if value is not masked placeholder
-				if value != "" && !isMaskedValue(value) {
-					cfg.Providers[providerName][key] = value
+			// If the first key is "__replace_all__", treat providers as full replacement array
+			if firstKey == "__replace_all__" {
+				var newProviders []map[string]string
+				if err := json.Unmarshal([]byte(req.Providers["__replace_all__"]["__array__"]), &newProviders); err == nil {
+					// Build new providers map from array
+					newProvidersMap := make(map[string]config.ProviderConfig)
+					for _, p := range newProviders {
+						name := p["name"]
+						if name != "" {
+							newProvidersMap[name] = make(config.ProviderConfig)
+							for k, v := range p {
+								if k != "name" {
+									newProvidersMap[name][k] = v
+								}
+							}
+						}
+					}
+					cfg.Providers = newProvidersMap
+				}
+			} else {
+				// Original behavior: update individual provider fields
+				for providerName, providerFields := range req.Providers {
+					if cfg.Providers == nil {
+						cfg.Providers = make(map[string]config.ProviderConfig)
+					}
+					if cfg.Providers[providerName] == nil {
+						cfg.Providers[providerName] = make(config.ProviderConfig)
+					}
+					for key, value := range providerFields {
+						// Only update if value is not masked placeholder
+						if value != "" && !isMaskedValue(value) {
+							cfg.Providers[providerName][key] = value
+						}
+					}
 				}
 			}
 		}

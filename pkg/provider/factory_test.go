@@ -1,0 +1,236 @@
+package provider
+
+import (
+	"context"
+	"testing"
+
+	"github.com/schardosin/astonish/pkg/config"
+)
+
+func TestGetProviderDisplayName(t *testing.T) {
+	tests := []struct {
+		providerType string
+		expected     string
+	}{
+		{"openai", "OpenAI"},
+		{"anthropic", "Anthropic"},
+		{"gemini", "Google GenAI"},
+		{"groq", "Groq"},
+		{"litellm", "LiteLLM"},
+		{"lm_studio", "LM Studio"},
+		{"ollama", "Ollama"},
+		{"openrouter", "Openrouter"},
+		{"poe", "Poe"},
+		{"sap_ai_core", "SAP AI Core"},
+		{"xai", "xAI"},
+		{"unknown", "unknown"},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.providerType, func(t *testing.T) {
+			result := GetProviderDisplayName(tt.providerType)
+			if result != tt.expected {
+				t.Errorf("GetProviderDisplayName(%q) = %q, expected %q",
+					tt.providerType, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGetProviderIDs(t *testing.T) {
+	ids := GetProviderIDs()
+
+	if len(ids) == 0 {
+		t.Error("GetProviderIDs returned empty slice")
+	}
+
+	expectedCount := 11
+	if len(ids) != expectedCount {
+		t.Errorf("GetProviderIDs returned %d IDs, expected %d", len(ids), expectedCount)
+	}
+
+	idSet := make(map[string]bool)
+	for _, id := range ids {
+		if idSet[id] {
+			t.Errorf("duplicate provider ID: %s", id)
+		}
+		idSet[id] = true
+	}
+
+	expectedIDs := []string{"anthropic", "gemini", "groq", "litellm", "lm_studio", "ollama", "openai", "openrouter", "poe", "sap_ai_core", "xai"}
+	for _, expected := range expectedIDs {
+		if !idSet[expected] {
+			t.Errorf("expected provider ID %s not found", expected)
+		}
+	}
+}
+
+func TestGetProvider_InstanceLookup(t *testing.T) {
+	cfg := &config.AppConfig{
+		Providers: map[string]config.ProviderConfig{
+			"openai-prod": {"type": "openai", "api_key": "sk-prod-key"},
+			"openai-dev":  {"type": "openai", "api_key": "sk-dev-key"},
+			"anthropic":   {"api_key": "sk-ant-..."},
+			"litellm-dev": {"type": "litellm", "api_key": "sk-litellm"},
+		},
+	}
+
+	tests := []struct {
+		name         string
+		instanceName string
+		modelName    string
+		expectError  bool
+	}{
+		{"new format with explicit type", "openai-prod", "gpt-4o", false},
+		{"new format dev instance", "openai-dev", "gpt-4o", false},
+		{"old format instance name", "anthropic", "claude-3-opus-20240229", false},
+		{"litellm with type", "litellm-dev", "gpt-4", false},
+		{"nonexistent instance", "nonexistent", "gpt-4", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := GetProvider(context.Background(), tt.instanceName, tt.modelName, cfg)
+			if tt.expectError && err == nil {
+				t.Errorf("expected error for instance %q, got nil", tt.instanceName)
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("unexpected error for instance %q: %v", tt.instanceName, err)
+			}
+		})
+	}
+}
+
+func TestGetProvider_BackwardCompatibility(t *testing.T) {
+	cfg := &config.AppConfig{
+		Providers: map[string]config.ProviderConfig{
+			"openai": {"api_key": "sk-old-key"},
+			"gemini": {"api_key": "AIza-old-key"},
+		},
+	}
+
+	tests := []struct {
+		name         string
+		instanceName string
+		modelName    string
+	}{
+		{"openai old format", "openai", "gpt-4"},
+		{"gemini old format", "gemini", "gemini-1.5-flash"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider, err := GetProvider(context.Background(), tt.instanceName, tt.modelName, cfg)
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if provider == nil {
+				t.Error("expected non-nil provider")
+			}
+		})
+	}
+}
+
+func TestGetProvider_MissingAPIKey(t *testing.T) {
+	cfg := &config.AppConfig{
+		Providers: map[string]config.ProviderConfig{
+			"openai-test": {"type": "openai"},
+		},
+	}
+
+	_, err := GetProvider(context.Background(), "openai-test", "gpt-4", cfg)
+	if err == nil {
+		t.Error("expected error for missing API key, got nil")
+	}
+}
+
+func TestListModelsForProvider_InstanceLookup(t *testing.T) {
+	cfg := &config.AppConfig{
+		Providers: map[string]config.ProviderConfig{
+			"openai-prod": {"type": "openai", "api_key": "sk-prod-key"},
+			"openai-dev":  {"type": "openai", "api_key": "sk-dev-key"},
+			"anthropic":   {"api_key": "sk-ant-..."},
+		},
+	}
+
+	tests := []struct {
+		name         string
+		instanceName string
+		expectError  bool
+	}{
+		{"new format instance", "openai-prod", true},
+		{"old format instance", "anthropic", true},
+		{"nonexistent instance", "nonexistent", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ListModelsForProvider(context.Background(), tt.instanceName, cfg)
+			if !tt.expectError && err == nil {
+				t.Error("expected models or error")
+			}
+			if tt.expectError && err == nil {
+				t.Errorf("expected error for instance %q, got nil", tt.instanceName)
+			}
+		})
+	}
+}
+
+func TestListModelsForProvider_MissingAPIKey(t *testing.T) {
+	cfg := &config.AppConfig{
+		Providers: map[string]config.ProviderConfig{
+			"openai-test": {"type": "openai"},
+		},
+	}
+
+	_, err := ListModelsForProvider(context.Background(), "openai-test", cfg)
+	if err == nil {
+		t.Error("expected error for missing API key, got nil")
+	}
+}
+
+func TestProviderDisplayNames_AllHaveDisplayNames(t *testing.T) {
+	ids := GetProviderIDs()
+	for _, id := range ids {
+		name := GetProviderDisplayName(id)
+		if name == "" {
+			t.Errorf("provider %s has empty display name", id)
+		}
+		if name == id {
+			t.Errorf("provider %s display name should be different from ID", id)
+		}
+	}
+}
+
+func TestGetProvider_MultipleInstances(t *testing.T) {
+	cfg := &config.AppConfig{
+		Providers: map[string]config.ProviderConfig{
+			"openai-prod": {
+				"type":    "openai",
+				"api_key": "prod-key-12345",
+			},
+			"openai-dev": {
+				"type":    "openai",
+				"api_key": "dev-key-67890",
+			},
+			"anthropic-prod": {
+				"type":    "anthropic",
+				"api_key": "prod-anthropic-key",
+			},
+		},
+	}
+
+	instances := []string{"openai-prod", "openai-dev", "anthropic-prod"}
+	for _, instance := range instances {
+		t.Run(instance, func(t *testing.T) {
+			provider, err := GetProvider(context.Background(), instance, "test-model", cfg)
+			if err != nil {
+				t.Fatalf("failed to get provider %s: %v", instance, err)
+			}
+			if provider == nil {
+				t.Errorf("provider %s is nil", instance)
+			}
+		})
+	}
+}

@@ -21,6 +21,33 @@ type GeneralConfig struct {
 
 type ProviderConfig map[string]string
 
+// GetProviderType returns the provider type for a given provider instance.
+// For new format: checks explicit "type" field
+// For old format (backward compatible): uses instance name if it matches known provider type
+// Returns empty string if neither is valid (caller should handle error)
+func GetProviderType(instanceName string, instance ProviderConfig) string {
+	if instance == nil {
+		return ""
+	}
+
+	if providerType, ok := instance["type"]; ok && providerType != "" {
+		return providerType
+	}
+
+	knownTypes := []string{
+		"anthropic", "gemini", "groq", "litellm", "lm_studio",
+		"ollama", "openai", "openrouter", "poe", "sap_ai_core", "xai",
+	}
+
+	for _, knownType := range knownTypes {
+		if instanceName == knownType {
+			return instanceName
+		}
+	}
+
+	return ""
+}
+
 func GetConfigDir() (string, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {

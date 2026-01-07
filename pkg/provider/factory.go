@@ -58,13 +58,23 @@ func GetProviderIDs() []string {
 	return ids
 }
 
-// GetProvider returns an LLM model based on the provider name.
-func GetProvider(ctx context.Context, name string, modelName string, cfg *config.AppConfig) (model.LLM, error) {
-	switch name {
+// GetProvider returns an LLM model based on a provider instance name.
+func GetProvider(ctx context.Context, instanceName string, modelName string, cfg *config.AppConfig) (model.LLM, error) {
+	instance, exists := cfg.Providers[instanceName]
+	if !exists {
+		return nil, fmt.Errorf("provider instance '%s' not found", instanceName)
+	}
+
+	providerType := config.GetProviderType(instanceName, instance)
+	if providerType == "" {
+		return nil, fmt.Errorf("provider instance '%s' has no 'type' field and name is not a known provider type", instanceName)
+	}
+
+	switch providerType {
 	case "anthropic":
-		apiKey := os.Getenv("ANTHROPIC_API_KEY")
-		if apiKey == "" && cfg != nil {
-			apiKey = cfg.Providers["anthropic"]["api_key"]
+		apiKey := instance["api_key"]
+		if apiKey == "" {
+			apiKey = os.Getenv("ANTHROPIC_API_KEY")
 		}
 		if apiKey == "" {
 			return nil, fmt.Errorf("ANTHROPIC_API_KEY not set")
@@ -75,9 +85,9 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 		return anthropic.NewProvider(apiKey, modelName), nil
 
 	case "google_genai", "gemini":
-		apiKey := os.Getenv("GOOGLE_API_KEY")
-		if apiKey == "" && cfg != nil {
-			apiKey = cfg.Providers["gemini"]["api_key"]
+		apiKey := instance["api_key"]
+		if apiKey == "" {
+			apiKey = os.Getenv("GOOGLE_API_KEY")
 		}
 		if apiKey == "" {
 			return nil, fmt.Errorf("GOOGLE_API_KEY not set")
@@ -88,9 +98,9 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 		return google.NewProvider(ctx, modelName, apiKey)
 
 	case "openai":
-		apiKey := os.Getenv("OPENAI_API_KEY")
-		if apiKey == "" && cfg != nil {
-			apiKey = cfg.Providers["openai"]["api_key"]
+		apiKey := instance["api_key"]
+		if apiKey == "" {
+			apiKey = os.Getenv("OPENAI_API_KEY")
 		}
 		if apiKey == "" {
 			return nil, fmt.Errorf("OPENAI_API_KEY not set")
@@ -102,9 +112,9 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 		return openai_provider.NewProvider(client, modelName, true), nil
 
 	case "openrouter":
-		apiKey := os.Getenv("OPENROUTER_API_KEY")
-		if apiKey == "" && cfg != nil {
-			apiKey = cfg.Providers["openrouter"]["api_key"]
+		apiKey := instance["api_key"]
+		if apiKey == "" {
+			apiKey = os.Getenv("OPENROUTER_API_KEY")
 		}
 		if apiKey == "" {
 			return nil, fmt.Errorf("OPENROUTER_API_KEY not set")
@@ -117,8 +127,6 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 		config.BaseURL = "https://openrouter.ai/api/v1"
 		client := openai.NewClientWithConfig(config)
 
-		// Fetch max_completion_tokens from OpenRouter API metadata
-		// This avoids OpenRouter's low defaults that can truncate output
 		maxTokens := openrouter.GetMaxCompletionTokens(ctx, apiKey, modelName)
 		if maxTokens > 0 {
 			log.Printf("[OpenRouter] Model %s: setting max_completion_tokens=%d", modelName, maxTokens)
@@ -127,9 +135,9 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 		return openai_provider.NewProvider(client, modelName, true), nil
 
 	case "poe":
-		apiKey := os.Getenv("POE_API_KEY")
-		if apiKey == "" && cfg != nil {
-			apiKey = cfg.Providers["poe"]["api_key"]
+		apiKey := instance["api_key"]
+		if apiKey == "" {
+			apiKey = os.Getenv("POE_API_KEY")
 		}
 		if apiKey == "" {
 			return nil, fmt.Errorf("POE_API_KEY not set")
@@ -145,27 +153,20 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 
 	case "ollama":
 		baseURL := "http://localhost:11434"
-		if cfg != nil && cfg.Providers["ollama"] != nil {
-			if val, ok := cfg.Providers["ollama"]["base_url"]; ok && val != "" {
-				baseURL = val
-			}
+		if instance["base_url"] != "" {
+			baseURL = instance["base_url"]
 		}
 		if modelName == "" {
 			return nil, fmt.Errorf("model name required for ollama")
 		}
 
-		// Use OpenAI client with Ollama base URL
-		// Note: Ollama's OpenAI compatible endpoint is at /v1
-		config := openai.DefaultConfig("ollama") // API key not required but must be non-empty string
+		config := openai.DefaultConfig("ollama")
 		config.BaseURL = fmt.Sprintf("%s/v1", baseURL)
 		client := openai.NewClientWithConfig(config)
 		return openai_provider.NewProvider(client, modelName, true), nil
 
 	case "groq":
-		apiKey := ""
-		if cfg != nil && cfg.Providers["groq"] != nil {
-			apiKey = cfg.Providers["groq"]["api_key"]
-		}
+		apiKey := instance["api_key"]
 		if apiKey == "" {
 			apiKey = os.Getenv("GROQ_API_KEY")
 		}
@@ -183,10 +184,8 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 
 	case "lm_studio":
 		baseURL := "http://localhost:1234/v1"
-		if cfg != nil && cfg.Providers["lm_studio"] != nil {
-			if val, ok := cfg.Providers["lm_studio"]["base_url"]; ok && val != "" {
-				baseURL = val
-			}
+		if instance["base_url"] != "" {
+			baseURL = instance["base_url"]
 		}
 		if modelName == "" {
 			return nil, fmt.Errorf("model name required for lm_studio")
@@ -198,16 +197,14 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 		return openai_provider.NewProvider(client, modelName, false), nil
 
 	case "litellm":
-		apiKey := os.Getenv("LITELLM_API_KEY")
-		if apiKey == "" && cfg != nil && cfg.Providers["litellm"] != nil {
-			apiKey = cfg.Providers["litellm"]["api_key"]
+		apiKey := instance["api_key"]
+		if apiKey == "" {
+			apiKey = os.Getenv("LITELLM_API_KEY")
 		}
 
 		baseURL := "http://localhost:4000"
-		if cfg != nil && cfg.Providers["litellm"] != nil {
-			if val, ok := cfg.Providers["litellm"]["base_url"]; ok && val != "" {
-				baseURL = strings.TrimSuffix(val, "/v1")
-			}
+		if instance["base_url"] != "" {
+			baseURL = strings.TrimSuffix(instance["base_url"], "/v1")
 		}
 		if modelName == "" {
 			return nil, fmt.Errorf("model name required for litellm")
@@ -218,41 +215,37 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 		if modelName == "" {
 			return nil, fmt.Errorf("model name required for sap_ai_core")
 		}
-		// Try environment variables first, then config
-		clientID := os.Getenv("AICORE_CLIENT_ID")
-		clientSecret := os.Getenv("AICORE_CLIENT_SECRET")
-		authURL := os.Getenv("AICORE_AUTH_URL")
-		baseURL := os.Getenv("AICORE_BASE_URL")
-		resourceGroup := os.Getenv("AICORE_RESOURCE_GROUP")
 
-		if cfg != nil && cfg.Providers["sap_ai_core"] != nil {
-			pCfg := cfg.Providers["sap_ai_core"]
-			if clientID == "" {
-				clientID = pCfg["client_id"]
-			}
-			if clientSecret == "" {
-				clientSecret = pCfg["client_secret"]
-			}
-			if authURL == "" {
-				authURL = pCfg["auth_url"]
-			}
-			if baseURL == "" {
-				baseURL = pCfg["base_url"]
-			}
-			if resourceGroup == "" {
-				resourceGroup = pCfg["resource_group"]
-			}
+		clientID := instance["client_id"]
+		if clientID == "" {
+			clientID = os.Getenv("AICORE_CLIENT_ID")
+		}
+		clientSecret := instance["client_secret"]
+		if clientSecret == "" {
+			clientSecret = os.Getenv("AICORE_CLIENT_SECRET")
+		}
+		authURL := instance["auth_url"]
+		if authURL == "" {
+			authURL = os.Getenv("AICORE_AUTH_URL")
+		}
+		baseURL := instance["base_url"]
+		if baseURL == "" {
+			baseURL = os.Getenv("AICORE_BASE_URL")
+		}
+		resourceGroup := instance["resource_group"]
+		if resourceGroup == "" {
+			resourceGroup = os.Getenv("AICORE_RESOURCE_GROUP")
 		}
 
 		if clientID == "" || clientSecret == "" || authURL == "" || baseURL == "" {
-			return nil, fmt.Errorf("SAP AI Core configuration incomplete (need AICORE_CLIENT_ID, AICORE_CLIENT_SECRET, AICORE_AUTH_URL, AICORE_BASE_URL)")
+			return nil, fmt.Errorf("SAP AI Core configuration incomplete")
 		}
 		return sap.NewProviderWithConfig(ctx, modelName, clientID, clientSecret, authURL, baseURL, resourceGroup)
 
 	case "xai", "grok":
-		apiKey := os.Getenv("XAI_API_KEY")
-		if apiKey == "" && cfg != nil {
-			apiKey = cfg.Providers["xai"]["api_key"]
+		apiKey := instance["api_key"]
+		if apiKey == "" {
+			apiKey = os.Getenv("XAI_API_KEY")
 		}
 		if apiKey == "" {
 			return nil, fmt.Errorf("XAI_API_KEY not set")
@@ -267,19 +260,28 @@ func GetProvider(ctx context.Context, name string, modelName string, cfg *config
 		return openai_provider.NewProvider(client, modelName, true), nil
 
 	default:
-		return nil, fmt.Errorf("unsupported provider: %s", name)
+		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
 	}
 }
 
-// ListModelsForProvider fetches available models for a given provider.
+// ListModelsForProvider fetches available models for a given provider instance.
 // This is used by the API to provide model lists to the UI.
 func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.AppConfig) ([]string, error) {
-	switch providerID {
+	instance, exists := cfg.Providers[providerID]
+	if !exists {
+		return nil, fmt.Errorf("provider instance '%s' not found", providerID)
+	}
+
+	providerType := config.GetProviderType(providerID, instance)
+	if providerType == "" {
+		return nil, fmt.Errorf("provider instance '%s' has no 'type' field and name is not a known provider type", providerID)
+	}
+
+	instanceConfig := instance
+
+	switch providerType {
 	case "anthropic":
-		apiKey := ""
-		if cfg != nil && cfg.Providers["anthropic"] != nil {
-			apiKey = cfg.Providers["anthropic"]["api_key"]
-		}
+		apiKey := instanceConfig["api_key"]
 		if apiKey == "" {
 			apiKey = os.Getenv("ANTHROPIC_API_KEY")
 		}
@@ -289,10 +291,7 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 		return anthropic.ListModels(ctx, apiKey)
 
 	case "google_genai", "gemini":
-		apiKey := ""
-		if cfg != nil && cfg.Providers["gemini"] != nil {
-			apiKey = cfg.Providers["gemini"]["api_key"]
-		}
+		apiKey := instanceConfig["api_key"]
 		if apiKey == "" {
 			apiKey = os.Getenv("GOOGLE_API_KEY")
 		}
@@ -302,10 +301,7 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 		return google.ListModels(ctx, apiKey)
 
 	case "openai":
-		apiKey := ""
-		if cfg != nil && cfg.Providers["openai"] != nil {
-			apiKey = cfg.Providers["openai"]["api_key"]
-		}
+		apiKey := instanceConfig["api_key"]
 		if apiKey == "" {
 			apiKey = os.Getenv("OPENAI_API_KEY")
 		}
@@ -315,10 +311,7 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 		return openai_provider.ListModels(ctx, apiKey)
 
 	case "groq":
-		apiKey := ""
-		if cfg != nil && cfg.Providers["groq"] != nil {
-			apiKey = cfg.Providers["groq"]["api_key"]
-		}
+		apiKey := instanceConfig["api_key"]
 		if apiKey == "" {
 			apiKey = os.Getenv("GROQ_API_KEY")
 		}
@@ -328,10 +321,7 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 		return groq.ListModels(ctx, apiKey)
 
 	case "xai":
-		apiKey := ""
-		if cfg != nil && cfg.Providers["xai"] != nil {
-			apiKey = cfg.Providers["xai"]["api_key"]
-		}
+		apiKey := instanceConfig["api_key"]
 		if apiKey == "" {
 			apiKey = os.Getenv("XAI_API_KEY")
 		}
@@ -342,46 +332,39 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 
 	case "ollama":
 		baseURL := "http://localhost:11434"
-		if cfg != nil && cfg.Providers["ollama"] != nil {
-			if val, ok := cfg.Providers["ollama"]["base_url"]; ok && val != "" {
-				baseURL = val
-			}
+		if instanceConfig["base_url"] != "" {
+			baseURL = instanceConfig["base_url"]
 		}
 		return ollama.ListModels(ctx, baseURL)
 
 	case "lm_studio":
 		baseURL := "http://localhost:1234/v1"
-		if cfg != nil && cfg.Providers["lm_studio"] != nil {
-			if val, ok := cfg.Providers["lm_studio"]["base_url"]; ok && val != "" {
-				baseURL = val
-			}
+		if instanceConfig["base_url"] != "" {
+			baseURL = instanceConfig["base_url"]
 		}
 		return lmstudio.ListModels(ctx, baseURL)
 
 	case "litellm":
-		apiKey := os.Getenv("LITELLM_API_KEY")
-		if apiKey == "" && cfg != nil && cfg.Providers["litellm"] != nil {
-			apiKey = cfg.Providers["litellm"]["api_key"]
+		apiKey := instanceConfig["api_key"]
+		if apiKey == "" {
+			apiKey = os.Getenv("LITELLM_API_KEY")
 		}
 
 		baseURL := "http://localhost:4000/v1"
-		if cfg != nil && cfg.Providers["litellm"] != nil {
-			if val, ok := cfg.Providers["litellm"]["base_url"]; ok && val != "" {
-				baseURL = val
-			}
+		if instanceConfig["base_url"] != "" {
+			baseURL = instanceConfig["base_url"]
 		}
 		return litellm.ListModels(ctx, apiKey, baseURL)
 
 	case "openrouter":
-		apiKey := os.Getenv("OPENROUTER_API_KEY")
-		if apiKey == "" && cfg != nil && cfg.Providers["openrouter"] != nil {
-			apiKey = cfg.Providers["openrouter"]["api_key"]
+		apiKey := instanceConfig["api_key"]
+		if apiKey == "" {
+			apiKey = os.Getenv("OPENROUTER_API_KEY")
 		}
 		models, err := openrouter.ListModels(apiKey)
 		if err != nil {
 			return nil, err
 		}
-		// Convert DisplayModel to string list
 		var modelNames []string
 		for _, m := range models {
 			modelNames = append(modelNames, m.ID)
@@ -389,43 +372,32 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 		return modelNames, nil
 
 	case "poe":
-		apiKey := ""
-		if cfg != nil && cfg.Providers["poe"] != nil {
-			apiKey = cfg.Providers["poe"]["api_key"]
-		}
+		apiKey := instanceConfig["api_key"]
 		if apiKey == "" {
 			apiKey = os.Getenv("POE_API_KEY")
-		}
-		if apiKey == "" {
-			return nil, fmt.Errorf("Poe API key not configured")
 		}
 		return poe.ListModels(ctx, apiKey)
 
 	case "sap_ai_core":
-		// Try environment variables first, then config
-		clientID := os.Getenv("AICORE_CLIENT_ID")
-		clientSecret := os.Getenv("AICORE_CLIENT_SECRET")
-		authURL := os.Getenv("AICORE_AUTH_URL")
-		baseURL := os.Getenv("AICORE_BASE_URL")
-		resourceGroup := os.Getenv("AICORE_RESOURCE_GROUP")
-
-		if cfg != nil && cfg.Providers["sap_ai_core"] != nil {
-			pCfg := cfg.Providers["sap_ai_core"]
-			if clientID == "" {
-				clientID = pCfg["client_id"]
-			}
-			if clientSecret == "" {
-				clientSecret = pCfg["client_secret"]
-			}
-			if authURL == "" {
-				authURL = pCfg["auth_url"]
-			}
-			if baseURL == "" {
-				baseURL = pCfg["base_url"]
-			}
-			if resourceGroup == "" {
-				resourceGroup = pCfg["resource_group"]
-			}
+		clientID := instanceConfig["client_id"]
+		if clientID == "" {
+			clientID = os.Getenv("AICORE_CLIENT_ID")
+		}
+		clientSecret := instanceConfig["client_secret"]
+		if clientSecret == "" {
+			clientSecret = os.Getenv("AICORE_CLIENT_SECRET")
+		}
+		authURL := instanceConfig["auth_url"]
+		if authURL == "" {
+			authURL = os.Getenv("AICORE_AUTH_URL")
+		}
+		baseURL := instanceConfig["base_url"]
+		if baseURL == "" {
+			baseURL = os.Getenv("AICORE_BASE_URL")
+		}
+		resourceGroup := instanceConfig["resource_group"]
+		if resourceGroup == "" {
+			resourceGroup = os.Getenv("AICORE_RESOURCE_GROUP")
 		}
 
 		if clientID == "" || clientSecret == "" || authURL == "" || baseURL == "" {
@@ -434,6 +406,6 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 		return sap.ListModels(ctx, clientID, clientSecret, authURL, baseURL, resourceGroup)
 
 	default:
-		return nil, fmt.Errorf("unsupported provider: %s", providerID)
+		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
 	}
 }

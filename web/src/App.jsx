@@ -55,6 +55,7 @@ function App() {
   const [toast, setToast] = useState(null) // { message, type: 'success' | 'error' | 'info', action?: { label, onClick }, persistent?: boolean }
   const [showUpgradeDialog, setShowUpgradeDialog] = useState(false) // { version, url }
   const [updateAvailable, setUpdateAvailable] = useState(null) // { version, url }
+  const [appVersion, setAppVersion] = useState('dev') // App version from backend
 
   // Flow State
   const [availableTools, setAvailableTools] = useState([])
@@ -167,7 +168,13 @@ function App() {
         return
       }
       const versionData = await versionRes.json()
-      const currentVersion = (versionData.version || 'dev').replace(/^v/, '')
+      const currentVersion = (versionData.version || 'dev').replace(/^v/, '').trim()
+      setAppVersion(currentVersion)
+
+      // Skip update check if running development version
+      if (currentVersion === 'dev' || currentVersion === '') {
+        return
+      }
 
       // Check GitHub for latest release
       const releaseRes = await fetch('https://api.github.com/repos/schardosin/astonish/releases/latest')
@@ -175,11 +182,16 @@ function App() {
         return
       }
       const releaseData = await releaseRes.json()
+
+      // Update last check time BEFORE comparison
       localStorage.setItem('astonish_update_check', now.toString())
 
-      const latestVersion = (releaseData.tag_name || '').replace(/^v/, '')
+      const latestVersion = (releaseData.tag_name || '').replace(/^v/, '').trim()
 
-      if (currentVersion !== latestVersion) {
+      // Use proper semver comparison
+      const versionsEqual = compareVersions(currentVersion, latestVersion)
+
+      if (!versionsEqual) {
         setUpdateAvailable({ version: releaseData.tag_name, url: releaseData.html_url })
         setToast({
           message: `Astonish ${releaseData.tag_name} is available`,
@@ -194,6 +206,33 @@ function App() {
     } catch (err) {
       console.error('Failed to check for updates:', err)
     }
+  }
+
+  // Compare two version strings semantically
+  // Returns true if versions are equal, false otherwise
+  const compareVersions = (v1, v2) => {
+    const parseVersion = (v) => {
+      // Remove any whitespace and split by dots
+      const clean = v.replace(/\s+/g, '')
+      const parts = clean.split('.').map(p => {
+        const num = parseInt(p, 10)
+        return isNaN(num) ? 0 : num
+      })
+      return {
+        major: parts[0] || 0,
+        minor: parts[1] || 0,
+        patch: parts[2] || 0,
+        rest: parts.slice(3).join('.') // For any additional parts (e.g., prerelease)
+      }
+    }
+
+    const p1 = parseVersion(v1)
+    const p2 = parseVersion(v2)
+
+    if (p1.major !== p2.major) return p1.major === p2.major
+    if (p1.minor !== p2.minor) return p1.minor === p2.minor
+    if (p1.patch !== p2.patch) return p1.patch === p2.patch
+    return p1.rest === p2.rest
   }
 
   // Load agents, tools, and settings from API on mount
@@ -1620,6 +1659,7 @@ layout:
           onSettingsSaved={loadSettings}
           updateAvailable={updateAvailable}
           onUpdateClick={() => setShowUpgradeDialog(updateAvailable)}
+          appVersion={appVersion}
         />
       )}
 

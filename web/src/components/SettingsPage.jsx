@@ -110,7 +110,7 @@ const refreshMCPServer = async (serverName) => {
   return res.json()
 }
 
-export default function SettingsPage({ onClose, activeSection = 'general', onSectionChange, onToolsRefresh, onSettingsSaved, updateAvailable = null, onUpdateClick = null }) {
+export default function SettingsPage({ onClose, activeSection = 'general', onSectionChange, onToolsRefresh, onSettingsSaved, updateAvailable = null, onUpdateClick = null, appVersion = 'dev' }) {
   // Use prop for active section, default to 'general'
   const [settings, setSettings] = useState(null)
   const [mcpConfig, setMcpConfig] = useState(null)
@@ -636,8 +636,9 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
           </div>
         )}
 
-        {/* UI Version */}
-        <div className="p-3 border-t text-xs" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
+        {/* Version Info */}
+        <div className="p-3 border-t text-xs space-y-1" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
+          <div className="opacity-60">App Version: v{appVersion}</div>
           <div className="opacity-60">UI Version: {__UI_VERSION__}</div>
         </div>
       </div>

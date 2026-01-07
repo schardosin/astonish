@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -121,20 +123,65 @@ func checkForUpdates() {
 		os.WriteFile(updateFile, data, 0644)
 	}
 
-	// Compare versions (remove 'v' prefix if present)
-	current := Version
+	// Compare versions (remove 'v' prefix and trim whitespace)
+	current := strings.TrimSpace(Version)
 	if len(current) > 0 && current[0] == 'v' {
 		current = current[1:]
 	}
-	latest := result.TagName
+	current = strings.TrimSpace(current)
+
+	latest := strings.TrimSpace(result.TagName)
 	if len(latest) > 0 && latest[0] == 'v' {
 		latest = latest[1:]
 	}
+	latest = strings.TrimSpace(latest)
 
-	if current != latest {
+	// Skip if running development version
+	if current == "" || current == "dev" {
+		return
+	}
+
+	// Use semantic version comparison
+	if !versionsEqual(current, latest) {
 		fmt.Println()
 		fmt.Printf("\033[93mA new version of Astonish is available: %s\033[0m\n", result.TagName)
 		fmt.Printf("\033[93mRun \033[1mbrew upgrade schardosin/astonish/astonish\033[0m\033[93m to update.\033[0m\n")
 		fmt.Println()
 	}
+}
+
+// versionsEqual compares two version strings semantically
+// Returns true if versions are equal, false otherwise
+func versionsEqual(v1, v2 string) bool {
+	parseVersion := func(v string) (major, minor, patch int, rest string) {
+		v = strings.ReplaceAll(v, " ", "")
+		parts := strings.Split(v, ".")
+		if len(parts) > 0 {
+			major, _ = strconv.Atoi(parts[0])
+		}
+		if len(parts) > 1 {
+			minor, _ = strconv.Atoi(parts[1])
+		}
+		if len(parts) > 2 {
+			patch, _ = strconv.Atoi(parts[2])
+		}
+		if len(parts) > 3 {
+			rest = strings.Join(parts[3:], ".")
+		}
+		return
+	}
+
+	m1, n1, p1, r1 := parseVersion(v1)
+	m2, n2, p2, r2 := parseVersion(v2)
+
+	if m1 != m2 {
+		return m1 == m2
+	}
+	if n1 != n2 {
+		return n1 == n2
+	}
+	if p1 != p2 {
+		return p1 == p2
+	}
+	return r1 == r2
 }

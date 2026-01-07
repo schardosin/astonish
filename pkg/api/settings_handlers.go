@@ -899,3 +899,19 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		"models":       modelInfos,
 	})
 }
+
+// Version is set at build time via -ldflags
+var Version = "dev"
+
+// VersionResponse represents the version API response
+type VersionResponse struct {
+	Version string `json:"version"`
+}
+
+// GetVersionHandler handles GET /api/version
+func GetVersionHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(VersionResponse{
+		Version: Version,
+	})
+}

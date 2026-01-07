@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package, Store, GitBranch, RefreshCw, Search, Play } from 'lucide-react'
+import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package, Store, GitBranch, RefreshCw, Search, Play, Download } from 'lucide-react'
 import MCPStoreModal from './MCPStoreModal'
 import FlowStorePanel from './FlowStorePanel'
 import ProviderModelSelector from './ProviderModelSelector'
@@ -110,7 +110,7 @@ const refreshMCPServer = async (serverName) => {
   return res.json()
 }
 
-export default function SettingsPage({ onClose, activeSection = 'general', onSectionChange, onToolsRefresh, onSettingsSaved }) {
+export default function SettingsPage({ onClose, activeSection = 'general', onSectionChange, onToolsRefresh, onSettingsSaved, updateAvailable = null, onUpdateClick = null }) {
   // Use prop for active section, default to 'general'
   const [settings, setSettings] = useState(null)
   const [mcpConfig, setMcpConfig] = useState(null)
@@ -615,6 +615,26 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
             )
           })}
         </nav>
+
+        {/* Update Available Indicator */}
+        {updateAvailable && onUpdateClick && (
+          <div className="p-3 border-t" style={{ borderColor: 'var(--border-color)' }}>
+            <button
+              onClick={onUpdateClick}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all hover:scale-[1.02]"
+              style={{ 
+                background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.2) 0%, rgba(124, 58, 237, 0.2) 100%)',
+                border: '1px solid rgba(168, 85, 247, 0.3)'
+              }}
+            >
+              <Download size={18} style={{ color: '#a855f7' }} />
+              <div className="flex-1 text-left">
+                <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Update Available</div>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{updateAvailable.version}</div>
+              </div>
+            </button>
+          </div>
+        )}
 
         {/* UI Version */}
         <div className="p-3 border-t text-xs" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>

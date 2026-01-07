@@ -1,8 +1,13 @@
 package astonish
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"path/filepath"
+	"time"
 )
 
 // Execute is the main entry point for the CLI
@@ -19,6 +24,11 @@ func Execute() error {
 	if os.Args[1] == "--version" || os.Args[1] == "-v" {
 		printVersion()
 		return nil
+	}
+
+	// Check for updates (skip for version command)
+	if os.Args[1] != "version" {
+		checkForUpdates()
 	}
 
 	command := os.Args[1]
@@ -61,3 +71,70 @@ func printUsage() {
 	fmt.Println("  -v, --version         show version information and exit")
 }
 
+type updateCheckData struct {
+	LastCheck time.Time `json:"lastCheck"`
+}
+
+func checkForUpdates() {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return
+	}
+	astonishDir := filepath.Join(configDir, "astonish")
+	updateFile := filepath.Join(astonishDir, "update_check.json")
+
+	var lastCheck updateCheckData
+
+	// Read last check time
+	if data, err := os.ReadFile(updateFile); err == nil {
+		json.Unmarshal(data, &lastCheck)
+	}
+
+	// Only check once per day
+	if time.Since(lastCheck.LastCheck) < 24*time.Hour {
+		return
+	}
+
+	// Perform update check
+	resp, err := http.Get("https://api.github.com/repos/schardosin/astonish/releases/latest")
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return
+	}
+
+	var result struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return
+	}
+
+	// Update last check time
+	os.MkdirAll(astonishDir, 0755)
+	lastCheck.LastCheck = time.Now()
+	if data, err := json.Marshal(lastCheck); err == nil {
+		os.WriteFile(updateFile, data, 0644)
+	}
+
+	// Compare versions (remove 'v' prefix if present)
+	current := Version
+	if len(current) > 0 && current[0] == 'v' {
+		current = current[1:]
+	}
+	latest := result.TagName
+	if len(latest) > 0 && latest[0] == 'v' {
+		latest = latest[1:]
+	}
+
+	if current != latest {
+		fmt.Println()
+		fmt.Printf("\033[93mA new version of Astonish is available: %s\033[0m\n", result.TagName)
+		fmt.Printf("\033[93mRun \033[1mbrew upgrade schardosin/astonish/astonish\033[0m\033[93m to update.\033[0m\n")
+		fmt.Println()
+	}
+}

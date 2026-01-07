@@ -168,7 +168,7 @@ function App() {
         return
       }
       const versionData = await versionRes.json()
-      const currentVersion = (versionData.version || 'dev').replace(/^v/, '').trim()
+      const currentVersion = (versionData.version || 'dev').trim()
       setAppVersion(currentVersion)
 
       // Skip update check if running development version

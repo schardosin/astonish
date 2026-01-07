@@ -638,7 +638,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
 
         {/* Version Info */}
         <div className="p-3 border-t text-xs space-y-1" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
-          <div className="opacity-60">App Version: v{appVersion}</div>
+          <div className="opacity-60">App Version: {appVersion}</div>
           <div className="opacity-60">UI Version: {__UI_VERSION__}</div>
         </div>
       </div>

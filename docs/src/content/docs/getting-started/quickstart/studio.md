@@ -42,6 +42,7 @@ On first launch, you'll see the **Setup Wizard**. This guides you through connec
 | Anthropic Claude | Cloud | API Key |
 | OpenAI | Cloud | API Key |
 | Groq | Cloud | API Key |
+| LiteLLM | Cloud/Local | API Key and/or Base URL |
 | Ollama | Local | Just install Ollama |
 | LM Studio | Local | Just install LM Studio |
 

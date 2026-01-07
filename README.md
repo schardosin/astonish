@@ -103,7 +103,7 @@ curl -fsSL [https://raw.githubusercontent.com/schardosin/astonish/refs/heads/mai
 astonish studio
 ```
 
-Opens a local UI at `http://localhost:9393` to configure providers (Gemini, Claude, GPT, Ollama) and design your first flow.
+Opens a local UI at `http://localhost:9393` to configure providers (Gemini, Claude, GPT, LiteLLM, Ollama) and design your first flow.
 
 ### 3. Run from CLI
 
@@ -119,6 +119,32 @@ astonish flows run summarizer -p file_path="./notes.txt"
 # Perfect for cron jobs and automation
 0 9 * * * /usr/local/bin/astonish flows run daily_report >> /var/log/report.log
 ```
+
+---
+
+## 🤖 Supported AI Providers
+
+Astonish supports both cloud and local AI providers, giving you flexibility to choose what works best for your needs.
+
+| Provider | Type | Best For |
+|----------|------|----------|
+| **OpenRouter** | Cloud | Access to 100+ models with one API key |
+| **OpenAI** | Cloud | GPT-4, GPT-4o, GPT-3.5 |
+| **Anthropic** | Cloud | Claude, Haiku and Opus family |
+| **Google Gemini** | Cloud | Gemini Pro, Flash |
+| **Groq** | Cloud | Ultra-fast inference |
+| **LiteLLM** | Cloud/Local | Unified interface for 100+ LLM providers |
+| **xAI** | Cloud | Grok models |
+| **Ollama** | Local | Self-hosted open models |
+| **LM Studio** | Local | Self-hosted with GUI |
+| **SAP AI Core** | Cloud | SAP enterprise |
+| **Poe** | Cloud | Multiple models via Poe |
+
+Configure providers via:
+- **Setup Wizard**: `astonish setup` (CLI)
+- **Studio UI**: Settings → Providers (Visual)
+
+For detailed configuration instructions, see the [Provider Configuration Guide](https://schardosin.github.io/astonish/using-the-app/configure-providers/).
 
 ---
 

@@ -618,6 +618,7 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/mcp/{serverName}/tools/{toolName}/run", RunServerToolHandler).Methods("POST")
 	router.HandleFunc("/api/mcp/{name}/refresh", RefreshMCPServerHandler).Methods("POST")
 	router.HandleFunc("/api/settings/status", GetSetupStatusHandler).Methods("GET")
+	router.HandleFunc("/api/version", GetVersionHandler).Methods("GET")
 
 	// Provider endpoints
 	router.HandleFunc("/api/providers/{providerId}/models", ListProviderModelsHandler).Methods("GET")

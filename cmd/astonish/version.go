@@ -4,10 +4,8 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/schardosin/astonish/pkg/version"
 )
-
-// Version is set at build time via -ldflags
-var Version = "dev"
 
 // Version information
 const (
@@ -48,7 +46,7 @@ func printVersion() {
 
 	// Print version info
 	fmt.Println(labelStyle.Render(Name))
-	fmt.Printf("%s %s\n", labelStyle.Render("Version:"), valueStyle.Render(Version))
+	fmt.Printf("%s %s\n", labelStyle.Render("Version:"), valueStyle.Render(version.Version))
 	fmt.Printf("%s %s\n", labelStyle.Render("Author:"), valueStyle.Render(Author))
 	fmt.Printf("%s %s\n", labelStyle.Render("GitHub:"), linkStyle.Render(GitHub))
 	fmt.Println()

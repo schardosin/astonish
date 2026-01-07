@@ -24,6 +24,7 @@ import (
 	"github.com/schardosin/astonish/pkg/provider/poe"
 	"github.com/schardosin/astonish/pkg/provider/sap"
 	"github.com/schardosin/astonish/pkg/provider/xai"
+	"github.com/schardosin/astonish/pkg/version"
 )
 
 // GeneralSettings represents the general app settings
@@ -900,9 +901,6 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-// Version is set at build time via -ldflags
-var Version = "dev"
-
 // VersionResponse represents the version API response
 type VersionResponse struct {
 	Version string `json:"version"`
@@ -912,6 +910,6 @@ type VersionResponse struct {
 func GetVersionHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(VersionResponse{
-		Version: Version,
+		Version: version.Version,
 	})
 }

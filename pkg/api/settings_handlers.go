@@ -910,6 +910,6 @@ type VersionResponse struct {
 func GetVersionHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(VersionResponse{
-		Version: version.Version,
+		Version: version.GetVersion(),
 	})
 }

@@ -7,17 +7,17 @@ import (
 	"github.com/schardosin/astonish/pkg/version"
 )
 
-// Version is set at build time via -ldflags (for backward compat with CI)
-// If not set, falls back to pkg/version.Version
-var Version = "dev"
-
-// GetVersion returns the CLI version, preferring the cmd-level Version if set
-func GetVersion() string {
+func init() {
+	// Register our version with pkg/version so the API can access it
+	// Only register if version is not "dev" (i.e., was set via ldflags)
+	// This allows both old CI (setting cmd/astonish.Version) and new CI (setting pkg/version.Version) to work
 	if Version != "dev" {
-		return Version
+		version.SetCmdVersion(Version)
 	}
-	return version.Version
 }
+
+// Version is set at build time via -ldflags (for backward compat with CI)
+var Version = "dev"
 
 // Version information
 const (
@@ -28,11 +28,11 @@ const (
 
 // ASCII Logo with colors using lipgloss
 var asciiLogo = `
-    ___         __              _      __  
-   /   |  _____/ /_____  ____  (_)____/ /_ 
+    ___         __              _      __
+   /   |  _____/ /_____  ____  (_)____/ /_
   / /| | / ___/ __/ __ \/ __ \/ / ___/ __ \
  / ___ |(__  ) /_/ /_/ / / / / (__  ) / / /
-/_/  |_/____/\__/\____/_/ /_/_/____/_/ /_/ 
+/_/  |_/____/\__/\____/_/ /_/_/____/_/ /_/
 `
 
 func printVersion() {
@@ -58,7 +58,7 @@ func printVersion() {
 
 	// Print version info
 	fmt.Println(labelStyle.Render(Name))
-	fmt.Printf("%s %s\n", labelStyle.Render("Version:"), valueStyle.Render(GetVersion()))
+	fmt.Printf("%s %s\n", labelStyle.Render("Version:"), valueStyle.Render(version.GetVersion()))
 	fmt.Printf("%s %s\n", labelStyle.Render("Author:"), valueStyle.Render(Author))
 	fmt.Printf("%s %s\n", labelStyle.Render("GitHub:"), linkStyle.Render(GitHub))
 	fmt.Println()

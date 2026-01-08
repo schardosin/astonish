@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/schardosin/astonish/pkg/version"
 )
 
 // Execute is the main entry point for the CLI
@@ -124,7 +126,7 @@ func checkForUpdates() {
 	}
 
 	// Compare versions (remove 'v' prefix and trim whitespace)
-	current := strings.TrimSpace(GetVersion())
+	current := strings.TrimSpace(version.GetVersion())
 	if len(current) > 0 && current[0] == 'v' {
 		current = current[1:]
 	}

@@ -203,7 +203,6 @@ function App() {
 
       // Check if this update was already seen (saved in localStorage)
       const savedUpdate = localStorage.getItem('astonish_update_available')
-      const updateAlreadySeen = savedUpdate !== null
 
       // Simple string comparison (both versions normalized without 'v' prefix)
       if (currentVersion !== latestVersion) {
@@ -214,7 +213,7 @@ function App() {
         localStorage.setItem('astonish_update_available', JSON.stringify(updateInfo))
 
         // Only show toast if this is a newly detected update (not already seen)
-        if (!updateAlreadySeen) {
+        if (!savedUpdate) {
           setToast({
             message: `Astonish ${releaseData.tag_name} is available`,
             type: 'info',
@@ -247,14 +246,23 @@ function App() {
   // Check for updates on mount
   useEffect(() => {
     const initUpdateCheck = async () => {
-      await loadAppVersion()      // Always load version on page load
+      const currentVersion = await loadAppVersion()      // Always load version on page load
 
-      // Load saved update state BEFORE checking for new updates
+      // Load saved update state from localStorage
       const savedUpdate = localStorage.getItem('astonish_update_available')
       if (savedUpdate) {
         try {
           const updateInfo = JSON.parse(savedUpdate)
-          setUpdateAvailable(updateInfo)
+          // Check if saved update matches current version (user updated since last check)
+          const savedVersion = (updateInfo.version || '').replace(/^v/, '').trim()
+          if (savedVersion === currentVersion) {
+            // Version matches - user updated, clear old update notification
+            localStorage.removeItem('astonish_update_available')
+            setUpdateAvailable(null)
+          } else {
+            // Version still outdated - keep showing update button
+            setUpdateAvailable(updateInfo)
+          }
         } catch (err) {
           console.error('Failed to parse saved update info:', err)
         }

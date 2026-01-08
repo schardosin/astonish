@@ -68,7 +68,6 @@ function App() {
   const abortControllerRef = useRef(null)
   const autoSaveTimerRef = useRef(null)  // Debounce timer for auto-save
   const layoutSaveTimerRef = useRef(null) // Debounce timer for layout changes
-  const initialRenderRef = useRef(true) // Track if this is the initial render to avoid auto-showing saved update toast
   
   // Chat State
   const [chatMessages, setChatMessages] = useState([
@@ -202,6 +201,10 @@ function App() {
 
       const latestVersion = (releaseData.tag_name || '').replace(/^v/, '').trim()
 
+      // Check if this update was already seen (saved in localStorage)
+      const savedUpdate = localStorage.getItem('astonish_update_available')
+      const updateAlreadySeen = savedUpdate !== null
+
       // Simple string comparison (both versions normalized without 'v' prefix)
       if (currentVersion !== latestVersion) {
         const updateInfo = { version: releaseData.tag_name, url: releaseData.html_url }
@@ -210,8 +213,8 @@ function App() {
         // Save to localStorage so update button persists in Settings
         localStorage.setItem('astonish_update_available', JSON.stringify(updateInfo))
 
-        // Only show toast if this is not initial page load (i.e., new update detected)
-        if (!initialRenderRef.current) {
+        // Only show toast if this is a newly detected update (not already seen)
+        if (!updateAlreadySeen) {
           setToast({
             message: `Astonish ${releaseData.tag_name} is available`,
             type: 'info',
@@ -229,9 +232,6 @@ function App() {
       }
     } catch (err) {
       console.error('Failed to check for updates:', err)
-    } finally {
-      // Mark first render as complete (after check is done)
-      initialRenderRef.current = false
     }
   }
 
@@ -246,23 +246,24 @@ function App() {
 
   // Check for updates on mount
   useEffect(() => {
-    loadAppVersion()      // Always load version on page load
-    checkForUpdates()      // Check for updates with 4-hour interval
-  }, [])
+    const initUpdateCheck = async () => {
+      await loadAppVersion()      // Always load version on page load
 
-  // Load update available from localStorage on mount (but don't auto-show toast)
-  useEffect(() => {
-    const saved = localStorage.getItem('astonish_update_available')
-    if (saved) {
-      try {
-        const updateInfo = JSON.parse(saved)
-        // Load the update state but don't show toast on page load
-        // Only show toast when update is newly detected during checkForUpdates()
-        setUpdateAvailable(updateInfo)
-      } catch (err) {
-        console.error('Failed to parse saved update info:', err)
+      // Load saved update state BEFORE checking for new updates
+      const savedUpdate = localStorage.getItem('astonish_update_available')
+      if (savedUpdate) {
+        try {
+          const updateInfo = JSON.parse(savedUpdate)
+          setUpdateAvailable(updateInfo)
+        } catch (err) {
+          console.error('Failed to parse saved update info:', err)
+        }
       }
+
+      checkForUpdates()      // Check for updates with 4-hour interval
     }
+
+    initUpdateCheck()
   }, [])
 
   // Auto-dismiss toast after 3 seconds (except for persistent toasts like updates)

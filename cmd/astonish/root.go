@@ -95,7 +95,7 @@ func checkForUpdates() {
 	}
 
 	// Only check once per day
-	if time.Since(lastCheck.LastCheck) < 24*time.Hour {
+	if time.Since(lastCheck.LastCheck) < 4*time.Hour {
 		return
 	}
 

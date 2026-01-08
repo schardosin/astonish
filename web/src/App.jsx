@@ -157,7 +157,7 @@ function App() {
     const lastCheck = localStorage.getItem('astonish_update_check')
     const now = Date.now()
 
-    if (lastCheck && now - parseInt(lastCheck) < 24 * 60 * 60 * 1000) {
+    if (lastCheck && now - parseInt(lastCheck) < 4 * 60 * 60 * 1000) {
       return
     }
 
@@ -188,10 +188,8 @@ function App() {
 
       const latestVersion = (releaseData.tag_name || '').replace(/^v/, '').trim()
 
-      // Use proper semver comparison
-      const versionsEqual = compareVersions(currentVersion, latestVersion)
-
-      if (!versionsEqual) {
+      // Simple string comparison (versions are already normalized without 'v' prefix)
+      if (currentVersion !== latestVersion) {
         setUpdateAvailable({ version: releaseData.tag_name, url: releaseData.html_url })
         setToast({
           message: `Astonish ${releaseData.tag_name} is available`,
@@ -206,33 +204,6 @@ function App() {
     } catch (err) {
       console.error('Failed to check for updates:', err)
     }
-  }
-
-  // Compare two version strings semantically
-  // Returns true if versions are equal, false otherwise
-  const compareVersions = (v1, v2) => {
-    const parseVersion = (v) => {
-      // Remove any whitespace and split by dots
-      const clean = v.replace(/\s+/g, '')
-      const parts = clean.split('.').map(p => {
-        const num = parseInt(p, 10)
-        return isNaN(num) ? 0 : num
-      })
-      return {
-        major: parts[0] || 0,
-        minor: parts[1] || 0,
-        patch: parts[2] || 0,
-        rest: parts.slice(3).join('.') // For any additional parts (e.g., prerelease)
-      }
-    }
-
-    const p1 = parseVersion(v1)
-    const p2 = parseVersion(v2)
-
-    if (p1.major !== p2.major) return p1.major === p2.major
-    if (p1.minor !== p2.minor) return p1.minor === p2.minor
-    if (p1.patch !== p2.patch) return p1.patch === p2.patch
-    return p1.rest === p2.rest
   }
 
   // Load agents, tools, and settings from API on mount

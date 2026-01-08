@@ -153,7 +153,25 @@ function App() {
     }
   }
 
-  // Check for updates (once per day)
+  // Load app version from backend (always runs)
+  const loadAppVersion = async () => {
+    try {
+      const versionRes = await fetch('/api/version')
+      if (!versionRes.ok) {
+        return 'dev'
+      }
+      const versionData = await versionRes.json()
+      const currentVersion = (versionData.version || 'dev').replace(/^v/, '').trim()
+      console.log('[Update Check] Backend version:', versionData.version, 'Normalized:', currentVersion)
+      setAppVersion(currentVersion)
+      return currentVersion
+    } catch (err) {
+      console.error('Failed to load app version:', err)
+      return 'dev'
+    }
+  }
+
+  // Check for updates (once per 4 hours)
   const checkForUpdates = async () => {
     const lastCheck = localStorage.getItem('astonish_update_check')
     const now = Date.now()
@@ -163,15 +181,7 @@ function App() {
     }
 
     try {
-      // Get app version from backend
-      const versionRes = await fetch('/api/version')
-      if (!versionRes.ok) {
-        return
-      }
-      const versionData = await versionRes.json()
-      const currentVersion = (versionData.version || 'dev').replace(/^v/, '').trim()
-      console.log('[Update Check] Backend version:', versionData.version, 'Normalized:', currentVersion)
-      setAppVersion(currentVersion)
+      const currentVersion = await loadAppVersion()
 
       // If running dev version, clear any saved update state
       if (currentVersion === 'dev') {
@@ -236,7 +246,8 @@ function App() {
 
   // Check for updates on mount
   useEffect(() => {
-    checkForUpdates()
+    loadAppVersion()      // Always load version on page load
+    checkForUpdates()      // Check for updates with 4-hour interval
   }, [])
 
   // Load update available from localStorage on mount (but don't auto-show toast)

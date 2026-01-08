@@ -68,6 +68,7 @@ function App() {
   const abortControllerRef = useRef(null)
   const autoSaveTimerRef = useRef(null)  // Debounce timer for auto-save
   const layoutSaveTimerRef = useRef(null) // Debounce timer for layout changes
+  const initialRenderRef = useRef(true) // Track if this is the initial render to avoid auto-showing saved update toast
   
   // Chat State
   const [chatMessages, setChatMessages] = useState([
@@ -169,10 +170,13 @@ function App() {
       }
       const versionData = await versionRes.json()
       const currentVersion = (versionData.version || 'dev').replace(/^v/, '').trim()
+      console.log('[Update Check] Backend version:', versionData.version, 'Normalized:', currentVersion)
       setAppVersion(currentVersion)
 
-      // Skip update check if running development version
-      if (currentVersion === 'dev' || currentVersion === '') {
+      // If running dev version, clear any saved update state
+      if (currentVersion === 'dev') {
+        setUpdateAvailable(null)
+        localStorage.removeItem('astonish_update_available')
         return
       }
 
@@ -190,19 +194,34 @@ function App() {
 
       // Simple string comparison (both versions normalized without 'v' prefix)
       if (currentVersion !== latestVersion) {
-        setUpdateAvailable({ version: releaseData.tag_name, url: releaseData.html_url })
-        setToast({
-          message: `Astonish ${releaseData.tag_name} is available`,
-          type: 'info',
-          persistent: true,
-          action: {
-            label: 'See Options',
-            onClick: () => setShowUpgradeDialog({ version: releaseData.tag_name, url: releaseData.html_url })
-          }
-        })
+        const updateInfo = { version: releaseData.tag_name, url: releaseData.html_url }
+        setUpdateAvailable(updateInfo)
+
+        // Save to localStorage so update button persists in Settings
+        localStorage.setItem('astonish_update_available', JSON.stringify(updateInfo))
+
+        // Only show toast if this is not initial page load (i.e., new update detected)
+        if (!initialRenderRef.current) {
+          setToast({
+            message: `Astonish ${releaseData.tag_name} is available`,
+            type: 'info',
+            persistent: true,
+            action: {
+              label: 'See Options',
+              onClick: () => setShowUpgradeDialog({ version: releaseData.tag_name, url: releaseData.html_url })
+            }
+          })
+        }
+      } else {
+        // No update available - clear saved update state
+        setUpdateAvailable(null)
+        localStorage.removeItem('astonish_update_available')
       }
     } catch (err) {
       console.error('Failed to check for updates:', err)
+    } finally {
+      // Mark first render as complete (after check is done)
+      initialRenderRef.current = false
     }
   }
 
@@ -220,27 +239,20 @@ function App() {
     checkForUpdates()
   }, [])
 
-  // Load update available from localStorage on mount
+  // Load update available from localStorage on mount (but don't auto-show toast)
   useEffect(() => {
     const saved = localStorage.getItem('astonish_update_available')
     if (saved) {
       try {
         const updateInfo = JSON.parse(saved)
+        // Load the update state but don't show toast on page load
+        // Only show toast when update is newly detected during checkForUpdates()
         setUpdateAvailable(updateInfo)
       } catch (err) {
         console.error('Failed to parse saved update info:', err)
       }
     }
   }, [])
-
-  // Save update available to localStorage when it changes
-  useEffect(() => {
-    if (updateAvailable) {
-      localStorage.setItem('astonish_update_available', JSON.stringify(updateAvailable))
-    } else {
-      localStorage.removeItem('astonish_update_available')
-    }
-  }, [updateAvailable])
 
   // Auto-dismiss toast after 3 seconds (except for persistent toasts like updates)
   useEffect(() => {

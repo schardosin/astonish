@@ -168,7 +168,7 @@ function App() {
         return
       }
       const versionData = await versionRes.json()
-      const currentVersion = (versionData.version || 'dev').trim()
+      const currentVersion = (versionData.version || 'dev').replace(/^v/, '').trim()
       setAppVersion(currentVersion)
 
       // Skip update check if running development version
@@ -188,7 +188,7 @@ function App() {
 
       const latestVersion = (releaseData.tag_name || '').replace(/^v/, '').trim()
 
-      // Simple string comparison (versions are already normalized without 'v' prefix)
+      // Simple string comparison (both versions normalized without 'v' prefix)
       if (currentVersion !== latestVersion) {
         setUpdateAvailable({ version: releaseData.tag_name, url: releaseData.html_url })
         setToast({
@@ -219,6 +219,28 @@ function App() {
   useEffect(() => {
     checkForUpdates()
   }, [])
+
+  // Load update available from localStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('astonish_update_available')
+    if (saved) {
+      try {
+        const updateInfo = JSON.parse(saved)
+        setUpdateAvailable(updateInfo)
+      } catch (err) {
+        console.error('Failed to parse saved update info:', err)
+      }
+    }
+  }, [])
+
+  // Save update available to localStorage when it changes
+  useEffect(() => {
+    if (updateAvailable) {
+      localStorage.setItem('astonish_update_available', JSON.stringify(updateAvailable))
+    } else {
+      localStorage.removeItem('astonish_update_available')
+    }
+  }, [updateAvailable])
 
   // Auto-dismiss toast after 3 seconds (except for persistent toasts like updates)
   useEffect(() => {

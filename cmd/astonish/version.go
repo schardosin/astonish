@@ -7,6 +7,18 @@ import (
 	"github.com/schardosin/astonish/pkg/version"
 )
 
+// Version is set at build time via -ldflags (for backward compat with CI)
+// If not set, falls back to pkg/version.Version
+var Version = "dev"
+
+// GetVersion returns the CLI version, preferring the cmd-level Version if set
+func GetVersion() string {
+	if Version != "dev" {
+		return Version
+	}
+	return version.Version
+}
+
 // Version information
 const (
 	Name   = "Astonish AI Companion"
@@ -46,7 +58,7 @@ func printVersion() {
 
 	// Print version info
 	fmt.Println(labelStyle.Render(Name))
-	fmt.Printf("%s %s\n", labelStyle.Render("Version:"), valueStyle.Render(version.Version))
+	fmt.Printf("%s %s\n", labelStyle.Render("Version:"), valueStyle.Render(GetVersion()))
 	fmt.Printf("%s %s\n", labelStyle.Render("Author:"), valueStyle.Render(Author))
 	fmt.Printf("%s %s\n", labelStyle.Render("GitHub:"), linkStyle.Render(GitHub))
 	fmt.Println()

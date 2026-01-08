@@ -94,7 +94,7 @@ func checkForUpdates() {
 		json.Unmarshal(data, &lastCheck)
 	}
 
-	// Only check once per day
+	// Only check every 4 hours
 	if time.Since(lastCheck.LastCheck) < 4*time.Hour {
 		return
 	}

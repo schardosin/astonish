@@ -4,6 +4,10 @@ import MCPStoreModal from './MCPStoreModal'
 import FlowStorePanel from './FlowStorePanel'
 import ProviderModelSelector from './ProviderModelSelector'
 import MCPInspector from './MCPInspector'
+import CodeMirror from '@uiw/react-codemirror'
+import { json } from '@codemirror/lang-json'
+import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/search'
+import { keymap, EditorView } from '@codemirror/view'
 
 // API functions
 const fetchSettings = async () => {
@@ -110,7 +114,7 @@ const refreshMCPServer = async (serverName) => {
   return res.json()
 }
 
-export default function SettingsPage({ onClose, activeSection = 'general', onSectionChange, onToolsRefresh, onSettingsSaved, updateAvailable = null, onUpdateClick = null, appVersion = 'dev' }) {
+export default function SettingsPage({ onClose, activeSection = 'general', onSectionChange, onToolsRefresh, onSettingsSaved, updateAvailable = null, onUpdateClick = null, appVersion = 'dev', theme = 'dark' }) {
   // Use prop for active section, default to 'general'
   const [settings, setSettings] = useState(null)
   const [mcpConfig, setMcpConfig] = useState(null)
@@ -665,7 +669,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className={activeSection === 'mcp' && mcpViewMode === 'source' ? 'flex-1 overflow-hidden' : 'flex-1 overflow-y-auto p-6'}>
           {activeSection === 'general' && (
             <div className="max-w-xl space-y-6">
               <div>
@@ -1020,7 +1024,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
           )}
 
           {activeSection === 'mcp' && (
-            <div className="space-y-4">
+            <div className={mcpViewMode === 'source' ? 'h-full flex flex-col' : 'space-y-4'}>
               {/* View toggle */}
               <div className="flex items-center gap-2">
                 <div className="flex rounded-lg overflow-hidden border" style={{ borderColor: 'var(--border-color)' }}>
@@ -1034,9 +1038,9 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                         ? 'text-white shadow-sm'
                         : 'hover:bg-gray-600/20'
                     }`}
-                    style={{ 
+                    style={{
                       background: mcpViewMode === 'editor' ? 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)' : 'transparent',
-                      color: mcpViewMode !== 'editor' ? 'var(--text-secondary)' : undefined 
+                      color: mcpViewMode !== 'editor' ? 'var(--text-secondary)' : undefined
                     }}
                   >
                     <LayoutGrid size={14} />
@@ -1444,64 +1448,86 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
 
               {/* Source View */}
               {mcpViewMode === 'source' && (
-                <div className="space-y-4">
-                  <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                    Edit the raw JSON configuration below. Changes will be synced when you save or switch back to Editor view.
-                  </p>
-                  {mcpSourceError && (
-                    <div className="flex items-center gap-2" style={{ color: 'var(--danger)' }}>
-                      <AlertCircle size={16} />
-                      {mcpSourceError}
+                <div className="flex flex-col h-full">
+                  <div className="flex items-center justify-between px-6 pt-4 mb-4 flex-shrink-0">
+                    <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                      Edit the raw JSON configuration below. Changes will be synced when you save or switch back to Editor view.
+                    </p>
+                    {mcpSourceError && (
+                      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg" style={{ background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)' }}>
+                        <AlertCircle size={14} />
+                        <span className="text-sm">{mcpSourceError}</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex-1 overflow-hidden mx-6 mb-4" style={{ maxHeight: 'calc(100vh - 220px)' }}>
+                    <div className="h-full rounded-lg border" style={{ borderColor: 'var(--border-color)' }}>
+                      <CodeMirror
+                        value={mcpSourceText}
+                        onChange={(value) => {
+                          setMcpSourceText(value)
+                          try {
+                            JSON.parse(value)
+                            setMcpSourceError(null)
+                          } catch {}
+                        }}
+                        height="100%"
+                        className="h-full"
+                        extensions={[
+                          json(),
+                          search({ scrollToMatch: (range) => EditorView.scrollIntoView(range, { y: 'center', yMargin: 100 }) }),
+                          highlightSelectionMatches(),
+                          keymap.of(searchKeymap),
+                        ]}
+                        theme={theme === 'dark' ? 'dark' : 'light'}
+                        basicSetup={{
+                          lineNumbers: true,
+                          highlightActiveLineGutter: true,
+                          highlightActiveLine: true,
+                          foldGutter: true,
+                        }}
+                      />
                     </div>
-                  )}
-                  <textarea
-                    value={mcpSourceText}
-                    onChange={(e) => setMcpSourceText(e.target.value)}
-                    className="w-full h-96 px-4 py-3 rounded-lg border text-sm font-mono resize-y"
-                    style={{
-                      background: 'var(--bg-secondary)',
-                      borderColor: mcpSourceError ? '#f87171' : 'var(--border-color)',
-                      color: 'var(--text-primary)'
-                    }}
-                    spellCheck={false}
-                  />
-                  <button
-                    onClick={async () => {
-                      try {
-                        const parsed = JSON.parse(mcpSourceText)
-                        if (parsed.mcpServers && typeof parsed.mcpServers === 'object') {
-                          setSaving(true)
-                          await saveMCPConfig({ mcpServers: parsed.mcpServers })
-                          setMcpServers(parsed.mcpServers)
-                          const names = {}
-                          const args = {}
-                          Object.entries(parsed.mcpServers).forEach(([name, server]) => {
-                            names[name] = name
-                            args[name] = Array.isArray(server.args) ? server.args.join(', ') : ''
-                          })
-                          setMcpServerNames(names)
-                          setMcpServerArgs(args)
-                          setMcpSourceError(null)
-                          setMcpHasChanges(false)
-                          setSaveSuccess(true)
-                          if (onToolsRefresh) onToolsRefresh()
-                          setTimeout(() => setSaveSuccess(false), 2000)
+                  </div>
+                  <div className="flex items-center justify-end gap-3 px-6 pb-6 flex-shrink-0">
+                    <button
+                      onClick={async () => {
+                        try {
+                          const parsed = JSON.parse(mcpSourceText)
+                          if (parsed.mcpServers && typeof parsed.mcpServers === 'object') {
+                            setSaving(true)
+                            await saveMCPConfig({ mcpServers: parsed.mcpServers })
+                            setMcpServers(parsed.mcpServers)
+                            const names = {}
+                            const args = {}
+                            Object.entries(parsed.mcpServers).forEach(([name, server]) => {
+                              names[name] = name
+                              args[name] = Array.isArray(server.args) ? server.args.join(', ') : ''
+                            })
+                            setMcpServerNames(names)
+                            setMcpServerArgs(args)
+                            setMcpSourceError(null)
+                            setMcpHasChanges(false)
+                            setSaveSuccess(true)
+                            if (onToolsRefresh) onToolsRefresh()
+                            setTimeout(() => setSaveSuccess(false), 2000)
+                            setSaving(false)
+                          } else {
+                            setMcpSourceError('Invalid format: expected { "mcpServers": { ... } }')
+                          }
+                        } catch (e) {
+                          setMcpSourceError(`Invalid JSON: ${e.message}`)
                           setSaving(false)
-                        } else {
-                          setMcpSourceError('Invalid format: expected { "mcpServers": { ... } }')
                         }
-                      } catch (e) {
-                        setMcpSourceError(`Invalid JSON: ${e.message}`)
-                        setSaving(false)
-                      }
-                    }}
-                    disabled={saving}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-95 disabled:opacity-50"
-                    style={{ background: 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)', color: '#fff' }}
-                  >
-                    <Save size={16} />
-                    {saving ? 'Saving...' : 'Apply & Save'}
-                  </button>
+                      }}
+                      disabled={saving}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-95 disabled:opacity-50"
+                      style={{ background: 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)', color: '#fff' }}
+                    >
+                      <Save size={16} />
+                      {saving ? 'Saving...' : 'Apply & Save'}
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

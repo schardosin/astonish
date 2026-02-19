@@ -591,6 +591,127 @@ func (m *minimalReadonlyContext) SessionID() string                    { return 
 func (m *minimalReadonlyContext) Branch() string                       { return "" }
 
 // RegisterRoutes registers the API routes on a router
+
+// MCPServerInfo represents an MCP server in the list response
+type MCPServerInfo struct {
+	Name      string `json:"name"`
+	Transport string `json:"transport"`
+	Command   string `json:"command,omitempty"`
+	URL       string `json:"url,omitempty"`
+	Enabled   bool   `json:"enabled"`
+}
+
+// MCPServersListResponse is the response for GET /api/mcp/servers
+type MCPServersListResponse struct {
+	Servers []MCPServerInfo `json:"servers"`
+}
+
+// GetMCPServersHandler handles GET /api/mcp/servers
+func GetMCPServersHandler(w http.ResponseWriter, r *http.Request) {
+	mcpConfig, err := config.LoadMCPConfig()
+	if err != nil {
+		http.Error(w, "Failed to load MCP config", http.StatusInternalServerError)
+		return
+	}
+
+	servers := make([]MCPServerInfo, 0, len(mcpConfig.MCPServers))
+	for name, cfg := range mcpConfig.MCPServers {
+		transport := cfg.Transport
+		if transport == "" {
+			transport = "stdio"
+		}
+		servers = append(servers, MCPServerInfo{
+			Name:      name,
+			Transport: transport,
+			Command:   cfg.Command,
+			URL:       cfg.URL,
+			Enabled:   cfg.IsEnabled(),
+		})
+	}
+
+	// Sort by name
+	sort.Slice(servers, func(i, j int) bool {
+		return servers[i].Name < servers[j].Name
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(MCPServersListResponse{Servers: servers})
+}
+
+// UpdateMCPServerRequest is the request body for PATCH /api/mcp/servers/{name}
+type UpdateMCPServerRequest struct {
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// UpdateMCPServerResponse is the response for PATCH /api/mcp/servers/{name}
+type UpdateMCPServerResponse struct {
+	Success bool          `json:"success"`
+	Server  MCPServerInfo `json:"server"`
+}
+
+// UpdateMCPServerHandler handles PATCH /api/mcp/servers/{name}
+func UpdateMCPServerHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	serverName := vars["name"]
+
+	if serverName == "" {
+		http.Error(w, "Server name is required", http.StatusBadRequest)
+		return
+	}
+
+	var req UpdateMCPServerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Load config
+	mcpConfig, err := config.LoadMCPConfig()
+	if err != nil {
+		http.Error(w, "Failed to load MCP config", http.StatusInternalServerError)
+		return
+	}
+
+	// Find server
+	serverCfg, exists := mcpConfig.MCPServers[serverName]
+	if !exists {
+		http.Error(w, "Server not found", http.StatusNotFound)
+		return
+	}
+
+	// Update enabled status if provided
+	if req.Enabled != nil {
+		serverCfg.Enabled = req.Enabled
+		mcpConfig.MCPServers[serverName] = serverCfg
+
+		// Save config
+		if err := config.SaveMCPConfig(mcpConfig); err != nil {
+			http.Error(w, "Failed to save MCP config", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Build response
+	transport := serverCfg.Transport
+	if transport == "" {
+		transport = "stdio"
+	}
+
+	response := UpdateMCPServerResponse{
+		Success: true,
+		Server: MCPServerInfo{
+			Name:      serverName,
+			Transport: transport,
+			Command:   serverCfg.Command,
+			URL:       serverCfg.URL,
+			Enabled:   serverCfg.IsEnabled(),
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
 func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/agents", ListAgentsHandler).Methods("GET")
 	router.HandleFunc("/api/agents/{name}", GetAgentHandler).Methods("GET")
@@ -614,6 +735,8 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/settings/mcp", UpdateMCPSettingsHandler).Methods("PUT")
 	router.HandleFunc("/api/mcp/install-inline", InstallInlineMCPServerHandler).Methods("POST")
 	router.HandleFunc("/api/mcp/status", MCPStatusHandler).Methods("GET")
+	router.HandleFunc("/api/mcp/servers", GetMCPServersHandler).Methods("GET")
+	router.HandleFunc("/api/mcp/servers/{name}", UpdateMCPServerHandler).Methods("PATCH")
 	router.HandleFunc("/api/mcp/{serverName}/tools", ListServerToolsHandler).Methods("GET")
 	router.HandleFunc("/api/mcp/{serverName}/tools/{toolName}/run", RunServerToolHandler).Methods("POST")
 	router.HandleFunc("/api/mcp/{name}/refresh", RefreshMCPServerHandler).Methods("POST")

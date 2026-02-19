@@ -60,6 +60,17 @@ func (m *Manager) InitializeToolsets(ctx context.Context) error {
 	}
 
 	for serverName, serverConfig := range m.config.MCPServers {
+		// Skip disabled servers
+		if !serverConfig.IsEnabled() {
+			log.Printf("Skipping disabled MCP server: %s", serverName)
+			m.initResults = append(m.initResults, InitResult{
+				Name:    serverName,
+				Success: false,
+				Error:   "Server is disabled",
+			})
+			continue
+		}
+
 		transport, stderrBuf, err := createTransport(serverConfig)
 		if err != nil {
 			errMsg := fmt.Sprintf("Failed to create transport: %v (Stderr: %s)", err, GetStderr(stderrBuf))
@@ -111,6 +122,11 @@ func (m *Manager) InitializeSingleToolset(ctx context.Context, serverName string
 	serverConfig, exists := m.config.MCPServers[serverName]
 	if !exists {
 		return nil, fmt.Errorf("server '%s' not found in config", serverName)
+	}
+
+	// Check if server is enabled
+	if !serverConfig.IsEnabled() {
+		return nil, fmt.Errorf("server '%s' is disabled", serverName)
 	}
 
 	transport, stderrBuf, err := createTransport(serverConfig)
@@ -172,6 +188,12 @@ func (m *Manager) InitializeSelectiveToolsets(ctx context.Context, serverNames [
 	for serverName, serverConfig := range m.config.MCPServers {
 		if !needed[serverName] {
 			continue // Skip servers not needed for this flow
+		}
+
+		// Skip disabled servers
+		if !serverConfig.IsEnabled() {
+			log.Printf("Skipping disabled MCP server: %s", serverName)
+			continue
 		}
 
 		transport, stderrBuf, err := createTransport(serverConfig)

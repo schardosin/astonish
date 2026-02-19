@@ -48,25 +48,187 @@ func handleToolsCommand(args []string) error {
 		return handleToolsEditCommand()
 	case "store":
 		return handleToolsStoreCommand(args[1:])
+	case "servers":
+		return handleToolsServersCommand(args[1:])
+	case "enable":
+		return handleToolsEnableCommand(args[1:])
+	case "disable":
+		return handleToolsDisableCommand(args[1:])
 	default:
 		return fmt.Errorf("unknown tools command: %s", args[0])
 	}
 }
 
 func printToolsUsage() {
-	fmt.Println("usage: astonish tools [-h] {list,edit,store} ...")
+	fmt.Println("usage: astonish tools [-h] {list,edit,store,servers,enable,disable} ...")
 	fmt.Println("")
 	fmt.Println("positional arguments:")
-	fmt.Println("  {list,edit,store}")
+	fmt.Println("  {list,edit,store,servers,enable,disable}")
 	fmt.Println("                        Tools management commands")
 	fmt.Println("    list                List available tools (internal + MCP)")
 	fmt.Println("    edit                Edit MCP configuration")
 	fmt.Println("    store               Browse and install MCP servers from the store")
+	fmt.Println("    servers             List MCP servers with their enabled/disabled status")
+	fmt.Println("    enable <name>       Enable an MCP server")
+	fmt.Println("    disable <name>      Disable an MCP server")
 	fmt.Println("")
 	fmt.Println("options:")
 	fmt.Println("  -h, --help            show this help message and exit")
 }
 
+// handleToolsServersCommand lists all MCP servers with their enabled/disabled status
+func handleToolsServersCommand(args []string) error {
+	serversCmd := flag.NewFlagSet("servers", flag.ExitOnError)
+	jsonOutput := serversCmd.Bool("json", false, "Output in JSON format")
+
+	if err := serversCmd.Parse(args); err != nil {
+		return fmt.Errorf("failed to parse flags: %w", err)
+	}
+
+	mcpConfig, err := config.LoadMCPConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load MCP config: %w", err)
+	}
+
+	type ServerInfo struct {
+		Name      string `json:"name"`
+		Transport string `json:"transport"`
+		Command   string `json:"command,omitempty"`
+		URL       string `json:"url,omitempty"`
+		Enabled   bool   `json:"enabled"`
+	}
+
+	servers := make([]ServerInfo, 0, len(mcpConfig.MCPServers))
+	for name, cfg := range mcpConfig.MCPServers {
+		transport := cfg.Transport
+		if transport == "" {
+			transport = "stdio"
+		}
+		servers = append(servers, ServerInfo{
+			Name:      name,
+			Transport: transport,
+			Command:   cfg.Command,
+			URL:       cfg.URL,
+			Enabled:   cfg.IsEnabled(),
+		})
+	}
+
+	// Sort by name
+	sort.Slice(servers, func(i, j int) bool {
+		return servers[i].Name < servers[j].Name
+	})
+
+	if *jsonOutput {
+		data, err := json.MarshalIndent(servers, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal servers to JSON: %w", err)
+		}
+		fmt.Println(string(data))
+		return nil
+	}
+
+	// Styled output
+	headerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("63")).
+		Bold(true).
+		PaddingBottom(1)
+
+	enabledStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("42"))
+
+	disabledStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240"))
+
+	nameStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("205")).
+		Bold(true)
+
+	fmt.Println(headerStyle.Render("MCP SERVERS"))
+
+	if len(servers) == 0 {
+		fmt.Println("  No MCP servers configured.")
+		fmt.Println("  Run 'astonish tools store' to browse and install servers.")
+		return nil
+	}
+
+	// Find max name length for alignment
+	maxLen := 0
+	for _, srv := range servers {
+		if len(srv.Name) > maxLen {
+			maxLen = len(srv.Name)
+		}
+	}
+
+	for _, srv := range servers {
+		status := enabledStyle.Render("✓")
+		statusText := enabledStyle.Render("(enabled)")
+		style := nameStyle
+		if !srv.Enabled {
+			status = disabledStyle.Render("✗")
+			statusText = disabledStyle.Render("(disabled)")
+			style = disabledStyle
+		}
+
+		padding := strings.Repeat(" ", maxLen-len(srv.Name)+1)
+		fmt.Printf("  %s %s%s%s  %s\n", status, style.Render(srv.Name), padding, srv.Transport, statusText)
+	}
+
+	return nil
+}
+
+// handleToolsEnableCommand enables an MCP server
+func handleToolsEnableCommand(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: astonish tools enable <server-name>")
+	}
+
+	serverName := args[0]
+
+	if err := config.SetMCPServerEnabled(serverName, true); err != nil {
+		// If server not found, show available servers
+		if strings.Contains(err.Error(), "not found") {
+			names, _ := config.GetMCPServerNames()
+			if len(names) > 0 {
+				return fmt.Errorf("%w\nAvailable servers: %s", err, strings.Join(names, ", "))
+			}
+		}
+		return err
+	}
+
+	successStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("42")).
+		Bold(true)
+
+	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Server '%s' enabled", serverName)))
+	return nil
+}
+
+// handleToolsDisableCommand disables an MCP server
+func handleToolsDisableCommand(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: astonish tools disable <server-name>")
+	}
+
+	serverName := args[0]
+
+	if err := config.SetMCPServerEnabled(serverName, false); err != nil {
+		// If server not found, show available servers
+		if strings.Contains(err.Error(), "not found") {
+			names, _ := config.GetMCPServerNames()
+			if len(names) > 0 {
+				return fmt.Errorf("%w\nAvailable servers: %s", err, strings.Join(names, ", "))
+			}
+		}
+		return err
+	}
+
+	successStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("220")).
+		Bold(true)
+
+	fmt.Println(successStyle.Render(fmt.Sprintf("✗ Server '%s' disabled", serverName)))
+	return nil
+}
 func handleToolsListCommand(args []string) error {
 	listCmd := flag.NewFlagSet("list", flag.ExitOnError)
 	jsonOutput := listCmd.Bool("json", false, "Output in JSON format")

@@ -14,6 +14,12 @@ type MCPServerConfig struct {
 	Env       map[string]string `json:"env" yaml:"env,omitempty"`
 	Transport string            `json:"transport" yaml:"transport,omitempty"`     // "stdio" or "sse"
 	URL       string            `json:"url,omitempty" yaml:"url,omitempty"` // For SSE transport
+	Enabled   *bool             `json:"enabled,omitempty" yaml:"enabled,omitempty"` // nil defaults to true
+}
+
+// IsEnabled returns true if the server is enabled (defaults to true if not set)
+func (c *MCPServerConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 // MCPConfig represents the entire MCP configuration
@@ -88,4 +94,40 @@ func GetMCPConfigPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(configDir, "mcp_config.json"), nil
+}
+
+// SetMCPServerEnabled sets the enabled status for a specific MCP server
+func SetMCPServerEnabled(serverName string, enabled bool) error {
+	config, err := LoadMCPConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load MCP config: %w", err)
+	}
+
+	server, exists := config.MCPServers[serverName]
+	if !exists {
+		return fmt.Errorf("server '%s' not found", serverName)
+	}
+
+	server.Enabled = &enabled
+	config.MCPServers[serverName] = server
+
+	if err := SaveMCPConfig(config); err != nil {
+		return fmt.Errorf("failed to save MCP config: %w", err)
+	}
+
+	return nil
+}
+
+// GetMCPServerNames returns all server names from the config
+func GetMCPServerNames() ([]string, error) {
+	config, err := LoadMCPConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0, len(config.MCPServers))
+	for name := range config.MCPServers {
+		names = append(names, name)
+	}
+	return names, nil
 }

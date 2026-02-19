@@ -103,6 +103,17 @@ const fetchMCPStatus = async () => {
   return res.json()
 }
 
+// Toggle MCP server enabled/disabled
+const toggleMCPServer = async (name, enabled) => {
+  const res = await fetch(`/api/mcp/servers/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled })
+  })
+  if (!res.ok) throw new Error('Failed to toggle server')
+  return res.json()
+}
+
 const refreshMCPServer = async (serverName) => {
   const res = await fetch(`/api/mcp/${encodeURIComponent(serverName)}/refresh`, {
     method: 'POST'
@@ -502,6 +513,32 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
         ...prev,
         [serverName]: { ...(prev?.[serverName] || {}), name: serverName, status: 'error', error: err.message }
       }))
+    }
+  }
+
+  // Handle toggle enabled/disabled for MCP server
+  const handleToggleMcpServer = async (serverId, serverName, currentEnabled) => {
+    const newEnabled = !currentEnabled
+    
+    // Optimistic update in local state
+    setMcpServers(prev => ({
+      ...prev,
+      [serverId]: { ...prev[serverId], enabled: newEnabled }
+    }))
+    
+    try {
+      await toggleMCPServer(serverName, newEnabled)
+      // Refresh tools if needed
+      if (onToolsRefresh) onToolsRefresh()
+      // Refresh MCP status to reflect changes
+      loadMcpServerStatus()
+    } catch (err) {
+      // Revert on error
+      setMcpServers(prev => ({
+        ...prev,
+        [serverId]: { ...prev[serverId], enabled: currentEnabled }
+      }))
+      setError(`Failed to ${newEnabled ? 'enable' : 'disable'} server: ${err.message}`)
     }
   }
 
@@ -1098,6 +1135,8 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                       const isSaving = savingServer === name
                       const serverStatus = mcpServerStatus[displayName]
                       const hasError = serverStatus?.status === 'error'
+                      // enabled defaults to true if not explicitly set
+                      const isEnabled = server.enabled !== false
                       
                       return (
                         <div
@@ -1116,7 +1155,8 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                             className="p-4"
                             onClick={() => setExpandedMcpServer(isExpanded ? null : name)}
                           >
-                            <div className="flex items-start justify-between gap-3">
+                            {/* Top row: icon, title, actions */}
+                            <div className="flex items-center gap-3">
                               {/* Server Icon with Status Indicator */}
                               <div className="relative shrink-0">
                                 <div 
@@ -1124,16 +1164,20 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                                   style={{ 
                                     background: hasError 
                                       ? 'linear-gradient(135deg, rgba(239, 68, 68, 0.2) 0%, rgba(220, 38, 38, 0.2) 100%)'
-                                      : 'linear-gradient(135deg, rgba(168, 85, 247, 0.2) 0%, rgba(124, 58, 237, 0.2) 100%)',
+                                      : !isEnabled
+                                        ? 'rgba(107, 114, 128, 0.15)'
+                                        : 'linear-gradient(135deg, rgba(168, 85, 247, 0.2) 0%, rgba(124, 58, 237, 0.2) 100%)',
                                     border: hasError 
                                       ? '1px solid rgba(239, 68, 68, 0.3)'
-                                      : '1px solid rgba(168, 85, 247, 0.3)'
+                                      : !isEnabled
+                                        ? '1px solid var(--border-color)'
+                                        : '1px solid rgba(168, 85, 247, 0.3)'
                                   }}
                                 >
-                                  <Server size={18} style={{ color: hasError ? '#ef4444' : '#a855f7' }} />
+                                  <Server size={18} style={{ color: hasError ? '#ef4444' : !isEnabled ? 'var(--text-muted)' : '#a855f7' }} />
                                 </div>
                                 {/* Status dot */}
-                                {serverStatus && (
+                                {serverStatus && isEnabled && (
                                   <div 
                                     className="absolute -top-1 -right-1 w-3 h-3 rounded-full border-2"
                                     style={{ 
@@ -1148,127 +1192,157 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                                 )}
                               </div>
                               
+                              {/* Title */}
                               <div className="flex-1 min-w-0">
-                                {/* Title */}
-                                <h3 className="font-semibold text-base truncate" style={{ color: 'var(--text-primary)' }}>
+                                <h3 className="font-semibold text-base truncate" style={{ color: isEnabled ? 'var(--text-primary)' : 'var(--text-muted)' }}>
                                   {displayName}
                                 </h3>
-                                
-                                {/* Command/URL line */}
-                                <div className="flex items-center gap-2 mt-1.5">
-                                  <code 
-                                    className="text-xs font-mono px-2 py-1 rounded truncate max-w-[200px]"
-                                    style={{ 
-                                      background: 'var(--bg-primary)', 
-                                      color: 'var(--text-secondary)',
-                                      border: '1px solid var(--border-color)'
-                                    }}
-                                  >
-                                    {(server.transport || 'stdio') === 'stdio' 
-                                      ? server.command || 'no command' 
-                                      : server.url || 'no url'}
-                                  </code>
-                                  
-                                  {/* Transport Badge */}
-                                  <span 
-                                    className="shrink-0 text-xs font-medium px-2 py-1 rounded flex items-center gap-1"
-                                    style={{ 
-                                      background: (server.transport || 'stdio') === 'stdio' 
-                                        ? 'rgba(34, 197, 94, 0.15)' 
-                                        : 'rgba(59, 130, 246, 0.15)',
-                                      color: (server.transport || 'stdio') === 'stdio' 
-                                        ? '#22c55e' 
-                                        : '#3b82f6',
-                                      border: `1px solid ${(server.transport || 'stdio') === 'stdio' ? 'rgba(34, 197, 94, 0.3)' : 'rgba(59, 130, 246, 0.3)'}`
-                                    }}
-                                  >
-                                    {server.transport || 'stdio'}
-                                  </span>
-                                </div>
-                                
-                                {/* Environment Variables - show as subtle tags */}
-                                {server.env && Object.keys(server.env).length > 0 && !isExpanded && (
-                                  <div className="flex items-center gap-1.5 mt-2">
-                                    <Key size={12} style={{ color: 'var(--text-muted)' }} />
-                                    <div className="flex flex-wrap gap-1">
-                                      {Object.keys(server.env).slice(0, 2).map(key => (
-                                        <span 
-                                          key={key}
-                                          className="text-xs px-1.5 py-0.5 rounded"
-                                          style={{ 
-                                            background: 'rgba(168, 85, 247, 0.1)', 
-                                            color: 'var(--text-muted)',
-                                            border: '1px solid rgba(168, 85, 247, 0.2)'
-                                          }}
-                                        >
-                                          {key}
-                                        </span>
-                                      ))}
-                                      {Object.keys(server.env).length > 2 && (
-                                        <span 
-                                          className="text-xs px-1.5 py-0.5 rounded"
-                                          style={{ color: 'var(--text-muted)' }}
-                                        >
-                                          +{Object.keys(server.env).length - 2} more
-                                        </span>
-                                      )}
-                                    </div>
-                                  </div>
-                                )}
+                              </div>
 
-                                {/* Error message display */}
-                                {hasError && !isExpanded && (
-                                  <div 
-                                    className="flex items-start gap-2 mt-2 p-2 rounded text-xs"
-                                    style={{ 
-                                      background: 'rgba(239, 68, 68, 0.1)', 
-                                      border: '1px solid rgba(239, 68, 68, 0.2)',
-                                      color: '#f87171'
-                                    }}
-                                  >
-                                    <AlertCircle size={14} className="shrink-0 mt-0.5" />
-                                    <div className="flex-1">
-                                      <div className="font-medium">Failed to load</div>
-                                      <div className="opacity-80 mt-0.5">{serverStatus.error}</div>
-                                    </div>
-                                    {serverStatus?.status === 'loading' ? (
-                                      <Loader2 size={14} className="animate-spin shrink-0 mt-0.5 opacity-50" />
-                                    ) : (
-                                      <button 
-                                        onClick={(e) => { e.stopPropagation(); handleRefreshMcpServer(displayName) }}
-                                        className="p-1 hover:bg-white/10 rounded transition-colors"
-                                        title="Retry"
-                                      >
-                                        <RefreshCw size={14} />
-                                      </button>
-                                    )}
-                                  </div>
-                                )}
+                              {/* Actions row - vertically centered */}
+                              <div className="flex items-center gap-2 shrink-0">
+                                {/* Test button */}
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setInspectServer(displayName)
+                                  }}
+                                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all hover:scale-[1.02]"
+                                  style={{ 
+                                    background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.15) 0%, rgba(124, 58, 237, 0.15) 100%)',
+                                    color: '#a855f7',
+                                    border: '1px solid rgba(168, 85, 247, 0.3)',
+                                    opacity: isEnabled ? 1 : 0.4
+                                  }}
+                                  title="Test tools from this server"
+                                  disabled={!isEnabled}
+                                >
+                                  <Play size={12} />
+                                  Test
+                                </button>
+
+                                {/* Enable/Disable Toggle */}
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleToggleMcpServer(name, displayName, isEnabled)
+                                  }}
+                                  className="relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none"
+                                  style={{ 
+                                    background: isEnabled 
+                                      ? 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)' 
+                                      : 'var(--bg-tertiary)',
+                                    border: isEnabled ? 'none' : '1px solid var(--border-color)'
+                                  }}
+                                  title={isEnabled ? 'Disable server' : 'Enable server'}
+                                >
+                                  <span
+                                    className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
+                                      isEnabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                                    }`}
+                                  />
+                                </button>
+
+                                <ChevronRight 
+                                  size={18} 
+                                  className={`transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                                  style={{ color: 'var(--text-muted)' }}
+                                />
+                              </div>
+                            </div>
+                            
+                            {/* Details row below title */}
+                            <div className="mt-2 ml-[52px]" style={{ opacity: isEnabled ? 1 : 0.5 }}>
+                              {/* Command/URL line */}
+                              <div className="flex items-center gap-2">
+                                <code 
+                                  className="text-xs font-mono px-2 py-1 rounded truncate max-w-[200px]"
+                                  style={{ 
+                                    background: 'var(--bg-primary)', 
+                                    color: 'var(--text-secondary)',
+                                    border: '1px solid var(--border-color)'
+                                  }}
+                                >
+                                  {(server.transport || 'stdio') === 'stdio' 
+                                    ? server.command || 'no command' 
+                                    : server.url || 'no url'}
+                                </code>
+                                
+                                {/* Transport Badge */}
+                                <span 
+                                  className="shrink-0 text-xs font-medium px-2 py-1 rounded flex items-center gap-1"
+                                  style={{ 
+                                    background: (server.transport || 'stdio') === 'stdio' 
+                                      ? 'rgba(34, 197, 94, 0.15)' 
+                                      : 'rgba(59, 130, 246, 0.15)',
+                                    color: (server.transport || 'stdio') === 'stdio' 
+                                      ? '#22c55e' 
+                                      : '#3b82f6',
+                                    border: `1px solid ${(server.transport || 'stdio') === 'stdio' ? 'rgba(34, 197, 94, 0.3)' : 'rgba(59, 130, 246, 0.3)'}`
+                                  }}
+                                >
+                                  {server.transport || 'stdio'}
+                                </span>
                               </div>
                               
-                              {/* Test button */}
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  setInspectServer(displayName)
-                                }}
-                                className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all hover:scale-[1.02]"
-                                style={{ 
-                                  background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.15) 0%, rgba(124, 58, 237, 0.15) 100%)',
-                                  color: '#a855f7',
-                                  border: '1px solid rgba(168, 85, 247, 0.3)'
-                                }}
-                                title="Test tools from this server"
-                              >
-                                <Play size={12} />
-                                Test
-                              </button>
+                              {/* Environment Variables - show as subtle tags */}
+                              {server.env && Object.keys(server.env).length > 0 && !isExpanded && (
+                                <div className="flex items-center gap-1.5 mt-2">
+                                  <Key size={12} style={{ color: 'var(--text-muted)' }} />
+                                  <div className="flex flex-wrap gap-1">
+                                    {Object.keys(server.env).slice(0, 2).map(key => (
+                                      <span 
+                                        key={key}
+                                        className="text-xs px-1.5 py-0.5 rounded"
+                                        style={{ 
+                                          background: 'rgba(168, 85, 247, 0.1)', 
+                                          color: 'var(--text-muted)',
+                                          border: '1px solid rgba(168, 85, 247, 0.2)'
+                                        }}
+                                      >
+                                        {key}
+                                      </span>
+                                    ))}
+                                    {Object.keys(server.env).length > 2 && (
+                                      <span 
+                                        className="text-xs px-1.5 py-0.5 rounded"
+                                        style={{ color: 'var(--text-muted)' }}
+                                      >
+                                        +{Object.keys(server.env).length - 2} more
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
 
-                              <ChevronRight 
-                                size={20} 
-                                className={`transition-transform shrink-0 ${isExpanded ? 'rotate-90' : ''}`}
-                                style={{ color: 'var(--text-muted)' }}
-                              />
+                              {/* Error message display */}
+                              {hasError && !isExpanded && (
+                                <div 
+                                  className="flex items-start gap-2 mt-2 p-2 rounded text-xs"
+                                  style={{ 
+                                    background: 'rgba(239, 68, 68, 0.1)', 
+                                    border: '1px solid rgba(239, 68, 68, 0.2)',
+                                    color: '#f87171'
+                                  }}
+                                >
+                                  <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                                  <div className="flex-1">
+                                    <div className="font-medium">Failed to load</div>
+                                    <div className="opacity-80 mt-0.5">{serverStatus.error}</div>
+                                  </div>
+                                  {serverStatus?.status === 'loading' ? (
+                                    <Loader2 size={14} className="animate-spin shrink-0 mt-0.5 opacity-50" />
+                                  ) : (
+                                    <button 
+                                      onClick={(e) => { e.stopPropagation(); handleRefreshMcpServer(displayName) }}
+                                      className="p-1 hover:bg-white/10 rounded transition-colors"
+                                      title="Retry"
+                                    >
+                                      <RefreshCw size={14} />
+                                    </button>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           </div>
                           

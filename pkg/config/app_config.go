@@ -10,6 +10,17 @@ import (
 type AppConfig struct {
 	General   GeneralConfig             `yaml:"general"`
 	Providers map[string]ProviderConfig `yaml:"providers"`
+	Chat      ChatConfig                `yaml:"chat,omitempty"`
+}
+
+type ChatConfig struct {
+	SystemPrompt      string `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
+	MaxToolCalls      int    `yaml:"max_tool_calls,omitempty" json:"max_tool_calls,omitempty"`
+	MaxTools          int    `yaml:"max_tools,omitempty" json:"max_tools,omitempty"`
+	AutoApprove       bool   `yaml:"auto_approve,omitempty" json:"auto_approve,omitempty"`
+	WorkspaceDir      string `yaml:"workspace_dir,omitempty" json:"workspace_dir,omitempty"`
+	FlowSaveThreshold int    `yaml:"flow_save_threshold,omitempty" json:"flow_save_threshold,omitempty"`
+	FlowSaveDir       string `yaml:"flow_save_dir,omitempty" json:"flow_save_dir,omitempty"`
 }
 
 type GeneralConfig struct {

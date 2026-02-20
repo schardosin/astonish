@@ -11,6 +11,8 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/schardosin/astonish/pkg/cache"
+	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/mcp"
@@ -54,16 +56,18 @@ func handleToolsCommand(args []string) error {
 		return handleToolsEnableCommand(args[1:])
 	case "disable":
 		return handleToolsDisableCommand(args[1:])
+	case "refresh":
+		return handleToolsRefreshCommand(args[1:])
 	default:
 		return fmt.Errorf("unknown tools command: %s", args[0])
 	}
 }
 
 func printToolsUsage() {
-	fmt.Println("usage: astonish tools [-h] {list,edit,store,servers,enable,disable} ...")
+	fmt.Println("usage: astonish tools [-h] {list,edit,store,servers,enable,disable,refresh} ...")
 	fmt.Println("")
 	fmt.Println("positional arguments:")
-	fmt.Println("  {list,edit,store,servers,enable,disable}")
+	fmt.Println("  {list,edit,store,servers,enable,disable,refresh}")
 	fmt.Println("                        Tools management commands")
 	fmt.Println("    list                List available tools (internal + MCP)")
 	fmt.Println("    edit                Edit MCP configuration")
@@ -71,6 +75,7 @@ func printToolsUsage() {
 	fmt.Println("    servers             List MCP servers with their enabled/disabled status")
 	fmt.Println("    enable <name>       Enable an MCP server")
 	fmt.Println("    disable <name>      Disable an MCP server")
+	fmt.Println("    refresh             Refresh the tools cache (connects to all MCP servers)")
 	fmt.Println("")
 	fmt.Println("options:")
 	fmt.Println("  -h, --help            show this help message and exit")
@@ -728,3 +733,89 @@ func handleToolsStoreInstall() error {
 	return nil
 }
 
+// handleToolsRefreshCommand connects to all MCP servers and refreshes the tools cache.
+// This populates cached tool schemas needed for lazy loading in chat mode.
+func handleToolsRefreshCommand(args []string) error {
+	refreshCmd := flag.NewFlagSet("refresh", flag.ExitOnError)
+	verbose := refreshCmd.Bool("v", false, "Verbose output")
+	refreshCmd.Parse(args)
+
+	ctx := context.Background()
+
+	mcpCfg, err := config.LoadMCPConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load MCP config: %w", err)
+	}
+	if mcpCfg == nil || len(mcpCfg.MCPServers) == 0 {
+		fmt.Println("No MCP servers configured.")
+		return nil
+	}
+
+	fmt.Println("Refreshing tools cache...")
+
+	mcpManager, err := mcp.NewManager()
+	if err != nil {
+		return fmt.Errorf("failed to create MCP manager: %w", err)
+	}
+	defer mcpManager.Cleanup()
+
+	totalTools := 0
+	successCount := 0
+	failCount := 0
+
+	for name, serverCfg := range mcpCfg.MCPServers {
+		if !serverCfg.IsEnabled() {
+			if *verbose {
+				fmt.Printf("  [skip] %s (disabled)\n", name)
+			}
+			continue
+		}
+
+		fmt.Printf("  [....] %s", name)
+
+		namedToolset, initErr := mcpManager.InitializeSingleToolset(ctx, name)
+		if initErr != nil {
+			fmt.Printf("\r  [FAIL] %s: %v\n", name, initErr)
+			failCount++
+			continue
+		}
+
+		minCtx := &minimalReadonlyContext{Context: ctx}
+		mcpTools, toolErr := namedToolset.Toolset.Tools(minCtx)
+		if toolErr != nil {
+			fmt.Printf("\r  [FAIL] %s: %v\n", name, toolErr)
+			failCount++
+			continue
+		}
+
+		// Build cache entries with schemas
+		entries := make([]cache.ToolEntry, 0, len(mcpTools))
+		for _, t := range mcpTools {
+			entries = append(entries, cache.ToolEntry{
+				Name:        t.Name(),
+				Description: t.Description(),
+				Source:      name,
+				InputSchema: common.ExtractToolInputSchema(t),
+			})
+		}
+
+		checksum := cache.ComputeServerChecksum(serverCfg.Command, serverCfg.Args, serverCfg.Env)
+		cache.AddServerTools(name, entries, checksum)
+
+		fmt.Printf("\r  [ OK ] %s (%d tools)\n", name, len(mcpTools))
+		totalTools += len(mcpTools)
+		successCount++
+	}
+
+	if err := cache.SaveCache(); err != nil {
+		return fmt.Errorf("failed to save cache: %w", err)
+	}
+
+	fmt.Printf("\nDone: %d servers refreshed, %d tools cached", successCount, totalTools)
+	if failCount > 0 {
+		fmt.Printf(", %d failed", failCount)
+	}
+	fmt.Println()
+
+	return nil
+}

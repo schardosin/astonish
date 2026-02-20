@@ -11,6 +11,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/cache"
+	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/provider"
@@ -391,13 +392,14 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 				AddServerToolsToCache(req.ServerName, newTools)
 				toolsLoaded = len(newTools)
 
-				// Also update persistent cache
-				persistentTools := make([]cache.ToolEntry, 0, len(newTools))
-				for _, t := range newTools {
+				// Also update persistent cache (use mcpTools for schema access)
+				persistentTools := make([]cache.ToolEntry, 0, len(mcpTools))
+				for _, t := range mcpTools {
 					persistentTools = append(persistentTools, cache.ToolEntry{
-						Name:        t.Name,
-						Description: t.Description,
-						Source:      t.Source,
+						Name:        t.Name(),
+						Description: t.Description(),
+						Source:      req.ServerName,
+						InputSchema: common.ExtractToolInputSchema(t),
 					})
 				}
 				checksum := cache.ComputeServerChecksum(req.Config.Command, req.Config.Args, req.Config.Env)
@@ -480,6 +482,7 @@ func updatePersistentCacheForServers(ctx context.Context, servers map[string]con
 				Name:        t.Name(),
 				Description: t.Description(),
 				Source:      serverName,
+				InputSchema: common.ExtractToolInputSchema(t),
 			})
 		}
 

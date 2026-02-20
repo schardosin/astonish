@@ -12,10 +12,12 @@ import (
 
 // SystemPromptBuilder constructs context-aware system prompts for chat mode.
 type SystemPromptBuilder struct {
-	Tools        []tool.Tool
-	Toolsets     []tool.Toolset
-	WorkspaceDir string
-	CustomPrompt string
+	Tools         []tool.Tool
+	Toolsets      []tool.Toolset
+	WorkspaceDir  string
+	CustomPrompt  string
+	MemoryContent string // Contents of MEMORY.md (loaded per turn)
+	ExecutionPlan string // Flow-based execution plan (set when a flow matches)
 }
 
 // Build constructs the full system prompt.
@@ -70,6 +72,33 @@ func (b *SystemPromptBuilder) Build() string {
 	}
 	sb.WriteString(fmt.Sprintf("- OS: %s/%s\n", runtime.GOOS, runtime.GOARCH))
 	sb.WriteString(fmt.Sprintf("- Date: %s\n", time.Now().Format("2006-01-02 15:04 MST")))
+
+	// 6. Persistent Memory
+	memoryGuidance := "**What to save:** connection details (IPs, hostnames, users, auth methods, ports), " +
+		"server roles, network topology, user preferences, project conventions.\n" +
+		"**What NOT to save:** lists of VMs/containers/pods, their running status, resource usage (RAM, disk, CPU), " +
+		"command outputs, or ANY data that changes over time. Those must always be fetched live.\n"
+
+	if b.MemoryContent != "" {
+		sb.WriteString("\n## Persistent Memory\n\n")
+		sb.WriteString("You have persistent memory. Known facts from previous interactions:\n\n")
+		sb.WriteString(b.MemoryContent)
+		sb.WriteString("\n\n")
+		sb.WriteString("When you discover NEW durable facts during this interaction, save them using **memory_save**.\n")
+		sb.WriteString(memoryGuidance)
+	} else {
+		// Even without existing memory, tell the LLM it can save
+		sb.WriteString("\n## Persistent Memory\n\n")
+		sb.WriteString("You have access to persistent memory via the **memory_save** tool. ")
+		sb.WriteString("When you discover durable facts during this interaction, save them for future recall.\n")
+		sb.WriteString(memoryGuidance)
+	}
+
+	// 7. Execution Plan (only when a flow matches)
+	if b.ExecutionPlan != "" {
+		sb.WriteString("\n## Execution Plan\n\n")
+		sb.WriteString(b.ExecutionPlan)
+	}
 
 	return sb.String()
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/memory"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/model"
@@ -40,6 +41,10 @@ type ChatAgent struct {
 	FlowSaveDir       string         // Directory for saved flows (default: agents dir)
 	FlowRegistry      *FlowRegistry  // Registry for saved flows
 	FlowDistiller     *FlowDistiller // Distiller for trace-to-YAML conversion
+
+	// Memory and flow reuse
+	MemoryManager      *memory.Manager     // Persistent memory manager
+	FlowContextBuilder *FlowContextBuilder // Converts flow YAML to execution plan
 
 	// Internal: reuse AstonishAgent for approval formatting
 	approvalHelper *AstonishAgent
@@ -115,7 +120,42 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		// --- Phase A: Dynamic Execution ---
 		trace := NewExecutionTrace(userText)
 
-		// Build system prompt
+		// Load memory and inject into system prompt
+		c.SystemPrompt.MemoryContent = ""
+		c.SystemPrompt.ExecutionPlan = ""
+
+		if c.MemoryManager != nil {
+			memContent, memErr := c.MemoryManager.Load()
+			if memErr != nil {
+				if c.DebugMode {
+					fmt.Printf("[Chat DEBUG] Failed to load memory: %v\n", memErr)
+				}
+			} else if memContent != "" {
+				c.SystemPrompt.MemoryContent = memContent
+				if c.DebugMode {
+					fmt.Printf("[Chat DEBUG] Loaded memory (%d bytes)\n", len(memContent))
+				}
+			}
+
+			// Check for matching saved flow
+			if c.FlowRegistry != nil && c.FlowContextBuilder != nil {
+				flowFile, plan := c.matchAndBuildPlan(userText, memContent)
+				if plan != "" {
+					c.SystemPrompt.ExecutionPlan = plan
+					// Emit a brief info note about the flow match
+					yield(&session.Event{
+						LLMResponse: model.LLMResponse{
+							Content: &genai.Content{
+								Parts: []*genai.Part{{Text: fmt.Sprintf("_Using saved flow: %s_\n", strings.TrimSuffix(flowFile, ".yaml"))}},
+								Role:  "model",
+							},
+						},
+					}, nil)
+				}
+			}
+		}
+
+		// Build system prompt (includes memory and execution plan if set)
 		instruction := c.SystemPrompt.Build()
 
 		// Create the AfterToolCallback for trace recording
@@ -214,7 +254,8 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		}
 
 		// --- Phase B: Flow Save Offer ---
-		if trace.ToolCallCount() >= c.FlowSaveThreshold {
+		// Skip if this execution was guided by a saved flow (nothing new to save)
+		if trace.ToolCallCount() >= c.FlowSaveThreshold && c.SystemPrompt.ExecutionPlan == "" {
 			// Store trace on the ChatAgent itself (state.Set doesn't persist across invocations)
 			c.pendingTrace = trace
 
@@ -530,4 +571,104 @@ func (c *ChatAgent) extractInputParams(invCtx agent.InvocationContext, yamlStr s
 	}
 
 	return params
+}
+
+// matchAndBuildPlan checks if the user's request matches a saved flow.
+// If a match is found, it reads the flow YAML and builds an execution plan.
+// Returns (flowFile, planText) -- both empty if no match.
+func (c *ChatAgent) matchAndBuildPlan(userText string, memoryContent string) (string, string) {
+	if c.FlowRegistry == nil || c.FlowContextBuilder == nil || c.FlowDistiller == nil {
+		return "", ""
+	}
+
+	entries := c.FlowRegistry.Entries()
+	if len(entries) == 0 {
+		return "", ""
+	}
+
+	// Use the registry's LLM-based matching
+	matchPrompt := c.FlowRegistry.BuildMatchPrompt(userText)
+	if matchPrompt == "" {
+		return "", ""
+	}
+
+	if c.DebugMode {
+		fmt.Printf("[Chat DEBUG] Checking flow registry for match...\n")
+	}
+
+	response, err := c.FlowDistiller.LLM(context.Background(), matchPrompt)
+	if err != nil {
+		if c.DebugMode {
+			fmt.Printf("[Chat DEBUG] Flow match LLM call failed: %v\n", err)
+		}
+		return "", ""
+	}
+
+	matchedFile := strings.TrimSpace(response)
+	if c.DebugMode {
+		fmt.Printf("[Chat DEBUG] Flow match response: %q\n", matchedFile)
+	}
+
+	// Check if the response is "NONE" or not a valid filename
+	if strings.EqualFold(matchedFile, "NONE") || matchedFile == "" {
+		return "", ""
+	}
+
+	// Ensure .yaml extension
+	if !strings.HasSuffix(matchedFile, ".yaml") {
+		matchedFile += ".yaml"
+	}
+
+	// Find the flow file on disk
+	flowPath := c.resolveFlowPath(matchedFile)
+	if flowPath == "" {
+		if c.DebugMode {
+			fmt.Printf("[Chat DEBUG] Matched flow file not found on disk: %s\n", matchedFile)
+		}
+		return "", ""
+	}
+
+	// Read the flow YAML
+	flowData, err := os.ReadFile(flowPath)
+	if err != nil {
+		if c.DebugMode {
+			fmt.Printf("[Chat DEBUG] Failed to read flow file: %v\n", err)
+		}
+		return "", ""
+	}
+
+	// Build the execution plan
+	plan := c.FlowContextBuilder.BuildExecutionPlan(string(flowData), matchedFile, memoryContent)
+	if plan == "" {
+		return "", ""
+	}
+
+	if c.DebugMode {
+		fmt.Printf("[Chat DEBUG] Built execution plan from flow: %s (%d bytes)\n", matchedFile, len(plan))
+	}
+
+	return matchedFile, plan
+}
+
+// resolveFlowPath finds the full path for a flow file.
+// Checks FlowSaveDir, then the default agents directory.
+func (c *ChatAgent) resolveFlowPath(filename string) string {
+	// Check FlowSaveDir first
+	if c.FlowSaveDir != "" {
+		p := filepath.Join(c.FlowSaveDir, filename)
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+
+	// Check default agents directory
+	configDir, err := os.UserConfigDir()
+	if err == nil {
+		p := filepath.Join(configDir, "astonish", "agents", filename)
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+
+	return ""
 }

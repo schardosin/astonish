@@ -14,6 +14,7 @@ import (
 	"github.com/schardosin/astonish/pkg/api"
 	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/tools"
 	"github.com/schardosin/astonish/pkg/ui"
@@ -63,6 +64,23 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 	internalTools, err := tools.GetInternalTools()
 	if err != nil {
 		return fmt.Errorf("failed to initialize internal tools: %w", err)
+	}
+
+	// --- 2b. Initialize memory manager and memory_save tool ---
+	memMgr, memErr := memory.NewManager("", cfg.DebugMode)
+	if memErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("Warning: Failed to initialize memory manager: %v\n", memErr)
+		}
+	} else {
+		memorySaveTool, msErr := tools.NewMemorySaveTool(memMgr)
+		if msErr != nil {
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Failed to create memory_save tool: %v\n", msErr)
+			}
+		} else {
+			internalTools = append(internalTools, memorySaveTool)
+		}
 	}
 
 	// --- 3. Load MCP tools from cache (lazy -- no server connections at startup) ---
@@ -234,6 +252,12 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 		chatAgent.MaxToolCalls = cfg.AppConfig.Chat.MaxToolCalls
 	}
 
+	// --- 6d. Wire memory and flow context ---
+	if memMgr != nil {
+		chatAgent.MemoryManager = memMgr
+	}
+	chatAgent.FlowContextBuilder = &agent.FlowContextBuilder{DebugMode: cfg.DebugMode}
+
 	// --- 7. Create ADK agent wrapper ---
 	adkAgent, err := adkagent.New(adkagent.Config{
 		Name:        "astonish_chat",
@@ -287,7 +311,21 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 	if mcpToolCount > 0 {
 		fmt.Printf(" + %d MCP (lazy)", mcpToolCount)
 	}
-	fmt.Printf(" | Provider: %s\n\n", cfg.ProviderName)
+	fmt.Printf(" | Provider: %s", cfg.ProviderName)
+	if memMgr != nil {
+		memContent, _ := memMgr.Load()
+		if memContent != "" {
+			fmt.Print(" | Memory: active")
+		}
+	}
+	if chatAgent.FlowRegistry != nil {
+		entries := chatAgent.FlowRegistry.Entries()
+		if len(entries) > 0 {
+			fmt.Printf(" | Flows: %d saved", len(entries))
+		}
+	}
+	fmt.Println()
+	fmt.Println()
 
 	// --- 11. Spinner helpers ---
 	var spinnerProgram *tea.Program

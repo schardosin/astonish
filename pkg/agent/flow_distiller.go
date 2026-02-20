@@ -34,6 +34,12 @@ type FlowDistiller struct {
 	ValidateYAML func(yamlStr string, tools []DistillerToolInfo) FlowValidationResult
 }
 
+// internalOnlyTools lists tools that exist only for the chat agent's
+// internal use and must never appear in distilled flows.
+var internalOnlyTools = map[string]bool{
+	"memory_save": true,
+}
+
 // NewFlowDistiller creates a FlowDistiller that uses the provided ADK model.LLM.
 // The getSchema and validateYAML functions break the import cycle with pkg/api.
 func NewFlowDistiller(
@@ -169,11 +175,14 @@ func (d *FlowDistiller) buildDistillationPrompt(req DistillRequest, previousYAML
 		sb.WriteString(d.GetSchema())
 	}
 
-	// Available tools
+	// Available tools (excluding internal-only tools)
 	toolInfos := d.buildToolInfoList()
 	if len(toolInfos) > 0 {
 		sb.WriteString("\n\n# Available Tools\n\nONLY use tools from this list:\n")
 		for _, t := range toolInfos {
+			if internalOnlyTools[t.Name] {
+				continue
+			}
 			sb.WriteString(fmt.Sprintf("- %s: %s (source: %s)\n", t.Name, t.Description, t.Source))
 		}
 	}
@@ -182,12 +191,17 @@ func (d *FlowDistiller) buildDistillationPrompt(req DistillRequest, previousYAML
 	sb.WriteString("\n\n# Original User Request\n\n")
 	sb.WriteString(req.UserRequest)
 
-	// Execution trace (successful steps only)
+	// Execution trace (successful steps only, excluding internal-only tools)
 	steps := req.Trace.SuccessfulSteps()
 	sb.WriteString("\n\n# Execution Trace (successful steps)\n\n")
-	for i, step := range steps {
+	stepNum := 0
+	for _, step := range steps {
+		if internalOnlyTools[step.ToolName] {
+			continue
+		}
+		stepNum++
 		argsJSON, _ := json.MarshalIndent(step.ToolArgs, "", "  ")
-		sb.WriteString(fmt.Sprintf("Step %d: Called **%s**\n", i+1, step.ToolName))
+		sb.WriteString(fmt.Sprintf("Step %d: Called **%s**\n", stepNum, step.ToolName))
 		sb.WriteString(fmt.Sprintf("  Args: %s\n", string(argsJSON)))
 		if step.DurationMs > 0 {
 			sb.WriteString(fmt.Sprintf("  Duration: %dms\n", step.DurationMs))
@@ -204,7 +218,8 @@ func (d *FlowDistiller) buildDistillationPrompt(req DistillRequest, previousYAML
 	sb.WriteString("5. Use tools_selection to restrict to only the tools that were actually used\n")
 	sb.WriteString("6. After tool execution, add an LLM processing node that formats the output\n")
 	sb.WriteString("7. Add an output node to display the formatted result\n")
-	sb.WriteString("8. Include proper flow edges connecting START -> nodes -> END\n\n")
+	sb.WriteString("8. Include proper flow edges connecting START -> nodes -> END\n")
+	sb.WriteString("9. NEVER include memory_save or other internal-only tools in the flow. Memory is a chat-mode concern, not a flow step.\n\n")
 
 	// Include actual output if captured, so the distiller can replicate the format
 	if req.Trace.FinalOutput != "" {

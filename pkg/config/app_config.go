@@ -13,14 +13,95 @@ type AppConfig struct {
 	Providers  map[string]ProviderConfig  `yaml:"providers"`
 	Chat       ChatConfig                 `yaml:"chat,omitempty"`
 	Sessions   SessionConfig              `yaml:"sessions,omitempty"`
+	Memory     MemoryConfig               `yaml:"memory,omitempty"`
 }
 
-// WebServerConfig stores credentials for a standard web MCP server (Tavily, Brave, Firecrawl).
+// MemoryConfig controls the semantic memory / RAG system.
+type MemoryConfig struct {
+	Enabled   *bool           `yaml:"enabled,omitempty" json:"enabled,omitempty"` // Default: true (nil means true)
+	MemoryDir string          `yaml:"memory_dir,omitempty" json:"memory_dir,omitempty"`
+	VectorDir string          `yaml:"vector_dir,omitempty" json:"vector_dir,omitempty"`
+	Embedding EmbeddingConfig `yaml:"embedding,omitempty" json:"embedding,omitempty"`
+	Chunking  ChunkingConfig  `yaml:"chunking,omitempty" json:"chunking,omitempty"`
+	Search    SearchConfig    `yaml:"search,omitempty" json:"search,omitempty"`
+	Sync      SyncConfig      `yaml:"sync,omitempty" json:"sync,omitempty"`
+}
+
+// EmbeddingConfig controls the embedding provider for memory search.
+type EmbeddingConfig struct {
+	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"` // "auto", "openai", "ollama", "openai-compat"
+	Model    string `yaml:"model,omitempty" json:"model,omitempty"`
+	BaseURL  string `yaml:"base_url,omitempty" json:"base_url,omitempty"`
+	APIKey   string `yaml:"api_key,omitempty" json:"api_key,omitempty"`
+}
+
+// ChunkingConfig controls how memory files are split into chunks.
+type ChunkingConfig struct {
+	MaxChars int `yaml:"max_chars,omitempty" json:"max_chars,omitempty"` // Default: 1600
+	Overlap  int `yaml:"overlap,omitempty" json:"overlap,omitempty"`     // Default: 320
+}
+
+// SearchConfig controls memory search defaults.
+type SearchConfig struct {
+	MaxResults int     `yaml:"max_results,omitempty" json:"max_results,omitempty"` // Default: 6
+	MinScore   float64 `yaml:"min_score,omitempty" json:"min_score,omitempty"`     // Default: 0.35
+}
+
+// SyncConfig controls the file watcher for live reindexing.
+type SyncConfig struct {
+	Watch      *bool `yaml:"watch,omitempty" json:"watch,omitempty"`             // Default: true (nil means true)
+	DebounceMs int   `yaml:"debounce_ms,omitempty" json:"debounce_ms,omitempty"` // Default: 1500
+}
+
+// IsMemoryEnabled returns whether the memory system is enabled.
+// Defaults to true if not explicitly set.
+func (c *MemoryConfig) IsMemoryEnabled() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+// IsWatchEnabled returns whether the file watcher is enabled.
+// Defaults to true if not explicitly set.
+func (c *MemoryConfig) IsWatchEnabled() bool {
+	if c.Sync.Watch == nil {
+		return true
+	}
+	return *c.Sync.Watch
+}
+
+// GetMemoryDir returns the memory directory, defaulting to ~/.config/astonish/memory/.
+func GetMemoryDir(cfg *MemoryConfig) (string, error) {
+	if cfg != nil && cfg.MemoryDir != "" {
+		return cfg.MemoryDir, nil
+	}
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, "memory"), nil
+}
+
+// GetVectorDir returns the vector storage directory, defaulting to ~/.config/astonish/memory/vectors/.
+func GetVectorDir(cfg *MemoryConfig) (string, error) {
+	if cfg != nil && cfg.VectorDir != "" {
+		return cfg.VectorDir, nil
+	}
+	memDir, err := GetMemoryDir(cfg)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(memDir, "vectors"), nil
+}
+
+// WebServerConfig stores credentials and installation state for a standard MCP server.
 // The server command, args, and env var names are defined in standard_servers.go.
-// Only the API key is stored here, keeping config.yaml as the single source of truth
-// for web server credentials (separate from mcp_config.json which holds custom servers).
+// For servers that require an API key (Tavily, Brave, Firecrawl), the key is stored here.
+// For keyless servers (Playwright), only the Installed flag is set.
 type WebServerConfig struct {
-	APIKey string `yaml:"api_key" json:"api_key"`
+	APIKey    string `yaml:"api_key,omitempty" json:"api_key,omitempty"`
+	Installed bool   `yaml:"installed,omitempty" json:"installed,omitempty"`
 }
 
 // SessionConfig controls session persistence behavior.
@@ -33,13 +114,12 @@ type SessionConfig struct {
 }
 
 type ChatConfig struct {
-	SystemPrompt      string `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
-	MaxToolCalls      int    `yaml:"max_tool_calls,omitempty" json:"max_tool_calls,omitempty"`
-	MaxTools          int    `yaml:"max_tools,omitempty" json:"max_tools,omitempty"`
-	AutoApprove       bool   `yaml:"auto_approve,omitempty" json:"auto_approve,omitempty"`
-	WorkspaceDir      string `yaml:"workspace_dir,omitempty" json:"workspace_dir,omitempty"`
-	FlowSaveThreshold int    `yaml:"flow_save_threshold,omitempty" json:"flow_save_threshold,omitempty"`
-	FlowSaveDir       string `yaml:"flow_save_dir,omitempty" json:"flow_save_dir,omitempty"`
+	SystemPrompt string `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
+	MaxToolCalls int    `yaml:"max_tool_calls,omitempty" json:"max_tool_calls,omitempty"`
+	MaxTools     int    `yaml:"max_tools,omitempty" json:"max_tools,omitempty"`
+	AutoApprove  bool   `yaml:"auto_approve,omitempty" json:"auto_approve,omitempty"`
+	WorkspaceDir string `yaml:"workspace_dir,omitempty" json:"workspace_dir,omitempty"`
+	FlowSaveDir  string `yaml:"flow_save_dir,omitempty" json:"flow_save_dir,omitempty"`
 }
 
 type GeneralConfig struct {

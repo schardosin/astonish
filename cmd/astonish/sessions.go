@@ -1,0 +1,252 @@
+package astonish
+
+import (
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/schardosin/astonish/pkg/config"
+	persistentsession "github.com/schardosin/astonish/pkg/session"
+)
+
+func handleSessionsCommand(args []string) error {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
+		printSessionsUsage()
+		return nil
+	}
+
+	subcommand := args[0]
+	switch subcommand {
+	case "list", "ls":
+		return handleSessionsList()
+	case "show":
+		if len(args) < 2 {
+			fmt.Println("Error: session ID required")
+			fmt.Println("Usage: astonish sessions show <session-id>")
+			return fmt.Errorf("session ID required")
+		}
+		return handleSessionsShow(args[1])
+	case "delete", "rm":
+		if len(args) < 2 {
+			fmt.Println("Error: session ID required")
+			fmt.Println("Usage: astonish sessions delete <session-id>")
+			return fmt.Errorf("session ID required")
+		}
+		return handleSessionsDelete(args[1])
+	default:
+		fmt.Printf("Unknown sessions subcommand: %s\n", subcommand)
+		printSessionsUsage()
+		return fmt.Errorf("unknown subcommand: %s", subcommand)
+	}
+}
+
+func handleSessionsList() error {
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	if appCfg.Sessions.Storage == "memory" {
+		fmt.Println("Session persistence is disabled (storage: memory).")
+		fmt.Println("Remove 'sessions: { storage: memory }' from your config to enable it.")
+		return nil
+	}
+
+	sessDir, err := config.GetSessionsDir(&appCfg.Sessions)
+	if err != nil {
+		return fmt.Errorf("failed to resolve sessions dir: %w", err)
+	}
+
+	index := persistentsession.NewSessionIndex(sessDir + "/index.json")
+	data, err := index.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load session index: %w", err)
+	}
+
+	if len(data.Sessions) == 0 {
+		fmt.Println("No sessions found.")
+		return nil
+	}
+
+	// Sort by UpdatedAt descending
+	metas := make([]persistentsession.SessionMeta, 0, len(data.Sessions))
+	for _, m := range data.Sessions {
+		metas = append(metas, m)
+	}
+	sort.Slice(metas, func(i, j int) bool {
+		return metas[i].UpdatedAt.After(metas[j].UpdatedAt)
+	})
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tTITLE\tMESSAGES\tUPDATED\tAGE")
+	for _, m := range metas {
+		id := m.ID
+		if len(id) > 8 {
+			id = id[:8]
+		}
+		title := m.Title
+		if title == "" {
+			title = "-"
+		}
+		if len(title) > 40 {
+			title = title[:37] + "..."
+		}
+		age := formatAge(m.UpdatedAt)
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\n",
+			id, title, m.MessageCount,
+			m.UpdatedAt.Format("2006-01-02 15:04"), age)
+	}
+	w.Flush()
+
+	fmt.Printf("\n%d session(s) total\n", len(metas))
+	return nil
+}
+
+func handleSessionsShow(sessionID string) error {
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	if appCfg.Sessions.Storage == "memory" {
+		fmt.Println("Session persistence is disabled (storage: memory).")
+		return nil
+	}
+
+	sessDir, err := config.GetSessionsDir(&appCfg.Sessions)
+	if err != nil {
+		return fmt.Errorf("failed to resolve sessions dir: %w", err)
+	}
+
+	// Try to find session by prefix match
+	index := persistentsession.NewSessionIndex(sessDir + "/index.json")
+	fullID, err := resolveSessionID(index, sessionID)
+	if err != nil {
+		return err
+	}
+
+	meta, err := index.Get(fullID)
+	if err != nil {
+		return fmt.Errorf("session not found: %w", err)
+	}
+
+	fmt.Printf("Session: %s\n", meta.ID)
+	fmt.Printf("App:     %s\n", meta.AppName)
+	fmt.Printf("User:    %s\n", meta.UserID)
+	fmt.Printf("Created: %s\n", meta.CreatedAt.Format(time.RFC3339))
+	fmt.Printf("Updated: %s\n", meta.UpdatedAt.Format(time.RFC3339))
+	if meta.Title != "" {
+		fmt.Printf("Title:   %s\n", meta.Title)
+	}
+	fmt.Printf("Messages: %d\n", meta.MessageCount)
+	fmt.Println()
+	fmt.Printf("Resume with: astonish chat --resume %s\n", meta.ID)
+
+	return nil
+}
+
+func handleSessionsDelete(sessionID string) error {
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	if appCfg.Sessions.Storage == "memory" {
+		fmt.Println("Session persistence is disabled (storage: memory).")
+		return nil
+	}
+
+	sessDir, err := config.GetSessionsDir(&appCfg.Sessions)
+	if err != nil {
+		return fmt.Errorf("failed to resolve sessions dir: %w", err)
+	}
+
+	index := persistentsession.NewSessionIndex(sessDir + "/index.json")
+	fullID, err := resolveSessionID(index, sessionID)
+	if err != nil {
+		return err
+	}
+
+	// Get metadata for transcript path
+	meta, err := index.Get(fullID)
+	if err != nil {
+		return fmt.Errorf("session not found: %w", err)
+	}
+
+	// Remove transcript file
+	transcriptPath := fmt.Sprintf("%s/%s/%s/%s.jsonl", sessDir, meta.AppName, meta.UserID, meta.ID)
+	os.Remove(transcriptPath)
+
+	// Remove from index
+	if err := index.Remove(fullID); err != nil {
+		return fmt.Errorf("failed to delete session: %w", err)
+	}
+
+	fmt.Printf("Deleted session %s\n", fullID)
+	return nil
+}
+
+// resolveSessionID resolves a potentially partial session ID to a full one.
+func resolveSessionID(index *persistentsession.SessionIndex, partial string) (string, error) {
+	data, err := index.Load()
+	if err != nil {
+		return "", fmt.Errorf("failed to load index: %w", err)
+	}
+
+	// Exact match first
+	if _, ok := data.Sessions[partial]; ok {
+		return partial, nil
+	}
+
+	// Prefix match
+	var matches []string
+	for id := range data.Sessions {
+		if strings.HasPrefix(id, partial) {
+			matches = append(matches, id)
+		}
+	}
+
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("no session matching %q", partial)
+	case 1:
+		return matches[0], nil
+	default:
+		return "", fmt.Errorf("ambiguous session ID %q matches %d sessions", partial, len(matches))
+	}
+}
+
+func formatAge(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
+}
+
+func printSessionsUsage() {
+	fmt.Println("usage: astonish sessions <command> [args]")
+	fmt.Println("")
+	fmt.Println("Manage persistent chat sessions.")
+	fmt.Println("")
+	fmt.Println("commands:")
+	fmt.Println("  list, ls              List all sessions")
+	fmt.Println("  show <id>             Show session details")
+	fmt.Println("  delete, rm <id>       Delete a session")
+	fmt.Println("")
+	fmt.Println("Session IDs can be abbreviated (prefix match).")
+	fmt.Println("")
+	fmt.Println("examples:")
+	fmt.Println("  astonish sessions list")
+	fmt.Println("  astonish sessions show abc123")
+	fmt.Println("  astonish sessions delete abc123")
+}

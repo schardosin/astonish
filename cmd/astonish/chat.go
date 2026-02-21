@@ -23,11 +23,13 @@ func handleChatCommand(args []string) error {
 	workspaceDir := chatCmd.String("workspace", "", "Working directory (default: current dir)")
 	autoApprove := chatCmd.Bool("auto-approve", false, "Auto-approve all tool executions")
 	debugMode := chatCmd.Bool("debug", false, "Enable debug mode")
+	resumeSession := chatCmd.String("resume", "", "Resume an existing session by ID")
 
 	// Short flag aliases
 	chatCmd.StringVar(providerName, "p", "", "AI provider (short)")
 	chatCmd.StringVar(modelName, "m", "", "Model name (short)")
 	chatCmd.StringVar(workspaceDir, "w", "", "Working directory (short)")
+	chatCmd.StringVar(resumeSession, "r", "", "Resume session (short)")
 
 	// Handle --help
 	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
@@ -63,6 +65,7 @@ func handleChatCommand(args []string) error {
 		DebugMode:    *debugMode,
 		AutoApprove:  *autoApprove,
 		WorkspaceDir: *workspaceDir,
+		SessionID:    *resumeSession,
 	}
 
 	return launcher.RunChatConsole(context.Background(), cfg)
@@ -79,6 +82,7 @@ func printChatUsage() {
 	fmt.Println("  -p, --provider      AI provider (default: from config)")
 	fmt.Println("  -m, --model         Model name (default: from config)")
 	fmt.Println("  -w, --workspace     Working directory (default: current dir)")
+	fmt.Println("  -r, --resume        Resume an existing session by ID")
 	fmt.Println("  --auto-approve      Auto-approve all tool executions")
 	fmt.Println("  --debug             Enable debug output")
 	fmt.Println("  -h, --help          Show this help message")
@@ -87,6 +91,7 @@ func printChatUsage() {
 	fmt.Println("  astonish chat")
 	fmt.Println("  astonish chat -p openai -m gpt-4o")
 	fmt.Println("  astonish chat --auto-approve")
+	fmt.Println("  astonish chat --resume <session-id>")
 	fmt.Println("")
 	fmt.Println("In chat mode, the agent has access to all configured tools (internal + MCP)")
 	fmt.Println("and will call them as needed to accomplish your tasks.")

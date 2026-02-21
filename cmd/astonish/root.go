@@ -39,6 +39,8 @@ func Execute() error {
 	switch command {
 	case "chat":
 		return handleChatCommand(os.Args[2:])
+	case "sessions":
+		return handleSessionsCommand(os.Args[2:])
 	case "flows", "agents": // "agents" is a hidden alias for backwards compatibility
 		return handleFlowsCommand(os.Args[2:])
 	case "tap":
@@ -60,12 +62,13 @@ func Execute() error {
 }
 
 func printUsage() {
-	fmt.Println("usage: astonish [-h] [-v] {chat,flows,tap,studio,config,setup,tools} ...")
+	fmt.Println("usage: astonish [-h] [-v] {chat,sessions,flows,tap,studio,config,setup,tools} ...")
 	fmt.Println("")
 	fmt.Println("positional arguments:")
-	fmt.Println("  {chat,flows,tap,studio,config,setup,tools}")
+	fmt.Println("  {chat,sessions,flows,tap,studio,config,setup,tools}")
 	fmt.Println("                        Astonish CLI commands")
 	fmt.Println("    chat                Start an interactive chat session")
+	fmt.Println("    sessions            Manage persistent sessions")
 	fmt.Println("    flows               Design and run AI flows")
 	fmt.Println("    tap                 Manage extension repositories")
 	fmt.Println("    studio              Launch the visual editor")

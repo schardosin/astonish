@@ -8,9 +8,28 @@ import (
 )
 
 type AppConfig struct {
-	General   GeneralConfig             `yaml:"general"`
-	Providers map[string]ProviderConfig `yaml:"providers"`
-	Chat      ChatConfig                `yaml:"chat,omitempty"`
+	General    GeneralConfig              `yaml:"general"`
+	WebServers map[string]WebServerConfig `yaml:"web_servers,omitempty" json:"web_servers,omitempty"`
+	Providers  map[string]ProviderConfig  `yaml:"providers"`
+	Chat       ChatConfig                 `yaml:"chat,omitempty"`
+	Sessions   SessionConfig              `yaml:"sessions,omitempty"`
+}
+
+// WebServerConfig stores credentials for a standard web MCP server (Tavily, Brave, Firecrawl).
+// The server command, args, and env var names are defined in standard_servers.go.
+// Only the API key is stored here, keeping config.yaml as the single source of truth
+// for web server credentials (separate from mcp_config.json which holds custom servers).
+type WebServerConfig struct {
+	APIKey string `yaml:"api_key" json:"api_key"`
+}
+
+// SessionConfig controls session persistence behavior.
+type SessionConfig struct {
+	// Storage type: "memory" (default) or "file"
+	Storage string `yaml:"storage,omitempty" json:"storage,omitempty"`
+	// BaseDir overrides the default session storage directory.
+	// Empty means ~/.config/astonish/sessions/
+	BaseDir string `yaml:"base_dir,omitempty" json:"base_dir,omitempty"`
 }
 
 type ChatConfig struct {
@@ -81,6 +100,20 @@ func GetAgentsDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(configDir, "agents"), nil
+}
+
+// GetSessionsDir returns the session storage directory.
+// If the config specifies a custom base_dir, that is used; otherwise
+// it defaults to ~/.config/astonish/sessions/.
+func GetSessionsDir(cfg *SessionConfig) (string, error) {
+	if cfg != nil && cfg.BaseDir != "" {
+		return cfg.BaseDir, nil
+	}
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, "sessions"), nil
 }
 
 func LoadAppConfig() (*AppConfig, error) {

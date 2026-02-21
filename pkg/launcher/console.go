@@ -15,6 +15,7 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/provider"
+	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/tools"
 	"github.com/schardosin/astonish/pkg/ui"
 	adkagent "google.golang.org/adk/agent"
@@ -297,7 +298,19 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	// Create session service
 	sessionService := cfg.SessionService
 	if sessionService == nil {
-		sessionService = session.InMemoryService()
+		if cfg.AppConfig != nil && cfg.AppConfig.Sessions.Storage == "file" {
+			sessDir, dirErr := config.GetSessionsDir(&cfg.AppConfig.Sessions)
+			if dirErr != nil {
+				return fmt.Errorf("failed to resolve sessions directory: %w", dirErr)
+			}
+			fileStore, fsErr := persistentsession.NewFileStore(sessDir)
+			if fsErr != nil {
+				return fmt.Errorf("failed to create file session store: %w", fsErr)
+			}
+			sessionService = fileStore
+		} else {
+			sessionService = session.InMemoryService()
+		}
 	}
 
 	// Create Astonish agent with internal tools

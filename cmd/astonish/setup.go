@@ -319,6 +319,13 @@ SaveConfig:
 		}
 	}
 
+	// --- Browser Setup ---
+	if err := handleBrowserSetup(); err != nil {
+		if !isUserAborted(err) {
+			fmt.Printf("Warning: Browser setup failed: %v\n", err)
+		}
+	}
+
 	return nil
 }
 
@@ -1182,5 +1189,13 @@ func handleWebToolSetup() error {
 	}
 	printSuccess(msg)
 
+	return nil
+}
+
+// handleBrowserSetup displays an informational note about browser automation.
+// Playwright is a keyless standard server and is always active by default —
+// no setup step is needed.
+func handleBrowserSetup() error {
+	printSuccess("Playwright Browser is active by default. The AI can automate browsers, take screenshots, and interact with JS-heavy pages — no setup required.")
 	return nil
 }

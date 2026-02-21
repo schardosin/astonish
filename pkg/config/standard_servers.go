@@ -8,13 +8,14 @@ type StandardEnvVar struct {
 }
 
 // StandardMCPServer describes a pre-configured MCP server that Astonish
-// knows how to install with minimal user input (just an API key).
+// knows how to install with minimal user input (just an API key, or nothing for keyless servers).
 // The server command, args, and env var names are hardcoded here.
-// Only the API key value is stored in config.yaml under web_servers.
+// Credentials are stored in config.yaml under web_servers.
 type StandardMCPServer struct {
 	ID             string           `json:"id"`
 	DisplayName    string           `json:"displayName"`
 	Description    string           `json:"description"`
+	Category       string           `json:"category"` // "web" or "browser"
 	Command        string           `json:"command"`
 	Args           []string         `json:"args"`
 	EnvVars        []StandardEnvVar `json:"envVars"`
@@ -23,12 +24,13 @@ type StandardMCPServer struct {
 	IsDefault      bool             `json:"isDefault"`
 }
 
-// standardServers is the hardcoded registry of supported web MCP servers.
+// standardServers is the hardcoded registry of supported standard MCP servers.
 var standardServers = []StandardMCPServer{
 	{
 		ID:          "tavily",
 		DisplayName: "Tavily",
 		Description: "Web search and content extraction via Tavily API. Recommended for most users.",
+		Category:    "web",
 		Command:     "npx",
 		Args:        []string{"-y", "tavily-mcp@latest"},
 		EnvVars: []StandardEnvVar{
@@ -42,6 +44,7 @@ var standardServers = []StandardMCPServer{
 		ID:          "brave-search",
 		DisplayName: "Brave Search",
 		Description: "Web search powered by Brave Search API. Search only, no content extraction.",
+		Category:    "web",
 		Command:     "npx",
 		Args:        []string{"-y", "@brave/brave-search-mcp-server", "--transport", "stdio"},
 		EnvVars: []StandardEnvVar{
@@ -55,6 +58,7 @@ var standardServers = []StandardMCPServer{
 		ID:          "firecrawl",
 		DisplayName: "Firecrawl",
 		Description: "Web search, scraping, and content extraction via Firecrawl API.",
+		Category:    "web",
 		Command:     "npx",
 		Args:        []string{"-y", "firecrawl-mcp"},
 		EnvVars: []StandardEnvVar{
@@ -63,6 +67,16 @@ var standardServers = []StandardMCPServer{
 		WebSearchTool:  "firecrawl:firecrawl_search",
 		WebExtractTool: "firecrawl:firecrawl_scrape",
 		IsDefault:      false,
+	},
+	{
+		ID:          "playwright",
+		DisplayName: "Playwright Browser",
+		Description: "Browser automation via Playwright. Navigate, click, type, screenshot, and extract content from JS-heavy pages. No API key required.",
+		Category:    "browser",
+		Command:     "npx",
+		Args:        []string{"@playwright/mcp@latest", "--headless"},
+		EnvVars:     []StandardEnvVar{}, // No API key needed
+		IsDefault:   false,
 	},
 }
 
@@ -93,18 +107,30 @@ func GetStandardServerIDs() map[string]bool {
 	return ids
 }
 
-// IsStandardServerInstalled checks if a standard server has credentials stored in config.yaml.
+// IsStandardServerInstalled checks if a standard server is available for use.
+// Keyless servers (e.g. Playwright) are always considered installed — they need
+// no API key and no explicit setup step.
+// For servers requiring an API key, checks that the key is present in config.yaml.
 func IsStandardServerInstalled(id string) bool {
+	// Keyless servers are always available — no config entry needed
+	srv := GetStandardServer(id)
+	if srv != nil && len(srv.EnvVars) == 0 {
+		return true
+	}
+
 	appCfg, err := LoadAppConfig()
 	if err != nil {
 		return false
 	}
 	ws, exists := appCfg.WebServers[id]
-	return exists && ws.APIKey != ""
+	if !exists {
+		return false
+	}
+	return ws.APIKey != ""
 }
 
-// InstallStandardServer stores a standard server's API key in config.yaml
-// and configures it as the active web search/extract tool.
+// InstallStandardServer stores a standard server's credentials in config.yaml
+// and configures it as the active web search/extract tool (if applicable).
 // The server definition (command, args, env var names) comes from the hardcoded registry.
 // At MCP load time, LoadMCPConfig() merges these into the MCP server list automatically.
 func InstallStandardServer(id string, envValues map[string]string) error {
@@ -113,7 +139,7 @@ func InstallStandardServer(id string, envValues map[string]string) error {
 		return &StandardServerError{ID: id, Message: "unknown standard server"}
 	}
 
-	// Extract the API key from the provided env values
+	// Extract the API key from the provided env values (if any are required)
 	var apiKey string
 	for _, ev := range srv.EnvVars {
 		if val, ok := envValues[ev.Name]; ok && val != "" {
@@ -137,7 +163,12 @@ func InstallStandardServer(id string, envValues map[string]string) error {
 		appCfg.WebServers = make(map[string]WebServerConfig)
 	}
 
-	appCfg.WebServers[id] = WebServerConfig{APIKey: apiKey}
+	wsCfg := WebServerConfig{APIKey: apiKey}
+	// For keyless servers, set the Installed flag
+	if len(srv.EnvVars) == 0 {
+		wsCfg.Installed = true
+	}
+	appCfg.WebServers[id] = wsCfg
 
 	if srv.WebSearchTool != "" {
 		appCfg.General.WebSearchTool = srv.WebSearchTool

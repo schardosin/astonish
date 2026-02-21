@@ -1152,9 +1152,14 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                               {srv.installed && <Check size={14} style={{ color: '#22c55e' }} />}
                             </div>
                             <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>
-                              {srv.capabilities.webSearch && srv.capabilities.webExtract ? 'Search + Extract' : 'Search only'}
+                              {srv.envVars?.length === 0 ? 'Browser Automation' : srv.capabilities.webSearch && srv.capabilities.webExtract ? 'Search + Extract' : 'Search only'}
                             </p>
-                            {setupServer === srv.id ? (
+                            {srv.envVars?.length === 0 && srv.installed ? (
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs" style={{ color: '#22c55e' }}>Active</span>
+                                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>No setup required</span>
+                              </div>
+                            ) : setupServer === srv.id ? (
                               <div className="space-y-2">
                                 {srv.envVars.map(ev => (
                                   <input

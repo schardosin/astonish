@@ -151,3 +151,36 @@ export async function installInlineMcpServer(serverName, config) {
   }
   return response.json()
 }
+
+/**
+ * Fetch available standard MCP servers with install status
+ * @returns {Promise<{servers: Array}>}
+ */
+export async function fetchStandardServers() {
+  const response = await fetch(`${API_BASE}/standard-servers`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch standard servers: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+/**
+ * Install a standard MCP server
+ * @param {string} id - Standard server ID (e.g., "tavily")
+ * @param {object} env - Environment variables (e.g., { TAVILY_API_KEY: "tvly-xxx" })
+ * @returns {Promise<{status: string, serverName: string, toolsLoaded: number}>}
+ */
+export async function installStandardServer(id, env = {}) {
+  const response = await fetch(`${API_BASE}/standard-servers/${encodeURIComponent(id)}/install`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ env }),
+  })
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(errorText || `Failed to install standard server (${response.status})`)
+  }
+  return response.json()
+}

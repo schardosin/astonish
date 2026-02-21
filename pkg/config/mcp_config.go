@@ -12,8 +12,8 @@ type MCPServerConfig struct {
 	Command   string            `json:"command" yaml:"command"`
 	Args      []string          `json:"args" yaml:"args,omitempty"`
 	Env       map[string]string `json:"env" yaml:"env,omitempty"`
-	Transport string            `json:"transport" yaml:"transport,omitempty"`     // "stdio" or "sse"
-	URL       string            `json:"url,omitempty" yaml:"url,omitempty"` // For SSE transport
+	Transport string            `json:"transport" yaml:"transport,omitempty"`       // "stdio" or "sse"
+	URL       string            `json:"url,omitempty" yaml:"url,omitempty"`         // For SSE transport
 	Enabled   *bool             `json:"enabled,omitempty" yaml:"enabled,omitempty"` // nil defaults to true
 }
 
@@ -27,8 +27,27 @@ type MCPConfig struct {
 	MCPServers map[string]MCPServerConfig `json:"mcpServers"`
 }
 
-// LoadMCPConfig loads the MCP configuration from the config directory
+// LoadMCPConfig loads the MCP configuration from the config directory.
+// It merges standard web servers from config.yaml into the result so that
+// the MCP manager can start them alongside custom servers. Standard server
+// entries from config.yaml take precedence over same-name entries in mcp_config.json.
 func LoadMCPConfig() (*MCPConfig, error) {
+	cfg, err := LoadMCPConfigRaw()
+	if err != nil {
+		return nil, err
+	}
+
+	// Merge standard web servers from config.yaml.
+	// These are stored separately so they survive mcp_config.json resets.
+	mergeStandardServers(cfg)
+
+	return cfg, nil
+}
+
+// LoadMCPConfigRaw loads the MCP configuration from mcp_config.json only,
+// without merging standard web servers from config.yaml.
+// Use this when you need the raw file contents (e.g. for the Settings UI Source view).
+func LoadMCPConfigRaw() (*MCPConfig, error) {
 	configDir, err := GetConfigDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get config directory: %w", err)
@@ -36,35 +55,51 @@ func LoadMCPConfig() (*MCPConfig, error) {
 
 	mcpConfigPath := filepath.Join(configDir, "mcp_config.json")
 
-	// Check if file exists
-	if _, err := os.Stat(mcpConfigPath); os.IsNotExist(err) {
-		// Return empty config if file doesn't exist
-		return &MCPConfig{
-			MCPServers: make(map[string]MCPServerConfig),
-		}, nil
-	}
-
-	// Read file
-	data, err := os.ReadFile(mcpConfigPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read MCP config file: %w", err)
-	}
-
-	// Parse JSON
 	var config MCPConfig
-	if err := json.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse MCP config: %w", err)
-	}
 
-	// Initialize map if nil
-	if config.MCPServers == nil {
+	if _, err := os.Stat(mcpConfigPath); os.IsNotExist(err) {
 		config.MCPServers = make(map[string]MCPServerConfig)
+	} else {
+		data, err := os.ReadFile(mcpConfigPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read MCP config file: %w", err)
+		}
+
+		if err := json.Unmarshal(data, &config); err != nil {
+			return nil, fmt.Errorf("failed to parse MCP config: %w", err)
+		}
+
+		if config.MCPServers == nil {
+			config.MCPServers = make(map[string]MCPServerConfig)
+		}
 	}
 
 	return &config, nil
 }
 
-// SaveMCPConfig saves the MCP configuration to the config directory
+// mergeStandardServers injects configured standard web servers from config.yaml
+// into the MCPConfig. Entries from config.yaml override same-name entries in mcp_config.json.
+func mergeStandardServers(cfg *MCPConfig) {
+	appCfg, err := LoadAppConfig()
+	if err != nil || appCfg.WebServers == nil {
+		return
+	}
+
+	for id, ws := range appCfg.WebServers {
+		if ws.APIKey == "" {
+			continue
+		}
+		srv := GetStandardServer(id)
+		if srv == nil {
+			continue
+		}
+		cfg.MCPServers[id] = BuildMCPServerConfig(srv, ws.APIKey)
+	}
+}
+
+// SaveMCPConfig saves the MCP configuration to the config directory.
+// Standard web servers (from config.yaml) are stripped before writing
+// since they are managed separately and merged at load time.
 func SaveMCPConfig(config *MCPConfig) error {
 	configDir, err := GetConfigDir()
 	if err != nil {
@@ -73,8 +108,19 @@ func SaveMCPConfig(config *MCPConfig) error {
 
 	mcpConfigPath := filepath.Join(configDir, "mcp_config.json")
 
+	// Strip standard server entries — they live in config.yaml, not here
+	filtered := &MCPConfig{
+		MCPServers: make(map[string]MCPServerConfig, len(config.MCPServers)),
+	}
+	standardIDs := GetStandardServerIDs()
+	for name, srv := range config.MCPServers {
+		if !standardIDs[name] {
+			filtered.MCPServers[name] = srv
+		}
+	}
+
 	// Marshal to JSON with indentation
-	data, err := json.MarshalIndent(config, "", "  ")
+	data, err := json.MarshalIndent(filtered, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal MCP config: %w", err)
 	}

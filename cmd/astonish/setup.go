@@ -311,6 +311,14 @@ SaveConfig:
 		displayName = selectedProviderID
 	}
 	printSuccess(fmt.Sprintf("%s (%s) configured successfully!", selectedInstance, displayName))
+
+	// --- Web Tool Setup ---
+	if err := handleWebToolSetup(); err != nil {
+		if !isUserAborted(err) {
+			fmt.Printf("Warning: Web tool setup failed: %v\n", err)
+		}
+	}
+
 	return nil
 }
 
@@ -1062,6 +1070,117 @@ func fetchAndSelectOpenAICompatModel(pCfg config.ProviderConfig, appCfg *config.
 	// Save selected model as default
 	appCfg.General.DefaultModel = selectedModel
 	fmt.Printf("Selected default model: %s\n", selectedModel)
+
+	return nil
+}
+
+// handleWebToolSetup prompts the user to configure a standard web tool MCP server.
+func handleWebToolSetup() error {
+	// Check if any web tool is already configured
+	appCfg, err := config.LoadAppConfig()
+	if err == nil && appCfg.General.WebSearchTool != "" {
+		var reconfigure bool
+		err := huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Web search is already configured").
+					Description("Would you like to reconfigure web search tools?").
+					Value(&reconfigure),
+			),
+		).Run()
+		if err != nil || !reconfigure {
+			return err
+		}
+	}
+
+	// Ask if user wants to set up web tools
+	var setupWeb bool
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Configure Web Search Tools?").
+				Description("Web tools let the AI search the web and extract content from URLs").
+				Affirmative("Yes").
+				Negative("Skip").
+				Value(&setupWeb),
+		),
+	).Run()
+	if err != nil {
+		return err
+	}
+	if !setupWeb {
+		return nil
+	}
+
+	// Show available standard servers
+	servers := config.GetStandardServers()
+	var serverOptions []huh.Option[string]
+	for _, srv := range servers {
+		label := srv.DisplayName
+		if srv.IsDefault {
+			label += " (recommended)"
+		}
+		if config.IsStandardServerInstalled(srv.ID) {
+			label += " [installed]"
+		}
+		serverOptions = append(serverOptions, huh.NewOption(label, srv.ID))
+	}
+
+	var selectedServer string
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select a web tool provider").
+				Description("Choose which service to use for web search and content extraction").
+				Options(serverOptions...).
+				Value(&selectedServer),
+		),
+	).Run()
+	if err != nil {
+		return err
+	}
+
+	srv := config.GetStandardServer(selectedServer)
+	if srv == nil {
+		return fmt.Errorf("unknown server: %s", selectedServer)
+	}
+
+	// Collect env var values
+	envValues := make(map[string]string)
+	for _, ev := range srv.EnvVars {
+		var val string
+		err := huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title(ev.Name).
+					Description(ev.Description).
+					EchoMode(huh.EchoModePassword).
+					Value(&val),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
+		val = strings.TrimSpace(val)
+		if val == "" && ev.Required {
+			fmt.Printf("Skipped: %s is required but was left empty.\n", ev.Name)
+			return nil
+		}
+		envValues[ev.Name] = val
+	}
+
+	// Install the server
+	runSpinner(fmt.Sprintf("Configuring %s...", srv.DisplayName))
+
+	if err := config.InstallStandardServer(selectedServer, envValues); err != nil {
+		return fmt.Errorf("failed to configure %s: %w", srv.DisplayName, err)
+	}
+
+	msg := fmt.Sprintf("%s configured! Web search is now available.", srv.DisplayName)
+	if srv.WebExtractTool != "" {
+		msg = fmt.Sprintf("%s configured! Web search and content extraction are now available.", srv.DisplayName)
+	}
+	printSuccess(msg)
 
 	return nil
 }

@@ -179,6 +179,13 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
   // Web-capable tools state
   const [webCapableTools, setWebCapableTools] = useState({ webSearch: [], webExtract: [] })
 
+  // Standard servers state
+  const [standardServers, setStandardServers] = useState([])
+  const [setupServer, setSetupServer] = useState(null) // Server being set up
+  const [setupEnv, setSetupEnv] = useState({}) // Env vars being entered
+  const [setupLoading, setSetupLoading] = useState(false)
+  const [setupError, setSetupError] = useState(null)
+
   // Taps state
   const [taps, setTaps] = useState([])
   const [tapsLoading, setTapsLoading] = useState(false)
@@ -227,14 +234,16 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
   const loadData = async () => {
     setLoading(true)
     try {
-      const [settingsData, mcpData, webTools] = await Promise.all([
+      const [settingsData, mcpData, webTools, stdServers] = await Promise.all([
         fetchSettings(),
         fetchMCPConfig(),
-        fetchWebCapableTools().catch(() => ({ webSearch: [], webExtract: [] }))
+        fetchWebCapableTools().catch(() => ({ webSearch: [], webExtract: [] })),
+        fetch('/api/standard-servers').then(r => r.ok ? r.json() : { servers: [] }).catch(() => ({ servers: [] }))
       ])
       setSettings(settingsData)
       setMcpConfig(mcpData)
       setWebCapableTools(webTools)
+      setStandardServers(stdServers.servers || [])
       setGeneralForm({
         default_provider: settingsData.general.default_provider || '',
         default_model: settingsData.general.default_model || '',
@@ -812,16 +821,8 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
               {/* Web Tools Section */}
               <div className="pt-4 border-t" style={{ borderColor: 'var(--border-color)' }}>
                 <h4 className="text-sm font-medium mb-3" style={{ color: 'var(--text-primary)' }}>
-                  AI Assist Web Tools
+                  Web Tools
                 </h4>
-                <p className="text-xs mb-4 p-2 rounded" style={{ 
-                  color: 'var(--text-muted)', 
-                  background: 'rgba(168, 85, 247, 0.1)',
-                  border: '1px solid rgba(168, 85, 247, 0.2)'
-                }}>
-                  ℹ️ Only MCP servers with <code style={{ color: 'var(--accent)' }}>websearch</code> in their name are shown below. 
-                  Rename your tool following this convention (e.g., tavily-websearch) to use it with AI Assist.
-                </p>
                 
                 <div className="space-y-4">
                   <div>
@@ -836,7 +837,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                     >
                       <option value="">None (disabled)</option>
                       {webCapableTools.webSearch.map(t => (
-                        <option key={t.name} value={`${t.source}:${t.name}`}>
+                        <option key={`${t.source}:${t.name}`} value={`${t.source}:${t.name}`}>
                           {t.source} ({t.name})
                         </option>
                       ))}
@@ -858,7 +859,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                     >
                       <option value="">None (disabled)</option>
                       {webCapableTools.webExtract.map(t => (
-                        <option key={t.name} value={`${t.source}:${t.name}`}>
+                        <option key={`${t.source}:${t.name}`} value={`${t.source}:${t.name}`}>
                           {t.source} ({t.name})
                         </option>
                       ))}
@@ -867,6 +868,21 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                       Used to extract content from URLs when user provides a link
                     </p>
                   </div>
+
+                  {/* Quick setup hint if no web tools configured */}
+                  {!generalForm.web_search_tool && !generalForm.web_extract_tool && standardServers.some(s => !s.installed) && (
+                    <p className="text-xs p-2 rounded" style={{ 
+                      color: 'var(--text-muted)', 
+                      background: 'rgba(168, 85, 247, 0.1)',
+                      border: '1px solid rgba(168, 85, 247, 0.2)'
+                    }}>
+                      No web tools configured. Go to the <button 
+                        onClick={() => onSectionChange && onSectionChange('mcp')}
+                        className="underline font-medium"
+                        style={{ color: 'var(--accent)' }}
+                      >MCP Servers</button> section to quick-install a web search provider.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -1108,6 +1124,127 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
               {/* Editor View */}
               {mcpViewMode === 'editor' && (
                 <>
+                  {/* Standard Web Servers Section */}
+                  {standardServers.length > 0 && (
+                    <div className="mb-4 p-4 rounded-lg border" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
+                      <h4 className="text-sm font-medium mb-2 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+                        <Search size={14} style={{ color: '#a855f7' }} />
+                        Web Search Providers
+                      </h4>
+                      <p className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>
+                        Configure a web search provider to enable web search and content extraction.
+                      </p>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        {standardServers.map(srv => (
+                          <div key={srv.id} className="p-3 rounded-lg border transition-all" style={{ 
+                            borderColor: srv.installed ? 'rgba(34, 197, 94, 0.3)' : 'var(--border-color)',
+                            background: srv.installed ? 'rgba(34, 197, 94, 0.05)' : 'var(--bg-tertiary)'
+                          }}>
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                                {srv.displayName}
+                                {srv.isDefault && !srv.installed && (
+                                  <span className="ml-1 text-xs px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(168, 85, 247, 0.15)', color: '#a855f7' }}>
+                                    recommended
+                                  </span>
+                                )}
+                              </span>
+                              {srv.installed && <Check size={14} style={{ color: '#22c55e' }} />}
+                            </div>
+                            <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>
+                              {srv.capabilities.webSearch && srv.capabilities.webExtract ? 'Search + Extract' : 'Search only'}
+                            </p>
+                            {setupServer === srv.id ? (
+                              <div className="space-y-2">
+                                {srv.envVars.map(ev => (
+                                  <input
+                                    key={ev.name}
+                                    type="password"
+                                    placeholder={ev.name}
+                                    value={setupEnv[ev.name] || ''}
+                                    onChange={(e) => setSetupEnv({ ...setupEnv, [ev.name]: e.target.value })}
+                                    className="w-full px-2 py-1.5 rounded border text-xs"
+                                    style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                                  />
+                                ))}
+                                {setupError && (
+                                  <p className="text-xs" style={{ color: '#ef4444' }}>{setupError}</p>
+                                )}
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={async () => {
+                                      setSetupLoading(true)
+                                      setSetupError(null)
+                                      try {
+                                        const res = await fetch(`/api/standard-servers/${srv.id}/install`, {
+                                          method: 'POST',
+                                          headers: { 'Content-Type': 'application/json' },
+                                          body: JSON.stringify({ env: setupEnv })
+                                        })
+                                        if (!res.ok) {
+                                          const text = await res.text()
+                                          throw new Error(text)
+                                        }
+                                        const result = await res.json()
+                                        setSetupServer(null)
+                                        setSetupEnv({})
+                                        await loadData()
+                                        if (onToolsRefresh) onToolsRefresh()
+                                        if (result.webSearchTool) {
+                                          setGeneralForm(prev => ({
+                                            ...prev,
+                                            web_search_tool: result.webSearchTool,
+                                            web_extract_tool: result.webExtractTool || prev.web_extract_tool
+                                          }))
+                                        }
+                                      } catch (err) {
+                                        setSetupError(err.message)
+                                      } finally {
+                                        setSetupLoading(false)
+                                      }
+                                    }}
+                                    disabled={setupLoading || srv.envVars.some(ev => ev.required && !setupEnv[ev.name])}
+                                    className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium text-white disabled:opacity-50"
+                                    style={{ background: 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)' }}
+                                  >
+                                    {setupLoading ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                                    {srv.installed ? 'Reconfigure' : 'Install'}
+                                  </button>
+                                  <button
+                                    onClick={() => { setSetupServer(null); setSetupEnv({}); setSetupError(null) }}
+                                    className="px-2 py-1 rounded text-xs"
+                                    style={{ color: 'var(--text-muted)' }}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            ) : srv.installed ? (
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs" style={{ color: '#22c55e' }}>Configured</span>
+                                <button
+                                  onClick={() => { setSetupServer(srv.id); setSetupEnv({}); setSetupError(null) }}
+                                  className="text-xs px-1.5 py-0.5 rounded transition-colors"
+                                  style={{ color: 'var(--text-muted)' }}
+                                >
+                                  Reconfigure
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => { setSetupServer(srv.id); setSetupEnv({}); setSetupError(null) }}
+                                className="text-xs font-medium px-2 py-1 rounded transition-colors"
+                                style={{ color: '#a855f7', background: 'rgba(168, 85, 247, 0.1)' }}
+                              >
+                                Setup
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex items-center gap-3">
                     <button
                       onClick={() => setShowMCPStore(true)}
@@ -1127,9 +1264,11 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                     </button>
                   </div>
 
-                  {/* Grid of MCP Server Cards */}
+                  {/* Grid of MCP Server Cards (excludes standard web servers) */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {Object.entries(mcpServers).map(([name, server]) => {
+                    {Object.entries(mcpServers)
+                      .filter(([name]) => !standardServers.some(s => s.id === name))
+                      .map(([name, server]) => {
                       const isExpanded = expandedMcpServer === name
                       const displayName = mcpServerNames[name] || name
                       const isSaving = savingServer === name

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/schardosin/astonish/pkg/config"
 )
 
 // WebCapableToolsResponse is the response for GET /api/tools/web-capable
@@ -14,36 +16,88 @@ type WebCapableToolsResponse struct {
 
 // WebCapableTool represents a tool that can be used for web search or extract
 type WebCapableTool struct {
-	Name   string `json:"name"`   // Full tool name (e.g., "mcp_tavily_tavily-websearch")
-	Source string `json:"source"` // MCP server source name
+	Name   string `json:"name"`   // Tool name within the MCP server (e.g., "tavily-search")
+	Source string `json:"source"` // MCP server name (e.g., "tavily")
 }
 
-// WebCapableToolsHandler returns tools containing "websearch" or "webextract" in their name
+// WebCapableToolsHandler returns web-capable tools available for selection.
+// It combines two sources:
+//  1. Installed standard servers from the registry (Tavily, Brave, Firecrawl)
+//  2. The currently configured web tools from config.yaml (handles servers
+//     installed under non-standard names)
+//
 // GET /api/tools/web-capable
 func WebCapableToolsHandler(w http.ResponseWriter, r *http.Request) {
-	cachedTools := GetCachedTools()
-
 	response := WebCapableToolsResponse{
 		WebSearch:  []WebCapableTool{},
 		WebExtract: []WebCapableTool{},
 	}
 
-	for _, tool := range cachedTools {
-		lowerName := strings.ToLower(tool.Name)
-		lowerSource := strings.ToLower(tool.Source)
+	// Track what we've already added to avoid duplicates
+	seenSearch := map[string]bool{}
+	seenExtract := map[string]bool{}
 
-		// Both webSearch and webExtract use the same "websearch" naming convention
-		// since tools like Tavily offer both search and extract in the same MCP server
-		if strings.Contains(lowerName, "websearch") || strings.Contains(lowerSource, "websearch") {
-			webTool := WebCapableTool{
-				Name:   tool.Name,
-				Source: tool.Source,
+	// 1. Add tools from installed standard servers
+	standardServers := config.GetStandardServers()
+	for _, srv := range standardServers {
+		if !config.IsStandardServerInstalled(srv.ID) {
+			continue
+		}
+
+		if srv.WebSearchTool != "" {
+			if source, name, ok := parseToolRef(srv.WebSearchTool); ok {
+				key := source + ":" + name
+				if !seenSearch[key] {
+					response.WebSearch = append(response.WebSearch, WebCapableTool{Name: name, Source: source})
+					seenSearch[key] = true
+				}
 			}
-			response.WebSearch = append(response.WebSearch, webTool)
-			response.WebExtract = append(response.WebExtract, webTool)
+		}
+
+		if srv.WebExtractTool != "" {
+			if source, name, ok := parseToolRef(srv.WebExtractTool); ok {
+				key := source + ":" + name
+				if !seenExtract[key] {
+					response.WebExtract = append(response.WebExtract, WebCapableTool{Name: name, Source: source})
+					seenExtract[key] = true
+				}
+			}
+		}
+	}
+
+	// 2. Also include whatever is currently configured in config.yaml.
+	//    This handles servers installed under non-standard names (e.g. "tavily-websearch").
+	appCfg, err := config.LoadAppConfig()
+	if err == nil {
+		if appCfg.General.WebSearchTool != "" {
+			if source, name, ok := parseToolRef(appCfg.General.WebSearchTool); ok {
+				key := source + ":" + name
+				if !seenSearch[key] {
+					response.WebSearch = append(response.WebSearch, WebCapableTool{Name: name, Source: source})
+					seenSearch[key] = true
+				}
+			}
+		}
+		if appCfg.General.WebExtractTool != "" {
+			if source, name, ok := parseToolRef(appCfg.General.WebExtractTool); ok {
+				key := source + ":" + name
+				if !seenExtract[key] {
+					response.WebExtract = append(response.WebExtract, WebCapableTool{Name: name, Source: source})
+					seenExtract[key] = true
+				}
+			}
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// parseToolRef splits a "serverName:toolName" reference into its parts.
+func parseToolRef(ref string) (source string, name string, ok bool) {
+	parts := strings.SplitN(ref, ":", 2)
+	if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+		return parts[0], parts[1], true
+	}
+	return "", "", false
 }

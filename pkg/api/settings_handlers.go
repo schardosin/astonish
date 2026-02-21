@@ -202,7 +202,7 @@ func isMaskedValue(val string) bool {
 
 // GetMCPSettingsHandler handles GET /api/settings/mcp
 func GetMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadMCPConfig()
+	cfg, err := config.LoadMCPConfigRaw()
 	if err != nil {
 		http.Error(w, "Failed to load MCP config: "+err.Error(), http.StatusInternalServerError)
 		return

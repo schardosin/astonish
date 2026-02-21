@@ -74,14 +74,126 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 		if cfg.DebugMode {
 			fmt.Printf("Warning: Failed to initialize memory manager: %v\n", memErr)
 		}
-	} else {
-		memorySaveTool, msErr := tools.NewMemorySaveTool(memMgr)
+	}
+
+	// --- 2c. Initialize semantic memory (vector store, indexer) ---
+	var memStore *memory.Store
+	var memIndexer *memory.Indexer
+	memorySearchAvailable := false
+
+	if memMgr != nil && cfg.AppConfig != nil && cfg.AppConfig.Memory.IsMemoryEnabled() {
+		memCfg := &cfg.AppConfig.Memory
+
+		memDir, mdErr := config.GetMemoryDir(memCfg)
+		vecDir, vdErr := config.GetVectorDir(memCfg)
+
+		if mdErr == nil && vdErr == nil {
+			// Ensure memory directory exists
+			if err := os.MkdirAll(memDir, 0755); err != nil {
+				if cfg.DebugMode {
+					fmt.Printf("Warning: Failed to create memory directory: %v\n", err)
+				}
+			} else {
+				// Resolve embedding function
+				embeddingFunc, embErr := memory.ResolveEmbeddingFunc(cfg.AppConfig, memCfg)
+				if embErr != nil {
+					if cfg.DebugMode {
+						fmt.Printf("Warning: No embedding provider available: %v\n", embErr)
+					}
+				} else {
+					// Build store config
+					storeCfg := memory.DefaultStoreConfig()
+					storeCfg.MemoryDir = memDir
+					storeCfg.VectorDir = vecDir
+					if memCfg.Chunking.MaxChars > 0 {
+						storeCfg.ChunkMaxChars = memCfg.Chunking.MaxChars
+					}
+					if memCfg.Chunking.Overlap > 0 {
+						storeCfg.ChunkOverlap = memCfg.Chunking.Overlap
+					}
+					if memCfg.Search.MaxResults > 0 {
+						storeCfg.MaxResults = memCfg.Search.MaxResults
+					}
+					if memCfg.Search.MinScore > 0 {
+						storeCfg.MinScore = memCfg.Search.MinScore
+					}
+
+					store, storeErr := memory.NewStore(storeCfg, embeddingFunc)
+					if storeErr != nil {
+						if cfg.DebugMode {
+							fmt.Printf("Warning: Failed to create memory store: %v\n", storeErr)
+						}
+					} else {
+						memStore = store
+						memIndexer = memory.NewIndexer(store, storeCfg, cfg.DebugMode)
+						store.SetIndexer(memIndexer)
+						memorySearchAvailable = true
+
+						// Perform initial indexing in background
+						go func() {
+							if err := memIndexer.IndexAll(context.Background()); err != nil {
+								if cfg.DebugMode {
+									fmt.Printf("Warning: Initial memory indexing failed: %v\n", err)
+								}
+							}
+						}()
+
+						// Start file watcher in background
+						if memCfg.IsWatchEnabled() {
+							debounceMs := memCfg.Sync.DebounceMs
+							if debounceMs <= 0 {
+								debounceMs = 1500
+							}
+							watchCtx, watchCancel := context.WithCancel(context.Background())
+							go func() {
+								if err := memIndexer.WatchAndSync(watchCtx, debounceMs); err != nil {
+									if cfg.DebugMode {
+										fmt.Printf("Warning: Memory file watcher error: %v\n", err)
+									}
+								}
+							}()
+							defer watchCancel()
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Create memory tools
+	if memMgr != nil {
+		var saveStore tools.MemorySaveStore
+		if memStore != nil {
+			saveStore = memStore
+		}
+		memorySaveTool, msErr := tools.NewMemorySaveTool(memMgr, saveStore)
 		if msErr != nil {
 			if cfg.DebugMode {
 				fmt.Printf("Warning: Failed to create memory_save tool: %v\n", msErr)
 			}
 		} else {
 			internalTools = append(internalTools, memorySaveTool)
+		}
+	}
+
+	if memorySearchAvailable && memStore != nil {
+		searchTool, searchErr := tools.NewMemorySearchTool(memStore)
+		if searchErr != nil {
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Failed to create memory_search tool: %v\n", searchErr)
+			}
+		} else {
+			internalTools = append(internalTools, searchTool)
+		}
+
+		memDir, _ := config.GetMemoryDir(&cfg.AppConfig.Memory)
+		getTool, getErr := tools.NewMemoryGetTool(memDir)
+		if getErr != nil {
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Failed to create memory_get tool: %v\n", getErr)
+			}
+		} else {
+			internalTools = append(internalTools, getTool)
 		}
 	}
 
@@ -194,6 +306,13 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 		if _, serverName, _ := api.IsWebExtractConfigured(); serverName != "" {
 			priorityServers[serverName] = true
 		}
+		// Keyless standard servers (e.g. Playwright) are always active and
+		// referenced in the system prompt, so they must survive trimming too.
+		for _, srv := range config.GetStandardServers() {
+			if len(srv.EnvVars) == 0 {
+				priorityServers[srv.ID] = true
+			}
+		}
 
 		var trimmedToolsets []tool.Toolset
 		remaining := mcpBudget
@@ -269,6 +388,21 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 		promptBuilder.WebExtractToolName = toolName
 	}
 
+	// Check browser availability (Playwright or similar)
+	// Only set BrowserAvailable if the toolset actually survived trimming,
+	// otherwise the prompt would reference tools the model can't use.
+	for _, ts := range mcpToolsets {
+		if ts.Name() == "playwright" {
+			promptBuilder.BrowserAvailable = true
+			break
+		}
+	}
+
+	// Check memory search availability
+	if memorySearchAvailable {
+		promptBuilder.MemorySearchAvailable = true
+	}
+
 	// Load custom prompt from app config if available
 	if cfg.AppConfig != nil && cfg.AppConfig.Chat.SystemPrompt != "" {
 		promptBuilder.CustomPrompt = cfg.AppConfig.Chat.SystemPrompt
@@ -312,9 +446,6 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 	// Set flow save directory from config
 	if cfg.AppConfig != nil && cfg.AppConfig.Chat.FlowSaveDir != "" {
 		chatAgent.FlowSaveDir = cfg.AppConfig.Chat.FlowSaveDir
-	}
-	if cfg.AppConfig != nil && cfg.AppConfig.Chat.FlowSaveThreshold > 0 {
-		chatAgent.FlowSaveThreshold = cfg.AppConfig.Chat.FlowSaveThreshold
 	}
 	if cfg.AppConfig != nil && cfg.AppConfig.Chat.MaxToolCalls > 0 {
 		chatAgent.MaxToolCalls = cfg.AppConfig.Chat.MaxToolCalls
@@ -428,6 +559,9 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 			fmt.Print(" | Memory: active")
 		}
 	}
+	if memorySearchAvailable {
+		fmt.Printf(" | RAG: %d chunks", memStore.Count())
+	}
 	if chatAgent.FlowRegistry != nil {
 		entries := chatAgent.FlowRegistry.Entries()
 		if len(entries) > 0 {
@@ -491,6 +625,47 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 		}
 		if strings.EqualFold(input, "exit") || strings.EqualFold(input, "quit") {
 			break
+		}
+
+		// Slash command dispatch
+		if strings.HasPrefix(input, "/") {
+			switch {
+			case input == "/distill":
+				startSpinner("Analyzing conversation...")
+				description, previewErr := chatAgent.PreviewDistill(ctx)
+				stopSpinner()
+				if previewErr != nil {
+					fmt.Printf("%sError:%s %v\n\n", "\033[31m", ColorReset, previewErr)
+					break
+				}
+				fmt.Printf("%sTask identified:%s %s\n", ColorGreen, ColorReset, description)
+				fmt.Printf("Distill this into a reusable flow? (yes/no): ")
+				confirm, _ := reader.ReadString('\n')
+				confirm = strings.TrimSpace(confirm)
+				if !strings.EqualFold(confirm, "yes") && !strings.EqualFold(confirm, "y") {
+					fmt.Println("Cancelled.")
+					break
+				}
+				startSpinner("Distilling flow...")
+				distillErr := chatAgent.ConfirmAndDistill(ctx, func(s string) {
+					stopSpinner()
+					fmt.Printf("%sAgent:%s %s", ColorGreen, ColorReset, s)
+				})
+				stopSpinner()
+				if distillErr != nil {
+					fmt.Printf("%sError:%s %v\n", "\033[31m", ColorReset, distillErr)
+				}
+				fmt.Println()
+			case input == "/help":
+				fmt.Printf("%sAvailable commands:%s\n", ColorCyan, ColorReset)
+				fmt.Println("  /distill  - Distill the last task into a reusable flow")
+				fmt.Println("  /help     - Show this help message")
+				fmt.Println("  exit      - Exit the chat")
+				fmt.Println()
+			default:
+				fmt.Printf("Unknown command: %s. Type /help for available commands.\n\n", input)
+			}
+			continue
 		}
 
 		// Send message to agent

@@ -15,6 +15,9 @@ var SafeTools = map[string]bool{
 	"git_diff_add_line_numbers": true,
 	"filter_json":               true,
 	"web_fetch":                 true,
+	"read_pdf":                  true,
+	"memory_search":             true,
+	"memory_get":                true,
 }
 
 // IsToolSafe returns true if the tool is read-only and safe to auto-approve.

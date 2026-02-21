@@ -46,7 +46,7 @@ node_modules/
 mcp_servers/
 
 # New local files
-AGENTS.md
-docs/specs/
+#AGENTS.md
+#docs/specs/
 /astonish
 !/astonish/

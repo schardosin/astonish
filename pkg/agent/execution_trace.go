@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -87,4 +89,38 @@ func (t *ExecutionTrace) SuccessfulSteps() []TraceStep {
 		}
 	}
 	return result
+}
+
+// Summary returns a compact one-line summary of the trace for LLM analysis.
+// Format: User: "<request>" | Tools: tool1, tool2 (<N> calls) | Output: <len> chars
+func (t *ExecutionTrace) Summary() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// Distinct tool names
+	toolSet := make(map[string]bool)
+	for _, s := range t.Steps {
+		toolSet[s.ToolName] = true
+	}
+	var toolNames []string
+	for name := range toolSet {
+		toolNames = append(toolNames, name)
+	}
+
+	var sb strings.Builder
+	// Truncate user request for readability
+	req := t.UserRequest
+	if len(req) > 100 {
+		req = req[:97] + "..."
+	}
+	sb.WriteString(fmt.Sprintf("User: %q", req))
+
+	if len(t.Steps) > 0 {
+		sb.WriteString(fmt.Sprintf(" | Tools: %s (%d calls)", strings.Join(toolNames, ", "), len(t.Steps)))
+	} else {
+		sb.WriteString(" | Tools: none")
+	}
+
+	sb.WriteString(fmt.Sprintf(" | Output: %d chars", len(t.FinalOutput)))
+	return sb.String()
 }

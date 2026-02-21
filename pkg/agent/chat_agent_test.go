@@ -9,7 +9,7 @@ import (
 
 func TestExtractInputParams_NilTrace(t *testing.T) {
 	ca := &ChatAgent{}
-	params := ca.extractInputParams(nil, "nodes: []", nil)
+	params := ca.extractInputParams(context.Background(), "nodes: []", nil)
 	if params != nil {
 		t.Errorf("expected nil for nil trace, got %v", params)
 	}
@@ -19,7 +19,7 @@ func TestExtractInputParams_EmptyYAML(t *testing.T) {
 	ca := &ChatAgent{}
 	trace := NewExecutionTrace("test")
 	trace.Finalize()
-	params := ca.extractInputParams(nil, "", trace)
+	params := ca.extractInputParams(context.Background(), "", trace)
 	if params != nil {
 		t.Errorf("expected nil for empty YAML, got %v", params)
 	}
@@ -30,7 +30,7 @@ func TestExtractInputParams_NoDistiller(t *testing.T) {
 	trace := NewExecutionTrace("test")
 	trace.Finalize()
 	// No FlowDistiller set — should return nil gracefully
-	params := ca.extractInputParams(nil, `
+	params := ca.extractInputParams(context.Background(), `
 nodes:
   - name: get_host
     type: input
@@ -54,7 +54,7 @@ func TestExtractInputParams_NoInputNodes(t *testing.T) {
 	}
 	trace := NewExecutionTrace("test")
 	trace.Finalize()
-	params := ca.extractInputParams(nil, `
+	params := ca.extractInputParams(context.Background(), `
 nodes:
   - name: do_stuff
     type: llm
@@ -81,7 +81,7 @@ func TestExtractInputParams_ParsesLLMResponse(t *testing.T) {
 	}, nil, nil)
 	trace.Finalize()
 
-	params := ca.extractInputParams(nil, `
+	params := ca.extractInputParams(context.Background(), `
 nodes:
   - name: get_connection_info
     type: input
@@ -131,7 +131,7 @@ func TestExtractInputParams_IgnoresInvalidLLMResponse(t *testing.T) {
 	trace.RecordStep("some_tool", map[string]any{"x": "y"}, nil, nil)
 	trace.Finalize()
 
-	params := ca.extractInputParams(nil, `
+	params := ca.extractInputParams(context.Background(), `
 nodes:
   - name: get_host
     type: input
@@ -178,7 +178,7 @@ func TestExtractInputParams_LLMPromptContainsTrace(t *testing.T) {
 	}, nil, nil)
 	trace.Finalize()
 
-	ca.extractInputParams(nil, `
+	ca.extractInputParams(context.Background(), `
 nodes:
   - name: get_host
     type: input
@@ -222,7 +222,7 @@ func TestExtractInputParams_OutputModelMultipleFields(t *testing.T) {
 	}, nil, nil)
 	trace.Finalize()
 
-	params := ca.extractInputParams(nil, `
+	params := ca.extractInputParams(context.Background(), `
 nodes:
   - name: get_connection_info
     type: input

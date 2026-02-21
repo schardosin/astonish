@@ -23,9 +23,7 @@ import (
 // It wraps ADK's llmagent in a persistent chat session where the LLM
 // decides which tools to call and how to proceed.
 //
-// Two-phase execution:
-//   - Phase A: Dynamic execution with tool-use loops, recording an execution trace
-//   - Phase B: After complex tasks (2+ tool calls), offer to distill into a reusable YAML flow
+// Execution records a trace for on-demand flow distillation via /distill.
 type ChatAgent struct {
 	LLM            model.LLM
 	Tools          []tool.Tool
@@ -37,10 +35,9 @@ type ChatAgent struct {
 	MaxToolCalls   int // Max consecutive tool calls per turn (default: 25)
 
 	// Flow distillation
-	FlowSaveThreshold int            // Min tool calls to offer flow save (default: 1)
-	FlowSaveDir       string         // Directory for saved flows (default: agents dir)
-	FlowRegistry      *FlowRegistry  // Registry for saved flows
-	FlowDistiller     *FlowDistiller // Distiller for trace-to-YAML conversion
+	FlowSaveDir   string         // Directory for saved flows (default: agents dir)
+	FlowRegistry  *FlowRegistry  // Registry for saved flows
+	FlowDistiller *FlowDistiller // Distiller for trace-to-YAML conversion
 
 	// Memory and flow reuse
 	MemoryManager      *memory.Manager     // Persistent memory manager
@@ -49,9 +46,18 @@ type ChatAgent struct {
 	// Internal: reuse AstonishAgent for approval formatting
 	approvalHelper *AstonishAgent
 
-	// Internal: pending trace for flow distillation (stored here because
-	// session state copies don't persist complex objects like *ExecutionTrace)
-	pendingTrace *ExecutionTrace
+	// Internal: execution traces for on-demand /distill
+	lastTrace    *ExecutionTrace   // most recent turn's trace
+	traceHistory []*ExecutionTrace // all traces in this session
+
+	// Internal: cached result from PreviewDistill for ConfirmAndDistill
+	pendingDistill *distillPreview
+}
+
+// distillPreview holds the result of PreviewDistill for use by ConfirmAndDistill.
+type distillPreview struct {
+	Description string            // LLM-generated task description
+	Traces      []*ExecutionTrace // selected traces to distill
 }
 
 // NewChatAgent creates a ChatAgent with all configured tools and toolsets.
@@ -60,19 +66,17 @@ func NewChatAgent(llm model.LLM, internalTools []tool.Tool, toolsets []tool.Tool
 	debugMode bool, autoApprove bool) *ChatAgent {
 
 	maxToolCalls := 25
-	flowSaveThreshold := 1
 
 	return &ChatAgent{
-		LLM:               llm,
-		Tools:             internalTools,
-		Toolsets:          toolsets,
-		SessionService:    sessionService,
-		SystemPrompt:      promptBuilder,
-		DebugMode:         debugMode,
-		AutoApprove:       autoApprove,
-		MaxToolCalls:      maxToolCalls,
-		FlowSaveThreshold: flowSaveThreshold,
-		approvalHelper:    &AstonishAgent{LLM: llm, AutoApprove: autoApprove},
+		LLM:            llm,
+		Tools:          internalTools,
+		Toolsets:       toolsets,
+		SessionService: sessionService,
+		SystemPrompt:   promptBuilder,
+		DebugMode:      debugMode,
+		AutoApprove:    autoApprove,
+		MaxToolCalls:   maxToolCalls,
+		approvalHelper: &AstonishAgent{LLM: llm, AutoApprove: autoApprove},
 	}
 }
 
@@ -80,8 +84,6 @@ func NewChatAgent(llm model.LLM, internalTools []tool.Tool, toolsets []tool.Tool
 // It is called by the ADK runner for each user message.
 func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
 	return func(yield func(*session.Event, error) bool) {
-		state := ctx.Session().State()
-
 		// Extract user text
 		userText := ""
 		if ctx.UserContent() != nil {
@@ -94,27 +96,6 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 		if c.DebugMode {
 			fmt.Printf("[Chat DEBUG] User message: %s\n", userText)
-		}
-
-		// Check if we're handling a flow save response
-		pendingVal, _ := state.Get("chat:pending_flow_save")
-		if pending, ok := pendingVal.(bool); ok && pending {
-			if strings.EqualFold(strings.TrimSpace(userText), "yes") {
-				c.handleFlowSave(ctx, state, yield)
-			}
-			// Clear pending state via StateDelta and clear the trace
-			c.pendingTrace = nil
-			yield(&session.Event{
-				Actions: session.EventActions{
-					StateDelta: map[string]any{
-						"chat:pending_flow_save": false,
-					},
-				},
-			}, nil)
-			if strings.EqualFold(strings.TrimSpace(userText), "yes") {
-				return
-			}
-			// If they said something other than "yes", fall through to process as new message
 		}
 
 		// --- Phase A: Dynamic Execution ---
@@ -246,100 +227,161 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		trace.Finalize()
 
 		if c.DebugMode {
-			fmt.Printf("[Chat DEBUG] postLoop reached. Trace tool call count: %d, threshold: %d\n",
-				trace.ToolCallCount(), c.FlowSaveThreshold)
+			fmt.Printf("[Chat DEBUG] postLoop reached. Trace tool call count: %d\n",
+				trace.ToolCallCount())
 			for i, step := range trace.Steps {
 				fmt.Printf("[Chat DEBUG]   Step %d: %s (success: %v)\n", i+1, step.ToolName, step.Success)
 			}
 		}
 
-		// --- Phase B: Flow Save Offer ---
-		// Skip if this execution was guided by a saved flow (nothing new to save)
-		if trace.ToolCallCount() >= c.FlowSaveThreshold && c.SystemPrompt.ExecutionPlan == "" {
-			// Store trace on the ChatAgent itself (state.Set doesn't persist across invocations)
-			c.pendingTrace = trace
-
-			// Emit the offer -- use StateDelta to persist the pending flag in session state
-			yield(&session.Event{
-				LLMResponse: model.LLMResponse{
-					Content: &genai.Content{
-						Parts: []*genai.Part{{Text: fmt.Sprintf(
-							"\n\n---\nThis task used %d tool calls. Would you like to save it as a reusable flow? (yes/no)",
-							trace.ToolCallCount())}},
-						Role: "model",
-					},
-				},
-				Actions: session.EventActions{
-					StateDelta: map[string]any{
-						"chat:pending_flow_save": true,
-					},
-				},
-			}, nil)
-		}
+		// Store the trace for on-demand /distill
+		c.lastTrace = trace
+		c.traceHistory = append(c.traceHistory, trace)
 	}
 }
 
-// handleFlowSave performs flow distillation and saves the result.
-func (c *ChatAgent) handleFlowSave(ctx agent.InvocationContext, state session.State, yield func(*session.Event, error) bool) {
-	// Get the stored trace
-	trace := c.pendingTrace
-	if trace == nil {
-		yield(&session.Event{
-			LLMResponse: model.LLMResponse{
-				Content: &genai.Content{
-					Parts: []*genai.Part{{Text: "No execution trace found. Cannot save flow."}},
-					Role:  "model",
-				},
-			},
-		}, nil)
-		return
+// PreviewDistill analyzes the conversation trace history and identifies the
+// primary task to distill. Returns a description for user confirmation.
+// The result is cached internally for use by ConfirmAndDistill.
+func (c *ChatAgent) PreviewDistill(ctx context.Context) (string, error) {
+	// Filter traces that have tool calls (conversational turns are not distillable)
+	var substantive []*ExecutionTrace
+	for _, t := range c.traceHistory {
+		if t.ToolCallCount() > 0 {
+			substantive = append(substantive, t)
+		}
 	}
 
-	// Check if distiller is available
+	if len(substantive) == 0 {
+		return "", fmt.Errorf("no tasks with tool calls found in this session — nothing to distill")
+	}
+
+	// If only one substantive trace, skip the LLM assessment
+	if len(substantive) == 1 {
+		desc := fmt.Sprintf("%s (%d tool calls)", substantive[0].UserRequest, substantive[0].ToolCallCount())
+		c.pendingDistill = &distillPreview{
+			Description: desc,
+			Traces:      substantive,
+		}
+		return desc, nil
+	}
+
+	// Multiple traces — ask the LLM to identify the primary task
 	if c.FlowDistiller == nil {
-		yield(&session.Event{
-			LLMResponse: model.LLMResponse{
-				Content: &genai.Content{
-					Parts: []*genai.Part{{Text: "Flow distillation is not configured. The execution trace has been recorded."}},
-					Role:  "model",
-				},
-			},
-		}, nil)
-		return
+		// No LLM available for assessment, fall back to most recent substantive trace
+		last := substantive[len(substantive)-1]
+		desc := fmt.Sprintf("%s (%d tool calls)", last.UserRequest, last.ToolCallCount())
+		c.pendingDistill = &distillPreview{
+			Description: desc,
+			Traces:      []*ExecutionTrace{last},
+		}
+		return desc, nil
 	}
 
-	// Emit "distilling..." message
-	yield(&session.Event{
-		LLMResponse: model.LLMResponse{
-			Content: &genai.Content{
-				Parts: []*genai.Part{{Text: "Distilling execution into a reusable flow..."}},
-				Role:  "model",
-			},
-		},
-		Actions: session.EventActions{
-			StateDelta: map[string]any{
-				"_spinner_text": "Distilling flow...",
-			},
-		},
-	}, nil)
+	// Build assessment prompt
+	var sb strings.Builder
+	sb.WriteString("Analyze these conversation traces and identify the primary TASK worth saving as a reusable workflow.\n\n")
+
+	for i, t := range c.traceHistory {
+		sb.WriteString(fmt.Sprintf("Trace %d: %s\n", i+1, t.Summary()))
+	}
+
+	sb.WriteString("\nRules:\n")
+	sb.WriteString("- Select only traces that form a single coherent task with tool calls\n")
+	sb.WriteString("- Multiple traces may form ONE task (e.g., first attempt fails, user provides credentials, second attempt succeeds)\n")
+	sb.WriteString("- Ignore conversational turns, troubleshooting tangents, and Q&A about previous results\n")
+	sb.WriteString("- If multiple distinct tasks exist, pick the most substantial one (most tool calls)\n\n")
+
+	sb.WriteString("Respond with EXACTLY two lines:\n")
+	sb.WriteString("traces: <comma-separated trace numbers>\n")
+	sb.WriteString("description: <one-line description of the task>\n")
+
+	response, err := c.FlowDistiller.LLM(ctx, sb.String())
+	if err != nil {
+		// Fall back to most recent substantive trace
+		last := substantive[len(substantive)-1]
+		desc := fmt.Sprintf("%s (%d tool calls)", last.UserRequest, last.ToolCallCount())
+		c.pendingDistill = &distillPreview{
+			Description: desc,
+			Traces:      []*ExecutionTrace{last},
+		}
+		return desc, nil
+	}
+
+	// Parse response
+	var selectedIndices []int
+	var description string
+	for _, line := range strings.Split(response, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "traces:") {
+			parts := strings.Split(strings.TrimSpace(strings.TrimPrefix(line, "traces:")), ",")
+			for _, p := range parts {
+				p = strings.TrimSpace(p)
+				var idx int
+				if _, err := fmt.Sscanf(p, "%d", &idx); err == nil && idx >= 1 && idx <= len(c.traceHistory) {
+					selectedIndices = append(selectedIndices, idx-1) // convert to 0-based
+				}
+			}
+		} else if strings.HasPrefix(line, "description:") {
+			description = strings.TrimSpace(strings.TrimPrefix(line, "description:"))
+		}
+	}
+
+	// Build the selected traces list
+	var selected []*ExecutionTrace
+	if len(selectedIndices) > 0 {
+		for _, idx := range selectedIndices {
+			selected = append(selected, c.traceHistory[idx])
+		}
+	} else {
+		// LLM didn't return valid indices, fall back to all substantive traces
+		selected = substantive
+	}
+
+	if description == "" {
+		// Build description from selected traces
+		var reqs []string
+		for _, t := range selected {
+			reqs = append(reqs, t.UserRequest)
+		}
+		description = strings.Join(reqs, " → ")
+	}
+
+	c.pendingDistill = &distillPreview{
+		Description: description,
+		Traces:      selected,
+	}
+	return description, nil
+}
+
+// ConfirmAndDistill runs flow distillation using the traces identified by
+// a prior call to PreviewDistill. The print function receives status/result text.
+func (c *ChatAgent) ConfirmAndDistill(ctx context.Context, print func(string)) error {
+	preview := c.pendingDistill
+	c.pendingDistill = nil // clear regardless of outcome
+
+	if preview == nil || len(preview.Traces) == 0 {
+		return fmt.Errorf("no pending distill preview — call PreviewDistill first")
+	}
+
+	if c.FlowDistiller == nil {
+		return fmt.Errorf("flow distillation is not configured")
+	}
+
+	// Merge selected traces into one combined trace for the distiller
+	merged := c.mergeTraces(preview.Traces)
+
+	print("Distilling execution into a reusable flow...\n")
 
 	// Run distillation
-	result, err := c.FlowDistiller.Distill(context.Background(), DistillRequest{
-		UserRequest: trace.UserRequest,
-		Trace:       trace,
+	result, err := c.FlowDistiller.Distill(ctx, DistillRequest{
+		UserRequest: merged.UserRequest,
+		Trace:       merged,
 	})
 	if err != nil {
-		yield(&session.Event{
-			LLMResponse: model.LLMResponse{
-				Content: &genai.Content{
-					Parts: []*genai.Part{{Text: fmt.Sprintf("Flow distillation failed: %v", err)}},
-					Role:  "model",
-				},
-			},
-		}, nil)
-		// If we got partial YAML despite errors, still try to save
+		print(fmt.Sprintf("Flow distillation failed: %v\n", err))
 		if result == nil {
-			return
+			return err
 		}
 	}
 
@@ -348,30 +390,14 @@ func (c *ChatAgent) handleFlowSave(ctx agent.InvocationContext, state session.St
 	if saveDir == "" {
 		configDir, cfgErr := os.UserConfigDir()
 		if cfgErr != nil {
-			yield(&session.Event{
-				LLMResponse: model.LLMResponse{
-					Content: &genai.Content{
-						Parts: []*genai.Part{{Text: fmt.Sprintf("Failed to determine config directory: %v", cfgErr)}},
-						Role:  "model",
-					},
-				},
-			}, nil)
-			return
+			return fmt.Errorf("failed to determine config directory: %w", cfgErr)
 		}
 		saveDir = filepath.Join(configDir, "astonish", "agents")
 	}
 
 	// Create the directory if it doesn't exist
 	if mkErr := os.MkdirAll(saveDir, 0755); mkErr != nil {
-		yield(&session.Event{
-			LLMResponse: model.LLMResponse{
-				Content: &genai.Content{
-					Parts: []*genai.Part{{Text: fmt.Sprintf("Failed to create flow directory: %v", mkErr)}},
-					Role:  "model",
-				},
-			},
-		}, nil)
-		return
+		return fmt.Errorf("failed to create flow directory: %w", mkErr)
 	}
 
 	// Save the YAML file
@@ -380,21 +406,12 @@ func (c *ChatAgent) handleFlowSave(ctx agent.InvocationContext, state session.St
 
 	// Avoid overwriting existing files
 	if _, statErr := os.Stat(flowPath); statErr == nil {
-		// File exists, add timestamp suffix
 		filename = fmt.Sprintf("%s_%s.yaml", result.FlowName, time.Now().Format("20060102_150405"))
 		flowPath = filepath.Join(saveDir, filename)
 	}
 
 	if writeErr := os.WriteFile(flowPath, []byte(result.YAML), 0644); writeErr != nil {
-		yield(&session.Event{
-			LLMResponse: model.LLMResponse{
-				Content: &genai.Content{
-					Parts: []*genai.Part{{Text: fmt.Sprintf("Failed to write flow file: %v", writeErr)}},
-					Role:  "model",
-				},
-			},
-		}, nil)
-		return
+		return fmt.Errorf("failed to write flow file: %w", writeErr)
 	}
 
 	// Register in the flow registry
@@ -412,18 +429,17 @@ func (c *ChatAgent) handleFlowSave(ctx agent.InvocationContext, state session.St
 		}
 	}
 
-	// Emit success message
-	msg := fmt.Sprintf("Flow saved as `%s`\n", flowPath)
+	// Build success message
+	msg := fmt.Sprintf("\nFlow saved as `%s`\n", flowPath)
 	msg += fmt.Sprintf("  Description: %s\n", result.Description)
 	if len(result.Tags) > 0 {
 		msg += fmt.Sprintf("  Tags: %s\n", strings.Join(result.Tags, ", "))
 	}
 
-	// Build run command with parameter suggestions from the execution trace
+	// Build run command with parameter suggestions
 	runCmd := "astonish flows run " + result.FlowName
-	paramFlags := c.extractInputParams(ctx, result.YAML, trace)
+	paramFlags := c.extractInputParams(ctx, result.YAML, merged)
 	for _, pf := range paramFlags {
-		// Quote the value if it contains spaces
 		parts := strings.SplitN(pf, "=", 2)
 		if len(parts) == 2 && strings.ContainsAny(parts[1], " \t") {
 			runCmd += fmt.Sprintf(` -p %s="%s"`, parts[0], parts[1])
@@ -432,16 +448,38 @@ func (c *ChatAgent) handleFlowSave(ctx agent.InvocationContext, state session.St
 		}
 	}
 	runCmd += " --auto-approve"
-	msg += "\nYou can run this flow with:\n  " + runCmd
+	msg += "\nYou can run this flow with:\n  " + runCmd + "\n"
 
-	yield(&session.Event{
-		LLMResponse: model.LLMResponse{
-			Content: &genai.Content{
-				Parts: []*genai.Part{{Text: msg}},
-				Role:  "model",
-			},
-		},
-	}, nil)
+	print(msg)
+	return nil
+}
+
+// mergeTraces combines multiple execution traces into a single trace.
+// The user request is joined, and all steps are concatenated in order.
+func (c *ChatAgent) mergeTraces(traces []*ExecutionTrace) *ExecutionTrace {
+	if len(traces) == 1 {
+		return traces[0]
+	}
+
+	var requests []string
+	var allSteps []TraceStep
+	var finalOutput string
+
+	for _, t := range traces {
+		requests = append(requests, t.UserRequest)
+		allSteps = append(allSteps, t.Steps...)
+		if t.FinalOutput != "" {
+			finalOutput = t.FinalOutput // use the last non-empty output
+		}
+	}
+
+	return &ExecutionTrace{
+		UserRequest: strings.Join(requests, " → "),
+		Steps:       allSteps,
+		FinalOutput: finalOutput,
+		StartedAt:   traces[0].StartedAt,
+		EndedAt:     traces[len(traces)-1].EndedAt,
+	}
 }
 
 // flowYAML is a minimal struct for parsing the distilled YAML to extract input nodes.
@@ -459,7 +497,7 @@ type flowNode struct {
 // extractInputParams parses the distilled YAML to find input node names,
 // then asks the LLM to fill in the actual values from the execution trace.
 // Returns a slice of "nodeName=value" strings suitable for -p flags.
-func (c *ChatAgent) extractInputParams(invCtx agent.InvocationContext, yamlStr string, trace *ExecutionTrace) []string {
+func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trace *ExecutionTrace) []string {
 	if trace == nil || yamlStr == "" || c.FlowDistiller == nil {
 		return nil
 	}

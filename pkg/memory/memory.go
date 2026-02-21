@@ -58,7 +58,8 @@ func (m *Manager) Load() (string, error) {
 // Append adds content under a ## Category heading in MEMORY.md.
 // If the section doesn't exist, it is created. Duplicate lines
 // (exact match) within the same section are skipped.
-func (m *Manager) Append(category, content string) error {
+// When overwrite is true, the entire section is replaced with the new content.
+func (m *Manager) Append(category, content string, overwrite bool) error {
 	if err := m.EnsureDir(); err != nil {
 		return fmt.Errorf("failed to create memory directory: %w", err)
 	}
@@ -79,31 +80,51 @@ func (m *Manager) Append(category, content string) error {
 		sections.add(section)
 	}
 
-	// Add new lines, skipping duplicates
 	newLines := strings.Split(strings.TrimSpace(content), "\n")
-	existingLines := make(map[string]bool)
-	for _, line := range section.lines {
-		existingLines[strings.TrimSpace(line)] = true
-	}
 
-	added := 0
-	for _, line := range newLines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
+	if overwrite {
+		// Replace the entire section content
+		var cleaned []string
+		for _, line := range newLines {
+			if strings.TrimSpace(line) != "" {
+				cleaned = append(cleaned, line)
+			}
 		}
-		if !existingLines[trimmed] {
-			section.lines = append(section.lines, line)
-			existingLines[trimmed] = true
-			added++
-		}
-	}
+		section.lines = cleaned
 
-	if added == 0 {
 		if m.DebugMode {
-			fmt.Printf("[Memory DEBUG] No new lines to add to section '%s'\n", category)
+			fmt.Printf("[Memory DEBUG] Overwrote section '%s' with %d lines\n", category, len(cleaned))
 		}
-		return nil
+	} else {
+		// Add new lines, skipping duplicates
+		existingLines := make(map[string]bool)
+		for _, line := range section.lines {
+			existingLines[strings.TrimSpace(line)] = true
+		}
+
+		added := 0
+		for _, line := range newLines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" {
+				continue
+			}
+			if !existingLines[trimmed] {
+				section.lines = append(section.lines, line)
+				existingLines[trimmed] = true
+				added++
+			}
+		}
+
+		if added == 0 {
+			if m.DebugMode {
+				fmt.Printf("[Memory DEBUG] No new lines to add to section '%s'\n", category)
+			}
+			return nil
+		}
+
+		if m.DebugMode {
+			fmt.Printf("[Memory DEBUG] Added %d lines to section '%s'\n", added, category)
+		}
 	}
 
 	// Write back
@@ -112,9 +133,6 @@ func (m *Manager) Append(category, content string) error {
 		return fmt.Errorf("failed to write memory file: %w", err)
 	}
 
-	if m.DebugMode {
-		fmt.Printf("[Memory DEBUG] Added %d lines to section '%s'\n", added, category)
-	}
 	return nil
 }
 

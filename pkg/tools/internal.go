@@ -385,9 +385,17 @@ func GetInternalTools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
+	readPDFTool, err := functiontool.New(functiontool.Config{
+		Name:        "read_pdf",
+		Description: "Extract text content from a PDF file. Accepts a local file path or an HTTP/HTTPS URL. Returns plain text with page markers. Use this for reading PDF documents, reports, papers, etc.",
+	}, ReadPDF)
+	if err != nil {
+		return nil, err
+	}
+
 	return []tool.Tool{
 		readFileTool, writeFileTool, shellCommandTool, filterJsonTool, gitDiffAddLineNumbersTool,
-		fileTreeTool, grepSearchTool, findFilesTool, editFileTool, webFetchTool,
+		fileTreeTool, grepSearchTool, findFilesTool, editFileTool, webFetchTool, readPDFTool,
 	}, nil
 }
 
@@ -472,6 +480,13 @@ func ExecuteTool(ctx context.Context, name string, args map[string]interface{}) 
 			return nil, fmt.Errorf("invalid args for web_fetch: %w", err)
 		}
 		return WebFetch(nil, toolArgs)
+
+	case "read_pdf":
+		var toolArgs ReadPDFArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for read_pdf: %w", err)
+		}
+		return ReadPDF(nil, toolArgs)
 
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)

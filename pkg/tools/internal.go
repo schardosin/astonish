@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
@@ -110,19 +111,43 @@ func WriteFile(ctx tool.Context, args WriteFileArgs) (WriteFileResult, error) {
 }
 
 type ShellCommandArgs struct {
-	Command string `json:"command" jsonschema:"The shell command to execute"`
+	Command    string `json:"command" jsonschema:"The shell command to execute"`
+	Timeout    int    `json:"timeout,omitempty" jsonschema:"Timeout in seconds. Default 120. Max 3600."`
+	WorkingDir string `json:"working_dir,omitempty" jsonschema:"Working directory for the command. Defaults to the current directory."`
 }
 
 type ShellCommandResult struct {
-	Stdout string `json:"stdout"`
+	Stdout   string `json:"stdout"`
+	TimedOut bool   `json:"timed_out,omitempty"`
 }
 
 func ShellCommand(ctx tool.Context, args ShellCommandArgs) (ShellCommandResult, error) {
-	// Use sh -c to execute the command
-	cmd := exec.Command("sh", "-c", args.Command)
+	// Apply timeout defaults and bounds
+	timeout := args.Timeout
+	if timeout <= 0 {
+		timeout = 120
+	}
+	if timeout > 3600 {
+		timeout = 3600
+	}
+
+	cmdCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "sh", "-c", args.Command)
+	if args.WorkingDir != "" {
+		cmd.Dir = args.WorkingDir
+	}
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return ShellCommandResult{}, fmt.Errorf("failed to execute command: %w, output: %s", err, string(output))
+		if cmdCtx.Err() == context.DeadlineExceeded {
+			return ShellCommandResult{
+				Stdout:   string(output),
+				TimedOut: true,
+			}, nil
+		}
+		return ShellCommandResult{Stdout: string(output)}, fmt.Errorf("failed to execute command: %w", err)
 	}
 	return ShellCommandResult{Stdout: string(output)}, nil
 }
@@ -297,7 +322,7 @@ func GetInternalTools() ([]tool.Tool, error) {
 
 	shellCommandTool, err := functiontool.New(functiontool.Config{
 		Name:        "shell_command",
-		Description: "Execute a shell command to retrieve information or perform actions. Use this tool when you need to run CLI commands like 'gh', 'git', etc.",
+		Description: "Execute a shell command. Supports optional timeout (default 120s) and working directory. Use for CLI commands like git, gh, curl, docker, etc.",
 	}, ShellCommand)
 	if err != nil {
 		return nil, err
@@ -344,9 +369,25 @@ func GetInternalTools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
+	editFileTool, err := functiontool.New(functiontool.Config{
+		Name:        "edit_file",
+		Description: "Edit a file by finding and replacing text. Supports exact string matching or regex patterns. Returns an error if old_string matches multiple locations without replace_all=true, so you can refine the match.",
+	}, EditFile)
+	if err != nil {
+		return nil, err
+	}
+
+	webFetchTool, err := functiontool.New(functiontool.Config{
+		Name:        "web_fetch",
+		Description: "Fetch a URL and extract its content as clean markdown, readable text, or raw HTML. PREFERRED tool for fetching specific URLs — always try this first before other web extraction tools. Fast, free, no API key required. Uses Mozilla Readability for article-focused extraction. If this tool returns empty or navigation-only content (common with JavaScript-heavy pages), then retry with the configured MCP web extract tool.",
+	}, WebFetch)
+	if err != nil {
+		return nil, err
+	}
+
 	return []tool.Tool{
 		readFileTool, writeFileTool, shellCommandTool, filterJsonTool, gitDiffAddLineNumbersTool,
-		fileTreeTool, grepSearchTool, findFilesTool,
+		fileTreeTool, grepSearchTool, findFilesTool, editFileTool, webFetchTool,
 	}, nil
 }
 
@@ -417,6 +458,20 @@ func ExecuteTool(ctx context.Context, name string, args map[string]interface{}) 
 			return nil, fmt.Errorf("invalid args for find_files: %w", err)
 		}
 		return FindFiles(nil, toolArgs)
+
+	case "edit_file":
+		var toolArgs EditFileArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for edit_file: %w", err)
+		}
+		return EditFile(nil, toolArgs)
+
+	case "web_fetch":
+		var toolArgs WebFetchArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for web_fetch: %w", err)
+		}
+		return WebFetch(nil, toolArgs)
 
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)

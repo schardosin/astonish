@@ -12,12 +12,16 @@ import (
 
 // SystemPromptBuilder constructs context-aware system prompts for chat mode.
 type SystemPromptBuilder struct {
-	Tools         []tool.Tool
-	Toolsets      []tool.Toolset
-	WorkspaceDir  string
-	CustomPrompt  string
-	MemoryContent string // Contents of MEMORY.md (loaded per turn)
-	ExecutionPlan string // Flow-based execution plan (set when a flow matches)
+	Tools               []tool.Tool
+	Toolsets            []tool.Toolset
+	WorkspaceDir        string
+	CustomPrompt        string
+	MemoryContent       string // Contents of MEMORY.md (loaded per turn)
+	ExecutionPlan       string // Flow-based execution plan (set when a flow matches)
+	WebSearchAvailable  bool   // Whether a web search MCP tool is configured
+	WebExtractAvailable bool   // Whether a web extract MCP tool is configured
+	WebSearchToolName   string // Name of the configured search tool (e.g. "tavily-search")
+	WebExtractToolName  string // Name of the configured extract tool (e.g. "tavily-extract")
 }
 
 // Build constructs the full system prompt.
@@ -64,6 +68,32 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString("- If a tool call fails, analyze the error and try a different approach before giving up.\n")
 	sb.WriteString("- Only ask the user for help when you genuinely cannot proceed (e.g., you need credentials or access you don't have).\n")
 	sb.WriteString("- When you have enough information to answer, respond directly and concisely.\n")
+
+	// 4b. Web capabilities — always render since web_fetch is a built-in tool
+	sb.WriteString("\n## Web Access\n\n")
+	sb.WriteString("You have a built-in `web_fetch` tool that can fetch and extract content from any URL.\n\n")
+
+	sb.WriteString("**MANDATORY tool selection rules for web tasks:**\n\n")
+	sb.WriteString("1. **For any specific URL**, you MUST use `web_fetch` first. Do NOT skip it in favor of other tools.\n")
+
+	if b.WebExtractAvailable {
+		extractName := b.WebExtractToolName
+		if extractName == "" {
+			extractName = "the configured web extract tool"
+		}
+		sb.WriteString(fmt.Sprintf("2. ONLY if `web_fetch` returns empty, navigation-only, or broken content (common with JavaScript-heavy pages), THEN retry the same URL with `%s`. You MUST use `%s` for this — do NOT substitute any other extraction or scraping tool. The user has explicitly configured `%s` as their web extraction provider.\n", extractName, extractName, extractName))
+	}
+
+	if b.WebSearchAvailable {
+		searchName := b.WebSearchToolName
+		if searchName == "" {
+			searchName = "the configured web search tool"
+		}
+		sb.WriteString(fmt.Sprintf("3. To **search** for information (when you don't have a specific URL), use `%s`.\n", searchName))
+	}
+
+	sb.WriteString("\n**Never** use a search tool to extract content from a known URL. **Never** skip `web_fetch` and go directly to an MCP extraction tool. **Never** use a different extraction tool than the one specified above.\n")
+	sb.WriteString("Use web capabilities when you need up-to-date information not available in your training data.\n")
 
 	// 5. Environment info
 	sb.WriteString("\n## Environment\n\n")

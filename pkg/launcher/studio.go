@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"log"
@@ -8,14 +9,22 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/api"
 	"github.com/schardosin/astonish/web"
 )
 
-// RunStudio starts the Studio web server
-func RunStudio(port int) error {
+// StudioServer wraps the HTTP server with lifecycle management.
+type StudioServer struct {
+	server   *http.Server
+	listener net.Listener
+	port     int
+}
+
+// NewStudioServer creates a configured Studio server without starting it.
+func NewStudioServer(port int) (*StudioServer, error) {
 	router := mux.NewRouter()
 
 	// Register API routes
@@ -27,7 +36,6 @@ func RunStudio(port int) error {
 		spaHandler := spaFileServer(http.FS(webFS))
 		router.PathPrefix("/").Handler(spaHandler)
 	} else {
-		// No web assets found - print helpful message
 		log.Printf("Warning: No web assets found. Run 'npm run build' in the web directory first.")
 		router.PathPrefix("/").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/" || r.URL.Path == "/index.html" {
@@ -36,7 +44,7 @@ func RunStudio(port int) error {
 <html>
 <head><title>Astonish Studio</title></head>
 <body style="font-family: sans-serif; padding: 40px; background: #0d121f; color: white;">
-<h1>🚀 Astonish Studio</h1>
+<h1>Astonish Studio</h1>
 <p>Web assets not found. Please build the frontend first:</p>
 <pre style="background: #1a1a2e; padding: 20px; border-radius: 8px;">
 cd web
@@ -44,12 +52,6 @@ npm install
 npm run build
 </pre>
 <p>Then restart the studio server.</p>
-<p>For development, you can run the Vite dev server instead:</p>
-<pre style="background: #1a1a2e; padding: 20px; border-radius: 8px;">
-cd web
-npm run dev
-</pre>
-<p>And open <a href="http://localhost:5173" style="color: #9F7AEA;">http://localhost:5173</a></p>
 </body>
 </html>`)
 				return
@@ -59,35 +61,66 @@ npm run dev
 	}
 
 	addr := fmt.Sprintf(":%d", port)
-
-	// Create listener first to check if port is available
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
+		return nil, err
+	}
+
+	return &StudioServer{
+		server: &http.Server{
+			Handler:      router,
+			ReadTimeout:  0, // SSE streaming needs no read timeout
+			WriteTimeout: 0, // SSE streaming needs no write timeout
+			IdleTimeout:  120 * time.Second,
+		},
+		listener: listener,
+		port:     port,
+	}, nil
+}
+
+// Port returns the port the server is listening on.
+func (s *StudioServer) Port() int {
+	return s.port
+}
+
+// Serve starts serving HTTP requests. Blocks until the server is shut down.
+// Returns http.ErrServerClosed on graceful shutdown.
+func (s *StudioServer) Serve() error {
+	return s.server.Serve(s.listener)
+}
+
+// Shutdown gracefully shuts down the server with a timeout.
+func (s *StudioServer) Shutdown(ctx context.Context) error {
+	return s.server.Shutdown(ctx)
+}
+
+// RunStudio starts the Studio web server (blocking, for CLI use).
+func RunStudio(port int) error {
+	studio, err := NewStudioServer(port)
+	if err != nil {
 		fmt.Printf("\n")
-		fmt.Printf("  ❌ Failed to start Astonish Studio\n")
+		fmt.Printf("  Failed to start Astonish Studio\n")
 		fmt.Printf("\n")
 		fmt.Printf("  Error: %v\n", err)
 		fmt.Printf("\n")
 		if isPortInUse(err) {
-			fmt.Printf("  💡 Port %d is already in use. Try one of these:\n", port)
-			fmt.Printf("     • Stop the other process using port %d\n", port)
-			fmt.Printf("     • Use a different port: astonish studio --port 9394\n")
+			fmt.Printf("  Port %d is already in use. Try one of these:\n", port)
+			fmt.Printf("     - Stop the other process using port %d\n", port)
+			fmt.Printf("     - Use a different port: astonish studio --port 9394\n")
 		}
 		fmt.Printf("\n")
 		return err
 	}
 
-	// Print startup message only after we know the port is available
 	fmt.Printf("\n")
-	fmt.Printf("  🚀 Astonish Studio is running!\n")
+	fmt.Printf("  Astonish Studio is running!\n")
 	fmt.Printf("\n")
-	fmt.Printf("  ➜  Local:   http://localhost:%d\n", port)
+	fmt.Printf("  Local:   http://localhost:%d\n", port)
 	fmt.Printf("\n")
 	fmt.Printf("  Press Ctrl+C to stop\n")
 	fmt.Printf("\n")
 
-	// Serve using the listener we already created
-	return http.Serve(listener, router)
+	return studio.Serve()
 }
 
 // isPortInUse checks if the error indicates the port is already in use

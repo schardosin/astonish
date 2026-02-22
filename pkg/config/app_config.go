@@ -14,6 +14,7 @@ type AppConfig struct {
 	Chat       ChatConfig                 `yaml:"chat,omitempty"`
 	Sessions   SessionConfig              `yaml:"sessions,omitempty"`
 	Memory     MemoryConfig               `yaml:"memory,omitempty"`
+	Daemon     DaemonConfig               `yaml:"daemon,omitempty"`
 }
 
 // MemoryConfig controls the semantic memory / RAG system.
@@ -166,6 +167,35 @@ type GeneralConfig struct {
 	WebSearchTool   string `yaml:"web_search_tool" json:"web_search_tool"`
 	WebExtractTool  string `yaml:"web_extract_tool" json:"web_extract_tool"`
 	ContextLength   int    `yaml:"context_length,omitempty" json:"context_length,omitempty"` // Override context window size (tokens)
+}
+
+// DaemonConfig controls the background daemon service.
+type DaemonConfig struct {
+	// Port for the HTTP server. Default: 9393.
+	Port int `yaml:"port,omitempty" json:"port,omitempty"`
+	// LogDir overrides the default log directory.
+	// Empty means ~/.config/astonish/logs/
+	LogDir string `yaml:"log_dir,omitempty" json:"log_dir,omitempty"`
+}
+
+// GetPort returns the daemon port, defaulting to 9393.
+func (c *DaemonConfig) GetPort() int {
+	if c.Port <= 0 {
+		return 9393
+	}
+	return c.Port
+}
+
+// GetLogDir returns the log directory, defaulting to ~/.config/astonish/logs/.
+func (c *DaemonConfig) GetLogDir() string {
+	if c.LogDir != "" {
+		return c.LogDir
+	}
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return "logs"
+	}
+	return filepath.Join(configDir, "logs")
 }
 
 type ProviderConfig map[string]string

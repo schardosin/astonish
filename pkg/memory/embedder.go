@@ -3,102 +3,51 @@ package memory
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/schardosin/astonish/pkg/config"
 
 	chromem "github.com/philippgille/chromem-go"
 )
 
-// ResolveEmbeddingFunc determines the best embedding function from the user's
-// configured Astonish providers. It tries providers in this order:
-//  1. OpenAI → text-embedding-3-small
-//  2. OpenAI-compatible → configured base_url with text-embedding-3-small
-//  3. Ollama → nomic-embed-text
+// EmbedderResult holds the resolved embedding function and an optional cleanup
+// function that must be called when the embedder is no longer needed.
+type EmbedderResult struct {
+	EmbeddingFunc chromem.EmbeddingFunc
+	Cleanup       func() error // nil if no cleanup is needed (e.g., cloud API providers)
+}
+
+// ResolveEmbeddingFunc determines the embedding function to use for the vector store.
 //
-// Returns an error if no suitable provider is found.
-func ResolveEmbeddingFunc(appCfg *config.AppConfig, memoryCfg *config.MemoryConfig) (chromem.EmbeddingFunc, error) {
+// Default behavior (no explicit provider configured):
+//
+//	Uses a local, in-process embedding model via Hugot (pure Go, no external
+//	dependencies). The model (all-MiniLM-L6-v2, ~23 MB) is auto-downloaded on
+//	first use and cached in ~/.config/astonish/models/.
+//
+// Explicit provider (memory.embedding.provider in config.yaml):
+//
+//	Users can opt in to cloud-based embeddings by setting the provider to
+//	"openai", "ollama", or "openai-compat". This is the only way to use
+//	cloud APIs for embeddings — auto-detection of cloud providers is intentionally
+//	not performed to avoid unexpected costs.
+func ResolveEmbeddingFunc(appCfg *config.AppConfig, memoryCfg *config.MemoryConfig, debugMode bool) (*EmbedderResult, error) {
 	// If memory config explicitly specifies an embedding provider, use that
-	if memoryCfg != nil && memoryCfg.Embedding.Provider != "" && memoryCfg.Embedding.Provider != "auto" {
-		return resolveExplicitProvider(memoryCfg)
-	}
-
-	// Auto-detect from configured providers
-	if appCfg == nil || len(appCfg.Providers) == 0 {
-		return nil, fmt.Errorf("no providers configured; add a provider to config.yaml or configure memory.embedding explicitly")
-	}
-
-	// 1. Try OpenAI
-	for name, instance := range appCfg.Providers {
-		providerType := config.GetProviderType(name, instance)
-		if providerType == "openai" {
-			apiKey := instance["api_key"]
-			if apiKey == "" {
-				apiKey = os.Getenv("OPENAI_API_KEY")
-			}
-			if apiKey != "" {
-				return chromem.NewEmbeddingFuncOpenAI(apiKey, chromem.EmbeddingModelOpenAI3Small), nil
-			}
+	if memoryCfg != nil && memoryCfg.Embedding.Provider != "" && memoryCfg.Embedding.Provider != "auto" && memoryCfg.Embedding.Provider != "local" {
+		ef, err := resolveExplicitProvider(memoryCfg)
+		if err != nil {
+			return nil, err
 		}
+		return &EmbedderResult{EmbeddingFunc: ef}, nil
 	}
 
-	// 2. Try OpenAI-compatible providers (including SAP AI Core, LiteLLM, etc.)
-	for name, instance := range appCfg.Providers {
-		providerType := config.GetProviderType(name, instance)
-		if providerType == "openai_compat" {
-			apiKey := instance["api_key"]
-			baseURL := instance["base_url"]
-			if apiKey != "" && baseURL != "" {
-				baseURL = strings.TrimSuffix(baseURL, "/")
-				model := "text-embedding-3-small"
-				return chromem.NewEmbeddingFuncOpenAICompat(baseURL, apiKey, model, nil), nil
-			}
-		}
-	}
-
-	// 3. Try Ollama
-	for name, instance := range appCfg.Providers {
-		providerType := config.GetProviderType(name, instance)
-		if providerType == "ollama" {
-			baseURL := instance["base_url"]
-			if baseURL == "" {
-				baseURL = "http://localhost:11434"
-			}
-			// Ollama's embedding endpoint is at /api, not /v1
-			ollamaBaseURL := strings.TrimSuffix(baseURL, "/")
-			if !strings.HasSuffix(ollamaBaseURL, "/api") {
-				ollamaBaseURL = ollamaBaseURL + "/api"
-			}
-			return chromem.NewEmbeddingFuncOllama("nomic-embed-text", ollamaBaseURL), nil
-		}
-	}
-
-	// 4. Try other providers with OpenAI-compat embedding endpoint
-	for name, instance := range appCfg.Providers {
-		providerType := config.GetProviderType(name, instance)
-		switch providerType {
-		case "groq":
-			apiKey := instance["api_key"]
-			if apiKey == "" {
-				apiKey = os.Getenv("GROQ_API_KEY")
-			}
-			if apiKey != "" {
-				// Groq doesn't have embedding models, skip
-				continue
-			}
-		case "anthropic":
-			// Anthropic doesn't have embedding models, skip
-			continue
-		case "xai", "grok":
-			// xAI doesn't have embedding models, skip
-			continue
-		}
-	}
-
-	return nil, fmt.Errorf("no embedding-capable provider found; configure an OpenAI, Ollama, or OpenAI-compatible provider")
+	// Default: use local Hugot-based embeddings (pure Go, zero cost, no API calls)
+	// resolveLocalEmbedder is defined in hugot_embedder.go (build tag: GO || ALL)
+	// or hugot_embedder_stub.go (no build tags — returns error)
+	return resolveLocalEmbedder(debugMode)
 }
 
 // resolveExplicitProvider creates an embedding function from explicit memory config.
+// This is the opt-in path for users who want to use cloud-based embedding APIs.
 func resolveExplicitProvider(cfg *config.MemoryConfig) (chromem.EmbeddingFunc, error) {
 	switch cfg.Embedding.Provider {
 	case "openai":
@@ -139,6 +88,6 @@ func resolveExplicitProvider(cfg *config.MemoryConfig) (chromem.EmbeddingFunc, e
 		return chromem.NewEmbeddingFuncOpenAICompat(baseURL, apiKey, model, nil), nil
 
 	default:
-		return nil, fmt.Errorf("unsupported embedding provider: %s", cfg.Embedding.Provider)
+		return nil, fmt.Errorf("unsupported embedding provider: %s (supported: openai, ollama, openai-compat)", cfg.Embedding.Provider)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/schardosin/astonish/pkg/memory"
+	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/model"
@@ -61,6 +62,9 @@ type ChatAgent struct {
 	// Self-management callbacks
 	SelfMDRefresher  func() // Called after config changes to regenerate SELF.md
 	FlowKnowledgeDir string // Path to memory/flows/ for knowledge docs
+
+	// Context compaction
+	Compactor *persistentsession.Compactor // Manages context window compaction (nil = disabled)
 
 	// Internal: reuse AstonishAgent for approval formatting
 	approvalHelper *AstonishAgent
@@ -146,11 +150,13 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 				if plan != "" {
 					matchedFlowName = flowFile
 					c.SystemPrompt.ExecutionPlan = plan
-					// Emit a brief info note about the flow match
+					// Emit conversational info about the flow match
+					flowDisplayName := strings.TrimSuffix(flowFile, ".yaml")
+					flowDisplayName = strings.ReplaceAll(flowDisplayName, "_", " ")
 					yield(&session.Event{
 						LLMResponse: model.LLMResponse{
 							Content: &genai.Content{
-								Parts: []*genai.Part{{Text: fmt.Sprintf("_Using saved flow: %s_\n", strings.TrimSuffix(flowFile, ".yaml"))}},
+								Parts: []*genai.Part{{Text: fmt.Sprintf("I found a saved workflow for this (%s), let me use it.\n", flowDisplayName)}},
 								Role:  "model",
 							},
 						},
@@ -207,13 +213,20 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			return output, err
 		}
 
+		// Build BeforeModelCallbacks
+		var beforeModelCallbacks []llmagent.BeforeModelCallback
+		if c.Compactor != nil {
+			beforeModelCallbacks = append(beforeModelCallbacks, c.Compactor.BeforeModelCallback())
+		}
+
 		// Create llmagent with all tools
 		llmAgent, err := llmagent.New(llmagent.Config{
-			Name:        "chat",
-			Model:       c.LLM,
-			Instruction: instruction,
-			Tools:       c.Tools,
-			Toolsets:    c.Toolsets,
+			Name:                 "chat",
+			Model:                c.LLM,
+			Instruction:          instruction,
+			Tools:                c.Tools,
+			Toolsets:             c.Toolsets,
+			BeforeModelCallbacks: beforeModelCallbacks,
 			AfterToolCallbacks: []llmagent.AfterToolCallback{
 				afterToolCallback,
 			},
@@ -230,6 +243,24 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 		for event, err := range llmAgent.Run(ctx) {
 			if err != nil {
+				// If we were using an execution plan and it failed, inform the user
+				// conversationally. The orphan cleanup in the provider layer ensures
+				// the next turn's history is valid.
+				if c.SystemPrompt.ExecutionPlan != "" {
+					c.SystemPrompt.ExecutionPlan = ""
+					if c.DebugMode {
+						fmt.Printf("[Chat DEBUG] Flow execution failed: %v, cleared execution plan\n", err)
+					}
+					yield(&session.Event{
+						LLMResponse: model.LLMResponse{
+							Content: &genai.Content{
+								Parts: []*genai.Part{{Text: "The saved workflow ran into an issue, so I'll try a different approach. Could you repeat your request?"}},
+								Role:  "model",
+							},
+						},
+					}, nil)
+					return
+				}
 				yield(nil, err)
 				return
 			}

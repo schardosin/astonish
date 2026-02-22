@@ -631,6 +631,25 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 		chatAgent.MaxToolCalls = cfg.AppConfig.Chat.MaxToolCalls
 	}
 
+	// --- 6e. Initialize context compaction ---
+	var compactor *persistentsession.Compactor
+	if cfg.AppConfig == nil || cfg.AppConfig.Sessions.Compaction.IsCompactionEnabled() {
+		contextWindow := provider.ResolveContextWindowCached(ctx, cfg.ProviderName, cfg.ModelName, cfg.AppConfig)
+		compactor = persistentsession.NewCompactor(contextWindow)
+		if cfg.AppConfig != nil {
+			compCfg := &cfg.AppConfig.Sessions.Compaction
+			compactor.Threshold = compCfg.GetThreshold()
+			compactor.PreserveRecent = compCfg.GetPreserveRecent()
+		}
+		compactor.DebugMode = cfg.DebugMode
+		compactor.LLM = makeLLMFunc(llm)
+		chatAgent.Compactor = compactor
+		if cfg.DebugMode {
+			fmt.Printf("Context compaction: enabled (window: %d tokens, threshold: %.0f%%)\n",
+				contextWindow, compactor.Threshold*100)
+		}
+	}
+
 	// --- 6d. Wire memory and flow context ---
 	if memMgr != nil {
 		chatAgent.MemoryManager = memMgr
@@ -833,6 +852,17 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				fmt.Printf("\n%sStatus%s\n", ColorCyan, ColorReset)
 				fmt.Printf("  Provider:  %s\n", currentProvider)
 				fmt.Printf("  Model:     %s\n", currentModel)
+				if compactor != nil {
+					est, win := compactor.TokenUsage()
+					pct := float64(0)
+					if win > 0 {
+						pct = float64(est) / float64(win) * 100
+					}
+					fmt.Printf("  Context:   %d / %d tokens (%.0f%%)\n", est, win, pct)
+					if cc := compactor.CompactionCount(); cc > 0 {
+						fmt.Printf("  Compacted: %d time(s)\n", cc)
+					}
+				}
 				toolCount := len(internalTools)
 				mcpCount := 0
 				if len(mcpToolsets) > 0 {
@@ -872,9 +902,25 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 					fmt.Printf("  Flows:     %d saved\n", len(entries))
 				}
 				fmt.Printf("  Session:   %s\n\n", shortID)
+			case input == "/compact":
+				if compactor == nil {
+					fmt.Printf("%sCompaction is disabled.%s\n\n", "\033[31m", ColorReset)
+				} else {
+					est, win := compactor.TokenUsage()
+					pct := float64(est) / float64(win) * 100
+					fmt.Printf("Context: %d / %d tokens (%.0f%%). ", est, win, pct)
+					if est == 0 {
+						fmt.Printf("No conversation data yet.\n\n")
+					} else if pct < compactor.Threshold*100 {
+						fmt.Printf("Under threshold (%.0f%%), no compaction needed.\n\n", compactor.Threshold*100)
+					} else {
+						fmt.Printf("Compaction will trigger automatically on next message.\n\n")
+					}
+				}
 			case input == "/help":
 				fmt.Printf("%sAvailable commands:%s\n", ColorCyan, ColorReset)
 				fmt.Println("  /status   - Show current provider, model, tools, and memory status")
+				fmt.Println("  /compact  - Show context window usage and compaction status")
 				fmt.Println("  /distill  - Distill the last task into a reusable flow")
 				fmt.Println("  /help     - Show this help message")
 				fmt.Println("  exit      - Exit the chat")
@@ -1158,6 +1204,16 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 					// Rebuild distiller LLM closure to use the new provider
 					if chatAgent.FlowDistiller != nil {
 						chatAgent.FlowDistiller.LLM = makeLLMFunc(newLLM)
+					}
+					// Update compactor for new model's context window
+					if compactor != nil {
+						provider.InvalidateContextWindowCache()
+						newWindow := provider.ResolveContextWindowCached(ctx, newProvider, newModel, updatedCfg)
+						compactor.ContextWindow = newWindow
+						compactor.LLM = makeLLMFunc(newLLM)
+						if updatedCfg.General.ContextLength > 0 {
+							compactor.ContextWindow = updatedCfg.General.ContextLength
+						}
 					}
 					// Refresh SELF.md to reflect new provider/model
 					if chatAgent.SelfMDRefresher != nil {

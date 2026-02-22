@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	apiURL      = "https://api.anthropic.com/v1/messages"
-	modelsURL   = "https://api.anthropic.com/v1/models"
-	apiVersion  = "2023-06-01"
+	apiURL     = "https://api.anthropic.com/v1/messages"
+	modelsURL  = "https://api.anthropic.com/v1/models"
+	apiVersion = "2023-06-01"
 )
 
 // Model cache for avoiding repeated API calls
@@ -281,6 +281,12 @@ func (p *Provider) toAnthropicRequest(req *model.LLMRequest, streaming bool) (*R
 		}
 	}
 
+	// Patch orphaned tool_use blocks: if an assistant message has tool_use blocks
+	// without corresponding tool_result blocks in the following user message,
+	// inject synthetic error tool_result blocks. This prevents Anthropic 400 errors
+	// when tool execution fails mid-stream (e.g., "unknown tool").
+	messages = patchOrphanedToolUse(messages)
+
 	// Map tools
 	var tools []Tool
 	if req.Config != nil && len(req.Config.Tools) > 0 {
@@ -480,4 +486,81 @@ func ListModels(ctx context.Context, apiKey string) ([]string, error) {
 		ids = append(ids, m.ID)
 	}
 	return ids, nil
+}
+
+// patchOrphanedToolUse scans the messages array for assistant messages containing
+// tool_use blocks that lack corresponding tool_result blocks in the following user
+// message. For each orphan, a synthetic error tool_result is injected. This prevents
+// Anthropic 400 errors when tool execution fails and no FunctionResponse event is
+// persisted to the session.
+func patchOrphanedToolUse(messages []Message) []Message {
+	for i := 0; i < len(messages); i++ {
+		msg := messages[i]
+		if msg.Role != "assistant" {
+			continue
+		}
+
+		// Extract tool_use IDs from this assistant message
+		var toolUseIDs []string
+		for _, c := range msg.Content {
+			if c.Type == "tool_use" && c.ID != "" {
+				toolUseIDs = append(toolUseIDs, c.ID)
+			}
+		}
+		if len(toolUseIDs) == 0 {
+			continue
+		}
+
+		// Collect tool_result IDs from the immediately following user message
+		answeredIDs := make(map[string]bool)
+		if i+1 < len(messages) && messages[i+1].Role == "user" {
+			for _, c := range messages[i+1].Content {
+				if c.Type == "tool_result" && c.ToolUseID != "" {
+					answeredIDs[c.ToolUseID] = true
+				}
+			}
+		}
+
+		// Find orphaned tool_use IDs (no matching tool_result)
+		var orphanIDs []string
+		for _, id := range toolUseIDs {
+			if !answeredIDs[id] {
+				orphanIDs = append(orphanIDs, id)
+			}
+		}
+		if len(orphanIDs) == 0 {
+			continue
+		}
+
+		// Build synthetic tool_result blocks for orphans
+		var resultBlocks []Content
+		for _, id := range orphanIDs {
+			resultBlocks = append(resultBlocks, Content{
+				Type:      "tool_result",
+				ToolUseID: id,
+				IsError:   true,
+			})
+		}
+
+		// Insert synthetic tool_results into the conversation
+		if i+1 < len(messages) && messages[i+1].Role == "user" {
+			// Merge into the existing user message
+			messages[i+1].Content = append(resultBlocks, messages[i+1].Content...)
+		} else {
+			// Insert a new user message with the synthetic tool_results
+			syntheticMsg := Message{
+				Role:    "user",
+				Content: resultBlocks,
+			}
+			newMsgs := make([]Message, 0, len(messages)+1)
+			newMsgs = append(newMsgs, messages[:i+1]...)
+			newMsgs = append(newMsgs, syntheticMsg)
+			if i+1 < len(messages) {
+				newMsgs = append(newMsgs, messages[i+1:]...)
+			}
+			messages = newMsgs
+			i++ // skip the inserted message
+		}
+	}
+	return messages
 }

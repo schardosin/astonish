@@ -35,6 +35,7 @@ type GeneralSettings struct {
 	DefaultModel               string `json:"default_model"`
 	WebSearchTool              string `json:"web_search_tool"`
 	WebExtractTool             string `json:"web_extract_tool"`
+	ContextLength              int    `json:"context_length,omitempty"`
 }
 
 // ProviderSettings represents a provider's configuration (masked)
@@ -105,6 +106,7 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 			DefaultModel:               cfg.General.DefaultModel,
 			WebSearchTool:              cfg.General.WebSearchTool,
 			WebExtractTool:             cfg.General.WebExtractTool,
+			ContextLength:              cfg.General.ContextLength,
 		},
 		Providers: providers,
 	}
@@ -133,6 +135,9 @@ func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		cfg.General.DefaultModel = req.General.DefaultModel
 		cfg.General.WebSearchTool = req.General.WebSearchTool
 		cfg.General.WebExtractTool = req.General.WebExtractTool
+		if req.General.ContextLength > 0 {
+			cfg.General.ContextLength = req.General.ContextLength
+		}
 	}
 
 	// Update provider settings if provided

@@ -111,6 +111,44 @@ type SessionConfig struct {
 	// BaseDir overrides the default session storage directory.
 	// Empty means ~/.config/astonish/sessions/
 	BaseDir string `yaml:"base_dir,omitempty" json:"base_dir,omitempty"`
+	// Compaction controls automatic context window compaction.
+	Compaction CompactionConfig `yaml:"compaction,omitempty" json:"compaction,omitempty"`
+}
+
+// CompactionConfig controls how and when context is compacted.
+type CompactionConfig struct {
+	// Enabled turns compaction on/off. Default true (nil means true).
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// Threshold is the fraction of the context window that triggers compaction (0.0-1.0).
+	// Default 0.8 (compact when 80% full).
+	Threshold float64 `yaml:"threshold,omitempty" json:"threshold,omitempty"`
+	// PreserveRecent is the number of most recent messages to keep intact (not summarized).
+	// Default 4.
+	PreserveRecent int `yaml:"preserve_recent,omitempty" json:"preserve_recent,omitempty"`
+}
+
+// IsCompactionEnabled returns whether compaction is enabled. Defaults to true.
+func (c *CompactionConfig) IsCompactionEnabled() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+// GetThreshold returns the compaction threshold (default 0.8).
+func (c *CompactionConfig) GetThreshold() float64 {
+	if c.Threshold <= 0 || c.Threshold > 1.0 {
+		return 0.8
+	}
+	return c.Threshold
+}
+
+// GetPreserveRecent returns the number of recent messages to preserve (default 4).
+func (c *CompactionConfig) GetPreserveRecent() int {
+	if c.PreserveRecent <= 0 {
+		return 4
+	}
+	return c.PreserveRecent
 }
 
 type ChatConfig struct {
@@ -127,6 +165,7 @@ type GeneralConfig struct {
 	DefaultModel    string `yaml:"default_model" json:"default_model"`
 	WebSearchTool   string `yaml:"web_search_tool" json:"web_search_tool"`
 	WebExtractTool  string `yaml:"web_extract_tool" json:"web_extract_tool"`
+	ContextLength   int    `yaml:"context_length,omitempty" json:"context_length,omitempty"` // Override context window size (tokens)
 }
 
 type ProviderConfig map[string]string

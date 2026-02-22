@@ -132,3 +132,45 @@ func (t *Transcript) Exists() bool {
 	_, err := os.Stat(t.path)
 	return err == nil
 }
+
+// Rewrite atomically replaces the transcript with a new header and events.
+// Used after compaction to persist the compacted conversation on disk.
+func (t *Transcript) Rewrite(sessionID string, events []*adksession.Event) error {
+	// Build new content in memory
+	var lines [][]byte
+
+	// Header
+	header := TranscriptEntry{
+		Type:      "header",
+		SessionID: sessionID,
+		Version:   1,
+	}
+	headerData, err := json.Marshal(header)
+	if err != nil {
+		return fmt.Errorf("failed to serialize header: %w", err)
+	}
+	lines = append(lines, headerData)
+
+	// Events
+	for _, event := range events {
+		entry := TranscriptEntry{
+			Type:  "event",
+			Event: event,
+		}
+		data, err := json.Marshal(entry)
+		if err != nil {
+			return fmt.Errorf("failed to serialize event: %w", err)
+		}
+		lines = append(lines, data)
+	}
+
+	// Build the final content
+	var content []byte
+	for _, line := range lines {
+		content = append(content, line...)
+		content = append(content, '\n')
+	}
+
+	// Atomic write to prevent corruption
+	return atomicWrite(t.path, content, 0644)
+}

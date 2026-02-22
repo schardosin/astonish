@@ -89,6 +89,8 @@ func SchedulerJobHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}
+		// Recompute NextRun from now so schedule changes take effect immediately
+		s.RefreshNextRun(jobID)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
 
@@ -172,6 +174,9 @@ func handleCreateJob(w http.ResponseWriter, r *http.Request, s *scheduler.Schedu
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Compute initial NextRun
+	s.RefreshNextRun(job.ID)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)

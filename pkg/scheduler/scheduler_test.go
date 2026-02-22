@@ -1,8 +1,11 @@
 package scheduler
 
 import (
+	"context"
+	"log"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -295,5 +298,176 @@ func TestEqualFold(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("equalFold(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
 		}
+	}
+}
+
+func TestRefreshNextRunAfterScheduleChange(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "jobs.json")
+	store, err := NewStore(path)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	logger := log.New(os.Stderr, "", 0)
+	sched := New(store, nil, nil, logger)
+
+	// Create a job with "every minute" schedule
+	job := &Job{
+		Name:    "Test Refresh",
+		Mode:    ModeAdaptive,
+		Enabled: true,
+		Schedule: JobSchedule{
+			Cron: "* * * * *", // every minute
+		},
+		Payload: JobPayload{
+			Instructions: "test",
+		},
+	}
+	if err := store.Add(job); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	// Set initial NextRun to ~1 minute from now (as if computed from * * * * *)
+	sched.RefreshNextRun(job.ID)
+	jobAfterInit := store.Get(job.ID)
+	if jobAfterInit.NextRun == nil {
+		t.Fatal("expected NextRun to be set after RefreshNextRun")
+	}
+	initialNextRun := *jobAfterInit.NextRun
+
+	// Now update the schedule to "every 5 minutes"
+	jobAfterInit.Schedule.Cron = "*/5 * * * *"
+	if err := store.Update(jobAfterInit); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	// Refresh NextRun — this is what the bridge/API should call after update
+	sched.RefreshNextRun(job.ID)
+
+	jobAfterUpdate := store.Get(job.ID)
+	if jobAfterUpdate.NextRun == nil {
+		t.Fatal("expected NextRun to be set after schedule change")
+	}
+	updatedNextRun := *jobAfterUpdate.NextRun
+
+	// The updated NextRun should be >= initialNextRun because */5 has wider spacing
+	// than * (every minute). Specifically, */5 aligns to 0,5,10,...55 while * fires
+	// every minute. So the next */5 from now should be at or after the next * from now.
+	if updatedNextRun.Before(initialNextRun) {
+		t.Errorf("updated NextRun (%s) should not be before initial NextRun (%s)",
+			updatedNextRun.Format(time.RFC3339), initialNextRun.Format(time.RFC3339))
+	}
+
+	// Verify it aligns to a */5 boundary (minute should be 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55)
+	min := updatedNextRun.Minute()
+	if min%5 != 0 {
+		t.Errorf("updated NextRun minute = %d, expected multiple of 5", min)
+	}
+}
+
+func TestComputeNextRunUsesBaseTime(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "jobs.json")
+	store, err := NewStore(path)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	logger := log.New(os.Stderr, "", 0)
+	sched := New(store, nil, nil, logger)
+
+	job := &Job{
+		Name:    "Base Time Test",
+		Mode:    ModeAdaptive,
+		Enabled: true,
+		Schedule: JobSchedule{
+			Cron:     "0 9 * * *", // daily at 9 AM
+			Timezone: "UTC",       // explicit UTC so test is location-independent
+		},
+		Payload: JobPayload{
+			Instructions: "test",
+		},
+	}
+
+	// Compute from a known base time: 2025-01-15 08:00 UTC
+	base := time.Date(2025, 1, 15, 8, 0, 0, 0, time.UTC)
+	nextRun := sched.computeNextRun(job, base)
+	if nextRun == nil {
+		t.Fatal("expected NextRun to be computed")
+	}
+
+	// Should be 2025-01-15 09:00 UTC (same day, next 9 AM)
+	expected := time.Date(2025, 1, 15, 9, 0, 0, 0, time.UTC)
+	if !nextRun.Equal(expected) {
+		t.Errorf("NextRun = %s, want %s", nextRun.Format(time.RFC3339), expected.Format(time.RFC3339))
+	}
+
+	// Compute from a base time AFTER 9 AM — should be next day
+	base2 := time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC)
+	nextRun2 := sched.computeNextRun(job, base2)
+	if nextRun2 == nil {
+		t.Fatal("expected NextRun to be computed")
+	}
+
+	expected2 := time.Date(2025, 1, 16, 9, 0, 0, 0, time.UTC)
+	if !nextRun2.Equal(expected2) {
+		t.Errorf("NextRun = %s, want %s", nextRun2.Format(time.RFC3339), expected2.Format(time.RFC3339))
+	}
+}
+
+func TestInFlightDedup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "jobs.json")
+	store, err := NewStore(path)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	// Track how many times execute is called
+	var execCount atomic.Int32
+	executeDone := make(chan struct{})
+
+	logger := log.New(os.Stderr, "", 0)
+	sched := New(store, func(ctx context.Context, job *Job) (string, error) {
+		execCount.Add(1)
+		// Block long enough for a second tick to fire
+		<-executeDone
+		return "done", nil
+	}, nil, logger)
+
+	// Create a job that's already due
+	past := time.Now().Add(-1 * time.Minute)
+	job := &Job{
+		Name:    "Dedup Test",
+		Mode:    ModeAdaptive,
+		Enabled: true,
+		NextRun: &past,
+		Schedule: JobSchedule{
+			Cron: "* * * * *",
+		},
+		Payload: JobPayload{
+			Instructions: "test",
+		},
+	}
+	if err := store.Add(job); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	// First tick should dispatch the job
+	sched.tick()
+
+	// Second tick should skip it (already running)
+	sched.tick()
+
+	// Let the job finish
+	close(executeDone)
+
+	// Wait briefly for goroutine to complete
+	time.Sleep(100 * time.Millisecond)
+
+	count := execCount.Load()
+	if count != 1 {
+		t.Errorf("execute called %d times, want 1 (dedup should prevent double dispatch)", count)
 	}
 }

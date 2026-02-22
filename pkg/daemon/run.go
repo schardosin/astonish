@@ -282,6 +282,8 @@ func (b *schedulerBridge) AddJob(job *tools.SchedulerJob) error {
 		return err
 	}
 	job.ID = sj.ID
+	// Compute initial NextRun so the scheduler knows when to fire
+	b.sched.RefreshNextRun(sj.ID)
 	return nil
 }
 
@@ -300,7 +302,12 @@ func (b *schedulerBridge) RemoveJob(id string) error {
 
 func (b *schedulerBridge) UpdateJob(job *tools.SchedulerJob) error {
 	sj := toolJobToSchedulerJob(job)
-	return b.sched.Store().Update(sj)
+	if err := b.sched.Store().Update(sj); err != nil {
+		return err
+	}
+	// Recompute NextRun from now so schedule changes take effect immediately
+	b.sched.RefreshNextRun(sj.ID)
+	return nil
 }
 
 func (b *schedulerBridge) RunNow(ctx context.Context, jobID string) (string, error) {

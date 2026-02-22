@@ -34,10 +34,12 @@ type Scheduler struct {
 	logger  *log.Logger
 	parser  cron.Parser
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	mu     sync.Mutex // protects concurrent RunNow calls
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+	mu      sync.Mutex          // protects concurrent RunNow calls
+	running map[string]struct{} // tracks in-flight job IDs to prevent double dispatch
+	runMu   sync.Mutex          // protects the running map
 }
 
 // New creates a new Scheduler.
@@ -51,6 +53,7 @@ func New(store *Store, execute ExecuteFunc, deliver DeliverFunc, logger *log.Log
 		deliver: deliver,
 		logger:  logger,
 		parser:  cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
+		running: make(map[string]struct{}),
 	}
 }
 
@@ -137,10 +140,25 @@ func (s *Scheduler) tick() {
 			}
 		}
 
+		// Skip if this job is already running (prevents double dispatch)
+		s.runMu.Lock()
+		if _, alreadyRunning := s.running[job.ID]; alreadyRunning {
+			s.runMu.Unlock()
+			continue
+		}
+		s.running[job.ID] = struct{}{}
+		s.runMu.Unlock()
+
 		// Execute in a goroutine (non-blocking tick)
 		s.wg.Add(1)
 		go func(j *Job) {
 			defer s.wg.Done()
+			defer func() {
+				s.runMu.Lock()
+				delete(s.running, j.ID)
+				s.runMu.Unlock()
+			}()
+
 			s.mu.Lock()
 			result, err := s.executeJob(s.ctx, j)
 			s.mu.Unlock()
@@ -183,8 +201,8 @@ func (s *Scheduler) executeJob(ctx context.Context, job *Job) (string, error) {
 			stored.Name, len(result))
 	}
 
-	// Compute next run
-	stored.NextRun = s.computeNextRun(stored)
+	// Compute next run from when execution started
+	stored.NextRun = s.computeNextRun(stored, now)
 
 	if err := s.store.Update(stored); err != nil {
 		s.logger.Printf("[scheduler] Failed to update job state for %q: %v", stored.Name, err)
@@ -200,7 +218,7 @@ func (s *Scheduler) refreshNextRuns() {
 		if !job.Enabled {
 			continue
 		}
-		nextRun := s.computeNextRun(job)
+		nextRun := s.computeNextRun(job, time.Now())
 		if nextRun != nil {
 			stored := s.store.Get(job.ID)
 			if stored != nil {
@@ -211,8 +229,29 @@ func (s *Scheduler) refreshNextRuns() {
 	}
 }
 
+// RefreshNextRun recomputes the next run time for a specific job from now.
+// Call this after updating a job's schedule to ensure the new timing takes effect
+// immediately instead of waiting for the next execution cycle.
+func (s *Scheduler) RefreshNextRun(jobID string) {
+	job := s.store.Get(jobID)
+	if job == nil || !job.Enabled {
+		return
+	}
+	nextRun := s.computeNextRun(job, time.Now())
+	if nextRun != nil {
+		stored := s.store.Get(jobID)
+		if stored != nil {
+			stored.NextRun = nextRun
+			_ = s.store.Update(stored)
+			s.logger.Printf("[scheduler] Refreshed next run for job %q: %s", stored.Name, nextRun.Format(time.RFC3339))
+		}
+	}
+}
+
 // computeNextRun calculates the next run time for a job based on its cron schedule.
-func (s *Scheduler) computeNextRun(job *Job) *time.Time {
+// The base time determines the reference point: use time.Now() for schedule changes,
+// or job.LastRun for post-execution scheduling.
+func (s *Scheduler) computeNextRun(job *Job, base time.Time) *time.Time {
 	schedule, err := s.parser.Parse(job.Schedule.Cron)
 	if err != nil {
 		s.logger.Printf("[scheduler] Invalid cron for job %q: %v", job.Name, err)
@@ -228,13 +267,7 @@ func (s *Scheduler) computeNextRun(job *Job) *time.Time {
 		}
 	}
 
-	// Base time: last run or now
-	base := time.Now().In(loc)
-	if job.LastRun != nil {
-		base = job.LastRun.In(loc)
-	}
-
-	next := schedule.Next(base)
+	next := schedule.Next(base.In(loc))
 	nextUTC := next.UTC()
 	return &nextUTC
 }

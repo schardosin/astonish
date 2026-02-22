@@ -182,6 +182,16 @@ func GetAgentsDir() (string, error) {
 	return filepath.Join(configDir, "agents"), nil
 }
 
+// GetModelsDir returns the directory for locally downloaded ML models (e.g., embedding models).
+// Defaults to ~/.config/astonish/models/.
+func GetModelsDir() (string, error) {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, "models"), nil
+}
+
 // GetSessionsDir returns the session storage directory.
 // If the config specifies a custom base_dir, that is used; otherwise
 // it defaults to ~/.config/astonish/sessions/.

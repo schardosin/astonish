@@ -1,6 +1,7 @@
 package astonish
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"sort"
@@ -36,6 +37,8 @@ func handleSessionsCommand(args []string) error {
 			return fmt.Errorf("session ID required")
 		}
 		return handleSessionsDelete(args[1])
+	case "clear":
+		return handleSessionsClear()
 	default:
 		fmt.Printf("Unknown sessions subcommand: %s\n", subcommand)
 		printSessionsUsage()
@@ -189,6 +192,62 @@ func handleSessionsDelete(sessionID string) error {
 	return nil
 }
 
+func handleSessionsClear() error {
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	if appCfg.Sessions.Storage == "memory" {
+		fmt.Println("Session persistence is disabled (storage: memory).")
+		return nil
+	}
+
+	sessDir, err := config.GetSessionsDir(&appCfg.Sessions)
+	if err != nil {
+		return fmt.Errorf("failed to resolve sessions dir: %w", err)
+	}
+
+	index := persistentsession.NewSessionIndex(sessDir + "/index.json")
+	data, err := index.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load session index: %w", err)
+	}
+
+	count := len(data.Sessions)
+	if count == 0 {
+		fmt.Println("No sessions to delete.")
+		return nil
+	}
+
+	// Confirmation prompt
+	fmt.Printf("This will delete all %d session(s). Are you sure? [y/N] ", count)
+	reader := bufio.NewReader(os.Stdin)
+	answer, _ := reader.ReadString('\n')
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	if answer != "y" && answer != "yes" {
+		fmt.Println("Cancelled.")
+		return nil
+	}
+
+	// Delete all transcript files
+	deleted := 0
+	for _, meta := range data.Sessions {
+		transcriptPath := fmt.Sprintf("%s/%s/%s/%s.jsonl", sessDir, meta.AppName, meta.UserID, meta.ID)
+		os.Remove(transcriptPath)
+		deleted++
+	}
+
+	// Clear the index
+	data.Sessions = make(map[string]persistentsession.SessionMeta)
+	if err := index.Save(data); err != nil {
+		return fmt.Errorf("failed to save cleared index: %w", err)
+	}
+
+	fmt.Printf("Deleted %d session(s).\n", deleted)
+	return nil
+}
+
 // resolveSessionID resolves a potentially partial session ID to a full one.
 func resolveSessionID(index *persistentsession.SessionIndex, partial string) (string, error) {
 	data, err := index.Load()
@@ -242,6 +301,7 @@ func printSessionsUsage() {
 	fmt.Println("  list, ls              List all sessions")
 	fmt.Println("  show <id>             Show session details")
 	fmt.Println("  delete, rm <id>       Delete a session")
+	fmt.Println("  clear                 Delete all sessions")
 	fmt.Println("")
 	fmt.Println("Session IDs can be abbreviated (prefix match).")
 	fmt.Println("")
@@ -249,4 +309,5 @@ func printSessionsUsage() {
 	fmt.Println("  astonish sessions list")
 	fmt.Println("  astonish sessions show abc123")
 	fmt.Println("  astonish sessions delete abc123")
+	fmt.Println("  astonish sessions clear")
 }

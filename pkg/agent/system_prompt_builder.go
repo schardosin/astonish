@@ -27,6 +27,7 @@ type SystemPromptBuilder struct {
 	WebExtractToolName    string // Name of the configured extract tool (e.g. "tavily-extract")
 	BrowserAvailable      bool   // Whether a browser automation MCP tool is configured (e.g. Playwright)
 	MemorySearchAvailable bool   // Whether semantic memory search is available
+	ChannelHints          string // Channel-specific output constraints (empty = console mode)
 }
 
 // Build constructs the full system prompt.
@@ -36,6 +37,13 @@ func (b *SystemPromptBuilder) Build() string {
 	// 1. Identity
 	sb.WriteString("You are Astonish, an AI assistant with access to tools.\n")
 	sb.WriteString("You help users accomplish tasks by calling tools and reasoning through problems.\n\n")
+
+	// 1b. Channel-specific output constraints (set per-turn by channel manager)
+	if b.ChannelHints != "" {
+		sb.WriteString("## Output Constraints\n\n")
+		sb.WriteString(b.ChannelHints)
+		sb.WriteString("\n\n")
+	}
 
 	// 2. Custom prompt (if set by user)
 	if b.CustomPrompt != "" {

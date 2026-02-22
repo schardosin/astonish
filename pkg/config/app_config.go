@@ -15,6 +15,7 @@ type AppConfig struct {
 	Sessions   SessionConfig              `yaml:"sessions,omitempty"`
 	Memory     MemoryConfig               `yaml:"memory,omitempty"`
 	Daemon     DaemonConfig               `yaml:"daemon,omitempty"`
+	Channels   ChannelsConfig             `yaml:"channels,omitempty"`
 }
 
 // MemoryConfig controls the semantic memory / RAG system.
@@ -196,6 +197,34 @@ func (c *DaemonConfig) GetLogDir() string {
 		return "logs"
 	}
 	return filepath.Join(configDir, "logs")
+}
+
+// ChannelsConfig controls communication channel integrations.
+type ChannelsConfig struct {
+	// Enabled controls whether channels are active. Default: false (nil means false).
+	Enabled  *bool          `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Telegram TelegramConfig `yaml:"telegram,omitempty" json:"telegram,omitempty"`
+}
+
+// IsChannelsEnabled returns true if channels are explicitly enabled.
+func (c *ChannelsConfig) IsChannelsEnabled() bool {
+	return c.Enabled != nil && *c.Enabled
+}
+
+// TelegramConfig holds configuration for the Telegram channel adapter.
+type TelegramConfig struct {
+	// Enabled controls whether the Telegram adapter is active. Default: false (nil means false).
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// BotToken is the Telegram bot token from BotFather.
+	BotToken string `yaml:"bot_token,omitempty" json:"bot_token,omitempty"`
+	// AllowFrom is a list of allowed Telegram user IDs. Required — at least one
+	// user ID must be specified. An empty list blocks all messages (safe default).
+	AllowFrom []string `yaml:"allow_from,omitempty" json:"allow_from,omitempty"`
+}
+
+// IsTelegramEnabled returns true if Telegram is explicitly enabled and has a bot token.
+func (c *TelegramConfig) IsTelegramEnabled() bool {
+	return c.Enabled != nil && *c.Enabled && c.BotToken != ""
 }
 
 type ProviderConfig map[string]string

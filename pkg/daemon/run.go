@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/schardosin/astonish/pkg/api"
+	"github.com/schardosin/astonish/pkg/channels"
+	"github.com/schardosin/astonish/pkg/channels/telegram"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/launcher"
 )
@@ -77,6 +79,54 @@ func Run(cfg RunConfig) error {
 	ctx := context.Background()
 	api.InitToolsCache(ctx)
 
+	// --- Initialize channel manager if channels are enabled ---
+	var channelMgr *channels.ChannelManager
+
+	if appCfg.Channels.IsChannelsEnabled() {
+		logger.Printf("Channels enabled, initializing ChatAgent...")
+
+		// Build a fully-wired ChatAgent for channel use
+		factoryResult, factoryErr := launcher.NewWiredChatAgent(ctx, &launcher.ChatFactoryConfig{
+			AppConfig:    appCfg,
+			ProviderName: appCfg.General.DefaultProvider,
+			ModelName:    appCfg.General.DefaultModel,
+			DebugMode:    cfg.Debug,
+			AutoApprove:  true, // Channels auto-approve all tools (no interactive approval)
+		})
+		if factoryErr != nil {
+			logger.Printf("Warning: Failed to initialize ChatAgent for channels: %v", factoryErr)
+		} else {
+			defer factoryResult.Cleanup()
+
+			channelMgr = channels.NewChannelManager(factoryResult.ChatAgent, factoryResult.SessionService, log.Default(), &channels.ChannelManagerConfig{
+				ProviderName: factoryResult.ProviderName,
+				ModelName:    factoryResult.ModelName,
+				ToolCount:    len(factoryResult.InternalTools),
+			})
+
+			// Register Telegram if enabled
+			if appCfg.Channels.Telegram.IsTelegramEnabled() {
+				tg := telegram.New(&telegram.Config{
+					BotToken:  appCfg.Channels.Telegram.BotToken,
+					AllowFrom: appCfg.Channels.Telegram.AllowFrom,
+					Commands:  channelMgr.Commands(),
+				}, log.Default())
+				channelMgr.Register(tg)
+				logger.Printf("Telegram channel registered")
+			}
+
+			// Start all channels
+			if err := channelMgr.StartAll(ctx); err != nil {
+				logger.Printf("Warning: Failed to start channels: %v", err)
+			} else {
+				logger.Printf("Channels started")
+			}
+
+			// Make channel manager available to API handlers
+			api.SetChannelManager(channelMgr)
+		}
+	}
+
 	// Create and start the Studio server
 	studio, err := launcher.NewStudioServer(port)
 	if err != nil {
@@ -117,6 +167,14 @@ func Run(cfg RunConfig) error {
 	// Graceful shutdown with timeout
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	// Stop channels first (drain in-flight messages)
+	if channelMgr != nil {
+		logger.Printf("Stopping channels...")
+		if err := channelMgr.StopAll(shutdownCtx); err != nil {
+			logger.Printf("Warning: Channel shutdown error: %v", err)
+		}
+	}
 
 	if err := studio.Shutdown(shutdownCtx); err != nil {
 		logger.Printf("Shutdown error: %v", err)

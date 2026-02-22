@@ -463,6 +463,13 @@ func DeleteAgentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Remove the corresponding knowledge doc so the vector store
+	// watcher picks up the deletion and cleans up indexed chunks.
+	if memDir, err := config.GetMemoryDir(nil); err == nil {
+		docPath := filepath.Join(memDir, "flows", name+".md")
+		os.Remove(docPath) // best-effort — may not exist
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "deleted": name})
 }
@@ -776,4 +783,7 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/chat", HandleChat).Methods("POST")
 	router.HandleFunc("/api/session/{id}/stop", HandleStopSession).Methods("POST")
 	router.HandleFunc("/api/session/{id}/keepalive", HandleSessionKeepalive).Methods("POST")
+
+	// Channels endpoints
+	router.HandleFunc("/api/channels/status", ChannelsStatusHandler).Methods("GET")
 }

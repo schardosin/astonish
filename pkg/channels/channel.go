@@ -1,0 +1,98 @@
+// Package channels defines the core interfaces and types for Astonish's
+// communication channel system. Channels are plugins that receive inbound
+// messages from external platforms (Telegram, Slack, etc.), normalize them
+// into a common format, route them to the ChatAgent, and deliver responses
+// back to the originating platform.
+package channels
+
+import (
+	"context"
+	"time"
+)
+
+// ChatType represents the kind of chat a message originates from.
+type ChatType string
+
+const (
+	ChatTypeDirect  ChatType = "direct"
+	ChatTypeGroup   ChatType = "group"
+	ChatTypeChannel ChatType = "channel"
+)
+
+// MessageFormat describes the formatting of outbound message text.
+type MessageFormat string
+
+const (
+	FormatText     MessageFormat = "text"
+	FormatMarkdown MessageFormat = "markdown"
+	FormatHTML     MessageFormat = "html"
+)
+
+// Channel is the interface that all channel adapters must implement.
+// Each adapter handles platform-specific connection, message normalization,
+// and outbound delivery.
+type Channel interface {
+	// ID returns a unique identifier for this channel (e.g., "telegram").
+	ID() string
+
+	// Name returns a human-readable name (e.g., "Telegram Bot").
+	Name() string
+
+	// Start begins listening for inbound messages. The handler is called
+	// for each normalized inbound message. Start blocks until ctx is
+	// cancelled or Stop is called.
+	Start(ctx context.Context, handler MessageHandler) error
+
+	// Stop gracefully shuts down the channel, draining in-flight messages.
+	Stop(ctx context.Context) error
+
+	// Send delivers an outbound message to the specified target.
+	Send(ctx context.Context, target Target, msg OutboundMessage) error
+
+	// Status returns the current connection and operational status.
+	Status() ChannelStatus
+}
+
+// MessageHandler is the callback invoked by a channel for each inbound message.
+// The handler is responsible for routing the message to the appropriate agent
+// and sending the response back via Channel.Send.
+type MessageHandler func(ctx context.Context, msg InboundMessage) error
+
+// InboundMessage is a platform-normalized inbound message.
+type InboundMessage struct {
+	ID         string    // Platform message ID
+	ChannelID  string    // Channel adapter ID (e.g., "telegram")
+	SenderID   string    // Normalized sender identifier
+	SenderName string    // Human-readable sender name
+	ChatID     string    // Normalized chat/conversation ID
+	ChatType   ChatType  // "direct", "group", "channel"
+	Text       string    // Message text content
+	ReplyTo    string    // ID of message being replied to (empty if not a reply)
+	ThreadID   string    // Thread/topic ID (empty if not threaded)
+	Timestamp  time.Time // When the message was sent
+	Raw        any       // Platform-specific raw message (for advanced use)
+}
+
+// OutboundMessage is the response to be delivered back to a channel.
+type OutboundMessage struct {
+	Text     string        // Response text
+	ReplyTo  string        // ID of message to reply to
+	ThreadID string        // Thread/topic ID to post in
+	Format   MessageFormat // "text" or "markdown"
+}
+
+// Target identifies where to send an outbound message.
+type Target struct {
+	ChannelID string // Channel adapter ID (e.g., "telegram")
+	ChatID    string // Chat/conversation to send to
+	ThreadID  string // Thread/topic to post in (optional)
+}
+
+// ChannelStatus reports the operational state of a channel.
+type ChannelStatus struct {
+	Connected    bool      // Whether the channel is currently connected
+	AccountID    string    // Bot/account identifier on the platform
+	ConnectedAt  time.Time // When the connection was established
+	Error        string    // Last error message (empty if healthy)
+	MessageCount int64     // Total messages processed since start
+}

@@ -227,6 +227,20 @@ func (t *TelegramChannel) Status() channels.ChannelStatus {
 	return status
 }
 
+// BroadcastTargets returns a Target for each allowed user.
+// In direct messages, Telegram chat ID == user ID, so each AllowFrom
+// entry becomes a delivery target.
+func (t *TelegramChannel) BroadcastTargets() []channels.Target {
+	targets := make([]channels.Target, 0, len(t.allowSet))
+	for id := range t.allowSet {
+		targets = append(targets, channels.Target{
+			ChannelID: "telegram",
+			ChatID:    id,
+		})
+	}
+	return targets
+}
+
 // processUpdate handles a single Telegram update.
 func (t *TelegramChannel) processUpdate(ctx context.Context, update tgbotapi.Update) {
 	msg := update.Message

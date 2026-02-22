@@ -1,0 +1,262 @@
+package scheduler
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"sync"
+	"time"
+
+	"github.com/robfig/cron/v3"
+)
+
+// backoffSteps defines the error backoff delays for consecutive failures.
+var backoffSteps = []time.Duration{
+	30 * time.Second,
+	1 * time.Minute,
+	5 * time.Minute,
+	15 * time.Minute,
+	60 * time.Minute,
+}
+
+// ExecuteFunc is the function called to execute a job.
+// It receives the job and returns the result text and any error.
+type ExecuteFunc func(ctx context.Context, job *Job) (string, error)
+
+// DeliverFunc is the function called to deliver job results to a channel.
+type DeliverFunc func(ctx context.Context, job *Job, result string, err error) error
+
+// Scheduler manages the lifecycle and execution of scheduled jobs.
+type Scheduler struct {
+	store   *Store
+	execute ExecuteFunc
+	deliver DeliverFunc
+	logger  *log.Logger
+	parser  cron.Parser
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+	mu     sync.Mutex // protects concurrent RunNow calls
+}
+
+// New creates a new Scheduler.
+func New(store *Store, execute ExecuteFunc, deliver DeliverFunc, logger *log.Logger) *Scheduler {
+	if logger == nil {
+		logger = log.Default()
+	}
+	return &Scheduler{
+		store:   store,
+		execute: execute,
+		deliver: deliver,
+		logger:  logger,
+		parser:  cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
+	}
+}
+
+// Start begins the scheduler tick loop. It blocks until Stop is called
+// or the context is cancelled.
+func (s *Scheduler) Start(ctx context.Context) {
+	s.ctx, s.cancel = context.WithCancel(ctx)
+
+	// Compute next-run times for all enabled jobs on startup
+	s.refreshNextRuns()
+
+	s.wg.Add(1)
+	go s.loop()
+
+	s.logger.Printf("[scheduler] Started with %d job(s)", len(s.store.List()))
+}
+
+// Stop gracefully shuts down the scheduler and waits for in-flight jobs.
+func (s *Scheduler) Stop() {
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.wg.Wait()
+	s.logger.Printf("[scheduler] Stopped")
+}
+
+// Store returns the underlying job store (for tools/API access).
+func (s *Scheduler) Store() *Store {
+	return s.store
+}
+
+// RunNow triggers immediate execution of a job by ID.
+// Returns the result text and any execution error.
+func (s *Scheduler) RunNow(ctx context.Context, jobID string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	job := s.store.Get(jobID)
+	if job == nil {
+		return "", fmt.Errorf("job %s not found", jobID)
+	}
+
+	return s.executeJob(ctx, job)
+}
+
+// loop is the main tick loop. It checks for due jobs every 30 seconds.
+func (s *Scheduler) loop() {
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			s.tick()
+		}
+	}
+}
+
+// tick checks all enabled jobs and dispatches those that are due.
+func (s *Scheduler) tick() {
+	now := time.Now()
+	jobs := s.store.List()
+
+	for _, job := range jobs {
+		if !job.Enabled {
+			continue
+		}
+		if job.NextRun == nil {
+			continue
+		}
+		if now.Before(*job.NextRun) {
+			continue
+		}
+
+		// Check backoff
+		if job.ConsecutiveFailures > 0 && job.LastRun != nil {
+			backoff := s.backoffDuration(job.ConsecutiveFailures)
+			if now.Before(job.LastRun.Add(backoff)) {
+				continue // Still in backoff
+			}
+		}
+
+		// Execute in a goroutine (non-blocking tick)
+		s.wg.Add(1)
+		go func(j *Job) {
+			defer s.wg.Done()
+			s.mu.Lock()
+			result, err := s.executeJob(s.ctx, j)
+			s.mu.Unlock()
+
+			// Deliver results to configured channel
+			if s.deliver != nil {
+				if deliverErr := s.deliver(s.ctx, j, result, err); deliverErr != nil {
+					s.logger.Printf("[scheduler] Delivery failed for job %q: %v", j.Name, deliverErr)
+				}
+			}
+		}(job)
+	}
+}
+
+// executeJob runs a single job, updates its runtime state, and returns the result.
+func (s *Scheduler) executeJob(ctx context.Context, job *Job) (string, error) {
+	s.logger.Printf("[scheduler] Executing job %q (mode: %s)", job.Name, job.Mode)
+
+	now := time.Now()
+	result, execErr := s.execute(ctx, job)
+
+	// Update runtime state in the store
+	stored := s.store.Get(job.ID)
+	if stored == nil {
+		return result, execErr
+	}
+
+	stored.LastRun = &now
+	if execErr != nil {
+		stored.LastStatus = StatusFailed
+		stored.LastError = execErr.Error()
+		stored.ConsecutiveFailures++
+		s.logger.Printf("[scheduler] Job %q failed (%d consecutive): %v",
+			stored.Name, stored.ConsecutiveFailures, execErr)
+	} else {
+		stored.LastStatus = StatusSuccess
+		stored.LastError = ""
+		stored.ConsecutiveFailures = 0
+		s.logger.Printf("[scheduler] Job %q completed successfully (%d chars)",
+			stored.Name, len(result))
+	}
+
+	// Compute next run
+	stored.NextRun = s.computeNextRun(stored)
+
+	if err := s.store.Update(stored); err != nil {
+		s.logger.Printf("[scheduler] Failed to update job state for %q: %v", stored.Name, err)
+	}
+
+	return result, execErr
+}
+
+// refreshNextRuns computes and sets NextRun for all enabled jobs.
+func (s *Scheduler) refreshNextRuns() {
+	jobs := s.store.List()
+	for _, job := range jobs {
+		if !job.Enabled {
+			continue
+		}
+		nextRun := s.computeNextRun(job)
+		if nextRun != nil {
+			stored := s.store.Get(job.ID)
+			if stored != nil {
+				stored.NextRun = nextRun
+				_ = s.store.Update(stored)
+			}
+		}
+	}
+}
+
+// computeNextRun calculates the next run time for a job based on its cron schedule.
+func (s *Scheduler) computeNextRun(job *Job) *time.Time {
+	schedule, err := s.parser.Parse(job.Schedule.Cron)
+	if err != nil {
+		s.logger.Printf("[scheduler] Invalid cron for job %q: %v", job.Name, err)
+		return nil
+	}
+
+	loc := time.Local
+	if job.Schedule.Timezone != "" {
+		if parsed, err := time.LoadLocation(job.Schedule.Timezone); err == nil {
+			loc = parsed
+		} else {
+			s.logger.Printf("[scheduler] Invalid timezone %q for job %q, using local", job.Schedule.Timezone, job.Name)
+		}
+	}
+
+	// Base time: last run or now
+	base := time.Now().In(loc)
+	if job.LastRun != nil {
+		base = job.LastRun.In(loc)
+	}
+
+	next := schedule.Next(base)
+	nextUTC := next.UTC()
+	return &nextUTC
+}
+
+// backoffDuration returns the delay for a given failure count.
+func (s *Scheduler) backoffDuration(failures int) time.Duration {
+	idx := failures - 1
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(backoffSteps) {
+		idx = len(backoffSteps) - 1
+	}
+	return backoffSteps[idx]
+}
+
+// ValidateCron checks if a cron expression is valid.
+func ValidateCron(expr string) error {
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	_, err := parser.Parse(expr)
+	if err != nil {
+		return fmt.Errorf("invalid cron expression %q: %w", expr, err)
+	}
+	return nil
+}

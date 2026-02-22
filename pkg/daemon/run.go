@@ -15,6 +15,8 @@ import (
 	"github.com/schardosin/astonish/pkg/channels/telegram"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/launcher"
+	"github.com/schardosin/astonish/pkg/scheduler"
+	"github.com/schardosin/astonish/pkg/tools"
 )
 
 // RunConfig holds the configuration for a daemon run.
@@ -79,51 +81,103 @@ func Run(cfg RunConfig) error {
 	ctx := context.Background()
 	api.InitToolsCache(ctx)
 
-	// --- Initialize channel manager if channels are enabled ---
+	// --- Initialize shared ChatAgent if channels need it ---
+	// The scheduler is always-on by default but doesn't require a ChatAgent at startup:
+	// - Routine jobs use the headless runner (creates its own LLM)
+	// - Adaptive jobs use the shared ChatAgent if available, or fail gracefully
+	// The ChatAgent is expensive to create, so we only init it when channels are enabled.
 	var channelMgr *channels.ChannelManager
+	var factoryResult *launcher.ChatFactoryResult
 
-	if appCfg.Channels.IsChannelsEnabled() {
-		logger.Printf("Channels enabled, initializing ChatAgent...")
+	needsChatAgent := appCfg.Channels.IsChannelsEnabled()
 
-		// Build a fully-wired ChatAgent for channel use
-		factoryResult, factoryErr := launcher.NewWiredChatAgent(ctx, &launcher.ChatFactoryConfig{
+	if needsChatAgent {
+		logger.Printf("Initializing ChatAgent for channels...")
+
+		// Build a fully-wired ChatAgent for channel/scheduler use
+		fr, factoryErr := launcher.NewWiredChatAgent(ctx, &launcher.ChatFactoryConfig{
 			AppConfig:    appCfg,
 			ProviderName: appCfg.General.DefaultProvider,
 			ModelName:    appCfg.General.DefaultModel,
 			DebugMode:    cfg.Debug,
-			AutoApprove:  true, // Channels auto-approve all tools (no interactive approval)
+			AutoApprove:  true, // Channels/scheduler auto-approve all tools
 		})
 		if factoryErr != nil {
-			logger.Printf("Warning: Failed to initialize ChatAgent for channels: %v", factoryErr)
+			logger.Printf("Warning: Failed to initialize ChatAgent: %v", factoryErr)
 		} else {
+			factoryResult = fr
 			defer factoryResult.Cleanup()
+		}
+	}
 
-			channelMgr = channels.NewChannelManager(factoryResult.ChatAgent, factoryResult.SessionService, log.Default(), &channels.ChannelManagerConfig{
-				ProviderName: factoryResult.ProviderName,
-				ModelName:    factoryResult.ModelName,
-				ToolCount:    len(factoryResult.InternalTools),
-			})
+	// --- Initialize channel manager if channels are enabled ---
+	if appCfg.Channels.IsChannelsEnabled() && factoryResult != nil {
+		channelMgr = channels.NewChannelManager(factoryResult.ChatAgent, factoryResult.SessionService, log.Default(), &channels.ChannelManagerConfig{
+			ProviderName: factoryResult.ProviderName,
+			ModelName:    factoryResult.ModelName,
+			ToolCount:    len(factoryResult.InternalTools),
+		})
 
-			// Register Telegram if enabled
-			if appCfg.Channels.Telegram.IsTelegramEnabled() {
-				tg := telegram.New(&telegram.Config{
-					BotToken:  appCfg.Channels.Telegram.BotToken,
-					AllowFrom: appCfg.Channels.Telegram.AllowFrom,
-					Commands:  channelMgr.Commands(),
-				}, log.Default())
-				channelMgr.Register(tg)
-				logger.Printf("Telegram channel registered")
-			}
+		// Register Telegram if enabled
+		if appCfg.Channels.Telegram.IsTelegramEnabled() {
+			tg := telegram.New(&telegram.Config{
+				BotToken:  appCfg.Channels.Telegram.BotToken,
+				AllowFrom: appCfg.Channels.Telegram.AllowFrom,
+				Commands:  channelMgr.Commands(),
+			}, log.Default())
+			channelMgr.Register(tg)
+			logger.Printf("Telegram channel registered")
+		}
 
-			// Start all channels
-			if err := channelMgr.StartAll(ctx); err != nil {
-				logger.Printf("Warning: Failed to start channels: %v", err)
+		// Start all channels
+		if err := channelMgr.StartAll(ctx); err != nil {
+			logger.Printf("Warning: Failed to start channels: %v", err)
+		} else {
+			logger.Printf("Channels started")
+		}
+
+		// Make channel manager available to API handlers
+		api.SetChannelManager(channelMgr)
+	}
+
+	// --- Initialize scheduler if enabled ---
+	var sched *scheduler.Scheduler
+
+	if appCfg.Scheduler.IsSchedulerEnabled() {
+		storePath, storeErr := scheduler.DefaultStorePath()
+		if storeErr != nil {
+			logger.Printf("Warning: Failed to resolve scheduler store path: %v", storeErr)
+		} else {
+			store, storeErr := scheduler.NewStore(storePath)
+			if storeErr != nil {
+				logger.Printf("Warning: Failed to initialize scheduler store: %v", storeErr)
 			} else {
-				logger.Printf("Channels started")
-			}
+				// Create executor with injected headless runner
+				exec := &scheduler.Executor{
+					AppConfig:    appCfg,
+					ProviderName: appCfg.General.DefaultProvider,
+					ModelName:    appCfg.General.DefaultModel,
+					DebugMode:    cfg.Debug,
+					RunHeadless:  makeHeadlessRunner(),
+				}
+				if factoryResult != nil {
+					exec.ChatAgent = factoryResult.ChatAgent
+					exec.SessionService = factoryResult.SessionService
+				}
 
-			// Make channel manager available to API handlers
-			api.SetChannelManager(channelMgr)
+				// Create delivery function (only if channels are available)
+				var deliver scheduler.DeliverFunc
+				if channelMgr != nil {
+					deliver = scheduler.NewDeliverFunc(channelMgr)
+				}
+
+				sched = scheduler.New(store, exec.Execute, deliver, log.Default())
+				sched.Start(ctx)
+
+				// Make scheduler available to API handlers and LLM tools
+				api.SetScheduler(sched)
+				tools.SetSchedulerAccess(newSchedulerBridge(sched))
+			}
 		}
 	}
 
@@ -168,7 +222,13 @@ func Run(cfg RunConfig) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Stop channels first (drain in-flight messages)
+	// Stop scheduler first (finish in-flight jobs)
+	if sched != nil {
+		logger.Printf("Stopping scheduler...")
+		sched.Stop()
+	}
+
+	// Stop channels (drain in-flight messages)
 	if channelMgr != nil {
 		logger.Printf("Stopping channels...")
 		if err := channelMgr.StopAll(shutdownCtx); err != nil {
@@ -183,4 +243,135 @@ func Run(cfg RunConfig) error {
 
 	logger.Printf("Daemon stopped cleanly")
 	return nil
+}
+
+// makeHeadlessRunner creates a RunHeadlessFunc that bridges the scheduler's
+// executor to the launcher's headless runner, breaking the import cycle
+// (scheduler -> launcher -> api).
+func makeHeadlessRunner() scheduler.RunHeadlessFunc {
+	return func(ctx context.Context, cfg *scheduler.HeadlessRunConfig) (string, error) {
+		agentCfg, err := config.LoadAgent(cfg.FlowPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to load flow %q: %w", cfg.FlowPath, err)
+		}
+
+		return launcher.RunHeadless(ctx, &launcher.HeadlessConfig{
+			AgentConfig:  agentCfg,
+			AppConfig:    cfg.AppConfig,
+			ProviderName: cfg.ProviderName,
+			ModelName:    cfg.ModelName,
+			Parameters:   cfg.Parameters,
+			DebugMode:    cfg.DebugMode,
+		})
+	}
+}
+
+// schedulerBridge adapts scheduler.Scheduler to tools.SchedulerAccess,
+// bridging the two packages without creating import cycles.
+type schedulerBridge struct {
+	sched *scheduler.Scheduler
+}
+
+func newSchedulerBridge(s *scheduler.Scheduler) *schedulerBridge {
+	return &schedulerBridge{sched: s}
+}
+
+func (b *schedulerBridge) AddJob(job *tools.SchedulerJob) error {
+	sj := toolJobToSchedulerJob(job)
+	if err := b.sched.Store().Add(sj); err != nil {
+		return err
+	}
+	job.ID = sj.ID
+	return nil
+}
+
+func (b *schedulerBridge) ListJobs() []*tools.SchedulerJob {
+	jobs := b.sched.Store().List()
+	result := make([]*tools.SchedulerJob, len(jobs))
+	for i, j := range jobs {
+		result[i] = schedulerJobToToolJob(j)
+	}
+	return result
+}
+
+func (b *schedulerBridge) RemoveJob(id string) error {
+	return b.sched.Store().Remove(id)
+}
+
+func (b *schedulerBridge) UpdateJob(job *tools.SchedulerJob) error {
+	sj := toolJobToSchedulerJob(job)
+	return b.sched.Store().Update(sj)
+}
+
+func (b *schedulerBridge) RunNow(ctx context.Context, jobID string) (string, error) {
+	return b.sched.RunNow(ctx, jobID)
+}
+
+func (b *schedulerBridge) GetJobByName(name string) *tools.SchedulerJob {
+	j := b.sched.Store().GetByName(name)
+	if j == nil {
+		return nil
+	}
+	return schedulerJobToToolJob(j)
+}
+
+func (b *schedulerBridge) ValidateCron(expr string) error {
+	return scheduler.ValidateCron(expr)
+}
+
+// toolJobToSchedulerJob converts a tools.SchedulerJob to scheduler.Job.
+func toolJobToSchedulerJob(tj *tools.SchedulerJob) *scheduler.Job {
+	sj := &scheduler.Job{
+		ID:   tj.ID,
+		Name: tj.Name,
+		Mode: scheduler.JobMode(tj.Mode),
+		Schedule: scheduler.JobSchedule{
+			Cron:     tj.Cron,
+			Timezone: tj.Timezone,
+		},
+		Payload: scheduler.JobPayload{
+			Flow:         tj.Flow,
+			Params:       tj.Params,
+			Instructions: tj.Instr,
+		},
+		Delivery: scheduler.JobDelivery{
+			Channel: tj.Channel,
+			Target:  tj.Target,
+		},
+		Enabled:             tj.Enabled,
+		CreatedAt:           tj.CreatedAt,
+		ConsecutiveFailures: tj.Failures,
+	}
+	if tj.LastRun != nil {
+		sj.LastRun = tj.LastRun
+	}
+	if tj.LastStatus != "" {
+		sj.LastStatus = scheduler.JobStatus(tj.LastStatus)
+	}
+	if tj.NextRun != nil {
+		sj.NextRun = tj.NextRun
+	}
+	return sj
+}
+
+// schedulerJobToToolJob converts a scheduler.Job to tools.SchedulerJob.
+func schedulerJobToToolJob(sj *scheduler.Job) *tools.SchedulerJob {
+	return &tools.SchedulerJob{
+		ID:         sj.ID,
+		Name:       sj.Name,
+		Mode:       string(sj.Mode),
+		Cron:       sj.Schedule.Cron,
+		Timezone:   sj.Schedule.Timezone,
+		Flow:       sj.Payload.Flow,
+		Params:     sj.Payload.Params,
+		Instr:      sj.Payload.Instructions,
+		Channel:    sj.Delivery.Channel,
+		Target:     sj.Delivery.Target,
+		Enabled:    sj.Enabled,
+		LastRun:    sj.LastRun,
+		LastStatus: string(sj.LastStatus),
+		NextRun:    sj.NextRun,
+		Failures:   sj.ConsecutiveFailures,
+		CreatedAt:  sj.CreatedAt,
+	}
 }

@@ -224,6 +224,18 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 	}
 
+	// --- 2d. Initialize scheduler tools ---
+	// These are always registered — they gracefully handle "scheduler not available"
+	// when the daemon isn't running or scheduler isn't enabled.
+	schedTools, schedErr := tools.GetSchedulerTools()
+	if schedErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("Warning: Failed to create scheduler tools: %v\n", schedErr)
+		}
+	} else {
+		internalTools = append(internalTools, schedTools...)
+	}
+
 	// --- 3. Load MCP tools from cache (lazy) ---
 	mcpCfg, _ := config.LoadMCPConfig()
 	var lazyToolsets []*agent.LazyMCPToolset

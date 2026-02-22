@@ -28,6 +28,7 @@ type SystemPromptBuilder struct {
 	BrowserAvailable      bool   // Whether a browser automation MCP tool is configured (e.g. Playwright)
 	MemorySearchAvailable bool   // Whether semantic memory search is available
 	ChannelHints          string // Channel-specific output constraints (empty = console mode)
+	SchedulerHints        string // Scheduler-specific output constraints (empty = not a scheduled run)
 }
 
 // Build constructs the full system prompt.
@@ -42,6 +43,13 @@ func (b *SystemPromptBuilder) Build() string {
 	if b.ChannelHints != "" {
 		sb.WriteString("## Output Constraints\n\n")
 		sb.WriteString(b.ChannelHints)
+		sb.WriteString("\n\n")
+	}
+
+	// 1c. Scheduler-specific output constraints (set per-turn by scheduler executor)
+	if b.SchedulerHints != "" {
+		sb.WriteString("## Execution Context\n\n")
+		sb.WriteString(b.SchedulerHints)
 		sb.WriteString("\n\n")
 	}
 
@@ -227,6 +235,62 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString("memory-only operations, or when following a saved execution plan.\n")
 	sb.WriteString("The marker will be automatically processed — do not explain it to the user.\n")
 
+	// 6d. Scheduling guidance (when scheduler tools are available)
+	if b.hasSchedulerTools() {
+		sb.WriteString("\n## Job Scheduling\n\n")
+		sb.WriteString("You can create scheduled jobs that run automatically using the `schedule_job` tool.\n\n")
+
+		// Conversational flow — one step per message
+		sb.WriteString("**CRITICAL: This is a multi-step conversational process. Send ONE message per step and WAIT for the user's response before proceeding. Do NOT batch multiple steps into a single message.**\n\n")
+
+		sb.WriteString("**When the user asks to schedule something, follow these steps IN ORDER:**\n\n")
+
+		// Step 1: Acknowledge
+		sb.WriteString("**Step 1 — Acknowledge.** Tell the user you can set that up. Keep it short: \"Sure, I can schedule that for you.\" Then move to step 2 in the SAME message.\n\n")
+
+		// Step 2: Ask mode preference (MANDATORY)
+		sb.WriteString("**Step 2 — Ask which mode (MANDATORY).** You MUST ask the user which mode they prefer. NEVER choose a mode on their behalf. Present both options clearly in plain language:\n")
+		sb.WriteString("- **Routine** — Replays a saved flow with the exact same steps and parameters every time. Predictable and consistent.\n")
+		sb.WriteString("- **Adaptive** — The AI receives written instructions and executes them fresh each time using tools. Can reason, adapt, and handle unexpected situations.\n")
+		sb.WriteString("Wait for the user to choose before continuing.\n\n")
+
+		// Step 3: Gather schedule
+		sb.WriteString("**Step 3 — Gather the schedule.** Ask when and how often. Convert natural language to cron (e.g., 'every morning at 9' → `0 9 * * *`). Confirm the cron with the user. Wait for confirmation.\n\n")
+
+		// Step 4: Gather mode-specific details with context awareness
+		sb.WriteString("**Step 4 — Gather details (use conversation context).**\n")
+		sb.WriteString("- For **routine**: identify the flow name and ALL required parameters. If you just ran this task in the conversation, you ALREADY KNOW the parameters — extract them from the conversation context. Never leave required parameters empty if you have them available.\n")
+		sb.WriteString("- For **adaptive**: write detailed instructions for your future self. ")
+		sb.WriteString("CRITICAL — The instructions MUST include the EXACT output format that was last shown to the user. ")
+		sb.WriteString("Copy the format/template from the most recent output the user saw and approved. ")
+		sb.WriteString("Include a concrete example of what the output should look like, taken from the actual output you produced. ")
+		sb.WriteString("The scheduled execution must reproduce the same presentation — if the user wants a different format, they will ask.\n\n")
+
+		// Step 5: Summarize and ask permission before testing
+		sb.WriteString("**Step 5 — Summarize the plan and ask permission to test (MANDATORY).** ")
+		sb.WriteString("Before running anything, present a clear summary of what will happen:\n")
+		sb.WriteString("- Mode, schedule, flow/instructions\n")
+		sb.WriteString("- Note that results will be delivered to all active channels (e.g., Telegram) automatically\n")
+		sb.WriteString("- Explain: \"I'll run a test execution now to verify it works. The result will be shown to you before I enable the schedule.\"\n")
+		sb.WriteString("- Ask: \"Does this look right? Can I go ahead and run the test?\"\n")
+		sb.WriteString("NEVER execute the test without the user's explicit approval. Some tasks may be sensitive or have side effects. Wait for a clear yes.\n\n")
+
+		// Step 6: Run test
+		sb.WriteString("**Step 6 — Run the test.** After the user approves, call `schedule_job` with `test_first=true`. ")
+		sb.WriteString("You do NOT need to set channel or target — delivery is automatic to all active channels. ")
+		sb.WriteString("Show the test result to the user.\n\n")
+
+		// Step 7: Confirm and enable
+		sb.WriteString("**Step 7 — Ask to enable.** Ask the user if the test result looks good. If confirmed, call `update_scheduled_job` to enable the job. If not, discuss what to fix.\n\n")
+
+		// Cron reference
+		sb.WriteString("**Cron syntax** (5-field: minute hour day-of-month month day-of-week):\n")
+		sb.WriteString("- `0 9 * * *` = daily at 9 AM\n")
+		sb.WriteString("- `0 9 * * 1-5` = weekdays at 9 AM\n")
+		sb.WriteString("- `0 */2 * * *` = every 2 hours\n")
+		sb.WriteString("- `*/30 * * * *` = every 30 minutes\n")
+	}
+
 	// 7. Execution Plan with integrated knowledge (when a flow matches)
 	if b.ExecutionPlan != "" {
 		sb.WriteString("\n## Execution Plan\n\n")
@@ -269,6 +333,16 @@ func (b *SystemPromptBuilder) ToolCount() int {
 		}
 	}
 	return count
+}
+
+// hasSchedulerTools returns true if schedule_job is among the available tools.
+func (b *SystemPromptBuilder) hasSchedulerTools() bool {
+	for _, t := range b.Tools {
+		if t.Name() == "schedule_job" {
+			return true
+		}
+	}
+	return false
 }
 
 // ToolNames returns a list of all available tool names.

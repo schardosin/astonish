@@ -8,9 +8,12 @@ package channels
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"google.golang.org/adk/session"
 )
@@ -146,11 +149,12 @@ func parseCommandName(text string) string {
 }
 
 // DefaultCommands creates a CommandRegistry pre-loaded with the standard
-// cross-channel commands: /status, /new, /help.
+// cross-channel commands: /status, /new, /jobs, /help.
 func DefaultCommands() *CommandRegistry {
 	r := NewCommandRegistry()
 	r.Register(statusCommand())
 	r.Register(newSessionCommand())
+	r.Register(jobsCommand())
 	r.Register(helpCommand(r))
 	return r
 }
@@ -186,21 +190,83 @@ func newSessionCommand() *Command {
 		Description: "Start a fresh conversation (new session)",
 		Handler: func(ctx context.Context, cc CommandContext) (string, error) {
 			if cc.SessionService == nil {
-				return "Session reset is not available.", nil
+				return welcomeMessage(cc.SenderName), nil
 			}
 
 			// Delete the existing session so the next message creates a fresh one.
-			err := cc.SessionService.Delete(ctx, &session.DeleteRequest{
+			_ = cc.SessionService.Delete(ctx, &session.DeleteRequest{
 				AppName:   cc.AppName,
 				UserID:    cc.UserID,
 				SessionID: cc.SessionKey,
 			})
+
+			return welcomeMessage(cc.SenderName), nil
+		},
+	}
+}
+
+// welcomeMessage returns a friendly greeting for new/reset sessions.
+func welcomeMessage(name string) string {
+	if name == "" {
+		name = "there"
+	}
+	return fmt.Sprintf("Hey %s! Fresh start. What can I help you with?", name)
+}
+
+func jobsCommand() *Command {
+	return &Command{
+		Name:        "jobs",
+		Description: "Show scheduled jobs",
+		Handler: func(ctx context.Context, cc CommandContext) (string, error) {
+			// Fetch jobs from daemon API
+			resp, err := http.Get("http://localhost:9393/api/scheduler/jobs")
 			if err != nil {
-				// Not fatal — session may not exist yet (first message).
-				return "Starting fresh. Send your next message to begin a new conversation.", nil
+				return "Scheduler is not available (daemon not running?).", nil
+			}
+			defer resp.Body.Close()
+
+			var result struct {
+				Jobs []struct {
+					Name     string `json:"name"`
+					Mode     string `json:"mode"`
+					Schedule struct {
+						Cron     string `json:"cron"`
+						Timezone string `json:"timezone"`
+					} `json:"schedule"`
+					Enabled    bool    `json:"enabled"`
+					LastStatus string  `json:"last_status"`
+					NextRun    *string `json:"next_run"`
+				} `json:"jobs"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				return "Failed to read scheduler status.", nil
 			}
 
-			return "Session cleared. Send your next message to start a new conversation.", nil
+			if len(result.Jobs) == 0 {
+				return "No scheduled jobs.\n\nTo create one, just tell me: \"Schedule X to run every day at 9am\"", nil
+			}
+
+			var b strings.Builder
+			b.WriteString(fmt.Sprintf("Scheduled Jobs (%d)\n\n", len(result.Jobs)))
+			for _, j := range result.Jobs {
+				status := "off"
+				if j.Enabled {
+					status = j.LastStatus
+					if status == "" || status == "pending" {
+						status = "waiting"
+					}
+				}
+				nextRun := ""
+				if j.NextRun != nil && j.Enabled {
+					t, err := time.Parse(time.RFC3339, *j.NextRun)
+					if err == nil {
+						nextRun = fmt.Sprintf(" (next: %s)", t.Format("Jan 2 15:04"))
+					}
+				}
+				b.WriteString(fmt.Sprintf("  %s [%s] %s — %s%s\n",
+					j.Name, j.Mode, j.Schedule.Cron, status, nextRun))
+			}
+			return b.String(), nil
 		},
 	}
 }

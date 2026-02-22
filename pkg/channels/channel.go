@@ -49,6 +49,12 @@ type Channel interface {
 	// Send delivers an outbound message to the specified target.
 	Send(ctx context.Context, target Target, msg OutboundMessage) error
 
+	// BroadcastTargets returns all targets this channel can deliver to.
+	// For example, Telegram returns one Target per allowed user (in direct
+	// messages, chat ID == user ID). Used by the scheduler to broadcast
+	// job results to all active recipients without needing per-job targeting.
+	BroadcastTargets() []Target
+
 	// Status returns the current connection and operational status.
 	Status() ChannelStatus
 }

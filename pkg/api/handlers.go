@@ -786,4 +786,9 @@ func RegisterRoutes(router *mux.Router) {
 
 	// Channels endpoints
 	router.HandleFunc("/api/channels/status", ChannelsStatusHandler).Methods("GET")
+
+	// Scheduler endpoints
+	router.HandleFunc("/api/scheduler/jobs", SchedulerJobsHandler).Methods("GET", "POST")
+	router.HandleFunc("/api/scheduler/jobs/{id}/run", SchedulerJobRunHandler).Methods("POST")
+	router.HandleFunc("/api/scheduler/jobs/{id}", SchedulerJobHandler).Methods("GET", "PUT", "DELETE")
 }

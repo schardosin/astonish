@@ -330,6 +330,38 @@ func (m *ChannelManager) getChannel(id string) Channel {
 	return m.channels[id]
 }
 
+// Send delivers an outbound message to a target channel. This is used by
+// external callers (scheduler, API) to send messages without going through
+// the inbound message flow.
+func (m *ChannelManager) Send(ctx context.Context, target Target, msg OutboundMessage) error {
+	ch := m.getChannel(target.ChannelID)
+	if ch == nil {
+		return fmt.Errorf("channel %s not found", target.ChannelID)
+	}
+	return ch.Send(ctx, target, msg)
+}
+
+// Broadcast delivers an outbound message to all targets across all registered
+// channels. For Telegram, this means sending to every allowed user. Used by
+// the scheduler to deliver job results without needing per-job targeting.
+func (m *ChannelManager) Broadcast(ctx context.Context, msg OutboundMessage) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var firstErr error
+	for _, ch := range m.channels {
+		for _, target := range ch.BroadcastTargets() {
+			if err := ch.Send(ctx, target, msg); err != nil {
+				m.logger.Printf("[channels] Broadcast to %s/%s failed: %v", target.ChannelID, target.ChatID, err)
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+	}
+	return firstErr
+}
+
 // distillMarkerRe matches [DISTILL: description] anywhere in text.
 var distillMarkerRe = regexp.MustCompile(`\[DISTILL:\s*([^\]]+)\]`)
 

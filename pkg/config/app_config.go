@@ -16,6 +16,7 @@ type AppConfig struct {
 	Memory     MemoryConfig               `yaml:"memory,omitempty"`
 	Daemon     DaemonConfig               `yaml:"daemon,omitempty"`
 	Channels   ChannelsConfig             `yaml:"channels,omitempty"`
+	Scheduler  SchedulerConfig            `yaml:"scheduler,omitempty"`
 }
 
 // MemoryConfig controls the semantic memory / RAG system.
@@ -209,6 +210,22 @@ type ChannelsConfig struct {
 // IsChannelsEnabled returns true if channels are explicitly enabled.
 func (c *ChannelsConfig) IsChannelsEnabled() bool {
 	return c.Enabled != nil && *c.Enabled
+}
+
+// SchedulerConfig controls the job scheduler.
+type SchedulerConfig struct {
+	// Enabled controls whether the scheduler is active. Default: true (nil means true).
+	// Set to false to explicitly disable the scheduler.
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+}
+
+// IsSchedulerEnabled returns true if the scheduler is enabled.
+// Defaults to true if not explicitly set (nil means true).
+func (c *SchedulerConfig) IsSchedulerEnabled() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
 }
 
 // TelegramConfig holds configuration for the Telegram channel adapter.

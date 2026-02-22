@@ -14,6 +14,7 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/provider"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
+	"github.com/schardosin/astonish/pkg/tools"
 	"github.com/schardosin/astonish/pkg/ui"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
@@ -57,6 +58,14 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 		return err
 	}
 	defer result.Cleanup()
+
+	// Set up scheduler access via daemon HTTP API (if daemon is running)
+	if cfg.AppConfig != nil {
+		daemonPort := cfg.AppConfig.Daemon.GetPort()
+		tools.SetSchedulerAccess(&tools.SchedulerHTTPAccess{
+			BaseURL: fmt.Sprintf("http://localhost:%d", daemonPort),
+		})
+	}
 
 	// Unpack factory result into local variables used by the TUI loop
 	llm := result.LLM

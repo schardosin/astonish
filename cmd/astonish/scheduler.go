@@ -23,24 +23,24 @@ func handleSchedulerCommand(args []string) error {
 		return handleSchedulerList()
 	case "enable":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: astonish scheduler enable <job-id-or-name>")
+			return fmt.Errorf("usage: astonish scheduler enable <name>")
 		}
-		return handleSchedulerToggle(args[1], true)
+		return handleSchedulerToggle(strings.Join(args[1:], " "), true)
 	case "disable":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: astonish scheduler disable <job-id-or-name>")
+			return fmt.Errorf("usage: astonish scheduler disable <name>")
 		}
-		return handleSchedulerToggle(args[1], false)
+		return handleSchedulerToggle(strings.Join(args[1:], " "), false)
 	case "remove", "rm":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: astonish scheduler remove <job-id-or-name>")
+			return fmt.Errorf("usage: astonish scheduler remove <name>")
 		}
-		return handleSchedulerRemove(args[1])
+		return handleSchedulerRemove(strings.Join(args[1:], " "))
 	case "run":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: astonish scheduler run <job-id-or-name>")
+			return fmt.Errorf("usage: astonish scheduler run <name>")
 		}
-		return handleSchedulerRun(args[1])
+		return handleSchedulerRun(strings.Join(args[1:], " "))
 	case "status":
 		return handleSchedulerStatus()
 	default:
@@ -55,12 +55,12 @@ func printSchedulerUsage() {
 	fmt.Println("Manage scheduled jobs. Jobs are created through chat (talk to the AI).")
 	fmt.Println("")
 	fmt.Println("subcommands:")
-	fmt.Println("  list (ls)             List all scheduled jobs")
-	fmt.Println("  enable <id|name>      Enable a scheduled job")
-	fmt.Println("  disable <id|name>     Disable a scheduled job")
-	fmt.Println("  remove (rm) <id|name> Remove a scheduled job")
-	fmt.Println("  run <id|name>         Trigger immediate execution")
-	fmt.Println("  status                Show scheduler status")
+	fmt.Println("  list (ls)            List all scheduled jobs")
+	fmt.Println("  enable <name>        Enable a scheduled job")
+	fmt.Println("  disable <name>       Disable a scheduled job")
+	fmt.Println("  remove (rm) <name>   Remove a scheduled job")
+	fmt.Println("  run <name>           Trigger immediate execution")
+	fmt.Println("  status               Show scheduler status")
 }
 
 // schedulerJobAPI is the JSON shape returned by the daemon API.

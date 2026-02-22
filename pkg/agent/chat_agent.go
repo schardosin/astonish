@@ -6,6 +6,7 @@ import (
 	"iter"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -19,11 +20,23 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// KnowledgeSearchResult holds a single result from the knowledge vector search.
+type KnowledgeSearchResult struct {
+	Path    string
+	Score   float64
+	Snippet string
+}
+
+// KnowledgeSearchFunc performs a vector search and returns matching results.
+// Used to auto-retrieve relevant knowledge before LLM execution.
+type KnowledgeSearchFunc func(ctx context.Context, query string, maxResults int, minScore float64) ([]KnowledgeSearchResult, error)
+
 // ChatAgent implements a dynamic chat agent without flow definitions.
 // It wraps ADK's llmagent in a persistent chat session where the LLM
 // decides which tools to call and how to proceed.
 //
-// Execution records a trace for on-demand flow distillation via /distill.
+// Execution records a trace. After reusable tasks, auto-distillation
+// generates a flow YAML + knowledge doc. /distill remains as manual fallback.
 type ChatAgent struct {
 	LLM            model.LLM
 	Tools          []tool.Tool
@@ -42,6 +55,12 @@ type ChatAgent struct {
 	// Memory and flow reuse
 	MemoryManager      *memory.Manager     // Persistent memory manager
 	FlowContextBuilder *FlowContextBuilder // Converts flow YAML to execution plan
+	FlowSearcher       FlowMemorySearcher  // Vector-based flow matching (nil = LLM-only)
+	KnowledgeSearch    KnowledgeSearchFunc // Auto-retrieve relevant knowledge per turn (nil = disabled)
+
+	// Self-management callbacks
+	SelfMDRefresher  func() // Called after config changes to regenerate SELF.md
+	FlowKnowledgeDir string // Path to memory/flows/ for knowledge docs
 
 	// Internal: reuse AstonishAgent for approval formatting
 	approvalHelper *AstonishAgent
@@ -104,6 +123,9 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		// Load memory and inject into system prompt
 		c.SystemPrompt.MemoryContent = ""
 		c.SystemPrompt.ExecutionPlan = ""
+		c.SystemPrompt.RelevantKnowledge = ""
+
+		var matchedFlowName string
 
 		if c.MemoryManager != nil {
 			memContent, memErr := c.MemoryManager.Load()
@@ -122,6 +144,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			if c.FlowRegistry != nil && c.FlowContextBuilder != nil {
 				flowFile, plan := c.matchAndBuildPlan(userText, memContent)
 				if plan != "" {
+					matchedFlowName = flowFile
 					c.SystemPrompt.ExecutionPlan = plan
 					// Emit a brief info note about the flow match
 					yield(&session.Event{
@@ -134,6 +157,38 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 					}, nil)
 				}
 			}
+		}
+
+		// Auto-retrieve relevant knowledge from vector store
+		if c.KnowledgeSearch != nil && userText != "" {
+			searchQuery := buildKnowledgeQuery(userText, matchedFlowName)
+			if len(searchQuery) < 5 {
+				if c.DebugMode {
+					fmt.Printf("[Chat DEBUG] Auto knowledge search: skipped (processed query too short: %q)\n", searchQuery)
+				}
+			} else {
+				results, searchErr := c.KnowledgeSearch(context.Background(), searchQuery, 5, 0.3)
+				if searchErr != nil {
+					if c.DebugMode {
+						fmt.Printf("[Chat DEBUG] Auto knowledge search failed: %v\n", searchErr)
+					}
+				} else if len(results) > 0 {
+					var kb strings.Builder
+					for _, r := range results {
+						kb.WriteString(fmt.Sprintf("**%s** (relevance: %.0f%%)\n", r.Path, r.Score*100))
+						kb.WriteString(r.Snippet)
+						kb.WriteString("\n\n")
+					}
+					c.SystemPrompt.RelevantKnowledge = escapeCurlyPlaceholders(kb.String())
+					if c.DebugMode {
+						fmt.Printf("[Chat DEBUG] Auto knowledge search: %d results injected for query: %s\n", len(results), truncateQuery(searchQuery, 60))
+					}
+				} else if c.DebugMode {
+					fmt.Printf("[Chat DEBUG] Auto knowledge search: no results for query: %s\n", truncateQuery(searchQuery, 60))
+				}
+			}
+		} else if c.KnowledgeSearch == nil && c.DebugMode {
+			fmt.Println("[Chat DEBUG] Auto knowledge search: disabled (KnowledgeSearch not wired)")
 		}
 
 		// Build system prompt (includes memory and execution plan if set)
@@ -392,7 +447,7 @@ func (c *ChatAgent) ConfirmAndDistill(ctx context.Context, print func(string)) e
 		if cfgErr != nil {
 			return fmt.Errorf("failed to determine config directory: %w", cfgErr)
 		}
-		saveDir = filepath.Join(configDir, "astonish", "agents")
+		saveDir = filepath.Join(configDir, "astonish", "flows")
 	}
 
 	// Create the directory if it doesn't exist
@@ -451,6 +506,102 @@ func (c *ChatAgent) ConfirmAndDistill(ctx context.Context, print func(string)) e
 	msg += "\nYou can run this flow with:\n  " + runCmd + "\n"
 
 	print(msg)
+	return nil
+}
+
+// AutoDistill performs background flow distillation after the LLM signals a reusable task.
+// It uses the most recent trace(s), runs the distiller, saves the flow,
+// generates a knowledge doc, and updates the registry.
+// The description parameter comes from the [DISTILL: ...] marker in the LLM response.
+func (c *ChatAgent) AutoDistill(ctx context.Context, description string) error {
+	if c.FlowDistiller == nil {
+		return fmt.Errorf("flow distillation is not configured")
+	}
+
+	// Find the most recent substantive trace
+	var trace *ExecutionTrace
+	for i := len(c.traceHistory) - 1; i >= 0; i-- {
+		if c.traceHistory[i].ToolCallCount() > 0 {
+			trace = c.traceHistory[i]
+			break
+		}
+	}
+	if trace == nil {
+		return fmt.Errorf("no trace with tool calls found")
+	}
+
+	// Run distillation
+	result, err := c.FlowDistiller.Distill(ctx, DistillRequest{
+		UserRequest: trace.UserRequest,
+		Trace:       trace,
+	})
+	if err != nil {
+		if result == nil {
+			return err
+		}
+	}
+
+	// Determine save directory
+	saveDir := c.FlowSaveDir
+	if saveDir == "" {
+		configDir, cfgErr := os.UserConfigDir()
+		if cfgErr != nil {
+			return fmt.Errorf("failed to determine config directory: %w", cfgErr)
+		}
+		saveDir = filepath.Join(configDir, "astonish", "flows")
+	}
+
+	if mkErr := os.MkdirAll(saveDir, 0755); mkErr != nil {
+		return fmt.Errorf("failed to create flow directory: %w", mkErr)
+	}
+
+	filename := result.FlowName + ".yaml"
+	flowPath := filepath.Join(saveDir, filename)
+
+	if _, statErr := os.Stat(flowPath); statErr == nil {
+		filename = fmt.Sprintf("%s_%s.yaml", result.FlowName, time.Now().Format("20060102_150405"))
+		flowPath = filepath.Join(saveDir, filename)
+	}
+
+	if writeErr := os.WriteFile(flowPath, []byte(result.YAML), 0644); writeErr != nil {
+		return fmt.Errorf("failed to write flow file: %w", writeErr)
+	}
+
+	// Register in flow registry
+	entry := FlowRegistryEntry{
+		FlowFile:    filename,
+		Description: result.Description,
+		Tags:        result.Tags,
+		CreatedAt:   time.Now(),
+	}
+	if c.FlowRegistry != nil {
+		if regErr := c.FlowRegistry.Register(entry); regErr != nil {
+			if c.DebugMode {
+				fmt.Printf("[AutoDistill] Failed to register flow: %v\n", regErr)
+			}
+		}
+	}
+
+	// Generate flow knowledge doc
+	if c.FlowKnowledgeDir != "" {
+		doc := GenerateFlowKnowledgeDoc(result.YAML, entry)
+		docName := strings.TrimSuffix(filename, ".yaml") + ".md"
+		docPath := filepath.Join(c.FlowKnowledgeDir, docName)
+		if mkErr := os.MkdirAll(c.FlowKnowledgeDir, 0755); mkErr == nil {
+			_ = os.WriteFile(docPath, []byte(doc), 0644)
+			// The fsnotify watcher will pick up the new file and reindex it
+		}
+	}
+
+	// Refresh SELF.md to reflect the new flow
+	if c.SelfMDRefresher != nil {
+		c.SelfMDRefresher()
+	}
+
+	if c.DebugMode {
+		fmt.Printf("[AutoDistill] Flow saved: %s (%s)\n", flowPath, description)
+	}
+
 	return nil
 }
 
@@ -612,7 +763,8 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 }
 
 // matchAndBuildPlan checks if the user's request matches a saved flow.
-// If a match is found, it reads the flow YAML and builds an execution plan.
+// Uses vector-based matching first (fast, no LLM call), falling back to
+// LLM-based matching when ambiguous or when vector search is unavailable.
 // Returns (flowFile, planText) -- both empty if no match.
 func (c *ChatAgent) matchAndBuildPlan(userText string, memoryContent string) (string, string) {
 	if c.FlowRegistry == nil || c.FlowContextBuilder == nil || c.FlowDistiller == nil {
@@ -624,37 +776,61 @@ func (c *ChatAgent) matchAndBuildPlan(userText string, memoryContent string) (st
 		return "", ""
 	}
 
-	// Use the registry's LLM-based matching
-	matchPrompt := c.FlowRegistry.BuildMatchPrompt(userText)
-	if matchPrompt == "" {
-		return "", ""
-	}
+	var matchedFile string
 
-	if c.DebugMode {
-		fmt.Printf("[Chat DEBUG] Checking flow registry for match...\n")
-	}
-
-	response, err := c.FlowDistiller.LLM(context.Background(), matchPrompt)
-	if err != nil {
+	// Strategy 1: Vector-based matching (fast, no LLM call)
+	if c.FlowSearcher != nil {
 		if c.DebugMode {
-			fmt.Printf("[Chat DEBUG] Flow match LLM call failed: %v\n", err)
+			fmt.Printf("[Chat DEBUG] Checking flow registry via vector search...\n")
 		}
-		return "", ""
+		flowFile, score, err := c.FlowRegistry.FindMatchVector(context.Background(), c.FlowSearcher, userText)
+		if err == nil && flowFile != "" {
+			if score >= 0.8 {
+				// High confidence — use directly
+				matchedFile = flowFile
+				if c.DebugMode {
+					fmt.Printf("[Chat DEBUG] Vector match (high confidence %.2f): %s\n", score, flowFile)
+				}
+			} else if score >= 0.6 {
+				// Ambiguous — fall through to LLM disambiguation
+				if c.DebugMode {
+					fmt.Printf("[Chat DEBUG] Vector match (ambiguous %.2f): %s — falling back to LLM\n", score, flowFile)
+				}
+			}
+		}
 	}
 
-	matchedFile := strings.TrimSpace(response)
-	if c.DebugMode {
-		fmt.Printf("[Chat DEBUG] Flow match response: %q\n", matchedFile)
-	}
+	// Strategy 2: LLM-based matching (fallback)
+	if matchedFile == "" {
+		matchPrompt := c.FlowRegistry.BuildMatchPrompt(userText)
+		if matchPrompt == "" {
+			return "", ""
+		}
 
-	// Check if the response is "NONE" or not a valid filename
-	if strings.EqualFold(matchedFile, "NONE") || matchedFile == "" {
-		return "", ""
-	}
+		if c.DebugMode {
+			fmt.Printf("[Chat DEBUG] Checking flow registry via LLM...\n")
+		}
 
-	// Ensure .yaml extension
-	if !strings.HasSuffix(matchedFile, ".yaml") {
-		matchedFile += ".yaml"
+		response, err := c.FlowDistiller.LLM(context.Background(), matchPrompt)
+		if err != nil {
+			if c.DebugMode {
+				fmt.Printf("[Chat DEBUG] Flow match LLM call failed: %v\n", err)
+			}
+			return "", ""
+		}
+
+		matchedFile = strings.TrimSpace(response)
+		if c.DebugMode {
+			fmt.Printf("[Chat DEBUG] Flow match response: %q\n", matchedFile)
+		}
+
+		if strings.EqualFold(matchedFile, "NONE") || matchedFile == "" {
+			return "", ""
+		}
+
+		if !strings.HasSuffix(matchedFile, ".yaml") {
+			matchedFile += ".yaml"
+		}
 	}
 
 	// Find the flow file on disk
@@ -699,14 +875,43 @@ func (c *ChatAgent) resolveFlowPath(filename string) string {
 		}
 	}
 
-	// Check default agents directory
+	// Check default flows directory
 	configDir, err := os.UserConfigDir()
 	if err == nil {
-		p := filepath.Join(configDir, "astonish", "agents", filename)
+		p := filepath.Join(configDir, "astonish", "flows", filename)
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
 	}
 
 	return ""
+}
+
+// truncateQuery shortens a string for debug logging, appending "..." if truncated.
+func truncateQuery(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
+// urlPattern matches http/https URLs in text.
+var urlPattern = regexp.MustCompile(`https?://\S+`)
+
+// buildKnowledgeQuery pre-processes a user query for semantic search.
+// It strips URLs (which dilute embedding semantics for models like MiniLM)
+// and appends matched flow name tokens to boost relevance.
+func buildKnowledgeQuery(userText, flowName string) string {
+	// Strip URLs — they carry no semantic meaning for the embedding model
+	q := urlPattern.ReplaceAllString(userText, "")
+	// Collapse whitespace
+	q = strings.Join(strings.Fields(q), " ")
+	// Append flow name tokens if available (e.g. "download-youtube-video" -> "download youtube video")
+	if flowName != "" {
+		name := strings.TrimSuffix(flowName, ".yaml")
+		name = strings.ReplaceAll(name, "-", " ")
+		name = strings.ReplaceAll(name, "_", " ")
+		q = strings.TrimSpace(q + " " + name)
+	}
+	return q
 }

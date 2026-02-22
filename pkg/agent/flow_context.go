@@ -117,11 +117,23 @@ func (b *FlowContextBuilder) BuildExecutionPlan(flowYAML string, flowName string
 				if len(node.ToolsSelection) > 0 {
 					sb.WriteString(fmt.Sprintf("  Tools: %s\n", strings.Join(node.ToolsSelection, ", ")))
 				}
-				// Extract the key instruction from the system prompt (first few lines)
+				// Extract instructions from the system prompt (full strategy, not just first line)
 				if node.System != "" {
 					instruction := extractKeyInstruction(node.System)
 					if instruction != "" {
-						sb.WriteString(fmt.Sprintf("  Instruction: %s\n", instruction))
+						if strings.Contains(instruction, "\n") {
+							// Multi-line: render as indented block
+							sb.WriteString("  Instructions:\n")
+							for _, line := range strings.Split(instruction, "\n") {
+								if line == "" {
+									sb.WriteString("\n")
+								} else {
+									sb.WriteString(fmt.Sprintf("    %s\n", line))
+								}
+							}
+						} else {
+							sb.WriteString(fmt.Sprintf("  Instruction: %s\n", instruction))
+						}
 					}
 				}
 				if node.Prompt != "" {
@@ -244,23 +256,39 @@ func resolveFromMemory(fieldName string, memoryContent string) string {
 // Skips "You are a..." preamble lines and returns the first actionable line.
 func extractKeyInstruction(system string) string {
 	lines := strings.Split(strings.TrimSpace(system), "\n")
+	var result []string
+	pastPreamble := false
+
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
+			if pastPreamble {
+				result = append(result, "")
+			}
 			continue
 		}
-		// Skip generic preamble
-		lower := strings.ToLower(trimmed)
-		if strings.HasPrefix(lower, "you are") || strings.HasPrefix(lower, "your job") {
-			continue
+		// Skip generic preamble lines at the start
+		if !pastPreamble {
+			lower := strings.ToLower(trimmed)
+			if strings.HasPrefix(lower, "you are") || strings.HasPrefix(lower, "your job") ||
+				strings.HasPrefix(lower, "your role") || strings.HasPrefix(lower, "your task") {
+				continue
+			}
+			pastPreamble = true
 		}
-		// Return the first actionable line, truncated
-		if len(trimmed) > 200 {
-			trimmed = trimmed[:200] + "..."
-		}
-		return trimmed
+		result = append(result, trimmed)
 	}
-	return ""
+
+	if len(result) == 0 {
+		return ""
+	}
+
+	// Join and truncate to a reasonable limit
+	full := strings.Join(result, "\n")
+	if len(full) > 1000 {
+		full = full[:1000] + "\n..."
+	}
+	return full
 }
 
 // summarizePrompt returns a concise version of a prompt, replacing

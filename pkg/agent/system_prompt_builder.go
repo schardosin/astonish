@@ -17,7 +17,10 @@ type SystemPromptBuilder struct {
 	WorkspaceDir          string
 	CustomPrompt          string
 	MemoryContent         string // Contents of MEMORY.md (loaded per turn)
+	InstructionsContent   string // Contents of INSTRUCTIONS.md (behavior directives)
+	SelfContent           string // Contents of SELF.md (auto-generated self-awareness)
 	ExecutionPlan         string // Flow-based execution plan (set when a flow matches)
+	RelevantKnowledge     string // Auto-retrieved knowledge from vector search (set per turn)
 	WebSearchAvailable    bool   // Whether a web search MCP tool is configured
 	WebExtractAvailable   bool   // Whether a web extract MCP tool is configured
 	WebSearchToolName     string // Name of the configured search tool (e.g. "tavily-search")
@@ -37,6 +40,13 @@ func (b *SystemPromptBuilder) Build() string {
 	// 2. Custom prompt (if set by user)
 	if b.CustomPrompt != "" {
 		sb.WriteString(b.CustomPrompt)
+		sb.WriteString("\n\n")
+	}
+
+	// 2b. Behavior Instructions (from INSTRUCTIONS.md)
+	if b.InstructionsContent != "" {
+		sb.WriteString("## Behavior Instructions\n\n")
+		sb.WriteString(b.InstructionsContent)
 		sb.WriteString("\n\n")
 	}
 
@@ -139,12 +149,21 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString(fmt.Sprintf("- OS: %s/%s\n", runtime.GOOS, runtime.GOARCH))
 	sb.WriteString(fmt.Sprintf("- Date: %s\n", time.Now().Format("2006-01-02 15:04 MST")))
 
+	// 5b. Self-Configuration (from SELF.md)
+	if b.SelfContent != "" {
+		sb.WriteString("\n## Self-Configuration\n\n")
+		sb.WriteString(b.SelfContent)
+		sb.WriteString("\n")
+	}
+
 	// 6. Persistent Memory
 	memoryGuidance := "**What to save to MEMORY.md (core):** connection details (IPs, hostnames, users, auth methods, ports), " +
 		"server roles, network topology, user preferences, project conventions. Keep it concise — only durable facts.\n" +
 		"**What to save to knowledge files (via file param):** procedural knowledge discovered during problem-solving — " +
 		"API quirks, command syntax learned through trial and error, configuration steps, workarounds, how-to procedures. " +
 		"Things you figured out that would save time next time.\n" +
+		"**Behavior preferences:** If the user tells you to change how you behave (e.g., always use a certain tool, " +
+		"skip confirmations for certain operations), save that to INSTRUCTIONS.md rather than MEMORY.md.\n" +
 		"**Correcting facts:** When the user corrects information or you discover that existing memory is wrong, " +
 		"use `overwrite: true` and provide the **complete corrected section content**. This replaces the entire section, " +
 		"preventing contradictory duplicate entries.\n" +
@@ -158,40 +177,71 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString(b.MemoryContent)
 		sb.WriteString("\n\n")
 		sb.WriteString("When you discover NEW durable facts during this interaction, save them using **memory_save**.\n")
+		sb.WriteString("**Auto-save workarounds:** After completing a task where your initial approach FAILED ")
+		sb.WriteString("and you found a working alternative, ALWAYS save the solution using `memory_save` with a topic file ")
+		sb.WriteString("(e.g., file=\"tools/yt-dlp.md\"). Include: what failed, why, and the working command/approach. ")
+		sb.WriteString("This prevents repeating the same trial-and-error in future sessions.\n")
 		sb.WriteString(memoryGuidance)
 	} else {
 		// Even without existing memory, tell the LLM it can save
 		sb.WriteString("\n## Persistent Memory\n\n")
 		sb.WriteString("You have access to persistent memory via the **memory_save** tool. ")
 		sb.WriteString("When you discover durable facts during this interaction, save them for future recall.\n")
+		sb.WriteString("**Auto-save workarounds:** After completing a task where your initial approach FAILED ")
+		sb.WriteString("and you found a working alternative, ALWAYS save the solution using `memory_save` with a topic file ")
+		sb.WriteString("(e.g., file=\"tools/yt-dlp.md\"). Include: what failed, why, and the working command/approach.\n")
 		sb.WriteString(memoryGuidance)
 	}
 
 	// 6b. Knowledge Recall (when semantic search is available)
 	if b.MemorySearchAvailable {
 		sb.WriteString("\n## Knowledge Recall\n\n")
-		sb.WriteString("You have access to a searchable knowledge base in the memory/ directory.\n")
-		sb.WriteString("Use `memory_search` to find detailed information about projects, infrastructure,\n")
-		sb.WriteString("people, decisions, and past work. Use `memory_get` to read specific sections.\n\n")
-		sb.WriteString("**When to search:** Before answering questions about specific project details,\n")
-		sb.WriteString("server configurations, past decisions, team members, or anything not covered\n")
-		sb.WriteString("in the core memory above.\n\n")
-		sb.WriteString("**Saving knowledge:**\n")
-		sb.WriteString("- Core facts (IPs, credentials, preferences) → MEMORY.md (no file param)\n")
-		sb.WriteString("- Procedural knowledge (API quirks, command recipes, workarounds, config steps discovered during problem-solving) → topic files (e.g., file=\"infrastructure/proxmox.md\")\n")
-		sb.WriteString("- NEVER save command results or resource listings — always fetch those live\n")
+		sb.WriteString("You have a searchable knowledge base with procedural knowledge, workarounds, and past solutions.\n\n")
+		sb.WriteString("**ALWAYS call `memory_search` before starting any multi-step task.** Search for the tool name, ")
+		sb.WriteString("command name, or task description. Past workarounds, working commands, and procedures are stored here.\n")
+		sb.WriteString("Use `memory_get` to read full context around a search result.\n\n")
+		sb.WriteString("Examples of when to search:\n")
+		sb.WriteString("- Before running yt-dlp → search \"yt-dlp\"\n")
+		sb.WriteString("- Before deploying an app → search \"deploy\" or the app name\n")
+		sb.WriteString("- Before configuring a server → search the server name or technology\n")
 	}
 
-	// 6c. Workflow Saving hint (when flow distillation is available)
-	sb.WriteString("\n## Workflow Saving\n\n")
-	sb.WriteString("After completing a task that used 2 or more tool calls, you MUST append this exact line at the very end of your response:\n\n")
-	sb.WriteString("_Type /distill to save this as a reusable flow._\n\n")
-	sb.WriteString("Do NOT include this line for: simple lookups, conversations, single-step answers, memory-only operations, or when following a saved execution plan.\n")
+	// 6c. Auto-Distillation hint (when flow distillation is available)
+	sb.WriteString("\n## Workflow Auto-Save\n\n")
+	sb.WriteString("When you complete a task that used 2 or more tool calls and the task is REUSABLE (could be run again with different parameters), ")
+	sb.WriteString("append this marker as the LAST line of your response:\n\n")
+	sb.WriteString("```\n[DISTILL: brief description of what the task does]\n```\n\n")
+	sb.WriteString("Examples of GOOD markers:\n")
+	sb.WriteString("- `[DISTILL: check server status via SSH and report disk/memory/CPU]`\n")
+	sb.WriteString("- `[DISTILL: deploy Docker container with health check]`\n")
+	sb.WriteString("- `[DISTILL: create new Go microservice with tests and Dockerfile]`\n\n")
+	sb.WriteString("Do NOT add the marker for: simple lookups, conversations, single-step answers, ")
+	sb.WriteString("memory-only operations, or when following a saved execution plan.\n")
+	sb.WriteString("The marker will be automatically processed — do not explain it to the user.\n")
 
-	// 7. Execution Plan (only when a flow matches)
+	// 7. Execution Plan with integrated knowledge (when a flow matches)
 	if b.ExecutionPlan != "" {
 		sb.WriteString("\n## Execution Plan\n\n")
+		if b.RelevantKnowledge != "" {
+			sb.WriteString("### Knowledge From Previous Experience\n\n")
+			sb.WriteString("CRITICAL — The following knowledge was learned from previous executions of this exact task. ")
+			sb.WriteString("It contains proven commands, specific flags, and workarounds that are KNOWN TO WORK. ")
+			sb.WriteString("If any step below conflicts with this knowledge, ALWAYS prefer the knowledge — ")
+			sb.WriteString("it reflects what actually succeeded in practice:\n\n")
+			sb.WriteString(b.RelevantKnowledge)
+			sb.WriteString("\n### Steps\n\n")
+		}
 		sb.WriteString(b.ExecutionPlan)
+	}
+
+	// 7b. Standalone knowledge (when no execution plan matched but knowledge was found)
+	if b.ExecutionPlan == "" && b.RelevantKnowledge != "" {
+		sb.WriteString("\n## Knowledge For This Task\n\n")
+		sb.WriteString("CRITICAL — You MUST apply the following knowledge when executing this task. ")
+		sb.WriteString("It contains proven commands, specific flags, and workarounds that are KNOWN TO WORK ")
+		sb.WriteString("from previous sessions. Use the exact commands and approaches described here:\n\n")
+		sb.WriteString(b.RelevantKnowledge)
+		sb.WriteString("\n")
 	}
 
 	return sb.String()

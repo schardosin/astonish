@@ -53,6 +53,8 @@ func Execute() error {
 		return handleConfigCommand(os.Args[2:])
 	case "tools":
 		return handleToolsCommand(os.Args[2:])
+	case "memory":
+		return handleMemoryCommand(os.Args[2:])
 	case "demo":
 		return handleDemoCommand(os.Args[2:])
 	default:
@@ -62,10 +64,10 @@ func Execute() error {
 }
 
 func printUsage() {
-	fmt.Println("usage: astonish [-h] [-v] {chat,sessions,flows,tap,studio,config,setup,tools} ...")
+	fmt.Println("usage: astonish [-h] [-v] {chat,sessions,flows,tap,studio,config,setup,tools,memory} ...")
 	fmt.Println("")
 	fmt.Println("positional arguments:")
-	fmt.Println("  {chat,sessions,flows,tap,studio,config,setup,tools}")
+	fmt.Println("  {chat,sessions,flows,tap,studio,config,setup,tools,memory}")
 	fmt.Println("                        Astonish CLI commands")
 	fmt.Println("    chat                Start an interactive chat session")
 	fmt.Println("    sessions            Manage persistent sessions")
@@ -75,6 +77,7 @@ func printUsage() {
 	fmt.Println("    config              Manage configuration")
 	fmt.Println("    setup               Run interactive setup")
 	fmt.Println("    tools               Manage MCP tools")
+	fmt.Println("    memory              Manage semantic memory and knowledge")
 	fmt.Println("")
 	fmt.Println("options:")
 	fmt.Println("  -h, --help            show this help message and exit")

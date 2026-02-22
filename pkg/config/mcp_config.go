@@ -78,7 +78,8 @@ func LoadMCPConfigRaw() (*MCPConfig, error) {
 }
 
 // mergeStandardServers injects configured standard servers from config.yaml
-// into the MCPConfig. Entries from config.yaml override same-name entries in mcp_config.json.
+// into the MCPConfig. Entries from config.yaml override same-name entries in mcp_config.json
+// but preserve any explicit Enabled flag the user has set (e.g., disabling Playwright).
 // Key-based servers (Tavily, Brave, Firecrawl) require an API key in config.yaml.
 // Keyless servers (Playwright) are always injected — they need no setup.
 func mergeStandardServers(cfg *MCPConfig) {
@@ -94,23 +95,34 @@ func mergeStandardServers(cfg *MCPConfig) {
 			if ws.APIKey == "" {
 				continue
 			}
-			cfg.MCPServers[id] = BuildMCPServerConfig(srv, ws.APIKey)
+			newCfg := BuildMCPServerConfig(srv, ws.APIKey)
+			// Preserve explicit Enabled flag from existing entry (user may have disabled it)
+			if existing, ok := cfg.MCPServers[id]; ok && existing.Enabled != nil {
+				newCfg.Enabled = existing.Enabled
+			}
+			cfg.MCPServers[id] = newCfg
 		}
 	}
 
 	// Second: always inject keyless servers (e.g. Playwright) — no config entry needed.
-	// Override any existing entry (e.g. stale manual config with wrong flags).
+	// Refresh command/args but preserve any explicit Enabled flag.
 	for _, srv := range GetStandardServers() {
 		if len(srv.EnvVars) > 0 {
 			continue // needs API key, handled above
 		}
-		cfg.MCPServers[srv.ID] = BuildMCPServerConfig(&srv, "")
+		newCfg := BuildMCPServerConfig(&srv, "")
+		if existing, ok := cfg.MCPServers[srv.ID]; ok && existing.Enabled != nil {
+			newCfg.Enabled = existing.Enabled
+		}
+		cfg.MCPServers[srv.ID] = newCfg
 	}
 }
 
 // SaveMCPConfig saves the MCP configuration to the config directory.
 // Standard web servers (from config.yaml) are stripped before writing
 // since they are managed separately and merged at load time.
+// Exception: disabled standard servers are preserved — the user explicitly
+// chose to disable them, and that choice must survive save/load cycles.
 func SaveMCPConfig(config *MCPConfig) error {
 	configDir, err := GetConfigDir()
 	if err != nil {
@@ -119,13 +131,15 @@ func SaveMCPConfig(config *MCPConfig) error {
 
 	mcpConfigPath := filepath.Join(configDir, "mcp_config.json")
 
-	// Strip standard server entries — they live in config.yaml, not here
+	// Strip standard server entries — they live in config.yaml, not here.
+	// But keep any that were explicitly disabled (Enabled == false) since
+	// that's a deliberate user choice we need to persist.
 	filtered := &MCPConfig{
 		MCPServers: make(map[string]MCPServerConfig, len(config.MCPServers)),
 	}
 	standardIDs := GetStandardServerIDs()
 	for name, srv := range config.MCPServers {
-		if !standardIDs[name] {
+		if !standardIDs[name] || (srv.Enabled != nil && !*srv.Enabled) {
 			filtered.MCPServers[name] = srv
 		}
 	}

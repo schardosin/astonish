@@ -8,12 +8,15 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/api"
 	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/provider"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
@@ -58,6 +61,8 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 		return fmt.Errorf("failed to initialize provider '%s' with model '%s': %w",
 			cfg.ProviderName, cfg.ModelName, err)
 	}
+	currentProvider := cfg.ProviderName
+	currentModel := cfg.ModelName
 	if cfg.DebugMode {
 		fmt.Printf("Provider initialized: %s (model: %s)\n", cfg.ProviderName, cfg.ModelName)
 	}
@@ -80,6 +85,8 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 	var memStore *memory.Store
 	var memIndexer *memory.Indexer
 	memorySearchAvailable := false
+	indexingDone := make(chan struct{}) // closed when background IndexAll completes
+	var indexingErr error
 
 	if memMgr != nil && cfg.AppConfig != nil && cfg.AppConfig.Memory.IsMemoryEnabled() {
 		memCfg := &cfg.AppConfig.Memory
@@ -94,13 +101,16 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 					fmt.Printf("Warning: Failed to create memory directory: %v\n", err)
 				}
 			} else {
-				// Resolve embedding function
-				embeddingFunc, embErr := memory.ResolveEmbeddingFunc(cfg.AppConfig, memCfg)
+				// Resolve embedding function (local model, auto-downloaded on first run)
+				embResult, embErr := memory.ResolveEmbeddingFunc(cfg.AppConfig, memCfg, cfg.DebugMode)
 				if embErr != nil {
-					if cfg.DebugMode {
-						fmt.Printf("Warning: No embedding provider available: %v\n", embErr)
-					}
+					fmt.Printf("Note: Semantic memory unavailable (%v)\n", embErr)
 				} else {
+					// Clean up embedder resources on exit (e.g., Hugot session)
+					if embResult.Cleanup != nil {
+						defer embResult.Cleanup()
+					}
+
 					// Build store config
 					storeCfg := memory.DefaultStoreConfig()
 					storeCfg.MemoryDir = memDir
@@ -118,24 +128,21 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 						storeCfg.MinScore = memCfg.Search.MinScore
 					}
 
-					store, storeErr := memory.NewStore(storeCfg, embeddingFunc)
+					store, storeErr := memory.NewStore(storeCfg, embResult.EmbeddingFunc)
 					if storeErr != nil {
 						if cfg.DebugMode {
 							fmt.Printf("Warning: Failed to create memory store: %v\n", storeErr)
 						}
 					} else {
 						memStore = store
-						memIndexer = memory.NewIndexer(store, storeCfg, cfg.DebugMode)
+						memIndexer = memory.NewIndexer(store, storeCfg, false) // suppress indexer debug in chat; use 'astonish memory reindex' for diagnostics
 						store.SetIndexer(memIndexer)
 						memorySearchAvailable = true
 
 						// Perform initial indexing in background
 						go func() {
-							if err := memIndexer.IndexAll(context.Background()); err != nil {
-								if cfg.DebugMode {
-									fmt.Printf("Warning: Initial memory indexing failed: %v\n", err)
-								}
-							}
+							indexingErr = memIndexer.IndexAll(context.Background())
+							close(indexingDone)
 						}()
 
 						// Start file watcher in background
@@ -158,6 +165,11 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				}
 			}
 		}
+	}
+
+	// If indexing was never started, close the channel so waits are no-ops
+	if !memorySearchAvailable {
+		close(indexingDone)
 	}
 
 	// Create memory tools
@@ -236,10 +248,14 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 		}
 	}()
 
+	// Track startup notices for inclusion in the welcome message
+	var startupNotices []string
+
 	// Warn if MCP servers are configured but no tools are cached
 	if mcpCfg != nil && len(mcpCfg.MCPServers) > 0 && len(lazyToolsets) == 0 {
-		fmt.Println("Note: MCP servers are configured but no tools are cached.")
-		fmt.Println("      Run 'astonish studio' or 'astonish tools refresh' to populate the cache.")
+		startupNotices = append(startupNotices,
+			"MCP servers are configured but no tools are cached yet. "+
+				"Run 'astonish studio' or 'astonish tools refresh' to set them up.")
 	}
 
 	// --- 4. Create session service ---
@@ -353,8 +369,8 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 
 		droppedTools := totalMCPTools - (mcpBudget - remaining)
 		if droppedTools > 0 {
-			fmt.Printf("Warning: Tool count (%d) exceeds provider limit (%d). Dropped %d MCP tools.\n",
-				totalTools, maxTools, droppedTools)
+			startupNotices = append(startupNotices,
+				fmt.Sprintf("I trimmed %d MCP tools to fit your provider's limit of %d — type /status for details.", droppedTools, maxTools))
 			if cfg.DebugMode {
 				fmt.Printf("  Internal tools: %d (always included)\n", len(internalTools))
 				fmt.Printf("  MCP tools included: %d, dropped: %d\n", mcpBudget-remaining, droppedTools)
@@ -378,14 +394,26 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 		WorkspaceDir: workspaceDir,
 	}
 
-	// Check web tool availability
-	if webSearchConfigured, _, toolName := api.IsWebSearchConfigured(); webSearchConfigured {
-		promptBuilder.WebSearchAvailable = true
-		promptBuilder.WebSearchToolName = toolName
+	// Check web tool availability.
+	// Config may reference an MCP server that was disabled or failed to load,
+	// so we cross-check against the actually loaded mcpToolsets.
+	if webSearchConfigured, serverName, toolName := api.IsWebSearchConfigured(); webSearchConfigured {
+		for _, ts := range mcpToolsets {
+			if ts.Name() == serverName {
+				promptBuilder.WebSearchAvailable = true
+				promptBuilder.WebSearchToolName = toolName
+				break
+			}
+		}
 	}
-	if webExtractConfigured, _, toolName := api.IsWebExtractConfigured(); webExtractConfigured {
-		promptBuilder.WebExtractAvailable = true
-		promptBuilder.WebExtractToolName = toolName
+	if webExtractConfigured, serverName, toolName := api.IsWebExtractConfigured(); webExtractConfigured {
+		for _, ts := range mcpToolsets {
+			if ts.Name() == serverName {
+				promptBuilder.WebExtractAvailable = true
+				promptBuilder.WebExtractToolName = toolName
+				break
+			}
+		}
 	}
 
 	// Check browser availability (Playwright or similar)
@@ -401,6 +429,61 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 	// Check memory search availability
 	if memorySearchAvailable {
 		promptBuilder.MemorySearchAvailable = true
+	}
+
+	// Load INSTRUCTIONS.md (create with defaults if missing)
+	var memDir string
+	if cfg.AppConfig != nil && cfg.AppConfig.Memory.IsMemoryEnabled() {
+		memDir, _ = config.GetMemoryDir(&cfg.AppConfig.Memory)
+	}
+	if memDir == "" {
+		memDir, _ = config.GetMemoryDir(nil)
+	}
+	if memDir != "" {
+		created, ensErr := memory.EnsureInstructions(memDir)
+		if ensErr != nil {
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Failed to ensure INSTRUCTIONS.md: %v\n", ensErr)
+			}
+		} else if created && cfg.DebugMode {
+			fmt.Printf("Created default INSTRUCTIONS.md in %s\n", memDir)
+		}
+		instrContent, instrErr := memory.LoadInstructions(memDir)
+		if instrErr != nil {
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Failed to load INSTRUCTIONS.md: %v\n", instrErr)
+			}
+		} else if instrContent != "" {
+			promptBuilder.InstructionsContent = instrContent
+		}
+	}
+
+	// Generate SELF.md from current config state
+	var selfMDMemDir string // directory where SELF.md lives
+	if memDir != "" {
+		selfMDMemDir = memDir
+
+		// Build SelfMDConfig from current state
+		selfCfg := buildSelfMDConfig(cfg, memDir, internalTools, mcpToolsets, mcpCfg, memStore, memorySearchAvailable)
+
+		selfContent := memory.GenerateSelfMD(selfCfg)
+		if writeErr := memory.WriteSelfMD(memDir, selfContent); writeErr != nil {
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Failed to write SELF.md: %v\n", writeErr)
+			}
+		} else {
+			promptBuilder.SelfContent = selfContent
+			if cfg.DebugMode {
+				fmt.Printf("Generated SELF.md (%d bytes)\n", len(selfContent))
+			}
+		}
+	}
+
+	// Reconcile flow knowledge docs (memory/flows/) at startup
+	var memFlowsDir string
+	flowsDir, _ := flowstore.GetFlowsDir()
+	if memDir != "" && flowsDir != "" {
+		memFlowsDir = filepath.Join(memDir, "flows")
 	}
 
 	// Load custom prompt from app config if available
@@ -424,7 +507,104 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 			}
 		} else {
 			chatAgent.FlowRegistry = registry
+
+			// Auto-register any YAML files in flows/ that aren't in the registry
+			// (e.g., flows created via Studio) and prune entries for deleted YAMLs
+			if flowsDir != "" {
+				added, syncErr := registry.SyncFromDirectory(flowsDir)
+				if syncErr != nil {
+					if cfg.DebugMode {
+						fmt.Printf("Warning: Flow registry sync failed: %v\n", syncErr)
+					}
+				} else if added > 0 && cfg.DebugMode {
+					fmt.Printf("Auto-registered %d new flows from %s\n", added, flowsDir)
+				}
+			}
+
+			// Reconcile flow knowledge docs now that we have the registry
+			if memFlowsDir != "" && flowsDir != "" {
+				entries := registry.Entries()
+				if len(entries) > 0 {
+					if reconErr := agent.ReconcileFlowKnowledge(flowsDir, memFlowsDir, entries); reconErr != nil {
+						if cfg.DebugMode {
+							fmt.Printf("Warning: Flow knowledge reconciliation failed: %v\n", reconErr)
+						}
+					} else if cfg.DebugMode {
+						fmt.Printf("Reconciled flow knowledge docs in %s\n", memFlowsDir)
+					}
+				}
+			}
 		}
+	}
+
+	// --- 6b2. Wire flow vector searcher ---
+	if memorySearchAvailable && memStore != nil {
+		chatAgent.FlowSearcher = agent.NewFlowMemorySearcher(
+			func(ctx context.Context, query string, maxResults int, minScore float64) ([]agent.FlowSearchResult, error) {
+				results, err := memStore.Search(ctx, query, maxResults, minScore)
+				if err != nil {
+					return nil, err
+				}
+				var flowResults []agent.FlowSearchResult
+				for _, r := range results {
+					flowResults = append(flowResults, agent.FlowSearchResult{
+						Path:  r.Path,
+						Score: r.Score,
+					})
+				}
+				return flowResults, nil
+			},
+		)
+
+		// Wire auto knowledge search for per-turn retrieval
+		chatAgent.KnowledgeSearch = func(ctx context.Context, query string, maxResults int, minScore float64) ([]agent.KnowledgeSearchResult, error) {
+			results, err := memStore.Search(ctx, query, maxResults, minScore)
+			if err != nil {
+				return nil, err
+			}
+			var knowledgeResults []agent.KnowledgeSearchResult
+			for _, r := range results {
+				knowledgeResults = append(knowledgeResults, agent.KnowledgeSearchResult{
+					Path:    r.Path,
+					Score:   r.Score,
+					Snippet: r.Snippet,
+				})
+			}
+			return knowledgeResults, nil
+		}
+
+		if cfg.DebugMode {
+			fmt.Println("Flow vector search: enabled")
+			fmt.Println("Auto knowledge retrieval: enabled")
+		}
+	}
+
+	// --- 6b3. Wire flow knowledge dir and SELF.md refresher ---
+	if memFlowsDir != "" {
+		chatAgent.FlowKnowledgeDir = memFlowsDir
+	}
+	if selfMDMemDir != "" {
+		chatAgent.SelfMDRefresher = func() {
+			selfCfg := buildSelfMDConfig(cfg, selfMDMemDir, internalTools, mcpToolsets, mcpCfg, memStore, memorySearchAvailable)
+			// Include flow entries if registry is available
+			if chatAgent.FlowRegistry != nil {
+				for _, e := range chatAgent.FlowRegistry.Entries() {
+					selfCfg.FlowEntries = append(selfCfg.FlowEntries, memory.FlowInfo{
+						Name:        strings.TrimSuffix(e.FlowFile, ".yaml"),
+						Description: e.Description,
+					})
+				}
+			}
+			content := memory.GenerateSelfMD(selfCfg)
+			if writeErr := memory.WriteSelfMD(selfMDMemDir, content); writeErr == nil {
+				promptBuilder.SelfContent = content
+				if cfg.DebugMode {
+					fmt.Printf("[SELF.md] Refreshed (%d bytes)\n", len(content))
+				}
+			}
+		}
+		// Do an initial refresh now that the registry is loaded
+		chatAgent.SelfMDRefresher()
 	}
 
 	// --- 6c. Initialize Flow Distiller ---
@@ -525,60 +705,45 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 	)
 
 	// --- 10. Welcome message ---
-	fmt.Printf("\n%sAstonish Chat%s - Type your message (Ctrl+C to exit)\n", ColorGreen, ColorReset)
+	shortID := sess.ID()
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+
 	if isResumed {
-		shortID := sess.ID()
-		if len(shortID) > 8 {
-			shortID = shortID[:8]
+		// Friendly welcome back
+		fmt.Printf("\n%sHey, welcome back!%s Here's where we left off:\n\n", ColorGreen, ColorReset)
+		if cfg.DebugMode {
+			fmt.Printf("Session: %s (resumed, %d events)\n", shortID, sess.Events().Len())
 		}
-		fmt.Printf("Session: %s (resumed, %d events)\n", shortID, sess.Events().Len())
 	} else {
-		shortID := sess.ID()
-		if len(shortID) > 8 {
-			shortID = shortID[:8]
-		}
-		fmt.Printf("Session: %s (new)\n", shortID)
-	}
-	mcpToolCount := 0
-	if len(mcpToolsets) > 0 {
-		minCtx := &minimalReadonlyContext{Context: ctx}
-		for _, ts := range mcpToolsets {
-			if t, err := ts.Tools(minCtx); err == nil {
-				mcpToolCount += len(t)
-			}
+		// Friendly new session greeting
+		fmt.Printf("\n%sHey! I'm Astonish, your AI assistant.%s\n", ColorGreen, ColorReset)
+		if cfg.DebugMode {
+			fmt.Printf("Session: %s (new)\n", shortID)
 		}
 	}
-	fmt.Printf("Tools: %d internal", len(internalTools))
-	if mcpToolCount > 0 {
-		fmt.Printf(" + %d MCP (lazy)", mcpToolCount)
-	}
-	fmt.Printf(" | Provider: %s", cfg.ProviderName)
-	if memMgr != nil {
-		memContent, _ := memMgr.Load()
-		if memContent != "" {
-			fmt.Print(" | Memory: active")
+
+	// Show startup notices conversationally
+	if len(startupNotices) > 0 {
+		for _, notice := range startupNotices {
+			fmt.Printf("%s%s%s\n", ColorYellow, notice, ColorReset)
 		}
 	}
-	if memorySearchAvailable {
-		fmt.Printf(" | RAG: %d chunks", memStore.Count())
-	}
-	if chatAgent.FlowRegistry != nil {
-		entries := chatAgent.FlowRegistry.Entries()
-		if len(entries) > 0 {
-			fmt.Printf(" | Flows: %d saved", len(entries))
-		}
-	}
-	fmt.Println()
-	fmt.Println()
 
 	// --- 10b. Show recent history on resume ---
 	if isResumed && sess.Events().Len() > 0 {
 		printRecentHistory(sess, 3, ColorCyan, ColorGreen, ColorReset)
+		fmt.Printf("What would you like to do next?\n")
+	} else {
+		fmt.Printf("What can I help you with today?\n")
 	}
+	fmt.Println()
 
 	// --- 11. Spinner helpers ---
 	var spinnerProgram *tea.Program
 	var spinnerDone chan struct{}
+	lineHasContent := false // tracks whether partial text exists on the current terminal line
 
 	stopSpinner := func() {
 		if spinnerProgram != nil {
@@ -593,6 +758,13 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 
 	startSpinner := func(text string) {
 		stopSpinner()
+		// If there's partial text on the current line, move to a new line
+		// so the spinner gets its own line and EraseEntireLine won't destroy
+		// previously streamed text.
+		if lineHasContent {
+			fmt.Print("\n")
+			lineHasContent = false
+		}
 		spinnerDone = make(chan struct{})
 		spinnerModel := ui.NewSpinner(text)
 		spinnerProgram = tea.NewProgram(spinnerModel, tea.WithInput(nil))
@@ -608,6 +780,7 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 	// --- 12b. Title generation tracking ---
 	needsTitle := !isResumed // new sessions need a title; resumed ones already have one
 	turnCount := 0
+	indexingWaited := false // ensures we wait for indexing at most once
 
 	// --- 13. Main chat loop ---
 	for {
@@ -656,8 +829,52 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 					fmt.Printf("%sError:%s %v\n", "\033[31m", ColorReset, distillErr)
 				}
 				fmt.Println()
+			case input == "/status":
+				fmt.Printf("\n%sStatus%s\n", ColorCyan, ColorReset)
+				fmt.Printf("  Provider:  %s\n", currentProvider)
+				fmt.Printf("  Model:     %s\n", currentModel)
+				toolCount := len(internalTools)
+				mcpCount := 0
+				if len(mcpToolsets) > 0 {
+					minCtx := &minimalReadonlyContext{Context: ctx}
+					for _, ts := range mcpToolsets {
+						if t, err := ts.Tools(minCtx); err == nil {
+							mcpCount += len(t)
+						}
+					}
+				}
+				if mcpCount > 0 {
+					fmt.Printf("  Tools:     %d internal + %d MCP\n", toolCount, mcpCount)
+				} else {
+					fmt.Printf("  Tools:     %d internal\n", toolCount)
+				}
+				if memMgr != nil {
+					fmt.Printf("  Memory:    active\n")
+				} else {
+					fmt.Printf("  Memory:    disabled\n")
+				}
+				if memorySearchAvailable {
+					select {
+					case <-indexingDone:
+						if indexingErr != nil {
+							fmt.Printf("  RAG:       error (%v)\n", indexingErr)
+						} else {
+							fmt.Printf("  RAG:       %d chunks indexed\n", memStore.Count())
+						}
+					default:
+						fmt.Printf("  RAG:       indexing...\n")
+					}
+				} else {
+					fmt.Printf("  RAG:       unavailable\n")
+				}
+				if chatAgent.FlowRegistry != nil {
+					entries := chatAgent.FlowRegistry.Entries()
+					fmt.Printf("  Flows:     %d saved\n", len(entries))
+				}
+				fmt.Printf("  Session:   %s\n\n", shortID)
 			case input == "/help":
 				fmt.Printf("%sAvailable commands:%s\n", ColorCyan, ColorReset)
+				fmt.Println("  /status   - Show current provider, model, tools, and memory status")
 				fmt.Println("  /distill  - Distill the last task into a reusable flow")
 				fmt.Println("  /help     - Show this help message")
 				fmt.Println("  exit      - Exit the chat")
@@ -670,14 +887,51 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 
 		// Send message to agent
 		userMsg := genai.NewContentFromText(input, genai.RoleUser)
+
+		// Wait for background indexing to complete before the first agent call.
+		// This ensures memory_search and flow matching have indexed data available.
+		if !indexingWaited {
+			indexingWaited = true
+			select {
+			case <-indexingDone:
+				// Already done — no delay
+			default:
+				startSpinner("Preparing memory index...")
+				<-indexingDone
+				stopSpinner()
+			}
+		}
+
 		startSpinner("Thinking...")
 
 		aiPrefixPrinted := false
-		var textBuffer strings.Builder
+		var responseAccum strings.Builder // accumulates full response for [DISTILL:] detection
 		waitingForApproval := false
 		var approvalOptions []string
 		inToolBox := false
 		lastEventWasTool := false
+		spinnerStopped := false
+
+		// printText prints streaming text directly as it arrives.
+		// Handles the Agent: prefix on first output and a single newline
+		// separator when transitioning from tool events back to text.
+		printText := func(text string) {
+			if text == "" {
+				return
+			}
+			if !spinnerStopped {
+				stopSpinner()
+				spinnerStopped = true
+			}
+			if !aiPrefixPrinted {
+				fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
+				aiPrefixPrinted = true
+			} else if lastEventWasTool {
+				lastEventWasTool = false
+			}
+			fmt.Print(text)
+			lineHasContent = !strings.HasSuffix(text, "\n")
+		}
 
 		for event, err := range r.Run(ctx, userID, sess.ID(), userMsg, adkagent.RunConfig{
 			StreamingMode: adkagent.StreamingModeSSE,
@@ -697,6 +951,7 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 							if part.FunctionCall != nil {
 								argsJSON, _ := json.MarshalIndent(part.FunctionCall.Args, "", "  ")
 								stopSpinner()
+								spinnerStopped = true
 								fmt.Printf("\n%s[DEBUG] Tool Call: %s%s\nArgs: %s\n",
 									ColorCyan, part.FunctionCall.Name, ColorReset, string(argsJSON))
 							}
@@ -728,6 +983,7 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				// Spinner text updates
 				if spinnerText, ok := event.Actions.StateDelta["_spinner_text"].(string); ok {
 					startSpinner(spinnerText)
+					spinnerStopped = false
 				}
 			}
 
@@ -736,12 +992,18 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				continue
 			}
 
-			// Detect tool call/response events to insert separators
+			// Detect tool call/response events and start spinner for tool execution
 			hasTool := false
 			chunk := ""
 			for _, p := range event.LLMResponse.Content.Parts {
 				chunk += p.Text
-				if p.FunctionCall != nil || p.FunctionResponse != nil {
+				if p.FunctionCall != nil {
+					hasTool = true
+					// Start spinner showing which tool is running
+					startSpinner(fmt.Sprintf("Running %s...", p.FunctionCall.Name))
+					spinnerStopped = false
+				}
+				if p.FunctionResponse != nil {
 					hasTool = true
 				}
 			}
@@ -750,59 +1012,50 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 			}
 
 			if chunk != "" {
+				// Accumulate full response for [DISTILL:] detection
+				responseAccum.WriteString(chunk)
+
+				// Strip [DISTILL: ...] marker from display
+				displayChunk := stripDistillMarker(chunk)
+
 				// Detect tool box boundaries
-				if strings.Contains(chunk, "╭") {
-					// Flush text buffer before tool box
-					if textBuffer.Len() > 0 {
-						stopSpinner()
-						if !aiPrefixPrinted {
-							fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
-							aiPrefixPrinted = true
-						}
-						fmt.Print(textBuffer.String())
-						textBuffer.Reset()
-					}
+				if strings.Contains(displayChunk, "╭") {
 					inToolBox = true
 				}
 
 				if inToolBox {
-					stopSpinner()
-					fmt.Print(chunk)
-					if strings.Contains(chunk, "╰") {
+					if !spinnerStopped {
+						stopSpinner()
+						spinnerStopped = true
+					}
+					fmt.Print(displayChunk)
+					lineHasContent = !strings.HasSuffix(displayChunk, "\n")
+					if strings.Contains(displayChunk, "╰") {
 						inToolBox = false
-						aiPrefixPrinted = false
 					}
 				} else {
-					textBuffer.WriteString(chunk)
-					// Stream text to terminal
-					if textBuffer.Len() > 0 {
-						stopSpinner()
-						if !aiPrefixPrinted {
-							fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
-							aiPrefixPrinted = true
-						} else if lastEventWasTool {
-							// Insert separator between text segments separated by tool calls
-							fmt.Print("\n")
-						}
-						lastEventWasTool = false
-						fmt.Print(textBuffer.String())
-						textBuffer.Reset()
-					}
+					printText(displayChunk)
 				}
 			}
 		}
 
-		// Flush remaining text
-		if textBuffer.Len() > 0 {
-			stopSpinner()
-			if !aiPrefixPrinted {
-				fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
-			}
-			fmt.Print(textBuffer.String())
-			textBuffer.Reset()
-		}
-
 		stopSpinner()
+
+		// Detect [DISTILL: ...] marker in full response and trigger auto-distill
+		fullResponse := responseAccum.String()
+		if distillDesc := extractDistillMarker(fullResponse); distillDesc != "" {
+			if cfg.DebugMode {
+				fmt.Printf("\n[Auto-distill] Detected marker: %s\n", distillDesc)
+			}
+			// Trigger auto-distillation in background
+			go func(desc string) {
+				if err := chatAgent.AutoDistill(context.Background(), desc); err != nil {
+					if cfg.DebugMode {
+						fmt.Printf("[Auto-distill] Failed: %v\n", err)
+					}
+				}
+			}(distillDesc)
+		}
 
 		// Handle approval if needed
 		if waitingForApproval {
@@ -825,9 +1078,9 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 			// Re-run with approval response
 			startSpinner("Executing...")
 			aiPrefixPrinted = false
-			textBuffer.Reset()
 			inToolBox = false
 			lastEventWasTool = false
+			spinnerStopped = false
 
 			for event, err := range r.Run(ctx, userID, sess.ID(), userMsg, adkagent.RunConfig{
 				StreamingMode: adkagent.StreamingModeSSE,
@@ -842,12 +1095,17 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 					continue
 				}
 
-				// Detect tool call/response events to insert separators
+				// Detect tool call/response events and start spinner for tool execution
 				hasTool := false
 				chunk := ""
 				for _, p := range event.LLMResponse.Content.Parts {
 					chunk += p.Text
-					if p.FunctionCall != nil || p.FunctionResponse != nil {
+					if p.FunctionCall != nil {
+						hasTool = true
+						startSpinner(fmt.Sprintf("Running %s...", p.FunctionCall.Name))
+						spinnerStopped = false
+					}
+					if p.FunctionResponse != nil {
 						hasTool = true
 					}
 				}
@@ -856,40 +1114,60 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				}
 
 				if chunk != "" {
-					if strings.Contains(chunk, "╭") {
-						if textBuffer.Len() > 0 {
-							stopSpinner()
-							if !aiPrefixPrinted {
-								fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
-								aiPrefixPrinted = true
-							}
-							fmt.Print(textBuffer.String())
-							textBuffer.Reset()
-						}
+					// Accumulate for [DISTILL:] detection
+					responseAccum.WriteString(chunk)
+					displayChunk := stripDistillMarker(chunk)
+
+					if strings.Contains(displayChunk, "╭") {
 						inToolBox = true
 					}
 					if inToolBox {
-						stopSpinner()
-						fmt.Print(chunk)
-						if strings.Contains(chunk, "╰") {
+						if !spinnerStopped {
+							stopSpinner()
+							spinnerStopped = true
+						}
+						fmt.Print(displayChunk)
+						if strings.Contains(displayChunk, "╰") {
 							inToolBox = false
 							aiPrefixPrinted = false
 						}
 					} else {
-						stopSpinner()
-						if !aiPrefixPrinted {
-							fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
-							aiPrefixPrinted = true
-						} else if lastEventWasTool {
-							fmt.Print("\n")
-						}
-						lastEventWasTool = false
-						fmt.Print(chunk)
+						printText(displayChunk)
 					}
 				}
 			}
 
 			stopSpinner()
+		}
+
+		// --- Hot-swap: detect provider/model config changes ---
+		// If the LLM edited config.yaml to switch provider or model during this turn,
+		// re-initialize the LLM so the next turn uses the new one immediately.
+		if updatedCfg, loadErr := config.LoadAppConfig(); loadErr == nil {
+			newProvider := updatedCfg.General.DefaultProvider
+			newModel := updatedCfg.General.DefaultModel
+			if newProvider != "" && newModel != "" &&
+				(newProvider != currentProvider || newModel != currentModel) {
+				newLLM, swapErr := provider.GetProvider(ctx, newProvider, newModel, updatedCfg)
+				if swapErr == nil {
+					llm = newLLM
+					chatAgent.LLM = newLLM
+					currentProvider = newProvider
+					currentModel = newModel
+					cfg.AppConfig = updatedCfg
+					// Rebuild distiller LLM closure to use the new provider
+					if chatAgent.FlowDistiller != nil {
+						chatAgent.FlowDistiller.LLM = makeLLMFunc(newLLM)
+					}
+					// Refresh SELF.md to reflect new provider/model
+					if chatAgent.SelfMDRefresher != nil {
+						chatAgent.SelfMDRefresher()
+					}
+					fmt.Printf("\n%s[Provider switched to %s (model: %s)]%s\n", ColorGreen, newProvider, newModel, ColorReset)
+				} else if cfg.DebugMode {
+					fmt.Printf("\nWarning: Failed to switch provider to %s/%s: %v\n", newProvider, newModel, swapErr)
+				}
+			}
 		}
 
 		// Track turns and generate title after first exchange
@@ -1030,4 +1308,175 @@ func printRecentHistory(sess session.Session, maxExchanges int, colorCyan, color
 	}
 	fmt.Println(dividerEnd)
 	fmt.Println()
+}
+
+// distillMarkerRe matches [DISTILL: description] anywhere in text.
+var distillMarkerRe = regexp.MustCompile(`\[DISTILL:\s*([^\]]+)\]`)
+
+// extractDistillMarker returns the description from a [DISTILL: ...] marker in text,
+// or empty string if no marker found.
+func extractDistillMarker(text string) string {
+	matches := distillMarkerRe.FindStringSubmatch(text)
+	if len(matches) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(matches[1])
+}
+
+// stripDistillMarker removes [DISTILL: ...] markers from a text chunk.
+// This prevents the marker from being displayed to the user.
+func stripDistillMarker(chunk string) string {
+	return distillMarkerRe.ReplaceAllString(chunk, "")
+}
+
+// makeLLMFunc creates a simple LLM call function suitable for FlowDistiller.LLM.
+// This is used during hot-swap to rebuild the distiller's closure with a new provider.
+func makeLLMFunc(llm model.LLM) func(ctx context.Context, prompt string) (string, error) {
+	return func(ctx context.Context, prompt string) (string, error) {
+		req := &model.LLMRequest{
+			Contents: []*genai.Content{
+				{
+					Parts: []*genai.Part{{Text: prompt}},
+					Role:  "user",
+				},
+			},
+		}
+		var text string
+		for resp, err := range llm.GenerateContent(ctx, req, false) {
+			if err != nil {
+				return text, err
+			}
+			if resp.Content != nil {
+				for _, p := range resp.Content.Parts {
+					if p.Text != "" {
+						text += p.Text
+					}
+				}
+			}
+		}
+		if text == "" {
+			return "", fmt.Errorf("empty response from LLM")
+		}
+		return text, nil
+	}
+}
+
+// buildSelfMDConfig constructs a SelfMDConfig from the current runtime state.
+func buildSelfMDConfig(
+	cfg *ChatConsoleConfig,
+	memDir string,
+	internalTools []tool.Tool,
+	mcpToolsets []tool.Toolset,
+	mcpCfg *config.MCPConfig,
+	memStore *memory.Store,
+	memorySearchAvailable bool,
+) *memory.SelfMDConfig {
+	selfCfg := &memory.SelfMDConfig{
+		ProviderName:  cfg.ProviderName,
+		ModelName:     cfg.ModelName,
+		MemoryDir:     memDir,
+		MemoryEnabled: cfg.AppConfig != nil && cfg.AppConfig.Memory.IsMemoryEnabled(),
+		InternalTools: len(internalTools),
+	}
+
+	// Config file paths
+	if cfgPath, err := config.GetConfigPath(); err == nil {
+		selfCfg.ConfigPath = cfgPath
+	}
+	if mcpPath, err := config.GetMCPConfigPath(); err == nil {
+		selfCfg.MCPConfigPath = mcpPath
+	}
+
+	// All providers
+	if cfg.AppConfig != nil && len(cfg.AppConfig.Providers) > 0 {
+		selfCfg.Providers = make(map[string]string, len(cfg.AppConfig.Providers))
+		for name, prov := range cfg.AppConfig.Providers {
+			provType := config.GetProviderType(name, prov)
+			modelName := prov["model"]
+			if modelName == "" {
+				modelName = "(default)"
+			}
+			selfCfg.Providers[name] = fmt.Sprintf("%s: %s", provType, modelName)
+		}
+	}
+
+	// MCP servers
+	if mcpCfg != nil {
+		for name, srv := range mcpCfg.MCPServers {
+			info := memory.MCPServerInfo{
+				Name:   name,
+				Active: srv.IsEnabled(),
+			}
+			// Check if keyless standard server
+			for _, std := range config.GetStandardServers() {
+				if std.ID == name {
+					info.Keyless = len(std.EnvVars) == 0
+					if std.ID == "playwright" {
+						info.Category = "browser"
+					}
+					break
+				}
+			}
+			selfCfg.MCPServers = append(selfCfg.MCPServers, info)
+		}
+	}
+
+	// MCP tool count
+	if len(mcpToolsets) > 0 {
+		minCtx := &minimalReadonlyContext{Context: context.Background()}
+		for _, ts := range mcpToolsets {
+			if t, err := ts.Tools(minCtx); err == nil {
+				selfCfg.MCPTools += len(t)
+			}
+		}
+	}
+
+	// Flow directory and entries (will be populated after registry init)
+	if flowDir, err := flowstore.GetFlowsDir(); err == nil {
+		selfCfg.FlowDir = flowDir
+	}
+
+	// Embedding info
+	if cfg.AppConfig != nil {
+		embCfg := cfg.AppConfig.Memory.Embedding
+		if embCfg.Provider != "" || embCfg.Model != "" {
+			prov := embCfg.Provider
+			if prov == "" {
+				prov = "auto"
+			}
+			model := embCfg.Model
+			if model == "" {
+				model = "(default)"
+			}
+			selfCfg.EmbeddingInfo = fmt.Sprintf("%s (%s)", prov, model)
+		}
+	}
+
+	// Chunk count
+	if memStore != nil {
+		selfCfg.ChunkCount = memStore.Count()
+	}
+
+	// Core and knowledge files
+	if memDir != "" {
+		coreFiles := []string{"MEMORY.md", "INSTRUCTIONS.md", "SELF.md"}
+		for _, f := range coreFiles {
+			if _, err := os.Stat(filepath.Join(memDir, f)); err == nil {
+				selfCfg.CoreFiles = append(selfCfg.CoreFiles, f)
+			}
+		}
+
+		// Scan for knowledge files (non-core .md files and subdirectories)
+		entries, _ := os.ReadDir(memDir)
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() && name != "flows" && name != "vectors" {
+				selfCfg.KnowledgeFiles = append(selfCfg.KnowledgeFiles, name+"/")
+			} else if strings.HasSuffix(name, ".md") && name != "MEMORY.md" && name != "INSTRUCTIONS.md" && name != "SELF.md" {
+				selfCfg.KnowledgeFiles = append(selfCfg.KnowledgeFiles, name)
+			}
+		}
+	}
+
+	return selfCfg
 }

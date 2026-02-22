@@ -63,15 +63,18 @@ func (idx *Indexer) IndexAll(ctx context.Context) error {
 
 	// Track which files still exist on disk
 	existingPaths := make(map[string]bool)
+	var indexErrors int
 
 	for _, absPath := range files {
 		relPath, err := filepath.Rel(memDir, absPath)
 		if err != nil {
+			indexErrors++
 			continue
 		}
 		existingPaths[relPath] = true
 
 		if err := idx.indexFileUnlocked(ctx, relPath); err != nil {
+			indexErrors++
 			if idx.debugMode {
 				fmt.Printf("[Memory Indexer] Error indexing %s: %v\n", relPath, err)
 			}
@@ -94,7 +97,12 @@ func (idx *Indexer) IndexAll(ctx context.Context) error {
 	}
 
 	if idx.debugMode {
-		fmt.Printf("[Memory Indexer] Indexed %d files, %d chunks total\n", len(existingPaths), idx.store.Count())
+		fmt.Printf("[Memory Indexer] Indexed %d files (%d errors), %d chunks total\n", len(existingPaths), indexErrors, idx.store.Count())
+	}
+
+	// If every file failed, return an error so callers know indexing was unsuccessful
+	if indexErrors > 0 && indexErrors >= len(files) && len(files) > 0 {
+		return fmt.Errorf("indexing failed: all %d files had errors", len(files))
 	}
 
 	return nil

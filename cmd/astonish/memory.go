@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/memory"
 )
 
@@ -82,7 +83,14 @@ func initMemoryEnv(verbose bool) (*memoryEnv, error) {
 	}
 
 	// Initialize embedding function (local Hugot by default)
-	embResult, err := memory.ResolveEmbeddingFunc(appCfg, memCfg, verbose)
+	// Try to resolve embedding API key from credential store if available
+	var embGetSecret config.SecretGetter
+	if cfgDir, err := config.GetConfigDir(); err == nil {
+		if store, err := credentials.Open(cfgDir); err == nil {
+			embGetSecret = store.GetSecret
+		}
+	}
+	embResult, err := memory.ResolveEmbeddingFunc(appCfg, memCfg, verbose, embGetSecret)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize embedder: %w", err)
 	}

@@ -30,10 +30,17 @@ type EmbedderResult struct {
 //	"openai", "ollama", or "openai-compat". This is the only way to use
 //	cloud APIs for embeddings — auto-detection of cloud providers is intentionally
 //	not performed to avoid unexpected costs.
-func ResolveEmbeddingFunc(appCfg *config.AppConfig, memoryCfg *config.MemoryConfig, debugMode bool) (*EmbedderResult, error) {
+//
+// The optional getSecret function resolves secrets from the credential store.
+// If nil, only config values and env vars are used (legacy behavior).
+func ResolveEmbeddingFunc(appCfg *config.AppConfig, memoryCfg *config.MemoryConfig, debugMode bool, getSecret ...config.SecretGetter) (*EmbedderResult, error) {
 	// If memory config explicitly specifies an embedding provider, use that
 	if memoryCfg != nil && memoryCfg.Embedding.Provider != "" && memoryCfg.Embedding.Provider != "auto" && memoryCfg.Embedding.Provider != "local" {
-		ef, err := resolveExplicitProvider(memoryCfg)
+		var sg config.SecretGetter
+		if len(getSecret) > 0 {
+			sg = getSecret[0]
+		}
+		ef, err := resolveExplicitProvider(memoryCfg, sg)
 		if err != nil {
 			return nil, err
 		}
@@ -48,13 +55,27 @@ func ResolveEmbeddingFunc(appCfg *config.AppConfig, memoryCfg *config.MemoryConf
 
 // resolveExplicitProvider creates an embedding function from explicit memory config.
 // This is the opt-in path for users who want to use cloud-based embedding APIs.
-func resolveExplicitProvider(cfg *config.MemoryConfig) (chromem.EmbeddingFunc, error) {
+// The optional getSecret function resolves keys from the credential store.
+func resolveExplicitProvider(cfg *config.MemoryConfig, getSecret config.SecretGetter) (chromem.EmbeddingFunc, error) {
+	// resolveEmbeddingAPIKey checks credential store, then config, then env var.
+	resolveAPIKey := func(envVar string) string {
+		if getSecret != nil {
+			if val := getSecret("memory.embedding.api_key"); val != "" {
+				return val
+			}
+		}
+		if cfg.Embedding.APIKey != "" {
+			return cfg.Embedding.APIKey
+		}
+		if envVar != "" {
+			return os.Getenv(envVar)
+		}
+		return ""
+	}
+
 	switch cfg.Embedding.Provider {
 	case "openai":
-		apiKey := cfg.Embedding.APIKey
-		if apiKey == "" {
-			apiKey = os.Getenv("OPENAI_API_KEY")
-		}
+		apiKey := resolveAPIKey("OPENAI_API_KEY")
 		if apiKey == "" {
 			return nil, fmt.Errorf("OpenAI embedding requires an API key")
 		}
@@ -80,7 +101,7 @@ func resolveExplicitProvider(cfg *config.MemoryConfig) (chromem.EmbeddingFunc, e
 		if baseURL == "" {
 			return nil, fmt.Errorf("OpenAI-compatible embedding requires a base_url")
 		}
-		apiKey := cfg.Embedding.APIKey
+		apiKey := resolveAPIKey("")
 		model := cfg.Embedding.Model
 		if model == "" {
 			model = "text-embedding-3-small"

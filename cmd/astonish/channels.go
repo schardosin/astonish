@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/daemon"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -219,8 +220,18 @@ func handleTelegramSetup() error {
 	enabled := true
 	cfg.Channels.Enabled = &enabled
 	cfg.Channels.Telegram.Enabled = &enabled
-	cfg.Channels.Telegram.BotToken = botToken
 	cfg.Channels.Telegram.AllowFrom = allowFrom
+
+	// Save bot token to encrypted credential store (keep config.yaml clean)
+	cfg.Channels.Telegram.BotToken = botToken // fallback: stays in config if store fails
+	configDir, _ := config.GetConfigDir()
+	if configDir != "" {
+		if store, storeErr := credentials.Open(configDir); storeErr == nil {
+			if setErr := store.SetSecret("channels.telegram.bot_token", botToken); setErr == nil {
+				cfg.Channels.Telegram.BotToken = "" // scrub from config.yaml
+			}
+		}
+	}
 
 	if err := config.SaveAppConfig(cfg); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)

@@ -6,13 +6,81 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/config"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )
+
+// --- Credential store file access protection ---
+
+// protectedFileNames are filenames within the config directory that must never
+// be accessed by LLM tools. These contain the encryption key and encrypted secrets.
+var protectedFileNames = []string{".store_key", "credentials.enc"}
+
+// isProtectedPath returns true if the given file path resolves to a protected
+// credential store file inside the config directory.
+func isProtectedPath(filePath string) bool {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return false
+	}
+
+	// Resolve to absolute and follow symlinks to prevent bypass via relative paths or links
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		absPath = filePath
+	}
+	resolvedPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		resolvedPath = absPath
+	}
+
+	for _, name := range protectedFileNames {
+		protectedPath := filepath.Join(configDir, name)
+		resolvedProtected, err := filepath.EvalSymlinks(protectedPath)
+		if err != nil {
+			resolvedProtected = protectedPath
+		}
+		if resolvedPath == resolvedProtected || absPath == protectedPath {
+			return true
+		}
+	}
+	return false
+}
+
+// commandReferencesProtectedFile checks if a shell command string references
+// protected credential store files. Returns true and the matched filename
+// if found. This is a best-effort check for defense-in-depth — it catches
+// common patterns like cat, cp, xxd, base64, etc.
+func commandReferencesProtectedFile(command string) (bool, string) {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return false, ""
+	}
+
+	for _, name := range protectedFileNames {
+		// Full path match
+		fullPath := filepath.Join(configDir, name)
+		if strings.Contains(command, fullPath) {
+			return true, name
+		}
+	}
+
+	// Also check for the bare filename — catches cases where the command
+	// uses cd or relative paths to reach the config dir
+	for _, name := range protectedFileNames {
+		if strings.Contains(command, name) {
+			return true, name
+		}
+	}
+
+	return false, ""
+}
 
 type ReadFileArgs struct {
 	Path string `json:"path" jsonschema:"The path to the file to read"`
@@ -23,6 +91,9 @@ type ReadFileResult struct {
 }
 
 func ReadFile(ctx tool.Context, args ReadFileArgs) (ReadFileResult, error) {
+	if isProtectedPath(args.Path) {
+		return ReadFileResult{}, fmt.Errorf("access denied: this file is part of the credential store and cannot be read")
+	}
 	content, err := os.ReadFile(args.Path)
 	if err != nil {
 		return ReadFileResult{}, fmt.Errorf("failed to read file: %w", err)
@@ -88,6 +159,10 @@ func contentToString(content interface{}) (string, error) {
 }
 
 func WriteFile(ctx tool.Context, args WriteFileArgs) (WriteFileResult, error) {
+	if isProtectedPath(args.FilePath) {
+		return WriteFileResult{}, fmt.Errorf("access denied: this file is part of the credential store and cannot be modified")
+	}
+
 	// Convert content to string
 	preliminaryString, err := contentToString(args.Content)
 	if err != nil {
@@ -122,6 +197,11 @@ type ShellCommandResult struct {
 }
 
 func ShellCommand(ctx tool.Context, args ShellCommandArgs) (ShellCommandResult, error) {
+	// Block commands that reference credential store files
+	if matched, fileName := commandReferencesProtectedFile(args.Command); matched {
+		return ShellCommandResult{}, fmt.Errorf("access denied: command references credential store file '%s' which cannot be accessed", fileName)
+	}
+
 	// Apply timeout defaults and bounds
 	timeout := args.Timeout
 	if timeout <= 0 {

@@ -7,12 +7,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/provider/anthropic"
@@ -27,6 +29,87 @@ import (
 	"github.com/schardosin/astonish/pkg/provider/xai"
 	"github.com/schardosin/astonish/pkg/version"
 )
+
+// --- Package-level credential store for API handlers ---
+
+var (
+	apiCredStoreMu sync.RWMutex
+	apiCredStore   *credentials.Store
+)
+
+// SetAPICredentialStore registers the credential store for use by API handlers.
+// Called during startup (daemon/factory).
+func SetAPICredentialStore(s *credentials.Store) {
+	apiCredStoreMu.Lock()
+	defer apiCredStoreMu.Unlock()
+	apiCredStore = s
+}
+
+// getAPICredentialStore returns the registered credential store (or nil).
+func getAPICredentialStore() *credentials.Store {
+	apiCredStoreMu.RLock()
+	defer apiCredStoreMu.RUnlock()
+	return apiCredStore
+}
+
+// resolveProviderSecret looks up a provider secret from the credential store,
+// falling back to the config map and then to an environment variable.
+func resolveProviderSecret(instanceName, cfgKey, envVar string, providerCfg config.ProviderConfig) string {
+	// 1. Credential store
+	if store := getAPICredentialStore(); store != nil {
+		storeKey := "provider." + instanceName + "." + cfgKey
+		if val := store.GetSecret(storeKey); val != "" {
+			return val
+		}
+	}
+	// 2. Config map
+	if val, ok := providerCfg[cfgKey]; ok && val != "" {
+		return val
+	}
+	// 3. Environment variable
+	if envVar != "" {
+		return os.Getenv(envVar)
+	}
+	return ""
+}
+
+// isProviderConfigured checks if a provider has any secret configured
+// (either in the credential store or in the config map).
+func isProviderConfigured(instanceName string, providerCfg config.ProviderConfig) bool {
+	// Check credential store for any secrets for this provider
+	if store := getAPICredentialStore(); store != nil {
+		provType := config.GetProviderType(instanceName, providerCfg)
+		if provType == "" {
+			provType = instanceName
+		}
+		// Check common secret keys for this provider type
+		secretKeys := providerSecretKeys(provType)
+		for _, key := range secretKeys {
+			storeKey := "provider." + instanceName + "." + key
+			if store.GetSecret(storeKey) != "" {
+				return true
+			}
+		}
+	}
+
+	// Check config map (non-secret fields like base_url also count as "configured")
+	for key, val := range providerCfg {
+		if key != "type" && val != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// providerSecretKeys returns the secret field names for a given provider type.
+func providerSecretKeys(provType string) []string {
+	switch provType {
+	case "sap_ai_core":
+		return []string{"client_id", "client_secret", "auth_url"}
+	default:
+		return []string{"api_key"}
+	}
+}
 
 // GeneralSettings represents the general app settings
 type GeneralSettings struct {
@@ -89,6 +172,9 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 				configured = true
 			}
 		}
+
+		// Also check credential store for secret fields not in config
+		configured = configured || isProviderConfigured(instanceName, instanceConfig)
 
 		providers = append(providers, ProviderSettings{
 			Name:        instanceName,
@@ -186,6 +272,32 @@ func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+
+		// Extract secrets from provider configs and store in credential store.
+		// Then scrub secrets from the config struct before saving to YAML.
+		if store := getAPICredentialStore(); store != nil {
+			secrets := make(map[string]string)
+			for instanceName, pCfg := range cfg.Providers {
+				provType := config.GetProviderType(instanceName, pCfg)
+				if provType == "" {
+					provType = instanceName
+				}
+				for _, key := range providerSecretKeys(provType) {
+					if val, has := pCfg[key]; has && val != "" {
+						storeKey := "provider." + instanceName + "." + key
+						secrets[storeKey] = val
+					}
+				}
+			}
+			if len(secrets) > 0 {
+				if err := store.SetSecretBatch(secrets); err != nil {
+					log.Printf("Warning: Failed to save provider secrets to credential store: %v", err)
+				} else {
+					// Scrub secrets from config before saving to YAML
+					credentials.ScrubAppConfig(cfg)
+				}
+			}
+		}
 	}
 
 	if err := config.SaveAppConfig(cfg); err != nil {
@@ -193,8 +305,12 @@ func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Re-setup environment variables
-	config.SetupAllProviderEnv(cfg)
+	// Re-setup environment variables (prefer credential store path)
+	if store := getAPICredentialStore(); store != nil {
+		config.SetupAllProviderEnvFromStore(cfg, store.GetSecret)
+	} else {
+		config.SetupAllProviderEnv(cfg)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -582,16 +698,8 @@ func GetSetupStatusHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Check if at least one credential field has a value (excluding 'type')
-		hasCredentials := false
-		for key, val := range providerCfg {
-			if key != "type" && val != "" {
-				hasCredentials = true
-				break
-			}
-		}
-
-		if hasCredentials {
+		// Check if provider is configured (config map + credential store)
+		if isProviderConfigured(instanceName, providerCfg) {
 			configuredProviders = append(configuredProviders, instanceName)
 		}
 	}
@@ -625,10 +733,11 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 
 	// For OpenRouter, return full metadata with pricing
 	if providerID == "openrouter" {
-		apiKey := ""
-		if cfg.Providers["openrouter"] != nil {
-			apiKey = cfg.Providers["openrouter"]["api_key"]
+		pCfg := cfg.Providers["openrouter"]
+		if pCfg == nil {
+			pCfg = make(config.ProviderConfig)
 		}
+		apiKey := resolveProviderSecret("openrouter", "api_key", "OPENROUTER_API_KEY", pCfg)
 
 		models, err := openrouter.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
@@ -647,13 +756,11 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 
 	// For Anthropic, return model metadata with display names
 	if providerID == "anthropic" {
-		apiKey := ""
-		if cfg.Providers["anthropic"] != nil {
-			apiKey = cfg.Providers["anthropic"]["api_key"]
+		pCfg := cfg.Providers["anthropic"]
+		if pCfg == nil {
+			pCfg = make(config.ProviderConfig)
 		}
-		if apiKey == "" {
-			apiKey = os.Getenv("ANTHROPIC_API_KEY")
-		}
+		apiKey := resolveProviderSecret("anthropic", "api_key", "ANTHROPIC_API_KEY", pCfg)
 
 		models, err := anthropic.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
@@ -672,13 +779,11 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 
 	// For Google AI (Gemini), return model metadata with token limits
 	if providerID == "gemini" {
-		apiKey := ""
-		if cfg.Providers["gemini"] != nil {
-			apiKey = cfg.Providers["gemini"]["api_key"]
+		pCfg := cfg.Providers["gemini"]
+		if pCfg == nil {
+			pCfg = make(config.ProviderConfig)
 		}
-		if apiKey == "" {
-			apiKey = os.Getenv("GOOGLE_API_KEY")
-		}
+		apiKey := resolveProviderSecret("gemini", "api_key", "GOOGLE_API_KEY", pCfg)
 
 		models, err := google.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
@@ -697,13 +802,11 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 
 	// For Groq, return model metadata with context window
 	if providerID == "groq" {
-		apiKey := ""
-		if cfg.Providers["groq"] != nil {
-			apiKey = cfg.Providers["groq"]["api_key"]
+		pCfg := cfg.Providers["groq"]
+		if pCfg == nil {
+			pCfg = make(config.ProviderConfig)
 		}
-		if apiKey == "" {
-			apiKey = os.Getenv("GROQ_API_KEY")
-		}
+		apiKey := resolveProviderSecret("groq", "api_key", "GROQ_API_KEY", pCfg)
 
 		models, err := groq.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
@@ -722,13 +825,11 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 
 	// For OpenAI, return model metadata
 	if providerID == "openai" {
-		apiKey := ""
-		if cfg.Providers["openai"] != nil {
-			apiKey = cfg.Providers["openai"]["api_key"]
+		pCfg := cfg.Providers["openai"]
+		if pCfg == nil {
+			pCfg = make(config.ProviderConfig)
 		}
-		if apiKey == "" {
-			apiKey = os.Getenv("OPENAI_API_KEY")
-		}
+		apiKey := resolveProviderSecret("openai", "api_key", "OPENAI_API_KEY", pCfg)
 
 		models, err := openai_provider.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
@@ -747,13 +848,11 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 
 	// For Poe, return model metadata
 	if providerID == "poe" {
-		apiKey := ""
-		if cfg.Providers["poe"] != nil {
-			apiKey = cfg.Providers["poe"]["api_key"]
+		pCfg := cfg.Providers["poe"]
+		if pCfg == nil {
+			pCfg = make(config.ProviderConfig)
 		}
-		if apiKey == "" {
-			apiKey = os.Getenv("POE_API_KEY")
-		}
+		apiKey := resolveProviderSecret("poe", "api_key", "POE_API_KEY", pCfg)
 
 		models, err := poe.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
@@ -772,29 +871,24 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 
 	// For SAP AI Core, return model metadata with context window and max tokens
 	if providerID == "sap_ai_core" {
-		clientID := ""
-		clientSecret := ""
-		authURL := ""
+		pCfg := cfg.Providers["sap_ai_core"]
+		if pCfg == nil {
+			pCfg = make(config.ProviderConfig)
+		}
+		clientID := resolveProviderSecret("sap_ai_core", "client_id", "AICORE_CLIENT_ID", pCfg)
+		clientSecret := resolveProviderSecret("sap_ai_core", "client_secret", "AICORE_CLIENT_SECRET", pCfg)
+		authURL := resolveProviderSecret("sap_ai_core", "auth_url", "AICORE_AUTH_URL", pCfg)
+		// base_url and resource_group are non-secret, read from config/env only
 		baseURL := ""
-		resourceGroup := ""
-		if cfg.Providers["sap_ai_core"] != nil {
-			clientID = cfg.Providers["sap_ai_core"]["client_id"]
-			clientSecret = cfg.Providers["sap_ai_core"]["client_secret"]
-			authURL = cfg.Providers["sap_ai_core"]["auth_url"]
-			baseURL = cfg.Providers["sap_ai_core"]["base_url"]
-			resourceGroup = cfg.Providers["sap_ai_core"]["resource_group"]
-		}
-		if clientID == "" {
-			clientID = os.Getenv("AICORE_CLIENT_ID")
-		}
-		if clientSecret == "" {
-			clientSecret = os.Getenv("AICORE_CLIENT_SECRET")
-		}
-		if authURL == "" {
-			authURL = os.Getenv("AICORE_AUTH_URL")
+		if pCfg["base_url"] != "" {
+			baseURL = pCfg["base_url"]
 		}
 		if baseURL == "" {
 			baseURL = os.Getenv("AICORE_BASE_URL")
+		}
+		resourceGroup := ""
+		if pCfg["resource_group"] != "" {
+			resourceGroup = pCfg["resource_group"]
 		}
 		if resourceGroup == "" {
 			resourceGroup = os.Getenv("AICORE_RESOURCE_GROUP")
@@ -817,13 +911,11 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 
 	// For xAI, return model metadata
 	if providerID == "xai" {
-		apiKey := ""
-		if cfg.Providers["xai"] != nil {
-			apiKey = cfg.Providers["xai"]["api_key"]
+		pCfg := cfg.Providers["xai"]
+		if pCfg == nil {
+			pCfg = make(config.ProviderConfig)
 		}
-		if apiKey == "" {
-			apiKey = os.Getenv("XAI_API_KEY")
-		}
+		apiKey := resolveProviderSecret("xai", "api_key", "XAI_API_KEY", pCfg)
 
 		models, err := xai.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {

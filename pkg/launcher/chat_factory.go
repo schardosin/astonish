@@ -11,6 +11,7 @@ import (
 	"github.com/schardosin/astonish/pkg/api"
 	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/provider"
@@ -49,6 +50,7 @@ type ChatFactoryResult struct {
 	SessionService        session.Service
 	StartupNotices        []string
 	PromptBuilder         *agent.SystemPromptBuilder
+	CredentialStore       *credentials.Store // Encrypted credential store (nil if unavailable)
 
 	// Cleanup aggregates all deferred cleanups (embedder, MCP, file watcher).
 	// The caller must call this when the ChatAgent is no longer needed.
@@ -92,6 +94,61 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		return nil, fmt.Errorf("failed to initialize internal tools: %w", err)
 	}
 
+	// --- 2a. Initialize credential store (early — needed by memory, MCP, migration) ---
+	var credStore *credentials.Store
+	configDir, configDirErr := config.GetConfigDir()
+	if configDirErr == nil {
+		cs, csErr := credentials.Open(configDir)
+		if csErr != nil {
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Failed to open credential store: %v\n", csErr)
+			}
+		} else {
+			credStore = cs
+			tools.SetCredentialStore(cs)
+
+			// Wire credential store into config package for standard server lookups
+			config.SetInstalledSecretGetter(cs.GetSecret)
+
+			// Wire credential store into API handlers
+			api.SetAPICredentialStore(cs)
+
+			// Auto-migrate secrets from config.yaml to the encrypted store (one-time)
+			migrated, migrateErr := credentials.MigrateFromConfig(cs, cfg.AppConfig, nil)
+			if migrateErr != nil {
+				if cfg.DebugMode {
+					fmt.Printf("Warning: Credential migration error: %v\n", migrateErr)
+				}
+			} else if migrated > 0 {
+				// Re-save config.yaml with secrets scrubbed
+				if saveErr := config.SaveAppConfig(cfg.AppConfig); saveErr != nil {
+					if cfg.DebugMode {
+						fmt.Printf("Warning: Failed to save scrubbed config: %v\n", saveErr)
+					}
+				} else if cfg.DebugMode {
+					fmt.Printf("Migrated %d secrets from config.yaml to encrypted store\n", migrated)
+				}
+			}
+
+			// Setup provider env vars from credential store
+			config.SetupAllProviderEnvFromStore(cfg.AppConfig, cs.GetSecret)
+		}
+	}
+	// Fallback: if credential store unavailable, use legacy env setup
+	if credStore == nil {
+		config.SetupAllProviderEnv(cfg.AppConfig)
+	}
+
+	// Register credential tools (gracefully handle "store not available" like scheduler)
+	credTools, credErr := tools.GetCredentialTools()
+	if credErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("Warning: Failed to create credential tools: %v\n", credErr)
+		}
+	} else {
+		internalTools = append(internalTools, credTools...)
+	}
+
 	// --- 2b. Initialize memory manager ---
 	memMgr, memErr := memory.NewManager("", cfg.DebugMode)
 	if memErr != nil {
@@ -119,7 +176,11 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					fmt.Printf("Warning: Failed to create memory directory: %v\n", err)
 				}
 			} else {
-				embResult, embErr := memory.ResolveEmbeddingFunc(cfg.AppConfig, memCfg, cfg.DebugMode)
+				var embGetSecret config.SecretGetter
+				if credStore != nil {
+					embGetSecret = credStore.GetSecret
+				}
+				embResult, embErr := memory.ResolveEmbeddingFunc(cfg.AppConfig, memCfg, cfg.DebugMode, embGetSecret)
 				if embErr != nil {
 					fmt.Printf("Note: Semantic memory unavailable (%v)\n", embErr)
 				} else {
@@ -507,6 +568,16 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		promptBuilder, cfg.DebugMode, cfg.AutoApprove,
 	)
 
+	// Wire credential redactor to ChatAgent and session service
+	if credStore != nil {
+		redactor := credStore.Redactor()
+		chatAgent.Redactor = redactor
+		// Also wire to file-based session store for transcript redaction
+		if fs, ok := sessionService.(*persistentsession.FileStore); ok {
+			fs.RedactFunc = redactor.Redact
+		}
+	}
+
 	// --- 6b. Initialize Flow Registry ---
 	registryPath, regErr := agent.DefaultRegistryPath()
 	if regErr == nil {
@@ -674,6 +745,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		SessionService:        sessionService,
 		StartupNotices:        startupNotices,
 		PromptBuilder:         promptBuilder,
+		CredentialStore:       credStore,
 		Cleanup:               cleanup,
 	}, nil
 }

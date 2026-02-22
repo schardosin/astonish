@@ -48,7 +48,12 @@ var ProviderEnvMapping = map[string]map[string]string{
 	},
 }
 
-// SetupProviderEnv sets environment variables from config for a specific provider
+// SecretGetter resolves a secret by key from an encrypted store.
+// Returns empty string if the key is not found.
+type SecretGetter func(key string) string
+
+// SetupProviderEnv sets environment variables from config for a specific provider.
+// This is the legacy path that reads from the plaintext ProviderConfig map.
 func SetupProviderEnv(providerName string, providerCfg ProviderConfig) {
 	if mapping, ok := ProviderEnvMapping[providerName]; ok {
 		for cfgKey, envKey := range mapping {
@@ -59,13 +64,78 @@ func SetupProviderEnv(providerName string, providerCfg ProviderConfig) {
 	}
 }
 
-// SetupAllProviderEnv sets environment variables for all configured providers
+// SetupAllProviderEnv sets environment variables for all configured providers.
+// This is the legacy path that reads from the plaintext config.yaml.
+// After migration, use SetupAllProviderEnvFromStore instead.
 func SetupAllProviderEnv(appCfg *AppConfig) {
 	if appCfg == nil || appCfg.Providers == nil {
 		return
 	}
 	for providerName, providerCfg := range appCfg.Providers {
 		SetupProviderEnv(providerName, providerCfg)
+	}
+}
+
+// SetupAllProviderEnvFromStore sets environment variables for all configured
+// providers, reading secret values from the encrypted credential store and
+// non-secret values from the config map. Falls back to existing env vars.
+//
+// Resolution order per field:
+//  1. Credential store (via getSecret)
+//  2. Config map (for non-secret fields like base_url, resource_group)
+//  3. Already-set env var (external environment)
+func SetupAllProviderEnvFromStore(appCfg *AppConfig, getSecret SecretGetter) {
+	if appCfg == nil || appCfg.Providers == nil {
+		return
+	}
+
+	for instanceName, providerCfg := range appCfg.Providers {
+		provType := GetProviderType(instanceName, providerCfg)
+		if provType == "" {
+			provType = instanceName
+		}
+
+		mapping, ok := ProviderEnvMapping[provType]
+		if !ok {
+			continue
+		}
+
+		for cfgKey, envVar := range mapping {
+			// 1. Try credential store
+			storeKey := "provider." + instanceName + "." + cfgKey
+			if val := getSecret(storeKey); val != "" {
+				os.Setenv(envVar, val)
+				continue
+			}
+
+			// 2. Try config map (non-secret fields like base_url stay here)
+			if val, has := providerCfg[cfgKey]; has && val != "" {
+				os.Setenv(envVar, val)
+				continue
+			}
+
+			// 3. Env var may already be set externally — leave it alone
+		}
+	}
+
+	// Also set web server API keys as env vars for MCP servers
+	if appCfg.WebServers != nil {
+		webServerEnvMapping := map[string]string{
+			"tavily":       "TAVILY_API_KEY",
+			"brave-search": "BRAVE_API_KEY",
+			"firecrawl":    "FIRECRAWL_API_KEY",
+		}
+		for serverID, envVar := range webServerEnvMapping {
+			storeKey := "web_servers." + serverID + ".api_key"
+			if val := getSecret(storeKey); val != "" {
+				os.Setenv(envVar, val)
+				continue
+			}
+			// Fallback to config
+			if wsCfg, ok := appCfg.WebServers[serverID]; ok && wsCfg.APIKey != "" {
+				os.Setenv(envVar, wsCfg.APIKey)
+			}
+		}
 	}
 }
 

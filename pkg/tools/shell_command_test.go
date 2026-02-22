@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/schardosin/astonish/pkg/config"
 )
 
 func TestShellCommand_Echo(t *testing.T) {
@@ -116,5 +118,153 @@ func TestShellCommand_MultilineOutput(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(result.Stdout), "\n")
 	if len(lines) != 3 {
 		t.Errorf("output lines = %d, want 3", len(lines))
+	}
+}
+
+// --- Security: file access blocking tests ---
+
+func TestShellCommand_BlocksStoreKey(t *testing.T) {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		t.Skip("config dir not resolvable, skipping")
+	}
+
+	fullPath := filepath.Join(configDir, ".store_key")
+
+	// Direct cat
+	_, err = ShellCommand(nil, ShellCommandArgs{
+		Command: "cat " + fullPath,
+	})
+	if err == nil {
+		t.Fatal("expected error when reading .store_key via shell_command")
+	}
+	if !strings.Contains(err.Error(), "access denied") {
+		t.Errorf("error should mention 'access denied', got: %v", err)
+	}
+
+	// With pipes
+	_, err = ShellCommand(nil, ShellCommandArgs{
+		Command: "cat " + fullPath + " | base64",
+	})
+	if err == nil {
+		t.Fatal("expected error when reading .store_key via piped command")
+	}
+
+	// xxd variant
+	_, err = ShellCommand(nil, ShellCommandArgs{
+		Command: "xxd " + fullPath,
+	})
+	if err == nil {
+		t.Fatal("expected error when reading .store_key via xxd")
+	}
+}
+
+func TestShellCommand_BlocksCredentialsEnc(t *testing.T) {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		t.Skip("config dir not resolvable, skipping")
+	}
+
+	fullPath := filepath.Join(configDir, "credentials.enc")
+
+	_, err = ShellCommand(nil, ShellCommandArgs{
+		Command: "cat " + fullPath,
+	})
+	if err == nil {
+		t.Fatal("expected error when reading credentials.enc via shell_command")
+	}
+	if !strings.Contains(err.Error(), "access denied") {
+		t.Errorf("error should mention 'access denied', got: %v", err)
+	}
+}
+
+func TestShellCommand_BlocksBareFilename(t *testing.T) {
+	// Even bare filenames (without path) should be blocked
+	_, err := ShellCommand(nil, ShellCommandArgs{
+		Command: "cat .store_key",
+	})
+	if err == nil {
+		t.Fatal("expected error when command references .store_key by bare name")
+	}
+	if !strings.Contains(err.Error(), "access denied") {
+		t.Errorf("error should mention 'access denied', got: %v", err)
+	}
+}
+
+func TestShellCommand_AllowsNormalCommands(t *testing.T) {
+	// Normal commands that don't reference protected files should work
+	result, err := ShellCommand(nil, ShellCommandArgs{
+		Command: "echo 'credentials are fine to mention in text'",
+	})
+	if err != nil {
+		t.Fatalf("normal command should not be blocked: %v", err)
+	}
+	if !strings.Contains(result.Stdout, "credentials are fine") {
+		t.Errorf("unexpected output: %s", result.Stdout)
+	}
+}
+
+func TestReadFile_BlocksStoreKey(t *testing.T) {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		t.Skip("config dir not resolvable, skipping")
+	}
+
+	fullPath := filepath.Join(configDir, ".store_key")
+
+	_, err = ReadFile(nil, ReadFileArgs{Path: fullPath})
+	if err == nil {
+		t.Fatal("expected error when reading .store_key via read_file")
+	}
+	if !strings.Contains(err.Error(), "access denied") {
+		t.Errorf("error should mention 'access denied', got: %v", err)
+	}
+}
+
+func TestReadFile_BlocksCredentialsEnc(t *testing.T) {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		t.Skip("config dir not resolvable, skipping")
+	}
+
+	fullPath := filepath.Join(configDir, "credentials.enc")
+
+	_, err = ReadFile(nil, ReadFileArgs{Path: fullPath})
+	if err == nil {
+		t.Fatal("expected error when reading credentials.enc via read_file")
+	}
+	if !strings.Contains(err.Error(), "access denied") {
+		t.Errorf("error should mention 'access denied', got: %v", err)
+	}
+}
+
+func TestReadFile_AllowsNormalFiles(t *testing.T) {
+	dir := t.TempDir()
+	testFile := filepath.Join(dir, "normal.txt")
+	os.WriteFile(testFile, []byte("hello"), 0644)
+
+	result, err := ReadFile(nil, ReadFileArgs{Path: testFile})
+	if err != nil {
+		t.Fatalf("reading normal file should work: %v", err)
+	}
+	if result.Content != "hello" {
+		t.Errorf("content = %q, want %q", result.Content, "hello")
+	}
+}
+
+func TestWriteFile_BlocksStoreKey(t *testing.T) {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		t.Skip("config dir not resolvable, skipping")
+	}
+
+	fullPath := filepath.Join(configDir, ".store_key")
+
+	_, err = WriteFile(nil, WriteFileArgs{FilePath: fullPath, Content: "malicious"})
+	if err == nil {
+		t.Fatal("expected error when writing to .store_key via write_file")
+	}
+	if !strings.Contains(err.Error(), "access denied") {
+		t.Errorf("error should mention 'access denied', got: %v", err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/memory"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"google.golang.org/adk/agent"
@@ -62,6 +63,9 @@ type ChatAgent struct {
 	// Self-management callbacks
 	SelfMDRefresher  func() // Called after config changes to regenerate SELF.md
 	FlowKnowledgeDir string // Path to memory/flows/ for knowledge docs
+
+	// Credential redaction
+	Redactor *credentials.Redactor // Redacts credential values from tool outputs (nil = disabled)
 
 	// Context compaction
 	Compactor *persistentsession.Compactor // Manages context window compaction (nil = disabled)
@@ -202,6 +206,10 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 		// Create the AfterToolCallback for trace recording
 		afterToolCallback := func(ctx tool.Context, t tool.Tool, input, output map[string]any, err error) (map[string]any, error) {
+			// Redact credential values from tool output before the LLM sees them
+			if c.Redactor != nil && output != nil {
+				output = c.Redactor.RedactMap(output)
+			}
 			trace.RecordStep(t.Name(), input, output, err)
 			if c.DebugMode {
 				status := "OK"

@@ -239,9 +239,12 @@ type TelegramConfig struct {
 	AllowFrom []string `yaml:"allow_from,omitempty" json:"allow_from,omitempty"`
 }
 
-// IsTelegramEnabled returns true if Telegram is explicitly enabled and has a bot token.
+// IsTelegramEnabled returns true if Telegram is explicitly enabled.
+// Note: After credential migration, the bot token may be in the encrypted
+// credential store rather than in BotToken. Callers should resolve the token
+// separately if this returns true.
 func (c *TelegramConfig) IsTelegramEnabled() bool {
-	return c.Enabled != nil && *c.Enabled && c.BotToken != ""
+	return c.Enabled != nil && *c.Enabled
 }
 
 type ProviderConfig map[string]string

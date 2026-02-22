@@ -178,7 +178,7 @@ func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, err
 // --- list_scheduled_jobs tool ---
 
 type ListScheduledJobsArgs struct {
-	// No arguments needed
+	Filter string `json:"filter,omitempty" jsonschema:"Optional filter to match jobs by name or mode (e.g., 'daily-report', 'flow'). If empty, lists all jobs."`
 }
 
 type ListScheduledJobsResult struct {
@@ -207,8 +207,11 @@ func listScheduledJobs(ctx tool.Context, args ListScheduledJobsArgs) (ListSchedu
 	}
 
 	jobs := schedulerAccessVar.ListJobs()
-	summaries := make([]JobSummary, len(jobs))
-	for i, j := range jobs {
+	summaries := make([]JobSummary, 0, len(jobs))
+	for _, j := range jobs {
+		if args.Filter != "" && !strings.Contains(j.Name, args.Filter) && !strings.Contains(j.Mode, args.Filter) {
+			continue
+		}
 		summary := JobSummary{
 			ID:       j.ID,
 			Name:     j.Name,
@@ -222,12 +225,16 @@ func listScheduledJobs(ctx tool.Context, args ListScheduledJobsArgs) (ListSchedu
 		if j.NextRun != nil {
 			summary.NextRun = j.NextRun.Format(time.RFC3339)
 		}
-		summaries[i] = summary
+		summaries = append(summaries, summary)
 	}
 
 	msg := fmt.Sprintf("%d scheduled job(s)", len(summaries))
 	if len(summaries) == 0 {
-		msg = "No scheduled jobs"
+		if args.Filter != "" {
+			msg = fmt.Sprintf("No scheduled jobs matching %q", args.Filter)
+		} else {
+			msg = "No scheduled jobs"
+		}
 	}
 
 	return ListScheduledJobsResult{

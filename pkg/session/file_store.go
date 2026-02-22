@@ -24,6 +24,10 @@ type FileStore struct {
 	mu       sync.RWMutex
 	sessions map[string]*fileSession // sessionID -> in-memory session (loaded on demand)
 
+	// RedactFunc, if set, sanitizes text before persisting to disk.
+	// Used to strip credential values from session transcripts.
+	RedactFunc func(string) string
+
 	// Separate state stores mirroring ADK's in-memory service
 	appState  map[string]stateMap            // appName -> state
 	userState map[string]map[string]stateMap // appName -> userID -> state
@@ -290,8 +294,14 @@ func (s *FileStore) AppendEvent(ctx context.Context, curSession adksession.Sessi
 	// Persist to transcript
 	transcriptPath := filepath.Join(s.baseDir, sess.appName, sess.userID, sess.id+".jsonl")
 	transcript := NewTranscript(transcriptPath)
-	if err := transcript.AppendEvent(event); err != nil {
-		return fmt.Errorf("failed to persist event: %w", err)
+	if s.RedactFunc != nil {
+		if err := transcript.AppendEventRedacted(event, s.RedactFunc); err != nil {
+			return fmt.Errorf("failed to persist event: %w", err)
+		}
+	} else {
+		if err := transcript.AppendEvent(event); err != nil {
+			return fmt.Errorf("failed to persist event: %w", err)
+		}
 	}
 
 	// Update index metadata

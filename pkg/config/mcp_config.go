@@ -80,27 +80,40 @@ func LoadMCPConfigRaw() (*MCPConfig, error) {
 // mergeStandardServers injects configured standard servers from config.yaml
 // into the MCPConfig. Entries from config.yaml override same-name entries in mcp_config.json
 // but preserve any explicit Enabled flag the user has set (e.g., disabling Playwright).
-// Key-based servers (Tavily, Brave, Firecrawl) require an API key in config.yaml.
+// Key-based servers (Tavily, Brave, Firecrawl) require an API key — resolved from
+// the credential store first, then config.yaml.
 // Keyless servers (Playwright) are always injected — they need no setup.
 func mergeStandardServers(cfg *MCPConfig) {
 	appCfg, _ := LoadAppConfig()
+	getter := getInstalledSecretGetter()
 
-	// First: inject key-based servers that have credentials in config.yaml
-	if appCfg != nil && appCfg.WebServers != nil {
-		for id, ws := range appCfg.WebServers {
-			srv := GetStandardServer(id)
-			if srv == nil || len(srv.EnvVars) == 0 {
+	// First: inject key-based servers that have credentials
+	if appCfg != nil {
+		for _, srv := range GetStandardServers() {
+			if len(srv.EnvVars) == 0 {
 				continue // keyless handled below
 			}
-			if ws.APIKey == "" {
+
+			// Resolve API key: credential store first, then config.yaml
+			apiKey := ""
+			if getter != nil {
+				apiKey = getter("web_servers." + srv.ID + ".api_key")
+			}
+			if apiKey == "" && appCfg.WebServers != nil {
+				if ws, ok := appCfg.WebServers[srv.ID]; ok {
+					apiKey = ws.APIKey
+				}
+			}
+			if apiKey == "" {
 				continue
 			}
-			newCfg := BuildMCPServerConfig(srv, ws.APIKey)
+
+			newCfg := BuildMCPServerConfig(&srv, apiKey)
 			// Preserve explicit Enabled flag from existing entry (user may have disabled it)
-			if existing, ok := cfg.MCPServers[id]; ok && existing.Enabled != nil {
+			if existing, ok := cfg.MCPServers[srv.ID]; ok && existing.Enabled != nil {
 				newCfg.Enabled = existing.Enabled
 			}
-			cfg.MCPServers[id] = newCfg
+			cfg.MCPServers[srv.ID] = newCfg
 		}
 	}
 

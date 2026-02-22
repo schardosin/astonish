@@ -14,6 +14,7 @@ import (
 	"github.com/schardosin/astonish/pkg/channels"
 	"github.com/schardosin/astonish/pkg/channels/telegram"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/launcher"
 	"github.com/schardosin/astonish/pkg/scheduler"
 	"github.com/schardosin/astonish/pkg/tools"
@@ -69,8 +70,32 @@ func Run(cfg RunConfig) error {
 	}
 	defer RemovePID(pidPath)
 
-	// Set up provider environment variables
-	config.SetupAllProviderEnv(appCfg)
+	// Set up provider environment variables (credential store → config → env fallback)
+	configDir, _ := config.GetConfigDir()
+	if configDir != "" {
+		if cs, csErr := credentials.Open(configDir); csErr == nil {
+			config.SetInstalledSecretGetter(cs.GetSecret)
+			api.SetAPICredentialStore(cs)
+
+			// Auto-migrate secrets from config.yaml (one-time)
+			migrated, migrateErr := credentials.MigrateFromConfig(cs, appCfg, log.Default())
+			if migrateErr != nil {
+				logger.Printf("Warning: Credential migration error: %v", migrateErr)
+			} else if migrated > 0 {
+				if saveErr := config.SaveAppConfig(appCfg); saveErr != nil {
+					logger.Printf("Warning: Failed to save scrubbed config: %v", saveErr)
+				} else {
+					logger.Printf("Migrated %d secrets from config.yaml to encrypted store", migrated)
+				}
+			}
+			config.SetupAllProviderEnvFromStore(appCfg, cs.GetSecret)
+		} else {
+			logger.Printf("Warning: Failed to open credential store: %v", csErr)
+			config.SetupAllProviderEnv(appCfg)
+		}
+	} else {
+		config.SetupAllProviderEnv(appCfg)
+	}
 
 	// Set up MCP environment variables
 	if mcpCfg, err := config.LoadMCPConfig(); err == nil {
@@ -118,15 +143,29 @@ func Run(cfg RunConfig) error {
 			ToolCount:    len(factoryResult.InternalTools),
 		})
 
+		// Wire credential redactor to channel manager for outbound message sanitization
+		if factoryResult.CredentialStore != nil {
+			channelMgr.SetRedactor(factoryResult.CredentialStore.Redactor())
+		}
+
 		// Register Telegram if enabled
 		if appCfg.Channels.Telegram.IsTelegramEnabled() {
-			tg := telegram.New(&telegram.Config{
-				BotToken:  appCfg.Channels.Telegram.BotToken,
-				AllowFrom: appCfg.Channels.Telegram.AllowFrom,
-				Commands:  channelMgr.Commands(),
-			}, log.Default())
-			channelMgr.Register(tg)
-			logger.Printf("Telegram channel registered")
+			// Resolve bot token: credential store first, then config fallback
+			botToken := appCfg.Channels.Telegram.BotToken
+			if botToken == "" && factoryResult.CredentialStore != nil {
+				botToken = factoryResult.CredentialStore.GetSecret("channels.telegram.bot_token")
+			}
+			if botToken == "" {
+				logger.Printf("Warning: Telegram enabled but no bot token found")
+			} else {
+				tg := telegram.New(&telegram.Config{
+					BotToken:  botToken,
+					AllowFrom: appCfg.Channels.Telegram.AllowFrom,
+					Commands:  channelMgr.Commands(),
+				}, log.Default())
+				channelMgr.Register(tg)
+				logger.Printf("Telegram channel registered")
+			}
 		}
 
 		// Start all channels

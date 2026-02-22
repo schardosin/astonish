@@ -12,6 +12,7 @@ import (
 	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/mcp"
 )
 
@@ -86,8 +87,25 @@ func InstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Install to config.yaml (credentials + web tool settings)
-	if err := config.InstallStandardServer(serverID, req.Env); err != nil {
+	// Save API key to encrypted credential store
+	storeKeyInConfig := true
+	configDir, _ := config.GetConfigDir()
+	if configDir != "" {
+		if store, storeErr := credentials.Open(configDir); storeErr == nil {
+			for _, ev := range srv.EnvVars {
+				if val, ok := req.Env[ev.Name]; ok && val != "" {
+					storeKey := "web_servers." + serverID + ".api_key"
+					if setErr := store.SetSecret(storeKey, val); setErr == nil {
+						storeKeyInConfig = false
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// Install to config.yaml (web tool settings; key excluded if stored in credential store)
+	if err := config.InstallStandardServer(serverID, req.Env, storeKeyInConfig); err != nil {
 		http.Error(w, "Failed to install server: "+err.Error(), http.StatusBadRequest)
 		return
 	}

@@ -110,12 +110,21 @@ func GetStandardServerIDs() map[string]bool {
 // IsStandardServerInstalled checks if a standard server is available for use.
 // Keyless servers (e.g. Playwright) are always considered installed — they need
 // no API key and no explicit setup step.
-// For servers requiring an API key, checks that the key is present in config.yaml.
+// For servers requiring an API key, checks that the key is present in config.yaml
+// or in the credential store (via the SecretGetter if set).
 func IsStandardServerInstalled(id string) bool {
 	// Keyless servers are always available — no config entry needed
 	srv := GetStandardServer(id)
 	if srv != nil && len(srv.EnvVars) == 0 {
 		return true
+	}
+
+	// Check credential store via registered getter
+	if getter := getInstalledSecretGetter(); getter != nil {
+		storeKey := "web_servers." + id + ".api_key"
+		if getter(storeKey) != "" {
+			return true
+		}
 	}
 
 	appCfg, err := LoadAppConfig()
@@ -129,11 +138,26 @@ func IsStandardServerInstalled(id string) bool {
 	return ws.APIKey != ""
 }
 
-// InstallStandardServer stores a standard server's credentials in config.yaml
+// --- Optional credential store getter for IsStandardServerInstalled ---
+// This avoids an import cycle between config and credentials.
+
+var installedSecretGetter SecretGetter
+
+// SetInstalledSecretGetter registers a SecretGetter for IsStandardServerInstalled
+// to use when checking the credential store. Called during startup.
+func SetInstalledSecretGetter(g SecretGetter) {
+	installedSecretGetter = g
+}
+
+func getInstalledSecretGetter() SecretGetter {
+	return installedSecretGetter
+}
+
+// InstallStandardServer stores a standard server's configuration in config.yaml
 // and configures it as the active web search/extract tool (if applicable).
-// The server definition (command, args, env var names) comes from the hardcoded registry.
-// At MCP load time, LoadMCPConfig() merges these into the MCP server list automatically.
-func InstallStandardServer(id string, envValues map[string]string) error {
+// If storeKeyInConfig is false, the API key is NOT written to config.yaml
+// (the caller is responsible for storing it in the credential store).
+func InstallStandardServer(id string, envValues map[string]string, storeKeyInConfig bool) error {
 	srv := GetStandardServer(id)
 	if srv == nil {
 		return &StandardServerError{ID: id, Message: "unknown standard server"}
@@ -163,7 +187,10 @@ func InstallStandardServer(id string, envValues map[string]string) error {
 		appCfg.WebServers = make(map[string]WebServerConfig)
 	}
 
-	wsCfg := WebServerConfig{APIKey: apiKey}
+	wsCfg := WebServerConfig{}
+	if storeKeyInConfig {
+		wsCfg.APIKey = apiKey
+	}
 	// For keyless servers, set the Installed flag
 	if len(srv.EnvVars) == 0 {
 		wsCfg.Installed = true

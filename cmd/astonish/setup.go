@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/provider/anthropic"
 	"github.com/schardosin/astonish/pkg/provider/google"
@@ -301,7 +302,13 @@ SaveConfig:
 	// Set as default provider
 	cfg.General.DefaultProvider = selectedInstance
 
-	// Save config
+	// Save secrets to encrypted credential store (instead of plaintext config.yaml)
+	if err := saveProviderSecretsToStore(selectedInstance, selectedProviderID, pCfg); err != nil {
+		fmt.Printf("Warning: Failed to save secrets to credential store: %v\n", err)
+		fmt.Println("Secrets will be saved in config.yaml as fallback.")
+	}
+
+	// Save config (secrets have been scrubbed from pCfg by saveProviderSecretsToStore)
 	if err := config.SaveAppConfig(cfg); err != nil {
 		return fmt.Errorf("error saving config: %w", err)
 	}
@@ -457,6 +464,55 @@ func runSAPAICoreForm(pCfg config.ProviderConfig) {
 	pCfg["auth_url"] = authURL
 	pCfg["base_url"] = baseURL
 	pCfg["resource_group"] = resourceGroup
+}
+
+// saveProviderSecretsToStore saves sensitive fields from a provider config
+// into the encrypted credential store and scrubs them from the pCfg map.
+// Non-secret fields (base_url, resource_group, type, model) are left in pCfg.
+func saveProviderSecretsToStore(instanceName, providerType string, pCfg config.ProviderConfig) error {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return fmt.Errorf("get config dir: %w", err)
+	}
+
+	store, err := credentials.Open(configDir)
+	if err != nil {
+		return fmt.Errorf("open credential store: %w", err)
+	}
+
+	// Determine which keys are secret for this provider type
+	secretKeys := []string{"api_key"} // default
+	switch providerType {
+	case "sap_ai_core":
+		secretKeys = []string{"client_id", "client_secret", "auth_url"}
+	case "ollama", "lm_studio":
+		secretKeys = nil // no secrets for local providers
+	}
+
+	secrets := make(map[string]string)
+	for _, key := range secretKeys {
+		val, ok := pCfg[key]
+		if !ok || val == "" {
+			continue
+		}
+		storeKey := "provider." + instanceName + "." + key
+		secrets[storeKey] = val
+	}
+
+	if len(secrets) == 0 {
+		return nil
+	}
+
+	if err := store.SetSecretBatch(secrets); err != nil {
+		return fmt.Errorf("save secrets: %w", err)
+	}
+
+	// Scrub secrets from pCfg so they don't end up in config.yaml
+	for _, key := range secretKeys {
+		delete(pCfg, key)
+	}
+
+	return nil
 }
 
 func fetchAndSelectSAPModel(pCfg config.ProviderConfig, appCfg *config.AppConfig) error {
@@ -1179,7 +1235,25 @@ func handleWebToolSetup() error {
 	// Install the server
 	runSpinner(fmt.Sprintf("Configuring %s...", srv.DisplayName))
 
-	if err := config.InstallStandardServer(selectedServer, envValues); err != nil {
+	// Save API key to credential store
+	storeKeyInConfig := true // fallback to config if store fails
+	configDir, _ := config.GetConfigDir()
+	if configDir != "" {
+		if store, storeErr := credentials.Open(configDir); storeErr == nil {
+			// Extract the first non-empty env value as the API key
+			for _, ev := range srv.EnvVars {
+				if val, ok := envValues[ev.Name]; ok && val != "" {
+					storeKey := "web_servers." + selectedServer + ".api_key"
+					if setErr := store.SetSecret(storeKey, val); setErr == nil {
+						storeKeyInConfig = false
+					}
+					break
+				}
+			}
+		}
+	}
+
+	if err := config.InstallStandardServer(selectedServer, envValues, storeKeyInConfig); err != nil {
 		return fmt.Errorf("failed to configure %s: %w", srv.DisplayName, err)
 	}
 

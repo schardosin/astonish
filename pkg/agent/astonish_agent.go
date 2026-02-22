@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/planner"
 	"github.com/schardosin/astonish/pkg/ui"
 	"google.golang.org/adk/agent"
@@ -37,9 +38,9 @@ type sessionEventTracking struct {
 
 // Package-level map for session event tracking (persists across LiveSession instances)
 var (
-	sessionTrackingMu   sync.RWMutex
-	sessionTrackingMap  = make(map[string]*sessionEventTracking)
-	
+	sessionTrackingMu  sync.RWMutex
+	sessionTrackingMap = make(map[string]*sessionEventTracking)
+
 	// EnableEventFiltering controls whether LLM nodes see filtered events (per-node history)
 	// or full session history. Set to true for node isolation, false for full context.
 	// TODO: Make this configurable per agent flow in the future
@@ -185,7 +186,7 @@ func (p *ProtectedTool) ProcessRequest(ctx tool.Context, req *model.LLMRequest) 
 // Run intercepts the execution to check for approval
 func (p *ProtectedTool) Run(ctx tool.Context, args any) (map[string]any, error) {
 	toolName := p.Tool.Name()
-	
+
 	// Get current node for node-scoped approval (prevents same tool in different nodes from sharing approval)
 	currentNode := ""
 	if nodeVal, err := p.State.Get("current_node"); err == nil && nodeVal != nil {
@@ -267,6 +268,7 @@ type AstonishAgent struct {
 	IsWebMode      bool // If true, avoids ANSI codes in output
 	AutoApprove    bool // If true, automatically approves all tool executions
 	SessionService session.Service
+	Redactor       *credentials.Redactor // Redacts credential values from tool/LLM outputs (nil = disabled)
 }
 
 // NewAstonishAgent creates a new AstonishAgent.
@@ -318,7 +320,7 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 		}
 
 		// Fallback: Check event history if state is missing
-		// BUT only check recent events - stop if we find awaiting_approval=false 
+		// BUT only check recent events - stop if we find awaiting_approval=false
 		// (which means approval was resolved)
 		if !awaiting {
 			events := ctx.Session().Events()
@@ -825,7 +827,7 @@ func (a *AstonishAgent) emitNodeTransition(nodeName string, state session.State,
 				"temp:node_history": history,
 				"temp:node_type":    node.Type,
 				"node_type":         node.Type,
-			"silent":            node.Silent,
+				"silent":            node.Silent,
 			},
 		},
 	}
@@ -1023,7 +1025,7 @@ func (a *AstonishAgent) handleToolApproval(ctx agent.InvocationContext, state se
 				currentNode = nodeName
 			}
 		}
-		
+
 		// Grant approval using the node-scoped key
 		approvalKey := fmt.Sprintf("approval:%s:%s", currentNode, toolName)
 		state.Set(approvalKey, true)
@@ -1663,7 +1665,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		var beforeToolCallbacks []llmagent.BeforeToolCallback
 		var afterToolCallbacks []llmagent.AfterToolCallback
 
-	if !node.ToolsAutoApproval && !a.AutoApprove {
+		if !node.ToolsAutoApproval && !a.AutoApprove {
 			beforeToolCallbacks = []llmagent.BeforeToolCallback{
 				func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 					toolName := t.Name()
@@ -1821,7 +1823,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 					yield(&session.Event{
 						LLMResponse: model.LLMResponse{
 							Content: &genai.Content{
-				Parts: []*genai.Part{{Text: prompt}},
+								Parts: []*genai.Part{{Text: prompt}},
 								Role:  "model",
 							},
 						},
@@ -1843,6 +1845,11 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		// Add AfterToolCallback for debugging and raw_tool_output handling
 		afterToolCallbacks = []llmagent.AfterToolCallback{
 			func(ctx tool.Context, t tool.Tool, args map[string]any, result map[string]any, err error) (map[string]any, error) {
+				// Redact credential values from tool output before the LLM sees them
+				if a.Redactor != nil && result != nil {
+					result = a.Redactor.RedactMap(result)
+				}
+
 				if err != nil {
 					// Tool failed, let the LLM see the error
 					return result, err
@@ -1877,7 +1884,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 							return result, nil
 						}
 					}
-					
+
 					// Get the state key to store the raw output
 					var stateKey string
 					for k := range node.RawToolOutput {
@@ -1943,7 +1950,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 						"status":  "success",
 						"message": fmt.Sprintf("Tool '%s' executed successfully. Its output has been directly stored in the agent's state under the key '%s'.", toolName, stateKey),
 					}
-					
+
 					if a.DebugMode {
 						fmt.Printf("[DEBUG] raw_tool_output: Returning sanitized result to LLM: %+v\n", sanitizedResult)
 					}
@@ -2067,7 +2074,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		// Create approval callback if tools_auto_approval is false
 		var approvalCallback planner.ApprovalCallback
 		if !node.ToolsAutoApproval {
-		approvalCallback = func(toolName string, args map[string]any) (bool, error) {
+			approvalCallback = func(toolName string, args map[string]any) (bool, error) {
 				// Node-scoped approval key
 				approvalKey := fmt.Sprintf("approval:%s:%s", node.Name, toolName)
 
@@ -2497,7 +2504,6 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			}
 		}
 
-
 		// Accumulate text response for output_model (Unconditionally at start of loop)
 		if event.LLMResponse.Content != nil {
 			for _, part := range event.LLMResponse.Content.Parts {
@@ -2539,7 +2545,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				}
 			}
 
-		// Suppress text-only events when node has output_model
+			// Suppress text-only events when node has output_model
 			// This prevents raw JSON from being displayed to the user.
 			// The JSON is parsed and values are distributed to StateDelta.
 			// If user_message is defined, it will handle displaying content from state.
@@ -2569,7 +2575,6 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			return false, nil // Stops the loop, effectively pausing the agent
 		}
 
-
 		// 4. Handle raw_tool_output state updates
 		if event.LLMResponse.Content != nil {
 			for _, part := range event.LLMResponse.Content.Parts {
@@ -2579,7 +2584,6 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 						respJSON, _ := json.MarshalIndent(part.FunctionResponse.Response, "", "  ")
 						fmt.Printf("[DEBUG] Tool Response for %s: %s\n", part.FunctionResponse.Name, string(respJSON))
 					}
-
 
 				}
 			}
@@ -3069,6 +3073,11 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 	// toolResult is likely a struct (e.g. ShellCommandResult).
 	// We need to extract fields based on `output_model` and `raw_tool_output`.
 
+	// Redact credential values from tool output before storing in state
+	if a.Redactor != nil && toolResult != nil {
+		toolResult = a.Redactor.RedactMap(toolResult)
+	}
+
 	// Convert result to map for easy access
 	resultMap := make(map[string]interface{})
 	// Marshal/Unmarshal hack to convert struct to map
@@ -3174,7 +3183,7 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 
 	// Clear awaiting_approval state
 	state.Set("awaiting_approval", false)
-	
+
 	// IMPORTANT: Clear tool approval AFTER execution to ensure loops require re-approval
 	// This is critical for circular flows where the same tool node is executed multiple
 	// times with different parameters (e.g., paginated API calls)
@@ -3630,7 +3639,7 @@ func (s *LiveSession) Events() session.Events {
 
 	// Determine the start index for this node's events
 	startIndex := tracking.nodeEventStartIndex // Default to existing start index
-	
+
 	// If we found a boundary (input node or different node), use that as the start
 	if nodeBoundaryIndex >= 0 {
 		startIndex = nodeBoundaryIndex + 1 // Start after the boundary event
@@ -3654,7 +3663,7 @@ func (s *LiveSession) Events() session.Events {
 
 	// Debug output
 	if s.agent != nil && s.agent.DebugMode {
-		fmt.Printf("[DEBUG] LiveSession.Events: total=%d, currentNode=%s, startIndex=%d, lastSeen=%d\n", 
+		fmt.Printf("[DEBUG] LiveSession.Events: total=%d, currentNode=%s, startIndex=%d, lastSeen=%d\n",
 			totalLen, currentNode, startIndex, tracking.lastSeenEventIndex)
 	}
 

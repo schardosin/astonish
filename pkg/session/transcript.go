@@ -53,6 +53,17 @@ func (t *Transcript) WriteHeader(sessionID string) error {
 
 // AppendEvent appends a single event to the transcript file.
 func (t *Transcript) AppendEvent(event *adksession.Event) error {
+	return t.appendEventData(event, nil)
+}
+
+// AppendEventRedacted appends a single event to the transcript file,
+// applying a redaction function to the serialized JSON before writing.
+// This ensures credential values are never written to disk.
+func (t *Transcript) AppendEventRedacted(event *adksession.Event, redactFunc func(string) string) error {
+	return t.appendEventData(event, redactFunc)
+}
+
+func (t *Transcript) appendEventData(event *adksession.Event, redactFunc func(string) string) error {
 	entry := TranscriptEntry{
 		Type:  "event",
 		Event: event,
@@ -62,6 +73,12 @@ func (t *Transcript) AppendEvent(event *adksession.Event) error {
 	if err != nil {
 		return fmt.Errorf("failed to serialize event: %w", err)
 	}
+
+	// Apply redaction to the serialized JSON if configured
+	if redactFunc != nil {
+		data = []byte(redactFunc(string(data)))
+	}
+
 	data = append(data, '\n')
 
 	f, err := os.OpenFile(t.path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)

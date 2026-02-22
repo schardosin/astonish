@@ -291,6 +291,24 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("- `*/30 * * * *` = every 30 minutes\n")
 	}
 
+	// 6e. Credential management guidance (when credential tools are available)
+	if b.hasCredentialTools() {
+		sb.WriteString("\n## Credential Management\n\n")
+		sb.WriteString("You have access to an encrypted credential store. Use it to securely manage API keys, tokens, and passwords.\n\n")
+		sb.WriteString("**CRITICAL: When the user shares a secret (API key, token, password), IMMEDIATELY save it using `save_credential` before doing anything else.** ")
+		sb.WriteString("Once saved, the secret value is automatically redacted from all your outputs — you will never accidentally leak it.\n\n")
+		sb.WriteString("**Available credential types:**\n")
+		sb.WriteString("- `api_key` — Custom header + value (e.g., `X-API-Key: sk-abc123`)\n")
+		sb.WriteString("- `bearer` — Authorization: Bearer token\n")
+		sb.WriteString("- `basic` — Username + password (HTTP Basic Auth)\n")
+		sb.WriteString("- `oauth_client_credentials` — Auto-refreshing OAuth2 client credentials flow\n\n")
+		sb.WriteString("**Rules:**\n")
+		sb.WriteString("- NEVER echo back, repeat, or include credential secret values in your responses. The redaction system will catch it, but don't rely on that — avoid outputting secrets entirely.\n")
+		sb.WriteString("- Reference credentials by name (e.g., \"I saved it as 'proxmox-api'\") rather than showing the value.\n")
+		sb.WriteString("- Use `list_credentials` to show what's stored (it only shows metadata, never secret values).\n")
+		sb.WriteString("- Use `test_credential` to verify a credential works before using it.\n")
+	}
+
 	// 7. Execution Plan with integrated knowledge (when a flow matches)
 	if b.ExecutionPlan != "" {
 		sb.WriteString("\n## Execution Plan\n\n")
@@ -339,6 +357,16 @@ func (b *SystemPromptBuilder) ToolCount() int {
 func (b *SystemPromptBuilder) hasSchedulerTools() bool {
 	for _, t := range b.Tools {
 		if t.Name() == "schedule_job" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasCredentialTools returns true if save_credential is among the available tools.
+func (b *SystemPromptBuilder) hasCredentialTools() bool {
+	for _, t := range b.Tools {
+		if t.Name() == "save_credential" {
 			return true
 		}
 	}

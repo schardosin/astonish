@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/credentials"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
@@ -32,6 +33,9 @@ type ChannelManager struct {
 	providerName string
 	modelName    string
 	toolCount    int
+
+	// Credential redaction for outbound messages
+	redactor *credentials.Redactor
 }
 
 // ChannelManagerConfig holds optional configuration for NewChannelManager.
@@ -62,6 +66,19 @@ func NewChannelManager(chatAgent *agent.ChatAgent, sessSvc session.Service, logg
 		m.toolCount = cfg.ToolCount
 	}
 	return m
+}
+
+// SetRedactor sets the credential redactor for outbound message sanitization.
+func (m *ChannelManager) SetRedactor(r *credentials.Redactor) {
+	m.redactor = r
+}
+
+// redactText applies credential redaction if a redactor is configured.
+func (m *ChannelManager) redactText(s string) string {
+	if m.redactor == nil {
+		return s
+	}
+	return m.redactor.Redact(s)
 }
 
 // Register adds a channel to the manager. Must be called before StartAll.
@@ -210,6 +227,7 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	// Process response: strip distill marker, trigger auto-distill
 	fullResponse := responseText.String()
 	displayText := stripDistillMarker(fullResponse)
+	displayText = m.redactText(displayText)
 
 	if distillDesc := extractDistillMarker(fullResponse); distillDesc != "" {
 		m.logger.Printf("[channels] Auto-distill triggered: %s", distillDesc)
@@ -338,6 +356,7 @@ func (m *ChannelManager) Send(ctx context.Context, target Target, msg OutboundMe
 	if ch == nil {
 		return fmt.Errorf("channel %s not found", target.ChannelID)
 	}
+	msg.Text = m.redactText(msg.Text)
 	return ch.Send(ctx, target, msg)
 }
 
@@ -347,6 +366,8 @@ func (m *ChannelManager) Send(ctx context.Context, target Target, msg OutboundMe
 func (m *ChannelManager) Broadcast(ctx context.Context, msg OutboundMessage) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
+	msg.Text = m.redactText(msg.Text)
 
 	var firstErr error
 	for _, ch := range m.channels {

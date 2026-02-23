@@ -1225,7 +1225,7 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 				oneLiner = errorTitle
 			}
 
-			yield(&session.Event{
+			if !yield(&session.Event{
 				Actions: session.EventActions{
 					StateDelta: map[string]any{
 						"_retry_info": map[string]any{
@@ -1236,7 +1236,9 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 						"_processing_info": true,
 					},
 				},
-			}, nil)
+			}, nil) {
+				return false
+			}
 		}
 
 		if isLastAttempt {
@@ -1472,8 +1474,9 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			}
 
 			if len(missingTools) > 0 {
-				yield(nil, fmt.Errorf("configured tools not found: %s", strings.Join(missingTools, ", ")))
-				return false, fmt.Errorf("configured tools not found: %s", strings.Join(missingTools, ", "))
+				toolErr := fmt.Errorf("configured tools not found: %s", strings.Join(missingTools, ", "))
+				yield(nil, toolErr)
+				return false, toolErr
 			}
 		}
 

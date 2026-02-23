@@ -222,18 +222,7 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("- Before configuring a server → search the server name or technology\n")
 	}
 
-	// 6c. Auto-Distillation hint (when flow distillation is available)
-	sb.WriteString("\n## Workflow Auto-Save\n\n")
-	sb.WriteString("When you complete a task that used 2 or more tool calls and the task is REUSABLE (could be run again with different parameters), ")
-	sb.WriteString("append this marker as the LAST line of your response:\n\n")
-	sb.WriteString("```\n[DISTILL: brief description of what the task does]\n```\n\n")
-	sb.WriteString("Examples of GOOD markers:\n")
-	sb.WriteString("- `[DISTILL: check server status via SSH and report disk/memory/CPU]`\n")
-	sb.WriteString("- `[DISTILL: deploy Docker container with health check]`\n")
-	sb.WriteString("- `[DISTILL: create new Go microservice with tests and Dockerfile]`\n\n")
-	sb.WriteString("Do NOT add the marker for: simple lookups, conversations, single-step answers, ")
-	sb.WriteString("memory-only operations, or when following a saved execution plan.\n")
-	sb.WriteString("The marker will be automatically processed — do not explain it to the user.\n")
+	// 6c. (Auto-distillation removed — flows are created explicitly via /distill command or Studio)
 
 	// 6d. Scheduling guidance (when scheduler tools are available)
 	if b.hasSchedulerTools() {

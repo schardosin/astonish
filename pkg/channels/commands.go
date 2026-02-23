@@ -15,8 +15,20 @@ import (
 	"sync"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/agent"
+
 	"google.golang.org/adk/session"
 )
+
+// DistillSession identifies a session for distillation.
+type DistillSession = agent.DistillSession
+
+// Distiller is the interface for on-demand flow distillation.
+// ChatAgent satisfies this interface.
+type Distiller interface {
+	PreviewDistill(ctx context.Context, ds agent.DistillSession) (string, error)
+	ConfirmAndDistill(ctx context.Context, ds agent.DistillSession, print func(string)) error
+}
 
 // CommandContext provides everything a command handler needs to inspect
 // or mutate the current conversation state.
@@ -45,6 +57,9 @@ type CommandContext struct {
 	ModelName string
 	// ToolCount is the number of available tools.
 	ToolCount int
+
+	// Distiller provides on-demand flow distillation (nil if unavailable).
+	Distiller Distiller
 }
 
 // CommandFunc is the handler signature for a slash command.
@@ -149,11 +164,12 @@ func parseCommandName(text string) string {
 }
 
 // DefaultCommands creates a CommandRegistry pre-loaded with the standard
-// cross-channel commands: /status, /new, /jobs, /help.
+// cross-channel commands: /status, /new, /distill, /jobs, /help.
 func DefaultCommands() *CommandRegistry {
 	r := NewCommandRegistry()
 	r.Register(statusCommand())
 	r.Register(newSessionCommand())
+	r.Register(distillCommand())
 	r.Register(jobsCommand())
 	r.Register(helpCommand(r))
 	return r
@@ -211,6 +227,43 @@ func welcomeMessage(name string) string {
 		name = "there"
 	}
 	return fmt.Sprintf("Hey %s! Fresh start. What can I help you with?", name)
+}
+
+func distillCommand() *Command {
+	return &Command{
+		Name:        "distill",
+		Description: "Distill the last task into a reusable flow",
+		Handler: func(ctx context.Context, cc CommandContext) (string, error) {
+			if cc.Distiller == nil {
+				return "Flow distillation is not available.", nil
+			}
+
+			ds := DistillSession{
+				SessionID: cc.SessionKey,
+				AppName:   cc.AppName,
+				UserID:    cc.UserID,
+			}
+
+			// One-shot: preview + confirm without user interaction.
+			// Channel users explicitly requested /distill, so proceed directly.
+			description, err := cc.Distiller.PreviewDistill(ctx, ds)
+			if err != nil {
+				return fmt.Sprintf("Nothing to distill: %v", err), nil
+			}
+
+			var result strings.Builder
+			result.WriteString(fmt.Sprintf("Task identified: %s\n\n", description))
+
+			distillErr := cc.Distiller.ConfirmAndDistill(ctx, ds, func(s string) {
+				result.WriteString(s)
+			})
+			if distillErr != nil {
+				result.WriteString(fmt.Sprintf("\nDistillation failed: %v", distillErr))
+			}
+
+			return result.String(), nil
+		},
+	}
 }
 
 func jobsCommand() *Command {

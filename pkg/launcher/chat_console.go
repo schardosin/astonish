@@ -8,10 +8,10 @@ import (
 	"io"
 	"log"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/provider"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
@@ -252,7 +252,12 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 			switch {
 			case input == "/distill":
 				startSpinner("Analyzing conversation...")
-				description, previewErr := chatAgent.PreviewDistill(ctx)
+				ds := agent.DistillSession{
+					SessionID: sess.ID(),
+					AppName:   appName,
+					UserID:    userID,
+				}
+				description, previewErr := chatAgent.PreviewDistill(ctx, ds)
 				stopSpinner()
 				if previewErr != nil {
 					fmt.Printf("%sError:%s %v\n\n", "\033[31m", ColorReset, previewErr)
@@ -267,7 +272,7 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 					break
 				}
 				startSpinner("Distilling flow...")
-				distillErr := chatAgent.ConfirmAndDistill(ctx, func(s string) {
+				distillErr := chatAgent.ConfirmAndDistill(ctx, ds, func(s string) {
 					stopSpinner()
 					fmt.Printf("%sAgent:%s %s", ColorGreen, ColorReset, s)
 				})
@@ -407,7 +412,6 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 		startSpinner("Thinking...")
 
 		aiPrefixPrinted := false
-		var responseAccum strings.Builder // accumulates full response for [DISTILL:] detection
 		waitingForApproval := false
 		var approvalOptions []string
 		inToolBox := false
@@ -514,11 +518,7 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 			}
 
 			if chunk != "" {
-				// Accumulate full response for [DISTILL:] detection
-				responseAccum.WriteString(chunk)
-
-				// Strip [DISTILL: ...] marker from display
-				displayChunk := stripDistillMarker(chunk)
+				displayChunk := chunk
 
 				// Detect tool box boundaries
 				if strings.Contains(displayChunk, "╭") {
@@ -542,22 +542,6 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 		}
 
 		stopSpinner()
-
-		// Detect [DISTILL: ...] marker in full response and trigger auto-distill
-		fullResponse := responseAccum.String()
-		if distillDesc := extractDistillMarker(fullResponse); distillDesc != "" {
-			if cfg.DebugMode {
-				fmt.Printf("\n[Auto-distill] Detected marker: %s\n", distillDesc)
-			}
-			// Trigger auto-distillation in background
-			go func(desc string) {
-				if err := chatAgent.AutoDistill(context.Background(), desc); err != nil {
-					if cfg.DebugMode {
-						fmt.Printf("[Auto-distill] Failed: %v\n", err)
-					}
-				}
-			}(distillDesc)
-		}
 
 		// Handle approval if needed
 		if waitingForApproval {
@@ -616,9 +600,7 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				}
 
 				if chunk != "" {
-					// Accumulate for [DISTILL:] detection
-					responseAccum.WriteString(chunk)
-					displayChunk := stripDistillMarker(chunk)
+					displayChunk := chunk
 
 					if strings.Contains(displayChunk, "╭") {
 						inToolBox = true
@@ -820,25 +802,6 @@ func printRecentHistory(sess session.Session, maxExchanges int, colorCyan, color
 	}
 	fmt.Println(dividerEnd)
 	fmt.Println()
-}
-
-// distillMarkerRe matches [DISTILL: description] anywhere in text.
-var distillMarkerRe = regexp.MustCompile(`\[DISTILL:\s*([^\]]+)\]`)
-
-// extractDistillMarker returns the description from a [DISTILL: ...] marker in text,
-// or empty string if no marker found.
-func extractDistillMarker(text string) string {
-	matches := distillMarkerRe.FindStringSubmatch(text)
-	if len(matches) < 2 {
-		return ""
-	}
-	return strings.TrimSpace(matches[1])
-}
-
-// stripDistillMarker removes [DISTILL: ...] markers from a text chunk.
-// This prevents the marker from being displayed to the user.
-func stripDistillMarker(chunk string) string {
-	return distillMarkerRe.ReplaceAllString(chunk, "")
 }
 
 // makeLLMFunc creates a simple LLM call function suitable for FlowDistiller.LLM.

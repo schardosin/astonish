@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/schardosin/astonish/pkg/credentials"
@@ -73,18 +74,25 @@ type ChatAgent struct {
 	// Internal: reuse AstonishAgent for approval formatting
 	approvalHelper *AstonishAgent
 
-	// Internal: execution traces for on-demand /distill
-	lastTrace    *ExecutionTrace   // most recent turn's trace
-	traceHistory []*ExecutionTrace // all traces in this session
-
-	// Internal: cached result from PreviewDistill for ConfirmAndDistill
-	pendingDistill *distillPreview
+	// Internal: per-session execution traces for on-demand /distill
+	traceHistory   map[string][]*ExecutionTrace // keyed by session ID
+	pendingDistill map[string]*distillPreview   // keyed by session ID
+	traceMu        sync.Mutex                   // protects traceHistory and pendingDistill
 }
 
 // distillPreview holds the result of PreviewDistill for use by ConfirmAndDistill.
 type distillPreview struct {
 	Description string            // LLM-generated task description
 	Traces      []*ExecutionTrace // selected traces to distill
+}
+
+// DistillSession identifies a session for distillation, providing the
+// information needed to look up persisted session events for trace
+// reconstruction across daemon restarts.
+type DistillSession struct {
+	SessionID string // persistent session key (e.g. "telegram:direct:12345")
+	AppName   string // ADK app name (always "astonish")
+	UserID    string // ADK user ID for session lookup
 }
 
 // NewChatAgent creates a ChatAgent with all configured tools and toolsets.
@@ -104,6 +112,8 @@ func NewChatAgent(llm model.LLM, internalTools []tool.Tool, toolsets []tool.Tool
 		AutoApprove:    autoApprove,
 		MaxToolCalls:   maxToolCalls,
 		approvalHelper: &AstonishAgent{LLM: llm, AutoApprove: autoApprove},
+		traceHistory:   make(map[string][]*ExecutionTrace),
+		pendingDistill: make(map[string]*distillPreview),
 	}
 }
 
@@ -358,19 +368,171 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			}
 		}
 
-		// Store the trace for on-demand /distill
-		c.lastTrace = trace
-		c.traceHistory = append(c.traceHistory, trace)
+		// Store the trace keyed by session ID for on-demand /distill
+		sessionID := ctx.Session().ID()
+		c.traceMu.Lock()
+		c.traceHistory[sessionID] = append(c.traceHistory[sessionID], trace)
+		// Prune: keep at most 20 traces per session
+		if len(c.traceHistory[sessionID]) > 20 {
+			c.traceHistory[sessionID] = c.traceHistory[sessionID][len(c.traceHistory[sessionID])-20:]
+		}
+		c.traceMu.Unlock()
 	}
 }
 
-// PreviewDistill analyzes the conversation trace history and identifies the
-// primary task to distill. Returns a description for user confirmation.
-// The result is cached internally for use by ConfirmAndDistill.
-func (c *ChatAgent) PreviewDistill(ctx context.Context) (string, error) {
+// reconstructTraces rebuilds execution traces from persisted session events.
+// This allows /distill to work across daemon restarts — the session transcript
+// on disk contains all the tool call/response events we need.
+//
+// Strategy: walk events chronologically. Each user message starts a new trace.
+// FunctionCall events provide tool name + args. FunctionResponse events provide
+// results. Final text after tools becomes the trace output.
+func (c *ChatAgent) reconstructTraces(ctx context.Context, ds DistillSession) []*ExecutionTrace {
+	resp, err := c.SessionService.Get(ctx, &session.GetRequest{
+		AppName:   ds.AppName,
+		UserID:    ds.UserID,
+		SessionID: ds.SessionID,
+	})
+	if err != nil || resp.Session == nil {
+		if c.DebugMode {
+			fmt.Printf("[Chat DEBUG] reconstructTraces: failed to load session %s: %v\n", ds.SessionID, err)
+		}
+		return nil
+	}
+
+	events := resp.Session.Events()
+	if events.Len() == 0 {
+		return nil
+	}
+
+	var traces []*ExecutionTrace
+	var current *ExecutionTrace
+	// Map pending function calls by name so we can match them with responses.
+	// Using name rather than ID because some providers don't set FunctionCall.ID.
+	pendingCalls := make(map[string]map[string]any) // tool name -> args
+
+	for i := range events.Len() {
+		event := events.At(i)
+		if event.LLMResponse.Content == nil {
+			continue
+		}
+
+		// User message starts a new trace
+		if event.Author == "user" {
+			// Finalize previous trace if it exists
+			if current != nil {
+				current.Finalize()
+				traces = append(traces, current)
+			}
+			// Extract user text
+			var userText string
+			for _, p := range event.LLMResponse.Content.Parts {
+				if p.Text != "" {
+					userText += p.Text
+				}
+			}
+			current = &ExecutionTrace{
+				UserRequest: userText,
+				StartedAt:   event.Timestamp,
+			}
+			pendingCalls = make(map[string]map[string]any)
+			continue
+		}
+
+		// Agent events — only process if we have an active trace
+		if current == nil {
+			continue
+		}
+
+		for _, part := range event.LLMResponse.Content.Parts {
+			if part.FunctionCall != nil {
+				// Record the call args for later matching with the response
+				pendingCalls[part.FunctionCall.Name] = part.FunctionCall.Args
+			}
+
+			if part.FunctionResponse != nil {
+				toolName := part.FunctionResponse.Name
+				toolArgs := pendingCalls[toolName]
+				delete(pendingCalls, toolName)
+
+				// Determine success from the response map
+				success := true
+				var errMsg string
+				if part.FunctionResponse.Response != nil {
+					if e, ok := part.FunctionResponse.Response["error"]; ok {
+						if es, ok := e.(string); ok && es != "" {
+							success = false
+							errMsg = es
+						}
+					}
+				}
+
+				step := TraceStep{
+					ToolName:  toolName,
+					ToolArgs:  toolArgs,
+					Success:   success,
+					Timestamp: event.Timestamp,
+				}
+				if part.FunctionResponse.Response != nil {
+					step.ToolResult = part.FunctionResponse.Response
+				}
+				if errMsg != "" {
+					step.Error = errMsg
+				}
+				current.Steps = append(current.Steps, step)
+			}
+
+			// Text after tool calls is the final output
+			if part.Text != "" && !part.Thought && part.FunctionCall == nil && part.FunctionResponse == nil {
+				if len(current.Steps) > 0 {
+					current.FinalOutput += part.Text
+				}
+			}
+		}
+	}
+
+	// Finalize the last trace
+	if current != nil {
+		current.Finalize()
+		traces = append(traces, current)
+	}
+
+	if c.DebugMode {
+		fmt.Printf("[Chat DEBUG] reconstructTraces: rebuilt %d traces from session %s\n", len(traces), ds.SessionID)
+		for i, t := range traces {
+			fmt.Printf("[Chat DEBUG]   Trace %d: %q (%d tool calls)\n", i+1, t.UserRequest, t.ToolCallCount())
+		}
+	}
+
+	return traces
+}
+
+// PreviewDistill analyzes the conversation trace history for the given session
+// and identifies the primary task to distill. Returns a description for user
+// confirmation. The result is cached internally for use by ConfirmAndDistill.
+func (c *ChatAgent) PreviewDistill(ctx context.Context, ds DistillSession) (string, error) {
+	sessionID := ds.SessionID
+
+	c.traceMu.Lock()
+	sessionTraces := c.traceHistory[sessionID]
+	c.traceMu.Unlock()
+
+	// If no in-memory traces, reconstruct from persisted session events.
+	// This handles daemon restarts — traces are ephemeral but session
+	// events survive on disk.
+	if len(sessionTraces) == 0 && c.SessionService != nil && ds.AppName != "" && ds.UserID != "" {
+		reconstructed := c.reconstructTraces(ctx, ds)
+		if len(reconstructed) > 0 {
+			c.traceMu.Lock()
+			c.traceHistory[sessionID] = reconstructed
+			sessionTraces = reconstructed
+			c.traceMu.Unlock()
+		}
+	}
+
 	// Filter traces that have tool calls (conversational turns are not distillable)
 	var substantive []*ExecutionTrace
-	for _, t := range c.traceHistory {
+	for _, t := range sessionTraces {
 		if t.ToolCallCount() > 0 {
 			substantive = append(substantive, t)
 		}
@@ -383,10 +545,12 @@ func (c *ChatAgent) PreviewDistill(ctx context.Context) (string, error) {
 	// If only one substantive trace, skip the LLM assessment
 	if len(substantive) == 1 {
 		desc := fmt.Sprintf("%s (%d tool calls)", substantive[0].UserRequest, substantive[0].ToolCallCount())
-		c.pendingDistill = &distillPreview{
+		c.traceMu.Lock()
+		c.pendingDistill[sessionID] = &distillPreview{
 			Description: desc,
 			Traces:      substantive,
 		}
+		c.traceMu.Unlock()
 		return desc, nil
 	}
 
@@ -395,10 +559,12 @@ func (c *ChatAgent) PreviewDistill(ctx context.Context) (string, error) {
 		// No LLM available for assessment, fall back to most recent substantive trace
 		last := substantive[len(substantive)-1]
 		desc := fmt.Sprintf("%s (%d tool calls)", last.UserRequest, last.ToolCallCount())
-		c.pendingDistill = &distillPreview{
+		c.traceMu.Lock()
+		c.pendingDistill[sessionID] = &distillPreview{
 			Description: desc,
 			Traces:      []*ExecutionTrace{last},
 		}
+		c.traceMu.Unlock()
 		return desc, nil
 	}
 
@@ -406,7 +572,7 @@ func (c *ChatAgent) PreviewDistill(ctx context.Context) (string, error) {
 	var sb strings.Builder
 	sb.WriteString("Analyze these conversation traces and identify the primary TASK worth saving as a reusable workflow.\n\n")
 
-	for i, t := range c.traceHistory {
+	for i, t := range sessionTraces {
 		sb.WriteString(fmt.Sprintf("Trace %d: %s\n", i+1, t.Summary()))
 	}
 
@@ -425,10 +591,12 @@ func (c *ChatAgent) PreviewDistill(ctx context.Context) (string, error) {
 		// Fall back to most recent substantive trace
 		last := substantive[len(substantive)-1]
 		desc := fmt.Sprintf("%s (%d tool calls)", last.UserRequest, last.ToolCallCount())
-		c.pendingDistill = &distillPreview{
+		c.traceMu.Lock()
+		c.pendingDistill[sessionID] = &distillPreview{
 			Description: desc,
 			Traces:      []*ExecutionTrace{last},
 		}
+		c.traceMu.Unlock()
 		return desc, nil
 	}
 
@@ -442,7 +610,7 @@ func (c *ChatAgent) PreviewDistill(ctx context.Context) (string, error) {
 			for _, p := range parts {
 				p = strings.TrimSpace(p)
 				var idx int
-				if _, err := fmt.Sscanf(p, "%d", &idx); err == nil && idx >= 1 && idx <= len(c.traceHistory) {
+				if _, err := fmt.Sscanf(p, "%d", &idx); err == nil && idx >= 1 && idx <= len(sessionTraces) {
 					selectedIndices = append(selectedIndices, idx-1) // convert to 0-based
 				}
 			}
@@ -455,7 +623,7 @@ func (c *ChatAgent) PreviewDistill(ctx context.Context) (string, error) {
 	var selected []*ExecutionTrace
 	if len(selectedIndices) > 0 {
 		for _, idx := range selectedIndices {
-			selected = append(selected, c.traceHistory[idx])
+			selected = append(selected, sessionTraces[idx])
 		}
 	} else {
 		// LLM didn't return valid indices, fall back to all substantive traces
@@ -471,18 +639,24 @@ func (c *ChatAgent) PreviewDistill(ctx context.Context) (string, error) {
 		description = strings.Join(reqs, " → ")
 	}
 
-	c.pendingDistill = &distillPreview{
+	c.traceMu.Lock()
+	c.pendingDistill[sessionID] = &distillPreview{
 		Description: description,
 		Traces:      selected,
 	}
+	c.traceMu.Unlock()
 	return description, nil
 }
 
 // ConfirmAndDistill runs flow distillation using the traces identified by
 // a prior call to PreviewDistill. The print function receives status/result text.
-func (c *ChatAgent) ConfirmAndDistill(ctx context.Context, print func(string)) error {
-	preview := c.pendingDistill
-	c.pendingDistill = nil // clear regardless of outcome
+func (c *ChatAgent) ConfirmAndDistill(ctx context.Context, ds DistillSession, print func(string)) error {
+	sessionID := ds.SessionID
+
+	c.traceMu.Lock()
+	preview := c.pendingDistill[sessionID]
+	delete(c.pendingDistill, sessionID) // clear regardless of outcome
+	c.traceMu.Unlock()
 
 	if preview == nil || len(preview.Traces) == 0 {
 		return fmt.Errorf("no pending distill preview — call PreviewDistill first")
@@ -575,102 +749,6 @@ func (c *ChatAgent) ConfirmAndDistill(ctx context.Context, print func(string)) e
 	msg += "\nYou can run this flow with:\n  " + runCmd + "\n"
 
 	print(msg)
-	return nil
-}
-
-// AutoDistill performs background flow distillation after the LLM signals a reusable task.
-// It uses the most recent trace(s), runs the distiller, saves the flow,
-// generates a knowledge doc, and updates the registry.
-// The description parameter comes from the [DISTILL: ...] marker in the LLM response.
-func (c *ChatAgent) AutoDistill(ctx context.Context, description string) error {
-	if c.FlowDistiller == nil {
-		return fmt.Errorf("flow distillation is not configured")
-	}
-
-	// Find the most recent substantive trace
-	var trace *ExecutionTrace
-	for i := len(c.traceHistory) - 1; i >= 0; i-- {
-		if c.traceHistory[i].ToolCallCount() > 0 {
-			trace = c.traceHistory[i]
-			break
-		}
-	}
-	if trace == nil {
-		return fmt.Errorf("no trace with tool calls found")
-	}
-
-	// Run distillation
-	result, err := c.FlowDistiller.Distill(ctx, DistillRequest{
-		UserRequest: trace.UserRequest,
-		Trace:       trace,
-	})
-	if err != nil {
-		if result == nil {
-			return err
-		}
-	}
-
-	// Determine save directory
-	saveDir := c.FlowSaveDir
-	if saveDir == "" {
-		configDir, cfgErr := os.UserConfigDir()
-		if cfgErr != nil {
-			return fmt.Errorf("failed to determine config directory: %w", cfgErr)
-		}
-		saveDir = filepath.Join(configDir, "astonish", "flows")
-	}
-
-	if mkErr := os.MkdirAll(saveDir, 0755); mkErr != nil {
-		return fmt.Errorf("failed to create flow directory: %w", mkErr)
-	}
-
-	filename := result.FlowName + ".yaml"
-	flowPath := filepath.Join(saveDir, filename)
-
-	if _, statErr := os.Stat(flowPath); statErr == nil {
-		filename = fmt.Sprintf("%s_%s.yaml", result.FlowName, time.Now().Format("20060102_150405"))
-		flowPath = filepath.Join(saveDir, filename)
-	}
-
-	if writeErr := os.WriteFile(flowPath, []byte(result.YAML), 0644); writeErr != nil {
-		return fmt.Errorf("failed to write flow file: %w", writeErr)
-	}
-
-	// Register in flow registry
-	entry := FlowRegistryEntry{
-		FlowFile:    filename,
-		Description: result.Description,
-		Tags:        result.Tags,
-		CreatedAt:   time.Now(),
-	}
-	if c.FlowRegistry != nil {
-		if regErr := c.FlowRegistry.Register(entry); regErr != nil {
-			if c.DebugMode {
-				fmt.Printf("[AutoDistill] Failed to register flow: %v\n", regErr)
-			}
-		}
-	}
-
-	// Generate flow knowledge doc
-	if c.FlowKnowledgeDir != "" {
-		doc := GenerateFlowKnowledgeDoc(result.YAML, entry)
-		docName := strings.TrimSuffix(filename, ".yaml") + ".md"
-		docPath := filepath.Join(c.FlowKnowledgeDir, docName)
-		if mkErr := os.MkdirAll(c.FlowKnowledgeDir, 0755); mkErr == nil {
-			_ = os.WriteFile(docPath, []byte(doc), 0644)
-			// The fsnotify watcher will pick up the new file and reindex it
-		}
-	}
-
-	// Refresh SELF.md to reflect the new flow
-	if c.SelfMDRefresher != nil {
-		c.SelfMDRefresher()
-	}
-
-	if c.DebugMode {
-		fmt.Printf("[AutoDistill] Flow saved: %s (%s)\n", flowPath, description)
-	}
-
 	return nil
 }
 

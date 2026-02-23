@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -227,7 +226,6 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	// Process events as they arrive. Each complete LLM text turn is sent
 	// as a separate message immediately, giving the user real-time updates
 	// during multi-tool operations instead of one giant message at the end.
-	var fullResponse strings.Builder // accumulated for distill marker extraction
 	var messagesSent int
 
 	for event, err := range r.Run(ctx, userID, sess.ID(), userContent, adkagent.RunConfig{}) {
@@ -268,11 +266,8 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 			continue
 		}
 
-		fullResponse.WriteString(text)
-
-		// Prepare display text — strip distill markers and redact secrets
-		displayText := stripDistillMarker(text)
-		displayText = m.redactText(displayText)
+		// Prepare display text — redact secrets
+		displayText := m.redactText(text)
 		if strings.TrimSpace(displayText) == "" {
 			continue
 		}
@@ -296,17 +291,6 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 
 	// Stop typing indicator now that the agent is done
 	typingCancel()
-
-	// Handle auto-distillation from the full accumulated response
-	fullResponseStr := fullResponse.String()
-	if distillDesc := extractDistillMarker(fullResponseStr); distillDesc != "" {
-		m.logger.Printf("[channels] Auto-distill triggered: %s", distillDesc)
-		go func(desc string) {
-			if err := m.agent.AutoDistill(context.Background(), desc); err != nil {
-				m.logger.Printf("[channels] Auto-distill failed: %v", err)
-			}
-		}(distillDesc)
-	}
 
 	// Fallback if the agent produced no visible text at all
 	if messagesSent == 0 {
@@ -340,12 +324,7 @@ func (m *ChannelManager) handleCommand(ctx context.Context, msg InboundMessage, 
 		ProviderName:   m.providerName,
 		ModelName:      m.modelName,
 		ToolCount:      m.toolCount,
-	}
-
-	response, err := m.commands.Execute(ctx, msg.Text, cc)
-	if err != nil {
-		m.logger.Printf("[channels] Command error: %v", err)
-		response = "Sorry, that command failed."
+		Distiller:      m.agent,
 	}
 
 	ch := m.getChannel(msg.ChannelID)
@@ -357,6 +336,20 @@ func (m *ChannelManager) handleCommand(ctx context.Context, msg InboundMessage, 
 		ChannelID: msg.ChannelID,
 		ChatID:    msg.ChatID,
 		ThreadID:  msg.ThreadID,
+	}
+
+	// Start typing indicator — some commands (e.g. /distill) involve LLM
+	// calls and can take significant time. Shows the user something is happening.
+	typingCtx, typingCancel := context.WithCancel(ctx)
+	go m.sendTypingLoop(typingCtx, ch, target)
+
+	response, err := m.commands.Execute(ctx, msg.Text, cc)
+
+	typingCancel()
+
+	if err != nil {
+		m.logger.Printf("[channels] Command error: %v", err)
+		response = "Sorry, that command failed."
 	}
 
 	outMsg := OutboundMessage{
@@ -433,23 +426,6 @@ func (m *ChannelManager) Broadcast(ctx context.Context, msg OutboundMessage) err
 		}
 	}
 	return firstErr
-}
-
-// distillMarkerRe matches [DISTILL: description] anywhere in text.
-var distillMarkerRe = regexp.MustCompile(`\[DISTILL:\s*([^\]]+)\]`)
-
-// extractDistillMarker returns the description from a [DISTILL: ...] marker.
-func extractDistillMarker(text string) string {
-	matches := distillMarkerRe.FindStringSubmatch(text)
-	if len(matches) < 2 {
-		return ""
-	}
-	return strings.TrimSpace(matches[1])
-}
-
-// stripDistillMarker removes [DISTILL: ...] markers from text.
-func stripDistillMarker(text string) string {
-	return distillMarkerRe.ReplaceAllString(text, "")
 }
 
 // channelHints returns LLM output guidance for a given channel.

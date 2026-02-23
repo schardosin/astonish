@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -189,11 +188,15 @@ type ShellCommandArgs struct {
 	Command    string `json:"command" jsonschema:"The shell command to execute"`
 	Timeout    int    `json:"timeout,omitempty" jsonschema:"Timeout in seconds. Default 120. Max 3600."`
 	WorkingDir string `json:"working_dir,omitempty" jsonschema:"Working directory for the command. Defaults to the current directory."`
+	Background bool   `json:"background,omitempty" jsonschema:"If true, start the command in the background and return a session_id immediately. Use process_read/process_write/process_kill to interact with it."`
 }
 
 type ShellCommandResult struct {
-	Stdout   string `json:"stdout"`
-	TimedOut bool   `json:"timed_out,omitempty"`
+	Stdout          string `json:"stdout"`
+	TimedOut        bool   `json:"timed_out,omitempty"`
+	WaitingForInput bool   `json:"waiting_for_input,omitempty"`
+	SessionID       string `json:"session_id,omitempty"`
+	ExitCode        *int   `json:"exit_code,omitempty"`
 }
 
 func ShellCommand(ctx tool.Context, args ShellCommandArgs) (ShellCommandResult, error) {
@@ -211,25 +214,103 @@ func ShellCommand(ctx tool.Context, args ShellCommandArgs) (ShellCommandResult, 
 		timeout = 3600
 	}
 
-	cmdCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
-	defer cancel()
+	pm := GetProcessManager()
 
-	cmd := exec.CommandContext(cmdCtx, "sh", "-c", args.Command)
-	if args.WorkingDir != "" {
-		cmd.Dir = args.WorkingDir
-	}
-
-	output, err := cmd.CombinedOutput()
+	// Start process with PTY
+	sess, err := pm.Start(args.Command, args.WorkingDir, 24, 80)
 	if err != nil {
-		if cmdCtx.Err() == context.DeadlineExceeded {
-			return ShellCommandResult{
-				Stdout:   string(output),
-				TimedOut: true,
-			}, nil
-		}
-		return ShellCommandResult{Stdout: string(output)}, fmt.Errorf("failed to execute command: %w", err)
+		return ShellCommandResult{}, fmt.Errorf("failed to start command: %w", err)
 	}
-	return ShellCommandResult{Stdout: string(output)}, nil
+
+	// Background mode: return immediately with session ID
+	if args.Background {
+		// Wait briefly for initial output
+		time.Sleep(300 * time.Millisecond)
+		data := sess.Output.Bytes()
+		return ShellCommandResult{
+			Stdout:    string(data),
+			SessionID: sess.ID,
+		}, nil
+	}
+
+	// One-shot mode: wait for completion or interactive detection
+	deadline := time.After(time.Duration(timeout) * time.Second)
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-sess.done:
+			// Process exited — return output
+			data := sess.Output.Bytes()
+			result := ShellCommandResult{
+				Stdout:   string(data),
+				ExitCode: sess.ExitCode,
+			}
+			return result, nil
+
+		case <-deadline:
+			// Timeout — kill process and return what we have
+			_ = pm.Kill(sess.ID)
+			data := sess.Output.Bytes()
+			return ShellCommandResult{
+				Stdout:    string(data),
+				TimedOut:  true,
+				SessionID: sess.ID,
+			}, nil
+
+		case <-ticker.C:
+			// Check if process is waiting for input (alive but idle)
+			if sess.IsRunning() && sess.IdleDuration() >= idleThreshold {
+				data := sess.Output.Bytes()
+				if len(data) > 0 && looksLikePrompt(string(data)) {
+					return ShellCommandResult{
+						Stdout:          string(data),
+						WaitingForInput: true,
+						SessionID:       sess.ID,
+					}, nil
+				}
+			}
+		}
+	}
+}
+
+// looksLikePrompt checks if the output ends with something that looks like
+// an interactive prompt waiting for user input.
+func looksLikePrompt(output string) bool {
+	trimmed := strings.TrimRight(output, " \t")
+	if len(trimmed) == 0 {
+		return false
+	}
+
+	// Check common prompt endings (check both with and without trailing whitespace)
+	promptSuffixes := []string{
+		"?", ":", ">", "$", "#", "%",
+		"(yes/no)", "(y/n)", "(Y/n)", "(y/N)",
+		"[yes/no]", "[y/n]", "[Y/n]", "[y/N]",
+		"(yes/no/[fingerprint])",
+		"password:", "Password:", "PASSWORD:",
+		"passphrase:", "Passphrase:",
+	}
+
+	lower := strings.ToLower(trimmed)
+	for _, suffix := range promptSuffixes {
+		if strings.HasSuffix(trimmed, suffix) || strings.HasSuffix(lower, strings.ToLower(suffix)) {
+			return true
+		}
+	}
+
+	// Check if last line is short (< 200 chars) and ends with a prompt character
+	lines := strings.Split(trimmed, "\n")
+	lastLine := strings.TrimSpace(lines[len(lines)-1])
+	if len(lastLine) > 0 && len(lastLine) < 200 {
+		lastChar := lastLine[len(lastLine)-1]
+		if lastChar == '?' || lastChar == ':' || lastChar == '>' || lastChar == '$' || lastChar == '#' || lastChar == '%' {
+			return true
+		}
+	}
+
+	return false
 }
 
 // --- Filter JSON Tool ---
@@ -401,8 +482,12 @@ func GetInternalTools() ([]tool.Tool, error) {
 	}
 
 	shellCommandTool, err := functiontool.New(functiontool.Config{
-		Name:        "shell_command",
-		Description: "Execute a shell command. Supports optional timeout (default 120s) and working directory. Use for CLI commands like git, gh, curl, docker, etc.",
+		Name: "shell_command",
+		Description: `Execute a shell command with full PTY support.
+
+One-shot mode (default): Runs the command and waits for it to complete. If the command is waiting for interactive input (SSH prompts, password, confirmations), it returns early with waiting_for_input=true and a session_id. Use process_write to respond to the prompt, and process_read to check output.
+
+Background mode (background=true): Starts the command and returns immediately with a session_id. Use process_read, process_write, and process_kill to manage the process.`,
 	}, ShellCommand)
 	if err != nil {
 		return nil, err
@@ -567,6 +652,34 @@ func ExecuteTool(ctx context.Context, name string, args map[string]interface{}) 
 			return nil, fmt.Errorf("invalid args for read_pdf: %w", err)
 		}
 		return ReadPDF(nil, toolArgs)
+
+	case "process_read":
+		var toolArgs ProcessReadArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for process_read: %w", err)
+		}
+		return processRead(nil, toolArgs)
+
+	case "process_write":
+		var toolArgs ProcessWriteArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for process_write: %w", err)
+		}
+		return processWrite(nil, toolArgs)
+
+	case "process_list":
+		var toolArgs ProcessListArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for process_list: %w", err)
+		}
+		return processList(nil, toolArgs)
+
+	case "process_kill":
+		var toolArgs ProcessKillArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for process_kill: %w", err)
+		}
+		return processKill(nil, toolArgs)
 
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)

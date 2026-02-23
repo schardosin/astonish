@@ -11,13 +11,16 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/huh v0.8.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
+	github.com/creack/pty v1.1.24
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
 	github.com/knights-analytics/hugot v0.6.2
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/modelcontextprotocol/go-sdk v1.1.0
 	github.com/philippgille/chromem-go v0.7.0
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/sashabaranov/go-openai v1.41.2
 	go.starlark.net v0.0.0-20251109183026-be02852a5e1f
 	golang.org/x/net v0.49.0
@@ -54,7 +57,6 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-shiori/dom v0.0.0-20230515143342-73569d674e1c // indirect
-	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1 // indirect
 	github.com/gofrs/flock v0.13.0 // indirect
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
 	github.com/gomlx/exceptions v0.0.3 // indirect
@@ -83,7 +85,6 @@ require (
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/schollz/progressbar/v2 v2.15.0 // indirect
 	github.com/sugarme/regexpset v0.0.0-20200920021344-4d4ec8eaf93c // indirect
 	github.com/sugarme/tokenizer v0.3.0 // indirect

@@ -217,6 +217,27 @@ func (t *TelegramChannel) Send(ctx context.Context, target channels.Target, msg 
 	return nil
 }
 
+// SendTyping sends a "typing" chat action to the Telegram chat.
+// This shows a "typing..." indicator in the chat for ~5 seconds.
+func (t *TelegramChannel) SendTyping(ctx context.Context, target channels.Target) error {
+	t.mu.RLock()
+	bot := t.botAPI
+	t.mu.RUnlock()
+
+	if bot == nil {
+		return nil
+	}
+
+	chatID, err := strconv.ParseInt(target.ChatID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("telegram: invalid chat ID %q: %w", target.ChatID, err)
+	}
+
+	action := tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping)
+	_, err = bot.Request(action)
+	return err
+}
+
 // Status returns the current channel status.
 func (t *TelegramChannel) Status() channels.ChannelStatus {
 	t.mu.RLock()

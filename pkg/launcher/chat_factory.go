@@ -297,6 +297,17 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		internalTools = append(internalTools, schedTools...)
 	}
 
+	// --- 2e. Initialize process management tools ---
+	processTools, procErr := tools.GetProcessTools()
+	if procErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("Warning: Failed to create process tools: %v\n", procErr)
+		}
+	} else {
+		internalTools = append(internalTools, processTools...)
+	}
+	cleanups = append(cleanups, tools.CleanupProcessManager)
+
 	// --- 3. Load MCP tools from cache (lazy) ---
 	mcpCfg, _ := config.LoadMCPConfig()
 	var lazyToolsets []*agent.LazyMCPToolset

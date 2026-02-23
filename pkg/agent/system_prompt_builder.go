@@ -309,6 +309,23 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("- Use `test_credential` to verify a credential works before using it.\n")
 	}
 
+	// 6f. Process management guidance (always available — shell_command has PTY support)
+	if b.hasProcessTools() {
+		sb.WriteString("\n## Interactive Commands & Process Management\n\n")
+		sb.WriteString("`shell_command` runs commands in a full PTY (pseudo-terminal). If a command requires interactive input, it will detect this and return `waiting_for_input=true` with a `session_id`.\n\n")
+		sb.WriteString("**When shell_command returns `waiting_for_input=true`:**\n")
+		sb.WriteString("1. Read the output — it shows the prompt the process is displaying\n")
+		sb.WriteString("2. Use `process_write(session_id, input)` to send your response (always include `\\n` to press Enter)\n")
+		sb.WriteString("3. Use `process_read(session_id)` to check for more output\n")
+		sb.WriteString("4. Repeat until the task is complete\n\n")
+		sb.WriteString("**For long-running commands** (servers, watchers), use `shell_command(command, background=true)` to start them without waiting. Then use `process_read` to check output and `process_kill` to stop them.\n\n")
+		sb.WriteString("**Common interactive scenarios:**\n")
+		sb.WriteString("- SSH host key verification: respond with `yes\\n`\n")
+		sb.WriteString("- Password prompts: ask the user for the password, then send it\n")
+		sb.WriteString("- Package install confirmations: respond with `y\\n`\n")
+		sb.WriteString("- Use `process_list` to see all active sessions and `process_kill` to clean up when done\n")
+	}
+
 	// 7. Execution Plan with integrated knowledge (when a flow matches)
 	if b.ExecutionPlan != "" {
 		sb.WriteString("\n## Execution Plan\n\n")
@@ -367,6 +384,16 @@ func (b *SystemPromptBuilder) hasSchedulerTools() bool {
 func (b *SystemPromptBuilder) hasCredentialTools() bool {
 	for _, t := range b.Tools {
 		if t.Name() == "save_credential" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasProcessTools returns true if process_read is among the available tools.
+func (b *SystemPromptBuilder) hasProcessTools() bool {
+	for _, t := range b.Tools {
+		if t.Name() == "process_read" {
 			return true
 		}
 	}

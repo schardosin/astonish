@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/credentials"
@@ -204,45 +205,11 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 
 	// Run the agent
 	userContent := genai.NewContentFromText(msg.Text, genai.RoleUser)
-	var responseText strings.Builder
 
-	for event, err := range r.Run(ctx, userID, sess.ID(), userContent, adkagent.RunConfig{}) {
-		if err != nil {
-			m.logger.Printf("[channels] Agent error for %s: %v", route.SessionKey, err)
-			responseText.WriteString("Sorry, I encountered an error processing your message.")
-			break
-		}
-
-		if event.LLMResponse.Content == nil {
-			continue
-		}
-
-		for _, part := range event.LLMResponse.Content.Parts {
-			if part.Text != "" {
-				responseText.WriteString(part.Text)
-			}
-		}
-	}
-
-	// Process response: strip distill marker, trigger auto-distill
-	fullResponse := responseText.String()
-	displayText := stripDistillMarker(fullResponse)
-	displayText = m.redactText(displayText)
-
-	if distillDesc := extractDistillMarker(fullResponse); distillDesc != "" {
-		m.logger.Printf("[channels] Auto-distill triggered: %s", distillDesc)
-		go func(desc string) {
-			if err := m.agent.AutoDistill(context.Background(), desc); err != nil {
-				m.logger.Printf("[channels] Auto-distill failed: %v", err)
-			}
-		}(distillDesc)
-	}
-
-	// Send response back to channel
-	if strings.TrimSpace(displayText) == "" {
-		displayText = "I processed your request but have nothing to say."
-	}
-
+	// Start typing indicator — shows "typing..." in the chat while the
+	// agent is processing. Telegram typing expires after ~5 seconds, so
+	// we refresh every 4 seconds. The goroutine stops when the agent
+	// finishes (typingCancel is called).
 	ch := m.getChannel(msg.ChannelID)
 	if ch == nil {
 		return fmt.Errorf("channel %s not found", msg.ChannelID)
@@ -254,19 +221,103 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 		ThreadID:  msg.ThreadID,
 	}
 
-	outMsg := OutboundMessage{
-		Text:    displayText,
-		ReplyTo: msg.ID,
-		Format:  FormatHTML,
+	typingCtx, typingCancel := context.WithCancel(ctx)
+	go m.sendTypingLoop(typingCtx, ch, target)
+
+	// Process events as they arrive. Each complete LLM text turn is sent
+	// as a separate message immediately, giving the user real-time updates
+	// during multi-tool operations instead of one giant message at the end.
+	var fullResponse strings.Builder // accumulated for distill marker extraction
+	var messagesSent int
+
+	for event, err := range r.Run(ctx, userID, sess.ID(), userContent, adkagent.RunConfig{}) {
+		if err != nil {
+			m.logger.Printf("[channels] Agent error for %s: %v", route.SessionKey, err)
+			if messagesSent == 0 {
+				_ = ch.Send(ctx, target, OutboundMessage{
+					Text:    "Sorry, I encountered an error processing your message.",
+					ReplyTo: msg.ID,
+					Format:  FormatText,
+				})
+			}
+			break
+		}
+
+		if event.LLMResponse.Content == nil {
+			continue
+		}
+
+		// Skip streaming text chunks — wait for the complete aggregated
+		// response. We send complete thoughts, not word-by-word fragments.
+		if event.LLMResponse.Partial {
+			continue
+		}
+
+		// Extract user-facing text only. Skip internal parts: function
+		// calls, function responses, and chain-of-thought (Thought).
+		var eventText strings.Builder
+		for _, part := range event.LLMResponse.Content.Parts {
+			if part.Text != "" && !part.Thought && part.FunctionCall == nil && part.FunctionResponse == nil {
+				eventText.WriteString(part.Text)
+			}
+		}
+
+		text := eventText.String()
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+
+		fullResponse.WriteString(text)
+
+		// Prepare display text — strip distill markers and redact secrets
+		displayText := stripDistillMarker(text)
+		displayText = m.redactText(displayText)
+		if strings.TrimSpace(displayText) == "" {
+			continue
+		}
+
+		// Send this turn's text as a message immediately
+		outMsg := OutboundMessage{
+			Text:   displayText,
+			Format: FormatHTML,
+		}
+		// Only the first message is a reply to the user's message
+		if messagesSent == 0 {
+			outMsg.ReplyTo = msg.ID
+		}
+
+		if err := ch.Send(ctx, target, outMsg); err != nil {
+			m.logger.Printf("[channels] Failed to send message to %s: %v", msg.ChannelID, err)
+		} else {
+			messagesSent++
+		}
 	}
 
-	if err := ch.Send(ctx, target, outMsg); err != nil {
-		m.logger.Printf("[channels] Failed to send response to %s: %v", msg.ChannelID, err)
-		return fmt.Errorf("send error: %w", err)
+	// Stop typing indicator now that the agent is done
+	typingCancel()
+
+	// Handle auto-distillation from the full accumulated response
+	fullResponseStr := fullResponse.String()
+	if distillDesc := extractDistillMarker(fullResponseStr); distillDesc != "" {
+		m.logger.Printf("[channels] Auto-distill triggered: %s", distillDesc)
+		go func(desc string) {
+			if err := m.agent.AutoDistill(context.Background(), desc); err != nil {
+				m.logger.Printf("[channels] Auto-distill failed: %v", err)
+			}
+		}(distillDesc)
 	}
 
-	m.logger.Printf("[channels] Response sent to %s (chat: %s, %d chars)",
-		msg.ChannelID, msg.ChatID, len(displayText))
+	// Fallback if the agent produced no visible text at all
+	if messagesSent == 0 {
+		_ = ch.Send(ctx, target, OutboundMessage{
+			Text:    "I processed your request but have nothing to say.",
+			ReplyTo: msg.ID,
+			Format:  FormatText,
+		})
+	}
+
+	m.logger.Printf("[channels] Response sent to %s (chat: %s, %d messages)",
+		msg.ChannelID, msg.ChatID, messagesSent)
 
 	return nil
 }
@@ -423,4 +474,33 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// typingInterval is how often we refresh the typing indicator.
+// Telegram typing expires after ~5 seconds, so 4s gives a comfortable margin.
+const typingInterval = 4 * time.Second
+
+// sendTypingLoop sends periodic typing indicators until ctx is cancelled.
+// Best-effort: errors are logged but don't interrupt the agent run.
+func (m *ChannelManager) sendTypingLoop(ctx context.Context, ch Channel, target Target) {
+	// Send immediately so the user sees "typing..." right away
+	if err := ch.SendTyping(ctx, target); err != nil {
+		m.logger.Printf("[channels] Typing indicator failed: %v", err)
+	}
+
+	ticker := time.NewTicker(typingInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := ch.SendTyping(ctx, target); err != nil {
+				// Don't spam logs — just log once and stop
+				m.logger.Printf("[channels] Typing indicator failed: %v", err)
+				return
+			}
+		}
+	}
 }

@@ -55,6 +55,12 @@ type Channel interface {
 	// job results to all active recipients without needing per-job targeting.
 	BroadcastTargets() []Target
 
+	// SendTyping sends a "typing" indicator to the specified target.
+	// Typing indicators are ephemeral — on Telegram they last ~5 seconds.
+	// Callers should call this repeatedly for long-running operations.
+	// Channels that don't support typing indicators should return nil.
+	SendTyping(ctx context.Context, target Target) error
+
 	// Status returns the current connection and operational status.
 	Status() ChannelStatus
 }

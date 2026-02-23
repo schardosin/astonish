@@ -18,6 +18,8 @@ var SafeTools = map[string]bool{
 	"read_pdf":                  true,
 	"memory_search":             true,
 	"memory_get":                true,
+	"process_list":              true,
+	"process_read":              true,
 }
 
 // IsToolSafe returns true if the tool is read-only and safe to auto-approve.

@@ -45,25 +45,37 @@ func TestShellCommand_WorkingDir(t *testing.T) {
 }
 
 func TestShellCommand_ExitNonZero(t *testing.T) {
-	_, err := ShellCommand(nil, ShellCommandArgs{
+	result, err := ShellCommand(nil, ShellCommandArgs{
 		Command: "exit 1",
 	})
-	if err == nil {
-		t.Fatal("expected error for non-zero exit, got nil")
+	if err != nil {
+		t.Fatalf("ShellCommand() error = %v (PTY reports exit code in result, not error)", err)
+	}
+	if result.ExitCode == nil {
+		t.Fatal("expected ExitCode to be set for non-zero exit")
+	}
+	if *result.ExitCode != 1 {
+		t.Errorf("ExitCode = %d, want 1", *result.ExitCode)
 	}
 }
 
 func TestShellCommand_StderrInOutput(t *testing.T) {
-	// CombinedOutput captures both stdout and stderr
-	_, err := ShellCommand(nil, ShellCommandArgs{
+	// PTY merges stdout and stderr into a single stream
+	result, err := ShellCommand(nil, ShellCommandArgs{
 		Command: "echo error_msg >&2 && exit 1",
 	})
-	if err == nil {
-		t.Fatal("expected error, got nil")
+	if err != nil {
+		t.Fatalf("ShellCommand() error = %v (PTY reports exit code in result, not error)", err)
 	}
-	// The error message should mention command failure
-	if !strings.Contains(err.Error(), "failed to execute") {
-		t.Errorf("error = %q, want it to contain 'failed to execute'", err.Error())
+	// stderr should appear in the output stream (PTY merges stdout/stderr)
+	if !strings.Contains(result.Stdout, "error_msg") {
+		t.Errorf("Stdout = %q, want it to contain 'error_msg'", result.Stdout)
+	}
+	if result.ExitCode == nil {
+		t.Fatal("expected ExitCode to be set for non-zero exit")
+	}
+	if *result.ExitCode != 1 {
+		t.Errorf("ExitCode = %d, want 1", *result.ExitCode)
 	}
 }
 

@@ -1,5 +1,10 @@
 package config
 
+import (
+	"fmt"
+	"strings"
+)
+
 // StandardEnvVar describes an environment variable required by a standard MCP server.
 type StandardEnvVar struct {
 	Name        string `json:"name"`
@@ -202,6 +207,35 @@ func InstallStandardServer(id string, envValues map[string]string, storeKeyInCon
 	}
 	if srv.WebExtractTool != "" {
 		appCfg.General.WebExtractTool = srv.WebExtractTool
+	}
+
+	return SaveAppConfig(appCfg)
+}
+
+// UninstallStandardServer removes a standard server's configuration from config.yaml.
+// It deletes the WebServers entry and clears General.WebSearchTool / WebExtractTool
+// if they reference this server. The caller is responsible for removing the API key
+// from the credential store.
+func UninstallStandardServer(id string) error {
+	srv := GetStandardServer(id)
+	if srv == nil {
+		return &StandardServerError{ID: id, Message: "unknown standard server"}
+	}
+
+	appCfg, err := LoadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Remove the web server entry
+	delete(appCfg.WebServers, id)
+
+	// Clear web tool references that belong to this server
+	if strings.HasPrefix(appCfg.General.WebSearchTool, id+":") {
+		appCfg.General.WebSearchTool = ""
+	}
+	if strings.HasPrefix(appCfg.General.WebExtractTool, id+":") {
+		appCfg.General.WebExtractTool = ""
 	}
 
 	return SaveAppConfig(appCfg)

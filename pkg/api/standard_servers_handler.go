@@ -12,7 +12,6 @@ import (
 	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/mcp"
 )
 
@@ -87,19 +86,18 @@ func InstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Save API key to encrypted credential store
+	// Save API key to the shared credential store so that the in-memory
+	// cache is updated immediately (mergeStandardServers uses the same
+	// instance via getInstalledSecretGetter to resolve keys at load time).
 	storeKeyInConfig := true
-	configDir, _ := config.GetConfigDir()
-	if configDir != "" {
-		if store, storeErr := credentials.Open(configDir); storeErr == nil {
-			for _, ev := range srv.EnvVars {
-				if val, ok := req.Env[ev.Name]; ok && val != "" {
-					storeKey := "web_servers." + serverID + ".api_key"
-					if setErr := store.SetSecret(storeKey, val); setErr == nil {
-						storeKeyInConfig = false
-					}
-					break
+	if store := getAPICredentialStore(); store != nil {
+		for _, ev := range srv.EnvVars {
+			if val, ok := req.Env[ev.Name]; ok && val != "" {
+				storeKey := "web_servers." + serverID + ".api_key"
+				if setErr := store.SetSecret(storeKey, val); setErr == nil {
+					storeKeyInConfig = false
 				}
+				break
 			}
 		}
 	}
@@ -204,4 +202,53 @@ func InstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 		response["toolError"] = toolError
 	}
 	json.NewEncoder(w).Encode(response)
+}
+
+// UninstallStandardServerHandler handles DELETE /api/standard-servers/{id}
+// Removes a standard MCP server's configuration, credentials, and cached tools.
+func UninstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	serverID := vars["id"]
+
+	srv := config.GetStandardServer(serverID)
+	if srv == nil {
+		http.Error(w, "Unknown standard server: "+serverID, http.StatusNotFound)
+		return
+	}
+
+	// Keyless servers (e.g. Playwright) cannot be uninstalled
+	if len(srv.EnvVars) == 0 {
+		http.Error(w, "Server does not require configuration", http.StatusBadRequest)
+		return
+	}
+
+	// Remove API key from the shared credential store
+	if store := getAPICredentialStore(); store != nil {
+		storeKey := "web_servers." + serverID + ".api_key"
+		_ = store.RemoveSecret(storeKey)
+	}
+
+	// Remove from config.yaml (web_servers entry + web tool references)
+	if err := config.UninstallStandardServer(serverID); err != nil {
+		http.Error(w, "Failed to uninstall server: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Remove from in-memory and persistent caches
+	RemoveServerToolsFromCache(serverID)
+	cache.RemoveServer(serverID)
+	if err := cache.SaveCache(); err != nil {
+		log.Printf("[Cache] Warning: Failed to save cache after uninstall: %v", err)
+	}
+
+	// Clear server status
+	ClearServerStatus(serverID)
+
+	log.Printf("[Standard Server] Uninstalled '%s' (%s)", srv.ID, srv.DisplayName)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":     "uninstalled",
+		"serverName": srv.ID,
+	})
 }

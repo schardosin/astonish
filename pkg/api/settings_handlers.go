@@ -23,6 +23,7 @@ import (
 	"github.com/schardosin/astonish/pkg/provider/lmstudio"
 	"github.com/schardosin/astonish/pkg/provider/ollama"
 	openai_provider "github.com/schardosin/astonish/pkg/provider/openai"
+	"github.com/schardosin/astonish/pkg/provider/openai_compat"
 	"github.com/schardosin/astonish/pkg/provider/openrouter"
 	"github.com/schardosin/astonish/pkg/provider/poe"
 	"github.com/schardosin/astonish/pkg/provider/sap"
@@ -647,6 +648,22 @@ func ListProviderModelsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve secrets from credential store into the provider config so that
+	// ListModelsForProvider sees the actual API key (secrets are scrubbed from
+	// the YAML config file and stored in the credential store).
+	if instance, exists := cfg.Providers[providerID]; exists {
+		providerType := config.GetProviderType(providerID, instance)
+		if providerType == "" {
+			providerType = providerID
+		}
+		for _, key := range providerSecretKeys(providerType) {
+			resolved := resolveProviderSecret(providerID, key, "", instance)
+			if resolved != "" {
+				instance[key] = resolved
+			}
+		}
+	}
+
 	models, err := provider.ListModelsForProvider(r.Context(), providerID, cfg)
 	if err != nil {
 		http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
@@ -975,6 +992,40 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 			"models":       models,
 		})
 		return
+	}
+
+	// For OpenAI Compatible providers (matched by type, not instance name)
+	if pCfg := cfg.Providers[providerID]; pCfg != nil {
+		providerType := config.GetProviderType(providerID, pCfg)
+		if providerType == "openai_compat" {
+			apiKey := resolveProviderSecret(providerID, "api_key", "", pCfg)
+			baseURL := pCfg["base_url"]
+			if baseURL == "" {
+				baseURL = "https://api.openai.com/v1"
+			}
+
+			models, err := openai_compat.ListModels(r.Context(), apiKey, baseURL)
+			if err != nil {
+				http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+
+			var modelInfos []map[string]interface{}
+			for _, m := range models {
+				modelInfos = append(modelInfos, map[string]interface{}{
+					"id":   m,
+					"name": m,
+				})
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"provider":     providerID,
+				"has_metadata": false,
+				"models":       modelInfos,
+			})
+			return
+		}
 	}
 
 	// For other providers, return basic model list wrapped as ModelInfo

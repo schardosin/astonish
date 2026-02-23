@@ -1234,6 +1234,25 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                                 >
                                   Reconfigure
                                 </button>
+                                {srv.envVars?.length > 0 && (
+                                  <button
+                                    onClick={async () => {
+                                      try {
+                                        const res = await fetch(`/api/standard-servers/${srv.id}`, { method: 'DELETE' })
+                                        if (!res.ok) throw new Error('Failed to remove server')
+                                        await loadData()
+                                        if (onToolsRefresh) onToolsRefresh()
+                                      } catch (err) {
+                                        console.error('Failed to remove standard server:', err)
+                                      }
+                                    }}
+                                    className="p-0.5 rounded transition-colors hover:bg-red-500/10"
+                                    style={{ color: 'var(--text-muted)' }}
+                                    title="Remove configuration"
+                                  >
+                                    <Trash2 size={12} />
+                                  </button>
+                                )}
                               </div>
                             ) : (
                               <button

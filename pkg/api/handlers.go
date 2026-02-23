@@ -753,6 +753,7 @@ func RegisterRoutes(router *mux.Router) {
 	// Standard servers endpoints
 	router.HandleFunc("/api/standard-servers", ListStandardServersHandler).Methods("GET")
 	router.HandleFunc("/api/standard-servers/{id}/install", InstallStandardServerHandler).Methods("POST")
+	router.HandleFunc("/api/standard-servers/{id}", UninstallStandardServerHandler).Methods("DELETE")
 
 	// Provider endpoints
 	router.HandleFunc("/api/providers/{providerId}/models", ListProviderModelsHandler).Methods("GET")

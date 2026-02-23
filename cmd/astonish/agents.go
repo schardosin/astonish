@@ -11,8 +11,10 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/launcher"
+	"github.com/schardosin/astonish/pkg/tools"
 	"github.com/schardosin/astonish/pkg/ui"
 	"google.golang.org/adk/session"
 )
@@ -134,37 +136,22 @@ func handleRunCommand(args []string) error {
 		*providerName = "gemini"
 	}
 
-	// Set environment variables from config for the selected provider
-	if providerCfg, ok := appCfg.Providers[*providerName]; ok {
-		for k, v := range providerCfg {
-			envKey := ""
-			switch *providerName {
-			case "gemini":
-				if k == "api_key" {
-					envKey = "GOOGLE_API_KEY"
-				}
-			case "openai":
-				if k == "api_key" {
-					envKey = "OPENAI_API_KEY"
-				}
-			case "sap_ai_core":
-				switch k {
-				case "client_id":
-					envKey = "AICORE_CLIENT_ID"
-				case "client_secret":
-					envKey = "AICORE_CLIENT_SECRET"
-				case "auth_url":
-					envKey = "AICORE_AUTH_URL"
-				case "base_url":
-					envKey = "AICORE_BASE_URL"
-				case "resource_group":
-					envKey = "AICORE_RESOURCE_GROUP"
-				}
-			}
-			if envKey != "" && v != "" {
-				os.Setenv(envKey, v)
-			}
+	// Set up provider credentials from the encrypted credential store.
+	// After migration, secrets are scrubbed from config.yaml and stored
+	// only in the credential store. InjectProviderSecretsToConfig re-hydrates
+	// the in-memory config map so GetProvider() can read them.
+	configDir, configDirErr := config.GetConfigDir()
+	if configDirErr == nil {
+		if cs, csErr := credentials.Open(configDir); csErr == nil {
+			tools.SetCredentialStore(cs)
+			config.SetInstalledSecretGetter(cs.GetSecret)
+			config.InjectProviderSecretsToConfig(appCfg, cs.GetSecret)
+			config.SetupAllProviderEnvFromStore(appCfg, cs.GetSecret)
+		} else {
+			config.SetupAllProviderEnv(appCfg)
 		}
+	} else {
+		config.SetupAllProviderEnv(appCfg)
 	}
 
 	// Load MCP config and set environment variables from all servers

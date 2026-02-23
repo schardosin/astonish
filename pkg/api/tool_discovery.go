@@ -34,9 +34,9 @@ type ToolSearchResult struct {
 	Source         string            `json:"source"`
 	Tags           []string          `json:"tags"`
 	Installable    bool              `json:"installable"`
-	Reason         string            `json:"reason,omitempty"`       // Why this tool matches the requirement
-	RequiresApiKey bool              `json:"requiresApiKey"`         // Whether tool requires API key
-	EnvVars        map[string]string `json:"envVars,omitempty"`      // Required env vars (key -> placeholder value)
+	Reason         string            `json:"reason,omitempty"`  // Why this tool matches the requirement
+	RequiresApiKey bool              `json:"requiresApiKey"`    // Whether tool requires API key
+	EnvVars        map[string]string `json:"envVars,omitempty"` // Required env vars (key -> placeholder value)
 }
 
 // ToolSearchResponse is the response for POST /api/ai/tool-search
@@ -80,7 +80,7 @@ func normalizeToolName(name string) string {
 // Uses AI to semantically evaluate which store tools can fulfill the requirement
 func AIToolSearchHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	
+
 	var req ToolSearchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -137,6 +137,7 @@ func findToolsWithAI(ctx context.Context, requirement string, toolSummaries []st
 	if err != nil {
 		return nil
 	}
+	injectProviderSecrets(appCfg)
 
 	providerName := appCfg.General.DefaultProvider
 	modelName := appCfg.General.DefaultModel
@@ -208,7 +209,7 @@ CRITICAL: The "name" field MUST be copied EXACTLY from the AVAILABLE TOOLS list.
 
 	// Parse the JSON response
 	response := responseText.String()
-	
+
 	// Extract JSON from response (may be wrapped in markdown code blocks)
 	jsonStart := strings.Index(response, "{")
 	jsonEnd := strings.LastIndex(response, "}")
@@ -233,32 +234,32 @@ CRITICAL: The "name" field MUST be copied EXACTLY from the AVAILABLE TOOLS list.
 	for _, match := range parsed.Matches {
 		matchNameLower := strings.ToLower(match.Name)
 		matchNameNormalized := normalizeToolName(match.Name)
-		
+
 		var bestMatch *mcpstore.Server
 		for i := range servers {
 			srv := &servers[i]
 			srvNameLower := strings.ToLower(srv.Name)
 			srvNameNormalized := normalizeToolName(srv.Name)
-			
+
 			// Exact match
 			if srvNameLower == matchNameLower {
 				bestMatch = srv
 				break
 			}
-			
+
 			// Normalized match (removes spaces, hyphens, underscores)
 			if srvNameNormalized == matchNameNormalized {
 				bestMatch = srv
 				break
 			}
-			
+
 			// Contains match (for partial matches)
 			if strings.Contains(srvNameLower, matchNameLower) || strings.Contains(matchNameLower, srvNameLower) {
 				bestMatch = srv
 				// Don't break - keep looking for better match
 			}
 		}
-		
+
 		if bestMatch != nil {
 			// Check if already added (avoid duplicates)
 			alreadyAdded := false
@@ -271,13 +272,13 @@ CRITICAL: The "name" field MUST be copied EXACTLY from the AVAILABLE TOOLS list.
 			if alreadyAdded {
 				continue
 			}
-			
+
 			// Extract env vars from config if present
 			var envVars map[string]string
 			if bestMatch.Config != nil && len(bestMatch.Config.Env) > 0 {
 				envVars = bestMatch.Config.Env
 			}
-			
+
 			results = append(results, ToolSearchResult{
 				ID:             bestMatch.McpId,
 				Name:           bestMatch.Name,
@@ -396,7 +397,7 @@ type InternetSearchResponse struct {
 	TavilyAvailable bool                `json:"tavilyAvailable"`
 	Results         []InternetMCPResult `json:"results"`
 	Message         string              `json:"message,omitempty"`
-	ToolUsed        string              `json:"toolUsed,omitempty"`   // Name of the MCP tool used for search
+	ToolUsed        string              `json:"toolUsed,omitempty"`    // Name of the MCP tool used for search
 	SearchQuery     string              `json:"searchQuery,omitempty"` // The query sent to the tool
 }
 
@@ -481,7 +482,7 @@ func AIToolSearchInternetHandler(w http.ResponseWriter, r *http.Request) {
 	// The requirement often contains garbage like "that is not currently installed"
 	cleanedReq := req.Requirement
 	cleanedReq = strings.ToLower(cleanedReq)
-	
+
 	// Remove common garbage phrases
 	garbagePatterns := []string{
 		"that is not currently installed",
@@ -505,14 +506,14 @@ func AIToolSearchInternetHandler(w http.ResponseWriter, r *http.Request) {
 	for _, pattern := range garbagePatterns {
 		cleanedReq = strings.ReplaceAll(cleanedReq, pattern, " ")
 	}
-	
+
 	// Remove quotes, semicolons, and other punctuation
 	cleanedReq = regexp.MustCompile(`[";:,\(\)\[\]]`).ReplaceAllString(cleanedReq, " ")
-	
+
 	// Clean up whitespace and deduplicate words
 	cleanedReq = strings.TrimSpace(cleanedReq)
 	cleanedReq = regexp.MustCompile(`\s+`).ReplaceAllString(cleanedReq, " ")
-	
+
 	words := strings.Fields(cleanedReq)
 	seen := make(map[string]bool)
 	uniqueWords := []string{}
@@ -524,7 +525,7 @@ func AIToolSearchInternetHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	cleanedReq = strings.Join(uniqueWords, " ")
-	
+
 	// Build a clean search query - ALWAYS include "MCP server" for proper results
 	searchQuery := fmt.Sprintf("%s MCP server github npm", cleanedReq)
 	log.Printf("[Internet Search] Query: %s", searchQuery)
@@ -582,11 +583,11 @@ func URLExtractHandler(w http.ResponseWriter, r *http.Request) {
 		var searchConfigured bool
 		var searchToolName string
 		searchConfigured, serverName, searchToolName = IsWebSearchConfigured()
-		_ = searchToolName // Not used in fallback
+		_ = searchToolName   // Not used in fallback
 		extractToolName = "" // No specific tool name, will fallback to "extract" search
 		configured = searchConfigured
 	}
-	
+
 	if !configured {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(URLExtractResponse{
@@ -641,6 +642,7 @@ func extractMCPServerFromURL(ctx context.Context, url string, serverName string,
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
+	injectProviderSecrets(appCfg)
 
 	// Initialize MCP manager
 	mcpManager, err := mcp.NewManager()
@@ -696,17 +698,17 @@ func extractMCPServerFromURL(ctx context.Context, url string, serverName string,
 	type toolWithDeclaration interface {
 		Declaration() *genai.FunctionDeclaration
 	}
-	
+
 	declTool, ok := extractTool.(toolWithDeclaration)
 	if !ok {
 		return nil, fmt.Errorf("extract tool does not expose its schema")
 	}
-	
+
 	declaration := declTool.Declaration()
 	if declaration == nil {
 		return nil, fmt.Errorf("extract tool has nil declaration")
 	}
-	
+
 	log.Printf("[URL Extract] Tool schema: %s - %s", declaration.Name, declaration.Description)
 
 	// Get LLM provider for tool execution
@@ -879,7 +881,6 @@ Respond ONLY with the JSON object or null.`, string(extractResultJSON), url)
 	return &result, nil
 }
 
-
 type InternetMCPInstallRequest struct {
 	Name    string            `json:"name"`
 	Command string            `json:"command"`
@@ -975,12 +976,13 @@ func InternetMCPInstallHandler(w http.ResponseWriter, r *http.Request) {
 // searchInternetForMCPServers uses the configured MCP web search tool to find MCP servers
 func searchInternetForMCPServers(ctx context.Context, serverName string, searchToolName string, searchQuery string) ([]InternetMCPResult, error) {
 	log.Printf("[searchInternetForMCPServers] Starting with server=%s, tool=%s, query=%s", serverName, searchToolName, searchQuery)
-	
+
 	// Load app configuration
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
+	injectProviderSecrets(appCfg)
 
 	// Initialize MCP manager and the specific web search server
 	mcpManager, err := mcp.NewManager()
@@ -1035,12 +1037,12 @@ func searchInternetForMCPServers(ctx context.Context, serverName string, searchT
 	type toolWithDeclaration interface {
 		Declaration() *genai.FunctionDeclaration
 	}
-	
+
 	declTool, ok := searchTool.(toolWithDeclaration)
 	if !ok {
 		return nil, fmt.Errorf("search tool does not expose its schema")
 	}
-	
+
 	declaration := declTool.Declaration()
 	if declaration == nil {
 		return nil, fmt.Errorf("search tool has nil declaration")
@@ -1218,4 +1220,3 @@ Example:
 
 	return results, nil
 }
-

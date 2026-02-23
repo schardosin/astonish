@@ -25,12 +25,12 @@ import (
 
 // ChatRequest represents the request body for /api/chat
 type ChatRequest struct {
-	AgentID   string `json:"agentId"`
-	Message   string `json:"message"` // User input
-	SessionID string `json:"sessionId"`
-	Provider  string `json:"provider,omitempty"`
-	Model     string `json:"model,omitempty"`
-	AutoApprove bool `json:"autoApprove,omitempty"` // Global auto-approve flag
+	AgentID     string `json:"agentId"`
+	Message     string `json:"message"` // User input
+	SessionID   string `json:"sessionId"`
+	Provider    string `json:"provider,omitempty"`
+	Model       string `json:"model,omitempty"`
+	AutoApprove bool   `json:"autoApprove,omitempty"` // Global auto-approve flag
 }
 
 // SessionManager manages active sessions
@@ -199,7 +199,6 @@ func getRequiredMCPServers(cfg *config.AgentConfig) []string {
 		}
 	}
 
-
 	if len(toolsNeeded) == 0 {
 		return nil
 	}
@@ -298,6 +297,7 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("Warning: Failed to load app config: %v\n", err)
 		appCfg = &config.AppConfig{}
 	}
+	injectProviderSecrets(appCfg)
 
 	providerName := req.Provider
 	if providerName == "" {
@@ -337,6 +337,16 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Register credential tools (resolve_credential, etc.)
+	if credTools, credErr := tools.GetCredentialTools(); credErr == nil {
+		internalTools = append(internalTools, credTools...)
+	}
+
+	// Register process management tools (process_start, process_write, etc.)
+	if processTools, procErr := tools.GetProcessTools(); procErr == nil {
+		internalTools = append(internalTools, processTools...)
+	}
+
 	// Initialize MCP - per-session, only servers needed for this flow
 	requiredServers := getRequiredMCPServers(cfg)
 	_, mcpToolsets := sm.GetOrCreateMCPManager(ctx, req.SessionID, requiredServers)
@@ -347,6 +357,11 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	astonishAgent.IsWebMode = true  // Enable Web mode for UI (disables ANSI colors)
 	astonishAgent.SessionService = sm.service
 	astonishAgent.AutoApprove = req.AutoApprove
+
+	// Wire credential redactor so secrets are masked in SSE output
+	if cs := tools.GetCredentialStore(); cs != nil {
+		astonishAgent.Redactor = cs.Redactor()
+	}
 
 	adkAgent, err := adkagent.New(adkagent.Config{
 		Name:        "astonish_agent",

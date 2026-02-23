@@ -250,6 +250,27 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		fmt.Printf("ERROR: Failed to initialize tools: %v\n", err)
 		return fmt.Errorf("failed to initialize internal tools: %w", err)
 	}
+
+	// Register credential tools (resolve_credential, etc.)
+	credTools, credErr := tools.GetCredentialTools()
+	if credErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("Warning: Failed to create credential tools: %v\n", credErr)
+		}
+	} else {
+		internalTools = append(internalTools, credTools...)
+	}
+
+	// Register process management tools (process_start, process_write, etc.)
+	processTools, procErr := tools.GetProcessTools()
+	if procErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("Warning: Failed to create process tools: %v\n", procErr)
+		}
+	} else {
+		internalTools = append(internalTools, processTools...)
+	}
+
 	if cfg.DebugMode {
 		fmt.Printf("✓ Internal tools initialized: %d tools available\n", len(internalTools))
 	}

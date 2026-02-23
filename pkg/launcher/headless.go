@@ -9,6 +9,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/tools"
@@ -41,6 +42,21 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 		log.SetOutput(io.Discard)
 	}
 
+	// Ensure provider secrets are available. When called from the daemon,
+	// secrets are typically already injected into AppConfig. But for safety
+	// (and if called from other contexts), initialize the credential store
+	// and inject secrets if they're missing.
+	configDir, configDirErr := config.GetConfigDir()
+	if configDirErr == nil {
+		if cs, csErr := credentials.Open(configDir); csErr == nil {
+			if tools.GetCredentialStore() == nil {
+				tools.SetCredentialStore(cs)
+			}
+			config.InjectProviderSecretsToConfig(cfg.AppConfig, cs.GetSecret)
+			config.SetupAllProviderEnvFromStore(cfg.AppConfig, cs.GetSecret)
+		}
+	}
+
 	// Initialize LLM
 	llm, err := provider.GetProvider(ctx, cfg.ProviderName, cfg.ModelName, cfg.AppConfig)
 	if err != nil {
@@ -51,6 +67,26 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 	internalTools, err := tools.GetInternalTools()
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize tools: %w", err)
+	}
+
+	// Register credential tools (resolve_credential, etc.)
+	credTools, credErr := tools.GetCredentialTools()
+	if credErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("[headless] Warning: Failed to create credential tools: %v\n", credErr)
+		}
+	} else {
+		internalTools = append(internalTools, credTools...)
+	}
+
+	// Register process management tools (process_start, process_write, etc.)
+	processTools, procErr := tools.GetProcessTools()
+	if procErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("[headless] Warning: Failed to create process tools: %v\n", procErr)
+		}
+	} else {
+		internalTools = append(internalTools, processTools...)
 	}
 
 	// Initialize MCP tools needed for this flow

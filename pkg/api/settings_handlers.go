@@ -53,6 +53,18 @@ func getAPICredentialStore() *credentials.Store {
 	return apiCredStore
 }
 
+// injectProviderSecrets injects secrets from the credential store into a
+// freshly-loaded AppConfig. API handlers load config from disk per request
+// (to pick up changes), but the on-disk config has scrubbed API keys after
+// credential migration. This re-hydrates them from the encrypted store.
+func injectProviderSecrets(appCfg *config.AppConfig) {
+	store := getAPICredentialStore()
+	if store == nil || appCfg == nil {
+		return
+	}
+	config.InjectProviderSecretsToConfig(appCfg, store.GetSecret)
+}
+
 // resolveProviderSecret looks up a provider secret from the credential store,
 // falling back to the config map and then to an environment variable.
 func resolveProviderSecret(instanceName, cfgKey, envVar string, providerCfg config.ProviderConfig) string {

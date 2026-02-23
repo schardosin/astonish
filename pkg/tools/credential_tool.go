@@ -27,12 +27,12 @@ func GetCredentialStore() *credentials.Store {
 
 type SaveCredentialArgs struct {
 	Name         string `json:"name" jsonschema:"Short identifier for this credential (e.g., 'my-api', 'proxmox', 'saas-prod')"`
-	Type         string `json:"type" jsonschema:"Credential type: 'api_key' (custom header+value), 'bearer' (Authorization: Bearer token), 'basic' (username+password), 'oauth_client_credentials' (auto-refreshing OAuth2)"`
+	Type         string `json:"type" jsonschema:"Credential type: 'api_key' (custom header+value), 'bearer' (Authorization: Bearer token), 'basic' (HTTP Basic Auth), 'password' (plain username+password for SSH/FTP/SMTP/databases), 'oauth_client_credentials' (auto-refreshing OAuth2)"`
 	Header       string `json:"header,omitempty" jsonschema:"Header name for api_key type (e.g., 'X-API-Key', 'Authorization'). Required for api_key type."`
 	Value        string `json:"value,omitempty" jsonschema:"The API key value. Required for api_key type."`
 	Token        string `json:"token,omitempty" jsonschema:"The bearer token. Required for bearer type."`
-	Username     string `json:"username,omitempty" jsonschema:"Username for basic auth. Required for basic type."`
-	Password     string `json:"password,omitempty" jsonschema:"Password for basic auth. Required for basic type."`
+	Username     string `json:"username,omitempty" jsonschema:"Username for basic or password type. Required for both."`
+	Password     string `json:"password,omitempty" jsonschema:"Password for basic or password type. Required for both."`
 	AuthURL      string `json:"auth_url,omitempty" jsonschema:"OAuth token endpoint URL. Required for oauth_client_credentials type."`
 	ClientID     string `json:"client_id,omitempty" jsonschema:"OAuth client ID. Required for oauth_client_credentials type."`
 	ClientSecret string `json:"client_secret,omitempty" jsonschema:"OAuth client secret. Required for oauth_client_credentials type."`
@@ -107,10 +107,20 @@ func saveCredential(_ tool.Context, args SaveCredentialArgs) (SaveCredentialResu
 			Scope:        args.Scope,
 		}
 
+	case credentials.CredPassword:
+		if args.Username == "" {
+			return SaveCredentialResult{Status: "error", Message: "Username is required for password type"}, nil
+		}
+		cred = &credentials.Credential{
+			Type:     credentials.CredPassword,
+			Username: args.Username,
+			Password: args.Password,
+		}
+
 	default:
 		return SaveCredentialResult{
 			Status:  "error",
-			Message: fmt.Sprintf("Unknown type %q. Use: api_key, bearer, basic, or oauth_client_credentials", args.Type),
+			Message: fmt.Sprintf("Unknown type %q. Use: api_key, bearer, basic, password, or oauth_client_credentials", args.Type),
 		}, nil
 	}
 
@@ -153,6 +163,9 @@ func listCredentials(_ tool.Context, args ListCredentialsArgs) (ListCredentialsR
 	if credentialStoreVar == nil {
 		return ListCredentialsResult{Message: "Credential store is not available"}, nil
 	}
+
+	// Reload from disk to pick up changes made by CLI (astonish credential add/remove)
+	credentialStoreVar.Reload()
 
 	// HTTP credentials
 	creds := credentialStoreVar.List()
@@ -280,6 +293,12 @@ func testCredential(_ tool.Context, args TestCredentialArgs) (TestCredentialResu
 			Message: fmt.Sprintf("OAuth credential %q: token acquired successfully", args.Name),
 		}, nil
 
+	case credentials.CredPassword:
+		return TestCredentialResult{
+			Status:  "ok",
+			Message: fmt.Sprintf("Credential %q configured (%s, user: %s). Use resolve_credential to retrieve the username and password for SSH/FTP/database connections.", args.Name, cred.Type, cred.Username),
+		}, nil
+
 	default:
 		return TestCredentialResult{
 			Status:  "ok",
@@ -288,12 +307,78 @@ func testCredential(_ tool.Context, args TestCredentialArgs) (TestCredentialResu
 	}
 }
 
+// --- resolve_credential tool ---
+
+type ResolveCredentialArgs struct {
+	Name string `json:"name" jsonschema:"The credential name to resolve"`
+}
+
+type ResolveCredentialResult struct {
+	Status       string `json:"status"`
+	Message      string `json:"message,omitempty"`
+	Type         string `json:"type,omitempty"`
+	Username     string `json:"username,omitempty"`
+	Password     string `json:"password,omitempty"`
+	Token        string `json:"token,omitempty"`
+	Header       string `json:"header,omitempty"`
+	Value        string `json:"value,omitempty"`
+	AuthURL      string `json:"auth_url,omitempty"`
+	ClientID     string `json:"client_id,omitempty"`
+}
+
+func resolveCredential(_ tool.Context, args ResolveCredentialArgs) (ResolveCredentialResult, error) {
+	if credentialStoreVar == nil {
+		return ResolveCredentialResult{Status: "error", Message: "Credential store is not available"}, nil
+	}
+
+	if args.Name == "" {
+		return ResolveCredentialResult{Status: "error", Message: "Name is required"}, nil
+	}
+
+	// Reload from disk to pick up changes made by CLI (astonish credential add/remove)
+	credentialStoreVar.Reload()
+
+	cred := credentialStoreVar.Get(args.Name)
+	if cred == nil {
+		return ResolveCredentialResult{
+			Status:  "error",
+			Message: fmt.Sprintf("Credential %q not found", args.Name),
+		}, nil
+	}
+
+	result := ResolveCredentialResult{
+		Status: "ok",
+		Type:   string(cred.Type),
+	}
+
+	switch cred.Type {
+	case credentials.CredPassword:
+		result.Username = cred.Username
+		result.Password = cred.Password
+	case credentials.CredBasic:
+		result.Username = cred.Username
+		result.Password = cred.Password
+	case credentials.CredBearer:
+		result.Token = cred.Token
+	case credentials.CredAPIKey:
+		result.Header = cred.Header
+		result.Value = cred.Value
+	case credentials.CredOAuthClientCreds:
+		// Don't expose client secret — use http_request with credential param instead
+		result.AuthURL = cred.AuthURL
+		result.ClientID = cred.ClientID
+		result.Message = "Use http_request with credential parameter for OAuth — the token is managed automatically."
+	}
+
+	return result, nil
+}
+
 // --- Tool constructors ---
 
 func NewSaveCredentialTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name: "save_credential",
-		Description: `Save a credential (API key, token, or OAuth config) to the encrypted credential store.
+		Description: `Save a credential (API key, token, password, or OAuth config) to the encrypted credential store.
 
 The credential is encrypted at rest and never exposed in conversation history. 
 Use this IMMEDIATELY when the user provides any secret (API key, token, password, client secret).
@@ -302,10 +387,12 @@ Do NOT repeat the secret value in your response — just confirm it was saved.
 Types:
 - api_key: Custom header + value (e.g., X-API-Key: sk-...)
 - bearer: Authorization: Bearer <token>
-- basic: Authorization: Basic <base64(user:pass)>
+- basic: HTTP Basic Auth header (Authorization: Basic <base64(user:pass)>)
+- password: Plain username + password for non-HTTP use (SSH, FTP, SMTP, databases)
 - oauth_client_credentials: Auto-refreshing OAuth2 (provide auth_url, client_id, client_secret)
 
-After saving, the credential can be referenced by name in http_request calls.`,
+After saving, HTTP credentials (api_key, bearer, basic, oauth) can be used with http_request.
+Password credentials can be resolved with resolve_credential for use with process_write (SSH, etc).`,
 	}, saveCredential)
 }
 
@@ -328,6 +415,27 @@ func NewTestCredentialTool() (tool.Tool, error) {
 		Name:        "test_credential",
 		Description: "Test a stored credential. For OAuth: performs the token acquisition flow. For others: confirms configuration is valid.",
 	}, testCredential)
+}
+
+func NewResolveCredentialTool() (tool.Tool, error) {
+	return functiontool.New(functiontool.Config{
+		Name: "resolve_credential",
+		Description: `Retrieve the raw fields of a stored credential by name.
+
+Use this to get username/password for SSH, FTP, SMTP, database connections — anything that is not an HTTP API.
+The returned values can then be piped to interactive prompts via process_write.
+
+Returns different fields depending on the credential type:
+- password: username, password
+- basic: username, password
+- bearer: token
+- api_key: header, value
+- oauth_client_credentials: auth_url, client_id (no secret — use http_request instead)
+
+The returned values are NOT redacted so you can use them directly in commands (e.g., sshpass, process_write).
+However, the output redaction system will scrub them from your text responses to the user.
+Do NOT echo secrets back to the user — use them only for programmatic purposes.`,
+	}, resolveCredential)
 }
 
 // GetCredentialTools returns all credential management tools.
@@ -357,6 +465,12 @@ func GetCredentialTools() ([]tool.Tool, error) {
 		return nil, fmt.Errorf("test_credential: %w", err)
 	}
 	tools = append(tools, testTool)
+
+	resolveTool, err := NewResolveCredentialTool()
+	if err != nil {
+		return nil, fmt.Errorf("resolve_credential: %w", err)
+	}
+	tools = append(tools, resolveTool)
 
 	return tools, nil
 }

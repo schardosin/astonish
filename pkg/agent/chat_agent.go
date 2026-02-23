@@ -107,10 +107,35 @@ func NewChatAgent(llm model.LLM, internalTools []tool.Tool, toolsets []tool.Tool
 	}
 }
 
+// redactEventText applies credential redaction to any LLM text parts in an event.
+// This prevents the LLM from leaking secrets (e.g., from resolve_credential) in
+// its text responses to the user. Tool call arguments are NOT affected.
+func redactEventText(r *credentials.Redactor, event *session.Event) {
+	if r == nil || event == nil {
+		return
+	}
+	if event.LLMResponse.Content != nil {
+		for i, part := range event.LLMResponse.Content.Parts {
+			if part.Text != "" {
+				event.LLMResponse.Content.Parts[i].Text = r.Redact(part.Text)
+			}
+		}
+	}
+}
+
 // Run implements the agent.Run interface for ADK.
 // It is called by the ADK runner for each user message.
 func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
 	return func(yield func(*session.Event, error) bool) {
+		// Wrap yield to redact credential values from LLM text responses.
+		// The LLM may have received raw secrets via resolve_credential and
+		// could accidentally echo them. This ensures secrets never reach the user.
+		origYield := yield
+		yield = func(event *session.Event, err error) bool {
+			redactEventText(c.Redactor, event)
+			return origYield(event, err)
+		}
+
 		// Extract user text
 		userText := ""
 		if ctx.UserContent() != nil {
@@ -206,11 +231,16 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 		// Create the AfterToolCallback for trace recording
 		afterToolCallback := func(ctx tool.Context, t tool.Tool, input, output map[string]any, err error) (map[string]any, error) {
-			// Redact credential values from tool output before the LLM sees them
-			if c.Redactor != nil && output != nil {
-				output = c.Redactor.RedactMap(output)
+			// Redact credential values from tool output before the LLM sees them.
+			// Exception: resolve_credential must return raw values so the LLM can
+			// use them programmatically (e.g., pipe a password to sshpass via process_write).
+			// Secrets in the LLM's text responses are still caught by the session
+			// transcript redactor and channel output redactor.
+			redactedOutput := output
+			if c.Redactor != nil && output != nil && t.Name() != "resolve_credential" {
+				redactedOutput = c.Redactor.RedactMap(output)
 			}
-			trace.RecordStep(t.Name(), input, output, err)
+			trace.RecordStep(t.Name(), input, redactedOutput, err)
 			if c.DebugMode {
 				status := "OK"
 				if err != nil {
@@ -218,7 +248,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 				}
 				fmt.Printf("[Chat DEBUG] Tool call recorded: %s -> %s\n", t.Name(), status)
 			}
-			return output, err
+			return redactedOutput, err
 		}
 
 		// Build BeforeModelCallbacks

@@ -415,7 +415,7 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 		// Pending state delta to be attached to the next event
 		pendingStateDelta := make(map[string]any)
 
-		// Wrap yield to inject pendingStateDelta
+		// Wrap yield to inject pendingStateDelta and redact credential values
 		originalYield := yield
 		yield = func(event *session.Event, err error) bool {
 			if event != nil && len(pendingStateDelta) > 0 {
@@ -431,6 +431,10 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				// Clear pendingStateDelta so we don't send it again
 				pendingStateDelta = make(map[string]any)
 			}
+			// Redact credential values from LLM text responses before they
+			// reach the user. The LLM may have received raw secrets via
+			// resolve_credential and could accidentally echo them.
+			redactEventText(a.Redactor, event)
 			return originalYield(event, err)
 		}
 
@@ -1845,8 +1849,10 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		// Add AfterToolCallback for debugging and raw_tool_output handling
 		afterToolCallbacks = []llmagent.AfterToolCallback{
 			func(ctx tool.Context, t tool.Tool, args map[string]any, result map[string]any, err error) (map[string]any, error) {
-				// Redact credential values from tool output before the LLM sees them
-				if a.Redactor != nil && result != nil {
+				// Redact credential values from tool output before the LLM sees them.
+				// Exception: resolve_credential must return raw values so the LLM can
+				// use them programmatically (e.g., pipe a password to sshpass via process_write).
+				if a.Redactor != nil && result != nil && t.Name() != "resolve_credential" {
 					result = a.Redactor.RedactMap(result)
 				}
 
@@ -3073,8 +3079,9 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 	// toolResult is likely a struct (e.g. ShellCommandResult).
 	// We need to extract fields based on `output_model` and `raw_tool_output`.
 
-	// Redact credential values from tool output before storing in state
-	if a.Redactor != nil && toolResult != nil {
+	// Redact credential values from tool output before storing in state.
+	// Exception: resolve_credential must return raw values for programmatic use.
+	if a.Redactor != nil && toolResult != nil && toolName != "resolve_credential" {
 		toolResult = a.Redactor.RedactMap(toolResult)
 	}
 

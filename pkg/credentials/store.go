@@ -26,6 +26,12 @@ const (
 	// CredOAuthClientCreds performs OAuth2 client_credentials flow
 	// and produces Authorization: Bearer <access_token>.
 	CredOAuthClientCreds CredentialType = "oauth_client_credentials"
+
+	// CredPassword stores a plain username + password pair for non-HTTP use
+	// cases: SSH, FTP, SMTP, databases, etc. Unlike basic, this type is not
+	// an HTTP credential — Resolve() will return an error. Use Get() or the
+	// resolve_credential LLM tool to access the raw fields.
+	CredPassword CredentialType = "password"
 )
 
 // Credential holds authentication data for a single named credential.
@@ -107,6 +113,27 @@ func Open(configDir string) (*Store, error) {
 	}
 
 	return s, nil
+}
+
+// Reload re-reads the credential store from disk, picking up changes made by
+// other processes (e.g., the CLI running "astonish credential add" while the
+// daemon is running). The in-memory state and redaction signatures are fully
+// replaced. This is safe to call concurrently with other Store methods.
+func (s *Store) Reload() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.load(); err != nil {
+		return fmt.Errorf("reload credential store: %w", err)
+	}
+
+	// Rebuild redaction signatures from refreshed data
+	s.redactor.UpdateFromCredentials(s.data.Credentials)
+	for key, val := range s.data.Secrets {
+		s.redactor.AddSecret("secret/"+key, val)
+	}
+
+	return nil
 }
 
 // Get returns a copy of the named credential, or nil if not found.
@@ -209,6 +236,9 @@ func (s *Store) Resolve(name string) (headerKey, headerValue string, err error) 
 			return "", "", fmt.Errorf("credential %q OAuth: %w", name, err)
 		}
 		return "Authorization", "Bearer " + token, nil
+
+	case CredPassword:
+		return "", "", fmt.Errorf("credential %q is a password credential (for SSH/FTP/etc.), not an HTTP credential — use resolve_credential to access its fields", name)
 
 	default:
 		return "", "", fmt.Errorf("credential %q: unknown type %q", name, credCopy.Type)

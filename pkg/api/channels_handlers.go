@@ -15,6 +15,28 @@ var (
 	channelManager   *channels.ChannelManager
 )
 
+// channelReloadFn holds a callback that reloads channel configuration.
+// Set by the daemon run loop via SetChannelReloadFunc.
+var (
+	channelReloadMu sync.RWMutex
+	channelReloadFn func() error
+)
+
+// SetChannelReloadFunc registers a callback that the daemon provides to
+// reload channels from the latest config. Called once during daemon startup.
+func SetChannelReloadFunc(fn func() error) {
+	channelReloadMu.Lock()
+	defer channelReloadMu.Unlock()
+	channelReloadFn = fn
+}
+
+// getChannelReloadFunc returns the registered reload callback, or nil.
+func getChannelReloadFunc() func() error {
+	channelReloadMu.RLock()
+	defer channelReloadMu.RUnlock()
+	return channelReloadFn
+}
+
 // SetChannelManager registers the active channel manager for API access.
 // Called by the daemon run loop after channel initialization.
 func SetChannelManager(cm *channels.ChannelManager) {
@@ -76,4 +98,35 @@ func ChannelsStatusHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// ChannelsReloadHandler re-reads channel configuration and reinitializes
+// channel adapters without restarting the daemon process.
+//
+// POST /api/channels/reload
+//
+// Response:
+//
+//	{ "status": "ok", "message": "Channels reloaded" }
+func ChannelsReloadHandler(w http.ResponseWriter, r *http.Request) {
+	reload := getChannelReloadFunc()
+	if reload == nil {
+		http.Error(w, `{"error":"reload not available"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := reload(); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "ok",
+		"message": "Channels reloaded",
+	})
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -113,6 +114,11 @@ func Run(cfg RunConfig) error {
 	// The ChatAgent is expensive to create, so we only init it when channels are enabled.
 	var channelMgr *channels.ChannelManager
 	var factoryResult *launcher.ChatFactoryResult
+	defer func() {
+		if factoryResult != nil {
+			factoryResult.Cleanup()
+		}
+	}()
 
 	needsChatAgent := appCfg.Channels.IsChannelsEnabled()
 
@@ -131,27 +137,33 @@ func Run(cfg RunConfig) error {
 			logger.Printf("Warning: Failed to initialize ChatAgent: %v", factoryErr)
 		} else {
 			factoryResult = fr
-			defer factoryResult.Cleanup()
 		}
 	}
 
-	// --- Initialize channel manager if channels are enabled ---
-	if appCfg.Channels.IsChannelsEnabled() && factoryResult != nil {
-		channelMgr = channels.NewChannelManager(factoryResult.ChatAgent, factoryResult.SessionService, log.Default(), &channels.ChannelManagerConfig{
+	// initChannels creates (or recreates) the ChannelManager from fresh config.
+	// It registers and starts all enabled channel adapters. The ChatAgent and
+	// factoryResult are reused — only channel adapters are recycled.
+	initChannels := func(freshCfg *config.AppConfig) (*channels.ChannelManager, error) {
+		if !freshCfg.Channels.IsChannelsEnabled() {
+			return nil, nil
+		}
+		if factoryResult == nil {
+			return nil, fmt.Errorf("channels enabled but no ChatAgent available — restart the daemon")
+		}
+
+		mgr := channels.NewChannelManager(factoryResult.ChatAgent, factoryResult.SessionService, log.Default(), &channels.ChannelManagerConfig{
 			ProviderName: factoryResult.ProviderName,
 			ModelName:    factoryResult.ModelName,
 			ToolCount:    len(factoryResult.InternalTools),
 		})
 
-		// Wire credential redactor to channel manager for outbound message sanitization
 		if factoryResult.CredentialStore != nil {
-			channelMgr.SetRedactor(factoryResult.CredentialStore.Redactor())
+			mgr.SetRedactor(factoryResult.CredentialStore.Redactor())
 		}
 
 		// Register Telegram if enabled
-		if appCfg.Channels.Telegram.IsTelegramEnabled() {
-			// Resolve bot token: credential store first, then config fallback
-			botToken := appCfg.Channels.Telegram.BotToken
+		if freshCfg.Channels.Telegram.IsTelegramEnabled() {
+			botToken := freshCfg.Channels.Telegram.BotToken
 			if botToken == "" && factoryResult.CredentialStore != nil {
 				botToken = factoryResult.CredentialStore.GetSecret("channels.telegram.bot_token")
 			}
@@ -160,24 +172,90 @@ func Run(cfg RunConfig) error {
 			} else {
 				tg := telegram.New(&telegram.Config{
 					BotToken:  botToken,
-					AllowFrom: appCfg.Channels.Telegram.AllowFrom,
-					Commands:  channelMgr.Commands(),
+					AllowFrom: freshCfg.Channels.Telegram.AllowFrom,
+					Commands:  mgr.Commands(),
 				}, log.Default())
-				channelMgr.Register(tg)
+				mgr.Register(tg)
 				logger.Printf("Telegram channel registered")
 			}
 		}
 
-		// Start all channels
-		if err := channelMgr.StartAll(ctx); err != nil {
-			logger.Printf("Warning: Failed to start channels: %v", err)
-		} else {
-			logger.Printf("Channels started")
+		if err := mgr.StartAll(ctx); err != nil {
+			return mgr, fmt.Errorf("failed to start channels: %w", err)
+		}
+		logger.Printf("Channels started")
+		return mgr, nil
+	}
+
+	// --- Initialize channel manager if channels are enabled ---
+	if mgr, err := initChannels(appCfg); err != nil {
+		logger.Printf("Warning: %v", err)
+	} else {
+		channelMgr = mgr
+	}
+	api.SetChannelManager(channelMgr)
+
+	// reloadChannels re-reads config, stops existing channels, and starts new
+	// ones. Called by the POST /api/channels/reload endpoint so that CLI
+	// commands like "astonish channels setup telegram" can activate changes
+	// without a full daemon restart.
+	var reloadMu sync.Mutex
+	reloadChannels := func() error {
+		reloadMu.Lock()
+		defer reloadMu.Unlock()
+
+		logger.Printf("Reloading channel configuration...")
+
+		// Re-read config and credential store from disk
+		freshCfg, err := config.LoadAppConfig()
+		if err != nil {
+			return fmt.Errorf("failed to reload config: %w", err)
+		}
+		if factoryResult != nil && factoryResult.CredentialStore != nil {
+			if err := factoryResult.CredentialStore.Reload(); err != nil {
+				logger.Printf("Warning: failed to reload credential store: %v", err)
+			}
 		}
 
-		// Make channel manager available to API handlers
+		// Stop existing channels
+		if channelMgr != nil {
+			shutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			if err := channelMgr.StopAll(shutCtx); err != nil {
+				logger.Printf("Warning: error stopping channels: %v", err)
+			}
+		}
+
+		// Lazy-init ChatAgent if channels are now enabled but weren't at startup
+		if freshCfg.Channels.IsChannelsEnabled() && factoryResult == nil {
+			logger.Printf("Initializing ChatAgent for newly enabled channels...")
+			fr, factoryErr := launcher.NewWiredChatAgent(ctx, &launcher.ChatFactoryConfig{
+				AppConfig:    freshCfg,
+				ProviderName: freshCfg.General.DefaultProvider,
+				ModelName:    freshCfg.General.DefaultModel,
+				DebugMode:    cfg.Debug,
+				AutoApprove:  true,
+			})
+			if factoryErr != nil {
+				return fmt.Errorf("failed to initialize ChatAgent: %w", factoryErr)
+			}
+			factoryResult = fr
+			// Cleanup handled by the deferred closure in Run() that reads
+			// the current factoryResult at shutdown time.
+		}
+
+		// Create fresh channel manager with new config
+		mgr, err := initChannels(freshCfg)
+		if err != nil {
+			logger.Printf("Warning: %v", err)
+		}
+		channelMgr = mgr
 		api.SetChannelManager(channelMgr)
+
+		logger.Printf("Channel reload complete")
+		return nil
 	}
+	api.SetChannelReloadFunc(reloadChannels)
 
 	// --- Initialize scheduler if enabled ---
 	var sched *scheduler.Scheduler

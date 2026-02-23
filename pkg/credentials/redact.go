@@ -155,6 +155,8 @@ func (r *Redactor) addSecretFieldsLocked(name string, cred *Credential) {
 			b64 := base64.StdEncoding.EncodeToString([]byte(basicAuth))
 			r.signatures[b64] = name
 		}
+	case CredPassword:
+		r.addVariantsLocked(name, cred.Password)
 	case CredOAuthClientCreds:
 		r.addVariantsLocked(name, cred.ClientSecret)
 		// Client ID is often semi-public but let's protect it too

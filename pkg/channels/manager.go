@@ -239,6 +239,7 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 					ReplyTo: msg.ID,
 					Format:  FormatText,
 				})
+				messagesSent++
 			}
 			break
 		}

@@ -131,7 +131,8 @@ func handleCredentialAdd(name string) error {
 				Options(
 					huh.NewOption("API Key (custom header + value)", "api_key"),
 					huh.NewOption("Bearer Token (Authorization: Bearer ...)", "bearer"),
-					huh.NewOption("Basic Auth (username + password)", "basic"),
+					huh.NewOption("Basic Auth (HTTP Authorization header)", "basic"),
+					huh.NewOption("Password (plain username + password for SSH/FTP/SMTP/etc.)", "password"),
 					huh.NewOption("OAuth Client Credentials (auto token refresh)", "oauth_client_credentials"),
 				).
 				Value(&credType),
@@ -150,6 +151,8 @@ func handleCredentialAdd(name string) error {
 		cred, err = collectBearerCred()
 	case credentials.CredBasic:
 		cred, err = collectBasicCred()
+	case credentials.CredPassword:
+		cred, err = collectPasswordCred()
 	case credentials.CredOAuthClientCreds:
 		cred, err = collectOAuthCred()
 	default:
@@ -219,6 +222,10 @@ func handleCredentialTest(name string) error {
 	case credentials.CredBasic:
 		fmt.Printf("Credential %q configured (basic, user: %s)\n", name, cred.Username)
 		fmt.Println("Use http_request tool with credential parameter to test connectivity.")
+
+	case credentials.CredPassword:
+		fmt.Printf("Credential %q configured (password, user: %s)\n", name, cred.Username)
+		fmt.Println("Use resolve_credential in chat to retrieve username/password for SSH/FTP/database connections.")
 
 	default:
 		fmt.Printf("Credential %q configured (type: %s)\n", name, cred.Type)
@@ -310,6 +317,36 @@ func collectBasicCred() (*credentials.Credential, error) {
 
 	return &credentials.Credential{
 		Type:     credentials.CredBasic,
+		Username: username,
+		Password: password,
+	}, nil
+}
+
+func collectPasswordCred() (*credentials.Credential, error) {
+	username := ""
+	password := ""
+
+	err := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Username").
+				Value(&username),
+			huh.NewInput().
+				Title("Password").
+				EchoMode(huh.EchoModePassword).
+				Value(&password),
+		),
+	).Run()
+	if err != nil {
+		return nil, err
+	}
+
+	if username == "" {
+		return nil, fmt.Errorf("username is required")
+	}
+
+	return &credentials.Credential{
+		Type:     credentials.CredPassword,
 		Username: username,
 		Password: password,
 	}, nil

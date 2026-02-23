@@ -197,3 +197,26 @@ func TestGenerateSelfMD_MemoryDisabled(t *testing.T) {
 		t.Error("expected memory disabled status")
 	}
 }
+
+func TestGenerateSelfMD_CredentialCLISection(t *testing.T) {
+	cfg := &SelfMDConfig{
+		ProviderName: "test",
+		ModelName:    "test-model",
+	}
+
+	content := GenerateSelfMD(cfg)
+
+	checks := []string{
+		"### Credential CLI Commands",
+		"astonish credential add <name>",
+		"astonish credential list",
+		"astonish credential remove <name>",
+		"astonish credential test <name>",
+		"Interactive TUI form",
+	}
+	for _, check := range checks {
+		if !strings.Contains(content, check) {
+			t.Errorf("expected content to contain %q", check)
+		}
+	}
+}

@@ -451,6 +451,169 @@ func TestStoreResolveNotFound(t *testing.T) {
 	}
 }
 
+func TestStorePasswordCRUD(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	// Save a password credential
+	err = store.Set("proxmox-ssh", &Credential{
+		Type:     CredPassword,
+		Username: "root",
+		Password: "my-secret-password",
+	})
+	if err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	// Get — should return raw fields
+	cred := store.Get("proxmox-ssh")
+	if cred == nil {
+		t.Fatal("Get returned nil")
+	}
+	if cred.Type != CredPassword {
+		t.Errorf("Type = %q, want %q", cred.Type, CredPassword)
+	}
+	if cred.Username != "root" {
+		t.Errorf("Username = %q, want %q", cred.Username, "root")
+	}
+	if cred.Password != "my-secret-password" {
+		t.Errorf("Password = %q, want %q", cred.Password, "my-secret-password")
+	}
+
+	// List — should show the type
+	list := store.List()
+	if list["proxmox-ssh"] != CredPassword {
+		t.Errorf("List[proxmox-ssh] = %q, want %q", list["proxmox-ssh"], CredPassword)
+	}
+}
+
+func TestStoreResolvePassword_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := Open(dir)
+
+	store.Set("ssh-cred", &Credential{
+		Type:     CredPassword,
+		Username: "admin",
+		Password: "secret123",
+	})
+
+	_, _, err := store.Resolve("ssh-cred")
+	if err == nil {
+		t.Error("expected error resolving password credential")
+	}
+	if !strings.Contains(err.Error(), "not an HTTP credential") {
+		t.Errorf("error should mention 'not an HTTP credential', got: %v", err)
+	}
+}
+
+func TestStorePasswordPersistence(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create and add
+	store1, _ := Open(dir)
+	store1.Set("db-cred", &Credential{
+		Type:     CredPassword,
+		Username: "dbuser",
+		Password: "dbpass123",
+	})
+
+	// Reopen from disk
+	store2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open (2): %v", err)
+	}
+
+	cred := store2.Get("db-cred")
+	if cred == nil {
+		t.Fatal("credential not found after reload")
+	}
+	if cred.Username != "dbuser" || cred.Password != "dbpass123" {
+		t.Errorf("fields don't match after reload: user=%q pass=%q", cred.Username, cred.Password)
+	}
+}
+
+func TestStorePasswordRedaction(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := Open(dir)
+
+	store.Set("ssh-test", &Credential{
+		Type:     CredPassword,
+		Username: "root",
+		Password: "super-secret-ssh-pass-12345",
+	})
+
+	// The password should be redacted
+	input := "Password is: super-secret-ssh-pass-12345"
+	output := store.Redactor().Redact(input)
+
+	if contains(output, "super-secret-ssh-pass-12345") {
+		t.Error("password should be redacted from output")
+	}
+}
+
+func TestStoreReload(t *testing.T) {
+	dir := t.TempDir()
+
+	// Open store1 and add a credential
+	store1, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open store1: %v", err)
+	}
+	store1.Set("existing", &Credential{
+		Type:  CredBearer,
+		Token: "token-existing-111111",
+	})
+
+	// Simulate an external write: open a second store instance (like the CLI)
+	// and add a credential through it
+	store2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open store2: %v", err)
+	}
+	store2.Set("cli-added", &Credential{
+		Type:     CredPassword,
+		Username: "admin",
+		Password: "external-password-222222",
+	})
+
+	// Before reload: store1 should NOT see "cli-added"
+	if store1.Get("cli-added") != nil {
+		t.Fatal("store1 should not see cli-added before Reload()")
+	}
+
+	// Reload store1 from disk
+	if err := store1.Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	// After reload: store1 should see both credentials
+	cred := store1.Get("cli-added")
+	if cred == nil {
+		t.Fatal("store1 should see cli-added after Reload()")
+	}
+	if cred.Username != "admin" || cred.Password != "external-password-222222" {
+		t.Errorf("cli-added fields wrong: user=%q pass=%q", cred.Username, cred.Password)
+	}
+
+	// Original credential should still be there
+	existing := store1.Get("existing")
+	if existing == nil {
+		t.Fatal("existing credential should survive reload")
+	}
+	if existing.Token != "token-existing-111111" {
+		t.Errorf("existing token = %q, want %q", existing.Token, "token-existing-111111")
+	}
+
+	// Redaction should work for the newly loaded credential's password
+	output := store1.Redactor().Redact("password is external-password-222222")
+	if contains(output, "external-password-222222") {
+		t.Error("password from reloaded credential should be redacted")
+	}
+}
+
 // --- Redaction tests ---
 
 func TestRedactSimple(t *testing.T) {

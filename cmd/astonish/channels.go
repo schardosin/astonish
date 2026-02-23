@@ -246,22 +246,8 @@ func handleTelegramSetup() error {
 	fmt.Printf("  Deep link:     https://t.me/%s\n", botUsername)
 	fmt.Println()
 
-	// Auto-restart daemon if it's running so the new config takes effect immediately.
-	svc, svcErr := daemon.NewService()
-	if svcErr == nil {
-		if running, _ := svc.IsRunning(); running {
-			fmt.Println("  Restarting daemon...")
-			if restartErr := svc.Restart(); restartErr != nil {
-				fmt.Printf("  \033[33mWarning: Could not restart daemon: %v\033[0m\n", restartErr)
-				fmt.Println("  Restart it manually: astonish daemon restart")
-			} else {
-				fmt.Println("  Daemon restarted — your bot is live!")
-			}
-		} else {
-			fmt.Println("  Start the daemon to activate:")
-			fmt.Println("    astonish daemon start")
-		}
-	}
+	// Activate the new config in the running daemon (if any).
+	notifyDaemonChannelsChanged(cfg)
 	fmt.Println()
 
 	return nil
@@ -409,12 +395,63 @@ func handleChannelDisable(channel string) error {
 			return fmt.Errorf("failed to save config: %w", err)
 		}
 		fmt.Println("Telegram channel disabled.")
-		fmt.Println("Restart the daemon for changes to take effect: astonish daemon restart")
+		notifyDaemonChannelsChanged(cfg)
 	default:
 		return fmt.Errorf("unknown channel: %s (available: telegram)", channel)
 	}
 
 	return nil
+}
+
+// notifyDaemonChannelsChanged tells the running daemon to reload channel
+// configuration. It tries three strategies in order:
+//  1. API reload (POST /api/channels/reload) — works for both "daemon run"
+//     and "daemon start".
+//  2. Service restart (systemctl/launchctl) — works only for installed services.
+//  3. Manual instructions — printed when both fail.
+func notifyDaemonChannelsChanged(appCfg *config.AppConfig) {
+	port := appCfg.Daemon.GetPort()
+	reloadURL := fmt.Sprintf("http://localhost:%d/api/channels/reload", port)
+
+	// Strategy 1: API reload (fast, works for foreground and service mode)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(reloadURL, "application/json", nil)
+	if err == nil {
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			fmt.Println("  Channels reloaded — changes are live!")
+			fmt.Println()
+			return
+		}
+		// Read error body for diagnostics
+		body, _ := io.ReadAll(resp.Body)
+		if len(body) > 0 {
+			var errResp map[string]string
+			if json.Unmarshal(body, &errResp) == nil {
+				if msg, ok := errResp["error"]; ok {
+					fmt.Printf("  \033[33mWarning: Reload returned: %s\033[0m\n", msg)
+				}
+			}
+		}
+	}
+
+	// Strategy 2: Service restart (for daemon start / installed services)
+	svc, svcErr := daemon.NewService()
+	if svcErr == nil {
+		if running, _ := svc.IsRunning(); running {
+			fmt.Println("  Restarting daemon...")
+			if restartErr := svc.Restart(); restartErr == nil {
+				fmt.Println("  Daemon restarted — changes are live!")
+				fmt.Println()
+				return
+			}
+		}
+	}
+
+	// Strategy 3: Manual instructions
+	fmt.Println("  Start the daemon to activate:")
+	fmt.Println("    astonish daemon start")
+	fmt.Println()
 }
 
 func handleChannelsStatus() error {

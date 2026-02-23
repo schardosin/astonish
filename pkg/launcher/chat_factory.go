@@ -75,26 +75,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 	}
 
-	// --- 1. Initialize LLM ---
-	if cfg.DebugMode {
-		fmt.Println("Initializing LLM provider...")
-	}
-	llm, err := provider.GetProvider(ctx, cfg.ProviderName, cfg.ModelName, cfg.AppConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize provider '%s' with model '%s': %w",
-			cfg.ProviderName, cfg.ModelName, err)
-	}
-	if cfg.DebugMode {
-		fmt.Printf("Provider initialized: %s (model: %s)\n", cfg.ProviderName, cfg.ModelName)
-	}
-
-	// --- 2. Initialize internal tools ---
-	internalTools, err := tools.GetInternalTools()
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize internal tools: %w", err)
-	}
-
-	// --- 2a. Initialize credential store (early — needed by memory, MCP, migration) ---
+	// --- 0. Initialize credential store (must happen before LLM — secrets are scrubbed from config after migration) ---
 	var credStore *credentials.Store
 	configDir, configDirErr := config.GetConfigDir()
 	if configDirErr == nil {
@@ -130,6 +111,12 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				}
 			}
 
+			// Inject secrets back into config map so GetProvider() can read them.
+			// This is needed because migration scrubs secrets from the config map,
+			// and some providers (e.g. openai_compat) only read from the config map
+			// with no env var fallback.
+			config.InjectProviderSecretsToConfig(cfg.AppConfig, cs.GetSecret)
+
 			// Setup provider env vars from credential store
 			config.SetupAllProviderEnvFromStore(cfg.AppConfig, cs.GetSecret)
 		}
@@ -137,6 +124,25 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// Fallback: if credential store unavailable, use legacy env setup
 	if credStore == nil {
 		config.SetupAllProviderEnv(cfg.AppConfig)
+	}
+
+	// --- 1. Initialize LLM ---
+	if cfg.DebugMode {
+		fmt.Println("Initializing LLM provider...")
+	}
+	llm, err := provider.GetProvider(ctx, cfg.ProviderName, cfg.ModelName, cfg.AppConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize provider '%s' with model '%s': %w",
+			cfg.ProviderName, cfg.ModelName, err)
+	}
+	if cfg.DebugMode {
+		fmt.Printf("Provider initialized: %s (model: %s)\n", cfg.ProviderName, cfg.ModelName)
+	}
+
+	// --- 2. Initialize internal tools ---
+	internalTools, err := tools.GetInternalTools()
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize internal tools: %w", err)
 	}
 
 	// Register credential tools (gracefully handle "store not available" like scheduler)
@@ -210,16 +216,21 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 							fmt.Printf("Warning: Failed to create memory store: %v\n", storeErr)
 						}
 					} else {
-						memStore = store
-						memIndexer = memory.NewIndexer(store, storeCfg, false)
-						store.SetIndexer(memIndexer)
-						memorySearchAvailable = true
+					memStore = store
+					memIndexer = memory.NewIndexer(store, storeCfg, false)
+					store.SetIndexer(memIndexer)
+					memorySearchAvailable = true
 
-						// Perform initial indexing in background
-						go func() {
-							indexingErr = memIndexer.IndexAll(context.Background())
-							close(indexingDone)
+					// Perform initial indexing in background
+					go func() {
+						defer close(indexingDone)
+						defer func() {
+							if r := recover(); r != nil {
+								indexingErr = fmt.Errorf("indexing panicked: %v", r)
+							}
 						}()
+						indexingErr = memIndexer.IndexAll(context.Background())
+					}()
 
 						// Start file watcher in background
 						if memCfg.IsWatchEnabled() {

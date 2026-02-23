@@ -326,6 +326,17 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("- Use `process_list` to see all active sessions and `process_kill` to clean up when done\n")
 	}
 
+	// 6g. HTTP request guidance (when http_request tool is available)
+	if b.hasHttpRequestTool() {
+		sb.WriteString("\n## HTTP Requests\n\n")
+		sb.WriteString("Use the `http_request` tool for API calls instead of curl via shell_command.\n")
+		sb.WriteString("- Set `credential` to a stored credential name for authenticated requests\n")
+		sb.WriteString("- Use `save_credential` first if you need to store new API credentials\n")
+		sb.WriteString("- The credential's auth header is injected automatically (supports API key, bearer, basic, OAuth)\n")
+		sb.WriteString("- For JSON APIs, the Content-Type header is set automatically when the body is JSON\n")
+		sb.WriteString("- Credential values are never exposed in tool args — only the credential name is passed\n")
+	}
+
 	// 7. Execution Plan with integrated knowledge (when a flow matches)
 	if b.ExecutionPlan != "" {
 		sb.WriteString("\n## Execution Plan\n\n")
@@ -394,6 +405,16 @@ func (b *SystemPromptBuilder) hasCredentialTools() bool {
 func (b *SystemPromptBuilder) hasProcessTools() bool {
 	for _, t := range b.Tools {
 		if t.Name() == "process_read" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasHttpRequestTool returns true if http_request is among the available tools.
+func (b *SystemPromptBuilder) hasHttpRequestTool() bool {
+	for _, t := range b.Tools {
+		if t.Name() == "http_request" {
 			return true
 		}
 	}

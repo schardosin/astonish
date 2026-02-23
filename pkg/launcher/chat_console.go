@@ -10,6 +10,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/provider"
@@ -392,7 +393,13 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				// Already done — no delay
 			default:
 				startSpinner("Preparing memory index...")
-				<-indexingDone
+				select {
+				case <-indexingDone:
+					// Completed
+				case <-time.After(60 * time.Second):
+					// Timed out — continue without blocking, indexing may finish in background
+					fmt.Println("\nMemory indexing is taking too long — continuing without it.")
+				}
 				stopSpinner()
 			}
 		}

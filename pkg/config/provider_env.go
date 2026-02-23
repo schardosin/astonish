@@ -152,3 +152,58 @@ func SetupMCPEnv(mcpCfg *MCPConfig) {
 		}
 	}
 }
+
+// providerSecretKeys lists config keys that may contain secrets for each provider type.
+// This mirrors the secretKeyMapping in credentials/migrate.go. We maintain a copy here
+// to avoid a circular import (config ← credentials → config).
+var providerSecretKeys = map[string][]string{
+	"anthropic":     {"api_key"},
+	"gemini":        {"api_key"},
+	"openai":        {"api_key"},
+	"openrouter":    {"api_key"},
+	"groq":          {"api_key"},
+	"xai":           {"api_key"},
+	"grok":          {"api_key"},
+	"poe":           {"api_key"},
+	"litellm":       {"api_key"},
+	"openai_compat": {"api_key"},
+	"sap_ai_core":   {"client_id", "client_secret", "auth_url"},
+}
+
+// InjectProviderSecretsToConfig reads secrets from the credential store and writes
+// them back into the AppConfig.Providers map. This ensures that GetProvider() can
+// read secrets from the config map regardless of provider type — including providers
+// like openai_compat that have no env var fallback in ProviderEnvMapping.
+//
+// This must be called BEFORE GetProvider() and AFTER the credential store is opened.
+func InjectProviderSecretsToConfig(appCfg *AppConfig, getSecret SecretGetter) {
+	if appCfg == nil || appCfg.Providers == nil || getSecret == nil {
+		return
+	}
+
+	for instanceName, providerCfg := range appCfg.Providers {
+		provType := GetProviderType(instanceName, providerCfg)
+		if provType == "" {
+			provType = instanceName
+		}
+
+		secretKeys, ok := providerSecretKeys[provType]
+		if !ok {
+			// Unknown provider type — try api_key as a common default
+			secretKeys = []string{"api_key"}
+		}
+
+		for _, key := range secretKeys {
+			// Skip if config already has a value (not scrubbed)
+			if val, has := providerCfg[key]; has && val != "" {
+				continue
+			}
+
+			// Try the credential store
+			storeKey := "provider." + instanceName + "." + key
+			if val := getSecret(storeKey); val != "" {
+				providerCfg[key] = val
+			}
+		}
+	}
+}

@@ -558,9 +558,20 @@ Background mode (background=true): Starts the command and returns immediately wi
 		return nil, err
 	}
 
+	httpRequestTool, err := functiontool.New(functiontool.Config{
+		Name: "http_request",
+		Description: `Make an HTTP request to an API endpoint. Supports GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS.
+
+Use this instead of curl via shell_command for cleaner API calls. Set 'credential' to a stored credential name for automatic authentication header injection (supports API key, bearer, basic, OAuth). JSON Content-Type is set automatically when the body starts with { or [.`,
+	}, HttpRequest)
+	if err != nil {
+		return nil, err
+	}
+
 	return []tool.Tool{
 		readFileTool, writeFileTool, shellCommandTool, filterJsonTool, gitDiffAddLineNumbersTool,
 		fileTreeTool, grepSearchTool, findFilesTool, editFileTool, webFetchTool, readPDFTool,
+		httpRequestTool,
 	}, nil
 }
 
@@ -680,6 +691,13 @@ func ExecuteTool(ctx context.Context, name string, args map[string]interface{}) 
 			return nil, fmt.Errorf("invalid args for process_kill: %w", err)
 		}
 		return processKill(nil, toolArgs)
+
+	case "http_request":
+		var toolArgs HttpRequestArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for http_request: %w", err)
+		}
+		return HttpRequest(nil, toolArgs)
 
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)

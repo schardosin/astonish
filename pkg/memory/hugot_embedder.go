@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 
+	"github.com/gomlx/gomlx/backends"
+	"github.com/gomlx/gomlx/backends/simplego"
 	chromem "github.com/philippgille/chromem-go"
 
 	"github.com/knights-analytics/hugot"
@@ -32,10 +35,39 @@ type HugotEmbedder struct {
 	mu       sync.Mutex // serializes embedding calls for safety
 }
 
+// patchGoMLXBackendForLowCPU works around a deadlock in GoMLX's simplego backend
+// that occurs when runtime.NumCPU() is low (typically 1-2 CPUs in containers).
+//
+// The simplego backend's parallel execution mode uses a worker pool sized by
+// runtime.NumCPU(). The DotGeneral operation (matrix multiplication) internally
+// calls WaitToStart() to spawn sub-tasks from within an already-running worker
+// goroutine. With a small worker pool, this causes a deadlock: all worker slots
+// are occupied by goroutines waiting to spawn sub-tasks, but no slots are free.
+//
+// The fix: override the "go" backend constructor to always use ops_sequential
+// when CPU count is low. Sequential execution has negligible performance impact
+// for sentence embedding workloads (~140ms per embedding on a single core).
+func patchGoMLXBackendForLowCPU() {
+	if runtime.NumCPU() > 2 {
+		return
+	}
+	backends.Register(simplego.BackendName, func(config string) (backends.Backend, error) {
+		if config == "" {
+			config = "ops_sequential"
+		} else {
+			config += ",ops_sequential"
+		}
+		return simplego.New(config)
+	})
+}
+
 // NewHugotEmbedder creates a local embedding pipeline using Hugot's pure Go backend.
 // modelsDir is where ONNX models are stored (e.g., ~/.config/astonish/models/).
 // The model is downloaded from HuggingFace on first use (~23 MB).
 func NewHugotEmbedder(modelsDir string, debugMode bool) (*HugotEmbedder, error) {
+	// Patch GoMLX backend before creating the session to avoid deadlock on low-CPU systems.
+	patchGoMLXBackendForLowCPU()
+
 	if err := os.MkdirAll(modelsDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create models directory: %w", err)
 	}

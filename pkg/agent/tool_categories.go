@@ -25,6 +25,39 @@ var SafeTools = map[string]bool{
 	"browser_take_screenshot":  true,
 	"browser_console_messages": true,
 	"browser_network_requests": true,
+	// Browser navigation & interaction (operates in sandboxed browser)
+	"browser_navigate":      true,
+	"browser_navigate_back": true,
+	"browser_click":         true,
+	"browser_type":          true,
+	"browser_hover":         true,
+	"browser_drag":          true,
+	"browser_press_key":     true,
+	"browser_select_option": true,
+	"browser_fill_form":     true,
+	// Browser management
+	"browser_tabs":          true,
+	"browser_close":         true,
+	"browser_resize":        true,
+	"browser_wait_for":      true,
+	"browser_file_upload":   true,
+	"browser_handle_dialog": true,
+	// Browser advanced
+	"browser_evaluate":      true,
+	"browser_run_code":      true,
+	"browser_pdf":           true,
+	"browser_response_body": true,
+	// Browser state & emulation (Phase 2)
+	"browser_cookies":         true,
+	"browser_storage":         true,
+	"browser_set_offline":     true,
+	"browser_set_headers":     true,
+	"browser_set_credentials": true,
+	"browser_set_geolocation": true,
+	"browser_set_media":       true,
+	"browser_set_timezone":    true,
+	"browser_set_locale":      true,
+	"browser_set_device":      true,
 }
 
 // IsToolSafe returns true if the tool is read-only and safe to auto-approve.

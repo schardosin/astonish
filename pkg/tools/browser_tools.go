@@ -200,6 +200,107 @@ Use mode="efficient" for large pages (compact, interactive-only, depth=6, maxCha
 		return nil, err
 	}
 
+	responseBodyTool, err := functiontool.New(functiontool.Config{
+		Name: "browser_response_body",
+		Description: `Intercept and read HTTP response bodies from network requests.
+
+Three-step workflow:
+1. action="listen" urlPattern="*api/data*" — start intercepting matching responses
+2. Trigger the action that produces the request (click, navigate, etc.)
+3. action="read" — retrieve the captured response body
+
+Use action="stop" to remove the interceptor when done.`,
+	}, BrowserResponseBody(mgr))
+	if err != nil {
+		return nil, err
+	}
+
+	// --- State & Emulation ---
+
+	cookiesTool, err := functiontool.New(functiontool.Config{
+		Name:        "browser_cookies",
+		Description: "Get, set, or clear browser cookies. Use action=get to inspect, action=set to add/modify, action=clear to remove all.",
+	}, BrowserCookies(mgr))
+	if err != nil {
+		return nil, err
+	}
+
+	storageTool, err := functiontool.New(functiontool.Config{
+		Name:        "browser_storage",
+		Description: "Read, write, or clear localStorage/sessionStorage. Use kind=local or kind=session with action=get/getAll/set/clear.",
+	}, BrowserStorage(mgr))
+	if err != nil {
+		return nil, err
+	}
+
+	setOfflineTool, err := functiontool.New(functiontool.Config{
+		Name:        "browser_set_offline",
+		Description: "Enable or disable network connectivity for the browser page. Simulates offline mode.",
+	}, BrowserSetOffline(mgr))
+	if err != nil {
+		return nil, err
+	}
+
+	setHeadersTool, err := functiontool.New(functiontool.Config{
+		Name:        "browser_set_headers",
+		Description: "Add extra HTTP headers to all requests from this page. Pass an empty map to clear.",
+	}, BrowserSetHeaders(mgr))
+	if err != nil {
+		return nil, err
+	}
+
+	setCredentialsTool, err := functiontool.New(functiontool.Config{
+		Name:        "browser_set_credentials",
+		Description: "Set HTTP Basic Auth credentials. The browser will automatically respond to auth challenges.",
+	}, BrowserSetCredentials(mgr))
+	if err != nil {
+		return nil, err
+	}
+
+	setGeolocationTool, err := functiontool.New(functiontool.Config{
+		Name:        "browser_set_geolocation",
+		Description: "Override the browser's geolocation (latitude, longitude, accuracy).",
+	}, BrowserSetGeolocation(mgr))
+	if err != nil {
+		return nil, err
+	}
+
+	setMediaTool, err := functiontool.New(functiontool.Config{
+		Name:        "browser_set_media",
+		Description: "Set the preferred color scheme (dark, light, no-preference) for CSS media queries.",
+	}, BrowserSetMedia(mgr))
+	if err != nil {
+		return nil, err
+	}
+
+	setTimezoneTool, err := functiontool.New(functiontool.Config{
+		Name:        "browser_set_timezone",
+		Description: "Override the browser's timezone (IANA ID like 'America/New_York'). Empty to clear.",
+	}, BrowserSetTimezone(mgr))
+	if err != nil {
+		return nil, err
+	}
+
+	setLocaleTool, err := functiontool.New(functiontool.Config{
+		Name:        "browser_set_locale",
+		Description: "Override the browser's locale (BCP 47 like 'en-US', 'fr-FR'). Empty to clear.",
+	}, BrowserSetLocale(mgr))
+	if err != nil {
+		return nil, err
+	}
+
+	setDeviceTool, err := functiontool.New(functiontool.Config{
+		Name: "browser_set_device",
+		Description: `Emulate a mobile or tablet device. Sets viewport, user agent, touch, and DPR.
+
+Available devices: iPhone 4, iPhone 5/SE, iPhone 6/7/8, iPhone 6/7/8 Plus, iPhone X, iPad, iPad Mini, iPad Pro, Pixel 2, Pixel 2 XL, Galaxy S5, Galaxy S III, Galaxy Note 3, Galaxy Fold, Nexus 5, Nexus 6, Moto G4, Surface Duo, Kindle Fire HDX, and more.
+
+Use device="clear" to remove device emulation.`,
+	}, BrowserSetDevice(mgr))
+	if err != nil {
+		return nil, err
+	}
+
 	return []tool.Tool{
 		// Navigation
 		navigateTool, navigateBackTool,
@@ -210,6 +311,10 @@ Use mode="efficient" for large pages (compact, interactive-only, depth=6, maxCha
 		// Management
 		tabsTool, closeTool, resizeTool, waitForTool, fileUploadTool, handleDialogTool,
 		// Advanced
-		evaluateTool, runCodeTool, pdfTool,
+		evaluateTool, runCodeTool, pdfTool, responseBodyTool,
+		// State & Emulation
+		cookiesTool, storageTool,
+		setOfflineTool, setHeadersTool, setCredentialsTool,
+		setGeolocationTool, setMediaTool, setTimezoneTool, setLocaleTool, setDeviceTool,
 	}, nil
 }

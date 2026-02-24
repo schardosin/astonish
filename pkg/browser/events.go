@@ -3,6 +3,8 @@ package browser
 import (
 	"sync"
 	"time"
+
+	"github.com/go-rod/rod"
 )
 
 // ConsoleMessage represents a browser console message.
@@ -27,11 +29,95 @@ type PageError struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+// CapturedResponse is a response captured by the response body interceptor.
+type CapturedResponse struct {
+	URL          string            `json:"url"`
+	Status       int               `json:"status"`
+	Headers      map[string]string `json:"headers,omitempty"`
+	Body         string            `json:"body,omitempty"`
+	ResourceType string            `json:"resourceType,omitempty"`
+	Timestamp    time.Time         `json:"timestamp"`
+}
+
+// ResponseCapture manages the response body interception state for a page.
+type ResponseCapture struct {
+	mu        sync.Mutex
+	router    *rod.HijackRouter
+	pattern   string
+	responses *RingBuffer[CapturedResponse]
+	notify    chan struct{} // signaled when a new response arrives
+}
+
+// NewResponseCapture creates a ResponseCapture with a buffer for up to 50 responses.
+func NewResponseCapture() *ResponseCapture {
+	return &ResponseCapture{
+		responses: NewRingBuffer[CapturedResponse](50),
+		notify:    make(chan struct{}, 1),
+	}
+}
+
+// AddResponse adds a captured response and signals any waiting readers.
+func (rc *ResponseCapture) AddResponse(resp CapturedResponse) {
+	rc.responses.Add(resp)
+	// Non-blocking signal to any waiting reader.
+	select {
+	case rc.notify <- struct{}{}:
+	default:
+	}
+}
+
+// Responses returns all captured responses.
+func (rc *ResponseCapture) Responses() []CapturedResponse {
+	return rc.responses.Items()
+}
+
+// WaitChan returns a channel that receives when a new response arrives.
+func (rc *ResponseCapture) WaitChan() <-chan struct{} {
+	return rc.notify
+}
+
+// SetRouter stores the hijack router reference for later cleanup.
+func (rc *ResponseCapture) SetRouter(router *rod.HijackRouter, pattern string) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	rc.router = router
+	rc.pattern = pattern
+}
+
+// Stop removes the hijack router and clears captured responses.
+func (rc *ResponseCapture) Stop() error {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	var err error
+	if rc.router != nil {
+		err = rc.router.Stop()
+		rc.router = nil
+	}
+	rc.pattern = ""
+	rc.responses.Clear()
+	return err
+}
+
+// IsActive returns true if a hijack router is currently running.
+func (rc *ResponseCapture) IsActive() bool {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	return rc.router != nil
+}
+
+// Pattern returns the current URL pattern being intercepted.
+func (rc *ResponseCapture) Pattern() string {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	return rc.pattern
+}
+
 // PageState tracks per-page state including event buffers.
 type PageState struct {
 	Console *RingBuffer[ConsoleMessage]
 	Network *RingBuffer[NetworkRequest]
 	Errors  *RingBuffer[PageError]
+	Capture *ResponseCapture
 }
 
 // NewPageState creates a PageState with default buffer sizes.
@@ -40,6 +126,7 @@ func NewPageState() *PageState {
 		Console: NewRingBuffer[ConsoleMessage](500),
 		Network: NewRingBuffer[NetworkRequest](500),
 		Errors:  NewRingBuffer[PageError](200),
+		Capture: NewResponseCapture(),
 	}
 }
 

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"iter"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/memory"
+	"github.com/schardosin/astonish/pkg/provider/llmerror"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
@@ -78,6 +80,19 @@ type ChatAgent struct {
 	traceHistory   map[string][]*ExecutionTrace // keyed by session ID
 	pendingDistill map[string]*distillPreview   // keyed by session ID
 	traceMu        sync.Mutex                   // protects traceHistory and pendingDistill
+
+	// Image side-channel: images stripped from tool results before they
+	// enter session history, available for channels to deliver to users.
+	pendingImages []ImageFromTool
+	imageMu       sync.Mutex
+}
+
+// ImageFromTool holds image data extracted from a tool result before the
+// result is persisted to session history. This prevents large base64 blobs
+// from polluting the session transcript and being replayed to the LLM.
+type ImageFromTool struct {
+	Data   []byte // raw image bytes
+	Format string // "png" or "jpeg"
 }
 
 // distillPreview holds the result of PreviewDistill for use by ConfirmAndDistill.
@@ -115,6 +130,78 @@ func NewChatAgent(llm model.LLM, internalTools []tool.Tool, toolsets []tool.Tool
 		traceHistory:   make(map[string][]*ExecutionTrace),
 		pendingDistill: make(map[string]*distillPreview),
 	}
+}
+
+// DrainImages returns and clears all pending images that were extracted from
+// tool results during the current agent run. Thread-safe. The channel manager
+// calls this to retrieve images for delivery without relying on session events.
+func (c *ChatAgent) DrainImages() []ImageFromTool {
+	c.imageMu.Lock()
+	defer c.imageMu.Unlock()
+	imgs := c.pendingImages
+	c.pendingImages = nil
+	return imgs
+}
+
+// extractAndStripImages checks a tool result map for an "image_base64" key.
+// If found, the base64 data is decoded and stashed in the pending images queue
+// for channel delivery, and the key is replaced with a short placeholder so the
+// LLM knows a screenshot was taken without the full binary data polluting the
+// session history or being replayed on subsequent LLM calls.
+func (c *ChatAgent) extractAndStripImages(output map[string]any) map[string]any {
+	if output == nil {
+		return output
+	}
+
+	b64, ok := output["image_base64"].(string)
+	if !ok || b64 == "" {
+		return output
+	}
+
+	// Decode and stash the image for channel delivery
+	data, err := base64.StdEncoding.DecodeString(b64)
+	if err == nil && len(data) > 0 {
+		format := "png"
+		if f, ok := output["format"].(string); ok && f != "" {
+			format = f
+		}
+		c.imageMu.Lock()
+		c.pendingImages = append(c.pendingImages, ImageFromTool{
+			Data:   data,
+			Format: format,
+		})
+		c.imageMu.Unlock()
+	}
+
+	// Replace the base64 blob with a lightweight placeholder.
+	// Copy the map to avoid mutating the original.
+	stripped := make(map[string]any, len(output))
+	for k, v := range output {
+		stripped[k] = v
+	}
+	stripped["image_base64"] = fmt.Sprintf("[screenshot captured, %d bytes]", len(b64))
+	return stripped
+}
+
+// retryBackoff returns the duration to wait before retrying after a transient
+// LLM error. It respects the Retry-After header if present, otherwise uses
+// exponential backoff: 2s, 5s, 15s.
+func retryBackoff(attempt int, err error) time.Duration {
+	// Respect provider's Retry-After if available
+	if ra := llmerror.GetRetryAfter(err); ra > 0 {
+		// Cap at 60s to avoid absurd waits
+		if ra > 60*time.Second {
+			ra = 60 * time.Second
+		}
+		return ra
+	}
+
+	// Exponential backoff: 2s, 5s, 15s
+	backoffs := []time.Duration{2 * time.Second, 5 * time.Second, 15 * time.Second}
+	if attempt < len(backoffs) {
+		return backoffs[attempt]
+	}
+	return backoffs[len(backoffs)-1]
 }
 
 // redactEventText applies credential redaction to any LLM text parts in an event.
@@ -250,6 +337,12 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			if c.Redactor != nil && output != nil && t.Name() != "resolve_credential" {
 				redactedOutput = c.Redactor.RedactMap(output)
 			}
+
+			// Strip image_base64 from tool results to prevent large binary
+			// blobs from entering session history. The raw image bytes are
+			// stashed in the ChatAgent's image queue for channel delivery.
+			redactedOutput = c.extractAndStripImages(redactedOutput)
+
 			trace.RecordStep(t.Name(), input, redactedOutput, err)
 			if c.DebugMode {
 				status := "OK"
@@ -284,77 +377,109 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			return
 		}
 
-		// Run the llmagent
+		// Run the llmagent with retry for transient errors (429, 502, 503, etc.)
+		const maxRetries = 3
 		toolCallCount := 0
 		maxToolCalls := c.MaxToolCalls
 		lastToolCallSeen := false
 
-		for event, err := range llmAgent.Run(ctx) {
-			if err != nil {
-				// If we were using an execution plan and it failed, inform the user
-				// conversationally. The orphan cleanup in the provider layer ensures
-				// the next turn's history is valid.
-				if c.SystemPrompt.ExecutionPlan != "" {
-					c.SystemPrompt.ExecutionPlan = ""
-					if c.DebugMode {
-						fmt.Printf("[Chat DEBUG] Flow execution failed: %v, cleared execution plan\n", err)
-					}
-					yield(&session.Event{
-						LLMResponse: model.LLMResponse{
-							Content: &genai.Content{
-								Parts: []*genai.Part{{Text: "The saved workflow ran into an issue, so I'll try a different approach. Could you repeat your request?"}},
-								Role:  "model",
-							},
-						},
-					}, nil)
-					return
-				}
-				yield(nil, err)
-				return
-			}
-
-			// Count tool calls and capture text output
-			if event.LLMResponse.Content != nil {
-				for _, p := range event.LLMResponse.Content.Parts {
-					if p.FunctionCall != nil {
-						toolCallCount++
-						lastToolCallSeen = true
-						if toolCallCount >= maxToolCalls {
-							yield(&session.Event{
-								LLMResponse: model.LLMResponse{
-									Content: &genai.Content{
-										Parts: []*genai.Part{{Text: fmt.Sprintf("\n[Max tool calls reached (%d). Stopping.]", maxToolCalls)}},
-										Role:  "model",
-									},
-								},
-							}, nil)
-							goto postLoop
+		for attempt := range maxRetries {
+			retried := false
+			for event, err := range llmAgent.Run(ctx) {
+				if err != nil {
+					// Check for retryable errors (rate limit, server overload)
+					if llmerror.IsRetryable(err) && attempt < maxRetries-1 {
+						wait := retryBackoff(attempt, err)
+						if c.DebugMode {
+							fmt.Printf("[Chat DEBUG] Retryable error (attempt %d/%d): %v, waiting %v\n",
+								attempt+1, maxRetries, err, wait)
 						}
+						select {
+						case <-time.After(wait):
+						case <-ctx.Done():
+							yield(nil, ctx.Err())
+							return
+						}
+						retried = true
+						break // break inner for-range, continue outer retry loop
 					}
-					// Capture text that comes after tool calls (the final formatted output)
-					if p.Text != "" && lastToolCallSeen {
-						trace.AppendOutput(p.Text)
-					}
-				}
-			}
 
-			// Check for approval pause
-			if event.Actions.StateDelta != nil {
-				if awaitingVal, ok := event.Actions.StateDelta["awaiting_approval"]; ok {
-					if awaiting, ok := awaitingVal.(bool); ok && awaiting {
-						// Yield the approval event and return -- the runner will
-						// call us again with the user's response
-						yield(event, nil)
+					// Non-retryable error, or retries exhausted
+					if c.DebugMode && attempt > 0 {
+						fmt.Printf("[Chat DEBUG] Error after %d retries: %v\n", attempt, err)
+					}
+
+					// If we were using an execution plan and it failed, inform the user
+					// conversationally. The orphan cleanup in the provider layer ensures
+					// the next turn's history is valid.
+					if c.SystemPrompt.ExecutionPlan != "" {
+						c.SystemPrompt.ExecutionPlan = ""
+						if c.DebugMode {
+							fmt.Printf("[Chat DEBUG] Flow execution failed: %v, cleared execution plan\n", err)
+						}
+						yield(&session.Event{
+							LLMResponse: model.LLMResponse{
+								Content: &genai.Content{
+									Parts: []*genai.Part{{Text: "The saved workflow ran into an issue, so I'll try a different approach. Could you repeat your request?"}},
+									Role:  "model",
+								},
+							},
+						}, nil)
 						return
 					}
+					yield(nil, err)
+					return
 				}
-			}
 
-			// Yield event to the caller (console/web)
-			if !yield(event, nil) {
-				return
+				// Count tool calls and capture text output
+				if event.LLMResponse.Content != nil {
+					for _, p := range event.LLMResponse.Content.Parts {
+						if p.FunctionCall != nil {
+							toolCallCount++
+							lastToolCallSeen = true
+							if toolCallCount >= maxToolCalls {
+								yield(&session.Event{
+									LLMResponse: model.LLMResponse{
+										Content: &genai.Content{
+											Parts: []*genai.Part{{Text: fmt.Sprintf("\n[Max tool calls reached (%d). Stopping.]", maxToolCalls)}},
+											Role:  "model",
+										},
+									},
+								}, nil)
+								goto postLoop
+							}
+						}
+						// Capture text that comes after tool calls (the final formatted output)
+						if p.Text != "" && lastToolCallSeen {
+							trace.AppendOutput(p.Text)
+						}
+					}
+				}
+
+				// Check for approval pause
+				if event.Actions.StateDelta != nil {
+					if awaitingVal, ok := event.Actions.StateDelta["awaiting_approval"]; ok {
+						if awaiting, ok := awaitingVal.(bool); ok && awaiting {
+							// Yield the approval event and return -- the runner will
+							// call us again with the user's response
+							yield(event, nil)
+							return
+						}
+					}
+				}
+
+				// Yield event to the caller (console/web)
+				if !yield(event, nil) {
+					return
+				}
+			} // end inner for-range over llmAgent.Run(ctx)
+
+			// If we didn't retry, the run completed successfully — break out
+			if !retried {
+				break
 			}
-		}
+			// Otherwise, the retry loop continues with the next attempt
+		} // end outer retry loop
 
 	postLoop:
 		// Finalize the trace

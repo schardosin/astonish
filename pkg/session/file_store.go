@@ -368,6 +368,10 @@ func (s *FileStore) loadFromDisk(appName, userID, sessionID string) (*fileSessio
 		return nil, fmt.Errorf("failed to read transcript: %w", err)
 	}
 
+	// Sanitize loaded events: strip large binary data (e.g., image_base64
+	// from browser screenshots) that would bloat LLM context on replay.
+	sanitizeEventsOnLoad(events)
+
 	// Rebuild state from events
 	state := make(stateMap)
 	for _, event := range events {
@@ -388,6 +392,30 @@ func (s *FileStore) loadFromDisk(appName, userID, sessionID string) (*fileSessio
 		events:    events,
 		updatedAt: meta.UpdatedAt,
 	}, nil
+}
+
+// sanitizeEventsOnLoad strips large binary data from loaded session events
+// to prevent bloating the LLM context when sessions are replayed. This is a
+// defense-in-depth measure for sessions persisted before the AfterToolCallback
+// began stripping image data at source.
+func sanitizeEventsOnLoad(events []*adksession.Event) {
+	for _, event := range events {
+		if event.LLMResponse.Content == nil {
+			continue
+		}
+		for _, part := range event.LLMResponse.Content.Parts {
+			if part.FunctionResponse == nil || part.FunctionResponse.Response == nil {
+				continue
+			}
+			resp := part.FunctionResponse.Response
+			b64, ok := resp["image_base64"].(string)
+			if !ok || len(b64) <= 200 {
+				// Not an image or already a placeholder — skip
+				continue
+			}
+			resp["image_base64"] = fmt.Sprintf("[screenshot data stripped on load, %d bytes]", len(b64))
+		}
+	}
 }
 
 // updateAppState updates app-scoped state and returns the merged app state.

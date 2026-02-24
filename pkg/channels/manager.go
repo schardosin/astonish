@@ -11,6 +11,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/schardosin/astonish/pkg/provider/llmerror"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
@@ -158,7 +159,7 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	route := m.router.Route(msg)
 
 	m.logger.Printf("[channels] Inbound from %s (chat: %s, sender: %s): %s",
-		msg.ChannelID, msg.ChatID, msg.SenderName, truncate(msg.Text, 100))
+		msg.ChannelID, msg.ChatID, msg.SenderName, m.redactText(truncate(msg.Text, 100)))
 
 	// Intercept slash commands before sending to the agent.
 	if m.commands.IsCommand(msg.Text) {
@@ -226,14 +227,17 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	// Process events as they arrive. Each complete LLM text turn is sent
 	// as a separate message immediately, giving the user real-time updates
 	// during multi-tool operations instead of one giant message at the end.
+	// Images from tool results (e.g., browser_take_screenshot) are collected
+	// and attached to the next outbound text message.
 	var messagesSent int
+	var pendingImages []ImageAttachment
 
 	for event, err := range r.Run(ctx, userID, sess.ID(), userContent, adkagent.RunConfig{}) {
 		if err != nil {
 			m.logger.Printf("[channels] Agent error for %s: %v", route.SessionKey, err)
 			if messagesSent == 0 {
 				_ = ch.Send(ctx, target, OutboundMessage{
-					Text:    "Sorry, I encountered an error processing your message.",
+					Text:    friendlyErrorMessage(err),
 					ReplyTo: msg.ID,
 					Format:  FormatText,
 				})
@@ -250,6 +254,16 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 		// response. We send complete thoughts, not word-by-word fragments.
 		if event.LLMResponse.Partial {
 			continue
+		}
+
+		// Scan for images in tool (function) responses. Images are stripped
+		// from tool results by the AfterToolCallback (to keep session history
+		// clean) and stashed in the ChatAgent's image queue. Drain them here.
+		for _, img := range m.agent.DrainImages() {
+			pendingImages = append(pendingImages, ImageAttachment{
+				Data:   img.Data,
+				Format: img.Format,
+			})
 		}
 
 		// Extract user-facing text only. Skip internal parts: function
@@ -272,11 +286,15 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 			continue
 		}
 
-		// Send this turn's text as a message immediately
+		// Send this turn's text as a message immediately.
+		// Attach any pending images from preceding tool calls.
 		outMsg := OutboundMessage{
 			Text:   displayText,
 			Format: FormatHTML,
+			Images: pendingImages,
 		}
+		pendingImages = nil // consumed
+
 		// Only the first message is a reply to the user's message
 		if messagesSent == 0 {
 			outMsg.ReplyTo = msg.ID
@@ -284,6 +302,22 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 
 		if err := ch.Send(ctx, target, outMsg); err != nil {
 			m.logger.Printf("[channels] Failed to send message to %s: %v", msg.ChannelID, err)
+		} else {
+			messagesSent++
+		}
+	}
+
+	// If images were produced but no text followed (e.g., the LLM's final
+	// turn was a tool call with no commentary), send them as a standalone message.
+	if len(pendingImages) > 0 {
+		outMsg := OutboundMessage{
+			Images: pendingImages,
+		}
+		if messagesSent == 0 {
+			outMsg.ReplyTo = msg.ID
+		}
+		if err := ch.Send(ctx, target, outMsg); err != nil {
+			m.logger.Printf("[channels] Failed to send images to %s: %v", msg.ChannelID, err)
 		} else {
 			messagesSent++
 		}
@@ -451,6 +485,29 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// friendlyErrorMessage converts an error from the agent/LLM into a user-facing
+// message that explains what went wrong and what the user should do.
+func friendlyErrorMessage(err error) string {
+	if llmerror.IsRateLimited(err) {
+		return "I'm being rate limited by the AI provider. Please wait a moment and try again."
+	}
+	if llmerror.IsAuthError(err) {
+		return "Authentication error with the AI provider. Please check your API keys and configuration."
+	}
+	if llmerror.IsServerError(err) {
+		return "The AI provider is experiencing issues. Please try again shortly."
+	}
+	if code := llmerror.StatusCode(err); code > 0 {
+		return fmt.Sprintf("The AI provider returned an error (HTTP %d). Please try again.", code)
+	}
+	// Unknown error — include a brief summary
+	msg := err.Error()
+	if len(msg) > 200 {
+		msg = msg[:200] + "..."
+	}
+	return fmt.Sprintf("Sorry, I encountered an error: %s", msg)
 }
 
 // typingInterval is how often we refresh the typing indicator.

@@ -87,10 +87,20 @@ type InboundMessage struct {
 
 // OutboundMessage is the response to be delivered back to a channel.
 type OutboundMessage struct {
-	Text     string        // Response text
-	ReplyTo  string        // ID of message to reply to
-	ThreadID string        // Thread/topic ID to post in
-	Format   MessageFormat // "text" or "markdown"
+	Text     string            // Response text
+	ReplyTo  string            // ID of message to reply to
+	ThreadID string            // Thread/topic ID to post in
+	Format   MessageFormat     // "text" or "markdown"
+	Images   []ImageAttachment // Optional image attachments (e.g., screenshots)
+}
+
+// ImageAttachment is a binary image to send as part of an outbound message.
+// Channels that support media (Telegram, Discord) will send these as photos.
+// Channels that don't support media will ignore them.
+type ImageAttachment struct {
+	Data    []byte // Raw image bytes (decoded from base64)
+	Format  string // Image format: "png" or "jpeg"
+	Caption string // Optional caption (Telegram supports up to 1024 chars)
 }
 
 // Target identifies where to send an outbound message.

@@ -23,6 +23,9 @@ import (
 // maxMessageLength is the Telegram API limit for a single message.
 const maxMessageLength = 4096
 
+// maxCaptionLength is the Telegram API limit for a photo caption.
+const maxCaptionLength = 1024
+
 // Config holds configuration for the Telegram channel adapter.
 type Config struct {
 	BotToken  string                    // Telegram bot token from BotFather
@@ -160,8 +163,8 @@ func (t *TelegramChannel) Stop(ctx context.Context) error {
 }
 
 // Send delivers an outbound message to a Telegram chat.
-// Long messages are split into chunks respecting the 4096-char limit,
-// with paragraph-aware splitting. HTML formatting is used for rich text.
+// Images are sent as photos first (with optional caption), then any remaining
+// text is sent as message chunks respecting the 4096-char limit.
 func (t *TelegramChannel) Send(ctx context.Context, target channels.Target, msg channels.OutboundMessage) error {
 	t.mu.RLock()
 	bot := t.botAPI
@@ -176,11 +179,71 @@ func (t *TelegramChannel) Send(ctx context.Context, target channels.Target, msg 
 		return fmt.Errorf("telegram: invalid chat ID %q: %w", target.ChatID, err)
 	}
 
-	// Convert markdown to Telegram HTML when format is HTML.
-	text := msg.Text
+	// --- Phase 1: Send images as photos ---
+	// If we have images and the text is short enough, use the text as a
+	// caption on the first photo (Telegram allows up to 1024 chars).
+	// Otherwise, send photos without captions and text separately.
+	textForCaption := ""
+	remainingText := msg.Text
+
+	if len(msg.Images) > 0 && remainingText != "" {
+		// Convert markdown for caption if needed
+		caption := remainingText
+		if msg.Format == channels.FormatHTML {
+			caption = markdownToTelegramHTML(remainingText)
+		}
+		if len(caption) <= maxCaptionLength {
+			textForCaption = caption
+			remainingText = "" // consumed as caption
+		}
+	}
+
+	for i, img := range msg.Images {
+		ext := img.Format
+		if ext == "" {
+			ext = "png"
+		}
+		photoBytes := tgbotapi.FileBytes{
+			Name:  fmt.Sprintf("image.%s", ext),
+			Bytes: img.Data,
+		}
+		photo := tgbotapi.NewPhoto(chatID, photoBytes)
+
+		// Use text as caption on the first photo only
+		if i == 0 && textForCaption != "" {
+			photo.Caption = textForCaption
+			if msg.Format == channels.FormatHTML {
+				photo.ParseMode = "HTML"
+			}
+		}
+
+		// Use image's own caption if set (overrides text caption)
+		if img.Caption != "" {
+			photo.Caption = img.Caption
+		}
+
+		// Reply-to on the first photo
+		if i == 0 && msg.ReplyTo != "" {
+			if replyID, err := strconv.Atoi(msg.ReplyTo); err == nil {
+				photo.ReplyToMessageID = replyID
+			}
+		}
+
+		if _, err := bot.Send(photo); err != nil {
+			t.logger.Printf("[telegram] Failed to send photo: %v", err)
+			// Non-fatal — continue with text
+		}
+	}
+
+	// --- Phase 2: Send remaining text (if not consumed as caption) ---
+	if strings.TrimSpace(remainingText) == "" {
+		return nil
+	}
+
+	text := remainingText
 	parseMode := ""
 	if msg.Format == channels.FormatHTML {
-		text = markdownToTelegramHTML(msg.Text)
+		text = markdownToTelegramHTML(remainingText)
 		parseMode = "HTML"
 	}
 
@@ -190,8 +253,8 @@ func (t *TelegramChannel) Send(ctx context.Context, target channels.Target, msg 
 		teleMsg := tgbotapi.NewMessage(chatID, chunk)
 		teleMsg.ParseMode = parseMode
 
-		// Set reply-to on the first chunk only
-		if i == 0 && msg.ReplyTo != "" {
+		// Set reply-to on the first chunk only (if not already set on a photo)
+		if i == 0 && msg.ReplyTo != "" && len(msg.Images) == 0 {
 			if replyID, err := strconv.Atoi(msg.ReplyTo); err == nil {
 				teleMsg.ReplyToMessageID = replyID
 			}

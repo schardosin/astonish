@@ -815,6 +815,10 @@ func (c *ChatAgent) ConfirmAndDistill(ctx context.Context, ds DistillSession, pr
 	// Merge selected traces into one combined trace for the distiller
 	merged := c.mergeTraces(preview.Traces)
 
+	// Flatten sub-agent traces: replace delegate_tasks steps with children's
+	// actual tool calls so the distilled flow has no sub-agent concepts
+	flattenTraces(merged)
+
 	print("Distilling execution into a reusable flow...\n")
 
 	// Run distillation

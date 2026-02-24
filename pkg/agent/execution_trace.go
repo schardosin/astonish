@@ -21,13 +21,15 @@ type ExecutionTrace struct {
 
 // TraceStep records a single tool call during execution.
 type TraceStep struct {
-	ToolName   string         `json:"toolName"`
-	ToolArgs   map[string]any `json:"toolArgs"`
-	ToolResult map[string]any `json:"toolResult,omitempty"`
-	DurationMs int64          `json:"durationMs"`
-	Success    bool           `json:"success"`
-	Error      string         `json:"error,omitempty"`
-	Timestamp  time.Time      `json:"timestamp"`
+	ToolName       string            `json:"toolName"`
+	ToolArgs       map[string]any    `json:"toolArgs"`
+	ToolResult     map[string]any    `json:"toolResult,omitempty"`
+	DurationMs     int64             `json:"durationMs"`
+	Success        bool              `json:"success"`
+	Error          string            `json:"error,omitempty"`
+	Timestamp      time.Time         `json:"timestamp"`
+	SubAgentName   string            `json:"subAgentName,omitempty"`   // Set when this step is a delegate_tasks call
+	SubAgentTraces []*ExecutionTrace `json:"subAgentTraces,omitempty"` // Child agent traces (attached after delegation)
 }
 
 // NewExecutionTrace creates a new trace for a user request.

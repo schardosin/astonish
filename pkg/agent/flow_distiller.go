@@ -37,7 +37,8 @@ type FlowDistiller struct {
 // internalOnlyTools lists tools that exist only for the chat agent's
 // internal use and must never appear in distilled flows.
 var internalOnlyTools = map[string]bool{
-	"memory_save": true,
+	"memory_save":    true,
+	"delegate_tasks": true,
 }
 
 // NewFlowDistiller creates a FlowDistiller that uses the provided ADK model.LLM.
@@ -335,4 +336,46 @@ func extractYAMLBlock(text string) string {
 	}
 
 	return strings.TrimSpace(remaining[:endIdx])
+}
+
+// flattenTraces replaces delegate_tasks trace steps with the actual tool calls
+// from child agent traces. This ensures distilled flows contain real tool calls
+// (read_file, shell_command, etc.) rather than opaque delegate_tasks calls.
+// The flattening is done in-place on the trace.
+func flattenTraces(trace *ExecutionTrace) *ExecutionTrace {
+	if trace == nil {
+		return trace
+	}
+
+	trace.mu.Lock()
+	defer trace.mu.Unlock()
+
+	var flattened []TraceStep
+	for _, step := range trace.Steps {
+		if step.ToolName != "delegate_tasks" || len(step.SubAgentTraces) == 0 {
+			flattened = append(flattened, step)
+			continue
+		}
+
+		// Replace the delegate_tasks step with the children's actual tool calls
+		for _, childTrace := range step.SubAgentTraces {
+			if childTrace == nil {
+				continue
+			}
+			childTrace.mu.Lock()
+			for _, childStep := range childTrace.Steps {
+				// Skip internal-only tools from children too
+				if internalOnlyTools[childStep.ToolName] {
+					continue
+				}
+				// Tag the step with the sub-agent name for context
+				childStep.SubAgentName = step.SubAgentName
+				flattened = append(flattened, childStep)
+			}
+			childTrace.mu.Unlock()
+		}
+	}
+
+	trace.Steps = flattened
+	return trace
 }

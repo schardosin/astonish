@@ -375,6 +375,32 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("- Credential values are never exposed in tool args — only the credential name is passed\n")
 	}
 
+	// 6h. Task delegation guidance (when delegate_tasks tool is available)
+	if b.hasDelegateTasksTool() {
+		sb.WriteString("\n## Task Delegation\n\n")
+		sb.WriteString("Use `delegate_tasks` to run multiple independent tasks in parallel via sub-agents.\n\n")
+		sb.WriteString("**IMPORTANT — Delegation has significant overhead.** Each sub-agent creates a new session, ")
+		sb.WriteString("loads context, and runs its own LLM loop. The user sees NO output until ALL sub-agents finish. ")
+		sb.WriteString("For most requests, calling tools directly is faster and provides a better experience.\n\n")
+		sb.WriteString("**When to delegate (3+ heavy independent tasks):**\n")
+		sb.WriteString("- 3 or more independent research/analysis tasks that each require multiple tool calls\n")
+		sb.WriteString("- Large-scale parallel operations (e.g., analyze 5+ files, test 4+ APIs)\n")
+		sb.WriteString("- Tasks where the combined sequential time would exceed 2-3 minutes\n\n")
+		sb.WriteString("**When NOT to delegate (do it yourself instead):**\n")
+		sb.WriteString("- 1-2 tasks, even if independent — just call the tools directly in sequence\n")
+		sb.WriteString("- Quick lookups (API calls, file reads, calendar checks, status queries)\n")
+		sb.WriteString("- Any request where the user expects a fast, conversational response\n")
+		sb.WriteString("- Tasks requiring user interaction, clarification, or streaming output\n")
+		sb.WriteString("- When the user's request can be answered with fewer than 6 total tool calls\n\n")
+		sb.WriteString("**Guidelines (when you do delegate):**\n")
+		sb.WriteString("- ALWAYS send a brief acknowledgment message BEFORE calling delegate_tasks\n")
+		sb.WriteString("- Be specific in task descriptions — sub-agents work autonomously\n")
+		sb.WriteString("- Name sub-agents descriptively (e.g., 'api-researcher', 'test-writer')\n")
+		sb.WriteString("- Filter tools when a sub-agent only needs specific capabilities\n")
+		sb.WriteString("- Sub-agents can read memory but cannot write to it\n")
+		sb.WriteString("- Max 10 tasks per delegation call, each with a 5-minute timeout\n")
+	}
+
 	// 7. Execution Plan with integrated knowledge (when a flow matches)
 	if b.ExecutionPlan != "" {
 		sb.WriteString("\n## Execution Plan\n\n")
@@ -453,6 +479,16 @@ func (b *SystemPromptBuilder) hasProcessTools() bool {
 func (b *SystemPromptBuilder) hasHttpRequestTool() bool {
 	for _, t := range b.Tools {
 		if t.Name() == "http_request" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasDelegateTasksTool returns true if delegate_tasks is among the available tools.
+func (b *SystemPromptBuilder) hasDelegateTasksTool() bool {
+	for _, t := range b.Tools {
+		if t.Name() == "delegate_tasks" {
 			return true
 		}
 	}

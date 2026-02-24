@@ -19,6 +19,7 @@ type AppConfig struct {
 	Channels   ChannelsConfig             `yaml:"channels,omitempty"`
 	Scheduler  SchedulerConfig            `yaml:"scheduler,omitempty"`
 	Browser    BrowserAppConfig           `yaml:"browser,omitempty"`
+	SubAgents  SubAgentAppConfig          `yaml:"sub_agents,omitempty"`
 }
 
 // MemoryConfig controls the semantic memory / RAG system.
@@ -273,6 +274,35 @@ type BrowserAppConfig struct {
 	UserDataDir string `yaml:"user_data_dir,omitempty" json:"user_data_dir,omitempty"`
 	// NavigationTimeout is the max seconds to wait for page loads. Default: 30.
 	NavigationTimeout int `yaml:"navigation_timeout,omitempty" json:"navigation_timeout,omitempty"`
+}
+
+// SubAgentAppConfig holds configuration for the sub-agent delegation system.
+type SubAgentAppConfig struct {
+	// Enabled controls whether task delegation is available. Default: true (nil means true).
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// MaxDepth is the maximum delegation nesting depth. Default: 2.
+	MaxDepth int `yaml:"max_depth,omitempty" json:"max_depth,omitempty"`
+	// MaxConcurrent is the maximum number of parallel sub-agents. Default: 5.
+	MaxConcurrent int `yaml:"max_concurrent,omitempty" json:"max_concurrent,omitempty"`
+	// TaskTimeoutSec is the per-task timeout in seconds. Default: 300 (5 minutes).
+	TaskTimeoutSec int `yaml:"task_timeout_sec,omitempty" json:"task_timeout_sec,omitempty"`
+}
+
+// IsSubAgentsEnabled returns whether the sub-agent system is enabled.
+// Defaults to true if not explicitly set.
+func (c *SubAgentAppConfig) IsSubAgentsEnabled() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+// TaskTimeout returns the per-task timeout as a time.Duration.
+func (c *SubAgentAppConfig) TaskTimeout() time.Duration {
+	if c.TaskTimeoutSec <= 0 {
+		return 5 * time.Minute
+	}
+	return time.Duration(c.TaskTimeoutSec) * time.Second
 }
 
 // TelegramConfig holds configuration for the Telegram channel adapter.

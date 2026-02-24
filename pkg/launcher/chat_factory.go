@@ -345,6 +345,26 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	}
 	cleanups = append(cleanups, browserMgr.Cleanup)
 
+	// --- 2g. Sub-agent delegation tool ---
+	var subAgentMgr *agent.SubAgentManager
+	if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
+		delegateTool, delegateErr := tools.GetDelegateTasksTool()
+		if delegateErr != nil {
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Failed to create delegate_tasks tool: %v\n", delegateErr)
+			}
+		} else {
+			internalTools = append(internalTools, delegateTool)
+
+			subAgentCfg := agent.SubAgentConfig{
+				MaxDepth:      cfg.AppConfig.SubAgents.MaxDepth,
+				MaxConcurrent: cfg.AppConfig.SubAgents.MaxConcurrent,
+				TaskTimeout:   cfg.AppConfig.SubAgents.TaskTimeout(),
+			}
+			subAgentMgr = agent.NewSubAgentManager(subAgentCfg)
+		}
+	}
+
 	// --- 3. Load MCP tools from cache (lazy) ---
 	mcpCfg, _ := config.LoadMCPConfig()
 	var lazyToolsets []*agent.LazyMCPToolset
@@ -621,6 +641,18 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		if fs, ok := sessionService.(*persistentsession.FileStore); ok {
 			fs.RedactFunc = redactor.Redact
 		}
+	}
+
+	// Wire SubAgentManager — deferred until all tools and LLM are known
+	if subAgentMgr != nil {
+		subAgentMgr.LLM = llm
+		subAgentMgr.Tools = internalTools
+		subAgentMgr.Toolsets = mcpToolsets
+		subAgentMgr.SessionService = sessionService
+		subAgentMgr.MemoryManager = memMgr
+		subAgentMgr.AppName = "astonish"
+		subAgentMgr.UserID = "console_user"
+		tools.SetSubAgentManager(subAgentMgr)
 	}
 
 	// --- 6b. Initialize Flow Registry ---
@@ -905,6 +937,11 @@ func factoryBuildSelfMDConfig(
 				selfCfg.KnowledgeFiles = append(selfCfg.KnowledgeFiles, name)
 			}
 		}
+	}
+
+	// Sub-agents
+	if cfg.AppConfig != nil {
+		selfCfg.SubAgentsEnabled = cfg.AppConfig.SubAgents.IsSubAgentsEnabled()
 	}
 
 	return selfCfg

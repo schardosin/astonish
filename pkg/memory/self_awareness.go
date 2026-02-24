@@ -11,22 +11,23 @@ import (
 
 // SelfMDConfig holds everything needed to generate SELF.md.
 type SelfMDConfig struct {
-	ConfigPath     string            // Path to config.yaml
-	MCPConfigPath  string            // Path to mcp_config.json
-	ProviderName   string            // Active provider name
-	ModelName      string            // Active model name
-	Providers      map[string]string // provider instance -> "type: model" summary
-	MCPServers     []MCPServerInfo   // Installed MCP servers
-	FlowEntries    []FlowInfo        // Saved flows from registry
-	FlowDir        string            // Path to agents/ directory
-	MemoryDir      string            // Path to memory/ directory
-	MemoryEnabled  bool              // Whether memory system is active
-	EmbeddingInfo  string            // Embedding provider summary (e.g., "openai (text-embedding-3-small)")
-	ChunkCount     int               // Number of indexed chunks
-	InternalTools  int               // Count of internal tools
-	MCPTools       int               // Count of MCP tools
-	CoreFiles      []string          // Core memory files found (MEMORY.md, INSTRUCTIONS.md, etc.)
-	KnowledgeFiles []string          // Knowledge tier files found
+	ConfigPath       string            // Path to config.yaml
+	MCPConfigPath    string            // Path to mcp_config.json
+	ProviderName     string            // Active provider name
+	ModelName        string            // Active model name
+	Providers        map[string]string // provider instance -> "type: model" summary
+	MCPServers       []MCPServerInfo   // Installed MCP servers
+	FlowEntries      []FlowInfo        // Saved flows from registry
+	FlowDir          string            // Path to agents/ directory
+	MemoryDir        string            // Path to memory/ directory
+	MemoryEnabled    bool              // Whether memory system is active
+	EmbeddingInfo    string            // Embedding provider summary (e.g., "openai (text-embedding-3-small)")
+	ChunkCount       int               // Number of indexed chunks
+	InternalTools    int               // Count of internal tools
+	MCPTools         int               // Count of MCP tools
+	CoreFiles        []string          // Core memory files found (MEMORY.md, INSTRUCTIONS.md, etc.)
+	KnowledgeFiles   []string          // Knowledge tier files found
+	SubAgentsEnabled bool              // Whether sub-agent delegation is available
 }
 
 // MCPServerInfo describes an installed MCP server for SELF.md.
@@ -126,6 +127,13 @@ func GenerateSelfMD(cfg *SelfMDConfig) string {
 	sb.WriteString(fmt.Sprintf("- Internal tools: %d\n", cfg.InternalTools))
 	sb.WriteString(fmt.Sprintf("- MCP tools: %d\n", cfg.MCPTools))
 	sb.WriteString(fmt.Sprintf("- Total: %d\n\n", cfg.InternalTools+cfg.MCPTools))
+
+	// Sub-agents
+	if cfg.SubAgentsEnabled {
+		sb.WriteString("## Sub-Agents\n")
+		sb.WriteString("- Task delegation: enabled (delegate_tasks tool)\n")
+		sb.WriteString("- Parallel sub-agent execution for independent tasks\n\n")
+	}
 
 	// Memory system
 	sb.WriteString("## Memory System\n")

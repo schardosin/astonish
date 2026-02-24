@@ -542,3 +542,161 @@ func TestFileStore_TempStateTrimmed(t *testing.T) {
 		t.Error("expected error for temp key after trim, got nil")
 	}
 }
+
+func TestFileStore_CreateWithParentID(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	// Create parent session
+	parentResp, err := store.Create(ctx, &adksession.CreateRequest{
+		AppName:   "myapp",
+		UserID:    "user1",
+		SessionID: "parent-sess",
+	})
+	if err != nil {
+		t.Fatalf("Create(parent) error = %v", err)
+	}
+
+	// Create child session using StateKeyParentID
+	childResp, err := store.Create(ctx, &adksession.CreateRequest{
+		AppName:   "myapp",
+		UserID:    "user1",
+		SessionID: "child-sess",
+		State: map[string]any{
+			StateKeyParentID: "parent-sess",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create(child) error = %v", err)
+	}
+
+	// Verify parent session exists
+	if parentResp.Session.ID() != "parent-sess" {
+		t.Errorf("parent ID = %q, want %q", parentResp.Session.ID(), "parent-sess")
+	}
+
+	// Verify child session exists
+	if childResp.Session.ID() != "child-sess" {
+		t.Errorf("child ID = %q, want %q", childResp.Session.ID(), "child-sess")
+	}
+
+	// Verify ParentID is set in the index
+	meta, err := store.index.Get("child-sess")
+	if err != nil {
+		t.Fatalf("index.Get(child-sess) error = %v", err)
+	}
+	if meta.ParentID != "parent-sess" {
+		t.Errorf("ParentID = %q, want %q", meta.ParentID, "parent-sess")
+	}
+
+	// Verify StateKeyParentID is NOT in the child session's state
+	_, stateErr := childResp.Session.State().Get(StateKeyParentID)
+	if stateErr == nil {
+		t.Error("expected StateKeyParentID to be removed from state, but it's still present")
+	}
+}
+
+func TestFileStore_ListExcludesSubSessions(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	// Create parent
+	createTestSession(t, store, "myapp", "user1")
+
+	// Create child via StateKeyParentID
+	parentSess := createTestSession(t, store, "myapp", "user1")
+	_, err := store.Create(ctx, &adksession.CreateRequest{
+		AppName:   "myapp",
+		UserID:    "user1",
+		SessionID: "sub-child",
+		State: map[string]any{
+			StateKeyParentID: parentSess.ID(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create(child) error = %v", err)
+	}
+
+	// List should exclude sub-sessions
+	resp, err := store.List(ctx, &adksession.ListRequest{AppName: "myapp"})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+
+	// Should return 2 top-level sessions, not 3
+	if len(resp.Sessions) != 2 {
+		t.Errorf("List() len = %d, want 2 (excluding sub-session)", len(resp.Sessions))
+	}
+}
+
+func TestFileStore_DeleteCascadesChildren(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	// Create parent
+	parentResp, err := store.Create(ctx, &adksession.CreateRequest{
+		AppName:   "myapp",
+		UserID:    "user1",
+		SessionID: "parent-cascade",
+	})
+	if err != nil {
+		t.Fatalf("Create(parent) error = %v", err)
+	}
+
+	// Create two children
+	for _, childID := range []string{"child-cascade-1", "child-cascade-2"} {
+		_, err := store.Create(ctx, &adksession.CreateRequest{
+			AppName:   "myapp",
+			UserID:    "user1",
+			SessionID: childID,
+			State: map[string]any{
+				StateKeyParentID: "parent-cascade",
+			},
+		})
+		if err != nil {
+			t.Fatalf("Create(%s) error = %v", childID, err)
+		}
+	}
+
+	// Create unrelated session
+	_, err = store.Create(ctx, &adksession.CreateRequest{
+		AppName:   "myapp",
+		UserID:    "user1",
+		SessionID: "unrelated-sess",
+	})
+	if err != nil {
+		t.Fatalf("Create(unrelated) error = %v", err)
+	}
+
+	// Delete parent — should cascade children
+	err = store.Delete(ctx, &adksession.DeleteRequest{
+		AppName:   "myapp",
+		UserID:    "user1",
+		SessionID: parentResp.Session.ID(),
+	})
+	if err != nil {
+		t.Fatalf("Delete(parent) error = %v", err)
+	}
+
+	// Parent and children should be gone
+	for _, id := range []string{"parent-cascade", "child-cascade-1", "child-cascade-2"} {
+		_, err := store.Get(ctx, &adksession.GetRequest{
+			AppName:   "myapp",
+			UserID:    "user1",
+			SessionID: id,
+		})
+		if err == nil {
+			t.Errorf("Get(%s) should return error after cascade delete, got nil", id)
+		}
+	}
+
+	// Unrelated session should still exist
+	_, err = store.Get(ctx, &adksession.GetRequest{
+		AppName:   "myapp",
+		UserID:    "user1",
+		SessionID: "unrelated-sess",
+	})
+	if err != nil {
+		t.Errorf("Get(unrelated) error = %v, want nil (should survive cascade)", err)
+	}
+}

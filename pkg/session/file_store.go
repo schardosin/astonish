@@ -35,6 +35,11 @@ type FileStore struct {
 
 type stateMap = map[string]any
 
+// StateKeyParentID is the session state key used to pass a parent session ID
+// during session creation. FileStore.Create() extracts this key from the
+// initial state and stores it in the index metadata, then removes it from state.
+const StateKeyParentID = "_astonish_parent_id"
+
 // NewFileStore creates a file-based session store at the given directory.
 func NewFileStore(baseDir string) (*FileStore, error) {
 	if err := os.MkdirAll(baseDir, 0755); err != nil {
@@ -78,6 +83,13 @@ func (s *FileStore) Create(ctx context.Context, req *adksession.CreateRequest) (
 		state = make(stateMap)
 	}
 
+	// Extract parent ID from state if present (used for sub-agent sessions)
+	var parentID string
+	if pid, ok := state[StateKeyParentID].(string); ok && pid != "" {
+		parentID = pid
+		delete(state, StateKeyParentID)
+	}
+
 	// Extract and store scoped state deltas
 	appDelta, userDelta, sessionDelta := extractStateDeltas(state)
 	appState := s.updateAppState(appDelta, req.AppName)
@@ -119,6 +131,7 @@ func (s *FileStore) Create(ctx context.Context, req *adksession.CreateRequest) (
 		CreatedAt:    now,
 		UpdatedAt:    now,
 		MessageCount: 0,
+		ParentID:     parentID,
 	}
 	if err := s.index.Add(meta); err != nil {
 		return nil, fmt.Errorf("failed to add session to index: %w", err)
@@ -225,23 +238,34 @@ func (s *FileStore) List(ctx context.Context, req *adksession.ListRequest) (*adk
 }
 
 // Delete deletes a session by removing its transcript and index entry.
+// If the session has child sub-sessions, they are cascade-deleted as well.
 func (s *FileStore) Delete(ctx context.Context, req *adksession.DeleteRequest) error {
 	if req.AppName == "" || req.UserID == "" || req.SessionID == "" {
 		return fmt.Errorf("app_name, user_id, session_id are required, got app_name: %q, user_id: %q, session_id: %q",
 			req.AppName, req.UserID, req.SessionID)
 	}
 
+	// Collect child session IDs before acquiring the write lock
+	children, _ := s.index.ListChildren(req.SessionID)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Remove from in-memory cache
+	// Remove child sessions' transcripts and in-memory cache
+	for _, child := range children {
+		delete(s.sessions, child.ID)
+		transcriptPath := filepath.Join(s.baseDir, child.AppName, child.UserID, child.ID+".jsonl")
+		os.Remove(transcriptPath)
+	}
+
+	// Remove the parent session from in-memory cache
 	delete(s.sessions, req.SessionID)
 
 	// Remove transcript file
 	transcriptPath := filepath.Join(s.baseDir, req.AppName, req.UserID, req.SessionID+".jsonl")
 	os.Remove(transcriptPath) // ignore error if file doesn't exist
 
-	// Remove from index
+	// Remove from index (cascades children automatically)
 	return s.index.Remove(req.SessionID)
 }
 

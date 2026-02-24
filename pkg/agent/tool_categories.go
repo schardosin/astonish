@@ -20,6 +20,11 @@ var SafeTools = map[string]bool{
 	"memory_get":                true,
 	"process_list":              true,
 	"process_read":              true,
+	// Browser observation tools (read-only)
+	"browser_snapshot":         true,
+	"browser_take_screenshot":  true,
+	"browser_console_messages": true,
+	"browser_network_requests": true,
 }
 
 // IsToolSafe returns true if the tool is read-only and safe to auto-approve.

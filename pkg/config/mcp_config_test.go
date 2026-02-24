@@ -11,63 +11,12 @@ func boolPtr(b bool) *bool {
 	return &b
 }
 
-// TestMergeStandardServers_PreservesDisabledKeyless verifies that mergeStandardServers
-// does not overwrite an explicit Enabled=false flag on a keyless server (e.g. Playwright).
-func TestMergeStandardServers_PreservesDisabledKeyless(t *testing.T) {
-	cfg := &MCPConfig{
-		MCPServers: map[string]MCPServerConfig{
-			"playwright": {
-				Command: "npx",
-				Args:    []string{"@playwright/mcp@latest", "--headless"},
-				Enabled: boolPtr(false), // user disabled it
-			},
-		},
-	}
-
-	mergeStandardServers(cfg)
-
-	srv, ok := cfg.MCPServers["playwright"]
-	if !ok {
-		t.Fatal("playwright entry missing after merge")
-	}
-	if srv.Enabled == nil {
-		t.Fatal("Enabled flag was reset to nil (should be false)")
-	}
-	if *srv.Enabled {
-		t.Fatal("Enabled flag was flipped to true (should be false)")
-	}
-}
-
-// TestMergeStandardServers_InjectsKeylessWhenAbsent verifies that a keyless server
-// is injected even when there's no existing entry.
-func TestMergeStandardServers_InjectsKeylessWhenAbsent(t *testing.T) {
-	cfg := &MCPConfig{
-		MCPServers: make(map[string]MCPServerConfig),
-	}
-
-	mergeStandardServers(cfg)
-
-	srv, ok := cfg.MCPServers["playwright"]
-	if !ok {
-		t.Fatal("playwright should be injected into empty config")
-	}
-	// No existing entry → Enabled should remain nil (defaults to true)
-	if srv.Enabled != nil {
-		t.Fatalf("Enabled should be nil for freshly injected server, got %v", *srv.Enabled)
-	}
-	if srv.Command != "npx" {
-		t.Fatalf("unexpected Command: %s", srv.Command)
-	}
-}
-
 // TestMergeStandardServers_PreservesDisabledKeyBased verifies that a key-based server
 // with Enabled=false keeps that flag when re-merged with a valid API key.
 func TestMergeStandardServers_PreservesDisabledKeyBased(t *testing.T) {
 	// This test relies on LoadAppConfig which reads the real config.
 	// If no config.yaml exists or no Tavily key is set, the key-based branch is skipped,
-	// so we only test the keyless path in CI-safe mode.
-	// For a full integration test we'd need to set up a config.yaml with a key.
-	// This test validates that the code path preserves the Enabled flag structurally.
+	// so we verify the flag is preserved structurally.
 
 	cfg := &MCPConfig{
 		MCPServers: map[string]MCPServerConfig{
@@ -86,8 +35,7 @@ func TestMergeStandardServers_PreservesDisabledKeyBased(t *testing.T) {
 	srv := cfg.MCPServers["tavily"]
 	if srv.Enabled == nil || *srv.Enabled {
 		// This is OK if LoadAppConfig() had no Tavily key — the key-based branch
-		// doesn't touch it. But the keyless pass also won't touch it (Tavily has env vars).
-		// So Enabled should remain false from our initial setup.
+		// doesn't touch it. So Enabled should remain false from our initial setup.
 		if srv.Enabled == nil {
 			t.Fatal("Enabled flag was reset to nil (should stay false)")
 		}
@@ -97,8 +45,35 @@ func TestMergeStandardServers_PreservesDisabledKeyBased(t *testing.T) {
 	}
 }
 
+// TestMergeStandardServers_CustomServerUntouched verifies that mergeStandardServers
+// does not modify entries for non-standard (custom) servers.
+func TestMergeStandardServers_CustomServerUntouched(t *testing.T) {
+	cfg := &MCPConfig{
+		MCPServers: map[string]MCPServerConfig{
+			"my-custom-server": {
+				Command: "node",
+				Args:    []string{"server.js"},
+				Enabled: boolPtr(false),
+			},
+		},
+	}
+
+	mergeStandardServers(cfg)
+
+	srv, ok := cfg.MCPServers["my-custom-server"]
+	if !ok {
+		t.Fatal("custom server entry missing after merge")
+	}
+	if srv.Enabled == nil {
+		t.Fatal("Enabled flag was reset to nil (should be false)")
+	}
+	if *srv.Enabled {
+		t.Fatal("Enabled flag was flipped to true (should be false)")
+	}
+}
+
 // setupTempConfigDir creates a temporary directory structure that GetConfigDir() will use.
-// Returns a cleanup function.
+// Returns the config directory path.
 func setupTempConfigDir(t *testing.T) string {
 	t.Helper()
 	tmpDir := t.TempDir()
@@ -128,9 +103,9 @@ func TestSaveMCPConfig_PersistsDisabledStandardServers(t *testing.T) {
 
 	cfg := &MCPConfig{
 		MCPServers: map[string]MCPServerConfig{
-			"playwright": {
+			"tavily": {
 				Command: "npx",
-				Args:    []string{"@playwright/mcp@latest", "--headless"},
+				Args:    []string{"-y", "tavily-mcp@latest"},
 				Enabled: boolPtr(false), // explicitly disabled
 			},
 			"my-custom-server": {
@@ -157,12 +132,12 @@ func TestSaveMCPConfig_PersistsDisabledStandardServers(t *testing.T) {
 	}
 
 	// Disabled standard server should be persisted
-	pw, ok := loaded.MCPServers["playwright"]
+	srv, ok := loaded.MCPServers["tavily"]
 	if !ok {
-		t.Fatalf("disabled playwright should be persisted, got: %s", string(data))
+		t.Fatalf("disabled tavily should be persisted, got: %s", string(data))
 	}
-	if pw.Enabled == nil || *pw.Enabled {
-		t.Fatal("playwright Enabled should be false after round-trip")
+	if srv.Enabled == nil || *srv.Enabled {
+		t.Fatal("tavily Enabled should be false after round-trip")
 	}
 
 	// Custom server should always be persisted
@@ -178,15 +153,15 @@ func TestSaveMCPConfig_StripsEnabledStandardServers(t *testing.T) {
 
 	cfg := &MCPConfig{
 		MCPServers: map[string]MCPServerConfig{
-			"playwright": {
-				Command: "npx",
-				Args:    []string{"@playwright/mcp@latest", "--headless"},
-				// Enabled is nil → defaults to true → should be stripped
-			},
 			"tavily": {
 				Command: "npx",
 				Args:    []string{"-y", "tavily-mcp@latest"},
 				Enabled: boolPtr(true), // explicitly enabled → should be stripped
+			},
+			"brave-search": {
+				Command: "npx",
+				Args:    []string{"-y", "@brave/brave-search-mcp-server"},
+				// Enabled is nil → defaults to true → should be stripped
 			},
 			"my-custom-server": {
 				Command: "node",
@@ -204,11 +179,11 @@ func TestSaveMCPConfig_StripsEnabledStandardServers(t *testing.T) {
 		t.Fatalf("LoadMCPConfigRaw failed: %v", err)
 	}
 
-	if _, ok := loaded.MCPServers["playwright"]; ok {
-		t.Fatal("enabled playwright should be stripped from saved config")
-	}
 	if _, ok := loaded.MCPServers["tavily"]; ok {
 		t.Fatal("explicitly enabled tavily should be stripped from saved config")
+	}
+	if _, ok := loaded.MCPServers["brave-search"]; ok {
+		t.Fatal("nil-enabled brave-search should be stripped from saved config")
 	}
 	if _, ok := loaded.MCPServers["my-custom-server"]; !ok {
 		t.Fatal("custom server should always be persisted")
@@ -223,9 +198,9 @@ func TestSaveMCPConfig_RoundTripPreservesDisabledFlag(t *testing.T) {
 
 	original := &MCPConfig{
 		MCPServers: map[string]MCPServerConfig{
-			"playwright": {
+			"tavily": {
 				Command: "npx",
-				Args:    []string{"@playwright/mcp@latest", "--headless"},
+				Args:    []string{"-y", "tavily-mcp@latest"},
 				Enabled: boolPtr(false),
 			},
 		},
@@ -245,14 +220,14 @@ func TestSaveMCPConfig_RoundTripPreservesDisabledFlag(t *testing.T) {
 	// Merge (simulates LoadMCPConfig)
 	mergeStandardServers(raw)
 
-	pw, ok := raw.MCPServers["playwright"]
+	srv, ok := raw.MCPServers["tavily"]
 	if !ok {
-		t.Fatal("playwright should exist after merge")
+		t.Fatal("tavily should exist after merge")
 	}
-	if pw.Enabled == nil {
+	if srv.Enabled == nil {
 		t.Fatal("Enabled should not be nil after round-trip + merge")
 	}
-	if *pw.Enabled {
+	if *srv.Enabled {
 		t.Fatal("Enabled should be false after round-trip + merge")
 	}
 }

@@ -1267,9 +1267,9 @@ func handleWebToolSetup() error {
 }
 
 // handleBrowserSetup displays an informational note about browser automation.
-// Playwright is a keyless standard server and is always active by default —
-// no setup step is needed.
+// Browser automation is built-in via native Go tools (rod) — no external MCP
+// server or Node.js dependency required. Chromium is auto-downloaded on first use.
 func handleBrowserSetup() error {
-	printSuccess("Playwright Browser is active by default. The AI can automate browsers, take screenshots, and interact with JS-heavy pages — no setup required.")
+	printSuccess("Browser automation is built-in. The AI can navigate pages, click, type, take screenshots, and more — no setup required. Chromium is downloaded automatically on first use.")
 	return nil
 }

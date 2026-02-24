@@ -9,6 +9,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/api"
+	"github.com/schardosin/astonish/pkg/browser"
 	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
@@ -216,21 +217,21 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 							fmt.Printf("Warning: Failed to create memory store: %v\n", storeErr)
 						}
 					} else {
-					memStore = store
-					memIndexer = memory.NewIndexer(store, storeCfg, false)
-					store.SetIndexer(memIndexer)
-					memorySearchAvailable = true
+						memStore = store
+						memIndexer = memory.NewIndexer(store, storeCfg, false)
+						store.SetIndexer(memIndexer)
+						memorySearchAvailable = true
 
-					// Perform initial indexing in background
-					go func() {
-						defer close(indexingDone)
-						defer func() {
-							if r := recover(); r != nil {
-								indexingErr = fmt.Errorf("indexing panicked: %v", r)
-							}
+						// Perform initial indexing in background
+						go func() {
+							defer close(indexingDone)
+							defer func() {
+								if r := recover(); r != nil {
+									indexingErr = fmt.Errorf("indexing panicked: %v", r)
+								}
+							}()
+							indexingErr = memIndexer.IndexAll(context.Background())
 						}()
-						indexingErr = memIndexer.IndexAll(context.Background())
-					}()
 
 						// Start file watcher in background
 						if memCfg.IsWatchEnabled() {
@@ -318,6 +319,18 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		internalTools = append(internalTools, processTools...)
 	}
 	cleanups = append(cleanups, tools.CleanupProcessManager)
+
+	// --- 2f. Initialize browser automation tools ---
+	browserMgr := browser.NewManager(browser.DefaultConfig())
+	browserTools, browserErr := tools.GetBrowserTools(browserMgr)
+	if browserErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("Warning: Failed to create browser tools: %v\n", browserErr)
+		}
+	} else {
+		internalTools = append(internalTools, browserTools...)
+	}
+	cleanups = append(cleanups, browserMgr.Cleanup)
 
 	// --- 3. Load MCP tools from cache (lazy) ---
 	mcpCfg, _ := config.LoadMCPConfig()
@@ -513,12 +526,9 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 	}
 
-	// Check browser availability
-	for _, ts := range mcpToolsets {
-		if ts.Name() == "playwright" {
-			promptBuilder.BrowserAvailable = true
-			break
-		}
+	// Check browser availability (native browser tools)
+	if browserErr == nil && len(browserTools) > 0 {
+		promptBuilder.BrowserAvailable = true
 	}
 
 	// Check memory search availability
@@ -825,9 +835,7 @@ func factoryBuildSelfMDConfig(
 			for _, std := range config.GetStandardServers() {
 				if std.ID == name {
 					info.Keyless = len(std.EnvVars) == 0
-					if std.ID == "playwright" {
-						info.Category = "browser"
-					}
+					info.Category = std.Category
 					break
 				}
 			}

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/browser"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/mcp"
@@ -88,6 +89,18 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 	} else {
 		internalTools = append(internalTools, processTools...)
 	}
+
+	// Register browser automation tools
+	browserMgr := browser.NewManager(browser.DefaultConfig())
+	browserTools, browserErr := tools.GetBrowserTools(browserMgr)
+	if browserErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("[headless] Warning: Failed to create browser tools: %v\n", browserErr)
+		}
+	} else {
+		internalTools = append(internalTools, browserTools...)
+	}
+	defer browserMgr.Cleanup()
 
 	// Initialize MCP tools needed for this flow
 	requiredServers := getRequiredMCPServersFromConfig(ctx, cfg.AgentConfig, cfg.DebugMode)

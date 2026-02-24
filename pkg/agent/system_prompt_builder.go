@@ -25,7 +25,7 @@ type SystemPromptBuilder struct {
 	WebExtractAvailable   bool   // Whether a web extract MCP tool is configured
 	WebSearchToolName     string // Name of the configured search tool (e.g. "tavily-search")
 	WebExtractToolName    string // Name of the configured extract tool (e.g. "tavily-extract")
-	BrowserAvailable      bool   // Whether a browser automation MCP tool is configured (e.g. Playwright)
+	BrowserAvailable      bool   // Whether built-in browser tools are registered
 	MemorySearchAvailable bool   // Whether semantic memory search is available
 	ChannelHints          string // Channel-specific output constraints (empty = console mode)
 	SchedulerHints        string // Scheduler-specific output constraints (empty = not a scheduled run)
@@ -109,7 +109,7 @@ func (b *SystemPromptBuilder) Build() string {
 
 	// Prefer free/local browser before paid extract provider when available
 	if b.BrowserAvailable {
-		sb.WriteString(fmt.Sprintf("%d. If `web_fetch` returns empty, navigation-only, or broken content (common with JS-heavy pages), THEN try the same URL using Playwright browser tools (e.g., `browser_navigate` + `browser_snapshot`). This runs locally and is free.\n", ruleN))
+		sb.WriteString(fmt.Sprintf("%d. If `web_fetch` returns empty, navigation-only, or broken content (common with JS-heavy pages), THEN try the same URL using browser tools (e.g., `browser_navigate` + `browser_snapshot`). This runs locally and is free.\n", ruleN))
 		ruleN++
 	}
 
@@ -147,14 +147,32 @@ func (b *SystemPromptBuilder) Build() string {
 	// 4c. Browser capabilities
 	if b.BrowserAvailable {
 		sb.WriteString("\n## Browser Automation\n\n")
-		sb.WriteString("You have access to a Playwright browser automation server with tools like `browser_navigate`, `browser_click`, `browser_type`, `browser_snapshot`, `browser_take_screenshot`, etc.\n\n")
+		sb.WriteString("You have a built-in browser with tools for navigating, interacting, and observing web pages.\n\n")
+		sb.WriteString("**Core workflow:**\n")
+		sb.WriteString("1. `browser_navigate` to load a page\n")
+		sb.WriteString("2. `browser_snapshot` to see the page structure (accessibility tree with ref IDs)\n")
+		sb.WriteString("3. Use refs from the snapshot to interact: `browser_click ref=ref5`, `browser_type ref=ref7 text=\"hello\"`\n")
+		sb.WriteString("4. `browser_snapshot` again to see the result\n\n")
 		sb.WriteString("**When to use the browser:**\n")
-		sb.WriteString("- After `web_fetch` fails for content extraction (preferred before paid extract tools)\n")
+		sb.WriteString("- After `web_fetch` fails for content extraction (JS-heavy pages)\n")
 		sb.WriteString("- When you need to interact with a page (click buttons, fill forms, log in)\n")
 		sb.WriteString("- When you need a visual screenshot of a page\n")
 		sb.WriteString("- When you need to navigate through multi-page workflows\n\n")
-		sb.WriteString("**Prefer `web_fetch` over the browser** for simple content extraction — it's faster and lighter. Only use browser tools when `web_fetch` fails or when interaction/screenshots are needed.\n")
-		sb.WriteString("Use `browser_snapshot` (accessibility tree) for understanding page structure — it's more efficient than screenshots for decision-making.\n")
+		sb.WriteString("**Tips:**\n")
+		sb.WriteString("- Prefer `web_fetch` for simple content extraction — it's faster\n")
+		sb.WriteString("- Use `browser_snapshot` over `browser_take_screenshot` for decision-making — text is cheaper than images\n")
+		sb.WriteString("- Use `mode=\"efficient\"` on snapshots for large pages — shows only interactive elements\n")
+		sb.WriteString("- Refs are valid until the next snapshot. If a ref fails, take a new snapshot.\n")
+
+		if b.hasCredentialTools() {
+			sb.WriteString("\n**Authenticated websites:**\n")
+			sb.WriteString("When a page requires login, check the credential store FIRST — don't ask the user for passwords.\n")
+			sb.WriteString("1. `list_credentials` — look for a credential matching the site's domain or name\n")
+			sb.WriteString("2. If found: `resolve_credential(name=\"...\")` to get username + password\n")
+			sb.WriteString("3. `browser_type` to fill the login form fields, `browser_click` to submit\n")
+			sb.WriteString("4. If no matching credential exists: ask the user for the credentials, then `save_credential` to store them securely BEFORE typing them into the form\n")
+			sb.WriteString("NEVER ask the user to type passwords in chat if a credential already exists in the store.\n")
+		}
 	}
 
 	// 5. Environment info

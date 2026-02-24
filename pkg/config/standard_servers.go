@@ -73,16 +73,6 @@ var standardServers = []StandardMCPServer{
 		WebExtractTool: "firecrawl:firecrawl_scrape",
 		IsDefault:      false,
 	},
-	{
-		ID:          "playwright",
-		DisplayName: "Playwright Browser",
-		Description: "Browser automation via Playwright. Navigate, click, type, screenshot, and extract content from JS-heavy pages. No API key required.",
-		Category:    "browser",
-		Command:     "npx",
-		Args:        []string{"@playwright/mcp@latest", "--headless"},
-		EnvVars:     []StandardEnvVar{}, // No API key needed
-		IsDefault:   false,
-	},
 }
 
 // GetStandardServers returns all pre-configured standard MCP servers.
@@ -113,7 +103,7 @@ func GetStandardServerIDs() map[string]bool {
 }
 
 // IsStandardServerInstalled checks if a standard server is available for use.
-// Keyless servers (e.g. Playwright) are always considered installed — they need
+// Keyless servers are always considered installed — they need
 // no API key and no explicit setup step.
 // For servers requiring an API key, checks that the key is present in config.yaml
 // or in the credential store (via the SecretGetter if set).

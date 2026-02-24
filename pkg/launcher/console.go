@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/browser"
 	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
@@ -270,6 +271,18 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	} else {
 		internalTools = append(internalTools, processTools...)
 	}
+
+	// Register browser automation tools
+	browserMgr := browser.NewManager(browser.DefaultConfig())
+	browserTools, browserErr := tools.GetBrowserTools(browserMgr)
+	if browserErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("Warning: Failed to create browser tools: %v\n", browserErr)
+		}
+	} else {
+		internalTools = append(internalTools, browserTools...)
+	}
+	defer browserMgr.Cleanup()
 
 	if cfg.DebugMode {
 		fmt.Printf("✓ Internal tools initialized: %d tools available\n", len(internalTools))

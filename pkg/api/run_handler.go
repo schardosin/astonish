@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/browser"
 	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcp"
@@ -47,6 +48,19 @@ const sessionTimeout = 2 * time.Minute
 
 var globalSessionManager *SessionManager
 var sessionOnce sync.Once
+
+// globalBrowserMgr is a shared browser manager for all Studio sessions.
+// The browser is lazily launched on first use and cleaned up on session timeout.
+var globalBrowserMgr *browser.Manager
+var browserOnce sync.Once
+
+// GetBrowserManager returns the shared browser manager for all sessions.
+func GetBrowserManager() *browser.Manager {
+	browserOnce.Do(func() {
+		globalBrowserMgr = browser.NewManager(browser.DefaultConfig())
+	})
+	return globalBrowserMgr
+}
 
 // GetSessionManager returns the singleton session manager
 func GetSessionManager() *SessionManager {
@@ -345,6 +359,11 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	// Register process management tools (process_start, process_write, etc.)
 	if processTools, procErr := tools.GetProcessTools(); procErr == nil {
 		internalTools = append(internalTools, processTools...)
+	}
+
+	// Register browser automation tools (shared manager across sessions)
+	if browserTools, browserErr := tools.GetBrowserTools(GetBrowserManager()); browserErr == nil {
+		internalTools = append(internalTools, browserTools...)
 	}
 
 	// Initialize MCP - per-session, only servers needed for this flow

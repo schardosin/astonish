@@ -216,7 +216,7 @@ func UninstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Keyless servers (e.g. Playwright) cannot be uninstalled
+	// Keyless servers cannot be uninstalled
 	if len(srv.EnvVars) == 0 {
 		http.Error(w, "Server does not require configuration", http.StatusBadRequest)
 		return

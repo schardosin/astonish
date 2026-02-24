@@ -106,8 +106,8 @@ func TestGenerateSelfMD_WithMCPServers(t *testing.T) {
 		ProviderName: "test",
 		ModelName:    "test-model",
 		MCPServers: []MCPServerInfo{
-			{Name: "playwright", Category: "browser", Keyless: true, Active: true},
 			{Name: "tavily", Category: "web", Keyless: false, Active: true},
+			{Name: "my-custom-server", Category: "", Keyless: false, Active: true},
 		},
 		MCPConfigPath: "/path/to/mcp_config.json",
 	}
@@ -117,11 +117,11 @@ func TestGenerateSelfMD_WithMCPServers(t *testing.T) {
 	if !strings.Contains(content, "## MCP Servers") {
 		t.Error("expected MCP servers section")
 	}
-	if !strings.Contains(content, "playwright") {
-		t.Error("expected playwright listed")
+	if !strings.Contains(content, "tavily") {
+		t.Error("expected tavily listed")
 	}
-	if !strings.Contains(content, "keyless") {
-		t.Error("expected keyless annotation")
+	if !strings.Contains(content, "my-custom-server") {
+		t.Error("expected custom server listed")
 	}
 }
 

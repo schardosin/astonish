@@ -79,10 +79,10 @@ func LoadMCPConfigRaw() (*MCPConfig, error) {
 
 // mergeStandardServers injects configured standard servers from config.yaml
 // into the MCPConfig. Entries from config.yaml override same-name entries in mcp_config.json
-// but preserve any explicit Enabled flag the user has set (e.g., disabling Playwright).
+// but preserve any explicit Enabled flag the user has set.
 // Key-based servers (Tavily, Brave, Firecrawl) require an API key — resolved from
 // the credential store first, then config.yaml.
-// Keyless servers (Playwright) are always injected — they need no setup.
+// Keyless servers are always injected — they need no setup.
 func mergeStandardServers(cfg *MCPConfig) {
 	appCfg, _ := LoadAppConfig()
 	getter := getInstalledSecretGetter()
@@ -117,7 +117,7 @@ func mergeStandardServers(cfg *MCPConfig) {
 		}
 	}
 
-	// Second: always inject keyless servers (e.g. Playwright) — no config entry needed.
+	// Second: always inject keyless servers — no config entry needed.
 	// Refresh command/args but preserve any explicit Enabled flag.
 	for _, srv := range GetStandardServers() {
 		if len(srv.EnvVars) > 0 {

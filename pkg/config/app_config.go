@@ -101,7 +101,7 @@ func GetVectorDir(cfg *MemoryConfig) (string, error) {
 // WebServerConfig stores credentials and installation state for a standard MCP server.
 // The server command, args, and env var names are defined in standard_servers.go.
 // For servers that require an API key (Tavily, Brave, Firecrawl), the key is stored here.
-// For keyless servers (Playwright), only the Installed flag is set.
+// For keyless servers, only the Installed flag is set.
 type WebServerConfig struct {
 	APIKey    string `yaml:"api_key,omitempty" json:"api_key,omitempty"`
 	Installed bool   `yaml:"installed,omitempty" json:"installed,omitempty"`

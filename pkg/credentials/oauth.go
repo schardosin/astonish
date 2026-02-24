@@ -144,3 +144,73 @@ func fetchOAuthToken(cred *Credential) (token string, expiresIn int, err error) 
 
 	return tokenResp.AccessToken, expiresIn, nil
 }
+
+// authCodeTokenResponse extends the standard token response with refresh_token.
+// Some providers rotate refresh tokens on each use (Google does not by default,
+// but may in certain configurations).
+type authCodeTokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	Scope        string `json:"scope,omitempty"`
+	Error        string `json:"error"`
+	ErrorDesc    string `json:"error_description"`
+}
+
+// refreshAuthCodeToken uses a refresh_token to obtain a new access_token.
+// Returns the new access token, an optional new refresh token (for providers
+// that rotate refresh tokens), and the expiry time in seconds.
+func refreshAuthCodeToken(cred *Credential) (accessToken, newRefreshToken string, expiresIn int, err error) {
+	if cred.TokenURL == "" {
+		return "", "", 0, fmt.Errorf("token_url is required for oauth_authorization_code credentials")
+	}
+	if cred.RefreshToken == "" {
+		return "", "", 0, fmt.Errorf("refresh_token is required to refresh an authorization code credential")
+	}
+	if cred.ClientID == "" {
+		return "", "", 0, fmt.Errorf("client_id is required for oauth_authorization_code credentials")
+	}
+	if cred.ClientSecret == "" {
+		return "", "", 0, fmt.Errorf("client_secret is required for oauth_authorization_code credentials")
+	}
+
+	form := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {cred.RefreshToken},
+		"client_id":     {cred.ClientID},
+		"client_secret": {cred.ClientSecret},
+	}
+
+	client := &http.Client{Timeout: oauthTimeout}
+	resp, err := client.Post(cred.TokenURL, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", "", 0, fmt.Errorf("refresh token request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxTokenResponseBytes))
+	if err != nil {
+		return "", "", 0, fmt.Errorf("read refresh token response: %w", err)
+	}
+
+	var tokenResp authCodeTokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return "", "", 0, fmt.Errorf("parse refresh token response: %w", err)
+	}
+
+	if tokenResp.Error != "" {
+		return "", "", 0, fmt.Errorf("OAuth refresh error: %s (%s)", tokenResp.Error, tokenResp.ErrorDesc)
+	}
+
+	if tokenResp.AccessToken == "" {
+		return "", "", 0, fmt.Errorf("refresh token response missing access_token (status %d)", resp.StatusCode)
+	}
+
+	expiresIn = tokenResp.ExpiresIn
+	if expiresIn <= 0 {
+		expiresIn = 3600
+	}
+
+	return tokenResp.AccessToken, tokenResp.RefreshToken, expiresIn, nil
+}

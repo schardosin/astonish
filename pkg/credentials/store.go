@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 )
 
 // CredentialType defines the authentication mechanism.
@@ -32,6 +33,13 @@ const (
 	// an HTTP credential — Resolve() will return an error. Use Get() or the
 	// resolve_credential LLM tool to access the raw fields.
 	CredPassword CredentialType = "password"
+
+	// CredOAuthAuthCode stores OAuth2 credentials obtained via the
+	// authorization code flow (Google, GitHub, etc.). Unlike client_credentials,
+	// this flow requires user consent and produces a refresh_token that can
+	// acquire new access tokens without user interaction.
+	// Resolve() auto-refreshes expired tokens and persists updated tokens to disk.
+	CredOAuthAuthCode CredentialType = "oauth_authorization_code"
 )
 
 // Credential holds authentication data for a single named credential.
@@ -54,6 +62,12 @@ type Credential struct {
 	ClientID     string `json:"client_id,omitempty"`
 	ClientSecret string `json:"client_secret,omitempty"`
 	Scope        string `json:"scope,omitempty"`
+
+	// oauth_authorization_code fields (also uses ClientID, ClientSecret, Scope above)
+	TokenURL     string `json:"token_url,omitempty"`     // Token endpoint (e.g., https://oauth2.googleapis.com/token)
+	AccessToken  string `json:"access_token,omitempty"`  // Current access token
+	RefreshToken string `json:"refresh_token,omitempty"` // Long-lived refresh token
+	TokenExpiry  string `json:"token_expiry,omitempty"`  // RFC3339 timestamp of access token expiry
 }
 
 // storeData is the JSON structure inside the encrypted file.
@@ -240,6 +254,13 @@ func (s *Store) Resolve(name string) (headerKey, headerValue string, err error) 
 	case CredPassword:
 		return "", "", fmt.Errorf("credential %q is a password credential (for SSH/FTP/etc.), not an HTTP credential — use resolve_credential to access its fields", name)
 
+	case CredOAuthAuthCode:
+		token, err := s.resolveAuthCode(name, &credCopy)
+		if err != nil {
+			return "", "", fmt.Errorf("credential %q OAuth: %w", name, err)
+		}
+		return "Authorization", "Bearer " + token, nil
+
 	default:
 		return "", "", fmt.Errorf("credential %q: unknown type %q", name, credCopy.Type)
 	}
@@ -421,4 +442,87 @@ func (s *Store) save() error {
 func basicAuthValue(username, password string) string {
 	auth := username + ":" + password
 	return base64.StdEncoding.EncodeToString([]byte(auth))
+}
+
+// resolveAuthCode returns a valid access token for an oauth_authorization_code
+// credential. If the token is expired, it refreshes using the refresh_token
+// and persists the updated tokens to disk.
+func (s *Store) resolveAuthCode(name string, cred *Credential) (string, error) {
+	// Check in-memory cache first
+	s.tokens.mu.RLock()
+	if cached, ok := s.tokens.tokens[name]; ok {
+		if time.Now().Before(cached.expiresAt) {
+			s.tokens.mu.RUnlock()
+			return cached.accessToken, nil
+		}
+	}
+	s.tokens.mu.RUnlock()
+
+	// Check if stored token is still valid
+	if cred.AccessToken != "" && cred.TokenExpiry != "" {
+		if expiry, err := time.Parse(time.RFC3339, cred.TokenExpiry); err == nil {
+			if time.Now().Before(expiry.Add(-tokenExpiryBuffer)) {
+				// Cache it and return
+				s.tokens.mu.Lock()
+				s.tokens.tokens[name] = &cachedToken{
+					accessToken: cred.AccessToken,
+					expiresAt:   expiry.Add(-tokenExpiryBuffer),
+				}
+				s.tokens.mu.Unlock()
+				if s.redactor != nil {
+					s.redactor.AddSecret(name+"/token", cred.AccessToken)
+				}
+				return cred.AccessToken, nil
+			}
+		}
+	}
+
+	// Token expired or missing — refresh
+	if cred.RefreshToken == "" {
+		return "", fmt.Errorf("access token expired and no refresh_token available — the user needs to re-authorize")
+	}
+
+	accessToken, newRefreshToken, expiresIn, err := refreshAuthCodeToken(cred)
+	if err != nil {
+		return "", err
+	}
+
+	// Calculate expiry
+	expiresAt := time.Now().Add(time.Duration(expiresIn) * time.Second)
+
+	// Update in-memory cache
+	s.tokens.mu.Lock()
+	s.tokens.tokens[name] = &cachedToken{
+		accessToken: accessToken,
+		expiresAt:   expiresAt.Add(-tokenExpiryBuffer),
+	}
+	s.tokens.mu.Unlock()
+
+	// Register for redaction
+	if s.redactor != nil {
+		s.redactor.AddSecret(name+"/token", accessToken)
+	}
+
+	// Persist updated tokens to disk — critical for auth code flow since
+	// the refresh token may rotate (new refresh_token returned on each use).
+	s.mu.Lock()
+	if stored, ok := s.data.Credentials[name]; ok {
+		stored.AccessToken = accessToken
+		stored.TokenExpiry = expiresAt.Format(time.RFC3339)
+		if newRefreshToken != "" {
+			stored.RefreshToken = newRefreshToken
+			// Update redaction for the new refresh token
+			if s.redactor != nil {
+				s.redactor.AddSecret(name, newRefreshToken)
+			}
+		}
+		if err := s.save(); err != nil {
+			s.mu.Unlock()
+			// Non-fatal: token works but won't survive restart
+			return accessToken, nil
+		}
+	}
+	s.mu.Unlock()
+
+	return accessToken, nil
 }

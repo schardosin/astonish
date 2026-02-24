@@ -134,6 +134,7 @@ func handleCredentialAdd(name string) error {
 					huh.NewOption("Basic Auth (HTTP Authorization header)", "basic"),
 					huh.NewOption("Password (plain username + password for SSH/FTP/SMTP/etc.)", "password"),
 					huh.NewOption("OAuth Client Credentials (auto token refresh)", "oauth_client_credentials"),
+					huh.NewOption("OAuth Authorization Code (user-authorized, with refresh token)", "oauth_authorization_code"),
 				).
 				Value(&credType),
 		),
@@ -155,6 +156,8 @@ func handleCredentialAdd(name string) error {
 		cred, err = collectPasswordCred()
 	case credentials.CredOAuthClientCreds:
 		cred, err = collectOAuthCred()
+	case credentials.CredOAuthAuthCode:
+		cred, err = collectOAuthAuthCodeCred()
 	default:
 		return fmt.Errorf("unknown credential type: %s", credType)
 	}
@@ -210,6 +213,16 @@ func handleCredentialTest(name string) error {
 		// Show success without revealing the token
 		tokenLen := len(headerValue) - len("Bearer ")
 		fmt.Printf("OK: acquired token (%d chars), header: %s\n", tokenLen, headerKey)
+
+	case credentials.CredOAuthAuthCode:
+		fmt.Printf("Testing OAuth authorization code credential %q...\n", name)
+		headerKey, headerValue, err := store.Resolve(name)
+		if err != nil {
+			fmt.Printf("FAILED: %v\n", err)
+			return nil
+		}
+		tokenLen := len(headerValue) - len("Bearer ")
+		fmt.Printf("OK: access token valid (%d chars), header: %s (auto-refreshes when expired)\n", tokenLen, headerKey)
 
 	case credentials.CredAPIKey:
 		fmt.Printf("Credential %q configured (api_key, header: %s)\n", name, cred.Header)
@@ -395,6 +408,73 @@ func collectOAuthCred() (*credentials.Credential, error) {
 		AuthURL:      authURL,
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
+		Scope:        scope,
+	}, nil
+}
+
+func collectOAuthAuthCodeCred() (*credentials.Credential, error) {
+	tokenURL := ""
+	clientID := ""
+	clientSecret := ""
+	accessToken := ""
+	refreshToken := ""
+	scope := ""
+
+	err := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Token URL").
+				Description("Token endpoint (e.g., https://oauth2.googleapis.com/token)").
+				Value(&tokenURL),
+			huh.NewInput().
+				Title("Client ID").
+				Value(&clientID),
+			huh.NewInput().
+				Title("Client Secret").
+				EchoMode(huh.EchoModePassword).
+				Value(&clientSecret),
+			huh.NewInput().
+				Title("Access Token").
+				Description("Current access token (from the authorization code exchange)").
+				EchoMode(huh.EchoModePassword).
+				Value(&accessToken),
+			huh.NewInput().
+				Title("Refresh Token").
+				Description("Long-lived refresh token (from the authorization code exchange)").
+				EchoMode(huh.EchoModePassword).
+				Value(&refreshToken),
+			huh.NewInput().
+				Title("Scope (optional)").
+				Value(&scope),
+		),
+	).Run()
+	if err != nil {
+		return nil, err
+	}
+
+	if tokenURL == "" {
+		return nil, fmt.Errorf("token URL is required")
+	}
+	if clientID == "" {
+		return nil, fmt.Errorf("client ID is required")
+	}
+	if clientSecret == "" {
+		return nil, fmt.Errorf("client secret is required")
+	}
+	if accessToken == "" {
+		return nil, fmt.Errorf("access token is required")
+	}
+	if refreshToken == "" {
+		return nil, fmt.Errorf("refresh token is required")
+	}
+
+	return &credentials.Credential{
+		Type:         credentials.CredOAuthAuthCode,
+		TokenURL:     tokenURL,
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
 		Scope:        scope,
 	}, nil
 }

@@ -161,6 +161,11 @@ func (r *Redactor) addSecretFieldsLocked(name string, cred *Credential) {
 		r.addVariantsLocked(name, cred.ClientSecret)
 		// Client ID is often semi-public but let's protect it too
 		r.addVariantsLocked(name, cred.ClientID)
+	case CredOAuthAuthCode:
+		r.addVariantsLocked(name, cred.ClientSecret)
+		r.addVariantsLocked(name, cred.ClientID)
+		r.addVariantsLocked(name, cred.AccessToken)
+		r.addVariantsLocked(name, cred.RefreshToken)
 	}
 }
 

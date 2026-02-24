@@ -864,3 +864,285 @@ func searchString(s, substr string) bool {
 	}
 	return false
 }
+
+// --- OAuth Authorization Code credential tests ---
+
+func TestOAuthAuthCodeSaveAndLoad(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	cred := &Credential{
+		Type:         CredOAuthAuthCode,
+		TokenURL:     "https://oauth2.googleapis.com/token",
+		ClientID:     "test-client-id-123.apps.googleusercontent.com",
+		ClientSecret: "GOCSPX-test-secret-value",
+		AccessToken:  "ya29.test-access-token-abcdef",
+		RefreshToken: "1//test-refresh-token-ghijkl",
+		Scope:        "https://www.googleapis.com/auth/calendar.readonly",
+	}
+
+	if err := store.Set("google-calendar", cred); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	// Reload from disk
+	store2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open (reload): %v", err)
+	}
+
+	loaded := store2.Get("google-calendar")
+	if loaded == nil {
+		t.Fatal("credential not found after reload")
+	}
+	if loaded.Type != CredOAuthAuthCode {
+		t.Errorf("type = %q, want %q", loaded.Type, CredOAuthAuthCode)
+	}
+	if loaded.TokenURL != cred.TokenURL {
+		t.Errorf("token_url = %q, want %q", loaded.TokenURL, cred.TokenURL)
+	}
+	if loaded.ClientID != cred.ClientID {
+		t.Errorf("client_id mismatch")
+	}
+	if loaded.ClientSecret != cred.ClientSecret {
+		t.Errorf("client_secret mismatch")
+	}
+	if loaded.AccessToken != cred.AccessToken {
+		t.Errorf("access_token mismatch")
+	}
+	if loaded.RefreshToken != cred.RefreshToken {
+		t.Errorf("refresh_token mismatch")
+	}
+	if loaded.Scope != cred.Scope {
+		t.Errorf("scope = %q, want %q", loaded.Scope, cred.Scope)
+	}
+}
+
+func TestOAuthAuthCodeResolveValidToken(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	// Set a token that expires in the future
+	expiry := time.Now().Add(1 * time.Hour).Format(time.RFC3339)
+	cred := &Credential{
+		Type:         CredOAuthAuthCode,
+		TokenURL:     "https://oauth2.googleapis.com/token",
+		ClientID:     "test-client-id-123.apps.googleusercontent.com",
+		ClientSecret: "GOCSPX-test-secret-value",
+		AccessToken:  "ya29.valid-access-token-12345",
+		RefreshToken: "1//test-refresh-token-ghijkl",
+		TokenExpiry:  expiry,
+	}
+
+	if err := store.Set("test-oauth", cred); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	// Resolve should return the stored token without refreshing
+	headerKey, headerValue, err := store.Resolve("test-oauth")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if headerKey != "Authorization" {
+		t.Errorf("header key = %q, want %q", headerKey, "Authorization")
+	}
+	if headerValue != "Bearer ya29.valid-access-token-12345" {
+		t.Errorf("header value = %q, want %q", headerValue, "Bearer ya29.valid-access-token-12345")
+	}
+}
+
+func TestOAuthAuthCodeResolveNoRefreshToken(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	// Set a token that's already expired with no refresh token
+	expiry := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
+	cred := &Credential{
+		Type:         CredOAuthAuthCode,
+		TokenURL:     "https://oauth2.googleapis.com/token",
+		ClientID:     "test-client-id-123.apps.googleusercontent.com",
+		ClientSecret: "GOCSPX-test-secret-value",
+		AccessToken:  "ya29.expired-access-token",
+		TokenExpiry:  expiry,
+		// No RefreshToken
+	}
+
+	if err := store.Set("test-no-refresh", cred); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	_, _, err = store.Resolve("test-no-refresh")
+	if err == nil {
+		t.Fatal("expected error when resolving expired token without refresh_token")
+	}
+	if !strings.Contains(err.Error(), "refresh_token") {
+		t.Errorf("error should mention refresh_token, got: %v", err)
+	}
+}
+
+func TestOAuthAuthCodeResolveCachedToken(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	// Save a credential with expired token
+	cred := &Credential{
+		Type:         CredOAuthAuthCode,
+		TokenURL:     "https://oauth2.googleapis.com/token",
+		ClientID:     "test-client-id",
+		ClientSecret: "test-client-secret-val",
+		AccessToken:  "ya29.old-token",
+		RefreshToken: "1//refresh-token",
+	}
+
+	if err := store.Set("test-cache", cred); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	// Manually inject a cached token (simulates prior successful resolve)
+	store.tokens.mu.Lock()
+	store.tokens.tokens["test-cache"] = &cachedToken{
+		accessToken: "ya29.cached-from-memory-token",
+		expiresAt:   time.Now().Add(5 * time.Minute),
+	}
+	store.tokens.mu.Unlock()
+
+	// Resolve should return the cached token, not try to refresh
+	_, headerValue, err := store.Resolve("test-cache")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if headerValue != "Bearer ya29.cached-from-memory-token" {
+		t.Errorf("expected cached token, got: %q", headerValue)
+	}
+}
+
+func TestOAuthAuthCodeRedaction(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	cred := &Credential{
+		Type:         CredOAuthAuthCode,
+		TokenURL:     "https://oauth2.googleapis.com/token",
+		ClientID:     "test-client-id-for-redaction.apps.googleusercontent.com",
+		ClientSecret: "GOCSPX-redact-this-secret",
+		AccessToken:  "ya29.redact-this-access-token",
+		RefreshToken: "1//redact-this-refresh-token",
+	}
+
+	if err := store.Set("gcal", cred); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	r := store.Redactor()
+
+	// All secret fields should be redacted
+	input := "Secret: GOCSPX-redact-this-secret, Token: ya29.redact-this-access-token, Refresh: 1//redact-this-refresh-token"
+	output := r.Redact(input)
+
+	if strings.Contains(output, "GOCSPX-redact-this-secret") {
+		t.Error("client_secret should be redacted")
+	}
+	if strings.Contains(output, "ya29.redact-this-access-token") {
+		t.Error("access_token should be redacted")
+	}
+	if strings.Contains(output, "1//redact-this-refresh-token") {
+		t.Error("refresh_token should be redacted")
+	}
+
+	// Client ID should also be redacted
+	if strings.Contains(output, "test-client-id-for-redaction.apps.googleusercontent.com") {
+		t.Error("client_id should be redacted")
+	}
+}
+
+func TestOAuthAuthCodeList(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	cred := &Credential{
+		Type:         CredOAuthAuthCode,
+		TokenURL:     "https://oauth2.googleapis.com/token",
+		ClientID:     "test-client-id",
+		ClientSecret: "test-client-secret-val",
+		AccessToken:  "ya29.test-token-value",
+		RefreshToken: "1//test-refresh-value",
+	}
+
+	if err := store.Set("gcal", cred); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	listed := store.List()
+	if credType, ok := listed["gcal"]; !ok {
+		t.Error("gcal not found in list")
+	} else if credType != CredOAuthAuthCode {
+		t.Errorf("type = %q, want %q", credType, CredOAuthAuthCode)
+	}
+}
+
+func TestOAuthAuthCodeRemoveAndReload(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	cred := &Credential{
+		Type:         CredOAuthAuthCode,
+		TokenURL:     "https://oauth2.googleapis.com/token",
+		ClientID:     "test-client-id",
+		ClientSecret: "test-client-secret-val",
+		AccessToken:  "ya29.test-token-value",
+		RefreshToken: "1//test-refresh-value",
+	}
+
+	if err := store.Set("to-remove", cred); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	if err := store.Remove("to-remove"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	// Verify removed from memory
+	if store.Get("to-remove") != nil {
+		t.Error("credential should be removed from memory")
+	}
+
+	// Verify removed from disk
+	store2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open (reload): %v", err)
+	}
+	if store2.Get("to-remove") != nil {
+		t.Error("credential should be removed from disk")
+	}
+
+	// Verify redaction signatures are cleaned up
+	secretText := "GOCSPX-redact-this-secret ya29.test-token-value 1//test-refresh-value"
+	output := store.Redactor().Redact(secretText)
+	// After remove, the values might still be in the redactor (by design — conservative),
+	// but the credential itself should be gone.
+	if store.Get("to-remove") != nil {
+		t.Error("credential should be gone")
+	}
+	_ = output // redaction behavior after remove is not strictly specified
+}

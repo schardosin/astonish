@@ -26,17 +26,20 @@ func GetCredentialStore() *credentials.Store {
 // --- save_credential tool ---
 
 type SaveCredentialArgs struct {
-	Name         string `json:"name" jsonschema:"Short identifier for this credential (e.g., 'my-api', 'proxmox', 'saas-prod')"`
-	Type         string `json:"type" jsonschema:"Credential type: 'api_key' (custom header+value), 'bearer' (Authorization: Bearer token), 'basic' (HTTP Basic Auth), 'password' (plain username+password for SSH/FTP/SMTP/databases), 'oauth_client_credentials' (auto-refreshing OAuth2)"`
+	Name         string `json:"name" jsonschema:"Short identifier for this credential (e.g., 'my-api', 'proxmox', 'google-calendar')"`
+	Type         string `json:"type" jsonschema:"Credential type: 'api_key' (custom header+value), 'bearer' (Authorization: Bearer token), 'basic' (HTTP Basic Auth), 'password' (plain username+password for SSH/FTP/SMTP/databases), 'oauth_client_credentials' (auto-refreshing OAuth2 server-to-server), 'oauth_authorization_code' (user-authorized OAuth2 with refresh token — Google, GitHub, etc.)"`
 	Header       string `json:"header,omitempty" jsonschema:"Header name for api_key type (e.g., 'X-API-Key', 'Authorization'). Required for api_key type."`
 	Value        string `json:"value,omitempty" jsonschema:"The API key value. Required for api_key type."`
 	Token        string `json:"token,omitempty" jsonschema:"The bearer token. Required for bearer type."`
 	Username     string `json:"username,omitempty" jsonschema:"Username for basic or password type. Required for both."`
 	Password     string `json:"password,omitempty" jsonschema:"Password for basic or password type. Required for both."`
 	AuthURL      string `json:"auth_url,omitempty" jsonschema:"OAuth token endpoint URL. Required for oauth_client_credentials type."`
-	ClientID     string `json:"client_id,omitempty" jsonschema:"OAuth client ID. Required for oauth_client_credentials type."`
-	ClientSecret string `json:"client_secret,omitempty" jsonschema:"OAuth client secret. Required for oauth_client_credentials type."`
-	Scope        string `json:"scope,omitempty" jsonschema:"OAuth scope (optional, for oauth_client_credentials type)."`
+	ClientID     string `json:"client_id,omitempty" jsonschema:"OAuth client ID. Required for oauth_client_credentials and oauth_authorization_code types."`
+	ClientSecret string `json:"client_secret,omitempty" jsonschema:"OAuth client secret. Required for oauth_client_credentials and oauth_authorization_code types."`
+	Scope        string `json:"scope,omitempty" jsonschema:"OAuth scope (optional, for oauth_client_credentials and oauth_authorization_code types)."`
+	TokenURL     string `json:"token_url,omitempty" jsonschema:"Token endpoint URL for exchanging/refreshing tokens. Required for oauth_authorization_code type (e.g., https://oauth2.googleapis.com/token)."`
+	AccessToken  string `json:"access_token,omitempty" jsonschema:"Current access token. Required for oauth_authorization_code type."`
+	RefreshToken string `json:"refresh_token,omitempty" jsonschema:"Refresh token for obtaining new access tokens. Required for oauth_authorization_code type."`
 }
 
 type SaveCredentialResult struct {
@@ -117,10 +120,36 @@ func saveCredential(_ tool.Context, args SaveCredentialArgs) (SaveCredentialResu
 			Password: args.Password,
 		}
 
+	case credentials.CredOAuthAuthCode:
+		if args.TokenURL == "" {
+			return SaveCredentialResult{Status: "error", Message: "token_url is required for oauth_authorization_code type (e.g., https://oauth2.googleapis.com/token)"}, nil
+		}
+		if args.ClientID == "" {
+			return SaveCredentialResult{Status: "error", Message: "client_id is required for oauth_authorization_code type"}, nil
+		}
+		if args.ClientSecret == "" {
+			return SaveCredentialResult{Status: "error", Message: "client_secret is required for oauth_authorization_code type"}, nil
+		}
+		if args.AccessToken == "" {
+			return SaveCredentialResult{Status: "error", Message: "access_token is required for oauth_authorization_code type — exchange the authorization code first, then save the resulting tokens"}, nil
+		}
+		if args.RefreshToken == "" {
+			return SaveCredentialResult{Status: "error", Message: "refresh_token is required for oauth_authorization_code type — ensure access_type=offline was used in the authorization URL"}, nil
+		}
+		cred = &credentials.Credential{
+			Type:         credentials.CredOAuthAuthCode,
+			TokenURL:     args.TokenURL,
+			ClientID:     args.ClientID,
+			ClientSecret: args.ClientSecret,
+			AccessToken:  args.AccessToken,
+			RefreshToken: args.RefreshToken,
+			Scope:        args.Scope,
+		}
+
 	default:
 		return SaveCredentialResult{
 			Status:  "error",
-			Message: fmt.Sprintf("Unknown type %q. Use: api_key, bearer, basic, password, or oauth_client_credentials", args.Type),
+			Message: fmt.Sprintf("Unknown type %q. Use: api_key, bearer, basic, password, oauth_client_credentials, or oauth_authorization_code", args.Type),
 		}, nil
 	}
 
@@ -293,6 +322,20 @@ func testCredential(_ tool.Context, args TestCredentialArgs) (TestCredentialResu
 			Message: fmt.Sprintf("OAuth credential %q: token acquired successfully", args.Name),
 		}, nil
 
+	case credentials.CredOAuthAuthCode:
+		// Test by resolving (which triggers refresh if expired)
+		_, _, err := credentialStoreVar.Resolve(args.Name)
+		if err != nil {
+			return TestCredentialResult{
+				Status:  "failed",
+				Message: fmt.Sprintf("OAuth authorization code credential %q: token refresh failed: %v", args.Name, err),
+			}, nil
+		}
+		return TestCredentialResult{
+			Status:  "ok",
+			Message: fmt.Sprintf("OAuth credential %q: access token is valid (auto-refreshes when expired)", args.Name),
+		}, nil
+
 	case credentials.CredPassword:
 		return TestCredentialResult{
 			Status:  "ok",
@@ -314,16 +357,16 @@ type ResolveCredentialArgs struct {
 }
 
 type ResolveCredentialResult struct {
-	Status       string `json:"status"`
-	Message      string `json:"message,omitempty"`
-	Type         string `json:"type,omitempty"`
-	Username     string `json:"username,omitempty"`
-	Password     string `json:"password,omitempty"`
-	Token        string `json:"token,omitempty"`
-	Header       string `json:"header,omitempty"`
-	Value        string `json:"value,omitempty"`
-	AuthURL      string `json:"auth_url,omitempty"`
-	ClientID     string `json:"client_id,omitempty"`
+	Status   string `json:"status"`
+	Message  string `json:"message,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+	Token    string `json:"token,omitempty"`
+	Header   string `json:"header,omitempty"`
+	Value    string `json:"value,omitempty"`
+	AuthURL  string `json:"auth_url,omitempty"`
+	ClientID string `json:"client_id,omitempty"`
 }
 
 func resolveCredential(_ tool.Context, args ResolveCredentialArgs) (ResolveCredentialResult, error) {
@@ -368,6 +411,19 @@ func resolveCredential(_ tool.Context, args ResolveCredentialArgs) (ResolveCrede
 		result.AuthURL = cred.AuthURL
 		result.ClientID = cred.ClientID
 		result.Message = "Use http_request with credential parameter for OAuth — the token is managed automatically."
+	case credentials.CredOAuthAuthCode:
+		// Resolve to get a valid (refreshed if needed) access token
+		_, headerValue, err := credentialStoreVar.Resolve(args.Name)
+		if err != nil {
+			return ResolveCredentialResult{
+				Status:  "error",
+				Message: fmt.Sprintf("Failed to resolve OAuth token: %v", err),
+			}, nil
+		}
+		// Extract the token from "Bearer <token>"
+		result.Token = strings.TrimPrefix(headerValue, "Bearer ")
+		result.ClientID = cred.ClientID
+		result.Message = "Access token resolved (auto-refreshed if expired). Prefer using http_request with credential parameter — it handles the Bearer header automatically."
 	}
 
 	return result, nil
@@ -389,9 +445,12 @@ Types:
 - bearer: Authorization: Bearer <token>
 - basic: HTTP Basic Auth header (Authorization: Basic <base64(user:pass)>)
 - password: Plain username + password for non-HTTP use (SSH, FTP, SMTP, databases)
-- oauth_client_credentials: Auto-refreshing OAuth2 (provide auth_url, client_id, client_secret)
+- oauth_client_credentials: Auto-refreshing OAuth2 server-to-server (provide auth_url, client_id, client_secret)
+- oauth_authorization_code: User-authorized OAuth2 with refresh token (Google, GitHub, etc.)
+  Provide: token_url, client_id, client_secret, access_token, refresh_token, scope
+  The access token auto-refreshes using the refresh token when it expires.
 
-After saving, HTTP credentials (api_key, bearer, basic, oauth) can be used with http_request.
+After saving, HTTP credentials (api_key, bearer, basic, oauth_*) can be used with http_request.
 Password credentials can be resolved with resolve_credential for use with process_write (SSH, etc).`,
 	}, saveCredential)
 }

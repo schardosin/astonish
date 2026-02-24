@@ -147,7 +147,8 @@ func (b *SystemPromptBuilder) Build() string {
 	// 4c. Browser capabilities
 	if b.BrowserAvailable {
 		sb.WriteString("\n## Browser Automation\n\n")
-		sb.WriteString("You have a built-in browser with tools for navigating, interacting, and observing web pages.\n\n")
+		sb.WriteString("You have a built-in browser with tools for navigating, interacting, and observing web pages.\n")
+		sb.WriteString("The browser uses a persistent profile — login sessions, cookies, and site data survive across restarts. Once the user logs into a site, they stay logged in.\n\n")
 		sb.WriteString("**Core workflow:**\n")
 		sb.WriteString("1. `browser_navigate` to load a page\n")
 		sb.WriteString("2. `browser_snapshot` to see the page structure (accessibility tree with ref IDs)\n")
@@ -163,6 +164,7 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("- Use `browser_snapshot` over `browser_take_screenshot` for decision-making — text is cheaper than images\n")
 		sb.WriteString("- Use `mode=\"efficient\"` on snapshots for large pages — shows only interactive elements\n")
 		sb.WriteString("- Refs are valid until the next snapshot. If a ref fails, take a new snapshot.\n")
+		sb.WriteString("- Use `browser_tabs` with `action=\"new\"` and `incognito=true` to open a tab with isolated cookies/storage (for testing login flows or browsing without personal session data)\n")
 
 		if b.hasCredentialTools() {
 			sb.WriteString("\n**Authenticated websites:**\n")

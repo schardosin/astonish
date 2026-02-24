@@ -14,9 +14,10 @@ import (
 // --- browser_tabs ---
 
 type BrowserTabsArgs struct {
-	Action   string `json:"action" jsonschema:"Tab action: list, new, close, or select"`
-	URL      string `json:"url,omitempty" jsonschema:"URL for the new tab (used with action=new)"`
-	TargetID string `json:"targetId,omitempty" jsonschema:"Tab target ID (used with action=close or select)"`
+	Action    string `json:"action" jsonschema:"Tab action: list, new, close, or select"`
+	URL       string `json:"url,omitempty" jsonschema:"URL for the new tab (used with action=new)"`
+	TargetID  string `json:"targetId,omitempty" jsonschema:"Tab target ID (used with action=close or select)"`
+	Incognito bool   `json:"incognito,omitempty" jsonschema:"Open in incognito mode with isolated cookies/storage (used with action=new). Use for testing login flows or browsing without personal session data."`
 }
 
 type TabInfo struct {
@@ -68,15 +69,35 @@ func BrowserTabs(mgr *browser.Manager, guard *browser.NavigationGuard) func(tool
 					return BrowserTabsResult{}, err
 				}
 			}
-			pg, err := b.Page(proto.TargetCreateTarget{URL: url})
-			if err != nil {
-				return BrowserTabsResult{}, fmt.Errorf("failed to create tab: %w", err)
+
+			var pg *rod.Page
+			if args.Incognito {
+				// Incognito: isolated cookie jar and storage
+				pg, err = mgr.NewIncognitoPage()
+				if err != nil {
+					return BrowserTabsResult{}, fmt.Errorf("failed to create incognito tab: %w", err)
+				}
+				if url != "about:blank" {
+					if err := pg.Navigate(url); err != nil {
+						return BrowserTabsResult{}, fmt.Errorf("failed to navigate incognito tab: %w", err)
+					}
+					_ = pg.Timeout(mgr.NavigationTimeout()).WaitLoad()
+				}
+			} else {
+				pg, err = b.Page(proto.TargetCreateTarget{URL: url})
+				if err != nil {
+					return BrowserTabsResult{}, fmt.Errorf("failed to create tab: %w", err)
+				}
+				mgr.SetActivePage(pg)
 			}
-			mgr.SetActivePage(pg)
+
 			info, _ := pg.Info()
 			msg := "New tab opened"
+			if args.Incognito {
+				msg = "New incognito tab opened (isolated cookies/storage)"
+			}
 			if info != nil {
-				msg = fmt.Sprintf("New tab opened: %s", info.URL)
+				msg += fmt.Sprintf(": %s", info.URL)
 			}
 			return BrowserTabsResult{Success: true, Message: msg}, nil
 

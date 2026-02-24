@@ -3,6 +3,7 @@ package browser
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -37,33 +38,47 @@ type BrowserConfig struct {
 	ViewportWidth     int           // Default: 1280
 	ViewportHeight    int           // Default: 720
 	NoSandbox         bool          // For running as root in containers
-	UserDataDir       string        // Empty = temp dir (cleaned up on close)
+	UserDataDir       string        // Browser profile dir. Default: ~/.config/astonish/browser/
 	NavigationTimeout time.Duration // Max time to wait for page load (default: 30s)
 }
 
 // DefaultConfig returns a BrowserConfig with sensible defaults.
 // NoSandbox is enabled automatically when running as root (uid 0),
 // because Chrome refuses to use its sandbox when running as root.
+// UserDataDir defaults to ~/.config/astonish/browser/ so that login
+// sessions, cookies, and site data persist across restarts.
 func DefaultConfig() BrowserConfig {
 	return BrowserConfig{
 		Headless:          true,
 		ViewportWidth:     1280,
 		ViewportHeight:    720,
 		NoSandbox:         os.Getuid() == 0,
+		UserDataDir:       defaultProfileDir(),
 		NavigationTimeout: 30 * time.Second,
 	}
+}
+
+// defaultProfileDir returns the default persistent browser profile directory.
+// Falls back to empty string (temp dir) if the config directory can't be resolved.
+func defaultProfileDir() string {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(configDir, "astonish", "browser")
 }
 
 // Manager manages a singleton headless browser instance. The browser is
 // launched lazily on first tool invocation and cleaned up when the session ends.
 type Manager struct {
-	mu       sync.Mutex
-	browser  *rod.Browser
-	launch   *launcher.Launcher
-	config   BrowserConfig
-	pages    map[proto.TargetTargetID]*PageState
-	pagesMu  sync.RWMutex
-	activePg *rod.Page // most recently active page
+	mu        sync.Mutex
+	browser   *rod.Browser
+	incognito *rod.Browser // ephemeral context with isolated cookies/storage (nil until requested)
+	launch    *launcher.Launcher
+	config    BrowserConfig
+	pages     map[proto.TargetTargetID]*PageState
+	pagesMu   sync.RWMutex
+	activePg  *rod.Page // most recently active page
 }
 
 // NewManager creates a Manager with the given config. The browser is NOT
@@ -111,6 +126,11 @@ func (m *Manager) GetOrLaunch() (*rod.Browser, error) {
 		l = l.Bin(m.config.ChromePath)
 	}
 	if m.config.UserDataDir != "" {
+		// Ensure the profile directory exists with restricted permissions.
+		// Chrome writes cookies, session tokens, and localStorage here.
+		if err := os.MkdirAll(m.config.UserDataDir, 0700); err != nil {
+			return nil, fmt.Errorf("failed to create browser profile dir: %w", err)
+		}
 		l = l.UserDataDir(m.config.UserDataDir)
 	}
 
@@ -184,6 +204,46 @@ func (m *Manager) SetActivePage(pg *rod.Page) {
 	defer m.mu.Unlock()
 	m.activePg = pg
 	m.ensurePageState(pg)
+}
+
+// NewIncognitoPage creates a new page in an isolated (incognito) browser context.
+// The page has its own cookie jar and storage — it cannot see the persistent
+// profile's login sessions. Use this for testing login flows, verifying
+// unauthenticated behavior, or browsing without leaking personal cookies.
+// The incognito page becomes the active page.
+func (m *Manager) NewIncognitoPage() (*rod.Page, error) {
+	b, err := m.GetOrLaunch()
+	if err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Lazily create the incognito context (one per session is enough)
+	if m.incognito == nil {
+		inc, err := b.Incognito()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create incognito context: %w", err)
+		}
+		m.incognito = inc
+	}
+
+	pg, err := m.incognito.Page(proto.TargetCreateTarget{URL: "about:blank"})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create incognito page: %w", err)
+	}
+
+	if err := pg.SetViewport(&proto.EmulationSetDeviceMetricsOverride{
+		Width:  m.config.ViewportWidth,
+		Height: m.config.ViewportHeight,
+	}); err != nil {
+		return nil, fmt.Errorf("failed to set viewport: %w", err)
+	}
+
+	m.activePg = pg
+	m.ensurePageState(pg)
+	return pg, nil
 }
 
 // GetPage returns a page by its CDP target ID.
@@ -354,18 +414,28 @@ func (m *Manager) NavigationTimeout() time.Duration {
 	return m.config.NavigationTimeout
 }
 
-// Cleanup closes the browser and kills the process.
+// Cleanup closes the browser and kills the process. The persistent profile
+// directory (cookies, localStorage, etc.) is preserved for future sessions.
 func (m *Manager) Cleanup() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Close incognito context first (it's a child of the main browser)
+	if m.incognito != nil {
+		_ = m.incognito.Close()
+		m.incognito = nil
+	}
 	if m.browser != nil {
 		_ = m.browser.Close()
 		m.browser = nil
 	}
 	if m.launch != nil {
 		m.launch.Kill()
-		m.launch.Cleanup()
+		// Only clean up the user data dir if we're using a temp profile.
+		// Persistent profiles must survive across restarts.
+		if m.config.UserDataDir == "" {
+			m.launch.Cleanup()
+		}
 		m.launch = nil
 	}
 	m.activePg = nil

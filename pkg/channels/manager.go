@@ -334,10 +334,12 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	// Stop typing indicator now that the agent is done
 	typingCancel()
 
-	// Fallback if the agent produced no visible text at all
+	// Fallback if the agent produced no visible text at all.
+	// This can happen when context compaction degrades the conversation history
+	// or the LLM responds with only tool calls and no summary text.
 	if messagesSent == 0 {
 		_ = ch.Send(ctx, target, OutboundMessage{
-			Text:    "I processed your request but have nothing to say.",
+			Text:    "Something went wrong and I couldn't generate a response. Try sending your message again, or use /new to start a fresh session.",
 			ReplyTo: msg.ID,
 			Format:  FormatText,
 		})

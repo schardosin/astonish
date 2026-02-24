@@ -162,9 +162,11 @@ func TestCompactContents_WithTruncation(t *testing.T) {
 		t.Errorf("len(result) = %d, want 3", len(result))
 	}
 
-	// First message should be the summary
-	if result[0].Role != "user" {
-		t.Errorf("summary role = %q, want %q", result[0].Role, "user")
+	// First message should be the summary.
+	// The summary role adapts to ensure role alternation with the first
+	// recent message. Here the first recent is "user", so summary is "model".
+	if result[0].Role != "model" {
+		t.Errorf("summary role = %q, want %q", result[0].Role, "model")
 	}
 	summaryText := result[0].Parts[0].Text
 	if !strings.Contains(summaryText, "Context Summary") {

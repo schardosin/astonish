@@ -163,13 +163,19 @@ func (c *Compactor) CompactContents(ctx context.Context, contents []*genai.Conte
 		summary = c.truncationSummary(oldContents)
 	}
 
-	// Create the summary message as a "user" message that the model will see
+	// Create the summary message. Default to "user" role, but if the first
+	// recent message is also "user", use "model" to preserve role alternation.
+	// Anthropic and Bedrock reject consecutive same-role messages with 400.
+	summaryRole := "user"
+	if len(recentContents) > 0 && recentContents[0].Role == "user" {
+		summaryRole = "model"
+	}
 	summaryContent := &genai.Content{
 		Parts: []*genai.Part{{
 			Text: fmt.Sprintf("[Context Summary — %d earlier messages compacted]\n\n%s",
 				len(oldContents), summary),
 		}},
-		Role: "user",
+		Role: summaryRole,
 	}
 
 	// Build compacted result: summary + recent

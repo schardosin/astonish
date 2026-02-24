@@ -115,7 +115,7 @@ func NewChatAgent(llm model.LLM, internalTools []tool.Tool, toolsets []tool.Tool
 	sessionService session.Service, promptBuilder *SystemPromptBuilder,
 	debugMode bool, autoApprove bool) *ChatAgent {
 
-	maxToolCalls := 25
+	maxToolCalls := 100
 
 	return &ChatAgent{
 		LLM:            llm,
@@ -382,6 +382,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		toolCallCount := 0
 		maxToolCalls := c.MaxToolCalls
 		lastToolCallSeen := false
+		anyTextYielded := false
 
 		for attempt := range maxRetries {
 			retried := false
@@ -449,6 +450,10 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 								goto postLoop
 							}
 						}
+						// Track whether any user-facing text was produced
+						if p.Text != "" && !p.Thought && p.FunctionCall == nil && p.FunctionResponse == nil {
+							anyTextYielded = true
+						}
 						// Capture text that comes after tool calls (the final formatted output)
 						if p.Text != "" && lastToolCallSeen {
 							trace.AppendOutput(p.Text)
@@ -480,6 +485,22 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			}
 			// Otherwise, the retry loop continues with the next attempt
 		} // end outer retry loop
+
+		// If the LLM made tool calls but never produced user-facing text,
+		// yield a synthetic message so the consumer doesn't see silence.
+		// This commonly happens after context compaction degrades the
+		// conversation history, causing the LLM to call tools but skip
+		// the final summary.
+		if lastToolCallSeen && !anyTextYielded {
+			yield(&session.Event{
+				LLMResponse: model.LLMResponse{
+					Content: &genai.Content{
+						Parts: []*genai.Part{{Text: "I completed the requested actions. Let me know if you'd like me to elaborate on the results or if there's anything else I can help with."}},
+						Role:  "model",
+					},
+				},
+			}, nil)
+		}
 
 	postLoop:
 		// Finalize the trace

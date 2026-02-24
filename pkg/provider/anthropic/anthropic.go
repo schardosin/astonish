@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/provider/llmerror"
+
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
 )
@@ -87,7 +89,7 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
-			yield(nil, fmt.Errorf("anthropic api error: %s - %s", resp.Status, string(body)))
+			yield(nil, llmerror.NewFromResponse("anthropic", resp, body))
 			return
 		}
 

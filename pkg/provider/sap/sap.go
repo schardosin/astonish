@@ -17,6 +17,7 @@ import (
 
 	goopenai "github.com/sashabaranov/go-openai"
 	"github.com/schardosin/astonish/pkg/provider/bedrock"
+	"github.com/schardosin/astonish/pkg/provider/llmerror"
 	"github.com/schardosin/astonish/pkg/provider/openai"
 	"github.com/schardosin/astonish/pkg/provider/vertex"
 	"google.golang.org/adk/model"
@@ -496,10 +497,10 @@ func ListModels(ctx context.Context, clientID, clientSecret, authURL, baseURL, r
 
 // ModelInfo represents enhanced model metadata for SAP AI Core
 type ModelInfo struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	ContextLength    int    `json:"context_length,omitempty"`
-	MaxOutputTokens  int    `json:"max_completion_tokens,omitempty"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	ContextLength   int    `json:"context_length,omitempty"`
+	MaxOutputTokens int    `json:"max_completion_tokens,omitempty"`
 }
 
 // Model cache for SAP AI Core
@@ -592,7 +593,7 @@ func (p *Provider) generateBedrockContent(ctx context.Context, req *model.LLMReq
 
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
-			yield(nil, fmt.Errorf("bedrock request failed: %s, body: %s", resp.Status, string(body)))
+			yield(nil, llmerror.NewFromResponse("sap-bedrock", resp, body))
 			return
 		}
 
@@ -661,7 +662,7 @@ func (p *Provider) generateVertexContent(ctx context.Context, req *model.LLMRequ
 
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
-			yield(nil, fmt.Errorf("vertex request failed: %s, body: %s", resp.Status, string(body)))
+			yield(nil, llmerror.NewFromResponse("sap-vertex", resp, body))
 			return
 		}
 

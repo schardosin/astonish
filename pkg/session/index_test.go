@@ -266,3 +266,115 @@ func TestAtomicWrite(t *testing.T) {
 		t.Errorf("content = %q, want %q", string(data), string(content))
 	}
 }
+
+func TestIndex_ListFiltersSubSessions(t *testing.T) {
+	dir := t.TempDir()
+	idx := NewSessionIndex(filepath.Join(dir, "index.json"))
+
+	sessions := []SessionMeta{
+		{ID: "parent-1", AppName: "app1", UserID: "user-a"},
+		{ID: "child-1", AppName: "app1", UserID: "user-a", ParentID: "parent-1"},
+		{ID: "child-2", AppName: "app1", UserID: "user-a", ParentID: "parent-1"},
+		{ID: "parent-2", AppName: "app1", UserID: "user-a"},
+	}
+	for _, s := range sessions {
+		if err := idx.Add(s); err != nil {
+			t.Fatalf("Add(%s) error = %v", s.ID, err)
+		}
+	}
+
+	// List should only return top-level sessions (no ParentID)
+	result, err := idx.List("app1", "")
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(result) != 2 {
+		t.Errorf("List() len = %d, want 2 (only top-level sessions)", len(result))
+	}
+	for _, m := range result {
+		if m.ParentID != "" {
+			t.Errorf("List() returned sub-session %s with ParentID=%q", m.ID, m.ParentID)
+		}
+	}
+}
+
+func TestIndex_ListChildren(t *testing.T) {
+	dir := t.TempDir()
+	idx := NewSessionIndex(filepath.Join(dir, "index.json"))
+
+	sessions := []SessionMeta{
+		{ID: "parent-1", AppName: "app1", UserID: "user-a"},
+		{ID: "child-1", AppName: "app1", UserID: "user-a", ParentID: "parent-1"},
+		{ID: "child-2", AppName: "app1", UserID: "user-a", ParentID: "parent-1"},
+		{ID: "parent-2", AppName: "app1", UserID: "user-a"},
+		{ID: "child-3", AppName: "app1", UserID: "user-a", ParentID: "parent-2"},
+	}
+	for _, s := range sessions {
+		if err := idx.Add(s); err != nil {
+			t.Fatalf("Add(%s) error = %v", s.ID, err)
+		}
+	}
+
+	// Children of parent-1
+	children, err := idx.ListChildren("parent-1")
+	if err != nil {
+		t.Fatalf("ListChildren(parent-1) error = %v", err)
+	}
+	if len(children) != 2 {
+		t.Errorf("ListChildren(parent-1) len = %d, want 2", len(children))
+	}
+
+	// Children of parent-2
+	children, err = idx.ListChildren("parent-2")
+	if err != nil {
+		t.Fatalf("ListChildren(parent-2) error = %v", err)
+	}
+	if len(children) != 1 {
+		t.Errorf("ListChildren(parent-2) len = %d, want 1", len(children))
+	}
+
+	// No children
+	children, err = idx.ListChildren("nonexistent")
+	if err != nil {
+		t.Fatalf("ListChildren(nonexistent) error = %v", err)
+	}
+	if len(children) != 0 {
+		t.Errorf("ListChildren(nonexistent) len = %d, want 0", len(children))
+	}
+}
+
+func TestIndex_RemoveCascadesChildren(t *testing.T) {
+	dir := t.TempDir()
+	idx := NewSessionIndex(filepath.Join(dir, "index.json"))
+
+	sessions := []SessionMeta{
+		{ID: "parent-1", AppName: "app1", UserID: "user-a"},
+		{ID: "child-1", AppName: "app1", UserID: "user-a", ParentID: "parent-1"},
+		{ID: "child-2", AppName: "app1", UserID: "user-a", ParentID: "parent-1"},
+		{ID: "unrelated", AppName: "app1", UserID: "user-a"},
+	}
+	for _, s := range sessions {
+		if err := idx.Add(s); err != nil {
+			t.Fatalf("Add(%s) error = %v", s.ID, err)
+		}
+	}
+
+	// Remove parent — should cascade children
+	if err := idx.Remove("parent-1"); err != nil {
+		t.Fatalf("Remove(parent-1) error = %v", err)
+	}
+
+	// Parent and children should be gone
+	for _, id := range []string{"parent-1", "child-1", "child-2"} {
+		_, err := idx.Get(id)
+		if err == nil {
+			t.Errorf("Get(%s) should return error after cascade delete, got nil", id)
+		}
+	}
+
+	// Unrelated session should still exist
+	_, err := idx.Get("unrelated")
+	if err != nil {
+		t.Errorf("Get(unrelated) error = %v, want nil (should survive cascade)", err)
+	}
+}

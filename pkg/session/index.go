@@ -23,6 +23,7 @@ type SessionMeta struct {
 	UpdatedAt    time.Time `json:"updatedAt"`
 	Title        string    `json:"title,omitempty"`
 	MessageCount int       `json:"messageCount"`
+	ParentID     string    `json:"parentId,omitempty"` // Non-empty for sub-agent sessions
 }
 
 // IndexData is the top-level structure of the index file.
@@ -93,7 +94,7 @@ func (idx *SessionIndex) Add(meta SessionMeta) error {
 	return idx.Save(index)
 }
 
-// Remove removes a session from the index.
+// Remove removes a session and all its child sub-sessions from the index.
 func (idx *SessionIndex) Remove(id string) error {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
@@ -101,6 +102,13 @@ func (idx *SessionIndex) Remove(id string) error {
 	index, err := idx.loadUnsafe()
 	if err != nil {
 		return err
+	}
+
+	// Cascade: remove any sessions whose ParentID matches this session
+	for childID, meta := range index.Sessions {
+		if meta.ParentID == id {
+			delete(index.Sessions, childID)
+		}
 	}
 
 	delete(index.Sessions, id)
@@ -145,7 +153,8 @@ func (idx *SessionIndex) Get(id string) (*SessionMeta, error) {
 	return &meta, nil
 }
 
-// List returns all sessions matching the given app name and user ID.
+// List returns all top-level sessions matching the given app name and user ID.
+// Sub-sessions (those with a non-empty ParentID) are excluded.
 // If userID is empty, all sessions for the app are returned.
 func (idx *SessionIndex) List(appName, userID string) ([]SessionMeta, error) {
 	idx.mu.Lock()
@@ -158,6 +167,9 @@ func (idx *SessionIndex) List(appName, userID string) ([]SessionMeta, error) {
 
 	var result []SessionMeta
 	for _, meta := range index.Sessions {
+		if meta.ParentID != "" {
+			continue // skip sub-sessions
+		}
 		if meta.AppName != appName {
 			continue
 		}
@@ -165,6 +177,26 @@ func (idx *SessionIndex) List(appName, userID string) ([]SessionMeta, error) {
 			continue
 		}
 		result = append(result, meta)
+	}
+
+	return result, nil
+}
+
+// ListChildren returns all sessions whose ParentID matches the given parent session ID.
+func (idx *SessionIndex) ListChildren(parentID string) ([]SessionMeta, error) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	index, err := idx.loadUnsafe()
+	if err != nil {
+		return nil, err
+	}
+
+	var result []SessionMeta
+	for _, meta := range index.Sessions {
+		if meta.ParentID == parentID {
+			result = append(result, meta)
+		}
 	}
 
 	return result, nil

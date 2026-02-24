@@ -52,7 +52,7 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 	// Try to get web assets (embedded or filesystem)
 	webFS := getWebAssets()
 
-	var handler http.Handler = router
+	var handler http.Handler
 
 	if webFS != nil {
 		// Wrap router + SPA into a single handler

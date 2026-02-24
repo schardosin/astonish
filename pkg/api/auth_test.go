@@ -168,9 +168,8 @@ func TestAuthManager_CodeMaxPending(t *testing.T) {
 	am := NewAuthManager(store)
 
 	// Generate maxPendingCodes + 2 codes
-	codes := make([]string, 0)
 	for i := 0; i < maxPendingCodes+2; i++ {
-		codes = append(codes, am.GenerateCode("test", "127.0.0.1"))
+		am.GenerateCode("test", "127.0.0.1")
 	}
 
 	// Oldest codes should be evicted

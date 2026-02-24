@@ -97,7 +97,7 @@ func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, err
 	if args.Mode == "routine" && args.Flow == "" {
 		return ScheduleJobResult{
 			Status:  "error",
-			Message: "Routine mode requires a 'flow' name",
+			Message: "Routine mode requires a 'flow' name. If no flow exists for this task, call `distill_flow` first to create one from the conversation, then use the resulting flow name here.",
 		}, nil
 	}
 	if args.Mode == "adaptive" && args.Instructions == "" {
@@ -397,7 +397,7 @@ Two modes:
 
 IMPORTANT — Context awareness:
 - When scheduling a task you just performed in this conversation, use the conversation context to populate ALL required parameters (routine) or write complete instructions (adaptive).
-- For routine mode: if the flow requires parameters, extract them from the conversation — you already have them.
+- For routine mode: if the flow requires parameters, extract them from the conversation — you already have them. If no saved flow exists for this task, call distill_flow first to create one from the conversation traces, then use the resulting flow name here.
 - For adaptive mode: the instructions MUST reproduce the EXACT output format the user last saw. Include a concrete example of the expected output copied from your most recent response to the user.
 
 Delivery: Results are automatically broadcast to all active channels (e.g., all allowed Telegram users). You do NOT need to specify channel or target — delivery is handled automatically.
@@ -505,6 +505,10 @@ func (s *SchedulerHTTPAccess) ListJobs() []*SchedulerJob {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
 	var result struct {
 		Jobs []*SchedulerJob `json:"jobs"`
 	}
@@ -546,6 +550,10 @@ func (s *SchedulerHTTPAccess) RunNow(ctx context.Context, jobID string) (string,
 		return "", fmt.Errorf("failed to contact daemon: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("daemon returned HTTP %d", resp.StatusCode)
+	}
 
 	var result struct {
 		Result string `json:"result"`

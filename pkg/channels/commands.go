@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/config"
 
 	"google.golang.org/adk/session"
 )
@@ -281,12 +282,22 @@ func jobsCommand() *Command {
 		Name:        "jobs",
 		Description: "Show scheduled jobs",
 		Handler: func(ctx context.Context, cc CommandContext) (string, error) {
+			// Determine daemon API URL from config
+			daemonURL := "http://localhost:9393"
+			if appCfg, err := config.LoadAppConfig(); err == nil {
+				daemonURL = fmt.Sprintf("http://localhost:%d", appCfg.Daemon.GetPort())
+			}
+
 			// Fetch jobs from daemon API
-			resp, err := http.Get("http://localhost:9393/api/scheduler/jobs")
+			resp, err := http.Get(daemonURL + "/api/scheduler/jobs")
 			if err != nil {
 				return "Scheduler is not available (daemon not running?).", nil
 			}
 			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				return fmt.Sprintf("Scheduler returned an error (HTTP %d).", resp.StatusCode), nil
+			}
 
 			var result struct {
 				Jobs []struct {

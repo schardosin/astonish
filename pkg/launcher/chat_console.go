@@ -68,6 +68,9 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 		})
 	}
 
+	// Make distillation available to LLM tools (for auto-distill during scheduling)
+	tools.SetDistillAccess(newDistillBridgeConsole(result.ChatAgent))
+
 	// Unpack factory result into local variables used by the TUI loop
 	llm := result.LLM
 	currentProvider := result.ProviderName
@@ -834,4 +837,30 @@ func makeLLMFunc(llm model.LLM) func(ctx context.Context, prompt string) (string
 		}
 		return text, nil
 	}
+}
+
+// distillBridgeConsole adapts agent.ChatAgent to tools.DistillAccess for the
+// console launcher, bridging the two packages without import cycles.
+type distillBridgeConsole struct {
+	chatAgent *agent.ChatAgent
+}
+
+func newDistillBridgeConsole(a *agent.ChatAgent) *distillBridgeConsole {
+	return &distillBridgeConsole{chatAgent: a}
+}
+
+func (b *distillBridgeConsole) PreviewDistill(ctx context.Context, ds tools.DistillSession) (string, error) {
+	return b.chatAgent.PreviewDistill(ctx, agent.DistillSession{
+		SessionID: ds.SessionID,
+		AppName:   ds.AppName,
+		UserID:    ds.UserID,
+	})
+}
+
+func (b *distillBridgeConsole) ConfirmAndDistill(ctx context.Context, ds tools.DistillSession, print func(string)) error {
+	return b.chatAgent.ConfirmAndDistill(ctx, agent.DistillSession{
+		SessionID: ds.SessionID,
+		AppName:   ds.AppName,
+		UserID:    ds.UserID,
+	}, print)
 }

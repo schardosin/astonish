@@ -205,6 +205,10 @@ func handleSchedulerRun(idOrName string) error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("daemon returned HTTP %d", resp.StatusCode)
+	}
+
 	var result struct {
 		Result string `json:"result"`
 		Error  string `json:"error"`
@@ -255,6 +259,10 @@ func fetchSchedulerJobs() ([]schedulerJobAPI, error) {
 		return nil, fmt.Errorf("failed to contact daemon (is it running?): %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("daemon returned HTTP %d — check that the daemon is running and accessible", resp.StatusCode)
+	}
 
 	body, _ := io.ReadAll(resp.Body)
 

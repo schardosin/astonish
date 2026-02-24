@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/api"
 	"github.com/schardosin/astonish/pkg/channels"
 	"github.com/schardosin/astonish/pkg/channels/telegram"
@@ -155,6 +156,8 @@ func Run(cfg RunConfig) error {
 			logger.Printf("Warning: Failed to initialize ChatAgent: %v", factoryErr)
 		} else {
 			factoryResult = fr
+			// Make distillation available to LLM tools (for auto-distill during scheduling)
+			tools.SetDistillAccess(newDistillBridge(fr.ChatAgent))
 		}
 	}
 
@@ -261,6 +264,8 @@ func Run(cfg RunConfig) error {
 				return fmt.Errorf("failed to initialize ChatAgent: %w", factoryErr)
 			}
 			factoryResult = fr
+			// Make distillation available to LLM tools
+			tools.SetDistillAccess(newDistillBridge(fr.ChatAgent))
 			// Cleanup handled by the deferred closure in Run() that reads
 			// the current factoryResult at shutdown time.
 		}
@@ -526,4 +531,30 @@ func schedulerJobToToolJob(sj *scheduler.Job) *tools.SchedulerJob {
 		Failures:   sj.ConsecutiveFailures,
 		CreatedAt:  sj.CreatedAt,
 	}
+}
+
+// distillBridge adapts agent.ChatAgent to tools.DistillAccess,
+// bridging the two packages without creating import cycles.
+type distillBridge struct {
+	agent *agent.ChatAgent
+}
+
+func newDistillBridge(a *agent.ChatAgent) *distillBridge {
+	return &distillBridge{agent: a}
+}
+
+func (b *distillBridge) PreviewDistill(ctx context.Context, ds tools.DistillSession) (string, error) {
+	return b.agent.PreviewDistill(ctx, agent.DistillSession{
+		SessionID: ds.SessionID,
+		AppName:   ds.AppName,
+		UserID:    ds.UserID,
+	})
+}
+
+func (b *distillBridge) ConfirmAndDistill(ctx context.Context, ds tools.DistillSession, print func(string)) error {
+	return b.agent.ConfirmAndDistill(ctx, agent.DistillSession{
+		SessionID: ds.SessionID,
+		AppName:   ds.AppName,
+		UserID:    ds.UserID,
+	}, print)
 }

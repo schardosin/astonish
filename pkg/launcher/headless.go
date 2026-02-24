@@ -252,7 +252,8 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 				if autoApprovedVal, ok := event.Actions.StateDelta["auto_approved"]; ok {
 					if auto, ok := autoApprovedVal.(bool); ok && auto {
 						waitingForApproval = false
-						break
+						// Continue processing — auto-approval is informational.
+						// The tool still needs to execute and produce results.
 					}
 				}
 

@@ -260,17 +260,17 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("**Step 1 — Acknowledge.** Tell the user you can set that up. Keep it short: \"Sure, I can schedule that for you.\" Then move to step 2 in the SAME message.\n\n")
 
 		// Step 2: Ask mode preference (MANDATORY)
-		sb.WriteString("**Step 2 — Ask which mode (MANDATORY).** You MUST ask the user which mode they prefer. NEVER choose a mode on their behalf. Present both options clearly in plain language:\n")
+		sb.WriteString("**Step 2 — Ask which mode (MANDATORY).** You MUST ask the user which mode they prefer. NEVER choose a mode on their behalf or recommend one over the other. Present both options objectively and let the user decide:\n")
 		sb.WriteString("- **Routine** — Replays a saved flow with the exact same steps and parameters every time. Predictable and consistent.\n")
 		sb.WriteString("- **Adaptive** — The AI receives written instructions and executes them fresh each time using tools. Can reason, adapt, and handle unexpected situations.\n")
-		sb.WriteString("Wait for the user to choose before continuing.\n\n")
+		sb.WriteString("Do NOT add commentary suggesting which mode is better, more practical, or more appropriate. Simply present both and wait for the user to choose.\n\n")
 
 		// Step 3: Gather schedule
 		sb.WriteString("**Step 3 — Gather the schedule.** Ask when and how often. Convert natural language to cron (e.g., 'every morning at 9' → `0 9 * * *`). Confirm the cron with the user. Wait for confirmation.\n\n")
 
 		// Step 4: Gather mode-specific details with context awareness
 		sb.WriteString("**Step 4 — Gather details (use conversation context).**\n")
-		sb.WriteString("- For **routine**: identify the flow name and ALL required parameters. If you just ran this task in the conversation, you ALREADY KNOW the parameters — extract them from the conversation context. Never leave required parameters empty if you have them available.\n")
+		sb.WriteString("- For **routine**: identify the flow name and ALL required parameters. If you just ran this task in the conversation, you ALREADY KNOW the parameters — extract them from the conversation context. Never leave required parameters empty if you have them available. **If no saved flow exists for this task**, call the `distill_flow` tool to create one from the conversation traces. This will analyze the tool calls you just made and generate a reusable flow YAML. Then use the resulting flow name for scheduling.\n")
 		sb.WriteString("- For **adaptive**: write detailed instructions for your future self. ")
 		sb.WriteString("CRITICAL — The instructions MUST include the EXACT output format that was last shown to the user. ")
 		sb.WriteString("Copy the format/template from the most recent output the user saw and approved. ")

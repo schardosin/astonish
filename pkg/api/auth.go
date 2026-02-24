@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -221,10 +222,18 @@ func (am *AuthManager) handleCheckStatus(w http.ResponseWriter, r *http.Request)
 }
 
 // AuthMiddleware returns HTTP middleware that enforces device authorization.
+// Requests from loopback addresses (CLI, in-process calls) are always allowed.
 // Requests to /api/auth/* are always allowed (they are the auth flow).
 // API requests get 401. UI requests get the embedded auth page.
 func AuthMiddleware(am *AuthManager, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Loopback bypass — CLI commands and in-process calls always come
+		// from localhost. Auth is for remote browser sessions, not local tools.
+		if isLoopback(r.RemoteAddr) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		path := r.URL.Path
 
 		// Auth endpoints are always accessible
@@ -256,6 +265,18 @@ func AuthMiddleware(am *AuthManager, next http.Handler) http.Handler {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, authPageHTML)
 	})
+}
+
+// isLoopback returns true if the remote address is a loopback address
+// (127.0.0.1, [::1], or any 127.x.x.x). The addr is typically in
+// "host:port" format from http.Request.RemoteAddr.
+func isLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr // no port, use as-is
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // authPageHTML is a self-contained HTML page that displays the authorization code

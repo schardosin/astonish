@@ -499,3 +499,82 @@ func TestAuthMiddleware_RejectsExpiredCookie(t *testing.T) {
 		t.Errorf("expired cookie should be 401, got %d", w.Code)
 	}
 }
+
+func TestAuthMiddleware_AllowsLoopback(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewAuthStore(dir, 24*time.Hour)
+	am := NewAuthManager(store)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+	handler := AuthMiddleware(am, inner)
+
+	tests := []struct {
+		name       string
+		remoteAddr string
+	}{
+		{"IPv4 loopback", "127.0.0.1:12345"},
+		{"IPv6 loopback", "[::1]:12345"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/api/scheduler/jobs", nil)
+			req.RemoteAddr = tt.remoteAddr
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Errorf("loopback request from %s should be allowed, got status %d", tt.remoteAddr, w.Code)
+			}
+		})
+	}
+}
+
+func TestAuthMiddleware_BlocksNonLoopback(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewAuthStore(dir, 24*time.Hour)
+	am := NewAuthManager(store)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := AuthMiddleware(am, inner)
+
+	// Non-loopback address without auth should still be blocked
+	req := httptest.NewRequest("GET", "/api/scheduler/jobs", nil)
+	req.RemoteAddr = "192.168.1.100:12345"
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("non-loopback request without auth should be 401, got %d", w.Code)
+	}
+}
+
+func TestIsLoopback(t *testing.T) {
+	tests := []struct {
+		addr     string
+		expected bool
+	}{
+		{"127.0.0.1:8080", true},
+		{"127.0.0.1:0", true},
+		{"[::1]:8080", true},
+		{"192.168.1.1:8080", false},
+		{"10.0.0.1:8080", false},
+		{"0.0.0.0:8080", false},
+		{"", false},
+		{"invalid", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.addr, func(t *testing.T) {
+			got := isLoopback(tt.addr)
+			if got != tt.expected {
+				t.Errorf("isLoopback(%q) = %v, want %v", tt.addr, got, tt.expected)
+			}
+		})
+	}
+}

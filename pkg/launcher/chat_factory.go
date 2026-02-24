@@ -309,6 +309,18 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		internalTools = append(internalTools, schedTools...)
 	}
 
+	// --- 2d-ii. Initialize distill_flow tool ---
+	// Registered alongside scheduler tools — enables auto-distillation when
+	// the user wants to schedule a task as "routine" but no flow exists yet.
+	distillTools, distillErr := tools.GetDistillTools()
+	if distillErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("Warning: Failed to create distill tools: %v\n", distillErr)
+		}
+	} else {
+		internalTools = append(internalTools, distillTools...)
+	}
+
 	// --- 2e. Initialize process management tools ---
 	processTools, procErr := tools.GetProcessTools()
 	if procErr != nil {

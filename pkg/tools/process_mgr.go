@@ -129,6 +129,7 @@ type ProcessSession struct {
 	mu        sync.Mutex
 	lastWrite time.Time // last time output was received from the process
 	done      chan struct{}
+	readDone  chan struct{} // closed when readLoop exits (all output drained)
 }
 
 // IsRunning returns true if the process is still alive.
@@ -189,6 +190,7 @@ func (pm *ProcessManager) Start(command, workDir string, rows, cols uint16) (*Pr
 		cmd:       cmd,
 		lastWrite: time.Now(),
 		done:      make(chan struct{}),
+		readDone:  make(chan struct{}),
 	}
 
 	// Start output reader goroutine
@@ -301,6 +303,7 @@ func (pm *ProcessManager) cleanupLoop() {
 
 // readLoop continuously reads from the PTY master and writes to the ring buffer.
 func (s *ProcessSession) readLoop() {
+	defer close(s.readDone)
 	buf := make([]byte, 4096)
 	for {
 		n, err := s.pty.Read(buf)
@@ -314,7 +317,7 @@ func (s *ProcessSession) readLoop() {
 			}
 		}
 		if err != nil {
-			// EOF or error — process output stream closed
+			// EOF or EIO — process output stream closed
 			return
 		}
 	}
@@ -340,8 +343,19 @@ func (s *ProcessSession) waitLoop() {
 	}
 	s.mu.Unlock()
 
-	// Close PTY master after process exits (unblocks readLoop)
+	// On Linux, when the slave PTY closes (process exits), the master
+	// side gets EIO which causes readLoop to exit. We must wait for
+	// readLoop to finish draining before we close the PTY fd and
+	// signal done. Give readLoop a bounded time to drain; if the
+	// process exited, the PTY read will get EIO promptly.
+	select {
+	case <-s.readDone:
+	case <-time.After(2 * time.Second):
+	}
+
+	// Close PTY master fd (safe even if readLoop already got EIO)
 	s.pty.Close()
+
 	close(s.done)
 }
 

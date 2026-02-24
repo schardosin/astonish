@@ -165,7 +165,7 @@ func GenerateSelfMD(cfg *SelfMDConfig) string {
 	sb.WriteString("- `astonish credential list` — Show stored credentials (metadata only, never secret values)\n")
 	sb.WriteString("- `astonish credential remove <name>` — Remove a credential\n")
 	sb.WriteString("- `astonish credential test <name>` — Test a credential (OAuth: token flow, others: config check)\n")
-	sb.WriteString("Available types: api_key, bearer, basic, password (SSH/FTP/SMTP/databases), oauth_client_credentials\n")
+	sb.WriteString("Available types: api_key, bearer, basic, password (SSH/FTP/SMTP/databases), oauth_client_credentials, oauth_authorization_code (Google/GitHub/etc.)\n")
 	sb.WriteString("**Note:** Prefer using your `save_credential` tool directly over suggesting CLI commands — it's faster and doesn't require the user to leave the chat.\n")
 	sb.WriteString("\nIf a requested model or provider is not in this file, read config.yaml directly to check the full configuration.\n")
 

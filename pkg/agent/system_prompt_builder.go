@@ -194,7 +194,9 @@ func (b *SystemPromptBuilder) Build() string {
 
 	// 6. Persistent Memory
 	memoryGuidance := "**What to save to MEMORY.md (core):** connection details (IPs, hostnames, users, auth methods, ports), " +
-		"server roles, network topology, user preferences, project conventions. Keep it concise — only durable facts.\n" +
+		"server roles, network topology, user preferences, project conventions, " +
+		"**and API/service integrations** (credential name, service name, API base URL, OAuth scopes, redirect URI, " +
+		"discovered resources like calendar names, repo lists, or account details). Keep it concise — only durable facts.\n" +
 		"**What to save to knowledge files (via file param):** procedural knowledge discovered during problem-solving — " +
 		"API quirks, command syntax learned through trial and error, configuration steps, workarounds, how-to procedures. " +
 		"Things you figured out that would save time next time.\n" +
@@ -311,7 +313,21 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("- `bearer` — Authorization: Bearer token\n")
 		sb.WriteString("- `basic` — HTTP Basic Auth header (Authorization: Basic base64(user:pass))\n")
 		sb.WriteString("- `password` — Plain username + password for non-HTTP use (SSH, FTP, SMTP, databases)\n")
-		sb.WriteString("- `oauth_client_credentials` — Auto-refreshing OAuth2 client credentials flow\n\n")
+		sb.WriteString("- `oauth_client_credentials` — Auto-refreshing OAuth2 client credentials flow (server-to-server)\n")
+		sb.WriteString("- `oauth_authorization_code` — User-authorized OAuth2 with refresh token (Google, GitHub, Spotify, etc.)\n\n")
+		sb.WriteString("**OAuth Authorization Code flow (for Google Calendar, GitHub, etc.):**\n")
+		sb.WriteString("1. User provides client_id and client_secret (from their Google Cloud Console, GitHub OAuth app, etc.)\n")
+		sb.WriteString("2. Save these immediately with `save_credential` (type=password, name like 'google-oauth-setup') as a temporary hold\n")
+		sb.WriteString("3. Build the authorization URL with: client_id, redirect_uri (usually http://localhost:8080), response_type=code, scope, access_type=offline\n")
+		sb.WriteString("4. Give the URL to the user — they open it in their browser, authorize, and paste back the redirect URL containing the code\n")
+		sb.WriteString("5. Exchange the code for tokens: POST to the token endpoint with grant_type=authorization_code, code, client_id, client_secret, redirect_uri\n")
+		sb.WriteString("6. Save the final credential with `save_credential` type=oauth_authorization_code including: token_url, client_id, client_secret, access_token, refresh_token, scope\n")
+		sb.WriteString("7. Remove the temporary credential from step 2\n")
+		sb.WriteString("8. Use `http_request` with credential parameter for all subsequent API calls — tokens auto-refresh\n\n")
+		sb.WriteString("**CRITICAL: After setting up ANY new API integration or OAuth credential**, immediately save the integration ")
+		sb.WriteString("context to MEMORY.md using `memory_save`. Include: credential name, service name, API base URL, scopes granted, ")
+		sb.WriteString("redirect URI (if OAuth), and any discovered resources (e.g., calendar names, repositories, endpoints). ")
+		sb.WriteString("Without this, future sessions will not know the integration exists or how to use it.\n\n")
 		sb.WriteString("**Rules:**\n")
 		sb.WriteString("- NEVER echo back, repeat, or include credential secret values in your responses. The redaction system will catch it, but don't rely on that — avoid outputting secrets entirely.\n")
 		sb.WriteString("- Reference credentials by name (e.g., \"I saved it as 'proxmox-ssh'\") rather than showing the value.\n")

@@ -107,6 +107,24 @@ func Run(cfg RunConfig) error {
 	ctx := context.Background()
 	api.InitToolsCache(ctx)
 
+	// --- Initialize device authorization for Studio ---
+	var authManager *api.AuthManager
+	if appCfg.Daemon.Auth.IsAuthEnabled() && configDir != "" {
+		authStore, authErr := api.NewAuthStore(configDir, appCfg.Daemon.Auth.GetSessionTTL())
+		if authErr != nil {
+			logger.Printf("Warning: Failed to initialize auth store: %v", authErr)
+		} else {
+			authManager = api.NewAuthManager(authStore)
+			ttlDays := appCfg.Daemon.Auth.SessionTTLDays
+			if ttlDays == 0 {
+				ttlDays = 90
+			}
+			logger.Printf("Studio device authorization enabled (session TTL: %d days)", ttlDays)
+		}
+	} else if !appCfg.Daemon.Auth.IsAuthEnabled() {
+		logger.Printf("Studio device authorization disabled by config")
+	}
+
 	// --- Initialize shared ChatAgent if channels need it ---
 	// The scheduler is always-on by default but doesn't require a ChatAgent at startup:
 	// - Routine jobs use the headless runner (creates its own LLM)
@@ -193,6 +211,9 @@ func Run(cfg RunConfig) error {
 	} else {
 		channelMgr = mgr
 	}
+	if channelMgr != nil && authManager != nil {
+		channelMgr.SetAuthorizeFunc(authManager.AuthorizeCode)
+	}
 	api.SetChannelManager(channelMgr)
 
 	// reloadChannels re-reads config, stops existing channels, and starts new
@@ -250,6 +271,9 @@ func Run(cfg RunConfig) error {
 			logger.Printf("Warning: %v", err)
 		}
 		channelMgr = mgr
+		if channelMgr != nil && authManager != nil {
+			channelMgr.SetAuthorizeFunc(authManager.AuthorizeCode)
+		}
 		api.SetChannelManager(channelMgr)
 
 		logger.Printf("Channel reload complete")
@@ -299,7 +323,11 @@ func Run(cfg RunConfig) error {
 	}
 
 	// Create and start the Studio server
-	studio, err := launcher.NewStudioServer(port)
+	var studioOpts []launcher.StudioOption
+	if authManager != nil {
+		studioOpts = append(studioOpts, launcher.WithAuth(authManager))
+	}
+	studio, err := launcher.NewStudioServer(port, studioOpts...)
 	if err != nil {
 		logger.Printf("Failed to start HTTP server: %v", err)
 		return fmt.Errorf("failed to start HTTP server: %w", err)

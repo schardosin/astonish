@@ -37,6 +37,9 @@ type ChannelManager struct {
 
 	// Credential redaction for outbound messages
 	redactor *credentials.Redactor
+
+	// Device authorization for Studio web UI
+	authorizeFunc func(code string) (string, bool)
 }
 
 // ChannelManagerConfig holds optional configuration for NewChannelManager.
@@ -72,6 +75,11 @@ func NewChannelManager(chatAgent *agent.ChatAgent, sessSvc session.Service, logg
 // SetRedactor sets the credential redactor for outbound message sanitization.
 func (m *ChannelManager) SetRedactor(r *credentials.Redactor) {
 	m.redactor = r
+}
+
+// SetAuthorizeFunc sets the device authorization handler for the /authorize command.
+func (m *ChannelManager) SetAuthorizeFunc(fn func(code string) (string, bool)) {
+	m.authorizeFunc = fn
 }
 
 // redactText applies credential redaction if a redactor is configured.
@@ -359,6 +367,7 @@ func (m *ChannelManager) handleCommand(ctx context.Context, msg InboundMessage, 
 		ModelName:      m.modelName,
 		ToolCount:      m.toolCount,
 		Distiller:      m.agent,
+		AuthorizeFunc:  m.authorizeFunc,
 	}
 
 	ch := m.getChannel(msg.ChannelID)

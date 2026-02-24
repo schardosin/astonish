@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -179,6 +180,9 @@ type DaemonConfig struct {
 	// LogDir overrides the default log directory.
 	// Empty means ~/.config/astonish/logs/
 	LogDir string `yaml:"log_dir,omitempty" json:"log_dir,omitempty"`
+	// Auth controls device-based authentication for the Studio web UI.
+	// Auth is enabled by default in daemon mode.
+	Auth StudioAuthConfig `yaml:"auth,omitempty" json:"auth,omitempty"`
 }
 
 // GetPort returns the daemon port, defaulting to 9393.
@@ -199,6 +203,28 @@ func (c *DaemonConfig) GetLogDir() string {
 		return "logs"
 	}
 	return filepath.Join(configDir, "logs")
+}
+
+// StudioAuthConfig controls device-based authentication for the Studio web UI.
+type StudioAuthConfig struct {
+	// Disabled turns off authentication entirely. Default: false (auth is on).
+	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	// SessionTTLDays controls how long an authorized session lasts.
+	// Default: 90 days. Set to 0 to use the default.
+	SessionTTLDays int `yaml:"session_ttl_days,omitempty" json:"session_ttl_days,omitempty"`
+}
+
+// IsAuthEnabled returns true if Studio authentication is enabled (default: true).
+func (c *StudioAuthConfig) IsAuthEnabled() bool {
+	return !c.Disabled
+}
+
+// GetSessionTTL returns the session TTL as a time.Duration.
+func (c *StudioAuthConfig) GetSessionTTL() time.Duration {
+	if c.SessionTTLDays > 0 {
+		return time.Duration(c.SessionTTLDays) * 24 * time.Hour
+	}
+	return 90 * 24 * time.Hour
 }
 
 // ChannelsConfig controls communication channel integrations.

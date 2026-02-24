@@ -60,6 +60,14 @@ type CommandContext struct {
 
 	// Distiller provides on-demand flow distillation (nil if unavailable).
 	Distiller Distiller
+
+	// AuthorizeFunc validates a device authorization code for Studio access.
+	// Returns a human-readable message and whether the code was accepted.
+	// Nil if device auth is not available (e.g. no daemon, auth disabled).
+	AuthorizeFunc func(code string) (string, bool)
+
+	// RawText is the full command text as typed by the user (e.g. "/authorize A7X-K2M").
+	RawText string
 }
 
 // CommandFunc is the handler signature for a slash command.
@@ -134,6 +142,7 @@ func (r *CommandRegistry) Execute(ctx context.Context, text string, cc CommandCo
 		return fmt.Sprintf("Unknown command: /%s. Type /help for available commands.", name), nil
 	}
 
+	cc.RawText = text
 	return cmd.Handler(ctx, cc)
 }
 
@@ -171,6 +180,7 @@ func DefaultCommands() *CommandRegistry {
 	r.Register(newSessionCommand())
 	r.Register(distillCommand())
 	r.Register(jobsCommand())
+	r.Register(authorizeCommand())
 	r.Register(helpCommand(r))
 	return r
 }
@@ -323,6 +333,31 @@ func jobsCommand() *Command {
 		},
 	}
 }
+
+func authorizeCommand() *Command {
+	return &Command{
+		Name:        "authorize",
+		Description: "Authorize a device to access Astonish Studio",
+		Handler: func(ctx context.Context, cc CommandContext) (string, error) {
+			if cc.AuthorizeFunc == nil {
+				return "Device authorization is not available. Studio auth is only active in daemon mode.", nil
+			}
+
+			// Extract code from the command arguments: /authorize CODE
+			code := strings.TrimSpace(strings.TrimPrefix(cc.RawText, "/authorize"))
+			if code == "" {
+				return "Usage: /authorize CODE\n\nEnter the 6-character code shown on the Studio authorization page.", nil
+			}
+
+			msg, _ := cc.AuthorizeFunc(code)
+			return msg, nil
+		},
+	}
+}
+
+// parseCommandArgs is a helper — it's not available here because the
+// command handler only gets CommandContext. We need the raw text.
+// Instead, we'll adjust the approach: pass the raw text in CommandContext.
 
 func helpCommand(registry *CommandRegistry) *Command {
 	return &Command{

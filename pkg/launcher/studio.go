@@ -21,43 +21,66 @@ type StudioServer struct {
 	server   *http.Server
 	listener net.Listener
 	port     int
+	Auth     *api.AuthManager // nil means no auth (direct CLI mode)
+}
+
+// StudioOption configures optional StudioServer behavior.
+type StudioOption func(*StudioServer)
+
+// WithAuth enables device authorization on the Studio server.
+func WithAuth(am *api.AuthManager) StudioOption {
+	return func(s *StudioServer) { s.Auth = am }
 }
 
 // NewStudioServer creates a configured Studio server without starting it.
-func NewStudioServer(port int) (*StudioServer, error) {
+func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
+	s := &StudioServer{port: port}
+	for _, opt := range opts {
+		opt(s)
+	}
+
 	router := mux.NewRouter()
+
+	// Register auth endpoints first (they are always accessible)
+	if s.Auth != nil {
+		api.RegisterAuthRoutes(router, s.Auth)
+	}
 
 	// Register API routes
 	api.RegisterRoutes(router)
 
 	// Try to get web assets (embedded or filesystem)
 	webFS := getWebAssets()
+
+	var handler http.Handler = router
+
 	if webFS != nil {
+		// Wrap router + SPA into a single handler
 		spaHandler := spaFileServer(http.FS(webFS))
-		router.PathPrefix("/").Handler(spaHandler)
-	} else {
-		log.Printf("Warning: No web assets found. Run 'npm run build' in the web directory first.")
-		router.PathPrefix("/").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/" || r.URL.Path == "/index.html" {
-				w.Header().Set("Content-Type", "text/html")
-				fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head><title>Astonish Studio</title></head>
-<body style="font-family: sans-serif; padding: 40px; background: #0d121f; color: white;">
-<h1>Astonish Studio</h1>
-<p>Web assets not found. Please build the frontend first:</p>
-<pre style="background: #1a1a2e; padding: 20px; border-radius: 8px;">
-cd web
-npm install
-npm run build
-</pre>
-<p>Then restart the studio server.</p>
-</body>
-</html>`)
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Let mux handle /api/* routes
+			if len(r.URL.Path) >= 4 && r.URL.Path[:4] == "/api" {
+				router.ServeHTTP(w, r)
 				return
 			}
-			http.NotFound(w, r)
+			// Everything else is SPA
+			spaHandler.ServeHTTP(w, r)
 		})
+	} else {
+		log.Printf("Warning: No web assets found. Run 'npm run build' in the web directory first.")
+		fallback := noAssetsHandler()
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if len(r.URL.Path) >= 4 && r.URL.Path[:4] == "/api" {
+				router.ServeHTTP(w, r)
+				return
+			}
+			fallback.ServeHTTP(w, r)
+		})
+	}
+
+	// Apply auth middleware if enabled (wraps both API and SPA)
+	if s.Auth != nil {
+		handler = api.AuthMiddleware(s.Auth, handler)
 	}
 
 	addr := fmt.Sprintf(":%d", port)
@@ -66,16 +89,15 @@ npm run build
 		return nil, err
 	}
 
-	return &StudioServer{
-		server: &http.Server{
-			Handler:      router,
-			ReadTimeout:  0, // SSE streaming needs no read timeout
-			WriteTimeout: 0, // SSE streaming needs no write timeout
-			IdleTimeout:  120 * time.Second,
-		},
-		listener: listener,
-		port:     port,
-	}, nil
+	s.server = &http.Server{
+		Handler:      handler,
+		ReadTimeout:  0, // SSE streaming needs no read timeout
+		WriteTimeout: 0, // SSE streaming needs no write timeout
+		IdleTimeout:  120 * time.Second,
+	}
+	s.listener = listener
+
+	return s, nil
 }
 
 // Port returns the port the server is listening on.
@@ -194,6 +216,31 @@ func findWebDir() string {
 	}
 
 	return ""
+}
+
+// noAssetsHandler returns a handler for when web assets are not found.
+func noAssetsHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprintf(w, `<!DOCTYPE html>
+<html>
+<head><title>Astonish Studio</title></head>
+<body style="font-family: sans-serif; padding: 40px; background: #0d121f; color: white;">
+<h1>Astonish Studio</h1>
+<p>Web assets not found. Please build the frontend first:</p>
+<pre style="background: #1a1a2e; padding: 20px; border-radius: 8px;">
+cd web
+npm install
+npm run build
+</pre>
+<p>Then restart the studio server.</p>
+</body>
+</html>`)
+			return
+		}
+		http.NotFound(w, r)
+	})
 }
 
 // spaFileServer returns a handler that serves SPA files with fallback to index.html

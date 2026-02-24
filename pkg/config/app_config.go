@@ -17,6 +17,7 @@ type AppConfig struct {
 	Daemon     DaemonConfig               `yaml:"daemon,omitempty"`
 	Channels   ChannelsConfig             `yaml:"channels,omitempty"`
 	Scheduler  SchedulerConfig            `yaml:"scheduler,omitempty"`
+	Browser    BrowserAppConfig           `yaml:"browser,omitempty"`
 }
 
 // MemoryConfig controls the semantic memory / RAG system.
@@ -226,6 +227,26 @@ func (c *SchedulerConfig) IsSchedulerEnabled() bool {
 		return true
 	}
 	return *c.Enabled
+}
+
+// BrowserAppConfig controls the built-in browser automation module.
+// All fields are optional — defaults are applied by browser.DefaultConfig().
+type BrowserAppConfig struct {
+	// Headless controls whether the browser runs in headless mode. Default: true.
+	Headless *bool `yaml:"headless,omitempty" json:"headless,omitempty"`
+	// ViewportWidth is the default viewport width in pixels. Default: 1280.
+	ViewportWidth int `yaml:"viewport_width,omitempty" json:"viewport_width,omitempty"`
+	// ViewportHeight is the default viewport height in pixels. Default: 720.
+	ViewportHeight int `yaml:"viewport_height,omitempty" json:"viewport_height,omitempty"`
+	// NoSandbox disables Chrome's sandbox. Auto-detected (true when running as root).
+	NoSandbox *bool `yaml:"no_sandbox,omitempty" json:"no_sandbox,omitempty"`
+	// ChromePath overrides the Chromium binary path. Empty = auto-download via rod.
+	ChromePath string `yaml:"chrome_path,omitempty" json:"chrome_path,omitempty"`
+	// UserDataDir overrides the persistent browser profile directory.
+	// Empty = ~/.config/astonish/browser/ (persistent profile).
+	UserDataDir string `yaml:"user_data_dir,omitempty" json:"user_data_dir,omitempty"`
+	// NavigationTimeout is the max seconds to wait for page loads. Default: 30.
+	NavigationTimeout int `yaml:"navigation_timeout,omitempty" json:"navigation_timeout,omitempty"`
 }
 
 // TelegramConfig holds configuration for the Telegram channel adapter.

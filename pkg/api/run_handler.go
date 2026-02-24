@@ -57,7 +57,20 @@ var browserOnce sync.Once
 // GetBrowserManager returns the shared browser manager for all sessions.
 func GetBrowserManager() *browser.Manager {
 	browserOnce.Do(func() {
-		globalBrowserMgr = browser.NewManager(browser.DefaultConfig())
+		cfg := browser.DefaultConfig()
+		if appCfg, err := config.LoadAppConfig(); err == nil {
+			b := &appCfg.Browser
+			cfg = browser.OverrideConfig(
+				b.Headless,
+				b.ViewportWidth,
+				b.ViewportHeight,
+				b.NoSandbox,
+				b.ChromePath,
+				b.UserDataDir,
+				b.NavigationTimeout,
+			)
+		}
+		globalBrowserMgr = browser.NewManager(cfg)
 	})
 	return globalBrowserMgr
 }

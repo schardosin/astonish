@@ -58,6 +58,35 @@ func DefaultConfig() BrowserConfig {
 	}
 }
 
+// OverrideConfig applies optional overrides to the default config.
+// Zero values are ignored (the default is preserved). This is used by the
+// launcher to merge user config from config.yaml with sensible defaults.
+func OverrideConfig(headless *bool, viewportWidth, viewportHeight int, noSandbox *bool, chromePath, userDataDir string, navigationTimeoutSec int) BrowserConfig {
+	cfg := DefaultConfig()
+	if headless != nil {
+		cfg.Headless = *headless
+	}
+	if viewportWidth > 0 {
+		cfg.ViewportWidth = viewportWidth
+	}
+	if viewportHeight > 0 {
+		cfg.ViewportHeight = viewportHeight
+	}
+	if noSandbox != nil {
+		cfg.NoSandbox = *noSandbox
+	}
+	if chromePath != "" {
+		cfg.ChromePath = chromePath
+	}
+	if userDataDir != "" {
+		cfg.UserDataDir = userDataDir
+	}
+	if navigationTimeoutSec > 0 {
+		cfg.NavigationTimeout = time.Duration(navigationTimeoutSec) * time.Second
+	}
+	return cfg
+}
+
 // defaultProfileDir returns the default persistent browser profile directory.
 // Falls back to empty string (temp dir) if the config directory can't be resolved.
 func defaultProfileDir() string {

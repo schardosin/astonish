@@ -91,7 +91,7 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 	}
 
 	// Register browser automation tools
-	browserMgr := browser.NewManager(browser.DefaultConfig())
+	browserMgr := browser.NewManager(browserConfigFromApp(cfg.AppConfig))
 	browserTools, browserErr := tools.GetBrowserTools(browserMgr)
 	if browserErr != nil {
 		if cfg.DebugMode {

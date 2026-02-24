@@ -321,7 +321,8 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	cleanups = append(cleanups, tools.CleanupProcessManager)
 
 	// --- 2f. Initialize browser automation tools ---
-	browserMgr := browser.NewManager(browser.DefaultConfig())
+	browserCfg := browserConfigFromApp(cfg.AppConfig)
+	browserMgr := browser.NewManager(browserCfg)
 	browserTools, browserErr := tools.GetBrowserTools(browserMgr)
 	if browserErr != nil {
 		if cfg.DebugMode {
@@ -895,4 +896,22 @@ func factoryBuildSelfMDConfig(
 	}
 
 	return selfCfg
+}
+
+// browserConfigFromApp builds a browser.BrowserConfig by merging user settings
+// from AppConfig with sensible defaults from browser.DefaultConfig().
+func browserConfigFromApp(appCfg *config.AppConfig) browser.BrowserConfig {
+	if appCfg == nil {
+		return browser.DefaultConfig()
+	}
+	b := &appCfg.Browser
+	return browser.OverrideConfig(
+		b.Headless,
+		b.ViewportWidth,
+		b.ViewportHeight,
+		b.NoSandbox,
+		b.ChromePath,
+		b.UserDataDir,
+		b.NavigationTimeout,
+	)
 }

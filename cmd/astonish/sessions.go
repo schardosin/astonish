@@ -74,14 +74,22 @@ func handleSessionsList() error {
 		return nil
 	}
 
-	// Sort by UpdatedAt descending
+	// Sort by UpdatedAt descending, excluding sub-sessions
 	metas := make([]persistentsession.SessionMeta, 0, len(data.Sessions))
 	for _, m := range data.Sessions {
+		if m.ParentID != "" {
+			continue // skip sub-agent sessions
+		}
 		metas = append(metas, m)
 	}
 	sort.Slice(metas, func(i, j int) bool {
 		return metas[i].UpdatedAt.After(metas[j].UpdatedAt)
 	})
+
+	if len(metas) == 0 {
+		fmt.Println("No sessions found.")
+		return nil
+	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "ID\tTITLE\tMESSAGES\tUPDATED\tAGE")
@@ -145,6 +153,13 @@ func handleSessionsShow(sessionID string) error {
 		fmt.Printf("Title:   %s\n", meta.Title)
 	}
 	fmt.Printf("Messages: %d\n", meta.MessageCount)
+
+	// Show sub-session count if any
+	children, _ := index.ListChildren(fullID)
+	if len(children) > 0 {
+		fmt.Printf("Sub-sessions: %d\n", len(children))
+	}
+
 	fmt.Println()
 	fmt.Printf("Resume with: astonish chat --resume %s\n", meta.ID)
 
@@ -179,16 +194,27 @@ func handleSessionsDelete(sessionID string) error {
 		return fmt.Errorf("session not found: %w", err)
 	}
 
+	// Cascade: remove child sub-session transcripts
+	children, _ := index.ListChildren(fullID)
+	for _, child := range children {
+		childPath := fmt.Sprintf("%s/%s/%s/%s.jsonl", sessDir, child.AppName, child.UserID, child.ID)
+		os.Remove(childPath)
+	}
+
 	// Remove transcript file
 	transcriptPath := fmt.Sprintf("%s/%s/%s/%s.jsonl", sessDir, meta.AppName, meta.UserID, meta.ID)
 	os.Remove(transcriptPath)
 
-	// Remove from index
+	// Remove from index (cascades children automatically)
 	if err := index.Remove(fullID); err != nil {
 		return fmt.Errorf("failed to delete session: %w", err)
 	}
 
-	fmt.Printf("Deleted session %s\n", fullID)
+	if len(children) > 0 {
+		fmt.Printf("Deleted session %s and %d sub-session(s)\n", fullID, len(children))
+	} else {
+		fmt.Printf("Deleted session %s\n", fullID)
+	}
 	return nil
 }
 

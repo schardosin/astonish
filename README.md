@@ -45,7 +45,7 @@ Astonish itself is a single Go binary with no runtime dependencies. MCP servers 
 
 ## 💬 Autonomous Chat Agent
 
-The core of Astonish is `astonish chat`, a dynamic agent that uses LLM-driven tool-use loops to solve problems. It decides which tools to call, chains them together, and works through multi-step tasks without predefined workflows.
+The core of Astonish is a dynamic agent that uses LLM-driven tool-use loops to solve problems. It decides which tools to call, chains them together, and works through multi-step tasks without predefined workflows. Use it from the terminal with `astonish chat`, or talk to it from anywhere through integrated channels like Telegram.
 
 **50+ built-in tools** including shell execution (PTY-backed with background processes), file operations, web fetching with readability extraction, PDF reading, semantic memory search, browser automation, credential management, sub-agent delegation, and skill lookup.
 

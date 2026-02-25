@@ -17,6 +17,7 @@ import (
 	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/provider"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
+	"github.com/schardosin/astonish/pkg/skills"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
@@ -183,6 +184,29 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					fmt.Printf("Warning: Failed to create memory directory: %v\n", err)
 				}
 			} else {
+				// Pre-sync skills to memory directory BEFORE indexing starts,
+				// so skill files are included in the initial IndexAll() walk.
+				if cfg.AppConfig.Skills.IsSkillsEnabled() {
+					skillsCfg := &cfg.AppConfig.Skills
+					workDir := cfg.WorkspaceDir
+					if workDir == "" {
+						workDir, _ = os.Getwd()
+					}
+					preSkills, psErr := skills.LoadSkills(
+						skillsCfg.GetUserSkillsDir(),
+						skillsCfg.ExtraDirs,
+						workDir,
+						skillsCfg.Allowlist,
+					)
+					if psErr == nil && len(preSkills) > 0 {
+						if syncErr := skills.SyncSkillsToMemory(preSkills, memDir); syncErr != nil {
+							if cfg.DebugMode {
+								fmt.Printf("Warning: Failed to pre-sync skills to memory: %v\n", syncErr)
+							}
+						}
+					}
+				}
+
 				var embGetSecret config.SecretGetter
 				if credStore != nil {
 					embGetSecret = credStore.GetSecret
@@ -248,6 +272,34 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 								}
 							}()
 							cleanups = append(cleanups, watchCancel)
+
+							// Start skills directory watcher — watches skill source dirs
+							// and re-syncs to memory/skills/ when SKILL.md files change.
+							// The memory watcher above then picks up those changes.
+							if cfg.AppConfig.Skills.IsSkillsEnabled() {
+								skillsCfg := &cfg.AppConfig.Skills
+								skillWorkDir := cfg.WorkspaceDir
+								if skillWorkDir == "" {
+									skillWorkDir, _ = os.Getwd()
+								}
+								skillWatchCtx, skillWatchCancel := context.WithCancel(context.Background())
+								go func() {
+									if wErr := skills.WatchSkillDirs(skillWatchCtx, skills.WatcherConfig{
+										UserDir:      skillsCfg.GetUserSkillsDir(),
+										ExtraDirs:    skillsCfg.ExtraDirs,
+										WorkspaceDir: skillWorkDir,
+										Allowlist:    skillsCfg.Allowlist,
+										MemoryDir:    memDir,
+										DebounceMs:   debounceMs + 500, // Slightly longer than memory watcher
+										DebugMode:    cfg.DebugMode,
+									}); wErr != nil {
+										if cfg.DebugMode {
+											fmt.Printf("Warning: Skills watcher error: %v\n", wErr)
+										}
+									}
+								}()
+								cleanups = append(cleanups, skillWatchCancel)
+							}
 						}
 					}
 				}
@@ -362,6 +414,49 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				TaskTimeout:   cfg.AppConfig.SubAgents.TaskTimeout(),
 			}
 			subAgentMgr = agent.NewSubAgentManager(subAgentCfg)
+		}
+	}
+
+	// --- 2h. Initialize skills system ---
+	var loadedSkills []skills.Skill
+	var skillIndex string
+	if cfg.AppConfig != nil && cfg.AppConfig.Skills.IsSkillsEnabled() {
+		skillsCfg := &cfg.AppConfig.Skills
+		workDir := cfg.WorkspaceDir
+		if workDir == "" {
+			workDir, _ = os.Getwd()
+		}
+
+		var skillErr error
+		loadedSkills, skillErr = skills.LoadSkills(
+			skillsCfg.GetUserSkillsDir(),
+			skillsCfg.ExtraDirs,
+			workDir,
+			skillsCfg.Allowlist,
+		)
+		if skillErr != nil {
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Failed to load skills: %v\n", skillErr)
+			}
+		} else {
+			eligible := skills.FilterEligible(loadedSkills)
+			if len(eligible) > 0 {
+				// Build lightweight index for system prompt
+				skillIndex = skills.BuildSkillIndex(loadedSkills)
+
+				// Create skill_lookup tool
+				skillTool, stErr := tools.NewSkillLookupTool(loadedSkills)
+				if stErr != nil {
+					if cfg.DebugMode {
+						fmt.Printf("Warning: Failed to create skill_lookup tool: %v\n", stErr)
+					}
+				} else {
+					internalTools = append(internalTools, skillTool)
+				}
+			}
+			if cfg.DebugMode {
+				fmt.Printf("Skills loaded: %d total, %d eligible\n", len(loadedSkills), len(eligible))
+			}
 		}
 	}
 
@@ -569,6 +664,11 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		promptBuilder.MemorySearchAvailable = true
 	}
 
+	// Set skill index for system prompt
+	if skillIndex != "" {
+		promptBuilder.SkillIndex = skillIndex
+	}
+
 	// Load INSTRUCTIONS.md
 	var memDir string
 	if cfg.AppConfig != nil && cfg.AppConfig.Memory.IsMemoryEnabled() {
@@ -601,7 +701,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	if memDir != "" {
 		selfMDMemDir = memDir
 
-		selfCfg := factoryBuildSelfMDConfig(cfg, memDir, internalTools, mcpToolsets, mcpCfg, memStore, memorySearchAvailable)
+		selfCfg := factoryBuildSelfMDConfig(cfg, memDir, internalTools, mcpToolsets, mcpCfg, memStore, memorySearchAvailable, loadedSkills)
 		selfContent := memory.GenerateSelfMD(selfCfg)
 		if writeErr := memory.WriteSelfMD(memDir, selfContent); writeErr != nil {
 			if cfg.DebugMode {
@@ -739,7 +839,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	}
 	if selfMDMemDir != "" {
 		chatAgent.SelfMDRefresher = func() {
-			selfCfg := factoryBuildSelfMDConfig(cfg, selfMDMemDir, internalTools, mcpToolsets, mcpCfg, memStore, memorySearchAvailable)
+			selfCfg := factoryBuildSelfMDConfig(cfg, selfMDMemDir, internalTools, mcpToolsets, mcpCfg, memStore, memorySearchAvailable, loadedSkills)
 			if chatAgent.FlowRegistry != nil {
 				for _, e := range chatAgent.FlowRegistry.Entries() {
 					selfCfg.FlowEntries = append(selfCfg.FlowEntries, memory.FlowInfo{
@@ -843,6 +943,7 @@ func factoryBuildSelfMDConfig(
 	mcpCfg *config.MCPConfig,
 	memStore *memory.Store,
 	memorySearchAvailable bool,
+	loadedSkills []skills.Skill,
 ) *memory.SelfMDConfig {
 	selfCfg := &memory.SelfMDConfig{
 		ProviderName:  cfg.ProviderName,
@@ -931,7 +1032,7 @@ func factoryBuildSelfMDConfig(
 		entries, _ := os.ReadDir(memDir)
 		for _, e := range entries {
 			name := e.Name()
-			if e.IsDir() && name != "flows" && name != "vectors" {
+			if e.IsDir() && name != "flows" && name != "vectors" && name != "skills" {
 				selfCfg.KnowledgeFiles = append(selfCfg.KnowledgeFiles, name+"/")
 			} else if strings.HasSuffix(name, ".md") && name != "MEMORY.md" && name != "INSTRUCTIONS.md" && name != "SELF.md" {
 				selfCfg.KnowledgeFiles = append(selfCfg.KnowledgeFiles, name)
@@ -942,6 +1043,14 @@ func factoryBuildSelfMDConfig(
 	// Sub-agents
 	if cfg.AppConfig != nil {
 		selfCfg.SubAgentsEnabled = cfg.AppConfig.SubAgents.IsSubAgentsEnabled()
+	}
+
+	// Skills
+	if len(loadedSkills) > 0 {
+		eligible := skills.FilterEligible(loadedSkills)
+		for _, s := range eligible {
+			selfCfg.SkillNames = append(selfCfg.SkillNames, s.Name)
+		}
 	}
 
 	return selfCfg

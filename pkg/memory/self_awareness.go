@@ -28,6 +28,7 @@ type SelfMDConfig struct {
 	CoreFiles        []string          // Core memory files found (MEMORY.md, INSTRUCTIONS.md, etc.)
 	KnowledgeFiles   []string          // Knowledge tier files found
 	SubAgentsEnabled bool              // Whether sub-agent delegation is available
+	SkillNames       []string          // Names of loaded eligible skills
 }
 
 // MCPServerInfo describes an installed MCP server for SELF.md.
@@ -133,6 +134,14 @@ func GenerateSelfMD(cfg *SelfMDConfig) string {
 		sb.WriteString("## Sub-Agents\n")
 		sb.WriteString("- Task delegation: enabled (delegate_tasks tool)\n")
 		sb.WriteString("- Parallel sub-agent execution for independent tasks\n\n")
+	}
+
+	// Skills
+	if len(cfg.SkillNames) > 0 {
+		sb.WriteString("## Skills\n")
+		sb.WriteString(fmt.Sprintf("- Loaded: %d eligible skills\n", len(cfg.SkillNames)))
+		sb.WriteString(fmt.Sprintf("- Available: %s\n", strings.Join(cfg.SkillNames, ", ")))
+		sb.WriteString("- Retrieval: automatic (vector search) + explicit (skill_lookup tool)\n\n")
 	}
 
 	// Memory system

@@ -29,6 +29,7 @@ type SystemPromptBuilder struct {
 	MemorySearchAvailable bool   // Whether semantic memory search is available
 	ChannelHints          string // Channel-specific output constraints (empty = console mode)
 	SchedulerHints        string // Scheduler-specific output constraints (empty = not a scheduled run)
+	SkillIndex            string // Lightweight skill listing (Tier 1 — names and descriptions only)
 }
 
 // Build constructs the full system prompt.
@@ -245,6 +246,12 @@ func (b *SystemPromptBuilder) Build() string {
 	}
 
 	// 6c. (Auto-distillation removed — flows are created explicitly via /distill command or Studio)
+
+	// 6c2. Skill index (lightweight listing of available CLI tool skills)
+	if b.SkillIndex != "" {
+		sb.WriteString("\n")
+		sb.WriteString(b.SkillIndex)
+	}
 
 	// 6d. Scheduling guidance (when scheduler tools are available)
 	if b.hasSchedulerTools() {

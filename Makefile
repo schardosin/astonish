@@ -39,6 +39,7 @@ build:
 build-ui:
 	@echo "Building React UI..."
 	cd $(WEB_DIR) && npm install && npm run build
+	@touch $(WEB_DIR)/embed.go
 	@echo "React UI built successfully: $(WEB_DIR)/dist"
 
 # Build everything: UI first, then Go binary

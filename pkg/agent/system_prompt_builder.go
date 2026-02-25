@@ -98,6 +98,14 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString("- Only ask the user for help when you genuinely cannot proceed (e.g., you need credentials or access you don't have).\n")
 	sb.WriteString("- When you have enough information to answer, respond directly and concisely.\n")
 
+	// 4a. Communication flow — ensure the user always knows what's happening
+	sb.WriteString("\n## Communication Flow\n\n")
+	sb.WriteString("- When the user asks you to do something, briefly acknowledge the request before starting work (e.g., \"Let me check that for you.\").\n")
+	sb.WriteString("- If you plan to use a specific skill or tool, mention it so the user knows your approach (e.g., \"I have a weather skill for this — let me look it up.\").\n")
+	sb.WriteString("- For multi-step tasks, provide brief progress updates between steps so the user knows things are moving.\n")
+	sb.WriteString("- Do NOT stay silent while working. The user should always know something is happening.\n")
+	sb.WriteString("- Keep acknowledgments short (one sentence). The focus should be on results, not narration.\n")
+
 	// 4b. Web capabilities — always render since web_fetch is a built-in tool
 	sb.WriteString("\n## Web Access\n\n")
 	sb.WriteString("You have a built-in `web_fetch` tool that can fetch and extract content from any URL.\n\n")

@@ -20,6 +20,7 @@ type AppConfig struct {
 	Scheduler  SchedulerConfig            `yaml:"scheduler,omitempty"`
 	Browser    BrowserAppConfig           `yaml:"browser,omitempty"`
 	SubAgents  SubAgentAppConfig          `yaml:"sub_agents,omitempty"`
+	Skills     SkillsConfig               `yaml:"skills,omitempty"`
 }
 
 // MemoryConfig controls the semantic memory / RAG system.
@@ -303,6 +304,39 @@ func (c *SubAgentAppConfig) TaskTimeout() time.Duration {
 		return 5 * time.Minute
 	}
 	return time.Duration(c.TaskTimeoutSec) * time.Second
+}
+
+// SkillsConfig controls the skills system.
+type SkillsConfig struct {
+	// Enabled controls whether skills are loaded. Default: true (nil means true).
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// UserDir is the directory for user-defined skills. Default: ~/.config/astonish/skills/
+	UserDir string `yaml:"user_dir,omitempty" json:"user_dir,omitempty"`
+	// ExtraDirs are additional directories to search for skills.
+	ExtraDirs []string `yaml:"extra_dirs,omitempty" json:"extra_dirs,omitempty"`
+	// Allowlist restricts which skills are loaded. Empty means all eligible skills.
+	Allowlist []string `yaml:"allowlist,omitempty" json:"allowlist,omitempty"`
+}
+
+// IsSkillsEnabled returns whether the skills system is enabled.
+// Defaults to true if not explicitly set.
+func (c *SkillsConfig) IsSkillsEnabled() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+// GetUserSkillsDir returns the user skills directory, defaulting to ~/.config/astonish/skills/
+func (c *SkillsConfig) GetUserSkillsDir() string {
+	if c.UserDir != "" {
+		return c.UserDir
+	}
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(configDir, "astonish", "skills")
 }
 
 // TelegramConfig holds configuration for the Telegram channel adapter.

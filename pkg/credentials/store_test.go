@@ -339,6 +339,7 @@ func TestStorePersistence(t *testing.T) {
 	cred := store2.Get("persist-test")
 	if cred == nil {
 		t.Fatal("credential not found after reload")
+		return
 	}
 	if cred.Token != "eyJhbGciOiJIUzI1NiJ9.test-token" {
 		t.Errorf("Token = %q after reload, want %q", cred.Token, "eyJhbGciOiJIUzI1NiJ9.test-token")
@@ -473,6 +474,7 @@ func TestStorePasswordCRUD(t *testing.T) {
 	cred := store.Get("proxmox-ssh")
 	if cred == nil {
 		t.Fatal("Get returned nil")
+		return
 	}
 	if cred.Type != CredPassword {
 		t.Errorf("Type = %q, want %q", cred.Type, CredPassword)
@@ -530,6 +532,7 @@ func TestStorePasswordPersistence(t *testing.T) {
 	cred := store2.Get("db-cred")
 	if cred == nil {
 		t.Fatal("credential not found after reload")
+		return
 	}
 	if cred.Username != "dbuser" || cred.Password != "dbpass123" {
 		t.Errorf("fields don't match after reload: user=%q pass=%q", cred.Username, cred.Password)
@@ -594,6 +597,7 @@ func TestStoreReload(t *testing.T) {
 	cred := store1.Get("cli-added")
 	if cred == nil {
 		t.Fatal("store1 should see cli-added after Reload()")
+		return
 	}
 	if cred.Username != "admin" || cred.Password != "external-password-222222" {
 		t.Errorf("cli-added fields wrong: user=%q pass=%q", cred.Username, cred.Password)
@@ -603,6 +607,7 @@ func TestStoreReload(t *testing.T) {
 	existing := store1.Get("existing")
 	if existing == nil {
 		t.Fatal("existing credential should survive reload")
+		return
 	}
 	if existing.Token != "token-existing-111111" {
 		t.Errorf("existing token = %q, want %q", existing.Token, "token-existing-111111")
@@ -898,6 +903,7 @@ func TestOAuthAuthCodeSaveAndLoad(t *testing.T) {
 	loaded := store2.Get("google-calendar")
 	if loaded == nil {
 		t.Fatal("credential not found after reload")
+		return
 	}
 	if loaded.Type != CredOAuthAuthCode {
 		t.Errorf("type = %q, want %q", loaded.Type, CredOAuthAuthCode)

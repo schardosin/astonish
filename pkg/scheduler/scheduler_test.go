@@ -52,6 +52,7 @@ func TestStoreAddAndGet(t *testing.T) {
 	got := store.Get(job.ID)
 	if got == nil {
 		t.Fatal("Get returned nil")
+		return
 	}
 	if got.Name != "Test Job" {
 		t.Errorf("Name = %q, want %q", got.Name, "Test Job")
@@ -79,6 +80,7 @@ func TestStoreGetByName(t *testing.T) {
 	got := store.GetByName("morning report") // case-insensitive
 	if got == nil {
 		t.Fatal("GetByName returned nil")
+		return
 	}
 	if got.Name != "Morning Report" {
 		t.Errorf("Name = %q, want %q", got.Name, "Morning Report")

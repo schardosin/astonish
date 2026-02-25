@@ -157,6 +157,7 @@ func TestTranscript_EventWithStateDelta(t *testing.T) {
 	delta := got[0].Actions.StateDelta
 	if delta == nil {
 		t.Fatal("StateDelta is nil")
+		return
 	}
 	if v, ok := delta["key1"].(string); !ok || v != "value1" {
 		t.Errorf("StateDelta[key1] = %v, want %q", delta["key1"], "value1")
@@ -245,6 +246,7 @@ func TestTranscript_LargeEventContent(t *testing.T) {
 	parts := got[0].Content.Parts
 	if len(parts) == 0 {
 		t.Fatal("Content.Parts is empty")
+		return
 	}
 	if parts[0].Text != largeText {
 		t.Errorf("text length = %d, want %d", len(parts[0].Text), len(largeText))

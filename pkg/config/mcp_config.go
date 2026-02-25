@@ -12,8 +12,8 @@ type MCPServerConfig struct {
 	Command   string            `json:"command" yaml:"command"`
 	Args      []string          `json:"args" yaml:"args,omitempty"`
 	Env       map[string]string `json:"env" yaml:"env,omitempty"`
-	Transport string            `json:"transport" yaml:"transport,omitempty"`     // "stdio" or "sse"
-	URL       string            `json:"url,omitempty" yaml:"url,omitempty"` // For SSE transport
+	Transport string            `json:"transport" yaml:"transport,omitempty"`       // "stdio" or "sse"
+	URL       string            `json:"url,omitempty" yaml:"url,omitempty"`         // For SSE transport
 	Enabled   *bool             `json:"enabled,omitempty" yaml:"enabled,omitempty"` // nil defaults to true
 }
 
@@ -27,8 +27,27 @@ type MCPConfig struct {
 	MCPServers map[string]MCPServerConfig `json:"mcpServers"`
 }
 
-// LoadMCPConfig loads the MCP configuration from the config directory
+// LoadMCPConfig loads the MCP configuration from the config directory.
+// It merges standard web servers from config.yaml into the result so that
+// the MCP manager can start them alongside custom servers. Standard server
+// entries from config.yaml take precedence over same-name entries in mcp_config.json.
 func LoadMCPConfig() (*MCPConfig, error) {
+	cfg, err := LoadMCPConfigRaw()
+	if err != nil {
+		return nil, err
+	}
+
+	// Merge standard web servers from config.yaml.
+	// These are stored separately so they survive mcp_config.json resets.
+	mergeStandardServers(cfg)
+
+	return cfg, nil
+}
+
+// LoadMCPConfigRaw loads the MCP configuration from mcp_config.json only,
+// without merging standard web servers from config.yaml.
+// Use this when you need the raw file contents (e.g. for the Settings UI Source view).
+func LoadMCPConfigRaw() (*MCPConfig, error) {
 	configDir, err := GetConfigDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get config directory: %w", err)
@@ -36,35 +55,87 @@ func LoadMCPConfig() (*MCPConfig, error) {
 
 	mcpConfigPath := filepath.Join(configDir, "mcp_config.json")
 
-	// Check if file exists
-	if _, err := os.Stat(mcpConfigPath); os.IsNotExist(err) {
-		// Return empty config if file doesn't exist
-		return &MCPConfig{
-			MCPServers: make(map[string]MCPServerConfig),
-		}, nil
-	}
-
-	// Read file
-	data, err := os.ReadFile(mcpConfigPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read MCP config file: %w", err)
-	}
-
-	// Parse JSON
 	var config MCPConfig
-	if err := json.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse MCP config: %w", err)
-	}
 
-	// Initialize map if nil
-	if config.MCPServers == nil {
+	if _, err := os.Stat(mcpConfigPath); os.IsNotExist(err) {
 		config.MCPServers = make(map[string]MCPServerConfig)
+	} else {
+		data, err := os.ReadFile(mcpConfigPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read MCP config file: %w", err)
+		}
+
+		if err := json.Unmarshal(data, &config); err != nil {
+			return nil, fmt.Errorf("failed to parse MCP config: %w", err)
+		}
+
+		if config.MCPServers == nil {
+			config.MCPServers = make(map[string]MCPServerConfig)
+		}
 	}
 
 	return &config, nil
 }
 
-// SaveMCPConfig saves the MCP configuration to the config directory
+// mergeStandardServers injects configured standard servers from config.yaml
+// into the MCPConfig. Entries from config.yaml override same-name entries in mcp_config.json
+// but preserve any explicit Enabled flag the user has set.
+// Key-based servers (Tavily, Brave, Firecrawl) require an API key — resolved from
+// the credential store first, then config.yaml.
+// Keyless servers are always injected — they need no setup.
+func mergeStandardServers(cfg *MCPConfig) {
+	appCfg, _ := LoadAppConfig()
+	getter := getInstalledSecretGetter()
+
+	// First: inject key-based servers that have credentials
+	if appCfg != nil {
+		for _, srv := range GetStandardServers() {
+			if len(srv.EnvVars) == 0 {
+				continue // keyless handled below
+			}
+
+			// Resolve API key: credential store first, then config.yaml
+			apiKey := ""
+			if getter != nil {
+				apiKey = getter("web_servers." + srv.ID + ".api_key")
+			}
+			if apiKey == "" && appCfg.WebServers != nil {
+				if ws, ok := appCfg.WebServers[srv.ID]; ok {
+					apiKey = ws.APIKey
+				}
+			}
+			if apiKey == "" {
+				continue
+			}
+
+			newCfg := BuildMCPServerConfig(&srv, apiKey)
+			// Preserve explicit Enabled flag from existing entry (user may have disabled it)
+			if existing, ok := cfg.MCPServers[srv.ID]; ok && existing.Enabled != nil {
+				newCfg.Enabled = existing.Enabled
+			}
+			cfg.MCPServers[srv.ID] = newCfg
+		}
+	}
+
+	// Second: always inject keyless servers — no config entry needed.
+	// Refresh command/args but preserve any explicit Enabled flag.
+	for _, srv := range GetStandardServers() {
+		if len(srv.EnvVars) > 0 {
+			continue // needs API key, handled above
+		}
+		newCfg := BuildMCPServerConfig(&srv, "")
+		if existing, ok := cfg.MCPServers[srv.ID]; ok && existing.Enabled != nil {
+			newCfg.Enabled = existing.Enabled
+		}
+		cfg.MCPServers[srv.ID] = newCfg
+	}
+}
+
+// SaveMCPConfig saves the MCP configuration to the config directory.
+// Standard web servers (from config.yaml) are stripped before writing
+// since they are managed separately and merged at load time.
+// Exception: disabled standard servers are preserved — the user explicitly
+// chose to disable them, and that choice must survive save/load cycles.
 func SaveMCPConfig(config *MCPConfig) error {
 	configDir, err := GetConfigDir()
 	if err != nil {
@@ -73,8 +144,21 @@ func SaveMCPConfig(config *MCPConfig) error {
 
 	mcpConfigPath := filepath.Join(configDir, "mcp_config.json")
 
+	// Strip standard server entries — they live in config.yaml, not here.
+	// But keep any that were explicitly disabled (Enabled == false) since
+	// that's a deliberate user choice we need to persist.
+	filtered := &MCPConfig{
+		MCPServers: make(map[string]MCPServerConfig, len(config.MCPServers)),
+	}
+	standardIDs := GetStandardServerIDs()
+	for name, srv := range config.MCPServers {
+		if !standardIDs[name] || (srv.Enabled != nil && !*srv.Enabled) {
+			filtered.MCPServers[name] = srv
+		}
+	}
+
 	// Marshal to JSON with indentation
-	data, err := json.MarshalIndent(config, "", "  ")
+	data, err := json.MarshalIndent(filtered, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal MCP config: %w", err)
 	}

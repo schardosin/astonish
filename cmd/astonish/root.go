@@ -37,6 +37,10 @@ func Execute() error {
 
 	command := os.Args[1]
 	switch command {
+	case "chat":
+		return handleChatCommand(os.Args[2:])
+	case "sessions":
+		return handleSessionsCommand(os.Args[2:])
 	case "flows", "agents": // "agents" is a hidden alias for backwards compatibility
 		return handleFlowsCommand(os.Args[2:])
 	case "tap":
@@ -49,6 +53,18 @@ func Execute() error {
 		return handleConfigCommand(os.Args[2:])
 	case "tools":
 		return handleToolsCommand(os.Args[2:])
+	case "memory":
+		return handleMemoryCommand(os.Args[2:])
+	case "daemon":
+		return handleDaemonCommand(os.Args[2:])
+	case "channels":
+		return handleChannelsCommand(os.Args[2:])
+	case "scheduler":
+		return handleSchedulerCommand(os.Args[2:])
+	case "credential", "credentials":
+		return handleCredentialCommand(os.Args[2:])
+	case "skills":
+		return handleSkillsCommand(os.Args[2:])
 	case "demo":
 		return handleDemoCommand(os.Args[2:])
 	default:
@@ -58,17 +74,25 @@ func Execute() error {
 }
 
 func printUsage() {
-	fmt.Println("usage: astonish [-h] [-v] {flows,tap,studio,config,setup,tools} ...")
+	fmt.Println("usage: astonish [-h] [-v] {chat,sessions,flows,tap,studio,daemon,channels,scheduler,credential,skills,config,setup,tools,memory} ...")
 	fmt.Println("")
 	fmt.Println("positional arguments:")
-	fmt.Println("  {flows,tap,studio,config,setup,tools}")
+	fmt.Println("  {chat,sessions,flows,tap,studio,daemon,channels,scheduler,credential,skills,config,setup,tools,memory}")
 	fmt.Println("                        Astonish CLI commands")
+	fmt.Println("    chat                Start an interactive chat session")
+	fmt.Println("    sessions            Manage persistent sessions")
 	fmt.Println("    flows               Design and run AI flows")
 	fmt.Println("    tap                 Manage extension repositories")
 	fmt.Println("    studio              Launch the visual editor")
+	fmt.Println("    daemon              Manage the background daemon service")
+	fmt.Println("    channels            Manage communication channels")
+	fmt.Println("    scheduler           Manage scheduled jobs")
+	fmt.Println("    credential          Manage the encrypted credential store")
+	fmt.Println("    skills              Manage CLI tool skill guides")
 	fmt.Println("    config              Manage configuration")
 	fmt.Println("    setup               Run interactive setup")
 	fmt.Println("    tools               Manage MCP tools")
+	fmt.Println("    memory              Manage semantic memory and knowledge")
 	fmt.Println("")
 	fmt.Println("options:")
 	fmt.Println("  -h, --help            show this help message and exit")

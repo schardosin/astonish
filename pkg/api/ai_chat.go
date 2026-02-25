@@ -81,6 +81,7 @@ func IntentClassifyHandler(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	injectProviderSecrets(appCfg)
 
 	providerName := appCfg.General.DefaultProvider
 	modelName := appCfg.General.DefaultModel
@@ -240,13 +241,13 @@ func executeFlowCreationTool(ctx context.Context, toolName string, args map[stri
 		if query == "" {
 			return "", nil, fmt.Errorf("query is required")
 		}
-		
+
 		// Load all servers from taps
 		servers, err := loadAllServersFromTaps()
 		if err != nil {
 			return fmt.Sprintf("Error loading store: %s", err.Error()), nil, nil
 		}
-		
+
 		// Filter to only installable servers
 		var installableServers []mcpstore.Server
 		var toolSummaries []string
@@ -260,14 +261,14 @@ func executeFlowCreationTool(ctx context.Context, toolName string, args map[stri
 				toolSummaries = append(toolSummaries, fmt.Sprintf("- %s: %s%s", srv.Name, srv.Description, tags))
 			}
 		}
-		
+
 		// Use the same AI search logic
 		matchingTools := findToolsWithAI(ctx, query, toolSummaries, installableServers)
-		
+
 		if len(matchingTools) == 0 {
 			return fmt.Sprintf("No MCP servers found in the store matching '%s'. Try search_mcp_internet to search online.", query), nil, nil
 		}
-		
+
 		// Build result
 		var result strings.Builder
 		result.WriteString(fmt.Sprintf("Found %d MCP servers in the store:\n", len(matchingTools)))
@@ -276,29 +277,29 @@ func executeFlowCreationTool(ctx context.Context, toolName string, args map[stri
 		}
 		result.WriteString("\nTell the user to install one of these servers before creating the flow.")
 		return result.String(), matchingTools, nil
-		
+
 	case "search_mcp_internet":
 		query, _ := args["query"].(string)
 		if query == "" {
 			return "", nil, fmt.Errorf("query is required")
 		}
-		
+
 		// Check if web search is configured
 		webSearchConfigured, serverName, toolName := IsWebSearchConfigured()
 		if !webSearchConfigured {
 			return "Internet search is not configured. Tell the user to configure a web search tool (like Tavily) in Settings.", nil, nil
 		}
-		
+
 		// Use the internet search function
 		results, err := searchInternetForMCPServers(ctx, serverName, toolName, query+" MCP server github npm")
 		if err != nil {
 			return fmt.Sprintf("Search error: %s", err.Error()), nil, nil
 		}
-		
+
 		if len(results) == 0 {
 			return fmt.Sprintf("No MCP servers found on the internet for '%s'.", query), nil, nil
 		}
-		
+
 		// Build result
 		var result strings.Builder
 		result.WriteString(fmt.Sprintf("Found %d MCP servers online:\n", len(results)))
@@ -310,7 +311,7 @@ func executeFlowCreationTool(ctx context.Context, toolName string, args map[stri
 		}
 		result.WriteString("\nTell the user to install one of these servers before creating the flow.")
 		return result.String(), results, nil
-		
+
 	default:
 		return "", nil, fmt.Errorf("unknown tool: %s", toolName)
 	}
@@ -917,6 +918,7 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	injectProviderSecrets(appCfg)
 
 	// Get default provider and model
 	// Note: Provider env vars are set up at studio startup in cmd/astonish/studio.go
@@ -1016,7 +1018,7 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 			Temperature: genai.Ptr(float32(0.7)),
 		},
 	}
-	
+
 	// Add tools for create_flow context so AI can search for missing tools
 	if req.Context == "create_flow" {
 		llmReq.Config.Tools = getFlowCreationTools()
@@ -1033,13 +1035,13 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 		// Call LLM (with potential tool execution loop)
 		const maxToolCalls = 5 // Limit tool calls to prevent infinite loops
 		toolCallCount := 0
-		
-	foundStoreResults := false
+
+		foundStoreResults := false
 	toolLoop:
 		for {
 			var responseText strings.Builder
 			var functionCalls []*genai.FunctionCall
-			
+
 			for resp, err := range llm.GenerateContent(ctx, llmReq, true) {
 				if err != nil {
 					if streaming {
@@ -1065,13 +1067,13 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			
+
 			// If no function calls, we have the final response
 			if len(functionCalls) == 0 {
 				fullResponse = responseText.String()
 				break toolLoop
 			}
-			
+
 			// Check tool call limit
 			toolCallCount++
 			if toolCallCount > maxToolCalls {
@@ -1082,7 +1084,7 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 				}
 				break toolLoop
 			}
-			
+
 			// Execute the function call and prepare response
 			for _, fc := range functionCalls {
 				// Convert args
@@ -1092,7 +1094,7 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 						args[k] = v
 					}
 				}
-				
+
 				// Guard: If we found store results, prevent internet search
 				shouldSkip := fc.Name == "search_mcp_internet" && foundStoreResults
 
@@ -1100,7 +1102,7 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 				if streaming && !shouldSkip {
 					sendSSE(w, flusher, "tool_start", map[string]interface{}{"name": fc.Name, "args": args})
 				}
-				
+
 				var result string
 				var data interface{}
 				var err error
@@ -1117,7 +1119,7 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 						q, _ := args["query"].(string)
 						toolLogs.WriteString(fmt.Sprintf("> **Searching Internet** for: `%s`...\n", q))
 					}
-					
+
 					// Execute the tool
 					result, data, err = executeFlowCreationTool(ctx, fc.Name, args)
 					if err != nil {
@@ -1142,12 +1144,12 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 				}
-				
+
 				// Stream tool end
 				if streaming && !shouldSkip {
 					sendSSE(w, flusher, "tool_end", map[string]interface{}{"name": fc.Name, "result": result, "result_data": data})
 				}
-				
+
 				// Add assistant's function call and function response to history
 				llmReq.Contents = append(llmReq.Contents, &genai.Content{
 					Role: "model",
@@ -1265,7 +1267,7 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	// Prepend tool logs if any
 	finalMessage := fullResponse
 	if toolLogs.Len() > 0 {
@@ -1299,8 +1301,6 @@ func sendSSE(w http.ResponseWriter, flusher http.Flusher, eventType string, data
 		flusher.Flush()
 	}
 }
-
-
 
 // getAvailableTools fetches tools for AI context from cache
 func getAvailableTools(ctx context.Context) []ToolInfo {

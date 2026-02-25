@@ -1,0 +1,560 @@
+package daemon
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/api"
+	"github.com/schardosin/astonish/pkg/channels"
+	"github.com/schardosin/astonish/pkg/channels/telegram"
+	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/schardosin/astonish/pkg/launcher"
+	"github.com/schardosin/astonish/pkg/scheduler"
+	"github.com/schardosin/astonish/pkg/tools"
+)
+
+// RunConfig holds the configuration for a daemon run.
+type RunConfig struct {
+	Port  int
+	Debug bool
+}
+
+// Run starts the daemon in the foreground. It starts the Studio HTTP server,
+// writes a PID file, handles signals for graceful shutdown, and cleans up on exit.
+// This function blocks until a shutdown signal is received.
+func Run(cfg RunConfig) error {
+	// Load app config for provider/MCP setup
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Resolve port
+	port := cfg.Port
+	if port <= 0 {
+		if appCfg.Daemon.Port > 0 {
+			port = appCfg.Daemon.Port
+		} else {
+			port = 9393
+		}
+	}
+
+	// Set up logging
+	logDir := appCfg.Daemon.GetLogDir()
+	logger, err := NewLogger(logDir + "/daemon.log")
+	if err != nil {
+		return fmt.Errorf("failed to initialize logger: %w", err)
+	}
+	defer logger.Close()
+
+	// Redirect standard log to file
+	log.SetOutput(logger)
+	log.SetFlags(0) // Logger adds its own timestamps
+
+	logger.Printf("Astonish daemon starting (port: %d, pid: %d)", port, os.Getpid())
+
+	// Write PID file
+	pidPath, err := DefaultPIDPath()
+	if err != nil {
+		return fmt.Errorf("failed to resolve PID path: %w", err)
+	}
+	if err := WritePID(pidPath); err != nil {
+		return fmt.Errorf("failed to write PID file: %w", err)
+	}
+	defer RemovePID(pidPath)
+
+	// Set up provider environment variables (credential store → config → env fallback)
+	configDir, _ := config.GetConfigDir()
+	if configDir != "" {
+		if cs, csErr := credentials.Open(configDir); csErr == nil {
+			config.SetInstalledSecretGetter(cs.GetSecret)
+			api.SetAPICredentialStore(cs)
+
+			// Auto-migrate secrets from config.yaml (one-time)
+			migrated, migrateErr := credentials.MigrateFromConfig(cs, appCfg, log.Default())
+			if migrateErr != nil {
+				logger.Printf("Warning: Credential migration error: %v", migrateErr)
+			} else if migrated > 0 {
+				if saveErr := config.SaveAppConfig(appCfg); saveErr != nil {
+					logger.Printf("Warning: Failed to save scrubbed config: %v", saveErr)
+				} else {
+					logger.Printf("Migrated %d secrets from config.yaml to encrypted store", migrated)
+				}
+			}
+			config.SetupAllProviderEnvFromStore(appCfg, cs.GetSecret)
+		} else {
+			logger.Printf("Warning: Failed to open credential store: %v", csErr)
+			config.SetupAllProviderEnv(appCfg)
+		}
+	} else {
+		config.SetupAllProviderEnv(appCfg)
+	}
+
+	// Set up MCP environment variables
+	if mcpCfg, err := config.LoadMCPConfig(); err == nil {
+		config.SetupMCPEnv(mcpCfg)
+	}
+
+	// Initialize tools cache
+	ctx := context.Background()
+	api.InitToolsCache(ctx)
+
+	// --- Initialize device authorization for Studio ---
+	var authManager *api.AuthManager
+	if appCfg.Daemon.Auth.IsAuthEnabled() && configDir != "" {
+		authStore, authErr := api.NewAuthStore(configDir, appCfg.Daemon.Auth.GetSessionTTL())
+		if authErr != nil {
+			logger.Printf("Warning: Failed to initialize auth store: %v", authErr)
+		} else {
+			authManager = api.NewAuthManager(authStore)
+			ttlDays := appCfg.Daemon.Auth.SessionTTLDays
+			if ttlDays == 0 {
+				ttlDays = 90
+			}
+			logger.Printf("Studio device authorization enabled (session TTL: %d days)", ttlDays)
+		}
+	} else if !appCfg.Daemon.Auth.IsAuthEnabled() {
+		logger.Printf("Studio device authorization disabled by config")
+	}
+
+	// --- Initialize shared ChatAgent if channels need it ---
+	// The scheduler is always-on by default but doesn't require a ChatAgent at startup:
+	// - Routine jobs use the headless runner (creates its own LLM)
+	// - Adaptive jobs use the shared ChatAgent if available, or fail gracefully
+	// The ChatAgent is expensive to create, so we only init it when channels are enabled.
+	var channelMgr *channels.ChannelManager
+	var factoryResult *launcher.ChatFactoryResult
+	defer func() {
+		if factoryResult != nil {
+			factoryResult.Cleanup()
+		}
+	}()
+
+	needsChatAgent := appCfg.Channels.IsChannelsEnabled()
+
+	if needsChatAgent {
+		logger.Printf("Initializing ChatAgent for channels...")
+
+		// Build a fully-wired ChatAgent for channel/scheduler use
+		fr, factoryErr := launcher.NewWiredChatAgent(ctx, &launcher.ChatFactoryConfig{
+			AppConfig:    appCfg,
+			ProviderName: appCfg.General.DefaultProvider,
+			ModelName:    appCfg.General.DefaultModel,
+			DebugMode:    cfg.Debug,
+			AutoApprove:  true, // Channels/scheduler auto-approve all tools
+		})
+		if factoryErr != nil {
+			logger.Printf("Warning: Failed to initialize ChatAgent: %v", factoryErr)
+		} else {
+			factoryResult = fr
+			// Make distillation available to LLM tools (for auto-distill during scheduling)
+			tools.SetDistillAccess(newDistillBridge(fr.ChatAgent))
+		}
+	}
+
+	// initChannels creates (or recreates) the ChannelManager from fresh config.
+	// It registers and starts all enabled channel adapters. The ChatAgent and
+	// factoryResult are reused — only channel adapters are recycled.
+	initChannels := func(freshCfg *config.AppConfig) (*channels.ChannelManager, error) {
+		if !freshCfg.Channels.IsChannelsEnabled() {
+			return nil, nil
+		}
+		if factoryResult == nil {
+			return nil, fmt.Errorf("channels enabled but no ChatAgent available — restart the daemon")
+		}
+
+		mgr := channels.NewChannelManager(factoryResult.ChatAgent, factoryResult.SessionService, log.Default(), &channels.ChannelManagerConfig{
+			ProviderName: factoryResult.ProviderName,
+			ModelName:    factoryResult.ModelName,
+			ToolCount:    len(factoryResult.InternalTools),
+		})
+
+		if factoryResult.CredentialStore != nil {
+			mgr.SetRedactor(factoryResult.CredentialStore.Redactor())
+		}
+
+		// Register Telegram if enabled
+		if freshCfg.Channels.Telegram.IsTelegramEnabled() {
+			botToken := freshCfg.Channels.Telegram.BotToken
+			if botToken == "" && factoryResult.CredentialStore != nil {
+				botToken = factoryResult.CredentialStore.GetSecret("channels.telegram.bot_token")
+			}
+			if botToken == "" {
+				logger.Printf("Warning: Telegram enabled but no bot token found")
+			} else {
+				tg := telegram.New(&telegram.Config{
+					BotToken:  botToken,
+					AllowFrom: freshCfg.Channels.Telegram.AllowFrom,
+					Commands:  mgr.Commands(),
+				}, log.Default())
+				mgr.Register(tg)
+				logger.Printf("Telegram channel registered")
+			}
+		}
+
+		if err := mgr.StartAll(ctx); err != nil {
+			return mgr, fmt.Errorf("failed to start channels: %w", err)
+		}
+		logger.Printf("Channels started")
+		return mgr, nil
+	}
+
+	// --- Initialize channel manager if channels are enabled ---
+	if mgr, err := initChannels(appCfg); err != nil {
+		logger.Printf("Warning: %v", err)
+	} else {
+		channelMgr = mgr
+	}
+	if channelMgr != nil && authManager != nil {
+		channelMgr.SetAuthorizeFunc(authManager.AuthorizeCode)
+	}
+	api.SetChannelManager(channelMgr)
+
+	// reloadChannels re-reads config, stops existing channels, and starts new
+	// ones. Called by the POST /api/channels/reload endpoint so that CLI
+	// commands like "astonish channels setup telegram" can activate changes
+	// without a full daemon restart.
+	var reloadMu sync.Mutex
+	reloadChannels := func() error {
+		reloadMu.Lock()
+		defer reloadMu.Unlock()
+
+		logger.Printf("Reloading channel configuration...")
+
+		// Re-read config and credential store from disk
+		freshCfg, err := config.LoadAppConfig()
+		if err != nil {
+			return fmt.Errorf("failed to reload config: %w", err)
+		}
+		if factoryResult != nil && factoryResult.CredentialStore != nil {
+			if err := factoryResult.CredentialStore.Reload(); err != nil {
+				logger.Printf("Warning: failed to reload credential store: %v", err)
+			}
+		}
+
+		// Stop existing channels
+		if channelMgr != nil {
+			shutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			if err := channelMgr.StopAll(shutCtx); err != nil {
+				logger.Printf("Warning: error stopping channels: %v", err)
+			}
+		}
+
+		// Lazy-init ChatAgent if channels are now enabled but weren't at startup
+		if freshCfg.Channels.IsChannelsEnabled() && factoryResult == nil {
+			logger.Printf("Initializing ChatAgent for newly enabled channels...")
+			fr, factoryErr := launcher.NewWiredChatAgent(ctx, &launcher.ChatFactoryConfig{
+				AppConfig:    freshCfg,
+				ProviderName: freshCfg.General.DefaultProvider,
+				ModelName:    freshCfg.General.DefaultModel,
+				DebugMode:    cfg.Debug,
+				AutoApprove:  true,
+			})
+			if factoryErr != nil {
+				return fmt.Errorf("failed to initialize ChatAgent: %w", factoryErr)
+			}
+			factoryResult = fr
+			// Make distillation available to LLM tools
+			tools.SetDistillAccess(newDistillBridge(fr.ChatAgent))
+			// Cleanup handled by the deferred closure in Run() that reads
+			// the current factoryResult at shutdown time.
+		}
+
+		// Create fresh channel manager with new config
+		mgr, err := initChannels(freshCfg)
+		if err != nil {
+			logger.Printf("Warning: %v", err)
+		}
+		channelMgr = mgr
+		if channelMgr != nil && authManager != nil {
+			channelMgr.SetAuthorizeFunc(authManager.AuthorizeCode)
+		}
+		api.SetChannelManager(channelMgr)
+
+		logger.Printf("Channel reload complete")
+		return nil
+	}
+	api.SetChannelReloadFunc(reloadChannels)
+
+	// --- Initialize scheduler if enabled ---
+	var sched *scheduler.Scheduler
+
+	if appCfg.Scheduler.IsSchedulerEnabled() {
+		storePath, storeErr := scheduler.DefaultStorePath()
+		if storeErr != nil {
+			logger.Printf("Warning: Failed to resolve scheduler store path: %v", storeErr)
+		} else {
+			store, storeErr := scheduler.NewStore(storePath)
+			if storeErr != nil {
+				logger.Printf("Warning: Failed to initialize scheduler store: %v", storeErr)
+			} else {
+				// Create executor with injected headless runner
+				exec := &scheduler.Executor{
+					AppConfig:    appCfg,
+					ProviderName: appCfg.General.DefaultProvider,
+					ModelName:    appCfg.General.DefaultModel,
+					DebugMode:    cfg.Debug,
+					RunHeadless:  makeHeadlessRunner(),
+				}
+				if factoryResult != nil {
+					exec.ChatAgent = factoryResult.ChatAgent
+					exec.SessionService = factoryResult.SessionService
+				}
+
+				// Create delivery function (only if channels are available)
+				var deliver scheduler.DeliverFunc
+				if channelMgr != nil {
+					deliver = scheduler.NewDeliverFunc(channelMgr)
+				}
+
+				sched = scheduler.New(store, exec.Execute, deliver, log.Default())
+				sched.Start(ctx)
+
+				// Make scheduler available to API handlers and LLM tools
+				api.SetScheduler(sched)
+				tools.SetSchedulerAccess(newSchedulerBridge(sched))
+			}
+		}
+	}
+
+	// Create and start the Studio server
+	var studioOpts []launcher.StudioOption
+	if authManager != nil {
+		studioOpts = append(studioOpts, launcher.WithAuth(authManager))
+	}
+	studio, err := launcher.NewStudioServer(port, studioOpts...)
+	if err != nil {
+		logger.Printf("Failed to start HTTP server: %v", err)
+		return fmt.Errorf("failed to start HTTP server: %w", err)
+	}
+
+	// Signal handling
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+
+	// Start serving in a goroutine
+	errCh := make(chan error, 1)
+	go func() {
+		logger.Printf("HTTP server listening on http://localhost:%d", port)
+		if err := studio.Serve(); err != nil && err != http.ErrServerClosed {
+			errCh <- err
+		}
+		close(errCh)
+	}()
+
+	// Print to stdout for foreground mode
+	fmt.Printf("Astonish daemon running (pid: %d, port: %d)\n", os.Getpid(), port)
+	fmt.Printf("Log: %s/daemon.log\n", logDir)
+
+	// Wait for signal or server error
+	select {
+	case sig := <-sigCh:
+		logger.Printf("Received signal %v, shutting down...", sig)
+		fmt.Printf("\nShutting down...\n")
+	case err := <-errCh:
+		if err != nil {
+			logger.Printf("Server error: %v", err)
+			return err
+		}
+	}
+
+	// Graceful shutdown with timeout
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Stop scheduler first (finish in-flight jobs)
+	if sched != nil {
+		logger.Printf("Stopping scheduler...")
+		sched.Stop()
+	}
+
+	// Stop channels (drain in-flight messages)
+	if channelMgr != nil {
+		logger.Printf("Stopping channels...")
+		if err := channelMgr.StopAll(shutdownCtx); err != nil {
+			logger.Printf("Warning: Channel shutdown error: %v", err)
+		}
+	}
+
+	if err := studio.Shutdown(shutdownCtx); err != nil {
+		logger.Printf("Shutdown error: %v", err)
+		return fmt.Errorf("shutdown error: %w", err)
+	}
+
+	logger.Printf("Daemon stopped cleanly")
+	return nil
+}
+
+// makeHeadlessRunner creates a RunHeadlessFunc that bridges the scheduler's
+// executor to the launcher's headless runner, breaking the import cycle
+// (scheduler -> launcher -> api).
+func makeHeadlessRunner() scheduler.RunHeadlessFunc {
+	return func(ctx context.Context, cfg *scheduler.HeadlessRunConfig) (string, error) {
+		agentCfg, err := config.LoadAgent(cfg.FlowPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to load flow %q: %w", cfg.FlowPath, err)
+		}
+
+		return launcher.RunHeadless(ctx, &launcher.HeadlessConfig{
+			AgentConfig:  agentCfg,
+			AppConfig:    cfg.AppConfig,
+			ProviderName: cfg.ProviderName,
+			ModelName:    cfg.ModelName,
+			Parameters:   cfg.Parameters,
+			DebugMode:    cfg.DebugMode,
+		})
+	}
+}
+
+// schedulerBridge adapts scheduler.Scheduler to tools.SchedulerAccess,
+// bridging the two packages without creating import cycles.
+type schedulerBridge struct {
+	sched *scheduler.Scheduler
+}
+
+func newSchedulerBridge(s *scheduler.Scheduler) *schedulerBridge {
+	return &schedulerBridge{sched: s}
+}
+
+func (b *schedulerBridge) AddJob(job *tools.SchedulerJob) error {
+	sj := toolJobToSchedulerJob(job)
+	if err := b.sched.Store().Add(sj); err != nil {
+		return err
+	}
+	job.ID = sj.ID
+	// Compute initial NextRun so the scheduler knows when to fire
+	b.sched.RefreshNextRun(sj.ID)
+	return nil
+}
+
+func (b *schedulerBridge) ListJobs() []*tools.SchedulerJob {
+	jobs := b.sched.Store().List()
+	result := make([]*tools.SchedulerJob, len(jobs))
+	for i, j := range jobs {
+		result[i] = schedulerJobToToolJob(j)
+	}
+	return result
+}
+
+func (b *schedulerBridge) RemoveJob(id string) error {
+	return b.sched.Store().Remove(id)
+}
+
+func (b *schedulerBridge) UpdateJob(job *tools.SchedulerJob) error {
+	sj := toolJobToSchedulerJob(job)
+	if err := b.sched.Store().Update(sj); err != nil {
+		return err
+	}
+	// Recompute NextRun from now so schedule changes take effect immediately
+	b.sched.RefreshNextRun(sj.ID)
+	return nil
+}
+
+func (b *schedulerBridge) RunNow(ctx context.Context, jobID string) (string, error) {
+	return b.sched.RunNow(ctx, jobID)
+}
+
+func (b *schedulerBridge) GetJobByName(name string) *tools.SchedulerJob {
+	j := b.sched.Store().GetByName(name)
+	if j == nil {
+		return nil
+	}
+	return schedulerJobToToolJob(j)
+}
+
+func (b *schedulerBridge) ValidateCron(expr string) error {
+	return scheduler.ValidateCron(expr)
+}
+
+// toolJobToSchedulerJob converts a tools.SchedulerJob to scheduler.Job.
+func toolJobToSchedulerJob(tj *tools.SchedulerJob) *scheduler.Job {
+	sj := &scheduler.Job{
+		ID:   tj.ID,
+		Name: tj.Name,
+		Mode: scheduler.JobMode(tj.Mode),
+		Schedule: scheduler.JobSchedule{
+			Cron:     tj.Cron,
+			Timezone: tj.Timezone,
+		},
+		Payload: scheduler.JobPayload{
+			Flow:         tj.Flow,
+			Params:       tj.Params,
+			Instructions: tj.Instr,
+		},
+		Delivery: scheduler.JobDelivery{
+			Channel: tj.Channel,
+			Target:  tj.Target,
+		},
+		Enabled:             tj.Enabled,
+		CreatedAt:           tj.CreatedAt,
+		ConsecutiveFailures: tj.Failures,
+	}
+	if tj.LastRun != nil {
+		sj.LastRun = tj.LastRun
+	}
+	if tj.LastStatus != "" {
+		sj.LastStatus = scheduler.JobStatus(tj.LastStatus)
+	}
+	if tj.NextRun != nil {
+		sj.NextRun = tj.NextRun
+	}
+	return sj
+}
+
+// schedulerJobToToolJob converts a scheduler.Job to tools.SchedulerJob.
+func schedulerJobToToolJob(sj *scheduler.Job) *tools.SchedulerJob {
+	return &tools.SchedulerJob{
+		ID:         sj.ID,
+		Name:       sj.Name,
+		Mode:       string(sj.Mode),
+		Cron:       sj.Schedule.Cron,
+		Timezone:   sj.Schedule.Timezone,
+		Flow:       sj.Payload.Flow,
+		Params:     sj.Payload.Params,
+		Instr:      sj.Payload.Instructions,
+		Channel:    sj.Delivery.Channel,
+		Target:     sj.Delivery.Target,
+		Enabled:    sj.Enabled,
+		LastRun:    sj.LastRun,
+		LastStatus: string(sj.LastStatus),
+		NextRun:    sj.NextRun,
+		Failures:   sj.ConsecutiveFailures,
+		CreatedAt:  sj.CreatedAt,
+	}
+}
+
+// distillBridge adapts agent.ChatAgent to tools.DistillAccess,
+// bridging the two packages without creating import cycles.
+type distillBridge struct {
+	agent *agent.ChatAgent
+}
+
+func newDistillBridge(a *agent.ChatAgent) *distillBridge {
+	return &distillBridge{agent: a}
+}
+
+func (b *distillBridge) PreviewDistill(ctx context.Context, ds tools.DistillSession) (string, error) {
+	return b.agent.PreviewDistill(ctx, agent.DistillSession{
+		SessionID: ds.SessionID,
+		AppName:   ds.AppName,
+		UserID:    ds.UserID,
+	})
+}
+
+func (b *distillBridge) ConfirmAndDistill(ctx context.Context, ds tools.DistillSession, print func(string)) error {
+	return b.agent.ConfirmAndDistill(ctx, agent.DistillSession{
+		SessionID: ds.SessionID,
+		AppName:   ds.AppName,
+		UserID:    ds.UserID,
+	}, print)
+}

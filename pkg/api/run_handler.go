@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/browser"
 	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcp"
@@ -25,12 +26,12 @@ import (
 
 // ChatRequest represents the request body for /api/chat
 type ChatRequest struct {
-	AgentID   string `json:"agentId"`
-	Message   string `json:"message"` // User input
-	SessionID string `json:"sessionId"`
-	Provider  string `json:"provider,omitempty"`
-	Model     string `json:"model,omitempty"`
-	AutoApprove bool `json:"autoApprove,omitempty"` // Global auto-approve flag
+	AgentID     string `json:"agentId"`
+	Message     string `json:"message"` // User input
+	SessionID   string `json:"sessionId"`
+	Provider    string `json:"provider,omitempty"`
+	Model       string `json:"model,omitempty"`
+	AutoApprove bool   `json:"autoApprove,omitempty"` // Global auto-approve flag
 }
 
 // SessionManager manages active sessions
@@ -47,6 +48,32 @@ const sessionTimeout = 2 * time.Minute
 
 var globalSessionManager *SessionManager
 var sessionOnce sync.Once
+
+// globalBrowserMgr is a shared browser manager for all Studio sessions.
+// The browser is lazily launched on first use and cleaned up on session timeout.
+var globalBrowserMgr *browser.Manager
+var browserOnce sync.Once
+
+// GetBrowserManager returns the shared browser manager for all sessions.
+func GetBrowserManager() *browser.Manager {
+	browserOnce.Do(func() {
+		cfg := browser.DefaultConfig()
+		if appCfg, err := config.LoadAppConfig(); err == nil {
+			b := &appCfg.Browser
+			cfg = browser.OverrideConfig(
+				b.Headless,
+				b.ViewportWidth,
+				b.ViewportHeight,
+				b.NoSandbox,
+				b.ChromePath,
+				b.UserDataDir,
+				b.NavigationTimeout,
+			)
+		}
+		globalBrowserMgr = browser.NewManager(cfg)
+	})
+	return globalBrowserMgr
+}
 
 // GetSessionManager returns the singleton session manager
 func GetSessionManager() *SessionManager {
@@ -199,7 +226,6 @@ func getRequiredMCPServers(cfg *config.AgentConfig) []string {
 		}
 	}
 
-
 	if len(toolsNeeded) == 0 {
 		return nil
 	}
@@ -298,6 +324,7 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("Warning: Failed to load app config: %v\n", err)
 		appCfg = &config.AppConfig{}
 	}
+	injectProviderSecrets(appCfg)
 
 	providerName := req.Provider
 	if providerName == "" {
@@ -337,6 +364,21 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Register credential tools (resolve_credential, etc.)
+	if credTools, credErr := tools.GetCredentialTools(); credErr == nil {
+		internalTools = append(internalTools, credTools...)
+	}
+
+	// Register process management tools (process_start, process_write, etc.)
+	if processTools, procErr := tools.GetProcessTools(); procErr == nil {
+		internalTools = append(internalTools, processTools...)
+	}
+
+	// Register browser automation tools (shared manager across sessions)
+	if browserTools, browserErr := tools.GetBrowserTools(GetBrowserManager()); browserErr == nil {
+		internalTools = append(internalTools, browserTools...)
+	}
+
 	// Initialize MCP - per-session, only servers needed for this flow
 	requiredServers := getRequiredMCPServers(cfg)
 	_, mcpToolsets := sm.GetOrCreateMCPManager(ctx, req.SessionID, requiredServers)
@@ -347,6 +389,11 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	astonishAgent.IsWebMode = true  // Enable Web mode for UI (disables ANSI colors)
 	astonishAgent.SessionService = sm.service
 	astonishAgent.AutoApprove = req.AutoApprove
+
+	// Wire credential redactor so secrets are masked in SSE output
+	if cs := tools.GetCredentialStore(); cs != nil {
+		astonishAgent.Redactor = cs.Redactor()
+	}
 
 	adkAgent, err := adkagent.New(adkagent.Config{
 		Name:        "astonish_agent",

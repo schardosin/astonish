@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/provider/anthropic"
 	"github.com/schardosin/astonish/pkg/provider/google"
@@ -301,7 +302,13 @@ SaveConfig:
 	// Set as default provider
 	cfg.General.DefaultProvider = selectedInstance
 
-	// Save config
+	// Save secrets to encrypted credential store (instead of plaintext config.yaml)
+	if err := saveProviderSecretsToStore(selectedInstance, selectedProviderID, pCfg); err != nil {
+		fmt.Printf("Warning: Failed to save secrets to credential store: %v\n", err)
+		fmt.Println("Secrets will be saved in config.yaml as fallback.")
+	}
+
+	// Save config (secrets have been scrubbed from pCfg by saveProviderSecretsToStore)
 	if err := config.SaveAppConfig(cfg); err != nil {
 		return fmt.Errorf("error saving config: %w", err)
 	}
@@ -311,6 +318,21 @@ SaveConfig:
 		displayName = selectedProviderID
 	}
 	printSuccess(fmt.Sprintf("%s (%s) configured successfully!", selectedInstance, displayName))
+
+	// --- Web Tool Setup ---
+	if err := handleWebToolSetup(); err != nil {
+		if !isUserAborted(err) {
+			fmt.Printf("Warning: Web tool setup failed: %v\n", err)
+		}
+	}
+
+	// --- Browser Setup ---
+	if err := handleBrowserSetup(); err != nil {
+		if !isUserAborted(err) {
+			fmt.Printf("Warning: Browser setup failed: %v\n", err)
+		}
+	}
+
 	return nil
 }
 
@@ -442,6 +464,55 @@ func runSAPAICoreForm(pCfg config.ProviderConfig) {
 	pCfg["auth_url"] = authURL
 	pCfg["base_url"] = baseURL
 	pCfg["resource_group"] = resourceGroup
+}
+
+// saveProviderSecretsToStore saves sensitive fields from a provider config
+// into the encrypted credential store and scrubs them from the pCfg map.
+// Non-secret fields (base_url, resource_group, type, model) are left in pCfg.
+func saveProviderSecretsToStore(instanceName, providerType string, pCfg config.ProviderConfig) error {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return fmt.Errorf("get config dir: %w", err)
+	}
+
+	store, err := credentials.Open(configDir)
+	if err != nil {
+		return fmt.Errorf("open credential store: %w", err)
+	}
+
+	// Determine which keys are secret for this provider type
+	secretKeys := []string{"api_key"} // default
+	switch providerType {
+	case "sap_ai_core":
+		secretKeys = []string{"client_id", "client_secret", "auth_url"}
+	case "ollama", "lm_studio":
+		secretKeys = nil // no secrets for local providers
+	}
+
+	secrets := make(map[string]string)
+	for _, key := range secretKeys {
+		val, ok := pCfg[key]
+		if !ok || val == "" {
+			continue
+		}
+		storeKey := "provider." + instanceName + "." + key
+		secrets[storeKey] = val
+	}
+
+	if len(secrets) == 0 {
+		return nil
+	}
+
+	if err := store.SetSecretBatch(secrets); err != nil {
+		return fmt.Errorf("save secrets: %w", err)
+	}
+
+	// Scrub secrets from pCfg so they don't end up in config.yaml
+	for _, key := range secretKeys {
+		delete(pCfg, key)
+	}
+
+	return nil
 }
 
 func fetchAndSelectSAPModel(pCfg config.ProviderConfig, appCfg *config.AppConfig) error {
@@ -1063,5 +1134,142 @@ func fetchAndSelectOpenAICompatModel(pCfg config.ProviderConfig, appCfg *config.
 	appCfg.General.DefaultModel = selectedModel
 	fmt.Printf("Selected default model: %s\n", selectedModel)
 
+	return nil
+}
+
+// handleWebToolSetup prompts the user to configure a standard web tool MCP server.
+func handleWebToolSetup() error {
+	// Check if any web tool is already configured
+	appCfg, err := config.LoadAppConfig()
+	if err == nil && appCfg.General.WebSearchTool != "" {
+		var reconfigure bool
+		err := huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Web search is already configured").
+					Description("Would you like to reconfigure web search tools?").
+					Value(&reconfigure),
+			),
+		).Run()
+		if err != nil || !reconfigure {
+			return err
+		}
+	}
+
+	// Ask if user wants to set up web tools
+	var setupWeb bool
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Configure Web Search Tools?").
+				Description("Web tools let the AI search the web and extract content from URLs").
+				Affirmative("Yes").
+				Negative("Skip").
+				Value(&setupWeb),
+		),
+	).Run()
+	if err != nil {
+		return err
+	}
+	if !setupWeb {
+		return nil
+	}
+
+	// Show available standard servers
+	servers := config.GetStandardServers()
+	var serverOptions []huh.Option[string]
+	for _, srv := range servers {
+		label := srv.DisplayName
+		if srv.IsDefault {
+			label += " (recommended)"
+		}
+		if config.IsStandardServerInstalled(srv.ID) {
+			label += " [installed]"
+		}
+		serverOptions = append(serverOptions, huh.NewOption(label, srv.ID))
+	}
+
+	var selectedServer string
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select a web tool provider").
+				Description("Choose which service to use for web search and content extraction").
+				Options(serverOptions...).
+				Value(&selectedServer),
+		),
+	).Run()
+	if err != nil {
+		return err
+	}
+
+	srv := config.GetStandardServer(selectedServer)
+	if srv == nil {
+		return fmt.Errorf("unknown server: %s", selectedServer)
+	}
+
+	// Collect env var values
+	envValues := make(map[string]string)
+	for _, ev := range srv.EnvVars {
+		var val string
+		err := huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title(ev.Name).
+					Description(ev.Description).
+					EchoMode(huh.EchoModePassword).
+					Value(&val),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
+		val = strings.TrimSpace(val)
+		if val == "" && ev.Required {
+			fmt.Printf("Skipped: %s is required but was left empty.\n", ev.Name)
+			return nil
+		}
+		envValues[ev.Name] = val
+	}
+
+	// Install the server
+	runSpinner(fmt.Sprintf("Configuring %s...", srv.DisplayName))
+
+	// Save API key to credential store
+	storeKeyInConfig := true // fallback to config if store fails
+	configDir, _ := config.GetConfigDir()
+	if configDir != "" {
+		if store, storeErr := credentials.Open(configDir); storeErr == nil {
+			// Extract the first non-empty env value as the API key
+			for _, ev := range srv.EnvVars {
+				if val, ok := envValues[ev.Name]; ok && val != "" {
+					storeKey := "web_servers." + selectedServer + ".api_key"
+					if setErr := store.SetSecret(storeKey, val); setErr == nil {
+						storeKeyInConfig = false
+					}
+					break
+				}
+			}
+		}
+	}
+
+	if err := config.InstallStandardServer(selectedServer, envValues, storeKeyInConfig); err != nil {
+		return fmt.Errorf("failed to configure %s: %w", srv.DisplayName, err)
+	}
+
+	msg := fmt.Sprintf("%s configured! Web search is now available.", srv.DisplayName)
+	if srv.WebExtractTool != "" {
+		msg = fmt.Sprintf("%s configured! Web search and content extraction are now available.", srv.DisplayName)
+	}
+	printSuccess(msg)
+
+	return nil
+}
+
+// handleBrowserSetup displays an informational note about browser automation.
+// Browser automation is built-in via native Go tools (rod) — no external MCP
+// server or Node.js dependency required. Chromium is auto-downloaded on first use.
+func handleBrowserSetup() error {
+	printSuccess("Browser automation is built-in. The AI can navigate pages, click, type, take screenshots, and more — no setup required. Chromium is downloaded automatically on first use.")
 	return nil
 }

@@ -10,10 +10,13 @@ import (
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/browser"
 	"github.com/schardosin/astonish/pkg/cache"
+	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/provider"
+	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/tools"
 	"github.com/schardosin/astonish/pkg/ui"
 	adkagent "google.golang.org/adk/agent"
@@ -63,7 +66,7 @@ func getRequiredMCPServersFromConfig(ctx context.Context, agentCfg *config.Agent
 	// Collect all required tools/servers from the flow
 	toolsNeeded := make(map[string]bool)
 	hasToolsEnabled := false
-	
+
 	for _, node := range agentCfg.Nodes {
 		// If node has tools: true, it potentially needs MCP servers
 		if node.Tools {
@@ -90,15 +93,15 @@ func getRequiredMCPServersFromConfig(ctx context.Context, agentCfg *config.Agent
 
 	// Load persistent cache for tool→server lookup
 	persistentCache, _ := cache.LoadCache()
-	
+
 	// Validate checksums and refresh any changed servers (synchronously for CLI)
 	needsRefresh, removed := cache.ValidateChecksums(verbose)
-	
+
 	// Remove stale servers from cache
 	for _, serverName := range removed {
 		cache.RemoveServer(serverName)
 	}
-	
+
 	// Refresh changed servers synchronously
 	if len(needsRefresh) > 0 {
 		if verbose {
@@ -110,14 +113,14 @@ func getRequiredMCPServersFromConfig(ctx context.Context, agentCfg *config.Agent
 	}
 
 	requiredServers := make(map[string]bool)
-	
+
 	for toolName := range toolsNeeded {
 		// Try 1: Check if server name is directly in tools_selection
 		if _, isServer := mcpCfg.MCPServers[toolName]; isServer {
 			requiredServers[toolName] = true
 			continue
 		}
-		
+
 		// Try 2: Check if tool is prefixed with server name (server-name.tool-name)
 		foundPrefix := false
 		for serverName := range mcpCfg.MCPServers {
@@ -130,14 +133,14 @@ func getRequiredMCPServersFromConfig(ctx context.Context, agentCfg *config.Agent
 		if foundPrefix {
 			continue
 		}
-		
+
 		// Try 3: Look up bare tool name in persistent cache
 		if serverName := cache.GetServerForTool(toolName); serverName != "" {
 			requiredServers[serverName] = true
 			log.Printf("[Cache] Found tool '%s' → server '%s' from persistent cache", toolName, serverName)
 			continue
 		}
-		
+
 		// Tool not found in cache - this shouldn't happen if cache is up to date
 		// Fall back to including all servers
 		log.Printf("[Cache] Tool '%s' not found in persistent cache, will load all servers", toolName)
@@ -200,6 +203,7 @@ func refreshServers(ctx context.Context, mcpCfg *config.MCPConfig, servers []str
 				Name:        t.Name(),
 				Description: t.Description(),
 				Source:      serverName,
+				InputSchema: common.ExtractToolInputSchema(t),
 			})
 		}
 		serverCfg := mcpCfg.MCPServers[serverName]
@@ -247,6 +251,39 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		fmt.Printf("ERROR: Failed to initialize tools: %v\n", err)
 		return fmt.Errorf("failed to initialize internal tools: %w", err)
 	}
+
+	// Register credential tools (resolve_credential, etc.)
+	credTools, credErr := tools.GetCredentialTools()
+	if credErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("Warning: Failed to create credential tools: %v\n", credErr)
+		}
+	} else {
+		internalTools = append(internalTools, credTools...)
+	}
+
+	// Register process management tools (process_start, process_write, etc.)
+	processTools, procErr := tools.GetProcessTools()
+	if procErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("Warning: Failed to create process tools: %v\n", procErr)
+		}
+	} else {
+		internalTools = append(internalTools, processTools...)
+	}
+
+	// Register browser automation tools
+	browserMgr := browser.NewManager(browserConfigFromApp(cfg.AppConfig))
+	browserTools, browserErr := tools.GetBrowserTools(browserMgr)
+	if browserErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("Warning: Failed to create browser tools: %v\n", browserErr)
+		}
+	} else {
+		internalTools = append(internalTools, browserTools...)
+	}
+	defer browserMgr.Cleanup()
+
 	if cfg.DebugMode {
 		fmt.Printf("✓ Internal tools initialized: %d tools available\n", len(internalTools))
 	}
@@ -258,10 +295,10 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 
 	// Extract required MCP servers from flow config (validates cache and refreshes if needed)
 	requiredServers := getRequiredMCPServersFromConfig(ctx, cfg.AgentConfig, cfg.DebugMode)
-	
+
 	var mcpManager *mcp.Manager
 	var mcpToolsets []tool.Toolset
-	
+
 	if len(requiredServers) > 0 {
 		var err error
 		mcpManager, err = mcp.NewManager()
@@ -286,7 +323,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 			fmt.Println("✓ No MCP servers needed for this flow")
 		}
 	}
-	
+
 	// Ensure MCP cleanup when run completes
 	if mcpManager != nil {
 		defer mcpManager.Cleanup()
@@ -295,7 +332,19 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	// Create session service
 	sessionService := cfg.SessionService
 	if sessionService == nil {
-		sessionService = session.InMemoryService()
+		if cfg.AppConfig != nil && cfg.AppConfig.Sessions.Storage == "file" {
+			sessDir, dirErr := config.GetSessionsDir(&cfg.AppConfig.Sessions)
+			if dirErr != nil {
+				return fmt.Errorf("failed to resolve sessions directory: %w", dirErr)
+			}
+			fileStore, fsErr := persistentsession.NewFileStore(sessDir)
+			if fsErr != nil {
+				return fmt.Errorf("failed to create file session store: %w", fsErr)
+			}
+			sessionService = fileStore
+		} else {
+			sessionService = session.InMemoryService()
+		}
 	}
 
 	// Create Astonish agent with internal tools
@@ -307,6 +356,11 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	astonishAgent.DebugMode = cfg.DebugMode
 	astonishAgent.AutoApprove = cfg.AutoApprove
 	astonishAgent.SessionService = sessionService
+
+	// Wire credential redactor if credential store is available
+	if cs := tools.GetCredentialStore(); cs != nil {
+		astonishAgent.Redactor = cs.Redactor()
+	}
 
 	// Create ADK agent wrapper
 	adkAgent, err := adkagent.New(adkagent.Config{
@@ -439,7 +493,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		// Declare suppression variables here so they are accessible throughout the loop and after
 		suppressStreaming := false
 		var userMessageFields []string
-		nodeJustChanged := false // Flag to skip userMessage processing on initial node change event
+		nodeJustChanged := false          // Flag to skip userMessage processing on initial node change event
 		turnHadUserMessageFields := false // Track if any node in this turn had userMessageFields (persists across node changes)
 
 		for event, err := range r.Run(ctx, userID, sess.ID(), userMsg, adkagent.RunConfig{
@@ -575,7 +629,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					if node != currentNodeName {
 						// Mark that we're in a node change event - skip userMessage processing on this event
 						nodeJustChanged = true
-						
+
 						// FIRST: Compute new node settings BEFORE any flush decisions
 						currentNodeName = node
 
@@ -654,12 +708,12 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 								}
 								textBuffer.Reset()
 							}
-							} else {
-								// If we were suppressing, clear BOTH buffers to prevent leakage
-								// The userMessage block handles display from StateDelta
-								lineBuffer = ""
-								textBuffer.Reset()
-							}
+						} else {
+							// If we were suppressing, clear BOTH buffers to prevent leakage
+							// The userMessage block handles display from StateDelta
+							lineBuffer = ""
+							textBuffer.Reset()
+						}
 
 						// Manage Spinner for new node
 						if isInputNode || isParallel || isSilent {
@@ -878,7 +932,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					} else if strings.Contains(line, "> Yes") || strings.Contains(line, "  No") {
 						isSystemMsg = true
 						shouldPrint = true
-				} else {
+					} else {
 						// Regular LLM Output: Check suppression
 						// For output_model/user_message nodes, we suppress completely
 						// The user_message mechanism will handle proper output display
@@ -900,81 +954,81 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					}
 
 					if shouldPrint {
-					if isSystemMsg {
-						// Stop spinner before printing system message (tool box, approval, etc.)
-						// Mark as NOT done (false) since we're just pausing for system output
-						stopSpinner(false, true)
-						
-						// FLUSH TEXT BUFFER before printing system message
-						if textBuffer.Len() > 0 {
-							rendered := ui.SmartRender(textBuffer.String())
-							if rendered != "" {
-								if !aiPrefixPrinted {
-									fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
-								}
-								fmt.Print(rendered)
-							}
-							textBuffer.Reset()
-						}
+						if isSystemMsg {
+							// Stop spinner before printing system message (tool box, approval, etc.)
+							// Mark as NOT done (false) since we're just pausing for system output
+							stopSpinner(false, true)
 
-						// Print System Message
-						toPrint := line
-						// If we are suppressing streaming, but the line contains a tool box start,
-						// we should print any text BEFORE the tool box (greeting/explanation from LLM)
-						// BUT we must preserve the ANSI color codes that immediately precede the box.
-						if suppressStreaming && strings.Contains(line, "╭") {
-							// Regex to find the tool box start and any immediately preceding ANSI color codes
-							// This matches: (optional ANSI codes) followed by "╭"
-							re := regexp.MustCompile(`((?:\x1b\[[0-9;]*m)*)╭`)
-							loc := re.FindStringIndex(line)
-							if loc != nil && loc[0] > 0 {
-								// There's text BEFORE the tool box - this is likely a greeting from the LLM
-								// Print it as regular AI output
-								priorText := line[:loc[0]]
-								if strings.TrimSpace(priorText) != "" {
-									stopSpinner(true, true)
+							// FLUSH TEXT BUFFER before printing system message
+							if textBuffer.Len() > 0 {
+								rendered := ui.SmartRender(textBuffer.String())
+								if rendered != "" {
 									if !aiPrefixPrinted {
 										fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
 									}
-									fmt.Print(ui.SmartRender(priorText))
+									fmt.Print(rendered)
 								}
-								// loc[0] is the start of the match (including the ANSI codes)
-								toPrint = line[loc[0]:]
-							}
-						}
-						fmt.Print(toPrint)
-
-						// Reset prefix state for next AI output (since we interrupted with system msg)
-						aiPrefixPrinted = false
-					} else {
-						// Buffer regular text
-						textBuffer.WriteString(line)
-
-						// Flush immediately for streaming effect (only when not suppressing)
-						if !suppressStreaming && textBuffer.Len() > 0 {
-							// Stop spinner ONLY when we're actually going to print
-							stopSpinner(true, true)
-							
-							var rendered string
-							if isOutputNode {
-								// For output nodes, bypass SmartRender to preserve formatting (e.g. JSON)
-								rendered = textBuffer.String()
-							} else {
-								rendered = ui.SmartRender(textBuffer.String())
+								textBuffer.Reset()
 							}
 
-							if rendered != "" {
-								if !aiPrefixPrinted {
-									fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
-									aiPrefixPrinted = true
+							// Print System Message
+							toPrint := line
+							// If we are suppressing streaming, but the line contains a tool box start,
+							// we should print any text BEFORE the tool box (greeting/explanation from LLM)
+							// BUT we must preserve the ANSI color codes that immediately precede the box.
+							if suppressStreaming && strings.Contains(line, "╭") {
+								// Regex to find the tool box start and any immediately preceding ANSI color codes
+								// This matches: (optional ANSI codes) followed by "╭"
+								re := regexp.MustCompile(`((?:\x1b\[[0-9;]*m)*)╭`)
+								loc := re.FindStringIndex(line)
+								if loc != nil && loc[0] > 0 {
+									// There's text BEFORE the tool box - this is likely a greeting from the LLM
+									// Print it as regular AI output
+									priorText := line[:loc[0]]
+									if strings.TrimSpace(priorText) != "" {
+										stopSpinner(true, true)
+										if !aiPrefixPrinted {
+											fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
+										}
+										fmt.Print(ui.SmartRender(priorText))
+									}
+									// loc[0] is the start of the match (including the ANSI codes)
+									toPrint = line[loc[0]:]
 								}
-								fmt.Print(rendered)
 							}
-							textBuffer.Reset()
+							fmt.Print(toPrint)
+
+							// Reset prefix state for next AI output (since we interrupted with system msg)
+							aiPrefixPrinted = false
+						} else {
+							// Buffer regular text
+							textBuffer.WriteString(line)
+
+							// Flush immediately for streaming effect (only when not suppressing)
+							if !suppressStreaming && textBuffer.Len() > 0 {
+								// Stop spinner ONLY when we're actually going to print
+								stopSpinner(true, true)
+
+								var rendered string
+								if isOutputNode {
+									// For output nodes, bypass SmartRender to preserve formatting (e.g. JSON)
+									rendered = textBuffer.String()
+								} else {
+									rendered = ui.SmartRender(textBuffer.String())
+								}
+
+								if rendered != "" {
+									if !aiPrefixPrinted {
+										fmt.Printf("\n%sAgent:%s\n", ColorGreen, ColorReset)
+										aiPrefixPrinted = true
+									}
+									fmt.Print(rendered)
+								}
+								textBuffer.Reset()
+							}
+							// When suppressing, text stays in buffer until tool box appears
 						}
-						// When suppressing, text stays in buffer until tool box appears
 					}
-				}
 				}
 			}
 

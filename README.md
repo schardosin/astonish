@@ -3,9 +3,9 @@
 
 # Astonish
 
-### Build Production AI Agents in Minutes, Not Months
+### An autonomous AI agent that learns your workflows
 
-*Design visually. Run anywhere. No servers required.*
+*Chat-first. Single binary. Zero infrastructure. Built in Go.*
 
 [![Documentation](https://img.shields.io/badge/Documentation-Astonish-purple.svg)](https://schardosin.github.io/astonish/)
 [![Lint](https://github.com/schardosin/astonish/actions/workflows/lint.yml/badge.svg)](https://github.com/schardosin/astonish/actions/workflows/lint.yml)
@@ -17,285 +17,321 @@
 
 ---
 
-## 💡 Our Vision
+Astonish is an autonomous AI agent you run locally. It solves problems dynamically using LLM-driven tool-use loops (shell commands, file edits, web fetches, browser automation, memory recall) and adapts to whatever the task demands. When a task is complex enough, Astonish can distill the successful execution into a reusable YAML flow. The agent gets smarter as you use it.
 
-**AI SOPs should be designed, not coded.**
-
-We believe the future of AI automation is declarative. You should focus on *what* your agent does, the business logic, the steps, and the outcomes, not *how* to wire up providers, handle errors, or manage retries. Astonish is built for **SOP-driven AI agents** that are structured, reliable, and repeatable.
-
-| You Focus On | Astonish Handles | 
-| ----- | ----- | 
-| Designing the business flow | Provider connections & authentication | 
-| Choosing which tools to use | Error detection & intelligent retries | 
-| Defining success criteria | State management (Blackboard pattern) | 
-| Business logic | Parallel execution & performance | 
-
-**MCP servers extend capabilities.** Need GitHub integration? Database access? Search the Internet? Add an MCP server. Your flow stays clean, and capabilities plug in via the Model Context Protocol.
-
-**AI assists your design.** Not sure how to structure your flow? Describe what you want in plain English. The AI Assistant generates the flow, refines nodes, and optimizes sequences.
-
-## What Makes Astonish Different
-
-### 🎯 Single Binary, Zero Infrastructure
-
-No web servers. No Docker-compose hell. No cloud subscriptions. Astonish is a single **Go-compiled executable** that runs anywhere, including your laptop, a Raspberry Pi, or a CI/CD pipeline.
-
-```bash
-# Add it to your cron
-0 9 * * * /usr/local/bin/astonish flows run daily_report >> /var/log/report.log
-
-# Run in any script
-./astonish flows run code_reviewer -p repo="./my-project"
-```
-
-### 📄 YAML as Source of Truth
-
-Your agent logic lives in simple YAML files. Version control them. Review them in PRs. Move them between environments. No platform lock-in.
-
-```yaml
-# This IS your agent. Copy it, share it, version it.
-nodes:
-  - name: analyze
-    type: llm
-    prompt: "Analyze {input}"
-flow:
-  - from: START
-    to: analyze
-```
-
-### 🖥️ Design Visually, Run Anywhere
-
-Use **Astonish Studio** to design flows visually, then run the exact same YAML from the command line. There is no "export" step and no format conversion.
-
----
-
-## ✨ Astonish Studio
-
-<div align="center">
-<img src="https://github.com/user-attachments/assets/fafeb202-b864-4ff8-ba37-7ae9f1a5dd0c" width="1000" alt="Astonish Studio">
-
-<p>Design your agent flows visually with the built-in <b>Astonish Studio</b></p>
-</div>
-
-• 🤖 **AI Assistant**. Describe what you want and let AI generate or refine your entire DAG.  
-• 🎨 **Visual Designer**. Drag-and-drop nodes with real-time streaming execution output.  
-• 🔧 **MCP Native**. First-class support for any MCP server like GitHub, Slack, or Postgres.  
-• 🏪 **Flow Store**. Install community agent flows with Homebrew-style taps.  
-• 💾 **GitOps Ready**. Save directly to YAML for instant version control.  
+Deeply inspired by [OpenClaw](https://github.com/openclaw/openclaw) and the pioneering work it did on personal AI assistants (always-on daemons, skills-as-markdown, multi-channel messaging, tool-use-first architecture), Astonish takes those lessons and implements them in Go as a single compiled binary with a twist: **automatic workflow distillation**. Every successful complex interaction can become a reusable, auditable, versionable workflow.
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Install
-
 ```bash
-# macOS/Linux (Homebrew)
+# Install (macOS/Linux)
 brew install schardosin/astonish/astonish
 
 # Or via curl
-curl -fsSL [https://raw.githubusercontent.com/schardosin/astonish/refs/heads/main/install.sh](https://raw.githubusercontent.com/schardosin/astonish/refs/heads/main/install.sh) | sh
+curl -fsSL https://raw.githubusercontent.com/schardosin/astonish/refs/heads/main/install.sh | sh
+
+# Configure your AI provider
+astonish setup
+
+# Start chatting
+astonish chat
 ```
 
-### 2. Launch Studio
+Astonish itself is a single Go binary with no runtime dependencies. MCP servers you add may use `npx`, `uvx`, or `docker` depending on the server, but the core agent needs nothing else installed.
+
+---
+
+## 💬 Autonomous Chat Agent
+
+The core of Astonish is a dynamic agent that uses LLM-driven tool-use loops to solve problems. It decides which tools to call, chains them together, and works through multi-step tasks without predefined workflows. Use it from the terminal with `astonish chat`, or talk to it from anywhere through integrated channels like Telegram.
+
+**50+ built-in tools** including shell execution (PTY-backed with background processes), file operations, web fetching with readability extraction, PDF reading, semantic memory search, browser automation, credential management, sub-agent delegation, and skill lookup.
+
+**MCP native.** Any MCP server works out of the box. Add GitHub, Slack, databases, or any other MCP-compatible tool. Your agent gains capabilities without touching code.
+
+**15+ AI providers.** OpenAI, Anthropic, Google Gemini, Groq, OpenRouter, xAI, Ollama, LM Studio, SAP AI Core, LiteLLM, and more. Swap providers mid-session by editing config and the agent hot-swaps without restart.
 
 ```bash
-astonish studio
+astonish chat                          # Start a new session
+astonish chat -p anthropic -m claude-4  # Use a specific provider/model
+astonish chat --resume                 # Resume your last session
 ```
 
-Opens a local UI at `http://localhost:9393` to configure providers (Gemini, Claude, GPT, LiteLLM, Ollama) and design your first flow.
+---
 
-### 3. Run from CLI
+## 🔄 Flow Distillation
 
-Once configured, run your agents anywhere:
+This is what makes Astonish different. The agent doesn't just solve problems, it learns from how it solved them.
+
+**Phase 1: Solve freely.** The agent works through your request dynamically, calling whatever tools it needs. The entire execution is traced.
+
+**Phase 2: Distill.** After a successful multi-step task, run `/distill`. The agent analyzes its execution trace and generates a reusable YAML flow, parameterized, validated, and ready to use.
+
+**Phase 3: Reuse.** The distilled flow becomes a first-class artifact. In chat, the agent recognizes similar requests and uses the saved flow as a guide for its execution. But the real value is beyond chat: you can view and edit the flow visually in Astonish Studio, use the AI Assistant to refine it, schedule it as a recurring job through the daemon, or share it with your team as a version-controlled YAML file.
+
+```
+You:    "Check how much memory my proxmox server has"
+Agent:  [shell_command] ssh root@192.168.1.100 free -h
+        Your server has 64GB total, 42GB used, 22GB free.
+
+You:    /distill
+Agent:  I'll distill this into a reusable flow...
+        Saved: check_proxmox_memory.yaml
+        Run again: astonish flows run check_proxmox_memory -p host="192.168.1.100"
+
+# Now you can:
+# - Schedule it:  astonish scheduler add --cron "0 9 * * *" --flow check_proxmox_memory
+# - Edit visually: open it in Astonish Studio and refine with the AI Assistant
+# - Share it:      commit the YAML to your team's repo
+# - Chat reuse:    next time you ask "check proxmox memory", the agent uses the saved flow as context
+```
+
+Distilled flows are plain YAML files. Version control them. Review them in PRs. Share them with your team.
+
+---
+
+## 🧠 Semantic Memory & RAG
+
+Astonish maintains a persistent memory system powered by vector search with local embeddings. No external API calls for embeddings, everything runs on your machine.
+
+- **Automatic knowledge retrieval.** Before every LLM call, a semantic search runs against your indexed knowledge. Relevant context is injected automatically, no manual prompt engineering needed.
+- **Two-tier memory.** Core facts in `MEMORY.md` (the agent remembers things you tell it) plus a knowledge tier for longer documents, project notes, and skill content.
+- **SELF.md.** The agent maintains a self-portrait: which provider it's using, what tools are available, what flows are saved, what skills are loaded. It knows what it can do.
+- **INSTRUCTIONS.md.** Behavioral guidelines the agent follows. Editable by you, never overwritten by the system.
 
 ```bash
-# Interactive mode
-astonish flows run my_agent
+astonish memory search "kubernetes deployment patterns"
+astonish memory list
+astonish memory reindex
+```
 
-# With injected variables
-astonish flows run summarizer -p file_path="./notes.txt"
+---
 
-# Perfect for cron jobs and automation
-0 9 * * * /usr/local/bin/astonish flows run daily_report >> /var/log/report.log
+## 📚 Skills System
+
+Skills teach the agent how to use CLI tools, APIs, and workflows without needing formal tool integrations. A skill is just a markdown file with YAML frontmatter.
+
+**Two-tier retrieval.** A lightweight index of all skill names and descriptions is always in the system prompt (~500 chars). Full skill content is retrieved on-demand, either automatically via vector search when your query matches, or explicitly when the agent calls `skill_lookup` by name.
+
+**9 bundled skills** ship with the binary: `github`, `docker`, `git`, `npm`, `python`, `kubernetes`, `terraform`, `aws`, `gcloud`. Each skill is only activated when its required binaries are present on your system.
+
+**Community skills via ClawHub.** Install community-authored skills from the [ClawHub](https://clawhub.com) registry:
+
+```bash
+astonish skills install owner/docker-compose-advanced
+astonish skills install https://clawhub.com/owner/kubernetes-helm
+astonish skills list
+astonish skills create my-custom-tool    # Create from template
+```
+
+**Live reload.** Add, edit, or remove skill files at any time. A file watcher detects changes and re-syncs to the vector store automatically, no restart needed.
+
+Drop a `SKILL.md` in `~/.config/astonish/skills/my-tool/` and the agent knows how to use it.
+
+---
+
+## 🌐 Native Browser Automation
+
+32 browser tools implemented in pure Go via [rod](https://github.com/go-rod/rod) and the Chrome DevTools Protocol. No Node.js. No Playwright. No npm. Zero external dependencies.
+
+| Category | Capabilities |
+|----------|-------------|
+| **Navigation** | Go to URLs, go back, wait for elements |
+| **Interaction** | Click, type, hover, drag, press keys, select options, fill forms |
+| **Observation** | Accessibility tree snapshots, screenshots, console messages, network requests |
+| **State** | Cookies, localStorage, sessionStorage, response body interception |
+| **Emulation** | 36 device presets, geolocation, timezone, locale, media features, offline mode |
+| **Stealth** | Anti-detection (User-Agent, Client Hints, webdriver patching, automation flags) |
+| **Screenshots** | Auto-compression for LLM context efficiency (resize + progressive JPEG quality) |
+
+The browser launches lazily on first use with a persistent profile at `~/.config/astonish/browser/`.
+
+---
+
+## 🕐 Always-On Daemon & Scheduler
+
+Run Astonish as a system service that stays alive across reboots.
+
+```bash
+astonish daemon install    # Install as launchd (macOS) or systemd (Linux) service
+astonish daemon start
+astonish daemon status
+```
+
+**Cron scheduler** with two execution modes:
+- **Routine**: headless replay of saved flows on a schedule
+- **Adaptive**: the agent interprets a natural language instruction each time it runs
+
+```bash
+# The agent can schedule its own jobs during conversation:
+You:    "Remind me every morning at 9am to check my server health"
+Agent:  [schedule_job] Created job "server_health_check" with cron "0 9 * * *"
+```
+
+**Telegram integration.** Connect a Telegram bot and interact with your agent from your phone. Results from scheduled jobs are broadcast to connected channels.
+
+```bash
+astonish channels setup telegram    # Interactive setup with token validation
+```
+
+---
+
+## 🤖 Sub-Agent Delegation
+
+For complex tasks that benefit from parallel execution, the agent can delegate work to sub-agents running in isolated sessions.
+
+```
+You:    "Review the authentication module and the payment module for security issues"
+Agent:  I'll delegate these as parallel tasks...
+        [delegate_tasks]
+          Task 1: "Review auth module for security issues" → sub-agent-1
+          Task 2: "Review payment module for security issues" → sub-agent-2
+        Both completed. Here's a combined report...
+```
+
+- Up to 10 parallel sub-agents with configurable concurrency
+- Isolated sessions with filtered tool access (sub-agents can't schedule jobs or save credentials)
+- Execution traces from sub-agents are flattened back into the parent's trace for distillation
+- Configurable depth limits prevent infinite delegation chains
+
+---
+
+## 🔐 Encrypted Credentials
+
+Secrets are encrypted at rest with AES-256-GCM and protected by a five-layer defense:
+
+1. **Encryption at rest**: credentials stored in `credentials.enc`, key in `.store_key`
+2. **File-path blocking**: `read_file`, `write_file`, `shell_command` cannot access credential files
+3. **Tool output redaction**: secrets are scrubbed from tool results before the LLM sees them
+4. **LLM response redaction**: if the LLM echoes a secret in its response, it's caught at the yield point
+5. **Key signature tracking**: raw, base64, and URL-encoded forms of each secret are tracked
+
+```bash
+astonish credential add       # Interactive form (type, name, value)
+astonish credential list      # Show stored credentials (values hidden)
+astonish credential test      # Verify credentials work
+```
+
+The agent can also manage credentials during conversation via LLM tools, and config.yaml API keys are automatically migrated to the encrypted store on first run.
+
+---
+
+## 🎨 Visual Flow Designer
+
+Astonish Studio lets you design agent flows visually and run the exact same YAML from the command line. No export step, no format conversion.
+
+```bash
+astonish studio              # Opens at http://localhost:9393
+```
+
+- **AI Assistant**: describe what you want, let AI generate the flow
+- **Drag-and-drop** designer with real-time execution output
+- **MCP native**: first-class support for any MCP server
+- **Flow Store**: install community flows with Homebrew-style taps
+- **GitOps ready**: everything saves directly to YAML
+
+```bash
+# Community flows
+astonish tap add schardosin/astonish-flows
+astonish flows store install technical_article_generator
+astonish flows run technical_article_generator
 ```
 
 ---
 
 ## 🤖 Supported AI Providers
 
-Astonish supports both cloud and local AI providers, giving you flexibility to choose what works best for your needs.
-
-| Provider | Type | Best For |
-|----------|------|----------|
-| **OpenRouter** | Cloud | Access to 100+ models with one API key |
-| **OpenAI** | Cloud | GPT-4, GPT-4o, GPT-3.5 |
-| **Anthropic** | Cloud | Claude, Haiku and Opus family |
+| Provider | Type | Notes |
+|----------|------|-------|
+| **OpenRouter** | Cloud | 100+ models with one API key |
+| **OpenAI** | Cloud | GPT-4o, o1, o3 |
+| **Anthropic** | Cloud | Claude Opus, Sonnet, Haiku |
 | **Google Gemini** | Cloud | Gemini Pro, Flash |
 | **Groq** | Cloud | Ultra-fast inference |
-| **LiteLLM** | Cloud/Local | Unified interface for 100+ LLM providers |
 | **xAI** | Cloud | Grok models |
+| **LiteLLM** | Cloud/Local | Unified interface for 100+ providers |
 | **Ollama** | Local | Self-hosted open models |
 | **LM Studio** | Local | Self-hosted with GUI |
-| **SAP AI Core** | Cloud | SAP enterprise |
-| **Poe** | Cloud | Multiple models via Poe |
+| **SAP AI Core** | Cloud | SAP enterprise AI |
 
-Configure providers via:
-- **Setup Wizard**: `astonish setup` (CLI)
-- **Studio UI**: Settings → Providers (Visual)
-
-For detailed configuration instructions, see the [Provider Configuration Guide](https://schardosin.github.io/astonish/using-the-app/configure-providers/).
+Configure via `astonish setup` (CLI wizard) or Astonish Studio (Settings > Providers).
 
 ---
-
-## 🔍 Why Astonish?
-
-| Feature | n8n / Flowise | CrewAI / AutoGen | Astonish | 
-| ----- | ----- | ----- | ----- | 
-| **Setup** | Server-based (Docker) | Python Library | **Single Binary (Go)** | 
-| **Logic** | Webhooks/Triggers | LLM "Roleplay" | **Deterministic SOPs** | 
-| **Storage** | Database | Python Scripts | **YAML Files** | 
-| **Speed** | Moderate | Slow (Python overhead) | **Fast (Goroutines)** | 
 
 ## 🏗️ Architecture
 
-Built on **Google's Agent Development Kit (ADK)**, Astonish handles the heavy lifting of provider configuration and tool orchestration. It uses a **State Blackboard** architecture to ensure clean data flow, where Astonish manages the entire connection lifecycle to AI providers.
+Built on [Google's Agent Development Kit (ADK)](https://github.com/google/adk-go) with dual execution modes connected by flow distillation:
 
 ```mermaid
 flowchart TB
-    subgraph Astonish["🚀 ASTONISH"]
-        YAML["📄 YAML Flow"]
-        Studio["🎨 Studio"]
-        CLI["⌨️ CLI Runner"]
-        
-        YAML --> Engine
-        Studio --> Engine
-        CLI --> Engine
-        
-        Engine["⚙️ Engine (Go)
-        • State Blackboard
-        • Parallel Execution
-        • Intelligent Retries
-        • Error Recovery"]
-        
-        subgraph Orchestration["🔧 Google ADK"]
-            ADK_Core["ADK Core"]
-            MCP["🔌 MCP Servers"]
-            Tools["🛠️ Built-in Tools"]
-            
-            ADK_Core --- MCP
-            ADK_Core --- Tools
-        end
-
-        ProviderLayer["🔐 Astonish Provider Layer
-        • Auth & Credential Management
-        • Connection Lifecycle
-        • API Communication"]
-        
-        Engine --> ADK_Core
-        ADK_Core --> ProviderLayer
+    subgraph Chat["💬 astonish chat"]
+        direction TB
+        C1["LLM tool-use loops"]
+        C2["50+ tools + MCP"]
+        C3["Memory + Skills + RAG"]
+        C4["Execution tracing"]
     end
-    
-    ProviderLayer --> Providers["☁️ AI Providers (Gemini, Claude, GPT, Ollama...)"]
+
+    subgraph Distill["🔄 Flow Distillation"]
+        direction TB
+        D1["Trace → YAML conversion"]
+        D2["Parameter extraction"]
+        D3["Registry indexing"]
+    end
+
+    subgraph Flows["📄 astonish flows run"]
+        direction TB
+        F1["Deterministic replay"]
+        F2["YAML-defined DAG"]
+        F3["Visual Studio editor"]
+        F4["Scheduled execution"]
+    end
+
+    Chat -->|/distill| Distill
+    Distill --> Flows
+    Flows -->|"context for chat"| Chat
 ```
 
-## 📋 Example: Web Search Assistant
-
-A versatile agent that interacts with users, performs live web searches via MCP tools, and loops until the user is satisfied.
-
-```yaml
-name: web_search_summarizer
-description: Search the internet and provide a summary of findings
-
-nodes:
-  - name: get_query
-    type: input
-    prompt: "What would you like me to search for?"
-    output_model:
-      user_query: str
-
-  - name: search_and_summarize
-    type: llm
-    system: "You are a helpful research assistant. Search the web for the user's query and provide a comprehensive, well-organized summary of the findings. Include key facts, relevant details, and cite sources when possible."
-    prompt: "Search for: {user_query}"
-    tools: true
-    tools_selection:
-      - tavily-search
-    output_model:
-      summary: str
-    user_message:
-      - summary
-
-  - name: ask_continue
-    type: input
-    prompt: "Would you like to search for something else?"
-    output_model:
-      choice: str
-    options:
-      - "yes"
-      - "no"
-
-flow:
-  - from: START
-    to: get_query
-  
-  - from: get_query
-    to: search_and_summarize
-  
-  - from: search_and_summarize
-    to: ask_continue
-  
-  - from: ask_continue
-    edges:
-      - to: get_query
-        condition: "lambda x: x['choice'] == 'yes'"
-      - to: END
-        condition: "lambda x: x['choice'] == 'no'"
-```
-
-Run it:
-
-```bash
-astonish flows run web_search_assistant
-```
+The agent starts dynamic. As workflows accumulate, common tasks gain structure that you can inspect, edit, schedule, and share.
 
 ---
 
-## 🏪 Flow Store & Taps
+## 🦞 Standing on Shoulders: OpenClaw
 
-Astonish uses a Homebrew-inspired **Tap system**. Anyone can share agent flows or MCP configurations by simply creating a GitHub repository.
+Astonish owes a significant debt to [OpenClaw](https://github.com/openclaw/openclaw). Studying OpenClaw's architecture (its skills-as-markdown system, always-on daemon with channel integration, tool-use-first agent loops, and the overall vision of a personal AI assistant that lives on your machine) directly shaped how Astonish was built.
 
-```bash
-# Add a community repo
-astonish tap add schardosin/astonish-flows
+**What we learned from OpenClaw:**
+- Skills don't need to be formal tool integrations. A markdown file that teaches the agent how to use `gh` or `kubectl` is enough.
+- An always-on daemon with channel delivery turns an agent from a CLI toy into something genuinely useful.
+- The agent loop should be unconstrained during problem-solving. Structure comes after, not before.
 
-# Install a flow
-astonish flows store install technical_article_generator
-
-# Run it
-astonish flows run technical_article_generator
-```
+**What Astonish adds:**
+- **Flow distillation.** Successful agent interactions crystallize into reusable, auditable YAML workflows. The system accumulates knowledge over time.
+- **Go-native.** Single compiled binary with no runtime dependencies. Runs on anything from a Raspberry Pi to a CI/CD pipeline.
+- **Dual-mode execution.** Dynamic chat and structured flows share the same tool system, provider layer, and session infrastructure.
 
 ---
 
 ## 🎯 Use Cases
 
-• **Infrastructure Observability**. Automate routine CLI tasks, analyze Kubernetes logs, or troubleshoot cluster issues using local tools and AI reasoning.  
-• **Personal Knowledge Base (RAG)**. Embed local documentation and source code to allow instant, private semantic search across your entire filesystem.  
-• **CI/CD & GitOps Automation**. Run agents directly in GitHub Actions to perform deep code reviews, manage project boards, or automate repo maintenance.  
-• **Engineering SOPs**. Transform manual troubleshooting guides into executable agents that anyone on the team can run via a single portable binary.  
-• **Workflow Orchestration**. Bridge the gap between local scripts, MCP servers, and enterprise APIs using a single, versionable YAML definition.  
+- **DevOps & Infrastructure.** SSH into servers, check health, deploy containers, manage Kubernetes clusters. The agent learns your runbooks and distills them into repeatable flows.
+- **Code Review & Development.** Navigate codebases, run tests, review PRs, refactor code. Sub-agents can parallelize across multiple files or modules.
+- **Research & Web Tasks.** Fetch pages, extract content, search the web, automate browser workflows. 32 native browser tools handle login flows, form filling, and data extraction.
+- **Scheduled Automation.** Set up cron jobs through conversation. The daemon runs them on schedule and delivers results to your Telegram.
+- **Team SOPs.** Distill successful workflows into YAML flows. Version control them. Share them. Anyone on the team runs them with `astonish flows run`.
 
 ---
 
 ## 🤝 Contributing & Support
 
-Built with ❤️ by an engineer who just wanted his agents to work without the boilerplate.
+Built with care by an engineer who studied what worked, took the best ideas, and built something new on top.
 
-• [Full Documentation](https://schardosin.github.io/astonish/)
-• [Submit a Pull Request](https://github.com/schardosin/astonish/pulls)
-• **License**. AGPL-3.0
+- [Full Documentation](https://schardosin.github.io/astonish/)
+- [Submit a Pull Request](https://github.com/schardosin/astonish/pulls)
+- **License**: AGPL-3.0
 
 <div align="center">
-<b>[⭐ Star us on GitHub](https://github.com/schardosin/astonish)</b>
+<b><a href="https://github.com/schardosin/astonish">Star us on GitHub</a></b>
 </div>

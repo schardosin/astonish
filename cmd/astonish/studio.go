@@ -4,9 +4,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 
 	"github.com/schardosin/astonish/pkg/api"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/launcher"
 )
 
@@ -19,9 +21,28 @@ func handleStudioCommand(args []string) error {
 	}
 
 	// Set up provider environment variables from config
-	// This matches what agents.go does for CLI commands
-	if appCfg, err := config.LoadAppConfig(); err == nil {
-		config.SetupAllProviderEnv(appCfg)
+	// Prefer credential store for secrets, fall back to legacy config
+	appCfg, _ := config.LoadAppConfig()
+	if appCfg != nil {
+		if cfgDir, err := config.GetConfigDir(); err == nil {
+			if cs, csErr := credentials.Open(cfgDir); csErr == nil {
+				config.SetInstalledSecretGetter(cs.GetSecret)
+				api.SetAPICredentialStore(cs)
+
+				// Auto-migrate (one-time)
+				migrated, migrateErr := credentials.MigrateFromConfig(cs, appCfg, log.Default())
+				if migrateErr != nil {
+					fmt.Printf("Warning: Credential migration error: %v\n", migrateErr)
+				} else if migrated > 0 {
+					_ = config.SaveAppConfig(appCfg)
+				}
+				config.SetupAllProviderEnvFromStore(appCfg, cs.GetSecret)
+			} else {
+				config.SetupAllProviderEnv(appCfg)
+			}
+		} else {
+			config.SetupAllProviderEnv(appCfg)
+		}
 	}
 
 	// Set up MCP environment variables

@@ -8,22 +8,22 @@ import (
 // testSetup creates a temporary directory for testing and resets the cache state
 func testSetup(t *testing.T) (string, func()) {
 	t.Helper()
-	
+
 	// Create temp directory
 	tmpDir, err := os.MkdirTemp("", "cache-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	
+
 	// Set the cache directory to the temp dir
 	SetCacheDir(tmpDir)
-	
+
 	// Return cleanup function
 	cleanup := func() {
 		os.RemoveAll(tmpDir)
 		SetCacheDir("") // Reset to default
 	}
-	
+
 	return tmpDir, cleanup
 }
 
@@ -31,25 +31,26 @@ func testSetup(t *testing.T) (string, func()) {
 func TestLoadCache(t *testing.T) {
 	_, cleanup := testSetup(t)
 	defer cleanup()
-	
+
 	// InvalidateCache clears memory cache, forcing a fresh load from disk
 	InvalidateCache()
-	
+
 	cache, err := LoadCache()
 	if err != nil {
 		t.Fatalf("LoadCache() unexpected error: %v", err)
 	}
-	
+
 	// Should return a valid cache, not nil
 	if cache == nil {
 		t.Fatal("LoadCache() returned nil cache")
+		return
 	}
-	
+
 	// Cache should have the correct version
 	if cache.Version != cacheVersion {
 		t.Errorf("Expected version %d, got %d", cacheVersion, cache.Version)
 	}
-	
+
 	// ServerChecksums map should be initialized
 	if cache.ServerChecksums == nil {
 		t.Error("ServerChecksums should not be nil")
@@ -59,10 +60,10 @@ func TestLoadCache(t *testing.T) {
 // TestComputeServerChecksum tests the checksum computation
 func TestComputeServerChecksum(t *testing.T) {
 	tests := []struct {
-		name     string
-		command  string
-		args     []string
-		env      map[string]string
+		name    string
+		command string
+		args    []string
+		env     map[string]string
 	}{
 		{
 			name:    "basic command",
@@ -83,22 +84,22 @@ func TestComputeServerChecksum(t *testing.T) {
 			env:     nil,
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			checksum1 := ComputeServerChecksum(tt.command, tt.args, tt.env)
 			checksum2 := ComputeServerChecksum(tt.command, tt.args, tt.env)
-			
+
 			// Same inputs should produce same checksum
 			if checksum1 != checksum2 {
 				t.Errorf("Same inputs produced different checksums: %s vs %s", checksum1, checksum2)
 			}
-			
+
 			// Checksum should not be empty
 			if checksum1 == "" {
 				t.Error("Checksum should not be empty")
 			}
-			
+
 			// Checksum should be reasonable length (16 hex chars from 8 bytes)
 			if len(checksum1) != 16 {
 				t.Errorf("Checksum length should be 16, got %d", len(checksum1))
@@ -112,11 +113,11 @@ func TestComputeServerChecksumDifferentInputs(t *testing.T) {
 	checksum1 := ComputeServerChecksum("npx", []string{"-y", "tool1"}, nil)
 	checksum2 := ComputeServerChecksum("npx", []string{"-y", "tool2"}, nil)
 	checksum3 := ComputeServerChecksum("node", []string{"-y", "tool1"}, nil)
-	
+
 	if checksum1 == checksum2 {
 		t.Error("Different args should produce different checksums")
 	}
-	
+
 	if checksum1 == checksum3 {
 		t.Error("Different commands should produce different checksums")
 	}
@@ -126,21 +127,21 @@ func TestComputeServerChecksumDifferentInputs(t *testing.T) {
 func TestAddServerTools(t *testing.T) {
 	_, cleanup := testSetup(t)
 	defer cleanup()
-	
+
 	tools := []ToolEntry{
 		{Name: "tool1", Description: "Test tool 1", Source: "test-server"},
 		{Name: "tool2", Description: "Test tool 2", Source: "test-server"},
 	}
 	checksum := "abc123def4567890"
-	
+
 	AddServerTools("test-server", tools, checksum)
-	
+
 	// Verify tools were added
 	result := GetToolsForServer("test-server")
 	if len(result) != 2 {
 		t.Errorf("Expected 2 tools, got %d", len(result))
 	}
-	
+
 	// Verify checksum was stored
 	storedChecksum := GetServerChecksum("test-server")
 	if storedChecksum != checksum {
@@ -152,26 +153,26 @@ func TestAddServerTools(t *testing.T) {
 func TestAddServerToolsReplacesExisting(t *testing.T) {
 	_, cleanup := testSetup(t)
 	defer cleanup()
-	
+
 	// Add initial tools
 	initialTools := []ToolEntry{
 		{Name: "old_tool", Description: "Old tool", Source: "test-server"},
 	}
 	AddServerTools("test-server", initialTools, "checksum1")
-	
+
 	// Add new tools for same server
 	newTools := []ToolEntry{
 		{Name: "new_tool1", Description: "New tool 1", Source: "test-server"},
 		{Name: "new_tool2", Description: "New tool 2", Source: "test-server"},
 	}
 	AddServerTools("test-server", newTools, "checksum2")
-	
+
 	// Should only have new tools, not old
 	result := GetToolsForServer("test-server")
 	if len(result) != 2 {
 		t.Errorf("Expected 2 tools, got %d", len(result))
 	}
-	
+
 	// Verify old tool is not present
 	for _, tool := range result {
 		if tool.Name == "old_tool" {
@@ -184,31 +185,31 @@ func TestAddServerToolsReplacesExisting(t *testing.T) {
 func TestAddServerToolsMultipleServers(t *testing.T) {
 	_, cleanup := testSetup(t)
 	defer cleanup()
-	
+
 	// Add tools for server 1
 	tools1 := []ToolEntry{
 		{Name: "tool1a", Description: "Tool 1A", Source: "server1"},
 		{Name: "tool1b", Description: "Tool 1B", Source: "server1"},
 	}
 	AddServerTools("server1", tools1, "checksum1")
-	
+
 	// Add tools for server 2
 	tools2 := []ToolEntry{
 		{Name: "tool2a", Description: "Tool 2A", Source: "server2"},
 	}
 	AddServerTools("server2", tools2, "checksum2")
-	
+
 	// Verify each server has correct tools
 	result1 := GetToolsForServer("server1")
 	result2 := GetToolsForServer("server2")
-	
+
 	if len(result1) != 2 {
 		t.Errorf("Server1 should have 2 tools, got %d", len(result1))
 	}
 	if len(result2) != 1 {
 		t.Errorf("Server2 should have 1 tool, got %d", len(result2))
 	}
-	
+
 	// Verify total tools
 	allTools := GetAllTools()
 	if len(allTools) != 3 {
@@ -220,7 +221,7 @@ func TestAddServerToolsMultipleServers(t *testing.T) {
 func TestRemoveServer(t *testing.T) {
 	_, cleanup := testSetup(t)
 	defer cleanup()
-	
+
 	// Add tools for two servers
 	AddServerTools("server1", []ToolEntry{
 		{Name: "tool1", Description: "Tool 1", Source: "server1"},
@@ -228,26 +229,26 @@ func TestRemoveServer(t *testing.T) {
 	AddServerTools("server2", []ToolEntry{
 		{Name: "tool2", Description: "Tool 2", Source: "server2"},
 	}, "checksum2")
-	
+
 	// Remove server1
 	RemoveServer("server1")
-	
+
 	// Verify server1 tools are gone
 	result1 := GetToolsForServer("server1")
 	if len(result1) != 0 {
 		t.Errorf("Server1 should have 0 tools after removal, got %d", len(result1))
 	}
-	
+
 	// Verify server1 checksum is gone
 	if GetServerChecksum("server1") != "" {
 		t.Error("Server1 checksum should be empty after removal")
 	}
-	
+
 	// Verify server1 is not found
 	if HasServer("server1") {
 		t.Error("HasServer should return false after removal")
 	}
-	
+
 	// Verify server2 is unaffected
 	result2 := GetToolsForServer("server2")
 	if len(result2) != 1 {
@@ -259,7 +260,7 @@ func TestRemoveServer(t *testing.T) {
 func TestGetServerForTool(t *testing.T) {
 	_, cleanup := testSetup(t)
 	defer cleanup()
-	
+
 	// Add tools
 	AddServerTools("tavily", []ToolEntry{
 		{Name: "tavily-search", Description: "Web search", Source: "tavily"},
@@ -268,7 +269,7 @@ func TestGetServerForTool(t *testing.T) {
 	AddServerTools("github", []ToolEntry{
 		{Name: "create_issue", Description: "Create GitHub issue", Source: "github"},
 	}, "checksum2")
-	
+
 	// Test lookups
 	tests := []struct {
 		toolName       string
@@ -279,7 +280,7 @@ func TestGetServerForTool(t *testing.T) {
 		{"create_issue", "github"},
 		{"nonexistent", ""},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.toolName, func(t *testing.T) {
 			server := GetServerForTool(tt.toolName)
@@ -294,22 +295,22 @@ func TestGetServerForTool(t *testing.T) {
 func TestHasServer(t *testing.T) {
 	_, cleanup := testSetup(t)
 	defer cleanup()
-	
+
 	// Initially no servers
 	if HasServer("test-server") {
 		t.Error("HasServer should return false when cache is empty")
 	}
-	
+
 	// Add a server
 	AddServerTools("test-server", []ToolEntry{
 		{Name: "tool", Description: "Test", Source: "test-server"},
 	}, "checksum")
-	
+
 	// Now it should exist
 	if !HasServer("test-server") {
 		t.Error("HasServer should return true after adding server")
 	}
-	
+
 	// Other servers should not exist
 	if HasServer("other-server") {
 		t.Error("HasServer should return false for non-existent server")
@@ -320,17 +321,17 @@ func TestHasServer(t *testing.T) {
 func TestIsEmpty(t *testing.T) {
 	_, cleanup := testSetup(t)
 	defer cleanup()
-	
+
 	// Initially empty
 	if !IsEmpty() {
 		t.Error("IsEmpty should return true when cache is empty")
 	}
-	
+
 	// Add tools
 	AddServerTools("test-server", []ToolEntry{
 		{Name: "tool", Description: "Test", Source: "test-server"},
 	}, "checksum")
-	
+
 	// No longer empty
 	if IsEmpty() {
 		t.Error("IsEmpty should return false after adding tools")
@@ -341,25 +342,25 @@ func TestIsEmpty(t *testing.T) {
 func TestInvalidateCache(t *testing.T) {
 	_, cleanup := testSetup(t)
 	defer cleanup()
-	
+
 	// Add some tools
 	AddServerTools("test-server", []ToolEntry{
 		{Name: "tool", Description: "Test", Source: "test-server"},
 	}, "checksum")
-	
+
 	// Verify not empty
 	if IsEmpty() {
 		t.Fatal("Cache should not be empty")
 	}
-	
+
 	// Invalidate
 	InvalidateCache()
-	
+
 	// Should be empty now (memory cache cleared)
 	cacheMu.RLock()
 	isEmpty := memoryCache == nil
 	cacheMu.RUnlock()
-	
+
 	if !isEmpty {
 		t.Error("Memory cache should be nil after invalidation")
 	}
@@ -369,22 +370,22 @@ func TestInvalidateCache(t *testing.T) {
 func TestSaveAndLoadCache(t *testing.T) {
 	_, cleanup := testSetup(t)
 	defer cleanup()
-	
+
 	// Add tools to memory cache
 	AddServerTools("test-server", []ToolEntry{
 		{Name: "tool1", Description: "Tool 1", Source: "test-server"},
 		{Name: "tool2", Description: "Tool 2", Source: "test-server"},
 	}, "testchecksum123")
-	
+
 	// We can't easily override getCachePath, so we test the save/load logic
 	// by directly manipulating the memory cache and file
-	
+
 	// Verify the tools are in memory
 	tools := GetToolsForServer("test-server")
 	if len(tools) != 2 {
 		t.Fatalf("Expected 2 tools, got %d", len(tools))
 	}
-	
+
 	// Verify checksum is stored
 	checksum := GetServerChecksum("test-server")
 	if checksum != "testchecksum123" {
@@ -402,13 +403,13 @@ func TestSaveAndLoadCache(t *testing.T) {
 func TestValidateChecksums(t *testing.T) {
 	_, cleanup := testSetup(t)
 	defer cleanup()
-	
+
 	// This test is limited because ValidateChecksums depends on config.LoadMCPConfig()
 	// which we can't easily mock. We test what we can.
-	
+
 	// With empty cache, should suggest refreshing all servers from config
 	needsRefresh, removed := ValidateChecksums(false)
-	
+
 	// Results depend on actual MCP config, but we verify the function runs without error
 	t.Logf("ValidateChecksums returned: needsRefresh=%v, removed=%v", needsRefresh, removed)
 }
@@ -417,7 +418,7 @@ func TestValidateChecksums(t *testing.T) {
 func TestGetAllTools(t *testing.T) {
 	_, cleanup := testSetup(t)
 	defer cleanup()
-	
+
 	// Add tools from multiple servers
 	AddServerTools("server1", []ToolEntry{
 		{Name: "tool1", Description: "Tool 1", Source: "server1"},
@@ -426,19 +427,19 @@ func TestGetAllTools(t *testing.T) {
 		{Name: "tool2", Description: "Tool 2", Source: "server2"},
 		{Name: "tool3", Description: "Tool 3", Source: "server2"},
 	}, "checksum2")
-	
+
 	allTools := GetAllTools()
-	
+
 	if len(allTools) != 3 {
 		t.Errorf("Expected 3 tools, got %d", len(allTools))
 	}
-	
+
 	// Verify all tools are present
 	toolNames := make(map[string]bool)
 	for _, tool := range allTools {
 		toolNames[tool.Name] = true
 	}
-	
+
 	for _, expected := range []string{"tool1", "tool2", "tool3"} {
 		if !toolNames[expected] {
 			t.Errorf("Missing tool: %s", expected)
@@ -450,10 +451,10 @@ func TestGetAllTools(t *testing.T) {
 func TestConcurrentAccess(t *testing.T) {
 	_, cleanup := testSetup(t)
 	defer cleanup()
-	
+
 	// Run multiple goroutines accessing the cache
 	done := make(chan bool)
-	
+
 	// Writer goroutine
 	go func() {
 		for i := 0; i < 100; i++ {
@@ -463,7 +464,7 @@ func TestConcurrentAccess(t *testing.T) {
 		}
 		done <- true
 	}()
-	
+
 	// Reader goroutines
 	for j := 0; j < 3; j++ {
 		go func() {
@@ -475,12 +476,12 @@ func TestConcurrentAccess(t *testing.T) {
 			done <- true
 		}()
 	}
-	
+
 	// Wait for all goroutines
 	for i := 0; i < 4; i++ {
 		<-done
 	}
-	
+
 	// If we get here without deadlock or panic, the test passes
 }
 
@@ -488,14 +489,14 @@ func TestConcurrentAccess(t *testing.T) {
 func TestToolEntrySource(t *testing.T) {
 	_, cleanup := testSetup(t)
 	defer cleanup()
-	
+
 	// Add tools without setting source in the entry
 	tools := []ToolEntry{
 		{Name: "tool1", Description: "Tool 1"},
 		{Name: "tool2", Description: "Tool 2"},
 	}
 	AddServerTools("my-server", tools, "checksum")
-	
+
 	// Verify source was set by AddServerTools
 	result := GetToolsForServer("my-server")
 	for _, tool := range result {
@@ -509,26 +510,26 @@ func TestToolEntrySource(t *testing.T) {
 func TestUpdateServerStatus(t *testing.T) {
 	_, cleanup := testSetup(t)
 	defer cleanup()
-	
+
 	status := ServerStatus{
 		Name:      "test-server",
 		Status:    "healthy",
 		ToolCount: 5,
 		LastCheck: "2024-12-31T12:00:00Z",
 	}
-	
+
 	UpdateServerStatus(status)
-	
+
 	statuses := GetServerStatuses()
 	if len(statuses) != 1 {
 		t.Errorf("Expected 1 server status, got %d", len(statuses))
 	}
-	
+
 	got, ok := statuses["test-server"]
 	if !ok {
 		t.Fatal("Status for 'test-server' not found")
 	}
-	
+
 	if got.Status != "healthy" {
 		t.Errorf("Expected status 'healthy', got %q", got.Status)
 	}
@@ -541,7 +542,7 @@ func TestUpdateServerStatus(t *testing.T) {
 func TestServerStatusPersistence(t *testing.T) {
 	_, cleanup := testSetup(t)
 	defer cleanup()
-	
+
 	status := ServerStatus{
 		Name:      "persistent-server",
 		Status:    "error",
@@ -549,31 +550,30 @@ func TestServerStatusPersistence(t *testing.T) {
 		ToolCount: 0,
 		LastCheck: "2024-12-31T12:00:00Z",
 	}
-	
+
 	UpdateServerStatus(status)
-	
+
 	// Force save and clear memory cache
 	if err := SaveCache(); err != nil {
 		t.Fatalf("SaveCache failed: %v", err)
 	}
-	
+
 	// Reset memory state but keep the file
 	memoryCache = nil
 	cacheLoaded = false
-	
+
 	// Reload from disk
 	reloaded, err := LoadCache()
 	if err != nil {
 		t.Fatalf("LoadCache failed: %v", err)
 	}
-	
+
 	if len(reloaded.ServerStatuses) != 1 {
 		t.Errorf("Expected 1 persisted status, got %d", len(reloaded.ServerStatuses))
 	}
-	
+
 	got := reloaded.ServerStatuses["persistent-server"]
 	if got.Status != "error" || got.Error != "Connection failed" {
 		t.Errorf("Persisted status mismatch: %+v", got)
 	}
 }
-

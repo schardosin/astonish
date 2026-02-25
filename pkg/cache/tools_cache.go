@@ -14,14 +14,15 @@ import (
 
 const (
 	cacheFileName = "tools_cache.json"
-	cacheVersion  = 2
+	cacheVersion  = 3
 )
 
 // ToolEntry represents a single tool in the cache
 type ToolEntry struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Source      string `json:"source"` // MCP server name or "internal"
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Source      string          `json:"source"`                // MCP server name or "internal"
+	InputSchema json.RawMessage `json:"inputSchema,omitempty"` // JSON schema for tool parameters
 }
 
 // ServerStatus represents the health and status of an MCP server
@@ -138,11 +139,11 @@ func SaveCache() error {
 		cacheMu.RUnlock()
 		return nil
 	}
-	
+
 	memoryCache.LastUpdated = time.Now()
 	data, err := json.MarshalIndent(memoryCache, "", "  ")
 	cacheMu.RUnlock()
-	
+
 	if err != nil {
 		return fmt.Errorf("failed to marshal cache: %w", err)
 	}
@@ -406,4 +407,21 @@ func ValidateChecksums(verbose bool) (needsRefresh []string, removed []string) {
 	}
 
 	return needsRefresh, removed
+}
+
+// MarshalSchema converts a schema value to json.RawMessage for caching.
+// Returns nil if the input is nil or cannot be marshaled.
+func MarshalSchema(schema any) json.RawMessage {
+	if schema == nil {
+		return nil
+	}
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return nil
+	}
+	// Don't store "null"
+	if string(data) == "null" {
+		return nil
+	}
+	return data
 }

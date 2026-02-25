@@ -5,13 +5,81 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/schardosin/astonish/pkg/config"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )
+
+// --- Credential store file access protection ---
+
+// protectedFileNames are filenames within the config directory that must never
+// be accessed by LLM tools. These contain the encryption key and encrypted secrets.
+var protectedFileNames = []string{".store_key", "credentials.enc"}
+
+// isProtectedPath returns true if the given file path resolves to a protected
+// credential store file inside the config directory.
+func isProtectedPath(filePath string) bool {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return false
+	}
+
+	// Resolve to absolute and follow symlinks to prevent bypass via relative paths or links
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		absPath = filePath
+	}
+	resolvedPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		resolvedPath = absPath
+	}
+
+	for _, name := range protectedFileNames {
+		protectedPath := filepath.Join(configDir, name)
+		resolvedProtected, err := filepath.EvalSymlinks(protectedPath)
+		if err != nil {
+			resolvedProtected = protectedPath
+		}
+		if resolvedPath == resolvedProtected || absPath == protectedPath {
+			return true
+		}
+	}
+	return false
+}
+
+// commandReferencesProtectedFile checks if a shell command string references
+// protected credential store files. Returns true and the matched filename
+// if found. This is a best-effort check for defense-in-depth — it catches
+// common patterns like cat, cp, xxd, base64, etc.
+func commandReferencesProtectedFile(command string) (bool, string) {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return false, ""
+	}
+
+	for _, name := range protectedFileNames {
+		// Full path match
+		fullPath := filepath.Join(configDir, name)
+		if strings.Contains(command, fullPath) {
+			return true, name
+		}
+	}
+
+	// Also check for the bare filename — catches cases where the command
+	// uses cd or relative paths to reach the config dir
+	for _, name := range protectedFileNames {
+		if strings.Contains(command, name) {
+			return true, name
+		}
+	}
+
+	return false, ""
+}
 
 type ReadFileArgs struct {
 	Path string `json:"path" jsonschema:"The path to the file to read"`
@@ -22,6 +90,9 @@ type ReadFileResult struct {
 }
 
 func ReadFile(ctx tool.Context, args ReadFileArgs) (ReadFileResult, error) {
+	if isProtectedPath(args.Path) {
+		return ReadFileResult{}, fmt.Errorf("access denied: this file is part of the credential store and cannot be read")
+	}
 	content, err := os.ReadFile(args.Path)
 	if err != nil {
 		return ReadFileResult{}, fmt.Errorf("failed to read file: %w", err)
@@ -87,6 +158,10 @@ func contentToString(content interface{}) (string, error) {
 }
 
 func WriteFile(ctx tool.Context, args WriteFileArgs) (WriteFileResult, error) {
+	if isProtectedPath(args.FilePath) {
+		return WriteFileResult{}, fmt.Errorf("access denied: this file is part of the credential store and cannot be modified")
+	}
+
 	// Convert content to string
 	preliminaryString, err := contentToString(args.Content)
 	if err != nil {
@@ -110,21 +185,132 @@ func WriteFile(ctx tool.Context, args WriteFileArgs) (WriteFileResult, error) {
 }
 
 type ShellCommandArgs struct {
-	Command string `json:"command" jsonschema:"The shell command to execute"`
+	Command    string `json:"command" jsonschema:"The shell command to execute"`
+	Timeout    int    `json:"timeout,omitempty" jsonschema:"Timeout in seconds. Default 120. Max 3600."`
+	WorkingDir string `json:"working_dir,omitempty" jsonschema:"Working directory for the command. Defaults to the current directory."`
+	Background bool   `json:"background,omitempty" jsonschema:"If true, start the command in the background and return a session_id immediately. Use process_read/process_write/process_kill to interact with it."`
 }
 
 type ShellCommandResult struct {
-	Stdout string `json:"stdout"`
+	Stdout          string `json:"stdout"`
+	TimedOut        bool   `json:"timed_out,omitempty"`
+	WaitingForInput bool   `json:"waiting_for_input,omitempty"`
+	SessionID       string `json:"session_id,omitempty"`
+	ExitCode        *int   `json:"exit_code,omitempty"`
 }
 
 func ShellCommand(ctx tool.Context, args ShellCommandArgs) (ShellCommandResult, error) {
-	// Use sh -c to execute the command
-	cmd := exec.Command("sh", "-c", args.Command)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return ShellCommandResult{}, fmt.Errorf("failed to execute command: %w, output: %s", err, string(output))
+	// Block commands that reference credential store files
+	if matched, fileName := commandReferencesProtectedFile(args.Command); matched {
+		return ShellCommandResult{}, fmt.Errorf("access denied: command references credential store file '%s' which cannot be accessed", fileName)
 	}
-	return ShellCommandResult{Stdout: string(output)}, nil
+
+	// Apply timeout defaults and bounds
+	timeout := args.Timeout
+	if timeout <= 0 {
+		timeout = 120
+	}
+	if timeout > 3600 {
+		timeout = 3600
+	}
+
+	pm := GetProcessManager()
+
+	// Start process with PTY
+	sess, err := pm.Start(args.Command, args.WorkingDir, 24, 80)
+	if err != nil {
+		return ShellCommandResult{}, fmt.Errorf("failed to start command: %w", err)
+	}
+
+	// Background mode: return immediately with session ID
+	if args.Background {
+		// Wait briefly for initial output
+		time.Sleep(300 * time.Millisecond)
+		data := sess.Output.Bytes()
+		return ShellCommandResult{
+			Stdout:    string(data),
+			SessionID: sess.ID,
+		}, nil
+	}
+
+	// One-shot mode: wait for completion or interactive detection
+	deadline := time.After(time.Duration(timeout) * time.Second)
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-sess.done:
+			// Process exited — return output
+			data := sess.Output.Bytes()
+			result := ShellCommandResult{
+				Stdout:   string(data),
+				ExitCode: sess.ExitCode,
+			}
+			return result, nil
+
+		case <-deadline:
+			// Timeout — kill process and return what we have
+			_ = pm.Kill(sess.ID)
+			data := sess.Output.Bytes()
+			return ShellCommandResult{
+				Stdout:    string(data),
+				TimedOut:  true,
+				SessionID: sess.ID,
+			}, nil
+
+		case <-ticker.C:
+			// Check if process is waiting for input (alive but idle)
+			if sess.IsRunning() && sess.IdleDuration() >= idleThreshold {
+				data := sess.Output.Bytes()
+				if len(data) > 0 && looksLikePrompt(string(data)) {
+					return ShellCommandResult{
+						Stdout:          string(data),
+						WaitingForInput: true,
+						SessionID:       sess.ID,
+					}, nil
+				}
+			}
+		}
+	}
+}
+
+// looksLikePrompt checks if the output ends with something that looks like
+// an interactive prompt waiting for user input.
+func looksLikePrompt(output string) bool {
+	trimmed := strings.TrimRight(output, " \t")
+	if len(trimmed) == 0 {
+		return false
+	}
+
+	// Check common prompt endings (check both with and without trailing whitespace)
+	promptSuffixes := []string{
+		"?", ":", ">", "$", "#", "%",
+		"(yes/no)", "(y/n)", "(Y/n)", "(y/N)",
+		"[yes/no]", "[y/n]", "[Y/n]", "[y/N]",
+		"(yes/no/[fingerprint])",
+		"password:", "Password:", "PASSWORD:",
+		"passphrase:", "Passphrase:",
+	}
+
+	lower := strings.ToLower(trimmed)
+	for _, suffix := range promptSuffixes {
+		if strings.HasSuffix(trimmed, suffix) || strings.HasSuffix(lower, strings.ToLower(suffix)) {
+			return true
+		}
+	}
+
+	// Check if last line is short (< 200 chars) and ends with a prompt character
+	lines := strings.Split(trimmed, "\n")
+	lastLine := strings.TrimSpace(lines[len(lines)-1])
+	if len(lastLine) > 0 && len(lastLine) < 200 {
+		lastChar := lastLine[len(lastLine)-1]
+		if lastChar == '?' || lastChar == ':' || lastChar == '>' || lastChar == '$' || lastChar == '#' || lastChar == '%' {
+			return true
+		}
+	}
+
+	return false
 }
 
 // --- Filter JSON Tool ---
@@ -296,8 +482,12 @@ func GetInternalTools() ([]tool.Tool, error) {
 	}
 
 	shellCommandTool, err := functiontool.New(functiontool.Config{
-		Name:        "shell_command",
-		Description: "Execute a shell command to retrieve information or perform actions. Use this tool when you need to run CLI commands like 'gh', 'git', etc.",
+		Name: "shell_command",
+		Description: `Execute a shell command with full PTY support.
+
+One-shot mode (default): Runs the command and waits for it to complete. If the command is waiting for interactive input (SSH prompts, password, confirmations), it returns early with waiting_for_input=true and a session_id. Use process_write to respond to the prompt, and process_read to check output.
+
+Background mode (background=true): Starts the command and returns immediately with a session_id. Use process_read, process_write, and process_kill to manage the process.`,
 	}, ShellCommand)
 	if err != nil {
 		return nil, err
@@ -344,9 +534,44 @@ func GetInternalTools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
+	editFileTool, err := functiontool.New(functiontool.Config{
+		Name:        "edit_file",
+		Description: "Edit a file by finding and replacing text. Supports exact string matching or regex patterns. Returns an error if old_string matches multiple locations without replace_all=true, so you can refine the match.",
+	}, EditFile)
+	if err != nil {
+		return nil, err
+	}
+
+	webFetchTool, err := functiontool.New(functiontool.Config{
+		Name:        "web_fetch",
+		Description: "Fetch a URL and extract its content as clean markdown, readable text, or raw HTML. PREFERRED tool for fetching specific URLs — always try this first before other web extraction tools. Fast, free, no API key required. Uses Mozilla Readability for article-focused extraction. If this tool returns empty or navigation-only content (common with JavaScript-heavy pages), then retry with the configured MCP web extract tool.",
+	}, WebFetch)
+	if err != nil {
+		return nil, err
+	}
+
+	readPDFTool, err := functiontool.New(functiontool.Config{
+		Name:        "read_pdf",
+		Description: "Extract text content from a PDF file. Accepts a local file path or an HTTP/HTTPS URL. Returns plain text with page markers. Use this for reading PDF documents, reports, papers, etc.",
+	}, ReadPDF)
+	if err != nil {
+		return nil, err
+	}
+
+	httpRequestTool, err := functiontool.New(functiontool.Config{
+		Name: "http_request",
+		Description: `Make an HTTP request to an API endpoint. Supports GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS.
+
+Use this instead of curl via shell_command for cleaner API calls. Set 'credential' to a stored credential name for automatic authentication header injection (supports API key, bearer, basic, OAuth). JSON Content-Type is set automatically when the body starts with { or [.`,
+	}, HttpRequest)
+	if err != nil {
+		return nil, err
+	}
+
 	return []tool.Tool{
 		readFileTool, writeFileTool, shellCommandTool, filterJsonTool, gitDiffAddLineNumbersTool,
-		fileTreeTool, grepSearchTool, findFilesTool,
+		fileTreeTool, grepSearchTool, findFilesTool, editFileTool, webFetchTool, readPDFTool,
+		httpRequestTool,
 	}, nil
 }
 
@@ -417,6 +642,62 @@ func ExecuteTool(ctx context.Context, name string, args map[string]interface{}) 
 			return nil, fmt.Errorf("invalid args for find_files: %w", err)
 		}
 		return FindFiles(nil, toolArgs)
+
+	case "edit_file":
+		var toolArgs EditFileArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for edit_file: %w", err)
+		}
+		return EditFile(nil, toolArgs)
+
+	case "web_fetch":
+		var toolArgs WebFetchArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for web_fetch: %w", err)
+		}
+		return WebFetch(nil, toolArgs)
+
+	case "read_pdf":
+		var toolArgs ReadPDFArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for read_pdf: %w", err)
+		}
+		return ReadPDF(nil, toolArgs)
+
+	case "process_read":
+		var toolArgs ProcessReadArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for process_read: %w", err)
+		}
+		return processRead(nil, toolArgs)
+
+	case "process_write":
+		var toolArgs ProcessWriteArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for process_write: %w", err)
+		}
+		return processWrite(nil, toolArgs)
+
+	case "process_list":
+		var toolArgs ProcessListArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for process_list: %w", err)
+		}
+		return processList(nil, toolArgs)
+
+	case "process_kill":
+		var toolArgs ProcessKillArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for process_kill: %w", err)
+		}
+		return processKill(nil, toolArgs)
+
+	case "http_request":
+		var toolArgs HttpRequestArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for http_request: %w", err)
+		}
+		return HttpRequest(nil, toolArgs)
 
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)

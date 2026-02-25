@@ -44,3 +44,9 @@ node_modules/
 
 # MCP server directories (runtime)
 mcp_servers/
+
+# New local files
+#AGENTS.md
+#docs/specs/
+/astonish
+!/astonish/

@@ -143,6 +143,12 @@ func ConvertRequest(req *model.LLMRequest, maxTokens int) (*Request, error) {
 		}
 	}
 
+	// Patch orphaned tool_use blocks: if an assistant message has tool_use blocks
+	// without corresponding tool_result blocks in the following user message,
+	// inject synthetic error tool_result blocks. This prevents Anthropic/Bedrock
+	// 400 errors when tool execution fails mid-stream (e.g., "unknown tool").
+	patchOrphanedToolUse(bedrockReq)
+
 	// Handle system instruction
 	if req.Config != nil && req.Config.SystemInstruction != nil {
 		var sysBuilder strings.Builder
@@ -165,7 +171,7 @@ func ConvertRequest(req *model.LLMRequest, maxTokens int) (*Request, error) {
 				// Convert JSON schema to Bedrock format
 				if funcDecl.Parameters != nil {
 					bedrockTool.InputSchema["type"] = "object"
-					
+
 					// Marshal and sanitize
 					schemaBytes, _ := json.Marshal(funcDecl.Parameters) // Error checked at source usually
 					var schemaMap map[string]interface{}
@@ -209,7 +215,7 @@ func sanitizeSchema(schema map[string]interface{}) {
 	if t, ok := schema["type"].(string); ok {
 		schema["type"] = strings.ToLower(t)
 	}
-	
+
 	// Recurse into properties
 	if props, ok := schema["properties"].(map[string]interface{}); ok {
 		for _, prop := range props {
@@ -218,7 +224,7 @@ func sanitizeSchema(schema map[string]interface{}) {
 			}
 		}
 	}
-	
+
 	// Recurse into array items
 	if items, ok := schema["items"].(map[string]interface{}); ok {
 		sanitizeSchema(items)
@@ -385,6 +391,103 @@ func ParseStream(reader io.Reader) iter.Seq2[*model.LLMResponse, error] {
 					}
 				}
 			}
+		}
+	}
+}
+
+// patchOrphanedToolUse scans the messages array for assistant messages containing
+// tool_use blocks that lack corresponding tool_result blocks in the following user
+// message. For each orphan, a synthetic error tool_result is injected. This prevents
+// Anthropic/Bedrock 400 errors when tool execution fails and no FunctionResponse
+// event is persisted to the session.
+func patchOrphanedToolUse(req *Request) {
+	for i := 0; i < len(req.Messages); i++ {
+		msg := req.Messages[i]
+		if msg.Role != "assistant" {
+			continue
+		}
+
+		// Extract tool_use IDs from this assistant message
+		blocks, ok := msg.Content.([]ContentBlock)
+		if !ok {
+			continue
+		}
+		var toolUseIDs []string
+		for _, b := range blocks {
+			if b.Type == "tool_use" && b.ID != "" {
+				toolUseIDs = append(toolUseIDs, b.ID)
+			}
+		}
+		if len(toolUseIDs) == 0 {
+			continue
+		}
+
+		// Collect tool_result IDs from the immediately following user message
+		answeredIDs := make(map[string]bool)
+		if i+1 < len(req.Messages) && req.Messages[i+1].Role == "user" {
+			switch next := req.Messages[i+1].Content.(type) {
+			case []ContentBlock:
+				for _, b := range next {
+					if b.Type == "tool_result" && b.ToolUseID != "" {
+						answeredIDs[b.ToolUseID] = true
+					}
+				}
+			}
+		}
+
+		// Find orphaned tool_use IDs (no matching tool_result)
+		var orphanIDs []string
+		for _, id := range toolUseIDs {
+			if !answeredIDs[id] {
+				orphanIDs = append(orphanIDs, id)
+			}
+		}
+		if len(orphanIDs) == 0 {
+			continue
+		}
+
+		// Build synthetic tool_result blocks for orphans
+		var resultBlocks []ContentBlock
+		for _, id := range orphanIDs {
+			resultBlocks = append(resultBlocks, ContentBlock{
+				Type:      "tool_result",
+				ToolUseID: id,
+				Content:   `{"error": "Tool call was not executed due to an internal error."}`,
+			})
+		}
+
+		// Insert a new user message with the synthetic tool_results
+		// right after the assistant message
+		syntheticMsg := Message{
+			Role:    "user",
+			Content: resultBlocks,
+		}
+
+		if i+1 < len(req.Messages) && req.Messages[i+1].Role == "user" {
+			// The next message is already a user message -- merge the synthetic
+			// results into it if it has content blocks, or insert before it otherwise
+			switch existing := req.Messages[i+1].Content.(type) {
+			case []ContentBlock:
+				req.Messages[i+1].Content = append(resultBlocks, existing...)
+			default:
+				// Next user message is a plain string; insert synthetic message between
+				newMsgs := make([]Message, 0, len(req.Messages)+1)
+				newMsgs = append(newMsgs, req.Messages[:i+1]...)
+				newMsgs = append(newMsgs, syntheticMsg)
+				newMsgs = append(newMsgs, req.Messages[i+1:]...)
+				req.Messages = newMsgs
+				i++ // skip the inserted message
+			}
+		} else {
+			// No following message or it's not a user message; insert synthetic message
+			newMsgs := make([]Message, 0, len(req.Messages)+1)
+			newMsgs = append(newMsgs, req.Messages[:i+1]...)
+			newMsgs = append(newMsgs, syntheticMsg)
+			if i+1 < len(req.Messages) {
+				newMsgs = append(newMsgs, req.Messages[i+1:]...)
+			}
+			req.Messages = newMsgs
+			i++ // skip the inserted message
 		}
 	}
 }

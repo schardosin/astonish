@@ -10,6 +10,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/cache"
+	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/mcp"
@@ -296,13 +297,14 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 				AddServerToolsToCache(serverName, newTools)
 				toolsLoaded = len(newTools)
 
-				// Also update persistent cache
-				persistentTools := make([]cache.ToolEntry, 0, len(newTools))
-				for _, t := range newTools {
+				// Also update persistent cache (use mcpTools for schema access)
+				persistentTools := make([]cache.ToolEntry, 0, len(mcpTools))
+				for _, t := range mcpTools {
 					persistentTools = append(persistentTools, cache.ToolEntry{
-						Name:        t.Name,
-						Description: t.Description,
-						Source:      t.Source,
+						Name:        t.Name(),
+						Description: t.Description(),
+						Source:      serverName,
+						InputSchema: common.ExtractToolInputSchema(t),
 					})
 				}
 				checksum := cache.ComputeServerChecksum(newConfig.Command, newConfig.Args, newConfig.Env)

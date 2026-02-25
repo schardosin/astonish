@@ -11,8 +11,10 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/launcher"
+	"github.com/schardosin/astonish/pkg/tools"
 	"github.com/schardosin/astonish/pkg/ui"
 	"google.golang.org/adk/session"
 )
@@ -134,37 +136,22 @@ func handleRunCommand(args []string) error {
 		*providerName = "gemini"
 	}
 
-	// Set environment variables from config for the selected provider
-	if providerCfg, ok := appCfg.Providers[*providerName]; ok {
-		for k, v := range providerCfg {
-			envKey := ""
-			switch *providerName {
-			case "gemini":
-				if k == "api_key" {
-					envKey = "GOOGLE_API_KEY"
-				}
-			case "openai":
-				if k == "api_key" {
-					envKey = "OPENAI_API_KEY"
-				}
-			case "sap_ai_core":
-				switch k {
-				case "client_id":
-					envKey = "AICORE_CLIENT_ID"
-				case "client_secret":
-					envKey = "AICORE_CLIENT_SECRET"
-				case "auth_url":
-					envKey = "AICORE_AUTH_URL"
-				case "base_url":
-					envKey = "AICORE_BASE_URL"
-				case "resource_group":
-					envKey = "AICORE_RESOURCE_GROUP"
-				}
-			}
-			if envKey != "" && v != "" {
-				os.Setenv(envKey, v)
-			}
+	// Set up provider credentials from the encrypted credential store.
+	// After migration, secrets are scrubbed from config.yaml and stored
+	// only in the credential store. InjectProviderSecretsToConfig re-hydrates
+	// the in-memory config map so GetProvider() can read them.
+	configDir, configDirErr := config.GetConfigDir()
+	if configDirErr == nil {
+		if cs, csErr := credentials.Open(configDir); csErr == nil {
+			tools.SetCredentialStore(cs)
+			config.SetInstalledSecretGetter(cs.GetSecret)
+			config.InjectProviderSecretsToConfig(appCfg, cs.GetSecret)
+			config.SetupAllProviderEnvFromStore(appCfg, cs.GetSecret)
+		} else {
+			config.SetupAllProviderEnv(appCfg)
 		}
+	} else {
+		config.SetupAllProviderEnv(appCfg)
 	}
 
 	// Load MCP config and set environment variables from all servers
@@ -222,7 +209,7 @@ func handleRunCommand(args []string) error {
 			if err == nil {
 				// Parse the flow reference first
 				tapName, flowName := parseFlowRef(agentName)
-				
+
 				// Check installed flows for this specific tap
 				if path, ok := store.GetInstalledFlowPath(tapName, flowName); ok {
 					agentPath = path
@@ -307,7 +294,7 @@ func handleListCommand() error {
 		Description string
 		Source      string // "local", "official", or tap name
 	}
-	
+
 	var localAgents []AgentInfo
 	var officialAgents []AgentInfo
 	tapAgents := make(map[string][]AgentInfo) // tapName -> agents
@@ -376,13 +363,13 @@ func handleListCommand() error {
 				if err == nil && cfg.Description != "" {
 					desc = cfg.Description
 				}
-				
+
 				info := AgentInfo{
 					Name:        name,
 					Description: desc,
 					Source:      tap.Name,
 				}
-				
+
 				if tap.Name == flowstore.OfficialStoreName {
 					officialAgents = append(officialAgents, info)
 				} else {
@@ -417,14 +404,14 @@ func handleListCommand() error {
 		if len(agents) == 0 {
 			return
 		}
-		
+
 		// Sort by name
 		sort.Slice(agents, func(i, j int) bool {
 			return agents[i].Name < agents[j].Name
 		})
-		
+
 		fmt.Println(style.Render(fmt.Sprintf("\n%s (%d)", title, len(agents))))
-		
+
 		for _, a := range agents {
 			fmt.Printf("  %s\n", nameStyle.Render(a.Name))
 			if a.Description != "" {
@@ -438,7 +425,7 @@ func handleListCommand() error {
 	for _, t := range tapAgents {
 		totalCount += len(t)
 	}
-	
+
 	if totalCount == 0 {
 		fmt.Println("No flows found.")
 		fmt.Println("\nTip: Run 'astonish flows store list' to browse available flows")
@@ -449,10 +436,10 @@ func handleListCommand() error {
 
 	// Print Local first
 	printSection("📁 LOCAL", localAgents, sectionStyle)
-	
+
 	// Print Official Store
 	printSection("🏪 OFFICIAL STORE", officialAgents, storeStyle)
-	
+
 	// Print Custom Taps
 	var tapNames []string
 	for tapName := range tapAgents {
@@ -704,6 +691,13 @@ func handleRemoveCommand(args []string) error {
 		return fmt.Errorf("failed to remove flow: %w", err)
 	}
 
+	// Remove the corresponding knowledge doc so the vector store
+	// watcher picks up the deletion and cleans up indexed chunks.
+	if memDir, err := config.GetMemoryDir(nil); err == nil {
+		docPath := filepath.Join(memDir, "flows", flowName+".md")
+		os.Remove(docPath) // best-effort — may not exist
+	}
+
 	fmt.Printf("✓ Removed flow: %s\n", flowName)
 	return nil
 }
@@ -826,25 +820,25 @@ func handleStoreListCommand(args []string) error {
 			label = fmt.Sprintf("%s (use: %s/<flow>)", tapName, tapName)
 		}
 		fmt.Println(headerStyle.Render(label))
-		
+
 		for _, f := range flows {
 			status := ""
 			if f.Installed {
 				status = installedStyle.Render(" [installed]")
 			}
-			
+
 			// Show full name for community, bare name for official
 			displayName := f.Name
 			if !isOfficial {
 				displayName = fmt.Sprintf("%s/%s", tapName, f.Name)
 			}
-			
+
 			// Show tags if any
 			tagDisplay := ""
 			if len(f.Tags) > 0 {
 				tagDisplay = tagStyle.Render(" [" + strings.Join(f.Tags, ", ") + "]")
 			}
-			
+
 			fmt.Printf("  %s%s%s\n", nameStyle.Render(displayName), status, tagDisplay)
 			fmt.Printf("    %s\n", descStyle.Render(f.Description))
 		}
@@ -969,13 +963,13 @@ func handleStoreSearchCommand(args []string) error {
 	var matches []flowstore.Flow
 	for _, f := range flows {
 		matched := false
-		
+
 		// Check name and description
 		if strings.Contains(strings.ToLower(f.Name), query) ||
 			strings.Contains(strings.ToLower(f.Description), query) {
 			matched = true
 		}
-		
+
 		// Check tags
 		if !matched {
 			for _, tag := range f.Tags {
@@ -985,7 +979,7 @@ func handleStoreSearchCommand(args []string) error {
 				}
 			}
 		}
-		
+
 		if matched {
 			matches = append(matches, f)
 		}
@@ -1026,10 +1020,10 @@ func parseTapAddArgs(args []string) (urlArg, alias string) {
 	if len(args) == 0 {
 		return "", ""
 	}
-	
+
 	urlArg = args[0]
 	alias = ""
-	
+
 	// Check if second arg exists and looks like a URL (contains a dot)
 	if len(args) >= 2 && strings.Contains(args[1], ".") {
 		// Format: <alias> <url>
@@ -1044,6 +1038,6 @@ func parseTapAddArgs(args []string) (urlArg, alias string) {
 			}
 		}
 	}
-	
+
 	return urlArg, alias
 }

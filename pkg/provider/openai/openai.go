@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/sashabaranov/go-openai"
+	"github.com/schardosin/astonish/pkg/provider/llmerror"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
 )
@@ -92,7 +93,7 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 		if streaming {
 			stream, err := p.client.CreateChatCompletionStream(ctx, openAIReq)
 			if err != nil {
-				yield(nil, err)
+				yield(nil, wrapOpenAIError(err))
 				return
 			}
 			defer stream.Close()
@@ -106,7 +107,7 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 					return
 				}
 				if err != nil {
-					yield(nil, err)
+					yield(nil, wrapOpenAIError(err))
 					return
 				}
 
@@ -191,7 +192,7 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 		} else {
 			resp, err := p.client.CreateChatCompletion(ctx, openAIReq)
 			if err != nil {
-				yield(nil, err)
+				yield(nil, wrapOpenAIError(err))
 				return
 			}
 			llmResp := p.toLLMResponse(resp)
@@ -383,4 +384,26 @@ func (p *Provider) toLLMResponseStream(resp openai.ChatCompletionStreamResponse)
 			Parts: parts,
 		},
 	}
+}
+
+// wrapOpenAIError converts go-openai library errors into structured LLMError
+// types that support retry classification. The library returns *APIError for
+// HTTP-level failures and *RequestError for transport-level failures.
+func wrapOpenAIError(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	var apiErr *openai.APIError
+	if errors.As(err, &apiErr) {
+		return llmerror.NewLLMError("openai", apiErr.HTTPStatusCode, apiErr.Message, "")
+	}
+
+	var reqErr *openai.RequestError
+	if errors.As(err, &reqErr) {
+		return llmerror.NewLLMError("openai", reqErr.HTTPStatusCode, reqErr.Error(), string(reqErr.Body))
+	}
+
+	// Unknown error type — return as-is
+	return err
 }

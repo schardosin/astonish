@@ -179,16 +179,25 @@ func handleCredentialRemove(name string) error {
 		return err
 	}
 
-	if store.Get(name) == nil {
-		return fmt.Errorf("credential %q not found", name)
+	// Try HTTP credentials first
+	if store.Get(name) != nil {
+		if err := store.Remove(name); err != nil {
+			return fmt.Errorf("failed to remove: %w", err)
+		}
+		fmt.Printf("Credential %q removed\n", name)
+		return nil
 	}
 
-	if err := store.Remove(name); err != nil {
-		return fmt.Errorf("failed to remove: %w", err)
+	// Try flat secrets (migrated provider keys, tokens, etc.)
+	if store.GetSecret(name) != "" {
+		if err := store.RemoveSecret(name); err != nil {
+			return fmt.Errorf("failed to remove: %w", err)
+		}
+		fmt.Printf("Secret %q removed\n", name)
+		return nil
 	}
 
-	fmt.Printf("Credential %q removed\n", name)
-	return nil
+	return fmt.Errorf("credential or secret %q not found", name)
 }
 
 func handleCredentialTest(name string) error {

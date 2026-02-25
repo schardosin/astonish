@@ -18,6 +18,7 @@ var SafeTools = map[string]bool{
 	"read_pdf":                  true,
 	"memory_search":             true,
 	"memory_get":                true,
+	"skill_lookup":              true,
 	"process_list":              true,
 	"process_read":              true,
 	// Browser observation tools (read-only)

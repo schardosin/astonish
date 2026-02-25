@@ -39,6 +39,7 @@ type FlowDistiller struct {
 var internalOnlyTools = map[string]bool{
 	"memory_save":    true,
 	"delegate_tasks": true,
+	"skill_lookup":   true,
 }
 
 // NewFlowDistiller creates a FlowDistiller that uses the provided ADK model.LLM.

@@ -261,6 +261,7 @@ func TestStoreCRUD(t *testing.T) {
 	cred := store.Get("my-api")
 	if cred == nil {
 		t.Fatal("Get returned nil")
+		return
 	}
 	if cred.Type != CredAPIKey {
 		t.Errorf("Type = %q, want %q", cred.Type, CredAPIKey)

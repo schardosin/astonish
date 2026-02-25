@@ -376,6 +376,7 @@ func TestAuthHandlers_FullFlow(t *testing.T) {
 	}
 	if sessionCookie == nil {
 		t.Fatal("expected session cookie to be set")
+		return
 	}
 	if !sessionCookie.HttpOnly {
 		t.Error("session cookie should be HttpOnly")

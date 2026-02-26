@@ -347,6 +347,7 @@ func BrowserFileUpload(mgr *browser.Manager, refs *browser.RefMap) func(tool.Con
 type BrowserHandleDialogArgs struct {
 	Accept     bool   `json:"accept" jsonschema:"Accept (true) or dismiss (false) the dialog"`
 	PromptText string `json:"promptText,omitempty" jsonschema:"Text to enter for prompt dialogs"`
+	TimeoutMs  int    `json:"timeout_ms,omitempty" jsonschema:"Max milliseconds to wait for a dialog to appear. Default: 10000 (10s). Use 0 for the default."`
 }
 
 type BrowserHandleDialogResult struct {
@@ -362,10 +363,34 @@ func BrowserHandleDialog(mgr *browser.Manager) func(tool.Context, BrowserHandleD
 			return BrowserHandleDialogResult{}, err
 		}
 
+		timeout := 10 * time.Second
+		if args.TimeoutMs > 0 {
+			timeout = time.Duration(args.TimeoutMs) * time.Millisecond
+		}
+
 		wait, handle := pg.HandleDialog()
 
-		// Wait for the dialog (with timeout)
-		dialog := wait()
+		// Run the blocking wait() in a goroutine and race it against a timeout.
+		// Rod's wait() does not accept a context, so this is the only safe pattern.
+		type dialogResult struct {
+			dialog *proto.PageJavascriptDialogOpening
+		}
+		ch := make(chan dialogResult, 1)
+		go func() {
+			d := wait()
+			ch <- dialogResult{dialog: d}
+		}()
+
+		var dialog *proto.PageJavascriptDialogOpening
+		select {
+		case res := <-ch:
+			dialog = res.dialog
+		case <-time.After(timeout):
+			return BrowserHandleDialogResult{
+				Success: false,
+				Message: fmt.Sprintf("No JavaScript dialog appeared within %dms. Most websites use inline messages instead of native dialogs (alert/confirm/prompt). Use browser_snapshot to read the current page state.", timeout.Milliseconds()),
+			}, nil
+		}
 
 		if err := handle(&proto.PageHandleJavaScriptDialog{
 			Accept:     args.Accept,

@@ -14,6 +14,7 @@ import (
 	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
+	emailpkg "github.com/schardosin/astonish/pkg/email"
 	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/provider"
@@ -413,8 +414,36 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	cleanups = append(cleanups, browserMgr.Cleanup)
 
 	// --- 2f-ii. Initialize email tools ---
-	// Email tools are registered if an email client is configured.
-	// The client may be set later by the daemon when the email channel starts.
+	// Create the email client here (before GetEmailTools) so tools are available
+	// in both console and daemon modes. The daemon's initEmailTools becomes a
+	// no-op when the factory has already set the client.
+	if cfg.AppConfig != nil {
+		emailCfg := cfg.AppConfig.Channels.Email
+		emailPassword := emailCfg.Password
+		if emailPassword == "" && credStore != nil {
+			emailPassword = credStore.GetSecret("channels.email.password")
+		}
+		if emailPassword != "" && emailCfg.IMAPServer != "" &&
+			emailCfg.SMTPServer != "" && emailCfg.Address != "" {
+			client, clientErr := emailpkg.NewClient(&emailpkg.Config{
+				Provider:     emailCfg.Provider,
+				IMAPServer:   emailCfg.IMAPServer,
+				SMTPServer:   emailCfg.SMTPServer,
+				Address:      emailCfg.Address,
+				Username:     emailCfg.Username,
+				Password:     emailPassword,
+				Folder:       emailCfg.Folder,
+				MaxBodyChars: emailCfg.MaxBodyChars,
+			})
+			if clientErr != nil {
+				if cfg.DebugMode {
+					fmt.Printf("Warning: Failed to create email client: %v\n", clientErr)
+				}
+			} else {
+				tools.SetEmailClient(client)
+			}
+		}
+	}
 	emailTools, emailErr := tools.GetEmailTools()
 	if emailErr != nil {
 		if cfg.DebugMode {
@@ -684,6 +713,20 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// Check browser availability (native browser tools)
 	if browserErr == nil && len(browserTools) > 0 {
 		promptBuilder.BrowserAvailable = true
+	}
+
+	// Populate agent identity from config (for web portal interactions)
+	if cfg.AppConfig != nil && cfg.AppConfig.AgentIdentity.IsConfigured() {
+		id := &cfg.AppConfig.AgentIdentity
+		promptBuilder.Identity = &agent.AgentIdentity{
+			Name:     id.Name,
+			Username: id.Username,
+			Email:    id.Email,
+			Bio:      id.Bio,
+			Website:  id.Website,
+			Locale:   id.Locale,
+			Timezone: id.Timezone,
+		}
 	}
 
 	// Check memory search availability
@@ -1096,6 +1139,23 @@ func factoryBuildSelfMDConfig(
 		}
 	}
 
+	// Browser handoff
+	for _, t := range internalTools {
+		if t.Name() == "browser_request_human" {
+			selfCfg.HandoffAvailable = true
+			break
+		}
+	}
+
+	// Agent identity
+	if cfg.AppConfig != nil && cfg.AppConfig.AgentIdentity.IsConfigured() {
+		id := &cfg.AppConfig.AgentIdentity
+		selfCfg.IdentityConfigured = true
+		selfCfg.IdentityName = id.Name
+		selfCfg.IdentityUsername = id.Username
+		selfCfg.IdentityEmail = id.Email
+	}
+
 	return selfCfg
 }
 
@@ -1114,6 +1174,8 @@ func browserConfigFromApp(appCfg *config.AppConfig) browser.BrowserConfig {
 		b.ChromePath,
 		b.UserDataDir,
 		b.NavigationTimeout,
+		b.HandoffBindAddress,
+		b.HandoffPort,
 	)
 }
 

@@ -10,26 +10,45 @@ import (
 	"google.golang.org/adk/tool"
 )
 
+// AgentIdentity holds the agent's configured persona for web portal interactions.
+// When populated, it is rendered into the system prompt so the LLM knows what
+// name, username, and email to use when filling registration forms.
+type AgentIdentity struct {
+	Name     string
+	Username string
+	Email    string
+	Bio      string
+	Website  string
+	Locale   string
+	Timezone string
+}
+
+// IsConfigured returns true if at least one identity field is set.
+func (id *AgentIdentity) IsConfigured() bool {
+	return id != nil && (id.Name != "" || id.Username != "" || id.Email != "")
+}
+
 // SystemPromptBuilder constructs context-aware system prompts for chat mode.
 type SystemPromptBuilder struct {
 	Tools                 []tool.Tool
 	Toolsets              []tool.Toolset
 	WorkspaceDir          string
 	CustomPrompt          string
-	MemoryContent         string // Contents of MEMORY.md (loaded per turn)
-	InstructionsContent   string // Contents of INSTRUCTIONS.md (behavior directives)
-	SelfContent           string // Contents of SELF.md (auto-generated self-awareness)
-	ExecutionPlan         string // Flow-based execution plan (set when a flow matches)
-	RelevantKnowledge     string // Auto-retrieved knowledge from vector search (set per turn)
-	WebSearchAvailable    bool   // Whether a web search MCP tool is configured
-	WebExtractAvailable   bool   // Whether a web extract MCP tool is configured
-	WebSearchToolName     string // Name of the configured search tool (e.g. "tavily-search")
-	WebExtractToolName    string // Name of the configured extract tool (e.g. "tavily-extract")
-	BrowserAvailable      bool   // Whether built-in browser tools are registered
-	MemorySearchAvailable bool   // Whether semantic memory search is available
-	ChannelHints          string // Channel-specific output constraints (empty = console mode)
-	SchedulerHints        string // Scheduler-specific output constraints (empty = not a scheduled run)
-	SkillIndex            string // Lightweight skill listing (Tier 1 — names and descriptions only)
+	MemoryContent         string         // Contents of MEMORY.md (loaded per turn)
+	InstructionsContent   string         // Contents of INSTRUCTIONS.md (behavior directives)
+	SelfContent           string         // Contents of SELF.md (auto-generated self-awareness)
+	ExecutionPlan         string         // Flow-based execution plan (set when a flow matches)
+	RelevantKnowledge     string         // Auto-retrieved knowledge from vector search (set per turn)
+	WebSearchAvailable    bool           // Whether a web search MCP tool is configured
+	WebExtractAvailable   bool           // Whether a web extract MCP tool is configured
+	WebSearchToolName     string         // Name of the configured search tool (e.g. "tavily-search")
+	WebExtractToolName    string         // Name of the configured extract tool (e.g. "tavily-extract")
+	BrowserAvailable      bool           // Whether built-in browser tools are registered
+	MemorySearchAvailable bool           // Whether semantic memory search is available
+	ChannelHints          string         // Channel-specific output constraints (empty = console mode)
+	SchedulerHints        string         // Scheduler-specific output constraints (empty = not a scheduled run)
+	SkillIndex            string         // Lightweight skill listing (Tier 1 — names and descriptions only)
+	Identity              *AgentIdentity // Agent persona for web portal interactions
 }
 
 // Build constructs the full system prompt.
@@ -190,6 +209,18 @@ func (b *SystemPromptBuilder) Build() string {
 			sb.WriteString("4. If no matching credential exists: ask the user for the credentials, then `save_credential` to store them securely BEFORE typing them into the form\n")
 			sb.WriteString("NEVER ask the user to type passwords in chat if a credential already exists in the store.\n")
 		}
+
+		if b.hasHandoffTool() {
+			sb.WriteString("\n**Human-in-the-loop (browser handoff):**\n")
+			sb.WriteString("Use `browser_request_human` when you encounter something that requires human intervention:\n")
+			sb.WriteString("- CAPTCHAs (reCAPTCHA, hCaptcha, Cloudflare Turnstile)\n")
+			sb.WriteString("- Complex multi-factor authentication flows\n")
+			sb.WriteString("- Payment forms requiring real card details\n")
+			sb.WriteString("- Any visual challenge you cannot solve programmatically\n\n")
+			sb.WriteString("The tool exposes the browser via CDP so the user can connect with `chrome://inspect` and take over. ")
+			sb.WriteString("Always provide a clear, specific reason describing what the user needs to do. ")
+			sb.WriteString("After handoff completes, take a fresh `browser_snapshot` to see what changed.\n")
+		}
 	}
 
 	// 5. Environment info
@@ -205,6 +236,40 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("\n## Self-Configuration\n\n")
 		sb.WriteString(b.SelfContent)
 		sb.WriteString("\n")
+	}
+
+	// 5c. Agent Identity (for web portal interactions)
+	if b.Identity.IsConfigured() {
+		sb.WriteString("\n## Agent Identity\n\n")
+		sb.WriteString("You have a configured identity for web portal registrations and interactions. ")
+		sb.WriteString("Use these details when filling registration forms, creating profiles, or identifying yourself on websites:\n\n")
+		if b.Identity.Name != "" {
+			sb.WriteString(fmt.Sprintf("- **Name:** %s\n", b.Identity.Name))
+		}
+		if b.Identity.Username != "" {
+			sb.WriteString(fmt.Sprintf("- **Username:** %s\n", b.Identity.Username))
+		}
+		if b.Identity.Email != "" {
+			sb.WriteString(fmt.Sprintf("- **Email:** %s\n", b.Identity.Email))
+		}
+		if b.Identity.Bio != "" {
+			sb.WriteString(fmt.Sprintf("- **Bio:** %s\n", b.Identity.Bio))
+		}
+		if b.Identity.Website != "" {
+			sb.WriteString(fmt.Sprintf("- **Website:** %s\n", b.Identity.Website))
+		}
+		if b.Identity.Locale != "" {
+			sb.WriteString(fmt.Sprintf("- **Locale:** %s\n", b.Identity.Locale))
+		}
+		if b.Identity.Timezone != "" {
+			sb.WriteString(fmt.Sprintf("- **Timezone:** %s\n", b.Identity.Timezone))
+		}
+		sb.WriteString("\n")
+		sb.WriteString("**Guidelines:**\n")
+		sb.WriteString("- If the username is taken on a portal, try appending digits or underscores (e.g. `username_01`)\n")
+		sb.WriteString("- For email verification, use the `email_wait` tool to wait for the confirmation email, then extract the verification link\n")
+		sb.WriteString("- If you encounter a CAPTCHA during registration, use `browser_request_human` to hand control to the user\n")
+		sb.WriteString("- Always save successful account registrations to persistent memory (credential store for passwords, MEMORY.md for account details)\n")
 	}
 
 	// 6. Persistent Memory
@@ -524,6 +589,16 @@ func (b *SystemPromptBuilder) hasHttpRequestTool() bool {
 func (b *SystemPromptBuilder) hasDelegateTasksTool() bool {
 	for _, t := range b.Tools {
 		if t.Name() == "delegate_tasks" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasHandoffTool returns true if browser_request_human is among the available tools.
+func (b *SystemPromptBuilder) hasHandoffTool() bool {
+	for _, t := range b.Tools {
+		if t.Name() == "browser_request_human" {
 			return true
 		}
 	}

@@ -36,6 +36,15 @@ type SelfMDConfig struct {
 	EmailEnabled    bool   // Inbound email channel active (IMAP polling)
 	EmailAddress    string // The agent's email address (e.g., "agent@gmail.com")
 	EmailToolsAvail bool   // Email tools available (true if IMAP/SMTP creds exist, even if channel disabled)
+
+	// Browser / Handoff
+	HandoffAvailable bool // Whether browser_request_human tool is registered
+
+	// Agent Identity (web portal persona)
+	IdentityConfigured bool   // Whether agent_identity is configured in config.yaml
+	IdentityName       string // Display name for registrations
+	IdentityUsername   string // Base username for registrations
+	IdentityEmail      string // Email for registrations
 }
 
 // MCPServerInfo describes an installed MCP server for SELF.md.
@@ -180,6 +189,33 @@ func GenerateSelfMD(cfg *SelfMDConfig) string {
 		if !cfg.EmailEnabled {
 			sb.WriteString("- Note: the inbound email channel is disabled, but you can still read, send, and search emails using these tools\n")
 		}
+		sb.WriteString("\n")
+	}
+
+	// Browser handoff
+	if cfg.HandoffAvailable {
+		sb.WriteString("## Browser Handoff\n")
+		sb.WriteString("- Tool: browser_request_human (pauses agent, exposes browser via CDP)\n")
+		sb.WriteString("- User connects via chrome://inspect to interact with the browser directly\n")
+		sb.WriteString("- Primary use: CAPTCHA solving, complex auth flows, payment forms\n")
+		sb.WriteString("- Completion: auto-detected when DevTools disconnects, or user visits /handoff/done\n")
+		sb.WriteString("\n")
+	}
+
+	// Agent Identity
+	if cfg.IdentityConfigured {
+		sb.WriteString("## Agent Identity\n")
+		sb.WriteString("Configured persona for web portal registrations:\n")
+		if cfg.IdentityName != "" {
+			sb.WriteString(fmt.Sprintf("- Name: %s\n", cfg.IdentityName))
+		}
+		if cfg.IdentityUsername != "" {
+			sb.WriteString(fmt.Sprintf("- Username: %s\n", cfg.IdentityUsername))
+		}
+		if cfg.IdentityEmail != "" {
+			sb.WriteString(fmt.Sprintf("- Email: %s\n", cfg.IdentityEmail))
+		}
+		sb.WriteString("Use these when registering on websites. Combine with email tools (email_wait) for verification.\n")
 		sb.WriteString("\n")
 	}
 

@@ -40,6 +40,16 @@ type BrowserConfig struct {
 	NoSandbox         bool          // For running as root in containers
 	UserDataDir       string        // Browser profile dir. Default: ~/.config/astonish/browser/
 	NavigationTimeout time.Duration // Max time to wait for page load (default: 30s)
+
+	// Handoff (human-in-the-loop)
+	HandoffBindAddress string // Network bind address for CDP handoff. Default: "127.0.0.1"
+	HandoffPort        int    // TCP port for CDP handoff proxy. Default: 9222
+}
+
+// HandoffCfg holds resolved handoff configuration for external use.
+type HandoffCfg struct {
+	BindAddress string
+	Port        int
 }
 
 // DefaultConfig returns a BrowserConfig with sensible defaults.
@@ -61,7 +71,7 @@ func DefaultConfig() BrowserConfig {
 // OverrideConfig applies optional overrides to the default config.
 // Zero values are ignored (the default is preserved). This is used by the
 // launcher to merge user config from config.yaml with sensible defaults.
-func OverrideConfig(headless *bool, viewportWidth, viewportHeight int, noSandbox *bool, chromePath, userDataDir string, navigationTimeoutSec int) BrowserConfig {
+func OverrideConfig(headless *bool, viewportWidth, viewportHeight int, noSandbox *bool, chromePath, userDataDir string, navigationTimeoutSec int, handoffBindAddress string, handoffPort int) BrowserConfig {
 	cfg := DefaultConfig()
 	if headless != nil {
 		cfg.Headless = *headless
@@ -83,6 +93,12 @@ func OverrideConfig(headless *bool, viewportWidth, viewportHeight int, noSandbox
 	}
 	if navigationTimeoutSec > 0 {
 		cfg.NavigationTimeout = time.Duration(navigationTimeoutSec) * time.Second
+	}
+	if handoffBindAddress != "" {
+		cfg.HandoffBindAddress = handoffBindAddress
+	}
+	if handoffPort > 0 {
+		cfg.HandoffPort = handoffPort
 	}
 	return cfg
 }
@@ -108,6 +124,7 @@ type Manager struct {
 	pages     map[proto.TargetTargetID]*PageState
 	pagesMu   sync.RWMutex
 	activePg  *rod.Page // most recently active page
+	cdpURL    string    // CDP WebSocket endpoint URL (set after launch)
 }
 
 // NewManager creates a Manager with the given config. The browser is NOT
@@ -176,8 +193,30 @@ func (m *Manager) GetOrLaunch() (*rod.Browser, error) {
 
 	m.browser = b
 	m.launch = l
+	m.cdpURL = u
 
 	return b, nil
+}
+
+// CDPURL returns the Chrome DevTools Protocol WebSocket endpoint URL.
+// Returns empty string if the browser has not been launched yet.
+func (m *Manager) CDPURL() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cdpURL
+}
+
+// HandoffConfig returns the resolved handoff configuration with defaults applied.
+func (m *Manager) HandoffConfig() HandoffCfg {
+	bind := m.config.HandoffBindAddress
+	if bind == "" {
+		bind = "127.0.0.1"
+	}
+	port := m.config.HandoffPort
+	if port == 0 {
+		port = 9222
+	}
+	return HandoffCfg{BindAddress: bind, Port: port}
 }
 
 // CurrentPage returns the most recently active page, creating one if none exists.

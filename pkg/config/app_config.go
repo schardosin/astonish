@@ -9,18 +9,19 @@ import (
 )
 
 type AppConfig struct {
-	General    GeneralConfig              `yaml:"general"`
-	WebServers map[string]WebServerConfig `yaml:"web_servers,omitempty" json:"web_servers,omitempty"`
-	Providers  map[string]ProviderConfig  `yaml:"providers"`
-	Chat       ChatConfig                 `yaml:"chat,omitempty"`
-	Sessions   SessionConfig              `yaml:"sessions,omitempty"`
-	Memory     MemoryConfig               `yaml:"memory,omitempty"`
-	Daemon     DaemonConfig               `yaml:"daemon,omitempty"`
-	Channels   ChannelsConfig             `yaml:"channels,omitempty"`
-	Scheduler  SchedulerConfig            `yaml:"scheduler,omitempty"`
-	Browser    BrowserAppConfig           `yaml:"browser,omitempty"`
-	SubAgents  SubAgentAppConfig          `yaml:"sub_agents,omitempty"`
-	Skills     SkillsConfig               `yaml:"skills,omitempty"`
+	General       GeneralConfig              `yaml:"general"`
+	WebServers    map[string]WebServerConfig `yaml:"web_servers,omitempty" json:"web_servers,omitempty"`
+	Providers     map[string]ProviderConfig  `yaml:"providers"`
+	Chat          ChatConfig                 `yaml:"chat,omitempty"`
+	Sessions      SessionConfig              `yaml:"sessions,omitempty"`
+	Memory        MemoryConfig               `yaml:"memory,omitempty"`
+	Daemon        DaemonConfig               `yaml:"daemon,omitempty"`
+	Channels      ChannelsConfig             `yaml:"channels,omitempty"`
+	Scheduler     SchedulerConfig            `yaml:"scheduler,omitempty"`
+	Browser       BrowserAppConfig           `yaml:"browser,omitempty"`
+	SubAgents     SubAgentAppConfig          `yaml:"sub_agents,omitempty"`
+	Skills        SkillsConfig               `yaml:"skills,omitempty"`
+	AgentIdentity AgentIdentityConfig        `yaml:"agent_identity,omitempty"`
 }
 
 // MemoryConfig controls the semantic memory / RAG system.
@@ -276,6 +277,38 @@ type BrowserAppConfig struct {
 	UserDataDir string `yaml:"user_data_dir,omitempty" json:"user_data_dir,omitempty"`
 	// NavigationTimeout is the max seconds to wait for page loads. Default: 30.
 	NavigationTimeout int `yaml:"navigation_timeout,omitempty" json:"navigation_timeout,omitempty"`
+
+	// HandoffBindAddress controls network binding for browser handoff (human-in-the-loop).
+	// "127.0.0.1" for local-only (default), "0.0.0.0" for remote access via SSH tunnel.
+	HandoffBindAddress string `yaml:"handoff_bind_address,omitempty" json:"handoff_bind_address,omitempty"`
+	// HandoffPort is the TCP port for the CDP handoff proxy. Default: 9222.
+	HandoffPort int `yaml:"handoff_port,omitempty" json:"handoff_port,omitempty"`
+}
+
+// AgentIdentityConfig holds the agent's persona for web portal registrations.
+// When configured, the agent uses these details to fill registration forms
+// and maintain a consistent identity across portal interactions.
+type AgentIdentityConfig struct {
+	// Name is the display name used for profile registrations.
+	Name string `yaml:"name,omitempty" json:"name,omitempty"`
+	// Username is the base username for registrations. Portal-specific suffixes
+	// may be added if the username is taken.
+	Username string `yaml:"username,omitempty" json:"username,omitempty"`
+	// Email is the agent's email address (should match email channel config).
+	Email string `yaml:"email,omitempty" json:"email,omitempty"`
+	// Bio is a short description for profile fields.
+	Bio string `yaml:"bio,omitempty" json:"bio,omitempty"`
+	// Website is an optional URL for profile fields.
+	Website string `yaml:"website,omitempty" json:"website,omitempty"`
+	// Locale is the language/locale preference (e.g. "en-US").
+	Locale string `yaml:"locale,omitempty" json:"locale,omitempty"`
+	// Timezone is the IANA timezone for profile settings (e.g. "America/New_York").
+	Timezone string `yaml:"timezone,omitempty" json:"timezone,omitempty"`
+}
+
+// IsConfigured returns true if at least a name or username is set.
+func (c *AgentIdentityConfig) IsConfigured() bool {
+	return c.Name != "" || c.Username != "" || c.Email != ""
 }
 
 // SubAgentAppConfig holds configuration for the sub-agent delegation system.

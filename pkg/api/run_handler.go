@@ -68,6 +68,8 @@ func GetBrowserManager() *browser.Manager {
 				b.ChromePath,
 				b.UserDataDir,
 				b.NavigationTimeout,
+				b.HandoffBindAddress,
+				b.HandoffPort,
 			)
 		}
 		globalBrowserMgr = browser.NewManager(cfg)

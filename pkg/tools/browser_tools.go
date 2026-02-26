@@ -301,6 +301,25 @@ Use device="clear" to remove device emulation.`,
 		return nil, err
 	}
 
+	// --- Human-in-the-loop ---
+
+	requestHumanTool, err := functiontool.New(functiontool.Config{
+		Name: "browser_request_human",
+		Description: `Pause agent execution and hand the browser over to a human via Chrome DevTools Protocol (CDP).
+
+Use this when you encounter something you cannot handle autonomously, such as:
+- CAPTCHAs that need manual solving
+- Complex multi-factor auth flows
+- Payment forms requiring real credentials
+- Any situation where a human eye/hand is needed
+
+The user connects via chrome://inspect, interacts with the browser, and signals completion.
+The agent then resumes with a fresh view of the page state.`,
+	}, BrowserRequestHuman(mgr))
+	if err != nil {
+		return nil, err
+	}
+
 	return []tool.Tool{
 		// Navigation
 		navigateTool, navigateBackTool,
@@ -316,5 +335,7 @@ Use device="clear" to remove device emulation.`,
 		cookiesTool, storageTool,
 		setOfflineTool, setHeadersTool, setCredentialsTool,
 		setGeolocationTool, setMediaTool, setTimezoneTool, setLocaleTool, setDeviceTool,
+		// Human-in-the-loop
+		requestHumanTool,
 	}, nil
 }

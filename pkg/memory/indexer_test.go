@@ -214,3 +214,98 @@ func TestIndexerDeletedFile(t *testing.T) {
 		t.Errorf("expected 0 documents after deletion, got %d", store.Count())
 	}
 }
+
+func TestIndexerFileIndexPersistence(t *testing.T) {
+	tmpDir := t.TempDir()
+	memDir := filepath.Join(tmpDir, "memory")
+	vecDir := filepath.Join(tmpDir, "vectors")
+
+	if err := os.MkdirAll(memDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(vecDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(memDir, "notes.md"), []byte("some content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	embedCalls := 0
+	mockEmbed := func(ctx context.Context, text string) ([]float32, error) {
+		embedCalls++
+		dim := 8
+		vec := make([]float32, dim)
+		for i := range vec {
+			vec[i] = 1.0 / float32(dim)
+		}
+		return vec, nil
+	}
+
+	cfg := &StoreConfig{
+		MemoryDir:     memDir,
+		VectorDir:     vecDir,
+		MaxResults:    6,
+		MinScore:      0.0,
+		ChunkMaxChars: 1600,
+		ChunkOverlap:  320,
+	}
+
+	// First indexer run — should embed the file
+	store1, err := NewStore(cfg, mockEmbed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexer1 := NewIndexer(store1, cfg, false)
+	store1.SetIndexer(indexer1)
+
+	ctx := context.Background()
+	if err := indexer1.IndexAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if embedCalls == 0 {
+		t.Fatal("expected at least one embed call on first run")
+	}
+
+	// Verify file_index.json was written
+	indexPath := filepath.Join(vecDir, "file_index.json")
+	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+		t.Fatal("file_index.json was not created")
+	}
+
+	// Second indexer (simulates new process) — same content, should skip embedding
+	callsBefore := embedCalls
+	store2, err := NewStore(cfg, mockEmbed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexer2 := NewIndexer(store2, cfg, false)
+	store2.SetIndexer(indexer2)
+
+	if err := indexer2.IndexAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if embedCalls != callsBefore {
+		t.Errorf("expected no new embed calls on second run (unchanged content), got %d new calls", embedCalls-callsBefore)
+	}
+
+	// Third indexer — modified content, should re-embed
+	if err := os.WriteFile(filepath.Join(memDir, "notes.md"), []byte("modified content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	callsBefore = embedCalls
+	store3, err := NewStore(cfg, mockEmbed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexer3 := NewIndexer(store3, cfg, false)
+	store3.SetIndexer(indexer3)
+
+	if err := indexer3.IndexAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if embedCalls == callsBefore {
+		t.Error("expected embed calls after content was modified")
+	}
+}

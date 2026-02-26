@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/agent"
@@ -247,19 +248,31 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 						store.SetIndexer(memIndexer)
 						memorySearchAvailable = true
 
-						// Perform initial indexing in background
-						go func() {
-							defer close(indexingDone)
-							defer func() {
-								if r := recover(); r != nil {
-									indexingErr = fmt.Errorf("indexing panicked: %v", r)
-								}
+						// If the daemon is already running, it maintains the vector
+						// index via its own Indexer + WatchAndSync. We can skip the
+						// expensive IndexAll() and file watcher — the persisted DB
+						// on disk is already up to date.
+						daemonActive := isDaemonRunning()
+						if daemonActive {
+							if cfg.DebugMode {
+								fmt.Println("[Memory] Daemon is running — skipping IndexAll and file watcher")
+							}
+							close(indexingDone)
+						} else {
+							// Perform initial indexing in background
+							go func() {
+								defer close(indexingDone)
+								defer func() {
+									if r := recover(); r != nil {
+										indexingErr = fmt.Errorf("indexing panicked: %v", r)
+									}
+								}()
+								indexingErr = memIndexer.IndexAll(context.Background())
 							}()
-							indexingErr = memIndexer.IndexAll(context.Background())
-						}()
+						}
 
-						// Start file watcher in background
-						if memCfg.IsWatchEnabled() {
+						// Start file watcher in background (only when daemon is NOT running)
+						if !daemonActive && memCfg.IsWatchEnabled() {
 							debounceMs := memCfg.Sync.DebounceMs
 							if debounceMs <= 0 {
 								debounceMs = 1500
@@ -1073,4 +1086,24 @@ func browserConfigFromApp(appCfg *config.AppConfig) browser.BrowserConfig {
 		b.UserDataDir,
 		b.NavigationTimeout,
 	)
+}
+
+// isDaemonRunning checks whether the astonish daemon is currently running
+// by reading the PID file and probing the process with signal 0.
+// This avoids importing the daemon package (which would create an import cycle).
+func isDaemonRunning() bool {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return false
+	}
+	pidPath := filepath.Join(configDir, "astonish", "daemon.pid")
+	data, err := os.ReadFile(pidPath)
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return false
+	}
+	return isProcessRunning(pid)
 }

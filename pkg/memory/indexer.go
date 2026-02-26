@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,14 +23,21 @@ type Indexer struct {
 	debugMode bool
 }
 
+// fileIndexName is the filename used to persist the file index to disk.
+const fileIndexName = "file_index.json"
+
 // NewIndexer creates a new indexer bound to the given store.
 func NewIndexer(store *Store, cfg *StoreConfig, debugMode bool) *Indexer {
-	return &Indexer{
+	idx := &Indexer{
 		store:     store,
 		config:    cfg,
 		fileIndex: make(map[string]string),
 		debugMode: debugMode,
 	}
+	// Restore the file index from a previous run so we can skip
+	// re-embedding files whose content hasn't changed.
+	idx.loadFileIndex()
+	return idx
 }
 
 // IndexAll performs a full index of all .md files in the memory directory.
@@ -105,6 +113,9 @@ func (idx *Indexer) IndexAll(ctx context.Context) error {
 		return fmt.Errorf("indexing failed: all %d files had errors", len(files))
 	}
 
+	// Persist the file index so the next startup can skip unchanged files.
+	idx.saveFileIndex()
+
 	return nil
 }
 
@@ -112,7 +123,12 @@ func (idx *Indexer) IndexAll(ctx context.Context) error {
 func (idx *Indexer) IndexFile(ctx context.Context, relPath string) error {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	return idx.indexFileUnlocked(ctx, relPath)
+	if err := idx.indexFileUnlocked(ctx, relPath); err != nil {
+		return err
+	}
+	// Persist after individual file changes (e.g. from file watcher).
+	idx.saveFileIndex()
+	return nil
 }
 
 // indexFileUnlocked indexes a single file. Must be called with idx.mu held.
@@ -273,6 +289,47 @@ func (idx *Indexer) WatchAndSync(ctx context.Context, debounceMs int) error {
 			if idx.debugMode {
 				fmt.Printf("[Memory Watcher] Error: %v\n", err)
 			}
+		}
+	}
+}
+
+// fileIndexPath returns the path to the persisted file index JSON.
+func (idx *Indexer) fileIndexPath() string {
+	return filepath.Join(idx.config.VectorDir, fileIndexName)
+}
+
+// loadFileIndex loads the persisted file index from disk.
+// If the file doesn't exist or is corrupt, the index starts empty.
+func (idx *Indexer) loadFileIndex() {
+	data, err := os.ReadFile(idx.fileIndexPath())
+	if err != nil {
+		return // File doesn't exist yet — first run.
+	}
+	loaded := make(map[string]string)
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		if idx.debugMode {
+			fmt.Printf("[Memory Indexer] Warning: corrupt file index, rebuilding: %v\n", err)
+		}
+		return
+	}
+	idx.fileIndex = loaded
+	if idx.debugMode {
+		fmt.Printf("[Memory Indexer] Loaded file index (%d entries)\n", len(loaded))
+	}
+}
+
+// saveFileIndex persists the current file index to disk.
+func (idx *Indexer) saveFileIndex() {
+	data, err := json.Marshal(idx.fileIndex)
+	if err != nil {
+		if idx.debugMode {
+			fmt.Printf("[Memory Indexer] Warning: failed to marshal file index: %v\n", err)
+		}
+		return
+	}
+	if err := os.WriteFile(idx.fileIndexPath(), data, 0644); err != nil {
+		if idx.debugMode {
+			fmt.Printf("[Memory Indexer] Warning: failed to save file index: %v\n", err)
 		}
 	}
 }

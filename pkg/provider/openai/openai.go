@@ -53,12 +53,13 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 		if req.Config != nil && len(req.Config.Tools) > 0 {
 			for _, t := range req.Config.Tools {
 				for _, fd := range t.FunctionDeclarations {
+					params := sanitizeToolParams(fd.ParametersJsonSchema)
 					tools = append(tools, openai.Tool{
 						Type: openai.ToolTypeFunction,
 						Function: &openai.FunctionDefinition{
 							Name:        fd.Name,
 							Description: fd.Description,
-							Parameters:  fd.ParametersJsonSchema,
+							Parameters:  params,
 						},
 					})
 				}
@@ -406,4 +407,37 @@ func wrapOpenAIError(err error) error {
 
 	// Unknown error type — return as-is
 	return err
+}
+
+// sanitizeToolParams ensures tool parameter schemas are compatible with
+// OpenAI-compatible endpoints. Some servers (e.g. LM Studio) crash when
+// a parameter schema has "type": "object" without a "properties" field.
+// This adds an empty "properties": {} in that case.
+//
+// The schema may arrive as a map[string]any or as a typed struct (e.g.
+// *jsonschema.Schema from the ADK). For typed structs, we round-trip
+// through JSON to get a mutable map.
+func sanitizeToolParams(params any) any {
+	if params == nil {
+		return params
+	}
+
+	m, ok := params.(map[string]any)
+	if !ok {
+		// Typed struct (e.g. *jsonschema.Schema) — round-trip via JSON
+		data, err := json.Marshal(params)
+		if err != nil {
+			return params
+		}
+		if err := json.Unmarshal(data, &m); err != nil {
+			return params
+		}
+	}
+
+	if m["type"] == "object" {
+		if _, hasProps := m["properties"]; !hasProps {
+			m["properties"] = map[string]any{}
+		}
+	}
+	return m
 }

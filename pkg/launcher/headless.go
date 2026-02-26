@@ -59,6 +59,9 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 	}
 
 	// Initialize LLM
+	if cfg.DebugMode {
+		provider.SetDebugMode(true)
+	}
 	llm, err := provider.GetProvider(ctx, cfg.ProviderName, cfg.ModelName, cfg.AppConfig)
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize provider: %w", err)

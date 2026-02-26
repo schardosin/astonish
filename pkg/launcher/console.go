@@ -232,6 +232,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	// Initialize LLM
 	if cfg.DebugMode {
 		fmt.Println("Initializing LLM provider...")
+		provider.SetDebugMode(true)
 	}
 	llm, err := provider.GetProvider(ctx, cfg.ProviderName, cfg.ModelName, cfg.AppConfig)
 	if err != nil {

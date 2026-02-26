@@ -131,6 +131,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// --- 1. Initialize LLM ---
 	if cfg.DebugMode {
 		fmt.Println("Initializing LLM provider...")
+		provider.SetDebugMode(true)
 	}
 	llm, err := provider.GetProvider(ctx, cfg.ProviderName, cfg.ModelName, cfg.AppConfig)
 	if err != nil {

@@ -24,6 +24,16 @@ import (
 	"google.golang.org/adk/model"
 )
 
+// debugMode is a package-level flag that enables verbose HTTP logging for
+// providers that support it (e.g. openai_compat). Set via SetDebugMode().
+var debugMode bool
+
+// SetDebugMode enables or disables debug HTTP logging for providers.
+// Call this before GetProvider() to enable request/response logging.
+func SetDebugMode(enabled bool) {
+	debugMode = enabled
+}
+
 // ProviderDisplayNames maps provider IDs to their proper display names.
 // This is the centralized source of truth for how provider names should be displayed
 // in both the CLI and UI.
@@ -273,7 +283,7 @@ func GetProvider(ctx context.Context, instanceName string, modelName string, cfg
 		if modelName == "" {
 			modelName = "gpt-4o"
 		}
-		return openai_compat.NewProvider(apiKey, baseURL, modelName), nil
+		return openai_compat.NewProvider(apiKey, baseURL, modelName, debugMode), nil
 
 	default:
 		return nil, fmt.Errorf("unsupported provider type: %s", providerType)

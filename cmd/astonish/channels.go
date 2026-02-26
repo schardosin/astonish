@@ -1,6 +1,7 @@
 package astonish
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/daemon"
+	emailPkg "github.com/schardosin/astonish/pkg/email"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -36,13 +38,16 @@ func handleChannelsCommand(args []string) error {
 			fmt.Println("")
 			fmt.Println("Available channels:")
 			fmt.Println("  telegram      Set up Telegram bot integration")
+			fmt.Println("  email         Set up Email integration (IMAP/SMTP)")
 			return nil
 		}
 		switch args[1] {
 		case "telegram":
 			return handleTelegramSetup()
+		case "email":
+			return handleEmailSetup()
 		default:
-			return fmt.Errorf("unknown channel: %s (available: telegram)", args[1])
+			return fmt.Errorf("unknown channel: %s (available: telegram, email)", args[1])
 		}
 	case "disable":
 		if len(args) < 2 {
@@ -376,6 +381,231 @@ func detectTelegramUsers(botToken string) ([]string, error) {
 	}
 }
 
+// handleEmailSetup runs the interactive email channel setup flow.
+func handleEmailSetup() error {
+	cfg, err := config.LoadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Check if already configured
+	if cfg.Channels.Email.IsEmailEnabled() {
+		fmt.Println()
+		fmt.Printf("  Email is already configured (%s)\n", cfg.Channels.Email.Address)
+		if len(cfg.Channels.Email.AllowFrom) > 0 {
+			fmt.Printf("  Allowed senders: %s\n", strings.Join(cfg.Channels.Email.AllowFrom, ", "))
+		}
+		fmt.Println()
+
+		var reconfigure bool
+		err := huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Reconfigure email?").
+					Value(&reconfigure),
+			),
+		).Run()
+		if err != nil || !reconfigure {
+			return nil
+		}
+	}
+
+	channelsPrintHeader("Email Channel Setup")
+	fmt.Println()
+
+	var imapServer, smtpServer, address, username, password string
+	var allowFromStr string
+
+	// IMAP/SMTP details form
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("IMAP Server (e.g., imap.gmail.com:993)").
+				Value(&imapServer).
+				Validate(func(s string) error {
+					if s == "" {
+						return fmt.Errorf("IMAP server is required")
+					}
+					return nil
+				}),
+			huh.NewInput().
+				Title("SMTP Server (e.g., smtp.gmail.com:587)").
+				Value(&smtpServer).
+				Validate(func(s string) error {
+					if s == "" {
+						return fmt.Errorf("SMTP server is required")
+					}
+					return nil
+				}),
+			huh.NewInput().
+				Title("Email Address").
+				Value(&address).
+				Validate(func(s string) error {
+					if s == "" || !strings.Contains(s, "@") {
+						return fmt.Errorf("valid email address is required")
+					}
+					return nil
+				}),
+			huh.NewInput().
+				Title("Username (press Enter if same as email address)").
+				Value(&username),
+			huh.NewInput().
+				Title("Password / App Password").
+				EchoMode(huh.EchoModePassword).
+				Value(&password).
+				Validate(func(s string) error {
+					if s == "" {
+						return fmt.Errorf("password is required")
+					}
+					return nil
+				}),
+		),
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Allowed senders (comma-separated emails, or * for anyone)").
+				Value(&allowFromStr).
+				Validate(func(s string) error {
+					if s == "" {
+						return fmt.Errorf("at least one sender address is required")
+					}
+					return nil
+				}),
+		),
+	).Run()
+	if err != nil {
+		return err
+	}
+
+	if username == "" {
+		username = address
+	}
+
+	// Parse allowFrom
+	var allowFrom []string
+	for _, a := range strings.Split(allowFromStr, ",") {
+		a = strings.TrimSpace(a)
+		if a != "" {
+			allowFrom = append(allowFrom, a)
+		}
+	}
+
+	fmt.Println()
+	channelsRunSpinner("Testing IMAP connection...")
+
+	// Test IMAP connection
+	emailCfg := &emailTestConfig{
+		IMAPServer: imapServer,
+		Address:    address,
+		Username:   username,
+		Password:   password,
+	}
+	if err := testIMAPConnection(emailCfg); err != nil {
+		fmt.Printf("  IMAP connection failed: %v\n", err)
+		return fmt.Errorf("IMAP test failed: %w", err)
+	}
+	channelsRunSpinner("IMAP connection successful")
+
+	// Save configuration
+	enabled := true
+	channelsEnabled := true
+	cfg.Channels.Enabled = &channelsEnabled
+	cfg.Channels.Email = config.EmailConfig{
+		Enabled:    &enabled,
+		Provider:   "imap",
+		IMAPServer: imapServer,
+		SMTPServer: smtpServer,
+		Address:    address,
+		Username:   username,
+		AllowFrom:  allowFrom,
+	}
+
+	// Store password in encrypted credential store
+	configDir, err := config.GetConfigDir()
+	if err == nil {
+		store, storeErr := credentials.Open(configDir)
+		if storeErr == nil {
+			if setErr := store.SetSecret("channels.email.password", password); setErr != nil {
+				fmt.Printf("  Warning: Failed to save password to encrypted store: %v\n", setErr)
+				fmt.Println("  Password will be saved in config.yaml (less secure)")
+				cfg.Channels.Email.Password = password
+			} else {
+				channelsRunSpinner("Password stored in encrypted credential store")
+			}
+		} else {
+			cfg.Channels.Email.Password = password
+		}
+	} else {
+		cfg.Channels.Email.Password = password
+	}
+
+	// Scrub migrated secrets before saving
+	credentials.ScrubAppConfig(cfg)
+
+	if err := config.SaveAppConfig(cfg); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+
+	fmt.Println()
+	channelsPrintSuccess("Email channel configured!")
+	fmt.Println()
+	fmt.Println("  Run 'astonish daemon start' to activate, or")
+	fmt.Println("  'astonish daemon run' for foreground mode.")
+	fmt.Println()
+
+	notifyDaemonChannelsChanged(cfg)
+
+	return nil
+}
+
+// emailTestConfig holds the minimal config for testing an IMAP connection.
+type emailTestConfig struct {
+	IMAPServer string
+	Address    string
+	Username   string
+	Password   string
+}
+
+// testIMAPConnection tests if we can connect and authenticate to the IMAP server.
+func testIMAPConnection(cfg *emailTestConfig) error {
+	emailCfg := &emailClientConfig{
+		IMAPServer: cfg.IMAPServer,
+		Address:    cfg.Address,
+		Username:   cfg.Username,
+		Password:   cfg.Password,
+	}
+	return testEmailConnection(emailCfg)
+}
+
+// emailClientConfig is a minimal config for creating a test email client.
+type emailClientConfig struct {
+	IMAPServer string
+	Address    string
+	Username   string
+	Password   string
+}
+
+// testEmailConnection creates a temporary email client and tests the connection.
+func testEmailConnection(cfg *emailClientConfig) error {
+	// We import the email package in the setup function since it's only
+	// used during setup, not at module load time.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	emailPkgCfg := &emailPkg.Config{
+		Provider:   "imap",
+		IMAPServer: cfg.IMAPServer,
+		Address:    cfg.Address,
+		Username:   cfg.Username,
+		Password:   cfg.Password,
+	}
+	client, err := emailPkg.NewClient(emailPkgCfg)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	return client.Connect(ctx)
+}
+
 // handleChannelDisable disables a channel in the config.
 func handleChannelDisable(channel string) error {
 	cfg, err := config.LoadAppConfig()
@@ -396,8 +626,20 @@ func handleChannelDisable(channel string) error {
 		}
 		fmt.Println("Telegram channel disabled.")
 		notifyDaemonChannelsChanged(cfg)
+	case "email":
+		if !cfg.Channels.Email.IsEmailEnabled() {
+			fmt.Println("Email is not currently enabled.")
+			return nil
+		}
+		disabled := false
+		cfg.Channels.Email.Enabled = &disabled
+		if err := config.SaveAppConfig(cfg); err != nil {
+			return fmt.Errorf("failed to save config: %w", err)
+		}
+		fmt.Println("Email channel disabled.")
+		notifyDaemonChannelsChanged(cfg)
 	default:
-		return fmt.Errorf("unknown channel: %s (available: telegram)", channel)
+		return fmt.Errorf("unknown channel: %s (available: telegram, email)", channel)
 	}
 
 	return nil
@@ -554,7 +796,7 @@ func handleChannelsStatusFromConfig(cfg *config.AppConfig) error {
 func printChannelsUsage() {
 	fmt.Println("usage: astonish channels {status,setup,disable}")
 	fmt.Println("")
-	fmt.Println("Manage communication channels (Telegram, Slack, etc.)")
+	fmt.Println("Manage communication channels (Telegram, Email, etc.)")
 	fmt.Println("")
 	fmt.Println("subcommands:")
 	fmt.Println("  status              Show status of all channels")
@@ -563,6 +805,7 @@ func printChannelsUsage() {
 	fmt.Println("")
 	fmt.Println("available channels:")
 	fmt.Println("  telegram            Telegram bot integration")
+	fmt.Println("  email               Email integration (IMAP/SMTP)")
 }
 
 // maskToken returns the last 8 chars of a token, with the rest replaced by dots.

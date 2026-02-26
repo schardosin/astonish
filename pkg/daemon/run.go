@@ -14,9 +14,11 @@ import (
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/api"
 	"github.com/schardosin/astonish/pkg/channels"
+	emailchan "github.com/schardosin/astonish/pkg/channels/email"
 	"github.com/schardosin/astonish/pkg/channels/telegram"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
+	emailpkg "github.com/schardosin/astonish/pkg/email"
 	"github.com/schardosin/astonish/pkg/launcher"
 	"github.com/schardosin/astonish/pkg/scheduler"
 	"github.com/schardosin/astonish/pkg/tools"
@@ -202,12 +204,76 @@ func Run(cfg RunConfig) error {
 			}
 		}
 
+		// Register Email channel (inbound polling) only if explicitly enabled
+		if freshCfg.Channels.Email.IsEmailEnabled() {
+			emailPassword := freshCfg.Channels.Email.Password
+			if emailPassword == "" && factoryResult.CredentialStore != nil {
+				emailPassword = factoryResult.CredentialStore.GetSecret("channels.email.password")
+			}
+			if emailPassword == "" {
+				logger.Printf("Warning: Email channel enabled but no password found")
+			} else if freshCfg.Channels.Email.IMAPServer == "" || freshCfg.Channels.Email.SMTPServer == "" {
+				logger.Printf("Warning: Email channel enabled but IMAP/SMTP servers not configured")
+			} else {
+				pollInterval := time.Duration(freshCfg.Channels.Email.GetPollInterval()) * time.Second
+				em := emailchan.New(&emailchan.Config{
+					Provider:     freshCfg.Channels.Email.Provider,
+					IMAPServer:   freshCfg.Channels.Email.IMAPServer,
+					SMTPServer:   freshCfg.Channels.Email.SMTPServer,
+					Address:      freshCfg.Channels.Email.Address,
+					Username:     freshCfg.Channels.Email.Username,
+					Password:     emailPassword,
+					PollInterval: pollInterval,
+					AllowFrom:    freshCfg.Channels.Email.AllowFrom,
+					Folder:       freshCfg.Channels.Email.Folder,
+					MarkRead:     freshCfg.Channels.Email.IsMarkRead(),
+					MaxBodyChars: freshCfg.Channels.Email.MaxBodyChars,
+					Commands:     mgr.Commands(),
+				}, log.Default())
+				mgr.Register(em)
+				logger.Printf("Email channel registered (%s)", freshCfg.Channels.Email.Address)
+			}
+		}
+
 		if err := mgr.StartAll(ctx); err != nil {
 			return mgr, fmt.Errorf("failed to start channels: %w", err)
 		}
 		logger.Printf("Channels started")
 		return mgr, nil
 	}
+
+	// initEmailTools initializes email tools whenever valid IMAP/SMTP
+	// credentials are configured, regardless of whether the email channel is
+	// enabled. This allows the agent to use email_list, email_read,
+	// email_search, email_send, email_wait, etc. during autonomous flows
+	// (e.g. web portal registration) without requiring the polling channel.
+	initEmailTools := func(cfg *config.AppConfig) {
+		if factoryResult == nil {
+			return
+		}
+		emailPassword := cfg.Channels.Email.Password
+		if emailPassword == "" && factoryResult.CredentialStore != nil {
+			emailPassword = factoryResult.CredentialStore.GetSecret("channels.email.password")
+		}
+		if emailPassword == "" || cfg.Channels.Email.IMAPServer == "" ||
+			cfg.Channels.Email.SMTPServer == "" || cfg.Channels.Email.Address == "" {
+			return
+		}
+		setupEmailTools(&emailToolConfig{
+			Provider:     cfg.Channels.Email.Provider,
+			IMAPServer:   cfg.Channels.Email.IMAPServer,
+			SMTPServer:   cfg.Channels.Email.SMTPServer,
+			Address:      cfg.Channels.Email.Address,
+			Username:     cfg.Channels.Email.Username,
+			Password:     emailPassword,
+			Folder:       cfg.Channels.Email.Folder,
+			MaxBodyChars: cfg.Channels.Email.MaxBodyChars,
+		})
+		logger.Printf("Email tools initialized (%s)", cfg.Channels.Email.Address)
+	}
+
+	// --- Initialize email tools (independent of channel enabled state) ---
+	initEmailTools(appCfg)
 
 	// --- Initialize channel manager if channels are enabled ---
 	if mgr, err := initChannels(appCfg); err != nil {
@@ -270,6 +336,9 @@ func Run(cfg RunConfig) error {
 			// Cleanup handled by the deferred closure in Run() that reads
 			// the current factoryResult at shutdown time.
 		}
+
+		// Refresh email tools (runs independently of channel state)
+		initEmailTools(freshCfg)
 
 		// Create fresh channel manager with new config
 		mgr, err := initChannels(freshCfg)
@@ -558,4 +627,36 @@ func (b *distillBridge) ConfirmAndDistill(ctx context.Context, ds tools.DistillS
 		AppName:   ds.AppName,
 		UserID:    ds.UserID,
 	}, print)
+}
+
+// emailToolConfig holds the info needed to create an email client for tools.
+type emailToolConfig struct {
+	Provider     string
+	IMAPServer   string
+	SMTPServer   string
+	Address      string
+	Username     string
+	Password     string
+	Folder       string
+	MaxBodyChars int
+}
+
+// setupEmailTools creates an email client and registers it for the email tools.
+func setupEmailTools(cfg *emailToolConfig) {
+	emailCfg := &emailpkg.Config{
+		Provider:     cfg.Provider,
+		IMAPServer:   cfg.IMAPServer,
+		SMTPServer:   cfg.SMTPServer,
+		Address:      cfg.Address,
+		Username:     cfg.Username,
+		Password:     cfg.Password,
+		Folder:       cfg.Folder,
+		MaxBodyChars: cfg.MaxBodyChars,
+	}
+	client, err := emailpkg.NewClient(emailCfg)
+	if err != nil {
+		log.Printf("Warning: Failed to create email client for tools: %v", err)
+		return
+	}
+	tools.SetEmailClient(client)
 }

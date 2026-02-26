@@ -485,6 +485,14 @@ func channelHints(channelID string) string {
 - Use simple formatting only: **bold**, *italic*, ` + "`code`" + `, and fenced code blocks
 - Break long responses into short paragraphs
 - Be conversational — this is a chat, not a terminal`
+	case "email":
+		return `You are responding via email.
+- Use proper email formatting with a greeting and sign-off
+- Keep responses clear and well-structured
+- You can use longer, more detailed responses than chat (email is async)
+- Use markdown for formatting (it will be rendered as rich text)
+- Do not include unnecessary pleasantries in every message if the conversation is ongoing
+- Thread context: you are replying to an email conversation`
 	default:
 		return ""
 	}

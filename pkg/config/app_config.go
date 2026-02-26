@@ -234,6 +234,7 @@ type ChannelsConfig struct {
 	// Enabled controls whether channels are active. Default: false (nil means false).
 	Enabled  *bool          `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	Telegram TelegramConfig `yaml:"telegram,omitempty" json:"telegram,omitempty"`
+	Email    EmailConfig    `yaml:"email,omitempty" json:"email,omitempty"`
 }
 
 // IsChannelsEnabled returns true if channels are explicitly enabled.
@@ -356,6 +357,58 @@ type TelegramConfig struct {
 // separately if this returns true.
 func (c *TelegramConfig) IsTelegramEnabled() bool {
 	return c.Enabled != nil && *c.Enabled
+}
+
+// EmailConfig holds configuration for the Email channel adapter.
+type EmailConfig struct {
+	// Enabled controls whether the Email adapter is active. Default: false (nil means false).
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// Provider selects the implementation: "imap" or "gmail". Default: "imap".
+	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
+	// IMAPServer is the IMAP server address (e.g., "imap.gmail.com:993").
+	IMAPServer string `yaml:"imap_server,omitempty" json:"imap_server,omitempty"`
+	// SMTPServer is the SMTP server address (e.g., "smtp.gmail.com:587").
+	SMTPServer string `yaml:"smtp_server,omitempty" json:"smtp_server,omitempty"`
+	// Address is the agent's email address.
+	Address string `yaml:"address,omitempty" json:"address,omitempty"`
+	// Username is the IMAP/SMTP login username. Often same as Address.
+	Username string `yaml:"username,omitempty" json:"username,omitempty"`
+	// Password is the IMAP/SMTP password or app password.
+	// After credential migration, this will be empty (stored in encrypted store).
+	Password string `yaml:"password,omitempty" json:"password,omitempty"`
+	// PollInterval is seconds between inbox checks. Default: 30.
+	PollInterval int `yaml:"poll_interval,omitempty" json:"poll_interval,omitempty"`
+	// AllowFrom is a list of email addresses allowed to trigger the agent.
+	// Use ["*"] to allow anyone. An empty list blocks all inbound messages.
+	AllowFrom []string `yaml:"allow_from,omitempty" json:"allow_from,omitempty"`
+	// Folder is the IMAP folder to monitor. Default: "INBOX".
+	Folder string `yaml:"folder,omitempty" json:"folder,omitempty"`
+	// MarkRead marks processed emails as read. Default: true.
+	MarkRead *bool `yaml:"mark_read,omitempty" json:"mark_read,omitempty"`
+	// MaxBodyChars truncates long email bodies. Default: 50000.
+	MaxBodyChars int `yaml:"max_body_chars,omitempty" json:"max_body_chars,omitempty"`
+}
+
+// IsEmailEnabled returns true if the Email channel is explicitly enabled.
+func (c *EmailConfig) IsEmailEnabled() bool {
+	return c.Enabled != nil && *c.Enabled
+}
+
+// IsMarkRead returns whether processed emails should be marked as read.
+// Defaults to true if not set.
+func (c *EmailConfig) IsMarkRead() bool {
+	if c.MarkRead == nil {
+		return true
+	}
+	return *c.MarkRead
+}
+
+// GetPollInterval returns the poll interval in seconds, defaulting to 30.
+func (c *EmailConfig) GetPollInterval() int {
+	if c.PollInterval <= 0 {
+		return 30
+	}
+	return c.PollInterval
 }
 
 type ProviderConfig map[string]string

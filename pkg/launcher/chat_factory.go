@@ -412,6 +412,18 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	}
 	cleanups = append(cleanups, browserMgr.Cleanup)
 
+	// --- 2f-ii. Initialize email tools ---
+	// Email tools are registered if an email client is configured.
+	// The client may be set later by the daemon when the email channel starts.
+	emailTools, emailErr := tools.GetEmailTools()
+	if emailErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("Warning: Failed to create email tools: %v\n", emailErr)
+		}
+	} else if len(emailTools) > 0 {
+		internalTools = append(internalTools, emailTools...)
+	}
+
 	// --- 2g. Sub-agent delegation tool ---
 	var subAgentMgr *agent.SubAgentManager
 	if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {

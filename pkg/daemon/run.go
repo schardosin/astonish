@@ -151,6 +151,7 @@ func Run(cfg RunConfig) error {
 			ModelName:    appCfg.General.DefaultModel,
 			DebugMode:    cfg.Debug,
 			AutoApprove:  true, // Channels/scheduler auto-approve all tools
+			IsDaemon:     true, // We ARE the daemon — always run indexing/watchers.
 		})
 		if factoryErr != nil {
 			logger.Printf("Warning: Failed to initialize ChatAgent: %v", factoryErr)

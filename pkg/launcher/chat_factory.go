@@ -33,6 +33,7 @@ type ChatFactoryConfig struct {
 	DebugMode    bool
 	AutoApprove  bool
 	WorkspaceDir string
+	IsDaemon     bool // When true, always run indexing/watchers (we ARE the daemon).
 }
 
 // ChatFactoryResult holds everything produced by the factory.
@@ -248,11 +249,11 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 						store.SetIndexer(memIndexer)
 						memorySearchAvailable = true
 
-						// If the daemon is already running, it maintains the vector
-						// index via its own Indexer + WatchAndSync. We can skip the
-						// expensive IndexAll() and file watcher — the persisted DB
-						// on disk is already up to date.
-						daemonActive := isDaemonRunning()
+						// If the daemon is already running (and we're NOT the daemon),
+						// it maintains the vector index via its own Indexer + WatchAndSync.
+						// We can skip the expensive IndexAll() and file watcher — the
+						// persisted DB on disk is already up to date.
+						daemonActive := !cfg.IsDaemon && isDaemonRunning()
 						if daemonActive {
 							if cfg.DebugMode {
 								fmt.Println("[Memory] Daemon is running — skipping IndexAll and file watcher")

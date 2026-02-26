@@ -130,14 +130,18 @@ func TestSystemPromptBuilder_HandoffGuidance(t *testing.T) {
 
 	prompt := builder.Build()
 
-	if !strings.Contains(prompt, "Human-in-the-loop") {
-		t.Error("expected handoff guidance section in browser automation")
+	checks := []string{
+		"Human-in-the-loop",
+		"CAPTCHAs",
+		"Two-step handoff flow",
+		"browser_request_human",
+		"browser_handoff_complete",
+		"RELAY the connection instructions",
 	}
-	if !strings.Contains(prompt, "CAPTCHAs") {
-		t.Error("expected CAPTCHA mention in handoff guidance")
-	}
-	if !strings.Contains(prompt, "chrome://inspect") {
-		t.Error("expected chrome://inspect mention")
+	for _, check := range checks {
+		if !strings.Contains(prompt, check) {
+			t.Errorf("expected prompt to contain %q", check)
+		}
 	}
 }
 

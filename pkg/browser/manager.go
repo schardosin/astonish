@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -125,6 +126,12 @@ type Manager struct {
 	pagesMu   sync.RWMutex
 	activePg  *rod.Page // most recently active page
 	cdpURL    string    // CDP WebSocket endpoint URL (set after launch)
+
+	// Handoff state (human-in-the-loop). The handoff server persists across
+	// tool calls so that browser_request_human can return immediately and
+	// browser_handoff_complete can wait later.
+	handoff       *HandoffServer
+	handoffReason string
 }
 
 // NewManager creates a Manager with the given config. The browser is NOT
@@ -217,6 +224,74 @@ func (m *Manager) HandoffConfig() HandoffCfg {
 		port = 9222
 	}
 	return HandoffCfg{BindAddress: bind, Port: port}
+}
+
+// StartHandoff creates and starts a handoff server, storing it on the Manager
+// so it persists across tool calls. Returns the HandoffInfo (with listen address)
+// and an error. If a handoff is already active, returns an error.
+func (m *Manager) StartHandoff(opts HandoffOpts) (*HandoffInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.handoff != nil && m.handoff.IsActive() {
+		return nil, fmt.Errorf("a browser handoff session is already active")
+	}
+
+	h := NewHandoffServer(nil)
+	info, err := h.Start(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	m.handoff = h
+	m.handoffReason = opts.Reason
+	return info, nil
+}
+
+// WaitHandoff blocks until the active handoff session completes or the context
+// is cancelled. Returns an error if no handoff is active. Stops and cleans up
+// the handoff server after the wait completes.
+func (m *Manager) WaitHandoff(ctx context.Context) error {
+	m.mu.Lock()
+	h := m.handoff
+	m.mu.Unlock()
+
+	if h == nil || !h.IsActive() {
+		return fmt.Errorf("no active handoff session")
+	}
+
+	err := h.WaitForCompletion(ctx)
+
+	// Clean up the handoff server after completion (or timeout)
+	m.mu.Lock()
+	if m.handoff == h {
+		_ = m.handoff.Stop()
+		m.handoff = nil
+		m.handoffReason = ""
+	}
+	m.mu.Unlock()
+
+	return err
+}
+
+// StopHandoff stops any active handoff session. Safe to call when no handoff
+// is running.
+func (m *Manager) StopHandoff() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.handoff != nil {
+		_ = m.handoff.Stop()
+		m.handoff = nil
+		m.handoffReason = ""
+	}
+}
+
+// HandoffActive returns true if a handoff session is currently running.
+func (m *Manager) HandoffActive() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.handoff != nil && m.handoff.IsActive()
 }
 
 // CurrentPage returns the most recently active page, creating one if none exists.
@@ -487,6 +562,13 @@ func (m *Manager) NavigationTimeout() time.Duration {
 func (m *Manager) Cleanup() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Stop any active handoff session
+	if m.handoff != nil {
+		_ = m.handoff.Stop()
+		m.handoff = nil
+		m.handoffReason = ""
+	}
 
 	// Close incognito context first (it's a child of the main browser)
 	if m.incognito != nil {

@@ -217,9 +217,12 @@ func (b *SystemPromptBuilder) Build() string {
 			sb.WriteString("- Complex multi-factor authentication flows\n")
 			sb.WriteString("- Payment forms requiring real card details\n")
 			sb.WriteString("- Any visual challenge you cannot solve programmatically\n\n")
-			sb.WriteString("The tool exposes the browser via CDP so the user can connect with `chrome://inspect` and take over. ")
-			sb.WriteString("Always provide a clear, specific reason describing what the user needs to do. ")
-			sb.WriteString("After handoff completes, take a fresh `browser_snapshot` to see what changed.\n")
+			sb.WriteString("**Two-step handoff flow (CRITICAL):**\n")
+			sb.WriteString("1. Call `browser_request_human` with a specific reason. It returns IMMEDIATELY with CDP connection instructions.\n")
+			sb.WriteString("2. **RELAY the connection instructions to the user in your response.** Include the listen address and steps.\n")
+			sb.WriteString("3. Call `browser_handoff_complete` to wait for the user to finish.\n")
+			sb.WriteString("4. After completion, take a fresh `browser_snapshot` to see what changed.\n\n")
+			sb.WriteString("You MUST show the user the connection details before calling browser_handoff_complete, otherwise they won't know how to connect.\n")
 		}
 	}
 

@@ -1072,6 +1072,22 @@ func factoryBuildSelfMDConfig(
 		selfCfg.SubAgentsEnabled = cfg.AppConfig.SubAgents.IsSubAgentsEnabled()
 	}
 
+	// Channels
+	if cfg.AppConfig != nil {
+		selfCfg.ChannelsEnabled = cfg.AppConfig.Channels.IsChannelsEnabled()
+		selfCfg.TelegramEnabled = cfg.AppConfig.Channels.Telegram.IsTelegramEnabled()
+		selfCfg.EmailEnabled = cfg.AppConfig.Channels.Email.IsEmailEnabled()
+		selfCfg.EmailAddress = cfg.AppConfig.Channels.Email.Address
+
+		// Email tools are available when IMAP/SMTP credentials are configured,
+		// regardless of whether the channel is enabled.
+		if cfg.AppConfig.Channels.Email.Address != "" &&
+			cfg.AppConfig.Channels.Email.IMAPServer != "" &&
+			cfg.AppConfig.Channels.Email.SMTPServer != "" {
+			selfCfg.EmailToolsAvail = true
+		}
+	}
+
 	// Skills
 	if len(loadedSkills) > 0 {
 		eligible := skills.FilterEligible(loadedSkills)

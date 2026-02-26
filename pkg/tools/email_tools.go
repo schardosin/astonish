@@ -15,6 +15,11 @@ func SetEmailClient(c email.Client) {
 	emailClient = c
 }
 
+// HasEmailClient returns true if an email client has been set.
+func HasEmailClient() bool {
+	return emailClient != nil
+}
+
 // GetEmailTools creates all email tools sharing a single email client.
 // Returns nil tools if no email client is configured.
 func GetEmailTools() ([]tool.Tool, error) {

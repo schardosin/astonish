@@ -251,6 +251,11 @@ func Run(cfg RunConfig) error {
 		if factoryResult == nil {
 			return
 		}
+		// If the factory already initialized the email client (both console and
+		// daemon paths), skip to avoid creating a redundant second client.
+		if tools.HasEmailClient() {
+			return
+		}
 		emailPassword := cfg.Channels.Email.Password
 		if emailPassword == "" && factoryResult.CredentialStore != nil {
 			emailPassword = factoryResult.CredentialStore.GetSecret("channels.email.password")

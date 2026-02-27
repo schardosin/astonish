@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package, Store, GitBranch, RefreshCw, Search, Play, Download, MessageSquare, Globe, Radio, Database, Brain, GitFork, Wand2, Clock, Shield, User } from 'lucide-react'
+import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package, Store, GitBranch, RefreshCw, Search, Play, Download, MessageSquare, Globe, Radio, Database, Brain, GitFork, Wand2, Clock, Shield, User, KeyRound } from 'lucide-react'
 import MCPStoreModal from './MCPStoreModal'
 import FlowStorePanel from './FlowStorePanel'
 import ProviderModelSelector from './ProviderModelSelector'
@@ -19,6 +19,7 @@ import SkillsSettings from './settings/SkillsSettings'
 import SchedulerSettings from './settings/SchedulerSettings'
 import DaemonSettings from './settings/DaemonSettings'
 import IdentitySettings from './settings/IdentitySettings'
+import CredentialsSettings from './settings/CredentialsSettings'
 
 // API functions
 const fetchSettings = async () => {
@@ -644,6 +645,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
   const menuItems = [
     { id: 'general', label: 'General', icon: Settings },
     { id: 'providers', label: 'Providers', icon: Key },
+    { id: 'credentials', label: 'Credentials', icon: KeyRound },
     { id: 'chat', label: 'Chat', icon: MessageSquare },
     { id: 'browser', label: 'Browser', icon: Globe },
     { id: 'channels', label: 'Channels', icon: Radio },
@@ -2008,6 +2010,10 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
 
           {activeSection === 'identity' && fullConfig && (
             <IdentitySettings config={fullConfig.agent_identity} onSaved={() => setFullConfig(null)} />
+          )}
+
+          {activeSection === 'credentials' && (
+            <CredentialsSettings />
           )}
         </div>
       </div>

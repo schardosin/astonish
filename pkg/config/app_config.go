@@ -295,6 +295,15 @@ type BrowserAppConfig struct {
 	// UserDataDir) are ignored since the external browser manages its own config.
 	RemoteCDPURL string `yaml:"remote_cdp_url,omitempty" json:"remote_cdp_url,omitempty"`
 
+	// FingerprintSeed is a deterministic seed for CloakBrowser's fingerprint
+	// generation. Each seed produces a unique but consistent browser fingerprint
+	// (canvas, WebGL, audio, fonts, TLS, etc.). Only effective when ChromePath
+	// points to a CloakBrowser binary. Example: "42000".
+	FingerprintSeed string `yaml:"fingerprint_seed,omitempty" json:"fingerprint_seed,omitempty"`
+	// FingerprintPlatform overrides the OS platform reported by CloakBrowser.
+	// Valid values: "windows", "macos", "linux". Only effective with CloakBrowser.
+	FingerprintPlatform string `yaml:"fingerprint_platform,omitempty" json:"fingerprint_platform,omitempty"`
+
 	// HandoffBindAddress controls network binding for browser handoff (human-in-the-loop).
 	// "127.0.0.1" for local-only (default), "0.0.0.0" for remote access via SSH tunnel.
 	HandoffBindAddress string `yaml:"handoff_bind_address,omitempty" json:"handoff_bind_address,omitempty"`

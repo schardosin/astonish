@@ -1166,19 +1166,21 @@ func browserConfigFromApp(appCfg *config.AppConfig) browser.BrowserConfig {
 		return browser.DefaultConfig()
 	}
 	b := &appCfg.Browser
-	return browser.OverrideConfig(
-		b.Headless,
-		b.ViewportWidth,
-		b.ViewportHeight,
-		b.NoSandbox,
-		b.ChromePath,
-		b.UserDataDir,
-		b.NavigationTimeout,
-		b.Proxy,
-		b.RemoteCDPURL,
-		b.HandoffBindAddress,
-		b.HandoffPort,
-	)
+	return browser.OverrideConfig(browser.ConfigOverrides{
+		Headless:            b.Headless,
+		ViewportWidth:       b.ViewportWidth,
+		ViewportHeight:      b.ViewportHeight,
+		NoSandbox:           b.NoSandbox,
+		ChromePath:          b.ChromePath,
+		UserDataDir:         b.UserDataDir,
+		NavigationTimeout:   b.NavigationTimeout,
+		Proxy:               b.Proxy,
+		RemoteCDPURL:        b.RemoteCDPURL,
+		FingerprintSeed:     b.FingerprintSeed,
+		FingerprintPlatform: b.FingerprintPlatform,
+		HandoffBindAddress:  b.HandoffBindAddress,
+		HandoffPort:         b.HandoffPort,
+	})
 }
 
 // isDaemonRunning checks whether the astonish daemon is currently running

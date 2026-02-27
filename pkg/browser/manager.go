@@ -43,6 +43,10 @@ type BrowserConfig struct {
 	Proxy             string        // HTTP/SOCKS proxy URL. Empty = direct connection.
 	RemoteCDPURL      string        // External CDP endpoint. When set, skip local launch.
 
+	// CloakBrowser fingerprint control (only effective with CloakBrowser binary)
+	FingerprintSeed     string // Deterministic fingerprint seed (e.g. "42000")
+	FingerprintPlatform string // OS to spoof: "windows", "macos", "linux"
+
 	// Handoff (human-in-the-loop)
 	HandoffBindAddress string // Network bind address for CDP handoff. Default: "127.0.0.1"
 	HandoffPort        int    // TCP port for CDP handoff proxy. Default: 9222
@@ -71,43 +75,69 @@ func DefaultConfig() BrowserConfig {
 	}
 }
 
+// ConfigOverrides holds optional user settings from config.yaml that override
+// the browser defaults. Pointer fields (nil = use default) and zero-value
+// fields (empty string / 0 = use default) follow the same convention as
+// config.BrowserAppConfig.
+type ConfigOverrides struct {
+	Headless            *bool
+	ViewportWidth       int
+	ViewportHeight      int
+	NoSandbox           *bool
+	ChromePath          string
+	UserDataDir         string
+	NavigationTimeout   int // seconds; 0 = use default
+	Proxy               string
+	RemoteCDPURL        string
+	HandoffBindAddress  string
+	HandoffPort         int
+	FingerprintSeed     string
+	FingerprintPlatform string
+}
+
 // OverrideConfig applies optional overrides to the default config.
-// Zero values are ignored (the default is preserved). This is used by the
+// Zero/nil values are ignored (the default is preserved). This is used by the
 // launcher to merge user config from config.yaml with sensible defaults.
-func OverrideConfig(headless *bool, viewportWidth, viewportHeight int, noSandbox *bool, chromePath, userDataDir string, navigationTimeoutSec int, proxy string, remoteCDPURL string, handoffBindAddress string, handoffPort int) BrowserConfig {
+func OverrideConfig(o ConfigOverrides) BrowserConfig {
 	cfg := DefaultConfig()
-	if headless != nil {
-		cfg.Headless = *headless
+	if o.Headless != nil {
+		cfg.Headless = *o.Headless
 	}
-	if viewportWidth > 0 {
-		cfg.ViewportWidth = viewportWidth
+	if o.ViewportWidth > 0 {
+		cfg.ViewportWidth = o.ViewportWidth
 	}
-	if viewportHeight > 0 {
-		cfg.ViewportHeight = viewportHeight
+	if o.ViewportHeight > 0 {
+		cfg.ViewportHeight = o.ViewportHeight
 	}
-	if noSandbox != nil {
-		cfg.NoSandbox = *noSandbox
+	if o.NoSandbox != nil {
+		cfg.NoSandbox = *o.NoSandbox
 	}
-	if chromePath != "" {
-		cfg.ChromePath = chromePath
+	if o.ChromePath != "" {
+		cfg.ChromePath = o.ChromePath
 	}
-	if userDataDir != "" {
-		cfg.UserDataDir = userDataDir
+	if o.UserDataDir != "" {
+		cfg.UserDataDir = o.UserDataDir
 	}
-	if navigationTimeoutSec > 0 {
-		cfg.NavigationTimeout = time.Duration(navigationTimeoutSec) * time.Second
+	if o.NavigationTimeout > 0 {
+		cfg.NavigationTimeout = time.Duration(o.NavigationTimeout) * time.Second
 	}
-	if proxy != "" {
-		cfg.Proxy = proxy
+	if o.Proxy != "" {
+		cfg.Proxy = o.Proxy
 	}
-	if remoteCDPURL != "" {
-		cfg.RemoteCDPURL = remoteCDPURL
+	if o.RemoteCDPURL != "" {
+		cfg.RemoteCDPURL = o.RemoteCDPURL
 	}
-	if handoffBindAddress != "" {
-		cfg.HandoffBindAddress = handoffBindAddress
+	if o.HandoffBindAddress != "" {
+		cfg.HandoffBindAddress = o.HandoffBindAddress
 	}
-	if handoffPort > 0 {
-		cfg.HandoffPort = handoffPort
+	if o.HandoffPort > 0 {
+		cfg.HandoffPort = o.HandoffPort
+	}
+	if o.FingerprintSeed != "" {
+		cfg.FingerprintSeed = o.FingerprintSeed
+	}
+	if o.FingerprintPlatform != "" {
+		cfg.FingerprintPlatform = o.FingerprintPlatform
 	}
 	return cfg
 }
@@ -212,6 +242,12 @@ func (m *Manager) GetOrLaunch() (*rod.Browser, error) {
 		// Prevent Blink from exposing AutomationControlled feature, which
 		// websites check via navigator.webdriver and other signals.
 		Set(flags.Flag("disable-blink-features"), "AutomationControlled").
+		// Disable Cross-Origin-Opener-Policy enforcement. Google OAuth
+		// popups set COOP: same-origin, which prevents the parent page
+		// (e.g. Reddit) from accessing window.closed on the popup. This
+		// breaks OAuth callback detection. Appending to the existing
+		// disable-features list (which rod sets to "site-per-process,TranslateUI").
+		Append(flags.Flag("disable-features"), "CrossOriginOpenerPolicy").
 		// Prevent Chrome from throttling timers and rendering in background
 		// tabs/windows. Important for consistent behavior in headed Xvfb mode.
 		Set(flags.Flag("disable-background-timer-throttling")).
@@ -231,6 +267,15 @@ func (m *Manager) GetOrLaunch() (*rod.Browser, error) {
 	}
 	if m.config.Proxy != "" {
 		l = l.Set(flags.Flag("proxy-server"), m.config.Proxy)
+	}
+
+	// CloakBrowser fingerprint flags. These are silently ignored by stock
+	// Chromium, so it's safe to set them unconditionally when configured.
+	if m.config.FingerprintSeed != "" {
+		l = l.Set(flags.Flag("fingerprint"), m.config.FingerprintSeed)
+	}
+	if m.config.FingerprintPlatform != "" {
+		l = l.Set(flags.Flag("fingerprint-platform"), m.config.FingerprintPlatform)
 	}
 
 	u, err := l.Launch()

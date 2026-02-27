@@ -60,19 +60,21 @@ func GetBrowserManager() *browser.Manager {
 		cfg := browser.DefaultConfig()
 		if appCfg, err := config.LoadAppConfig(); err == nil {
 			b := &appCfg.Browser
-			cfg = browser.OverrideConfig(
-				b.Headless,
-				b.ViewportWidth,
-				b.ViewportHeight,
-				b.NoSandbox,
-				b.ChromePath,
-				b.UserDataDir,
-				b.NavigationTimeout,
-				b.Proxy,
-				b.RemoteCDPURL,
-				b.HandoffBindAddress,
-				b.HandoffPort,
-			)
+			cfg = browser.OverrideConfig(browser.ConfigOverrides{
+				Headless:            b.Headless,
+				ViewportWidth:       b.ViewportWidth,
+				ViewportHeight:      b.ViewportHeight,
+				NoSandbox:           b.NoSandbox,
+				ChromePath:          b.ChromePath,
+				UserDataDir:         b.UserDataDir,
+				NavigationTimeout:   b.NavigationTimeout,
+				Proxy:               b.Proxy,
+				RemoteCDPURL:        b.RemoteCDPURL,
+				FingerprintSeed:     b.FingerprintSeed,
+				FingerprintPlatform: b.FingerprintPlatform,
+				HandoffBindAddress:  b.HandoffBindAddress,
+				HandoffPort:         b.HandoffPort,
+			})
 		}
 		globalBrowserMgr = browser.NewManager(cfg)
 	})

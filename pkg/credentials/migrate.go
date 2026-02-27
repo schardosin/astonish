@@ -77,6 +77,11 @@ func MigrateFromConfig(store *Store, appCfg *config.AppConfig, logger *log.Logge
 		secrets["channels.telegram.bot_token"] = appCfg.Channels.Telegram.BotToken
 	}
 
+	// --- 2b. Email channel password ---
+	if appCfg.Channels.Email.Password != "" {
+		secrets["channels.email.password"] = appCfg.Channels.Email.Password
+	}
+
 	// --- 3. Web server API keys (Tavily, Brave, Firecrawl) ---
 	for serverID, wsCfg := range appCfg.WebServers {
 		if wsCfg.APIKey != "" {
@@ -144,6 +149,9 @@ func scrubAppConfig(appCfg *config.AppConfig) {
 
 	// Telegram bot token
 	appCfg.Channels.Telegram.BotToken = ""
+
+	// Email channel password
+	appCfg.Channels.Email.Password = ""
 
 	// Web server API keys
 	for id, wsCfg := range appCfg.WebServers {

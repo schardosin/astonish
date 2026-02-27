@@ -12,6 +12,12 @@ import (
 	"google.golang.org/adk/tool"
 )
 
+// elementInteractionTimeout bounds all implicit rod Wait calls (WaitStableRAF,
+// WaitInteractable, WaitEnabled, WaitWritable) that run inside Click, Input,
+// Hover, Select, etc. Without this, those waits poll indefinitely on dynamic
+// SPAs like Reddit where the DOM never fully stabilizes.
+const elementInteractionTimeout = 30 * time.Second
+
 // --- browser_click ---
 
 type BrowserClickArgs struct {
@@ -41,6 +47,10 @@ func BrowserClick(mgr *browser.Manager, refs *browser.RefMap) func(tool.Context,
 			return BrowserClickResult{}, err
 		}
 
+		// Apply timeout so rod's internal WaitInteractable/WaitEnabled don't block
+		// indefinitely on dynamic SPAs (e.g. Reddit overlays, spinners).
+		el = el.Timeout(elementInteractionTimeout)
+
 		button := proto.InputMouseButtonLeft
 		switch strings.ToLower(args.Button) {
 		case "right":
@@ -53,6 +63,9 @@ func BrowserClick(mgr *browser.Manager, refs *browser.RefMap) func(tool.Context,
 		if args.DoubleClick {
 			clickCount = 2
 		}
+
+		// Subtle random delay before clicking to break robotic timing patterns.
+		browser.HumanDelay(50, 200)
 
 		if err := el.Click(button, clickCount); err != nil {
 			return BrowserClickResult{}, fmt.Errorf("click failed: %w", err)
@@ -100,18 +113,20 @@ func BrowserType(mgr *browser.Manager, refs *browser.RefMap) func(tool.Context, 
 			return BrowserTypeResult{}, err
 		}
 
+		// Apply timeout so rod's internal WaitStableRAF/WaitEnabled/WaitWritable
+		// don't block indefinitely on SPAs with continuous DOM mutations.
+		el = el.Timeout(elementInteractionTimeout)
+
 		// Clear existing content first
 		if err := el.SelectAllText(); err == nil {
 			_ = el.Type(input.Backspace)
 		}
 
 		if args.Slowly {
-			// Type character by character with a small delay
-			for _, ch := range args.Text {
-				if err := el.Input(string(ch)); err != nil {
-					return BrowserTypeResult{}, fmt.Errorf("typing failed: %w", err)
-				}
-				time.Sleep(50 * time.Millisecond)
+			// Type character by character with human-like random jitter
+			// (50-150ms between keystrokes) to avoid bot detection.
+			if err := browser.TypeHuman(el, args.Text); err != nil {
+				return BrowserTypeResult{}, fmt.Errorf("typing failed: %w", err)
 			}
 		} else {
 			if err := el.Input(args.Text); err != nil {
@@ -155,6 +170,12 @@ func BrowserHover(mgr *browser.Manager, refs *browser.RefMap) func(tool.Context,
 			return BrowserHoverResult{}, err
 		}
 
+		// Apply timeout so rod's internal WaitInteractable doesn't block indefinitely.
+		el = el.Timeout(elementInteractionTimeout)
+
+		// Subtle random delay before hovering to break robotic timing patterns.
+		browser.HumanDelay(30, 150)
+
 		if err := el.Hover(); err != nil {
 			return BrowserHoverResult{}, fmt.Errorf("hover failed: %w", err)
 		}
@@ -194,6 +215,10 @@ func BrowserDrag(mgr *browser.Manager, refs *browser.RefMap) func(tool.Context, 
 		if err != nil {
 			return BrowserDragResult{}, fmt.Errorf("endRef: %w", err)
 		}
+
+		// Apply timeout so rod's internal WaitStableRAF doesn't block indefinitely.
+		startEl = startEl.Timeout(elementInteractionTimeout)
+		endEl = endEl.Timeout(elementInteractionTimeout)
 
 		// Get center points of both elements
 		startPt, err := startEl.Interactable()
@@ -326,6 +351,9 @@ func BrowserSelectOption(mgr *browser.Manager, refs *browser.RefMap) func(tool.C
 			return BrowserSelectOptionResult{}, err
 		}
 
+		// Apply timeout so rod's internal WaitStableRAF doesn't block indefinitely.
+		el = el.Timeout(elementInteractionTimeout)
+
 		// Use Select with SelectorTypeText to match by visible text
 		if err := el.Select(args.Values, true, rod.SelectorTypeText); err != nil {
 			return BrowserSelectOptionResult{}, fmt.Errorf("select failed: %w", err)
@@ -363,11 +391,19 @@ func BrowserFillForm(mgr *browser.Manager, refs *browser.RefMap) func(tool.Conte
 		}
 
 		filled := 0
-		for _, f := range args.Fields {
+		for i, f := range args.Fields {
+			// Random pause between fields mimics a real user tabbing through a form.
+			if i > 0 {
+				browser.HumanDelay(100, 300)
+			}
+
 			el, err := refs.ResolveElement(pg, f.Ref)
 			if err != nil {
 				return BrowserFillFormResult{Success: false, FilledCount: filled}, fmt.Errorf("field %s: %w", f.Ref, err)
 			}
+
+			// Apply timeout so rod's internal Wait calls don't block indefinitely.
+			el = el.Timeout(elementInteractionTimeout)
 
 			// Clear and fill
 			if err := el.SelectAllText(); err == nil {

@@ -174,6 +174,17 @@ func (pm *ProcessManager) Start(command, workDir string, rows, cols uint16) (*Pr
 		cmd.Dir = workDir
 	}
 
+	// Set environment: inherit parent env and add safe defaults.
+	// EDITOR/VISUAL=true prevents commands that spawn a text editor (commit messages,
+	// interactive configs, etc.) from hanging — the agent cannot operate a text editor.
+	// TERM=xterm-256color ensures consistent terminal behavior regardless of how
+	// Astonish is launched.
+	cmd.Env = append(os.Environ(),
+		"EDITOR=true",
+		"VISUAL=true",
+		"TERM=xterm-256color",
+	)
+
 	// Start with PTY
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: rows, Cols: cols})
 	if err != nil {

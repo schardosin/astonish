@@ -151,8 +151,10 @@ Use mode="efficient" for large pages (compact, interactive-only, depth=6, maxCha
 	}
 
 	waitForTool, err := functiontool.New(functiontool.Config{
-		Name:        "browser_wait_for",
-		Description: "Wait for a condition: text to appear/disappear, CSS selector to be visible, URL to match, page load state, or a JavaScript expression to be truthy.",
+		Name: "browser_wait_for",
+		Description: `Wait for a condition: text to appear/disappear, CSS selector to be visible, URL to match, page load state, or a JavaScript expression to be truthy.
+
+IMPORTANT: Avoid state="networkidle" on single-page applications (Reddit, Twitter, Gmail, etc.) as they maintain persistent WebSocket connections and never truly go network-idle, causing the full timeout to elapse. Prefer waiting for specific text, selectors, or URL changes instead.`,
 	}, BrowserWaitFor(mgr))
 	if err != nil {
 		return nil, err
@@ -167,8 +169,10 @@ Use mode="efficient" for large pages (compact, interactive-only, depth=6, maxCha
 	}
 
 	handleDialogTool, err := functiontool.New(functiontool.Config{
-		Name:        "browser_handle_dialog",
-		Description: "Handle a JavaScript dialog (alert, confirm, prompt). Must be called before the action that triggers the dialog.",
+		Name: "browser_handle_dialog",
+		Description: `Handle a native JavaScript dialog (alert, confirm, prompt). Must be called before the action that triggers the dialog.
+
+IMPORTANT: This only works for native JS dialogs (window.alert, window.confirm, window.prompt). Most modern websites use custom modal/inline UI instead of native dialogs. If no dialog appears within the timeout (default 10s), the tool returns gracefully. Use browser_snapshot to check for inline error messages or modals instead.`,
 	}, BrowserHandleDialog(mgr))
 	if err != nil {
 		return nil, err
@@ -301,6 +305,38 @@ Use device="clear" to remove device emulation.`,
 		return nil, err
 	}
 
+	// --- Human-in-the-loop ---
+
+	requestHumanTool, err := functiontool.New(functiontool.Config{
+		Name: "browser_request_human",
+		Description: `Start a browser handoff session so a human can take over via Chrome DevTools Protocol (CDP). Returns IMMEDIATELY with connection instructions that you MUST relay to the user.
+
+Use this when you encounter something you cannot handle autonomously:
+- CAPTCHAs that need manual solving
+- Complex multi-factor auth flows
+- Payment forms requiring real credentials
+- Any situation where a human eye/hand is needed
+
+IMPORTANT: This tool returns immediately. After showing the user the connection instructions, you MUST call browser_handoff_complete to wait for them to finish. Then take a browser_snapshot to see the result.`,
+	}, BrowserRequestHuman(mgr))
+	if err != nil {
+		return nil, err
+	}
+
+	handoffCompleteTool, err := functiontool.New(functiontool.Config{
+		Name: "browser_handoff_complete",
+		Description: `Wait for the user to finish an active browser handoff session. Call this AFTER you have relayed the connection instructions from browser_request_human to the user.
+
+The tool blocks until the user signals completion by:
+- Closing the Chrome DevTools window (auto-detected after 10s)
+- Visiting the /handoff/done URL
+
+After this returns, take a browser_snapshot to see what the user did.`,
+	}, BrowserHandoffComplete(mgr))
+	if err != nil {
+		return nil, err
+	}
+
 	return []tool.Tool{
 		// Navigation
 		navigateTool, navigateBackTool,
@@ -316,5 +352,7 @@ Use device="clear" to remove device emulation.`,
 		cookiesTool, storageTool,
 		setOfflineTool, setHeadersTool, setCredentialsTool,
 		setGeolocationTool, setMediaTool, setTimezoneTool, setLocaleTool, setDeviceTool,
+		// Human-in-the-loop
+		requestHumanTool, handoffCompleteTool,
 	}, nil
 }

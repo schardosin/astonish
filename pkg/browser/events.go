@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/proto"
 )
 
 // ConsoleMessage represents a browser console message.
@@ -113,14 +114,22 @@ func (rc *ResponseCapture) Pattern() string {
 }
 
 // PageState tracks per-page state including event buffers.
+// Event listeners are attached lazily (on first use) to avoid triggering
+// Runtime.enable, which is a primary bot-detection signal for modern WAFs.
 type PageState struct {
 	Console *RingBuffer[ConsoleMessage]
 	Network *RingBuffer[NetworkRequest]
 	Errors  *RingBuffer[PageError]
 	Capture *ResponseCapture
+
+	// listenersOnce ensures event listeners are attached at most once per page.
+	// Listeners are deferred to avoid triggering Runtime.enable on page creation,
+	// which is the #1 CDP detection vector used by DataDome, Cloudflare, etc.
+	listenersOnce sync.Once
 }
 
 // NewPageState creates a PageState with default buffer sizes.
+// Event listeners are NOT attached here; call AttachListeners() when needed.
 func NewPageState() *PageState {
 	return &PageState{
 		Console: NewRingBuffer[ConsoleMessage](500),
@@ -128,6 +137,74 @@ func NewPageState() *PageState {
 		Errors:  NewRingBuffer[PageError](200),
 		Capture: NewResponseCapture(),
 	}
+}
+
+// AttachListeners subscribes to Runtime and Network CDP events for the page.
+// Safe to call multiple times; listeners are attached at most once.
+//
+// This is intentionally deferred (not called on page creation) because
+// subscribing to RuntimeConsoleAPICalled or RuntimeExceptionThrown triggers
+// go-rod's automatic Runtime.enable call, which modern anti-bot systems
+// (DataDome, Cloudflare, HUMAN/PerimeterX) detect and flag as automation.
+//
+// Call this only when the agent explicitly needs console/network data.
+func (ps *PageState) AttachListeners(pg *rod.Page) {
+	ps.listenersOnce.Do(func() {
+		go pg.EachEvent(
+			func(e *proto.RuntimeConsoleAPICalled) {
+				var text string
+				for _, arg := range e.Args {
+					if text != "" {
+						text += " "
+					}
+					if arg.Value.Nil() {
+						if arg.Description != "" {
+							text += arg.Description
+						} else {
+							text += string(arg.Type)
+						}
+					} else {
+						text += arg.Value.String()
+					}
+				}
+				ps.Console.Add(ConsoleMessage{
+					Level:     string(e.Type),
+					Text:      text,
+					Timestamp: timestampToTime(float64(e.Timestamp)),
+				})
+			},
+			func(e *proto.RuntimeExceptionThrown) {
+				msg := ""
+				if e.ExceptionDetails.Exception != nil {
+					msg = e.ExceptionDetails.Exception.Description
+				}
+				if msg == "" {
+					msg = e.ExceptionDetails.Text
+				}
+				ps.Errors.Add(PageError{
+					Message:   msg,
+					Timestamp: timestampToTime(float64(e.Timestamp)),
+				})
+			},
+			func(e *proto.NetworkRequestWillBeSent) {
+				ps.Network.Add(NetworkRequest{
+					Method:       e.Request.Method,
+					URL:          e.Request.URL,
+					ResourceType: string(e.Type),
+					Timestamp:    timestampToTime(float64(e.Timestamp)),
+				})
+			},
+			func(e *proto.NetworkResponseReceived) {
+				ps.Network.UpdateLast(func(nr *NetworkRequest) bool {
+					if nr.URL == e.Response.URL {
+						nr.Status = e.Response.Status
+						return true
+					}
+					return false
+				})
+			},
+		)()
+	})
 }
 
 // RingBuffer is a thread-safe ring buffer of fixed capacity.

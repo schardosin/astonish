@@ -14,6 +14,7 @@ import (
 	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
+	emailpkg "github.com/schardosin/astonish/pkg/email"
 	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/provider"
@@ -412,6 +413,46 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	}
 	cleanups = append(cleanups, browserMgr.Cleanup)
 
+	// --- 2f-ii. Initialize email tools ---
+	// Create the email client here (before GetEmailTools) so tools are available
+	// in both console and daemon modes. The daemon's initEmailTools becomes a
+	// no-op when the factory has already set the client.
+	if cfg.AppConfig != nil {
+		emailCfg := cfg.AppConfig.Channels.Email
+		emailPassword := emailCfg.Password
+		if emailPassword == "" && credStore != nil {
+			emailPassword = credStore.GetSecret("channels.email.password")
+		}
+		if emailPassword != "" && emailCfg.IMAPServer != "" &&
+			emailCfg.SMTPServer != "" && emailCfg.Address != "" {
+			client, clientErr := emailpkg.NewClient(&emailpkg.Config{
+				Provider:     emailCfg.Provider,
+				IMAPServer:   emailCfg.IMAPServer,
+				SMTPServer:   emailCfg.SMTPServer,
+				Address:      emailCfg.Address,
+				Username:     emailCfg.Username,
+				Password:     emailPassword,
+				Folder:       emailCfg.Folder,
+				MaxBodyChars: emailCfg.MaxBodyChars,
+			})
+			if clientErr != nil {
+				if cfg.DebugMode {
+					fmt.Printf("Warning: Failed to create email client: %v\n", clientErr)
+				}
+			} else {
+				tools.SetEmailClient(client)
+			}
+		}
+	}
+	emailTools, emailErr := tools.GetEmailTools()
+	if emailErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("Warning: Failed to create email tools: %v\n", emailErr)
+		}
+	} else if len(emailTools) > 0 {
+		internalTools = append(internalTools, emailTools...)
+	}
+
 	// --- 2g. Sub-agent delegation tool ---
 	var subAgentMgr *agent.SubAgentManager
 	if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
@@ -672,6 +713,20 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// Check browser availability (native browser tools)
 	if browserErr == nil && len(browserTools) > 0 {
 		promptBuilder.BrowserAvailable = true
+	}
+
+	// Populate agent identity from config (for web portal interactions)
+	if cfg.AppConfig != nil && cfg.AppConfig.AgentIdentity.IsConfigured() {
+		id := &cfg.AppConfig.AgentIdentity
+		promptBuilder.Identity = &agent.AgentIdentity{
+			Name:     id.Name,
+			Username: id.Username,
+			Email:    id.Email,
+			Bio:      id.Bio,
+			Website:  id.Website,
+			Locale:   id.Locale,
+			Timezone: id.Timezone,
+		}
 	}
 
 	// Check memory search availability
@@ -1060,12 +1115,45 @@ func factoryBuildSelfMDConfig(
 		selfCfg.SubAgentsEnabled = cfg.AppConfig.SubAgents.IsSubAgentsEnabled()
 	}
 
+	// Channels
+	if cfg.AppConfig != nil {
+		selfCfg.ChannelsEnabled = cfg.AppConfig.Channels.IsChannelsEnabled()
+		selfCfg.TelegramEnabled = cfg.AppConfig.Channels.Telegram.IsTelegramEnabled()
+		selfCfg.EmailEnabled = cfg.AppConfig.Channels.Email.IsEmailEnabled()
+		selfCfg.EmailAddress = cfg.AppConfig.Channels.Email.Address
+
+		// Email tools are available when IMAP/SMTP credentials are configured,
+		// regardless of whether the channel is enabled.
+		if cfg.AppConfig.Channels.Email.Address != "" &&
+			cfg.AppConfig.Channels.Email.IMAPServer != "" &&
+			cfg.AppConfig.Channels.Email.SMTPServer != "" {
+			selfCfg.EmailToolsAvail = true
+		}
+	}
+
 	// Skills
 	if len(loadedSkills) > 0 {
 		eligible := skills.FilterEligible(loadedSkills)
 		for _, s := range eligible {
 			selfCfg.SkillNames = append(selfCfg.SkillNames, s.Name)
 		}
+	}
+
+	// Browser handoff
+	for _, t := range internalTools {
+		if t.Name() == "browser_request_human" {
+			selfCfg.HandoffAvailable = true
+			break
+		}
+	}
+
+	// Agent identity
+	if cfg.AppConfig != nil && cfg.AppConfig.AgentIdentity.IsConfigured() {
+		id := &cfg.AppConfig.AgentIdentity
+		selfCfg.IdentityConfigured = true
+		selfCfg.IdentityName = id.Name
+		selfCfg.IdentityUsername = id.Username
+		selfCfg.IdentityEmail = id.Email
 	}
 
 	return selfCfg
@@ -1078,15 +1166,21 @@ func browserConfigFromApp(appCfg *config.AppConfig) browser.BrowserConfig {
 		return browser.DefaultConfig()
 	}
 	b := &appCfg.Browser
-	return browser.OverrideConfig(
-		b.Headless,
-		b.ViewportWidth,
-		b.ViewportHeight,
-		b.NoSandbox,
-		b.ChromePath,
-		b.UserDataDir,
-		b.NavigationTimeout,
-	)
+	return browser.OverrideConfig(browser.ConfigOverrides{
+		Headless:            b.Headless,
+		ViewportWidth:       b.ViewportWidth,
+		ViewportHeight:      b.ViewportHeight,
+		NoSandbox:           b.NoSandbox,
+		ChromePath:          b.ChromePath,
+		UserDataDir:         b.UserDataDir,
+		NavigationTimeout:   b.NavigationTimeout,
+		Proxy:               b.Proxy,
+		RemoteCDPURL:        b.RemoteCDPURL,
+		FingerprintSeed:     b.FingerprintSeed,
+		FingerprintPlatform: b.FingerprintPlatform,
+		HandoffBindAddress:  b.HandoffBindAddress,
+		HandoffPort:         b.HandoffPort,
+	})
 }
 
 // isDaemonRunning checks whether the astonish daemon is currently running

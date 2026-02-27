@@ -10,26 +10,45 @@ import (
 	"google.golang.org/adk/tool"
 )
 
+// AgentIdentity holds the agent's configured persona for web portal interactions.
+// When populated, it is rendered into the system prompt so the LLM knows what
+// name, username, and email to use when filling registration forms.
+type AgentIdentity struct {
+	Name     string
+	Username string
+	Email    string
+	Bio      string
+	Website  string
+	Locale   string
+	Timezone string
+}
+
+// IsConfigured returns true if at least one identity field is set.
+func (id *AgentIdentity) IsConfigured() bool {
+	return id != nil && (id.Name != "" || id.Username != "" || id.Email != "")
+}
+
 // SystemPromptBuilder constructs context-aware system prompts for chat mode.
 type SystemPromptBuilder struct {
 	Tools                 []tool.Tool
 	Toolsets              []tool.Toolset
 	WorkspaceDir          string
 	CustomPrompt          string
-	MemoryContent         string // Contents of MEMORY.md (loaded per turn)
-	InstructionsContent   string // Contents of INSTRUCTIONS.md (behavior directives)
-	SelfContent           string // Contents of SELF.md (auto-generated self-awareness)
-	ExecutionPlan         string // Flow-based execution plan (set when a flow matches)
-	RelevantKnowledge     string // Auto-retrieved knowledge from vector search (set per turn)
-	WebSearchAvailable    bool   // Whether a web search MCP tool is configured
-	WebExtractAvailable   bool   // Whether a web extract MCP tool is configured
-	WebSearchToolName     string // Name of the configured search tool (e.g. "tavily-search")
-	WebExtractToolName    string // Name of the configured extract tool (e.g. "tavily-extract")
-	BrowserAvailable      bool   // Whether built-in browser tools are registered
-	MemorySearchAvailable bool   // Whether semantic memory search is available
-	ChannelHints          string // Channel-specific output constraints (empty = console mode)
-	SchedulerHints        string // Scheduler-specific output constraints (empty = not a scheduled run)
-	SkillIndex            string // Lightweight skill listing (Tier 1 — names and descriptions only)
+	MemoryContent         string         // Contents of MEMORY.md (loaded per turn)
+	InstructionsContent   string         // Contents of INSTRUCTIONS.md (behavior directives)
+	SelfContent           string         // Contents of SELF.md (auto-generated self-awareness)
+	ExecutionPlan         string         // Flow-based execution plan (set when a flow matches)
+	RelevantKnowledge     string         // Auto-retrieved knowledge from vector search (set per turn)
+	WebSearchAvailable    bool           // Whether a web search MCP tool is configured
+	WebExtractAvailable   bool           // Whether a web extract MCP tool is configured
+	WebSearchToolName     string         // Name of the configured search tool (e.g. "tavily-search")
+	WebExtractToolName    string         // Name of the configured extract tool (e.g. "tavily-extract")
+	BrowserAvailable      bool           // Whether built-in browser tools are registered
+	MemorySearchAvailable bool           // Whether semantic memory search is available
+	ChannelHints          string         // Channel-specific output constraints (empty = console mode)
+	SchedulerHints        string         // Scheduler-specific output constraints (empty = not a scheduled run)
+	SkillIndex            string         // Lightweight skill listing (Tier 1 — names and descriptions only)
+	Identity              *AgentIdentity // Agent persona for web portal interactions
 }
 
 // Build constructs the full system prompt.
@@ -98,7 +117,13 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString("- Only ask the user for help when you genuinely cannot proceed (e.g., you need credentials or access you don't have).\n")
 	sb.WriteString("- When you have enough information to answer, respond directly and concisely.\n")
 
-	// 4a. Communication flow — ensure the user always knows what's happening
+	// 4a. File operations — prefer built-in tools over shell commands
+	sb.WriteString("\n## File Operations\n\n")
+	sb.WriteString("Prefer `read_file`, `edit_file`, and `write_file` over shell commands (`sed`, `awk`, `echo`, `cat`) for reading and modifying files. ")
+	sb.WriteString("These tools are safer, handle multiline content correctly, and avoid quoting/escaping issues. ")
+	sb.WriteString("Reserve `shell_command` for file operations only when you need capabilities these tools don't provide (e.g., streaming, binary files, or complex pipelines).\n")
+
+	// 4b. Communication flow — ensure the user always knows what's happening
 	sb.WriteString("\n## Communication Flow\n\n")
 	sb.WriteString("- When the user asks you to do something, briefly acknowledge the request before starting work (e.g., \"Let me check that for you.\").\n")
 	sb.WriteString("- If you plan to use a specific skill or tool, mention it so the user knows your approach (e.g., \"I have a weather skill for this — let me look it up.\").\n")
@@ -106,7 +131,7 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString("- Do NOT stay silent while working. The user should always know something is happening.\n")
 	sb.WriteString("- Keep acknowledgments short (one sentence). The focus should be on results, not narration.\n")
 
-	// 4b. Web capabilities — always render since web_fetch is a built-in tool
+	// 4c. Web capabilities — always render since web_fetch is a built-in tool
 	sb.WriteString("\n## Web Access\n\n")
 	sb.WriteString("You have a built-in `web_fetch` tool that can fetch and extract content from any URL.\n\n")
 
@@ -153,7 +178,7 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString("\n**Never** use a search tool to extract content from a known URL. **Never** skip `web_fetch` and go directly to an MCP extraction tool. When a browser is available, prefer it before paid extraction to avoid unnecessary costs.\n")
 	sb.WriteString("Use web capabilities when you need up-to-date information not available in your training data.\n")
 
-	// 4c. Browser capabilities
+	// 4d. Browser capabilities
 	if b.BrowserAvailable {
 		sb.WriteString("\n## Browser Automation\n\n")
 		sb.WriteString("You have a built-in browser with tools for navigating, interacting, and observing web pages.\n")
@@ -184,6 +209,21 @@ func (b *SystemPromptBuilder) Build() string {
 			sb.WriteString("4. If no matching credential exists: ask the user for the credentials, then `save_credential` to store them securely BEFORE typing them into the form\n")
 			sb.WriteString("NEVER ask the user to type passwords in chat if a credential already exists in the store.\n")
 		}
+
+		if b.hasHandoffTool() {
+			sb.WriteString("\n**Human-in-the-loop (browser handoff):**\n")
+			sb.WriteString("Use `browser_request_human` when you encounter something that requires human intervention:\n")
+			sb.WriteString("- CAPTCHAs (reCAPTCHA, hCaptcha, Cloudflare Turnstile)\n")
+			sb.WriteString("- Complex multi-factor authentication flows\n")
+			sb.WriteString("- Payment forms requiring real card details\n")
+			sb.WriteString("- Any visual challenge you cannot solve programmatically\n\n")
+			sb.WriteString("**Two-step handoff flow (CRITICAL):**\n")
+			sb.WriteString("1. Call `browser_request_human` with a specific reason. It returns IMMEDIATELY with CDP connection instructions.\n")
+			sb.WriteString("2. **RELAY the connection instructions to the user in your response.** Include the listen address and steps.\n")
+			sb.WriteString("3. Call `browser_handoff_complete` to wait for the user to finish.\n")
+			sb.WriteString("4. After completion, take a fresh `browser_snapshot` to see what changed.\n\n")
+			sb.WriteString("You MUST show the user the connection details before calling browser_handoff_complete, otherwise they won't know how to connect.\n")
+		}
 	}
 
 	// 5. Environment info
@@ -199,6 +239,40 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("\n## Self-Configuration\n\n")
 		sb.WriteString(b.SelfContent)
 		sb.WriteString("\n")
+	}
+
+	// 5c. Agent Identity (for web portal interactions)
+	if b.Identity.IsConfigured() {
+		sb.WriteString("\n## Agent Identity\n\n")
+		sb.WriteString("You have a configured identity for web portal registrations and interactions. ")
+		sb.WriteString("Use these details when filling registration forms, creating profiles, or identifying yourself on websites:\n\n")
+		if b.Identity.Name != "" {
+			sb.WriteString(fmt.Sprintf("- **Name:** %s\n", b.Identity.Name))
+		}
+		if b.Identity.Username != "" {
+			sb.WriteString(fmt.Sprintf("- **Username:** %s\n", b.Identity.Username))
+		}
+		if b.Identity.Email != "" {
+			sb.WriteString(fmt.Sprintf("- **Email:** %s\n", b.Identity.Email))
+		}
+		if b.Identity.Bio != "" {
+			sb.WriteString(fmt.Sprintf("- **Bio:** %s\n", b.Identity.Bio))
+		}
+		if b.Identity.Website != "" {
+			sb.WriteString(fmt.Sprintf("- **Website:** %s\n", b.Identity.Website))
+		}
+		if b.Identity.Locale != "" {
+			sb.WriteString(fmt.Sprintf("- **Locale:** %s\n", b.Identity.Locale))
+		}
+		if b.Identity.Timezone != "" {
+			sb.WriteString(fmt.Sprintf("- **Timezone:** %s\n", b.Identity.Timezone))
+		}
+		sb.WriteString("\n")
+		sb.WriteString("**Guidelines:**\n")
+		sb.WriteString("- If the username is taken on a portal, try appending digits or underscores (e.g. `username_01`)\n")
+		sb.WriteString("- For email verification, use the `email_wait` tool to wait for the confirmation email, then extract the verification link\n")
+		sb.WriteString("- If you encounter a CAPTCHA during registration, use `browser_request_human` to hand control to the user\n")
+		sb.WriteString("- Always save successful account registrations to persistent memory (credential store for passwords, MEMORY.md for account details)\n")
 	}
 
 	// 6. Persistent Memory
@@ -379,7 +453,21 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("- Use `process_list` to see all active sessions and `process_kill` to clean up when done\n")
 	}
 
-	// 6g. HTTP request guidance (when http_request tool is available)
+	// 6g. Editor-avoidance guidance (always relevant when shell_command is available)
+	if b.hasProcessTools() {
+		sb.WriteString("\n## Commands That Open Text Editors\n\n")
+		sb.WriteString("Some CLI tools open a text editor (vi, nano, etc.) for user input. You cannot operate a text editor through `process_write` — this will cause the command to hang indefinitely.\n\n")
+		sb.WriteString("Before running any command, consider whether it might open an editor. Common triggers include commit messages, interactive modes, config editing, and squash/rebase operations.\n\n")
+		sb.WriteString("**Always prevent editors from opening by using one of these strategies:**\n")
+		sb.WriteString("- Use flags that skip the editor (e.g., `--no-edit`, `--message \"...\"`, `-m \"...\"`)\n")
+		sb.WriteString("- Use non-interactive alternatives instead of interactive modes\n")
+		sb.WriteString("- Pipe input via stdin where the tool supports it\n")
+		sb.WriteString("- As a last resort, prefix with `EDITOR=true` to auto-accept defaults: `EDITOR=true <command>`\n\n")
+		sb.WriteString("Note: The shell environment already sets `EDITOR=true` and `VISUAL=true` as a safety net, but you should still prefer explicit flags that avoid the editor entirely.\n\n")
+		sb.WriteString("If a command unexpectedly opens an editor (returns `waiting_for_input` with editor-like output), kill the session and re-run with editor prevention applied.\n")
+	}
+
+	// 6h. HTTP request guidance (when http_request tool is available)
 	if b.hasHttpRequestTool() {
 		sb.WriteString("\n## HTTP Requests\n\n")
 		sb.WriteString("Use the `http_request` tool for API calls instead of curl via shell_command.\n")
@@ -390,7 +478,7 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("- Credential values are never exposed in tool args — only the credential name is passed\n")
 	}
 
-	// 6h. Task delegation guidance (when delegate_tasks tool is available)
+	// 6i. Task delegation guidance (when delegate_tasks tool is available)
 	if b.hasDelegateTasksTool() {
 		sb.WriteString("\n## Task Delegation\n\n")
 		sb.WriteString("Use `delegate_tasks` to run multiple independent tasks in parallel via sub-agents.\n\n")
@@ -504,6 +592,16 @@ func (b *SystemPromptBuilder) hasHttpRequestTool() bool {
 func (b *SystemPromptBuilder) hasDelegateTasksTool() bool {
 	for _, t := range b.Tools {
 		if t.Name() == "delegate_tasks" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasHandoffTool returns true if browser_request_human is among the available tools.
+func (b *SystemPromptBuilder) hasHandoffTool() bool {
+	for _, t := range b.Tools {
+		if t.Name() == "browser_request_human" {
 			return true
 		}
 	}

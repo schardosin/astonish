@@ -132,6 +132,10 @@ func BrowserConsoleMessages(mgr *browser.Manager) func(tool.Context, BrowserCons
 			return BrowserConsoleMessagesResult{Messages: []browser.ConsoleMessage{}, Count: 0}, nil
 		}
 
+		// Lazily attach event listeners on first use. This defers Runtime.enable
+		// (a primary bot-detection signal) until the agent actually needs console data.
+		ps.AttachListeners(pg)
+
 		messages := ps.Console.Items()
 
 		// Filter by level
@@ -181,6 +185,10 @@ func BrowserNetworkRequests(mgr *browser.Manager) func(tool.Context, BrowserNetw
 		if ps == nil {
 			return BrowserNetworkRequestsResult{Requests: []browser.NetworkRequest{}, Count: 0}, nil
 		}
+
+		// Lazily attach event listeners on first use. This defers Runtime.enable
+		// (a primary bot-detection signal) until the agent actually needs network data.
+		ps.AttachListeners(pg)
 
 		requests := ps.Network.Items()
 

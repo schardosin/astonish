@@ -21,6 +21,11 @@ func handleCredentialCommand(args []string) error {
 	switch args[0] {
 	case "list", "ls":
 		return handleCredentialList()
+	case "show":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: astonish credential show <name>")
+		}
+		return handleCredentialShow(strings.Join(args[1:], " "))
 	case "add":
 		if len(args) < 2 {
 			return fmt.Errorf("usage: astonish credential add <name>")
@@ -36,6 +41,8 @@ func handleCredentialCommand(args []string) error {
 			return fmt.Errorf("usage: astonish credential test <name>")
 		}
 		return handleCredentialTest(strings.Join(args[1:], " "))
+	case "master-key":
+		return handleCredentialMasterKey()
 	default:
 		printCredentialUsage()
 		return fmt.Errorf("unknown credential subcommand: %s", args[0])
@@ -43,15 +50,17 @@ func handleCredentialCommand(args []string) error {
 }
 
 func printCredentialUsage() {
-	fmt.Println("usage: astonish credential {list,add,remove,test}")
+	fmt.Println("usage: astonish credential {list,show,add,remove,test,master-key}")
 	fmt.Println("")
 	fmt.Println("Manage the encrypted credential store.")
 	fmt.Println("")
 	fmt.Println("subcommands:")
 	fmt.Println("  list (ls)          List stored credentials and secrets (no values shown)")
+	fmt.Println("  show <name>        Show credential or secret values (decrypted)")
 	fmt.Println("  add <name>         Add a credential interactively")
 	fmt.Println("  remove (rm) <name> Remove a credential")
 	fmt.Println("  test <name>        Test a credential (OAuth: token flow, others: config check)")
+	fmt.Println("  master-key         Set, change, or remove the master key for viewing secrets")
 }
 
 func handleCredentialList() error {
@@ -486,6 +495,160 @@ func collectOAuthAuthCodeCred() (*credentials.Credential, error) {
 		RefreshToken: refreshToken,
 		Scope:        scope,
 	}, nil
+}
+
+// handleCredentialShow reveals a credential or flat secret value.
+func handleCredentialShow(name string) error {
+	store, err := openCredentialStore()
+	if err != nil {
+		return err
+	}
+
+	// Check master key
+	if store.HasMasterKey() {
+		var password string
+		err := huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Master key required").
+					Description("Enter the master key to reveal credential values.").
+					EchoMode(huh.EchoModePassword).
+					Value(&password),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
+		if !store.VerifyMasterKey(password) {
+			return fmt.Errorf("invalid master key")
+		}
+	}
+
+	// Try HTTP credential first
+	cred := store.Get(name)
+	if cred != nil {
+		fmt.Printf("Credential: %s\n", name)
+		fmt.Printf("Type:       %s\n", cred.Type)
+		switch cred.Type {
+		case credentials.CredAPIKey:
+			fmt.Printf("Header:     %s\n", cred.Header)
+			fmt.Printf("Value:      %s\n", cred.Value)
+		case credentials.CredBearer:
+			fmt.Printf("Token:      %s\n", cred.Token)
+		case credentials.CredBasic, credentials.CredPassword:
+			fmt.Printf("Username:   %s\n", cred.Username)
+			fmt.Printf("Password:   %s\n", cred.Password)
+		case credentials.CredOAuthClientCreds:
+			fmt.Printf("Auth URL:      %s\n", cred.AuthURL)
+			fmt.Printf("Client ID:     %s\n", cred.ClientID)
+			fmt.Printf("Client Secret: %s\n", cred.ClientSecret)
+			if cred.Scope != "" {
+				fmt.Printf("Scope:         %s\n", cred.Scope)
+			}
+		case credentials.CredOAuthAuthCode:
+			fmt.Printf("Token URL:     %s\n", cred.TokenURL)
+			fmt.Printf("Client ID:     %s\n", cred.ClientID)
+			fmt.Printf("Client Secret: %s\n", cred.ClientSecret)
+			fmt.Printf("Access Token:  %s\n", cred.AccessToken)
+			fmt.Printf("Refresh Token: %s\n", cred.RefreshToken)
+			if cred.TokenExpiry != "" {
+				fmt.Printf("Token Expiry:  %s\n", cred.TokenExpiry)
+			}
+			if cred.Scope != "" {
+				fmt.Printf("Scope:         %s\n", cred.Scope)
+			}
+		default:
+			fmt.Printf("(unknown type, raw fields may be available via API)\n")
+		}
+		return nil
+	}
+
+	// Try flat secret
+	value := store.GetSecret(name)
+	if value != "" {
+		fmt.Printf("%s\n", value)
+		return nil
+	}
+
+	return fmt.Errorf("credential or secret %q not found", name)
+}
+
+// handleCredentialMasterKey sets, changes, or removes the master key.
+func handleCredentialMasterKey() error {
+	store, err := openCredentialStore()
+	if err != nil {
+		return err
+	}
+
+	hasMasterKey := store.HasMasterKey()
+
+	if hasMasterKey {
+		fmt.Println("A master key is currently set.")
+		fmt.Println("You can change it or remove it (enter empty new key to remove).")
+		fmt.Println()
+
+		var currentKey string
+		err := huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Current master key").
+					EchoMode(huh.EchoModePassword).
+					Value(&currentKey),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
+		if !store.VerifyMasterKey(currentKey) {
+			return fmt.Errorf("invalid current master key")
+		}
+	} else {
+		fmt.Println("No master key is set.")
+		fmt.Println("Setting a master key adds an extra layer of protection:")
+		fmt.Println("credential values can only be viewed after entering the key.")
+		fmt.Println()
+	}
+
+	var newKey, confirmKey string
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("New master key (empty to remove)").
+				EchoMode(huh.EchoModePassword).
+				Value(&newKey),
+		),
+	).Run()
+	if err != nil {
+		return err
+	}
+
+	if newKey != "" {
+		err = huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Confirm new master key").
+					EchoMode(huh.EchoModePassword).
+					Value(&confirmKey),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
+		if newKey != confirmKey {
+			return fmt.Errorf("master keys do not match")
+		}
+	}
+
+	if err := store.SetMasterKey(newKey); err != nil {
+		return fmt.Errorf("failed to set master key: %w", err)
+	}
+
+	if newKey == "" {
+		fmt.Println("Master key removed. Credentials can be viewed without a key.")
+	} else {
+		fmt.Println("Master key set. Credential values now require this key to view.")
+	}
+	return nil
 }
 
 // openCredentialStore opens the credential store from the default config directory.

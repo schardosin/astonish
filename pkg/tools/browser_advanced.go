@@ -40,6 +40,12 @@ func BrowserEvaluate(mgr *browser.Manager, refs *browser.RefMap) func(tool.Conte
 			return BrowserEvaluateResult{}, err
 		}
 
+		// Rod's Eval wraps the expression with .apply(), so it expects a
+		// function, not a raw expression. Wrap the user's expression in an
+		// arrow function so that raw expressions like "document.title" or
+		// "1 + 2" work correctly.
+		jsFunc := fmt.Sprintf("() => { return (%s) }", args.Expression)
+
 		var res *proto.RuntimeRemoteObject
 
 		if args.Ref != "" {
@@ -47,12 +53,12 @@ func BrowserEvaluate(mgr *browser.Manager, refs *browser.RefMap) func(tool.Conte
 			if err != nil {
 				return BrowserEvaluateResult{}, err
 			}
-			res, err = el.Eval(args.Expression)
+			res, err = el.Eval(jsFunc)
 			if err != nil {
 				return BrowserEvaluateResult{}, fmt.Errorf("eval failed: %w", err)
 			}
 		} else {
-			res, err = pg.Eval(args.Expression)
+			res, err = pg.Eval(jsFunc)
 			if err != nil {
 				return BrowserEvaluateResult{}, fmt.Errorf("eval failed: %w", err)
 			}
@@ -87,9 +93,11 @@ func BrowserRunCode(mgr *browser.Manager) func(tool.Context, BrowserRunCodeArgs)
 			return BrowserRunCodeResult{}, err
 		}
 
-		// Wrap in an async IIFE to support await.
+		// Wrap the user's code in an async arrow function to support await.
+		// Rod's Eval wraps the JS with .apply(), so we must pass a function
+		// (not an IIFE) to avoid calling .apply() on a Promise return value.
 		// Apply a 30-second timeout so runaway scripts don't hang forever.
-		wrapped := fmt.Sprintf("(async () => { %s })()", args.Code)
+		wrapped := fmt.Sprintf("async () => { %s }", args.Code)
 		res, err := pg.Timeout(30 * time.Second).Evaluate(rod.Eval(wrapped).ByPromise())
 		if err != nil {
 			return BrowserRunCodeResult{}, fmt.Errorf("code execution failed: %w", err)

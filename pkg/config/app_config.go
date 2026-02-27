@@ -9,18 +9,19 @@ import (
 )
 
 type AppConfig struct {
-	General    GeneralConfig              `yaml:"general"`
-	WebServers map[string]WebServerConfig `yaml:"web_servers,omitempty" json:"web_servers,omitempty"`
-	Providers  map[string]ProviderConfig  `yaml:"providers"`
-	Chat       ChatConfig                 `yaml:"chat,omitempty"`
-	Sessions   SessionConfig              `yaml:"sessions,omitempty"`
-	Memory     MemoryConfig               `yaml:"memory,omitempty"`
-	Daemon     DaemonConfig               `yaml:"daemon,omitempty"`
-	Channels   ChannelsConfig             `yaml:"channels,omitempty"`
-	Scheduler  SchedulerConfig            `yaml:"scheduler,omitempty"`
-	Browser    BrowserAppConfig           `yaml:"browser,omitempty"`
-	SubAgents  SubAgentAppConfig          `yaml:"sub_agents,omitempty"`
-	Skills     SkillsConfig               `yaml:"skills,omitempty"`
+	General       GeneralConfig              `yaml:"general"`
+	WebServers    map[string]WebServerConfig `yaml:"web_servers,omitempty" json:"web_servers,omitempty"`
+	Providers     map[string]ProviderConfig  `yaml:"providers"`
+	Chat          ChatConfig                 `yaml:"chat,omitempty"`
+	Sessions      SessionConfig              `yaml:"sessions,omitempty"`
+	Memory        MemoryConfig               `yaml:"memory,omitempty"`
+	Daemon        DaemonConfig               `yaml:"daemon,omitempty"`
+	Channels      ChannelsConfig             `yaml:"channels,omitempty"`
+	Scheduler     SchedulerConfig            `yaml:"scheduler,omitempty"`
+	Browser       BrowserAppConfig           `yaml:"browser,omitempty"`
+	SubAgents     SubAgentAppConfig          `yaml:"sub_agents,omitempty"`
+	Skills        SkillsConfig               `yaml:"skills,omitempty"`
+	AgentIdentity AgentIdentityConfig        `yaml:"agent_identity,omitempty"`
 }
 
 // MemoryConfig controls the semantic memory / RAG system.
@@ -234,6 +235,7 @@ type ChannelsConfig struct {
 	// Enabled controls whether channels are active. Default: false (nil means false).
 	Enabled  *bool          `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	Telegram TelegramConfig `yaml:"telegram,omitempty" json:"telegram,omitempty"`
+	Email    EmailConfig    `yaml:"email,omitempty" json:"email,omitempty"`
 }
 
 // IsChannelsEnabled returns true if channels are explicitly enabled.
@@ -260,7 +262,11 @@ func (c *SchedulerConfig) IsSchedulerEnabled() bool {
 // BrowserAppConfig controls the built-in browser automation module.
 // All fields are optional — defaults are applied by browser.DefaultConfig().
 type BrowserAppConfig struct {
-	// Headless controls whether the browser runs in headless mode. Default: true.
+	// Headless controls whether the browser runs in headless mode.
+	// Default: false (headed mode with Xvfb on Linux servers for better stealth).
+	// Headed mode produces a more realistic browser fingerprint that avoids
+	// detection by strict anti-bot systems. If Xvfb is not available, Astonish
+	// falls back to headless mode automatically.
 	Headless *bool `yaml:"headless,omitempty" json:"headless,omitempty"`
 	// ViewportWidth is the default viewport width in pixels. Default: 1280.
 	ViewportWidth int `yaml:"viewport_width,omitempty" json:"viewport_width,omitempty"`
@@ -275,6 +281,60 @@ type BrowserAppConfig struct {
 	UserDataDir string `yaml:"user_data_dir,omitempty" json:"user_data_dir,omitempty"`
 	// NavigationTimeout is the max seconds to wait for page loads. Default: 30.
 	NavigationTimeout int `yaml:"navigation_timeout,omitempty" json:"navigation_timeout,omitempty"`
+	// Proxy sets an HTTP or SOCKS proxy for all browser traffic.
+	// Format: "http://user:pass@host:port" or "socks5://host:port".
+	// Useful for routing through residential proxies to avoid datacenter IP blocks.
+	Proxy string `yaml:"proxy,omitempty" json:"proxy,omitempty"`
+	// RemoteCDPURL connects to an external browser via Chrome DevTools Protocol
+	// instead of launching a local Chrome instance. Use this with anti-detect
+	// browsers (AdsPower, Dolphin Anty, Browserless, etc.) that handle
+	// fingerprint spoofing at the binary level.
+	// Format: "ws://localhost:9222/devtools/browser/<id>" or the CDP endpoint
+	// provided by your anti-detect browser.
+	// When set, all local launch options (Headless, ChromePath, NoSandbox, Proxy,
+	// UserDataDir) are ignored since the external browser manages its own config.
+	RemoteCDPURL string `yaml:"remote_cdp_url,omitempty" json:"remote_cdp_url,omitempty"`
+
+	// FingerprintSeed is a deterministic seed for CloakBrowser's fingerprint
+	// generation. Each seed produces a unique but consistent browser fingerprint
+	// (canvas, WebGL, audio, fonts, TLS, etc.). Only effective when ChromePath
+	// points to a CloakBrowser binary. Example: "42000".
+	FingerprintSeed string `yaml:"fingerprint_seed,omitempty" json:"fingerprint_seed,omitempty"`
+	// FingerprintPlatform overrides the OS platform reported by CloakBrowser.
+	// Valid values: "windows", "macos", "linux". Only effective with CloakBrowser.
+	FingerprintPlatform string `yaml:"fingerprint_platform,omitempty" json:"fingerprint_platform,omitempty"`
+
+	// HandoffBindAddress controls network binding for browser handoff (human-in-the-loop).
+	// "127.0.0.1" for local-only (default), "0.0.0.0" for remote access via SSH tunnel.
+	HandoffBindAddress string `yaml:"handoff_bind_address,omitempty" json:"handoff_bind_address,omitempty"`
+	// HandoffPort is the TCP port for the CDP handoff proxy. Default: 9222.
+	HandoffPort int `yaml:"handoff_port,omitempty" json:"handoff_port,omitempty"`
+}
+
+// AgentIdentityConfig holds the agent's persona for web portal registrations.
+// When configured, the agent uses these details to fill registration forms
+// and maintain a consistent identity across portal interactions.
+type AgentIdentityConfig struct {
+	// Name is the display name used for profile registrations.
+	Name string `yaml:"name,omitempty" json:"name,omitempty"`
+	// Username is the base username for registrations. Portal-specific suffixes
+	// may be added if the username is taken.
+	Username string `yaml:"username,omitempty" json:"username,omitempty"`
+	// Email is the agent's email address (should match email channel config).
+	Email string `yaml:"email,omitempty" json:"email,omitempty"`
+	// Bio is a short description for profile fields.
+	Bio string `yaml:"bio,omitempty" json:"bio,omitempty"`
+	// Website is an optional URL for profile fields.
+	Website string `yaml:"website,omitempty" json:"website,omitempty"`
+	// Locale is the language/locale preference (e.g. "en-US").
+	Locale string `yaml:"locale,omitempty" json:"locale,omitempty"`
+	// Timezone is the IANA timezone for profile settings (e.g. "America/New_York").
+	Timezone string `yaml:"timezone,omitempty" json:"timezone,omitempty"`
+}
+
+// IsConfigured returns true if at least a name or username is set.
+func (c *AgentIdentityConfig) IsConfigured() bool {
+	return c.Name != "" || c.Username != "" || c.Email != ""
 }
 
 // SubAgentAppConfig holds configuration for the sub-agent delegation system.
@@ -356,6 +416,58 @@ type TelegramConfig struct {
 // separately if this returns true.
 func (c *TelegramConfig) IsTelegramEnabled() bool {
 	return c.Enabled != nil && *c.Enabled
+}
+
+// EmailConfig holds configuration for the Email channel adapter.
+type EmailConfig struct {
+	// Enabled controls whether the Email adapter is active. Default: false (nil means false).
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// Provider selects the implementation: "imap" or "gmail". Default: "imap".
+	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
+	// IMAPServer is the IMAP server address (e.g., "imap.gmail.com:993").
+	IMAPServer string `yaml:"imap_server,omitempty" json:"imap_server,omitempty"`
+	// SMTPServer is the SMTP server address (e.g., "smtp.gmail.com:587").
+	SMTPServer string `yaml:"smtp_server,omitempty" json:"smtp_server,omitempty"`
+	// Address is the agent's email address.
+	Address string `yaml:"address,omitempty" json:"address,omitempty"`
+	// Username is the IMAP/SMTP login username. Often same as Address.
+	Username string `yaml:"username,omitempty" json:"username,omitempty"`
+	// Password is the IMAP/SMTP password or app password.
+	// After credential migration, this will be empty (stored in encrypted store).
+	Password string `yaml:"password,omitempty" json:"password,omitempty"`
+	// PollInterval is seconds between inbox checks. Default: 30.
+	PollInterval int `yaml:"poll_interval,omitempty" json:"poll_interval,omitempty"`
+	// AllowFrom is a list of email addresses allowed to trigger the agent.
+	// Use ["*"] to allow anyone. An empty list blocks all inbound messages.
+	AllowFrom []string `yaml:"allow_from,omitempty" json:"allow_from,omitempty"`
+	// Folder is the IMAP folder to monitor. Default: "INBOX".
+	Folder string `yaml:"folder,omitempty" json:"folder,omitempty"`
+	// MarkRead marks processed emails as read. Default: true.
+	MarkRead *bool `yaml:"mark_read,omitempty" json:"mark_read,omitempty"`
+	// MaxBodyChars truncates long email bodies. Default: 50000.
+	MaxBodyChars int `yaml:"max_body_chars,omitempty" json:"max_body_chars,omitempty"`
+}
+
+// IsEmailEnabled returns true if the Email channel is explicitly enabled.
+func (c *EmailConfig) IsEmailEnabled() bool {
+	return c.Enabled != nil && *c.Enabled
+}
+
+// IsMarkRead returns whether processed emails should be marked as read.
+// Defaults to true if not set.
+func (c *EmailConfig) IsMarkRead() bool {
+	if c.MarkRead == nil {
+		return true
+	}
+	return *c.MarkRead
+}
+
+// GetPollInterval returns the poll interval in seconds, defaulting to 30.
+func (c *EmailConfig) GetPollInterval() int {
+	if c.PollInterval <= 0 {
+		return 30
+	}
+	return c.PollInterval
 }
 
 type ProviderConfig map[string]string

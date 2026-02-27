@@ -1,13 +1,18 @@
 package credentials
 
 import (
+	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/argon2"
 )
 
 // CredentialType defines the authentication mechanism.
@@ -72,9 +77,11 @@ type Credential struct {
 
 // storeData is the JSON structure inside the encrypted file.
 type storeData struct {
-	Credentials map[string]*Credential `json:"credentials"`
-	Secrets     map[string]string      `json:"secrets,omitempty"`  // flat key-value store (provider keys, tokens, etc.)
-	Migrated    bool                   `json:"migrated,omitempty"` // true after config.yaml secrets have been migrated
+	Credentials   map[string]*Credential `json:"credentials"`
+	Secrets       map[string]string      `json:"secrets,omitempty"`         // flat key-value store (provider keys, tokens, etc.)
+	Migrated      bool                   `json:"migrated,omitempty"`        // true after config.yaml secrets have been migrated
+	MasterKeyHash string                 `json:"master_key_hash,omitempty"` // argon2id hash (base64)
+	MasterKeySalt string                 `json:"master_key_salt,omitempty"` // random 16-byte salt (base64)
 }
 
 // Store manages encrypted credential persistence with integrated redaction.
@@ -375,6 +382,73 @@ func (s *Store) SetMigrated() error {
 
 	s.data.Migrated = true
 	return s.save()
+}
+
+// --- Master key for gating human-facing credential reveals ---
+
+// argon2id parameters (standard recommendations for interactive use).
+const (
+	argon2Time    = 1
+	argon2Memory  = 64 * 1024 // 64 MB
+	argon2Threads = 4
+	argon2KeyLen  = 32
+	masterSaltLen = 16
+)
+
+// SetMasterKey sets (or changes) the master key used to gate credential reveals.
+// Pass an empty password to remove the master key.
+func (s *Store) SetMasterKey(password string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if password == "" {
+		s.data.MasterKeyHash = ""
+		s.data.MasterKeySalt = ""
+		return s.save()
+	}
+
+	salt := make([]byte, masterSaltLen)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		return fmt.Errorf("generate salt: %w", err)
+	}
+
+	hash := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
+
+	s.data.MasterKeyHash = base64.StdEncoding.EncodeToString(hash)
+	s.data.MasterKeySalt = base64.StdEncoding.EncodeToString(salt)
+	return s.save()
+}
+
+// HasMasterKey returns true if a master key has been configured.
+func (s *Store) HasMasterKey() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data.MasterKeyHash != "" && s.data.MasterKeySalt != ""
+}
+
+// VerifyMasterKey checks a password against the stored master key hash.
+// Returns false if no master key is set or if the password does not match.
+func (s *Store) VerifyMasterKey(password string) bool {
+	s.mu.RLock()
+	storedHash := s.data.MasterKeyHash
+	storedSalt := s.data.MasterKeySalt
+	s.mu.RUnlock()
+
+	if storedHash == "" || storedSalt == "" {
+		return false
+	}
+
+	salt, err := base64.StdEncoding.DecodeString(storedSalt)
+	if err != nil {
+		return false
+	}
+	expected, err := base64.StdEncoding.DecodeString(storedHash)
+	if err != nil {
+		return false
+	}
+
+	hash := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
+	return subtle.ConstantTimeCompare(hash, expected) == 1
 }
 
 // load reads and decrypts the credential store from disk.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"log"
 	"maps"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	adksession "google.golang.org/adk/session"
+	"google.golang.org/genai"
 )
 
 // FileStore implements ADK's session.Service interface with file-based persistence.
@@ -396,6 +398,12 @@ func (s *FileStore) loadFromDisk(appName, userID, sessionID string) (*fileSessio
 	// from browser screenshots) that would bloat LLM context on replay.
 	sanitizeEventsOnLoad(events)
 
+	// Repair orphaned tool calls: if the daemon was killed mid-execution,
+	// the last event may contain FunctionCall parts without matching
+	// FunctionResponse parts. Providers like OpenAI reject this with HTTP 400.
+	// Inject synthetic error responses so the conversation history is valid.
+	events = repairOrphanedToolCalls(events)
+
 	// Rebuild state from events
 	state := make(stateMap)
 	for _, event := range events {
@@ -442,7 +450,77 @@ func sanitizeEventsOnLoad(events []*adksession.Event) {
 	}
 }
 
-// updateAppState updates app-scoped state and returns the merged app state.
+// repairOrphanedToolCalls scans the event list for FunctionCall parts that
+// have no matching FunctionResponse in any subsequent event. This happens when
+// the daemon is killed mid-tool-execution: the FunctionCall event is persisted
+// but the FunctionResponse never arrives. Without repair, the malformed history
+// causes LLM providers (especially OpenAI) to reject the request with HTTP 400.
+//
+// For each orphaned FunctionCall, a synthetic FunctionResponse event is appended
+// with an error message explaining the interruption.
+func repairOrphanedToolCalls(events []*adksession.Event) []*adksession.Event {
+	// Collect all FunctionResponse IDs across all events
+	answeredIDs := make(map[string]bool)
+	for _, event := range events {
+		if event.Content == nil {
+			continue
+		}
+		for _, part := range event.Content.Parts {
+			if part.FunctionResponse != nil && part.FunctionResponse.ID != "" {
+				answeredIDs[part.FunctionResponse.ID] = true
+			}
+		}
+	}
+
+	// Find orphaned FunctionCalls (have ID but no matching FunctionResponse)
+	var orphanParts []*genai.Part
+	for _, event := range events {
+		if event.Content == nil {
+			continue
+		}
+		for _, part := range event.Content.Parts {
+			if part.FunctionCall != nil && part.FunctionCall.ID != "" {
+				if !answeredIDs[part.FunctionCall.ID] {
+					orphanParts = append(orphanParts, part)
+				}
+			}
+		}
+	}
+
+	if len(orphanParts) == 0 {
+		return events
+	}
+
+	log.Printf("[session] Repairing %d orphaned tool call(s) from interrupted session", len(orphanParts))
+
+	// Build synthetic FunctionResponse parts for each orphan
+	var responseParts []*genai.Part
+	for _, orphan := range orphanParts {
+		log.Printf("[session]   orphan: %s (id=%s)", orphan.FunctionCall.Name, orphan.FunctionCall.ID)
+		responseParts = append(responseParts, &genai.Part{
+			FunctionResponse: &genai.FunctionResponse{
+				ID:   orphan.FunctionCall.ID,
+				Name: orphan.FunctionCall.Name,
+				Response: map[string]any{
+					"error": "Tool call was interrupted (daemon restarted). The result is unavailable.",
+				},
+			},
+		})
+	}
+
+	// Append a synthetic event with all the error responses
+	syntheticEvent := &adksession.Event{
+		ID:        "repair-" + fmt.Sprintf("%d", time.Now().UnixMilli()),
+		Timestamp: time.Now(),
+		Author:    "tool",
+	}
+	syntheticEvent.Content = &genai.Content{
+		Role:  "user",
+		Parts: responseParts,
+	}
+
+	return append(events, syntheticEvent)
+}
 func (s *FileStore) updateAppState(appDelta stateMap, appName string) stateMap {
 	innerMap, ok := s.appState[appName]
 	if !ok {

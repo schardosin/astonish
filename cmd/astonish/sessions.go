@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -26,10 +27,10 @@ func handleSessionsCommand(args []string) error {
 	case "show":
 		if len(args) < 2 {
 			fmt.Println("Error: session ID required")
-			fmt.Println("Usage: astonish sessions show <session-id>")
+			fmt.Println("Usage: astonish sessions show <session-id> [flags]")
 			return fmt.Errorf("session ID required")
 		}
-		return handleSessionsShow(args[1])
+		return handleSessionsShow(args[1], args[2:])
 	case "delete", "rm":
 		if len(args) < 2 {
 			fmt.Println("Error: session ID required")
@@ -116,7 +117,41 @@ func handleSessionsList() error {
 	return nil
 }
 
-func handleSessionsShow(sessionID string) error {
+func handleSessionsShow(sessionID string, flags []string) error {
+	// Parse flags
+	opts := TraceOpts{}
+	for i := 0; i < len(flags); i++ {
+		switch flags[i] {
+		case "--json":
+			opts.JSONOutput = true
+		case "--tools-only", "-t":
+			opts.ToolsOnly = true
+		case "--verbose", "-v":
+			opts.Verbose = true
+		case "--last", "-n":
+			if i+1 < len(flags) {
+				i++
+				n, err := strconv.Atoi(flags[i])
+				if err != nil {
+					return fmt.Errorf("invalid value for --last: %s", flags[i])
+				}
+				opts.LastN = n
+			} else {
+				return fmt.Errorf("--last requires a number")
+			}
+		default:
+			// Check for -n<number> form (e.g. -n20)
+			if strings.HasPrefix(flags[i], "-n") && len(flags[i]) > 2 {
+				n, err := strconv.Atoi(flags[i][2:])
+				if err == nil {
+					opts.LastN = n
+					continue
+				}
+			}
+			return fmt.Errorf("unknown flag: %s", flags[i])
+		}
+	}
+
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
@@ -144,6 +179,31 @@ func handleSessionsShow(sessionID string) error {
 		return fmt.Errorf("session not found: %w", err)
 	}
 
+	// Load the transcript
+	transcriptPath := fmt.Sprintf("%s/%s/%s/%s.jsonl", sessDir, meta.AppName, meta.UserID, meta.ID)
+	transcript := persistentsession.NewTranscript(transcriptPath)
+
+	if !transcript.Exists() {
+		fmt.Printf("Session: %s\n", meta.ID)
+		fmt.Printf("App:     %s\n", meta.AppName)
+		fmt.Printf("User:    %s\n", meta.UserID)
+		fmt.Printf("Created: %s\n", meta.CreatedAt.Format(time.RFC3339))
+		fmt.Printf("Updated: %s\n", meta.UpdatedAt.Format(time.RFC3339))
+		fmt.Println("\nNo transcript file found.")
+		return nil
+	}
+
+	events, err := transcript.ReadEvents()
+	if err != nil {
+		return fmt.Errorf("failed to read transcript: %w", err)
+	}
+
+	if opts.JSONOutput {
+		renderSessionTraceJSON(meta.ID, meta.AppName, meta.UserID, events, opts)
+		return nil
+	}
+
+	// Print metadata header
 	fmt.Printf("Session: %s\n", meta.ID)
 	fmt.Printf("App:     %s\n", meta.AppName)
 	fmt.Printf("User:    %s\n", meta.UserID)
@@ -152,7 +212,7 @@ func handleSessionsShow(sessionID string) error {
 	if meta.Title != "" {
 		fmt.Printf("Title:   %s\n", meta.Title)
 	}
-	fmt.Printf("Messages: %d\n", meta.MessageCount)
+	fmt.Printf("Events:  %d\n", len(events))
 
 	// Show sub-session count if any
 	children, _ := index.ListChildren(fullID)
@@ -160,8 +220,13 @@ func handleSessionsShow(sessionID string) error {
 		fmt.Printf("Sub-sessions: %d\n", len(children))
 	}
 
-	fmt.Println()
-	fmt.Printf("Resume with: astonish chat --resume %s\n", meta.ID)
+	if len(events) == 0 {
+		fmt.Println("\nNo events recorded.")
+		return nil
+	}
+
+	// Render the trace
+	renderSessionTrace(events, opts)
 
 	return nil
 }
@@ -321,19 +386,28 @@ func formatAge(t time.Time) string {
 func printSessionsUsage() {
 	fmt.Println("usage: astonish sessions <command> [args]")
 	fmt.Println("")
-	fmt.Println("Manage persistent chat sessions.")
+	fmt.Println("Manage and inspect persistent chat sessions.")
 	fmt.Println("")
 	fmt.Println("commands:")
 	fmt.Println("  list, ls              List all sessions")
-	fmt.Println("  show <id>             Show session details")
+	fmt.Println("  show <id> [flags]     Show session trace (tool calls, LLM responses, errors)")
 	fmt.Println("  delete, rm <id>       Delete a session")
 	fmt.Println("  clear                 Delete all sessions")
+	fmt.Println("")
+	fmt.Println("show flags:")
+	fmt.Println("  --json                Output as JSON")
+	fmt.Println("  -t, --tools-only      Only show tool calls (skip LLM text)")
+	fmt.Println("  -v, --verbose         Show full tool args/results (no truncation)")
+	fmt.Println("  -n, --last N          Only show last N events")
 	fmt.Println("")
 	fmt.Println("Session IDs can be abbreviated (prefix match).")
 	fmt.Println("")
 	fmt.Println("examples:")
 	fmt.Println("  astonish sessions list")
 	fmt.Println("  astonish sessions show abc123")
+	fmt.Println("  astonish sessions show abc123 -t")
+	fmt.Println("  astonish sessions show telegram:direct:123 --tools-only --last 20")
+	fmt.Println("  astonish sessions show abc123 --json")
 	fmt.Println("  astonish sessions delete abc123")
 	fmt.Println("  astonish sessions clear")
 }

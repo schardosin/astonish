@@ -29,6 +29,22 @@ type SelfMDConfig struct {
 	KnowledgeFiles   []string          // Knowledge tier files found
 	SubAgentsEnabled bool              // Whether sub-agent delegation is available
 	SkillNames       []string          // Names of loaded eligible skills
+
+	// Channels
+	ChannelsEnabled bool   // Whether the channels system is enabled
+	TelegramEnabled bool   // Telegram channel active
+	EmailEnabled    bool   // Inbound email channel active (IMAP polling)
+	EmailAddress    string // The agent's email address (e.g., "agent@gmail.com")
+	EmailToolsAvail bool   // Email tools available (true if IMAP/SMTP creds exist, even if channel disabled)
+
+	// Browser / Handoff
+	HandoffAvailable bool // Whether browser_request_human tool is registered
+
+	// Agent Identity (web portal persona)
+	IdentityConfigured bool   // Whether agent_identity is configured in config.yaml
+	IdentityName       string // Display name for registrations
+	IdentityUsername   string // Base username for registrations
+	IdentityEmail      string // Email for registrations
 }
 
 // MCPServerInfo describes an installed MCP server for SELF.md.
@@ -144,6 +160,68 @@ func GenerateSelfMD(cfg *SelfMDConfig) string {
 		sb.WriteString("- Retrieval: automatic (vector search) + explicit (skill_lookup tool)\n\n")
 	}
 
+	// Channels
+	if cfg.ChannelsEnabled || cfg.EmailToolsAvail {
+		sb.WriteString("## Channels\n")
+		if cfg.ChannelsEnabled {
+			sb.WriteString("- Channels system: enabled\n")
+		}
+		if cfg.TelegramEnabled {
+			sb.WriteString("- Telegram: active (inbound messages trigger agent runs)\n")
+		}
+		if cfg.EmailEnabled {
+			sb.WriteString(fmt.Sprintf("- Email channel: active (IMAP polling, address: %s)\n", cfg.EmailAddress))
+			sb.WriteString("  - Inbound emails from allowed senders trigger agent runs\n")
+			sb.WriteString("  - Agent replies via SMTP with proper threading\n")
+		} else if cfg.EmailAddress != "" && !cfg.EmailEnabled {
+			sb.WriteString(fmt.Sprintf("- Email channel: disabled (address: %s)\n", cfg.EmailAddress))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Email tools (shown when available, regardless of channel state)
+	if cfg.EmailToolsAvail {
+		sb.WriteString("## Email Tools\n")
+		sb.WriteString(fmt.Sprintf("- Email address: %s\n", cfg.EmailAddress))
+		sb.WriteString("- 8 tools available: email_list, email_read, email_search, email_send, email_reply, email_mark_read, email_delete, email_wait\n")
+		sb.WriteString("- Tools work independently of the email channel (no polling required)\n")
+		sb.WriteString("- **email_wait**: polls inbox for matching email with timeout. Use for registration flows where you sign up on a website and need to receive a verification email. Supports substring matching on sender/subject.\n")
+		if !cfg.EmailEnabled {
+			sb.WriteString("- Note: the inbound email channel is disabled, but you can still read, send, and search emails using these tools\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	// Browser handoff
+	if cfg.HandoffAvailable {
+		sb.WriteString("## Browser Handoff\n")
+		sb.WriteString("Two-step human-in-the-loop flow:\n")
+		sb.WriteString("1. browser_request_human — starts CDP proxy, returns connection instructions immediately\n")
+		sb.WriteString("2. Relay the instructions to the user (listen address, chrome://inspect steps)\n")
+		sb.WriteString("3. browser_handoff_complete — blocks until user finishes\n")
+		sb.WriteString("4. browser_snapshot — check what changed\n")
+		sb.WriteString("- Completion: auto-detected when DevTools disconnects, or user visits /handoff/done\n")
+		sb.WriteString("- Primary use: CAPTCHA solving, complex auth flows, payment forms\n")
+		sb.WriteString("\n")
+	}
+
+	// Agent Identity
+	if cfg.IdentityConfigured {
+		sb.WriteString("## Agent Identity\n")
+		sb.WriteString("Configured persona for web portal registrations:\n")
+		if cfg.IdentityName != "" {
+			sb.WriteString(fmt.Sprintf("- Name: %s\n", cfg.IdentityName))
+		}
+		if cfg.IdentityUsername != "" {
+			sb.WriteString(fmt.Sprintf("- Username: %s\n", cfg.IdentityUsername))
+		}
+		if cfg.IdentityEmail != "" {
+			sb.WriteString(fmt.Sprintf("- Email: %s\n", cfg.IdentityEmail))
+		}
+		sb.WriteString("Use these when registering on websites. Combine with email tools (email_wait) for verification.\n")
+		sb.WriteString("\n")
+	}
+
 	// Memory system
 	sb.WriteString("## Memory System\n")
 	if cfg.MemoryEnabled {
@@ -184,6 +262,13 @@ func GenerateSelfMD(cfg *SelfMDConfig) string {
 	sb.WriteString("- `astonish credential test <name>` — Test a credential (OAuth: token flow, others: config check)\n")
 	sb.WriteString("Available types: api_key, bearer, basic, password (SSH/FTP/SMTP/databases), oauth_client_credentials, oauth_authorization_code (Google/GitHub/etc.)\n")
 	sb.WriteString("**Note:** Prefer using your `save_credential` tool directly over suggesting CLI commands — it's faster and doesn't require the user to leave the chat.\n")
+	sb.WriteString("\n### Channel CLI Commands\n")
+	sb.WriteString("If the user asks about managing communication channels:\n")
+	sb.WriteString("- `astonish channels setup telegram` — Interactive Telegram bot setup (token validation, user ID detection)\n")
+	sb.WriteString("- `astonish channels setup email` — Interactive IMAP/SMTP email setup (connection test, allowlist config)\n")
+	sb.WriteString("- `astonish channels status` — Show active channel status\n")
+	sb.WriteString("- `astonish channels disable` — Disable all channels\n")
+	sb.WriteString("Channels require the daemon to be running (`astonish daemon start`).\n")
 	sb.WriteString("\nIf a requested model or provider is not in this file, read config.yaml directly to check the full configuration.\n")
 
 	return sb.String()

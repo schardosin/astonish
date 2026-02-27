@@ -220,3 +220,107 @@ func TestGenerateSelfMD_CredentialCLISection(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerateSelfMD_BrowserHandoff(t *testing.T) {
+	cfg := &SelfMDConfig{
+		ProviderName:     "test",
+		ModelName:        "test-model",
+		HandoffAvailable: true,
+	}
+
+	content := GenerateSelfMD(cfg)
+
+	checks := []string{
+		"## Browser Handoff",
+		"browser_request_human",
+		"browser_handoff_complete",
+		"browser_snapshot",
+		"chrome://inspect",
+		"CAPTCHA",
+		"auto-detected",
+	}
+	for _, check := range checks {
+		if !strings.Contains(content, check) {
+			t.Errorf("expected content to contain %q", check)
+		}
+	}
+}
+
+func TestGenerateSelfMD_NoBrowserHandoff(t *testing.T) {
+	cfg := &SelfMDConfig{
+		ProviderName:     "test",
+		ModelName:        "test-model",
+		HandoffAvailable: false,
+	}
+
+	content := GenerateSelfMD(cfg)
+
+	if strings.Contains(content, "## Browser Handoff") {
+		t.Error("browser handoff section should not appear when not available")
+	}
+}
+
+func TestGenerateSelfMD_AgentIdentity(t *testing.T) {
+	cfg := &SelfMDConfig{
+		ProviderName:       "test",
+		ModelName:          "test-model",
+		IdentityConfigured: true,
+		IdentityName:       "Astonish Bot",
+		IdentityUsername:   "astonish_ai",
+		IdentityEmail:      "bot@example.com",
+	}
+
+	content := GenerateSelfMD(cfg)
+
+	checks := []string{
+		"## Agent Identity",
+		"Name: Astonish Bot",
+		"Username: astonish_ai",
+		"Email: bot@example.com",
+		"email tools",
+	}
+	for _, check := range checks {
+		if !strings.Contains(content, check) {
+			t.Errorf("expected content to contain %q", check)
+		}
+	}
+}
+
+func TestGenerateSelfMD_AgentIdentityPartial(t *testing.T) {
+	cfg := &SelfMDConfig{
+		ProviderName:       "test",
+		ModelName:          "test-model",
+		IdentityConfigured: true,
+		IdentityName:       "Bot",
+	}
+
+	content := GenerateSelfMD(cfg)
+
+	if !strings.Contains(content, "## Agent Identity") {
+		t.Error("expected identity section")
+	}
+	if !strings.Contains(content, "Name: Bot") {
+		t.Error("expected name")
+	}
+	// Username and Email not set, should not appear
+	if strings.Contains(content, "Username:") {
+		t.Error("username should not appear when not set")
+	}
+	if strings.Contains(content, "Email:") {
+		t.Error("email should not appear when not set")
+	}
+}
+
+func TestGenerateSelfMD_NoAgentIdentity(t *testing.T) {
+	cfg := &SelfMDConfig{
+		ProviderName:       "test",
+		ModelName:          "test-model",
+		IdentityConfigured: false,
+	}
+
+	content := GenerateSelfMD(cfg)
+
+	if strings.Contains(content, "## Agent Identity") {
+		t.Error("identity section should not appear when not configured")
+	}
+}

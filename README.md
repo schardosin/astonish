@@ -17,7 +17,7 @@
 
 ---
 
-Astonish is an autonomous AI agent you run locally. It solves problems dynamically using LLM-driven tool-use loops (shell commands, file edits, web fetches, browser automation, memory recall) and adapts to whatever the task demands. When a task is complex enough, Astonish can distill the successful execution into a reusable YAML flow. The agent gets smarter as you use it.
+Astonish is an autonomous AI agent you run locally. It solves problems dynamically using LLM-driven tool-use loops (shell commands, file edits, web fetches, browser automation, email, memory recall) and adapts to whatever the task demands. When a task is complex enough, Astonish can distill the successful execution into a reusable YAML flow. The agent gets smarter as you use it.
 
 Deeply inspired by [OpenClaw](https://github.com/openclaw/openclaw) and the pioneering work it did on personal AI assistants (always-on daemons, skills-as-markdown, multi-channel messaging, tool-use-first architecture), Astonish takes those lessons and implements them in Go as a single compiled binary with a twist: **automatic workflow distillation**. Every successful complex interaction can become a reusable, auditable, versionable workflow.
 
@@ -45,9 +45,9 @@ Astonish itself is a single Go binary with no runtime dependencies. MCP servers 
 
 ## 💬 Autonomous Chat Agent
 
-The core of Astonish is a dynamic agent that uses LLM-driven tool-use loops to solve problems. It decides which tools to call, chains them together, and works through multi-step tasks without predefined workflows. Use it from the terminal with `astonish chat`, or talk to it from anywhere through integrated channels like Telegram.
+The core of Astonish is a dynamic agent that uses LLM-driven tool-use loops to solve problems. It decides which tools to call, chains them together, and works through multi-step tasks without predefined workflows. Use it from the terminal with `astonish chat`, or talk to it from anywhere through integrated channels like Telegram and Email.
 
-**50+ built-in tools** including shell execution (PTY-backed with background processes), file operations, web fetching with readability extraction, PDF reading, semantic memory search, browser automation, credential management, sub-agent delegation, and skill lookup.
+**58+ built-in tools** including shell execution (PTY-backed with background processes), file operations, web fetching with readability extraction, PDF reading, semantic memory search, browser automation, email (read, send, search, wait for verification emails), credential management, sub-agent delegation, and skill lookup.
 
 **MCP native.** Any MCP server works out of the box. Add GitHub, Slack, databases, or any other MCP-compatible tool. Your agent gains capabilities without touching code.
 
@@ -170,11 +170,14 @@ You:    "Remind me every morning at 9am to check my server health"
 Agent:  [schedule_job] Created job "server_health_check" with cron "0 9 * * *"
 ```
 
-**Telegram integration.** Connect a Telegram bot and interact with your agent from your phone. Results from scheduled jobs are broadcast to connected channels.
+**Channel integrations.** Connect Telegram or Email and interact with your agent from anywhere. Results from scheduled jobs are broadcast to connected channels.
 
 ```bash
 astonish channels setup telegram    # Interactive setup with token validation
+astonish channels setup email       # IMAP/SMTP setup with connection test
 ```
+
+**Email as a tool.** Beyond the inbound channel, the agent has 8 email tools (list, read, search, send, reply, mark read, delete, wait) that work independently. The agent can receive verification emails during autonomous web registration flows, even if the inbound email channel is disabled. Just configure IMAP/SMTP credentials and the tools are available.
 
 ---
 
@@ -269,7 +272,7 @@ flowchart TB
     subgraph Chat["💬 astonish chat"]
         direction TB
         C1["LLM tool-use loops"]
-        C2["50+ tools + MCP"]
+        C2["58+ tools + MCP"]
         C3["Memory + Skills + RAG"]
         C4["Execution tracing"]
     end
@@ -319,7 +322,7 @@ Astonish owes a significant debt to [OpenClaw](https://github.com/openclaw/openc
 - **DevOps & Infrastructure.** SSH into servers, check health, deploy containers, manage Kubernetes clusters. The agent learns your runbooks and distills them into repeatable flows.
 - **Code Review & Development.** Navigate codebases, run tests, review PRs, refactor code. Sub-agents can parallelize across multiple files or modules.
 - **Research & Web Tasks.** Fetch pages, extract content, search the web, automate browser workflows. 32 native browser tools handle login flows, form filling, and data extraction.
-- **Scheduled Automation.** Set up cron jobs through conversation. The daemon runs them on schedule and delivers results to your Telegram.
+- **Scheduled Automation.** Set up cron jobs through conversation. The daemon runs them on schedule and delivers results to your Telegram or Email.
 - **Team SOPs.** Distill successful workflows into YAML flows. Version control them. Share them. Anyone on the team runs them with `astonish flows run`.
 
 ---

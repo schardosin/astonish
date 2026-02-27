@@ -442,7 +442,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 								yield(&session.Event{
 									LLMResponse: model.LLMResponse{
 										Content: &genai.Content{
-											Parts: []*genai.Part{{Text: fmt.Sprintf("\n[Max tool calls reached (%d). Stopping.]", maxToolCalls)}},
+											Parts: []*genai.Part{{Text: fmt.Sprintf("\n\nI've been working on this for a while now (%d tool calls). Let me pause here — would you like me to continue?", maxToolCalls)}},
 											Role:  "model",
 										},
 									},

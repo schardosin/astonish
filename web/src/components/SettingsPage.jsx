@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package, Store, GitBranch, RefreshCw, Search, Play, Download } from 'lucide-react'
+import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package, Store, GitBranch, RefreshCw, Search, Play, Download, MessageSquare, Globe, Radio, Database, Brain, GitFork, Wand2, Clock, Shield, User, KeyRound } from 'lucide-react'
 import MCPStoreModal from './MCPStoreModal'
 import FlowStorePanel from './FlowStorePanel'
 import ProviderModelSelector from './ProviderModelSelector'
@@ -8,6 +8,18 @@ import CodeMirror from '@uiw/react-codemirror'
 import { json } from '@codemirror/lang-json'
 import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/search'
 import { keymap, EditorView } from '@codemirror/view'
+import { fetchFullConfig } from './settings/settingsApi'
+import ChatSettings from './settings/ChatSettings'
+import BrowserSettings from './settings/BrowserSettings'
+import ChannelsSettings from './settings/ChannelsSettings'
+import SessionsSettings from './settings/SessionsSettings'
+import MemorySettings from './settings/MemorySettings'
+import SubAgentsSettings from './settings/SubAgentsSettings'
+import SkillsSettings from './settings/SkillsSettings'
+import SchedulerSettings from './settings/SchedulerSettings'
+import DaemonSettings from './settings/DaemonSettings'
+import IdentitySettings from './settings/IdentitySettings'
+import CredentialsSettings from './settings/CredentialsSettings'
 
 // API functions
 const fetchSettings = async () => {
@@ -125,6 +137,9 @@ const refreshMCPServer = async (serverName) => {
   return res.json()
 }
 
+// Section keys that use the full config API
+const FULL_CONFIG_SECTIONS = ['chat', 'browser', 'channels', 'sessions', 'memory', 'sub_agents', 'skills', 'scheduler', 'daemon', 'identity']
+
 export default function SettingsPage({ onClose, activeSection = 'general', onSectionChange, onToolsRefresh, onSettingsSaved, updateAvailable = null, onUpdateClick = null, appVersion = 'dev', theme = 'dark' }) {
   // Use prop for active section, default to 'general'
   const [settings, setSettings] = useState(null)
@@ -194,6 +209,10 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
   const [newTapAlias, setNewTapAlias] = useState('')
   const [tapsError, setTapsError] = useState(null)
 
+  // Full config state for new settings sections
+  const [fullConfig, setFullConfig] = useState(null)
+  const [fullConfigLoading, setFullConfigLoading] = useState(false)
+
   useEffect(() => {
     loadData()
   }, [])
@@ -208,6 +227,17 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
         .finally(() => setTapsLoading(false))
     }
   }, [activeSection])
+
+  // Load full config when a new settings section is opened
+  useEffect(() => {
+    if (FULL_CONFIG_SECTIONS.includes(activeSection) && !fullConfig) {
+      setFullConfigLoading(true)
+      fetchFullConfig()
+        .then(data => setFullConfig(data))
+        .catch(err => setError(err.message))
+        .finally(() => setFullConfigLoading(false))
+    }
+  }, [activeSection, fullConfig])
 
   const loadMcpServerStatus = async () => {
     try {
@@ -615,7 +645,18 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
   const menuItems = [
     { id: 'general', label: 'General', icon: Settings },
     { id: 'providers', label: 'Providers', icon: Key },
+    { id: 'credentials', label: 'Credentials', icon: KeyRound },
+    { id: 'chat', label: 'Chat', icon: MessageSquare },
+    { id: 'browser', label: 'Browser', icon: Globe },
+    { id: 'channels', label: 'Channels', icon: Radio },
     { id: 'mcp', label: 'MCP Servers', icon: Server },
+    { id: 'sessions', label: 'Sessions', icon: Database },
+    { id: 'memory', label: 'Memory', icon: Brain },
+    { id: 'sub_agents', label: 'Sub-Agents', icon: GitFork },
+    { id: 'skills', label: 'Skills', icon: Wand2 },
+    { id: 'scheduler', label: 'Scheduler', icon: Clock },
+    { id: 'daemon', label: 'Daemon', icon: Shield },
+    { id: 'identity', label: 'Agent Identity', icon: User },
     { id: 'taps', label: 'Repositories', icon: GitBranch },
     { id: 'flows', label: 'Flow Store', icon: Store },
   ]
@@ -643,7 +684,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
           </button>
         </div>
 
-        <nav className="flex-1 p-2 space-y-1">
+        <nav className="flex-1 p-2 space-y-1 overflow-y-auto">
           {menuItems.map(item => {
             const Icon = item.icon
             const isActive = activeSection === item.id
@@ -651,7 +692,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
               <button
                 key={item.id}
                 onClick={() => onSectionChange ? onSectionChange(item.id) : null}
-                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all"
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all"
                 style={{
                   background: isActive ? 'var(--accent-soft)' : 'transparent',
                   color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
@@ -1921,6 +1962,58 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
 
           {activeSection === 'flows' && (
             <FlowStorePanel />
+          )}
+
+          {/* New settings sections */}
+          {FULL_CONFIG_SECTIONS.includes(activeSection) && fullConfigLoading && (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} />
+              <span className="ml-2 text-sm" style={{ color: 'var(--text-muted)' }}>Loading settings...</span>
+            </div>
+          )}
+
+          {activeSection === 'chat' && fullConfig && (
+            <ChatSettings config={fullConfig.chat} onSaved={() => setFullConfig(null)} />
+          )}
+
+          {activeSection === 'browser' && fullConfig && (
+            <BrowserSettings config={fullConfig.browser} onSaved={() => setFullConfig(null)} />
+          )}
+
+          {activeSection === 'channels' && fullConfig && (
+            <ChannelsSettings config={fullConfig.channels} onSaved={() => setFullConfig(null)} />
+          )}
+
+          {activeSection === 'sessions' && fullConfig && (
+            <SessionsSettings config={fullConfig.sessions} onSaved={() => setFullConfig(null)} />
+          )}
+
+          {activeSection === 'memory' && fullConfig && (
+            <MemorySettings config={fullConfig.memory} onSaved={() => setFullConfig(null)} />
+          )}
+
+          {activeSection === 'sub_agents' && fullConfig && (
+            <SubAgentsSettings config={fullConfig.sub_agents} onSaved={() => setFullConfig(null)} />
+          )}
+
+          {activeSection === 'skills' && fullConfig && (
+            <SkillsSettings config={fullConfig.skills} onSaved={() => setFullConfig(null)} theme={theme} />
+          )}
+
+          {activeSection === 'scheduler' && fullConfig && (
+            <SchedulerSettings config={fullConfig.scheduler} onSaved={() => setFullConfig(null)} />
+          )}
+
+          {activeSection === 'daemon' && fullConfig && (
+            <DaemonSettings config={fullConfig.daemon} onSaved={() => setFullConfig(null)} />
+          )}
+
+          {activeSection === 'identity' && fullConfig && (
+            <IdentitySettings config={fullConfig.agent_identity} onSaved={() => setFullConfig(null)} />
+          )}
+
+          {activeSection === 'credentials' && (
+            <CredentialsSettings />
           )}
         </div>
       </div>

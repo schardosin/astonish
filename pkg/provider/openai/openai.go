@@ -297,8 +297,15 @@ func (p *Provider) toOpenAIMessages(req *model.LLMRequest) []openai.ChatCompleti
 					sb.WriteString(part.Text)
 				}
 				if part.FunctionCall != nil {
-					// Marshal args to JSON string
-					argsBytes, _ := json.Marshal(part.FunctionCall.Args)
+					// Marshal args to JSON string; use "{}" for nil/empty args
+					// because some providers (e.g. Anthropic via Bifrost) reject
+					// "null" as toolUse input.
+					argsStr := "{}"
+					if part.FunctionCall.Args != nil {
+						if b, err := json.Marshal(part.FunctionCall.Args); err == nil && string(b) != "null" {
+							argsStr = string(b)
+						}
+					}
 
 					// Use real ID if available
 					id := part.FunctionCall.ID
@@ -314,7 +321,7 @@ func (p *Provider) toOpenAIMessages(req *model.LLMRequest) []openai.ChatCompleti
 						Type: openai.ToolTypeFunction,
 						Function: openai.FunctionCall{
 							Name:      part.FunctionCall.Name,
-							Arguments: string(argsBytes),
+							Arguments: argsStr,
 						},
 					})
 				}
@@ -330,7 +337,53 @@ func (p *Provider) toOpenAIMessages(req *model.LLMRequest) []openai.ChatCompleti
 			messages = append(messages, msg)
 		}
 	}
+
+	// Post-process: merge consecutive messages with the same role.
+	// OpenAI requires strict user/assistant alternation. Consecutive user
+	// messages (e.g. from failed requests where no model response was stored)
+	// cause HTTP 400 errors. Tool messages are left alone since each carries
+	// its own tool_call_id.
+	messages = mergeConsecutiveSameRole(messages)
+
 	return messages
+}
+
+// mergeConsecutiveSameRole collapses adjacent messages that share the same role
+// into a single message. Only user and assistant text messages are merged; tool
+// messages are kept separate because each one carries a distinct tool_call_id.
+// For assistant messages with tool_calls, consecutive entries are also kept
+// separate to preserve call/response ordering.
+func mergeConsecutiveSameRole(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	if len(messages) <= 1 {
+		return messages
+	}
+
+	merged := make([]openai.ChatCompletionMessage, 0, len(messages))
+	merged = append(merged, messages[0])
+
+	for i := 1; i < len(messages); i++ {
+		prev := &merged[len(merged)-1]
+		cur := messages[i]
+
+		// Only merge if roles match, both are user or assistant, and neither
+		// carries tool calls or a tool_call_id.
+		sameRole := prev.Role == cur.Role
+		mergeable := cur.Role == openai.ChatMessageRoleUser || cur.Role == openai.ChatMessageRoleAssistant
+		noToolCalls := len(prev.ToolCalls) == 0 && len(cur.ToolCalls) == 0
+		noToolID := prev.ToolCallID == "" && cur.ToolCallID == ""
+
+		if sameRole && mergeable && noToolCalls && noToolID {
+			if prev.Content != "" && cur.Content != "" {
+				prev.Content = prev.Content + "\n" + cur.Content
+			} else if cur.Content != "" {
+				prev.Content = cur.Content
+			}
+		} else {
+			merged = append(merged, cur)
+		}
+	}
+
+	return merged
 }
 
 func (p *Provider) toLLMResponse(resp openai.ChatCompletionResponse) *model.LLMResponse {

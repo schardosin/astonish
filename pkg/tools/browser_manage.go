@@ -84,11 +84,21 @@ func BrowserTabs(mgr *browser.Manager, guard *browser.NavigationGuard) func(tool
 					_ = pg.Timeout(mgr.NavigationTimeout()).WaitLoad()
 				}
 			} else {
-				pg, err = b.Page(proto.TargetCreateTarget{URL: url})
+				// Create page to about:blank first so that SetActivePage can
+				// inject stealth JS (via EvalOnNewDocument) and UA overrides
+				// BEFORE any real navigation. Without this, the first page
+				// load runs without anti-detection measures.
+				pg, err = b.Page(proto.TargetCreateTarget{URL: "about:blank"})
 				if err != nil {
 					return BrowserTabsResult{}, fmt.Errorf("failed to create tab: %w", err)
 				}
 				mgr.SetActivePage(pg)
+				if url != "about:blank" {
+					if err := pg.Navigate(url); err != nil {
+						return BrowserTabsResult{}, fmt.Errorf("failed to navigate new tab: %w", err)
+					}
+					_ = pg.Timeout(mgr.NavigationTimeout()).WaitLoad()
+				}
 			}
 
 			info, _ := pg.Info()

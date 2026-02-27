@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/schardosin/astonish/pkg/browser"
@@ -79,7 +80,18 @@ func BrowserRequestHuman(mgr *browser.Manager) func(tool.Context, BrowserRequest
 			return BrowserRequestHumanResult{}, fmt.Errorf("failed to start handoff: %w", err)
 		}
 
-		// Build user-facing instructions that the agent MUST relay
+		// Build user-facing instructions that the agent MUST relay.
+		// If the proxy binds to 0.0.0.0, guide the user to use the machine's IP.
+		connectAddr := info.ListenAddress
+		addrNote := ""
+		if strings.HasPrefix(connectAddr, "0.0.0.0:") || strings.HasPrefix(connectAddr, "[::]:") {
+			port := connectAddr[strings.LastIndex(connectAddr, ":")+1:]
+			addrNote = fmt.Sprintf(
+				"\nNOTE: The proxy is listening on all interfaces (port %s). "+
+					"Use this machine's IP address instead of 0.0.0.0 "+
+					"(e.g. 192.168.x.x:%s or your server's IP:%s).\n", port, port, port)
+			connectAddr = "<this-machine-ip>:" + port
+		}
 		message := fmt.Sprintf(
 			"HUMAN ASSISTANCE NEEDED\n\n"+
 				"Reason: %s\n\n"+
@@ -88,14 +100,16 @@ func BrowserRequestHuman(mgr *browser.Manager) func(tool.Context, BrowserRequest
 				"1. Open Chrome and go to chrome://inspect\n"+
 				"2. Click 'Configure...' and add: %s\n"+
 				"3. The browser tab should appear under 'Remote Target'\n"+
-				"4. Click 'inspect' to open DevTools with full control\n\n"+
+				"4. Click 'inspect' to open DevTools with full control\n"+
+				"%s\n"+
 				"When you're done, either:\n"+
 				"- Close the DevTools window (auto-detected after 10s)\n"+
 				"- Visit http://%s/handoff/done in any browser\n\n"+
 				"IMPORTANT: After relaying these instructions to the user, call browser_handoff_complete to wait for them to finish.",
 			args.Reason,
 			pageURL,
-			info.ListenAddress,
+			connectAddr,
+			addrNote,
 			info.ListenAddress,
 		)
 

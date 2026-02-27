@@ -217,7 +217,7 @@ func (m *Manager) CDPURL() string {
 func (m *Manager) HandoffConfig() HandoffCfg {
 	bind := m.config.HandoffBindAddress
 	if bind == "" {
-		bind = "127.0.0.1"
+		bind = "0.0.0.0"
 	}
 	port := m.config.HandoffPort
 	if port == 0 {

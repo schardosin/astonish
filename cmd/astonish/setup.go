@@ -1266,10 +1266,5 @@ func handleWebToolSetup() error {
 	return nil
 }
 
-// handleBrowserSetup displays an informational note about browser automation.
-// Browser automation is built-in via native Go tools (rod) — no external MCP
-// server or Node.js dependency required. Chromium is auto-downloaded on first use.
-func handleBrowserSetup() error {
-	printSuccess("Browser automation is built-in. The AI can navigate pages, click, type, take screenshots, and more — no setup required. Chromium is downloaded automatically on first use.")
-	return nil
-}
+// handleBrowserSetup is defined in browser_setup.go — it runs the interactive
+// browser engine configuration flow (default Chromium, CloakBrowser, or custom).

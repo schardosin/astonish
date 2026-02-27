@@ -21,20 +21,23 @@ func handleConfigCommand(args []string) error {
 		return handleConfigShow()
 	case "directory":
 		return handleConfigDirectory()
+	case "browser":
+		return handleBrowserSetup()
 	default:
 		return fmt.Errorf("unknown config subcommand: %s", args[0])
 	}
 }
 
 func printConfigUsage() {
-	fmt.Println("usage: astonish config [-h] {edit,show,directory} ...")
+	fmt.Println("usage: astonish config [-h] {edit,show,directory,browser} ...")
 	fmt.Println("")
 	fmt.Println("positional arguments:")
-	fmt.Println("  {edit,show,directory}")
+	fmt.Println("  {edit,show,directory,browser}")
 	fmt.Println("                        Configuration management commands")
 	fmt.Println("    edit                Open config.yaml in default editor")
 	fmt.Println("    show                Print config.yaml contents")
 	fmt.Println("    directory           Print the configuration directory path")
+	fmt.Println("    browser             Configure browser engine (default, CloakBrowser, or custom)")
 	fmt.Println("")
 	fmt.Println("options:")
 	fmt.Println("  -h, --help            show this help message and exit")

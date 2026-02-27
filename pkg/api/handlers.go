@@ -764,6 +764,16 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/skills/{name}/content", UpdateSkillContentHandler).Methods("PUT")
 	router.HandleFunc("/api/skills/{name}", DeleteSkillHandler).Methods("DELETE")
 
+	// Credentials endpoints (master-key routes before {name} to avoid mux conflict)
+	router.HandleFunc("/api/credentials", ListCredentialsHandler).Methods("GET")
+	router.HandleFunc("/api/credentials", SaveCredentialHandler).Methods("POST")
+	router.HandleFunc("/api/credentials/master-key", SetMasterKeyHandler).Methods("POST")
+	router.HandleFunc("/api/credentials/verify-master-key", VerifyMasterKeyHandler).Methods("POST")
+	router.HandleFunc("/api/credentials/{name}", GetCredentialHandler).Methods("GET")
+	router.HandleFunc("/api/credentials/{name}", DeleteCredentialHandler).Methods("DELETE")
+	router.HandleFunc("/api/secrets/{key:.+}", GetSecretHandler).Methods("GET")
+	router.HandleFunc("/api/secrets/{key:.+}", SaveSecretHandler).Methods("PUT")
+
 	// Provider endpoints
 	router.HandleFunc("/api/providers/{providerId}/models", ListProviderModelsHandler).Methods("GET")
 	router.HandleFunc("/api/providers/{providerId}/models-metadata", ListProviderModelsWithMetadataHandler).Methods("GET")

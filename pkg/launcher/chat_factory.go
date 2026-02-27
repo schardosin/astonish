@@ -1174,6 +1174,8 @@ func browserConfigFromApp(appCfg *config.AppConfig) browser.BrowserConfig {
 		b.ChromePath,
 		b.UserDataDir,
 		b.NavigationTimeout,
+		b.Proxy,
+		b.RemoteCDPURL,
 		b.HandoffBindAddress,
 		b.HandoffPort,
 	)

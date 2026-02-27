@@ -262,7 +262,11 @@ func (c *SchedulerConfig) IsSchedulerEnabled() bool {
 // BrowserAppConfig controls the built-in browser automation module.
 // All fields are optional — defaults are applied by browser.DefaultConfig().
 type BrowserAppConfig struct {
-	// Headless controls whether the browser runs in headless mode. Default: true.
+	// Headless controls whether the browser runs in headless mode.
+	// Default: false (headed mode with Xvfb on Linux servers for better stealth).
+	// Headed mode produces a more realistic browser fingerprint that avoids
+	// detection by strict anti-bot systems. If Xvfb is not available, Astonish
+	// falls back to headless mode automatically.
 	Headless *bool `yaml:"headless,omitempty" json:"headless,omitempty"`
 	// ViewportWidth is the default viewport width in pixels. Default: 1280.
 	ViewportWidth int `yaml:"viewport_width,omitempty" json:"viewport_width,omitempty"`
@@ -277,6 +281,19 @@ type BrowserAppConfig struct {
 	UserDataDir string `yaml:"user_data_dir,omitempty" json:"user_data_dir,omitempty"`
 	// NavigationTimeout is the max seconds to wait for page loads. Default: 30.
 	NavigationTimeout int `yaml:"navigation_timeout,omitempty" json:"navigation_timeout,omitempty"`
+	// Proxy sets an HTTP or SOCKS proxy for all browser traffic.
+	// Format: "http://user:pass@host:port" or "socks5://host:port".
+	// Useful for routing through residential proxies to avoid datacenter IP blocks.
+	Proxy string `yaml:"proxy,omitempty" json:"proxy,omitempty"`
+	// RemoteCDPURL connects to an external browser via Chrome DevTools Protocol
+	// instead of launching a local Chrome instance. Use this with anti-detect
+	// browsers (AdsPower, Dolphin Anty, Browserless, etc.) that handle
+	// fingerprint spoofing at the binary level.
+	// Format: "ws://localhost:9222/devtools/browser/<id>" or the CDP endpoint
+	// provided by your anti-detect browser.
+	// When set, all local launch options (Headless, ChromePath, NoSandbox, Proxy,
+	// UserDataDir) are ignored since the external browser manages its own config.
+	RemoteCDPURL string `yaml:"remote_cdp_url,omitempty" json:"remote_cdp_url,omitempty"`
 
 	// HandoffBindAddress controls network binding for browser handoff (human-in-the-loop).
 	// "127.0.0.1" for local-only (default), "0.0.0.0" for remote access via SSH tunnel.

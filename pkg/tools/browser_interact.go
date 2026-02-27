@@ -64,6 +64,9 @@ func BrowserClick(mgr *browser.Manager, refs *browser.RefMap) func(tool.Context,
 			clickCount = 2
 		}
 
+		// Subtle random delay before clicking to break robotic timing patterns.
+		browser.HumanDelay(50, 200)
+
 		if err := el.Click(button, clickCount); err != nil {
 			return BrowserClickResult{}, fmt.Errorf("click failed: %w", err)
 		}
@@ -120,12 +123,10 @@ func BrowserType(mgr *browser.Manager, refs *browser.RefMap) func(tool.Context, 
 		}
 
 		if args.Slowly {
-			// Type character by character with a small delay
-			for _, ch := range args.Text {
-				if err := el.Input(string(ch)); err != nil {
-					return BrowserTypeResult{}, fmt.Errorf("typing failed: %w", err)
-				}
-				time.Sleep(50 * time.Millisecond)
+			// Type character by character with human-like random jitter
+			// (50-150ms between keystrokes) to avoid bot detection.
+			if err := browser.TypeHuman(el, args.Text); err != nil {
+				return BrowserTypeResult{}, fmt.Errorf("typing failed: %w", err)
 			}
 		} else {
 			if err := el.Input(args.Text); err != nil {
@@ -171,6 +172,9 @@ func BrowserHover(mgr *browser.Manager, refs *browser.RefMap) func(tool.Context,
 
 		// Apply timeout so rod's internal WaitInteractable doesn't block indefinitely.
 		el = el.Timeout(elementInteractionTimeout)
+
+		// Subtle random delay before hovering to break robotic timing patterns.
+		browser.HumanDelay(30, 150)
 
 		if err := el.Hover(); err != nil {
 			return BrowserHoverResult{}, fmt.Errorf("hover failed: %w", err)
@@ -387,7 +391,12 @@ func BrowserFillForm(mgr *browser.Manager, refs *browser.RefMap) func(tool.Conte
 		}
 
 		filled := 0
-		for _, f := range args.Fields {
+		for i, f := range args.Fields {
+			// Random pause between fields mimics a real user tabbing through a form.
+			if i > 0 {
+				browser.HumanDelay(100, 300)
+			}
+
 			el, err := refs.ResolveElement(pg, f.Ref)
 			if err != nil {
 				return BrowserFillFormResult{Success: false, FilledCount: filled}, fmt.Errorf("field %s: %w", f.Ref, err)

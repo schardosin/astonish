@@ -152,12 +152,12 @@ func TestLoadBundledSkills(t *testing.T) {
 		t.Fatalf("loadBundledSkills failed: %v", err)
 	}
 
-	// We ship 12 bundled skills
-	if len(byName) != 12 {
-		t.Errorf("Expected 12 bundled skills, got %d", len(byName))
+	// We ship 10 bundled skills
+	if len(byName) != 10 {
+		t.Errorf("Expected 10 bundled skills, got %d", len(byName))
 	}
 
-	expected := []string{"github", "docker", "git", "npm", "python", "kubernetes", "terraform", "aws", "gcloud", "web-registration", "reddit-interaction", "hackernews-interaction"}
+	expected := []string{"github", "docker", "git", "npm", "python", "kubernetes", "terraform", "aws", "gcloud", "web-registration"}
 	for _, name := range expected {
 		if _, ok := byName[name]; !ok {
 			t.Errorf("Missing bundled skill: %s", name)

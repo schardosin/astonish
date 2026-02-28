@@ -103,6 +103,29 @@ func SetStudioChatInitFunc(fn func(ctx context.Context) (*StudioChatComponents, 
 	GetChatManager().initFn = fn
 }
 
+// Reset tears down the current chat agent so the next request re-initializes
+// with fresh config from disk. This is called when settings change (provider,
+// model, MCP, etc.) to ensure new chats pick up the updated configuration.
+func (cm *ChatManager) Reset() {
+	// Cancel all in-flight SSE streams first.
+	cm.amu.Lock()
+	for sid, cancel := range cm.active {
+		cancel()
+		delete(cm.active, sid)
+	}
+	cm.amu.Unlock()
+
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	if cm.components != nil {
+		if cm.components.Cleanup != nil {
+			cm.components.Cleanup()
+		}
+		cm.components = nil
+	}
+}
+
 // ensureReady lazily initializes the ChatAgent on first use.
 func (cm *ChatManager) ensureReady(ctx context.Context) error {
 	cm.mu.Lock()

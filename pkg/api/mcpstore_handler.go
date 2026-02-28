@@ -336,6 +336,9 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Reset the Studio chat agent so the next request picks up the new MCP server.
+	GetChatManager().Reset()
+
 	w.Header().Set("Content-Type", "application/json")
 	response := map[string]interface{}{
 		"status":      "ok",

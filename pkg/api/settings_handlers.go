@@ -325,6 +325,9 @@ func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		config.SetupAllProviderEnv(cfg)
 	}
 
+	// Reset the Studio chat agent so the next request picks up fresh config.
+	GetChatManager().Reset()
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
@@ -432,6 +435,9 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Refresh in-memory tools cache
 	RefreshToolsCache(r.Context())
+
+	// Reset the Studio chat agent so the next request picks up fresh MCP config.
+	GetChatManager().Reset()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -548,6 +554,9 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[MCP Install] Installed inline server: %s", req.ServerName)
+
+	// Reset the Studio chat agent so the next request picks up the new MCP server.
+	GetChatManager().Reset()
 
 	w.Header().Set("Content-Type", "application/json")
 	response := map[string]interface{}{

@@ -560,6 +560,9 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reset the Studio chat agent so the next request picks up fresh config.
+	GetChatManager().Reset()
+
 	resp := map[string]interface{}{
 		"status": "ok",
 	}

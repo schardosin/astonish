@@ -696,6 +696,9 @@ func UpdateMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Failed to save MCP config", http.StatusInternalServerError)
 			return
 		}
+
+		// Reset the Studio chat agent so the next request picks up the MCP change.
+		GetChatManager().Reset()
 	}
 
 	// Build response

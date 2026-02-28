@@ -958,6 +958,9 @@ func InternetMCPInstallHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Warning: failed to refresh server %s: %v", serverName, err)
 	}
 
+	// Reset the Studio chat agent so the next request picks up the new MCP server.
+	GetChatManager().Reset()
+
 	toolsLoaded := 0
 	cachedTools := GetCachedTools()
 	for _, t := range cachedTools {

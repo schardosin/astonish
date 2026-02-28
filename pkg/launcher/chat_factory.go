@@ -718,10 +718,15 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// Populate agent identity from config (for web portal interactions)
 	if cfg.AppConfig != nil && cfg.AppConfig.AgentIdentity.IsConfigured() {
 		id := &cfg.AppConfig.AgentIdentity
+		identityEmail := id.Email
+		// Fall back to the channel email address if identity email is not set
+		if identityEmail == "" && cfg.AppConfig.Channels.Email.Address != "" {
+			identityEmail = cfg.AppConfig.Channels.Email.Address
+		}
 		promptBuilder.Identity = &agent.AgentIdentity{
 			Name:     id.Name,
 			Username: id.Username,
-			Email:    id.Email,
+			Email:    identityEmail,
 			Bio:      id.Bio,
 			Website:  id.Website,
 			Locale:   id.Locale,
@@ -1154,6 +1159,10 @@ func factoryBuildSelfMDConfig(
 		selfCfg.IdentityName = id.Name
 		selfCfg.IdentityUsername = id.Username
 		selfCfg.IdentityEmail = id.Email
+		// Fall back to the channel email address if identity email is not set
+		if selfCfg.IdentityEmail == "" && cfg.AppConfig.Channels.Email.Address != "" {
+			selfCfg.IdentityEmail = cfg.AppConfig.Channels.Email.Address
+		}
 	}
 
 	return selfCfg

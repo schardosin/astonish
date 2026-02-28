@@ -5,7 +5,6 @@ import { useState, useEffect, useCallback } from 'react'
  * Supports paths like:
  * - #/chat
  * - #/chat/{sessionId}
- * - #/home
  * - #/canvas
  * - #/agent/my-agent
  * - #/settings/general
@@ -67,12 +66,13 @@ function parseHash(hash) {
     return { view: 'chat', params: { sessionId: parts[1] ? decodeURIComponent(parts[1]) : '' } }
   }
 
-  if (view === 'home') {
-    return { view: 'home', params: {} }
-  }
-
   if (view === 'canvas') {
     return { view: 'canvas', params: {} }
+  }
+
+  // Legacy: #/home redirects to chat
+  if (view === 'home') {
+    return { view: 'chat', params: {} }
   }
 
   return { view, params: {} }
@@ -92,8 +92,6 @@ export function buildPath(view, params = {}) {
         return `/chat/${encodeURIComponent(params.sessionId)}`
       }
       return '/chat'
-    case 'home':
-      return '/home'
     case 'canvas':
       return '/canvas'
     default:

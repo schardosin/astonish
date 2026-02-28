@@ -14,7 +14,6 @@ import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import AIChatPanel from './components/AIChatPanel'
 import SettingsPage from './components/SettingsPage'
 import SetupWizard from './components/SetupWizard'
-import HomePage from './components/HomePage'
 import StudioChat from './components/StudioChat'
 import MCPDependenciesPanel from './components/MCPDependenciesPanel'
 import InstallMcpModal from './components/InstallMcpModal'
@@ -466,8 +465,6 @@ function App() {
       setView('canvas')
     } else if (path.view === 'chat') {
       setView('chat')
-    } else if (path.view === 'home') {
-      setView('home')
     } else if (path.view === 'canvas') {
       setView('canvas')
     }
@@ -1329,19 +1326,7 @@ layout:
 
         {/* Main Content */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {view === 'home' ? (
-            <HomePage
-              onCreateAgent={handleCreateNew}
-              onOpenSettings={() => navigate(buildPath('settings', { section: 'general' }))}
-              onOpenMCP={() => navigate(buildPath('settings', { section: 'mcp' }))}
-              onOpenRepositories={() => navigate(buildPath('settings', { section: 'taps' }))}
-              onOpenFlowStore={() => navigate(buildPath('settings', { section: 'flows' }))}
-              onBrowseFlows={() => navigate(buildPath('canvas'))}
-              defaultProvider={defaultProvider}
-              defaultModel={defaultModel}
-              theme={theme}
-            />
-          ) : view === 'chat' ? (
+          {view === 'chat' ? (
             <StudioChat
               theme={theme}
               initialSessionId={path.view === 'chat' ? path.params.sessionId : ''}

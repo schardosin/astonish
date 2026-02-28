@@ -1,4 +1,4 @@
-import { Moon, Sun, Settings, Cpu, Grid, Home, Sparkles } from 'lucide-react'
+import { Moon, Sun, Settings, Cpu, Grid, Home, Sparkles, MessageSquare } from 'lucide-react'
 
 export default function TopBar({ theme, onToggleTheme, onOpenSettings, defaultProvider, defaultModel, currentView, onNavigate }) {
   const navBackground = theme === 'dark' ? 'rgba(15, 23, 42, 0.92)' : 'rgba(255,255,255,0.86)'
@@ -50,6 +50,22 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, defaultPr
         >
           <Grid size={14} />
           <span className="text-xs font-medium">Flows</span>
+        </button>
+
+        <button 
+          onClick={() => onNavigate && onNavigate('chat')}
+          className={`hidden md:flex items-center gap-2 px-3 py-2 rounded-xl transition-all ${
+            currentView === 'chat' 
+              ? 'shadow-md' 
+              : 'hover:bg-purple-500/10'
+          }`}
+          style={{ 
+            background: currentView === 'chat' ? 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)' : (theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'var(--bg-tertiary)'), 
+            color: currentView === 'chat' ? '#fff' : 'var(--text-secondary)' 
+          }}
+        >
+          <MessageSquare size={14} />
+          <span className="text-xs font-medium">Chat</span>
         </button>
       </div>
 

@@ -15,6 +15,7 @@ import AIChatPanel from './components/AIChatPanel'
 import SettingsPage from './components/SettingsPage'
 import SetupWizard from './components/SetupWizard'
 import HomePage from './components/HomePage'
+import StudioChat from './components/StudioChat'
 import MCPDependenciesPanel from './components/MCPDependenciesPanel'
 import InstallMcpModal from './components/InstallMcpModal'
 import { useTheme } from './hooks/useTheme'
@@ -128,7 +129,7 @@ function App() {
   // Setup wizard state
   const [showSetupWizard, setShowSetupWizard] = useState(false)
   const [isCheckingSetup, setIsCheckingSetup] = useState(true)
-  const [view, setView] = useState('home')
+  const [view, setView] = useState('chat')
 
   // Check if setup is required on mount
   useEffect(() => {
@@ -462,6 +463,13 @@ function App() {
       if (targetAgent && targetAgent.id !== selectedAgent?.id) {
         handleAgentSelectInternal(targetAgent, false)
       }
+      setView('canvas')
+    } else if (path.view === 'chat') {
+      setView('chat')
+    } else if (path.view === 'home') {
+      setView('home')
+    } else if (path.view === 'canvas') {
+      setView('canvas')
     }
   }, [path, agents]) // Re-run when path or agents list changes
 
@@ -1301,7 +1309,7 @@ layout:
           defaultProvider={defaultProvider}
           defaultModel={defaultModel}
           currentView={view}
-          onNavigate={setView}
+          onNavigate={(v) => navigate(buildPath(v))}
         />
 
         {/* Main Content Area */}
@@ -1328,10 +1336,22 @@ layout:
               onOpenMCP={() => navigate(buildPath('settings', { section: 'mcp' }))}
               onOpenRepositories={() => navigate(buildPath('settings', { section: 'taps' }))}
               onOpenFlowStore={() => navigate(buildPath('settings', { section: 'flows' }))}
-              onBrowseFlows={() => setView('canvas')}
+              onBrowseFlows={() => navigate(buildPath('canvas'))}
               defaultProvider={defaultProvider}
               defaultModel={defaultModel}
               theme={theme}
+            />
+          ) : view === 'chat' ? (
+            <StudioChat
+              theme={theme}
+              initialSessionId={path.view === 'chat' ? path.params.sessionId : ''}
+              onSessionChange={(sessionId) => {
+                if (sessionId) {
+                  replaceHash(buildPath('chat', { sessionId }))
+                } else {
+                  replaceHash(buildPath('chat'))
+                }
+              }}
             />
           ) : !selectedAgent ? (
              <div className="flex-1 flex items-center justify-center p-8 text-center" style={{ color: 'var(--text-muted)' }}>

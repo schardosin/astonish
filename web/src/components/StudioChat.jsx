@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, Brain, RotateCcw, Wrench, Clock, Search } from 'lucide-react'
+import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { fetchSessions, fetchSessionHistory, deleteSession, connectChat, stopChat } from '../api/studioChat'
+import HomePage from './HomePage'
 
 export default function StudioChat({ theme, initialSessionId, onSessionChange }) {
   // Session state
@@ -153,6 +154,9 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
     }
 
     setInput('')
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto'
+    }
     setIsStreaming(true)
     streamingTextRef.current = ''
 
@@ -342,10 +346,18 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
     sendMessage(input)
   }
 
+  // Auto-resize textarea to fit content
+  const autoResize = useCallback((el) => {
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 200) + 'px'
+  }, [])
+
   // Handle input changes for slash command popup
   const handleInputChange = (e) => {
     const val = e.target.value
     setInput(val)
+    autoResize(e.target)
 
     if (val === '/') {
       setShowSlashPopup(true)
@@ -364,6 +376,9 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
     setShowSlashPopup(false)
     setSlashIndex(0)
     setInput('')
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto'
+    }
     sendMessage(cmd)
   }
 
@@ -495,7 +510,7 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
   return (
     <div className="flex flex-1 overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
       {/* Session Sidebar */}
-      {!sidebarCollapsed && (
+      {!sidebarCollapsed ? (
         <div
           className="flex flex-col"
           style={{
@@ -508,14 +523,24 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
           {/* Sidebar Header */}
           <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--border-color)' }}>
             <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Conversations</span>
-            <button
-              onClick={handleNewSession}
-              className="p-1.5 rounded-lg hover:bg-purple-500/15 transition-colors"
-              title="New conversation"
-              style={{ color: 'var(--text-secondary)' }}
-            >
-              <Plus size={16} />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={handleNewSession}
+                className="p-1.5 rounded-lg hover:bg-purple-500/15 transition-colors"
+                title="New conversation"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                <Plus size={16} />
+              </button>
+              <button
+                onClick={() => setSidebarCollapsed(true)}
+                className="p-1.5 rounded-lg hover:bg-purple-500/15 transition-colors"
+                title="Hide sidebar"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                <ChevronRight size={16} className="rotate-180" />
+              </button>
+            </div>
           </div>
 
           {/* Search */}
@@ -591,32 +616,35 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
             )}
           </div>
         </div>
+      ) : (
+        <div
+          className="flex flex-col items-center py-3 gap-3"
+          style={{
+            borderRight: '1px solid var(--border-color)',
+            background: theme === 'dark' ? 'rgba(15, 23, 42, 0.5)' : 'var(--bg-secondary)',
+          }}
+        >
+          <button
+            onClick={() => setSidebarCollapsed(false)}
+            className="p-1.5 rounded-lg hover:bg-purple-500/15 transition-colors"
+            title="Show sidebar"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            <ChevronRight size={16} />
+          </button>
+          <button
+            onClick={handleNewSession}
+            className="p-1.5 rounded-lg hover:bg-purple-500/15 transition-colors"
+            title="New conversation"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            <Plus size={16} />
+          </button>
+        </div>
       )}
 
       {/* Chat Area */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Chat Header */}
-        <div
-          className="flex items-center gap-2 px-4 py-2"
-          style={{ borderBottom: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}
-        >
-          <button
-            onClick={() => setSidebarCollapsed(prev => !prev)}
-            className="p-1 rounded hover:bg-purple-500/10 transition-colors"
-            title={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
-          >
-            <ChevronRight
-              size={14}
-              className={`transition-transform ${sidebarCollapsed ? '' : 'rotate-180'}`}
-              style={{ color: 'var(--text-muted)' }}
-            />
-          </button>
-          <Brain size={16} className="text-purple-400" />
-          <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-            {activeSessionId ? (sessions.find(s => s.id === activeSessionId)?.title || 'Chat') : 'New Chat'}
-          </span>
-        </div>
-
         {/* Messages Area */}
         <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
           {isLoadingHistory ? (
@@ -624,17 +652,7 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
               <Loader size={24} className="animate-spin text-purple-400" />
             </div>
           ) : messages.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center gap-4 text-center">
-              <div className="p-4 rounded-full bg-purple-500/10 mb-2">
-                <MessageSquare size={32} className="text-purple-400" />
-              </div>
-              <h3 className="text-lg font-medium" style={{ color: 'var(--text-primary)' }}>
-                Start a conversation
-              </h3>
-              <p className="text-sm max-w-sm" style={{ color: 'var(--text-muted)' }}>
-                Type a message below to start chatting with the AI agent. Use <code className="bg-purple-500/15 px-1 rounded text-purple-300">/help</code> for available commands.
-              </p>
-            </div>
+            <HomePage />
           ) : (
             messages.map((msg, index) => {
               if (msg.type === 'user') {
@@ -860,7 +878,7 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="flex items-center gap-3 p-4">
+          <form onSubmit={handleSubmit} className="flex items-end gap-3 p-4">
             {isStreaming && (
               <button
                 type="button"
@@ -872,19 +890,36 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
               </button>
             )}
             <div className="relative flex-1">
-              <input
+              <textarea
                 ref={inputRef}
-                type="text"
                 value={input}
                 onChange={handleInputChange}
-                onKeyDown={handleKeyDown}
+                onKeyDown={(e) => {
+                  // Enter without Shift submits the form
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    if (showSlashPopup && filteredSlashCommands.length > 0) {
+                      const selected = filteredSlashCommands[slashIndex] || filteredSlashCommands[0]
+                      handleSlashSelect(selected.cmd)
+                    } else if (!isStreaming && input.trim()) {
+                      // Reuse slash validation from handleSubmit
+                      if (input.startsWith('/') && !input.includes(' ')) return
+                      sendMessage(input)
+                    }
+                    return
+                  }
+                  handleKeyDown(e)
+                }}
                 disabled={isStreaming}
                 placeholder={isStreaming ? 'Agent is responding...' : 'Type a message or / for commands...'}
-                className="w-full px-4 py-2.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-60 disabled:cursor-not-allowed transition-all text-sm"
+                rows={1}
+                className="w-full px-4 py-2.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-60 disabled:cursor-not-allowed transition-all text-sm resize-none overflow-hidden"
                 style={{
                   background: 'var(--bg-tertiary)',
                   color: 'var(--text-primary)',
                   border: '1px solid var(--border-color)',
+                  maxHeight: '200px',
+                  overflowY: 'auto',
                 }}
               />
             </div>

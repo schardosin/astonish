@@ -3,6 +3,7 @@ package web
 import (
 	"embed"
 	"io/fs"
+	"sort"
 )
 
 //go:embed all:dist
@@ -17,10 +18,18 @@ func GetDistFS() fs.FS {
 		return nil
 	}
 
-	// Check for versioned subfolder (e.g., dist/1.0.0/)
-	// If there's exactly one directory entry, it's likely the version folder
-	if len(entries) == 1 && entries[0].IsDir() {
-		versionDir := entries[0].Name()
+	// Collect directory entries (versioned subfolders like dist/1.5.0/)
+	var dirs []string
+	for _, e := range entries {
+		if e.IsDir() {
+			dirs = append(dirs, e.Name())
+		}
+	}
+
+	// If there are versioned subdirectories, pick the latest (lexicographic sort works for semver)
+	if len(dirs) > 0 {
+		sort.Strings(dirs)
+		versionDir := dirs[len(dirs)-1]
 		subFS, err := fs.Sub(distFS, "dist/"+versionDir)
 		if err != nil {
 			return nil

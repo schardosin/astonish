@@ -3,6 +3,9 @@ import { useState, useEffect, useCallback } from 'react'
 /**
  * Custom hook for hash-based routing
  * Supports paths like:
+ * - #/chat
+ * - #/chat/{sessionId}
+ * - #/canvas
  * - #/agent/my-agent
  * - #/settings/general
  * - #/settings/providers
@@ -43,7 +46,7 @@ function parseHash(hash) {
   const parts = cleanHash.split('/').filter(Boolean)
   
   if (parts.length === 0) {
-    return { view: 'home', params: {} }
+    return { view: 'chat', params: {} }
   }
 
   const view = parts[0]
@@ -59,6 +62,19 @@ function parseHash(hash) {
     }
   }
 
+  if (view === 'chat') {
+    return { view: 'chat', params: { sessionId: parts[1] ? decodeURIComponent(parts[1]) : '' } }
+  }
+
+  if (view === 'canvas') {
+    return { view: 'canvas', params: {} }
+  }
+
+  // Legacy: #/home redirects to chat
+  if (view === 'home') {
+    return { view: 'chat', params: {} }
+  }
+
   return { view, params: {} }
 }
 
@@ -71,7 +87,14 @@ export function buildPath(view, params = {}) {
       return `/agent/${encodeURIComponent(params.agentName || '')}`
     case 'settings':
       return `/settings/${params.section || 'general'}`
+    case 'chat':
+      if (params.sessionId) {
+        return `/chat/${encodeURIComponent(params.sessionId)}`
+      }
+      return '/chat'
+    case 'canvas':
+      return '/canvas'
     default:
-      return '/'
+      return '/chat'
   }
 }

@@ -1,16 +1,11 @@
-import { Plus, Settings, Plug, Cpu, ArrowRight, Sparkles, BookMarked, Store } from 'lucide-react'
+import { Plus, Settings, Plug, ArrowRight, Sparkles, BookMarked, Store } from 'lucide-react'
+import { buildPath } from '../hooks/useHashRouter'
 
-export default function HomePage({ 
-  onCreateAgent, 
-  onOpenSettings, 
-  onOpenMCP,
-  onBrowseFlows,
-  onOpenRepositories,
-  onOpenFlowStore,
-  defaultProvider,
-  defaultModel,
-  theme 
-}) {
+function navigateTo(view, params) {
+  window.location.hash = '#' + buildPath(view, params)
+}
+
+export default function HomePage() {
   return (
     <div 
       className="flex-1 flex flex-col items-center justify-center p-8 overflow-y-auto"
@@ -31,25 +26,13 @@ export default function HomePage({
         <p className="text-lg max-w-xl mx-auto" style={{ color: 'var(--text-muted)' }}>
           Build powerful AI agents with a visual flow editor. Create, test, and deploy intelligent automation.
         </p>
-        
-        {/* Provider Badge */}
-        {defaultProvider && (
-          <div className="mt-6 inline-flex items-center gap-2 px-4 py-2 rounded-full" 
-            style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}
-          >
-            <Cpu size={16} className="text-purple-400" />
-            <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-              {defaultProvider} • {defaultModel}
-            </span>
-          </div>
-        )}
       </div>
 
       {/* Quick Actions */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-5xl w-full">
         {/* Browse Flows */}
         <button
-          onClick={onBrowseFlows}
+          onClick={() => navigateTo('canvas')}
           className="group p-6 rounded-2xl text-left transition-all hover:scale-[1.02] hover:shadow-xl"
           style={{ 
             background: 'var(--bg-secondary)',
@@ -70,7 +53,7 @@ export default function HomePage({
 
         {/* Create Agent */}
         <button
-          onClick={onCreateAgent}
+          onClick={() => navigateTo('canvas')}
           className="group p-6 rounded-2xl text-left transition-all hover:scale-[1.02] hover:shadow-xl"
           style={{ 
             background: 'linear-gradient(135deg, rgba(147, 51, 234, 0.15), rgba(59, 130, 246, 0.15))',
@@ -91,7 +74,7 @@ export default function HomePage({
 
         {/* Flow Store */}
         <button
-          onClick={onOpenFlowStore}
+          onClick={() => navigateTo('settings', { section: 'flows' })}
           className="group p-6 rounded-2xl text-left transition-all hover:scale-[1.02] hover:shadow-xl"
           style={{ 
             background: 'var(--bg-secondary)',
@@ -112,7 +95,7 @@ export default function HomePage({
 
         {/* Settings */}
         <button
-          onClick={onOpenSettings}
+          onClick={() => navigateTo('settings', { section: 'general' })}
           className="group p-6 rounded-2xl text-left transition-all hover:scale-[1.02] hover:shadow-xl"
           style={{ 
             background: 'var(--bg-secondary)',
@@ -133,7 +116,7 @@ export default function HomePage({
 
         {/* MCP Servers */}
         <button
-          onClick={onOpenMCP}
+          onClick={() => navigateTo('settings', { section: 'mcp' })}
           className="group p-6 rounded-2xl text-left transition-all hover:scale-[1.02] hover:shadow-xl"
           style={{ 
             background: 'var(--bg-secondary)',
@@ -154,7 +137,7 @@ export default function HomePage({
 
         {/* Repositories */}
         <button
-          onClick={onOpenRepositories}
+          onClick={() => navigateTo('settings', { section: 'taps' })}
           className="group p-6 rounded-2xl text-left transition-all hover:scale-[1.02] hover:shadow-xl"
           style={{ 
             background: 'var(--bg-secondary)',
@@ -177,7 +160,7 @@ export default function HomePage({
       {/* Bottom hint */}
       <div className="mt-12 text-center">
         <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-          Select an agent from the sidebar or create a new one to get started
+          Type a message below to start chatting, or use <code style={{ color: 'var(--accent)' }}>/help</code> for commands
         </p>
       </div>
     </div>

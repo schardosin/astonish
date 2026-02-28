@@ -812,4 +812,11 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/scheduler/jobs", SchedulerJobsHandler).Methods("GET", "POST")
 	router.HandleFunc("/api/scheduler/jobs/{id}/run", SchedulerJobRunHandler).Methods("POST")
 	router.HandleFunc("/api/scheduler/jobs/{id}", SchedulerJobHandler).Methods("GET", "PUT", "DELETE")
+
+	// Studio Chat endpoints
+	router.HandleFunc("/api/studio/chat", StudioChatHandler).Methods("POST")
+	router.HandleFunc("/api/studio/sessions", StudioSessionsHandler).Methods("GET")
+	router.HandleFunc("/api/studio/sessions/{id}", StudioSessionHandler).Methods("GET")
+	router.HandleFunc("/api/studio/sessions/{id}", StudioDeleteSessionHandler).Methods("DELETE")
+	router.HandleFunc("/api/studio/sessions/{id}/stop", StudioStopHandler).Methods("POST")
 }

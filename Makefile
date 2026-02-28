@@ -38,6 +38,7 @@ build:
 # Build the React UI
 build-ui:
 	@echo "Building React UI..."
+	@rm -rf $(WEB_DIR)/dist
 	cd $(WEB_DIR) && npm install && npm run build
 	@touch $(WEB_DIR)/embed.go
 	@echo "React UI built successfully: $(WEB_DIR)/dist"

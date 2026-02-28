@@ -370,6 +370,17 @@ func (s *FileStore) ResolveSessionID(partial string) (string, error) {
 	}
 }
 
+// ListSessionMetas returns session metadata from the index for an app/user pair.
+// This is a lightweight operation that does not load session transcripts from disk.
+func (s *FileStore) ListSessionMetas(appName, userID string) ([]SessionMeta, error) {
+	return s.index.List(appName, userID)
+}
+
+// GetSessionMeta returns metadata for a single session from the index.
+func (s *FileStore) GetSessionMeta(sessionID string) (*SessionMeta, error) {
+	return s.index.Get(sessionID)
+}
+
 // SetSessionTitle updates the title in the index for a given session.
 func (s *FileStore) SetSessionTitle(sessionID, title string) error {
 	return s.index.Update(sessionID, func(meta *SessionMeta) {

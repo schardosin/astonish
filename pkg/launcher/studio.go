@@ -13,6 +13,8 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/api"
+	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/tools"
 	"github.com/schardosin/astonish/web"
 )
 
@@ -38,6 +40,45 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 	for _, opt := range opts {
 		opt(s)
 	}
+
+	// Wire Studio Chat initialization (lazy, runs on first chat request)
+	api.SetStudioChatInitFunc(func(ctx context.Context) (*api.StudioChatComponents, error) {
+		appCfg, err := config.LoadAppConfig()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load config: %w", err)
+		}
+
+		result, err := NewWiredChatAgent(ctx, &ChatFactoryConfig{
+			AppConfig:    appCfg,
+			ProviderName: appCfg.General.DefaultProvider,
+			ModelName:    appCfg.General.DefaultModel,
+			DebugMode:    false,
+			AutoApprove:  false,
+			WorkspaceDir: "",
+			IsDaemon:     false,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize chat agent: %w", err)
+		}
+
+		// Wire scheduler access via daemon HTTP API
+		daemonPort := appCfg.Daemon.GetPort()
+		tools.SetSchedulerAccess(&tools.SchedulerHTTPAccess{
+			BaseURL: fmt.Sprintf("http://localhost:%d", daemonPort),
+		})
+
+		return &api.StudioChatComponents{
+			ChatAgent:         result.ChatAgent,
+			LLM:               result.LLM,
+			SessionService:    result.SessionService,
+			ProviderName:      result.ProviderName,
+			ModelName:         result.ModelName,
+			Compactor:         result.Compactor,
+			InternalToolCount: len(result.InternalTools),
+			MemoryActive:      result.MemoryManager != nil,
+			Cleanup:           result.Cleanup,
+		}, nil
+	})
 
 	router := mux.NewRouter()
 

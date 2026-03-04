@@ -6,12 +6,13 @@ import { fetchSessions, fetchSessionHistory, deleteSession, connectChat, stopCha
 import HomePage from './HomePage'
 
 // Collapsible fleet execution panel showing real-time progress of fleet phases.
-// Renders sub-thread activity (tool calls, results, agent text) identically to
-// the main chat thread, inside collapsible per-phase sections.
+// The orchestrator renders inline (no collapsible header). Agent phases are
+// collapsible, but their contents (tool calls, text, etc.) are always visible
+// with truncated output and a "Show more" button for long content.
 function FleetExecutionPanel({ data }) {
   const [expanded, setExpanded] = useState(true)
   const [expandedPhases, setExpandedPhases] = useState({})
-  const [expandedFleetTools, setExpandedFleetTools] = useState(new Set())
+  const [expandedContent, setExpandedContent] = useState(new Set())
 
   // Group events by phase
   const phases = useMemo(() => {
@@ -36,12 +37,15 @@ function FleetExecutionPanel({ data }) {
     return phaseOrder.map(k => phaseMap[k])
   }, [data.events])
 
+  // Count non-orchestrator phases for the header
+  const agentPhaseCount = phases.filter(p => p.name !== '_orchestrator').length
+
   const togglePhase = (name) => {
     setExpandedPhases(prev => ({ ...prev, [name]: !prev[name] }))
   }
 
-  const toggleFleetTool = (eventKey) => {
-    setExpandedFleetTools(prev => {
+  const toggleContent = (eventKey) => {
+    setExpandedContent(prev => {
       const next = new Set(prev)
       if (next.has(eventKey)) next.delete(eventKey)
       else next.add(eventKey)
@@ -56,10 +60,66 @@ function FleetExecutionPanel({ data }) {
     return <span className="text-gray-500 text-xs">-</span>
   }
 
-  // Render a tool call/result card (mirrors renderToolCard from the main thread)
+  // Content truncation threshold (characters). Content longer than this shows
+  // a truncated preview with a "Show more" button.
+  const TRUNCATE_THRESHOLD = 800
+
+  // Render the content area of a tool card. Always visible (no collapse toggle).
+  // Long content is truncated with a "Show more" / "Show less" button.
+  const renderCardContent = (cardData, eventKey) => {
+    if (cardData == null || cardData === undefined) return null
+    const text = typeof cardData === 'string' ? cardData : JSON.stringify(cardData, null, 2)
+    if (!text) return null
+
+    const isTruncatable = text.length > TRUNCATE_THRESHOLD
+    const isFullyExpanded = expandedContent.has(eventKey)
+    const displayText = (isTruncatable && !isFullyExpanded) ? text.slice(0, TRUNCATE_THRESHOLD) : text
+
+    return (
+      <div className="px-3 pb-2">
+        <div className="relative">
+          <pre
+            className="text-xs whitespace-pre-wrap break-words font-mono p-2 rounded"
+            style={{
+              background: 'rgba(0,0,0,0.3)',
+              color: 'var(--text-secondary)',
+              maxHeight: isFullyExpanded ? 'none' : '200px',
+              overflowY: 'hidden',
+            }}
+          >
+            {displayText}
+          </pre>
+          {isTruncatable && !isFullyExpanded && (
+            <div
+              className="absolute bottom-0 left-0 right-0 h-10 flex items-end justify-center rounded-b"
+              style={{ background: 'linear-gradient(transparent, rgba(0,0,0,0.5))' }}
+            >
+              <button
+                onClick={() => toggleContent(eventKey)}
+                className="text-[10px] text-cyan-400 hover:text-cyan-300 px-2 py-0.5 mb-1 rounded bg-black/50 cursor-pointer"
+              >
+                Show more ({Math.ceil(text.length / 1000)}k chars)
+              </button>
+            </div>
+          )}
+          {isTruncatable && isFullyExpanded && (
+            <div className="flex justify-center mt-1">
+              <button
+                onClick={() => toggleContent(eventKey)}
+                className="text-[10px] text-cyan-400 hover:text-cyan-300 px-2 py-0.5 rounded bg-black/30 cursor-pointer"
+              >
+                Show less
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  // Render a tool call/result card — always expanded, no collapse toggle
   const renderFleetToolCard = (evt, eventKey) => {
     const isCall = evt.type === 'worker_tool_call' || evt.type === 'tool_call' || evt.type === 'opencode_tool_call'
-    const isExpanded = expandedFleetTools.has(eventKey)
     const name = evt.detail || 'unknown'
     const isOpenCode = evt.type.startsWith('opencode_')
     const cardData = isCall ? (evt.args || evt.text || null) : (evt.result || evt.text || null)
@@ -70,37 +130,19 @@ function FleetExecutionPanel({ data }) {
         className="my-1.5 rounded-lg overflow-hidden"
         style={{ border: `1px solid ${isOpenCode ? 'rgba(6,182,212,0.3)' : 'var(--border-color)'}`, background: isOpenCode ? 'rgba(6,182,212,0.03)' : 'rgba(255,255,255,0.03)' }}
       >
-        <button
-          onClick={() => toggleFleetTool(eventKey)}
-          className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-purple-500/5 transition-colors cursor-pointer"
-        >
-          {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        <div className="flex items-center gap-2 px-3 py-1.5">
           <Wrench size={12} className={isOpenCode ? 'text-cyan-400' : isCall ? 'text-purple-400' : 'text-green-400'} />
           <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
             {isOpenCode && <span className="text-cyan-400 mr-1">OpenCode</span>}
             {isCall ? 'Tool Call' : 'Tool Result'}: <code className={`${isOpenCode ? 'bg-cyan-500/15 text-cyan-300' : 'bg-purple-500/15 text-purple-300'} px-1 py-0.5 rounded text-[11px]`}>{name}</code>
           </span>
-        </button>
-        {isExpanded && cardData != null && cardData !== undefined && (
-          <div className="px-3 pb-2">
-            <pre
-              className="text-xs whitespace-pre-wrap break-words font-mono p-2 rounded"
-              style={{
-                background: 'rgba(0,0,0,0.3)',
-                color: 'var(--text-secondary)',
-                maxHeight: '300px',
-                overflowY: 'auto',
-              }}
-            >
-              {typeof cardData === 'string' ? cardData : JSON.stringify(cardData, null, 2)}
-            </pre>
-          </div>
-        )}
+        </div>
+        {renderCardContent(cardData, eventKey)}
       </div>
     )
   }
 
-  // Render agent text (mirrors main thread agent message rendering)
+  // Render agent text
   const renderFleetText = (evt, eventKey) => {
     const textContent = evt.text || evt.message || ''
     if (!textContent) return null
@@ -206,34 +248,46 @@ function FleetExecutionPanel({ data }) {
         {data.status === 'running' && <Loader size={14} className="animate-spin" />}
         {data.status === 'complete' && <Check size={14} className="text-green-400" />}
         <span className="font-medium">Fleet Execution</span>
-        <span className="text-cyan-400/60 text-xs ml-auto">{phases.length} phase{phases.length !== 1 ? 's' : ''}</span>
+        <span className="text-cyan-400/60 text-xs ml-auto">{agentPhaseCount} phase{agentPhaseCount !== 1 ? 's' : ''}</span>
       </button>
 
-      {/* Phase list */}
+      {/* Content */}
       {expanded && (
         <div className="border-t border-cyan-500/20 px-2 py-1">
-          {phases.map((phase, phaseIdx) => (
-            <div key={phase.name} className="my-1">
-              {/* Phase header */}
-              <button
-                onClick={() => togglePhase(phase.name)}
-                className="w-full flex items-center gap-2 px-2 py-1.5 rounded hover:bg-cyan-500/10 transition-colors cursor-pointer"
-              >
-                {expandedPhases[phase.name] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                {statusIcon(phase.status)}
-                <span className="text-gray-200 font-medium">{phase.name}</span>
-                {phase.agent && <span className="text-gray-500 text-xs">({phase.agent})</span>}
-                {phase.status === 'running' && <span className="text-cyan-400/60 text-xs ml-auto">running</span>}
-              </button>
-
-              {/* Phase sub-thread (collapsed by default, auto-expand running phase) */}
-              {(expandedPhases[phase.name] || (phase.status === 'running' && expandedPhases[phase.name] !== false)) && (
-                <div className="ml-4 pl-2 border-l border-cyan-500/15 pb-1">
+          {phases.map((phase, phaseIdx) => {
+            // Orchestrator events render inline — no collapsible header
+            if (phase.name === '_orchestrator') {
+              return (
+                <div key={phase.name} className="pb-1">
                   {phase.events.map((evt, evtIdx) => renderPhaseEvent(evt, phaseIdx, evtIdx))}
                 </div>
-              )}
-            </div>
-          ))}
+              )
+            }
+
+            // Agent phases render as collapsible sections
+            return (
+              <div key={phase.name} className="my-1">
+                {/* Phase header */}
+                <button
+                  onClick={() => togglePhase(phase.name)}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded hover:bg-cyan-500/10 transition-colors cursor-pointer"
+                >
+                  {expandedPhases[phase.name] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  {statusIcon(phase.status)}
+                  <span className="text-gray-200 font-medium">{phase.name}</span>
+                  {phase.agent && <span className="text-gray-500 text-xs">({phase.agent})</span>}
+                  {phase.status === 'running' && <span className="text-cyan-400/60 text-xs ml-auto">running</span>}
+                </button>
+
+                {/* Phase contents — collapsed by default, auto-expand running phase */}
+                {(expandedPhases[phase.name] || (phase.status === 'running' && expandedPhases[phase.name] !== false)) && (
+                  <div className="ml-4 pl-2 border-l border-cyan-500/15 pb-1">
+                    {phase.events.map((evt, evtIdx) => renderPhaseEvent(evt, phaseIdx, evtIdx))}
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
     </div>

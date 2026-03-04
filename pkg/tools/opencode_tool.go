@@ -310,9 +310,8 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 					Message: callEvt.Message,
 					Text:    callEvt.Text,
 				})
-				if len(outputStr) > 2000 {
-					outputStr = outputStr[:2000] + "\n\n... (truncated)"
-				}
+				// Store full output in the trace for "Show more" on page reload.
+				// Truncate only the real-time SSE payload to keep streaming fast.
 				resultEvt := OpenCodeTraceEvent{
 					Type:    "opencode_tool_result",
 					Detail:  toolName,
@@ -320,11 +319,15 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 					Text:    outputStr,
 				}
 				trace = append(trace, resultEvt)
+				progressText := outputStr
+				if len(progressText) > 2000 {
+					progressText = progressText[:2000] + "\n\n... (truncated)"
+				}
 				sendProgress(FleetProgressEvent{
 					Type:    resultEvt.Type,
 					Detail:  resultEvt.Detail,
 					Message: resultEvt.Message,
-					Text:    resultEvt.Text,
+					Text:    progressText,
 				})
 			} else {
 				// Tool call in progress (status="running" or empty)

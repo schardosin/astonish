@@ -49,6 +49,7 @@ type SystemPromptBuilder struct {
 	SchedulerHints        string         // Scheduler-specific output constraints (empty = not a scheduled run)
 	SkillIndex            string         // Lightweight skill listing (Tier 1 — names and descriptions only)
 	Identity              *AgentIdentity // Agent persona for web portal interactions
+	FleetSection          string         // Pre-built "Available Fleets" section (empty = no fleets loaded)
 }
 
 // Build constructs the full system prompt.
@@ -502,6 +503,11 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("- Filter tools when a sub-agent only needs specific capabilities\n")
 		sb.WriteString("- Sub-agents can read memory but cannot write to it\n")
 		sb.WriteString("- Max 10 tasks per delegation call, each with a 5-minute timeout\n")
+	}
+
+	// 6j. Fleet awareness (when fleet definitions are loaded)
+	if b.FleetSection != "" {
+		sb.WriteString(b.FleetSection)
 	}
 
 	// 7. Execution Plan with integrated knowledge (when a flow matches)

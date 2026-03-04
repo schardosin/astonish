@@ -15,8 +15,10 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
 	emailpkg "github.com/schardosin/astonish/pkg/email"
+	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/memory"
+	"github.com/schardosin/astonish/pkg/persona"
 	"github.com/schardosin/astonish/pkg/provider"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/skills"
@@ -455,6 +457,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 
 	// --- 2g. Sub-agent delegation tool ---
 	var subAgentMgr *agent.SubAgentManager
+	var fleetOnlyTools []tool.Tool // fleet-only tools (run_fleet_phase), assigned to SubAgentManager.FleetTools
 	if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
 		delegateTool, delegateErr := tools.GetDelegateTasksTool()
 		if delegateErr != nil {
@@ -802,6 +805,121 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		promptBuilder.CustomPrompt = cfg.AppConfig.Chat.SystemPrompt
 	}
 
+	// --- 5b. Initialize persona and fleet registries ---
+	personasDir, persErr := config.GetPersonasDir()
+	if persErr == nil {
+		// Ensure bundled personas exist on disk (first-run bootstrap)
+		written, ensErr := persona.EnsureBundled(personasDir)
+		if ensErr != nil {
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Failed to bootstrap bundled personas: %v\n", ensErr)
+			}
+		} else if written > 0 && cfg.DebugMode {
+			fmt.Printf("Bootstrapped %d bundled personas to %s\n", written, personasDir)
+		}
+
+		personaReg, regErr := persona.NewRegistry(personasDir)
+		if regErr != nil {
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Failed to load persona registry: %v\n", regErr)
+			}
+		} else {
+			// Wire persona registry to API handlers
+			api.SetPersonaRegistry(personaReg)
+
+			fleetsDir, flErr := config.GetFleetsDir()
+			if flErr == nil {
+				// Ensure bundled fleets exist on disk
+				fWritten, fEnsErr := fleet.EnsureBundled(fleetsDir)
+				if fEnsErr != nil {
+					if cfg.DebugMode {
+						fmt.Printf("Warning: Failed to bootstrap bundled fleets: %v\n", fEnsErr)
+					}
+				} else if fWritten > 0 && cfg.DebugMode {
+					fmt.Printf("Bootstrapped %d bundled fleets to %s\n", fWritten, fleetsDir)
+				}
+
+				fleetReg, fRegErr := fleet.NewRegistry(fleetsDir, personaReg)
+				if fRegErr != nil {
+					if cfg.DebugMode {
+						fmt.Printf("Warning: Failed to load fleet registry: %v\n", fRegErr)
+					}
+				} else {
+					// Wire fleet registry to API handlers
+					api.SetFleetRegistry(fleetReg)
+
+					// Wire registries to fleet execution tool
+					tools.SetFleetRegistries(fleetReg, personaReg)
+
+					// Set up env vars declared by delegate configs (e.g. BIFROST_API_KEY for OpenCode).
+					// This must happen before any fleet tool runs so the delegate subprocess inherits them.
+					delegateEnvNames := fleet.CollectDelegateEnvVars(fleetReg.AllFleets())
+					if len(delegateEnvNames) > 0 {
+						var getSecret config.SecretGetter
+						if credStore != nil {
+							getSecret = credStore.GetSecret
+						}
+						config.SetupDelegateEnv(delegateEnvNames, getSecret)
+					}
+
+					// Register fleet tools (requires sub-agents to be enabled)
+					if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
+						// Build fleet-only tools (run_fleet_phase). These are NOT added to
+						// internalTools (so the main agent can't call them). Instead they go
+						// on SubAgentManager.FleetTools, accessible only to the fleet
+						// orchestrator via its explicit tool filter.
+						var ftErr error
+						fleetOnlyTools, ftErr = tools.GetFleetTools()
+						if ftErr != nil {
+							if cfg.DebugMode {
+								fmt.Printf("Warning: Failed to create fleet internal tools: %v\n", ftErr)
+							}
+						}
+
+						// Register fleet_plan + fleet_execute (the main agent's planning/execution interface)
+						fleetPlanningTools, fpErr := tools.GetFleetPlanningTools()
+						if fpErr != nil {
+							if cfg.DebugMode {
+								fmt.Printf("Warning: Failed to create fleet planning tools: %v\n", fpErr)
+							}
+						} else {
+							internalTools = append(internalTools, fleetPlanningTools...)
+						}
+
+						// Set fleet plans directory for the fleet_plan tool
+						fleetPlansDir, fpDirErr := config.GetFleetPlansDir()
+						if fpDirErr == nil {
+							if mkErr := os.MkdirAll(fleetPlansDir, 0755); mkErr != nil {
+								if cfg.DebugMode {
+									fmt.Printf("Warning: Failed to create fleet_plans directory: %v\n", mkErr)
+								}
+							} else {
+								tools.SetFleetPlansDir(fleetPlansDir)
+							}
+						}
+					}
+
+					// Build fleet awareness section for system prompt
+					if fleetReg.Count() > 0 {
+						summaries := fleetReg.ListFleets()
+						promptBuilder.FleetSection = fleet.BuildSystemPromptSection(
+							summaries,
+							func(key string) (*fleet.FleetConfig, bool) {
+								return fleetReg.GetFleet(key)
+							},
+							func(key string) (*persona.PersonaConfig, bool) {
+								return personaReg.GetPersona(key)
+							},
+						)
+						if cfg.DebugMode {
+							fmt.Printf("Fleet awareness: %d fleet(s), %d persona(s)\n", fleetReg.Count(), personaReg.Count())
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// --- 6. Create ChatAgent ---
 	chatAgent := agent.NewChatAgent(
 		llm, internalTools, mcpToolsets, sessionService,
@@ -822,6 +940,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	if subAgentMgr != nil {
 		subAgentMgr.LLM = llm
 		subAgentMgr.Tools = internalTools
+		subAgentMgr.FleetTools = fleetOnlyTools
 		subAgentMgr.Toolsets = mcpToolsets
 		subAgentMgr.SessionService = sessionService
 		subAgentMgr.MemoryManager = memMgr

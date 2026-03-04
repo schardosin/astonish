@@ -388,6 +388,22 @@ func (s *FileStore) SetSessionTitle(sessionID, title string) error {
 	})
 }
 
+// ListChildren returns metadata for all child sessions of the given parent.
+func (s *FileStore) ListChildren(parentID string) ([]SessionMeta, error) {
+	return s.index.ListChildren(parentID)
+}
+
+// ReadTranscriptEvents reads all events from a session's transcript file.
+// This is a lightweight read that does not load the full session into the cache.
+func (s *FileStore) ReadTranscriptEvents(appName, userID, sessionID string) ([]*adksession.Event, error) {
+	transcriptPath := filepath.Join(s.baseDir, appName, userID, sessionID+".jsonl")
+	transcript := NewTranscript(transcriptPath)
+	if !transcript.Exists() {
+		return nil, nil
+	}
+	return transcript.ReadEvents()
+}
+
 // loadFromDisk loads a session from its transcript file and index metadata.
 // Caller must hold s.mu lock.
 func (s *FileStore) loadFromDisk(appName, userID, sessionID string) (*fileSession, error) {

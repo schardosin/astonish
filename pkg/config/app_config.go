@@ -533,6 +533,36 @@ func GetModelsDir() (string, error) {
 	return filepath.Join(configDir, "models"), nil
 }
 
+// GetPersonasDir returns the directory for persona YAML definitions.
+// Defaults to ~/.config/astonish/personas/.
+func GetPersonasDir() (string, error) {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, "personas"), nil
+}
+
+// GetFleetsDir returns the directory for fleet YAML definitions.
+// Defaults to ~/.config/astonish/fleets/.
+func GetFleetsDir() (string, error) {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, "fleets"), nil
+}
+
+// GetFleetPlansDir returns the directory for custom fleet plan YAML definitions.
+// Defaults to ~/.config/astonish/fleet_plans/.
+func GetFleetPlansDir() (string, error) {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, "fleet_plans"), nil
+}
+
 // GetSessionsDir returns the session storage directory.
 // If the config specifies a custom base_dir, that is used; otherwise
 // it defaults to ~/.config/astonish/sessions/.

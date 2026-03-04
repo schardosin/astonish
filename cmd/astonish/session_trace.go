@@ -3,18 +3,22 @@ package astonish
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
+	persistentsession "github.com/schardosin/astonish/pkg/session"
 	adksession "google.golang.org/adk/session"
 )
 
 // TraceOpts controls how the session trace is rendered.
 type TraceOpts struct {
-	ToolsOnly  bool // Only show tool call/response events
-	Verbose    bool // Don't truncate args/results
-	LastN      int  // Only show last N events (0 = all)
-	JSONOutput bool // Output as JSON
+	ToolsOnly  bool   // Only show tool call/response events
+	Verbose    bool   // Don't truncate args/results
+	LastN      int    // Only show last N events (0 = all)
+	JSONOutput bool   // Output as JSON
+	Recursive  bool   // Include sub-session traces inline
+	Indent     string // Prefix for each output line (for nested rendering)
 }
 
 // traceEntry is used for JSON output.
@@ -59,6 +63,8 @@ func renderSessionTrace(events []*adksession.Event, opts TraceOpts) {
 		events = events[len(events)-opts.LastN:]
 	}
 
+	indent := opts.Indent
+
 	// Track FunctionCall timestamps for duration computation
 	callTimestamps := make(map[string]time.Time) // keyed by FunctionCall.ID
 	callNames := make(map[string]string)         // keyed by FunctionCall.ID -> tool name
@@ -88,7 +94,7 @@ func renderSessionTrace(events []*adksession.Event, opts TraceOpts) {
 			turnCount++
 			if !opts.ToolsOnly {
 				ts := formatTimestamp(ev.Timestamp)
-				fmt.Printf("\n--- Turn %d (%s) ---\n", turnCount, ts)
+				fmt.Printf("%s\n%s--- Turn %d (%s) ---\n", indent, indent, turnCount, ts)
 			}
 		}
 
@@ -100,11 +106,11 @@ func renderSessionTrace(events []*adksession.Event, opts TraceOpts) {
 			// User or model text
 			if part.Text != "" && !opts.ToolsOnly {
 				if part.Thought {
-					fmt.Printf("[thinking] %s\n\n", truncateStr(part.Text, textMax))
+					fmt.Printf("%s[thinking] %s\n\n", indent, truncateStr(part.Text, textMax))
 				} else if ev.Author == "user" || ev.Content.Role == "user" {
-					fmt.Printf("[user] %s\n\n", truncateStr(part.Text, textMax))
+					fmt.Printf("%s[user] %s\n\n", indent, truncateStr(part.Text, textMax))
 				} else {
-					fmt.Printf("[model] %s\n\n", truncateStr(part.Text, textMax))
+					fmt.Printf("%s[model] %s\n\n", indent, truncateStr(part.Text, textMax))
 				}
 			}
 
@@ -119,9 +125,9 @@ func renderSessionTrace(events []*adksession.Event, opts TraceOpts) {
 				argsStr := formatArgs(fc.Args, argsMax)
 
 				if opts.ToolsOnly {
-					fmt.Printf("%s  %s %s\n", ts, fc.Name, argsStr)
+					fmt.Printf("%s%s  %s %s\n", indent, ts, fc.Name, argsStr)
 				} else {
-					fmt.Printf("[tool] %s %s\n", fc.Name, argsStr)
+					fmt.Printf("%s[tool] %s %s\n", indent, fc.Name, argsStr)
 				}
 			}
 
@@ -145,17 +151,17 @@ func renderSessionTrace(events []*adksession.Event, opts TraceOpts) {
 				// Format result
 				if opts.ToolsOnly {
 					if isError {
-						fmt.Printf("         -> ERROR: %s  (%s)\n", truncateStr(errStr, argsMax), formatDuration(durationMs))
+						fmt.Printf("%s         -> ERROR: %s  (%s)\n", indent, truncateStr(errStr, argsMax), formatDuration(durationMs))
 					} else {
 						resultStr := formatResult(fr.Response, argsMax)
-						fmt.Printf("         -> %s  (%s)\n", resultStr, formatDuration(durationMs))
+						fmt.Printf("%s         -> %s  (%s)\n", indent, resultStr, formatDuration(durationMs))
 					}
 				} else {
 					if isError {
-						fmt.Printf("   -> ERROR: %s  (%s)\n\n", truncateStr(errStr, argsMax), formatDuration(durationMs))
+						fmt.Printf("%s   -> ERROR: %s  (%s)\n\n", indent, truncateStr(errStr, argsMax), formatDuration(durationMs))
 					} else {
 						resultStr := formatResult(fr.Response, argsMax)
-						fmt.Printf("   -> %s  (%s)\n\n", resultStr, formatDuration(durationMs))
+						fmt.Printf("%s   -> %s  (%s)\n\n", indent, resultStr, formatDuration(durationMs))
 					}
 				}
 			}
@@ -171,7 +177,7 @@ func renderSessionTrace(events []*adksession.Event, opts TraceOpts) {
 	if toolErrors > 0 {
 		parts = append(parts, fmt.Sprintf("%d errors", toolErrors))
 	}
-	fmt.Printf("--- %s ---\n", strings.Join(parts, " | "))
+	fmt.Printf("%s--- %s ---\n", indent, strings.Join(parts, " | "))
 }
 
 // renderSessionTraceJSON outputs events as structured JSON.
@@ -388,4 +394,59 @@ func truncateStr(s string, maxLen int) string {
 		return s[:maxLen]
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// renderChildSessions loads and renders child session traces inline after the
+// parent trace. Each child is shown with an indented header and its full trace.
+// Recurses into grandchildren (e.g., orchestrator -> workers).
+func renderChildSessions(sessDir string, parentID string, index *persistentsession.SessionIndex, opts TraceOpts) {
+	children, err := index.ListChildren(parentID)
+	if err != nil || len(children) == 0 {
+		return
+	}
+
+	// Sort children by creation time for chronological order
+	sort.Slice(children, func(i, j int) bool {
+		return children[i].CreatedAt.Before(children[j].CreatedAt)
+	})
+
+	childIndent := opts.Indent + "  "
+
+	for _, child := range children {
+		// Print child header
+		label := child.Title
+		if label == "" {
+			label = child.ID
+			if len(label) > 12 {
+				label = label[:12]
+			}
+		}
+		fmt.Printf("\n%s=== Sub-agent: %s ===\n", childIndent, label)
+
+		// Load and render child transcript
+		transcriptPath := fmt.Sprintf("%s/%s/%s/%s.jsonl", sessDir, child.AppName, child.UserID, child.ID)
+		transcript := persistentsession.NewTranscript(transcriptPath)
+		if !transcript.Exists() {
+			fmt.Printf("%s(no transcript file)\n", childIndent)
+			continue
+		}
+
+		events, err := transcript.ReadEvents()
+		if err != nil {
+			fmt.Printf("%s(error reading transcript: %v)\n", childIndent, err)
+			continue
+		}
+
+		if len(events) == 0 {
+			fmt.Printf("%s(empty transcript)\n", childIndent)
+			continue
+		}
+
+		childOpts := opts
+		childOpts.Indent = childIndent
+		renderSessionTrace(events, childOpts)
+
+		// Recurse into grandchildren
+		renderChildSessions(sessDir, child.ID, index, childOpts)
+	}
 }

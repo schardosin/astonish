@@ -52,6 +52,25 @@ func isProtectedPath(filePath string) bool {
 	return false
 }
 
+// expandPath resolves ~ to the user's home directory. Go's os and filepath
+// packages do not expand ~ (it's a shell feature), so LLM-provided paths
+// like "~/snake/main.py" would fail without this. Only the leading "~/" or
+// bare "~" is expanded; ~user syntax is not supported.
+func expandPath(path string) string {
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+		return path
+	}
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
+}
+
 // commandReferencesProtectedFile checks if a shell command string references
 // protected credential store files. Returns true and the matched filename
 // if found. This is a best-effort check for defense-in-depth — it catches
@@ -90,6 +109,7 @@ type ReadFileResult struct {
 }
 
 func ReadFile(ctx tool.Context, args ReadFileArgs) (ReadFileResult, error) {
+	args.Path = expandPath(args.Path)
 	if isProtectedPath(args.Path) {
 		return ReadFileResult{}, fmt.Errorf("access denied: this file is part of the credential store and cannot be read")
 	}
@@ -158,6 +178,7 @@ func contentToString(content interface{}) (string, error) {
 }
 
 func WriteFile(ctx tool.Context, args WriteFileArgs) (WriteFileResult, error) {
+	args.FilePath = expandPath(args.FilePath)
 	if isProtectedPath(args.FilePath) {
 		return WriteFileResult{}, fmt.Errorf("access denied: this file is part of the credential store and cannot be modified")
 	}
@@ -174,6 +195,13 @@ func WriteFile(ctx tool.Context, args WriteFileArgs) (WriteFileResult, error) {
 		finalContent = extracted
 	} else {
 		finalContent = preliminaryString
+	}
+
+	// Ensure parent directories exist
+	if dir := filepath.Dir(args.FilePath); dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return WriteFileResult{}, fmt.Errorf("failed to create directory %s: %w", dir, err)
+		}
 	}
 
 	// Write to file

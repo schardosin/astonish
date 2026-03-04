@@ -139,6 +139,24 @@ func SetupAllProviderEnvFromStore(appCfg *AppConfig, getSecret SecretGetter) {
 	}
 }
 
+// SetupDelegateEnv sets environment variables needed by delegate tools
+// (e.g. OpenCode). For each env var name, it tries the credential store
+// first (key: "delegate.env.<NAME>"), then leaves any already-set env var
+// in place. This should be called after fleet configs are loaded.
+func SetupDelegateEnv(envNames []string, getSecret SecretGetter) {
+	for _, name := range envNames {
+		// 1. Try credential store
+		if getSecret != nil {
+			storeKey := "delegate.env." + name
+			if val := getSecret(storeKey); val != "" {
+				os.Setenv(name, val)
+				continue
+			}
+		}
+		// 2. Env var may already be set externally — leave it alone
+	}
+}
+
 // SetupMCPEnv sets environment variables from MCP server configs
 func SetupMCPEnv(mcpCfg *MCPConfig) {
 	if mcpCfg == nil {

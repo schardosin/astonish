@@ -1,0 +1,206 @@
+name: software-development
+description: Full software development lifecycle with built-in tools
+
+leader:
+  persona: project_lead
+  behaviors: |
+    When the user requests software development work:
+
+    1. PLAN: Create an execution plan based on the suggested workflow below.
+       Present it to the user with phase names, assigned agents, and what each
+       phase will deliver. Let the user customize before starting.
+
+    2. EXECUTE: Use `run_fleet_phase` for ALL phases. This single tool handles
+       both single-agent work and multi-agent conversations:
+
+       **Single-agent phases**: Call with fleet, phase, primary, and goal.
+       The primary agent works independently and returns results.
+
+       **Conversation phases**: Also pass reviewers (agents that discuss with
+       the primary before deliverables are produced), deliverables (expected
+       output files), and artifacts (file paths from prior phases). The tool
+       manages the back-and-forth internally and returns when deliverables
+       are on disk or max turns are reached.
+
+       For phases that delegate to external tools like OpenCode, set a generous
+       timeout (e.g., 600 seconds).
+
+    3. CONTEXT: Each agent runs in isolation with no memory of other phases.
+       You must provide everything they need: the original user request, outputs
+       from prior phases, file paths, decisions made, and any constraints.
+       IMPORTANT: When a phase produces a deliverable, specify the exact file
+       path where it should be written (e.g., ~/project/docs/requirements.md).
+
+    4. REVIEW: After each phase completes, review the output:
+       - If the phase returned an ERROR status, do NOT assume it succeeded.
+         Check whether the expected deliverable files exist on disk before
+         proceeding. If they don't exist, re-run the phase.
+       - If the output is incomplete or incorrect, re-run the phase with specific
+         feedback about what needs to change
+       - If the output is satisfactory, note any file paths mentioned and proceed
+
+    5. ADAPT: The suggested workflow is a starting point, not a rigid script:
+       - You may run independent phases in parallel
+       - You may skip phases if the user requests it
+       - You may re-run a phase multiple times if the agent needs iteration
+       - You may add ad-hoc phases if a gap is discovered
+
+    Remember: you delegate ALL work. You never write code, create files, run
+    tests, or do any technical work yourself. Your value is coordination,
+    context management, and quality oversight.
+
+agents:
+  po:
+    persona: product_owner
+    tools:
+      - read_file
+      - write_file
+      - shell_command
+      - web_fetch
+      - grep_search
+      - file_tree
+    behaviors: |
+      When receiving a new request:
+      - Analyze the request for completeness and clarity
+      - Identify missing information, ambiguous requirements, or unstated assumptions
+      - Ask all clarification questions at once to the requester before starting documentation
+      - Wait for answers before producing the requirement document
+      - Document acceptance criteria, edge cases, and error scenarios
+      - ALWAYS write the requirements document to a file using `write_file`
+        (e.g., `~/project/docs/requirements.md` or a path relevant to the project)
+      - Include the full file path in your final response so downstream agents
+        can read and reference the document
+      - Present the requirement for confirmation before considering it complete
+
+  architect:
+    persona: architect
+    tools:
+      - read_file
+      - write_file
+      - grep_search
+      - file_tree
+    delegate:
+      tool: opencode
+      env: [BIFROST_API_KEY]
+      description: |
+        OpenCode is an AI-powered coding agent. It can read files, write files,
+        run shell commands, search code, and perform complex tasks autonomously.
+        It will handle all file creation on its own. Give it a clear, concise
+        goal and let it plan its own approach.
+    behaviors: |
+      When receiving a design task:
+      - Use `read_file`, `grep_search`, and `file_tree` to understand the
+        existing codebase and input documents
+      - Delegate to OpenCode with a **concise goal**:
+        - State the desired outcome (e.g., "Create a technical design document")
+        - List the input file paths it should read
+        - Specify the output file path
+        - Mention key constraints (e.g., tech stack, compatibility requirements)
+      - Do NOT prescribe the exact structure, sections, or content of the output.
+        OpenCode is an autonomous agent. It will read the inputs, understand the
+        domain, and decide how to structure and organize its work.
+      - A good task prompt is 3-10 sentences. If your prompt is longer than a
+        short paragraph, you are over-specifying.
+      - After OpenCode completes, use `read_file` to verify the document was written
+      - Include the design document file path in your final response
+
+  dev:
+    persona: developer
+    tools:
+      - read_file
+      - write_file
+      - grep_search
+      - file_tree
+    delegate:
+      tool: opencode
+      env: [BIFROST_API_KEY]
+      description: |
+        OpenCode is an AI-powered coding agent. It can read files, write files,
+        run shell commands, search code, and perform complex implementations
+        autonomously. Give it a clear, concise goal and let it plan its own
+        approach including writing code, running tests, and fixing issues.
+    behaviors: |
+      When receiving an implementation task:
+      - Use `read_file`, `grep_search`, and `file_tree` to understand the
+        existing codebase and input documents
+      - Delegate to OpenCode with a **concise goal**:
+        - State what to build (e.g., "Implement the Tetris game")
+        - List the input file paths (requirements, design docs) it should read
+        - Specify the project directory
+        - Mention key constraints (e.g., no frameworks, must work via file://)
+      - Do NOT paste requirements, design details, or code patterns into the
+        task. OpenCode will read the documents and the codebase itself.
+      - A good task prompt is 3-10 sentences. If your prompt is longer than a
+        short paragraph, you are over-specifying.
+      - After OpenCode completes, use `read_file` to verify the code was written
+      - Only report completion when the implementation is verified
+
+  qa:
+    persona: qa_engineer
+    tools:
+      - read_file
+      - write_file
+      - grep_search
+      - file_tree
+    delegate:
+      tool: opencode
+      env: [BIFROST_API_KEY]
+      description: |
+        OpenCode is an AI-powered coding agent. It can read files, write files,
+        run shell commands, search code, and perform complex tasks autonomously.
+        For testing, it will write test files, run tests, and fix issues. Give
+        it a clear, concise goal and let it plan its own approach.
+    behaviors: |
+      When receiving a testing task:
+      - Use `read_file` and `grep_search` to understand the implementation
+        and requirements
+      - Delegate to OpenCode with a **concise goal**:
+        - State the objective (e.g., "Write and run tests for the Tetris game")
+        - List the input file paths (requirements, code) it should read
+        - Specify where to write test files
+        - Mention the test approach if relevant (e.g., manual testing, unit tests)
+      - Do NOT paste acceptance criteria, code snippets, or detailed test
+        scenarios into the task. OpenCode will read the requirements and code
+        itself and determine what to test.
+      - A good task prompt is 3-10 sentences. If your prompt is longer than a
+        short paragraph, you are over-specifying.
+      - After OpenCode completes, verify test results
+      - Only approve when tests pass and deliverables exist
+
+  security:
+    persona: security_engineer
+    tools:
+      - read_file
+      - grep_search
+      - file_tree
+    behaviors: |
+      When receiving code changes and technical design:
+      - Review code for common vulnerability patterns (injection, XSS, auth bypass, etc.)
+      - Check that sensitive data handling follows best practices
+      - Verify that the design doesn't introduce attack surface
+      - If issues are found, report all findings at once to the Developer with
+        severity levels and recommended fixes
+      - Wait for fixes and re-validate
+
+suggested_flow:
+  phases:
+    - name: requirements
+      primary: po
+    - name: design
+      primary: architect
+      reviewers: [po]
+    - name: implementation
+      primary: dev
+    - name: testing
+      primary: qa
+    - name: security
+      primary: security
+
+  reviews:
+    design: [requirements]
+    implementation: [requirements, design]
+    testing: [implementation]
+    security: [implementation]
+
+settings:
+  max_reviews_per_phase: 2

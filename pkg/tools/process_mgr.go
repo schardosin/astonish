@@ -171,7 +171,7 @@ func (pm *ProcessManager) Start(command, workDir string, rows, cols uint16) (*Pr
 
 	cmd := exec.Command("sh", "-c", command)
 	if workDir != "" {
-		cmd.Dir = workDir
+		cmd.Dir = expandPath(workDir)
 	}
 
 	// Set environment: inherit parent env and add safe defaults.

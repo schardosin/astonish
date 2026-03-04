@@ -49,7 +49,7 @@ func FindFiles(ctx tool.Context, args FindFilesArgs) (FindFilesResult, error) {
 	}
 
 	// Make path absolute
-	absPath, err := filepath.Abs(searchPath)
+	absPath, err := filepath.Abs(expandPath(searchPath))
 	if err != nil {
 		return FindFilesResult{}, err
 	}

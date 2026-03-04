@@ -81,6 +81,7 @@ func delegateTasks(ctx tool.Context, args DelegateTasksArgs) (DelegateTasksResul
 			Instructions: input.Instructions,
 			ToolFilter:   input.Tools,
 			ParentID:     ctx.SessionID(),
+			ParentDepth:  0, // delegate_tasks creates top-level sub-agents
 		}
 	}
 

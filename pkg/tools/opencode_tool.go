@@ -28,11 +28,21 @@ type OpenCodeArgs struct {
 
 // OpenCodeResult is the output of the opencode tool.
 type OpenCodeResult struct {
-	Status    string         `json:"status"`               // "success", "error", "timeout"
-	Output    string         `json:"output"`               // Text output from OpenCode
-	SessionID string         `json:"session_id,omitempty"` // Session ID for continuation
-	Error     string         `json:"error,omitempty"`      // Error message
-	Tokens    map[string]any `json:"tokens,omitempty"`     // Token usage from last step
+	Status    string               `json:"status"`               // "success", "error", "timeout"
+	Output    string               `json:"output"`               // Text output from OpenCode
+	SessionID string               `json:"session_id,omitempty"` // Session ID for continuation
+	Error     string               `json:"error,omitempty"`      // Error message
+	Tokens    map[string]any       `json:"tokens,omitempty"`     // Token usage from last step
+	Trace     []OpenCodeTraceEvent `json:"trace,omitempty"`      // Execution trace for replay on reload
+}
+
+// OpenCodeTraceEvent is a lightweight record of an OpenCode event, stored in the
+// tool result so fleet reconstruction can replay opencode_* events on page reload.
+type OpenCodeTraceEvent struct {
+	Type    string `json:"type"`              // opencode_text, opencode_tool_call, opencode_tool_result, opencode_step_start, opencode_step_finish
+	Detail  string `json:"detail,omitempty"`  // Tool name for tool_call/tool_result
+	Message string `json:"message,omitempty"` // Summary message
+	Text    string `json:"text,omitempty"`    // Full text content (tool args, output, LLM text)
 }
 
 // openCodeBinaryPath caches the resolved path to the opencode binary.
@@ -199,6 +209,7 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 	var textParts []string
 	var sessionID string
 	var tokens map[string]any
+	var trace []OpenCodeTraceEvent
 
 	// Look up the fleet progress channel so we can stream OpenCode events in real-time.
 	// The channel is available when this tool runs inside a fleet worker sub-agent that
@@ -261,10 +272,16 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 		switch evt.Type {
 		case "text":
 			if evt.Part.Text != "" {
-				sendProgress(FleetProgressEvent{
+				traceEvt := OpenCodeTraceEvent{
 					Type:    "opencode_text",
 					Message: truncateForProgress(evt.Part.Text),
 					Text:    evt.Part.Text,
+				}
+				trace = append(trace, traceEvt)
+				sendProgress(FleetProgressEvent{
+					Type:    traceEvt.Type,
+					Message: traceEvt.Message,
+					Text:    traceEvt.Text,
 				})
 			}
 		case "tool_use":
@@ -280,43 +297,74 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 				// OpenCode often sends a single tool_use event with status="completed"
 				// containing both input and output. Emit both call and result so the
 				// UI can render what tool was called and what it returned.
-				sendProgress(FleetProgressEvent{
+				callEvt := OpenCodeTraceEvent{
 					Type:    "opencode_tool_call",
 					Detail:  toolName,
 					Message: fmt.Sprintf("OpenCode calling: %s", toolName),
 					Text:    inputStr,
+				}
+				trace = append(trace, callEvt)
+				sendProgress(FleetProgressEvent{
+					Type:    callEvt.Type,
+					Detail:  callEvt.Detail,
+					Message: callEvt.Message,
+					Text:    callEvt.Text,
 				})
 				if len(outputStr) > 2000 {
 					outputStr = outputStr[:2000] + "\n\n... (truncated)"
 				}
-				sendProgress(FleetProgressEvent{
+				resultEvt := OpenCodeTraceEvent{
 					Type:    "opencode_tool_result",
 					Detail:  toolName,
 					Message: fmt.Sprintf("OpenCode %s returned (%s)", toolName, status),
 					Text:    outputStr,
+				}
+				trace = append(trace, resultEvt)
+				sendProgress(FleetProgressEvent{
+					Type:    resultEvt.Type,
+					Detail:  resultEvt.Detail,
+					Message: resultEvt.Message,
+					Text:    resultEvt.Text,
 				})
 			} else {
 				// Tool call in progress (status="running" or empty)
-				sendProgress(FleetProgressEvent{
+				callEvt := OpenCodeTraceEvent{
 					Type:    "opencode_tool_call",
 					Detail:  toolName,
 					Message: fmt.Sprintf("OpenCode calling: %s", toolName),
 					Text:    inputStr,
+				}
+				trace = append(trace, callEvt)
+				sendProgress(FleetProgressEvent{
+					Type:    callEvt.Type,
+					Detail:  callEvt.Detail,
+					Message: callEvt.Message,
+					Text:    callEvt.Text,
 				})
 			}
 		case "step_start":
-			sendProgress(FleetProgressEvent{
+			traceEvt := OpenCodeTraceEvent{
 				Type:    "opencode_step_start",
 				Message: "OpenCode step started",
+			}
+			trace = append(trace, traceEvt)
+			sendProgress(FleetProgressEvent{
+				Type:    traceEvt.Type,
+				Message: traceEvt.Message,
 			})
 		case "step_finish":
 			reason := evt.Part.Reason
 			if reason == "" {
 				reason = "completed"
 			}
-			sendProgress(FleetProgressEvent{
+			traceEvt := OpenCodeTraceEvent{
 				Type:    "opencode_step_finish",
 				Message: fmt.Sprintf("OpenCode step finished: %s", reason),
+			}
+			trace = append(trace, traceEvt)
+			sendProgress(FleetProgressEvent{
+				Type:    traceEvt.Type,
+				Message: traceEvt.Message,
 			})
 		}
 	}
@@ -332,6 +380,7 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 			SessionID: sessionID,
 			Error:     fmt.Sprintf("OpenCode timed out after %d seconds", timeout),
 			Tokens:    tokens,
+			Trace:     trace,
 		}, nil
 	}
 
@@ -352,6 +401,7 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 			SessionID: sessionID,
 			Error:     strings.TrimSpace(errMsg),
 			Tokens:    tokens,
+			Trace:     trace,
 		}, nil
 	}
 
@@ -365,6 +415,7 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 		Output:    output,
 		SessionID: sessionID,
 		Tokens:    tokens,
+		Trace:     trace,
 	}, nil
 }
 

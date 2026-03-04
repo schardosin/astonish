@@ -219,6 +219,12 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		}
 	}
 
+	// Persist the task name as the session title so fleet reconstruction
+	// can derive phase/agent info from titles like "fleet-<fleet>-<phase>".
+	if fs, ok := m.SessionService.(*persistentsession.FileStore); ok {
+		_ = fs.SetSessionTitle(childSessionID, task.Name)
+	}
+
 	// Create child LLM agent via ADK
 	childAgent, err := llmagent.New(llmagent.Config{
 		Name:        task.Name,

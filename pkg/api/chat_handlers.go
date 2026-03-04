@@ -810,6 +810,10 @@ func eventsToMessages(events session.Events, fs *persistentsession.FileStore, se
 // buildFleetExecutionMessage reconstructs a fleet_execution message from child
 // session transcripts. This allows the FleetExecutionPanel to render on reload
 // even though the real-time fleet_progress SSE events are ephemeral.
+//
+// The function walks the session tree (main -> orchestrator -> workers), extracts
+// phase structure from the orchestrator's run_fleet_phase calls, then interleaves
+// worker events within their corresponding phases so the UI groups them correctly.
 func buildFleetExecutionMessage(fs *persistentsession.FileStore, parentSessionID string) *StudioMessage {
 	// Find orchestrator session (direct child of the main session)
 	children, err := fs.ListChildren(parentSessionID)
@@ -819,15 +823,26 @@ func buildFleetExecutionMessage(fs *persistentsession.FileStore, parentSessionID
 
 	var fleetEvents []FleetEventMsg
 
-	// Process each orchestrator child session
 	for _, orchestrator := range children {
-		// Read orchestrator transcript to find run_fleet_phase calls
 		orchEvents, err := fs.ReadTranscriptEvents(orchestrator.AppName, orchestrator.UserID, orchestrator.ID)
 		if err != nil || len(orchEvents) == 0 {
 			continue
 		}
 
-		// Walk orchestrator events to reconstruct phase starts/completions
+		// Derive fleet name from orchestrator title (format: "fleet-orchestrator-<fleet>")
+		// so we can correctly strip the "fleet-<fleet>-" prefix from worker titles.
+		fleetName := ""
+		if strings.HasPrefix(orchestrator.Title, "fleet-orchestrator-") {
+			fleetName = strings.TrimPrefix(orchestrator.Title, "fleet-orchestrator-")
+		}
+
+		// Collect worker sessions keyed by phase name for interleaving.
+		workers, _ := fs.ListChildren(orchestrator.ID)
+		workersByPhase := buildWorkerPhaseMap(fs, workers, fleetName)
+
+		// Walk orchestrator events in order. When we encounter a run_fleet_phase
+		// FunctionCall, emit phase_start + worker events. When we encounter the
+		// matching FunctionResponse, emit phase_complete.
 		for _, ev := range orchEvents {
 			if ev.Content == nil {
 				continue
@@ -850,6 +865,12 @@ func buildFleetExecutionMessage(fs *persistentsession.FileStore, parentSessionID
 						Agent:   agentKey,
 						Message: fmt.Sprintf("Starting phase: %s (agent: %s)", phaseName, agentKey),
 					})
+
+					// Interleave worker events for this phase right after phase_start
+					if workerEvts, ok := workersByPhase[phaseName]; ok {
+						fleetEvents = append(fleetEvents, workerEvts...)
+						delete(workersByPhase, phaseName)
+					}
 				}
 				if part.FunctionResponse != nil && part.FunctionResponse.Name == "run_fleet_phase" {
 					phaseName := ""
@@ -863,7 +884,7 @@ func buildFleetExecutionMessage(fs *persistentsession.FileStore, parentSessionID
 						}
 					}
 					evtType := "phase_complete"
-					if status != "success" {
+					if status != "success" && status != "completed" {
 						evtType = "phase_failed"
 					}
 					fleetEvents = append(fleetEvents, FleetEventMsg{
@@ -883,62 +904,14 @@ func buildFleetExecutionMessage(fs *persistentsession.FileStore, parentSessionID
 			}
 		}
 
-		// Find worker sessions (children of the orchestrator)
-		workers, err := fs.ListChildren(orchestrator.ID)
-		if err != nil {
-			continue
-		}
-
-		for _, worker := range workers {
-			workerEvents, err := fs.ReadTranscriptEvents(worker.AppName, worker.UserID, worker.ID)
-			if err != nil || len(workerEvents) == 0 {
-				continue
-			}
-
-			// Derive phase/agent from the worker session title or the task user message
-			phaseName, agentKey := extractPhaseInfo(worker.Title, workerEvents)
-
-			for _, ev := range workerEvents {
-				if ev.Content == nil {
-					continue
-				}
-				role := string(ev.Content.Role)
-				for _, part := range ev.Content.Parts {
-					// Skip user messages (they're the task description)
-					if role == "user" {
-						continue
-					}
-					if part.FunctionCall != nil {
-						fleetEvents = append(fleetEvents, FleetEventMsg{
-							Type:    "worker_tool_call",
-							Phase:   phaseName,
-							Agent:   agentKey,
-							Message: fmt.Sprintf("[%s/%s] Calling %s", phaseName, agentKey, part.FunctionCall.Name),
-							Detail:  part.FunctionCall.Name,
-							Args:    part.FunctionCall.Args,
-						})
-					}
-					if part.FunctionResponse != nil {
-						fleetEvents = append(fleetEvents, FleetEventMsg{
-							Type:    "worker_tool_result",
-							Phase:   phaseName,
-							Agent:   agentKey,
-							Message: fmt.Sprintf("[%s/%s] %s returned", phaseName, agentKey, part.FunctionResponse.Name),
-							Detail:  part.FunctionResponse.Name,
-							Result:  summarizeToolResult(part.FunctionResponse.Response),
-						})
-					}
-					if part.Text != "" && part.FunctionCall == nil && part.FunctionResponse == nil && !part.Thought {
-						fleetEvents = append(fleetEvents, FleetEventMsg{
-							Type:    "worker_text",
-							Phase:   phaseName,
-							Agent:   agentKey,
-							Message: part.Text,
-							Text:    part.Text,
-						})
-					}
-				}
-			}
+		// Append any remaining worker events that didn't match a phase
+		for phase, evts := range workersByPhase {
+			fleetEvents = append(fleetEvents, FleetEventMsg{
+				Type:    "phase_start",
+				Phase:   phase,
+				Message: fmt.Sprintf("Phase: %s", phase),
+			})
+			fleetEvents = append(fleetEvents, evts...)
 		}
 	}
 
@@ -953,24 +926,162 @@ func buildFleetExecutionMessage(fs *persistentsession.FileStore, parentSessionID
 	}
 }
 
-// extractPhaseInfo derives the phase name and agent key from a worker session.
-// It first tries the session title (format: "fleet-<fleet>-<phase>"), then
-// scans the first user message for context.
-func extractPhaseInfo(title string, events []*session.Event) (string, string) {
-	// Worker session names follow the pattern "fleet-<fleet>-<phase>"
-	if strings.HasPrefix(title, "fleet-") {
-		parts := strings.SplitN(title, "-", 3)
-		if len(parts) >= 3 {
-			return parts[2], ""
+// buildWorkerPhaseMap groups worker session events by their phase name.
+// Worker sessions are identified by their title (set by the sub-agent manager)
+// which follows patterns like "fleet-<fleet>-<phase>" for single-agent phases
+// or "fleet-<fleet>-<phase>-<agent>-t<N>" for conversation turns.
+// The fleetName parameter is needed to correctly strip the "fleet-<fleet>-" prefix
+// since the fleet name itself may contain hyphens (e.g., "software-dev").
+func buildWorkerPhaseMap(fs *persistentsession.FileStore, workers []persistentsession.SessionMeta, fleetName string) map[string][]FleetEventMsg {
+	result := make(map[string][]FleetEventMsg)
+
+	for _, worker := range workers {
+		workerEvents, err := fs.ReadTranscriptEvents(worker.AppName, worker.UserID, worker.ID)
+		if err != nil || len(workerEvents) == 0 {
+			continue
+		}
+
+		phaseName, agentKey := extractPhaseInfo(worker.Title, fleetName, workerEvents)
+
+		for _, ev := range workerEvents {
+			if ev.Content == nil {
+				continue
+			}
+			role := string(ev.Content.Role)
+			for _, part := range ev.Content.Parts {
+				// Skip user-role text (task descriptions), but NOT FunctionResponse
+				// parts which ADK also sends with role="user".
+				if role == "user" && part.FunctionResponse == nil {
+					continue
+				}
+				if part.FunctionCall != nil {
+					result[phaseName] = append(result[phaseName], FleetEventMsg{
+						Type:    "worker_tool_call",
+						Phase:   phaseName,
+						Agent:   agentKey,
+						Message: fmt.Sprintf("[%s/%s] Calling %s", phaseName, agentKey, part.FunctionCall.Name),
+						Detail:  part.FunctionCall.Name,
+						Args:    part.FunctionCall.Args,
+					})
+				}
+				if part.FunctionResponse != nil {
+					result[phaseName] = append(result[phaseName], FleetEventMsg{
+						Type:    "worker_tool_result",
+						Phase:   phaseName,
+						Agent:   agentKey,
+						Message: fmt.Sprintf("[%s/%s] %s returned", phaseName, agentKey, part.FunctionResponse.Name),
+						Detail:  part.FunctionResponse.Name,
+						Result:  summarizeToolResult(part.FunctionResponse.Response),
+					})
+					// If this is an opencode tool response, extract the execution trace
+					// so opencode_* events are reconstructed on page reload.
+					if part.FunctionResponse.Name == "opencode" {
+						result[phaseName] = append(result[phaseName], extractOpenCodeTrace(part.FunctionResponse.Response, phaseName, agentKey)...)
+					}
+				}
+				if part.Text != "" && part.FunctionCall == nil && part.FunctionResponse == nil && !part.Thought {
+					result[phaseName] = append(result[phaseName], FleetEventMsg{
+						Type:    "worker_text",
+						Phase:   phaseName,
+						Agent:   agentKey,
+						Message: part.Text,
+						Text:    part.Text,
+					})
+				}
+			}
 		}
 	}
 
-	// Fall back: scan first user message for phase/agent hints
-	// The orchestrator's task description often starts with the phase context
+	return result
+}
+
+// extractOpenCodeTrace converts the opencode tool's persisted trace (stored in the
+// FunctionResponse) into FleetEventMsg entries for the fleet execution panel.
+// The trace field is an array of {type, detail, message, text} objects that mirror
+// the real-time opencode_* progress events.
+func extractOpenCodeTrace(resp map[string]any, phase, agent string) []FleetEventMsg {
+	traceRaw, ok := resp["trace"]
+	if !ok {
+		return nil
+	}
+	traceSlice, ok := traceRaw.([]any)
+	if !ok {
+		return nil
+	}
+
+	var events []FleetEventMsg
+	for _, item := range traceSlice {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		evtType, _ := entry["type"].(string)
+		if evtType == "" {
+			continue
+		}
+		detail, _ := entry["detail"].(string)
+		message, _ := entry["message"].(string)
+		text, _ := entry["text"].(string)
+
+		events = append(events, FleetEventMsg{
+			Type:    evtType,
+			Phase:   phase,
+			Agent:   agent,
+			Detail:  detail,
+			Message: message,
+			Text:    text,
+		})
+	}
+	return events
+}
+
+// extractPhaseInfo derives the phase name and agent key from a worker session.
+// The fleetName parameter (e.g., "software-dev") is used to correctly strip the
+// "fleet-<fleet>-" prefix from titles, since the fleet name may contain hyphens.
+// It supports several title formats set by the fleet tools:
+//   - "fleet-<fleet>-<phase>" (single-agent phase)
+//   - "fleet-<fleet>-<phase>-<agent>-t<N>" (conversation turn)
+//   - "fleet-orchestrator-<fleet>" (orchestrator, no phase)
+func extractPhaseInfo(title string, fleetName string, events []*session.Event) (string, string) {
+	if strings.HasPrefix(title, "fleet-orchestrator-") {
+		return "_orchestrator", ""
+	}
+
+	// Use the known fleet name to strip the exact prefix "fleet-<fleet>-"
+	// This avoids ambiguity when the fleet name contains hyphens.
+	if fleetName != "" {
+		prefix := "fleet-" + fleetName + "-"
+		if strings.HasPrefix(title, prefix) {
+			remainder := strings.TrimPrefix(title, prefix)
+			// Check for conversation turn suffix: <phase>-<agent>-t<N>
+			// Work backwards: last segment is t<N>, second-to-last is agent
+			parts := strings.Split(remainder, "-")
+			if len(parts) >= 3 {
+				lastPart := parts[len(parts)-1]
+				if len(lastPart) > 1 && lastPart[0] == 't' && isDigits(lastPart[1:]) {
+					agentKey := parts[len(parts)-2]
+					phaseName := strings.Join(parts[:len(parts)-2], "-")
+					return phaseName, agentKey
+				}
+			}
+			// Single-agent phase: remainder is the phase name
+			return remainder, ""
+		}
+	}
+
+	// Fallback when fleet name is unknown: try the old heuristic
+	if strings.HasPrefix(title, "fleet-") {
+		rest := strings.TrimPrefix(title, "fleet-")
+		// If the rest contains at least one hyphen, assume the last segment is the phase
+		if idx := strings.LastIndex(rest, "-"); idx > 0 {
+			return rest[idx+1:], ""
+		}
+	}
+
+	// Fall back: scan first user message for phase hints
 	if len(events) > 0 && events[0].Content != nil {
 		for _, part := range events[0].Content.Parts {
 			if part.Text != "" {
-				// Try to extract from task text patterns like "[phase/agent]"
 				text := part.Text
 				if idx := strings.Index(text, "## Phase"); idx >= 0 {
 					line := text[idx:]
@@ -983,6 +1094,19 @@ func extractPhaseInfo(title string, events []*session.Event) (string, string) {
 	}
 
 	return "unknown", ""
+}
+
+// isDigits returns true if s is non-empty and contains only ASCII digits.
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // summarizeToolResult converts a tool response map into a display-friendly value.

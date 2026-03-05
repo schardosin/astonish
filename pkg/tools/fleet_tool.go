@@ -11,46 +11,26 @@ import (
 
 // Package-level registries for fleet execution.
 // Set by the launcher via SetFleetRegistries.
-var (
-	fleetRegistryVar   *fleet.Registry
-	personaRegistryVar *persona.Registry
-)
+var fleetRegistryVar *fleet.Registry
 
-// SetFleetRegistries registers the fleet and persona registries for the fleet tool.
-func SetFleetRegistries(fleetReg *fleet.Registry, personaReg *persona.Registry) {
+// SetFleetRegistries registers the fleet and persona registries for the fleet tools.
+// The persona registry is accepted for future use by the fleet session manager.
+func SetFleetRegistries(fleetReg *fleet.Registry, _ *persona.Registry) {
 	fleetRegistryVar = fleetReg
-	personaRegistryVar = personaReg
 }
 
-// ensureTool adds a tool name to the filter list if not already present.
-// If the filter is nil (meaning all tools), returns nil (keep all tools).
-func ensureTool(filter []string, name string) []string {
-	if filter == nil {
-		return nil
-	}
-	for _, t := range filter {
-		if t == name {
-			return filter
-		}
-	}
-	return append(filter, name)
-}
-
-// GetFleetTools returns fleet-related tools if the fleet system is available.
+// GetFleetTools returns fleet-related tools that sub-agents can use (e.g., opencode).
+// In fleet v2, the orchestrator/phase tools are gone. The only fleet-specific tool
+// that sub-agents need is the opencode delegate tool.
 func GetFleetTools() ([]tool.Tool, error) {
-	phaseT, err := NewRunFleetPhaseTool()
-	if err != nil {
-		return nil, err
-	}
 	ocT, err := NewOpenCodeTool()
 	if err != nil {
 		return nil, err
 	}
-	return []tool.Tool{phaseT, ocT}, nil
+	return []tool.Tool{ocT}, nil
 }
 
 // ListAvailableFleets returns a formatted string listing available fleets.
-// Used by slash command handlers to show fleet info without leaking internal prompts.
 func ListAvailableFleets() string {
 	if fleetRegistryVar == nil {
 		return "Fleet system is not initialized."
@@ -65,7 +45,6 @@ func ListAvailableFleets() string {
 		sb.WriteString(fmt.Sprintf("- **%s** (`%s`) — %s\n", s.Name, s.Key, s.Description))
 		sb.WriteString(fmt.Sprintf("  Agents: %s\n", strings.Join(s.AgentNames, ", ")))
 	}
-	sb.WriteString("\nUse `/fleet <task description>` to start a fleet-based task.\n")
-	sb.WriteString("Example: `/fleet build a REST API for user management`")
+	sb.WriteString("\nFleet sessions are started via the Studio UI or CLI (`astonish fleet start`).\n")
 	return sb.String()
 }

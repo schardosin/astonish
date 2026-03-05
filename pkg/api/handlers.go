@@ -832,4 +832,12 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/fleets/{key}", GetFleetHandler).Methods("GET")
 	router.HandleFunc("/api/fleets/{key}", SaveFleetHandler).Methods("PUT")
 	router.HandleFunc("/api/fleets/{key}", DeleteFleetHandler).Methods("DELETE")
+
+	// Fleet Session endpoints (fleet v2: autonomous agent team)
+	router.HandleFunc("/api/studio/fleet/start", FleetStartHandler).Methods("POST")
+	router.HandleFunc("/api/studio/fleet/sessions", FleetSessionsListHandler).Methods("GET")
+	router.HandleFunc("/api/studio/fleet/sessions/{id}", FleetSessionStatusHandler).Methods("GET")
+	router.HandleFunc("/api/studio/fleet/sessions/{id}/message", FleetMessageHandler).Methods("POST")
+	router.HandleFunc("/api/studio/fleet/sessions/{id}/stop", FleetSessionStopHandler).Methods("POST")
+	router.HandleFunc("/api/studio/fleet/sessions/{id}/stream", FleetSessionStreamHandler).Methods("GET")
 }

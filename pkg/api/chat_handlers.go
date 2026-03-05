@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -37,39 +38,34 @@ type StudioSessionResponse struct {
 	CreatedAt    string `json:"createdAt"`
 	UpdatedAt    string `json:"updatedAt"`
 	MessageCount int    `json:"messageCount"`
+	FleetKey     string `json:"fleetKey,omitempty"`
+	FleetName    string `json:"fleetName,omitempty"`
 }
 
 // StudioSessionDetailResponse is the response for GET /api/studio/sessions/{id}.
 type StudioSessionDetailResponse struct {
 	StudioSessionResponse
-	Messages []StudioMessage `json:"messages"`
+	Messages      []StudioMessage       `json:"messages"`
+	FleetMessages []FleetMessageSummary `json:"fleetMessages,omitempty"`
+}
+
+// FleetMessageSummary is a fleet message returned when loading fleet session history.
+type FleetMessageSummary struct {
+	ID        string         `json:"id,omitempty"`
+	Sender    string         `json:"sender"`
+	Text      string         `json:"text"`
+	Mentions  []string       `json:"mentions,omitempty"`
+	Timestamp string         `json:"timestamp,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
 }
 
 // StudioMessage is a simplified message for the frontend.
 type StudioMessage struct {
-	Type       string      `json:"type"`                 // user, agent, tool_call, tool_result, system, fleet_execution
+	Type       string      `json:"type"`                 // user, agent, tool_call, tool_result, system
 	Content    string      `json:"content,omitempty"`    // text content
 	ToolName   string      `json:"toolName,omitempty"`   // for tool_call/tool_result
 	ToolArgs   interface{} `json:"toolArgs,omitempty"`   // for tool_call
 	ToolResult interface{} `json:"toolResult,omitempty"` // for tool_result
-
-	// Fleet execution fields (for type=fleet_execution)
-	FleetEvents  []FleetEventMsg `json:"events,omitempty"` // reconstructed fleet events
-	FleetStatus  string          `json:"status,omitempty"` // "complete"
-	CurrentPhase *string         `json:"currentPhase,omitempty"`
-	CurrentAgent *string         `json:"currentAgent,omitempty"`
-}
-
-// FleetEventMsg is a single reconstructed fleet event for the frontend panel.
-type FleetEventMsg struct {
-	Type    string         `json:"type"` // phase_start, phase_complete, worker_tool_call, etc.
-	Phase   string         `json:"phase,omitempty"`
-	Agent   string         `json:"agent,omitempty"`
-	Message string         `json:"message,omitempty"`
-	Detail  string         `json:"detail,omitempty"`
-	Args    map[string]any `json:"args,omitempty"`
-	Result  interface{}    `json:"result,omitempty"`
-	Text    string         `json:"text,omitempty"`
 }
 
 // StudioChatComponents holds the wired components needed by Studio chat handlers.
@@ -238,19 +234,23 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Handle slash commands server-side
 	msg := strings.TrimSpace(req.Message)
-	fleetRequested := false
 
-	// /fleet: handle bare form as a slash command; /fleet <task> falls through to normal message flow
+	// /fleet: list available fleets
 	if msg == "/fleet" {
 		info := tools.ListAvailableFleets()
 		SendSSE(w, flusher, "system", map[string]interface{}{"content": info})
 		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
 		return
 	}
+	// /fleet <task>: start a fleet session via the fleet start API
 	if strings.HasPrefix(msg, "/fleet ") {
-		// Strip the /fleet prefix; the task goes to the agent as a normal user message.
-		msg = strings.TrimSpace(strings.TrimPrefix(msg, "/fleet"))
-		fleetRequested = true
+		task := strings.TrimSpace(strings.TrimPrefix(msg, "/fleet"))
+		// Signal the frontend to start a fleet session instead of a normal chat
+		SendSSE(w, flusher, "fleet_redirect", map[string]interface{}{
+			"task": task,
+		})
+		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+		return
 	}
 
 	if strings.HasPrefix(msg, "/") {
@@ -311,81 +311,16 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	// Prepare user message
 	var userMsg *genai.Content
 	if msg != "" {
-		if fleetRequested {
-			// /fleet <task>: send as a multi-part user message with fleet instruction
-			userMsg = &genai.Content{
-				Role: genai.RoleUser,
-				Parts: []*genai.Part{
-					genai.NewPartFromText("[FLEET MODE] Use fleet_plan to create a plan for this task, then fleet_execute to run it. Do NOT do the work yourself."),
-					genai.NewPartFromText(msg),
-				},
-			}
-		} else {
-			userMsg = genai.NewContentFromText(msg, genai.RoleUser)
-		}
+		userMsg = genai.NewContentFromText(msg, genai.RoleUser)
 	}
 
-	// Mutex for safe concurrent SSE writes (main event loop + fleet progress goroutine)
+	// Mutex for safe concurrent SSE writes
 	var sseMu sync.Mutex
 	safeSendSSE := func(eventType string, data interface{}) {
 		sseMu.Lock()
 		defer sseMu.Unlock()
 		SendSSE(w, flusher, eventType, data)
 	}
-
-	// Start fleet progress streaming goroutine. It polls for a fleet progress channel
-	// (created when fleet_execute is called) and forwards events as SSE.
-	// Uses its own context so we can cancel it after the event loop finishes.
-	fleetCtx, fleetCancel := context.WithCancel(ctx)
-	fleetProgressDone := make(chan struct{})
-	go func() {
-		defer close(fleetProgressDone)
-		ticker := time.NewTicker(200 * time.Millisecond)
-		defer ticker.Stop()
-
-		var ch <-chan tools.FleetProgressEvent
-		for {
-			select {
-			case <-fleetCtx.Done():
-				return
-			case <-ticker.C:
-				ch = tools.GetFleetProgressCh(sessionID)
-				if ch != nil {
-					ticker.Stop()
-					goto stream
-				}
-			}
-		}
-	stream:
-		for {
-			select {
-			case <-fleetCtx.Done():
-				return
-			case evt, ok := <-ch:
-				if !ok {
-					return // channel closed, fleet execution done
-				}
-				payload := map[string]interface{}{
-					"type":    evt.Type,
-					"phase":   evt.Phase,
-					"agent":   evt.Agent,
-					"message": evt.Message,
-					"detail":  evt.Detail,
-				}
-				// Include rich data fields when present (for full sub-thread rendering)
-				if evt.Args != nil {
-					payload["args"] = evt.Args
-				}
-				if evt.Result != nil {
-					payload["result"] = evt.Result
-				}
-				if evt.Text != "" {
-					payload["text"] = evt.Text
-				}
-				safeSendSSE("fleet_progress", payload)
-			}
-		}
-	}()
 
 	// Run the agent and stream events
 	for event, runErr := range rnr.Run(ctx, studioChatUserID, sessionID, userMsg, adkagent.RunConfig{
@@ -502,10 +437,6 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-
-	// Stop fleet progress goroutine and wait for it to finish
-	fleetCancel()
-	<-fleetProgressDone
 
 	// Generate title for new sessions after first exchange
 	if isNew && msg != "" {
@@ -657,6 +588,8 @@ func StudioSessionsHandler(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:    m.CreatedAt.Format(time.RFC3339),
 			UpdatedAt:    m.UpdatedAt.Format(time.RFC3339),
 			MessageCount: m.MessageCount,
+			FleetKey:     m.FleetKey,
+			FleetName:    m.FleetName,
 		})
 	}
 
@@ -686,6 +619,35 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fleet sessions: read transcript and return fleet-style messages
+	if meta.FleetKey != "" {
+		transcriptPath := filepath.Join(fs.BaseDir(), studioChatAppName, studioChatUserID, sessionID+".jsonl")
+		transcript := persistentsession.NewTranscript(transcriptPath)
+		events, readErr := transcript.ReadEvents()
+
+		var fleetMessages []FleetMessageSummary
+		if readErr == nil && len(events) > 0 {
+			fleetMessages = fleetEventsToMessages(events)
+		}
+
+		resp := StudioSessionDetailResponse{
+			StudioSessionResponse: StudioSessionResponse{
+				ID:           meta.ID,
+				Title:        meta.Title,
+				CreatedAt:    meta.CreatedAt.Format(time.RFC3339),
+				UpdatedAt:    meta.UpdatedAt.Format(time.RFC3339),
+				MessageCount: meta.MessageCount,
+				FleetKey:     meta.FleetKey,
+				FleetName:    meta.FleetName,
+			},
+			Messages:      []StudioMessage{},
+			FleetMessages: fleetMessages,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
 	// Get session transcript
 	getResp, err := fs.Get(r.Context(), &session.GetRequest{
 		AppName:   studioChatAppName,
@@ -698,7 +660,7 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Transform ADK events into simplified messages
-	messages := eventsToMessages(getResp.Session.Events(), fs, sessionID)
+	messages := eventsToMessages(getResp.Session.Events())
 
 	resp := StudioSessionDetailResponse{
 		StudioSessionResponse: StudioSessionResponse{
@@ -724,6 +686,14 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionID := mux.Vars(r)["id"]
+
+	// If this is an active fleet session, stop it
+	registry := getFleetSessionRegistry()
+	if fs := registry.Get(sessionID); fs != nil {
+		fs.Stop()
+		registry.Unregister(sessionID)
+	}
+
 	sessionService := cm.components.SessionService
 
 	err := sessionService.Delete(r.Context(), &session.DeleteRequest{
@@ -748,9 +718,7 @@ func StudioStopHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // eventsToMessages transforms ADK session events into a flat message list for the frontend.
-// When fs and sessionID are provided, fleet_execute tool calls are enriched with
-// reconstructed fleet execution data from child session transcripts.
-func eventsToMessages(events session.Events, fs *persistentsession.FileStore, sessionID string) []StudioMessage {
+func eventsToMessages(events session.Events) []StudioMessage {
 	var messages []StudioMessage
 
 	for i := range events.Len() {
@@ -788,13 +756,6 @@ func eventsToMessages(events session.Events, fs *persistentsession.FileStore, se
 				})
 			}
 			if part.FunctionResponse != nil {
-				// When fleet_execute completes, reconstruct the fleet execution panel
-				// from child session transcripts so it survives page reload
-				if part.FunctionResponse.Name == "fleet_execute" && fs != nil && sessionID != "" {
-					if fleetMsg := buildFleetExecutionMessage(fs, sessionID); fleetMsg != nil {
-						messages = append(messages, *fleetMsg)
-					}
-				}
 				messages = append(messages, StudioMessage{
 					Type:       "tool_result",
 					ToolName:   part.FunctionResponse.Name,
@@ -805,308 +766,6 @@ func eventsToMessages(events session.Events, fs *persistentsession.FileStore, se
 	}
 
 	return messages
-}
-
-// buildFleetExecutionMessage reconstructs a fleet_execution message from child
-// session transcripts. This allows the FleetExecutionPanel to render on reload
-// even though the real-time fleet_progress SSE events are ephemeral.
-//
-// The function walks the session tree (main -> orchestrator -> workers), extracts
-// phase structure from the orchestrator's run_fleet_phase calls, then interleaves
-// worker events within their corresponding phases so the UI groups them correctly.
-func buildFleetExecutionMessage(fs *persistentsession.FileStore, parentSessionID string) *StudioMessage {
-	// Find orchestrator session (direct child of the main session)
-	children, err := fs.ListChildren(parentSessionID)
-	if err != nil || len(children) == 0 {
-		return nil
-	}
-
-	var fleetEvents []FleetEventMsg
-
-	for _, orchestrator := range children {
-		orchEvents, err := fs.ReadTranscriptEvents(orchestrator.AppName, orchestrator.UserID, orchestrator.ID)
-		if err != nil || len(orchEvents) == 0 {
-			continue
-		}
-
-		// Derive fleet name from orchestrator title (format: "fleet-orchestrator-<fleet>")
-		// so we can correctly strip the "fleet-<fleet>-" prefix from worker titles.
-		fleetName := ""
-		if strings.HasPrefix(orchestrator.Title, "fleet-orchestrator-") {
-			fleetName = strings.TrimPrefix(orchestrator.Title, "fleet-orchestrator-")
-		}
-
-		// Collect worker sessions keyed by phase name for interleaving.
-		workers, _ := fs.ListChildren(orchestrator.ID)
-		workersByPhase := buildWorkerPhaseMap(fs, workers, fleetName)
-
-		// Walk orchestrator events in order. When we encounter a run_fleet_phase
-		// FunctionCall, emit phase_start + worker events. When we encounter the
-		// matching FunctionResponse, emit phase_complete.
-		for _, ev := range orchEvents {
-			if ev.Content == nil {
-				continue
-			}
-			for _, part := range ev.Content.Parts {
-				if part.FunctionCall != nil && part.FunctionCall.Name == "run_fleet_phase" {
-					phaseName := "unknown"
-					agentKey := "unknown"
-					if args := part.FunctionCall.Args; args != nil {
-						if p, ok := args["phase"].(string); ok && p != "" {
-							phaseName = p
-						}
-						if a, ok := args["primary"].(string); ok && a != "" {
-							agentKey = a
-						}
-					}
-					fleetEvents = append(fleetEvents, FleetEventMsg{
-						Type:    "phase_start",
-						Phase:   phaseName,
-						Agent:   agentKey,
-						Message: fmt.Sprintf("Starting phase: %s (agent: %s)", phaseName, agentKey),
-					})
-
-					// Interleave worker events for this phase right after phase_start
-					if workerEvts, ok := workersByPhase[phaseName]; ok {
-						fleetEvents = append(fleetEvents, workerEvts...)
-						delete(workersByPhase, phaseName)
-					}
-				}
-				if part.FunctionResponse != nil && part.FunctionResponse.Name == "run_fleet_phase" {
-					phaseName := ""
-					status := "success"
-					if resp := part.FunctionResponse.Response; resp != nil {
-						if p, ok := resp["phase"].(string); ok {
-							phaseName = p
-						}
-						if s, ok := resp["status"].(string); ok {
-							status = s
-						}
-					}
-					evtType := "phase_complete"
-					if status != "success" && status != "completed" {
-						evtType = "phase_failed"
-					}
-					fleetEvents = append(fleetEvents, FleetEventMsg{
-						Type:    evtType,
-						Phase:   phaseName,
-						Message: fmt.Sprintf("Phase %s: %s", phaseName, status),
-					})
-				}
-				// Orchestrator text
-				if part.Text != "" && part.FunctionCall == nil && part.FunctionResponse == nil && !part.Thought {
-					fleetEvents = append(fleetEvents, FleetEventMsg{
-						Type:    "text",
-						Message: part.Text,
-						Text:    part.Text,
-					})
-				}
-			}
-		}
-
-		// Append any remaining worker events that didn't match a phase
-		for phase, evts := range workersByPhase {
-			fleetEvents = append(fleetEvents, FleetEventMsg{
-				Type:    "phase_start",
-				Phase:   phase,
-				Message: fmt.Sprintf("Phase: %s", phase),
-			})
-			fleetEvents = append(fleetEvents, evts...)
-		}
-	}
-
-	if len(fleetEvents) == 0 {
-		return nil
-	}
-
-	return &StudioMessage{
-		Type:        "fleet_execution",
-		FleetEvents: fleetEvents,
-		FleetStatus: "complete",
-	}
-}
-
-// buildWorkerPhaseMap groups worker session events by their phase name.
-// Worker sessions are identified by their title (set by the sub-agent manager)
-// which follows patterns like "fleet-<fleet>-<phase>" for single-agent phases
-// or "fleet-<fleet>-<phase>-<agent>-t<N>" for conversation turns.
-// The fleetName parameter is needed to correctly strip the "fleet-<fleet>-" prefix
-// since the fleet name itself may contain hyphens (e.g., "software-dev").
-func buildWorkerPhaseMap(fs *persistentsession.FileStore, workers []persistentsession.SessionMeta, fleetName string) map[string][]FleetEventMsg {
-	result := make(map[string][]FleetEventMsg)
-
-	for _, worker := range workers {
-		workerEvents, err := fs.ReadTranscriptEvents(worker.AppName, worker.UserID, worker.ID)
-		if err != nil || len(workerEvents) == 0 {
-			continue
-		}
-
-		phaseName, agentKey := extractPhaseInfo(worker.Title, fleetName, workerEvents)
-
-		for _, ev := range workerEvents {
-			if ev.Content == nil {
-				continue
-			}
-			role := string(ev.Content.Role)
-			for _, part := range ev.Content.Parts {
-				// Skip user-role text (task descriptions), but NOT FunctionResponse
-				// parts which ADK also sends with role="user".
-				if role == "user" && part.FunctionResponse == nil {
-					continue
-				}
-				if part.FunctionCall != nil {
-					result[phaseName] = append(result[phaseName], FleetEventMsg{
-						Type:    "worker_tool_call",
-						Phase:   phaseName,
-						Agent:   agentKey,
-						Message: fmt.Sprintf("[%s/%s] Calling %s", phaseName, agentKey, part.FunctionCall.Name),
-						Detail:  part.FunctionCall.Name,
-						Args:    part.FunctionCall.Args,
-					})
-				}
-				if part.FunctionResponse != nil {
-					result[phaseName] = append(result[phaseName], FleetEventMsg{
-						Type:    "worker_tool_result",
-						Phase:   phaseName,
-						Agent:   agentKey,
-						Message: fmt.Sprintf("[%s/%s] %s returned", phaseName, agentKey, part.FunctionResponse.Name),
-						Detail:  part.FunctionResponse.Name,
-						Result:  summarizeToolResult(part.FunctionResponse.Response),
-					})
-					// If this is an opencode tool response, extract the execution trace
-					// so opencode_* events are reconstructed on page reload.
-					if part.FunctionResponse.Name == "opencode" {
-						result[phaseName] = append(result[phaseName], extractOpenCodeTrace(part.FunctionResponse.Response, phaseName, agentKey)...)
-					}
-				}
-				if part.Text != "" && part.FunctionCall == nil && part.FunctionResponse == nil && !part.Thought {
-					result[phaseName] = append(result[phaseName], FleetEventMsg{
-						Type:    "worker_text",
-						Phase:   phaseName,
-						Agent:   agentKey,
-						Message: part.Text,
-						Text:    part.Text,
-					})
-				}
-			}
-		}
-	}
-
-	return result
-}
-
-// extractOpenCodeTrace converts the opencode tool's persisted trace (stored in the
-// FunctionResponse) into FleetEventMsg entries for the fleet execution panel.
-// The trace field is an array of {type, detail, message, text} objects that mirror
-// the real-time opencode_* progress events.
-func extractOpenCodeTrace(resp map[string]any, phase, agent string) []FleetEventMsg {
-	traceRaw, ok := resp["trace"]
-	if !ok {
-		return nil
-	}
-	traceSlice, ok := traceRaw.([]any)
-	if !ok {
-		return nil
-	}
-
-	var events []FleetEventMsg
-	for _, item := range traceSlice {
-		entry, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		evtType, _ := entry["type"].(string)
-		if evtType == "" {
-			continue
-		}
-		detail, _ := entry["detail"].(string)
-		message, _ := entry["message"].(string)
-		text, _ := entry["text"].(string)
-
-		events = append(events, FleetEventMsg{
-			Type:    evtType,
-			Phase:   phase,
-			Agent:   agent,
-			Detail:  detail,
-			Message: message,
-			Text:    text,
-		})
-	}
-	return events
-}
-
-// extractPhaseInfo derives the phase name and agent key from a worker session.
-// The fleetName parameter (e.g., "software-dev") is used to correctly strip the
-// "fleet-<fleet>-" prefix from titles, since the fleet name may contain hyphens.
-// It supports several title formats set by the fleet tools:
-//   - "fleet-<fleet>-<phase>" (single-agent phase)
-//   - "fleet-<fleet>-<phase>-<agent>-t<N>" (conversation turn)
-//   - "fleet-orchestrator-<fleet>" (orchestrator, no phase)
-func extractPhaseInfo(title string, fleetName string, events []*session.Event) (string, string) {
-	if strings.HasPrefix(title, "fleet-orchestrator-") {
-		return "_orchestrator", ""
-	}
-
-	// Use the known fleet name to strip the exact prefix "fleet-<fleet>-"
-	// This avoids ambiguity when the fleet name contains hyphens.
-	if fleetName != "" {
-		prefix := "fleet-" + fleetName + "-"
-		if strings.HasPrefix(title, prefix) {
-			remainder := strings.TrimPrefix(title, prefix)
-			// Check for conversation turn suffix: <phase>-<agent>-t<N>
-			// Work backwards: last segment is t<N>, second-to-last is agent
-			parts := strings.Split(remainder, "-")
-			if len(parts) >= 3 {
-				lastPart := parts[len(parts)-1]
-				if len(lastPart) > 1 && lastPart[0] == 't' && isDigits(lastPart[1:]) {
-					agentKey := parts[len(parts)-2]
-					phaseName := strings.Join(parts[:len(parts)-2], "-")
-					return phaseName, agentKey
-				}
-			}
-			// Single-agent phase: remainder is the phase name
-			return remainder, ""
-		}
-	}
-
-	// Fallback when fleet name is unknown: try the old heuristic
-	if strings.HasPrefix(title, "fleet-") {
-		rest := strings.TrimPrefix(title, "fleet-")
-		// If the rest contains at least one hyphen, assume the last segment is the phase
-		if idx := strings.LastIndex(rest, "-"); idx > 0 {
-			return rest[idx+1:], ""
-		}
-	}
-
-	// Fall back: scan first user message for phase hints
-	if len(events) > 0 && events[0].Content != nil {
-		for _, part := range events[0].Content.Parts {
-			if part.Text != "" {
-				text := part.Text
-				if idx := strings.Index(text, "## Phase"); idx >= 0 {
-					line := text[idx:]
-					if end := strings.Index(line, "\n"); end > 0 {
-						return strings.TrimSpace(line[8:end]), ""
-					}
-				}
-			}
-		}
-	}
-
-	return "unknown", ""
-}
-
-// isDigits returns true if s is non-empty and contains only ASCII digits.
-func isDigits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 // summarizeToolResult converts a tool response map into a display-friendly value.
@@ -1137,6 +796,49 @@ func truncateResult(s string) string {
 		return s
 	}
 	return s[:maxLen] + "\n\n... (truncated)"
+}
+
+// fleetEventsToMessages converts ADK events from a fleet transcript back into
+// fleet-style message summaries for the frontend.
+func fleetEventsToMessages(events []*session.Event) []FleetMessageSummary {
+	var messages []FleetMessageSummary
+	for _, event := range events {
+		if event.LLMResponse.Content == nil {
+			continue
+		}
+		// Extract text from all parts
+		var text string
+		for _, part := range event.LLMResponse.Content.Parts {
+			if part.Text != "" {
+				text += part.Text
+			}
+		}
+		if text == "" {
+			continue
+		}
+
+		// Determine sender from Author field (set by fleetMessageToEvent)
+		sender := event.Author
+		if sender == "" {
+			// Fallback: infer from role
+			if event.LLMResponse.Content.Role == genai.RoleUser {
+				sender = "human"
+			} else {
+				sender = "agent"
+			}
+		}
+		if sender == "user" {
+			sender = "human"
+		}
+
+		messages = append(messages, FleetMessageSummary{
+			ID:        event.ID,
+			Sender:    sender,
+			Text:      text,
+			Timestamp: event.Timestamp.Format(time.RFC3339Nano),
+		})
+	}
+	return messages
 }
 
 // generateStudioSessionTitle calls the LLM to produce a short session title.

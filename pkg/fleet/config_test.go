@@ -11,12 +11,26 @@ import (
 
 const validFleetYAML = `name: test-fleet
 description: A test fleet
+communication:
+  flow:
+    - role: po
+      talks_to: [human, dev]
+      entry_point: true
+    - role: dev
+      talks_to: [po, qa]
+    - role: qa
+      talks_to: [dev, po]
 agents:
-  dev:
-    persona: developer
+  po:
+    persona: product_owner
     tools:
       - read_file
       - write_file
+    behaviors: |
+      When receiving a request, gather requirements.
+  dev:
+    persona: developer
+    tools: true
     behaviors: |
       When receiving a task, implement it.
   qa:
@@ -24,20 +38,17 @@ agents:
     tools: true
     behaviors: |
       When receiving code, test it.
-suggested_flow:
-  phases:
-    - name: implementation
-      agent: dev
-    - name: testing
-      agent: qa
-  reviews:
-    testing: [implementation]
 settings:
-  max_reviews_per_phase: 3
+  max_turns_per_agent: 15
 `
 
 const delegateFleetYAML = `name: delegate-fleet
 description: Fleet with delegate
+communication:
+  flow:
+    - role: dev
+      talks_to: [human]
+      entry_point: true
 agents:
   dev:
     persona: developer
@@ -68,17 +79,17 @@ func TestLoadFleet_Valid(t *testing.T) {
 	if f.Name != "test-fleet" {
 		t.Errorf("expected name %q, got %q", "test-fleet", f.Name)
 	}
-	if len(f.Agents) != 2 {
-		t.Errorf("expected 2 agents, got %d", len(f.Agents))
+	if len(f.Agents) != 3 {
+		t.Errorf("expected 3 agents, got %d", len(f.Agents))
 	}
 
 	// Check tools parsing
-	dev := f.Agents["dev"]
-	if dev.Tools.All {
-		t.Error("expected dev tools.All to be false")
+	po := f.Agents["po"]
+	if po.Tools.All {
+		t.Error("expected po tools.All to be false")
 	}
-	if len(dev.Tools.Names) != 2 {
-		t.Errorf("expected 2 tool names for dev, got %d", len(dev.Tools.Names))
+	if len(po.Tools.Names) != 2 {
+		t.Errorf("expected 2 tool names for po, got %d", len(po.Tools.Names))
 	}
 
 	qa := f.Agents["qa"]
@@ -86,18 +97,23 @@ func TestLoadFleet_Valid(t *testing.T) {
 		t.Error("expected qa tools.All to be true")
 	}
 
-	// Check suggested flow
-	if f.SuggestedFlow == nil {
-		t.Fatal("expected suggested_flow to be non-nil")
+	// Check communication graph
+	if f.Communication == nil {
+		t.Fatal("expected communication to be non-nil")
 		return
 	}
-	if len(f.SuggestedFlow.Phases) != 2 {
-		t.Errorf("expected 2 phases, got %d", len(f.SuggestedFlow.Phases))
+	if len(f.Communication.Flow) != 3 {
+		t.Errorf("expected 3 flow nodes, got %d", len(f.Communication.Flow))
+	}
+
+	// Check entry point
+	if ep := f.GetEntryPoint(); ep != "po" {
+		t.Errorf("expected entry point %q, got %q", "po", ep)
 	}
 
 	// Check settings
-	if f.Settings.GetMaxReviewsPerPhase() != 3 {
-		t.Errorf("expected max_reviews_per_phase 3, got %d", f.Settings.GetMaxReviewsPerPhase())
+	if f.Settings.GetMaxTurnsPerAgent() != 15 {
+		t.Errorf("expected max_turns_per_agent 15, got %d", f.Settings.GetMaxTurnsPerAgent())
 	}
 }
 
@@ -201,172 +217,175 @@ func TestFleetValidate_DelegateMissingTool(t *testing.T) {
 	}
 }
 
-func TestFleetValidate_LeaderMissingPersona(t *testing.T) {
+func TestFleetValidate_BadMode(t *testing.T) {
 	f := &FleetConfig{
 		Name: "test",
-		Leader: &FleetLeaderConfig{
-			Persona:   "",
-			Behaviors: "lead the team",
-		},
 		Agents: map[string]FleetAgentConfig{
-			"dev": {Persona: "developer", Tools: ToolsConfig{All: true}, Behaviors: "do stuff"},
+			"dev": {Persona: "developer", Tools: ToolsConfig{All: true}, Behaviors: "do stuff", Mode: "invalid"},
 		},
 	}
 	if err := f.Validate(); err == nil {
-		t.Error("expected error for leader with missing persona")
+		t.Error("expected error for invalid mode")
 	}
 }
 
-func TestFleetValidate_LeaderMissingBehaviors(t *testing.T) {
-	f := &FleetConfig{
-		Name: "test",
-		Leader: &FleetLeaderConfig{
-			Persona:   "project_lead",
-			Behaviors: "",
-		},
-		Agents: map[string]FleetAgentConfig{
-			"dev": {Persona: "developer", Tools: ToolsConfig{All: true}, Behaviors: "do stuff"},
-		},
-	}
-	if err := f.Validate(); err == nil {
-		t.Error("expected error for leader with missing behaviors")
-	}
-}
-
-func TestFleetValidate_BadPhaseRef(t *testing.T) {
+func TestFleetValidate_CommunicationBadRole(t *testing.T) {
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
 			"dev": {Persona: "developer", Tools: ToolsConfig{All: true}, Behaviors: "do stuff"},
 		},
-		SuggestedFlow: &FleetSuggestedFlow{
-			Phases: []FleetPhase{
-				{Name: "implementation", Agent: "nonexistent"},
+		Communication: &CommunicationConfig{
+			Flow: []CommunicationNode{
+				{Role: "nonexistent", TalksTo: []string{"dev"}, EntryPoint: true},
 			},
 		},
 	}
 	if err := f.Validate(); err == nil {
-		t.Error("expected error for unknown agent reference in phase")
+		t.Error("expected error for unknown role in communication flow")
 	}
 }
 
-func TestFleetValidate_BadReviewRef(t *testing.T) {
+func TestFleetValidate_CommunicationBadTarget(t *testing.T) {
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
 			"dev": {Persona: "developer", Tools: ToolsConfig{All: true}, Behaviors: "do stuff"},
 		},
-		SuggestedFlow: &FleetSuggestedFlow{
-			Phases: []FleetPhase{
-				{Name: "implementation", Agent: "dev"},
-			},
-			Reviews: map[string][]string{
-				"nonexistent": {"implementation"},
+		Communication: &CommunicationConfig{
+			Flow: []CommunicationNode{
+				{Role: "dev", TalksTo: []string{"nonexistent"}, EntryPoint: true},
 			},
 		},
 	}
 	if err := f.Validate(); err == nil {
-		t.Error("expected error for unknown reviewer phase")
+		t.Error("expected error for unknown target in talks_to")
 	}
 }
 
-func TestFleetValidate_ConversationPhase(t *testing.T) {
+func TestFleetValidate_CommunicationNoEntryPoint(t *testing.T) {
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
-			"architect": {Persona: "architect", Tools: ToolsConfig{All: true}, Behaviors: "design"},
-			"po":        {Persona: "po", Tools: ToolsConfig{All: true}, Behaviors: "requirements"},
+			"dev": {Persona: "developer", Tools: ToolsConfig{All: true}, Behaviors: "do stuff"},
 		},
-		SuggestedFlow: &FleetSuggestedFlow{
-			Phases: []FleetPhase{
-				{Name: "design", Primary: "architect", Reviewers: []string{"po"}},
+		Communication: &CommunicationConfig{
+			Flow: []CommunicationNode{
+				{Role: "dev", TalksTo: []string{"human"}},
+			},
+		},
+	}
+	if err := f.Validate(); err == nil {
+		t.Error("expected error for no entry point in communication")
+	}
+}
+
+func TestFleetValidate_CommunicationHumanAllowed(t *testing.T) {
+	f := &FleetConfig{
+		Name: "test",
+		Agents: map[string]FleetAgentConfig{
+			"po": {Persona: "product_owner", Tools: ToolsConfig{All: true}, Behaviors: "requirements"},
+		},
+		Communication: &CommunicationConfig{
+			Flow: []CommunicationNode{
+				{Role: "po", TalksTo: []string{"human"}, EntryPoint: true},
 			},
 		},
 	}
 	if err := f.Validate(); err != nil {
-		t.Errorf("expected valid conversation phase, got error: %v", err)
+		t.Errorf("expected valid communication with human target, got error: %v", err)
 	}
 }
 
-func TestFleetValidate_ConversationPhase_BadPrimary(t *testing.T) {
+func TestCommunicationHelpers(t *testing.T) {
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
-			"po": {Persona: "po", Tools: ToolsConfig{All: true}, Behaviors: "requirements"},
+			"po":  {Persona: "po", Tools: ToolsConfig{All: true}, Behaviors: "requirements"},
+			"dev": {Persona: "dev", Tools: ToolsConfig{All: true}, Behaviors: "code"},
+			"qa":  {Persona: "qa", Tools: ToolsConfig{All: true}, Behaviors: "test"},
 		},
-		SuggestedFlow: &FleetSuggestedFlow{
-			Phases: []FleetPhase{
-				{Name: "design", Primary: "nonexistent", Reviewers: []string{"po"}},
+		Communication: &CommunicationConfig{
+			Flow: []CommunicationNode{
+				{Role: "po", TalksTo: []string{"human", "dev"}, EntryPoint: true},
+				{Role: "dev", TalksTo: []string{"po", "qa"}},
+				{Role: "qa", TalksTo: []string{"dev", "po"}},
 			},
 		},
 	}
-	if err := f.Validate(); err == nil {
-		t.Error("expected error for unknown primary agent in conversation phase")
+
+	// GetEntryPoint
+	if ep := f.GetEntryPoint(); ep != "po" {
+		t.Errorf("GetEntryPoint() = %q, want %q", ep, "po")
+	}
+
+	// CanTalkTo
+	if !f.CanTalkTo("po", "human") {
+		t.Error("expected po to be able to talk to human")
+	}
+	if !f.CanTalkTo("po", "dev") {
+		t.Error("expected po to be able to talk to dev")
+	}
+	if f.CanTalkTo("po", "qa") {
+		t.Error("expected po NOT to be able to talk to qa")
+	}
+	if !f.CanTalkTo("dev", "qa") {
+		t.Error("expected dev to be able to talk to qa")
+	}
+	if f.CanTalkTo("dev", "human") {
+		t.Error("expected dev NOT to be able to talk to human")
+	}
+
+	// CanTalkToHuman
+	if !f.CanTalkToHuman("po") {
+		t.Error("expected po to be able to talk to human")
+	}
+	if f.CanTalkToHuman("dev") {
+		t.Error("expected dev NOT to be able to talk to human")
+	}
+
+	// GetTalksTo
+	poTargets := f.GetTalksTo("po")
+	if len(poTargets) != 2 || poTargets[0] != "human" || poTargets[1] != "dev" {
+		t.Errorf("GetTalksTo(po) = %v, want [human dev]", poTargets)
+	}
+
+	// GetFlowOrder
+	order := f.GetFlowOrder()
+	if len(order) != 3 || order[0] != "po" || order[1] != "dev" || order[2] != "qa" {
+		t.Errorf("GetFlowOrder() = %v, want [po dev qa]", order)
+	}
+
+	// GetNextInFlow
+	if next := f.GetNextInFlow("po"); next != "dev" {
+		t.Errorf("GetNextInFlow(po) = %q, want %q", next, "dev")
+	}
+	if next := f.GetNextInFlow("dev"); next != "qa" {
+		t.Errorf("GetNextInFlow(dev) = %q, want %q", next, "qa")
+	}
+	if next := f.GetNextInFlow("qa"); next != "" {
+		t.Errorf("GetNextInFlow(qa) = %q, want empty", next)
 	}
 }
 
-func TestFleetValidate_ConversationPhase_NoReviewers(t *testing.T) {
-	// Primary without reviewers is now a valid single-agent phase
-	f := &FleetConfig{
-		Name: "test",
-		Agents: map[string]FleetAgentConfig{
-			"architect": {Persona: "architect", Tools: ToolsConfig{All: true}, Behaviors: "design"},
-		},
-		SuggestedFlow: &FleetSuggestedFlow{
-			Phases: []FleetPhase{
-				{Name: "design", Primary: "architect"},
-			},
-		},
-	}
-	if err := f.Validate(); err != nil {
-		t.Errorf("expected valid single-agent phase with primary, got error: %v", err)
-	}
-}
-
-func TestFleetValidate_ConversationPhase_BadReviewer(t *testing.T) {
-	f := &FleetConfig{
-		Name: "test",
-		Agents: map[string]FleetAgentConfig{
-			"architect": {Persona: "architect", Tools: ToolsConfig{All: true}, Behaviors: "design"},
-		},
-		SuggestedFlow: &FleetSuggestedFlow{
-			Phases: []FleetPhase{
-				{Name: "design", Primary: "architect", Reviewers: []string{"nonexistent"}},
-			},
-		},
-	}
-	if err := f.Validate(); err == nil {
-		t.Error("expected error for unknown reviewer agent in conversation phase")
-	}
-}
-
-func TestFleetPhase_IsConversation(t *testing.T) {
-	// Single-agent via Agent field (backward compat)
-	singleAgent := FleetPhase{Name: "impl", Agent: "dev"}
-	if singleAgent.IsConversation() {
-		t.Error("expected single-agent phase (Agent field) not to be a conversation")
-	}
-	singleAgent.NormalizePrimary()
-	if singleAgent.GetPrimaryAgent() != "dev" {
-		t.Errorf("expected GetPrimaryAgent() = %q, got %q", "dev", singleAgent.GetPrimaryAgent())
+func TestAgentConfig_GetMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		mode     string
+		expected string
+	}{
+		{name: "empty defaults to agentic", mode: "", expected: "agentic"},
+		{name: "explicit simple", mode: "simple", expected: "simple"},
+		{name: "explicit agentic", mode: "agentic", expected: "agentic"},
 	}
 
-	// Single-agent via Primary field (no reviewers)
-	singlePrimary := FleetPhase{Name: "impl", Primary: "dev"}
-	if singlePrimary.IsConversation() {
-		t.Error("expected single-agent phase (Primary, no reviewers) not to be a conversation")
-	}
-	if singlePrimary.GetPrimaryAgent() != "dev" {
-		t.Errorf("expected GetPrimaryAgent() = %q, got %q", "dev", singlePrimary.GetPrimaryAgent())
-	}
-
-	// Conversation phase (Primary + Reviewers)
-	conv := FleetPhase{Name: "design", Primary: "architect", Reviewers: []string{"po"}}
-	if !conv.IsConversation() {
-		t.Error("expected conversation phase to be identified as conversation")
-	}
-	if conv.GetPrimaryAgent() != "architect" {
-		t.Errorf("expected GetPrimaryAgent() = %q, got %q", "architect", conv.GetPrimaryAgent())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &FleetAgentConfig{Mode: tt.mode}
+			if got := a.GetMode(); got != tt.expected {
+				t.Errorf("GetMode() = %q, want %q", got, tt.expected)
+			}
+		})
 	}
 }
 
@@ -431,8 +450,8 @@ func TestLoadFleets_NonExistentDir(t *testing.T) {
 
 func TestFleetSettings_Defaults(t *testing.T) {
 	s := FleetSettings{}
-	if s.GetMaxReviewsPerPhase() != 2 {
-		t.Errorf("expected default max_reviews_per_phase 2, got %d", s.GetMaxReviewsPerPhase())
+	if s.GetMaxTurnsPerAgent() != 20 {
+		t.Errorf("expected default max_turns_per_agent 20, got %d", s.GetMaxTurnsPerAgent())
 	}
 }
 
@@ -441,6 +460,10 @@ func TestRegistry_Basic(t *testing.T) {
 	personaDir := t.TempDir()
 
 	// Create persona files
+	poPersona := `name: Product Owner
+description: Gathers requirements
+prompt: You are a product owner.
+`
 	devPersona := `name: Developer
 description: Writes code
 prompt: You are a developer.
@@ -449,6 +472,10 @@ prompt: You are a developer.
 description: Tests code
 prompt: You are a QA engineer.
 `
+	if err := os.WriteFile(filepath.Join(personaDir, "product_owner.yaml"), []byte(poPersona), 0644); err != nil {
+		t.Fatal(err)
+		return
+	}
 	if err := os.WriteFile(filepath.Join(personaDir, "developer.yaml"), []byte(devPersona), 0644); err != nil {
 		t.Fatal(err)
 		return
@@ -554,13 +581,13 @@ func TestRegistry_SaveAndDelete(t *testing.T) {
 	}
 }
 
-func TestBuildSubAgentPrompt(t *testing.T) {
+func TestBuildAgentPrompt(t *testing.T) {
 	p := &persona.PersonaConfig{
 		Name:   "Developer",
 		Prompt: "You are a developer.",
 	}
 
-	agent := FleetAgentConfig{
+	agentCfg := FleetAgentConfig{
 		Persona:   "developer",
 		Behaviors: "When receiving a task, implement it carefully.",
 		Delegate: &DelegateConfig{
@@ -570,7 +597,23 @@ func TestBuildSubAgentPrompt(t *testing.T) {
 		},
 	}
 
-	prompt := BuildSubAgentPrompt(p, agent)
+	fleetCfg := &FleetConfig{
+		Name: "test",
+		Communication: &CommunicationConfig{
+			Flow: []CommunicationNode{
+				{Role: "po", TalksTo: []string{"human", "dev"}, EntryPoint: true},
+				{Role: "dev", TalksTo: []string{"po", "qa"}},
+				{Role: "qa", TalksTo: []string{"dev"}},
+			},
+		},
+		Agents: map[string]FleetAgentConfig{
+			"po":  agentCfg,
+			"dev": agentCfg,
+			"qa":  agentCfg,
+		},
+	}
+
+	prompt := BuildAgentPrompt(p, agentCfg, fleetCfg, "dev")
 
 	if !strings.Contains(prompt, "You are a developer.") {
 		t.Error("expected prompt to contain persona prompt")
@@ -580,6 +623,15 @@ func TestBuildSubAgentPrompt(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "implement it carefully") {
 		t.Error("expected prompt to contain behavior content")
+	}
+	if !strings.Contains(prompt, "Communication Rules") {
+		t.Error("expected prompt to contain communication rules section")
+	}
+	if !strings.Contains(prompt, "@po") {
+		t.Error("expected prompt to mention communication targets")
+	}
+	if !strings.Contains(prompt, "@qa") {
+		t.Error("expected prompt to mention communication targets")
 	}
 	if !strings.Contains(prompt, "Delegate Tool") {
 		t.Error("expected prompt to contain delegate execution section")
@@ -595,19 +647,33 @@ func TestBuildSubAgentPrompt(t *testing.T) {
 	}
 }
 
-func TestBuildSubAgentPrompt_NoDelegate(t *testing.T) {
+func TestBuildAgentPrompt_NoDelegate(t *testing.T) {
 	p := &persona.PersonaConfig{
 		Name:   "QA",
 		Prompt: "You are a QA engineer.",
 	}
 
-	agent := FleetAgentConfig{
+	agentCfg := FleetAgentConfig{
 		Persona:   "qa_engineer",
 		Tools:     ToolsConfig{All: true},
 		Behaviors: "Test everything.",
 	}
 
-	prompt := BuildSubAgentPrompt(p, agent)
+	fleetCfg := &FleetConfig{
+		Name: "test",
+		Communication: &CommunicationConfig{
+			Flow: []CommunicationNode{
+				{Role: "qa", TalksTo: []string{"dev"}, EntryPoint: true},
+				{Role: "dev", TalksTo: []string{"qa"}},
+			},
+		},
+		Agents: map[string]FleetAgentConfig{
+			"qa":  agentCfg,
+			"dev": {Persona: "dev", Tools: ToolsConfig{All: true}, Behaviors: "code"},
+		},
+	}
+
+	prompt := BuildAgentPrompt(p, agentCfg, fleetCfg, "qa")
 
 	if !strings.Contains(prompt, "You are a QA engineer.") {
 		t.Error("expected prompt to contain persona prompt")
@@ -627,37 +693,32 @@ func TestBuildSystemPromptSection_Empty(t *testing.T) {
 	}
 }
 
-func TestBuildSystemPromptSection_WithLeader(t *testing.T) {
+func TestBuildSystemPromptSection_WithCommunication(t *testing.T) {
 	fleets := []FleetSummary{
-		{Key: "dev", Name: "software-dev", Description: "Dev team", AgentCount: 2},
+		{Key: "dev", Name: "software-dev", Description: "Dev team", AgentCount: 3},
 	}
 
 	fleetConfigs := map[string]*FleetConfig{
 		"dev": {
 			Name:        "software-dev",
 			Description: "Dev team",
-			Leader: &FleetLeaderConfig{
-				Persona:   "project_lead",
-				Behaviors: "Delegate ALL work via run_fleet_phase.",
+			Communication: &CommunicationConfig{
+				Flow: []CommunicationNode{
+					{Role: "po", TalksTo: []string{"human", "dev"}, EntryPoint: true},
+					{Role: "dev", TalksTo: []string{"po", "qa"}},
+					{Role: "qa", TalksTo: []string{"dev", "po"}},
+				},
 			},
 			Agents: map[string]FleetAgentConfig{
-				"developer": {Persona: "developer", Tools: ToolsConfig{All: true}, Behaviors: "code"},
-				"qa":        {Persona: "qa_engineer", Delegate: &DelegateConfig{Tool: "opencode"}, Behaviors: "test"},
-			},
-			SuggestedFlow: &FleetSuggestedFlow{
-				Phases: []FleetPhase{
-					{Name: "implementation", Agent: "developer"},
-					{Name: "testing", Agent: "qa"},
-				},
+				"po":  {Persona: "product_owner", Tools: ToolsConfig{All: true}, Behaviors: "requirements"},
+				"dev": {Persona: "developer", Delegate: &DelegateConfig{Tool: "opencode"}, Behaviors: "code"},
+				"qa":  {Persona: "qa_engineer", Tools: ToolsConfig{All: true}, Behaviors: "test"},
 			},
 		},
 	}
 
 	personaConfigs := map[string]*persona.PersonaConfig{
-		"project_lead": {
-			Name:   "Project Lead",
-			Prompt: "You are a Project Lead. You delegate all work.",
-		},
+		"product_owner": {Name: "Product Owner", Prompt: "You are a PO."},
 	}
 
 	result := BuildSystemPromptSection(
@@ -672,65 +733,14 @@ func TestBuildSystemPromptSection_WithLeader(t *testing.T) {
 		},
 	)
 
-	// With the new approach, the system prompt uses lightweight fleet listing
-	// (leader persona is only injected into the orchestrator sub-agent, not here)
 	if !strings.Contains(result, "Fleet-Based Development") {
 		t.Error("expected fleet guidance section header")
-	}
-	if !strings.Contains(result, "fleet_plan") {
-		t.Error("expected fleet_plan tool reference")
-	}
-	if !strings.Contains(result, "fleet_execute") {
-		t.Error("expected fleet_execute tool reference")
 	}
 	if !strings.Contains(result, "software-dev") {
 		t.Error("expected fleet name in listing")
 	}
-	if !strings.Contains(result, "implementation") {
-		t.Error("expected workflow phase names")
-	}
-}
-
-func TestBuildSystemPromptSection_NoLeader(t *testing.T) {
-	fleets := []FleetSummary{
-		{Key: "dev", Name: "software-dev", Description: "Dev team", AgentCount: 2},
-	}
-
-	fleetConfigs := map[string]*FleetConfig{
-		"dev": {
-			Name:        "software-dev",
-			Description: "Dev team",
-			Agents: map[string]FleetAgentConfig{
-				"developer": {Persona: "developer", Tools: ToolsConfig{All: true}, Behaviors: "code"},
-				"qa":        {Persona: "qa_engineer", Tools: ToolsConfig{All: true}, Behaviors: "test"},
-			},
-			SuggestedFlow: &FleetSuggestedFlow{
-				Phases: []FleetPhase{
-					{Name: "implementation", Agent: "developer"},
-					{Name: "testing", Agent: "qa"},
-				},
-			},
-		},
-	}
-
-	result := BuildSystemPromptSection(
-		fleets,
-		func(key string) (*FleetConfig, bool) {
-			f, ok := fleetConfigs[key]
-			return f, ok
-		},
-		nil,
-	)
-
-	// Both leader and non-leader fleets use the same lightweight listing now
-	if !strings.Contains(result, "Fleet-Based Development") {
-		t.Error("expected fleet guidance section header")
-	}
-	if !strings.Contains(result, "software-dev") {
-		t.Error("expected fleet name")
-	}
-	if !strings.Contains(result, "implementation → testing") {
-		t.Error("expected workflow phases")
+	if !strings.Contains(result, "po") {
+		t.Error("expected agent names in flow")
 	}
 }
 

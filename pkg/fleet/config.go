@@ -10,34 +10,47 @@ import (
 )
 
 // FleetConfig represents a fleet definition loaded from YAML.
-// Fleets compose personas into teams with behavioral rules, tool/delegate
-// assignments, and a suggested workflow.
+// In v2, fleets define a communication graph (who talks to whom) instead of
+// a pipeline. Agents are autonomous actors that react to messages on a shared
+// channel and route work to each other via explicit @mentions.
 type FleetConfig struct {
 	Name          string                      `yaml:"name" json:"name"`
 	Description   string                      `yaml:"description,omitempty" json:"description,omitempty"`
-	Leader        *FleetLeaderConfig          `yaml:"leader,omitempty" json:"leader,omitempty"`
+	Communication *CommunicationConfig        `yaml:"communication,omitempty" json:"communication,omitempty"`
 	Agents        map[string]FleetAgentConfig `yaml:"agents" json:"agents"`
-	SuggestedFlow *FleetSuggestedFlow         `yaml:"suggested_flow,omitempty" json:"suggested_flow,omitempty"`
 	Settings      FleetSettings               `yaml:"settings,omitempty" json:"settings,omitempty"`
 }
 
-// FleetLeaderConfig defines the orchestrator for the fleet.
-// The leader persona is injected into the main ChatAgent's system prompt
-// when this fleet is active. The leader manages the team by delegating
-// work via run_fleet_phase and reviewing results.
-type FleetLeaderConfig struct {
-	Persona   string `yaml:"persona" json:"persona"`
-	Behaviors string `yaml:"behaviors" json:"behaviors"`
+// CommunicationConfig defines the communication graph for the fleet.
+// It specifies which agents can talk to each other and in what logical order.
+type CommunicationConfig struct {
+	Flow []CommunicationNode `yaml:"flow" json:"flow"`
+}
+
+// CommunicationNode defines one agent's position in the communication graph.
+type CommunicationNode struct {
+	Role       string   `yaml:"role" json:"role"`                                   // Agent key (e.g., "po", "architect")
+	TalksTo    []string `yaml:"talks_to" json:"talks_to"`                           // Who this agent can communicate with (agent keys or "human")
+	EntryPoint bool     `yaml:"entry_point,omitempty" json:"entry_point,omitempty"` // True if this agent receives initial human requests
 }
 
 // FleetAgentConfig defines a single agent slot within a fleet.
 // It references a persona and adds fleet-specific tool access, delegate
-// configuration, and behavioral rules.
+// configuration, behavioral rules, and execution mode.
 type FleetAgentConfig struct {
 	Persona   string          `yaml:"persona" json:"persona"`
+	Mode      string          `yaml:"mode,omitempty" json:"mode,omitempty"` // "simple" or "agentic" (default: "agentic")
 	Tools     ToolsConfig     `yaml:"tools,omitempty" json:"tools,omitempty"`
 	Delegate  *DelegateConfig `yaml:"delegate,omitempty" json:"delegate,omitempty"`
 	Behaviors string          `yaml:"behaviors" json:"behaviors"`
+}
+
+// GetMode returns the agent execution mode, defaulting to "agentic".
+func (a *FleetAgentConfig) GetMode() string {
+	if a.Mode == "" {
+		return "agentic"
+	}
+	return a.Mode
 }
 
 // ToolsConfig handles the polymorphic tools field which can be either
@@ -92,56 +105,99 @@ type DelegateConfig struct {
 	Env         []string       `yaml:"env,omitempty" json:"env,omitempty"` // Environment variable names to forward to the delegate
 }
 
-// FleetSuggestedFlow defines a template workflow.
-type FleetSuggestedFlow struct {
-	Phases  []FleetPhase        `yaml:"phases" json:"phases"`
-	Reviews map[string][]string `yaml:"reviews,omitempty" json:"reviews,omitempty"`
-}
-
-// FleetPhase is a single step in the suggested workflow.
-// Every phase has a Primary agent. If Reviewers are present, it becomes a
-// multi-agent conversation phase; otherwise it runs as a single-agent phase.
-//
-// The Agent field is a deprecated alias for Primary (for backward compatibility
-// with older YAML files). On load, Agent is normalized to Primary.
-type FleetPhase struct {
-	Name      string   `yaml:"name" json:"name"`
-	Agent     string   `yaml:"agent,omitempty" json:"agent,omitempty"`         // Deprecated: use Primary instead
-	Primary   string   `yaml:"primary,omitempty" json:"primary,omitempty"`     // Agent that executes/produces deliverables
-	Reviewers []string `yaml:"reviewers,omitempty" json:"reviewers,omitempty"` // Optional: agents that review/discuss (enables conversation mode)
-}
-
-// NormalizePrimary copies Agent to Primary if Primary is empty (backward compat).
-func (p *FleetPhase) NormalizePrimary() {
-	if p.Primary == "" && p.Agent != "" {
-		p.Primary = p.Agent
-	}
-}
-
-// IsConversation returns true if this phase uses the multi-agent conversation model.
-func (p *FleetPhase) IsConversation() bool {
-	return len(p.Reviewers) > 0
-}
-
-// GetPrimaryAgent returns the primary agent key for this phase.
-func (p *FleetPhase) GetPrimaryAgent() string {
-	if p.Primary != "" {
-		return p.Primary
-	}
-	return p.Agent // backward compat fallback
-}
-
 // FleetSettings holds fleet-level configuration.
 type FleetSettings struct {
-	MaxReviewsPerPhase int `yaml:"max_reviews_per_phase,omitempty" json:"max_reviews_per_phase,omitempty"`
+	MaxTurnsPerAgent int `yaml:"max_turns_per_agent,omitempty" json:"max_turns_per_agent,omitempty"` // Max LLM turns when an agent is activated (0 = use system default)
 }
 
-// GetMaxReviewsPerPhase returns the configured max or a default of 2.
-func (s *FleetSettings) GetMaxReviewsPerPhase() int {
-	if s.MaxReviewsPerPhase <= 0 {
-		return 2
+// GetMaxTurnsPerAgent returns the configured max or a default of 20.
+func (s *FleetSettings) GetMaxTurnsPerAgent() int {
+	if s.MaxTurnsPerAgent <= 0 {
+		return 20
 	}
-	return s.MaxReviewsPerPhase
+	return s.MaxTurnsPerAgent
+}
+
+// --- Communication graph helpers ---
+
+// GetEntryPoint returns the agent key marked as entry_point in the communication graph.
+// If no entry point is defined, returns the first agent in the flow.
+func (f *FleetConfig) GetEntryPoint() string {
+	if f.Communication == nil || len(f.Communication.Flow) == 0 {
+		return ""
+	}
+	for _, node := range f.Communication.Flow {
+		if node.EntryPoint {
+			return node.Role
+		}
+	}
+	// Fallback: first agent in the flow
+	return f.Communication.Flow[0].Role
+}
+
+// CanTalkTo checks whether agent 'from' is allowed to talk to agent 'to'
+// according to the communication graph.
+func (f *FleetConfig) CanTalkTo(from, to string) bool {
+	if f.Communication == nil {
+		return false
+	}
+	for _, node := range f.Communication.Flow {
+		if node.Role == from {
+			for _, target := range node.TalksTo {
+				if target == to {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	return false
+}
+
+// GetTalksTo returns the list of targets an agent can communicate with.
+func (f *FleetConfig) GetTalksTo(agentKey string) []string {
+	if f.Communication == nil {
+		return nil
+	}
+	for _, node := range f.Communication.Flow {
+		if node.Role == agentKey {
+			return node.TalksTo
+		}
+	}
+	return nil
+}
+
+// GetFlowOrder returns the logical order of agents from the communication graph.
+// This is the order in which agents appear in the flow, representing the
+// natural progression (e.g., PO -> architect -> dev -> QA -> security).
+func (f *FleetConfig) GetFlowOrder() []string {
+	if f.Communication == nil {
+		return nil
+	}
+	order := make([]string, 0, len(f.Communication.Flow))
+	for _, node := range f.Communication.Flow {
+		if node.Role != "human" {
+			order = append(order, node.Role)
+		}
+	}
+	return order
+}
+
+// GetNextInFlow returns the next agent in the logical flow after the given agent.
+// Returns empty string if the agent is last or not found.
+func (f *FleetConfig) GetNextInFlow(agentKey string) string {
+	order := f.GetFlowOrder()
+	for i, role := range order {
+		if role == agentKey && i+1 < len(order) {
+			return order[i+1]
+		}
+	}
+	return ""
+}
+
+// CanTalkToHuman checks whether an agent is allowed to talk to the human.
+func (f *FleetConfig) CanTalkToHuman(agentKey string) bool {
+	return f.CanTalkTo(agentKey, "human")
 }
 
 // Validate checks that the fleet config is internally consistent.
@@ -155,16 +211,6 @@ func (f *FleetConfig) Validate() error {
 		return fmt.Errorf("fleet %q: at least one agent is required", f.Name)
 	}
 
-	// Validate leader if present
-	if f.Leader != nil {
-		if strings.TrimSpace(f.Leader.Persona) == "" {
-			return fmt.Errorf("fleet %q: leader persona reference is required", f.Name)
-		}
-		if strings.TrimSpace(f.Leader.Behaviors) == "" {
-			return fmt.Errorf("fleet %q: leader behaviors are required", f.Name)
-		}
-	}
-
 	for key, agent := range f.Agents {
 		if strings.TrimSpace(agent.Persona) == "" {
 			return fmt.Errorf("fleet %q agent %q: persona reference is required", f.Name, key)
@@ -172,7 +218,7 @@ func (f *FleetConfig) Validate() error {
 		if strings.TrimSpace(agent.Behaviors) == "" {
 			return fmt.Errorf("fleet %q agent %q: behaviors are required", f.Name, key)
 		}
-		// Agent must have either tools or a delegate (or both for validation tools)
+		// Agent must have either tools or a delegate (or both)
 		if agent.Tools.IsEmpty() && agent.Delegate == nil {
 			return fmt.Errorf("fleet %q agent %q: must have tools or a delegate configured", f.Name, key)
 		}
@@ -181,49 +227,39 @@ func (f *FleetConfig) Validate() error {
 				return fmt.Errorf("fleet %q agent %q: delegate tool name is required", f.Name, key)
 			}
 		}
+		// Validate mode if specified
+		if agent.Mode != "" && agent.Mode != "simple" && agent.Mode != "agentic" {
+			return fmt.Errorf("fleet %q agent %q: mode must be 'simple' or 'agentic', got %q", f.Name, key, agent.Mode)
+		}
 	}
 
-	// Validate suggested flow references
-	if f.SuggestedFlow != nil {
-		phaseNames := make(map[string]bool)
-		for i := range f.SuggestedFlow.Phases {
-			phase := &f.SuggestedFlow.Phases[i]
-
-			// Normalize deprecated Agent -> Primary
-			phase.NormalizePrimary()
-
-			if strings.TrimSpace(phase.Name) == "" {
-				return fmt.Errorf("fleet %q: phase name is required", f.Name)
+	// Validate communication graph
+	if f.Communication != nil {
+		hasEntryPoint := false
+		for _, node := range f.Communication.Flow {
+			if strings.TrimSpace(node.Role) == "" {
+				return fmt.Errorf("fleet %q communication: role is required for each flow node", f.Name)
 			}
-
-			// Primary is required for all phases
-			if strings.TrimSpace(phase.Primary) == "" {
-				return fmt.Errorf("fleet %q phase %q: primary agent is required", f.Name, phase.Name)
-			}
-			if _, ok := f.Agents[phase.Primary]; !ok {
-				return fmt.Errorf("fleet %q phase %q: primary references unknown agent %q", f.Name, phase.Name, phase.Primary)
-			}
-
-			// Validate reviewers if present (conversation mode)
-			for _, r := range phase.Reviewers {
-				if _, ok := f.Agents[r]; !ok {
-					return fmt.Errorf("fleet %q phase %q: reviewer references unknown agent %q", f.Name, phase.Name, r)
+			// Role must reference a defined agent (unless it's "human")
+			if node.Role != "human" {
+				if _, ok := f.Agents[node.Role]; !ok {
+					return fmt.Errorf("fleet %q communication: role %q references unknown agent", f.Name, node.Role)
 				}
 			}
-
-			phaseNames[phase.Name] = true
+			// Validate talks_to targets
+			for _, target := range node.TalksTo {
+				if target != "human" {
+					if _, ok := f.Agents[target]; !ok {
+						return fmt.Errorf("fleet %q communication: %q talks_to unknown agent %q", f.Name, node.Role, target)
+					}
+				}
+			}
+			if node.EntryPoint {
+				hasEntryPoint = true
+			}
 		}
-
-		// Validate review targets
-		for reviewer, targets := range f.SuggestedFlow.Reviews {
-			if !phaseNames[reviewer] {
-				return fmt.Errorf("fleet %q reviews: reviewer %q is not a defined phase", f.Name, reviewer)
-			}
-			for _, target := range targets {
-				if !phaseNames[target] {
-					return fmt.Errorf("fleet %q reviews: review target %q is not a defined phase", f.Name, target)
-				}
-			}
+		if len(f.Communication.Flow) > 0 && !hasEntryPoint {
+			return fmt.Errorf("fleet %q communication: at least one agent must be marked as entry_point", f.Name)
 		}
 	}
 
@@ -233,13 +269,6 @@ func (f *FleetConfig) Validate() error {
 // ValidatePersonaRefs checks that all persona references in the fleet
 // can be resolved. The lookup function should return true if the persona key exists.
 func (f *FleetConfig) ValidatePersonaRefs(personaExists func(key string) bool) error {
-	// Check leader persona
-	if f.Leader != nil {
-		if !personaExists(f.Leader.Persona) {
-			return fmt.Errorf("fleet %q leader: persona %q not found", f.Name, f.Leader.Persona)
-		}
-	}
-
 	for agentKey, agent := range f.Agents {
 		if !personaExists(agent.Persona) {
 			return fmt.Errorf("fleet %q agent %q: persona %q not found", f.Name, agentKey, agent.Persona)

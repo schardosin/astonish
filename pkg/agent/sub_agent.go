@@ -38,8 +38,7 @@ type SubAgentTask struct {
 
 	// CustomPrompt, when true, uses Instructions directly as the LLM system prompt
 	// instead of wrapping it with buildChildPrompt(). This is used by fleet agents
-	// that build their own complete prompt (orchestrator via BuildOrchestratorPrompt,
-	// workers via BuildSubAgentPrompt).
+	// that build their own complete prompt (via fleet.BuildAgentPrompt).
 	CustomPrompt bool
 
 	// TimeoutOverride, when > 0, overrides the SubAgentManager's Config.TaskTimeout
@@ -77,14 +76,15 @@ type TaskResult struct {
 // SubAgentManager orchestrates the execution of sub-agent tasks.
 type SubAgentManager struct {
 	// Parent context
-	LLM            model.LLM          // Parent's LLM (used for children unless overridden)
-	Tools          []tool.Tool        // All internal tools available
-	FleetTools     []tool.Tool        // Fleet-only tools (e.g., run_fleet_phase) not in main agent's tool list
-	Toolsets       []tool.Toolset     // MCP toolsets
-	SessionService adksession.Service // Session persistence
-	MemoryManager  *memory.Manager    // Memory manager for context injection (nil = disabled)
-	AppName        string             // Application name for sessions
-	UserID         string             // User ID for sessions
+	LLM            model.LLM                    // Parent's LLM (used for children unless overridden)
+	Tools          []tool.Tool                  // All internal tools available
+	FleetTools     []tool.Tool                  // Fleet-only tools (e.g., run_fleet_phase) not in main agent's tool list
+	Toolsets       []tool.Toolset               // MCP toolsets
+	SessionService adksession.Service           // Session persistence
+	MemoryManager  *memory.Manager              // Memory manager for context injection (nil = disabled)
+	Compactor      *persistentsession.Compactor // Context window compactor for sub-agents (nil = disabled)
+	AppName        string                       // Application name for sessions
+	UserID         string                       // User ID for sessions
 
 	// Configuration
 	Config SubAgentConfig
@@ -100,9 +100,6 @@ var excludedChildTools = map[string]bool{
 	"schedule_job":      true, // Children can't schedule jobs
 	"save_credential":   true, // Children can't modify credentials
 	"remove_credential": true, // Children can't remove credentials
-	"fleet_plan":        true, // Fleet planning is main-agent only
-	"fleet_execute":     true, // Fleet execution is main-agent only
-	"run_fleet_phase":   true, // Fleet phases are orchestrator-only (via FleetTools)
 	"opencode":          true, // OpenCode delegation is fleet-agent-only (via FleetTools)
 }
 
@@ -225,13 +222,21 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		_ = fs.SetSessionTitle(childSessionID, task.Name)
 	}
 
+	// Wire context compaction for sub-agents to prevent exceeding the context window
+	// during long multi-step tool work (e.g., fleet agents reading/writing many files).
+	var beforeModelCallbacks []llmagent.BeforeModelCallback
+	if m.Compactor != nil {
+		beforeModelCallbacks = append(beforeModelCallbacks, m.Compactor.BeforeModelCallback())
+	}
+
 	// Create child LLM agent via ADK
 	childAgent, err := llmagent.New(llmagent.Config{
-		Name:        task.Name,
-		Model:       m.LLM,
-		Instruction: childPrompt,
-		Tools:       childTools,
-		Toolsets:    m.filterToolsets(),
+		Name:                 task.Name,
+		Model:                m.LLM,
+		Instruction:          childPrompt,
+		Tools:                childTools,
+		Toolsets:             m.filterToolsets(),
+		BeforeModelCallbacks: beforeModelCallbacks,
 	})
 	if err != nil {
 		return TaskResult{

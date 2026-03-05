@@ -246,7 +246,6 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 		if input == "" {
 			continue
 		}
-		fleetRequested := false
 		if strings.EqualFold(input, "exit") || strings.EqualFold(input, "quit") {
 			break
 		}
@@ -392,33 +391,17 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 					fmt.Println(tools.ListAvailableFleets())
 					fmt.Println()
 				} else {
-					// /fleet <task>: strip prefix, mark as fleet-requested, fall through
-					input = fleetTask
-					fleetRequested = true
+					fmt.Printf("%sFleet mode is available via Studio UI or the fleet CLI command.%s\n", ColorCyan, ColorReset)
+					fmt.Printf("Use: astonish fleet start --fleet <key>\n\n")
 				}
 			default:
 				fmt.Printf("Unknown command: %s. Type /help for available commands.\n\n", input)
 			}
-			// If /fleet rewrote the input, fall through to send it as a message.
-			// Otherwise (all other commands), continue to next iteration.
-			if !fleetRequested {
-				continue
-			}
+			continue
 		}
 
 		// Send message to agent
-		var userMsg *genai.Content
-		if fleetRequested {
-			userMsg = &genai.Content{
-				Role: genai.RoleUser,
-				Parts: []*genai.Part{
-					genai.NewPartFromText("[FLEET MODE] Use fleet_plan to create a plan for this task, then fleet_execute to run it. Do NOT do the work yourself."),
-					genai.NewPartFromText(input),
-				},
-			}
-		} else {
-			userMsg = genai.NewContentFromText(input, genai.RoleUser)
-		}
+		userMsg := genai.NewContentFromText(input, genai.RoleUser)
 
 		// Wait for background indexing to complete before the first agent call.
 		// This ensures memory_search and flow matching have indexed data available.
@@ -448,46 +431,6 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 		inToolBox := false
 		lastEventWasTool := false
 		spinnerStopped := false
-
-		// Start fleet progress monitor: updates spinner text with fleet progress events.
-		// This goroutine polls for the fleet progress channel (created when fleet_execute
-		// is called) and sends SpinnerTextMsg to update the spinner with real-time status.
-		fleetCtx, fleetCancel := context.WithCancel(ctx)
-		fleetProgressDone := make(chan struct{})
-		go func() {
-			defer close(fleetProgressDone)
-			ticker := time.NewTicker(200 * time.Millisecond)
-			defer ticker.Stop()
-
-			var ch <-chan tools.FleetProgressEvent
-			for {
-				select {
-				case <-fleetCtx.Done():
-					return
-				case <-ticker.C:
-					ch = tools.GetFleetProgressCh(sess.ID())
-					if ch != nil {
-						ticker.Stop()
-						goto stream
-					}
-				}
-			}
-		stream:
-			for {
-				select {
-				case <-fleetCtx.Done():
-					return
-				case evt, ok := <-ch:
-					if !ok {
-						return
-					}
-					// Update spinner text with fleet progress
-					if spinnerProgram != nil {
-						spinnerProgram.Send(ui.SpinnerTextMsg{Text: evt.Message})
-					}
-				}
-			}
-		}()
 
 		// printText prints streaming text directly as it arrives.
 		// Handles the Agent: prefix on first output and a single newline
@@ -613,10 +556,6 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 		}
 
 		stopSpinner()
-
-		// Stop fleet progress monitor for this turn
-		fleetCancel()
-		<-fleetProgressDone
 
 		// Handle approval if needed
 		if waitingForApproval {

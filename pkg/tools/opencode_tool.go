@@ -211,33 +211,6 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 	var tokens map[string]any
 	var trace []OpenCodeTraceEvent
 
-	// Look up the fleet progress channel so we can stream OpenCode events in real-time.
-	// The channel is available when this tool runs inside a fleet worker sub-agent that
-	// has FleetParentSessionKey in its session state.
-	var progressCh chan FleetProgressEvent
-	if parentSessionID, err := ctx.State().Get(FleetParentSessionKey); err == nil {
-		if mainID, ok := parentSessionID.(string); ok && mainID != "" {
-			progressCh = getFleetProgressChWrite(mainID)
-		}
-	}
-
-	// Read phase/agent context so progress events are grouped correctly in the UI.
-	var fleetPhase, fleetAgent string
-	if v, err := ctx.State().Get(FleetPhaseKey); err == nil {
-		fleetPhase, _ = v.(string)
-	}
-	if v, err := ctx.State().Get(FleetAgentKey); err == nil {
-		fleetAgent, _ = v.(string)
-	}
-
-	sendProgress := func(evt FleetProgressEvent) {
-		if progressCh != nil {
-			evt.Phase = fleetPhase
-			evt.Agent = fleetAgent
-			progressCh <- evt
-		}
-	}
-
 	scanner := bufio.NewScanner(stdout)
 	// Increase buffer size for large outputs
 	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
@@ -268,20 +241,14 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 			tokens = evt.Part.Tokens
 		}
 
-		// Forward events to the fleet progress channel for real-time UI streaming
+		// Build execution trace for replay
 		switch evt.Type {
 		case "text":
 			if evt.Part.Text != "" {
-				traceEvt := OpenCodeTraceEvent{
+				trace = append(trace, OpenCodeTraceEvent{
 					Type:    "opencode_text",
-					Message: truncateForProgress(evt.Part.Text),
+					Message: truncateString(evt.Part.Text, 500),
 					Text:    evt.Part.Text,
-				}
-				trace = append(trace, traceEvt)
-				sendProgress(FleetProgressEvent{
-					Type:    traceEvt.Type,
-					Message: traceEvt.Message,
-					Text:    traceEvt.Text,
 				})
 			}
 		case "tool_use":
@@ -293,81 +260,33 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 			inputStr := formatOpenCodeValue(evt.Part.State.Input)
 			outputStr := formatOpenCodeValue(evt.Part.State.Output)
 
+			trace = append(trace, OpenCodeTraceEvent{
+				Type:    "opencode_tool_call",
+				Detail:  toolName,
+				Message: fmt.Sprintf("OpenCode calling: %s", toolName),
+				Text:    inputStr,
+			})
 			if status == "completed" || status == "error" {
-				// OpenCode often sends a single tool_use event with status="completed"
-				// containing both input and output. Emit both call and result so the
-				// UI can render what tool was called and what it returned.
-				callEvt := OpenCodeTraceEvent{
-					Type:    "opencode_tool_call",
-					Detail:  toolName,
-					Message: fmt.Sprintf("OpenCode calling: %s", toolName),
-					Text:    inputStr,
-				}
-				trace = append(trace, callEvt)
-				sendProgress(FleetProgressEvent{
-					Type:    callEvt.Type,
-					Detail:  callEvt.Detail,
-					Message: callEvt.Message,
-					Text:    callEvt.Text,
-				})
-				// Store full output in the trace for "Show more" on page reload.
-				// Truncate only the real-time SSE payload to keep streaming fast.
-				resultEvt := OpenCodeTraceEvent{
+				trace = append(trace, OpenCodeTraceEvent{
 					Type:    "opencode_tool_result",
 					Detail:  toolName,
 					Message: fmt.Sprintf("OpenCode %s returned (%s)", toolName, status),
 					Text:    outputStr,
-				}
-				trace = append(trace, resultEvt)
-				progressText := outputStr
-				if len(progressText) > 2000 {
-					progressText = progressText[:2000] + "\n\n... (truncated)"
-				}
-				sendProgress(FleetProgressEvent{
-					Type:    resultEvt.Type,
-					Detail:  resultEvt.Detail,
-					Message: resultEvt.Message,
-					Text:    progressText,
-				})
-			} else {
-				// Tool call in progress (status="running" or empty)
-				callEvt := OpenCodeTraceEvent{
-					Type:    "opencode_tool_call",
-					Detail:  toolName,
-					Message: fmt.Sprintf("OpenCode calling: %s", toolName),
-					Text:    inputStr,
-				}
-				trace = append(trace, callEvt)
-				sendProgress(FleetProgressEvent{
-					Type:    callEvt.Type,
-					Detail:  callEvt.Detail,
-					Message: callEvt.Message,
-					Text:    callEvt.Text,
 				})
 			}
 		case "step_start":
-			traceEvt := OpenCodeTraceEvent{
+			trace = append(trace, OpenCodeTraceEvent{
 				Type:    "opencode_step_start",
 				Message: "OpenCode step started",
-			}
-			trace = append(trace, traceEvt)
-			sendProgress(FleetProgressEvent{
-				Type:    traceEvt.Type,
-				Message: traceEvt.Message,
 			})
 		case "step_finish":
 			reason := evt.Part.Reason
 			if reason == "" {
 				reason = "completed"
 			}
-			traceEvt := OpenCodeTraceEvent{
+			trace = append(trace, OpenCodeTraceEvent{
 				Type:    "opencode_step_finish",
 				Message: fmt.Sprintf("OpenCode step finished: %s", reason),
-			}
-			trace = append(trace, traceEvt)
-			sendProgress(FleetProgressEvent{
-				Type:    traceEvt.Type,
-				Message: traceEvt.Message,
 			})
 		}
 	}

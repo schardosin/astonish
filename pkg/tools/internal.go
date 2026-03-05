@@ -100,6 +100,14 @@ func commandReferencesProtectedFile(command string) (bool, string) {
 	return false, ""
 }
 
+// truncateString truncates a string to the given max length with ellipsis.
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
 type ReadFileArgs struct {
 	Path string `json:"path" jsonschema:"The path to the file to read"`
 }

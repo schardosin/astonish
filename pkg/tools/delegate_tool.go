@@ -18,6 +18,12 @@ func SetSubAgentManager(mgr *agent.SubAgentManager) {
 	subAgentManagerVar = mgr
 }
 
+// GetSubAgentManager returns the sub-agent manager.
+// Used by the fleet session API handlers to create fleet sessions.
+func GetSubAgentManager() *agent.SubAgentManager {
+	return subAgentManagerVar
+}
+
 // --- delegate_tasks tool ---
 
 // SubTaskInput describes a single sub-task to delegate.

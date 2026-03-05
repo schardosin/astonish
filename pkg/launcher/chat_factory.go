@@ -864,37 +864,15 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 
 					// Register fleet tools (requires sub-agents to be enabled)
 					if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
-						// Build fleet-only tools (run_fleet_phase). These are NOT added to
+						// Build fleet-only tools (opencode delegate). These are NOT added to
 						// internalTools (so the main agent can't call them). Instead they go
-						// on SubAgentManager.FleetTools, accessible only to the fleet
-						// orchestrator via its explicit tool filter.
+						// on SubAgentManager.FleetTools, accessible only to fleet
+						// worker agents via their explicit tool filter.
 						var ftErr error
 						fleetOnlyTools, ftErr = tools.GetFleetTools()
 						if ftErr != nil {
 							if cfg.DebugMode {
 								fmt.Printf("Warning: Failed to create fleet internal tools: %v\n", ftErr)
-							}
-						}
-
-						// Register fleet_plan + fleet_execute (the main agent's planning/execution interface)
-						fleetPlanningTools, fpErr := tools.GetFleetPlanningTools()
-						if fpErr != nil {
-							if cfg.DebugMode {
-								fmt.Printf("Warning: Failed to create fleet planning tools: %v\n", fpErr)
-							}
-						} else {
-							internalTools = append(internalTools, fleetPlanningTools...)
-						}
-
-						// Set fleet plans directory for the fleet_plan tool
-						fleetPlansDir, fpDirErr := config.GetFleetPlansDir()
-						if fpDirErr == nil {
-							if mkErr := os.MkdirAll(fleetPlansDir, 0755); mkErr != nil {
-								if cfg.DebugMode {
-									fmt.Printf("Warning: Failed to create fleet_plans directory: %v\n", mkErr)
-								}
-							} else {
-								tools.SetFleetPlansDir(fleetPlansDir)
 							}
 						}
 					}
@@ -1088,6 +1066,9 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		compactor.DebugMode = cfg.DebugMode
 		compactor.LLM = makeLLMFunc(llm)
 		chatAgent.Compactor = compactor
+		if subAgentMgr != nil {
+			subAgentMgr.Compactor = compactor
+		}
 		if cfg.DebugMode {
 			fmt.Printf("Context compaction: enabled (window: %d tokens, threshold: %.0f%%)\n",
 				contextWindow, compactor.Threshold*100)

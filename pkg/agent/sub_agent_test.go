@@ -195,9 +195,6 @@ func TestExcludedChildTools(t *testing.T) {
 		"schedule_job":      true,
 		"save_credential":   true,
 		"remove_credential": true,
-		"fleet_plan":        true,
-		"fleet_execute":     true,
-		"run_fleet_phase":   true,
 		"opencode":          true,
 	}
 

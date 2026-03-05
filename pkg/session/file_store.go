@@ -393,6 +393,28 @@ func (s *FileStore) ListChildren(parentID string) ([]SessionMeta, error) {
 	return s.index.ListChildren(parentID)
 }
 
+// AddSessionMeta adds a metadata entry to the session index directly.
+// This is used by fleet sessions that need to appear in the session list
+// without creating a full ADK session or transcript file.
+func (s *FileStore) AddSessionMeta(meta SessionMeta) error {
+	return s.index.Add(meta)
+}
+
+// UpdateSessionMeta updates an existing session's metadata in the index.
+func (s *FileStore) UpdateSessionMeta(sessionID string, fn func(*SessionMeta)) error {
+	return s.index.Update(sessionID, fn)
+}
+
+// RemoveSessionMeta removes a session's metadata from the index.
+func (s *FileStore) RemoveSessionMeta(sessionID string) error {
+	return s.index.Remove(sessionID)
+}
+
+// BaseDir returns the base directory for session storage.
+func (s *FileStore) BaseDir() string {
+	return s.baseDir
+}
+
 // ReadTranscriptEvents reads all events from a session's transcript file.
 // This is a lightweight read that does not load the full session into the cache.
 func (s *FileStore) ReadTranscriptEvents(appName, userID, sessionID string) ([]*adksession.Event, error) {

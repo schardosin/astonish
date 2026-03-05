@@ -1,0 +1,177 @@
+/**
+ * API client for Fleet Sessions (fleet v2: autonomous agent team)
+ */
+
+const API_BASE = '/api/studio/fleet'
+const FLEET_API = '/api/fleets'
+
+/**
+ * Fetch available fleet definitions
+ * @returns {Promise<{fleets: Array<{key: string, name: string, description: string, agent_count: number, agent_names: string[]}>}>}
+ */
+export async function fetchFleets() {
+  const response = await fetch(FLEET_API)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch fleets: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+/**
+ * Fetch active fleet sessions
+ * @returns {Promise<{sessions: Array<{id: string, fleet_key: string, fleet_name: string, state: string, active_agent: string}>}>}
+ */
+export async function fetchFleetSessions() {
+  const response = await fetch(`${API_BASE}/sessions`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch fleet sessions: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+/**
+ * Fetch a fleet session's current state and thread history
+ * @param {string} id - Fleet session ID
+ * @returns {Promise<{session_id: string, fleet_key: string, fleet_name: string, state: string, active_agent: string, messages: Array, agents: Array}>}
+ */
+export async function fetchFleetSession(id) {
+  const response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(id)}`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch fleet session: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+/**
+ * Start a new fleet session. Returns session info as JSON.
+ * The caller should then connect to the SSE stream via connectFleetStream().
+ * @param {object} params
+ * @param {string} params.fleetKey - Fleet definition key (e.g., 'software-dev')
+ * @param {string} params.message - Optional initial message to the team
+ * @returns {Promise<{session_id: string, fleet_key: string, fleet_name: string, agents: Array}>}
+ */
+export async function startFleetSession({ fleetKey, message }) {
+  const response = await fetch(`${API_BASE}/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      fleet_key: fleetKey,
+      message: message || '',
+    }),
+  })
+
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Connect to a fleet session's SSE stream for real-time events.
+ * Works for both newly created sessions and reconnections after page reload.
+ * Returns an AbortController so the caller can cancel.
+ * @param {object} params
+ * @param {string} params.sessionId - Fleet session ID
+ * @param {function} params.onEvent - Callback for each SSE event: (eventType, data) => void
+ * @param {function} params.onError - Callback for errors: (error) => void
+ * @param {function} params.onDone - Callback when stream completes
+ * @returns {AbortController}
+ */
+export function connectFleetStream({ sessionId, onEvent, onError, onDone }) {
+  const controller = new AbortController()
+
+  const run = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/stream`, {
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        const text = await response.text()
+        throw new Error(text || `HTTP ${response.status}`)
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const blocks = buffer.split('\n\n')
+        buffer = blocks.pop()
+
+        for (const block of blocks) {
+          if (!block.trim()) continue
+          const lines = block.split('\n')
+          let eventType = 'message'
+          let dataStr = ''
+
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              eventType = line.slice(7).trim()
+            } else if (line.startsWith('data: ')) {
+              dataStr = line.slice(6)
+            }
+          }
+
+          if (dataStr) {
+            try {
+              const data = JSON.parse(dataStr)
+              onEvent(eventType, data)
+            } catch (e) {
+              console.error('Failed to parse fleet SSE data:', e, dataStr)
+            }
+          }
+        }
+      }
+
+      if (onDone) onDone()
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        if (onDone) onDone()
+      } else {
+        if (onError) onError(err)
+      }
+    }
+  }
+
+  run()
+  return controller
+}
+
+/**
+ * Send a human message to an active fleet session
+ * @param {string} sessionId - Fleet session ID
+ * @param {string} message - Human message text
+ */
+export async function sendFleetMessage(sessionId, message) {
+  const response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/message`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message }),
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
+ * Stop an active fleet session
+ * @param {string} sessionId - Fleet session ID
+ */
+export async function stopFleetSession(sessionId) {
+  try {
+    await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/stop`, {
+      method: 'POST',
+    })
+  } catch (err) {
+    console.warn('Failed to stop fleet session:', err)
+  }
+}

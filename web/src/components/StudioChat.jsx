@@ -1,9 +1,115 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search } from 'lucide-react'
+import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search, Users } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { fetchSessions, fetchSessionHistory, deleteSession, connectChat, stopChat } from '../api/studioChat'
+import { fetchFleets, startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions } from '../api/fleetChat'
 import HomePage from './HomePage'
+
+// Agent identity colors for the team conversation view
+const AGENT_COLORS = {
+  po: { bg: 'rgba(59, 130, 246, 0.1)', border: 'rgba(59, 130, 246, 0.3)', text: '#60a5fa', label: 'PO' },
+  architect: { bg: 'rgba(168, 85, 247, 0.1)', border: 'rgba(168, 85, 247, 0.3)', text: '#c084fc', label: 'Architect' },
+  dev: { bg: 'rgba(34, 197, 94, 0.1)', border: 'rgba(34, 197, 94, 0.3)', text: '#4ade80', label: 'Dev' },
+  qa: { bg: 'rgba(234, 179, 8, 0.1)', border: 'rgba(234, 179, 8, 0.3)', text: '#facc15', label: 'QA' },
+  security: { bg: 'rgba(239, 68, 68, 0.1)', border: 'rgba(239, 68, 68, 0.3)', text: '#f87171', label: 'Security' },
+  system: { bg: 'rgba(107, 114, 128, 0.1)', border: 'rgba(107, 114, 128, 0.3)', text: '#9ca3af', label: 'System' },
+}
+
+function getAgentColor(sender) {
+  return AGENT_COLORS[sender] || { bg: 'rgba(6, 182, 212, 0.1)', border: 'rgba(6, 182, 212, 0.3)', text: '#22d3ee', label: sender }
+}
+
+// Fleet start dialog component
+function FleetStartDialog({ onStart, onCancel }) {
+  const [fleets, setFleets] = useState([])
+  const [selectedFleet, setSelectedFleet] = useState('')
+  const [initialMessage, setInitialMessage] = useState('')
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const data = await fetchFleets()
+        setFleets(data.fleets || [])
+        if (data.fleets && data.fleets.length > 0) {
+          setSelectedFleet(data.fleets[0].key)
+        }
+      } catch (err) {
+        console.error('Failed to load fleets:', err)
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    load()
+  }, [])
+
+  const handleSubmit = (e) => {
+    e.preventDefault()
+    if (!selectedFleet) return
+    onStart(selectedFleet, initialMessage)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div className="w-full max-w-md rounded-xl shadow-2xl" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+        <div className="px-6 py-4" style={{ borderBottom: '1px solid var(--border-color)' }}>
+          <h2 className="text-lg font-semibold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+            <Users size={20} className="text-cyan-400" />
+            Start Fleet Session
+          </h2>
+          <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+            Launch an autonomous agent team to collaborate on a task
+          </p>
+        </div>
+        <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader size={18} className="animate-spin text-cyan-400" />
+            </div>
+          ) : fleets.length === 0 ? (
+            <p className="text-sm text-center py-4" style={{ color: 'var(--text-muted)' }}>No fleets available</p>
+          ) : (
+            <>
+              <div>
+                <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Fleet</label>
+                <select
+                  value={selectedFleet}
+                  onChange={(e) => setSelectedFleet(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                  style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
+                >
+                  {fleets.map(f => (
+                    <option key={f.key} value={f.key}>{f.name} ({f.agent_names.join(', ')})</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Initial request (optional)</label>
+                <textarea
+                  value={initialMessage}
+                  onChange={(e) => setInitialMessage(e.target.value)}
+                  placeholder="Describe what you want the team to work on..."
+                  rows={3}
+                  className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 resize-none"
+                  style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
+                />
+              </div>
+            </>
+          )}
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" onClick={onCancel} className="px-4 py-2 text-sm rounded-lg hover:bg-white/5 transition-colors" style={{ color: 'var(--text-secondary)' }}>
+              Cancel
+            </button>
+            <button type="submit" disabled={!selectedFleet || isLoading} className="px-4 py-2 text-sm bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+              Start Fleet
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
 
 // Collapsible fleet execution panel showing real-time progress of fleet phases.
 // The orchestrator renders inline (no collapsible header). Agent phases are
@@ -230,7 +336,7 @@ function FleetExecutionPanel({ data }) {
           ) : (
             <Check size={10} className="text-cyan-400" />
           )}
-          <span className="text-cyan-400/70">{evt.message || (isStart ? 'OpenCode step started' : 'OpenCode step finished')}</span>
+           <span className="text-cyan-400/70">{evt.message || (isStart ? 'OpenCode step started' : 'OpenCode step finished')}</span>
         </div>
       )
     }
@@ -307,6 +413,13 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
 
+  // Fleet state
+  const [isFleetMode, setIsFleetMode] = useState(false)
+  const [fleetSessionId, setFleetSessionId] = useState(null)
+  const [fleetInfo, setFleetInfo] = useState(null) // { fleet_key, fleet_name, agents }
+  const [fleetState, setFleetState] = useState(null) // { state, active_agent }
+  const [showFleetDialog, setShowFleetDialog] = useState(false)
+
   // Slash command popup
   const [showSlashPopup, setShowSlashPopup] = useState(false)
   const [slashFilter, setSlashFilter] = useState('')
@@ -339,13 +452,95 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
     if (onSessionChange) onSessionChange(sessionId)
   }, [onSessionChange])
 
+  const connectToFleetStream = useCallback((sessionId) => {
+    const controller = connectFleetStream({
+      sessionId,
+      onEvent: (eventType, data) => {
+        switch (eventType) {
+          case 'fleet_session':
+            setFleetInfo({ fleet_key: data.fleet_key, fleet_name: data.fleet_name, agents: data.agents })
+            break
+
+          case 'fleet_message':
+            setMessages(prev => {
+              // Deduplicate by message ID
+              if (data.id && prev.some(m => m.id === data.id)) {
+                return prev
+              }
+              // Skip human messages from the stream since we add them optimistically.
+              // Match by sender + text to detect the duplicate.
+              if (data.sender === 'human' && prev.some(m => m.sender === 'human' && m.text === data.text && !m.id)) {
+                // Replace the optimistic message (no id) with the server version (has id)
+                return prev.map(m =>
+                  m.sender === 'human' && m.text === data.text && !m.id
+                    ? { ...m, id: data.id, timestamp: data.timestamp || m.timestamp }
+                    : m
+                )
+              }
+              return [...prev, { type: 'fleet_message', ...data, timestamp: data.timestamp || Date.now() }]
+            })
+            break
+
+          case 'fleet_state':
+            setFleetState({ state: data.state, active_agent: data.active_agent })
+            break
+
+          case 'fleet_done':
+            setIsStreaming(false)
+            break
+
+          case 'error':
+            setMessages(prev => [...prev, { type: 'error', content: data.error || 'Unknown error' }])
+            break
+
+          default:
+            break
+        }
+      },
+      onError: (err) => {
+        console.error('Fleet stream error:', err)
+        setMessages(prev => [...prev, { type: 'error', content: err.message }])
+        setIsStreaming(false)
+      },
+      onDone: () => {
+        setIsStreaming(false)
+      },
+    })
+
+    abortRef.current = controller
+    return controller
+  }, [])
+
   // Load sessions on mount (and initial session if URL specifies one)
+  // Also check for active fleet sessions that we should reconnect to.
   useEffect(() => {
     loadSessions()
-    if (initialSessionId) {
-      loadSessionHistory(initialSessionId)
+
+    const init = async () => {
+      if (initialSessionId) {
+        // Check if this is an active fleet session
+        try {
+          const data = await fetchFleetSessions()
+          const activeFleet = (data.sessions || []).find(s => s.id === initialSessionId)
+          if (activeFleet) {
+            setIsFleetMode(true)
+            setFleetSessionId(initialSessionId)
+            setFleetState({ state: activeFleet.state, active_agent: activeFleet.active_agent })
+            setMessages([])
+            setIsStreaming(true)
+            changeSession(initialSessionId)
+            connectToFleetStream(initialSessionId)
+            return
+          }
+        } catch {
+          // fetchFleetSessions may fail if fleet system not initialized; that's ok
+        }
+        // Not a fleet session (or fleet no longer active), load as regular
+        loadSessionHistory(initialSessionId)
+      }
     }
-  }, [])
+    init()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-scroll on new messages
   useEffect(() => {
@@ -378,7 +573,21 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
     try {
       setIsLoadingHistory(true)
       const data = await fetchSessionHistory(sessionId)
-      setMessages(data.messages || [])
+      // If the response includes fleet messages, convert them to the fleet_message format
+      if (data.fleetMessages && data.fleetMessages.length > 0) {
+        const fleetMsgs = data.fleetMessages.map(m => ({
+          type: 'fleet_message',
+          id: m.id,
+          sender: m.sender,
+          text: m.text,
+          mentions: m.mentions,
+          timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
+          metadata: m.metadata,
+        }))
+        setMessages(fleetMsgs)
+      } else {
+        setMessages(data.messages || [])
+      }
     } catch (err) {
       console.error('Failed to load session history:', err)
       setMessages([])
@@ -394,45 +603,180 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
       abortRef.current = null
     }
     setIsStreaming(false)
+
+    // Check if this is a fleet session (from sidebar data)
+    const session = sessions.find(s => s.id === sessionId)
+    if (session && session.fleetKey) {
+      // Check if this fleet session is still active in the registry
+      try {
+        const data = await fetchFleetSessions()
+        const activeFleet = (data.sessions || []).find(s => s.id === sessionId)
+        if (activeFleet) {
+          // Reconnect to the active fleet session
+          setIsFleetMode(true)
+          setFleetSessionId(sessionId)
+          setFleetState({ state: activeFleet.state, active_agent: activeFleet.active_agent })
+          setMessages([])
+          setIsStreaming(true)
+          changeSession(sessionId)
+          connectToFleetStream(sessionId)
+          return
+        }
+      } catch (err) {
+        console.error('Failed to check fleet session status:', err)
+      }
+      // Fleet session is no longer active; enter fleet mode as read-only history
+      setIsFleetMode(true)
+      setFleetSessionId(sessionId)
+      setFleetInfo({ fleet_key: session.fleetKey, fleet_name: session.fleetName })
+      setFleetState({ state: 'stopped', active_agent: '' })
+      changeSession(sessionId)
+      await loadSessionHistory(sessionId)
+      return
+    } else {
+      // Exit fleet mode if switching to a regular session
+      if (isFleetMode) {
+        setIsFleetMode(false)
+        setFleetSessionId(null)
+        setFleetInfo(null)
+        setFleetState(null)
+      }
+    }
+
     changeSession(sessionId)
     await loadSessionHistory(sessionId)
-  }, [])
+  }, [sessions, isFleetMode, connectToFleetStream, changeSession])
 
   const handleNewSession = useCallback(() => {
     if (abortRef.current) {
       abortRef.current.abort()
       abortRef.current = null
     }
+    // If in fleet mode, just disconnect the SSE stream (don't stop the fleet session)
+    if (isFleetMode) {
+      setIsFleetMode(false)
+      setFleetSessionId(null)
+      setFleetInfo(null)
+      setFleetState(null)
+    }
     setIsStreaming(false)
     changeSession(null)
     setMessages([])
     if (inputRef.current) inputRef.current.focus()
-  }, [])
+  }, [isFleetMode, changeSession])
 
   const handleDeleteSession = useCallback(async (e, sessionId) => {
     e.stopPropagation()
     try {
+      // If this is an active fleet session, stop it first
+      const session = sessions.find(s => s.id === sessionId)
+      if (session && session.fleetKey) {
+        try {
+          await stopFleetSession(sessionId)
+        } catch {
+          // Fleet session may already be stopped
+        }
+      }
       await deleteSession(sessionId)
       setSessions(prev => prev.filter(s => s.id !== sessionId))
       if (activeSessionId === sessionId) {
+        if (isFleetMode) {
+          setIsFleetMode(false)
+          setFleetSessionId(null)
+          setFleetInfo(null)
+          setFleetState(null)
+          setIsStreaming(false)
+          if (abortRef.current) {
+            abortRef.current.abort()
+            abortRef.current = null
+          }
+        }
         changeSession(null)
         setMessages([])
       }
     } catch (err) {
       console.error('Failed to delete session:', err)
     }
-  }, [activeSessionId])
+  }, [activeSessionId, sessions, isFleetMode])
 
   const handleStop = useCallback(() => {
     if (abortRef.current) {
       abortRef.current.abort()
       abortRef.current = null
     }
-    if (activeSessionId) {
+    if (isFleetMode && fleetSessionId) {
+      stopFleetSession(fleetSessionId)
+    } else if (activeSessionId) {
       stopChat(activeSessionId)
     }
     setIsStreaming(false)
-  }, [activeSessionId])
+  }, [activeSessionId, isFleetMode, fleetSessionId])
+
+  // Start a fleet session
+  const handleFleetStart = useCallback(async (fleetKey, initialMessage) => {
+    setShowFleetDialog(false)
+    setIsFleetMode(true)
+    setMessages([])
+    setIsStreaming(true)
+
+    // Add the initial human message to the UI if provided
+    if (initialMessage) {
+      setMessages([{ type: 'fleet_message', sender: 'human', text: initialMessage, timestamp: Date.now() }])
+    }
+
+    try {
+      // Create the fleet session (returns JSON with session info)
+      const sessionInfo = await startFleetSession({ fleetKey, message: initialMessage })
+      setFleetSessionId(sessionInfo.session_id)
+      setFleetInfo({ fleet_key: sessionInfo.fleet_key, fleet_name: sessionInfo.fleet_name, agents: sessionInfo.agents })
+      changeSession(sessionInfo.session_id)
+
+      // Refresh sidebar to show the new fleet session
+      loadSessions()
+
+      // Connect to the SSE stream for real-time events
+      connectToFleetStream(sessionInfo.session_id)
+    } catch (err) {
+      console.error('Failed to start fleet session:', err)
+      setMessages(prev => [...prev, { type: 'error', content: 'Failed to start fleet: ' + err.message }])
+      setIsStreaming(false)
+      setIsFleetMode(false)
+    }
+  }, [connectToFleetStream, changeSession])
+
+  // Send a human message to the fleet session
+  const sendFleetHumanMessage = useCallback(async (text) => {
+    if (!text.trim() || !fleetSessionId) return
+    // Add human message to UI immediately
+    setMessages(prev => [...prev, { type: 'fleet_message', sender: 'human', text, timestamp: Date.now() }])
+    setInput('')
+    if (inputRef.current) inputRef.current.style.height = 'auto'
+    try {
+      await sendFleetMessage(fleetSessionId, text)
+    } catch (err) {
+      console.error('Failed to send fleet message:', err)
+      setMessages(prev => [...prev, { type: 'error', content: 'Failed to send message: ' + err.message }])
+    }
+  }, [fleetSessionId])
+
+  // Exit fleet mode
+  const handleExitFleet = useCallback(() => {
+    if (abortRef.current) {
+      abortRef.current.abort()
+      abortRef.current = null
+    }
+    if (fleetSessionId) {
+      stopFleetSession(fleetSessionId)
+    }
+    setIsFleetMode(false)
+    setFleetSessionId(null)
+    setFleetInfo(null)
+    setFleetState(null)
+    setIsStreaming(false)
+    changeSession(null)
+    setMessages([])
+    loadSessions()
+  }, [fleetSessionId, changeSession])
 
   const sendMessage = useCallback((text) => {
     if (!text.trim()) return
@@ -557,6 +901,12 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
             })
             break
 
+          case 'fleet_redirect':
+            // The /fleet <task> command now redirects to fleet mode
+            setIsStreaming(false)
+            handleFleetStart('software-dev', data.task)
+            break
+
           case 'fleet_progress':
             // Accumulate fleet progress events into a structured fleet_execution message.
             // Each event is appended to the phases array; the UI renders a collapsible panel.
@@ -656,7 +1006,13 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
 
   const handleSubmit = (e) => {
     e.preventDefault()
-    if (isStreaming) return
+    if (isStreaming && !isFleetMode) return
+
+    // In fleet mode, send as human message to the fleet
+    if (isFleetMode && input.trim()) {
+      sendFleetHumanMessage(input)
+      return
+    }
 
     // If slash popup is open, send the highlighted or only matching command
     if (showSlashPopup && filteredSlashCommands.length > 0) {
@@ -836,6 +1192,7 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
   }
 
   return (
+    <>
     <div className="flex flex-1 overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
       {/* Session Sidebar */}
       {!sidebarCollapsed ? (
@@ -852,6 +1209,14 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
           <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--border-color)' }}>
             <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Conversations</span>
             <div className="flex items-center gap-1">
+              <button
+                onClick={() => setShowFleetDialog(true)}
+                className="p-1.5 rounded-lg hover:bg-cyan-500/15 transition-colors"
+                title="Start fleet session"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                <Users size={16} className="text-cyan-400" />
+              </button>
               <button
                 onClick={handleNewSession}
                 className="p-1.5 rounded-lg hover:bg-purple-500/15 transition-colors"
@@ -915,12 +1280,17 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
-                      <p
-                        className="text-sm font-medium truncate"
-                        style={{ color: activeSessionId === session.id ? 'var(--accent)' : 'var(--text-primary)' }}
-                      >
-                        {session.title || 'Untitled'}
-                      </p>
+                      <div className="flex items-center gap-1.5">
+                        {session.fleetKey && (
+                          <Users size={12} className="text-cyan-400 flex-shrink-0" />
+                        )}
+                        <p
+                          className="text-sm font-medium truncate"
+                          style={{ color: activeSessionId === session.id ? 'var(--accent)' : 'var(--text-primary)' }}
+                        >
+                          {session.title || 'Untitled'}
+                        </p>
+                      </div>
                       <div className="flex items-center gap-2 mt-1">
                         <Clock size={10} style={{ color: 'var(--text-muted)' }} />
                         <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -973,6 +1343,31 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
 
       {/* Chat Area */}
       <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Fleet session header */}
+        {isFleetMode && fleetInfo && (
+          <div className="flex items-center justify-between px-4 py-2" style={{ borderBottom: '1px solid var(--border-color)', background: 'rgba(6, 182, 212, 0.05)' }}>
+            <div className="flex items-center gap-3">
+              <Users size={16} className="text-cyan-400" />
+              <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{fleetInfo.fleet_name}</span>
+              {fleetState && (
+                <span className="flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full" style={{
+                  background: fleetState.state === 'waiting_for_human' ? 'rgba(234, 179, 8, 0.15)' : fleetState.state === 'processing' ? 'rgba(6, 182, 212, 0.15)' : 'rgba(107, 114, 128, 0.15)',
+                  color: fleetState.state === 'waiting_for_human' ? '#facc15' : fleetState.state === 'processing' ? '#22d3ee' : '#9ca3af',
+                }}>
+                  {fleetState.state === 'processing' && <Loader size={10} className="animate-spin" />}
+                  {fleetState.state === 'waiting_for_human' && '? '}
+                  {fleetState.active_agent ? `@${fleetState.active_agent}` : fleetState.state}
+                </span>
+              )}
+            </div>
+            <button
+              onClick={handleExitFleet}
+              className="text-xs px-2 py-1 rounded hover:bg-red-500/10 text-red-400 transition-colors"
+            >
+              Exit Fleet
+            </button>
+          </div>
+        )}
         {/* Messages Area */}
         <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
           {isLoadingHistory ? (
@@ -1160,6 +1555,55 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
                 return <FleetExecutionPanel key={index} data={msg} />
               }
 
+              if (msg.type === 'fleet_message') {
+                const isHuman = msg.sender === 'human'
+                const isSystem = msg.sender === 'system'
+                const color = getAgentColor(msg.sender)
+
+                if (isHuman) {
+                  return (
+                    <div key={index} className="flex justify-end">
+                      <div className="space-y-1 max-w-[80%]">
+                        <div className="text-xs font-medium text-right" style={{ color: 'var(--text-muted)' }}>You</div>
+                        <div className="chat-bubble-user p-3 rounded-lg">
+                          <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                }
+
+                return (
+                  <div key={index} className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="text-xs font-bold px-1.5 py-0.5 rounded"
+                        style={{ background: color.bg, color: color.text, border: `1px solid ${color.border}` }}
+                      >
+                        @{msg.sender}
+                      </span>
+                      {isSystem && <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>system</span>}
+                      {msg.mentions && msg.mentions.length > 0 && (
+                        <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                          &rarr; {msg.mentions.map(m => `@${m}`).join(', ')}
+                        </span>
+                      )}
+                    </div>
+                    <div
+                      className="p-4 rounded-lg max-w-[90%]"
+                      style={{
+                        background: color.bg,
+                        border: `1px solid ${color.border}`,
+                      }}
+                    >
+                      <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+                      </div>
+                    </div>
+                  </div>
+                )
+              }
+
               if (msg.type === 'retry') {
                 return (
                   <div key={index} className="flex items-center gap-2 px-3 py-2 my-1 text-sm">
@@ -1175,7 +1619,7 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
           )}
 
           {/* Streaming indicator */}
-          {isStreaming && messages.length > 0 && messages[messages.length - 1]?.type !== 'thinking' && messages[messages.length - 1]?.type !== 'fleet_execution' && (
+          {isStreaming && !isFleetMode && messages.length > 0 && messages[messages.length - 1]?.type !== 'thinking' && messages[messages.length - 1]?.type !== 'fleet_execution' && (
             <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-purple-500/10 border border-purple-500/20 w-fit">
               <Loader size={14} className="text-purple-400 animate-spin" />
               <span className="text-xs text-purple-300">Processing...</span>
@@ -1233,6 +1677,8 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
                     if (showSlashPopup && filteredSlashCommands.length > 0) {
                       const selected = filteredSlashCommands[slashIndex] || filteredSlashCommands[0]
                       handleSlashSelect(selected.cmd)
+                    } else if (isFleetMode && input.trim()) {
+                      sendFleetHumanMessage(input)
                     } else if (!isStreaming && input.trim()) {
                       // Reuse slash validation from handleSubmit
                       if (input.startsWith('/') && !input.includes(' ')) return
@@ -1242,8 +1688,18 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
                   }
                   handleKeyDown(e)
                 }}
-                disabled={isStreaming}
-                placeholder={isStreaming ? 'Agent is responding...' : 'Type a message or / for commands...'}
+                disabled={isStreaming && !isFleetMode}
+                placeholder={
+                  isFleetMode
+                    ? fleetState?.state === 'waiting_for_human'
+                      ? `${fleetState.active_agent || 'An agent'} is waiting for your response...`
+                      : fleetState?.state === 'processing'
+                        ? `${fleetState.active_agent || 'Agent'} is working... You can still type.`
+                        : 'Type a message to the team...'
+                    : isStreaming
+                      ? 'Agent is responding...'
+                      : 'Type a message or / for commands...'
+                }
                 rows={1}
                 className="w-full px-4 py-2.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-60 disabled:cursor-not-allowed transition-all text-sm resize-none overflow-hidden"
                 style={{
@@ -1257,7 +1713,7 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
             </div>
             <button
               type="submit"
-              disabled={isStreaming || !input.trim()}
+              disabled={(isStreaming && !isFleetMode) || !input.trim()}
               className="px-4 py-2.5 bg-[#805AD5] hover:bg-[#6B46C1] text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Send size={18} />
@@ -1266,5 +1722,14 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
         </div>
       </div>
     </div>
+
+    {/* Fleet start dialog */}
+    {showFleetDialog && (
+      <FleetStartDialog
+        onStart={handleFleetStart}
+        onCancel={() => setShowFleetDialog(false)}
+      />
+    )}
+    </>
   )
 }

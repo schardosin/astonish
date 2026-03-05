@@ -16,7 +16,6 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/agent"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
-	"github.com/schardosin/astonish/pkg/tools"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/runner"
@@ -235,17 +234,9 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	// Handle slash commands server-side
 	msg := strings.TrimSpace(req.Message)
 
-	// /fleet: list available fleets
-	if msg == "/fleet" {
-		info := tools.ListAvailableFleets()
-		SendSSE(w, flusher, "system", map[string]interface{}{"content": info})
-		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
-		return
-	}
-	// /fleet <task>: start a fleet session via the fleet start API
-	if strings.HasPrefix(msg, "/fleet ") {
+	// /fleet [task]: open fleet dialog, optionally pre-populated with the task
+	if msg == "/fleet" || strings.HasPrefix(msg, "/fleet ") {
 		task := strings.TrimSpace(strings.TrimPrefix(msg, "/fleet"))
-		// Signal the frontend to start a fleet session instead of a normal chat
 		SendSSE(w, flusher, "fleet_redirect", map[string]interface{}{
 			"task": task,
 		})
@@ -462,7 +453,7 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 				"- `/new` — Start a fresh conversation\n" +
 				"- `/compact` — Show context window usage and compaction status\n" +
 				"- `/distill` — Distill the last task into a reusable flow\n" +
-				"- `/fleet <task>` — Start a fleet-based task with specialized agents\n" +
+				"- `/fleet [task]` — Start a fleet session with an autonomous agent team\n" +
 				"- `/help` — Show this help message",
 		})
 

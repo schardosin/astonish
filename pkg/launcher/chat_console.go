@@ -380,20 +380,14 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				fmt.Println("  /new      - Start a fresh conversation (new session)")
 				fmt.Println("  /compact  - Show context window usage and compaction status")
 				fmt.Println("  /distill  - Distill the last task into a reusable flow")
-				fmt.Println("  /fleet    - Start a fleet-based task (e.g., /fleet build a REST API)")
+				fmt.Println("  /fleet    - Show available fleets (start fleet sessions via Studio UI)")
 				fmt.Println("  /help     - Show this help message")
 				fmt.Println("  exit      - Exit the chat")
 				fmt.Println()
 			case strings.HasPrefix(input, "/fleet"):
-				fleetTask := strings.TrimSpace(strings.TrimPrefix(input, "/fleet"))
-				if fleetTask == "" {
-					// Bare /fleet: show available fleets
-					fmt.Println(tools.ListAvailableFleets())
-					fmt.Println()
-				} else {
-					fmt.Printf("%sFleet mode is available via Studio UI or the fleet CLI command.%s\n", ColorCyan, ColorReset)
-					fmt.Printf("Use: astonish fleet start --fleet <key>\n\n")
-				}
+				// Show available fleets; fleet sessions are started via Studio UI
+				fmt.Println(tools.ListAvailableFleets())
+				fmt.Printf("%sTo start a fleet session, use Studio UI (make studio) or: astonish fleet start%s\n\n", ColorCyan, ColorReset)
 			default:
 				fmt.Printf("Unknown command: %s. Type /help for available commands.\n\n", input)
 			}

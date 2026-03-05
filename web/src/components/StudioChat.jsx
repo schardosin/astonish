@@ -21,10 +21,10 @@ function getAgentColor(sender) {
 }
 
 // Fleet start dialog component
-function FleetStartDialog({ onStart, onCancel }) {
+function FleetStartDialog({ onStart, onCancel, defaultMessage = '' }) {
   const [fleets, setFleets] = useState([])
   const [selectedFleet, setSelectedFleet] = useState('')
-  const [initialMessage, setInitialMessage] = useState('')
+  const [initialMessage, setInitialMessage] = useState(defaultMessage)
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
@@ -419,6 +419,7 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
   const [fleetInfo, setFleetInfo] = useState(null) // { fleet_key, fleet_name, agents }
   const [fleetState, setFleetState] = useState(null) // { state, active_agent }
   const [showFleetDialog, setShowFleetDialog] = useState(false)
+  const [fleetDialogMessage, setFleetDialogMessage] = useState('') // pre-populated from /fleet command
 
   // Slash command popup
   const [showSlashPopup, setShowSlashPopup] = useState(false)
@@ -715,6 +716,7 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
   // Start a fleet session
   const handleFleetStart = useCallback(async (fleetKey, initialMessage) => {
     setShowFleetDialog(false)
+    setFleetDialogMessage('')
     setIsFleetMode(true)
     setMessages([])
     setIsStreaming(true)
@@ -902,9 +904,10 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
             break
 
           case 'fleet_redirect':
-            // The /fleet <task> command now redirects to fleet mode
+            // /fleet [task] command opens the fleet dialog, optionally pre-populated
             setIsStreaming(false)
-            handleFleetStart('software-dev', data.task)
+            setFleetDialogMessage(data.task || '')
+            setShowFleetDialog(true)
             break
 
           case 'fleet_progress':
@@ -1210,7 +1213,7 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
             <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Conversations</span>
             <div className="flex items-center gap-1">
               <button
-                onClick={() => setShowFleetDialog(true)}
+                onClick={() => { setFleetDialogMessage(''); setShowFleetDialog(true) }}
                 className="p-1.5 rounded-lg hover:bg-cyan-500/15 transition-colors"
                 title="Start fleet session"
                 style={{ color: 'var(--text-secondary)' }}
@@ -1727,7 +1730,8 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
     {showFleetDialog && (
       <FleetStartDialog
         onStart={handleFleetStart}
-        onCancel={() => setShowFleetDialog(false)}
+        onCancel={() => { setFleetDialogMessage(''); setShowFleetDialog(false) }}
+        defaultMessage={fleetDialogMessage}
       />
     )}
     </>

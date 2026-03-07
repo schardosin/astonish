@@ -376,14 +376,19 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				}
 			case input == "/help":
 				fmt.Printf("%sAvailable commands:%s\n", ColorCyan, ColorReset)
-				fmt.Println("  /status   - Show current provider, model, tools, and memory status")
-				fmt.Println("  /new      - Start a fresh conversation (new session)")
-				fmt.Println("  /compact  - Show context window usage and compaction status")
-				fmt.Println("  /distill  - Distill the last task into a reusable flow")
-				fmt.Println("  /fleet    - Show available fleets (start fleet sessions via Studio UI)")
-				fmt.Println("  /help     - Show this help message")
-				fmt.Println("  exit      - Exit the chat")
+				fmt.Println("  /status      - Show current provider, model, tools, and memory status")
+				fmt.Println("  /new         - Start a fresh conversation (new session)")
+				fmt.Println("  /compact     - Show context window usage and compaction status")
+				fmt.Println("  /distill     - Distill the last task into a reusable flow")
+				fmt.Println("  /fleet       - Show available fleets (start fleet sessions via Studio UI)")
+				fmt.Println("  /fleet-plan  - Create a fleet plan (use Studio UI for guided conversation)")
+				fmt.Println("  /help        - Show this help message")
+				fmt.Println("  exit         - Exit the chat")
 				fmt.Println()
+			case strings.HasPrefix(input, "/fleet-plan"):
+				// Fleet plans require the guided conversation in Studio UI
+				fmt.Printf("%sFleet plan creation requires the Studio UI for the guided conversation.%s\n", ColorCyan, ColorReset)
+				fmt.Printf("Run: make studio (or make studio-dev), then type /fleet-plan in the chat.\n\n")
 			case strings.HasPrefix(input, "/fleet"):
 				// Show available fleets; fleet sessions are started via Studio UI
 				fmt.Println(tools.ListAvailableFleets())

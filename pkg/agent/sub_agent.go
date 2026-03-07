@@ -225,6 +225,12 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	// Wire context compaction for sub-agents to prevent exceeding the context window
 	// during long multi-step tool work (e.g., fleet agents reading/writing many files).
 	var beforeModelCallbacks []llmagent.BeforeModelCallback
+
+	// Truncate oversized tool responses before they reach the model. This prevents
+	// a single large response (e.g., file_tree on /) from causing a 400 Bad Request.
+	// Must run BEFORE compaction so the compactor sees reasonable-sized content.
+	beforeModelCallbacks = append(beforeModelCallbacks, TruncateToolResponsesCallback())
+
 	if m.Compactor != nil {
 		beforeModelCallbacks = append(beforeModelCallbacks, m.Compactor.BeforeModelCallback())
 	}
@@ -452,7 +458,7 @@ func (m *SubAgentManager) buildChildPrompt(task SubAgentTask) string {
 		memContent, err := m.MemoryManager.Load()
 		if err == nil && memContent != "" {
 			sb.WriteString("\n## Context (from persistent memory)\n")
-			sb.WriteString(memContent)
+			sb.WriteString(escapeCurlyPlaceholders(memContent))
 			sb.WriteString("\n")
 		}
 	}

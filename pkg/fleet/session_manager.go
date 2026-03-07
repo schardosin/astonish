@@ -36,6 +36,7 @@ type FleetSession struct {
 	ID              string
 	FleetKey        string
 	FleetConfig     *FleetConfig
+	Plan            *FleetPlan // Non-nil when started from a fleet plan (for prompt injection)
 	Channel         Channel
 	SubAgentManager *agent.SubAgentManager
 	PersonaRegistry *persona.Registry
@@ -63,6 +64,15 @@ type FleetSession struct {
 	// OnMessagePosted is called after every message is posted to the channel
 	// (human, agent, or system). Used for transcript persistence.
 	OnMessagePosted func(msg Message)
+
+	// OnSessionDone is called when Run() exits (clean stop or error).
+	// Used by the plan activator to mark issues as completed.
+	OnSessionDone func(sessionID string)
+
+	// ResumeTarget, when set before Run(), is used as the initial pending
+	// target agent instead of waiting for a new message. This is used during
+	// session recovery to continue from where the session left off.
+	ResumeTarget string
 }
 
 // NewFleetSession creates a new fleet session.
@@ -114,6 +124,9 @@ func (fs *FleetSession) Run(ctx context.Context) error {
 	defer func() {
 		cancel()
 		log.Printf("[fleet] Session %s stopped", fs.ID)
+		if fs.OnSessionDone != nil {
+			fs.OnSessionDone(fs.ID)
+		}
 	}()
 
 	// pendingTarget holds the next agent to activate when LLM routing
@@ -121,6 +134,19 @@ func (fs *FleetSession) Run(ctx context.Context) error {
 	// next iteration to avoid the deadlock where the message is already
 	// in the channel.
 	var pendingTarget string
+
+	// If resuming after a restart, use the pre-computed target.
+	if fs.ResumeTarget != "" {
+		pendingTarget = fs.ResumeTarget
+		fs.ResumeTarget = "" // consume it
+		log.Printf("[fleet] Resuming session with target agent %s", pendingTarget)
+	}
+
+	// Track consecutive agent failures to prevent infinite error loops.
+	// In headless sessions (no human to intervene), repeated failures mean
+	// the session should stop rather than hang forever.
+	const maxConsecutiveErrors = 3
+	consecutiveErrors := 0
 
 	for {
 		// Check context
@@ -158,6 +184,9 @@ func (fs *FleetSession) Run(ctx context.Context) error {
 					fs.waitingAgent = ""
 					fs.mu.Unlock()
 				}
+
+				// Human intervention resets the error counter
+				consecutiveErrors = 0
 			} else {
 				// This is an agent or system message that arrived from outside
 				// the main loop (e.g., a message posted by an external caller).
@@ -171,7 +200,10 @@ func (fs *FleetSession) Run(ctx context.Context) error {
 
 		response, err := fs.activateAgent(ctx, targetAgent)
 		if err != nil {
-			log.Printf("[fleet] Error activating agent %s: %v", targetAgent, err)
+			consecutiveErrors++
+			log.Printf("[fleet] Error activating agent %s (%d/%d): %v",
+				targetAgent, consecutiveErrors, maxConsecutiveErrors, err)
+
 			errMsg := Message{
 				ID:        uuid.New().String(),
 				Sender:    "system",
@@ -182,8 +214,39 @@ func (fs *FleetSession) Run(ctx context.Context) error {
 				log.Printf("[fleet] Error posting error message: %v", postErr)
 			}
 			fs.notifyMessagePosted(errMsg)
+
+			// Stop the session after too many consecutive failures.
+			// In headless mode there is no human to fix the problem, so
+			// continuing would just loop forever.
+			if consecutiveErrors >= maxConsecutiveErrors {
+				log.Printf("[fleet] Session %s stopping after %d consecutive errors", fs.ID, consecutiveErrors)
+				stopMsg := Message{
+					ID:     uuid.New().String(),
+					Sender: "system",
+					Text: fmt.Sprintf("Fleet session stopped: %d consecutive agent errors. "+
+						"Last error from %s: %v", consecutiveErrors, targetAgent, err),
+					Timestamp: time.Now(),
+				}
+				_ = fs.Channel.PostMessage(ctx, stopMsg)
+				fs.notifyMessagePosted(stopMsg)
+				fs.setState(StateStopped, "")
+				return fmt.Errorf("stopped after %d consecutive errors", consecutiveErrors)
+			}
+
+			// For retriable errors (timeouts, network failures), retry the
+			// same agent instead of falling into WaitForMessage where the
+			// session would hang forever in headless mode with no human to
+			// send a new message.
+			if isRetriableError(err) {
+				pendingTarget = targetAgent
+				log.Printf("[fleet] Will retry agent %s (retriable error)", targetAgent)
+			}
+
 			continue
 		}
+
+		// Successful activation resets the error counter
+		consecutiveErrors = 0
 
 		// Post agent's response to the channel
 		if postErr := fs.Channel.PostMessage(ctx, response); postErr != nil {
@@ -252,7 +315,7 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 	}
 
 	// Build system prompt with communication graph awareness
-	systemPrompt := BuildAgentPrompt(personaCfg, agentCfg, fs.FleetConfig, agentKey)
+	systemPrompt := BuildAgentPrompt(personaCfg, agentCfg, fs.FleetConfig, agentKey, fs.Plan)
 
 	// Build thread context
 	threadContext, err := BuildThreadContext(ctx, fs.Channel, agentKey)
@@ -269,13 +332,10 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 		agentKey, threadContext,
 	)
 
-	// Determine timeout
-	var timeoutOverride time.Duration
-	if agentCfg.Delegate != nil {
-		timeoutOverride = 10 * time.Minute // generous timeout for delegate agents
-	} else {
-		timeoutOverride = 5 * time.Minute // standard timeout
-	}
+	// Determine timeout. Fleet agents do multi-step work (multiple LLM calls,
+	// tool executions, file reads/writes) within a single activation. The
+	// timeout covers the entire activation, not individual LLM calls.
+	timeoutOverride := 20 * time.Minute
 
 	// Track intermediate text for real-time progress messaging.
 	// When the LLM produces text followed by a tool call in the same turn,
@@ -432,4 +492,39 @@ func (fs *FleetSession) Stop() {
 	if err := fs.Channel.Close(); err != nil {
 		log.Printf("[fleet] Error closing channel: %v", err)
 	}
+}
+
+// isRetriableError returns true for transient errors that are worth retrying
+// (timeouts, network failures, server errors). Returns false for errors that
+// indicate a configuration problem (missing persona, missing agent, etc.)
+// which would fail again immediately.
+func isRetriableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+
+	retriablePatterns := []string{
+		"context deadline exceeded",
+		"timeout",
+		"connection refused",
+		"connection reset",
+		"TLS handshake",
+		"i/o timeout",
+		"no such host",
+		"server misbehaving",
+		"500",
+		"502",
+		"503",
+		"504",
+		"429", // rate limited
+	}
+
+	lower := strings.ToLower(msg)
+	for _, pattern := range retriablePatterns {
+		if strings.Contains(lower, strings.ToLower(pattern)) {
+			return true
+		}
+	}
+	return false
 }

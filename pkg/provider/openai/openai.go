@@ -450,7 +450,23 @@ func wrapOpenAIError(err error) error {
 
 	var apiErr *openai.APIError
 	if errors.As(err, &apiErr) {
-		return llmerror.NewLLMError("openai", apiErr.HTTPStatusCode, apiErr.Message, "")
+		// Build a detailed message that includes Code and Type when available,
+		// since apiErr.Message alone may be empty for non-standard endpoints.
+		msg := apiErr.Message
+		if msg == "" {
+			// Reconstruct from available fields for better debugging
+			var parts []string
+			if apiErr.Type != "" {
+				parts = append(parts, apiErr.Type)
+			}
+			if code, ok := apiErr.Code.(string); ok && code != "" {
+				parts = append(parts, code)
+			}
+			if len(parts) > 0 {
+				msg = strings.Join(parts, ": ")
+			}
+		}
+		return llmerror.NewLLMError("openai", apiErr.HTTPStatusCode, msg, "")
 	}
 
 	var reqErr *openai.RequestError

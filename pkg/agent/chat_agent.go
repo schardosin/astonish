@@ -264,7 +264,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 					fmt.Printf("[Chat DEBUG] Failed to load memory: %v\n", memErr)
 				}
 			} else if memContent != "" {
-				c.SystemPrompt.MemoryContent = memContent
+				c.SystemPrompt.MemoryContent = escapeCurlyPlaceholders(memContent)
 				if c.DebugMode {
 					fmt.Printf("[Chat DEBUG] Loaded memory (%d bytes)\n", len(memContent))
 				}
@@ -356,6 +356,10 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 		// Build BeforeModelCallbacks
 		var beforeModelCallbacks []llmagent.BeforeModelCallback
+
+		// Truncate oversized tool responses before they reach the model
+		beforeModelCallbacks = append(beforeModelCallbacks, TruncateToolResponsesCallback())
+
 		if c.Compactor != nil {
 			beforeModelCallbacks = append(beforeModelCallbacks, c.Compactor.BeforeModelCallback())
 		}

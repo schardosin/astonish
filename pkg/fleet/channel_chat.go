@@ -17,11 +17,12 @@ import (
 // Agent messages are posted by the session manager after agent activation.
 // SSE handlers subscribe via Subscribe/Unsubscribe to stream messages to the UI.
 type ChatChannel struct {
-	sessionID string
-	messages  []Message
-	mu        sync.RWMutex
-	cond      *sync.Cond
-	closed    bool
+	sessionID  string
+	messages   []Message
+	readCursor int // index of next message to return from WaitForMessage
+	mu         sync.RWMutex
+	cond       *sync.Cond
+	closed     bool
 
 	// subscribers is a map of subscriber ID -> channel for new messages.
 	// Multiple SSE viewers can connect/disconnect independently.
@@ -106,17 +107,15 @@ func (c *ChatChannel) PostMessage(_ context.Context, msg Message) error {
 	return nil
 }
 
-// WaitForMessage blocks until a new message arrives after the last known message.
-// It uses a condition variable to avoid polling.
+// WaitForMessage blocks until a new message arrives that the Run loop hasn't
+// seen yet. It uses a monotonically increasing read cursor so messages posted
+// before the first call are NOT skipped.
 func (c *ChatChannel) WaitForMessage(ctx context.Context) (Message, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Track the current length so we can detect new messages
-	lastSeen := len(c.messages)
-
-	// Wait for a new message or cancellation
-	for len(c.messages) <= lastSeen && !c.closed {
+	// Wait for a message beyond the current read cursor
+	for c.readCursor >= len(c.messages) && !c.closed {
 		// Release the lock and wait for signal, re-acquire on wake
 		// We need to check context cancellation too, so we use a goroutine
 		// to broadcast on context done.
@@ -142,8 +141,10 @@ func (c *ChatChannel) WaitForMessage(ctx context.Context) (Message, error) {
 		return Message{}, fmt.Errorf("channel is closed")
 	}
 
-	// Return the newest message
-	return c.messages[len(c.messages)-1], nil
+	// Return the next unread message and advance the cursor
+	msg := c.messages[c.readCursor]
+	c.readCursor++
+	return msg, nil
 }
 
 // GetThread returns all messages in chronological order.

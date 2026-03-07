@@ -57,10 +57,6 @@ type RoutingResult struct {
 // routingTimeout is the max time allowed for a routing LLM call.
 const routingTimeout = 15 * time.Second
 
-// maxMessageLenForRouting is the max characters from a message to include in
-// the routing prompt. Longer messages are truncated.
-const maxMessageLenForRouting = 800
-
 // RouteWithLLM uses the LLM to determine who should act next after an agent
 // posts a message. This handles all the nuance of natural conversation:
 // acknowledgments, handoffs, multi-mentions, FYIs, etc.
@@ -114,17 +110,25 @@ func RouteWithLLM(ctx context.Context, msg Message, fleetCfg *FleetConfig, llm m
 	}
 
 	raw := strings.TrimSpace(responseText.String())
-	return parseRoutingResponse(raw, senderKey, talksTo, msg, fleetCfg)
+	result := parseRoutingResponse(raw, senderKey, talksTo, msg, fleetCfg)
+
+	// Post-processing: when the LLM says "human" but the message mentions
+	// agents outside the sender's talksTo, re-route through an intermediary.
+	// This handles the common pattern where an agent (e.g., PO) tries to hand
+	// off directly to a downstream agent (e.g., @dev) that isn't in their
+	// communication targets. Without this, the session stalls waiting for a
+	// human that will never come.
+	if result.Target == "human" {
+		if reroute := rerouteViaIntermediary(msg, senderKey, fleetCfg); reroute != nil {
+			return *reroute
+		}
+	}
+
+	return result
 }
 
 // buildRoutingPrompt constructs the prompt for the routing LLM call.
 func buildRoutingPrompt(sender, messageText string, talksTo []string) string {
-	// Truncate long messages
-	text := messageText
-	if len(text) > maxMessageLenForRouting {
-		text = text[:maxMessageLenForRouting] + "..."
-	}
-
 	// Build valid targets list
 	var targets []string
 	for _, t := range talksTo {
@@ -136,7 +140,7 @@ func buildRoutingPrompt(sender, messageText string, talksTo []string) string {
 	sb.WriteString("Given a message from a team member, determine who should act next.\n\n")
 
 	sb.WriteString(fmt.Sprintf("Message from: @%s\n", sender))
-	sb.WriteString(fmt.Sprintf("Message:\n\"\"\"\n%s\n\"\"\"\n\n", text))
+	sb.WriteString(fmt.Sprintf("Message:\n\"\"\"\n%s\n\"\"\"\n\n", messageText))
 
 	sb.WriteString(fmt.Sprintf("Valid targets that @%s can route to: %s\n", sender, strings.Join(targets, ", ")))
 	sb.WriteString("Special values: \"human\" (wait for customer input), \"self\" (sender still has the action), \"none\" (no one needs to act)\n\n")
@@ -209,4 +213,79 @@ func fallbackRoute(msg Message, fleetCfg *FleetConfig) RoutingResult {
 	}
 
 	return RoutingResult{Target: "none", Reason: "fallback: no valid routing signal"}
+}
+
+// rerouteViaIntermediary checks whether a message mentions agents that the
+// sender cannot directly reach, and if so, finds an intermediary in the
+// sender's talksTo list that CAN reach the mentioned agent.
+//
+// This handles a common pattern: the PO reviews work and says
+// "@architect, great work. @dev, please implement this." The PO's talksTo
+// is [human, architect], so @dev is unreachable. Without re-routing, the
+// router returns "human" and the session stalls forever. With re-routing,
+// we detect that @architect can reach @dev and route there instead.
+//
+// Returns nil if no re-route is needed (no unreachable mentions found).
+func rerouteViaIntermediary(msg Message, senderKey string, fleetCfg *FleetConfig) *RoutingResult {
+	mentions := msg.Mentions
+	if len(mentions) == 0 {
+		mentions = ParseMentions(msg.Text)
+	}
+	if len(mentions) == 0 {
+		return nil
+	}
+
+	senderTargets := fleetCfg.GetTalksTo(senderKey)
+	senderTargetSet := make(map[string]bool, len(senderTargets))
+	for _, t := range senderTargets {
+		senderTargetSet[t] = true
+	}
+
+	// Collect agents mentioned in the message that:
+	// (a) are valid fleet agents (exist in the config)
+	// (b) are NOT in the sender's talksTo (unreachable directly)
+	// (c) are not the sender themselves
+	// (d) are not "human" (handled separately)
+	var unreachable []string
+	for _, m := range mentions {
+		if m == senderKey || m == "human" {
+			continue
+		}
+		if _, isAgent := fleetCfg.Agents[m]; !isAgent {
+			continue
+		}
+		if senderTargetSet[m] {
+			continue // sender can already reach this agent
+		}
+		unreachable = append(unreachable, m)
+	}
+
+	if len(unreachable) == 0 {
+		return nil
+	}
+
+	// For each unreachable agent, check if any of the sender's talksTo
+	// targets can reach them (one-hop lookup). Pick the first intermediary
+	// found, prioritizing targets earlier in the talksTo list (which
+	// typically follows the communication flow order).
+	for _, target := range unreachable {
+		for _, intermediary := range senderTargets {
+			if intermediary == "human" {
+				continue
+			}
+			if fleetCfg.CanTalkTo(intermediary, target) {
+				log.Printf("[fleet-router] Re-route: @%s mentioned @%s (unreachable), routing to @%s (intermediary)",
+					senderKey, target, intermediary)
+				return &RoutingResult{
+					Target: intermediary,
+					Reason: fmt.Sprintf("re-route: @%s mentioned unreachable @%s, routing via @%s",
+						senderKey, target, intermediary),
+				}
+			}
+		}
+	}
+
+	// No intermediary found (target is more than one hop away).
+	// Fall through to the original routing decision.
+	return nil
 }

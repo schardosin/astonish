@@ -25,6 +25,11 @@ const (
 	// ModeAdaptive runs a free-form agentic chat turn. The LLM receives
 	// stored instructions and can reason, adapt, and use tools dynamically.
 	ModeAdaptive JobMode = "adaptive"
+
+	// ModeFleetPoll polls an external channel (e.g., GitHub Issues) for a fleet plan
+	// and starts headless fleet sessions for new work items. The job's Payload.Flow
+	// field holds the fleet plan key.
+	ModeFleetPoll JobMode = "fleet_poll"
 )
 
 // JobSchedule defines when a job runs.

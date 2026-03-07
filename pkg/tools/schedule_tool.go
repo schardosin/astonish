@@ -29,7 +29,7 @@ type SchedulerAccess interface {
 type SchedulerJob struct {
 	ID        string            `json:"id"`
 	Name      string            `json:"name"`
-	Mode      string            `json:"mode"` // "routine" or "adaptive"
+	Mode      string            `json:"mode"` // "routine", "adaptive", or "fleet_poll"
 	Cron      string            `json:"cron"`
 	Timezone  string            `json:"timezone,omitempty"`
 	Flow      string            `json:"flow,omitempty"`
@@ -89,7 +89,7 @@ func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, err
 	if args.Mode != "routine" && args.Mode != "adaptive" {
 		return ScheduleJobResult{
 			Status:  "error",
-			Message: "Mode must be 'routine' or 'adaptive'",
+			Message: "Mode must be 'routine' or 'adaptive'. Note: 'fleet_poll' jobs are created automatically when a fleet plan is activated, not via this tool.",
 		}, nil
 	}
 
@@ -193,6 +193,7 @@ type JobSummary struct {
 	Mode     string `json:"mode"`
 	Schedule string `json:"schedule"`
 	Timezone string `json:"timezone,omitempty"`
+	PlanKey  string `json:"plan_key,omitempty"` // fleet plan key for fleet_poll jobs
 	Enabled  bool   `json:"enabled"`
 	Status   string `json:"last_status"`
 	NextRun  string `json:"next_run,omitempty"`
@@ -221,6 +222,10 @@ func listScheduledJobs(ctx tool.Context, args ListScheduledJobsArgs) (ListSchedu
 			Enabled:  j.Enabled,
 			Status:   j.LastStatus,
 			Failures: j.Failures,
+		}
+		// For fleet_poll jobs, the Flow field holds the plan key
+		if j.Mode == "fleet_poll" {
+			summary.PlanKey = j.Flow
 		}
 		if j.NextRun != nil {
 			summary.NextRun = j.NextRun.Format(time.RFC3339)
@@ -377,9 +382,16 @@ func updateScheduledJob(ctx tool.Context, args UpdateScheduledJobArgs) (UpdateSc
 		}, nil
 	}
 
+	msg := fmt.Sprintf("Job %q updated: %s", job.Name, strings.Join(changes, ", "))
+	// Add a note for fleet_poll jobs that schedule changes should ideally
+	// be done through deactivate/reactivate to stay in sync with the plan.
+	if job.Mode == "fleet_poll" && args.Schedule != "" {
+		msg += ". Note: for fleet_poll jobs, consider deactivating and reactivating the fleet plan to keep the plan config in sync."
+	}
+
 	return UpdateScheduledJobResult{
 		Status:  "updated",
-		Message: fmt.Sprintf("Job %q updated: %s", job.Name, strings.Join(changes, ", ")),
+		Message: msg,
 	}, nil
 }
 
@@ -430,7 +442,7 @@ func NewRemoveScheduledJobTool() (tool.Tool, error) {
 func NewUpdateScheduledJobTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "update_scheduled_job",
-		Description: "Update a scheduled job. Can enable/disable, change schedule, timezone, or name.",
+		Description: "Update a scheduled job. Can enable/disable, change schedule, timezone, or name. Works for all job modes (routine, adaptive, fleet_poll). For fleet_poll jobs, schedule changes should ideally be done by deactivating and reactivating the fleet plan.",
 	}, updateScheduledJob)
 }
 

@@ -19,6 +19,11 @@ import (
 // It is injected by the daemon to avoid import cycles (scheduler -> launcher -> api).
 type RunHeadlessFunc func(ctx context.Context, cfg *HeadlessRunConfig) (string, error)
 
+// FleetPollFunc is a function type for polling a fleet plan's external channel.
+// It is injected by the daemon to avoid import cycles (scheduler -> fleet).
+// The planKey identifies which fleet plan to poll. Returns a result summary.
+type FleetPollFunc func(ctx context.Context, planKey string) (string, error)
+
 // HeadlessRunConfig holds the parameters for a headless flow run.
 // This mirrors launcher.HeadlessConfig but lives in the scheduler package
 // to avoid the import cycle.
@@ -49,6 +54,9 @@ type Executor struct {
 	// RunHeadless is the function to call for routine (flow) execution.
 	// Injected by the daemon to avoid import cycles.
 	RunHeadless RunHeadlessFunc
+	// FleetPoll is the function to call for fleet_poll mode execution.
+	// Injected by the daemon to avoid import cycles.
+	FleetPoll FleetPollFunc
 }
 
 // Execute runs a job based on its mode and returns the result text.
@@ -58,6 +66,8 @@ func (e *Executor) Execute(ctx context.Context, job *Job) (string, error) {
 		return e.executeRoutine(ctx, job)
 	case ModeAdaptive:
 		return e.executeAdaptive(ctx, job)
+	case ModeFleetPoll:
+		return e.executeFleetPoll(ctx, job)
 	default:
 		return "", fmt.Errorf("unknown job mode: %s", job.Mode)
 	}
@@ -220,4 +230,17 @@ func resolveFlowPath(name string) (string, error) {
 	}
 
 	return "", fmt.Errorf("flow %q not found in any search path", name)
+}
+
+// executeFleetPoll delegates to the injected FleetPollFunc.
+// The job's Payload.Flow field holds the fleet plan key to poll.
+func (e *Executor) executeFleetPoll(ctx context.Context, job *Job) (string, error) {
+	planKey := job.Payload.Flow
+	if planKey == "" {
+		return "", fmt.Errorf("fleet_poll job %q has no plan key (Payload.Flow)", job.Name)
+	}
+	if e.FleetPoll == nil {
+		return "", fmt.Errorf("fleet poll function not configured")
+	}
+	return e.FleetPoll(ctx, planKey)
 }

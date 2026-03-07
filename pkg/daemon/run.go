@@ -19,8 +19,10 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
 	emailpkg "github.com/schardosin/astonish/pkg/email"
+	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/launcher"
 	"github.com/schardosin/astonish/pkg/scheduler"
+	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/tools"
 )
 
@@ -109,6 +111,21 @@ func Run(cfg RunConfig) error {
 	// Initialize tools cache
 	ctx := context.Background()
 	api.InitToolsCache(ctx)
+
+	// --- Initialize file store for fleet session persistence ---
+	// This must happen early, before any fleet sessions can be created.
+	// Fleet sessions need a FileStore to persist transcripts and session
+	// metadata, independent of the ChatManager's lazy initialization.
+	if sessDir, dirErr := config.GetSessionsDir(&appCfg.Sessions); dirErr == nil {
+		if fleetStore, fsErr := persistentsession.NewFileStore(sessDir); fsErr == nil {
+			api.SetFleetSessionStore(fleetStore)
+			logger.Printf("Fleet session store initialized (%s)", sessDir)
+		} else {
+			logger.Printf("Warning: Failed to initialize fleet session store: %v", fsErr)
+		}
+	} else {
+		logger.Printf("Warning: Failed to resolve sessions directory: %v", dirErr)
+	}
 
 	// --- Initialize device authorization for Studio ---
 	var authManager *api.AuthManager
@@ -363,6 +380,7 @@ func Run(cfg RunConfig) error {
 
 	// --- Initialize scheduler if enabled ---
 	var sched *scheduler.Scheduler
+	var schedExec *scheduler.Executor
 
 	if appCfg.Scheduler.IsSchedulerEnabled() {
 		storePath, storeErr := scheduler.DefaultStorePath()
@@ -374,7 +392,7 @@ func Run(cfg RunConfig) error {
 				logger.Printf("Warning: Failed to initialize scheduler store: %v", storeErr)
 			} else {
 				// Create executor with injected headless runner
-				exec := &scheduler.Executor{
+				schedExec = &scheduler.Executor{
 					AppConfig:    appCfg,
 					ProviderName: appCfg.General.DefaultProvider,
 					ModelName:    appCfg.General.DefaultModel,
@@ -382,8 +400,8 @@ func Run(cfg RunConfig) error {
 					RunHeadless:  makeHeadlessRunner(),
 				}
 				if factoryResult != nil {
-					exec.ChatAgent = factoryResult.ChatAgent
-					exec.SessionService = factoryResult.SessionService
+					schedExec.ChatAgent = factoryResult.ChatAgent
+					schedExec.SessionService = factoryResult.SessionService
 				}
 
 				// Create delivery function (only if channels are available)
@@ -392,13 +410,47 @@ func Run(cfg RunConfig) error {
 					deliver = scheduler.NewDeliverFunc(channelMgr)
 				}
 
-				sched = scheduler.New(store, exec.Execute, deliver, log.Default())
+				sched = scheduler.New(store, schedExec.Execute, deliver, log.Default())
 				sched.Start(ctx)
 
 				// Make scheduler available to API handlers and LLM tools
 				api.SetScheduler(sched)
 				tools.SetSchedulerAccess(newSchedulerBridge(sched))
 			}
+		}
+	}
+
+	// --- Initialize fleet plan activator ---
+	// This bridges fleet plans to the scheduler for automated polling.
+	// Requires both the scheduler and the plan registry to be initialized.
+	if sched != nil {
+		planReg := api.GetFleetPlanRegistry()
+		if planReg != nil {
+			fleetSchedBridge := newFleetSchedulerBridge(sched)
+			fleetStarter := func(fCtx context.Context, fCfg fleet.HeadlessFleetConfig) (string, error) {
+				return api.StartHeadlessFleetSession(fCtx, fCfg)
+			}
+			activator := fleet.NewPlanActivator(planReg, fleetSchedBridge, fleetStarter)
+
+			// Wire the poll function into the scheduler executor
+			if schedExec != nil {
+				schedExec.FleetPoll = activator.Poll
+			}
+
+			// Wire the recover function for session recovery after restart
+			activator.SetRecoverFunc(func(rCtx context.Context, rCfg fleet.RecoverFleetConfig) error {
+				return api.RecoverFleetSession(rCtx, rCfg)
+			})
+
+			// Make activator available to API handlers
+			api.SetPlanActivator(activator)
+
+			// Restore previously activated plans (re-create monitors)
+			if err := activator.RestoreActivated(); err != nil {
+				logger.Printf("Warning: Failed to restore activated plans: %v", err)
+			}
+
+			logger.Printf("Fleet plan activator initialized")
 		}
 	}
 
@@ -664,4 +716,60 @@ func setupEmailTools(cfg *emailToolConfig) {
 		return
 	}
 	tools.SetEmailClient(client)
+}
+
+// fleetSchedulerBridge adapts scheduler.Scheduler to fleet.SchedulerAccess,
+// bridging the two packages without import cycles.
+type fleetSchedulerBridge struct {
+	sched *scheduler.Scheduler
+}
+
+func newFleetSchedulerBridge(s *scheduler.Scheduler) *fleetSchedulerBridge {
+	return &fleetSchedulerBridge{sched: s}
+}
+
+func (b *fleetSchedulerBridge) AddJob(job *fleet.SchedulerJob) error {
+	sj := &scheduler.Job{
+		Name: job.Name,
+		Mode: scheduler.JobMode(job.Mode),
+		Schedule: scheduler.JobSchedule{
+			Cron: job.Cron,
+		},
+		Payload: scheduler.JobPayload{
+			Flow: job.Flow,
+		},
+		Enabled: job.Enabled,
+	}
+	log.Printf("[fleet-sched-bridge] Adding job %q: mode=%s cron=%q flow=%q enabled=%v",
+		job.Name, job.Mode, job.Cron, job.Flow, job.Enabled)
+	if err := b.sched.Store().Add(sj); err != nil {
+		return err
+	}
+	job.ID = sj.ID
+	b.sched.RefreshNextRun(sj.ID)
+	log.Printf("[fleet-sched-bridge] Job created with ID %s", sj.ID)
+	return nil
+}
+
+func (b *fleetSchedulerBridge) RemoveJob(id string) error {
+	return b.sched.Store().Remove(id)
+}
+
+func (b *fleetSchedulerBridge) GetJob(id string) *fleet.SchedulerJob {
+	sj := b.sched.Store().Get(id)
+	if sj == nil {
+		return nil
+	}
+	return &fleet.SchedulerJob{
+		ID:      sj.ID,
+		Name:    sj.Name,
+		Mode:    string(sj.Mode),
+		Cron:    sj.Schedule.Cron,
+		Flow:    sj.Payload.Flow,
+		Enabled: sj.Enabled,
+	}
+}
+
+func (b *fleetSchedulerBridge) ValidateCron(expr string) error {
+	return scheduler.ValidateCron(expr)
 }

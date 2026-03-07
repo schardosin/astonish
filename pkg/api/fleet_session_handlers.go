@@ -25,7 +25,33 @@ import (
 var (
 	fleetSessionRegistry     *fleet.SessionRegistry
 	fleetSessionRegistryOnce sync.Once
+
+	// fleetFileStore is a standalone FileStore for fleet session persistence.
+	// Set during daemon startup so fleet sessions can persist transcripts and
+	// session metadata even when the ChatManager hasn't been lazily initialized
+	// (which only happens when someone opens the Studio UI).
+	fleetFileStore *session.FileStore
 )
+
+// SetFleetSessionStore sets the FileStore used for fleet session persistence.
+// Must be called during daemon startup before any fleet sessions are created.
+func SetFleetSessionStore(fs *session.FileStore) {
+	fleetFileStore = fs
+}
+
+// getFleetFileStore returns the FileStore for fleet persistence, trying the
+// dedicated fleet store first, then falling back to the ChatManager's store.
+func getFleetFileStore() *session.FileStore {
+	if fleetFileStore != nil {
+		return fleetFileStore
+	}
+	// Fallback: try the ChatManager (works when Studio UI has been opened)
+	cm := GetChatManager()
+	if cm != nil {
+		return cm.fileStore()
+	}
+	return nil
+}
 
 // getFleetSessionRegistry returns the global fleet session registry (singleton).
 func getFleetSessionRegistry() *fleet.SessionRegistry {
@@ -38,7 +64,8 @@ func getFleetSessionRegistry() *fleet.SessionRegistry {
 // FleetStartRequest is the request body for POST /api/studio/fleet/start.
 type FleetStartRequest struct {
 	FleetKey string `json:"fleet_key"`
-	Message  string `json:"message,omitempty"` // optional initial message from user
+	PlanKey  string `json:"plan_key,omitempty"` // alternative to fleet_key: start from a fleet plan
+	Message  string `json:"message,omitempty"`  // optional initial message from user
 }
 
 // FleetMessageRequest is the request body for POST /api/studio/fleet/sessions/{id}/message.
@@ -57,22 +84,47 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.FleetKey == "" {
-		http.Error(w, "fleet_key is required", http.StatusBadRequest)
+	if req.FleetKey == "" && req.PlanKey == "" {
+		http.Error(w, "fleet_key or plan_key is required", http.StatusBadRequest)
 		return
 	}
 
-	// Resolve fleet config
-	fleetReg := GetFleetRegistry()
-	if fleetReg == nil {
-		http.Error(w, "Fleet system not initialized", http.StatusServiceUnavailable)
-		return
-	}
+	// Resolve fleet config: either from a fleet plan or a regular fleet
+	var fleetCfg *fleet.FleetConfig
+	var fleetPlan *fleet.FleetPlan
+	var fleetKey string
+	var fleetName string
 
-	fleetCfg, ok := fleetReg.GetFleet(req.FleetKey)
-	if !ok {
-		http.Error(w, fmt.Sprintf("Fleet %q not found", req.FleetKey), http.StatusNotFound)
-		return
+	if req.PlanKey != "" {
+		// Start from a fleet plan
+		if fleetPlanRegistryVar == nil {
+			http.Error(w, "Fleet plan system not initialized", http.StatusServiceUnavailable)
+			return
+		}
+		plan, ok := fleetPlanRegistryVar.GetPlan(req.PlanKey)
+		if !ok {
+			http.Error(w, fmt.Sprintf("Fleet plan %q not found", req.PlanKey), http.StatusNotFound)
+			return
+		}
+		fleetPlan = plan
+		fleetCfg = &plan.FleetConfig
+		fleetKey = req.PlanKey
+		fleetName = plan.Name
+	} else {
+		// Start from a regular fleet
+		fleetReg := GetFleetRegistry()
+		if fleetReg == nil {
+			http.Error(w, "Fleet system not initialized", http.StatusServiceUnavailable)
+			return
+		}
+		cfg, ok := fleetReg.GetFleet(req.FleetKey)
+		if !ok {
+			http.Error(w, fmt.Sprintf("Fleet %q not found", req.FleetKey), http.StatusNotFound)
+			return
+		}
+		fleetCfg = cfg
+		fleetKey = req.FleetKey
+		fleetName = cfg.Name
 	}
 
 	// Get required dependencies
@@ -90,15 +142,20 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Create the fleet session with a background context (not tied to the HTTP request).
 	// The fleet session lives until explicitly stopped or all agents are done.
-	channel := fleet.NewChatChannel(req.FleetKey)
-	fleetSession := fleet.NewFleetSession(req.FleetKey, fleetCfg, channel, subAgentMgr, personaReg)
+	channel := fleet.NewChatChannel(fleetKey)
+	fleetSession := fleet.NewFleetSession(fleetKey, fleetCfg, channel, subAgentMgr, personaReg)
+
+	// If starting from a plan, attach it to the session for prompt injection
+	if fleetPlan != nil {
+		fleetSession.Plan = fleetPlan
+	}
 
 	// Register in the in-memory registry
 	registry := getFleetSessionRegistry()
 	registry.Register(fleetSession)
 
 	// Persist to the session index so the fleet shows in the sidebar
-	persistFleetSessionMeta(fleetSession, fleetCfg)
+	persistFleetSessionMeta(fleetSession, fleetCfg, 0, "")
 
 	// Create JSONL transcript so `sessions show` works for fleet sessions
 	wireFleetTranscript(fleetSession)
@@ -134,34 +191,33 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"session_id": fleetSession.ID,
-		"fleet_key":  req.FleetKey,
-		"fleet_name": fleetCfg.Name,
+		"fleet_key":  fleetKey,
+		"fleet_name": fleetName,
 		"agents":     buildAgentList(fleetCfg, personaReg),
 	})
 }
 
 // persistFleetSessionMeta adds the fleet session to the persistent session index
 // so it appears in the sidebar alongside regular chat sessions.
-func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig) {
-	cm := GetChatManager()
-	if cm == nil || cm.components == nil {
-		return
-	}
-	fileStore := cm.fileStore()
+func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig, issueNumber int, repo string) {
+	fileStore := getFleetFileStore()
 	if fileStore == nil {
+		log.Printf("[fleet] Warning: no file store available, cannot persist fleet session meta for %s", fs.ID)
 		return
 	}
 
 	now := time.Now()
 	meta := session.SessionMeta{
-		ID:        fs.ID,
-		AppName:   studioChatAppName,
-		UserID:    studioChatUserID,
-		CreatedAt: now,
-		UpdatedAt: now,
-		Title:     fmt.Sprintf("Fleet: %s", fleetCfg.Name),
-		FleetKey:  fs.FleetKey,
-		FleetName: fleetCfg.Name,
+		ID:          fs.ID,
+		AppName:     studioChatAppName,
+		UserID:      studioChatUserID,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Title:       fmt.Sprintf("Fleet: %s", fleetCfg.Name),
+		FleetKey:    fs.FleetKey,
+		FleetName:   fleetCfg.Name,
+		IssueNumber: issueNumber,
+		Repo:        repo,
 	}
 
 	if err := fileStore.AddSessionMeta(meta); err != nil {
@@ -171,11 +227,7 @@ func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig
 
 // updateFleetSessionMeta updates the message count and timestamp for a fleet session in the index.
 func updateFleetSessionMeta(sessionID string, messageCount int) {
-	cm := GetChatManager()
-	if cm == nil || cm.components == nil {
-		return
-	}
-	fileStore := cm.fileStore()
+	fileStore := getFleetFileStore()
 	if fileStore == nil {
 		return
 	}
@@ -190,12 +242,9 @@ func updateFleetSessionMeta(sessionID string, messageCount int) {
 // and wires up the OnMessagePosted callback to persist messages to it.
 // This makes fleet sessions visible via `astonish sessions show <id>`.
 func wireFleetTranscript(fs *fleet.FleetSession) {
-	cm := GetChatManager()
-	if cm == nil || cm.components == nil {
-		return
-	}
-	fileStore := cm.fileStore()
+	fileStore := getFleetFileStore()
 	if fileStore == nil {
+		log.Printf("[fleet] Warning: no file store available, cannot create transcript for %s", fs.ID)
 		return
 	}
 
@@ -394,11 +443,11 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 	// Subscribe to new messages BEFORE reading history to avoid missing
 	// messages posted between reading history and subscribing.
 	subscriberID := uuid.New().String()
-	chatChannel, isChatChannel := fs.Channel.(*fleet.ChatChannel)
+	subscribable, canSubscribe := fs.Channel.(fleet.Subscribable)
 	var msgCh <-chan fleet.Message
-	if isChatChannel {
-		msgCh = chatChannel.Subscribe(subscriberID)
-		defer chatChannel.Unsubscribe(subscriberID)
+	if canSubscribe {
+		msgCh = subscribable.Subscribe(subscriberID)
+		defer subscribable.Unsubscribe(subscriberID)
 	}
 
 	// Send existing thread history
@@ -474,8 +523,8 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 			})
 
 			// Update persistent meta (message count)
-			if isChatChannel {
-				updateFleetSessionMeta(sessionID, chatChannel.MessageCount())
+			if thread, thErr := fs.Channel.GetThread(ctx); thErr == nil {
+				updateFleetSessionMeta(sessionID, len(thread))
 			}
 		}
 	}

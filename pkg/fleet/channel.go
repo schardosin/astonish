@@ -6,8 +6,8 @@ import (
 
 // Channel is the communication backbone for a fleet session.
 // It abstracts the medium through which agents and the human exchange messages.
-// The initial implementation uses an Astonish chat session as the channel;
-// future implementations could use GitHub Issues, Jira, Slack, etc.
+// Implementations include ChatChannel (in-memory for UI sessions) and
+// GitHubIssueChannel (posts comments to a GitHub issue).
 type Channel interface {
 	// PostMessage posts a message to the channel.
 	// The message is persisted and visible to all participants.
@@ -22,4 +22,12 @@ type Channel interface {
 
 	// Close shuts down the channel and releases resources.
 	Close() error
+}
+
+// Subscribable is an optional interface that Channel implementations can
+// provide to support real-time message streaming to multiple viewers (SSE).
+// Both ChatChannel and GitHubIssueChannel implement this.
+type Subscribable interface {
+	Subscribe(id string) <-chan Message
+	Unsubscribe(id string)
 }

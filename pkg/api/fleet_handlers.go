@@ -11,8 +11,9 @@ import (
 
 // Package-level registries, set by the launcher during initialization.
 var (
-	personaRegistryVar *persona.Registry
-	fleetRegistryVar   *fleet.Registry
+	personaRegistryVar   *persona.Registry
+	fleetRegistryVar     *fleet.Registry
+	fleetPlanRegistryVar *fleet.PlanRegistry
 )
 
 // SetPersonaRegistry sets the persona registry for API handlers.
@@ -25,9 +26,19 @@ func SetFleetRegistry(reg *fleet.Registry) {
 	fleetRegistryVar = reg
 }
 
+// SetFleetPlanRegistry sets the fleet plan registry for API handlers.
+func SetFleetPlanRegistry(reg *fleet.PlanRegistry) {
+	fleetPlanRegistryVar = reg
+}
+
 // GetFleetRegistry returns the fleet registry (for use by other API packages).
 func GetFleetRegistry() *fleet.Registry {
 	return fleetRegistryVar
+}
+
+// GetFleetPlanRegistry returns the fleet plan registry (for use by other packages).
+func GetFleetPlanRegistry() *fleet.PlanRegistry {
+	return fleetPlanRegistryVar
 }
 
 // GetPersonaRegistry returns the persona registry (for use by other API packages).

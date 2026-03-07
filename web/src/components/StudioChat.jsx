@@ -3,7 +3,7 @@ import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, S
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { fetchSessions, fetchSessionHistory, deleteSession, connectChat, stopChat } from '../api/studioChat'
-import { fetchFleets, startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions } from '../api/fleetChat'
+import { fetchFleets, fetchFleetPlans, startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions, activateFleetPlan, deactivateFleetPlan, getFleetPlanStatus } from '../api/fleetChat'
 import HomePage from './HomePage'
 
 // Agent identity colors for the team conversation view
@@ -23,17 +23,32 @@ function getAgentColor(sender) {
 // Fleet start dialog component
 function FleetStartDialog({ onStart, onCancel, defaultMessage = '' }) {
   const [fleets, setFleets] = useState([])
-  const [selectedFleet, setSelectedFleet] = useState('')
+  const [plans, setPlans] = useState([])
+  const [selectedKey, setSelectedKey] = useState('')
+  const [selectedType, setSelectedType] = useState('fleet') // 'fleet' or 'plan'
   const [initialMessage, setInitialMessage] = useState(defaultMessage)
   const [isLoading, setIsLoading] = useState(true)
+  const [planStatus, setPlanStatus] = useState(null) // activation status for selected plan
+  const [activating, setActivating] = useState(false)
 
   useEffect(() => {
     const load = async () => {
       try {
-        const data = await fetchFleets()
-        setFleets(data.fleets || [])
-        if (data.fleets && data.fleets.length > 0) {
-          setSelectedFleet(data.fleets[0].key)
+        const [fleetData, planData] = await Promise.all([
+          fetchFleets(),
+          fetchFleetPlans().catch(() => ({ plans: [] })),
+        ])
+        const loadedFleets = fleetData.fleets || []
+        const loadedPlans = planData.plans || []
+        setFleets(loadedFleets)
+        setPlans(loadedPlans)
+        // Default to first fleet
+        if (loadedFleets.length > 0) {
+          setSelectedKey(loadedFleets[0].key)
+          setSelectedType('fleet')
+        } else if (loadedPlans.length > 0) {
+          setSelectedKey(loadedPlans[0].key)
+          setSelectedType('plan')
         }
       } catch (err) {
         console.error('Failed to load fleets:', err)
@@ -44,11 +59,63 @@ function FleetStartDialog({ onStart, onCancel, defaultMessage = '' }) {
     load()
   }, [])
 
+  // Fetch activation status when a plan is selected
+  useEffect(() => {
+    if (selectedType !== 'plan' || !selectedKey) {
+      setPlanStatus(null)
+      return
+    }
+    const selected = plans.find(p => p.key === selectedKey)
+    if (!selected || selected.channel_type === 'chat' || selected.channel_type === '') {
+      setPlanStatus(null)
+      return
+    }
+    getFleetPlanStatus(selectedKey).then(setPlanStatus).catch(() => setPlanStatus(null))
+  }, [selectedKey, selectedType, plans])
+
+  const handleSelectChange = (e) => {
+    const val = e.target.value
+    // Values are prefixed with "fleet:" or "plan:" to distinguish
+    if (val.startsWith('plan:')) {
+      setSelectedKey(val.slice(5))
+      setSelectedType('plan')
+    } else {
+      setSelectedKey(val.startsWith('fleet:') ? val.slice(6) : val)
+      setSelectedType('fleet')
+    }
+  }
+
+  const handleActivateToggle = async () => {
+    if (activating) return
+    setActivating(true)
+    try {
+      if (planStatus?.activated) {
+        await deactivateFleetPlan(selectedKey)
+      } else {
+        await activateFleetPlan(selectedKey)
+      }
+      // Refresh status and plans
+      const [newStatus, planData] = await Promise.all([
+        getFleetPlanStatus(selectedKey),
+        fetchFleetPlans().catch(() => ({ plans: [] })),
+      ])
+      setPlanStatus(newStatus)
+      setPlans(planData.plans || [])
+    } catch (err) {
+      console.error('Activation toggle failed:', err)
+      alert('Failed: ' + err.message)
+    } finally {
+      setActivating(false)
+    }
+  }
+
   const handleSubmit = (e) => {
     e.preventDefault()
-    if (!selectedFleet) return
-    onStart(selectedFleet, initialMessage)
+    if (!selectedKey) return
+    onStart(selectedType === 'plan' ? null : selectedKey, initialMessage, selectedType === 'plan' ? selectedKey : null)
   }
+
+  const hasItems = fleets.length > 0 || plans.length > 0
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
@@ -67,23 +134,74 @@ function FleetStartDialog({ onStart, onCancel, defaultMessage = '' }) {
             <div className="flex items-center justify-center py-8">
               <Loader size={18} className="animate-spin text-cyan-400" />
             </div>
-          ) : fleets.length === 0 ? (
+          ) : !hasItems ? (
             <p className="text-sm text-center py-4" style={{ color: 'var(--text-muted)' }}>No fleets available</p>
           ) : (
             <>
               <div>
                 <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Fleet</label>
                 <select
-                  value={selectedFleet}
-                  onChange={(e) => setSelectedFleet(e.target.value)}
+                  value={selectedType === 'plan' ? `plan:${selectedKey}` : `fleet:${selectedKey}`}
+                  onChange={handleSelectChange}
                   className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
                   style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
                 >
-                  {fleets.map(f => (
-                    <option key={f.key} value={f.key}>{f.name} ({f.agent_names.join(', ')})</option>
-                  ))}
+                  {fleets.length > 0 && (
+                    <optgroup label="Fleets">
+                      {fleets.map(f => (
+                        <option key={`fleet:${f.key}`} value={`fleet:${f.key}`}>{f.name} ({f.agent_names.join(', ')})</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {plans.length > 0 && (
+                    <optgroup label="Fleet Plans">
+                      {plans.map(p => (
+                        <option key={`plan:${p.key}`} value={`plan:${p.key}`}>
+                          {p.name} [{p.channel_type}]{p.activated ? ' (active)' : ''} ({p.agent_names.join(', ')})
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
               </div>
+              {/* Activation controls for non-chat plans */}
+              {planStatus && (
+                <div className="rounded-lg p-3 space-y-2" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className={`w-2 h-2 rounded-full ${planStatus.activated ? 'bg-green-400' : 'bg-gray-500'}`} />
+                      <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+                        {planStatus.activated ? 'Monitoring active' : 'Monitoring inactive'}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleActivateToggle}
+                      disabled={activating}
+                      className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                        planStatus.activated
+                          ? 'bg-red-600/20 text-red-400 hover:bg-red-600/30'
+                          : 'bg-green-600/20 text-green-400 hover:bg-green-600/30'
+                      } disabled:opacity-50`}
+                    >
+                      {activating ? 'Working...' : planStatus.activated ? 'Deactivate' : 'Activate'}
+                    </button>
+                  </div>
+                  {planStatus.activated && (
+                    <div className="text-xs space-y-0.5" style={{ color: 'var(--text-muted)' }}>
+                      {planStatus.last_poll_at && (
+                        <div>Last poll: {new Date(planStatus.last_poll_at).toLocaleString()} ({planStatus.last_poll_status || 'pending'})</div>
+                      )}
+                      {planStatus.sessions_started > 0 && (
+                        <div>Sessions started: {planStatus.sessions_started}</div>
+                      )}
+                      {planStatus.last_poll_error && (
+                        <div className="text-red-400">Error: {planStatus.last_poll_error}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Initial request (optional)</label>
                 <textarea
@@ -101,7 +219,7 @@ function FleetStartDialog({ onStart, onCancel, defaultMessage = '' }) {
             <button type="button" onClick={onCancel} className="px-4 py-2 text-sm rounded-lg hover:bg-white/5 transition-colors" style={{ color: 'var(--text-secondary)' }}>
               Cancel
             </button>
-            <button type="submit" disabled={!selectedFleet || isLoading} className="px-4 py-2 text-sm bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+            <button type="submit" disabled={!selectedKey || isLoading} className="px-4 py-2 text-sm bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
               Start Fleet
             </button>
           </div>
@@ -420,6 +538,7 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
   const [fleetState, setFleetState] = useState(null) // { state, active_agent }
   const [showFleetDialog, setShowFleetDialog] = useState(false)
   const [fleetDialogMessage, setFleetDialogMessage] = useState('') // pre-populated from /fleet command
+  const [pendingFleetPlanPrompt, setPendingFleetPlanPrompt] = useState(null) // deferred plan creation message
 
   // Slash command popup
   const [showSlashPopup, setShowSlashPopup] = useState(false)
@@ -445,6 +564,7 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
     { cmd: '/compact', desc: 'Show context window usage' },
     { cmd: '/distill', desc: 'Distill last task into a flow' },
     { cmd: '/fleet', desc: 'Start a fleet-based task with specialized agents' },
+    { cmd: '/fleet-plan', desc: 'Create a reusable fleet plan' },
   ], [])
 
   // Wrapper to keep URL in sync with active session
@@ -714,7 +834,7 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
   }, [activeSessionId, isFleetMode, fleetSessionId])
 
   // Start a fleet session
-  const handleFleetStart = useCallback(async (fleetKey, initialMessage) => {
+  const handleFleetStart = useCallback(async (fleetKey, initialMessage, planKey) => {
     setShowFleetDialog(false)
     setFleetDialogMessage('')
     setIsFleetMode(true)
@@ -728,7 +848,7 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
 
     try {
       // Create the fleet session (returns JSON with session info)
-      const sessionInfo = await startFleetSession({ fleetKey, message: initialMessage })
+      const sessionInfo = await startFleetSession({ fleetKey, planKey, message: initialMessage })
       setFleetSessionId(sessionInfo.session_id)
       setFleetInfo({ fleet_key: sessionInfo.fleet_key, fleet_name: sessionInfo.fleet_name, agents: sessionInfo.agents })
       changeSession(sessionInfo.session_id)
@@ -910,6 +1030,19 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
             setShowFleetDialog(true)
             break
 
+          case 'fleet_plan_redirect':
+            // /fleet-plan [hint] command: start plan creation in a fresh conversation.
+            // We defer the sendMessage call to let the current SSE stream finish cleanly.
+            setIsStreaming(false)
+            {
+              const hint = data.hint || ''
+              const planPrompt = hint
+                ? `I want to create a fleet plan. Here's what I need: ${hint}\n\nPlease guide me through the process. Ask me about the communication channel, artifact destinations, and any agent behavior customizations.\n\nIMPORTANT: Before saving, you MUST call the validate_fleet_plan tool to verify all external connections work (repo access, credentials, labels, etc.). Only call save_fleet_plan after validation passes. If validation fails, show me what went wrong and help me fix it.`
+                : `I want to create a new fleet plan. Please guide me through the process step by step:\n1. Which base fleet to use\n2. Communication channel type (chat, github_issues, jira, email)\n3. Channel-specific settings (e.g., for github_issues: repo, labels to filter, polling schedule)\n4. Artifact destinations (where code, docs, etc. should go)\n5. Any agent behavior customizations\n\nAsk me questions one at a time. When we have all the details:\n1. First call validate_fleet_plan to verify all connections work\n2. Show me the validation results\n3. Only call save_fleet_plan after validation passes\n\nIf validation fails, help me fix the issues before retrying.`
+              setPendingFleetPlanPrompt(planPrompt)
+            }
+            break
+
           case 'fleet_progress':
             // Accumulate fleet progress events into a structured fleet_execution message.
             // Each event is appended to the phases array; the UI renders a collapsible panel.
@@ -1006,6 +1139,15 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
 
     abortRef.current = controller
   }, [activeSessionId])
+
+  // Process deferred fleet plan prompt (set by fleet_plan_redirect SSE event)
+  useEffect(() => {
+    if (pendingFleetPlanPrompt && !isStreaming) {
+      const prompt = pendingFleetPlanPrompt
+      setPendingFleetPlanPrompt(null)
+      sendMessage(prompt)
+    }
+  }, [pendingFleetPlanPrompt, isStreaming, sendMessage])
 
   const handleSubmit = (e) => {
     e.preventDefault()

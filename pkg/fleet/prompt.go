@@ -2,10 +2,15 @@ package fleet
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/persona"
 )
+
+// curlyPlaceholderRe matches {variable} patterns that ADK's InjectSessionState
+// would try to resolve as session state keys. We escape them in prompt text.
+var curlyPlaceholderRe = regexp.MustCompile(`\{([^{}]+)\}`)
 
 // BuildSystemPromptSection generates the fleet section for the ChatAgent's
 // system prompt. This provides lightweight fleet awareness: listing available
@@ -83,7 +88,7 @@ func BuildSystemPromptSection(
 // - Fleet behaviors (from the fleet YAML)
 // - Communication graph awareness (who the agent can talk to)
 // - Delegate tool instructions (if applicable)
-func BuildAgentPrompt(personaCfg *persona.PersonaConfig, agentCfg FleetAgentConfig, fleetCfg *FleetConfig, agentKey string) string {
+func BuildAgentPrompt(personaCfg *persona.PersonaConfig, agentCfg FleetAgentConfig, fleetCfg *FleetConfig, agentKey string, plan ...*FleetPlan) string {
 	var sb strings.Builder
 
 	// Persona identity
@@ -144,6 +149,16 @@ func BuildAgentPrompt(personaCfg *persona.PersonaConfig, agentCfg FleetAgentConf
 		buildDelegatePromptSection(&sb, agentCfg.Delegate)
 	}
 
+	// Fleet plan environment (channel + artifacts).
+	// The environment section may contain {placeholder} patterns in config values
+	// (e.g., branch_pattern: "fleet/{task}"). These must be escaped to prevent
+	// ADK's InjectSessionState from treating them as session state keys.
+	if len(plan) > 0 && plan[0] != nil {
+		var envSb strings.Builder
+		buildEnvironmentPromptSection(&envSb, plan[0])
+		sb.WriteString(curlyPlaceholderRe.ReplaceAllString(envSb.String(), "<$1>"))
+	}
+
 	return sb.String()
 }
 
@@ -183,4 +198,75 @@ func buildDelegatePromptSection(sb *strings.Builder, d *DelegateConfig) {
 	sb.WriteString(fmt.Sprintf("- After %s completes, use `read_file` to verify the expected deliverables exist.\n", d.Tool))
 	sb.WriteString("- If the result is incomplete, call it again with specific follow-up instructions.\n")
 	sb.WriteString("- Use the returned `session_id` to continue in the same context.\n")
+}
+
+// buildEnvironmentPromptSection appends channel and artifact configuration
+// from a fleet plan to the agent's prompt. This tells the agent where work
+// items come from and where artifacts should be delivered.
+func buildEnvironmentPromptSection(sb *strings.Builder, plan *FleetPlan) {
+	sb.WriteString("\n## Environment Configuration\n\n")
+	sb.WriteString("This fleet session was started from a fleet plan with the following environment settings.\n")
+	sb.WriteString("Adjust your behavior accordingly.\n\n")
+
+	// Workspace directory (most important: prevents agents from searching the filesystem)
+	workspaceDir := plan.ResolveWorkspaceDir()
+	if workspaceDir != "" {
+		sb.WriteString("**Project Workspace:**\n")
+		sb.WriteString(fmt.Sprintf("- All project files live under: `%s`\n", workspaceDir))
+		sb.WriteString(fmt.Sprintf("- Source code goes in: `%s/src/`\n", workspaceDir))
+		sb.WriteString(fmt.Sprintf("- Documentation goes in: `%s/docs/`\n", workspaceDir))
+		sb.WriteString("- This directory has already been created for you.\n")
+		sb.WriteString("- **IMPORTANT:** Always use this workspace path for ALL file operations.\n")
+		sb.WriteString("  Do NOT search the filesystem for the project. Do NOT use `/` or `~` as starting points.\n\n")
+	}
+
+	// Channel info
+	sb.WriteString("**Communication Channel:**\n")
+	chType := plan.Channel.Type
+	if chType == "" {
+		chType = "chat"
+	}
+	sb.WriteString(fmt.Sprintf("- Type: `%s`\n", chType))
+	for k, v := range plan.Channel.Config {
+		sb.WriteString(fmt.Sprintf("- %s: `%v`\n", k, v))
+	}
+	if plan.Channel.Schedule != "" {
+		sb.WriteString(fmt.Sprintf("- Polling schedule: `%s`\n", plan.Channel.Schedule))
+	}
+	sb.WriteString("\n")
+
+	// Artifact destinations
+	if len(plan.Artifacts) > 0 {
+		sb.WriteString("**Artifact Destinations:**\n")
+		for name, artifact := range plan.Artifacts {
+			sb.WriteString(fmt.Sprintf("- **%s** (%s)", name, artifact.Type))
+			switch artifact.Type {
+			case "local":
+				if artifact.Path != "" {
+					sb.WriteString(fmt.Sprintf(": path `%s`", artifact.Path))
+				}
+			case "git_repo":
+				if artifact.Repo != "" {
+					sb.WriteString(fmt.Sprintf(": repo `%s`", artifact.Repo))
+				}
+				if artifact.BranchPattern != "" {
+					sb.WriteString(fmt.Sprintf(", branch pattern `%s`", artifact.BranchPattern))
+				}
+				if artifact.SubPath != "" {
+					sb.WriteString(fmt.Sprintf(", subpath `%s`", artifact.SubPath))
+				}
+				if artifact.AutoPR {
+					sb.WriteString(", auto-PR enabled")
+				}
+			}
+			sb.WriteString("\n")
+		}
+		sb.WriteString("\n")
+		sb.WriteString("When producing deliverables, ensure files are written to the correct artifact destination.\n")
+		if workspaceDir != "" {
+			sb.WriteString(fmt.Sprintf("All artifact destinations are relative to the project workspace at `%s`.\n", workspaceDir))
+		} else {
+			sb.WriteString("If an artifact destination specifies a git repo, work within that repo's directory.\n")
+		}
+	}
 }

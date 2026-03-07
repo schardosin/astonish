@@ -4,6 +4,7 @@
 
 const API_BASE = '/api/studio/fleet'
 const FLEET_API = '/api/fleets'
+const FLEET_PLANS_API = '/api/fleet-plans'
 
 /**
  * Fetch available fleet definitions
@@ -13,6 +14,18 @@ export async function fetchFleets() {
   const response = await fetch(FLEET_API)
   if (!response.ok) {
     throw new Error(`Failed to fetch fleets: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+/**
+ * Fetch available fleet plans
+ * @returns {Promise<{plans: Array<{key: string, name: string, description: string, created_from: string, channel_type: string, agent_count: number, agent_names: string[]}>}>}
+ */
+export async function fetchFleetPlans() {
+  const response = await fetch(FLEET_PLANS_API)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch fleet plans: ${response.statusText}`)
   }
   return response.json()
 }
@@ -46,18 +59,23 @@ export async function fetchFleetSession(id) {
  * Start a new fleet session. Returns session info as JSON.
  * The caller should then connect to the SSE stream via connectFleetStream().
  * @param {object} params
- * @param {string} params.fleetKey - Fleet definition key (e.g., 'software-dev')
- * @param {string} params.message - Optional initial message to the team
+ * @param {string} [params.fleetKey] - Fleet definition key (e.g., 'software-dev')
+ * @param {string} [params.planKey] - Fleet plan key (alternative to fleetKey)
+ * @param {string} [params.message] - Optional initial message to the team
  * @returns {Promise<{session_id: string, fleet_key: string, fleet_name: string, agents: Array}>}
  */
-export async function startFleetSession({ fleetKey, message }) {
+export async function startFleetSession({ fleetKey, planKey, message }) {
+  const body = { message: message || '' }
+  if (planKey) {
+    body.plan_key = planKey
+  } else {
+    body.fleet_key = fleetKey
+  }
+
   const response = await fetch(`${API_BASE}/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      fleet_key: fleetKey,
-      message: message || '',
-    }),
+    body: JSON.stringify(body),
   })
 
   if (!response.ok) {
@@ -174,4 +192,50 @@ export async function stopFleetSession(sessionId) {
   } catch (err) {
     console.warn('Failed to stop fleet session:', err)
   }
+}
+
+/**
+ * Activate a fleet plan (start polling its configured channel)
+ * @param {string} planKey - Fleet plan key
+ * @returns {Promise<{status: string, key: string}>}
+ */
+export async function activateFleetPlan(planKey) {
+  const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/activate`, {
+    method: 'POST',
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
+ * Deactivate a fleet plan (stop polling)
+ * @param {string} planKey - Fleet plan key
+ * @returns {Promise<{status: string, key: string}>}
+ */
+export async function deactivateFleetPlan(planKey) {
+  const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/deactivate`, {
+    method: 'POST',
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
+ * Get fleet plan activation status
+ * @param {string} planKey - Fleet plan key
+ * @returns {Promise<{activated: boolean, scheduler_job_id: string, activated_at: string, last_poll_at: string, last_poll_status: string, sessions_started: number}>}
+ */
+export async function getFleetPlanStatus(planKey) {
+  const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/status`)
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
 }

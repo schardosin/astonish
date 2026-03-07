@@ -244,6 +244,16 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// /fleet-plan: start a fleet plan creation conversation
+	if msg == "/fleet-plan" || strings.HasPrefix(msg, "/fleet-plan ") {
+		hint := strings.TrimSpace(strings.TrimPrefix(msg, "/fleet-plan"))
+		SendSSE(w, flusher, "fleet_plan_redirect", map[string]interface{}{
+			"hint": hint,
+		})
+		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+		return
+	}
+
 	if strings.HasPrefix(msg, "/") {
 		handleSlashCommand(ctx, w, flusher, cm, msg, req.SessionID)
 		return
@@ -454,6 +464,7 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 				"- `/compact` — Show context window usage and compaction status\n" +
 				"- `/distill` — Distill the last task into a reusable flow\n" +
 				"- `/fleet [task]` — Start a fleet session with an autonomous agent team\n" +
+				"- `/fleet-plan [hint]` — Create a reusable fleet plan through guided conversation\n" +
 				"- `/help` — Show this help message",
 		})
 

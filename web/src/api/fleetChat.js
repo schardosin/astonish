@@ -239,3 +239,104 @@ export async function getFleetPlanStatus(planKey) {
   }
   return response.json()
 }
+
+/**
+ * Fetch fleet session execution trace (merged parent + child events)
+ * @param {string} sessionId - Fleet session ID
+ * @param {object} [opts] - Optional filters
+ * @param {boolean} [opts.toolsOnly] - Only return tool events
+ * @param {number} [opts.lastN] - Limit to last N events
+ * @returns {Promise<{session_id: string, app: string, user: string, events: Array, summary: {total_events: number, tool_calls: number, errors: number}}>}
+ */
+export async function fetchFleetTrace(sessionId, opts = {}) {
+  const params = new URLSearchParams()
+  if (opts.toolsOnly) params.set('tools_only', 'true')
+  if (opts.lastN) params.set('last_n', String(opts.lastN))
+  const qs = params.toString()
+  const url = `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/trace${qs ? '?' + qs : ''}`
+  const response = await fetch(url)
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
+ * Duplicate a fleet plan
+ * @param {string} planKey - Fleet plan key to duplicate
+ * @returns {Promise<{status: string, key: string}>}
+ */
+export async function duplicateFleetPlan(planKey) {
+  const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/duplicate`, {
+    method: 'POST',
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
+ * Fetch raw YAML content of a fleet plan
+ * @param {string} planKey - Fleet plan key
+ * @returns {Promise<string>}
+ */
+export async function fetchFleetPlanYaml(planKey) {
+  const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/yaml`)
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.text()
+}
+
+/**
+ * Save raw YAML content for a fleet plan
+ * @param {string} planKey - Fleet plan key
+ * @param {string} yamlContent - Raw YAML content
+ * @returns {Promise<{status: string, key: string}>}
+ */
+export async function saveFleetPlanYaml(planKey, yamlContent) {
+  const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/yaml`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'text/yaml' },
+    body: yamlContent,
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
+ * Delete a fleet plan
+ * @param {string} planKey - Fleet plan key
+ * @returns {Promise<{status: string, key: string}>}
+ */
+export async function deleteFleetPlan(planKey) {
+  const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}`, {
+    method: 'DELETE',
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
+ * Get a single fleet plan detail
+ * @param {string} planKey - Fleet plan key
+ * @returns {Promise<{key: string, plan: object}>}
+ */
+export async function fetchFleetPlan(planKey) {
+  const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}`)
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
+}

@@ -15,6 +15,7 @@ import AIChatPanel from './components/AIChatPanel'
 import SettingsPage from './components/SettingsPage'
 import SetupWizard from './components/SetupWizard'
 import StudioChat from './components/StudioChat'
+import FleetView from './components/FleetView'
 import MCPDependenciesPanel from './components/MCPDependenciesPanel'
 import InstallMcpModal from './components/InstallMcpModal'
 import { useTheme } from './hooks/useTheme'
@@ -467,6 +468,8 @@ function App() {
       setView('chat')
     } else if (path.view === 'canvas') {
       setView('canvas')
+    } else if (path.view === 'fleet') {
+      setView('fleet')
     }
   }, [path, agents]) // Re-run when path or agents list changes
 
@@ -1337,6 +1340,12 @@ layout:
                   replaceHash(buildPath('chat'))
                 }
               }}
+            />
+          ) : view === 'fleet' ? (
+            <FleetView
+              theme={theme}
+              path={path}
+              onNavigate={(hashPath) => navigate(hashPath)}
             />
           ) : !selectedAgent ? (
              <div className="flex-1 flex items-center justify-center p-8 text-center" style={{ color: 'var(--text-muted)' }}>

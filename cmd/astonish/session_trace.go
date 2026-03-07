@@ -1,7 +1,6 @@
 package astonish
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -12,6 +11,7 @@ import (
 )
 
 // TraceOpts controls how the session trace is rendered.
+// Extends the shared TraceOpts with CLI-specific fields.
 type TraceOpts struct {
 	ToolsOnly  bool   // Only show tool call/response events
 	Verbose    bool   // Don't truncate args/results
@@ -21,42 +21,28 @@ type TraceOpts struct {
 	Indent     string // Prefix for each output line (for nested rendering)
 }
 
-// traceEntry is used for JSON output.
-type traceEntry struct {
-	Type       string         `json:"type"`
-	Timestamp  string         `json:"timestamp"`
-	Author     string         `json:"author,omitempty"`
-	Session    string         `json:"session,omitempty"` // sub-session label (only set for recursive child events)
-	Text       string         `json:"text,omitempty"`
-	ToolName   string         `json:"tool_name,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"`
-	Args       map[string]any `json:"args,omitempty"`
-	Result     map[string]any `json:"result,omitempty"`
-	DurationMs int64          `json:"duration_ms,omitempty"`
-	Success    *bool          `json:"success,omitempty"`
-	Error      string         `json:"error,omitempty"`
-}
+// traceEntry is an alias for the shared TraceEntry used in JSON output.
+type traceEntry = persistentsession.TraceEntry
 
-// traceSummary is the summary block in JSON output.
-type traceSummary struct {
-	TotalEvents int `json:"total_events"`
-	ToolCalls   int `json:"tool_calls"`
-	Errors      int `json:"errors"`
-}
+// traceSummary is an alias for the shared TraceSummary.
+type traceSummary = persistentsession.TraceSummary
 
-// traceJSON is the top-level JSON output structure.
-type traceJSON struct {
-	SessionID string       `json:"session_id"`
-	App       string       `json:"app"`
-	User      string       `json:"user"`
-	Events    []traceEntry `json:"events"`
-	Summary   traceSummary `json:"summary"`
-}
+// traceJSON is an alias for the shared TraceJSON.
+type traceJSON = persistentsession.TraceJSON
 
 const (
 	defaultTextMaxLen = 500
 	defaultArgsMaxLen = 200
 )
+
+// toSharedOpts converts CLI TraceOpts to the shared pkg/session TraceOpts.
+func toSharedOpts(opts TraceOpts) persistentsession.TraceOpts {
+	return persistentsession.TraceOpts{
+		ToolsOnly: opts.ToolsOnly,
+		Verbose:   opts.Verbose,
+		LastN:     opts.LastN,
+	}
+}
 
 // renderSessionTrace renders events as a human-readable timeline to stdout.
 func renderSessionTrace(events []*adksession.Event, opts TraceOpts) {
@@ -68,7 +54,6 @@ func renderSessionTrace(events []*adksession.Event, opts TraceOpts) {
 
 	// Track FunctionCall timestamps for duration computation
 	callTimestamps := make(map[string]time.Time) // keyed by FunctionCall.ID
-	callNames := make(map[string]string)         // keyed by FunctionCall.ID -> tool name
 
 	var (
 		toolCalls  int
@@ -107,11 +92,11 @@ func renderSessionTrace(events []*adksession.Event, opts TraceOpts) {
 			// User or model text
 			if part.Text != "" && !opts.ToolsOnly {
 				if part.Thought {
-					fmt.Printf("%s[thinking] %s\n\n", indent, truncateStr(part.Text, textMax))
+					fmt.Printf("%s[thinking] %s\n\n", indent, persistentsession.TruncateStr(part.Text, textMax))
 				} else if ev.Author == "user" || ev.Content.Role == "user" {
-					fmt.Printf("%s[user] %s\n\n", indent, truncateStr(part.Text, textMax))
+					fmt.Printf("%s[user] %s\n\n", indent, persistentsession.TruncateStr(part.Text, textMax))
 				} else {
-					fmt.Printf("%s[model] %s\n\n", indent, truncateStr(part.Text, textMax))
+					fmt.Printf("%s[model] %s\n\n", indent, persistentsession.TruncateStr(part.Text, textMax))
 				}
 			}
 
@@ -119,11 +104,10 @@ func renderSessionTrace(events []*adksession.Event, opts TraceOpts) {
 			if part.FunctionCall != nil {
 				fc := part.FunctionCall
 				callTimestamps[fc.ID] = ev.Timestamp
-				callNames[fc.ID] = fc.Name
 				toolCalls++
 
 				ts := formatTimestamp(ev.Timestamp)
-				argsStr := formatArgs(fc.Args, argsMax)
+				argsStr := persistentsession.FormatArgs(fc.Args, argsMax)
 
 				if opts.ToolsOnly {
 					fmt.Printf("%s%s  %s %s\n", indent, ts, fc.Name, argsStr)
@@ -143,7 +127,7 @@ func renderSessionTrace(events []*adksession.Event, opts TraceOpts) {
 				}
 
 				// Detect error
-				errStr := extractError(fr.Response)
+				errStr := persistentsession.ExtractError(fr.Response)
 				isError := errStr != ""
 				if isError {
 					toolErrors++
@@ -152,17 +136,17 @@ func renderSessionTrace(events []*adksession.Event, opts TraceOpts) {
 				// Format result
 				if opts.ToolsOnly {
 					if isError {
-						fmt.Printf("%s         -> ERROR: %s  (%s)\n", indent, truncateStr(errStr, argsMax), formatDuration(durationMs))
+						fmt.Printf("%s         -> ERROR: %s  (%s)\n", indent, persistentsession.TruncateStr(errStr, argsMax), persistentsession.FormatDuration(durationMs))
 					} else {
-						resultStr := formatResult(fr.Response, argsMax)
-						fmt.Printf("%s         -> %s  (%s)\n", indent, resultStr, formatDuration(durationMs))
+						resultStr := persistentsession.FormatResult(fr.Response, argsMax)
+						fmt.Printf("%s         -> %s  (%s)\n", indent, resultStr, persistentsession.FormatDuration(durationMs))
 					}
 				} else {
 					if isError {
-						fmt.Printf("%s   -> ERROR: %s  (%s)\n\n", indent, truncateStr(errStr, argsMax), formatDuration(durationMs))
+						fmt.Printf("%s   -> ERROR: %s  (%s)\n\n", indent, persistentsession.TruncateStr(errStr, argsMax), persistentsession.FormatDuration(durationMs))
 					} else {
-						resultStr := formatResult(fr.Response, argsMax)
-						fmt.Printf("%s   -> %s  (%s)\n\n", indent, resultStr, formatDuration(durationMs))
+						resultStr := persistentsession.FormatResult(fr.Response, argsMax)
+						fmt.Printf("%s   -> %s  (%s)\n\n", indent, resultStr, persistentsession.FormatDuration(durationMs))
 					}
 				}
 			}
@@ -181,213 +165,14 @@ func renderSessionTrace(events []*adksession.Event, opts TraceOpts) {
 	fmt.Printf("%s--- %s ---\n", indent, strings.Join(parts, " | "))
 }
 
-// collectTraceEntries converts ADK events into traceEntry objects for JSON output.
-// The sessionLabel parameter, when non-empty, is set on each entry to identify
-// which sub-session the event belongs to (used by recursive rendering).
-// Returns entries, tool call count, and error count.
+// collectTraceEntries delegates to the shared package.
 func collectTraceEntries(events []*adksession.Event, sessionLabel string, opts TraceOpts) ([]traceEntry, int, int) {
-	callTimestamps := make(map[string]time.Time)
-
-	var (
-		entries    []traceEntry
-		toolCalls  int
-		toolErrors int
-	)
-
-	for _, ev := range events {
-		if ev.Content == nil {
-			continue
-		}
-
-		for _, part := range ev.Content.Parts {
-			if part == nil {
-				continue
-			}
-
-			ts := ev.Timestamp.Format(time.RFC3339)
-
-			// Text
-			if part.Text != "" && !opts.ToolsOnly {
-				entryType := "model"
-				if ev.Author == "user" || ev.Content.Role == "user" {
-					entryType = "user"
-				}
-				if part.Thought {
-					entryType = "thinking"
-				}
-				entry := traceEntry{
-					Type:      entryType,
-					Timestamp: ts,
-					Author:    ev.Author,
-					Text:      part.Text,
-				}
-				if sessionLabel != "" {
-					entry.Session = sessionLabel
-				}
-				entries = append(entries, entry)
-			}
-
-			// FunctionCall
-			if part.FunctionCall != nil {
-				fc := part.FunctionCall
-				callTimestamps[fc.ID] = ev.Timestamp
-				toolCalls++
-
-				entry := traceEntry{
-					Type:       "tool_call",
-					Timestamp:  ts,
-					ToolName:   fc.Name,
-					ToolCallID: fc.ID,
-					Args:       fc.Args,
-				}
-				if sessionLabel != "" {
-					entry.Session = sessionLabel
-				}
-				entries = append(entries, entry)
-			}
-
-			// FunctionResponse
-			if part.FunctionResponse != nil {
-				fr := part.FunctionResponse
-
-				var durationMs int64
-				if callTS, ok := callTimestamps[fr.ID]; ok && !ev.Timestamp.IsZero() && !callTS.IsZero() {
-					durationMs = ev.Timestamp.Sub(callTS).Milliseconds()
-				}
-
-				errStr := extractError(fr.Response)
-				isError := errStr != ""
-				if isError {
-					toolErrors++
-				}
-
-				success := !isError
-				entry := traceEntry{
-					Type:       "tool_result",
-					Timestamp:  ts,
-					ToolName:   fr.Name,
-					ToolCallID: fr.ID,
-					DurationMs: durationMs,
-					Success:    &success,
-					Result:     fr.Response,
-				}
-				if isError {
-					entry.Error = errStr
-				}
-				if sessionLabel != "" {
-					entry.Session = sessionLabel
-				}
-				entries = append(entries, entry)
-			}
-		}
-	}
-
-	return entries, toolCalls, toolErrors
+	return persistentsession.CollectTraceEntries(events, sessionLabel, toSharedOpts(opts))
 }
 
-// extractError checks if a FunctionResponse contains an error.
-// ADK tools report errors as {"error": "message"} in the response map.
-func extractError(resp map[string]any) string {
-	if resp == nil {
-		return ""
-	}
-	// Check for "error" key (string)
-	if errVal, ok := resp["error"]; ok {
-		switch v := errVal.(type) {
-		case string:
-			if v != "" {
-				return v
-			}
-		case map[string]any:
-			// Some tools return {"error": {"message": "..."}}
-			if msg, ok := v["message"]; ok {
-				return fmt.Sprintf("%v", msg)
-			}
-			return fmt.Sprintf("%v", v)
-		}
-	}
-	return ""
-}
-
-// formatArgs renders a map as compact JSON, truncated to maxLen.
-func formatArgs(args map[string]any, maxLen int) string {
-	if len(args) == 0 {
-		return "{}"
-	}
-	if maxLen == 0 {
-		// Verbose: pretty print
-		data, err := json.MarshalIndent(args, "  ", "  ")
-		if err != nil {
-			return fmt.Sprintf("%v", args)
-		}
-		return string(data)
-	}
-	data, err := json.Marshal(args)
-	if err != nil {
-		return fmt.Sprintf("%v", args)
-	}
-	return truncateStr(string(data), maxLen)
-}
-
-// formatResult renders a tool result map as a compact string.
-func formatResult(result map[string]any, maxLen int) string {
-	if len(result) == 0 {
-		return "OK"
-	}
-
-	// For simple success results, show a compact form
-	if len(result) == 1 {
-		if success, ok := result["success"]; ok {
-			if b, ok := success.(bool); ok && b {
-				return "OK"
-			}
-		}
-	}
-
-	if maxLen == 0 {
-		data, err := json.MarshalIndent(result, "  ", "  ")
-		if err != nil {
-			return fmt.Sprintf("%v", result)
-		}
-		return string(data)
-	}
-
-	data, err := json.Marshal(result)
-	if err != nil {
-		return fmt.Sprintf("%v", result)
-	}
-	return truncateStr(string(data), maxLen)
-}
-
-// formatDuration renders milliseconds as a human-readable duration.
-func formatDuration(ms int64) string {
-	if ms <= 0 {
-		return "n/a"
-	}
-	if ms < 1000 {
-		return fmt.Sprintf("%dms", ms)
-	}
-	return fmt.Sprintf("%.1fs", float64(ms)/1000)
-}
-
-// formatTimestamp renders a time as HH:MM:SS for compact display.
-func formatTimestamp(t time.Time) string {
-	if t.IsZero() {
-		return "??:??:??"
-	}
-	return t.Format("15:04:05")
-}
-
-// truncateStr truncates a string to maxLen characters, appending "..." if truncated.
-// If maxLen is 0, no truncation is applied.
-func truncateStr(s string, maxLen int) string {
-	if maxLen <= 0 || len(s) <= maxLen {
-		return s
-	}
-	if maxLen <= 3 {
-		return s[:maxLen]
-	}
-	return s[:maxLen-3] + "..."
+// collectChildSessionEntries delegates to the shared package.
+func collectChildSessionEntries(sessDir, parentID string, index *persistentsession.SessionIndex, opts TraceOpts) ([]traceEntry, int, int) {
+	return persistentsession.CollectChildSessionEntries(sessDir, parentID, index, toSharedOpts(opts))
 }
 
 // renderChildSessions loads and renders child session traces inline after the
@@ -425,9 +210,9 @@ func renderChildSessions(sessDir string, parentID string, index *persistentsessi
 			continue
 		}
 
-		events, err := transcript.ReadEvents()
-		if err != nil {
-			fmt.Printf("%s(error reading transcript: %v)\n", childIndent, err)
+		events, readErr := transcript.ReadEvents()
+		if readErr != nil {
+			fmt.Printf("%s(error reading transcript: %v)\n", childIndent, readErr)
 			continue
 		}
 
@@ -445,57 +230,10 @@ func renderChildSessions(sessDir string, parentID string, index *persistentsessi
 	}
 }
 
-// collectChildSessionEntries loads child session transcripts and converts them
-// to traceEntry objects for JSON output. Recurses into grandchildren.
-// Returns all collected entries, total tool calls, and total errors.
-func collectChildSessionEntries(sessDir, parentID string, index *persistentsession.SessionIndex, opts TraceOpts) ([]traceEntry, int, int) {
-	children, err := index.ListChildren(parentID)
-	if err != nil || len(children) == 0 {
-		return nil, 0, 0
+// formatTimestamp renders a time as HH:MM:SS for compact display.
+func formatTimestamp(t time.Time) string {
+	if t.IsZero() {
+		return "??:??:??"
 	}
-
-	// Sort children by creation time for chronological order
-	sort.Slice(children, func(i, j int) bool {
-		return children[i].CreatedAt.Before(children[j].CreatedAt)
-	})
-
-	var (
-		allEntries     []traceEntry
-		totalToolCalls int
-		totalErrors    int
-	)
-
-	for _, child := range children {
-		label := child.Title
-		if label == "" {
-			label = child.ID
-			if len(label) > 12 {
-				label = label[:12]
-			}
-		}
-
-		transcriptPath := fmt.Sprintf("%s/%s/%s/%s.jsonl", sessDir, child.AppName, child.UserID, child.ID)
-		transcript := persistentsession.NewTranscript(transcriptPath)
-		if !transcript.Exists() {
-			continue
-		}
-
-		events, err := transcript.ReadEvents()
-		if err != nil || len(events) == 0 {
-			continue
-		}
-
-		entries, tc, te := collectTraceEntries(events, label, opts)
-		allEntries = append(allEntries, entries...)
-		totalToolCalls += tc
-		totalErrors += te
-
-		// Recurse into grandchildren
-		grandEntries, grandTC, grandTE := collectChildSessionEntries(sessDir, child.ID, index, opts)
-		allEntries = append(allEntries, grandEntries...)
-		totalToolCalls += grandTC
-		totalErrors += grandTE
-	}
-
-	return allEntries, totalToolCalls, totalErrors
+	return t.Format("15:04:05")
 }

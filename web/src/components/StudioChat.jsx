@@ -3,7 +3,7 @@ import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, S
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { fetchSessions, fetchSessionHistory, deleteSession, connectChat, stopChat } from '../api/studioChat'
-import { fetchFleets, fetchFleetPlans, startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions, activateFleetPlan, deactivateFleetPlan, getFleetPlanStatus } from '../api/fleetChat'
+import { fetchFleets, fetchFleetPlans, startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions } from '../api/fleetChat'
 import HomePage from './HomePage'
 
 // Agent identity colors for the team conversation view
@@ -28,8 +28,6 @@ function FleetStartDialog({ onStart, onCancel, defaultMessage = '' }) {
   const [selectedType, setSelectedType] = useState('fleet') // 'fleet' or 'plan'
   const [initialMessage, setInitialMessage] = useState(defaultMessage)
   const [isLoading, setIsLoading] = useState(true)
-  const [planStatus, setPlanStatus] = useState(null) // activation status for selected plan
-  const [activating, setActivating] = useState(false)
 
   useEffect(() => {
     const load = async () => {
@@ -59,20 +57,6 @@ function FleetStartDialog({ onStart, onCancel, defaultMessage = '' }) {
     load()
   }, [])
 
-  // Fetch activation status when a plan is selected
-  useEffect(() => {
-    if (selectedType !== 'plan' || !selectedKey) {
-      setPlanStatus(null)
-      return
-    }
-    const selected = plans.find(p => p.key === selectedKey)
-    if (!selected || selected.channel_type === 'chat' || selected.channel_type === '') {
-      setPlanStatus(null)
-      return
-    }
-    getFleetPlanStatus(selectedKey).then(setPlanStatus).catch(() => setPlanStatus(null))
-  }, [selectedKey, selectedType, plans])
-
   const handleSelectChange = (e) => {
     const val = e.target.value
     // Values are prefixed with "fleet:" or "plan:" to distinguish
@@ -82,30 +66,6 @@ function FleetStartDialog({ onStart, onCancel, defaultMessage = '' }) {
     } else {
       setSelectedKey(val.startsWith('fleet:') ? val.slice(6) : val)
       setSelectedType('fleet')
-    }
-  }
-
-  const handleActivateToggle = async () => {
-    if (activating) return
-    setActivating(true)
-    try {
-      if (planStatus?.activated) {
-        await deactivateFleetPlan(selectedKey)
-      } else {
-        await activateFleetPlan(selectedKey)
-      }
-      // Refresh status and plans
-      const [newStatus, planData] = await Promise.all([
-        getFleetPlanStatus(selectedKey),
-        fetchFleetPlans().catch(() => ({ plans: [] })),
-      ])
-      setPlanStatus(newStatus)
-      setPlans(planData.plans || [])
-    } catch (err) {
-      console.error('Activation toggle failed:', err)
-      alert('Failed: ' + err.message)
-    } finally {
-      setActivating(false)
     }
   }
 
@@ -164,44 +124,6 @@ function FleetStartDialog({ onStart, onCancel, defaultMessage = '' }) {
                   )}
                 </select>
               </div>
-              {/* Activation controls for non-chat plans */}
-              {planStatus && (
-                <div className="rounded-lg p-3 space-y-2" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className={`w-2 h-2 rounded-full ${planStatus.activated ? 'bg-green-400' : 'bg-gray-500'}`} />
-                      <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-                        {planStatus.activated ? 'Monitoring active' : 'Monitoring inactive'}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleActivateToggle}
-                      disabled={activating}
-                      className={`px-3 py-1 text-xs rounded-md transition-colors ${
-                        planStatus.activated
-                          ? 'bg-red-600/20 text-red-400 hover:bg-red-600/30'
-                          : 'bg-green-600/20 text-green-400 hover:bg-green-600/30'
-                      } disabled:opacity-50`}
-                    >
-                      {activating ? 'Working...' : planStatus.activated ? 'Deactivate' : 'Activate'}
-                    </button>
-                  </div>
-                  {planStatus.activated && (
-                    <div className="text-xs space-y-0.5" style={{ color: 'var(--text-muted)' }}>
-                      {planStatus.last_poll_at && (
-                        <div>Last poll: {new Date(planStatus.last_poll_at).toLocaleString()} ({planStatus.last_poll_status || 'pending'})</div>
-                      )}
-                      {planStatus.sessions_started > 0 && (
-                        <div>Sessions started: {planStatus.sessions_started}</div>
-                      )}
-                      {planStatus.last_poll_error && (
-                        <div className="text-red-400">Error: {planStatus.last_poll_error}</div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
               <div>
                 <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Initial request (optional)</label>
                 <textarea

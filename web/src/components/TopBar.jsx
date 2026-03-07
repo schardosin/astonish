@@ -1,4 +1,4 @@
-import { Moon, Sun, Settings, Cpu, Grid, MessageSquare } from 'lucide-react'
+import { Moon, Sun, Settings, Cpu, Grid, MessageSquare, Rocket } from 'lucide-react'
 
 export default function TopBar({ theme, onToggleTheme, onOpenSettings, defaultProvider, defaultModel, currentView, onNavigate }) {
   const navBackground = theme === 'dark' ? 'rgba(15, 23, 42, 0.92)' : 'rgba(255,255,255,0.86)'
@@ -50,6 +50,22 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, defaultPr
         >
           <Grid size={14} />
           <span className="text-xs font-medium">Flows</span>
+        </button>
+
+        <button 
+          onClick={() => onNavigate && onNavigate('fleet')}
+          className={`hidden md:flex items-center gap-2 px-3 py-2 rounded-xl transition-all ${
+            currentView === 'fleet' 
+              ? 'shadow-md' 
+              : 'hover:bg-purple-500/10'
+          }`}
+          style={{ 
+            background: currentView === 'fleet' ? 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)' : (theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'var(--bg-tertiary)'), 
+            color: currentView === 'fleet' ? '#fff' : 'var(--text-secondary)' 
+          }}
+        >
+          <Rocket size={14} />
+          <span className="text-xs font-medium">Fleet</span>
         </button>
       </div>
 

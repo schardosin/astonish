@@ -39,6 +39,8 @@ type StudioSessionResponse struct {
 	MessageCount int    `json:"messageCount"`
 	FleetKey     string `json:"fleetKey,omitempty"`
 	FleetName    string `json:"fleetName,omitempty"`
+	IssueNumber  int    `json:"issueNumber,omitempty"`
+	Repo         string `json:"repo,omitempty"`
 }
 
 // StudioSessionDetailResponse is the response for GET /api/studio/sessions/{id}.
@@ -592,6 +594,8 @@ func StudioSessionsHandler(w http.ResponseWriter, r *http.Request) {
 			MessageCount: m.MessageCount,
 			FleetKey:     m.FleetKey,
 			FleetName:    m.FleetName,
+			IssueNumber:  m.IssueNumber,
+			Repo:         m.Repo,
 		})
 	}
 
@@ -641,6 +645,8 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 				MessageCount: meta.MessageCount,
 				FleetKey:     meta.FleetKey,
 				FleetName:    meta.FleetName,
+				IssueNumber:  meta.IssueNumber,
+				Repo:         meta.Repo,
 			},
 			Messages:      []StudioMessage{},
 			FleetMessages: fleetMessages,

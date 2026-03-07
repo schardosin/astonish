@@ -415,6 +415,12 @@ func (s *FileStore) BaseDir() string {
 	return s.baseDir
 }
 
+// Index returns the underlying SessionIndex for direct access.
+// This is used by the trace API to walk child sessions.
+func (s *FileStore) Index() *SessionIndex {
+	return s.index
+}
+
 // ReadTranscriptEvents reads all events from a session's transcript file.
 // This is a lightweight read that does not load the full session into the cache.
 func (s *FileStore) ReadTranscriptEvents(appName, userID, sessionID string) ([]*adksession.Event, error) {

@@ -26,6 +26,7 @@ type traceEntry struct {
 	Type       string         `json:"type"`
 	Timestamp  string         `json:"timestamp"`
 	Author     string         `json:"author,omitempty"`
+	Session    string         `json:"session,omitempty"` // sub-session label (only set for recursive child events)
 	Text       string         `json:"text,omitempty"`
 	ToolName   string         `json:"tool_name,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"`
@@ -180,12 +181,11 @@ func renderSessionTrace(events []*adksession.Event, opts TraceOpts) {
 	fmt.Printf("%s--- %s ---\n", indent, strings.Join(parts, " | "))
 }
 
-// renderSessionTraceJSON outputs events as structured JSON.
-func renderSessionTraceJSON(sessionID, app, user string, events []*adksession.Event, opts TraceOpts) {
-	if opts.LastN > 0 && len(events) > opts.LastN {
-		events = events[len(events)-opts.LastN:]
-	}
-
+// collectTraceEntries converts ADK events into traceEntry objects for JSON output.
+// The sessionLabel parameter, when non-empty, is set on each entry to identify
+// which sub-session the event belongs to (used by recursive rendering).
+// Returns entries, tool call count, and error count.
+func collectTraceEntries(events []*adksession.Event, sessionLabel string, opts TraceOpts) ([]traceEntry, int, int) {
 	callTimestamps := make(map[string]time.Time)
 
 	var (
@@ -215,12 +215,16 @@ func renderSessionTraceJSON(sessionID, app, user string, events []*adksession.Ev
 				if part.Thought {
 					entryType = "thinking"
 				}
-				entries = append(entries, traceEntry{
+				entry := traceEntry{
 					Type:      entryType,
 					Timestamp: ts,
 					Author:    ev.Author,
 					Text:      part.Text,
-				})
+				}
+				if sessionLabel != "" {
+					entry.Session = sessionLabel
+				}
+				entries = append(entries, entry)
 			}
 
 			// FunctionCall
@@ -229,13 +233,17 @@ func renderSessionTraceJSON(sessionID, app, user string, events []*adksession.Ev
 				callTimestamps[fc.ID] = ev.Timestamp
 				toolCalls++
 
-				entries = append(entries, traceEntry{
+				entry := traceEntry{
 					Type:       "tool_call",
 					Timestamp:  ts,
 					ToolName:   fc.Name,
 					ToolCallID: fc.ID,
 					Args:       fc.Args,
-				})
+				}
+				if sessionLabel != "" {
+					entry.Session = sessionLabel
+				}
+				entries = append(entries, entry)
 			}
 
 			// FunctionResponse
@@ -266,29 +274,15 @@ func renderSessionTraceJSON(sessionID, app, user string, events []*adksession.Ev
 				if isError {
 					entry.Error = errStr
 				}
+				if sessionLabel != "" {
+					entry.Session = sessionLabel
+				}
 				entries = append(entries, entry)
 			}
 		}
 	}
 
-	output := traceJSON{
-		SessionID: sessionID,
-		App:       app,
-		User:      user,
-		Events:    entries,
-		Summary: traceSummary{
-			TotalEvents: len(events),
-			ToolCalls:   toolCalls,
-			Errors:      toolErrors,
-		},
-	}
-
-	data, err := json.MarshalIndent(output, "", "  ")
-	if err != nil {
-		fmt.Printf("Error serializing trace: %v\n", err)
-		return
-	}
-	fmt.Println(string(data))
+	return entries, toolCalls, toolErrors
 }
 
 // extractError checks if a FunctionResponse contains an error.
@@ -449,4 +443,59 @@ func renderChildSessions(sessDir string, parentID string, index *persistentsessi
 		// Recurse into grandchildren
 		renderChildSessions(sessDir, child.ID, index, childOpts)
 	}
+}
+
+// collectChildSessionEntries loads child session transcripts and converts them
+// to traceEntry objects for JSON output. Recurses into grandchildren.
+// Returns all collected entries, total tool calls, and total errors.
+func collectChildSessionEntries(sessDir, parentID string, index *persistentsession.SessionIndex, opts TraceOpts) ([]traceEntry, int, int) {
+	children, err := index.ListChildren(parentID)
+	if err != nil || len(children) == 0 {
+		return nil, 0, 0
+	}
+
+	// Sort children by creation time for chronological order
+	sort.Slice(children, func(i, j int) bool {
+		return children[i].CreatedAt.Before(children[j].CreatedAt)
+	})
+
+	var (
+		allEntries     []traceEntry
+		totalToolCalls int
+		totalErrors    int
+	)
+
+	for _, child := range children {
+		label := child.Title
+		if label == "" {
+			label = child.ID
+			if len(label) > 12 {
+				label = label[:12]
+			}
+		}
+
+		transcriptPath := fmt.Sprintf("%s/%s/%s/%s.jsonl", sessDir, child.AppName, child.UserID, child.ID)
+		transcript := persistentsession.NewTranscript(transcriptPath)
+		if !transcript.Exists() {
+			continue
+		}
+
+		events, err := transcript.ReadEvents()
+		if err != nil || len(events) == 0 {
+			continue
+		}
+
+		entries, tc, te := collectTraceEntries(events, label, opts)
+		allEntries = append(allEntries, entries...)
+		totalToolCalls += tc
+		totalErrors += te
+
+		// Recurse into grandchildren
+		grandEntries, grandTC, grandTE := collectChildSessionEntries(sessDir, child.ID, index, opts)
+		allEntries = append(allEntries, grandEntries...)
+		totalToolCalls += grandTC
+		totalErrors += grandTE
+	}
+
+	return allEntries, totalToolCalls, totalErrors
 }

@@ -2,6 +2,7 @@ package astonish
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -201,7 +202,38 @@ func handleSessionsShow(sessionID string, flags []string) error {
 	}
 
 	if opts.JSONOutput {
-		renderSessionTraceJSON(meta.ID, meta.AppName, meta.UserID, events, opts)
+		entries, toolCalls, toolErrors := collectTraceEntries(events, "", opts)
+
+		// Include sub-session traces when --recursive is set
+		if opts.Recursive {
+			childEntries, childTC, childTE := collectChildSessionEntries(sessDir, fullID, index, opts)
+			entries = append(entries, childEntries...)
+			toolCalls += childTC
+			toolErrors += childTE
+
+			// Sort all entries chronologically so parent and child events interleave
+			sort.Slice(entries, func(i, j int) bool {
+				return entries[i].Timestamp < entries[j].Timestamp
+			})
+		}
+
+		output := traceJSON{
+			SessionID: meta.ID,
+			App:       meta.AppName,
+			User:      meta.UserID,
+			Events:    entries,
+			Summary: traceSummary{
+				TotalEvents: len(events),
+				ToolCalls:   toolCalls,
+				Errors:      toolErrors,
+			},
+		}
+
+		data, err := json.MarshalIndent(output, "", "  ")
+		if err != nil {
+			return fmt.Errorf("error serializing trace: %w", err)
+		}
+		fmt.Println(string(data))
 		return nil
 	}
 

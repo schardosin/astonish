@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -15,6 +16,27 @@ import (
 )
 
 // --- opencode tool ---
+
+// summarizeThresholdBytes is the minimum output size before summarization kicks in.
+// Outputs smaller than this are returned as-is (e.g., short explore results).
+const summarizeThresholdBytes = 4 * 1024 // 4KB
+
+// summarizeInputCapBytes is the maximum raw output sent to the summarization LLM.
+// Even a 200KB output can be effectively summarized from the first 30KB.
+const summarizeInputCapBytes = 30 * 1024 // 30KB
+
+// openCodeSummarizer is an optional LLM function used to summarize verbose
+// OpenCode responses. When set, large outputs are replaced with concise summaries
+// so the calling agent's session context stays lean. OpenCode's own session
+// (accessible via session_id continuation) retains the full context internally.
+var openCodeSummarizer func(ctx context.Context, prompt string) (string, error)
+
+// SetOpenCodeSummarizer registers an LLM function for summarizing OpenCode
+// responses. Call this during launcher initialization with the same LLM used
+// by the compactor/distiller.
+func SetOpenCodeSummarizer(fn func(ctx context.Context, prompt string) (string, error)) {
+	openCodeSummarizer = fn
+}
 
 // OpenCodeArgs is the input schema for the opencode tool.
 type OpenCodeArgs struct {
@@ -294,15 +316,29 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 	// Wait for the command to finish
 	waitErr := cmd.Wait()
 
+	// Build raw output from collected text parts
+	rawOutput := strings.Join(textParts, "")
+
+	// Summarize output and strip trace for all return paths.
+	// The summarizer replaces verbose output with a concise summary so the
+	// calling agent's ADK session stays lean. OpenCode's own session retains
+	// full context via session_id continuation.
+	summarizedOutput := summarizeOpenCodeOutput(ctx, rawOutput, "success", sessionID)
+	summarizedTrace := trace
+	if openCodeSummarizer != nil && len(rawOutput) >= summarizeThresholdBytes {
+		summarizedTrace = stripTraceVerboseContent(trace)
+	}
+
 	// Check for timeout
 	if cmdCtx.Err() == context.DeadlineExceeded {
+		summarizedOutput = summarizeOpenCodeOutput(ctx, rawOutput, "timeout", sessionID)
 		return OpenCodeResult{
 			Status:    "timeout",
-			Output:    strings.Join(textParts, ""),
+			Output:    summarizedOutput,
 			SessionID: sessionID,
 			Error:     fmt.Sprintf("OpenCode timed out after %d seconds", timeout),
 			Tokens:    tokens,
-			Trace:     trace,
+			Trace:     summarizedTrace,
 		}, nil
 	}
 
@@ -313,32 +349,146 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 			errMsg = waitErr.Error()
 		}
 		// Still return any output we collected before the error
-		output := strings.Join(textParts, "")
-		if output == "" {
-			output = errMsg
+		if rawOutput == "" {
+			summarizedOutput = errMsg
+		} else {
+			summarizedOutput = summarizeOpenCodeOutput(ctx, rawOutput, "error", sessionID)
 		}
 		return OpenCodeResult{
 			Status:    "error",
-			Output:    output,
+			Output:    summarizedOutput,
 			SessionID: sessionID,
 			Error:     strings.TrimSpace(errMsg),
 			Tokens:    tokens,
-			Trace:     trace,
+			Trace:     summarizedTrace,
 		}, nil
 	}
 
-	output := strings.Join(textParts, "")
-	if output == "" {
-		output = "(no text output)"
+	if summarizedOutput == "" {
+		summarizedOutput = "(no text output)"
 	}
 
 	return OpenCodeResult{
 		Status:    "success",
-		Output:    output,
+		Output:    summarizedOutput,
 		SessionID: sessionID,
 		Tokens:    tokens,
-		Trace:     trace,
+		Trace:     summarizedTrace,
 	}, nil
+}
+
+// summarizeOpenCodeOutput replaces a verbose OpenCode output with a concise
+// LLM-generated summary. This is critical for keeping the calling agent's
+// session context lean: OpenCode retains full context internally (via session_id
+// continuation), so the caller only needs to know what happened, not every detail.
+//
+// Returns the original output unchanged if:
+//   - No summarizer is registered
+//   - Output is below the threshold (small enough to keep as-is)
+//   - The summarization LLM call fails (falls back to simple truncation)
+func summarizeOpenCodeOutput(ctx context.Context, rawOutput, status, sessionID string) string {
+	if openCodeSummarizer == nil {
+		return rawOutput
+	}
+	if len(rawOutput) < summarizeThresholdBytes {
+		return rawOutput
+	}
+
+	// Cap the input to the summarizer to avoid sending a huge prompt
+	inputForSummary := rawOutput
+	if len(inputForSummary) > summarizeInputCapBytes {
+		inputForSummary = inputForSummary[:summarizeInputCapBytes] + "\n\n[... output truncated for summarization ...]"
+	}
+
+	prompt := fmt.Sprintf(`Summarize the following OpenCode session output concisely.
+
+Preserve these details exactly:
+- Files created or modified (with full paths)
+- Test results (pass/fail counts, specific failure messages if any)
+- Git commits made (commit messages and short hashes)
+- Errors or warnings encountered
+- Key decisions or outcomes
+
+Keep the summary under 500 words. Do not include raw source code or full file contents.
+Write in past tense as a factual report of what was accomplished.
+
+OpenCode session status: %s
+OpenCode session ID: %s
+
+--- OpenCode Output ---
+%s`, status, sessionID, inputForSummary)
+
+	// Use a short timeout for the summarization call
+	summaryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	summary, err := openCodeSummarizer(summaryCtx, prompt)
+	if err != nil {
+		log.Printf("[opencode-summarize] LLM summarization failed, using fallback: %v", err)
+		return fallbackSummarize(rawOutput)
+	}
+
+	if strings.TrimSpace(summary) == "" {
+		log.Printf("[opencode-summarize] LLM returned empty summary, using fallback")
+		return fallbackSummarize(rawOutput)
+	}
+
+	log.Printf("[opencode-summarize] Summarized %d bytes to %d bytes", len(rawOutput), len(summary))
+	return summary
+}
+
+// fallbackSummarize creates a simple truncated summary when the LLM is unavailable.
+// Keeps the first 2KB (usually contains the plan/approach) and last 1KB (usually
+// contains the final result/commit message).
+func fallbackSummarize(rawOutput string) string {
+	const headSize = 2048
+	const tailSize = 1024
+
+	if len(rawOutput) <= headSize+tailSize+100 {
+		return rawOutput
+	}
+
+	head := rawOutput[:headSize]
+	tail := rawOutput[len(rawOutput)-tailSize:]
+	return head + "\n\n[... output summarized: " +
+		fmt.Sprintf("%d bytes omitted", len(rawOutput)-headSize-tailSize) +
+		" ...]\n\n" + tail
+}
+
+// stripTraceVerboseContent removes the full text content from trace events,
+// keeping only the structural events (step_start, step_finish) and tool call
+// summaries (name only, no full input/output). This prevents the trace from
+// bloating the tool response stored in the ADK session history.
+func stripTraceVerboseContent(trace []OpenCodeTraceEvent) []OpenCodeTraceEvent {
+	var stripped []OpenCodeTraceEvent
+	for _, evt := range trace {
+		switch evt.Type {
+		case "opencode_step_start", "opencode_step_finish":
+			// Keep structural events as-is (they have no large text)
+			stripped = append(stripped, evt)
+		case "opencode_tool_call":
+			// Keep tool name but drop full input text
+			stripped = append(stripped, OpenCodeTraceEvent{
+				Type:    evt.Type,
+				Detail:  evt.Detail,
+				Message: evt.Message,
+			})
+		case "opencode_tool_result":
+			// Keep tool name and status but drop full output text
+			stripped = append(stripped, OpenCodeTraceEvent{
+				Type:    evt.Type,
+				Detail:  evt.Detail,
+				Message: evt.Message,
+			})
+		case "opencode_text":
+			// Keep a short preview of text events
+			stripped = append(stripped, OpenCodeTraceEvent{
+				Type:    evt.Type,
+				Message: evt.Message,
+			})
+		}
+	}
+	return stripped
 }
 
 // NewOpenCodeTool creates the opencode tool for fleet agent delegation.

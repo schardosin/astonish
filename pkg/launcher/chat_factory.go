@@ -893,6 +893,45 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 							fmt.Printf("Fleet awareness: %d fleet(s), %d persona(s)\n", fleetReg.Count(), personaReg.Count())
 						}
 					}
+
+					// Initialize fleet plan registry
+					fleetPlansDir, fpErr := config.GetFleetPlansDir()
+					if fpErr == nil {
+						planReg, prErr := fleet.NewPlanRegistry(fleetPlansDir)
+						if prErr != nil {
+							if cfg.DebugMode {
+								fmt.Printf("Warning: Failed to load fleet plan registry: %v\n", prErr)
+							}
+						} else {
+							// Wire plan registry to API handlers
+							api.SetFleetPlanRegistry(planReg)
+							// Wire plan registry to the save_fleet_plan tool
+							tools.SetFleetPlanRegistry(planReg)
+							if cfg.DebugMode {
+								fmt.Printf("Fleet plans: %d loaded from %s\n", planReg.Count(), fleetPlansDir)
+							}
+						}
+					}
+
+					// Register save_fleet_plan tool (available to main chat agent)
+					fleetPlanTools, fptErr := tools.GetFleetPlanTools()
+					if fptErr != nil {
+						if cfg.DebugMode {
+							fmt.Printf("Warning: Failed to create fleet plan tools: %v\n", fptErr)
+						}
+					} else {
+						internalTools = append(internalTools, fleetPlanTools...)
+					}
+
+					// Register validate_fleet_plan tool (available to main chat agent)
+					fleetPlanValidateTools, fpvErr := tools.GetFleetPlanValidateTools()
+					if fpvErr != nil {
+						if cfg.DebugMode {
+							fmt.Printf("Warning: Failed to create fleet plan validate tools: %v\n", fpvErr)
+						}
+					} else {
+						internalTools = append(internalTools, fleetPlanValidateTools...)
+					}
 				}
 			}
 		}
@@ -1074,6 +1113,13 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				contextWindow, compactor.Threshold*100)
 		}
 	}
+
+	// --- 6e-bis. Wire OpenCode response summarizer ---
+	// Uses the same LLM function as the compactor. When set, verbose OpenCode
+	// outputs (>4KB) are replaced with concise summaries before they enter the
+	// calling agent's ADK session, keeping context lean. OpenCode retains full
+	// context internally via session_id continuation.
+	tools.SetOpenCodeSummarizer(makeLLMFunc(llm))
 
 	// --- 6d. Wire memory and flow context ---
 	if memMgr != nil {

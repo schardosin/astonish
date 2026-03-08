@@ -2,10 +2,11 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   Rocket, Search, ChevronDown, ChevronRight, Loader, Check, X, Copy,
   Trash2, Play, Square, Radio, ArrowRight, Users, FileText, Eye,
-  Wrench, Clock, AlertCircle, ExternalLink, GitBranch, Save,
+  Wrench, Clock, AlertCircle, ExternalLink, GitBranch, Code,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import YamlDrawer from './YamlDrawer'
 import {
   fetchFleetPlans, fetchFleets, fetchFleetPlan, fetchFleetPlanYaml, saveFleetPlanYaml,
   activateFleetPlan, deactivateFleetPlan, getFleetPlanStatus, duplicateFleetPlan,
@@ -188,7 +189,7 @@ function FleetSidebar({
 
 // ─── Plan Detail View ───
 
-function PlanDetail({ planKey, onNavigate, onRefresh }) {
+function PlanDetail({ planKey, onNavigate, onRefresh, theme }) {
   const [plan, setPlan] = useState(null)
   const [planStatus, setPlanStatus] = useState(null)
   const [yamlContent, setYamlContent] = useState('')
@@ -339,9 +340,11 @@ function PlanDetail({ planKey, onNavigate, onRefresh }) {
   const artifacts = plan.artifacts ? Object.entries(plan.artifacts) : []
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="max-w-4xl mx-auto p-6 space-y-6">
-        {/* Header */}
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Visual content area - shrinks to half when source is open */}
+      <div className={`${showYaml ? 'h-1/2' : 'flex-1'} overflow-y-auto`}>
+        <div className="max-w-4xl mx-auto p-6 space-y-6">
+          {/* Header */}
         <div className="flex items-start justify-between">
           <div>
             <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{plan.name}</h1>
@@ -363,6 +366,14 @@ function PlanDetail({ planKey, onNavigate, onRefresh }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowYaml(!showYaml)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
+              style={{ background: showYaml ? 'rgba(6, 182, 212, 0.15)' : 'var(--bg-tertiary)', color: showYaml ? '#22d3ee' : 'var(--text-secondary)' }}
+            >
+              <Code size={12} />
+              {showYaml ? 'Hide Source' : 'View Source'}
+            </button>
             <button
               onClick={() => setShowLaunchDialog(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white transition-colors"
@@ -545,49 +556,24 @@ function PlanDetail({ planKey, onNavigate, onRefresh }) {
             </div>
           </div>
         )}
-
-        {/* YAML Editor */}
-        <div className="rounded-lg overflow-hidden" style={{ border: '1px solid var(--border-color)' }}>
-          <button
-            onClick={() => setShowYaml(!showYaml)}
-            className="w-full flex items-center gap-2 px-4 py-3 hover:bg-white/5 transition-colors"
-            style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
-          >
-            {showYaml ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-            <FileText size={14} className="text-cyan-400" />
-            <span className="text-sm font-semibold">YAML Editor</span>
-          </button>
-          {showYaml && (
-            <div style={{ background: 'var(--bg-primary)' }}>
-              <textarea
-                value={yamlContent}
-                onChange={(e) => setYamlContent(e.target.value)}
-                className="w-full font-mono text-xs p-4 focus:outline-none resize-none"
-                style={{
-                  background: 'transparent',
-                  color: 'var(--text-primary)',
-                  minHeight: '400px',
-                  border: 'none',
-                }}
-                spellCheck={false}
-              />
-              <div className="flex items-center justify-between px-4 py-2" style={{ borderTop: '1px solid var(--border-color)' }}>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  {saveStatus === 'saved' && <span className="text-green-400">Saved successfully</span>}
-                  {saveStatus === 'error' && <span className="text-red-400">Save failed</span>}
-                </div>
-                <button
-                  onClick={handleSaveYaml}
-                  disabled={isSaving}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white transition-colors disabled:opacity-50"
-                >
-                  <Save size={12} /> {isSaving ? 'Saving...' : 'Save'}
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       </div>
+
+      {/* Bottom Panel - YAML Source Drawer */}
+      {showYaml && (
+        <div className="h-1/2" style={{ borderTop: '1px solid var(--border-color)' }}>
+          <YamlDrawer
+            content={yamlContent}
+            onChange={setYamlContent}
+            onClose={() => setShowYaml(false)}
+            theme={theme}
+            subtitle="Fleet plan configuration"
+            onSave={handleSaveYaml}
+            isSaving={isSaving}
+            saveStatus={saveStatus}
+          />
+        </div>
+      )}
 
       {/* Launch Dialog */}
       {showLaunchDialog && (
@@ -1182,6 +1168,7 @@ export default function FleetView({ theme, path, onNavigate }) {
             planKey={selectedItem.key}
             onNavigate={handleNavigate}
             onRefresh={loadData}
+            theme={theme}
           />
         )
       case 'session':

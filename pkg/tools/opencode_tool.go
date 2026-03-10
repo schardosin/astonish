@@ -25,6 +25,12 @@ const summarizeThresholdBytes = 4 * 1024 // 4KB
 // Even a 200KB output can be effectively summarized from the first 30KB.
 const summarizeInputCapBytes = 30 * 1024 // 30KB
 
+// maxOutputStoredBytes caps the Output field stored in the ADK FunctionResponse.
+// This is a safety net: even after LLM summarization and fallback truncation,
+// we enforce a hard limit. The agent only needs a brief summary of what happened;
+// OpenCode retains full context via session_id continuation.
+const maxOutputStoredBytes = 8 * 1024 // 8KB
+
 // openCodeSummarizer is an optional LLM function used to summarize verbose
 // OpenCode responses. When set, large outputs are replaced with concise summaries
 // so the calling agent's session context stays lean. OpenCode's own session
@@ -45,7 +51,6 @@ type OpenCodeArgs struct {
 	SessionID string `json:"session_id,omitempty" jsonschema:"Optional: continue an existing OpenCode session by its ID. Use this for follow-up tasks in the same context."`
 	Model     string `json:"model,omitempty" jsonschema:"Optional: override the model in provider/model format (e.g., 'bifrost/sapaicore/anthropic--claude-4.6-opus')."`
 	Agent     string `json:"agent,omitempty" jsonschema:"Optional: OpenCode agent to use. Default is 'build' (full tool access). Other options: 'explore' (read-only)."`
-	Timeout   int    `json:"timeout,omitempty" jsonschema:"Optional: timeout in seconds. Default: 300 (5 minutes). Set higher for complex tasks."`
 }
 
 // OpenCodeResult is the output of the opencode tool.
@@ -163,13 +168,10 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 		}, nil
 	}
 
-	timeout := args.Timeout
-	if timeout <= 0 {
-		timeout = 300
-	}
-	if timeout > 3600 {
-		timeout = 3600
-	}
+	// OpenCode tasks (especially in fleet sessions) routinely need 10-30 minutes
+	// for complex multi-step work. The timeout is hardcoded because the LLM
+	// consistently underestimates execution time when given control over it.
+	const openCodeTimeout = 45 * 60 // 45 minutes in seconds
 
 	// Build command arguments
 	// Global flags go before "run", subcommand flags go after "run"
@@ -197,7 +199,7 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 	cmdArgs = append(cmdArgs, args.Task)
 
 	// Create command with timeout
-	cmdCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	cmdCtx, cancel := context.WithTimeout(context.Background(), time.Duration(openCodeTimeout)*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(cmdCtx, binary, cmdArgs...)
@@ -319,26 +321,30 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 	// Build raw output from collected text parts
 	rawOutput := strings.Join(textParts, "")
 
-	// Summarize output and strip trace for all return paths.
-	// The summarizer replaces verbose output with a concise summary so the
-	// calling agent's ADK session stays lean. OpenCode's own session retains
-	// full context via session_id continuation.
+	// Summarize output for all return paths. The summarizer replaces verbose
+	// output with a concise summary so the calling agent's ADK session stays
+	// lean. OpenCode's own session (accessible via session_id continuation)
+	// retains the full context internally.
 	summarizedOutput := summarizeOpenCodeOutput(ctx, rawOutput, "success", sessionID)
-	summarizedTrace := trace
-	if openCodeSummarizer != nil && len(rawOutput) >= summarizeThresholdBytes {
-		summarizedTrace = stripTraceVerboseContent(trace)
-	}
+
+	// Strip trace to a lightweight summary. The full trace was needed for UI
+	// replay but was the #1 cause of context bloat: each opencode call stored
+	// 60-140KB of tool inputs/outputs in the ADK session. After 5-7 calls the
+	// accumulated trace data alone hit 400-800KB, causing LLM requests to
+	// timeout. The stripped trace keeps structural events (step counts, tool
+	// names) without the full text content.
+	leanTrace := stripTraceVerboseContent(trace)
 
 	// Check for timeout
 	if cmdCtx.Err() == context.DeadlineExceeded {
 		summarizedOutput = summarizeOpenCodeOutput(ctx, rawOutput, "timeout", sessionID)
 		return OpenCodeResult{
 			Status:    "timeout",
-			Output:    summarizedOutput,
+			Output:    capOutput(summarizedOutput),
 			SessionID: sessionID,
-			Error:     fmt.Sprintf("OpenCode timed out after %d seconds", timeout),
+			Error:     fmt.Sprintf("OpenCode timed out after %d seconds", openCodeTimeout),
 			Tokens:    tokens,
-			Trace:     summarizedTrace,
+			Trace:     leanTrace,
 		}, nil
 	}
 
@@ -356,11 +362,11 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 		}
 		return OpenCodeResult{
 			Status:    "error",
-			Output:    summarizedOutput,
+			Output:    capOutput(summarizedOutput),
 			SessionID: sessionID,
 			Error:     strings.TrimSpace(errMsg),
 			Tokens:    tokens,
-			Trace:     summarizedTrace,
+			Trace:     leanTrace,
 		}, nil
 	}
 
@@ -370,10 +376,10 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 
 	return OpenCodeResult{
 		Status:    "success",
-		Output:    summarizedOutput,
+		Output:    capOutput(summarizedOutput),
 		SessionID: sessionID,
 		Tokens:    tokens,
-		Trace:     summarizedTrace,
+		Trace:     leanTrace,
 	}, nil
 }
 
@@ -453,6 +459,17 @@ func fallbackSummarize(rawOutput string) string {
 	return head + "\n\n[... output summarized: " +
 		fmt.Sprintf("%d bytes omitted", len(rawOutput)-headSize-tailSize) +
 		" ...]\n\n" + tail
+}
+
+// capOutput enforces a hard limit on the output stored in the ADK FunctionResponse.
+// This is the final safety net: even if the LLM summarizer produces a long summary
+// or falls back to truncation, the stored output stays within budget.
+func capOutput(output string) string {
+	if len(output) <= maxOutputStoredBytes {
+		return output
+	}
+	// Keep the first portion and append a truncation notice
+	return output[:maxOutputStoredBytes] + "\n\n[... capped at 8KB for context budget ...]"
 }
 
 // stripTraceVerboseContent removes the full text content from trace events,

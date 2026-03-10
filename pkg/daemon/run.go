@@ -458,6 +458,11 @@ func Run(cfg RunConfig) error {
 			// Make activator available to API handlers
 			api.SetPlanActivator(activator)
 
+			// Wire OpenCode binary finder for project context generation.
+			// Fleet templates can define a project_context section that runs
+			// OpenCode /init to generate AGENTS.md before agents start.
+			fleet.OpenCodeBinaryFinder = tools.FindOpenCodeBinary
+
 			// Restore previously activated plans (re-create monitors)
 			if err := activator.RestoreActivated(); err != nil {
 				logger.Printf("Warning: Failed to restore activated plans: %v", err)

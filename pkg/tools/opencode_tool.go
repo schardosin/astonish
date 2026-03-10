@@ -75,8 +75,8 @@ type OpenCodeTraceEvent struct {
 // openCodeBinaryPath caches the resolved path to the opencode binary.
 var openCodeBinaryPath string
 
-// findOpenCodeBinary locates the opencode binary.
-func findOpenCodeBinary() (string, error) {
+// FindOpenCodeBinary locates the opencode binary.
+func FindOpenCodeBinary() (string, error) {
 	if openCodeBinaryPath != "" {
 		return openCodeBinaryPath, nil
 	}
@@ -160,7 +160,7 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 		}, nil
 	}
 
-	binary, err := findOpenCodeBinary()
+	binary, err := FindOpenCodeBinary()
 	if err != nil {
 		return OpenCodeResult{
 			Status: "error",

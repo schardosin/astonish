@@ -112,6 +112,13 @@ type FleetSession struct {
 	// always know the current project state, even when the conversation
 	// thread is truncated. Survives recovery via JSONL persistence.
 	Progress *ProgressTracker
+
+	// ProjectContext holds the content of the project context file (e.g.,
+	// AGENTS.md) generated at session startup. Injected into every agent's
+	// system prompt so agents understand the codebase structure, conventions,
+	// and build commands. Empty when the fleet template does not define a
+	// project_context section.
+	ProjectContext string
 }
 
 // NewFleetSession creates a new fleet session.
@@ -434,7 +441,7 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 	}
 
 	// Build system prompt with communication graph awareness
-	systemPrompt := BuildAgentPrompt(personaCfg, agentCfg, fs.FleetConfig, agentKey, fs.Progress, fs.Plan)
+	systemPrompt := BuildAgentPrompt(personaCfg, agentCfg, fs.FleetConfig, agentKey, fs.Progress, fs.ProjectContext, fs.Plan)
 
 	// Build thread context
 	threadContext, err := BuildThreadContext(ctx, fs.Channel, agentKey)

@@ -613,7 +613,7 @@ func TestBuildAgentPrompt(t *testing.T) {
 		},
 	}
 
-	prompt := BuildAgentPrompt(p, agentCfg, fleetCfg, "dev", nil)
+	prompt := BuildAgentPrompt(p, agentCfg, fleetCfg, "dev", nil, "")
 
 	if !strings.Contains(prompt, "You are a developer.") {
 		t.Error("expected prompt to contain persona prompt")
@@ -673,7 +673,7 @@ func TestBuildAgentPrompt_NoDelegate(t *testing.T) {
 		},
 	}
 
-	prompt := BuildAgentPrompt(p, agentCfg, fleetCfg, "qa", nil)
+	prompt := BuildAgentPrompt(p, agentCfg, fleetCfg, "qa", nil, "")
 
 	if !strings.Contains(prompt, "You are a QA engineer.") {
 		t.Error("expected prompt to contain persona prompt")

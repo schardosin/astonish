@@ -587,3 +587,8 @@ agents:
 
 settings:
   max_turns_per_agent: 20
+
+project_context:
+  generator: opencode_init
+  output_file: AGENTS.md
+  max_size_kb: 10

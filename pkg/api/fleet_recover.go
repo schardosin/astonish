@@ -104,6 +104,12 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 	fleetSession.Plan = plan
 	fleetSession.Headless = true
 
+	// Load existing project context file from the workspace (no regeneration
+	// on recovery; the file should already exist from the original session).
+	if workspaceDir != "" && fleetCfg.ProjectContext != nil {
+		fleetSession.ProjectContext = fleet.LoadProjectContextFile(workspaceDir, fleetCfg.ProjectContext)
+	}
+
 	// Reconstruct the progress tracker from recovered messages so agents
 	// know about prior approvals, completions, and handoffs.
 	for _, msg := range recoveredMessages {

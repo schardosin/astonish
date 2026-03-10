@@ -14,12 +14,13 @@ import (
 // a pipeline. Agents are autonomous actors that react to messages on a shared
 // channel and route work to each other via explicit @mentions.
 type FleetConfig struct {
-	Name          string                      `yaml:"name" json:"name"`
-	Description   string                      `yaml:"description,omitempty" json:"description,omitempty"`
-	PlanWizard    *PlanWizardConfig           `yaml:"plan_wizard,omitempty" json:"plan_wizard,omitempty"`
-	Communication *CommunicationConfig        `yaml:"communication,omitempty" json:"communication,omitempty"`
-	Agents        map[string]FleetAgentConfig `yaml:"agents" json:"agents"`
-	Settings      FleetSettings               `yaml:"settings,omitempty" json:"settings,omitempty"`
+	Name           string                      `yaml:"name" json:"name"`
+	Description    string                      `yaml:"description,omitempty" json:"description,omitempty"`
+	PlanWizard     *PlanWizardConfig           `yaml:"plan_wizard,omitempty" json:"plan_wizard,omitempty"`
+	Communication  *CommunicationConfig        `yaml:"communication,omitempty" json:"communication,omitempty"`
+	Agents         map[string]FleetAgentConfig `yaml:"agents" json:"agents"`
+	Settings       FleetSettings               `yaml:"settings,omitempty" json:"settings,omitempty"`
+	ProjectContext *ProjectContextConfig       `yaml:"project_context,omitempty" json:"project_context,omitempty"`
 }
 
 // PlanWizardConfig defines how an AI-guided plan creation session should behave
@@ -118,6 +119,34 @@ type DelegateConfig struct {
 	Params      map[string]any `yaml:"params,omitempty" json:"params,omitempty"`
 	Description string         `yaml:"description,omitempty" json:"description,omitempty"`
 	Env         []string       `yaml:"env,omitempty" json:"env,omitempty"` // Environment variable names to forward to the delegate
+}
+
+// ProjectContextConfig defines how project context (e.g., AGENTS.md) is
+// generated and injected into agent prompts. This is template-level config:
+// not all fleet types need project context, and those that do can choose
+// different generation strategies.
+type ProjectContextConfig struct {
+	// Generator is the strategy for producing the context file.
+	// Supported values: "opencode_init" (runs OpenCode /init to analyze the
+	// codebase), "load_file" (reads an existing file without generating).
+	// Empty or omitted means no project context.
+	Generator string `yaml:"generator,omitempty" json:"generator,omitempty"`
+
+	// OutputFile is the filename to write/read in the workspace directory
+	// (e.g., "AGENTS.md"). Relative to the workspace root.
+	OutputFile string `yaml:"output_file,omitempty" json:"output_file,omitempty"`
+
+	// MaxSizeKB caps the content injected into agent prompts.
+	// Default: 10 (10KB). Larger files are truncated.
+	MaxSizeKB int `yaml:"max_size_kb,omitempty" json:"max_size_kb,omitempty"`
+}
+
+// GetMaxSizeBytes returns the max size in bytes, defaulting to 10KB.
+func (p *ProjectContextConfig) GetMaxSizeBytes() int {
+	if p.MaxSizeKB <= 0 {
+		return 10 * 1024
+	}
+	return p.MaxSizeKB * 1024
 }
 
 // FleetSettings holds fleet-level configuration.

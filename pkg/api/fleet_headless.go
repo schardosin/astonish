@@ -65,6 +65,14 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 	fleetSession.Plan = plan
 	fleetSession.Headless = true
 
+	// Generate or update project context (e.g., AGENTS.md) before any agent
+	// starts. This runs synchronously so the context is ready when the first
+	// agent is activated. The timeout and strategy are defined by the fleet
+	// template's project_context section.
+	if workspaceDir != "" && fleetCfg.ProjectContext != nil {
+		fleetSession.ProjectContext = fleet.GenerateProjectContext(ctx, workspaceDir, fleetCfg.ProjectContext)
+	}
+
 	// Register in the in-memory registry
 	registry := getFleetSessionRegistry()
 	registry.Register(fleetSession)

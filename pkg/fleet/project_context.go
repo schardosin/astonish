@@ -1,0 +1,184 @@
+package fleet
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"time"
+)
+
+// projectContextTimeout is the maximum time allowed for project context
+// generation. OpenCode /init needs to scan the codebase, which can take
+// a while for large repositories.
+const projectContextTimeout = 15 * time.Minute
+
+// OpenCodeBinaryFinder is a function that locates the OpenCode binary.
+// Must be set by the caller (typically daemon/run.go) before fleet sessions
+// start. When nil, the opencode_init generator is unavailable.
+var OpenCodeBinaryFinder func() (string, error)
+
+// GenerateProjectContext dispatches to the configured generator strategy,
+// produces or updates the project context file in the workspace, and returns
+// its content (capped to the configured max size). Returns empty string on
+// any failure (non-fatal: fleet sessions can proceed without project context).
+func GenerateProjectContext(ctx context.Context, workspaceDir string, cfg *ProjectContextConfig) string {
+	if cfg == nil || cfg.Generator == "" || workspaceDir == "" {
+		return ""
+	}
+
+	switch cfg.Generator {
+	case "opencode_init":
+		return generateViaOpenCodeInit(ctx, workspaceDir, cfg)
+	case "load_file":
+		return LoadProjectContextFile(workspaceDir, cfg)
+	default:
+		log.Printf("[fleet-context] Unknown project context generator %q, skipping", cfg.Generator)
+		return ""
+	}
+}
+
+// LoadProjectContextFile reads an existing project context file from the
+// workspace without generating or updating it. Used for session recovery
+// (the file should already exist from the original session) and for the
+// "load_file" generator strategy.
+func LoadProjectContextFile(workspaceDir string, cfg *ProjectContextConfig) string {
+	if cfg == nil || cfg.OutputFile == "" || workspaceDir == "" {
+		return ""
+	}
+
+	path := filepath.Join(workspaceDir, cfg.OutputFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("[fleet-context] Failed to read project context file %s: %v", path, err)
+		}
+		return ""
+	}
+
+	content := string(data)
+	if content == "" {
+		return ""
+	}
+
+	return capProjectContext(content, cfg.GetMaxSizeBytes())
+}
+
+// generateViaOpenCodeInit runs OpenCode with a task that triggers /init to
+// analyze the codebase and generate or update the project context file.
+func generateViaOpenCodeInit(ctx context.Context, workspaceDir string, cfg *ProjectContextConfig) string {
+	if OpenCodeBinaryFinder == nil {
+		log.Printf("[fleet-context] OpenCode binary finder not configured, skipping project context generation")
+		return ""
+	}
+
+	binary, err := OpenCodeBinaryFinder()
+	if err != nil {
+		log.Printf("[fleet-context] OpenCode binary not found, skipping project context generation: %v", err)
+		return ""
+	}
+
+	outputFile := cfg.OutputFile
+	if outputFile == "" {
+		outputFile = "AGENTS.md"
+	}
+
+	task := fmt.Sprintf(
+		"Analyze this codebase and generate or update the %s file with project structure, "+
+			"build/test/lint commands, code conventions, and key architectural patterns. "+
+			"If %s already exists, update it with any new information while preserving "+
+			"manually added sections. Keep it concise and focused on what an AI coding "+
+			"agent needs to know to work effectively in this codebase.",
+		outputFile, outputFile,
+	)
+
+	genCtx, cancel := context.WithTimeout(ctx, projectContextTimeout)
+	defer cancel()
+
+	// Run OpenCode in JSON format so output is structured, but we only care
+	// about whether it succeeds. The actual output is the file on disk.
+	cmdArgs := []string{"run", "--format", "json", "--dir", workspaceDir, task}
+
+	log.Printf("[fleet-context] Generating project context via OpenCode /init in %s (timeout: %s)", workspaceDir, projectContextTimeout)
+	start := time.Now()
+
+	cmd := exec.CommandContext(genCtx, binary, cmdArgs...)
+	cmd.Dir = workspaceDir
+	cmd.Env = os.Environ()
+
+	// Capture stderr for error reporting
+	stderrBuf := &limitedBuffer{max: 4096}
+	cmd.Stderr = stderrBuf
+
+	// Drain stdout (NDJSON events) to prevent blocking
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		log.Printf("[fleet-context] Failed to create stdout pipe: %v", err)
+		return ""
+	}
+
+	if err := cmd.Start(); err != nil {
+		log.Printf("[fleet-context] Failed to start OpenCode: %v", err)
+		return ""
+	}
+
+	// Drain stdout in background to prevent the process from blocking
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 256*1024), 256*1024)
+		for scanner.Scan() {
+			// discard output
+		}
+	}()
+
+	err = cmd.Wait()
+	elapsed := time.Since(start)
+
+	if genCtx.Err() == context.DeadlineExceeded {
+		log.Printf("[fleet-context] OpenCode /init timed out after %s", elapsed.Round(time.Second))
+		// Still try to read the file; partial generation may have produced something useful
+	} else if err != nil {
+		log.Printf("[fleet-context] OpenCode /init failed after %s: %v (stderr: %s)",
+			elapsed.Round(time.Second), err, stderrBuf.String())
+		// Still try to read the file
+	} else {
+		log.Printf("[fleet-context] OpenCode /init completed in %s", elapsed.Round(time.Second))
+	}
+
+	// Read the generated file
+	return LoadProjectContextFile(workspaceDir, cfg)
+}
+
+// capProjectContext truncates content to the given max bytes, appending a
+// truncation notice if needed.
+func capProjectContext(content string, maxBytes int) string {
+	if len(content) <= maxBytes {
+		return content
+	}
+	return content[:maxBytes] + "\n\n[... truncated to fit context budget ...]\n"
+}
+
+// limitedBuffer is a bytes buffer that stops accepting writes after reaching max.
+type limitedBuffer struct {
+	data []byte
+	max  int
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	remaining := b.max - len(b.data)
+	if remaining <= 0 {
+		return len(p), nil // discard but report success
+	}
+	if len(p) > remaining {
+		p = p[:remaining]
+	}
+	b.data = append(b.data, p...)
+	return len(p), nil
+}
+
+func (b *limitedBuffer) String() string {
+	return string(b.data)
+}

@@ -16,9 +16,24 @@ import (
 type FleetConfig struct {
 	Name          string                      `yaml:"name" json:"name"`
 	Description   string                      `yaml:"description,omitempty" json:"description,omitempty"`
+	PlanWizard    *PlanWizardConfig           `yaml:"plan_wizard,omitempty" json:"plan_wizard,omitempty"`
 	Communication *CommunicationConfig        `yaml:"communication,omitempty" json:"communication,omitempty"`
 	Agents        map[string]FleetAgentConfig `yaml:"agents" json:"agents"`
 	Settings      FleetSettings               `yaml:"settings,omitempty" json:"settings,omitempty"`
+}
+
+// PlanWizardConfig defines how an AI-guided plan creation session should behave
+// when creating a fleet plan from this template. Each template can have a
+// completely different wizard tailored to its domain and integrations.
+type PlanWizardConfig struct {
+	// Description is a short user-visible message shown when the wizard starts
+	// (e.g., "Let's configure a software development fleet plan").
+	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+	// SystemPrompt contains instructions for the LLM that guide the plan creation
+	// conversation. These are injected as system context and never shown to the
+	// user as a chat message. The prompt should tell the LLM what to ask about,
+	// what to validate, and how to call save_fleet_plan.
+	SystemPrompt string `yaml:"system_prompt" json:"system_prompt"`
 }
 
 // CommunicationConfig defines the communication graph for the fleet.
@@ -30,7 +45,7 @@ type CommunicationConfig struct {
 // CommunicationNode defines one agent's position in the communication graph.
 type CommunicationNode struct {
 	Role       string   `yaml:"role" json:"role"`                                   // Agent key (e.g., "po", "architect")
-	TalksTo    []string `yaml:"talks_to" json:"talks_to"`                           // Who this agent can communicate with (agent keys or "human")
+	TalksTo    []string `yaml:"talks_to" json:"talks_to"`                           // Who this agent can communicate with (agent keys or "customer")
 	EntryPoint bool     `yaml:"entry_point,omitempty" json:"entry_point,omitempty"` // True if this agent receives initial human requests
 }
 
@@ -176,7 +191,7 @@ func (f *FleetConfig) GetFlowOrder() []string {
 	}
 	order := make([]string, 0, len(f.Communication.Flow))
 	for _, node := range f.Communication.Flow {
-		if node.Role != "human" {
+		if node.Role != "customer" {
 			order = append(order, node.Role)
 		}
 	}
@@ -195,9 +210,9 @@ func (f *FleetConfig) GetNextInFlow(agentKey string) string {
 	return ""
 }
 
-// CanTalkToHuman checks whether an agent is allowed to talk to the human.
-func (f *FleetConfig) CanTalkToHuman(agentKey string) bool {
-	return f.CanTalkTo(agentKey, "human")
+// CanTalkToCustomer checks whether an agent is allowed to talk to the customer.
+func (f *FleetConfig) CanTalkToCustomer(agentKey string) bool {
+	return f.CanTalkTo(agentKey, "customer")
 }
 
 // Validate checks that the fleet config is internally consistent.
@@ -240,15 +255,15 @@ func (f *FleetConfig) Validate() error {
 			if strings.TrimSpace(node.Role) == "" {
 				return fmt.Errorf("fleet %q communication: role is required for each flow node", f.Name)
 			}
-			// Role must reference a defined agent (unless it's "human")
-			if node.Role != "human" {
+			// Role must reference a defined agent (unless it's "customer")
+			if node.Role != "customer" {
 				if _, ok := f.Agents[node.Role]; !ok {
 					return fmt.Errorf("fleet %q communication: role %q references unknown agent", f.Name, node.Role)
 				}
 			}
 			// Validate talks_to targets
 			for _, target := range node.TalksTo {
-				if target != "human" {
+				if target != "customer" {
 					if _, ok := f.Agents[target]; !ok {
 						return fmt.Errorf("fleet %q communication: %q talks_to unknown agent %q", f.Name, node.Role, target)
 					}

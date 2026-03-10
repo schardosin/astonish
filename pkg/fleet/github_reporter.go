@@ -9,13 +9,15 @@ import (
 type GitHubReporter struct {
 	Repo        string
 	IssueNumber int
+	GHToken     string // optional: injected as GH_TOKEN for gh CLI auth
 }
 
 // NewGitHubReporter creates a reporter for a specific issue.
-func NewGitHubReporter(repo string, issueNumber int) *GitHubReporter {
+func NewGitHubReporter(repo string, issueNumber int, ghToken string) *GitHubReporter {
 	return &GitHubReporter{
 		Repo:        repo,
 		IssueNumber: issueNumber,
+		GHToken:     ghToken,
 	}
 }
 
@@ -25,7 +27,7 @@ func (r *GitHubReporter) PostComment(body string) error {
 		return fmt.Errorf("reporter not configured: repo=%q issue=%d", r.Repo, r.IssueNumber)
 	}
 
-	_, err := ghCommand("issue", "comment",
+	_, err := ghCommand(r.GHToken, "issue", "comment",
 		fmt.Sprintf("%d", r.IssueNumber),
 		"--repo", r.Repo,
 		"--body", body)
@@ -52,7 +54,7 @@ func buildSummaryComment(messages []Message, sessionID string) string {
 
 	sb.WriteString("## Astonish Fleet Summary\n\n")
 
-	// Collect agent contributions (skip system and human messages, skip intermediates)
+	// Collect agent contributions (skip system and customer messages, skip intermediates)
 	type contribution struct {
 		agent    string
 		messages []string
@@ -62,7 +64,7 @@ func buildSummaryComment(messages []Message, sessionID string) string {
 	var currentMessages []string
 
 	for _, msg := range messages {
-		if msg.Sender == "human" || msg.Sender == "system" {
+		if msg.Sender == "customer" || msg.Sender == "system" {
 			continue
 		}
 

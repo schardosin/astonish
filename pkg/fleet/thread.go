@@ -138,8 +138,8 @@ func writeSummarizedMessage(sb *strings.Builder, msg Message) {
 // formatSender returns a display name for a message sender.
 func formatSender(sender string) string {
 	switch sender {
-	case "human":
-		return "Customer (Human)"
+	case "customer":
+		return "Customer"
 	case "system":
 		return "System"
 	default:

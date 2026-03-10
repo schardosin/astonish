@@ -380,7 +380,7 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				fmt.Println("  /new         - Start a fresh conversation (new session)")
 				fmt.Println("  /compact     - Show context window usage and compaction status")
 				fmt.Println("  /distill     - Distill the last task into a reusable flow")
-				fmt.Println("  /fleet       - Show available fleets (start fleet sessions via Studio UI)")
+				fmt.Println("  /fleet       - Show available fleets and CLI commands")
 				fmt.Println("  /fleet-plan  - Create a fleet plan (use Studio UI for guided conversation)")
 				fmt.Println("  /help        - Show this help message")
 				fmt.Println("  exit         - Exit the chat")
@@ -388,11 +388,18 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 			case strings.HasPrefix(input, "/fleet-plan"):
 				// Fleet plans require the guided conversation in Studio UI
 				fmt.Printf("%sFleet plan creation requires the Studio UI for the guided conversation.%s\n", ColorCyan, ColorReset)
-				fmt.Printf("Run: make studio (or make studio-dev), then type /fleet-plan in the chat.\n\n")
+				fmt.Printf("Run: astonish studio, then type /fleet-plan in the chat.\n")
+				fmt.Printf("To manage existing plans: astonish fleet list\n\n")
 			case strings.HasPrefix(input, "/fleet"):
 				// Show available fleets; fleet sessions are started via Studio UI
 				fmt.Println(tools.ListAvailableFleets())
-				fmt.Printf("%sTo start a fleet session, use Studio UI (make studio) or: astonish fleet start%s\n\n", ColorCyan, ColorReset)
+				fmt.Printf("%sFleet CLI commands:%s\n", ColorCyan, ColorReset)
+				fmt.Printf("  astonish fleet list               List fleet plans\n")
+				fmt.Printf("  astonish fleet show <key>         Show plan details\n")
+				fmt.Printf("  astonish fleet activate <key>     Start polling\n")
+				fmt.Printf("  astonish fleet deactivate <key>   Stop polling\n")
+				fmt.Printf("  astonish fleet status <key>       Check status\n")
+				fmt.Printf("  astonish fleet templates          List templates\n\n")
 			default:
 				fmt.Printf("Unknown command: %s. Type /help for available commands.\n\n", input)
 			}

@@ -28,37 +28,37 @@ func GetFleetPlanRegistry() *fleet.PlanRegistry {
 // SaveFleetPlanArgs are the arguments for the save_fleet_plan tool.
 type SaveFleetPlanArgs struct {
 	// Key is a unique identifier for the plan (lowercase, hyphens, e.g., "frontend-bugs")
-	Key string `json:"key"`
+	Key string `json:"key" jsonschema:"Unique identifier for the plan (lowercase, hyphens, e.g., 'frontend-bugs')"`
 	// Name is the human-readable display name
-	Name string `json:"name"`
+	Name string `json:"name" jsonschema:"Human-readable display name for the plan"`
 	// Description explains what this plan does
-	Description string `json:"description"`
+	Description string `json:"description" jsonschema:"Short description of what this plan does"`
 	// BaseFleetKey is the fleet this plan is based on (e.g., "software-dev")
-	BaseFleetKey string `json:"base_fleet_key"`
-	// ChannelType is the input channel: "chat", "github_issues", "jira", "email"
-	ChannelType string `json:"channel_type"`
+	BaseFleetKey string `json:"base_fleet_key" jsonschema:"Fleet template key this plan is based on (e.g., 'software-dev'). Use list_fleets to see available templates."`
+	// ChannelType is the input channel: "chat", "github_issues"
+	ChannelType string `json:"channel_type" jsonschema:"Communication channel type: 'chat' (manual start via UI/CLI) or 'github_issues' (auto-triggered by new GitHub issues). These are the currently supported channels; other integrations may be added in the future."`
 	// ChannelConfig holds channel-specific settings as a JSON object
-	ChannelConfig map[string]any `json:"channel_config,omitempty"`
+	ChannelConfig map[string]any `json:"channel_config,omitempty" jsonschema:"Channel-specific settings. For github_issues: {repo, label, poll_schedule}. Not needed for chat channels."`
 	// ChannelSchedule is a cron expression for polling (non-chat channels)
-	ChannelSchedule string `json:"channel_schedule,omitempty"`
+	ChannelSchedule string `json:"channel_schedule,omitempty" jsonschema:"Cron expression for polling non-chat channels (e.g., '*/5 * * * *' for every 5 minutes)"`
 	// Artifacts maps artifact categories to their destinations (JSON object)
-	Artifacts map[string]SaveFleetPlanArtifact `json:"artifacts,omitempty"`
+	Artifacts map[string]SaveFleetPlanArtifact `json:"artifacts,omitempty" jsonschema:"Artifact destinations mapping category names to their config (e.g., code -> git_repo, docs -> local path)"`
 	// BehaviorOverrides maps agent keys to behavior text additions.
-	// These are appended to (not replacing) the base fleet agent behaviors.
-	BehaviorOverrides map[string]string `json:"behavior_overrides,omitempty"`
+	BehaviorOverrides map[string]string `json:"behavior_overrides,omitempty" jsonschema:"Additional behavior instructions per agent. Keyed by agent role (e.g., 'dev', 'qa'). These are APPENDED to the base fleet behaviors, not replacing them."`
+	// Credentials maps logical names to credential store entry names.
+	Credentials map[string]string `json:"credentials,omitempty" jsonschema:"Credential mappings for external service authentication. Key is a logical name agents use (e.g., 'github', 'jira', 'deploy-ssh'). Value is the credential name in the encrypted store. IMPORTANT: For github_issues channel plans, include a 'github' entry so the GitHub token is auto-injected into gh CLI commands. If credentials were validated with validate_fleet_plan, include the same mappings here."`
 	// ValidationPassed should be true if validate_fleet_plan was called and passed.
-	// Plans for non-chat channels require validation before saving.
-	ValidationPassed bool `json:"validation_passed,omitempty"`
+	ValidationPassed bool `json:"validation_passed,omitempty" jsonschema:"Set to true after validate_fleet_plan passes. Required for non-chat channel plans."`
 }
 
 // SaveFleetPlanArtifact describes a single artifact destination.
 type SaveFleetPlanArtifact struct {
-	Type          string `json:"type"`                     // "local" or "git_repo"
-	Path          string `json:"path,omitempty"`           // for "local"
-	Repo          string `json:"repo,omitempty"`           // for "git_repo"
-	BranchPattern string `json:"branch_pattern,omitempty"` // for "git_repo"
-	SubPath       string `json:"sub_path,omitempty"`       // for "git_repo"
-	AutoPR        bool   `json:"auto_pr,omitempty"`        // for "git_repo"
+	Type          string `json:"type" jsonschema:"Artifact storage type: 'local' (filesystem path) or 'git_repo' (GitHub repository)"`
+	Path          string `json:"path,omitempty" jsonschema:"Filesystem path for 'local' type artifacts"`
+	Repo          string `json:"repo,omitempty" jsonschema:"GitHub repository as 'owner/repo' for 'git_repo' type"`
+	BranchPattern string `json:"branch_pattern,omitempty" jsonschema:"Git branch naming pattern for 'git_repo' type (e.g., 'fleet/{task}')"`
+	SubPath       string `json:"sub_path,omitempty" jsonschema:"Subdirectory within the repo for 'git_repo' type (e.g., '/src')"`
+	AutoPR        bool   `json:"auto_pr,omitempty" jsonschema:"Automatically create a pull request when work is complete (for 'git_repo' type)"`
 }
 
 // SaveFleetPlanResult is the result of the save_fleet_plan tool.
@@ -205,6 +205,7 @@ func saveFleetPlan(_ tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult,
 		Description: strings.TrimSpace(args.Description),
 		CreatedFrom: baseKey,
 		FleetConfig: snapshotCfg,
+		Credentials: args.Credentials,
 		Channel:     channelCfg,
 		Artifacts:   artifacts,
 		Validation: fleet.PlanValidationState{
@@ -222,10 +223,20 @@ func saveFleetPlan(_ tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult,
 		}, nil
 	}
 
+	// Build a channel-type-aware success message with next-step guidance.
+	var msg string
+	switch channelType {
+	case "chat":
+		msg = fmt.Sprintf("Fleet plan %q saved successfully. To start a session, go to the Fleet tab in Studio and click Launch on the plan.", name)
+	default:
+		// Non-chat channels (github_issues, etc.) need activation to start polling.
+		msg = fmt.Sprintf("Fleet plan %q saved successfully. IMPORTANT: The plan is not active yet. To start monitoring, go to the Fleet tab in Studio, select the plan, and click the Activate button. This creates a scheduled job that polls for new items automatically.", name)
+	}
+
 	return SaveFleetPlanResult{
 		Status:  "saved",
 		Key:     key,
-		Message: fmt.Sprintf("Fleet plan %q saved successfully. It can be started from the Studio UI or CLI.", name),
+		Message: msg,
 	}, nil
 }
 
@@ -243,8 +254,12 @@ func GetFleetPlanTools() ([]tool.Tool, error) {
 	t, err := functiontool.New(functiontool.Config{
 		Name: "save_fleet_plan",
 		Description: "Save a fleet plan configuration. Creates a reusable, fully-configured fleet definition " +
-			"that includes both the team composition (snapshotted from a base fleet) and environment-specific " +
-			"settings like communication channel and artifact destinations. " +
+			"that includes the team composition (snapshotted from a base fleet), environment-specific " +
+			"settings like communication channel and artifact destinations, and credential mappings " +
+			"for authenticating with external services. " +
+			"IMPORTANT: If credentials were validated with validate_fleet_plan, pass the same " +
+			"credentials map here so they are stored in the plan. Without credentials, the plan " +
+			"cannot authenticate with external services at runtime. " +
 			"The plan is stored as a YAML file and can be launched from the Studio UI.",
 	}, saveFleetPlan)
 	if err != nil {

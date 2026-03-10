@@ -841,6 +841,7 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/fleet-plans/{key}/activate", ActivateFleetPlanHandler).Methods("POST")
 	router.HandleFunc("/api/fleet-plans/{key}/deactivate", DeactivateFleetPlanHandler).Methods("POST")
 	router.HandleFunc("/api/fleet-plans/{key}/status", FleetPlanStatusHandler).Methods("GET")
+	router.HandleFunc("/api/fleet-plans/{key}/retry/{issueNumber}", RetryFleetIssueHandler).Methods("POST")
 	router.HandleFunc("/api/fleet-plans/{key}/duplicate", DuplicateFleetPlanHandler).Methods("POST")
 	router.HandleFunc("/api/fleet-plans/{key}/yaml", GetFleetPlanYAMLHandler).Methods("GET")
 	router.HandleFunc("/api/fleet-plans/{key}/yaml", SaveFleetPlanYAMLHandler).Methods("PUT")

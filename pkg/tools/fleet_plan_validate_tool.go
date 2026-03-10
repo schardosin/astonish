@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -13,12 +14,14 @@ import (
 
 // ValidateFleetPlanArgs are the arguments for the validate_fleet_plan tool.
 type ValidateFleetPlanArgs struct {
-	// ChannelType is the channel to validate: "github_issues", "jira", "email", "chat"
-	ChannelType string `json:"channel_type"`
+	// ChannelType is the channel to validate: "github_issues" or "chat"
+	ChannelType string `json:"channel_type" jsonschema:"Channel type to validate: 'github_issues' or 'chat'. These are the currently supported channels."`
 	// ChannelConfig holds channel-specific settings to validate
-	ChannelConfig map[string]any `json:"channel_config,omitempty"`
+	ChannelConfig map[string]any `json:"channel_config,omitempty" jsonschema:"Channel-specific settings to validate. For github_issues: {repo, label, poll_schedule}."`
 	// Artifacts maps artifact categories to destinations to validate
-	Artifacts map[string]SaveFleetPlanArtifact `json:"artifacts,omitempty"`
+	Artifacts map[string]SaveFleetPlanArtifact `json:"artifacts,omitempty" jsonschema:"Artifact destinations to validate (checks repo access, path existence, etc.)"`
+	// Credentials maps logical names to credential store entry names to validate
+	Credentials map[string]string `json:"credentials,omitempty" jsonschema:"Credential mappings to validate. Key is a logical name (e.g., 'github', 'jira'). Value is the credential name in the encrypted store. Validates that each credential exists in the store. For 'github' credentials, the resolved token is used to test gh CLI authentication."`
 }
 
 // ValidateFleetPlanResult is the result of validation.
@@ -37,11 +40,29 @@ type ValidationCheck struct {
 
 func validateFleetPlan(_ tool.Context, args ValidateFleetPlanArgs) (ValidateFleetPlanResult, error) {
 	channelType := strings.TrimSpace(args.ChannelType)
+
+	// Validate credentials first (independent of channel type)
+	credChecks, ghToken := validateCredentials(args.Credentials)
+
 	if channelType == "" || channelType == "chat" {
+		checks := []ValidationCheck{{Name: "channel_type", Status: "passed", Message: "Chat channel requires no external validation."}}
+		checks = append(checks, credChecks...)
+
+		overallStatus := "passed"
+		for _, c := range checks {
+			if c.Status == "failed" {
+				overallStatus = "failed"
+			}
+		}
+		msg := "Chat channel validated. No external connections needed."
+		if overallStatus == "failed" {
+			msg = "Some credential checks failed. Fix these issues before saving the plan."
+		}
+
 		return ValidateFleetPlanResult{
-			Status:  "passed",
-			Checks:  []ValidationCheck{{Name: "channel_type", Status: "passed", Message: "Chat channel requires no external validation."}},
-			Message: "Chat channel validated. No external connections needed.",
+			Status:  overallStatus,
+			Checks:  checks,
+			Message: msg,
 		}, nil
 	}
 
@@ -49,7 +70,7 @@ func validateFleetPlan(_ tool.Context, args ValidateFleetPlanArgs) (ValidateFlee
 
 	switch channelType {
 	case "github_issues":
-		checks = validateGitHubIssues(args.ChannelConfig)
+		checks = validateGitHubIssues(args.ChannelConfig, ghToken)
 	default:
 		return ValidateFleetPlanResult{
 			Status:  "failed",
@@ -57,6 +78,9 @@ func validateFleetPlan(_ tool.Context, args ValidateFleetPlanArgs) (ValidateFlee
 			Message: fmt.Sprintf("Channel type %q is not yet supported for validation.", channelType),
 		}, nil
 	}
+
+	// Append credential checks
+	checks = append(checks, credChecks...)
 
 	// Validate artifacts
 	artifactChecks := validateArtifacts(args.Artifacts)
@@ -85,8 +109,16 @@ func validateFleetPlan(_ tool.Context, args ValidateFleetPlanArgs) (ValidateFlee
 }
 
 // validateGitHubIssues runs validation checks for GitHub Issues channel config.
-func validateGitHubIssues(config map[string]any) []ValidationCheck {
+// ghToken is the resolved GitHub token from the plan's credentials (may be empty
+// if no "github" credential is configured, in which case the default gh auth is used).
+func validateGitHubIssues(config map[string]any, ghToken string) []ValidationCheck {
 	var checks []ValidationCheck
+
+	// Build extra env for gh CLI commands when a credential token is available
+	var ghEnv []string
+	if ghToken != "" {
+		ghEnv = []string{"GH_TOKEN=" + ghToken}
+	}
 
 	// Check 1: gh CLI is installed
 	ghPath, err := exec.LookPath("gh")
@@ -105,20 +137,30 @@ func validateGitHubIssues(config map[string]any) []ValidationCheck {
 		Message: fmt.Sprintf("GitHub CLI found at %s.", ghPath),
 	})
 
-	// Check 2: gh is authenticated
-	authOut, authErr := runCommand("gh", "auth", "status")
+	// Check 2: gh is authenticated (using plan's token if available)
+	authOut, authErr := runCommandWithEnv(ghEnv, "gh", "auth", "status")
 	if authErr != nil {
+		authMsg := fmt.Sprintf("GitHub CLI is not authenticated. Error: %s", strings.TrimSpace(authOut))
+		if ghToken != "" {
+			authMsg = fmt.Sprintf("GitHub authentication failed with the provided credential. Error: %s", strings.TrimSpace(authOut))
+		} else {
+			authMsg += " Run 'gh auth login' or add a 'github' credential to the plan."
+		}
 		checks = append(checks, ValidationCheck{
 			Name:    "gh_authenticated",
 			Status:  "failed",
-			Message: fmt.Sprintf("GitHub CLI is not authenticated. Run 'gh auth login' first. Error: %s", strings.TrimSpace(authOut)),
+			Message: authMsg,
 		})
 		return checks
+	}
+	authMessage := "GitHub CLI is authenticated."
+	if ghToken != "" {
+		authMessage = "GitHub authentication successful using fleet plan credential."
 	}
 	checks = append(checks, ValidationCheck{
 		Name:    "gh_authenticated",
 		Status:  "passed",
-		Message: "GitHub CLI is authenticated.",
+		Message: authMessage,
 	})
 
 	// Check 3: repo is specified in config
@@ -138,7 +180,7 @@ func validateGitHubIssues(config map[string]any) []ValidationCheck {
 	})
 
 	// Check 4: repo exists and is accessible
-	repoOut, repoErr := runCommand("gh", "repo", "view", repo, "--json", "name,owner,isPrivate,viewerPermission")
+	repoOut, repoErr := runCommandWithEnv(ghEnv, "gh", "repo", "view", repo, "--json", "name,owner,isPrivate,viewerPermission")
 	if repoErr != nil {
 		checks = append(checks, ValidationCheck{
 			Name:    "repo_accessible",
@@ -198,7 +240,7 @@ func validateGitHubIssues(config map[string]any) []ValidationCheck {
 	}
 
 	// Check 6: can list issues (verifies issue tracker is enabled)
-	issueOut, issueErr := runCommand("gh", "issue", "list", "--repo", repo, "--limit", "1", "--json", "number")
+	issueOut, issueErr := runCommandWithEnv(ghEnv, "gh", "issue", "list", "--repo", repo, "--limit", "1", "--json", "number")
 	if issueErr != nil {
 		checks = append(checks, ValidationCheck{
 			Name:    "issues_accessible",
@@ -216,7 +258,7 @@ func validateGitHubIssues(config map[string]any) []ValidationCheck {
 	// Check 7: validate filter labels (if specified)
 	labels := getStringSliceFromConfig(config, "labels")
 	if len(labels) > 0 {
-		labelOut, labelErr := runCommand("gh", "label", "list", "--repo", repo, "--json", "name", "--limit", "200")
+		labelOut, labelErr := runCommandWithEnv(ghEnv, "gh", "label", "list", "--repo", repo, "--json", "name", "--limit", "200")
 		if labelErr != nil {
 			checks = append(checks, ValidationCheck{
 				Name:    "labels_exist",
@@ -259,6 +301,80 @@ func validateGitHubIssues(config map[string]any) []ValidationCheck {
 	}
 
 	return checks
+}
+
+// validateCredentials validates that all credential references in the plan
+// can be resolved from the encrypted credential store. Returns validation
+// checks and the resolved GitHub token (if a "github" credential is present).
+func validateCredentials(creds map[string]string) ([]ValidationCheck, string) {
+	if len(creds) == 0 {
+		return nil, ""
+	}
+
+	store := credentialStoreVar
+	if store == nil {
+		checks := []ValidationCheck{{
+			Name:    "credential_store",
+			Status:  "failed",
+			Message: "Credential store is not available. Ensure the daemon has initialized the encrypted store.",
+		}}
+		return checks, ""
+	}
+
+	var checks []ValidationCheck
+	var ghToken string
+
+	for logicalName, storeName := range creds {
+		checkName := fmt.Sprintf("credential_%s", logicalName)
+
+		// Try named credential first
+		cred := store.Get(storeName)
+		if cred != nil {
+			credType := string(cred.Type)
+			checks = append(checks, ValidationCheck{
+				Name:    checkName,
+				Status:  "passed",
+				Message: fmt.Sprintf("Credential %q resolved from store entry %q (type: %s).", logicalName, storeName, credType),
+			})
+
+			// Extract GitHub token if this is the "github" logical credential
+			if logicalName == "github" {
+				switch cred.Type {
+				case "bearer":
+					ghToken = cred.Token
+				case "api_key":
+					ghToken = cred.Value
+				case "password":
+					ghToken = cred.Password
+				}
+			}
+			continue
+		}
+
+		// Try flat secret
+		secret := store.GetSecret(storeName)
+		if secret != "" {
+			checks = append(checks, ValidationCheck{
+				Name:    checkName,
+				Status:  "passed",
+				Message: fmt.Sprintf("Credential %q resolved from flat secret %q.", logicalName, storeName),
+			})
+
+			if logicalName == "github" {
+				ghToken = secret
+			}
+			continue
+		}
+
+		// Not found
+		checks = append(checks, ValidationCheck{
+			Name:    checkName,
+			Status:  "failed",
+			Message: fmt.Sprintf("Credential %q not found: store entry %q does not exist. Add it with 'astonish credentials set' or the save_credential tool.", logicalName, storeName),
+		})
+	}
+
+	return checks, ghToken
 }
 
 // validateArtifacts validates artifact destination configs.
@@ -332,7 +448,17 @@ func validateArtifacts(artifacts map[string]SaveFleetPlanArtifact) []ValidationC
 
 // runCommand executes a command and returns combined output and error.
 func runCommand(name string, args ...string) (string, error) {
+	return runCommandWithEnv(nil, name, args...)
+}
+
+// runCommandWithEnv executes a command with optional extra environment variables.
+// Each entry in extraEnv should be "KEY=VALUE". The process inherits the current
+// environment with the extras appended (overriding any matching keys).
+func runCommandWithEnv(extraEnv []string, name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -402,7 +528,11 @@ func GetFleetPlanValidateTools() ([]tool.Tool, error) {
 		Name: "validate_fleet_plan",
 		Description: "Validate a fleet plan's external connections before saving. " +
 			"Tests that the configured communication channel (e.g., GitHub repo) is accessible, " +
-			"credentials are valid, required permissions exist, and artifact destinations are reachable. " +
+			"credentials exist in the encrypted store, required permissions exist, and artifact " +
+			"destinations are reachable. " +
+			"IMPORTANT: If the user provided credential mappings (e.g., github -> store-entry-name), " +
+			"include them in the credentials parameter so they are validated and used for authentication " +
+			"during channel checks. The same credentials must then be passed to save_fleet_plan. " +
 			"ALWAYS call this tool before save_fleet_plan to verify the configuration works. " +
 			"If validation fails, show the user what failed and help them fix it before retrying.",
 	}, validateFleetPlan)

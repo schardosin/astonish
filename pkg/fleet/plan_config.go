@@ -28,6 +28,14 @@ type FleetPlan struct {
 	// top-level fields. Go struct embedding still promotes Agents, Communication, etc.
 	FleetConfig `yaml:"-"`
 
+	// Credentials maps logical names to credential store entries.
+	// Each key is a logical name visible to agents (e.g., "github", "jira"),
+	// and each value is the name of a credential in the encrypted credential store.
+	// At runtime, the system resolves the actual tokens/passwords from the store
+	// and injects them into the environment (e.g., GH_TOKEN for "github").
+	// Agents see the logical names in their prompt but never the actual secrets.
+	Credentials map[string]string `yaml:"credentials,omitempty" json:"credentials,omitempty"`
+
 	// Environment configuration
 	Channel   PlanChannelConfig             `yaml:"channel" json:"channel"`
 	Artifacts map[string]PlanArtifactConfig `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
@@ -64,12 +72,13 @@ type fleetPlanYAML struct {
 	Settings      FleetSettings               `yaml:"settings,omitempty"`
 
 	// FleetPlan-specific fields
-	Channel    PlanChannelConfig             `yaml:"channel"`
-	Artifacts  map[string]PlanArtifactConfig `yaml:"artifacts,omitempty"`
-	Validation PlanValidationState           `yaml:"validation,omitempty"`
-	Activation PlanActivationState           `yaml:"activation,omitempty"`
-	CreatedAt  time.Time                     `yaml:"created_at,omitempty"`
-	UpdatedAt  time.Time                     `yaml:"updated_at,omitempty"`
+	Credentials map[string]string             `yaml:"credentials,omitempty"`
+	Channel     PlanChannelConfig             `yaml:"channel"`
+	Artifacts   map[string]PlanArtifactConfig `yaml:"artifacts,omitempty"`
+	Validation  PlanValidationState           `yaml:"validation,omitempty"`
+	Activation  PlanActivationState           `yaml:"activation,omitempty"`
+	CreatedAt   time.Time                     `yaml:"created_at,omitempty"`
+	UpdatedAt   time.Time                     `yaml:"updated_at,omitempty"`
 }
 
 // MarshalYAML implements custom YAML marshalling to avoid duplicate keys
@@ -83,6 +92,7 @@ func (p *FleetPlan) MarshalYAML() (interface{}, error) {
 		Communication: p.FleetConfig.Communication,
 		Agents:        p.FleetConfig.Agents,
 		Settings:      p.FleetConfig.Settings,
+		Credentials:   p.Credentials,
 		Channel:       p.Channel,
 		Artifacts:     p.Artifacts,
 		Validation:    p.Validation,
@@ -111,6 +121,7 @@ func (p *FleetPlan) UnmarshalYAML(value *yaml.Node) error {
 		Agents:        raw.Agents,
 		Settings:      raw.Settings,
 	}
+	p.Credentials = raw.Credentials
 	p.Channel = raw.Channel
 	p.Artifacts = raw.Artifacts
 	p.Validation = raw.Validation
@@ -125,7 +136,7 @@ func (p *FleetPlan) UnmarshalYAML(value *yaml.Node) error {
 // The channel determines how work items reach the fleet and how the fleet
 // reports progress.
 type PlanChannelConfig struct {
-	// Type is the channel type: "chat", "github_issues", "jira", "email"
+	// Type is the channel type: "chat", "github_issues"
 	Type string `yaml:"type" json:"type"`
 	// Config holds channel-type-specific settings (e.g., repo, labels, board).
 	Config map[string]any `yaml:"config,omitempty" json:"config,omitempty"`

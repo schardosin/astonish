@@ -32,6 +32,7 @@ const defaultCommentPollInterval = 15 * time.Second
 type GitHubIssueChannel struct {
 	repo        string // "owner/repo"
 	issueNumber int
+	ghToken     string // optional: injected as GH_TOKEN for gh CLI auth
 
 	// Internal ordered message list (same role as ChatChannel.messages).
 	messages   []Message
@@ -53,10 +54,13 @@ type GitHubIssueChannel struct {
 
 // NewGitHubIssueChannel creates a channel backed by a GitHub issue.
 // Call StartPoller after the session is running to begin ingesting human comments.
-func NewGitHubIssueChannel(repo string, issueNumber int) *GitHubIssueChannel {
+// The optional ghToken parameter is injected as GH_TOKEN for gh CLI auth;
+// pass empty string to use the ambient gh auth session.
+func NewGitHubIssueChannel(repo string, issueNumber int, ghToken string) *GitHubIssueChannel {
 	ch := &GitHubIssueChannel{
 		repo:         repo,
 		issueNumber:  issueNumber,
+		ghToken:      ghToken,
 		pollInterval: defaultCommentPollInterval,
 		subscribers:  make(map[string]chan Message),
 	}
@@ -100,9 +104,9 @@ func (c *GitHubIssueChannel) PostMessage(_ context.Context, msg Message) error {
 	// Notify SSE subscribers.
 	c.notifySubscribers(msg)
 
-	// Post to GitHub for non-human messages (human messages originate FROM
+	// Post to GitHub for non-customer messages (customer messages originate FROM
 	// GitHub, so posting them back would duplicate them).
-	if msg.Sender != "human" {
+	if msg.Sender != "customer" {
 		// Skip intermediate progress messages to reduce comment noise.
 		isIntermediate := false
 		if msg.Metadata != nil {
@@ -229,6 +233,15 @@ func (c *GitHubIssueChannel) MessageCount() int {
 	return len(c.messages)
 }
 
+// LastCommentID returns the highest GitHub comment ID seen by this channel.
+// Used to persist the comment cursor in the monitor state file so the comment
+// watcher knows where to resume polling after a daemon restart.
+func (c *GitHubIssueChannel) LastCommentID() int64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.lastCommentID
+}
+
 // LoadMessages pre-loads recovered messages into the channel and advances the
 // read cursor past them. This is used during session recovery so that Run()
 // does not re-process messages from the transcript.
@@ -267,7 +280,7 @@ func (c *GitHubIssueChannel) postCommentAsync(msg Message) {
 // postComment posts a comment via the REST API and returns the new comment's ID.
 func (c *GitHubIssueChannel) postComment(body string) (int64, error) {
 	// Use gh api to post (returns the created comment JSON).
-	out, err := ghCommand("api",
+	out, err := ghCommand(c.ghToken, "api",
 		fmt.Sprintf("repos/%s/issues/%d/comments", c.repo, c.issueNumber),
 		"-f", fmt.Sprintf("body=%s", body))
 	if err != nil {
@@ -316,8 +329,8 @@ type ghIssueComment struct {
 }
 
 // commentPollLoop periodically checks for new comments on the issue that
-// were NOT posted by the fleet (no marker). New human comments are injected
-// into the channel as Message{Sender: "human"}.
+// were NOT posted by the fleet (no marker). New customer comments are injected
+// into the channel as Message{Sender: "customer"}.
 func (c *GitHubIssueChannel) commentPollLoop(ctx context.Context) {
 	// Seed lastPollAt so the first poll doesn't fetch the entire history.
 	c.mu.Lock()
@@ -346,7 +359,7 @@ func (c *GitHubIssueChannel) pollComments() {
 	lastID := c.lastCommentID
 	c.mu.RUnlock()
 
-	out, err := ghCommand("api",
+	out, err := ghCommand(c.ghToken, "api",
 		fmt.Sprintf("repos/%s/issues/%d/comments?since=%s&per_page=100", c.repo, c.issueNumber, since))
 	if err != nil {
 		log.Printf("[github-channel] Error polling comments on issue #%d: %v", c.issueNumber, err)
@@ -378,7 +391,7 @@ func (c *GitHubIssueChannel) pollComments() {
 			continue
 		}
 
-		// This is a human comment. Inject it into the channel.
+		// This is a customer comment. Inject it into the channel.
 		ts, _ := time.Parse(time.RFC3339, comment.CreatedAt)
 		if ts.IsZero() {
 			ts = now
@@ -386,7 +399,7 @@ func (c *GitHubIssueChannel) pollComments() {
 
 		msg := Message{
 			ID:        uuid.New().String(),
-			Sender:    "human",
+			Sender:    "customer",
 			Text:      comment.Body,
 			Timestamp: ts,
 			Metadata: map[string]any{
@@ -405,7 +418,7 @@ func (c *GitHubIssueChannel) pollComments() {
 
 		c.notifySubscribers(msg)
 
-		log.Printf("[github-channel] Ingested human comment #%d from @%s on issue #%d",
+		log.Printf("[github-channel] Ingested customer comment #%d from @%s on issue #%d",
 			comment.ID, comment.User.Login, c.issueNumber)
 	}
 
@@ -420,7 +433,7 @@ func (c *GitHubIssueChannel) pollComments() {
 // Call this after posting the initial message but before starting the poller.
 func (c *GitHubIssueChannel) SeedLastCommentID() {
 	// Fetch all current comments to find the highest ID.
-	out, err := ghCommand("api",
+	out, err := ghCommand(c.ghToken, "api",
 		fmt.Sprintf("repos/%s/issues/%d/comments?per_page=100", c.repo, c.issueNumber))
 	if err != nil {
 		log.Printf("[github-channel] Warning: could not seed comment cursor: %v", err)

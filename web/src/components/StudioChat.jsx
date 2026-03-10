@@ -440,7 +440,7 @@ function FleetExecutionPanel({ data }) {
   )
 }
 
-export default function StudioChat({ theme, initialSessionId, onSessionChange }) {
+export default function StudioChat({ theme, initialSessionId, pendingChatMessage, onPendingChatMessageConsumed, onSessionChange }) {
   // Session state
   const [sessions, setSessions] = useState([])
   const [activeSessionId, setActiveSessionId] = useState(initialSessionId || null)
@@ -512,10 +512,10 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
               }
               // Skip human messages from the stream since we add them optimistically.
               // Match by sender + text to detect the duplicate.
-              if (data.sender === 'human' && prev.some(m => m.sender === 'human' && m.text === data.text && !m.id)) {
+              if (data.sender === 'customer' && prev.some(m => m.sender === 'customer' && m.text === data.text && !m.id)) {
                 // Replace the optimistic message (no id) with the server version (has id)
                 return prev.map(m =>
-                  m.sender === 'human' && m.text === data.text && !m.id
+                  m.sender === 'customer' && m.text === data.text && !m.id
                     ? { ...m, id: data.id, timestamp: data.timestamp || m.timestamp }
                     : m
                 )
@@ -765,7 +765,7 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
 
     // Add the initial human message to the UI if provided
     if (initialMessage) {
-      setMessages([{ type: 'fleet_message', sender: 'human', text: initialMessage, timestamp: Date.now() }])
+      setMessages([{ type: 'fleet_message', sender: 'customer', text: initialMessage, timestamp: Date.now() }])
     }
 
     try {
@@ -792,7 +792,7 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
   const sendFleetHumanMessage = useCallback(async (text) => {
     if (!text.trim() || !fleetSessionId) return
     // Add human message to UI immediately
-    setMessages(prev => [...prev, { type: 'fleet_message', sender: 'human', text, timestamp: Date.now() }])
+    setMessages(prev => [...prev, { type: 'fleet_message', sender: 'customer', text, timestamp: Date.now() }])
     setInput('')
     if (inputRef.current) inputRef.current.style.height = 'auto'
     try {
@@ -822,7 +822,7 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
     loadSessions()
   }, [fleetSessionId, changeSession])
 
-  const sendMessage = useCallback((text) => {
+  const sendMessage = useCallback((text, options = {}) => {
     if (!text.trim()) return
     const userMsg = text.trim()
 
@@ -841,6 +841,7 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
     const controller = connectChat({
       sessionId: activeSessionId || '',
       message: userMsg,
+      systemContext: options.systemContext || undefined,
       onEvent: (eventType, data) => {
         switch (eventType) {
           case 'session':
@@ -954,14 +955,27 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
 
           case 'fleet_plan_redirect':
             // /fleet-plan [hint] command: start plan creation in a fresh conversation.
-            // We defer the sendMessage call to let the current SSE stream finish cleanly.
+            // If the backend found a plan_wizard in the template, use it as system context.
+            // Otherwise fall back to a generic hardcoded prompt.
+            // NOTE: The user message is kept minimal (never the wizard description).
+            // The wizard's system_prompt already tells the LLM how to greet the user.
             setIsStreaming(false)
             {
               const hint = data.hint || ''
-              const planPrompt = hint
-                ? `I want to create a fleet plan. Here's what I need: ${hint}\n\nPlease guide me through the process. Ask me about the communication channel, artifact destinations, and any agent behavior customizations.\n\nIMPORTANT: Before saving, you MUST call the validate_fleet_plan tool to verify all external connections work (repo access, credentials, labels, etc.). Only call save_fleet_plan after validation passes. If validation fails, show me what went wrong and help me fix it.`
-                : `I want to create a new fleet plan. Please guide me through the process step by step:\n1. Which base fleet to use\n2. Communication channel type (chat, github_issues, jira, email)\n3. Channel-specific settings (e.g., for github_issues: repo, labels to filter, polling schedule)\n4. Artifact destinations (where code, docs, etc. should go)\n5. Any agent behavior customizations\n\nAsk me questions one at a time. When we have all the details:\n1. First call validate_fleet_plan to verify all connections work\n2. Show me the validation results\n3. Only call save_fleet_plan after validation passes\n\nIf validation fails, help me fix the issues before retrying.`
-              setPendingFleetPlanPrompt(planPrompt)
+              const wizardSystemPrompt = data.wizard_system_prompt || ''
+
+              if (wizardSystemPrompt) {
+                // Template has a wizard: send a minimal trigger + system context
+                setPendingFleetPlanPrompt({ message: `Create a fleet plan from the "${hint}" template.`, systemContext: wizardSystemPrompt })
+              } else if (hint) {
+                // No wizard in template: use generic prompt as system context
+                const genericSystemPrompt = `You are helping the user create a fleet plan based on the "${hint}" fleet template. The base_fleet_key is "${hint}". Guide them through:\n1. Plan identity (key, name, description)\n2. Communication channel type and settings\n3. Artifact destinations\n4. Credentials for external services\n5. Any agent behavior customizations\n\nBefore saving, call validate_fleet_plan with all config including credentials. Only call save_fleet_plan after validation passes. Include the same credentials in the save call.`
+                setPendingFleetPlanPrompt({ message: `Create a fleet plan from the "${hint}" template.`, systemContext: genericSystemPrompt })
+              } else {
+                // No hint at all: generic guided flow as system context
+                const genericSystemPrompt = `You are helping the user create a new fleet plan. Guide them through:\n1. Which base fleet template to use\n2. Communication channel type: 'chat' (manual start) or 'github_issues' (auto-triggered by new GitHub issues). These are the currently supported channels.\n3. Channel-specific settings\n4. Artifact destinations\n5. Credentials for external services\n6. Any agent behavior customizations\n\nAsk questions one at a time. Before saving, call validate_fleet_plan to verify connections. Only call save_fleet_plan after validation passes. Include credentials in both calls.`
+                setPendingFleetPlanPrompt({ message: 'I want to create a new fleet plan.', systemContext: genericSystemPrompt })
+              }
             }
             break
 
@@ -1065,11 +1079,21 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
   // Process deferred fleet plan prompt (set by fleet_plan_redirect SSE event)
   useEffect(() => {
     if (pendingFleetPlanPrompt && !isStreaming) {
-      const prompt = pendingFleetPlanPrompt
+      const { message, systemContext } = pendingFleetPlanPrompt
       setPendingFleetPlanPrompt(null)
-      sendMessage(prompt)
+      sendMessage(message, { systemContext })
     }
   }, [pendingFleetPlanPrompt, isStreaming, sendMessage])
+
+  // Process pending chat message passed from another view (e.g., Fleet UI "Create Plan with AI Guide")
+  useEffect(() => {
+    if (pendingChatMessage && !isStreaming) {
+      sendMessage(pendingChatMessage)
+      if (onPendingChatMessageConsumed) {
+        onPendingChatMessageConsumed()
+      }
+    }
+  }, [pendingChatMessage, isStreaming, sendMessage, onPendingChatMessageConsumed])
 
   const handleSubmit = (e) => {
     e.preventDefault()
@@ -1418,11 +1442,11 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
               <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{fleetInfo.fleet_name}</span>
               {fleetState && (
                 <span className="flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full" style={{
-                  background: fleetState.state === 'waiting_for_human' ? 'rgba(234, 179, 8, 0.15)' : fleetState.state === 'processing' ? 'rgba(6, 182, 212, 0.15)' : 'rgba(107, 114, 128, 0.15)',
-                  color: fleetState.state === 'waiting_for_human' ? '#facc15' : fleetState.state === 'processing' ? '#22d3ee' : '#9ca3af',
+                  background: fleetState.state === 'waiting_for_customer' ? 'rgba(234, 179, 8, 0.15)' : fleetState.state === 'processing' ? 'rgba(6, 182, 212, 0.15)' : 'rgba(107, 114, 128, 0.15)',
+                  color: fleetState.state === 'waiting_for_customer' ? '#facc15' : fleetState.state === 'processing' ? '#22d3ee' : '#9ca3af',
                 }}>
                   {fleetState.state === 'processing' && <Loader size={10} className="animate-spin" />}
-                  {fleetState.state === 'waiting_for_human' && '? '}
+                  {fleetState.state === 'waiting_for_customer' && '? '}
                   {fleetState.active_agent ? `@${fleetState.active_agent}` : fleetState.state}
                 </span>
               )}
@@ -1623,7 +1647,7 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
               }
 
               if (msg.type === 'fleet_message') {
-                const isHuman = msg.sender === 'human'
+                const isHuman = msg.sender === 'customer'
                 const isSystem = msg.sender === 'system'
                 const color = getAgentColor(msg.sender)
 
@@ -1758,7 +1782,7 @@ export default function StudioChat({ theme, initialSessionId, onSessionChange })
                 disabled={isStreaming && !isFleetMode}
                 placeholder={
                   isFleetMode
-                    ? fleetState?.state === 'waiting_for_human'
+                    ? fleetState?.state === 'waiting_for_customer'
                       ? `${fleetState.active_agent || 'An agent'} is waiting for your response...`
                       : fleetState?.state === 'processing'
                         ? `${fleetState.active_agent || 'Agent'} is working... You can still type.`

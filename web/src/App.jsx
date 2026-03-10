@@ -130,6 +130,7 @@ function App() {
   const [showSetupWizard, setShowSetupWizard] = useState(false)
   const [isCheckingSetup, setIsCheckingSetup] = useState(true)
   const [view, setView] = useState('chat')
+  const [pendingChatMessage, setPendingChatMessage] = useState(null)
 
   // Check if setup is required on mount
   useEffect(() => {
@@ -1333,6 +1334,8 @@ layout:
             <StudioChat
               theme={theme}
               initialSessionId={path.view === 'chat' ? path.params.sessionId : ''}
+              pendingChatMessage={pendingChatMessage}
+              onPendingChatMessageConsumed={() => setPendingChatMessage(null)}
               onSessionChange={(sessionId) => {
                 if (sessionId) {
                   replaceHash(buildPath('chat', { sessionId }))
@@ -1346,6 +1349,10 @@ layout:
               theme={theme}
               path={path}
               onNavigate={(hashPath) => navigate(hashPath)}
+              onCreatePlan={(templateKey) => {
+                setPendingChatMessage(`/fleet-plan ${templateKey}`)
+                navigate(buildPath('chat'))
+              }}
             />
           ) : !selectedAgent ? (
              <div className="flex-1 flex items-center justify-center p-8 text-center" style={{ color: 'var(--text-muted)' }}>

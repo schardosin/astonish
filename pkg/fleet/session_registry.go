@@ -80,7 +80,7 @@ func (r *SessionRegistry) PostHumanMessage(sessionID, text string) error {
 		return fmt.Errorf("fleet session %s is not running", sessionID)
 	}
 	msg := Message{
-		Sender: "human",
+		Sender: "customer",
 		Text:   text,
 	}
 	if err := fs.Channel.PostMessage(ctx, msg); err != nil {

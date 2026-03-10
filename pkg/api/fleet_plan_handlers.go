@@ -117,6 +117,14 @@ func DeleteFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	key := mux.Vars(r)["key"]
+
+	// Clean up associated resources (scheduler job, monitor, state file)
+	// before removing the plan from the registry. This prevents orphaned
+	// scheduler jobs that poll forever for a deleted plan.
+	if planActivatorVar != nil {
+		planActivatorVar.ForceCleanup(key)
+	}
+
 	if err := fleetPlanRegistryVar.Delete(key); err != nil {
 		http.Error(w, "Failed to delete fleet plan: "+err.Error(), http.StatusInternalServerError)
 		return

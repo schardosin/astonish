@@ -163,9 +163,9 @@ export function connectFleetStream({ sessionId, onEvent, onError, onDone }) {
 }
 
 /**
- * Send a human message to an active fleet session
+ * Send a customer message to an active fleet session
  * @param {string} sessionId - Fleet session ID
- * @param {string} message - Human message text
+ * @param {string} message - Customer message text
  */
 export async function sendFleetMessage(sessionId, message) {
   const response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/message`, {
@@ -334,6 +334,24 @@ export async function deleteFleetPlan(planKey) {
  */
 export async function fetchFleetPlan(planKey) {
   const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}`)
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
+ * Retry a failed fleet issue by resuming its interrupted session.
+ * @param {string} planKey - Fleet plan key
+ * @param {number} issueNumber - GitHub issue number
+ * @returns {Promise<{status: string, session_id: string, issue: number}>}
+ */
+export async function retryFleetIssue(planKey, issueNumber) {
+  const response = await fetch(
+    `${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/retry/${issueNumber}`,
+    { method: 'POST' }
+  )
   if (!response.ok) {
     const text = await response.text()
     throw new Error(text || `HTTP ${response.status}`)

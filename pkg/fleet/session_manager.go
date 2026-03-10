@@ -23,11 +23,25 @@ const (
 	StateIdle SessionState = "idle"
 	// StateProcessing means an agent is currently being activated.
 	StateProcessing SessionState = "processing"
-	// StateWaitingForHuman means an agent has requested human input and the fleet is paused.
-	StateWaitingForHuman SessionState = "waiting_for_human"
+	// StateWaitingForCustomer means an agent has requested customer input and the fleet is paused.
+	StateWaitingForCustomer SessionState = "waiting_for_customer"
 	// StateStopped means the fleet session has been stopped.
 	StateStopped SessionState = "stopped"
 )
+
+// idleWatchdogTimeout is how long a headless session waits for a new message
+// before the watchdog activates the entry point agent. This prevents sessions
+// from hanging forever when routing fails or returns an empty target.
+//
+// Only applies to headless sessions (no human in the UI). Sessions with
+// waitingAgent set (legitimately waiting for a human reply on GitHub) use a
+// longer timeout to give humans time to respond.
+const idleWatchdogTimeout = 5 * time.Minute
+
+// idleWatchdogTimeoutWaitingForCustomer is the longer timeout used when the
+// session explicitly asked a customer a question. GitHub comment replies may
+// take a while, so we wait longer before intervening.
+const idleWatchdogTimeoutWaitingForCustomer = 30 * time.Minute
 
 // FleetSession manages the message loop for a single fleet session.
 // It monitors a channel for messages, routes them to the appropriate agent,
@@ -66,13 +80,38 @@ type FleetSession struct {
 	OnMessagePosted func(msg Message)
 
 	// OnSessionDone is called when Run() exits (clean stop or error).
-	// Used by the plan activator to mark issues as completed.
-	OnSessionDone func(sessionID string)
+	// The error argument is nil for clean stops and non-nil when the session
+	// stopped due to consecutive agent failures. Used by the plan activator
+	// to mark issues as failed.
+	OnSessionDone func(sessionID string, sessionErr error)
+
+	// OnBallChange is called when the "ball" transitions between agents and
+	// human. Used by the plan activator to update the monitor state file so
+	// daemon restarts know whether to recover the session (ball=agents) or
+	// just watch for new comments (ball=human).
+	//
+	// Values: "agents" or "customer". "failed" is handled by OnSessionDone.
+	OnBallChange func(ball string)
+
+	// lastError stores the error from Run() so SSE viewers can include it
+	// in the fleet_done event. Protected by mu.
+	lastError error
 
 	// ResumeTarget, when set before Run(), is used as the initial pending
 	// target agent instead of waiting for a new message. This is used during
 	// session recovery to continue from where the session left off.
 	ResumeTarget string
+
+	// Headless is true for sessions started by the scheduler (no human in
+	// the UI). Used by the idle watchdog to decide whether to auto-activate
+	// the entry point agent when the session sits idle too long.
+	Headless bool
+
+	// Progress tracks key milestones (approvals, completions, handoffs)
+	// across the session lifetime. Injected into agent prompts so agents
+	// always know the current project state, even when the conversation
+	// thread is truncated. Survives recovery via JSONL persistence.
+	Progress *ProgressTracker
 }
 
 // NewFleetSession creates a new fleet session.
@@ -92,6 +131,7 @@ func NewFleetSession(
 		PersonaRegistry: personaReg,
 		LLM:             subAgentMgr.LLM,
 		state:           StateIdle,
+		Progress:        NewProgressTracker(),
 	}
 }
 
@@ -100,6 +140,14 @@ func (fs *FleetSession) GetState() (SessionState, string) {
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 	return fs.state, fs.activeAgent
+}
+
+// LastError returns the error from the last Run() invocation, or nil if
+// the session ended cleanly or is still running.
+func (fs *FleetSession) LastError() error {
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
+	return fs.lastError
 }
 
 // setState updates the session state and notifies listeners.
@@ -116,16 +164,19 @@ func (fs *FleetSession) setState(state SessionState, activeAgent string) {
 
 // Run starts the fleet session message loop.
 // It blocks until the context is cancelled or the session is stopped.
-func (fs *FleetSession) Run(ctx context.Context) error {
+func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 	ctx, cancel := context.WithCancel(ctx)
 	fs.ctx = ctx
 	fs.cancel = cancel
 	log.Printf("[fleet] Session %s started for fleet %q", fs.ID, fs.FleetKey)
 	defer func() {
 		cancel()
+		fs.mu.Lock()
+		fs.lastError = runErr
+		fs.mu.Unlock()
 		log.Printf("[fleet] Session %s stopped", fs.ID)
 		if fs.OnSessionDone != nil {
-			fs.OnSessionDone(fs.ID)
+			fs.OnSessionDone(fs.ID, runErr)
 		}
 	}()
 
@@ -163,30 +214,81 @@ func (fs *FleetSession) Run(ctx context.Context) error {
 			pendingTarget = ""
 			log.Printf("[fleet] Auto-chaining to agent %s", targetAgent)
 		} else {
-			// Wait for the next message
+			// Wait for the next message.
+			// For headless sessions, arm the idle watchdog so the session
+			// does not hang forever if no message arrives (e.g., routing
+			// returned "" or the poller has nothing new).
 			fs.setState(StateIdle, "")
-			msg, err := fs.Channel.WaitForMessage(ctx)
+
+			var waitCtx context.Context
+			var waitCancel context.CancelFunc
+
+			if fs.Headless {
+				timeout := idleWatchdogTimeout
+				fs.mu.RLock()
+				waiting := fs.waitingAgent
+				fs.mu.RUnlock()
+				if waiting != "" {
+					timeout = idleWatchdogTimeoutWaitingForCustomer
+				}
+				waitCtx, waitCancel = context.WithTimeout(ctx, timeout)
+			} else {
+				waitCtx, waitCancel = context.WithCancel(ctx)
+			}
+
+			msg, err := fs.Channel.WaitForMessage(waitCtx)
+			waitCancel()
+
 			if err != nil {
 				if ctx.Err() != nil {
 					fs.setState(StateStopped, "")
-					return nil // clean shutdown
+					return nil // clean shutdown (parent context cancelled)
+				}
+				// Idle watchdog fired: the child context timed out but the
+				// parent is still alive. Activate the entry point to reassess.
+				if fs.Headless && waitCtx.Err() == context.DeadlineExceeded {
+					entryPoint := fs.FleetConfig.GetEntryPoint()
+					log.Printf("[fleet] Idle watchdog fired for session %s (idle >%v), activating entry point @%s",
+						fs.ID, idleWatchdogTimeout, entryPoint)
+
+					watchdogMsg := Message{
+						ID:        uuid.New().String(),
+						Sender:    "system",
+						Text:      fmt.Sprintf("Idle watchdog: no activity for %v. Re-activating @%s to reassess.", idleWatchdogTimeout, entryPoint),
+						Timestamp: time.Now(),
+					}
+					_ = fs.Channel.PostMessage(ctx, watchdogMsg)
+					fs.notifyMessagePosted(watchdogMsg)
+
+					pendingTarget = entryPoint
+					continue
 				}
 				return fmt.Errorf("waiting for message: %w", err)
 			}
 
-			// Human messages use fast-path routing (no LLM needed)
-			if msg.IsFromHuman() {
-				targetAgent = RouteHumanMessage(fs.FleetConfig, fs.waitingAgent)
+			// Customer messages use fast-path routing (no LLM needed)
+			if msg.IsFromCustomer() {
+				targetAgent = RouteCustomerMessage(fs.FleetConfig, fs.waitingAgent)
 
-				// Clear waiting state since human responded
+				// Clear waiting state since customer responded
 				if fs.waitingAgent != "" {
 					fs.mu.Lock()
 					fs.waitingAgent = ""
 					fs.mu.Unlock()
 				}
 
-				// Human intervention resets the error counter
+				// Ball moves to agents since a customer replied
+				fs.notifyBallChange("agents")
+
+				// Customer intervention resets the error counter
 				consecutiveErrors = 0
+
+				// Track milestones from customer messages (approvals, etc.)
+				if fs.Progress != nil {
+					for _, m := range AnalyzeCustomerMessageForMilestones(msg) {
+						fs.Progress.AddMilestone(m)
+					}
+				}
 			} else {
 				// This is an agent or system message that arrived from outside
 				// the main loop (e.g., a message posted by an external caller).
@@ -260,24 +362,34 @@ func (fs *FleetSession) Run(ctx context.Context) error {
 			fs.OnAgentMessage(response)
 		}
 
+		// Track milestones from the agent's response (approvals, completions, handoffs)
+		if fs.Progress != nil {
+			for _, m := range AnalyzeMessageForMilestones(response) {
+				fs.Progress.AddMilestone(m)
+			}
+		}
+
 		// Use LLM to determine who should act next
 		routing := RouteWithLLM(ctx, response, fs.FleetConfig, fs.LLM)
 		log.Printf("[fleet] Routing decision for @%s's message: target=%s reason=%s",
 			response.Sender, routing.Target, routing.Reason)
 
 		switch routing.Target {
-		case "human":
+		case "customer":
 			fs.mu.Lock()
 			fs.waitingAgent = response.Sender
 			fs.mu.Unlock()
-			fs.setState(StateWaitingForHuman, response.Sender)
+			fs.setState(StateWaitingForCustomer, response.Sender)
+			fs.notifyBallChange("customer")
 
 		case "self":
 			// Sender still has the action; re-activate them
 			pendingTarget = response.Sender
 
 		case "none":
-			// No one needs to act; go idle and wait for next message
+			// No one needs to act; go idle and wait for next message.
+			// Ball moves to customer since no agent has pending work.
+			fs.notifyBallChange("customer")
 			continue
 
 		default:
@@ -299,6 +411,13 @@ func (fs *FleetSession) notifyMessagePosted(msg Message) {
 	}
 }
 
+// notifyBallChange calls the OnBallChange callback if set.
+func (fs *FleetSession) notifyBallChange(ball string) {
+	if fs.OnBallChange != nil {
+		fs.OnBallChange(ball)
+	}
+}
+
 // activateAgent builds the context and runs the agent as a sub-agent.
 // It wires an OnEvent callback to post intermediate progress messages to the
 // channel as the agent works, so the team sees real-time status updates instead
@@ -315,7 +434,7 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 	}
 
 	// Build system prompt with communication graph awareness
-	systemPrompt := BuildAgentPrompt(personaCfg, agentCfg, fs.FleetConfig, agentKey, fs.Plan)
+	systemPrompt := BuildAgentPrompt(personaCfg, agentCfg, fs.FleetConfig, agentKey, fs.Progress, fs.Plan)
 
 	// Build thread context
 	threadContext, err := BuildThreadContext(ctx, fs.Channel, agentKey)
@@ -335,7 +454,9 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 	// Determine timeout. Fleet agents do multi-step work (multiple LLM calls,
 	// tool executions, file reads/writes) within a single activation. The
 	// timeout covers the entire activation, not individual LLM calls.
-	timeoutOverride := 20 * time.Minute
+	// OpenCode tasks can take 30-45 minutes for complex multi-step work,
+	// so the fleet agent timeout must exceed that to allow completion.
+	timeoutOverride := 60 * time.Minute
 
 	// Track intermediate text for real-time progress messaging.
 	// When the LLM produces text followed by a tool call in the same turn,

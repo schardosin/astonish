@@ -36,12 +36,12 @@ func ParseMentions(text string) []string {
 	return mentions
 }
 
-// RouteHumanMessage determines which agent should handle a human message.
+// RouteCustomerMessage determines which agent should handle a customer message.
 // This is a fast path that doesn't need an LLM call.
 //
-// If an agent was waiting for human input, the message goes to that agent.
+// If an agent was waiting for customer input, the message goes to that agent.
 // Otherwise it goes to the entry point agent.
-func RouteHumanMessage(fleetCfg *FleetConfig, waitingAgent string) string {
+func RouteCustomerMessage(fleetCfg *FleetConfig, waitingAgent string) string {
 	if waitingAgent != "" {
 		return waitingAgent
 	}
@@ -50,7 +50,7 @@ func RouteHumanMessage(fleetCfg *FleetConfig, waitingAgent string) string {
 
 // RoutingResult holds the outcome of an LLM routing decision.
 type RoutingResult struct {
-	Target string // agent key, "human", "self", or "none"
+	Target string // agent key, "customer", "self", or "none"
 	Reason string // brief explanation (for logging)
 }
 
@@ -63,7 +63,7 @@ const routingTimeout = 15 * time.Second
 //
 // Returns a RoutingResult with Target set to one of:
 //   - An agent key (e.g., "dev") meaning that agent should be activated next
-//   - "human" meaning the system should wait for customer input
+//   - "customer" meaning the system should wait for customer input
 //   - "self" meaning the sender still has the action (re-activate them)
 //   - "none" meaning no one needs to act right now
 //
@@ -112,13 +112,19 @@ func RouteWithLLM(ctx context.Context, msg Message, fleetCfg *FleetConfig, llm m
 	raw := strings.TrimSpace(responseText.String())
 	result := parseRoutingResponse(raw, senderKey, talksTo, msg, fleetCfg)
 
-	// Post-processing: when the LLM says "human" but the message mentions
-	// agents outside the sender's talksTo, re-route through an intermediary.
-	// This handles the common pattern where an agent (e.g., PO) tries to hand
-	// off directly to a downstream agent (e.g., @dev) that isn't in their
-	// communication targets. Without this, the session stalls waiting for a
-	// human that will never come.
-	if result.Target == "human" {
+	// Post-processing: when the LLM says "customer" or "none" but the message
+	// mentions agents outside the sender's talksTo, re-route through an
+	// intermediary. This handles two common patterns:
+	//
+	// 1. "customer" case: An agent (e.g., PO) tries to hand off directly to a
+	//    downstream agent (e.g., @dev) that isn't in their talksTo. Without
+	//    this, the session stalls waiting for a customer that will never come.
+	//
+	// 2. "none" case: An agent (e.g., architect) declares their role is done
+	//    but mentions an unreachable agent (e.g., @qa) as a handoff or FYI.
+	//    The LLM interprets "I'm done" as "no action needed" and returns
+	//    "none", but the @mention signals the conversation should continue.
+	if result.Target == "customer" || result.Target == "none" {
 		if reroute := rerouteViaIntermediary(msg, senderKey, fleetCfg); reroute != nil {
 			return *reroute
 		}
@@ -143,16 +149,16 @@ func buildRoutingPrompt(sender, messageText string, talksTo []string) string {
 	sb.WriteString(fmt.Sprintf("Message:\n\"\"\"\n%s\n\"\"\"\n\n", messageText))
 
 	sb.WriteString(fmt.Sprintf("Valid targets that @%s can route to: %s\n", sender, strings.Join(targets, ", ")))
-	sb.WriteString("Special values: \"human\" (wait for customer input), \"self\" (sender still has the action), \"none\" (no one needs to act)\n\n")
+	sb.WriteString("Special values: \"customer\" (wait for customer input), \"self\" (sender still has the action), \"none\" (no one needs to act)\n\n")
 
 	sb.WriteString("Determine who should act next. Consider:\n")
 	sb.WriteString("- If the sender is handing off work or asking someone to do something, that person has the action.\n")
 	sb.WriteString("- If the sender addresses multiple people, focus on who is being asked to TAKE ACTION, not who is just being informed.\n")
 	sb.WriteString("- If the sender is acknowledging, thanking, or giving an FYI without requesting action, they likely still have the action (return \"self\").\n")
-	sb.WriteString("- If the sender asks @human a question or presents something for customer review, return \"human\".\n")
+	sb.WriteString("- If the sender asks @customer a question or presents something for customer review, return \"customer\".\n")
 	sb.WriteString("- If the sender says they are completely done and no one else needs to act, return \"none\".\n\n")
 
-	sb.WriteString("Respond with ONLY a single word: one of the valid targets, \"human\", \"self\", or \"none\".")
+	sb.WriteString("Respond with ONLY a single word: one of the valid targets, \"customer\", \"self\", or \"none\".")
 
 	return sb.String()
 }
@@ -167,8 +173,8 @@ func parseRoutingResponse(raw, senderKey string, talksTo []string, msg Message, 
 
 	// Check special values
 	switch normalized {
-	case "human":
-		return RoutingResult{Target: "human", Reason: "LLM decided: wait for customer"}
+	case "customer":
+		return RoutingResult{Target: "customer", Reason: "LLM decided: wait for customer"}
 	case "self", senderKey:
 		return RoutingResult{Target: "self", Reason: "LLM decided: sender still has the action"}
 	case "none", "no one", "nobody", "no_one":
@@ -195,10 +201,10 @@ func fallbackRoute(msg Message, fleetCfg *FleetConfig) RoutingResult {
 		mentions = ParseMentions(msg.Text)
 	}
 
-	// Check for @human mention
+	// Check for @customer mention
 	for _, m := range mentions {
-		if m == "human" {
-			return RoutingResult{Target: "human", Reason: "fallback: @human mentioned"}
+		if m == "customer" {
+			return RoutingResult{Target: "customer", Reason: "fallback: @customer mentioned"}
 		}
 	}
 
@@ -221,8 +227,8 @@ func fallbackRoute(msg Message, fleetCfg *FleetConfig) RoutingResult {
 //
 // This handles a common pattern: the PO reviews work and says
 // "@architect, great work. @dev, please implement this." The PO's talksTo
-// is [human, architect], so @dev is unreachable. Without re-routing, the
-// router returns "human" and the session stalls forever. With re-routing,
+// is [customer, architect], so @dev is unreachable. Without re-routing, the
+// router returns "customer" and the session stalls forever. With re-routing,
 // we detect that @architect can reach @dev and route there instead.
 //
 // Returns nil if no re-route is needed (no unreachable mentions found).
@@ -245,10 +251,10 @@ func rerouteViaIntermediary(msg Message, senderKey string, fleetCfg *FleetConfig
 	// (a) are valid fleet agents (exist in the config)
 	// (b) are NOT in the sender's talksTo (unreachable directly)
 	// (c) are not the sender themselves
-	// (d) are not "human" (handled separately)
+	// (d) are not "customer" (handled separately)
 	var unreachable []string
 	for _, m := range mentions {
-		if m == senderKey || m == "human" {
+		if m == senderKey || m == "customer" {
 			continue
 		}
 		if _, isAgent := fleetCfg.Agents[m]; !isAgent {
@@ -270,7 +276,7 @@ func rerouteViaIntermediary(msg Message, senderKey string, fleetCfg *FleetConfig
 	// typically follows the communication flow order).
 	for _, target := range unreachable {
 		for _, intermediary := range senderTargets {
-			if intermediary == "human" {
+			if intermediary == "customer" {
 				continue
 			}
 			if fleetCfg.CanTalkTo(intermediary, target) {

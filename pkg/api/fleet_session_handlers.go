@@ -175,7 +175,7 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 	// If user provided an initial message, post it to start the conversation
 	if req.Message != "" {
 		initialMsg := fleet.Message{
-			Sender: "human",
+			Sender: "customer",
 			Text:   req.Message,
 		}
 		if err := channel.PostMessage(context.Background(), initialMsg); err != nil {
@@ -274,7 +274,7 @@ func fleetMessageToEvent(msg fleet.Message, invocationNum int) *adksession.Event
 	// Map fleet sender to ADK role
 	role := genai.RoleModel
 	author := msg.Sender
-	if msg.Sender == "human" {
+	if msg.Sender == "customer" {
 		role = genai.RoleUser
 		author = "user"
 	}
@@ -505,7 +505,11 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 		case msg, ok := <-msgCh:
 			if !ok {
 				// Channel closed (fleet session ended)
-				safeSendSSE("fleet_done", map[string]interface{}{"done": true})
+				donePayload := map[string]interface{}{"done": true}
+				if lastErr := fs.LastError(); lastErr != nil {
+					donePayload["error"] = lastErr.Error()
+				}
+				safeSendSSE("fleet_done", donePayload)
 				return
 			}
 			if seen[msg.ID] {

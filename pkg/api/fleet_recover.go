@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,6 +14,7 @@ import (
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/tools"
+	"google.golang.org/adk/model"
 	adksession "google.golang.org/adk/session"
 	"google.golang.org/genai"
 )
@@ -86,7 +88,7 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 	// Create a GitHubIssueChannel pre-loaded with recovered messages.
 	// LoadMessages advances the read cursor past all recovered messages
 	// so Run() does not re-process them.
-	ghChannel := fleet.NewGitHubIssueChannel(cfg.Repo, cfg.IssueNumber)
+	ghChannel := fleet.NewGitHubIssueChannel(cfg.Repo, cfg.IssueNumber, cfg.GHToken)
 	ghChannel.LoadMessages(recoveredMessages)
 
 	// Seed the comment cursor so the poller skips all existing comments
@@ -100,12 +102,45 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 	fleetSession := fleet.NewFleetSession(plan.Key, fleetCfg, ghChannel, subAgentMgr, personaReg)
 	fleetSession.ID = cfg.SessionID // override with original session ID
 	fleetSession.Plan = plan
+	fleetSession.Headless = true
 
-	// Post a system message about the restart
+	// Reconstruct the progress tracker from recovered messages so agents
+	// know about prior approvals, completions, and handoffs.
+	for _, msg := range recoveredMessages {
+		if msg.Sender == "customer" {
+			for _, m := range fleet.AnalyzeCustomerMessageForMilestones(msg) {
+				fleetSession.Progress.AddMilestone(m)
+			}
+		} else {
+			for _, m := range fleet.AnalyzeMessageForMilestones(msg) {
+				fleetSession.Progress.AddMilestone(m)
+			}
+		}
+	}
+	// Record the resume event itself
+	fleetSession.Progress.AddMilestone(fleet.Milestone{
+		Type:    fleet.MilestoneResume,
+		Agent:   "system",
+		Summary: "Session resumed after daemon restart",
+	})
+
+	milestoneCount := len(fleetSession.Progress.GetMilestones())
+	log.Printf("[fleet-recover] Session %s: reconstructed %d milestones from transcript", cfg.SessionID, milestoneCount)
+
+	// Generate an LLM summary of the full conversation so the resume agent
+	// has accurate context about what happened, what was approved, and what
+	// work remains. This replaces the generic "Fleet session resumed" message.
+	resumeText := "Fleet session resumed after daemon restart. Continuing from where we left off."
+	if subAgentMgr.LLM != nil {
+		if summary := generateRecoverySummary(recoveredMessages, subAgentMgr.LLM); summary != "" {
+			resumeText = summary
+		}
+	}
+
 	restartMsg := fleet.Message{
 		ID:        uuid.New().String(),
 		Sender:    "system",
-		Text:      "Fleet session resumed after daemon restart. Continuing from where we left off.",
+		Text:      resumeText,
 		Timestamp: time.Now(),
 	}
 	if postErr := ghChannel.PostMessage(context.Background(), restartMsg); postErr != nil {
@@ -122,8 +157,19 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 
 	// Wire completion callback for issue lifecycle tracking
 	if cfg.CompletionFunc != nil {
-		fleetSession.OnSessionDone = func(_ string) {
-			cfg.CompletionFunc()
+		fleetSession.OnSessionDone = func(_ string, sessionErr error) {
+			cfg.CompletionFunc(sessionErr)
+		}
+	}
+
+	// Wire ball-change callback so the monitor state tracks who has the ball.
+	if cfg.BallChangeFunc != nil {
+		fleetSession.OnBallChange = func(ball string) {
+			var commentID int64
+			if ghChannel != nil {
+				commentID = ghChannel.LastCommentID()
+			}
+			cfg.BallChangeFunc(ball, commentID)
 		}
 	}
 
@@ -181,13 +227,13 @@ func eventsToFleetMessages(events []*adksession.Event) []fleet.Message {
 		sender := event.Author
 		if sender == "" {
 			if event.LLMResponse.Content.Role == genai.RoleUser {
-				sender = "human"
+				sender = "customer"
 			} else {
 				sender = "agent"
 			}
 		}
 		if sender == "user" {
-			sender = "human"
+			sender = "customer"
 		}
 
 		msg := fleet.Message{
@@ -209,8 +255,8 @@ func eventsToFleetMessages(events []*adksession.Event) []fleet.Message {
 //   - If from an agent: use LLM routing (or fallback to entry point)
 //   - If from system: route to entry point
 func determineResumeTarget(lastMsg fleet.Message, fleetCfg *fleet.FleetConfig, subAgentMgr *agent.SubAgentManager) string {
-	if lastMsg.Sender == "human" {
-		return fleet.RouteHumanMessage(fleetCfg, "")
+	if lastMsg.Sender == "customer" {
+		return fleet.RouteCustomerMessage(fleetCfg, "")
 	}
 
 	if lastMsg.Sender == "system" {
@@ -225,13 +271,18 @@ func determineResumeTarget(lastMsg fleet.Message, fleetCfg *fleet.FleetConfig, s
 
 		routing := fleet.RouteWithLLM(routeCtx, lastMsg, fleetCfg, subAgentMgr.LLM)
 		switch routing.Target {
-		case "human":
-			// The agent was waiting for human input. Since we are recovering
-			// after restart, return empty so Run() waits for a new message
-			// (the comment poller will pick up any new human comments).
-			return ""
+		case "customer":
+			// The agent was waiting for customer input. Rather than returning ""
+			// (which blocks forever in headless sessions with no customer), activate
+			// the entry point to reassess. If human input is truly needed the
+			// agent will say so, the session will enter WaitingForHuman state,
+			// and the GitHub comment poller will pick up any new replies.
+			return fleetCfg.GetEntryPoint()
 		case "none":
-			return ""
+			// Same rationale: "none" after recovery usually means the LLM could
+			// not determine next steps from the truncated context. The entry
+			// point agent can re-evaluate with the full progress tracker.
+			return fleetCfg.GetEntryPoint()
 		case "self":
 			return lastMsg.Sender
 		default:
@@ -259,4 +310,109 @@ func wireFleetTranscriptAppend(fs *fleet.FleetSession, transcriptPath string, pr
 			log.Printf("[fleet-recover] Warning: could not persist fleet message: %v", err)
 		}
 	}
+}
+
+// generateRecoverySummary uses the LLM to produce a structured summary of the
+// conversation history for injection into the resumed session. The summary
+// tells agents exactly what has happened, what was approved, and what remains.
+//
+// This solves the critical problem of agents re-doing work after recovery:
+// the regular thread context truncates to ~40K chars, losing earlier approvals
+// and completions. The summary preserves this information in a compact format
+// that fits in the recent message window.
+func generateRecoverySummary(messages []fleet.Message, llm model.LLM) string {
+	if len(messages) == 0 {
+		return ""
+	}
+
+	// Build a compact representation of ALL messages (no truncation).
+	// Each message: "@sender: first 300 chars of text"
+	// This is cheaper than the full text and fits in a single LLM call.
+	var threadText strings.Builder
+	for _, msg := range messages {
+		text := msg.Text
+		if len(text) > 300 {
+			text = text[:300] + "..."
+		}
+		text = strings.ReplaceAll(text, "\n", " ")
+		threadText.WriteString(fmt.Sprintf("@%s: %s\n", msg.Sender, text))
+	}
+
+	// Cap the total input to avoid exceeding context limits
+	input := threadText.String()
+	const maxInputChars = 80000
+	if len(input) > maxInputChars {
+		// Keep the first 20K and last 60K to preserve both beginning and end
+		input = input[:20000] + "\n\n[... middle of conversation omitted ...]\n\n" + input[len(input)-60000:]
+	}
+
+	prompt := fmt.Sprintf(`You are summarizing a team conversation that was interrupted and is being resumed.
+Produce a structured status report that tells agents EXACTLY where things stand.
+
+The conversation has %d messages. Here is the full thread:
+
+---
+%s
+---
+
+Produce a summary with EXACTLY this structure (fill in the details):
+
+## Session Recovery Summary
+
+**Original Task:** [1-2 sentence description of what was requested]
+
+**Decisions Made (DO NOT re-request these):**
+- [List each approval/decision with who approved and what was approved]
+
+**Work Completed (DO NOT redo this):**
+- [List each completed deliverable, step, or milestone with specifics]
+
+**Current State:**
+- [What is the immediate next action needed]
+- [Who should be doing it]
+- [Any blockers or pending items]
+
+**Key Artifacts:**
+- [List important files, PRs, branches that exist]
+
+Be specific with names, numbers, file paths, PR numbers, test counts, etc.
+Do NOT be vague. The agents reading this have NO other context.`, len(messages), input)
+
+	summaryCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	req := &genai.GenerateContentConfig{
+		Temperature:     genai.Ptr(float32(0.0)),
+		MaxOutputTokens: 1500,
+	}
+
+	llmReq := &model.LLMRequest{
+		Contents: []*genai.Content{
+			genai.NewContentFromText(prompt, genai.RoleUser),
+		},
+		Config: req,
+	}
+
+	var responseText strings.Builder
+	for resp, err := range llm.GenerateContent(summaryCtx, llmReq, false) {
+		if err != nil {
+			log.Printf("[fleet-recover] LLM summary failed: %v", err)
+			return ""
+		}
+		if resp != nil && resp.Content != nil {
+			for _, part := range resp.Content.Parts {
+				if part.Text != "" {
+					responseText.WriteString(part.Text)
+				}
+			}
+		}
+	}
+
+	summary := strings.TrimSpace(responseText.String())
+	if summary == "" {
+		return ""
+	}
+
+	log.Printf("[fleet-recover] Generated recovery summary (%d chars)", len(summary))
+	return "Fleet session resumed after daemon restart.\n\n" + summary
 }

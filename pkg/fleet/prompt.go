@@ -33,11 +33,11 @@ func BuildSystemPromptSection(
 	sb.WriteString("**How fleets work:**\n")
 	sb.WriteString("Fleets are autonomous agent teams that communicate through a shared channel.\n")
 	sb.WriteString("Each agent has a role (PO, architect, developer, etc.) and they talk to each\n")
-	sb.WriteString("other and to the human using @mentions. The human is a first-class participant.\n\n")
+	sb.WriteString("other and to the customer using @mentions. The customer is a first-class participant.\n\n")
 
 	sb.WriteString("**Starting a fleet:**\n")
 	sb.WriteString("Fleets are started via the Studio UI or CLI (`astonish fleet start`).\n")
-	sb.WriteString("They create a dedicated session where agents and the human collaborate.\n\n")
+	sb.WriteString("They create a dedicated session where agents and the customer collaborate.\n\n")
 
 	// List available fleets
 	sb.WriteString("**Available fleets:**\n\n")
@@ -88,7 +88,8 @@ func BuildSystemPromptSection(
 // - Fleet behaviors (from the fleet YAML)
 // - Communication graph awareness (who the agent can talk to)
 // - Delegate tool instructions (if applicable)
-func BuildAgentPrompt(personaCfg *persona.PersonaConfig, agentCfg FleetAgentConfig, fleetCfg *FleetConfig, agentKey string, plan ...*FleetPlan) string {
+// - Progress tracker state (milestones from this session)
+func BuildAgentPrompt(personaCfg *persona.PersonaConfig, agentCfg FleetAgentConfig, fleetCfg *FleetConfig, agentKey string, progress *ProgressTracker, plan ...*FleetPlan) string {
 	var sb strings.Builder
 
 	// Persona identity
@@ -111,8 +112,8 @@ func BuildAgentPrompt(personaCfg *persona.PersonaConfig, agentCfg FleetAgentConf
 	if len(talksTo) > 0 {
 		sb.WriteString("**You can communicate with:**\n")
 		for _, target := range talksTo {
-			if target == "human" {
-				sb.WriteString("- **@human** — The customer/requester. Ask questions, present deliverables for approval.\n")
+			if target == "customer" {
+				sb.WriteString("- **@customer** — The customer/requester. Ask questions, present deliverables for approval.\n")
 			} else {
 				sb.WriteString(fmt.Sprintf("- **@%s** — Team member. Route work or ask questions.\n", target))
 			}
@@ -125,7 +126,7 @@ func BuildAgentPrompt(personaCfg *persona.PersonaConfig, agentCfg FleetAgentConf
 	sb.WriteString("  For example: '@architect, can you review this?' or 'Thanks @po, I'll proceed.'\n")
 	sb.WriteString("- The system automatically determines who should act next based on your message.\n")
 	sb.WriteString("  You do NOT need a special format or a single @mention at the end.\n")
-	sb.WriteString("- If you want the customer to respond, address @human with a question or deliverable.\n")
+	sb.WriteString("- If you want the customer to respond, address @customer with a question or deliverable.\n")
 	sb.WriteString("- If you are handing off work to someone, make it clear in your message what you need them to do.\n\n")
 
 	sb.WriteString("**Progress updates:**\n")
@@ -147,6 +148,14 @@ func BuildAgentPrompt(personaCfg *persona.PersonaConfig, agentCfg FleetAgentConf
 	// Delegate tool instructions
 	if agentCfg.Delegate != nil {
 		buildDelegatePromptSection(&sb, agentCfg.Delegate)
+	}
+
+	// Progress tracker state (milestones: approvals, completions, handoffs)
+	if progress != nil {
+		progressSection := progress.FormatForPrompt()
+		if progressSection != "" {
+			sb.WriteString(progressSection)
+		}
 	}
 
 	// Fleet plan environment (channel + artifacts).
@@ -176,7 +185,6 @@ func buildDelegatePromptSection(sb *strings.Builder, d *DelegateConfig) {
 	sb.WriteString(fmt.Sprintf("Call the `%s` tool with:\n", d.Tool))
 	sb.WriteString("- `task`: A concise goal describing the desired outcome.\n")
 	sb.WriteString("- `dir`: The project's working directory.\n")
-	sb.WriteString("- `timeout`: Generous timeout in seconds (e.g., 300-600) for complex tasks.\n")
 	sb.WriteString("- `session_id`: Optional. Use the session_id from a previous result for follow-up tasks.\n\n")
 
 	sb.WriteString("### Delegation Guidelines\n\n")
@@ -268,5 +276,24 @@ func buildEnvironmentPromptSection(sb *strings.Builder, plan *FleetPlan) {
 		} else {
 			sb.WriteString("If an artifact destination specifies a git repo, work within that repo's directory.\n")
 		}
+	}
+
+	// Available credentials
+	if len(plan.Credentials) > 0 {
+		sb.WriteString("\n**Available Credentials:**\n")
+		for logicalName, storeName := range plan.Credentials {
+			sb.WriteString(fmt.Sprintf("- **%s** (credential: `%s`)", logicalName, storeName))
+			switch strings.ToLower(logicalName) {
+			case "github":
+				sb.WriteString(": The `gh` CLI and `git` commands are pre-configured with these credentials. No manual auth setup needed.")
+			case "jira":
+				sb.WriteString(": Use the `web_fetch` tool with appropriate auth headers for Jira API calls.")
+			case "ssh", "deploy-ssh":
+				sb.WriteString(": Use `shell_command` with SSH for remote operations.")
+			}
+			sb.WriteString("\n")
+		}
+		sb.WriteString("\nCredential secrets are injected into the environment automatically. ")
+		sb.WriteString("Do NOT attempt to read or log credential values.\n")
 	}
 }

@@ -25,9 +25,10 @@ import (
 
 // StudioChatRequest is the request body for POST /api/studio/chat.
 type StudioChatRequest struct {
-	SessionID   string `json:"sessionId,omitempty"`
-	Message     string `json:"message"`
-	AutoApprove bool   `json:"autoApprove,omitempty"`
+	SessionID     string `json:"sessionId,omitempty"`
+	Message       string `json:"message"`
+	AutoApprove   bool   `json:"autoApprove,omitempty"`
+	SystemContext string `json:"systemContext,omitempty"` // per-turn system instructions (not shown to user)
 }
 
 // StudioSessionResponse is a single session in list responses.
@@ -249,9 +250,19 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	// /fleet-plan: start a fleet plan creation conversation
 	if msg == "/fleet-plan" || strings.HasPrefix(msg, "/fleet-plan ") {
 		hint := strings.TrimSpace(strings.TrimPrefix(msg, "/fleet-plan"))
-		SendSSE(w, flusher, "fleet_plan_redirect", map[string]interface{}{
+		eventData := map[string]interface{}{
 			"hint": hint,
-		})
+		}
+		// If the hint is a fleet template key, look up the wizard config
+		if hint != "" {
+			if reg := GetFleetRegistry(); reg != nil {
+				if cfg, ok := reg.GetFleet(hint); ok && cfg.PlanWizard != nil {
+					eventData["wizard_description"] = cfg.PlanWizard.Description
+					eventData["wizard_system_prompt"] = cfg.PlanWizard.SystemPrompt
+				}
+			}
+		}
+		SendSSE(w, flusher, "fleet_plan_redirect", eventData)
 		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
 		return
 	}
@@ -310,6 +321,14 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Set auto-approve for this request
 	chatAgent.AutoApprove = req.AutoApprove
+
+	// Inject per-turn session context (e.g., fleet plan wizard instructions).
+	// Escape {variable} patterns to prevent ADK's InjectSessionState from
+	// trying to resolve them as session state keys (e.g. {task} in YAML examples).
+	if req.SystemContext != "" {
+		chatAgent.SystemPrompt.SessionContext = agent.EscapeCurlyPlaceholders(req.SystemContext)
+		defer func() { chatAgent.SystemPrompt.SessionContext = "" }()
+	}
 
 	// Prepare user message
 	var userMsg *genai.Content
@@ -830,13 +849,13 @@ func fleetEventsToMessages(events []*session.Event) []FleetMessageSummary {
 		if sender == "" {
 			// Fallback: infer from role
 			if event.LLMResponse.Content.Role == genai.RoleUser {
-				sender = "human"
+				sender = "customer"
 			} else {
 				sender = "agent"
 			}
 		}
 		if sender == "user" {
-			sender = "human"
+			sender = "customer"
 		}
 
 		messages = append(messages, FleetMessageSummary{

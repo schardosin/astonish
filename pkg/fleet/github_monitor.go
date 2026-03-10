@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -41,18 +42,44 @@ type GitHubIssueAuthor struct {
 	Login string `json:"login"`
 }
 
-// SeenIssueState tracks an individual issue's processing lifecycle.
+// SeenIssueState tracks who currently holds the "ball" for an issue.
+//
+// Status values:
+//   - "agents": an agent was working or about to act. Recovered on restart.
+//   - "customer": the last action was from agents (presenting results, asking questions).
+//     The session waits for a customer reply. NOT recovered on restart; instead a
+//     lightweight comment watcher polls for new customer comments and triggers
+//     recovery when one arrives.
+//   - "failed": agents had the ball but hit fatal errors (consecutive failures).
+//     Requires manual intervention via the Fleet Management UI's "Continue" button.
 type SeenIssueState struct {
-	FirstSeenAt time.Time `json:"first_seen_at"`
-	Status      string    `json:"status"`                 // "in_progress" or "completed"
-	SessionID   string    `json:"session_id,omitempty"`   // fleet session ID (for recovery)
-	CompletedAt time.Time `json:"completed_at,omitempty"` // when the session finished
+	FirstSeenAt   time.Time `json:"first_seen_at"`
+	Status        string    `json:"status"`                    // "agents", "customer", or "failed"
+	SessionID     string    `json:"session_id,omitempty"`      // fleet session ID (for recovery)
+	LastCommentID int64     `json:"last_comment_id,omitempty"` // highest GitHub comment ID seen (for polling)
+	FailedAt      time.Time `json:"failed_at,omitempty"`       // when the session failed (status=failed only)
+	Error         string    `json:"error,omitempty"`           // error message (status=failed only)
 }
 
-// InProgressIssue is returned by GetInProgressIssues for recovery on restart.
-type InProgressIssue struct {
+// AgentBallIssue is returned by GetAgentBallIssues for recovery on restart.
+type AgentBallIssue struct {
 	IssueNumber int
 	SessionID   string
+}
+
+// CustomerBallIssue is returned by GetCustomerBallIssues for comment watching on restart.
+type CustomerBallIssue struct {
+	IssueNumber   int
+	SessionID     string
+	LastCommentID int64
+}
+
+// FailedIssue is returned by GetFailedIssues for the Fleet Management UI.
+type FailedIssue struct {
+	IssueNumber int       `json:"issue_number"`
+	SessionID   string    `json:"session_id"`
+	Error       string    `json:"error"`
+	FailedAt    time.Time `json:"failed_at"`
 }
 
 // GitHubMonitorState is the persisted state for a GitHub monitor.
@@ -69,6 +96,7 @@ type GitHubMonitor struct {
 	Repo     string
 	Labels   []string // filter: only issues with these labels
 	StateDir string   // directory for persisting seen-issue state
+	GHToken  string   // optional: injected as GH_TOKEN for gh CLI auth
 
 	mu    sync.Mutex
 	state GitHubMonitorState
@@ -76,7 +104,7 @@ type GitHubMonitor struct {
 
 // NewGitHubMonitor creates a monitor for a fleet plan's GitHub Issues channel.
 func NewGitHubMonitor(planKey string, channelConfig map[string]any, stateDir string) *GitHubMonitor {
-	repo := getConfigString(channelConfig, "repo")
+	repo := GetConfigString(channelConfig, "repo")
 	labels := getConfigStringSlice(channelConfig, "labels")
 
 	return &GitHubMonitor{
@@ -177,7 +205,7 @@ func (m *GitHubMonitor) Poll() ([]GitHubIssue, error) {
 	// Limit to recent issues (avoid processing the entire backlog)
 	args = append(args, "--limit", "20")
 
-	out, err := ghCommand(args...)
+	out, err := ghCommand(m.GHToken, args...)
 	if err != nil {
 		return nil, fmt.Errorf("gh issue list failed: %w (output: %s)", err, strings.TrimSpace(out))
 	}
@@ -201,58 +229,153 @@ func (m *GitHubMonitor) Poll() ([]GitHubIssue, error) {
 	return newIssues, nil
 }
 
-// MarkInProgress marks an issue as claimed by a fleet session. The issue will
-// not be re-triggered by future polls. If the daemon restarts before the
-// session completes, GetInProgressIssues returns it for recovery.
-func (m *GitHubMonitor) MarkInProgress(issueNumber int, sessionID string) {
+// MarkAgents marks an issue as having the ball with agents. Called when a new
+// session starts or when a customer comment triggers re-activation. The issue will
+// not be re-triggered by future polls. If the daemon restarts before the ball
+// moves to "customer", GetAgentBallIssues returns it for recovery.
+func (m *GitHubMonitor) MarkAgents(issueNumber int, sessionID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.state.SeenIssues[issueNumber] = &SeenIssueState{
 		FirstSeenAt: time.Now(),
-		Status:      "in_progress",
+		Status:      "agents",
 		SessionID:   sessionID,
 	}
 
 	if err := m.saveStateLocked(); err != nil {
-		log.Printf("[github-monitor] Warning: failed to persist state after marking issue #%d in-progress: %v", issueNumber, err)
+		log.Printf("[github-monitor] Warning: failed to persist state after marking issue #%d agents: %v", issueNumber, err)
 	}
 }
 
-// MarkCompleted marks an issue as fully processed. Called when the fleet
-// session finishes (success or terminal error).
-func (m *GitHubMonitor) MarkCompleted(issueNumber int) {
+// MarkCustomer marks an issue as having the ball with the customer. The agents have
+// finished their current work (or asked a question) and the session is waiting
+// for a customer reply on the GitHub issue. On daemon restart, these issues are
+// NOT fully recovered; instead a lightweight comment watcher polls for new
+// customer comments and triggers recovery when one arrives.
+func (m *GitHubMonitor) MarkCustomer(issueNumber int, lastCommentID int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if s, ok := m.state.SeenIssues[issueNumber]; ok {
-		s.Status = "completed"
-		s.CompletedAt = time.Now()
+		s.Status = "customer"
+		s.LastCommentID = lastCommentID
+		s.Error = ""
+		s.FailedAt = time.Time{}
 	} else {
 		m.state.SeenIssues[issueNumber] = &SeenIssueState{
-			FirstSeenAt: time.Now(),
-			Status:      "completed",
-			CompletedAt: time.Now(),
+			FirstSeenAt:   time.Now(),
+			Status:        "customer",
+			LastCommentID: lastCommentID,
 		}
 	}
 
 	if err := m.saveStateLocked(); err != nil {
-		log.Printf("[github-monitor] Warning: failed to persist state after marking issue #%d completed: %v", issueNumber, err)
+		log.Printf("[github-monitor] Warning: failed to persist state after marking issue #%d customer: %v", issueNumber, err)
 	}
 }
 
-// GetInProgressIssues returns all issues that were claimed but not yet
-// completed. Used during daemon restart to resume interrupted sessions.
-func (m *GitHubMonitor) GetInProgressIssues() []InProgressIssue {
+// MarkFailed marks an issue as failed due to session errors. Unlike completed
+// issues, failed issues are NOT auto-recovered on daemon restart. They require
+// manual intervention via the Fleet Management UI's "Continue" button.
+func (m *GitHubMonitor) MarkFailed(issueNumber int, errMsg string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var result []InProgressIssue
+	if s, ok := m.state.SeenIssues[issueNumber]; ok {
+		s.Status = "failed"
+		s.Error = errMsg
+		s.FailedAt = time.Now()
+	} else {
+		m.state.SeenIssues[issueNumber] = &SeenIssueState{
+			FirstSeenAt: time.Now(),
+			Status:      "failed",
+			Error:       errMsg,
+			FailedAt:    time.Now(),
+		}
+	}
+
+	if err := m.saveStateLocked(); err != nil {
+		log.Printf("[github-monitor] Warning: failed to persist state after marking issue #%d failed: %v", issueNumber, err)
+	}
+}
+
+// GetFailedIssues returns all issues that failed during processing.
+// Used by the Fleet Management UI to display failures with a "Continue" button.
+func (m *GitHubMonitor) GetFailedIssues() []FailedIssue {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var result []FailedIssue
 	for num, state := range m.state.SeenIssues {
-		if state.Status == "in_progress" && state.SessionID != "" {
-			result = append(result, InProgressIssue{
+		if state.Status == "failed" && state.SessionID != "" {
+			result = append(result, FailedIssue{
 				IssueNumber: num,
 				SessionID:   state.SessionID,
+				Error:       state.Error,
+				FailedAt:    state.FailedAt,
+			})
+		}
+	}
+	return result
+}
+
+// ResetToAgents changes a failed issue back to "agents" so recovery
+// can resume it. Called by the retry handler when the user clicks "Continue".
+func (m *GitHubMonitor) ResetToAgents(issueNumber int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	s, ok := m.state.SeenIssues[issueNumber]
+	if !ok {
+		return fmt.Errorf("issue #%d not found in state", issueNumber)
+	}
+	if s.Status != "failed" {
+		return fmt.Errorf("issue #%d is not in failed state (current: %s)", issueNumber, s.Status)
+	}
+
+	s.Status = "agents"
+	s.Error = ""
+	s.FailedAt = time.Time{}
+
+	if err := m.saveStateLocked(); err != nil {
+		return fmt.Errorf("persisting state: %w", err)
+	}
+	return nil
+}
+
+// GetAgentBallIssues returns all issues where agents had the ball when the
+// daemon stopped. Used during restart to resume interrupted sessions.
+func (m *GitHubMonitor) GetAgentBallIssues() []AgentBallIssue {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var result []AgentBallIssue
+	for num, state := range m.state.SeenIssues {
+		if state.Status == "agents" && state.SessionID != "" {
+			result = append(result, AgentBallIssue{
+				IssueNumber: num,
+				SessionID:   state.SessionID,
+			})
+		}
+	}
+	return result
+}
+
+// GetCustomerBallIssues returns all issues where the ball is with the customer
+// (waiting for a reply on the GitHub issue). Used during restart to set up
+// lightweight comment watchers that trigger recovery when a reply arrives.
+func (m *GitHubMonitor) GetCustomerBallIssues() []CustomerBallIssue {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var result []CustomerBallIssue
+	for num, state := range m.state.SeenIssues {
+		if state.Status == "customer" && state.SessionID != "" {
+			result = append(result, CustomerBallIssue{
+				IssueNumber:   num,
+				SessionID:     state.SessionID,
+				LastCommentID: state.LastCommentID,
 			})
 		}
 	}
@@ -276,7 +399,7 @@ func (m *GitHubMonitor) MarkAllCurrentAsSeen() error {
 		args = append(args, "--label", label)
 	}
 
-	out, err := ghCommand(args...)
+	out, err := ghCommand(m.GHToken, args...)
 	if err != nil {
 		return fmt.Errorf("gh issue list failed: %w", err)
 	}
@@ -293,8 +416,7 @@ func (m *GitHubMonitor) MarkAllCurrentAsSeen() error {
 		if _, exists := m.state.SeenIssues[issue.Number]; !exists {
 			m.state.SeenIssues[issue.Number] = &SeenIssueState{
 				FirstSeenAt: now,
-				Status:      "completed",
-				CompletedAt: now,
+				Status:      "customer", // pre-existing issues: ball is with customer (no action needed)
 			}
 		}
 	}
@@ -351,18 +473,137 @@ func FormatIssueContext(issue GitHubIssue, repo string) string {
 	return sb.String()
 }
 
+// UpdateLastCommentID updates the persisted comment cursor for an issue.
+// Called by the session's OnBallChange callback so that after a daemon restart
+// the comment watcher knows which comments have already been processed.
+func (m *GitHubMonitor) UpdateLastCommentID(issueNumber int, commentID int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if s, ok := m.state.SeenIssues[issueNumber]; ok {
+		if commentID > s.LastCommentID {
+			s.LastCommentID = commentID
+			if err := m.saveStateLocked(); err != nil {
+				log.Printf("[github-monitor] Warning: failed to persist comment cursor for issue #%d: %v", issueNumber, err)
+			}
+		}
+	}
+}
+
+// customerReplyPollInterval is how often the comment watcher checks for new
+// customer replies on issues where the ball is with the customer.
+const customerReplyPollInterval = 60 * time.Second
+
+// CustomerReplyCallback is called when a new customer comment is detected on an
+// issue that was waiting for a customer reply. The monitor transitions the issue
+// to "agents" status and the callback should trigger session recovery.
+type CustomerReplyCallback func(issueNumber int, sessionID string, commentBody string)
+
+// WatchForCustomerReplies starts a background goroutine that periodically checks
+// all "customer" ball issues for new comments. When a new customer comment is found,
+// it transitions the issue to "agents" and calls the callback to trigger
+// session recovery.
+//
+// This is the lightweight alternative to full session recovery: instead of
+// spinning up a complete FleetSession with channel and agent activation on
+// restart, we just poll for new comments. When one arrives, we then do the
+// full recovery.
+func (m *GitHubMonitor) WatchForCustomerReplies(ctx context.Context, callback CustomerReplyCallback) {
+	go func() {
+		ticker := time.NewTicker(customerReplyPollInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				m.checkCustomerReplies(callback)
+			}
+		}
+	}()
+}
+
+// checkCustomerReplies checks all "customer" ball issues for new comments.
+func (m *GitHubMonitor) checkCustomerReplies(callback CustomerReplyCallback) {
+	customerIssues := m.GetCustomerBallIssues()
+	if len(customerIssues) == 0 {
+		return
+	}
+
+	for _, issue := range customerIssues {
+		comments := m.fetchNewComments(issue.IssueNumber, issue.LastCommentID)
+		for _, comment := range comments {
+			// Skip fleet-generated comments (contain our marker)
+			if strings.Contains(comment.Body, fleetCommentMarker) {
+				m.UpdateLastCommentID(issue.IssueNumber, comment.ID)
+				continue
+			}
+
+			// Customer comment found. Transition to "agents" and notify.
+			log.Printf("[github-monitor] New customer comment #%d on issue #%d, transitioning ball to agents",
+				comment.ID, issue.IssueNumber)
+
+			m.mu.Lock()
+			if s, ok := m.state.SeenIssues[issue.IssueNumber]; ok {
+				s.Status = "agents"
+				s.LastCommentID = comment.ID
+				_ = m.saveStateLocked()
+			}
+			m.mu.Unlock()
+
+			callback(issue.IssueNumber, issue.SessionID, comment.Body)
+
+			// Only process the first new human comment per issue per poll.
+			// The recovered session will pick up any subsequent comments
+			// via its own channel poller.
+			break
+		}
+	}
+}
+
+// fetchNewComments fetches comments on an issue that are newer than lastCommentID.
+func (m *GitHubMonitor) fetchNewComments(issueNumber int, lastCommentID int64) []ghIssueComment {
+	out, err := ghCommand(m.GHToken, "api",
+		fmt.Sprintf("repos/%s/issues/%d/comments?per_page=20&sort=created&direction=asc", m.Repo, issueNumber))
+	if err != nil {
+		log.Printf("[github-monitor] Error fetching comments for issue #%d: %v", issueNumber, err)
+		return nil
+	}
+
+	var comments []ghIssueComment
+	if err := json.Unmarshal([]byte(out), &comments); err != nil {
+		log.Printf("[github-monitor] Error parsing comments for issue #%d: %v", issueNumber, err)
+		return nil
+	}
+
+	// Filter to only comments newer than the cursor
+	var newer []ghIssueComment
+	for _, c := range comments {
+		if c.ID > lastCommentID {
+			newer = append(newer, c)
+		}
+	}
+	return newer
+}
+
 // ghCommand runs a gh CLI command and returns the output.
-func ghCommand(args ...string) (string, error) {
+// If ghToken is non-empty, it is injected as GH_TOKEN in the command
+// environment, overriding the ambient gh auth session.
+func ghCommand(ghToken string, args ...string) (string, error) {
 	cmd := exec.Command("gh", args...)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
+	if ghToken != "" {
+		cmd.Env = append(os.Environ(), "GH_TOKEN="+ghToken)
+	}
 	err := cmd.Run()
 	return out.String(), err
 }
 
-// getConfigString extracts a string from a config map.
-func getConfigString(config map[string]any, key string) string {
+// GetConfigString extracts a string from a config map.
+func GetConfigString(config map[string]any, key string) string {
 	if config == nil {
 		return ""
 	}

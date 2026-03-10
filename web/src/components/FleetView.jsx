@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   Rocket, Search, ChevronDown, ChevronRight, Loader, Check, X, Copy,
   Trash2, Play, Square, Radio, ArrowRight, Users, FileText, Eye,
-  Wrench, Clock, AlertCircle, ExternalLink, GitBranch, Code,
+  Wrench, Clock, AlertCircle, ExternalLink, GitBranch, Code, RotateCcw,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -11,7 +11,7 @@ import {
   fetchFleetPlans, fetchFleets, fetchFleetPlan, fetchFleetPlanYaml, saveFleetPlanYaml,
   activateFleetPlan, deactivateFleetPlan, getFleetPlanStatus, duplicateFleetPlan,
   deleteFleetPlan, startFleetSession, stopFleetSession, fetchFleetTrace,
-  fetchFleetSessions, connectFleetStream,
+  fetchFleetSessions, connectFleetStream, retryFleetIssue,
 } from '../api/fleetChat'
 import { fetchSessions } from '../api/studioChat'
 import { buildPath } from '../hooks/useHashRouter'
@@ -203,7 +203,9 @@ function PlanDetail({ planKey, onNavigate, onRefresh, theme }) {
   const [launchMessage, setLaunchMessage] = useState('')
   const [showLaunchDialog, setShowLaunchDialog] = useState(false)
   const [error, setError] = useState(null)
+  const [statusError, setStatusError] = useState(null)
   const [saveStatus, setSaveStatus] = useState(null)
+  const [retryingIssue, setRetryingIssue] = useState(null)
 
   const loadPlan = useCallback(async () => {
     setIsLoading(true)
@@ -218,10 +220,17 @@ function PlanDetail({ planKey, onNavigate, onRefresh, theme }) {
 
       // Load activation status for non-chat plans
       if (planData.plan?.channel?.type && planData.plan.channel.type !== 'chat') {
-        const status = await getFleetPlanStatus(planKey).catch(() => null)
-        setPlanStatus(status)
+        try {
+          const status = await getFleetPlanStatus(planKey)
+          setPlanStatus(status)
+          setStatusError(null)
+        } catch (statusErr) {
+          setPlanStatus(null)
+          setStatusError(statusErr.message || 'Failed to load activation status')
+        }
       } else {
         setPlanStatus(null)
+        setStatusError(null)
       }
     } catch (err) {
       setError(err.message)
@@ -314,6 +323,26 @@ function PlanDetail({ planKey, onNavigate, onRefresh, theme }) {
     }
   }
 
+  const handleRetryIssue = async (issueNumber) => {
+    if (retryingIssue) return
+    setRetryingIssue(issueNumber)
+    try {
+      const result = await retryFleetIssue(planKey, issueNumber)
+      // Refresh status to update the failed issues list
+      const newStatus = await getFleetPlanStatus(planKey)
+      setPlanStatus(newStatus)
+      if (onRefresh) onRefresh()
+      // Navigate to the recovering session
+      if (result.session_id) {
+        onNavigate(buildPath('fleet', { subView: 'session', subKey: result.session_id }))
+      }
+    } catch (err) {
+      alert('Retry failed: ' + err.message)
+    } finally {
+      setRetryingIssue(null)
+    }
+  }
+
   if (isLoading) {
     return (
       <div className="flex-1 flex items-center justify-center">
@@ -399,34 +428,53 @@ function PlanDetail({ planKey, onNavigate, onRefresh, theme }) {
           </div>
         </div>
 
-        {/* Activation Controls (non-chat plans only) */}
-        {planStatus && (
-          <div className="rounded-lg p-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className={`w-3 h-3 rounded-full ${planStatus.activated ? 'bg-green-400 animate-pulse' : 'bg-gray-500'}`} />
-                <div>
-                  <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-                    Channel Monitoring
-                  </span>
-                  <span className="text-xs ml-2" style={{ color: 'var(--text-muted)' }}>
-                    {planStatus.activated ? 'Active' : 'Inactive'}
-                  </span>
+        {/* Activation Controls (non-chat plans) */}
+        {plan.channel?.type && plan.channel.type !== 'chat' && (
+          statusError ? (
+            /* Status fetch failed — show error with retry */
+            <div className="rounded-lg p-4" style={{ background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.25)' }}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <AlertCircle size={16} className="text-red-400 flex-shrink-0" />
+                  <div>
+                    <span className="text-sm font-medium text-red-400">
+                      Could not load activation status
+                    </span>
+                    <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                      {statusError}
+                    </p>
+                  </div>
                 </div>
+                <button
+                  onClick={loadPlan}
+                  className="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
+                  style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+                >
+                  Retry
+                </button>
               </div>
-              <button
-                onClick={handleActivateToggle}
-                disabled={isActivating}
-                className={`px-4 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                  planStatus.activated
-                    ? 'bg-red-600/20 text-red-400 hover:bg-red-600/30'
-                    : 'bg-green-600/20 text-green-400 hover:bg-green-600/30'
-                } disabled:opacity-50`}
-              >
-                {isActivating ? 'Working...' : planStatus.activated ? 'Deactivate' : 'Activate'}
-              </button>
             </div>
-            {planStatus.activated && (
+          ) : planStatus?.activated ? (
+            /* Activated — show green status with deactivate option */
+            <div className="rounded-lg p-4" style={{ background: 'rgba(34, 197, 94, 0.08)', border: '1px solid rgba(34, 197, 94, 0.25)' }}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-3 h-3 rounded-full bg-green-400 animate-pulse" />
+                  <div>
+                    <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                      Channel Monitoring
+                    </span>
+                    <span className="text-xs ml-2 text-green-400">Active</span>
+                  </div>
+                </div>
+                <button
+                  onClick={handleActivateToggle}
+                  disabled={isActivating}
+                  className="px-4 py-1.5 text-xs font-medium rounded-lg bg-red-600/20 text-red-400 hover:bg-red-600/30 transition-colors disabled:opacity-50"
+                >
+                  {isActivating ? 'Working...' : 'Deactivate'}
+                </button>
+              </div>
               <div className="mt-3 grid grid-cols-3 gap-4 text-xs" style={{ color: 'var(--text-muted)' }}>
                 <div>
                   <div className="font-medium mb-0.5" style={{ color: 'var(--text-secondary)' }}>Last Poll</div>
@@ -447,7 +495,86 @@ function PlanDetail({ planKey, onNavigate, onRefresh, theme }) {
                   </div>
                 )}
               </div>
-            )}
+            </div>
+          ) : (
+            /* Not activated — prominent call to action */
+            <div className="rounded-lg p-4" style={{ background: 'rgba(234, 179, 8, 0.08)', border: '1px solid rgba(234, 179, 8, 0.3)' }}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-3 h-3 rounded-full bg-yellow-500" />
+                  <div>
+                    <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                      Not Activated
+                    </span>
+                    <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                      This plan monitors <strong className="text-yellow-400">{plan.channel.type.replace('_', ' ')}</strong> but
+                      is not yet active. Activate to start polling{plan.channel?.schedule ? ` on schedule (${plan.channel.schedule})` : ''}.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={handleActivateToggle}
+                  disabled={isActivating}
+                  className="px-5 py-2 text-sm font-semibold rounded-lg bg-green-600 hover:bg-green-500 text-white transition-colors disabled:opacity-50"
+                >
+                  {isActivating ? 'Activating...' : 'Activate'}
+                </button>
+              </div>
+            </div>
+          )
+        )}
+
+        {/* Failed Sessions */}
+        {planStatus?.failed_issues?.length > 0 && (
+          <div className="rounded-lg p-4" style={{ background: 'rgba(239, 68, 68, 0.06)', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+            <div className="flex items-center gap-2 mb-3">
+              <AlertCircle size={16} className="text-red-400" />
+              <h3 className="text-sm font-semibold text-red-400">
+                Failed Sessions ({planStatus.failed_issues.length})
+              </h3>
+            </div>
+            <div className="space-y-2">
+              {planStatus.failed_issues.map(issue => (
+                <div
+                  key={issue.issue_number}
+                  className="rounded-lg p-3 flex items-start justify-between gap-3"
+                  style={{ background: 'rgba(0, 0, 0, 0.15)', border: '1px solid rgba(239, 68, 68, 0.15)' }}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                        Issue #{issue.issue_number}
+                      </span>
+                      {issue.session_id && (
+                        <button
+                          onClick={() => onNavigate(buildPath('fleet', { subView: 'session', subKey: issue.session_id }))}
+                          className="text-[10px] px-1.5 py-0.5 rounded hover:bg-white/10 transition-colors cursor-pointer"
+                          style={{ color: '#22d3ee', background: 'rgba(6, 182, 212, 0.1)' }}
+                        >
+                          trace {issue.session_id.slice(0, 8)}
+                        </button>
+                      )}
+                      {issue.failed_at && (
+                        <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                          {formatTimeAgo(issue.failed_at)}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
+                      {issue.error || 'Unknown error'}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleRetryIssue(issue.issue_number)}
+                    disabled={retryingIssue === issue.issue_number}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 transition-colors disabled:opacity-50 flex-shrink-0"
+                  >
+                    <RotateCcw size={12} className={retryingIssue === issue.issue_number ? 'animate-spin' : ''} />
+                    {retryingIssue === issue.issue_number ? 'Retrying...' : 'Continue'}
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -979,7 +1106,7 @@ function TraceEntryRow({ entry, index, expanded, onToggle }) {
 
 // ─── Template Detail View ───
 
-function TemplateDetail({ templateKey, templates, onNavigate }) {
+function TemplateDetail({ templateKey, templates, onCreatePlan }) {
   const template = templates.find(t => t.key === templateKey)
 
   if (!template) {
@@ -991,10 +1118,9 @@ function TemplateDetail({ templateKey, templates, onNavigate }) {
   }
 
   const handleCreateWithAI = () => {
-    // Navigate to chat with /fleet-plan command
-    onNavigate(buildPath('chat'))
-    // Small delay to let the route change, then we'd need a mechanism to send /fleet-plan
-    // For now, just navigate to chat view
+    if (onCreatePlan) {
+      onCreatePlan(templateKey)
+    }
   }
 
   return (
@@ -1079,7 +1205,7 @@ function EmptyState() {
 
 // ─── Main FleetView Component ───
 
-export default function FleetView({ theme, path, onNavigate }) {
+export default function FleetView({ theme, path, onNavigate, onCreatePlan }) {
   const [plans, setPlans] = useState([])
   const [templates, setTemplates] = useState([])
   const [sessions, setSessions] = useState([])
@@ -1185,7 +1311,7 @@ export default function FleetView({ theme, path, onNavigate }) {
             key={selectedItem.key}
             templateKey={selectedItem.key}
             templates={templates}
-            onNavigate={handleNavigate}
+            onCreatePlan={onCreatePlan}
           />
         )
       default:

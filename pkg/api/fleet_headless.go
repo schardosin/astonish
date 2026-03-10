@@ -55,7 +55,7 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 	var ghChannel *fleet.GitHubIssueChannel
 
 	if cfg.IssueNumber > 0 && cfg.Repo != "" && plan.Channel.Type == "github_issues" {
-		ghChannel = fleet.NewGitHubIssueChannel(cfg.Repo, cfg.IssueNumber)
+		ghChannel = fleet.NewGitHubIssueChannel(cfg.Repo, cfg.IssueNumber, cfg.GHToken)
 		channel = ghChannel
 	} else {
 		channel = fleet.NewChatChannel(plan.Key)
@@ -63,6 +63,7 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 
 	fleetSession := fleet.NewFleetSession(plan.Key, fleetCfg, channel, subAgentMgr, personaReg)
 	fleetSession.Plan = plan
+	fleetSession.Headless = true
 
 	// Register in the in-memory registry
 	registry := getFleetSessionRegistry()
@@ -76,8 +77,19 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 
 	// Wire completion callback for issue lifecycle tracking
 	if cfg.CompletionFunc != nil {
-		fleetSession.OnSessionDone = func(_ string) {
-			cfg.CompletionFunc()
+		fleetSession.OnSessionDone = func(_ string, sessionErr error) {
+			cfg.CompletionFunc(sessionErr)
+		}
+	}
+
+	// Wire ball-change callback so the monitor state tracks who has the ball.
+	if cfg.BallChangeFunc != nil {
+		fleetSession.OnBallChange = func(ball string) {
+			var commentID int64
+			if ghChannel != nil {
+				commentID = ghChannel.LastCommentID()
+			}
+			cfg.BallChangeFunc(ball, commentID)
 		}
 	}
 
@@ -98,7 +110,7 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 	// initial message; we do not re-post it as a comment).
 	if cfg.InitialMsg != "" {
 		initialMsg := fleet.Message{
-			Sender:    "human",
+			Sender:    "customer",
 			Text:      cfg.InitialMsg,
 			Timestamp: time.Now(),
 		}

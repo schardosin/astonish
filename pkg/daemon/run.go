@@ -78,8 +78,10 @@ func Run(cfg RunConfig) error {
 
 	// Set up provider environment variables (credential store → config → env fallback)
 	configDir, _ := config.GetConfigDir()
+	var credStore *credentials.Store
 	if configDir != "" {
 		if cs, csErr := credentials.Open(configDir); csErr == nil {
+			credStore = cs
 			config.SetInstalledSecretGetter(cs.GetSecret)
 			api.SetAPICredentialStore(cs)
 
@@ -442,6 +444,17 @@ func Run(cfg RunConfig) error {
 				return api.RecoverFleetSession(rCtx, rCfg)
 			})
 
+			// Wire credential-based GitHub token resolver for fleet plans.
+			// When a plan has credentials: { github: "some-store-entry" }, this
+			// resolver extracts the token from the encrypted credential store so
+			// it can be injected as GH_TOKEN into gh CLI commands.
+			if credStore != nil {
+				activator.SetGHTokenResolver(func(plan *fleet.FleetPlan) string {
+					resolved, _ := fleet.ResolveCredentials(plan, credStore)
+					return fleet.GitHubToken(resolved)
+				})
+			}
+
 			// Make activator available to API handlers
 			api.SetPlanActivator(activator)
 
@@ -753,6 +766,15 @@ func (b *fleetSchedulerBridge) AddJob(job *fleet.SchedulerJob) error {
 
 func (b *fleetSchedulerBridge) RemoveJob(id string) error {
 	return b.sched.Store().Remove(id)
+}
+
+func (b *fleetSchedulerBridge) RemoveJobByName(name string) error {
+	for _, j := range b.sched.Store().List() {
+		if j.Name == name {
+			return b.sched.Store().Remove(j.ID)
+		}
+	}
+	return nil // job not found is not an error
 }
 
 func (b *fleetSchedulerBridge) GetJob(id string) *fleet.SchedulerJob {

@@ -50,6 +50,7 @@ type SystemPromptBuilder struct {
 	SkillIndex            string         // Lightweight skill listing (Tier 1 — names and descriptions only)
 	Identity              *AgentIdentity // Agent persona for web portal interactions
 	FleetSection          string         // Pre-built "Available Fleets" section (empty = no fleets loaded)
+	SessionContext        string         // Per-turn context injected by the caller (e.g., fleet plan wizard instructions)
 }
 
 // Build constructs the full system prompt.
@@ -71,6 +72,13 @@ func (b *SystemPromptBuilder) Build() string {
 	if b.SchedulerHints != "" {
 		sb.WriteString("## Execution Context\n\n")
 		sb.WriteString(b.SchedulerHints)
+		sb.WriteString("\n\n")
+	}
+
+	// 1d. Per-turn session context (e.g., fleet plan wizard instructions)
+	if b.SessionContext != "" {
+		sb.WriteString("## Session Task\n\n")
+		sb.WriteString(b.SessionContext)
 		sb.WriteString("\n\n")
 	}
 

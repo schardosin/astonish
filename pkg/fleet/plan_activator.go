@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -14,6 +16,7 @@ import (
 type SchedulerAccess interface {
 	AddJob(job *SchedulerJob) error
 	RemoveJob(id string) error
+	RemoveJobByName(name string) error
 	GetJob(id string) *SchedulerJob
 	ValidateCron(expr string) error
 }
@@ -40,10 +43,12 @@ type FleetRecoverFunc func(ctx context.Context, cfg RecoverFleetConfig) error
 // HeadlessFleetConfig holds parameters for starting a headless fleet session.
 type HeadlessFleetConfig struct {
 	Plan           *FleetPlan
-	InitialMsg     string // the formatted issue context or trigger message
-	IssueNumber    int    // GitHub issue number (0 if not issue-triggered)
-	Repo           string // GitHub repo "owner/repo"
-	CompletionFunc func() // called when the session finishes (for MarkCompleted)
+	InitialMsg     string                             // the formatted issue context or trigger message
+	IssueNumber    int                                // GitHub issue number (0 if not issue-triggered)
+	Repo           string                             // GitHub repo "owner/repo"
+	GHToken        string                             // resolved GitHub token (injected as GH_TOKEN)
+	CompletionFunc func(err error)                    // called when the session finishes (nil=success, non-nil=failed)
+	BallChangeFunc func(ball string, commentID int64) // called when ball moves between agents/human
 }
 
 // RecoverFleetConfig holds parameters for recovering an interrupted fleet session.
@@ -52,16 +57,24 @@ type RecoverFleetConfig struct {
 	SessionID      string // original session ID (to resume the same transcript)
 	IssueNumber    int
 	Repo           string
-	CompletionFunc func() // called when the recovered session finishes
+	GHToken        string                             // resolved GitHub token (injected as GH_TOKEN)
+	CompletionFunc func(err error)                    // called when the recovered session finishes
+	BallChangeFunc func(ball string, commentID int64) // called when ball moves between agents/human
 }
+
+// GHTokenResolverFunc resolves the GitHub token for a fleet plan by looking
+// up the plan's credentials map in the encrypted credential store.
+// Returns empty string if no GitHub credential is configured or available.
+type GHTokenResolverFunc func(plan *FleetPlan) string
 
 // PlanActivator manages the lifecycle of fleet plan activations.
 // It creates scheduler jobs for activated plans and removes them on deactivation.
 type PlanActivator struct {
-	planRegistry *PlanRegistry
-	scheduler    SchedulerAccess
-	fleetStart   FleetStartFunc
-	fleetRecover FleetRecoverFunc
+	planRegistry    *PlanRegistry
+	scheduler       SchedulerAccess
+	fleetStart      FleetStartFunc
+	fleetRecover    FleetRecoverFunc
+	ghTokenResolver GHTokenResolverFunc
 
 	// monitors tracks active GitHub monitors by plan key
 	monitors   map[string]*GitHubMonitor
@@ -83,6 +96,20 @@ func NewPlanActivator(planReg *PlanRegistry, sched SchedulerAccess, fleetStart F
 // function depends on API-layer components that initialize later.
 func (a *PlanActivator) SetRecoverFunc(fn FleetRecoverFunc) {
 	a.fleetRecover = fn
+}
+
+// SetGHTokenResolver sets the function used to resolve GitHub tokens for fleet plans.
+// Called by the daemon after the plan activator is created.
+func (a *PlanActivator) SetGHTokenResolver(fn GHTokenResolverFunc) {
+	a.ghTokenResolver = fn
+}
+
+// ResolveGHTokenForPlan resolves the GitHub token for a fleet plan.
+func (a *PlanActivator) ResolveGHTokenForPlan(plan *FleetPlan) string {
+	if a.ghTokenResolver != nil {
+		return a.ghTokenResolver(plan)
+	}
+	return ""
 }
 
 // Activate activates a fleet plan by creating a scheduler job that polls
@@ -114,6 +141,7 @@ func (a *PlanActivator) Activate(ctx context.Context, planKey string) error {
 	// so we only trigger on NEW issues created after activation.
 	if plan.Channel.Type == "github_issues" {
 		monitor := NewGitHubMonitor(planKey, plan.Channel.Config, a.planRegistry.Dir())
+		monitor.GHToken = a.ResolveGHTokenForPlan(plan)
 		if err := monitor.LoadState(); err != nil {
 			log.Printf("[plan-activator] Warning: failed to load monitor state for %q: %v", planKey, err)
 		}
@@ -281,6 +309,7 @@ func (a *PlanActivator) RestoreActivated() error {
 		// Re-create the monitor for this plan
 		if plan.Channel.Type == "github_issues" {
 			monitor := NewGitHubMonitor(summary.Key, plan.Channel.Config, a.planRegistry.Dir())
+			monitor.GHToken = a.ResolveGHTokenForPlan(plan)
 			if err := monitor.LoadState(); err != nil {
 				log.Printf("[plan-activator] Warning: failed to load monitor state for %q: %v", summary.Key, err)
 			}
@@ -300,29 +329,93 @@ func (a *PlanActivator) RestoreActivated() error {
 			a.monitorsMu.RUnlock()
 
 			if mon != nil {
-				inProgress := mon.GetInProgressIssues()
-				for _, ip := range inProgress {
-					repo := getConfigString(plan.Channel.Config, "repo")
-					issueNum := ip.IssueNumber
+				// Recover sessions where agents had the ball (full recovery).
+				agentBall := mon.GetAgentBallIssues()
+				for _, ab := range agentBall {
+					repo := GetConfigString(plan.Channel.Config, "repo")
+					issueNum := ab.IssueNumber
 
-					log.Printf("[plan-activator] Recovering interrupted session %s for issue #%d (plan %q)",
-						ip.SessionID, issueNum, summary.Key)
+					log.Printf("[plan-activator] Recovering interrupted session %s for issue #%d (plan %q, ball=agents)",
+						ab.SessionID, issueNum, summary.Key)
 
 					recoverCfg := RecoverFleetConfig{
 						Plan:        plan,
-						SessionID:   ip.SessionID,
+						SessionID:   ab.SessionID,
 						IssueNumber: issueNum,
 						Repo:        repo,
-						CompletionFunc: func() {
-							mon.MarkCompleted(issueNum)
+						GHToken:     a.ResolveGHTokenForPlan(plan),
+						CompletionFunc: func(sessionErr error) {
+							if sessionErr != nil {
+								mon.MarkFailed(issueNum, sessionErr.Error())
+							} else {
+								mon.MarkCustomer(issueNum, 0)
+							}
+						},
+						BallChangeFunc: func(ball string, commentID int64) {
+							switch ball {
+							case "customer":
+								mon.MarkCustomer(issueNum, commentID)
+							case "agents":
+								mon.UpdateLastCommentID(issueNum, commentID)
+							}
 						},
 					}
 					if err := a.fleetRecover(context.Background(), recoverCfg); err != nil {
 						log.Printf("[plan-activator] Failed to recover session %s for issue #%d: %v",
-							ip.SessionID, issueNum, err)
-						// Mark as completed so we don't retry endlessly
-						mon.MarkCompleted(issueNum)
+							ab.SessionID, issueNum, err)
+						mon.MarkFailed(issueNum, fmt.Sprintf("recovery failed: %v", err))
 					}
+				}
+
+				// For sessions where the customer has the ball, start a
+				// lightweight comment watcher instead of full recovery.
+				// When a new customer comment arrives, it triggers recovery.
+				customerBall := mon.GetCustomerBallIssues()
+				if len(customerBall) > 0 {
+					log.Printf("[plan-activator] Starting comment watcher for %d customer-ball issues (plan %q)",
+						len(customerBall), summary.Key)
+
+					// Capture plan-level variables for the callback closure.
+					planCopy := plan
+					monRef := mon
+					planKey := summary.Key
+
+					mon.WatchForCustomerReplies(context.Background(), func(issueNumber int, sessionID string, _ string) {
+						repo := GetConfigString(planCopy.Channel.Config, "repo")
+						issNum := issueNumber
+						sessID := sessionID
+
+						log.Printf("[plan-activator] Customer replied on issue #%d (plan %q), triggering recovery for session %s",
+							issNum, planKey, sessID)
+
+						recoverCfg := RecoverFleetConfig{
+							Plan:        planCopy,
+							SessionID:   sessID,
+							IssueNumber: issNum,
+							Repo:        repo,
+							GHToken:     a.ResolveGHTokenForPlan(planCopy),
+							CompletionFunc: func(sessionErr error) {
+								if sessionErr != nil {
+									monRef.MarkFailed(issNum, sessionErr.Error())
+								} else {
+									monRef.MarkCustomer(issNum, 0)
+								}
+							},
+							BallChangeFunc: func(ball string, commentID int64) {
+								switch ball {
+								case "customer":
+									monRef.MarkCustomer(issNum, commentID)
+								case "agents":
+									monRef.UpdateLastCommentID(issNum, commentID)
+								}
+							},
+						}
+						if err := a.fleetRecover(context.Background(), recoverCfg); err != nil {
+							log.Printf("[plan-activator] Failed to recover session %s after customer reply on issue #%d: %v",
+								sessID, issNum, err)
+							monRef.MarkFailed(issNum, fmt.Sprintf("recovery after human reply failed: %v", err))
+						}
+					})
 				}
 			}
 		}
@@ -388,7 +481,7 @@ func (a *PlanActivator) pollGitHubIssues(ctx context.Context, planKey string, pl
 	plan.Activation.LastPollError = ""
 
 	// Start a fleet session for each new issue
-	repo := getConfigString(plan.Channel.Config, "repo")
+	repo := GetConfigString(plan.Channel.Config, "repo")
 	started := 0
 
 	for _, issue := range newIssues {
@@ -405,8 +498,24 @@ func (a *PlanActivator) pollGitHubIssues(ctx context.Context, planKey string, pl
 				InitialMsg:  initialMsg,
 				IssueNumber: issueNum,
 				Repo:        repo,
-				CompletionFunc: func() {
-					monitor.MarkCompleted(issueNum)
+				GHToken:     a.ResolveGHTokenForPlan(plan),
+				CompletionFunc: func(sessionErr error) {
+					if sessionErr != nil {
+						monitor.MarkFailed(issueNum, sessionErr.Error())
+					} else {
+						// Session exited cleanly. Ball moves to customer (waiting
+						// for potential new comments or the issue is done).
+						monitor.MarkCustomer(issueNum, 0)
+					}
+				},
+				BallChangeFunc: func(ball string, commentID int64) {
+					switch ball {
+					case "customer":
+						monitor.MarkCustomer(issueNum, commentID)
+					case "agents":
+						// Update the comment cursor even when ball stays with agents
+						monitor.UpdateLastCommentID(issueNum, commentID)
+					}
 				},
 			}
 			sessionID, startErr := a.fleetStart(ctx, cfg)
@@ -414,7 +523,7 @@ func (a *PlanActivator) pollGitHubIssues(ctx context.Context, planKey string, pl
 				log.Printf("[plan-activator] Failed to start fleet session for issue #%d: %v", issue.Number, startErr)
 				continue
 			}
-			monitor.MarkInProgress(issue.Number, sessionID)
+			monitor.MarkAgents(issue.Number, sessionID)
 			started++
 			log.Printf("[plan-activator] Started fleet session %s for issue #%d (%s)", sessionID, issue.Number, issue.Title)
 		}
@@ -431,4 +540,74 @@ func (a *PlanActivator) GetMonitor(planKey string) *GitHubMonitor {
 	a.monitorsMu.RLock()
 	defer a.monitorsMu.RUnlock()
 	return a.monitors[planKey]
+}
+
+// GetFailedIssues returns failed issues for a plan. Returns nil if the plan
+// has no monitor (not a github_issues plan or not activated).
+func (a *PlanActivator) GetFailedIssues(planKey string) []FailedIssue {
+	a.monitorsMu.RLock()
+	mon := a.monitors[planKey]
+	a.monitorsMu.RUnlock()
+
+	if mon == nil {
+		return nil
+	}
+	return mon.GetFailedIssues()
+}
+
+// RetryFailedIssue resets a failed issue to "agents" so recovery can resume
+// the session. Returns the monitor for the caller to proceed with recovery.
+func (a *PlanActivator) RetryFailedIssue(planKey string, issueNumber int) (*GitHubMonitor, error) {
+	a.monitorsMu.RLock()
+	mon := a.monitors[planKey]
+	a.monitorsMu.RUnlock()
+
+	if mon == nil {
+		return nil, fmt.Errorf("no monitor found for plan %q", planKey)
+	}
+
+	if err := mon.ResetToAgents(issueNumber); err != nil {
+		return nil, err
+	}
+
+	return mon, nil
+}
+
+// ForceCleanup removes all resources associated with a fleet plan regardless
+// of the plan's current state. It is designed to be called before deleting a
+// plan from the registry, and is safe to call even if the plan is not activated
+// or has already been partially cleaned up.
+//
+// It removes:
+//   - The scheduler job (looked up by the predictable name "fleet-plan:<key>")
+//   - The in-memory GitHub monitor
+//   - The persisted monitor state file (.state/<key>.json)
+func (a *PlanActivator) ForceCleanup(planKey string) {
+	jobName := fmt.Sprintf("fleet-plan:%s", planKey)
+
+	// 1. Remove scheduler job by name (works even if we don't have the job UUID)
+	if err := a.scheduler.RemoveJobByName(jobName); err != nil {
+		log.Printf("[plan-activator] Warning: failed to remove scheduler job %q during cleanup: %v", jobName, err)
+	}
+
+	// 2. Remove in-memory monitor and clear its state file
+	a.monitorsMu.Lock()
+	monitor := a.monitors[planKey]
+	delete(a.monitors, planKey)
+	a.monitorsMu.Unlock()
+
+	if monitor != nil {
+		if err := monitor.ClearState(); err != nil {
+			log.Printf("[plan-activator] Warning: failed to clear monitor state for %q: %v", planKey, err)
+		}
+	} else {
+		// No in-memory monitor, but the state file may still exist on disk.
+		// Remove it directly using the same path convention as GitHubMonitor.
+		statePath := filepath.Join(a.planRegistry.Dir(), ".state", planKey+".json")
+		if err := os.Remove(statePath); err != nil && !os.IsNotExist(err) {
+			log.Printf("[plan-activator] Warning: failed to remove state file %q: %v", statePath, err)
+		}
+	}
+
+	log.Printf("[plan-activator] Cleaned up resources for plan %q", planKey)
 }

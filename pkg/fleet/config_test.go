@@ -14,7 +14,7 @@ description: A test fleet
 communication:
   flow:
     - role: po
-      talks_to: [human, dev]
+      talks_to: [customer, dev]
       entry_point: true
     - role: dev
       talks_to: [po, qa]
@@ -47,7 +47,7 @@ description: Fleet with delegate
 communication:
   flow:
     - role: dev
-      talks_to: [human]
+      talks_to: [customer]
       entry_point: true
 agents:
   dev:
@@ -271,7 +271,7 @@ func TestFleetValidate_CommunicationNoEntryPoint(t *testing.T) {
 		},
 		Communication: &CommunicationConfig{
 			Flow: []CommunicationNode{
-				{Role: "dev", TalksTo: []string{"human"}},
+				{Role: "dev", TalksTo: []string{"customer"}},
 			},
 		},
 	}
@@ -288,7 +288,7 @@ func TestFleetValidate_CommunicationHumanAllowed(t *testing.T) {
 		},
 		Communication: &CommunicationConfig{
 			Flow: []CommunicationNode{
-				{Role: "po", TalksTo: []string{"human"}, EntryPoint: true},
+				{Role: "po", TalksTo: []string{"customer"}, EntryPoint: true},
 			},
 		},
 	}
@@ -307,7 +307,7 @@ func TestCommunicationHelpers(t *testing.T) {
 		},
 		Communication: &CommunicationConfig{
 			Flow: []CommunicationNode{
-				{Role: "po", TalksTo: []string{"human", "dev"}, EntryPoint: true},
+				{Role: "po", TalksTo: []string{"customer", "dev"}, EntryPoint: true},
 				{Role: "dev", TalksTo: []string{"po", "qa"}},
 				{Role: "qa", TalksTo: []string{"dev", "po"}},
 			},
@@ -320,7 +320,7 @@ func TestCommunicationHelpers(t *testing.T) {
 	}
 
 	// CanTalkTo
-	if !f.CanTalkTo("po", "human") {
+	if !f.CanTalkTo("po", "customer") {
 		t.Error("expected po to be able to talk to human")
 	}
 	if !f.CanTalkTo("po", "dev") {
@@ -332,21 +332,21 @@ func TestCommunicationHelpers(t *testing.T) {
 	if !f.CanTalkTo("dev", "qa") {
 		t.Error("expected dev to be able to talk to qa")
 	}
-	if f.CanTalkTo("dev", "human") {
+	if f.CanTalkTo("dev", "customer") {
 		t.Error("expected dev NOT to be able to talk to human")
 	}
 
-	// CanTalkToHuman
-	if !f.CanTalkToHuman("po") {
+	// CanTalkToCustomer
+	if !f.CanTalkToCustomer("po") {
 		t.Error("expected po to be able to talk to human")
 	}
-	if f.CanTalkToHuman("dev") {
+	if f.CanTalkToCustomer("dev") {
 		t.Error("expected dev NOT to be able to talk to human")
 	}
 
 	// GetTalksTo
 	poTargets := f.GetTalksTo("po")
-	if len(poTargets) != 2 || poTargets[0] != "human" || poTargets[1] != "dev" {
+	if len(poTargets) != 2 || poTargets[0] != "customer" || poTargets[1] != "dev" {
 		t.Errorf("GetTalksTo(po) = %v, want [human dev]", poTargets)
 	}
 
@@ -601,7 +601,7 @@ func TestBuildAgentPrompt(t *testing.T) {
 		Name: "test",
 		Communication: &CommunicationConfig{
 			Flow: []CommunicationNode{
-				{Role: "po", TalksTo: []string{"human", "dev"}, EntryPoint: true},
+				{Role: "po", TalksTo: []string{"customer", "dev"}, EntryPoint: true},
 				{Role: "dev", TalksTo: []string{"po", "qa"}},
 				{Role: "qa", TalksTo: []string{"dev"}},
 			},
@@ -613,7 +613,7 @@ func TestBuildAgentPrompt(t *testing.T) {
 		},
 	}
 
-	prompt := BuildAgentPrompt(p, agentCfg, fleetCfg, "dev")
+	prompt := BuildAgentPrompt(p, agentCfg, fleetCfg, "dev", nil)
 
 	if !strings.Contains(prompt, "You are a developer.") {
 		t.Error("expected prompt to contain persona prompt")
@@ -673,7 +673,7 @@ func TestBuildAgentPrompt_NoDelegate(t *testing.T) {
 		},
 	}
 
-	prompt := BuildAgentPrompt(p, agentCfg, fleetCfg, "qa")
+	prompt := BuildAgentPrompt(p, agentCfg, fleetCfg, "qa", nil)
 
 	if !strings.Contains(prompt, "You are a QA engineer.") {
 		t.Error("expected prompt to contain persona prompt")
@@ -704,7 +704,7 @@ func TestBuildSystemPromptSection_WithCommunication(t *testing.T) {
 			Description: "Dev team",
 			Communication: &CommunicationConfig{
 				Flow: []CommunicationNode{
-					{Role: "po", TalksTo: []string{"human", "dev"}, EntryPoint: true},
+					{Role: "po", TalksTo: []string{"customer", "dev"}, EntryPoint: true},
 					{Role: "dev", TalksTo: []string{"po", "qa"}},
 					{Role: "qa", TalksTo: []string{"dev", "po"}},
 				},

@@ -458,7 +458,7 @@ func (m *SubAgentManager) buildChildPrompt(task SubAgentTask) string {
 		memContent, err := m.MemoryManager.Load()
 		if err == nil && memContent != "" {
 			sb.WriteString("\n## Context (from persistent memory)\n")
-			sb.WriteString(escapeCurlyPlaceholders(memContent))
+			sb.WriteString(EscapeCurlyPlaceholders(memContent))
 			sb.WriteString("\n")
 		}
 	}

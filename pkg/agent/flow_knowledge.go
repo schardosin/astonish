@@ -70,7 +70,7 @@ func GenerateFlowKnowledgeDoc(flowYAMLContent string, entry FlowRegistryEntry) s
 			if prompt == "" {
 				prompt = "(user provides value)"
 			}
-			prompt = escapeCurlyPlaceholders(prompt)
+			prompt = EscapeCurlyPlaceholders(prompt)
 			// Truncate long prompts
 			if len(prompt) > 100 {
 				prompt = prompt[:97] + "..."
@@ -113,13 +113,13 @@ func GenerateFlowKnowledgeDoc(flowYAMLContent string, entry FlowRegistryEntry) s
 	for i, node := range agentCfg.Nodes {
 		stepDesc := node.Type
 		if node.Prompt != "" {
-			prompt := escapeCurlyPlaceholders(node.Prompt)
+			prompt := EscapeCurlyPlaceholders(node.Prompt)
 			if len(prompt) > 80 {
 				prompt = prompt[:77] + "..."
 			}
 			stepDesc += ": " + prompt
 		} else if node.System != "" {
-			sys := escapeCurlyPlaceholders(node.System)
+			sys := EscapeCurlyPlaceholders(node.System)
 			if len(sys) > 80 {
 				sys = sys[:77] + "..."
 			}
@@ -165,10 +165,10 @@ func GenerateFlowKnowledgeDoc(flowYAMLContent string, entry FlowRegistryEntry) s
 	return sb.String()
 }
 
-// escapeCurlyPlaceholders replaces {variable} patterns with <variable> to
+// EscapeCurlyPlaceholders replaces {variable} patterns with <variable> to
 // prevent ADK's session state resolver from treating them as state keys.
 // Uses the curlyPlaceholder regex defined in flow_context.go.
-func escapeCurlyPlaceholders(s string) string {
+func EscapeCurlyPlaceholders(s string) string {
 	return curlyPlaceholder.ReplaceAllString(s, "<$1>")
 }
 

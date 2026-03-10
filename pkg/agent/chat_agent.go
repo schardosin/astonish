@@ -264,7 +264,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 					fmt.Printf("[Chat DEBUG] Failed to load memory: %v\n", memErr)
 				}
 			} else if memContent != "" {
-				c.SystemPrompt.MemoryContent = escapeCurlyPlaceholders(memContent)
+				c.SystemPrompt.MemoryContent = EscapeCurlyPlaceholders(memContent)
 				if c.DebugMode {
 					fmt.Printf("[Chat DEBUG] Loaded memory (%d bytes)\n", len(memContent))
 				}
@@ -311,7 +311,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 						kb.WriteString(r.Snippet)
 						kb.WriteString("\n\n")
 					}
-					c.SystemPrompt.RelevantKnowledge = escapeCurlyPlaceholders(kb.String())
+					c.SystemPrompt.RelevantKnowledge = EscapeCurlyPlaceholders(kb.String())
 					if c.DebugMode {
 						fmt.Printf("[Chat DEBUG] Auto knowledge search: %d results injected for query: %s\n", len(results), truncateQuery(searchQuery, 60))
 					}

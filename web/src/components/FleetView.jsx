@@ -30,6 +30,22 @@ function getAgentColor(name) {
   return AGENT_COLORS[name] || { bg: 'rgba(6, 182, 212, 0.1)', border: 'rgba(6, 182, 212, 0.3)', text: '#22d3ee', label: name }
 }
 
+// Extract the agent role from a sub-agent session label.
+// e.g., "fleet-juicytrade-po" -> "po", "fleet-myplan-architect" -> "architect"
+function extractAgentRole(sessionLabel) {
+  if (!sessionLabel) return null
+  const parts = sessionLabel.split('-')
+  const last = parts[parts.length - 1]
+  // Check if the last segment is a known agent role
+  if (AGENT_COLORS[last]) return last
+  // Try last two segments for compound names (e.g., "qa-engineer" if ever used)
+  if (parts.length >= 2) {
+    const lastTwo = parts.slice(-2).join('-')
+    if (AGENT_COLORS[lastTwo]) return lastTwo
+  }
+  return last
+}
+
 function formatTimeAgo(dateStr) {
   if (!dateStr) return ''
   const date = new Date(dateStr)
@@ -761,8 +777,8 @@ function SessionTrace({ sessionId, onRefresh }) {
   const [expandedEntries, setExpandedEntries] = useState(new Set())
   const [isStopping, setIsStopping] = useState(false)
   const [liveSession, setLiveSession] = useState(null)
-  const [liveMessages, setLiveMessages] = useState([])
   const scrollRef = useRef(null)
+  const prevEventCountRef = useRef(0)
   const abortRef = useRef(null)
   const pollRef = useRef(null)
 
@@ -787,18 +803,17 @@ function SessionTrace({ sessionId, onRefresh }) {
         const active = (data.sessions || []).find(s => s.id === sessionId)
         if (active && !cancelled) {
           setLiveSession(active)
-          // Connect to SSE stream for live updates
+          // Connect to SSE stream for live state updates
           const controller = connectFleetStream({
             sessionId,
             onEvent: (type, eventData) => {
-              if (type === 'fleet_message' || type === 'message') {
-                setLiveMessages(prev => [...prev, eventData])
-              }
               if (type === 'fleet_state') {
                 setLiveSession(prev => prev ? { ...prev, state: eventData.state, active_agent: eventData.active_agent } : prev)
               }
               if (type === 'fleet_done') {
                 setLiveSession(prev => prev ? { ...prev, state: 'stopped' } : prev)
+                // Final trace load to capture remaining events
+                loadTrace()
               }
             },
             onError: () => {},
@@ -823,19 +838,25 @@ function SessionTrace({ sessionId, onRefresh }) {
     loadTrace()
   }, [loadTrace])
 
-  // Poll trace every 10s for active sessions
+  // Poll trace every 5s for active sessions
   useEffect(() => {
     if (!liveSession || liveSession.state === 'stopped' || liveSession.state === 'completed') return
-    pollRef.current = setInterval(loadTrace, 10000)
+    pollRef.current = setInterval(loadTrace, 5000)
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [liveSession, loadTrace])
 
-  // Auto-scroll on new live messages
+  // Auto-scroll when new trace events arrive (only if already near bottom)
   useEffect(() => {
-    if (scrollRef.current && liveMessages.length > 0) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    const el = scrollRef.current
+    const eventCount = trace?.events?.length || 0
+    if (el && eventCount > prevEventCountRef.current) {
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100
+      if (isNearBottom) {
+        el.scrollTop = el.scrollHeight
+      }
     }
-  }, [liveMessages])
+    prevEventCountRef.current = eventCount
+  }, [trace])
 
   const handleStop = async () => {
     if (isStopping) return
@@ -942,27 +963,10 @@ function SessionTrace({ sessionId, onRefresh }) {
           ))
         )}
 
-        {/* Live messages not yet in trace */}
-        {liveMessages.length > 0 && (
-          <div className="pt-2 border-t border-cyan-500/20 mt-2">
-            {liveMessages.map((msg, i) => {
-              const color = getAgentColor(msg.sender || 'system')
-              return (
-                <div key={`live-${i}`} className="flex items-start gap-2 py-1.5 text-xs">
-                  <span className="font-medium flex-shrink-0" style={{ color: color.text }}>
-                    {msg.sender || 'system'}:
-                  </span>
-                  <span style={{ color: 'var(--text-secondary)' }}>{msg.text?.slice(0, 200) || ''}</span>
-                </div>
-              )
-            })}
-          </div>
-        )}
-
         {isActive && (
           <div className="flex items-center gap-2 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>
             <Loader size={12} className="animate-spin text-cyan-400" />
-            <span>Session is active, trace updates every 10s...</span>
+            <span>Session is active, trace updates every 5s...</span>
           </div>
         )}
       </div>
@@ -974,25 +978,37 @@ function SessionTrace({ sessionId, onRefresh }) {
 function TraceEntryRow({ entry, index, expanded, onToggle }) {
   const time = entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : ''
   const sessionLabel = entry.session || ''
+  const agentRole = extractAgentRole(sessionLabel)
+  const roleColor = agentRole ? getAgentColor(agentRole) : getAgentColor('system')
 
   if (entry.type === 'user' || entry.type === 'model' || entry.type === 'thinking') {
     const isUser = entry.type === 'user'
     const isThinking = entry.type === 'thinking'
-    const color = sessionLabel ? getAgentColor(sessionLabel) : (isUser ? getAgentColor('system') : { text: '#c084fc', bg: 'rgba(168, 85, 247, 0.05)' })
     const textPreview = entry.text?.length > 300 ? entry.text.slice(0, 300) + '...' : entry.text
+
+    // Determine the role label and color for this entry
+    let roleLabel, labelColor
+    if (isUser) {
+      roleLabel = 'customer'
+      labelColor = getAgentColor('system')
+    } else if (isThinking) {
+      roleLabel = agentRole ? `@${agentRole}` : 'thinking'
+      labelColor = { text: '#9ca3af', bg: 'rgba(107, 114, 128, 0.1)' }
+    } else {
+      roleLabel = agentRole ? `@${agentRole}` : 'router'
+      labelColor = agentRole ? roleColor : { text: '#9ca3af', bg: 'rgba(107, 114, 128, 0.1)' }
+    }
 
     return (
       <div className="py-1">
         <div className="flex items-start gap-2 text-xs">
           <span className="text-[10px] font-mono flex-shrink-0 w-16 text-right" style={{ color: 'var(--text-muted)' }}>{time}</span>
-          {sessionLabel && (
-            <span className="text-[10px] px-1 py-0.5 rounded flex-shrink-0" style={{ background: color.bg, color: color.text }}>
-              {sessionLabel}
-            </span>
-          )}
-          <span className="text-[10px] font-medium flex-shrink-0 w-10" style={{ color: isUser ? '#60a5fa' : isThinking ? '#9ca3af' : color.text }}>
-            {isUser ? 'USER' : isThinking ? 'THINK' : 'MODEL'}
+          <span className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 min-w-[60px] text-center font-medium" style={{ background: labelColor.bg, color: labelColor.text }}>
+            {roleLabel}
           </span>
+          {isThinking && (
+            <span className="text-[10px] italic flex-shrink-0" style={{ color: '#9ca3af' }}>thinking</span>
+          )}
           <div className="flex-1 min-w-0">
             {expanded ? (
               <div className="rounded p-2 text-xs" style={{ background: 'rgba(255,255,255,0.03)', color: 'var(--text-secondary)' }}>
@@ -1021,16 +1037,15 @@ function TraceEntryRow({ entry, index, expanded, onToggle }) {
   if (entry.type === 'tool_call') {
     const argsStr = entry.args ? JSON.stringify(entry.args) : ''
     const argsPreview = argsStr.length > 100 ? argsStr.slice(0, 100) + '...' : argsStr
+    const roleLabel = agentRole ? `@${agentRole}` : 'router'
 
     return (
       <div className="py-0.5">
         <div className="flex items-start gap-2 text-xs">
           <span className="text-[10px] font-mono flex-shrink-0 w-16 text-right" style={{ color: 'var(--text-muted)' }}>{time}</span>
-          {sessionLabel && (
-            <span className="text-[10px] px-1 py-0.5 rounded flex-shrink-0" style={{ background: getAgentColor(sessionLabel).bg, color: getAgentColor(sessionLabel).text }}>
-              {sessionLabel}
-            </span>
-          )}
+          <span className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 min-w-[60px] text-center font-medium" style={{ background: roleColor.bg, color: roleColor.text }}>
+            {roleLabel}
+          </span>
           <Wrench size={10} className="text-purple-400 flex-shrink-0 mt-0.5" />
           <span className="font-medium" style={{ color: '#c084fc' }}>{entry.tool_name}</span>
           {expanded ? (
@@ -1059,16 +1074,15 @@ function TraceEntryRow({ entry, index, expanded, onToggle }) {
     const durationStr = entry.duration_ms > 0 ? (entry.duration_ms < 1000 ? `${entry.duration_ms}ms` : `${(entry.duration_ms / 1000).toFixed(1)}s`) : ''
     const resultStr = entry.result ? JSON.stringify(entry.result) : ''
     const resultPreview = resultStr.length > 100 ? resultStr.slice(0, 100) + '...' : resultStr
+    const roleLabel = agentRole ? `@${agentRole}` : 'router'
 
     return (
       <div className="py-0.5">
         <div className="flex items-start gap-2 text-xs">
           <span className="text-[10px] font-mono flex-shrink-0 w-16 text-right" style={{ color: 'var(--text-muted)' }}>{time}</span>
-          {sessionLabel && (
-            <span className="text-[10px] px-1 py-0.5 rounded flex-shrink-0" style={{ background: getAgentColor(sessionLabel).bg, color: getAgentColor(sessionLabel).text }}>
-              {sessionLabel}
-            </span>
-          )}
+          <span className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 min-w-[60px] text-center font-medium" style={{ background: roleColor.bg, color: roleColor.text }}>
+            {roleLabel}
+          </span>
           {isError ? (
             <X size={10} className="text-red-400 flex-shrink-0 mt-0.5" />
           ) : (

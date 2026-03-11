@@ -432,7 +432,10 @@ func Run(cfg RunConfig) error {
 			fleetStarter := func(fCtx context.Context, fCfg fleet.HeadlessFleetConfig) (string, error) {
 				return api.StartHeadlessFleetSession(fCtx, fCfg)
 			}
-			activator := fleet.NewPlanActivator(planReg, fleetSchedBridge, fleetStarter)
+			// Pass api.GetFleetPlanRegistry as a function so the activator
+			// always sees the current registry instance, even if the Studio
+			// lazy chat init replaces it with a new one.
+			activator := fleet.NewPlanActivator(api.GetFleetPlanRegistry, fleetSchedBridge, fleetStarter)
 
 			// Wire the poll function into the scheduler executor
 			if schedExec != nil {

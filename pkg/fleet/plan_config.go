@@ -67,9 +67,10 @@ type fleetPlanYAML struct {
 	CreatedFrom string `yaml:"created_from,omitempty"`
 
 	// FleetConfig fields (excluding Name and Description which are already above)
-	Communication *CommunicationConfig        `yaml:"communication,omitempty"`
-	Agents        map[string]FleetAgentConfig `yaml:"agents"`
-	Settings      FleetSettings               `yaml:"settings,omitempty"`
+	Communication  *CommunicationConfig        `yaml:"communication,omitempty"`
+	Agents         map[string]FleetAgentConfig `yaml:"agents"`
+	Settings       FleetSettings               `yaml:"settings,omitempty"`
+	ProjectContext *ProjectContextConfig       `yaml:"project_context,omitempty"`
 
 	// FleetPlan-specific fields
 	Credentials map[string]string             `yaml:"credentials,omitempty"`
@@ -85,20 +86,21 @@ type fleetPlanYAML struct {
 // from the embedded FleetConfig.
 func (p *FleetPlan) MarshalYAML() (interface{}, error) {
 	return &fleetPlanYAML{
-		Name:          p.Name,
-		Key:           p.Key,
-		Description:   p.Description,
-		CreatedFrom:   p.CreatedFrom,
-		Communication: p.FleetConfig.Communication,
-		Agents:        p.FleetConfig.Agents,
-		Settings:      p.FleetConfig.Settings,
-		Credentials:   p.Credentials,
-		Channel:       p.Channel,
-		Artifacts:     p.Artifacts,
-		Validation:    p.Validation,
-		Activation:    p.Activation,
-		CreatedAt:     p.CreatedAt,
-		UpdatedAt:     p.UpdatedAt,
+		Name:           p.Name,
+		Key:            p.Key,
+		Description:    p.Description,
+		CreatedFrom:    p.CreatedFrom,
+		Communication:  p.FleetConfig.Communication,
+		Agents:         p.FleetConfig.Agents,
+		Settings:       p.FleetConfig.Settings,
+		ProjectContext: p.FleetConfig.ProjectContext,
+		Credentials:    p.Credentials,
+		Channel:        p.Channel,
+		Artifacts:      p.Artifacts,
+		Validation:     p.Validation,
+		Activation:     p.Activation,
+		CreatedAt:      p.CreatedAt,
+		UpdatedAt:      p.UpdatedAt,
 	}, nil
 }
 
@@ -115,11 +117,12 @@ func (p *FleetPlan) UnmarshalYAML(value *yaml.Node) error {
 	p.Description = raw.Description
 	p.CreatedFrom = raw.CreatedFrom
 	p.FleetConfig = FleetConfig{
-		Name:          raw.Name, // Use the plan name as the fleet name
-		Description:   raw.Description,
-		Communication: raw.Communication,
-		Agents:        raw.Agents,
-		Settings:      raw.Settings,
+		Name:           raw.Name, // Use the plan name as the fleet name
+		Description:    raw.Description,
+		Communication:  raw.Communication,
+		Agents:         raw.Agents,
+		Settings:       raw.Settings,
+		ProjectContext: raw.ProjectContext,
 	}
 	p.Credentials = raw.Credentials
 	p.Channel = raw.Channel
@@ -173,6 +176,23 @@ type PlanValidationState struct {
 // IsChat returns true if the plan uses the default chat channel.
 func (c *PlanChannelConfig) IsChat() bool {
 	return c.Type == "" || c.Type == "chat"
+}
+
+// GetSchedule returns the polling schedule for this channel.
+// It checks the top-level Schedule field first, then falls back to
+// config["poll_schedule"] (which the LLM sometimes uses instead),
+// and finally defaults to every 5 minutes.
+func (c *PlanChannelConfig) GetSchedule() string {
+	if c.Schedule != "" {
+		return c.Schedule
+	}
+	// Fallback: check the config map for poll_schedule
+	if s, ok := c.Config["poll_schedule"]; ok {
+		if str, ok := s.(string); ok && str != "" {
+			return str
+		}
+	}
+	return "*/5 * * * *"
 }
 
 // PlanActivationState tracks whether a fleet plan is actively monitoring

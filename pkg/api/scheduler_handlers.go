@@ -79,13 +79,66 @@ func SchedulerJobHandler(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(job)
 
 	case http.MethodPut:
-		var job scheduler.Job
-		if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
+		// The request body uses the flat tools.SchedulerJob JSON format
+		// (with top-level "cron", "flow", "instructions" fields), not
+		// the nested scheduler.Job format. Decode into a flat struct
+		// and selectively merge into the existing job.
+		var update struct {
+			Name         string            `json:"name"`
+			Mode         string            `json:"mode"`
+			Cron         string            `json:"cron"`
+			Timezone     string            `json:"timezone"`
+			Flow         string            `json:"flow"`
+			Params       map[string]string `json:"params"`
+			Instructions string            `json:"instructions"`
+			Channel      string            `json:"channel"`
+			Target       string            `json:"target"`
+			Enabled      *bool             `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
-		job.ID = jobID
-		if err := s.Store().Update(&job); err != nil {
+
+		existing := s.Store().Get(jobID)
+		if existing == nil {
+			http.Error(w, "job not found", http.StatusNotFound)
+			return
+		}
+
+		// Apply non-zero fields from the update
+		if update.Name != "" {
+			existing.Name = update.Name
+		}
+		if update.Mode != "" {
+			existing.Mode = scheduler.JobMode(update.Mode)
+		}
+		if update.Cron != "" {
+			existing.Schedule.Cron = update.Cron
+		}
+		if update.Timezone != "" {
+			existing.Schedule.Timezone = update.Timezone
+		}
+		if update.Flow != "" {
+			existing.Payload.Flow = update.Flow
+		}
+		if update.Params != nil {
+			existing.Payload.Params = update.Params
+		}
+		if update.Instructions != "" {
+			existing.Payload.Instructions = update.Instructions
+		}
+		if update.Channel != "" {
+			existing.Delivery.Channel = update.Channel
+		}
+		if update.Target != "" {
+			existing.Delivery.Target = update.Target
+		}
+		if update.Enabled != nil {
+			existing.Enabled = *update.Enabled
+		}
+
+		if err := s.Store().Update(existing); err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}

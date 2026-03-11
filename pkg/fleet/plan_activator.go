@@ -70,7 +70,7 @@ type GHTokenResolverFunc func(plan *FleetPlan) string
 // PlanActivator manages the lifecycle of fleet plan activations.
 // It creates scheduler jobs for activated plans and removes them on deactivation.
 type PlanActivator struct {
-	planRegistry    *PlanRegistry
+	planRegistryFn  func() *PlanRegistry
 	scheduler       SchedulerAccess
 	fleetStart      FleetStartFunc
 	fleetRecover    FleetRecoverFunc
@@ -82,13 +82,21 @@ type PlanActivator struct {
 }
 
 // NewPlanActivator creates a new activator.
-func NewPlanActivator(planReg *PlanRegistry, sched SchedulerAccess, fleetStart FleetStartFunc) *PlanActivator {
+// The registryFn is called each time the activator needs the PlanRegistry,
+// ensuring it always sees the current instance even if the package-level
+// variable is replaced (e.g., when the Studio lazy chat init re-creates it).
+func NewPlanActivator(registryFn func() *PlanRegistry, sched SchedulerAccess, fleetStart FleetStartFunc) *PlanActivator {
 	return &PlanActivator{
-		planRegistry: planReg,
-		scheduler:    sched,
-		fleetStart:   fleetStart,
-		monitors:     make(map[string]*GitHubMonitor),
+		planRegistryFn: registryFn,
+		scheduler:      sched,
+		fleetStart:     fleetStart,
+		monitors:       make(map[string]*GitHubMonitor),
 	}
+}
+
+// registry returns the current PlanRegistry instance.
+func (a *PlanActivator) registry() *PlanRegistry {
+	return a.planRegistryFn()
 }
 
 // SetRecoverFunc sets the function used to recover interrupted fleet sessions.
@@ -115,7 +123,7 @@ func (a *PlanActivator) ResolveGHTokenForPlan(plan *FleetPlan) string {
 // Activate activates a fleet plan by creating a scheduler job that polls
 // the plan's configured channel on the configured schedule.
 func (a *PlanActivator) Activate(ctx context.Context, planKey string) error {
-	plan, ok := a.planRegistry.GetPlan(planKey)
+	plan, ok := a.registry().GetPlan(planKey)
 	if !ok {
 		return fmt.Errorf("fleet plan %q not found", planKey)
 	}
@@ -129,10 +137,7 @@ func (a *PlanActivator) Activate(ctx context.Context, planKey string) error {
 	}
 
 	// Validate cron schedule
-	schedule := plan.Channel.Schedule
-	if schedule == "" {
-		schedule = "*/5 * * * *" // default: every 5 minutes
-	}
+	schedule := plan.Channel.GetSchedule()
 	if err := a.scheduler.ValidateCron(schedule); err != nil {
 		return fmt.Errorf("invalid cron schedule %q: %w", schedule, err)
 	}
@@ -140,7 +145,7 @@ func (a *PlanActivator) Activate(ctx context.Context, planKey string) error {
 	// For GitHub Issues: initialize the monitor and mark existing issues as seen
 	// so we only trigger on NEW issues created after activation.
 	if plan.Channel.Type == "github_issues" {
-		monitor := NewGitHubMonitor(planKey, plan.Channel.Config, a.planRegistry.Dir())
+		monitor := NewGitHubMonitor(planKey, plan.Channel.Config, a.registry().Dir())
 		monitor.GHToken = a.ResolveGHTokenForPlan(plan)
 		if err := monitor.LoadState(); err != nil {
 			log.Printf("[plan-activator] Warning: failed to load monitor state for %q: %v", planKey, err)
@@ -176,7 +181,7 @@ func (a *PlanActivator) Activate(ctx context.Context, planKey string) error {
 	}
 	plan.UpdatedAt = now
 
-	if err := a.planRegistry.Save(plan); err != nil {
+	if err := a.registry().Save(plan); err != nil {
 		// Rollback: remove the scheduler job
 		_ = a.scheduler.RemoveJob(job.ID)
 		return fmt.Errorf("failed to save activation state: %w", err)
@@ -188,7 +193,7 @@ func (a *PlanActivator) Activate(ctx context.Context, planKey string) error {
 
 // Deactivate deactivates a fleet plan by removing its scheduler job.
 func (a *PlanActivator) Deactivate(_ context.Context, planKey string) error {
-	plan, ok := a.planRegistry.GetPlan(planKey)
+	plan, ok := a.registry().GetPlan(planKey)
 	if !ok {
 		return fmt.Errorf("fleet plan %q not found", planKey)
 	}
@@ -213,7 +218,7 @@ func (a *PlanActivator) Deactivate(_ context.Context, planKey string) error {
 	plan.Activation = PlanActivationState{} // clear all activation state
 	plan.UpdatedAt = time.Now()
 
-	if err := a.planRegistry.Save(plan); err != nil {
+	if err := a.registry().Save(plan); err != nil {
 		return fmt.Errorf("failed to save deactivation state: %w", err)
 	}
 
@@ -234,7 +239,7 @@ type PlanActivationStatus struct {
 
 // Status returns the activation status of a fleet plan.
 func (a *PlanActivator) Status(planKey string) (*PlanActivationStatus, error) {
-	plan, ok := a.planRegistry.GetPlan(planKey)
+	plan, ok := a.registry().GetPlan(planKey)
 	if !ok {
 		return nil, fmt.Errorf("fleet plan %q not found", planKey)
 	}
@@ -254,11 +259,11 @@ func (a *PlanActivator) Status(planKey string) (*PlanActivationStatus, error) {
 // a daemon restart. Called during startup. It verifies that the corresponding
 // scheduler job still exists; if not, it re-creates the job to heal the state.
 func (a *PlanActivator) RestoreActivated() error {
-	plans := a.planRegistry.ListPlans()
+	plans := a.registry().ListPlans()
 	restored := 0
 
 	for _, summary := range plans {
-		plan, ok := a.planRegistry.GetPlan(summary.Key)
+		plan, ok := a.registry().GetPlan(summary.Key)
 		if !ok {
 			continue
 		}
@@ -274,10 +279,7 @@ func (a *PlanActivator) RestoreActivated() error {
 				log.Printf("[plan-activator] Scheduler job %s for plan %q is missing, re-creating...",
 					plan.Activation.SchedulerJobID, summary.Key)
 
-				schedule := plan.Channel.Schedule
-				if schedule == "" {
-					schedule = "*/5 * * * *"
-				}
+				schedule := plan.Channel.GetSchedule()
 
 				job := &SchedulerJob{
 					Name:    fmt.Sprintf("fleet-plan:%s", summary.Key),
@@ -292,14 +294,14 @@ func (a *PlanActivator) RestoreActivated() error {
 					// Clear activation state since we can't restore the job
 					plan.Activation = PlanActivationState{}
 					plan.UpdatedAt = time.Now()
-					_ = a.planRegistry.Save(plan)
+					_ = a.registry().Save(plan)
 					continue
 				}
 
 				// Update the job ID in the plan
 				plan.Activation.SchedulerJobID = job.ID
 				plan.UpdatedAt = time.Now()
-				_ = a.planRegistry.Save(plan)
+				_ = a.registry().Save(plan)
 
 				log.Printf("[plan-activator] Re-created scheduler job %s for plan %q (cron: %s)",
 					job.ID, summary.Key, schedule)
@@ -308,7 +310,7 @@ func (a *PlanActivator) RestoreActivated() error {
 
 		// Re-create the monitor for this plan
 		if plan.Channel.Type == "github_issues" {
-			monitor := NewGitHubMonitor(summary.Key, plan.Channel.Config, a.planRegistry.Dir())
+			monitor := NewGitHubMonitor(summary.Key, plan.Channel.Config, a.registry().Dir())
 			monitor.GHToken = a.ResolveGHTokenForPlan(plan)
 			if err := monitor.LoadState(); err != nil {
 				log.Printf("[plan-activator] Warning: failed to load monitor state for %q: %v", summary.Key, err)
@@ -430,7 +432,7 @@ func (a *PlanActivator) RestoreActivated() error {
 // Poll is called by the scheduler executor when a fleet_poll job fires.
 // It checks for new items on the plan's channel and starts fleet sessions.
 func (a *PlanActivator) Poll(ctx context.Context, planKey string) (string, error) {
-	plan, ok := a.planRegistry.GetPlan(planKey)
+	plan, ok := a.registry().GetPlan(planKey)
 	if !ok {
 		return "", fmt.Errorf("fleet plan %q not found", planKey)
 	}
@@ -466,14 +468,14 @@ func (a *PlanActivator) pollGitHubIssues(ctx context.Context, planKey string, pl
 	if err != nil {
 		plan.Activation.LastPollStatus = "failed"
 		plan.Activation.LastPollError = err.Error()
-		_ = a.planRegistry.Save(plan)
+		_ = a.registry().Save(plan)
 		return "", fmt.Errorf("polling GitHub issues: %w", err)
 	}
 
 	if len(newIssues) == 0 {
 		plan.Activation.LastPollStatus = "no_new_items"
 		plan.Activation.LastPollError = ""
-		_ = a.planRegistry.Save(plan)
+		_ = a.registry().Save(plan)
 		return "no new issues", nil
 	}
 
@@ -530,7 +532,7 @@ func (a *PlanActivator) pollGitHubIssues(ctx context.Context, planKey string, pl
 	}
 
 	plan.Activation.SessionsStarted += started
-	_ = a.planRegistry.Save(plan)
+	_ = a.registry().Save(plan)
 
 	return fmt.Sprintf("found %d new issue(s), started %d fleet session(s)", len(newIssues), started), nil
 }
@@ -603,7 +605,7 @@ func (a *PlanActivator) ForceCleanup(planKey string) {
 	} else {
 		// No in-memory monitor, but the state file may still exist on disk.
 		// Remove it directly using the same path convention as GitHubMonitor.
-		statePath := filepath.Join(a.planRegistry.Dir(), ".state", planKey+".json")
+		statePath := filepath.Join(a.registry().Dir(), ".state", planKey+".json")
 		if err := os.Remove(statePath); err != nil && !os.IsNotExist(err) {
 			log.Printf("[plan-activator] Warning: failed to remove state file %q: %v", statePath, err)
 		}

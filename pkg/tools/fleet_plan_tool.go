@@ -38,9 +38,9 @@ type SaveFleetPlanArgs struct {
 	// ChannelType is the input channel: "chat", "github_issues"
 	ChannelType string `json:"channel_type" jsonschema:"Communication channel type: 'chat' (manual start via UI/CLI) or 'github_issues' (auto-triggered by new GitHub issues). These are the currently supported channels; other integrations may be added in the future."`
 	// ChannelConfig holds channel-specific settings as a JSON object
-	ChannelConfig map[string]any `json:"channel_config,omitempty" jsonschema:"Channel-specific settings. For github_issues: {repo, label, poll_schedule}. Not needed for chat channels."`
+	ChannelConfig map[string]any `json:"channel_config,omitempty" jsonschema:"Channel-specific settings. For github_issues: {repo, label}. Not needed for chat channels."`
 	// ChannelSchedule is a cron expression for polling (non-chat channels)
-	ChannelSchedule string `json:"channel_schedule,omitempty" jsonschema:"Cron expression for polling non-chat channels (e.g., '*/5 * * * *' for every 5 minutes)"`
+	ChannelSchedule string `json:"channel_schedule,omitempty" jsonschema:"Cron expression for polling non-chat channels (e.g., '*/5 * * * *' for every 5 minutes, '* * * * *' for every minute). IMPORTANT: always set this field for non-chat channels; do NOT put the schedule inside channel_config."`
 	// Artifacts maps artifact categories to their destinations (JSON object)
 	Artifacts map[string]SaveFleetPlanArtifact `json:"artifacts,omitempty" jsonschema:"Artifact destinations mapping category names to their config (e.g., code -> git_repo, docs -> local path)"`
 	// BehaviorOverrides maps agent keys to behavior text additions.

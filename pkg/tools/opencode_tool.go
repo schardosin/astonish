@@ -531,12 +531,10 @@ Arguments:
 - session_id: Optional. Continue a previous OpenCode session for follow-up work.
 - model: Optional. Override the AI model (provider/model format).
 - agent: Optional. OpenCode agent type. Default 'build' has full tool access.
-- timeout: Optional. Seconds to wait (default: 300, max: 3600).
 
 Tips:
 - Be explicit about file paths and expected outputs
 - Include relevant context (requirements, design decisions, conventions)
-- For follow-up tasks, use the session_id from a previous result
-- Set a higher timeout for complex implementations (e.g., 600)`,
+- For follow-up tasks, use the session_id from a previous result`,
 	}, runOpenCode)
 }

@@ -328,7 +328,7 @@ agents:
 
       You MUST work incrementally. Never try to write the entire technical
       design in a single OpenCode call or a single large write. Complex systems
-      have many components and a single large write will timeout. Instead:
+      have many components and a single large write will fail. Instead:
 
       **Step 1: Outline.**
       After reading the requirements, plan the architecture document structure.
@@ -347,8 +347,7 @@ agents:
       When using OpenCode for exploration:
         opencode(task: "Analyze the existing codebase at <workspace>/src/ and
         summarize the current module structure, key patterns, and interfaces
-        relevant to <section topic>.", agent: "explore", dir: "<workspace>",
-        timeout: 120)
+        relevant to <section topic>.", agent: "explore", dir: "<workspace>")
 
       Write each section to the main architecture document incrementally.
       For example:
@@ -365,7 +364,7 @@ agents:
       **DO NOT:**
       - Try to write a 50+ page architecture document in a single write or
         OpenCode call
-      - Use OpenCode to write the design document (it will timeout on large docs)
+      - Use OpenCode to write the design document (write sections yourself with write_file)
       - Skip sections or leave placeholders
 
       **After the design is complete:**
@@ -425,22 +424,21 @@ agents:
       **Incremental execution (CRITICAL: follow this pattern):**
 
       You MUST work incrementally. Never try to implement everything in a single
-      OpenCode call. Complex tasks will timeout and you will lose all progress.
+      OpenCode call. Complex tasks are error-prone and you risk losing progress.
       Instead, follow this cycle:
 
       **Step 1: Plan.**
-      Call OpenCode with `agent: "explore"` (read-only mode, timeout ~120s) to
-      analyze the workspace, the requirements, and the technical design. Ask it
-      to produce a numbered step-by-step implementation plan where each step is
-      a small, self-contained unit of work. A good step produces one module or
-      feature, includes its unit tests, and can be committed independently.
+      Call OpenCode with `agent: "explore"` (read-only mode) to analyze the
+      workspace, the requirements, and the technical design. Ask it to produce
+      a numbered step-by-step implementation plan where each step is a small,
+      self-contained unit of work. A good step produces one module or feature,
+      includes its unit tests, and can be committed independently.
 
       Example:
         opencode(task: "Read docs/requirements.md and docs/technical-design.md.
         Analyze the project structure. Produce a numbered implementation plan
         where each step is one logical unit with its tests. Write the plan to
-        docs/implementation-plan.md", agent: "explore", dir: "<workspace>",
-        timeout: 120)
+        docs/implementation-plan.md", agent: "explore", dir: "<workspace>")
 
       After this call, use read_file to verify docs/implementation-plan.md exists
       and review the plan. If it looks wrong or incomplete, refine it with another
@@ -462,7 +460,7 @@ agents:
         <brief description>. Write the code in src/. Include unit tests.
         Run the tests. If they pass, commit and push with message
         'feat: <description>'.", session_id: "<id-from-plan-step>",
-        dir: "<workspace>", timeout: 600)
+        dir: "<workspace>")
 
       **Step 3: Verify after each step.**
       After each OpenCode call returns, use read_file to confirm:
@@ -483,7 +481,7 @@ agents:
       - Try to implement everything in a single OpenCode call
       - Skip writing tests for a step
       - Move to the next step before verifying the current one
-      - Set timeouts longer than 600s for a single step
+      - Try to do too much in a single OpenCode call (keep steps focused)
 
       **After all steps are complete:**
       1. Use read_file to do a final check that all deliverables exist.
@@ -541,17 +539,15 @@ agents:
       OpenCode call. Instead, follow this cycle:
 
       **Step 1: Plan your test strategy.**
-      Call OpenCode with `agent: "explore"` (read-only mode, timeout ~120s) to
-      analyze the implementation, requirements, and acceptance criteria. Ask it
-      to produce a numbered test plan where each step covers one module or
-      feature area.
+      Call OpenCode with `agent: "explore"` (read-only mode) to analyze the
+      implementation, requirements, and acceptance criteria. Ask it to produce
+      a numbered test plan where each step covers one module or feature area.
 
       Example:
         opencode(task: "Read docs/requirements.md, docs/technical-design.md, and
         the source code in src/. Produce a numbered test plan covering each
         acceptance criterion and module. Write the plan to
-        docs/test-plan.md", agent: "explore", dir: "<workspace>",
-        timeout: 120)
+        docs/test-plan.md", agent: "explore", dir: "<workspace>")
 
       After this call, use read_file to verify the test plan exists and review it.
 
@@ -569,7 +565,7 @@ agents:
         opencode(task: "Implement step 1 from docs/test-plan.md:
         <brief description>. Write tests in src/tests/ or alongside the code.
         Run the tests and report results.", session_id: "<id-from-plan-step>",
-        dir: "<workspace>", timeout: 300)
+        dir: "<workspace>")
 
       **Step 3: Verify after each step.**
       After each OpenCode call returns, use read_file to confirm:

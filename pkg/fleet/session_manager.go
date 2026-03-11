@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/schardosin/astonish/pkg/agent"
-	"github.com/schardosin/astonish/pkg/persona"
 	"google.golang.org/adk/model"
 	adksession "google.golang.org/adk/session"
 )
@@ -38,11 +37,6 @@ const (
 // longer timeout to give humans time to respond.
 const idleWatchdogTimeout = 5 * time.Minute
 
-// idleWatchdogTimeoutWaitingForCustomer is the longer timeout used when the
-// session explicitly asked a customer a question. GitHub comment replies may
-// take a while, so we wait longer before intervening.
-const idleWatchdogTimeoutWaitingForCustomer = 30 * time.Minute
-
 // FleetSession manages the message loop for a single fleet session.
 // It monitors a channel for messages, routes them to the appropriate agent,
 // activates agents, and posts their responses back to the channel.
@@ -53,7 +47,6 @@ type FleetSession struct {
 	Plan            *FleetPlan // Non-nil when started from a fleet plan (for prompt injection)
 	Channel         Channel
 	SubAgentManager *agent.SubAgentManager
-	PersonaRegistry *persona.Registry
 	LLM             model.LLM // LLM used for routing decisions
 
 	// ctx and cancel are set when Run() starts. ctx is used by external callers
@@ -62,10 +55,11 @@ type FleetSession struct {
 	cancel context.CancelFunc
 
 	// State
-	state        SessionState
-	activeAgent  string // which agent is currently processing (or last processed)
-	waitingAgent string // which agent is waiting for human input
-	mu           sync.RWMutex
+	state            SessionState
+	activeAgent      string // which agent is currently processing (or last processed)
+	waitingAgent     string // which agent is waiting for human input
+	ballWithCustomer bool   // true when ball was moved to customer (routing returned "customer" or "none")
+	mu               sync.RWMutex
 
 	// OnStateChange is called whenever the session state changes.
 	// Used by the API layer to stream state updates to the UI.
@@ -127,7 +121,6 @@ func NewFleetSession(
 	fleetCfg *FleetConfig,
 	channel Channel,
 	subAgentMgr *agent.SubAgentManager,
-	personaReg *persona.Registry,
 ) *FleetSession {
 	return &FleetSession{
 		ID:              uuid.New().String(),
@@ -135,7 +128,6 @@ func NewFleetSession(
 		FleetConfig:     fleetCfg,
 		Channel:         channel,
 		SubAgentManager: subAgentMgr,
-		PersonaRegistry: personaReg,
 		LLM:             subAgentMgr.LLM,
 		state:           StateIdle,
 		Progress:        NewProgressTracker(),
@@ -223,22 +215,29 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 		} else {
 			// Wait for the next message.
 			// For headless sessions, arm the idle watchdog so the session
-			// does not hang forever if no message arrives (e.g., routing
-			// returned "" or the poller has nothing new).
+			// does not hang forever if an agent gets stuck. The watchdog
+			// is disabled when the ball is with the customer (there is
+			// nothing for agents to do until the customer responds).
 			fs.setState(StateIdle, "")
 
 			var waitCtx context.Context
 			var waitCancel context.CancelFunc
 
 			if fs.Headless {
-				timeout := idleWatchdogTimeout
 				fs.mu.RLock()
-				waiting := fs.waitingAgent
+				customerHasBall := fs.ballWithCustomer
 				fs.mu.RUnlock()
-				if waiting != "" {
-					timeout = idleWatchdogTimeoutWaitingForCustomer
+
+				if customerHasBall {
+					// Ball is with customer: wait indefinitely (no watchdog).
+					// The session will resume when the customer posts a
+					// message (e.g., a new GitHub comment is polled).
+					waitCtx, waitCancel = context.WithCancel(ctx)
+				} else {
+					// Ball is with agents: arm the watchdog so we can
+					// detect stuck sessions and re-activate the entry point.
+					waitCtx, waitCancel = context.WithTimeout(ctx, idleWatchdogTimeout)
 				}
-				waitCtx, waitCancel = context.WithTimeout(ctx, timeout)
 			} else {
 				waitCtx, waitCancel = context.WithCancel(ctx)
 			}
@@ -418,8 +417,12 @@ func (fs *FleetSession) notifyMessagePosted(msg Message) {
 	}
 }
 
-// notifyBallChange calls the OnBallChange callback if set.
+// notifyBallChange calls the OnBallChange callback if set and updates
+// the internal ballWithCustomer flag used by the idle watchdog.
 func (fs *FleetSession) notifyBallChange(ball string) {
+	fs.mu.Lock()
+	fs.ballWithCustomer = (ball == "customer")
+	fs.mu.Unlock()
 	if fs.OnBallChange != nil {
 		fs.OnBallChange(ball)
 	}
@@ -435,13 +438,8 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 		return Message{}, fmt.Errorf("agent %q not found in fleet", agentKey)
 	}
 
-	personaCfg, pOk := fs.PersonaRegistry.GetPersona(agentCfg.Persona)
-	if !pOk {
-		return Message{}, fmt.Errorf("persona %q not found", agentCfg.Persona)
-	}
-
 	// Build system prompt with communication graph awareness
-	systemPrompt := BuildAgentPrompt(personaCfg, agentCfg, fs.FleetConfig, agentKey, fs.Progress, fs.ProjectContext, fs.Plan)
+	systemPrompt := BuildAgentPrompt(agentCfg, fs.FleetConfig, agentKey, fs.Progress, fs.ProjectContext, fs.Plan)
 
 	// Build thread context
 	threadContext, err := BuildThreadContext(ctx, fs.Channel, agentKey)

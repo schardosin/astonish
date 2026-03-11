@@ -628,7 +628,7 @@ function PlanDetail({ planKey, onNavigate, onRefresh, theme }) {
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-sm font-medium" style={{ color: color.text }}>{key}</span>
                     <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                      <span>Persona: {agent.persona}</span>
+                      <span>{agent.name}</span>
                       <span>Mode: {agent.mode || 'agentic'}</span>
                     </div>
                   </div>

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -13,7 +14,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/fleet"
-	"github.com/schardosin/astonish/pkg/persona"
 	"github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/tools"
 	adkmodel "google.golang.org/adk/model"
@@ -128,12 +128,6 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get required dependencies
-	personaReg := GetPersonaRegistry()
-	if personaReg == nil {
-		http.Error(w, "Persona system not initialized", http.StatusServiceUnavailable)
-		return
-	}
-
 	subAgentMgr := tools.GetSubAgentManager()
 	if subAgentMgr == nil {
 		http.Error(w, "Sub-agent system not initialized (sub-agents must be enabled)", http.StatusServiceUnavailable)
@@ -143,11 +137,26 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 	// Create the fleet session with a background context (not tied to the HTTP request).
 	// The fleet session lives until explicitly stopped or all agents are done.
 	channel := fleet.NewChatChannel(fleetKey)
-	fleetSession := fleet.NewFleetSession(fleetKey, fleetCfg, channel, subAgentMgr, personaReg)
+	fleetSession := fleet.NewFleetSession(fleetKey, fleetCfg, channel, subAgentMgr)
 
 	// If starting from a plan, attach it to the session for prompt injection
+	// and generate project context if configured.
 	if fleetPlan != nil {
 		fleetSession.Plan = fleetPlan
+
+		// Generate project context (e.g., AGENTS.md) before any agent starts.
+		// This mirrors the headless path in fleet_headless.go.
+		if fleetCfg.ProjectContext != nil {
+			workspaceDir := fleetPlan.ResolveWorkspaceDir()
+			if workspaceDir != "" {
+				if err := os.MkdirAll(workspaceDir, 0755); err != nil {
+					log.Printf("[fleet] Warning: could not create workspace %s: %v", workspaceDir, err)
+				} else {
+					fleetSession.ProjectContext = fleet.GenerateProjectContext(
+						context.Background(), workspaceDir, fleetCfg.ProjectContext)
+				}
+			}
+		}
 	}
 
 	// Register in the in-memory registry
@@ -193,7 +202,7 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 		"session_id": fleetSession.ID,
 		"fleet_key":  fleetKey,
 		"fleet_name": fleetName,
-		"agents":     buildAgentList(fleetCfg, personaReg),
+		"agents":     buildAgentList(fleetCfg),
 	})
 }
 
@@ -354,7 +363,7 @@ func FleetSessionStatusHandler(w http.ResponseWriter, r *http.Request) {
 		"state":        string(state),
 		"active_agent": activeAgent,
 		"messages":     thread,
-		"agents":       buildAgentList(fs.FleetConfig, fs.PersonaRegistry),
+		"agents":       buildAgentList(fs.FleetConfig),
 	})
 }
 
@@ -430,7 +439,7 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 		"session_id": fs.ID,
 		"fleet_key":  fs.FleetKey,
 		"fleet_name": fs.FleetConfig.Name,
-		"agents":     buildAgentList(fs.FleetConfig, fs.PersonaRegistry),
+		"agents":     buildAgentList(fs.FleetConfig),
 	})
 
 	// Send current state
@@ -535,7 +544,7 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildAgentList creates a list of agent descriptions for the frontend.
-func buildAgentList(fleetCfg *fleet.FleetConfig, personaReg *persona.Registry) []map[string]interface{} {
+func buildAgentList(fleetCfg *fleet.FleetConfig) []map[string]interface{} {
 	if fleetCfg == nil {
 		return nil
 	}
@@ -543,16 +552,10 @@ func buildAgentList(fleetCfg *fleet.FleetConfig, personaReg *persona.Registry) [
 	agents := make([]map[string]interface{}, 0, len(fleetCfg.Agents))
 	for key, agentCfg := range fleetCfg.Agents {
 		entry := map[string]interface{}{
-			"key":     key,
-			"persona": agentCfg.Persona,
-			"mode":    agentCfg.GetMode(),
-		}
-
-		if personaReg != nil {
-			if p, ok := personaReg.GetPersona(agentCfg.Persona); ok {
-				entry["name"] = p.Name
-				entry["description"] = p.Description
-			}
+			"key":         key,
+			"name":        agentCfg.Name,
+			"description": agentCfg.Description,
+			"mode":        agentCfg.GetMode(),
 		}
 
 		// Communication info

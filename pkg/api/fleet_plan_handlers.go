@@ -227,9 +227,11 @@ func deepCopyFleetPlan(src *fleet.FleetPlan) *fleet.FleetPlan {
 		dst.FleetConfig.Agents = make(map[string]fleet.FleetAgentConfig, len(src.FleetConfig.Agents))
 		for k, agent := range src.FleetConfig.Agents {
 			agentCopy := fleet.FleetAgentConfig{
-				Persona:   agent.Persona,
-				Mode:      agent.Mode,
-				Behaviors: agent.Behaviors,
+				Name:        agent.Name,
+				Description: agent.Description,
+				Identity:    agent.Identity,
+				Mode:        agent.Mode,
+				Behaviors:   agent.Behaviors,
 				Tools: fleet.ToolsConfig{
 					All: agent.Tools.All,
 				},

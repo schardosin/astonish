@@ -51,14 +51,16 @@ type CommunicationNode struct {
 }
 
 // FleetAgentConfig defines a single agent slot within a fleet.
-// It references a persona and adds fleet-specific tool access, delegate
-// configuration, behavioral rules, and execution mode.
+// The agent's identity, tools, delegation, and behavioral rules are all
+// defined inline. No external persona reference is needed.
 type FleetAgentConfig struct {
-	Persona   string          `yaml:"persona" json:"persona"`
-	Mode      string          `yaml:"mode,omitempty" json:"mode,omitempty"` // "simple" or "agentic" (default: "agentic")
-	Tools     ToolsConfig     `yaml:"tools,omitempty" json:"tools,omitempty"`
-	Delegate  *DelegateConfig `yaml:"delegate,omitempty" json:"delegate,omitempty"`
-	Behaviors string          `yaml:"behaviors" json:"behaviors"`
+	Name        string          `yaml:"name" json:"name"`
+	Description string          `yaml:"description,omitempty" json:"description,omitempty"`
+	Identity    string          `yaml:"identity" json:"identity"`
+	Mode        string          `yaml:"mode,omitempty" json:"mode,omitempty"` // "simple" or "agentic" (default: "agentic")
+	Tools       ToolsConfig     `yaml:"tools,omitempty" json:"tools,omitempty"`
+	Delegate    *DelegateConfig `yaml:"delegate,omitempty" json:"delegate,omitempty"`
+	Behaviors   string          `yaml:"behaviors" json:"behaviors"`
 }
 
 // GetMode returns the agent execution mode, defaulting to "agentic".
@@ -256,8 +258,11 @@ func (f *FleetConfig) Validate() error {
 	}
 
 	for key, agent := range f.Agents {
-		if strings.TrimSpace(agent.Persona) == "" {
-			return fmt.Errorf("fleet %q agent %q: persona reference is required", f.Name, key)
+		if strings.TrimSpace(agent.Name) == "" {
+			return fmt.Errorf("fleet %q agent %q: name is required", f.Name, key)
+		}
+		if strings.TrimSpace(agent.Identity) == "" {
+			return fmt.Errorf("fleet %q agent %q: identity is required", f.Name, key)
 		}
 		if strings.TrimSpace(agent.Behaviors) == "" {
 			return fmt.Errorf("fleet %q agent %q: behaviors are required", f.Name, key)
@@ -307,17 +312,6 @@ func (f *FleetConfig) Validate() error {
 		}
 	}
 
-	return nil
-}
-
-// ValidatePersonaRefs checks that all persona references in the fleet
-// can be resolved. The lookup function should return true if the persona key exists.
-func (f *FleetConfig) ValidatePersonaRefs(personaExists func(key string) bool) error {
-	for agentKey, agent := range f.Agents {
-		if !personaExists(agent.Persona) {
-			return fmt.Errorf("fleet %q agent %q: persona %q not found", f.Name, agentKey, agent.Persona)
-		}
-	}
 	return nil
 }
 

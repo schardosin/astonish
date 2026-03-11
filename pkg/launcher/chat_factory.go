@@ -18,7 +18,6 @@ import (
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/memory"
-	"github.com/schardosin/astonish/pkg/persona"
 	"github.com/schardosin/astonish/pkg/provider"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/skills"
@@ -805,135 +804,109 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		promptBuilder.CustomPrompt = cfg.AppConfig.Chat.SystemPrompt
 	}
 
-	// --- 5b. Initialize persona and fleet registries ---
-	personasDir, persErr := config.GetPersonasDir()
-	if persErr == nil {
-		// Ensure bundled personas exist on disk (first-run bootstrap)
-		written, ensErr := persona.EnsureBundled(personasDir)
-		if ensErr != nil {
+	// --- 5b. Initialize fleet registry ---
+	fleetsDir, flErr := config.GetFleetsDir()
+	if flErr == nil {
+		// Ensure bundled fleets exist on disk
+		fWritten, fEnsErr := fleet.EnsureBundled(fleetsDir)
+		if fEnsErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to bootstrap bundled personas: %v\n", ensErr)
+				fmt.Printf("Warning: Failed to bootstrap bundled fleets: %v\n", fEnsErr)
 			}
-		} else if written > 0 && cfg.DebugMode {
-			fmt.Printf("Bootstrapped %d bundled personas to %s\n", written, personasDir)
+		} else if fWritten > 0 && cfg.DebugMode {
+			fmt.Printf("Bootstrapped %d bundled fleets to %s\n", fWritten, fleetsDir)
 		}
 
-		personaReg, regErr := persona.NewRegistry(personasDir)
-		if regErr != nil {
+		fleetReg, fRegErr := fleet.NewRegistry(fleetsDir)
+		if fRegErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to load persona registry: %v\n", regErr)
+				fmt.Printf("Warning: Failed to load fleet registry: %v\n", fRegErr)
 			}
 		} else {
-			// Wire persona registry to API handlers
-			api.SetPersonaRegistry(personaReg)
+			// Wire fleet registry to API handlers
+			api.SetFleetRegistry(fleetReg)
 
-			fleetsDir, flErr := config.GetFleetsDir()
-			if flErr == nil {
-				// Ensure bundled fleets exist on disk
-				fWritten, fEnsErr := fleet.EnsureBundled(fleetsDir)
-				if fEnsErr != nil {
-					if cfg.DebugMode {
-						fmt.Printf("Warning: Failed to bootstrap bundled fleets: %v\n", fEnsErr)
-					}
-				} else if fWritten > 0 && cfg.DebugMode {
-					fmt.Printf("Bootstrapped %d bundled fleets to %s\n", fWritten, fleetsDir)
+			// Wire registry to fleet execution tool
+			tools.SetFleetRegistry(fleetReg)
+
+			// Set up env vars declared by delegate configs (e.g. BIFROST_API_KEY for OpenCode).
+			// This must happen before any fleet tool runs so the delegate subprocess inherits them.
+			delegateEnvNames := fleet.CollectDelegateEnvVars(fleetReg.AllFleets())
+			if len(delegateEnvNames) > 0 {
+				var getSecret config.SecretGetter
+				if credStore != nil {
+					getSecret = credStore.GetSecret
 				}
+				config.SetupDelegateEnv(delegateEnvNames, getSecret)
+			}
 
-				fleetReg, fRegErr := fleet.NewRegistry(fleetsDir, personaReg)
-				if fRegErr != nil {
+			// Register fleet tools (requires sub-agents to be enabled)
+			if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
+				// Build fleet-only tools (opencode delegate). These are NOT added to
+				// internalTools (so the main agent can't call them). Instead they go
+				// on SubAgentManager.FleetTools, accessible only to fleet
+				// worker agents via their explicit tool filter.
+				var ftErr error
+				fleetOnlyTools, ftErr = tools.GetFleetTools()
+				if ftErr != nil {
 					if cfg.DebugMode {
-						fmt.Printf("Warning: Failed to load fleet registry: %v\n", fRegErr)
-					}
-				} else {
-					// Wire fleet registry to API handlers
-					api.SetFleetRegistry(fleetReg)
-
-					// Wire registries to fleet execution tool
-					tools.SetFleetRegistries(fleetReg, personaReg)
-
-					// Set up env vars declared by delegate configs (e.g. BIFROST_API_KEY for OpenCode).
-					// This must happen before any fleet tool runs so the delegate subprocess inherits them.
-					delegateEnvNames := fleet.CollectDelegateEnvVars(fleetReg.AllFleets())
-					if len(delegateEnvNames) > 0 {
-						var getSecret config.SecretGetter
-						if credStore != nil {
-							getSecret = credStore.GetSecret
-						}
-						config.SetupDelegateEnv(delegateEnvNames, getSecret)
-					}
-
-					// Register fleet tools (requires sub-agents to be enabled)
-					if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
-						// Build fleet-only tools (opencode delegate). These are NOT added to
-						// internalTools (so the main agent can't call them). Instead they go
-						// on SubAgentManager.FleetTools, accessible only to fleet
-						// worker agents via their explicit tool filter.
-						var ftErr error
-						fleetOnlyTools, ftErr = tools.GetFleetTools()
-						if ftErr != nil {
-							if cfg.DebugMode {
-								fmt.Printf("Warning: Failed to create fleet internal tools: %v\n", ftErr)
-							}
-						}
-					}
-
-					// Build fleet awareness section for system prompt
-					if fleetReg.Count() > 0 {
-						summaries := fleetReg.ListFleets()
-						promptBuilder.FleetSection = fleet.BuildSystemPromptSection(
-							summaries,
-							func(key string) (*fleet.FleetConfig, bool) {
-								return fleetReg.GetFleet(key)
-							},
-							func(key string) (*persona.PersonaConfig, bool) {
-								return personaReg.GetPersona(key)
-							},
-						)
-						if cfg.DebugMode {
-							fmt.Printf("Fleet awareness: %d fleet(s), %d persona(s)\n", fleetReg.Count(), personaReg.Count())
-						}
-					}
-
-					// Initialize fleet plan registry
-					fleetPlansDir, fpErr := config.GetFleetPlansDir()
-					if fpErr == nil {
-						planReg, prErr := fleet.NewPlanRegistry(fleetPlansDir)
-						if prErr != nil {
-							if cfg.DebugMode {
-								fmt.Printf("Warning: Failed to load fleet plan registry: %v\n", prErr)
-							}
-						} else {
-							// Wire plan registry to API handlers
-							api.SetFleetPlanRegistry(planReg)
-							// Wire plan registry to the save_fleet_plan tool
-							tools.SetFleetPlanRegistry(planReg)
-							if cfg.DebugMode {
-								fmt.Printf("Fleet plans: %d loaded from %s\n", planReg.Count(), fleetPlansDir)
-							}
-						}
-					}
-
-					// Register save_fleet_plan tool (available to main chat agent)
-					fleetPlanTools, fptErr := tools.GetFleetPlanTools()
-					if fptErr != nil {
-						if cfg.DebugMode {
-							fmt.Printf("Warning: Failed to create fleet plan tools: %v\n", fptErr)
-						}
-					} else {
-						internalTools = append(internalTools, fleetPlanTools...)
-					}
-
-					// Register validate_fleet_plan tool (available to main chat agent)
-					fleetPlanValidateTools, fpvErr := tools.GetFleetPlanValidateTools()
-					if fpvErr != nil {
-						if cfg.DebugMode {
-							fmt.Printf("Warning: Failed to create fleet plan validate tools: %v\n", fpvErr)
-						}
-					} else {
-						internalTools = append(internalTools, fleetPlanValidateTools...)
+						fmt.Printf("Warning: Failed to create fleet internal tools: %v\n", ftErr)
 					}
 				}
 			}
+
+			// Build fleet awareness section for system prompt
+			if fleetReg.Count() > 0 {
+				summaries := fleetReg.ListFleets()
+				promptBuilder.FleetSection = fleet.BuildSystemPromptSection(
+					summaries,
+					func(key string) (*fleet.FleetConfig, bool) {
+						return fleetReg.GetFleet(key)
+					},
+				)
+				if cfg.DebugMode {
+					fmt.Printf("Fleet awareness: %d fleet(s)\n", fleetReg.Count())
+				}
+			}
+		}
+
+		// Initialize fleet plan registry
+		fleetPlansDir, fpErr := config.GetFleetPlansDir()
+		if fpErr == nil {
+			planReg, prErr := fleet.NewPlanRegistry(fleetPlansDir)
+			if prErr != nil {
+				if cfg.DebugMode {
+					fmt.Printf("Warning: Failed to load fleet plan registry: %v\n", prErr)
+				}
+			} else {
+				// Wire plan registry to API handlers
+				api.SetFleetPlanRegistry(planReg)
+				// Wire plan registry to the save_fleet_plan tool
+				tools.SetFleetPlanRegistry(planReg)
+				if cfg.DebugMode {
+					fmt.Printf("Fleet plans: %d loaded from %s\n", planReg.Count(), fleetPlansDir)
+				}
+			}
+		}
+
+		// Register save_fleet_plan tool (available to main chat agent)
+		fleetPlanTools, fptErr := tools.GetFleetPlanTools()
+		if fptErr != nil {
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Failed to create fleet plan tools: %v\n", fptErr)
+			}
+		} else {
+			internalTools = append(internalTools, fleetPlanTools...)
+		}
+
+		// Register validate_fleet_plan tool (available to main chat agent)
+		fleetPlanValidateTools, fpvErr := tools.GetFleetPlanValidateTools()
+		if fpvErr != nil {
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Failed to create fleet plan validate tools: %v\n", fpvErr)
+			}
+		} else {
+			internalTools = append(internalTools, fleetPlanValidateTools...)
 		}
 	}
 

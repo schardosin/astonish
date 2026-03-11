@@ -40,11 +40,6 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 	}
 
 	// Get required dependencies
-	personaReg := GetPersonaRegistry()
-	if personaReg == nil {
-		return "", fmt.Errorf("persona system not initialized")
-	}
-
 	subAgentMgr := tools.GetSubAgentManager()
 	if subAgentMgr == nil {
 		return "", fmt.Errorf("sub-agent system not initialized")
@@ -61,7 +56,7 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 		channel = fleet.NewChatChannel(plan.Key)
 	}
 
-	fleetSession := fleet.NewFleetSession(plan.Key, fleetCfg, channel, subAgentMgr, personaReg)
+	fleetSession := fleet.NewFleetSession(plan.Key, fleetCfg, channel, subAgentMgr)
 	fleetSession.Plan = plan
 	fleetSession.Headless = true
 

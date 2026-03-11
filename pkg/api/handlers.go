@@ -823,11 +823,7 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/studio/sessions/{id}", StudioDeleteSessionHandler).Methods("DELETE")
 	router.HandleFunc("/api/studio/sessions/{id}/stop", StudioStopHandler).Methods("POST")
 
-	// Fleet and Persona endpoints
-	router.HandleFunc("/api/personas", ListPersonasHandler).Methods("GET")
-	router.HandleFunc("/api/personas/{key}", GetPersonaHandler).Methods("GET")
-	router.HandleFunc("/api/personas/{key}", SavePersonaHandler).Methods("PUT")
-	router.HandleFunc("/api/personas/{key}", DeletePersonaHandler).Methods("DELETE")
+	// Fleet endpoints
 	router.HandleFunc("/api/fleets", ListFleetsHandler).Methods("GET")
 	router.HandleFunc("/api/fleets/{key}", GetFleetHandler).Methods("GET")
 	router.HandleFunc("/api/fleets/{key}", SaveFleetHandler).Methods("PUT")

@@ -533,16 +533,6 @@ func GetModelsDir() (string, error) {
 	return filepath.Join(configDir, "models"), nil
 }
 
-// GetPersonasDir returns the directory for persona YAML definitions.
-// Defaults to ~/.config/astonish/personas/.
-func GetPersonasDir() (string, error) {
-	configDir, err := GetConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(configDir, "personas"), nil
-}
-
 // GetFleetsDir returns the directory for fleet YAML definitions.
 // Defaults to ~/.config/astonish/fleets/.
 func GetFleetsDir() (string, error) {

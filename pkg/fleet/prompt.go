@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-
-	"github.com/schardosin/astonish/pkg/persona"
 )
 
 // curlyPlaceholderRe matches {variable} patterns that ADK's InjectSessionState
@@ -18,7 +16,6 @@ var curlyPlaceholderRe = regexp.MustCompile(`\{([^{}]+)\}`)
 func BuildSystemPromptSection(
 	fleets []FleetSummary,
 	fleetResolver func(key string) (*FleetConfig, bool),
-	personaResolver func(key string) (*persona.PersonaConfig, bool),
 ) string {
 	if len(fleets) == 0 {
 		return ""
@@ -66,13 +63,7 @@ func BuildSystemPromptSection(
 		if len(f.Agents) > 0 {
 			agentParts := make([]string, 0, len(f.Agents))
 			for key, agent := range f.Agents {
-				personaName := agent.Persona
-				if personaResolver != nil {
-					if p, pOk := personaResolver(agent.Persona); pOk {
-						personaName = p.Name
-					}
-				}
-				agentParts = append(agentParts, fmt.Sprintf("%s (%s)", key, personaName))
+				agentParts = append(agentParts, fmt.Sprintf("%s (%s)", key, agent.Name))
 			}
 			sb.WriteString(fmt.Sprintf("  Agents: %s\n", strings.Join(agentParts, ", ")))
 		}
@@ -84,17 +75,17 @@ func BuildSystemPromptSection(
 
 // BuildAgentPrompt builds the system prompt for an agent when activated
 // in a fleet session. It combines:
-// - The persona identity
+// - The agent identity (inline in the fleet config)
 // - Fleet behaviors (from the fleet YAML)
 // - Communication graph awareness (who the agent can talk to)
 // - Delegate tool instructions (if applicable)
 // - Progress tracker state (milestones from this session)
 // - Project context (e.g., AGENTS.md content from the workspace)
-func BuildAgentPrompt(personaCfg *persona.PersonaConfig, agentCfg FleetAgentConfig, fleetCfg *FleetConfig, agentKey string, progress *ProgressTracker, projectContext string, plan ...*FleetPlan) string {
+func BuildAgentPrompt(agentCfg FleetAgentConfig, fleetCfg *FleetConfig, agentKey string, progress *ProgressTracker, projectContext string, plan ...*FleetPlan) string {
 	var sb strings.Builder
 
-	// Persona identity
-	sb.WriteString(personaCfg.Prompt)
+	// Agent identity
+	sb.WriteString(agentCfg.Identity)
 	sb.WriteString("\n")
 
 	// Fleet behaviors

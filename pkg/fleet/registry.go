@@ -3,8 +3,6 @@ package fleet
 import (
 	"fmt"
 	"sync"
-
-	"github.com/schardosin/astonish/pkg/persona"
 )
 
 // FleetSummary is a lightweight view of a fleet for listing.
@@ -17,22 +15,18 @@ type FleetSummary struct {
 }
 
 // Registry manages a collection of fleet definitions loaded from disk.
-// It holds a reference to the persona registry for validation and resolution.
 type Registry struct {
-	dir      string
-	fleets   map[string]*FleetConfig
-	personas *persona.Registry
-	mu       sync.RWMutex
+	dir    string
+	fleets map[string]*FleetConfig
+	mu     sync.RWMutex
 }
 
 // NewRegistry creates a Registry by loading all fleet definitions from dir.
 // If dir does not exist, an empty registry is returned (not an error).
-// The persona registry is used to validate persona references.
-func NewRegistry(dir string, personas *persona.Registry) (*Registry, error) {
+func NewRegistry(dir string) (*Registry, error) {
 	r := &Registry{
-		dir:      dir,
-		fleets:   make(map[string]*FleetConfig),
-		personas: personas,
+		dir:    dir,
+		fleets: make(map[string]*FleetConfig),
 	}
 
 	if err := r.Reload(); err != nil {
@@ -102,43 +96,6 @@ func (r *Registry) Count() int {
 // Dir returns the directory this registry reads from.
 func (r *Registry) Dir() string {
 	return r.dir
-}
-
-// PersonaRegistry returns the associated persona registry.
-func (r *Registry) PersonaRegistry() *persona.Registry {
-	return r.personas
-}
-
-// ResolvePersona resolves a persona reference from a fleet agent config.
-// Returns the persona config or an error if not found.
-func (r *Registry) ResolvePersona(personaKey string) (*persona.PersonaConfig, error) {
-	if r.personas == nil {
-		return nil, fmt.Errorf("no persona registry available")
-	}
-	p, ok := r.personas.GetPersona(personaKey)
-	if !ok {
-		return nil, fmt.Errorf("persona %q not found", personaKey)
-	}
-	return p, nil
-}
-
-// ValidateAll validates all loaded fleets against the persona registry.
-// Returns a map of fleet key to validation error (nil if valid).
-func (r *Registry) ValidateAll() map[string]error {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	results := make(map[string]error, len(r.fleets))
-	for key, f := range r.fleets {
-		if r.personas != nil {
-			results[key] = f.ValidatePersonaRefs(func(pKey string) bool {
-				_, ok := r.personas.GetPersona(pKey)
-				return ok
-			})
-		}
-	}
-
-	return results
 }
 
 // Save persists a fleet definition to disk and updates the in-memory registry.

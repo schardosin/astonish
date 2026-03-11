@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/schardosin/astonish/pkg/persona"
 )
 
 const validFleetYAML = `name: test-fleet
@@ -22,19 +20,22 @@ communication:
       talks_to: [dev, po]
 agents:
   po:
-    persona: product_owner
+    name: Product Owner
+    identity: You are a product owner.
     tools:
       - read_file
       - write_file
     behaviors: |
       When receiving a request, gather requirements.
   dev:
-    persona: developer
+    name: Developer
+    identity: You are a developer.
     tools: true
     behaviors: |
       When receiving a task, implement it.
   qa:
-    persona: qa_engineer
+    name: QA Engineer
+    identity: You are a QA engineer.
     tools: true
     behaviors: |
       When receiving code, test it.
@@ -51,7 +52,8 @@ communication:
       entry_point: true
 agents:
   dev:
-    persona: developer
+    name: Developer
+    identity: You are a developer.
     delegate:
       tool: opencode
       params:
@@ -147,7 +149,7 @@ func TestLoadFleet_WithDelegate(t *testing.T) {
 func TestFleetValidate_MissingName(t *testing.T) {
 	f := &FleetConfig{
 		Agents: map[string]FleetAgentConfig{
-			"dev": {Persona: "developer", Tools: ToolsConfig{All: true}, Behaviors: "do stuff"},
+			"dev": {Name: "Developer", Identity: "You are a developer.", Tools: ToolsConfig{All: true}, Behaviors: "do stuff"},
 		},
 	}
 	if err := f.Validate(); err == nil {
@@ -165,15 +167,27 @@ func TestFleetValidate_NoAgents(t *testing.T) {
 	}
 }
 
-func TestFleetValidate_MissingPersona(t *testing.T) {
+func TestFleetValidate_MissingAgentName(t *testing.T) {
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
-			"dev": {Persona: "", Tools: ToolsConfig{All: true}, Behaviors: "do stuff"},
+			"dev": {Name: "", Identity: "You are a developer.", Tools: ToolsConfig{All: true}, Behaviors: "do stuff"},
 		},
 	}
 	if err := f.Validate(); err == nil {
-		t.Error("expected error for missing persona")
+		t.Error("expected error for missing agent name")
+	}
+}
+
+func TestFleetValidate_MissingIdentity(t *testing.T) {
+	f := &FleetConfig{
+		Name: "test",
+		Agents: map[string]FleetAgentConfig{
+			"dev": {Name: "Developer", Identity: "", Tools: ToolsConfig{All: true}, Behaviors: "do stuff"},
+		},
+	}
+	if err := f.Validate(); err == nil {
+		t.Error("expected error for missing identity")
 	}
 }
 
@@ -181,7 +195,7 @@ func TestFleetValidate_MissingBehaviors(t *testing.T) {
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
-			"dev": {Persona: "developer", Tools: ToolsConfig{All: true}, Behaviors: ""},
+			"dev": {Name: "Developer", Identity: "You are a developer.", Tools: ToolsConfig{All: true}, Behaviors: ""},
 		},
 	}
 	if err := f.Validate(); err == nil {
@@ -193,7 +207,7 @@ func TestFleetValidate_NoToolsOrDelegate(t *testing.T) {
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
-			"dev": {Persona: "developer", Behaviors: "do stuff"},
+			"dev": {Name: "Developer", Identity: "You are a developer.", Behaviors: "do stuff"},
 		},
 	}
 	if err := f.Validate(); err == nil {
@@ -206,7 +220,8 @@ func TestFleetValidate_DelegateMissingTool(t *testing.T) {
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
 			"dev": {
-				Persona:   "developer",
+				Name:      "Developer",
+				Identity:  "You are a developer.",
 				Delegate:  &DelegateConfig{Tool: ""},
 				Behaviors: "do stuff",
 			},
@@ -221,7 +236,7 @@ func TestFleetValidate_BadMode(t *testing.T) {
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
-			"dev": {Persona: "developer", Tools: ToolsConfig{All: true}, Behaviors: "do stuff", Mode: "invalid"},
+			"dev": {Name: "Developer", Identity: "You are a developer.", Tools: ToolsConfig{All: true}, Behaviors: "do stuff", Mode: "invalid"},
 		},
 	}
 	if err := f.Validate(); err == nil {
@@ -233,7 +248,7 @@ func TestFleetValidate_CommunicationBadRole(t *testing.T) {
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
-			"dev": {Persona: "developer", Tools: ToolsConfig{All: true}, Behaviors: "do stuff"},
+			"dev": {Name: "Developer", Identity: "You are a developer.", Tools: ToolsConfig{All: true}, Behaviors: "do stuff"},
 		},
 		Communication: &CommunicationConfig{
 			Flow: []CommunicationNode{
@@ -250,7 +265,7 @@ func TestFleetValidate_CommunicationBadTarget(t *testing.T) {
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
-			"dev": {Persona: "developer", Tools: ToolsConfig{All: true}, Behaviors: "do stuff"},
+			"dev": {Name: "Developer", Identity: "You are a developer.", Tools: ToolsConfig{All: true}, Behaviors: "do stuff"},
 		},
 		Communication: &CommunicationConfig{
 			Flow: []CommunicationNode{
@@ -267,7 +282,7 @@ func TestFleetValidate_CommunicationNoEntryPoint(t *testing.T) {
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
-			"dev": {Persona: "developer", Tools: ToolsConfig{All: true}, Behaviors: "do stuff"},
+			"dev": {Name: "Developer", Identity: "You are a developer.", Tools: ToolsConfig{All: true}, Behaviors: "do stuff"},
 		},
 		Communication: &CommunicationConfig{
 			Flow: []CommunicationNode{
@@ -280,11 +295,11 @@ func TestFleetValidate_CommunicationNoEntryPoint(t *testing.T) {
 	}
 }
 
-func TestFleetValidate_CommunicationHumanAllowed(t *testing.T) {
+func TestFleetValidate_CommunicationCustomerAllowed(t *testing.T) {
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
-			"po": {Persona: "product_owner", Tools: ToolsConfig{All: true}, Behaviors: "requirements"},
+			"po": {Name: "Product Owner", Identity: "You are a product owner.", Tools: ToolsConfig{All: true}, Behaviors: "requirements"},
 		},
 		Communication: &CommunicationConfig{
 			Flow: []CommunicationNode{
@@ -293,7 +308,7 @@ func TestFleetValidate_CommunicationHumanAllowed(t *testing.T) {
 		},
 	}
 	if err := f.Validate(); err != nil {
-		t.Errorf("expected valid communication with human target, got error: %v", err)
+		t.Errorf("expected valid communication with customer target, got error: %v", err)
 	}
 }
 
@@ -301,9 +316,9 @@ func TestCommunicationHelpers(t *testing.T) {
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
-			"po":  {Persona: "po", Tools: ToolsConfig{All: true}, Behaviors: "requirements"},
-			"dev": {Persona: "dev", Tools: ToolsConfig{All: true}, Behaviors: "code"},
-			"qa":  {Persona: "qa", Tools: ToolsConfig{All: true}, Behaviors: "test"},
+			"po":  {Name: "PO", Identity: "You are a PO.", Tools: ToolsConfig{All: true}, Behaviors: "requirements"},
+			"dev": {Name: "Dev", Identity: "You are a dev.", Tools: ToolsConfig{All: true}, Behaviors: "code"},
+			"qa":  {Name: "QA", Identity: "You are a QA.", Tools: ToolsConfig{All: true}, Behaviors: "test"},
 		},
 		Communication: &CommunicationConfig{
 			Flow: []CommunicationNode{
@@ -321,7 +336,7 @@ func TestCommunicationHelpers(t *testing.T) {
 
 	// CanTalkTo
 	if !f.CanTalkTo("po", "customer") {
-		t.Error("expected po to be able to talk to human")
+		t.Error("expected po to be able to talk to customer")
 	}
 	if !f.CanTalkTo("po", "dev") {
 		t.Error("expected po to be able to talk to dev")
@@ -333,21 +348,21 @@ func TestCommunicationHelpers(t *testing.T) {
 		t.Error("expected dev to be able to talk to qa")
 	}
 	if f.CanTalkTo("dev", "customer") {
-		t.Error("expected dev NOT to be able to talk to human")
+		t.Error("expected dev NOT to be able to talk to customer")
 	}
 
 	// CanTalkToCustomer
 	if !f.CanTalkToCustomer("po") {
-		t.Error("expected po to be able to talk to human")
+		t.Error("expected po to be able to talk to customer")
 	}
 	if f.CanTalkToCustomer("dev") {
-		t.Error("expected dev NOT to be able to talk to human")
+		t.Error("expected dev NOT to be able to talk to customer")
 	}
 
 	// GetTalksTo
 	poTargets := f.GetTalksTo("po")
 	if len(poTargets) != 2 || poTargets[0] != "customer" || poTargets[1] != "dev" {
-		t.Errorf("GetTalksTo(po) = %v, want [human dev]", poTargets)
+		t.Errorf("GetTalksTo(po) = %v, want [customer dev]", poTargets)
 	}
 
 	// GetFlowOrder
@@ -386,27 +401,6 @@ func TestAgentConfig_GetMode(t *testing.T) {
 				t.Errorf("GetMode() = %q, want %q", got, tt.expected)
 			}
 		})
-	}
-}
-
-func TestFleetValidatePersonaRefs(t *testing.T) {
-	f := &FleetConfig{
-		Name: "test",
-		Agents: map[string]FleetAgentConfig{
-			"dev": {Persona: "developer", Tools: ToolsConfig{All: true}, Behaviors: "do stuff"},
-			"qa":  {Persona: "missing_persona", Tools: ToolsConfig{All: true}, Behaviors: "test stuff"},
-		},
-	}
-
-	known := map[string]bool{"developer": true}
-	err := f.ValidatePersonaRefs(func(key string) bool {
-		return known[key]
-	})
-	if err == nil {
-		t.Error("expected error for missing persona reference")
-	}
-	if !strings.Contains(err.Error(), "missing_persona") {
-		t.Errorf("expected error to mention missing persona, got: %v", err)
 	}
 }
 
@@ -457,33 +451,6 @@ func TestFleetSettings_Defaults(t *testing.T) {
 
 func TestRegistry_Basic(t *testing.T) {
 	fleetDir := t.TempDir()
-	personaDir := t.TempDir()
-
-	// Create persona files
-	poPersona := `name: Product Owner
-description: Gathers requirements
-prompt: You are a product owner.
-`
-	devPersona := `name: Developer
-description: Writes code
-prompt: You are a developer.
-`
-	qaPersona := `name: QA Engineer
-description: Tests code
-prompt: You are a QA engineer.
-`
-	if err := os.WriteFile(filepath.Join(personaDir, "product_owner.yaml"), []byte(poPersona), 0644); err != nil {
-		t.Fatal(err)
-		return
-	}
-	if err := os.WriteFile(filepath.Join(personaDir, "developer.yaml"), []byte(devPersona), 0644); err != nil {
-		t.Fatal(err)
-		return
-	}
-	if err := os.WriteFile(filepath.Join(personaDir, "qa_engineer.yaml"), []byte(qaPersona), 0644); err != nil {
-		t.Fatal(err)
-		return
-	}
 
 	// Create fleet file
 	if err := os.WriteFile(filepath.Join(fleetDir, "test.yaml"), []byte(validFleetYAML), 0644); err != nil {
@@ -491,14 +458,7 @@ prompt: You are a QA engineer.
 		return
 	}
 
-	// Create registries
-	personaReg, err := persona.NewRegistry(personaDir)
-	if err != nil {
-		t.Fatal(err)
-		return
-	}
-
-	fleetReg, err := NewRegistry(fleetDir, personaReg)
+	fleetReg, err := NewRegistry(fleetDir)
 	if err != nil {
 		t.Fatal(err)
 		return
@@ -516,30 +476,12 @@ prompt: You are a QA engineer.
 	if f.Name != "test-fleet" {
 		t.Errorf("expected name %q, got %q", "test-fleet", f.Name)
 	}
-
-	// Test persona resolution
-	p, err := fleetReg.ResolvePersona("developer")
-	if err != nil {
-		t.Fatal(err)
-		return
-	}
-	if p.Name != "Developer" {
-		t.Errorf("expected resolved persona name %q, got %q", "Developer", p.Name)
-	}
-
-	// Validate persona references
-	results := fleetReg.ValidateAll()
-	for key, valErr := range results {
-		if valErr != nil {
-			t.Errorf("fleet %q validation failed: %v", key, valErr)
-		}
-	}
 }
 
 func TestRegistry_SaveAndDelete(t *testing.T) {
 	fleetDir := t.TempDir()
 
-	reg, err := NewRegistry(fleetDir, nil)
+	reg, err := NewRegistry(fleetDir)
 	if err != nil {
 		t.Fatal(err)
 		return
@@ -549,7 +491,8 @@ func TestRegistry_SaveAndDelete(t *testing.T) {
 		Name: "saved-fleet",
 		Agents: map[string]FleetAgentConfig{
 			"dev": {
-				Persona:   "developer",
+				Name:      "Developer",
+				Identity:  "You are a developer.",
 				Tools:     ToolsConfig{All: true},
 				Behaviors: "implement stuff",
 			},
@@ -582,13 +525,9 @@ func TestRegistry_SaveAndDelete(t *testing.T) {
 }
 
 func TestBuildAgentPrompt(t *testing.T) {
-	p := &persona.PersonaConfig{
-		Name:   "Developer",
-		Prompt: "You are a developer.",
-	}
-
 	agentCfg := FleetAgentConfig{
-		Persona:   "developer",
+		Name:      "Developer",
+		Identity:  "You are a developer.",
 		Behaviors: "When receiving a task, implement it carefully.",
 		Delegate: &DelegateConfig{
 			Tool:        "opencode",
@@ -613,10 +552,10 @@ func TestBuildAgentPrompt(t *testing.T) {
 		},
 	}
 
-	prompt := BuildAgentPrompt(p, agentCfg, fleetCfg, "dev", nil, "")
+	prompt := BuildAgentPrompt(agentCfg, fleetCfg, "dev", nil, "")
 
 	if !strings.Contains(prompt, "You are a developer.") {
-		t.Error("expected prompt to contain persona prompt")
+		t.Error("expected prompt to contain identity")
 	}
 	if !strings.Contains(prompt, "Team Behaviors") {
 		t.Error("expected prompt to contain behaviors section")
@@ -648,13 +587,9 @@ func TestBuildAgentPrompt(t *testing.T) {
 }
 
 func TestBuildAgentPrompt_NoDelegate(t *testing.T) {
-	p := &persona.PersonaConfig{
-		Name:   "QA",
-		Prompt: "You are a QA engineer.",
-	}
-
 	agentCfg := FleetAgentConfig{
-		Persona:   "qa_engineer",
+		Name:      "QA Engineer",
+		Identity:  "You are a QA engineer.",
 		Tools:     ToolsConfig{All: true},
 		Behaviors: "Test everything.",
 	}
@@ -669,14 +604,14 @@ func TestBuildAgentPrompt_NoDelegate(t *testing.T) {
 		},
 		Agents: map[string]FleetAgentConfig{
 			"qa":  agentCfg,
-			"dev": {Persona: "dev", Tools: ToolsConfig{All: true}, Behaviors: "code"},
+			"dev": {Name: "Dev", Identity: "You are a dev.", Tools: ToolsConfig{All: true}, Behaviors: "code"},
 		},
 	}
 
-	prompt := BuildAgentPrompt(p, agentCfg, fleetCfg, "qa", nil, "")
+	prompt := BuildAgentPrompt(agentCfg, fleetCfg, "qa", nil, "")
 
 	if !strings.Contains(prompt, "You are a QA engineer.") {
-		t.Error("expected prompt to contain persona prompt")
+		t.Error("expected prompt to contain identity")
 	}
 	if strings.Contains(prompt, "Delegate Tool") {
 		t.Error("expected prompt to NOT contain delegate execution section")
@@ -687,7 +622,7 @@ func TestBuildAgentPrompt_NoDelegate(t *testing.T) {
 }
 
 func TestBuildSystemPromptSection_Empty(t *testing.T) {
-	result := BuildSystemPromptSection(nil, nil, nil)
+	result := BuildSystemPromptSection(nil, nil)
 	if result != "" {
 		t.Errorf("expected empty string for no fleets, got %q", result)
 	}
@@ -710,15 +645,11 @@ func TestBuildSystemPromptSection_WithCommunication(t *testing.T) {
 				},
 			},
 			Agents: map[string]FleetAgentConfig{
-				"po":  {Persona: "product_owner", Tools: ToolsConfig{All: true}, Behaviors: "requirements"},
-				"dev": {Persona: "developer", Delegate: &DelegateConfig{Tool: "opencode"}, Behaviors: "code"},
-				"qa":  {Persona: "qa_engineer", Tools: ToolsConfig{All: true}, Behaviors: "test"},
+				"po":  {Name: "Product Owner", Identity: "You are a PO.", Tools: ToolsConfig{All: true}, Behaviors: "requirements"},
+				"dev": {Name: "Developer", Identity: "You are a dev.", Delegate: &DelegateConfig{Tool: "opencode"}, Behaviors: "code"},
+				"qa":  {Name: "QA Engineer", Identity: "You are a QA.", Tools: ToolsConfig{All: true}, Behaviors: "test"},
 			},
 		},
-	}
-
-	personaConfigs := map[string]*persona.PersonaConfig{
-		"product_owner": {Name: "Product Owner", Prompt: "You are a PO."},
 	}
 
 	result := BuildSystemPromptSection(
@@ -726,10 +657,6 @@ func TestBuildSystemPromptSection_WithCommunication(t *testing.T) {
 		func(key string) (*FleetConfig, bool) {
 			f, ok := fleetConfigs[key]
 			return f, ok
-		},
-		func(key string) (*persona.PersonaConfig, bool) {
-			p, ok := personaConfigs[key]
-			return p, ok
 		},
 	)
 
@@ -781,7 +708,7 @@ func TestCollectDelegateEnvVars(t *testing.T) {
 				"test": {
 					Name: "test",
 					Agents: map[string]FleetAgentConfig{
-						"dev": {Persona: "developer", Tools: ToolsConfig{All: true}, Behaviors: "code"},
+						"dev": {Name: "Developer", Identity: "You are a dev.", Tools: ToolsConfig{All: true}, Behaviors: "code"},
 					},
 				},
 			},
@@ -794,7 +721,8 @@ func TestCollectDelegateEnvVars(t *testing.T) {
 					Name: "test",
 					Agents: map[string]FleetAgentConfig{
 						"dev": {
-							Persona:   "developer",
+							Name:      "Developer",
+							Identity:  "You are a dev.",
 							Delegate:  &DelegateConfig{Tool: "opencode"},
 							Behaviors: "code",
 						},
@@ -810,7 +738,8 @@ func TestCollectDelegateEnvVars(t *testing.T) {
 					Name: "test",
 					Agents: map[string]FleetAgentConfig{
 						"dev": {
-							Persona:   "developer",
+							Name:      "Developer",
+							Identity:  "You are a dev.",
 							Delegate:  &DelegateConfig{Tool: "opencode", Env: []string{"BIFROST_API_KEY"}},
 							Behaviors: "code",
 						},
@@ -826,12 +755,14 @@ func TestCollectDelegateEnvVars(t *testing.T) {
 					Name: "fleet1",
 					Agents: map[string]FleetAgentConfig{
 						"dev": {
-							Persona:   "developer",
+							Name:      "Developer",
+							Identity:  "You are a dev.",
 							Delegate:  &DelegateConfig{Tool: "opencode", Env: []string{"BIFROST_API_KEY", "CUSTOM_KEY"}},
 							Behaviors: "code",
 						},
 						"qa": {
-							Persona:   "qa",
+							Name:      "QA",
+							Identity:  "You are QA.",
 							Delegate:  &DelegateConfig{Tool: "opencode", Env: []string{"BIFROST_API_KEY"}},
 							Behaviors: "test",
 						},
@@ -841,7 +772,8 @@ func TestCollectDelegateEnvVars(t *testing.T) {
 					Name: "fleet2",
 					Agents: map[string]FleetAgentConfig{
 						"arch": {
-							Persona:   "architect",
+							Name:      "Architect",
+							Identity:  "You are an architect.",
 							Delegate:  &DelegateConfig{Tool: "opencode", Env: []string{"BIFROST_API_KEY", "OTHER_KEY"}},
 							Behaviors: "design",
 						},
@@ -857,7 +789,8 @@ func TestCollectDelegateEnvVars(t *testing.T) {
 					Name: "test",
 					Agents: map[string]FleetAgentConfig{
 						"dev": {
-							Persona:   "developer",
+							Name:      "Developer",
+							Identity:  "You are a dev.",
 							Delegate:  &DelegateConfig{Tool: "opencode", Env: []string{"  BIFROST_API_KEY  ", "", "  "}},
 							Behaviors: "code",
 						},

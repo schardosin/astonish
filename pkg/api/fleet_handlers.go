@@ -6,20 +6,13 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/fleet"
-	"github.com/schardosin/astonish/pkg/persona"
 )
 
 // Package-level registries, set by the launcher during initialization.
 var (
-	personaRegistryVar   *persona.Registry
 	fleetRegistryVar     *fleet.Registry
 	fleetPlanRegistryVar *fleet.PlanRegistry
 )
-
-// SetPersonaRegistry sets the persona registry for API handlers.
-func SetPersonaRegistry(reg *persona.Registry) {
-	personaRegistryVar = reg
-}
 
 // SetFleetRegistry sets the fleet registry for API handlers.
 func SetFleetRegistry(reg *fleet.Registry) {
@@ -39,118 +32,6 @@ func GetFleetRegistry() *fleet.Registry {
 // GetFleetPlanRegistry returns the fleet plan registry (for use by other packages).
 func GetFleetPlanRegistry() *fleet.PlanRegistry {
 	return fleetPlanRegistryVar
-}
-
-// GetPersonaRegistry returns the persona registry (for use by other API packages).
-func GetPersonaRegistry() *persona.Registry {
-	return personaRegistryVar
-}
-
-// --- Persona Handlers ---
-
-// PersonaListItem represents a persona in listing responses.
-type PersonaListItem struct {
-	Key         string   `json:"key"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Expertise   []string `json:"expertise,omitempty"`
-}
-
-// ListPersonasHandler handles GET /api/personas
-func ListPersonasHandler(w http.ResponseWriter, r *http.Request) {
-	if personaRegistryVar == nil {
-		http.Error(w, "Persona system not initialized", http.StatusServiceUnavailable)
-		return
-	}
-
-	summaries := personaRegistryVar.ListPersonas()
-	items := make([]PersonaListItem, len(summaries))
-	for i, s := range summaries {
-		items[i] = PersonaListItem{
-			Key:         s.Key,
-			Name:        s.Name,
-			Description: s.Description,
-			Expertise:   s.Expertise,
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"personas": items,
-	})
-}
-
-// GetPersonaHandler handles GET /api/personas/{key}
-func GetPersonaHandler(w http.ResponseWriter, r *http.Request) {
-	if personaRegistryVar == nil {
-		http.Error(w, "Persona system not initialized", http.StatusServiceUnavailable)
-		return
-	}
-
-	key := mux.Vars(r)["key"]
-	p, ok := personaRegistryVar.GetPersona(key)
-	if !ok {
-		http.Error(w, "Persona not found", http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"key":     key,
-		"persona": p,
-	})
-}
-
-// SavePersonaHandler handles PUT /api/personas/{key}
-func SavePersonaHandler(w http.ResponseWriter, r *http.Request) {
-	if personaRegistryVar == nil {
-		http.Error(w, "Persona system not initialized", http.StatusServiceUnavailable)
-		return
-	}
-
-	key := mux.Vars(r)["key"]
-
-	var p persona.PersonaConfig
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if err := p.Validate(); err != nil {
-		http.Error(w, "Validation error: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if err := personaRegistryVar.Save(key, &p); err != nil {
-		http.Error(w, "Failed to save persona: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status": "ok",
-		"key":    key,
-	})
-}
-
-// DeletePersonaHandler handles DELETE /api/personas/{key}
-func DeletePersonaHandler(w http.ResponseWriter, r *http.Request) {
-	if personaRegistryVar == nil {
-		http.Error(w, "Persona system not initialized", http.StatusServiceUnavailable)
-		return
-	}
-
-	key := mux.Vars(r)["key"]
-
-	if err := personaRegistryVar.Delete(key); err != nil {
-		http.Error(w, "Failed to delete persona: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status": "ok",
-	})
 }
 
 // --- Fleet Handlers ---

@@ -5,17 +5,15 @@ import (
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/fleet"
-	"github.com/schardosin/astonish/pkg/persona"
 	"google.golang.org/adk/tool"
 )
 
 // Package-level registries for fleet execution.
-// Set by the launcher via SetFleetRegistries.
+// Set by the launcher via SetFleetRegistry.
 var fleetRegistryVar *fleet.Registry
 
-// SetFleetRegistries registers the fleet and persona registries for the fleet tools.
-// The persona registry is accepted for future use by the fleet session manager.
-func SetFleetRegistries(fleetReg *fleet.Registry, _ *persona.Registry) {
+// SetFleetRegistry registers the fleet registry for the fleet tools.
+func SetFleetRegistry(fleetReg *fleet.Registry) {
 	fleetRegistryVar = fleetReg
 }
 

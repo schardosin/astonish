@@ -45,11 +45,6 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 	}
 
 	// Get required dependencies (same as StartHeadlessFleetSession)
-	personaReg := GetPersonaRegistry()
-	if personaReg == nil {
-		return fmt.Errorf("persona system not initialized")
-	}
-
 	subAgentMgr := tools.GetSubAgentManager()
 	if subAgentMgr == nil {
 		return fmt.Errorf("sub-agent system not initialized")
@@ -99,7 +94,7 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 	ghChannel.StartPoller(context.Background())
 
 	// Create a new FleetSession but with the SAME session ID
-	fleetSession := fleet.NewFleetSession(plan.Key, fleetCfg, ghChannel, subAgentMgr, personaReg)
+	fleetSession := fleet.NewFleetSession(plan.Key, fleetCfg, ghChannel, subAgentMgr)
 	fleetSession.ID = cfg.SessionID // override with original session ID
 	fleetSession.Plan = plan
 	fleetSession.Headless = true

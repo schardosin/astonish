@@ -45,6 +45,11 @@ type SaveFleetPlanArgs struct {
 	Artifacts map[string]SaveFleetPlanArtifact `json:"artifacts,omitempty" jsonschema:"Artifact destinations mapping category names to their config (e.g., code -> git_repo, docs -> local path)"`
 	// BehaviorOverrides maps agent keys to behavior text additions.
 	BehaviorOverrides map[string]string `json:"behavior_overrides,omitempty" jsonschema:"Additional behavior instructions per agent. Keyed by agent role (e.g., 'dev', 'qa'). These are APPENDED to the base fleet behaviors, not replacing them."`
+	// IncludeAgents restricts which agents from the base fleet are included in the plan.
+	// If empty or nil, ALL agents from the base fleet are included (default behavior).
+	// When set, only the listed agent roles are kept; all others are removed from both
+	// the agents map and the communication flow graph.
+	IncludeAgents []string `json:"include_agents,omitempty" jsonschema:"Optional list of agent roles to include from the base fleet (e.g., ['dev'] or ['po', 'dev']). If omitted, all agents are included. When set, agents NOT in this list are removed along with their communication flow entries."`
 	// Credentials maps logical names to credential store entry names.
 	Credentials map[string]string `json:"credentials,omitempty" jsonschema:"Credential mappings for external service authentication. Key is a logical name agents use (e.g., 'github', 'jira', 'deploy-ssh'). Value is the credential name in the encrypted store. IMPORTANT: For github_issues channel plans, include a 'github' entry so the GitHub token is auto-injected into gh CLI commands. If credentials were validated with validate_fleet_plan, include the same mappings here."`
 	// ValidationPassed should be true if validate_fleet_plan was called and passed.
@@ -134,6 +139,16 @@ func saveFleetPlan(_ tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult,
 			Status:  "error",
 			Message: fmt.Sprintf("Failed to snapshot base fleet config: %v", err),
 		}, nil
+	}
+
+	// Filter agents if include_agents is specified
+	if len(args.IncludeAgents) > 0 {
+		if err := filterAgents(&snapshotCfg, args.IncludeAgents, baseKey); err != nil {
+			return SaveFleetPlanResult{
+				Status:  "error",
+				Message: err.Error(),
+			}, nil
+		}
 	}
 
 	// Apply behavior overrides (append to existing behaviors)
@@ -240,6 +255,71 @@ func saveFleetPlan(_ tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult,
 	}, nil
 }
 
+// filterAgents removes agents not in the includeList from the fleet config,
+// and rebuilds the communication flow to only reference kept agents.
+func filterAgents(cfg *fleet.FleetConfig, includeList []string, baseKey string) error {
+	includeSet := make(map[string]bool, len(includeList))
+	for _, role := range includeList {
+		role = strings.TrimSpace(strings.ToLower(role))
+		if role != "" {
+			includeSet[role] = true
+		}
+	}
+
+	// Validate that all requested agents exist in the base fleet
+	for role := range includeSet {
+		if _, exists := cfg.Agents[role]; !exists {
+			return fmt.Errorf("agent %q does not exist in fleet %q. Available agents: %s", role, baseKey, agentKeysString(cfg.Agents))
+		}
+	}
+
+	// Remove agents not in the include set
+	for agentKey := range cfg.Agents {
+		if !includeSet[agentKey] {
+			delete(cfg.Agents, agentKey)
+		}
+	}
+
+	// Rebuild communication flow to only include kept agents
+	if cfg.Communication != nil && len(cfg.Communication.Flow) > 0 {
+		var filteredFlow []fleet.CommunicationNode
+		for _, node := range cfg.Communication.Flow {
+			if !includeSet[node.Role] {
+				continue
+			}
+			// Filter talks_to to only reference kept agents + "customer"
+			var filteredTalksTo []string
+			for _, target := range node.TalksTo {
+				if includeSet[target] || target == "customer" {
+					filteredTalksTo = append(filteredTalksTo, target)
+				}
+			}
+			node.TalksTo = filteredTalksTo
+			filteredFlow = append(filteredFlow, node)
+		}
+
+		// If only one agent remains, make it the entry point and ensure
+		// it can talk to the customer (the human).
+		if len(filteredFlow) == 1 {
+			filteredFlow[0].EntryPoint = true
+			hasCustomer := false
+			for _, t := range filteredFlow[0].TalksTo {
+				if t == "customer" {
+					hasCustomer = true
+					break
+				}
+			}
+			if !hasCustomer {
+				filteredFlow[0].TalksTo = append(filteredFlow[0].TalksTo, "customer")
+			}
+		}
+
+		cfg.Communication.Flow = filteredFlow
+	}
+
+	return nil
+}
+
 // agentKeysString returns a comma-separated list of agent keys.
 func agentKeysString(agents map[string]fleet.FleetAgentConfig) string {
 	keys := make([]string, 0, len(agents))
@@ -260,6 +340,7 @@ func GetFleetPlanTools() ([]tool.Tool, error) {
 			"IMPORTANT: If credentials were validated with validate_fleet_plan, pass the same " +
 			"credentials map here so they are stored in the plan. Without credentials, the plan " +
 			"cannot authenticate with external services at runtime. " +
+			"Use include_agents to select a subset of agents from the template (e.g., only ['dev']). " +
 			"The plan is stored as a YAML file and can be launched from the Studio UI.",
 	}, saveFleetPlan)
 	if err != nil {

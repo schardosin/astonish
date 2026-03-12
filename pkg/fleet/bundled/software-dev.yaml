@@ -74,10 +74,18 @@ plan_wizard:
 
     After presenting this overview, ask: **"Does this workflow look right for
     your use case, or would you like to adjust anything before we configure the
-    plan?"** This gives the user a chance to request changes early (e.g., skip
-    the UX agent, add a Security agent, change communication paths, or modify
-    how an agent behaves). If they request changes, note them and incorporate
-    them as behavior_overrides when saving the plan.
+    plan?"** This gives the user a chance to request changes early (e.g., keep
+    only the Dev agent, skip the UX agent, or modify how an agent behaves).
+
+    **If the user wants to remove agents or keep only specific agents**, note
+    which agents they want and pass them as `include_agents` when saving. For
+    example, if the user says "keep only dev," set `include_agents: ["dev"]`.
+    The tool will automatically remove all other agents from the plan and
+    rebuild the communication flow. Do NOT use behavior_overrides as a
+    substitute for agent removal.
+
+    **If the user wants to change how an agent behaves** (without removing it),
+    note the changes and incorporate them as behavior_overrides when saving.
 
     Then proceed to the configuration steps below. Walk through them one at a
     time. Ask focused questions, confirm answers, then move on. Do not dump all
@@ -127,12 +135,14 @@ plan_wizard:
     For other integrations (SSH, external APIs, etc.): ask if any are needed and collect the
     logical name and store entry name for each.
 
-    ## 5. Behavior customizations (optional)
-    Ask if the user wants to add any behavior overrides for specific agents.
-    Remind them of the workflow presented earlier and explain that overrides are
-    appended to the base behaviors, not replacing them. If the user already
-    requested workflow adjustments during the overview step, confirm those will
-    be included as overrides.
+    ## 5. Agent selection and behavior customizations (optional)
+    If the user already requested agent changes during the overview step (e.g.,
+    "keep only dev" or "remove QA"), confirm those changes. You will pass them
+    as `include_agents` when calling save_fleet_plan.
+
+    Then ask if they want to add any behavior overrides for the agents that will
+    be included. Remind them that overrides are appended to the base behaviors,
+    not replacing them.
 
     ## Validation and saving
     Once all information is collected:
@@ -140,6 +150,9 @@ plan_wizard:
        credentials. Show the results to the user.
     2. If validation passes, call **save_fleet_plan** with ALL collected configuration
        including the same credentials map. Set validation_passed=true.
+       If the user requested specific agents, include `include_agents` with the
+       list of agent roles to keep (e.g., `["dev"]` or `["po", "dev", "qa"]`).
+       If the user wants ALL agents (the default), omit include_agents entirely.
     3. If validation fails, show what went wrong and help fix it before retrying.
 
     CRITICAL: The credentials map MUST be included in both the validate and save calls.

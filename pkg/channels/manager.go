@@ -40,6 +40,89 @@ type ChannelManager struct {
 
 	// Device authorization for Studio web UI
 	authorizeFunc func(code string) (string, bool)
+
+	// Fleet session tracking: maps chat session key -> fleet session ID.
+	// When a fleet session is active for a chat, inbound messages are routed
+	// to the fleet session instead of the regular chat agent.
+	activeFleets map[string]string
+	fleetMu      sync.RWMutex
+
+	// Pending session contexts: maps session key -> system context string.
+	// Used by /fleet_plan to inject the wizard system prompt on the next
+	// regular chat message. Consumed (cleared) after first use.
+	pendingContexts   map[string]string
+	pendingContextsMu sync.Mutex
+
+	// Fleet dependency functions — injected by the daemon to avoid circular imports.
+	// These allow fleet commands to access the fleet registries and session management
+	// without the channels package importing pkg/api.
+	fleetDeps *FleetDeps
+}
+
+// FleetDeps holds fleet-related dependencies injected into the ChannelManager.
+// This avoids circular imports between pkg/channels and pkg/api.
+type FleetDeps struct {
+	// GetSessionRegistry returns the fleet session registry.
+	GetSessionRegistry func() FleetSessionRegistry
+	// GetPlanRegistry returns the fleet plan registry.
+	GetPlanRegistry func() FleetPlanRegistry
+	// GetFleetRegistry returns the fleet template registry.
+	GetFleetRegistry func() FleetTemplateRegistry
+	// StartSessionFromPlan creates and starts a fleet session from a plan key.
+	StartSessionFromPlan func(planKey, initialMessage string) (*FleetSessionStartResult, error)
+	// StopSession stops a fleet session by ID and unregisters it.
+	StopSession func(sessionID string) error
+}
+
+// FleetSessionRegistry is the interface for managing active fleet sessions.
+type FleetSessionRegistry interface {
+	PostHumanMessage(sessionID, text string) error
+}
+
+// FleetPlanRegistry is the interface for reading fleet plans.
+type FleetPlanRegistry interface {
+	ListPlans() []FleetPlanSummary
+}
+
+// FleetTemplateRegistry is the interface for reading fleet templates.
+type FleetTemplateRegistry interface {
+	ListFleets() []FleetTemplateSummary
+	GetFleet(key string) (FleetTemplateWithWizard, bool)
+}
+
+// FleetPlanSummary is a lightweight view of a fleet plan.
+type FleetPlanSummary struct {
+	Key         string
+	Name        string
+	Description string
+	ChannelType string
+	AgentNames  []string
+}
+
+// FleetTemplateSummary is a lightweight view of a fleet template.
+type FleetTemplateSummary struct {
+	Key         string
+	Name        string
+	Description string
+	AgentNames  []string
+}
+
+// FleetTemplateWithWizard provides wizard config from a fleet template.
+type FleetTemplateWithWizard struct {
+	Name               string
+	WizardSystemPrompt string
+}
+
+// FleetSessionStartResult is the result of starting a fleet session.
+type FleetSessionStartResult struct {
+	SessionID string
+	FleetKey  string
+	FleetName string
+	// OnMessagePosted allows the caller to compose additional callbacks
+	// on the fleet session (e.g., forwarding messages to Telegram).
+	SetOnMessagePosted func(fn func(sender, text string))
+	// OnSessionDone allows the caller to register a callback for when the session ends.
+	SetOnSessionDone func(fn func(sessionID string, err error))
 }
 
 // ChannelManagerConfig holds optional configuration for NewChannelManager.
@@ -57,12 +140,14 @@ func NewChannelManager(chatAgent *agent.ChatAgent, sessSvc session.Service, logg
 		logger = log.Default()
 	}
 	m := &ChannelManager{
-		channels: make(map[string]Channel),
-		router:   NewRouter(),
-		agent:    chatAgent,
-		sessSvc:  sessSvc,
-		commands: DefaultCommands(),
-		logger:   logger,
+		channels:        make(map[string]Channel),
+		router:          NewRouter(),
+		agent:           chatAgent,
+		sessSvc:         sessSvc,
+		commands:        DefaultCommands(),
+		logger:          logger,
+		activeFleets:    make(map[string]string),
+		pendingContexts: make(map[string]string),
 	}
 	if cfg != nil {
 		m.providerName = cfg.ProviderName
@@ -80,6 +165,28 @@ func (m *ChannelManager) SetRedactor(r *credentials.Redactor) {
 // SetAuthorizeFunc sets the device authorization handler for the /authorize command.
 func (m *ChannelManager) SetAuthorizeFunc(fn func(code string) (string, bool)) {
 	m.authorizeFunc = fn
+}
+
+// SetFleetDeps injects fleet-related dependencies for fleet commands.
+// Must be called during daemon startup after fleet registries are initialized.
+func (m *ChannelManager) SetFleetDeps(deps *FleetDeps) {
+	m.fleetDeps = deps
+	registerFleetCommands(m)
+	// Re-register bot commands with channels that support it (e.g., Telegram)
+	// so the new fleet commands appear in the "/" autocomplete menu.
+	m.refreshChannelCommands()
+}
+
+// refreshChannelCommands tells all running channels to re-register their
+// command menus. Only channels that implement CommandRefresher are affected.
+func (m *ChannelManager) refreshChannelCommands() {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, ch := range m.channels {
+		if refresher, ok := ch.(CommandRefresher); ok {
+			refresher.RefreshCommands(m.commands)
+		}
+	}
 }
 
 // redactText applies credential redaction if a redactor is configured.
@@ -159,6 +266,48 @@ func (m *ChannelManager) Status() map[string]ChannelStatus {
 	return statuses
 }
 
+// --- Fleet session tracking ---
+
+// SetActiveFleet associates a chat session key with an active fleet session ID.
+// While active, inbound messages for this chat are routed to the fleet session.
+func (m *ChannelManager) SetActiveFleet(chatKey, sessionID string) {
+	m.fleetMu.Lock()
+	defer m.fleetMu.Unlock()
+	m.activeFleets[chatKey] = sessionID
+}
+
+// ClearActiveFleet removes the fleet association for a chat session key.
+func (m *ChannelManager) ClearActiveFleet(chatKey string) {
+	m.fleetMu.Lock()
+	defer m.fleetMu.Unlock()
+	delete(m.activeFleets, chatKey)
+}
+
+// GetActiveFleet returns the active fleet session ID for a chat, or empty string.
+func (m *ChannelManager) GetActiveFleet(chatKey string) string {
+	m.fleetMu.RLock()
+	defer m.fleetMu.RUnlock()
+	return m.activeFleets[chatKey]
+}
+
+// SetSessionContext sets a one-shot system context to inject on the next regular
+// chat message for the given session key. Used by /fleet_plan to inject the
+// wizard system prompt before the first wizard turn.
+func (m *ChannelManager) SetSessionContext(sessionKey, ctx string) {
+	m.pendingContextsMu.Lock()
+	defer m.pendingContextsMu.Unlock()
+	m.pendingContexts[sessionKey] = ctx
+}
+
+// consumeSessionContext retrieves and clears a pending session context.
+func (m *ChannelManager) consumeSessionContext(sessionKey string) string {
+	m.pendingContextsMu.Lock()
+	defer m.pendingContextsMu.Unlock()
+	ctx := m.pendingContexts[sessionKey]
+	delete(m.pendingContexts, sessionKey)
+	return ctx
+}
+
 // handleInbound processes an inbound message from any channel.
 // It routes the message to the appropriate session, runs the ChatAgent,
 // collects the response, handles auto-distillation, and sends the reply.
@@ -172,6 +321,12 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	// Intercept slash commands before sending to the agent.
 	if m.commands.IsCommand(msg.Text) {
 		return m.handleCommand(ctx, msg, route)
+	}
+
+	// If a fleet session is active for this chat, route the message there
+	// instead of the regular chat agent.
+	if fleetSessionID := m.GetActiveFleet(route.SessionKey); fleetSessionID != "" {
+		return m.handleFleetMessage(ctx, msg, route, fleetSessionID)
 	}
 
 	// Get or create persistent session
@@ -189,6 +344,12 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	if m.agent.SystemPrompt != nil {
 		m.agent.SystemPrompt.ChannelHints = channelHints(msg.ChannelID)
 		defer func() { m.agent.SystemPrompt.ChannelHints = "" }()
+	}
+
+	// Inject one-shot session context if pending (e.g., fleet plan wizard prompt).
+	if sessionCtx := m.consumeSessionContext(route.SessionKey); sessionCtx != "" && m.agent.SystemPrompt != nil {
+		m.agent.SystemPrompt.SessionContext = agent.EscapeCurlyPlaceholders(sessionCtx)
+		defer func() { m.agent.SystemPrompt.SessionContext = "" }()
 	}
 
 	// Create ADK agent wrapper for this turn
@@ -370,6 +531,7 @@ func (m *ChannelManager) handleCommand(ctx context.Context, msg InboundMessage, 
 		ToolCount:      m.toolCount,
 		Distiller:      m.agent,
 		AuthorizeFunc:  m.authorizeFunc,
+		Manager:        m,
 	}
 
 	ch := m.getChannel(msg.ChannelID)
@@ -404,6 +566,59 @@ func (m *ChannelManager) handleCommand(ctx context.Context, msg InboundMessage, 
 	}
 
 	return ch.Send(ctx, target, outMsg)
+}
+
+// handleFleetMessage routes an inbound message to an active fleet session.
+// The message is posted as a "customer" message on the fleet's chat channel.
+func (m *ChannelManager) handleFleetMessage(ctx context.Context, msg InboundMessage, route RouteResult, fleetSessionID string) error {
+	ch := m.getChannel(msg.ChannelID)
+	if ch == nil {
+		return fmt.Errorf("channel %s not found", msg.ChannelID)
+	}
+
+	target := Target{
+		ChannelID: msg.ChannelID,
+		ChatID:    msg.ChatID,
+		ThreadID:  msg.ThreadID,
+	}
+
+	// Post the message to the fleet session
+	if m.fleetDeps == nil || m.fleetDeps.GetSessionRegistry == nil {
+		m.logger.Printf("[channels] Fleet session registry not available")
+		_ = ch.Send(ctx, target, OutboundMessage{
+			Text:    "Fleet system is not available. Use /fleet_stop to exit fleet mode.",
+			ReplyTo: msg.ID,
+			Format:  FormatText,
+		})
+		return nil
+	}
+
+	registry := m.fleetDeps.GetSessionRegistry()
+	if registry == nil {
+		m.logger.Printf("[channels] Fleet session registry not initialized")
+		m.ClearActiveFleet(route.SessionKey)
+		_ = ch.Send(ctx, target, OutboundMessage{
+			Text:    "Fleet session has ended. Returning to normal chat.",
+			ReplyTo: msg.ID,
+			Format:  FormatText,
+		})
+		return nil
+	}
+
+	if err := registry.PostHumanMessage(fleetSessionID, msg.Text); err != nil {
+		m.logger.Printf("[channels] Failed to post fleet message: %v", err)
+		// If the session no longer exists, clear the mapping
+		m.ClearActiveFleet(route.SessionKey)
+		_ = ch.Send(ctx, target, OutboundMessage{
+			Text:    "Fleet session has ended. Returning to normal chat.",
+			ReplyTo: msg.ID,
+			Format:  FormatText,
+		})
+		return nil
+	}
+
+	m.logger.Printf("[channels] Routed message to fleet session %s", fleetSessionID)
+	return nil
 }
 
 // getOrCreateSession retrieves an existing session by key or creates a new one.

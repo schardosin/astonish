@@ -428,12 +428,30 @@ func (t *TelegramChannel) setError(errMsg string) {
 // "/" command menu. Includes all commands from the registry plus /start.
 // Best-effort: logs errors but does not fail the bot startup.
 func (t *TelegramChannel) registerBotCommands(bot *tgbotapi.BotAPI) {
+	t.registerBotCommandsFromRegistry(bot, t.config.Commands)
+}
+
+// RefreshCommands implements channels.CommandRefresher. It re-registers bot
+// commands with Telegram after new commands have been added (e.g., fleet commands).
+func (t *TelegramChannel) RefreshCommands(commands *channels.CommandRegistry) {
+	t.mu.RLock()
+	bot := t.botAPI
+	t.mu.RUnlock()
+	if bot == nil {
+		return
+	}
+	t.registerBotCommandsFromRegistry(bot, commands)
+}
+
+// registerBotCommandsFromRegistry calls Telegram's setMyCommands API with
+// all commands from the given registry plus /start.
+func (t *TelegramChannel) registerBotCommandsFromRegistry(bot *tgbotapi.BotAPI, commands *channels.CommandRegistry) {
 	cmds := []tgbotapi.BotCommand{
 		{Command: "start", Description: "Start a conversation with Astonish"},
 	}
 
-	if t.config.Commands != nil {
-		for _, cmd := range t.config.Commands.List() {
+	if commands != nil {
+		for _, cmd := range commands.List() {
 			cmds = append(cmds, tgbotapi.BotCommand{
 				Command:     cmd.Name,
 				Description: cmd.Description,

@@ -61,6 +61,11 @@ func getFleetSessionRegistry() *fleet.SessionRegistry {
 	return fleetSessionRegistry
 }
 
+// GetFleetSessionRegistry returns the global fleet session registry (exported for cross-package use).
+func GetFleetSessionRegistry() *fleet.SessionRegistry {
+	return getFleetSessionRegistry()
+}
+
 // FleetStartRequest is the request body for POST /api/studio/fleet/start.
 type FleetStartRequest struct {
 	FleetKey string `json:"fleet_key"`
@@ -71,6 +76,128 @@ type FleetStartRequest struct {
 // FleetMessageRequest is the request body for POST /api/studio/fleet/sessions/{id}/message.
 type FleetMessageRequest struct {
 	Message string `json:"message"`
+}
+
+// FleetSessionResult contains the result of creating a fleet session.
+// Used by both the HTTP handler and channel commands (e.g., Telegram /fleet).
+type FleetSessionResult struct {
+	Session   *fleet.FleetSession
+	FleetKey  string
+	FleetName string
+	Agents    []map[string]interface{}
+
+	// SetOnMessagePosted allows the caller to compose an additional callback
+	// on top of the existing transcript callback. The provided function receives
+	// every message posted to the fleet channel (agent, customer, and system).
+	SetOnMessagePosted func(fn func(msg fleet.Message))
+
+	// SetOnSessionDone allows the caller to register a callback for session completion.
+	// Composes with any existing done callback (e.g., plan activator).
+	SetOnSessionDone func(fn func(sessionID string, sessionErr error))
+}
+
+// StartFleetSessionFromPlan creates, registers, and starts a fleet session from a plan key.
+// The session is started in a background goroutine. The returned result includes
+// SetOnMessagePosted and SetOnSessionDone functions that compose with the existing
+// transcript callbacks (rather than replacing them), allowing callers (e.g., Telegram)
+// to add forwarding logic on top.
+// If initialMessage is non-empty, it is posted as the first customer message.
+func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionResult, error) {
+	if fleetPlanRegistryVar == nil {
+		return nil, fmt.Errorf("fleet plan system not initialized")
+	}
+	plan, ok := fleetPlanRegistryVar.GetPlan(planKey)
+	if !ok {
+		return nil, fmt.Errorf("fleet plan %q not found", planKey)
+	}
+
+	subAgentMgr := tools.GetSubAgentManager()
+	if subAgentMgr == nil {
+		return nil, fmt.Errorf("sub-agent system not initialized")
+	}
+
+	fleetCfg := &plan.FleetConfig
+	channel := fleet.NewChatChannel(planKey)
+	fleetSession := fleet.NewFleetSession(planKey, fleetCfg, channel, subAgentMgr)
+	fleetSession.Plan = plan
+
+	// Generate project context if configured
+	if fleetCfg.ProjectContext != nil {
+		workspaceDir := plan.ResolveWorkspaceDir()
+		if workspaceDir != "" {
+			if err := os.MkdirAll(workspaceDir, 0755); err != nil {
+				log.Printf("[fleet] Warning: could not create workspace %s: %v", workspaceDir, err)
+			} else {
+				fleetSession.ProjectContext = fleet.GenerateProjectContext(
+					context.Background(), workspaceDir, fleetCfg.ProjectContext)
+			}
+		}
+	}
+
+	// Register in session registry and persist metadata
+	registry := getFleetSessionRegistry()
+	registry.Register(fleetSession)
+	persistFleetSessionMeta(fleetSession, fleetCfg, 0, "")
+	wireFleetTranscript(fleetSession)
+
+	// Capture the transcript callback so we can compose additional callbacks on top.
+	transcriptCallback := fleetSession.OnMessagePosted
+	existingDoneCallback := fleetSession.OnSessionDone
+
+	// Start in background
+	go func() {
+		defer func() {
+			registry.Unregister(fleetSession.ID)
+			log.Printf("[fleet] Session %s removed from registry", fleetSession.ID)
+		}()
+		if err := fleetSession.Run(context.Background()); err != nil {
+			log.Printf("[fleet] Session %s error: %v", fleetSession.ID, err)
+		}
+	}()
+
+	// Post initial message if provided
+	if initialMessage != "" {
+		msg := fleet.Message{
+			Sender: "customer",
+			Text:   initialMessage,
+		}
+		if err := channel.PostMessage(context.Background(), msg); err != nil {
+			log.Printf("[fleet] Error posting initial message: %v", err)
+		}
+		if fleetSession.OnMessagePosted != nil {
+			fleetSession.OnMessagePosted(msg)
+		}
+	}
+
+	return &FleetSessionResult{
+		Session:   fleetSession,
+		FleetKey:  planKey,
+		FleetName: plan.Name,
+		Agents:    buildAgentList(fleetCfg),
+		// SetOnMessagePosted composes the caller's callback with the existing
+		// transcript callback. Both are called for every message.
+		SetOnMessagePosted: func(fn func(msg fleet.Message)) {
+			fleetSession.OnMessagePosted = func(msg fleet.Message) {
+				if transcriptCallback != nil {
+					transcriptCallback(msg)
+				}
+				if fn != nil {
+					fn(msg)
+				}
+			}
+		},
+		// SetOnSessionDone composes the caller's callback with any existing done callback.
+		SetOnSessionDone: func(fn func(sessionID string, sessionErr error)) {
+			fleetSession.OnSessionDone = func(sessionID string, sessionErr error) {
+				if existingDoneCallback != nil {
+					existingDoneCallback(sessionID, sessionErr)
+				}
+				if fn != nil {
+					fn(sessionID, sessionErr)
+				}
+			}
+		},
+	}, nil
 }
 
 // FleetStartHandler handles POST /api/studio/fleet/start.
@@ -89,88 +216,50 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve fleet config: either from a fleet plan or a regular fleet
-	var fleetCfg *fleet.FleetConfig
-	var fleetPlan *fleet.FleetPlan
-	var fleetKey string
-	var fleetName string
-
+	// If starting from a plan, use the shared helper
 	if req.PlanKey != "" {
-		// Start from a fleet plan
-		if fleetPlanRegistryVar == nil {
-			http.Error(w, "Fleet plan system not initialized", http.StatusServiceUnavailable)
+		result, err := StartFleetSessionFromPlan(req.PlanKey, req.Message)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		plan, ok := fleetPlanRegistryVar.GetPlan(req.PlanKey)
-		if !ok {
-			http.Error(w, fmt.Sprintf("Fleet plan %q not found", req.PlanKey), http.StatusNotFound)
-			return
-		}
-		fleetPlan = plan
-		fleetCfg = &plan.FleetConfig
-		fleetKey = req.PlanKey
-		fleetName = plan.Name
-	} else {
-		// Start from a regular fleet
-		fleetReg := GetFleetRegistry()
-		if fleetReg == nil {
-			http.Error(w, "Fleet system not initialized", http.StatusServiceUnavailable)
-			return
-		}
-		cfg, ok := fleetReg.GetFleet(req.FleetKey)
-		if !ok {
-			http.Error(w, fmt.Sprintf("Fleet %q not found", req.FleetKey), http.StatusNotFound)
-			return
-		}
-		fleetCfg = cfg
-		fleetKey = req.FleetKey
-		fleetName = cfg.Name
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"session_id": result.Session.ID,
+			"fleet_key":  result.FleetKey,
+			"fleet_name": result.FleetName,
+			"agents":     result.Agents,
+		})
+		return
 	}
 
-	// Get required dependencies
+	// Start from a regular fleet template
+	fleetReg := GetFleetRegistry()
+	if fleetReg == nil {
+		http.Error(w, "Fleet system not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	cfg, ok := fleetReg.GetFleet(req.FleetKey)
+	if !ok {
+		http.Error(w, fmt.Sprintf("Fleet %q not found", req.FleetKey), http.StatusNotFound)
+		return
+	}
+
 	subAgentMgr := tools.GetSubAgentManager()
 	if subAgentMgr == nil {
 		http.Error(w, "Sub-agent system not initialized (sub-agents must be enabled)", http.StatusServiceUnavailable)
 		return
 	}
 
-	// Create the fleet session with a background context (not tied to the HTTP request).
-	// The fleet session lives until explicitly stopped or all agents are done.
-	channel := fleet.NewChatChannel(fleetKey)
-	fleetSession := fleet.NewFleetSession(fleetKey, fleetCfg, channel, subAgentMgr)
+	channel := fleet.NewChatChannel(req.FleetKey)
+	fleetSession := fleet.NewFleetSession(req.FleetKey, cfg, channel, subAgentMgr)
 
-	// If starting from a plan, attach it to the session for prompt injection
-	// and generate project context if configured.
-	if fleetPlan != nil {
-		fleetSession.Plan = fleetPlan
-
-		// Generate project context (e.g., AGENTS.md) before any agent starts.
-		// This mirrors the headless path in fleet_headless.go.
-		if fleetCfg.ProjectContext != nil {
-			workspaceDir := fleetPlan.ResolveWorkspaceDir()
-			if workspaceDir != "" {
-				if err := os.MkdirAll(workspaceDir, 0755); err != nil {
-					log.Printf("[fleet] Warning: could not create workspace %s: %v", workspaceDir, err)
-				} else {
-					fleetSession.ProjectContext = fleet.GenerateProjectContext(
-						context.Background(), workspaceDir, fleetCfg.ProjectContext)
-				}
-			}
-		}
-	}
-
-	// Register in the in-memory registry
 	registry := getFleetSessionRegistry()
 	registry.Register(fleetSession)
-
-	// Persist to the session index so the fleet shows in the sidebar
-	persistFleetSessionMeta(fleetSession, fleetCfg, 0, "")
-
-	// Create JSONL transcript so `sessions show` works for fleet sessions
+	persistFleetSessionMeta(fleetSession, cfg, 0, "")
 	wireFleetTranscript(fleetSession)
 
-	// Start the fleet message loop in a background goroutine.
-	// This uses context.Background() so the fleet runs independently of any HTTP request.
 	go func() {
 		defer func() {
 			registry.Unregister(fleetSession.ID)
@@ -181,7 +270,6 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// If user provided an initial message, post it to start the conversation
 	if req.Message != "" {
 		initialMsg := fleet.Message{
 			Sender: "customer",
@@ -190,19 +278,17 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 		if err := channel.PostMessage(context.Background(), initialMsg); err != nil {
 			log.Printf("[fleet] Error posting initial message: %v", err)
 		}
-		// Persist the initial message to transcript
 		if fleetSession.OnMessagePosted != nil {
 			fleetSession.OnMessagePosted(initialMsg)
 		}
 	}
 
-	// Return session info as JSON (client will connect to SSE stream separately)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"session_id": fleetSession.ID,
-		"fleet_key":  fleetKey,
-		"fleet_name": fleetName,
-		"agents":     buildAgentList(fleetCfg),
+		"fleet_key":  req.FleetKey,
+		"fleet_name": cfg.Name,
+		"agents":     buildAgentList(cfg),
 	})
 }
 

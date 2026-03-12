@@ -475,6 +475,64 @@ func Run(cfg RunConfig) error {
 		}
 	}
 
+	// --- Wire fleet commands into channels ---
+	// Must happen after both channelMgr and fleet registries are initialized.
+	if channelMgr != nil {
+		channelMgr.SetFleetDeps(&channels.FleetDeps{
+			GetSessionRegistry: func() channels.FleetSessionRegistry {
+				return api.GetFleetSessionRegistry()
+			},
+			GetPlanRegistry: func() channels.FleetPlanRegistry {
+				reg := api.GetFleetPlanRegistry()
+				if reg == nil {
+					return nil
+				}
+				return &fleetPlanRegistryAdapter{reg: reg}
+			},
+			GetFleetRegistry: func() channels.FleetTemplateRegistry {
+				reg := api.GetFleetRegistry()
+				if reg == nil {
+					return nil
+				}
+				return &fleetTemplateRegistryAdapter{reg: reg}
+			},
+			StartSessionFromPlan: func(planKey, initialMessage string) (*channels.FleetSessionStartResult, error) {
+				result, err := api.StartFleetSessionFromPlan(planKey, initialMessage)
+				if err != nil {
+					return nil, err
+				}
+				return &channels.FleetSessionStartResult{
+					SessionID: result.Session.ID,
+					FleetKey:  result.FleetKey,
+					FleetName: result.FleetName,
+					SetOnMessagePosted: func(fn func(sender, text string)) {
+						if result.SetOnMessagePosted != nil {
+							result.SetOnMessagePosted(func(msg fleet.Message) {
+								fn(msg.Sender, msg.Text)
+							})
+						}
+					},
+					SetOnSessionDone: func(fn func(sessionID string, err error)) {
+						if result.SetOnSessionDone != nil {
+							result.SetOnSessionDone(fn)
+						}
+					},
+				}, nil
+			},
+			StopSession: func(sessionID string) error {
+				registry := api.GetFleetSessionRegistry()
+				fs := registry.Get(sessionID)
+				if fs == nil {
+					return fmt.Errorf("fleet session %s not found", sessionID)
+				}
+				fs.Stop()
+				registry.Unregister(sessionID)
+				return nil
+			},
+		})
+		logger.Printf("Fleet commands wired into channels")
+	}
+
 	// Create and start the Studio server
 	var studioOpts []launcher.StudioOption
 	if authManager != nil {
@@ -802,4 +860,58 @@ func (b *fleetSchedulerBridge) GetJob(id string) *fleet.SchedulerJob {
 
 func (b *fleetSchedulerBridge) ValidateCron(expr string) error {
 	return scheduler.ValidateCron(expr)
+}
+
+// fleetPlanRegistryAdapter adapts fleet.PlanRegistry to channels.FleetPlanRegistry.
+type fleetPlanRegistryAdapter struct {
+	reg *fleet.PlanRegistry
+}
+
+func (a *fleetPlanRegistryAdapter) ListPlans() []channels.FleetPlanSummary {
+	plans := a.reg.ListPlans()
+	result := make([]channels.FleetPlanSummary, len(plans))
+	for i, p := range plans {
+		result[i] = channels.FleetPlanSummary{
+			Key:         p.Key,
+			Name:        p.Name,
+			Description: p.Description,
+			ChannelType: p.ChannelType,
+			AgentNames:  p.AgentNames,
+		}
+	}
+	return result
+}
+
+// fleetTemplateRegistryAdapter adapts fleet.Registry to channels.FleetTemplateRegistry.
+type fleetTemplateRegistryAdapter struct {
+	reg *fleet.Registry
+}
+
+func (a *fleetTemplateRegistryAdapter) ListFleets() []channels.FleetTemplateSummary {
+	fleets := a.reg.ListFleets()
+	result := make([]channels.FleetTemplateSummary, len(fleets))
+	for i, f := range fleets {
+		result[i] = channels.FleetTemplateSummary{
+			Key:         f.Key,
+			Name:        f.Name,
+			Description: f.Description,
+			AgentNames:  f.AgentNames,
+		}
+	}
+	return result
+}
+
+func (a *fleetTemplateRegistryAdapter) GetFleet(key string) (channels.FleetTemplateWithWizard, bool) {
+	cfg, ok := a.reg.GetFleet(key)
+	if !ok {
+		return channels.FleetTemplateWithWizard{}, false
+	}
+	var wizardPrompt string
+	if cfg.PlanWizard != nil {
+		wizardPrompt = cfg.PlanWizard.SystemPrompt
+	}
+	return channels.FleetTemplateWithWizard{
+		Name:               cfg.Name,
+		WizardSystemPrompt: wizardPrompt,
+	}, true
 }

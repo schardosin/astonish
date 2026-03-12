@@ -118,3 +118,10 @@ type ChannelStatus struct {
 	Error        string    // Last error message (empty if healthy)
 	MessageCount int64     // Total messages processed since start
 }
+
+// CommandRefresher is an optional interface that channels can implement to
+// re-register slash commands with the platform (e.g., Telegram's setMyCommands).
+// This is called when new commands are added after the channel has started.
+type CommandRefresher interface {
+	RefreshCommands(commands *CommandRegistry)
+}

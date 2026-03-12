@@ -36,6 +36,13 @@ type ChatFactoryConfig struct {
 	AutoApprove  bool
 	WorkspaceDir string
 	IsDaemon     bool // When true, always run indexing/watchers (we ARE the daemon).
+
+	// SessionStore is an optional pre-created FileStore for session persistence.
+	// When set, the factory reuses this store instead of creating a new one.
+	// This ensures a single FileStore instance across the daemon process,
+	// preventing index.json race conditions between fleet sessions and
+	// sub-agent sessions.
+	SessionStore *persistentsession.FileStore
 }
 
 // ChatFactoryResult holds everything produced by the factory.
@@ -566,7 +573,13 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 
 	// --- 4. Create session service ---
 	var sessionService session.Service
-	if cfg.AppConfig != nil && cfg.AppConfig.Sessions.Storage == "memory" {
+	if cfg.SessionStore != nil {
+		// Reuse the pre-created store (shared with fleet sessions in the daemon).
+		sessionService = cfg.SessionStore
+		if cfg.DebugMode {
+			fmt.Println("Session storage: file (shared store)")
+		}
+	} else if cfg.AppConfig != nil && cfg.AppConfig.Sessions.Storage == "memory" {
 		sessionService = session.InMemoryService()
 		if cfg.DebugMode {
 			fmt.Println("Session storage: memory")

@@ -133,16 +133,19 @@ func Run(cfg RunConfig) error {
 	ctx := context.Background()
 	api.InitToolsCache(ctx)
 
-	// --- Initialize file store for fleet session persistence ---
-	// This must happen early, before any fleet sessions can be created.
-	// Fleet sessions need a FileStore to persist transcripts and session
-	// metadata, independent of the ChatManager's lazy initialization.
+	// --- Initialize file store for session persistence ---
+	// A single shared FileStore is used for ALL session persistence in the daemon:
+	// fleet session transcripts, Studio chat sub-agent sessions, and channel
+	// sub-agent sessions. Using one instance prevents index.json race conditions
+	// that caused child sessions to become orphaned (invisible in trace view).
+	var sharedFileStore *persistentsession.FileStore
 	if sessDir, dirErr := config.GetSessionsDir(&appCfg.Sessions); dirErr == nil {
-		if fleetStore, fsErr := persistentsession.NewFileStore(sessDir); fsErr == nil {
-			api.SetFleetSessionStore(fleetStore)
-			logger.Printf("Fleet session store initialized (%s)", sessDir)
+		if store, fsErr := persistentsession.NewFileStore(sessDir); fsErr == nil {
+			sharedFileStore = store
+			api.SetFleetSessionStore(store)
+			logger.Printf("Session store initialized (%s)", sessDir)
 		} else {
-			logger.Printf("Warning: Failed to initialize fleet session store: %v", fsErr)
+			logger.Printf("Warning: Failed to initialize session store: %v", fsErr)
 		}
 	} else {
 		logger.Printf("Warning: Failed to resolve sessions directory: %v", dirErr)
@@ -192,6 +195,7 @@ func Run(cfg RunConfig) error {
 			DebugMode:    cfg.Debug,
 			AutoApprove:  true, // Channels/scheduler auto-approve all tools
 			IsDaemon:     true, // We ARE the daemon — always run indexing/watchers.
+			SessionStore: sharedFileStore,
 		})
 		if factoryErr != nil {
 			logger.Printf("Warning: Failed to initialize ChatAgent: %v", factoryErr)
@@ -556,6 +560,9 @@ func Run(cfg RunConfig) error {
 	var studioOpts []launcher.StudioOption
 	if authManager != nil {
 		studioOpts = append(studioOpts, launcher.WithAuth(authManager))
+	}
+	if sharedFileStore != nil {
+		studioOpts = append(studioOpts, launcher.WithSessionStore(sharedFileStore))
 	}
 	studio, err := launcher.NewStudioServer(port, studioOpts...)
 	if err != nil {

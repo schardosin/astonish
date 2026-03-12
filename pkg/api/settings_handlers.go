@@ -325,6 +325,14 @@ func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		config.SetupAllProviderEnv(cfg)
 	}
 
+	// Regenerate the managed OpenCode config since provider/model may have changed.
+	// Reload config from disk to get the clean version (secrets were scrubbed above).
+	if freshCfg, loadErr := config.LoadAppConfig(); loadErr == nil {
+		regenerateOpenCodeConfig(freshCfg)
+	} else {
+		log.Printf("Warning: Failed to reload config for OpenCode regeneration: %v", loadErr)
+	}
+
 	// Reset the Studio chat agent so the next request picks up fresh config.
 	GetChatManager().Reset()
 

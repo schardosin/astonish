@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package, Store, GitBranch, RefreshCw, Search, Play, Download, MessageSquare, Globe, Radio, Database, Brain, GitFork, Wand2, Clock, Shield, User, KeyRound } from 'lucide-react'
+import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package, Store, GitBranch, RefreshCw, Search, Play, Download, MessageSquare, Globe, Radio, Database, Brain, GitFork, Wand2, Clock, Shield, User, KeyRound, Terminal } from 'lucide-react'
 import MCPStoreModal from './MCPStoreModal'
 import FlowStorePanel from './FlowStorePanel'
 import ProviderModelSelector from './ProviderModelSelector'
@@ -20,6 +20,7 @@ import SchedulerSettings from './settings/SchedulerSettings'
 import DaemonSettings from './settings/DaemonSettings'
 import IdentitySettings from './settings/IdentitySettings'
 import CredentialsSettings from './settings/CredentialsSettings'
+import OpenCodeSettings from './settings/OpenCodeSettings'
 
 // API functions
 const fetchSettings = async () => {
@@ -138,7 +139,7 @@ const refreshMCPServer = async (serverName) => {
 }
 
 // Section keys that use the full config API
-const FULL_CONFIG_SECTIONS = ['chat', 'browser', 'channels', 'sessions', 'memory', 'sub_agents', 'skills', 'scheduler', 'daemon', 'identity']
+const FULL_CONFIG_SECTIONS = ['chat', 'browser', 'channels', 'sessions', 'memory', 'sub_agents', 'skills', 'scheduler', 'daemon', 'identity', 'open_code']
 
 export default function SettingsPage({ onClose, activeSection = 'general', onSectionChange, onToolsRefresh, onSettingsSaved, updateAvailable = null, onUpdateClick = null, appVersion = 'dev', theme = 'dark' }) {
   // Use prop for active section, default to 'general'
@@ -653,6 +654,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
     { id: 'sessions', label: 'Sessions', icon: Database },
     { id: 'memory', label: 'Memory', icon: Brain },
     { id: 'sub_agents', label: 'Sub-Agents', icon: GitFork },
+    { id: 'open_code', label: 'OpenCode', icon: Terminal },
     { id: 'skills', label: 'Skills', icon: Wand2 },
     { id: 'scheduler', label: 'Scheduler', icon: Clock },
     { id: 'daemon', label: 'Daemon', icon: Shield },
@@ -2010,6 +2012,10 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
 
           {activeSection === 'identity' && fullConfig && (
             <IdentitySettings config={fullConfig.agent_identity} onSaved={() => setFullConfig(null)} />
+          )}
+
+          {activeSection === 'open_code' && fullConfig && (
+            <OpenCodeSettings config={fullConfig.open_code} onSaved={() => setFullConfig(null)} />
           )}
 
           {activeSection === 'credentials' && (

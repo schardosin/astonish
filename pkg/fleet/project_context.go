@@ -21,6 +21,18 @@ const projectContextTimeout = 15 * time.Minute
 // start. When nil, the opencode_init generator is unavailable.
 var OpenCodeBinaryFinder func() (string, error)
 
+// OpenCodeConfigPath is the path to the Astonish-managed opencode.json.
+// Set by the daemon after generating the config. When set, all OpenCode
+// invocations from the fleet context generator use this config.
+var OpenCodeConfigPath string
+
+// OpenCodeExtraEnv holds extra environment variables to set for OpenCode
+// invocations (e.g., ASTONISH_OC_API_KEY, AICORE_SERVICE_KEY).
+var OpenCodeExtraEnv map[string]string
+
+// OpenCodeModelFlag is the full provider/model string to pass as --model.
+var OpenCodeModelFlag string
+
 // GenerateProjectContext dispatches to the configured generator strategy,
 // produces or updates the project context file in the workspace, and returns
 // its content (capped to the configured max size). Returns empty string on
@@ -100,14 +112,27 @@ func generateViaOpenCodeInit(ctx context.Context, workspaceDir string, cfg *Proj
 
 	// Run OpenCode in JSON format so output is structured, but we only care
 	// about whether it succeeds. The actual output is the file on disk.
-	cmdArgs := []string{"run", "--format", "json", "--dir", workspaceDir, task}
+	cmdArgs := []string{"run", "--format", "json", "--dir", workspaceDir}
+	if OpenCodeModelFlag != "" {
+		cmdArgs = append(cmdArgs, "--model", OpenCodeModelFlag)
+	}
+	cmdArgs = append(cmdArgs, task)
 
 	log.Printf("[fleet-context] Generating project context via OpenCode /init in %s (timeout: %s)", workspaceDir, projectContextTimeout)
 	start := time.Now()
 
 	cmd := exec.CommandContext(genCtx, binary, cmdArgs...)
 	cmd.Dir = workspaceDir
-	cmd.Env = os.Environ()
+
+	// Build environment with managed config and extra env vars
+	env := os.Environ()
+	if OpenCodeConfigPath != "" {
+		env = setEnv(env, "OPENCODE_CONFIG", OpenCodeConfigPath)
+	}
+	for k, v := range OpenCodeExtraEnv {
+		env = setEnv(env, k, v)
+	}
+	cmd.Env = env
 
 	// Capture stderr for error reporting
 	stderrBuf := &limitedBuffer{max: 4096}
@@ -181,4 +206,16 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 
 func (b *limitedBuffer) String() string {
 	return string(b.data)
+}
+
+// setEnv appends or replaces an environment variable in a slice.
+func setEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i, e := range env {
+		if len(e) >= len(prefix) && e[:len(prefix)] == prefix {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
 }

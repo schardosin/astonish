@@ -75,6 +75,33 @@ type OpenCodeTraceEvent struct {
 // openCodeBinaryPath caches the resolved path to the opencode binary.
 var openCodeBinaryPath string
 
+// openCodeConfigPath is the path to the Astonish-managed opencode.json.
+// Set at daemon startup via SetOpenCodeConfig().
+var openCodeConfigPath string
+
+// openCodeConfigProviderID is the OpenCode provider identifier.
+var openCodeConfigProviderID string
+
+// openCodeConfigModelID is the model identifier within the provider.
+var openCodeConfigModelID string
+
+// openCodeConfigExtraEnv holds env vars to set before invoking OpenCode.
+var openCodeConfigExtraEnv map[string]string
+
+// SetOpenCodeConfig stores the result of OpenCode config generation so it
+// can be used when invoking the OpenCode tool.
+func SetOpenCodeConfig(configPath, providerID, modelID string, extraEnv map[string]string) {
+	openCodeConfigPath = configPath
+	openCodeConfigProviderID = providerID
+	openCodeConfigModelID = modelID
+	openCodeConfigExtraEnv = extraEnv
+}
+
+// GetOpenCodeConfigPath returns the managed OpenCode config path.
+func GetOpenCodeConfigPath() string {
+	return openCodeConfigPath
+}
+
 // FindOpenCodeBinary locates the opencode binary.
 func FindOpenCodeBinary() (string, error) {
 	if openCodeBinaryPath != "" {
@@ -191,8 +218,14 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 	if args.SessionID != "" {
 		cmdArgs = append(cmdArgs, "--session", args.SessionID)
 	}
+
+	// Model selection: if the caller specified a model, use it. Otherwise,
+	// if we have a managed OpenCode config, always pass the configured model
+	// so OpenCode uses the Astonish-managed provider.
 	if args.Model != "" {
 		cmdArgs = append(cmdArgs, "--model", args.Model)
+	} else if openCodeConfigProviderID != "" && openCodeConfigModelID != "" {
+		cmdArgs = append(cmdArgs, "--model", openCodeConfigProviderID+"/"+openCodeConfigModelID)
 	}
 
 	// The task goes as positional arguments
@@ -207,7 +240,22 @@ func runOpenCode(ctx tool.Context, args OpenCodeArgs) (OpenCodeResult, error) {
 
 	// Inherit full environment from the parent process.
 	// This ensures API keys (BIFROST_API_KEY, etc.) are available.
-	cmd.Env = os.Environ()
+	env := os.Environ()
+
+	// Inject managed OpenCode config if available.
+	// OPENCODE_CONFIG tells OpenCode to merge our config (which sets the
+	// provider and enabled_providers) on top of its own global config.
+	if openCodeConfigPath != "" {
+		env = appendOrReplaceEnv(env, "OPENCODE_CONFIG", openCodeConfigPath)
+	}
+
+	// Inject extra env vars from the managed config (e.g., ASTONISH_OC_API_KEY
+	// for openai-compatible providers, AICORE_SERVICE_KEY for SAP AI Core).
+	for k, v := range openCodeConfigExtraEnv {
+		env = appendOrReplaceEnv(env, k, v)
+	}
+
+	cmd.Env = env
 
 	// Capture stderr for error reporting
 	var stderrBuf strings.Builder
@@ -537,4 +585,17 @@ Tips:
 - Include relevant context (requirements, design decisions, conventions)
 - For follow-up tasks, use the session_id from a previous result`,
 	}, runOpenCode)
+}
+
+// appendOrReplaceEnv appends or replaces an environment variable in a slice.
+// The env slice uses the KEY=VALUE format.
+func appendOrReplaceEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i, e := range env {
+		if len(e) >= len(prefix) && e[:len(prefix)] == prefix {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
 }

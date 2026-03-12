@@ -110,6 +110,25 @@ func Run(cfg RunConfig) error {
 		config.SetupMCPEnv(mcpCfg)
 	}
 
+	// --- Generate managed OpenCode config ---
+	// This creates ~/.config/astonish/opencode.json from the current provider
+	// settings so that OpenCode (used as a delegate tool in fleet sessions)
+	// does not need independent configuration.
+	var getSecret config.SecretGetter
+	if credStore != nil {
+		getSecret = credStore.GetSecret
+	}
+	if ocResult, ocErr := config.GenerateOpenCodeConfig(appCfg, getSecret); ocErr != nil {
+		logger.Printf("Warning: Failed to generate OpenCode config: %v", ocErr)
+	} else {
+		tools.SetOpenCodeConfig(ocResult.ConfigPath, ocResult.ProviderID, ocResult.ModelID, ocResult.ExtraEnv)
+		// Also set fleet project context vars so opencode_init uses the managed config
+		fleet.OpenCodeConfigPath = ocResult.ConfigPath
+		fleet.OpenCodeExtraEnv = ocResult.ExtraEnv
+		fleet.OpenCodeModelFlag = ocResult.FullModelID()
+		logger.Printf("OpenCode config generated (%s, provider: %s, model: %s)", ocResult.ConfigPath, ocResult.ProviderID, ocResult.ModelID)
+	}
+
 	// Initialize tools cache
 	ctx := context.Background()
 	api.InitToolsCache(ctx)

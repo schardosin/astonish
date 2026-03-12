@@ -10,9 +10,9 @@ import HomePage from './HomePage'
 const AGENT_COLORS = {
   po: { bg: 'rgba(59, 130, 246, 0.1)', border: 'rgba(59, 130, 246, 0.3)', text: '#60a5fa', label: 'PO' },
   architect: { bg: 'rgba(168, 85, 247, 0.1)', border: 'rgba(168, 85, 247, 0.3)', text: '#c084fc', label: 'Architect' },
+  ux: { bg: 'rgba(236, 72, 153, 0.1)', border: 'rgba(236, 72, 153, 0.3)', text: '#f472b6', label: 'UX' },
   dev: { bg: 'rgba(34, 197, 94, 0.1)', border: 'rgba(34, 197, 94, 0.3)', text: '#4ade80', label: 'Dev' },
   qa: { bg: 'rgba(234, 179, 8, 0.1)', border: 'rgba(234, 179, 8, 0.3)', text: '#facc15', label: 'QA' },
-  security: { bg: 'rgba(239, 68, 68, 0.1)', border: 'rgba(239, 68, 68, 0.3)', text: '#f87171', label: 'Security' },
   system: { bg: 'rgba(107, 114, 128, 0.1)', border: 'rgba(107, 114, 128, 0.3)', text: '#9ca3af', label: 'System' },
 }
 
@@ -22,34 +22,23 @@ function getAgentColor(sender) {
 
 // Fleet start dialog component
 function FleetStartDialog({ onStart, onCancel, defaultMessage = '' }) {
-  const [fleets, setFleets] = useState([])
   const [plans, setPlans] = useState([])
   const [selectedKey, setSelectedKey] = useState('')
-  const [selectedType, setSelectedType] = useState('fleet') // 'fleet' or 'plan'
   const [initialMessage, setInitialMessage] = useState(defaultMessage)
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
     const load = async () => {
       try {
-        const [fleetData, planData] = await Promise.all([
-          fetchFleets(),
-          fetchFleetPlans().catch(() => ({ plans: [] })),
-        ])
-        const loadedFleets = fleetData.fleets || []
-        const loadedPlans = planData.plans || []
-        setFleets(loadedFleets)
-        setPlans(loadedPlans)
-        // Default to first fleet
-        if (loadedFleets.length > 0) {
-          setSelectedKey(loadedFleets[0].key)
-          setSelectedType('fleet')
-        } else if (loadedPlans.length > 0) {
-          setSelectedKey(loadedPlans[0].key)
-          setSelectedType('plan')
+        const planData = await fetchFleetPlans().catch(() => ({ plans: [] }))
+        // Only show chat-type plans (github_issues plans are triggered by the scheduler)
+        const chatPlans = (planData.plans || []).filter(p => p.channel_type === 'chat')
+        setPlans(chatPlans)
+        if (chatPlans.length > 0) {
+          setSelectedKey(chatPlans[0].key)
         }
       } catch (err) {
-        console.error('Failed to load fleets:', err)
+        console.error('Failed to load fleet plans:', err)
       } finally {
         setIsLoading(false)
       }
@@ -57,25 +46,11 @@ function FleetStartDialog({ onStart, onCancel, defaultMessage = '' }) {
     load()
   }, [])
 
-  const handleSelectChange = (e) => {
-    const val = e.target.value
-    // Values are prefixed with "fleet:" or "plan:" to distinguish
-    if (val.startsWith('plan:')) {
-      setSelectedKey(val.slice(5))
-      setSelectedType('plan')
-    } else {
-      setSelectedKey(val.startsWith('fleet:') ? val.slice(6) : val)
-      setSelectedType('fleet')
-    }
-  }
-
   const handleSubmit = (e) => {
     e.preventDefault()
     if (!selectedKey) return
-    onStart(selectedType === 'plan' ? null : selectedKey, initialMessage, selectedType === 'plan' ? selectedKey : null)
+    onStart(null, initialMessage, selectedKey)
   }
-
-  const hasItems = fleets.length > 0 || plans.length > 0
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
@@ -94,34 +69,26 @@ function FleetStartDialog({ onStart, onCancel, defaultMessage = '' }) {
             <div className="flex items-center justify-center py-8">
               <Loader size={18} className="animate-spin text-cyan-400" />
             </div>
-          ) : !hasItems ? (
-            <p className="text-sm text-center py-4" style={{ color: 'var(--text-muted)' }}>No fleets available</p>
+          ) : plans.length === 0 ? (
+            <div className="text-sm text-center py-4" style={{ color: 'var(--text-muted)' }}>
+              <p>No fleet plans available.</p>
+              <p className="mt-1 text-xs">Create a chat fleet plan first using <span className="font-mono text-cyan-400">/fleet-plan</span></p>
+            </div>
           ) : (
             <>
               <div>
-                <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Fleet</label>
+                <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Fleet Plan</label>
                 <select
-                  value={selectedType === 'plan' ? `plan:${selectedKey}` : `fleet:${selectedKey}`}
-                  onChange={handleSelectChange}
+                  value={selectedKey}
+                  onChange={(e) => setSelectedKey(e.target.value)}
                   className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
                   style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
                 >
-                  {fleets.length > 0 && (
-                    <optgroup label="Fleets">
-                      {fleets.map(f => (
-                        <option key={`fleet:${f.key}`} value={`fleet:${f.key}`}>{f.name} ({f.agent_names.join(', ')})</option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {plans.length > 0 && (
-                    <optgroup label="Fleet Plans">
-                      {plans.map(p => (
-                        <option key={`plan:${p.key}`} value={`plan:${p.key}`}>
-                          {p.name} [{p.channel_type}]{p.activated ? ' (active)' : ''} ({p.agent_names.join(', ')})
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
+                  {plans.map(p => (
+                    <option key={p.key} value={p.key}>
+                      {p.name} ({p.agent_names.join(', ')})
+                    </option>
+                  ))}
                 </select>
               </div>
               <div>
@@ -143,6 +110,93 @@ function FleetStartDialog({ onStart, onCancel, defaultMessage = '' }) {
             </button>
             <button type="submit" disabled={!selectedKey || isLoading} className="px-4 py-2 text-sm bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
               Start Fleet
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+// Dialog shown when /fleet-plan is called without a template key.
+// Lists available fleet templates so the user can pick one, then re-issues
+// /fleet-plan <key> to trigger the full wizard flow with system prompt injection.
+function FleetTemplatePicker({ onSelect, onCancel }) {
+  const [templates, setTemplates] = useState([])
+  const [selectedKey, setSelectedKey] = useState('')
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const data = await fetchFleets()
+        const loaded = data.fleets || []
+        setTemplates(loaded)
+        if (loaded.length > 0) {
+          setSelectedKey(loaded[0].key)
+        }
+      } catch (err) {
+        console.error('Failed to load fleet templates:', err)
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    load()
+  }, [])
+
+  const handleSubmit = (e) => {
+    e.preventDefault()
+    if (!selectedKey) return
+    onSelect(selectedKey)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div className="w-full max-w-md rounded-xl shadow-2xl" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+        <div className="px-6 py-4" style={{ borderBottom: '1px solid var(--border-color)' }}>
+          <h2 className="text-lg font-semibold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+            <Users size={20} className="text-cyan-400" />
+            Create Fleet Plan
+          </h2>
+          <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+            Select a fleet template to configure
+          </p>
+        </div>
+        <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader size={18} className="animate-spin text-cyan-400" />
+            </div>
+          ) : templates.length === 0 ? (
+            <p className="text-sm text-center py-4" style={{ color: 'var(--text-muted)' }}>No fleet templates available</p>
+          ) : (
+            <div>
+              <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Fleet Template</label>
+              <select
+                value={selectedKey}
+                onChange={(e) => setSelectedKey(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
+              >
+                {templates.map(t => (
+                  <option key={t.key} value={t.key}>
+                    {t.name} ({t.agent_names.join(', ')})
+                  </option>
+                ))}
+              </select>
+              {selectedKey && templates.find(t => t.key === selectedKey)?.description && (
+                <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {templates.find(t => t.key === selectedKey).description}
+                </p>
+              )}
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" onClick={onCancel} className="px-4 py-2 text-sm rounded-lg hover:bg-white/5 transition-colors" style={{ color: 'var(--text-secondary)' }}>
+              Cancel
+            </button>
+            <button type="submit" disabled={!selectedKey || isLoading} className="px-4 py-2 text-sm bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+              Continue
             </button>
           </div>
         </form>
@@ -460,6 +514,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   const [fleetState, setFleetState] = useState(null) // { state, active_agent }
   const [showFleetDialog, setShowFleetDialog] = useState(false)
   const [fleetDialogMessage, setFleetDialogMessage] = useState('') // pre-populated from /fleet command
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false) // /fleet-plan without template key
   const [pendingFleetPlanPrompt, setPendingFleetPlanPrompt] = useState(null) // deferred plan creation message
 
   // Slash command popup
@@ -956,9 +1011,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           case 'fleet_plan_redirect':
             // /fleet-plan [hint] command: start plan creation in a fresh conversation.
             // If the backend found a plan_wizard in the template, use it as system context.
-            // Otherwise fall back to a generic hardcoded prompt.
-            // NOTE: The user message is kept minimal (never the wizard description).
-            // The wizard's system_prompt already tells the LLM how to greet the user.
+            // If no hint, show a template picker dialog so the user selects one first.
             setIsStreaming(false)
             {
               const hint = data.hint || ''
@@ -972,9 +1025,8 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 const genericSystemPrompt = `You are helping the user create a fleet plan based on the "${hint}" fleet template. The base_fleet_key is "${hint}". Guide them through:\n1. Plan identity (key, name, description)\n2. Communication channel type and settings\n3. Artifact destinations\n4. Credentials for external services\n5. Any agent behavior customizations\n\nBefore saving, call validate_fleet_plan with all config including credentials. Only call save_fleet_plan after validation passes. Include the same credentials in the save call.`
                 setPendingFleetPlanPrompt({ message: `Create a fleet plan from the "${hint}" template.`, systemContext: genericSystemPrompt })
               } else {
-                // No hint at all: generic guided flow as system context
-                const genericSystemPrompt = `You are helping the user create a new fleet plan. Guide them through:\n1. Which base fleet template to use\n2. Communication channel type: 'chat' (manual start) or 'github_issues' (auto-triggered by new GitHub issues). These are the currently supported channels.\n3. Channel-specific settings\n4. Artifact destinations\n5. Credentials for external services\n6. Any agent behavior customizations\n\nAsk questions one at a time. Before saving, call validate_fleet_plan to verify connections. Only call save_fleet_plan after validation passes. Include credentials in both calls.`
-                setPendingFleetPlanPrompt({ message: 'I want to create a new fleet plan.', systemContext: genericSystemPrompt })
+                // No hint: show template picker so user selects one, then re-issue /fleet-plan <key>
+                setShowTemplatePicker(true)
               }
             }
             break
@@ -1820,6 +1872,17 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
         onStart={handleFleetStart}
         onCancel={() => { setFleetDialogMessage(''); setShowFleetDialog(false) }}
         defaultMessage={fleetDialogMessage}
+      />
+    )}
+
+    {/* Fleet template picker for bare /fleet-plan command */}
+    {showTemplatePicker && (
+      <FleetTemplatePicker
+        onSelect={(templateKey) => {
+          setShowTemplatePicker(false)
+          sendMessage(`/fleet-plan ${templateKey}`)
+        }}
+        onCancel={() => setShowTemplatePicker(false)}
       />
     )}
     </>

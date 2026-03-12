@@ -786,8 +786,11 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                   Default Model
                 </label>
                 
-                {/* Providers with enhanced selector */}
-                {['openrouter', 'anthropic', 'gemini', 'groq', 'litellm', 'openai', 'poe', 'sap_ai_core', 'xai', 'lm_studio', 'ollama'].includes(generalForm.default_provider) ? (
+                {/* Providers with enhanced selector — resolve instance name to type */}
+                {(() => {
+                  const providerType = settings?.providers?.find(p => p.name === generalForm.default_provider)?.type || ''
+                  return ['openrouter', 'anthropic', 'gemini', 'groq', 'litellm', 'openai', 'poe', 'sap_ai_core', 'xai', 'lm_studio', 'ollama', 'openai_compat'].includes(providerType)
+                })() ? (
                   <div>
                     <button
                       onClick={() => setShowModelSelector(true)}
@@ -804,11 +807,14 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                       <Search size={16} style={{ color: 'var(--text-muted)' }} />
                     </button>
                     <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                      {generalForm.default_provider === 'openrouter' 
-                        ? 'Click to open model browser with pricing info'
-                        : ['gemini', 'groq'].includes(generalForm.default_provider)
-                          ? 'Click to open model browser with context window'
-                          : 'Click to open model browser'}
+                      {(() => {
+                        const pt = settings?.providers?.find(p => p.name === generalForm.default_provider)?.type || ''
+                        return pt === 'openrouter'
+                          ? 'Click to open model browser with pricing info'
+                          : ['gemini', 'groq'].includes(pt)
+                            ? 'Click to open model browser with context window'
+                            : 'Click to open model browser'
+                      })()}
                     </p>
                   </div>
                 ) : (

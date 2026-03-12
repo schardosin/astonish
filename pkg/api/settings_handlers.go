@@ -777,284 +777,153 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// For OpenRouter, return full metadata with pricing
-	if providerID == "openrouter" {
-		pCfg := cfg.Providers["openrouter"]
-		if pCfg == nil {
-			pCfg = make(config.ProviderConfig)
-		}
-		apiKey := resolveProviderSecret("openrouter", "api_key", "OPENROUTER_API_KEY", pCfg)
+	// Resolve provider instance config and type. The providerID is the instance
+	// name (e.g. "SAP AI Core"), not necessarily the type slug ("sap_ai_core").
+	pCfg := cfg.Providers[providerID]
+	if pCfg == nil {
+		pCfg = make(config.ProviderConfig)
+	}
+	providerType := config.GetProviderType(providerID, pCfg)
 
+	switch providerType {
+	case "openrouter":
+		apiKey := resolveProviderSecret(providerID, "api_key", "OPENROUTER_API_KEY", pCfg)
 		models, err := openrouter.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"provider":     providerID,
-			"has_metadata": true,
-			"models":       models,
-		})
+		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
 		return
-	}
 
-	// For Anthropic, return model metadata with display names
-	if providerID == "anthropic" {
-		pCfg := cfg.Providers["anthropic"]
-		if pCfg == nil {
-			pCfg = make(config.ProviderConfig)
-		}
-		apiKey := resolveProviderSecret("anthropic", "api_key", "ANTHROPIC_API_KEY", pCfg)
-
+	case "anthropic":
+		apiKey := resolveProviderSecret(providerID, "api_key", "ANTHROPIC_API_KEY", pCfg)
 		models, err := anthropic.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"provider":     providerID,
-			"has_metadata": true,
-			"models":       models,
-		})
+		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
 		return
-	}
 
-	// For Google AI (Gemini), return model metadata with token limits
-	if providerID == "gemini" {
-		pCfg := cfg.Providers["gemini"]
-		if pCfg == nil {
-			pCfg = make(config.ProviderConfig)
-		}
-		apiKey := resolveProviderSecret("gemini", "api_key", "GOOGLE_API_KEY", pCfg)
-
+	case "gemini":
+		apiKey := resolveProviderSecret(providerID, "api_key", "GOOGLE_API_KEY", pCfg)
 		models, err := google.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"provider":     providerID,
-			"has_metadata": true,
-			"models":       models,
-		})
+		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
 		return
-	}
 
-	// For Groq, return model metadata with context window
-	if providerID == "groq" {
-		pCfg := cfg.Providers["groq"]
-		if pCfg == nil {
-			pCfg = make(config.ProviderConfig)
-		}
-		apiKey := resolveProviderSecret("groq", "api_key", "GROQ_API_KEY", pCfg)
-
+	case "groq":
+		apiKey := resolveProviderSecret(providerID, "api_key", "GROQ_API_KEY", pCfg)
 		models, err := groq.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"provider":     providerID,
-			"has_metadata": true,
-			"models":       models,
-		})
+		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
 		return
-	}
 
-	// For OpenAI, return model metadata
-	if providerID == "openai" {
-		pCfg := cfg.Providers["openai"]
-		if pCfg == nil {
-			pCfg = make(config.ProviderConfig)
-		}
-		apiKey := resolveProviderSecret("openai", "api_key", "OPENAI_API_KEY", pCfg)
-
+	case "openai":
+		apiKey := resolveProviderSecret(providerID, "api_key", "OPENAI_API_KEY", pCfg)
 		models, err := openai_provider.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"provider":     providerID,
-			"has_metadata": true,
-			"models":       models,
-		})
+		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
 		return
-	}
 
-	// For Poe, return model metadata
-	if providerID == "poe" {
-		pCfg := cfg.Providers["poe"]
-		if pCfg == nil {
-			pCfg = make(config.ProviderConfig)
-		}
-		apiKey := resolveProviderSecret("poe", "api_key", "POE_API_KEY", pCfg)
-
+	case "poe":
+		apiKey := resolveProviderSecret(providerID, "api_key", "POE_API_KEY", pCfg)
 		models, err := poe.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"provider":     providerID,
-			"has_metadata": true,
-			"models":       models,
-		})
+		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
 		return
-	}
 
-	// For SAP AI Core, return model metadata with context window and max tokens
-	if providerID == "sap_ai_core" {
-		pCfg := cfg.Providers["sap_ai_core"]
-		if pCfg == nil {
-			pCfg = make(config.ProviderConfig)
-		}
-		clientID := resolveProviderSecret("sap_ai_core", "client_id", "AICORE_CLIENT_ID", pCfg)
-		clientSecret := resolveProviderSecret("sap_ai_core", "client_secret", "AICORE_CLIENT_SECRET", pCfg)
-		authURL := resolveProviderSecret("sap_ai_core", "auth_url", "AICORE_AUTH_URL", pCfg)
-		// base_url and resource_group are non-secret, read from config/env only
-		baseURL := ""
-		if pCfg["base_url"] != "" {
-			baseURL = pCfg["base_url"]
-		}
+	case "sap_ai_core":
+		clientID := resolveProviderSecret(providerID, "client_id", "AICORE_CLIENT_ID", pCfg)
+		clientSecret := resolveProviderSecret(providerID, "client_secret", "AICORE_CLIENT_SECRET", pCfg)
+		authURL := resolveProviderSecret(providerID, "auth_url", "AICORE_AUTH_URL", pCfg)
+		baseURL := pCfg["base_url"]
 		if baseURL == "" {
 			baseURL = os.Getenv("AICORE_BASE_URL")
 		}
-		resourceGroup := ""
-		if pCfg["resource_group"] != "" {
-			resourceGroup = pCfg["resource_group"]
-		}
+		resourceGroup := pCfg["resource_group"]
 		if resourceGroup == "" {
 			resourceGroup = os.Getenv("AICORE_RESOURCE_GROUP")
 		}
-
 		models, err := sap.ListModelsWithMetadata(r.Context(), clientID, clientSecret, authURL, baseURL, resourceGroup)
 		if err != nil {
 			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"provider":     providerID,
-			"has_metadata": true,
-			"models":       models,
-		})
+		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
 		return
-	}
 
-	// For xAI, return model metadata
-	if providerID == "xai" {
-		pCfg := cfg.Providers["xai"]
-		if pCfg == nil {
-			pCfg = make(config.ProviderConfig)
-		}
-		apiKey := resolveProviderSecret("xai", "api_key", "XAI_API_KEY", pCfg)
-
+	case "xai":
+		apiKey := resolveProviderSecret(providerID, "api_key", "XAI_API_KEY", pCfg)
 		models, err := xai.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"provider":     providerID,
-			"has_metadata": true,
-			"models":       models,
-		})
+		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
 		return
-	}
 
-	// For LM Studio, return model metadata
-	if providerID == "lm_studio" {
-		baseURL := ""
-		if cfg.Providers["lm_studio"] != nil {
-			baseURL = cfg.Providers["lm_studio"]["base_url"]
-		}
-
+	case "lm_studio":
+		baseURL := pCfg["base_url"]
 		models, err := lmstudio.ListModelsWithMetadata(r.Context(), baseURL)
 		if err != nil {
 			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"provider":     providerID,
-			"has_metadata": true,
-			"models":       models,
-		})
+		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
 		return
 
-	}
-
-	// For Ollama, return model metadata
-	if providerID == "ollama" {
-		baseURL := ""
-		if cfg.Providers["ollama"] != nil {
-			baseURL = cfg.Providers["ollama"]["base_url"]
-		}
-
+	case "ollama":
+		baseURL := pCfg["base_url"]
 		models, err := ollama.ListModelsWithMetadata(r.Context(), baseURL)
 		if err != nil {
 			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"provider":     providerID,
-			"has_metadata": true,
-			"models":       models,
-		})
+		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
 		return
-	}
 
-	// For OpenAI Compatible providers (matched by type, not instance name)
-	if pCfg := cfg.Providers[providerID]; pCfg != nil {
-		providerType := config.GetProviderType(providerID, pCfg)
-		if providerType == "openai_compat" {
-			apiKey := resolveProviderSecret(providerID, "api_key", "", pCfg)
-			baseURL := pCfg["base_url"]
-			if baseURL == "" {
-				baseURL = "https://api.openai.com/v1"
-			}
-
-			models, err := openai_compat.ListModels(r.Context(), apiKey, baseURL)
-			if err != nil {
-				http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-
-			var modelInfos []map[string]interface{}
-			for _, m := range models {
-				modelInfos = append(modelInfos, map[string]interface{}{
-					"id":   m,
-					"name": m,
-				})
-			}
-
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"provider":     providerID,
-				"has_metadata": false,
-				"models":       modelInfos,
-			})
+	case "openai_compat":
+		apiKey := resolveProviderSecret(providerID, "api_key", "", pCfg)
+		baseURL := pCfg["base_url"]
+		if baseURL == "" {
+			baseURL = "https://api.openai.com/v1"
+		}
+		models, err := openai_compat.ListModels(r.Context(), apiKey, baseURL)
+		if err != nil {
+			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		var modelInfos []map[string]interface{}
+		for _, m := range models {
+			modelInfos = append(modelInfos, map[string]interface{}{"id": m, "name": m})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": false, "models": modelInfos})
+		return
 	}
 
 	// For other providers, return basic model list wrapped as ModelInfo

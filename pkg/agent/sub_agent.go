@@ -16,6 +16,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/google/uuid"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/memory"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 )
@@ -83,6 +84,7 @@ type SubAgentManager struct {
 	SessionService adksession.Service           // Session persistence
 	MemoryManager  *memory.Manager              // Memory manager for context injection (nil = disabled)
 	Compactor      *persistentsession.Compactor // Context window compactor for sub-agents (nil = disabled)
+	Redactor       *credentials.Redactor        // Redacts credential values from tool outputs (nil = disabled)
 	AppName        string                       // Application name for sessions
 	UserID         string                       // User ID for sessions
 
@@ -235,6 +237,20 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		beforeModelCallbacks = append(beforeModelCallbacks, m.Compactor.BeforeModelCallback())
 	}
 
+	// Wire credential redaction so sub-agent tool outputs don't leak secrets
+	// into the session transcript. The resolve_credential exemption is kept so
+	// the sub-agent LLM can still use raw values programmatically.
+	var afterToolCallbacks []llmagent.AfterToolCallback
+	if m.Redactor != nil {
+		redactor := m.Redactor
+		afterToolCallbacks = append(afterToolCallbacks, func(ctx tool.Context, t tool.Tool, input, output map[string]any, err error) (map[string]any, error) {
+			if output != nil && t.Name() != "resolve_credential" {
+				return redactor.RedactMap(output), err
+			}
+			return output, err
+		})
+	}
+
 	// Create child LLM agent via ADK
 	childAgent, err := llmagent.New(llmagent.Config{
 		Name:                 task.Name,
@@ -243,6 +259,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		Tools:                childTools,
 		Toolsets:             m.filterToolsets(),
 		BeforeModelCallbacks: beforeModelCallbacks,
+		AfterToolCallbacks:   afterToolCallbacks,
 	})
 	if err != nil {
 		return TaskResult{

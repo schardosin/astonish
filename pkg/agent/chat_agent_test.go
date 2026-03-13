@@ -2,8 +2,11 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"google.golang.org/adk/session"
+	"google.golang.org/genai"
 	"gopkg.in/yaml.v3"
 )
 
@@ -313,4 +316,302 @@ func splitFirst(s, sep string) [2]string {
 		}
 	}
 	return [2]string{s[:idx], s[idx+len(sep):]}
+}
+
+// --- thinkTagFilter streaming tests ---
+
+func TestThinkTagFilter_SingleChunkComplete(t *testing.T) {
+	// The entire think block arrives in one chunk.
+	f := &thinkTagFilter{}
+	got := f.Feed("<think>reasoning here</think>Hello!")
+	if got != "Hello!" {
+		t.Errorf("got %q, want %q", got, "Hello!")
+	}
+}
+
+func TestThinkTagFilter_StreamedAcrossChunks(t *testing.T) {
+	// Simulates the real streaming scenario: tags split across many small chunks.
+	f := &thinkTagFilter{}
+	chunks := []string{
+		"<thi",
+		"nk>",
+		"The user said ",
+		"\"Hi\".",
+		" This is a simple",
+		" greeting.",
+		"</thi",
+		"nk>",
+		"Hello! ",
+		"How can I help?",
+	}
+	var out strings.Builder
+	for _, c := range chunks {
+		out.WriteString(f.Feed(c))
+	}
+	want := "Hello! How can I help?"
+	if out.String() != want {
+		t.Errorf("got %q, want %q", out.String(), want)
+	}
+}
+
+func TestThinkTagFilter_MultipleThinkBlocks(t *testing.T) {
+	// Multiple think blocks interleaved with visible text.
+	f := &thinkTagFilter{}
+	chunks := []string{
+		"<think>first thought</think>",
+		"Visible 1",
+		"<think>second thought</think>",
+		" Visible 2",
+	}
+	var out strings.Builder
+	for _, c := range chunks {
+		out.WriteString(f.Feed(c))
+	}
+	want := "Visible 1 Visible 2"
+	if out.String() != want {
+		t.Errorf("got %q, want %q", out.String(), want)
+	}
+}
+
+func TestThinkTagFilter_ThinkingTag(t *testing.T) {
+	// <thinking> variant.
+	f := &thinkTagFilter{}
+	chunks := []string{
+		"<thinking>deep reasoning</thinking>",
+		"The answer is 42.",
+	}
+	var out strings.Builder
+	for _, c := range chunks {
+		out.WriteString(f.Feed(c))
+	}
+	want := "The answer is 42."
+	if out.String() != want {
+		t.Errorf("got %q, want %q", out.String(), want)
+	}
+}
+
+func TestThinkTagFilter_ThinkingTagStreamed(t *testing.T) {
+	// <thinking> tag split across chunks.
+	f := &thinkTagFilter{}
+	chunks := []string{
+		"<thinkin",
+		"g>",
+		"reasoning",
+		"</thinkin",
+		"g>",
+		"Result",
+	}
+	var out strings.Builder
+	for _, c := range chunks {
+		out.WriteString(f.Feed(c))
+	}
+	want := "Result"
+	if out.String() != want {
+		t.Errorf("got %q, want %q", out.String(), want)
+	}
+}
+
+func TestThinkTagFilter_NoThinkTags(t *testing.T) {
+	// Normal text without think tags passes through unchanged.
+	f := &thinkTagFilter{}
+	chunks := []string{"Hello ", "world! ", "How are you?"}
+	var out strings.Builder
+	for _, c := range chunks {
+		out.WriteString(f.Feed(c))
+	}
+	want := "Hello world! How are you?"
+	if out.String() != want {
+		t.Errorf("got %q, want %q", out.String(), want)
+	}
+}
+
+func TestThinkTagFilter_OnlyThinkContent(t *testing.T) {
+	// Entire response is inside think tags — output should be empty.
+	f := &thinkTagFilter{}
+	chunks := []string{
+		"<think>",
+		"all reasoning, no answer",
+		"</think>",
+	}
+	var out strings.Builder
+	for _, c := range chunks {
+		out.WriteString(f.Feed(c))
+	}
+	if out.String() != "" {
+		t.Errorf("got %q, want empty", out.String())
+	}
+}
+
+func TestThinkTagFilter_TagSplitAtEveryByte(t *testing.T) {
+	// Worst case: every byte arrives as a separate chunk.
+	input := "<think>hidden</think>visible"
+	f := &thinkTagFilter{}
+	var out strings.Builder
+	for _, b := range []byte(input) {
+		out.WriteString(f.Feed(string(b)))
+	}
+	want := "visible"
+	if out.String() != want {
+		t.Errorf("got %q, want %q", out.String(), want)
+	}
+}
+
+func TestThinkTagFilter_TextBeforeThinkTag(t *testing.T) {
+	// Text appears before the think tag.
+	f := &thinkTagFilter{}
+	chunks := []string{
+		"Sure! ",
+		"<think>let me reason</think>",
+		"Here is the answer.",
+	}
+	var out strings.Builder
+	for _, c := range chunks {
+		out.WriteString(f.Feed(c))
+	}
+	want := "Sure! Here is the answer."
+	if out.String() != want {
+		t.Errorf("got %q, want %q", out.String(), want)
+	}
+}
+
+func TestThinkTagFilter_NemotronExample(t *testing.T) {
+	// Simulates the real Nemotron output from the issue.
+	f := &thinkTagFilter{}
+	chunks := []string{
+		"<think>",
+		"We need to produce a market report ",
+		"for today's date.",
+		"\n\n",
+		"</think>",
+		"\n",
+		"Here's today's stock market recap",
+	}
+	var out strings.Builder
+	for _, c := range chunks {
+		out.WriteString(f.Feed(c))
+	}
+	want := "\nHere's today's stock market recap"
+	if out.String() != want {
+		t.Errorf("got %q, want %q", out.String(), want)
+	}
+}
+
+func TestThinkTagFilter_PartialOpenTagNotConsumed(t *testing.T) {
+	// A '<' that isn't part of a think tag should still be emitted.
+	f := &thinkTagFilter{}
+	got := f.Feed("a < b and c > d")
+	if got != "a < b and c > d" {
+		t.Errorf("got %q, want %q", got, "a < b and c > d")
+	}
+}
+
+func TestThinkTagFilter_AngleBracketInNormalText(t *testing.T) {
+	// HTML-like content that isn't a think tag.
+	f := &thinkTagFilter{}
+	chunks := []string{"Use <b>", "bold</b>", " text"}
+	var out strings.Builder
+	for _, c := range chunks {
+		out.WriteString(f.Feed(c))
+	}
+	want := "Use <b>bold</b> text"
+	if out.String() != want {
+		t.Errorf("got %q, want %q", out.String(), want)
+	}
+}
+
+func TestFilterEventThinkContent_DropsThoughtParts(t *testing.T) {
+	// Parts with Thought=true should be dropped entirely.
+	f := &thinkTagFilter{}
+	event := &session.Event{}
+	event.LLMResponse.Content = &genai.Content{
+		Role: "model",
+		Parts: []*genai.Part{
+			{Text: "thinking internally", Thought: true},
+			{Text: "visible answer"},
+		},
+	}
+	filterEventThinkContent(f, event)
+	if len(event.LLMResponse.Content.Parts) != 1 {
+		t.Fatalf("expected 1 part, got %d", len(event.LLMResponse.Content.Parts))
+	}
+	if event.LLMResponse.Content.Parts[0].Text != "visible answer" {
+		t.Errorf("got %q, want %q", event.LLMResponse.Content.Parts[0].Text, "visible answer")
+	}
+}
+
+func TestFilterEventThinkContent_NilEvent(t *testing.T) {
+	// Should not panic on nil.
+	f := &thinkTagFilter{}
+	filterEventThinkContent(f, nil)
+}
+
+func TestFilterEventThinkContent_NilContent(t *testing.T) {
+	// Should not panic when content is nil.
+	f := &thinkTagFilter{}
+	event := &session.Event{}
+	filterEventThinkContent(f, event)
+}
+
+func TestFilterEventThinkContent_WhitespaceOnlyAfterStrip(t *testing.T) {
+	// When think tags are stripped and only whitespace remains, the part
+	// should be dropped entirely — not yielded as an empty message.
+	f := &thinkTagFilter{}
+
+	// Simulate streaming: first chunk opens think block
+	event1 := &session.Event{}
+	event1.LLMResponse.Content = &genai.Content{
+		Role:  "model",
+		Parts: []*genai.Part{{Text: "<think>reasoning"}},
+	}
+	filterEventThinkContent(f, event1)
+	if len(event1.LLMResponse.Content.Parts) != 0 {
+		t.Errorf("expected 0 parts during think block, got %d", len(event1.LLMResponse.Content.Parts))
+	}
+
+	// Second chunk closes think block with trailing whitespace
+	event2 := &session.Event{}
+	event2.LLMResponse.Content = &genai.Content{
+		Role:  "model",
+		Parts: []*genai.Part{{Text: "</think>\n\n"}},
+	}
+	filterEventThinkContent(f, event2)
+	if len(event2.LLMResponse.Content.Parts) != 0 {
+		t.Errorf("expected 0 parts for whitespace-only remnant, got %d", len(event2.LLMResponse.Content.Parts))
+	}
+
+	// Third chunk is real content — should pass through
+	event3 := &session.Event{}
+	event3.LLMResponse.Content = &genai.Content{
+		Role:  "model",
+		Parts: []*genai.Part{{Text: "Hello!"}},
+	}
+	filterEventThinkContent(f, event3)
+	if len(event3.LLMResponse.Content.Parts) != 1 {
+		t.Fatalf("expected 1 part for real content, got %d", len(event3.LLMResponse.Content.Parts))
+	}
+	if event3.LLMResponse.Content.Parts[0].Text != "Hello!" {
+		t.Errorf("got %q, want %q", event3.LLMResponse.Content.Parts[0].Text, "Hello!")
+	}
+}
+
+func TestFilterEventThinkContent_ToolCallPartPreserved(t *testing.T) {
+	// Parts with FunctionCall should pass through even when adjacent to
+	// think-tagged text parts that get dropped.
+	f := &thinkTagFilter{}
+	event := &session.Event{}
+	event.LLMResponse.Content = &genai.Content{
+		Role: "model",
+		Parts: []*genai.Part{
+			{Text: "\n\n"},
+			{FunctionCall: &genai.FunctionCall{Name: "shell_command", Args: map[string]any{"command": "ls"}}},
+		},
+	}
+	filterEventThinkContent(f, event)
+	// The whitespace-only text part should be dropped, but the function call part must remain.
+	if len(event.LLMResponse.Content.Parts) != 1 {
+		t.Fatalf("expected 1 part (function call), got %d", len(event.LLMResponse.Content.Parts))
+	}
+	if event.LLMResponse.Content.Parts[0].FunctionCall == nil {
+		t.Error("expected function call part to be preserved")
+	}
 }

@@ -59,7 +59,7 @@ func processRead(_ tool.Context, args ProcessReadArgs) (ProcessReadResult, error
 
 type ProcessWriteArgs struct {
 	SessionID string `json:"session_id" jsonschema:"The session ID of the process to write to"`
-	Input     string `json:"input" jsonschema:"Text to send to the process stdin. Include newline (\\n) to press Enter."`
+	Input     string `json:"input" jsonschema:"Text to send to the process stdin. ALWAYS include a trailing newline (\\n) to press Enter. Send exactly once per prompt."`
 }
 
 type ProcessWriteResult struct {
@@ -81,7 +81,23 @@ func processWrite(_ tool.Context, args ProcessWriteArgs) (ProcessWriteResult, er
 		return ProcessWriteResult{}, fmt.Errorf("process has exited (session %q)", args.SessionID)
 	}
 
-	n, err := sess.Write([]byte(args.Input))
+	// Snapshot output size before write so we can return only NEW output
+	preWriteBytes := len(sess.Output.Bytes())
+
+	// Normalize the input: some models send literal escape sequences (the
+	// two-character string `\n`) instead of actual control characters.
+	// Convert the literal `\n` to a real newline so that interactive prompts
+	// (e.g., SSH password) receive proper keypresses.
+	input := strings.ReplaceAll(args.Input, `\n`, "\n")
+
+	// Ensure input ends with a newline so the Enter keypress is always sent.
+	// Some models omit the trailing \n despite the schema instruction, which
+	// causes interactive prompts (e.g., SSH password) to hang indefinitely.
+	if len(input) > 0 && !strings.HasSuffix(input, "\n") {
+		input += "\n"
+	}
+
+	n, err := sess.Write([]byte(input))
 	if err != nil {
 		return ProcessWriteResult{}, fmt.Errorf("write to process failed: %w", err)
 	}
@@ -92,9 +108,15 @@ func processWrite(_ tool.Context, args ProcessWriteArgs) (ProcessWriteResult, er
 	data := sess.Output.Bytes()
 	running := sess.IsRunning()
 
+	// Return only the new output produced after the write
+	newOutput := ""
+	if preWriteBytes < len(data) {
+		newOutput = string(data[preWriteBytes:])
+	}
+
 	result := ProcessWriteResult{
 		BytesWritten: n,
-		Output:       string(data),
+		Output:       newOutput,
 		TotalBytes:   len(data),
 		Running:      running,
 	}
@@ -215,8 +237,10 @@ func NewProcessWriteTool() (tool.Tool, error) {
 		Description: `Send input to a running process session.
 
 Use this to respond to interactive prompts (SSH host key verification, passwords, confirmations, etc.).
-Always include a newline (\n) at the end to press Enter.
-Returns the current output after writing, so you can see the process's response.`,
+ALWAYS include a trailing newline (\n) to press Enter — do not send the text without it.
+Send the input exactly ONCE; do not retry without a newline and then again with one, as this
+corrupts the input buffer (the process receives the text twice).
+Returns only the NEW output produced after your write, so you can see the process's response.`,
 	}, processWrite)
 }
 

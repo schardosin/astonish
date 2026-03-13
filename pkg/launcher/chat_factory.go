@@ -929,7 +929,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		promptBuilder, cfg.DebugMode, cfg.AutoApprove,
 	)
 
-	// Wire credential redactor to ChatAgent and session service
+	// Wire credential redactor to ChatAgent, session service, and sub-agents
 	if credStore != nil {
 		redactor := credStore.Redactor()
 		chatAgent.Redactor = redactor
@@ -947,6 +947,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		subAgentMgr.Toolsets = mcpToolsets
 		subAgentMgr.SessionService = sessionService
 		subAgentMgr.MemoryManager = memMgr
+		subAgentMgr.Redactor = chatAgent.Redactor
 		subAgentMgr.AppName = "astonish"
 		subAgentMgr.UserID = "console_user"
 		tools.SetSubAgentManager(subAgentMgr)

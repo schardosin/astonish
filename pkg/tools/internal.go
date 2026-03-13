@@ -131,8 +131,8 @@ func ReadFile(ctx tool.Context, args ReadFileArgs) (ReadFileResult, error) {
 // --- Write File Tool ---
 
 type WriteFileArgs struct {
-	FilePath string      `json:"file_path" jsonschema:"The path to the file where content will be written."`
-	Content  interface{} `json:"content" jsonschema:"The content to write to the file. Can be a single string or a list of strings."`
+	FilePath string `json:"file_path" jsonschema:"The path to the file where content will be written."`
+	Content  string `json:"content" jsonschema:"The content to write to the file."`
 }
 
 type WriteFileResult struct {
@@ -167,42 +167,18 @@ func tryExtractStdout(input string) (string, bool) {
 	return "", false
 }
 
-// contentToString converts the content (string or []interface{}) to a single string
-func contentToString(content interface{}) (string, error) {
-	switch v := content.(type) {
-	case string:
-		return v, nil
-	case []interface{}:
-		var lines []string
-		for _, item := range v {
-			lines = append(lines, fmt.Sprintf("%v", item))
-		}
-		return strings.Join(lines, "\n"), nil
-	case []string:
-		return strings.Join(v, "\n"), nil
-	default:
-		return fmt.Sprintf("%v", content), nil
-	}
-}
-
 func WriteFile(ctx tool.Context, args WriteFileArgs) (WriteFileResult, error) {
 	args.FilePath = expandPath(args.FilePath)
 	if isProtectedPath(args.FilePath) {
 		return WriteFileResult{}, fmt.Errorf("access denied: this file is part of the credential store and cannot be modified")
 	}
 
-	// Convert content to string
-	preliminaryString, err := contentToString(args.Content)
-	if err != nil {
-		return WriteFileResult{}, fmt.Errorf("failed to process content: %w", err)
-	}
-
 	// Try to extract stdout from JSON (for shell_command output)
 	var finalContent string
-	if extracted, ok := tryExtractStdout(preliminaryString); ok {
+	if extracted, ok := tryExtractStdout(args.Content); ok {
 		finalContent = extracted
 	} else {
-		finalContent = preliminaryString
+		finalContent = args.Content
 	}
 
 	// Ensure parent directories exist
@@ -352,8 +328,8 @@ func looksLikePrompt(output string) bool {
 // --- Filter JSON Tool ---
 
 type FilterJsonArgs struct {
-	JsonData        interface{} `json:"json_data" jsonschema:"The JSON data to filter. Can be a JSON string, a list of dicts, or a dict."`
-	FieldsToExtract []string    `json:"fields_to_extract" jsonschema:"A list of fields to extract. Use dot notation for nested fields."`
+	JsonData        string   `json:"json_data" jsonschema:"The JSON data to filter, as a JSON string."`
+	FieldsToExtract []string `json:"fields_to_extract" jsonschema:"A list of fields to extract. Use dot notation for nested fields."`
 }
 
 type FilterJsonResult struct {
@@ -435,41 +411,31 @@ func filterItem(item interface{}, fields []string) interface{} {
 func FilterJson(ctx tool.Context, args FilterJsonArgs) (FilterJsonResult, error) {
 	var data interface{}
 
-	// 1. Handle input parsing
-	switch v := args.JsonData.(type) {
-	case string:
-		// Try to parse string as JSON
-		var parsed interface{}
-		if err := json.Unmarshal([]byte(v), &parsed); err != nil {
-			// If not valid JSON, maybe it's a Python literal? Go doesn't support that natively easily.
-			// But let's assume valid JSON for now as per Python's main path.
-			// If unmarshal fails, return error or treat as raw string?
-			// Python returns error string.
-			return FilterJsonResult{Result: fmt.Sprintf("Error: Invalid JSON input - %v", err)}, nil
-		}
+	// 1. Parse the JSON string
+	var parsed interface{}
+	if err := json.Unmarshal([]byte(args.JsonData), &parsed); err != nil {
+		return FilterJsonResult{Result: fmt.Sprintf("Error: Invalid JSON input - %v", err)}, nil
+	}
 
-		// Check for 'stdout' wrapping
-		if m, ok := parsed.(map[string]interface{}); ok {
-			if stdout, exists := m["stdout"]; exists {
-				// If stdout is a string, try to parse IT as JSON
-				if stdoutStr, ok := stdout.(string); ok {
-					var innerParsed interface{}
-					if err := json.Unmarshal([]byte(stdoutStr), &innerParsed); err == nil {
-						data = innerParsed
-					} else {
-						data = stdoutStr
-					}
+	// Check for 'stdout' wrapping
+	if m, ok := parsed.(map[string]interface{}); ok {
+		if stdout, exists := m["stdout"]; exists {
+			// If stdout is a string, try to parse IT as JSON
+			if stdoutStr, ok := stdout.(string); ok {
+				var innerParsed interface{}
+				if err := json.Unmarshal([]byte(stdoutStr), &innerParsed); err == nil {
+					data = innerParsed
 				} else {
-					data = stdout
+					data = stdoutStr
 				}
 			} else {
-				data = parsed
+				data = stdout
 			}
 		} else {
 			data = parsed
 		}
-	default:
-		data = v
+	} else {
+		data = parsed
 	}
 
 	// 2. Validate data type

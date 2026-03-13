@@ -162,10 +162,19 @@ type ProtectedTool struct {
 	YieldFunc func(*session.Event, error) bool // For emitting events
 }
 
-// Declaration forwards the call to the underlying tool if it supports it
+// Declaration forwards the call to the underlying tool if it supports it.
+// It normalizes ParametersJsonSchema to map[string]any so that all providers
+// serialize tool schemas with consistent (alphabetically sorted) key ordering,
+// which is critical for LLM KV cache prefix stability.
 func (p *ProtectedTool) Declaration() *genai.FunctionDeclaration {
 	if declTool, ok := p.Tool.(ToolWithDeclaration); ok {
-		return declTool.Declaration()
+		decl := declTool.Declaration()
+		if decl != nil && decl.ParametersJsonSchema != nil {
+			if _, isMap := decl.ParametersJsonSchema.(map[string]any); !isMap {
+				decl.ParametersJsonSchema = NormalizeSchema(decl.ParametersJsonSchema)
+			}
+		}
+		return decl
 	}
 	return nil
 }

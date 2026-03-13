@@ -140,8 +140,33 @@ func (t *sanitizedTool) Run(ctx tool.Context, args any) (map[string]any, error) 
 	return runner.Run(ctx, args)
 }
 
+// NormalizeSchema converts any schema type (e.g. *jsonschema.Schema) to
+// map[string]any via a JSON round-trip. This ensures consistent key ordering
+// when the schema is later re-serialized by providers, which is critical for
+// LLM KV cache stability (the tool definitions are part of the prompt prefix).
+// If the schema is already map[string]any it is returned as-is.
+func NormalizeSchema(schema any) map[string]any {
+	if schema == nil {
+		return nil
+	}
+	if m, ok := schema.(map[string]any); ok {
+		return m
+	}
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil
+	}
+	return m
+}
+
 // sanitizeJSONSchema fixes common issues in raw JSON schemas from MCP servers.
-// The most common issue: type "object" without a "properties" field.
+// Common issues:
+//   - type "object" without a "properties" field
+//   - properties missing a "type" field (breaks strict LLM templates like Nemotron)
 func sanitizeJSONSchema(schema any, debugMode bool, toolName string) any {
 	switch s := schema.(type) {
 	case map[string]any:
@@ -167,6 +192,27 @@ func sanitizeJSONSchema(schema any, debugMode bool, toolName string) any {
 		if addl, ok := s["additionalProperties"]; ok {
 			if addlMap, isMap := addl.(map[string]any); isMap {
 				s["additionalProperties"] = sanitizeJSONSchema(addlMap, debugMode, toolName+".additionalProperties")
+			}
+		}
+
+		// Fix: property missing "type" — strict LLM templates (e.g. Nemotron)
+		// require every property to have an explicit type. Skip schemas that
+		// express their type via composition keywords (anyOf, oneOf, allOf).
+		if _, hasType := s["type"]; !hasType {
+			if _, hasAnyOf := s["anyOf"]; !hasAnyOf {
+				if _, hasOneOf := s["oneOf"]; !hasOneOf {
+					if _, hasAllOf := s["allOf"]; !hasAllOf {
+						// Only add default type if the schema has at least one
+						// key (a truly empty schema {} means "any value" and
+						// is typically the root, not a property).
+						if len(s) > 0 {
+							s["type"] = "string"
+							if debugMode {
+								fmt.Printf("[Chat DEBUG] Fixed schema for '%s': added default type \"string\" to typeless property\n", toolName)
+							}
+						}
+					}
+				}
 			}
 		}
 

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
-	"time"
+	//"time"
 
 	"google.golang.org/adk/tool"
 )
@@ -235,20 +235,12 @@ func (b *SystemPromptBuilder) Build() string {
 		}
 	}
 
-	// 5. Environment info
+	// 5. Environment info (static parts only — volatile Date is at the end for KV cache)
 	sb.WriteString("\n## Environment\n\n")
 	if b.WorkspaceDir != "" {
 		sb.WriteString(fmt.Sprintf("- Working directory: %s\n", b.WorkspaceDir))
 	}
 	sb.WriteString(fmt.Sprintf("- OS: %s/%s\n", runtime.GOOS, runtime.GOARCH))
-	sb.WriteString(fmt.Sprintf("- Date: %s\n", time.Now().Format("2006-01-02 15:04 MST")))
-
-	// 5b. Self-Configuration (from SELF.md)
-	if b.SelfContent != "" {
-		sb.WriteString("\n## Self-Configuration\n\n")
-		sb.WriteString(b.SelfContent)
-		sb.WriteString("\n")
-	}
 
 	// 5c. Agent Identity (for web portal interactions)
 	if b.Identity.IsConfigured() {
@@ -518,6 +510,14 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString(b.FleetSection)
 	}
 
+	// 6k. Self-Configuration (from SELF.md) — placed near the end so all static
+	// tool/guidance sections above remain a stable prefix for KV cache reuse.
+	if b.SelfContent != "" {
+		sb.WriteString("\n## Self-Configuration\n\n")
+		sb.WriteString(b.SelfContent)
+		sb.WriteString("\n")
+	}
+
 	// 7. Execution Plan with integrated knowledge (when a flow matches)
 	if b.ExecutionPlan != "" {
 		sb.WriteString("\n## Execution Plan\n\n")
@@ -542,6 +542,10 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString(b.RelevantKnowledge)
 		sb.WriteString("\n")
 	}
+
+	// 8. Current date — the LAST item in the system prompt so that everything
+	// above is a stable prefix for provider KV cache reuse across turns.
+	//sb.WriteString(fmt.Sprintf("\n- Date: %s\n", time.Now().Format("2006-01-02 15:04 MST")))
 
 	return sb.String()
 }

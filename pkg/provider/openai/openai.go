@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"sort"
 	"strings"
 
 	"github.com/sashabaranov/go-openai"
@@ -152,9 +153,15 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 						// Emit all accumulated tool calls
 						var parts []*genai.Part
 
-						// Sort by index to maintain order? Map iteration is random.
-						// Let's just iterate.
-						for _, tc := range toolCallAccumulator {
+						// Sort by index to maintain deterministic order
+						indices := make([]int, 0, len(toolCallAccumulator))
+						for idx := range toolCallAccumulator {
+							indices = append(indices, idx)
+						}
+						sort.Ints(indices)
+
+						for _, idx := range indices {
+							tc := toolCallAccumulator[idx]
 							var args map[string]any
 							if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
 								// Try to recover or just use empty

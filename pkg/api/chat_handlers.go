@@ -15,6 +15,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/credentials"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
@@ -431,18 +432,29 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 						"text": part.Text,
 					})
 				}
-				// Tool call
+				// Tool call — redact args so piped secrets (e.g. process_write
+				// with a password from resolve_credential) are not exposed in the UI.
 				if part.FunctionCall != nil {
+					args := part.FunctionCall.Args
+					if chatAgent.Redactor != nil && args != nil {
+						args = chatAgent.Redactor.RedactMap(args)
+					}
 					safeSendSSE("tool_call", map[string]interface{}{
 						"name": part.FunctionCall.Name,
-						"args": part.FunctionCall.Args,
+						"args": args,
 					})
 				}
-				// Tool result
+				// Tool result — redact so resolve_credential raw secrets
+				// (which are intentionally unredacted for the LLM) are not
+				// exposed in the UI.
 				if part.FunctionResponse != nil {
+					resp := part.FunctionResponse.Response
+					if chatAgent.Redactor != nil && resp != nil {
+						resp = chatAgent.Redactor.RedactMap(resp)
+					}
 					safeSendSSE("tool_result", map[string]interface{}{
 						"name":   part.FunctionResponse.Name,
-						"result": summarizeToolResult(part.FunctionResponse.Response),
+						"result": summarizeToolResult(resp),
 					})
 					// Drain any images stashed by the tool (e.g., browser screenshots)
 					for _, img := range chatAgent.DrainImages() {
@@ -687,7 +699,11 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Transform ADK events into simplified messages
-	messages := eventsToMessages(getResp.Session.Events())
+	var redactor *credentials.Redactor
+	if cm.components != nil && cm.components.ChatAgent != nil {
+		redactor = cm.components.ChatAgent.Redactor
+	}
+	messages := eventsToMessages(getResp.Session.Events(), redactor)
 
 	resp := StudioSessionDetailResponse{
 		StudioSessionResponse: StudioSessionResponse{
@@ -745,7 +761,8 @@ func StudioStopHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // eventsToMessages transforms ADK session events into a flat message list for the frontend.
-func eventsToMessages(events session.Events) []StudioMessage {
+// An optional redactor is applied to tool args and results to prevent credential exposure.
+func eventsToMessages(events session.Events, redactor *credentials.Redactor) []StudioMessage {
 	var messages []StudioMessage
 
 	for i := range events.Len() {
@@ -776,17 +793,25 @@ func eventsToMessages(events session.Events) []StudioMessage {
 				})
 			}
 			if part.FunctionCall != nil {
+				args := part.FunctionCall.Args
+				if redactor != nil && args != nil {
+					args = redactor.RedactMap(args)
+				}
 				messages = append(messages, StudioMessage{
 					Type:     "tool_call",
 					ToolName: part.FunctionCall.Name,
-					ToolArgs: part.FunctionCall.Args,
+					ToolArgs: args,
 				})
 			}
 			if part.FunctionResponse != nil {
+				resp := part.FunctionResponse.Response
+				if redactor != nil && resp != nil {
+					resp = redactor.RedactMap(resp)
+				}
 				messages = append(messages, StudioMessage{
 					Type:       "tool_result",
 					ToolName:   part.FunctionResponse.Name,
-					ToolResult: summarizeToolResult(part.FunctionResponse.Response),
+					ToolResult: summarizeToolResult(resp),
 				})
 			}
 		}

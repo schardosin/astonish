@@ -229,14 +229,19 @@ type thinkTagFilter struct {
 
 // Feed processes a chunk of streamed text and returns the portion that should
 // be shown to the user (empty string means the chunk was suppressed).
-func (f *thinkTagFilter) Feed(chunk string) string {
+// The second return value is true when the filter consumed or suppressed any
+// think-tag content during this call, which lets the caller distinguish
+// whitespace remnants of stripping from legitimate whitespace.
+func (f *thinkTagFilter) Feed(chunk string) (string, bool) {
 	var out strings.Builder
+	stripped := false
 	// Prepend anything buffered from the previous chunk.
 	input := f.buf + chunk
 	f.buf = ""
 
 	for len(input) > 0 {
 		if f.inside {
+			stripped = true // suppressing content inside a think block
 			// We are inside a think block — look for a closing tag.
 			idx := f.indexOfAnyClose(input)
 			if idx == -1 {
@@ -247,7 +252,7 @@ func (f *thinkTagFilter) Feed(chunk string) string {
 					f.buf = input[len(input)-prefixLen:]
 				}
 				// Everything is suppressed (still inside).
-				return out.String()
+				return out.String(), stripped
 			}
 			// Found a closing tag — skip past it.
 			closeTag := f.matchingCloseAt(input, idx)
@@ -268,14 +273,15 @@ func (f *thinkTagFilter) Feed(chunk string) string {
 			} else {
 				out.WriteString(input)
 			}
-			return out.String()
+			return out.String(), stripped
 		}
 		// Emit everything before the opening tag.
 		out.WriteString(input[:idx])
 		input = input[idx+len(tag):]
 		f.inside = true
+		stripped = true
 	}
-	return out.String()
+	return out.String(), stripped
 }
 
 // indexOfAnyClose returns the byte index in s where any closing tag starts, or -1.
@@ -368,8 +374,15 @@ func filterEventThinkContent(f *thinkTagFilter, event *session.Event) {
 			continue
 		}
 		if part.Text != "" {
-			filtered := f.Feed(part.Text)
-			if strings.TrimSpace(filtered) == "" {
+			filtered, stripped := f.Feed(part.Text)
+			if filtered == "" {
+				continue
+			}
+			// Only drop whitespace-only remnants when the filter actually
+			// stripped think-tag content from this chunk.  Legitimate
+			// whitespace (e.g., "\n\n" between markdown sections) must
+			// pass through to preserve formatting.
+			if stripped && strings.TrimSpace(filtered) == "" {
 				continue
 			}
 			part = &genai.Part{

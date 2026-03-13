@@ -320,12 +320,21 @@ func splitFirst(s, sep string) [2]string {
 
 // --- thinkTagFilter streaming tests ---
 
+// feedText is a test helper that calls Feed and returns only the text.
+func feedText(f *thinkTagFilter, chunk string) string {
+	text, _ := f.Feed(chunk)
+	return text
+}
+
 func TestThinkTagFilter_SingleChunkComplete(t *testing.T) {
 	// The entire think block arrives in one chunk.
 	f := &thinkTagFilter{}
-	got := f.Feed("<think>reasoning here</think>Hello!")
+	got, stripped := f.Feed("<think>reasoning here</think>Hello!")
 	if got != "Hello!" {
 		t.Errorf("got %q, want %q", got, "Hello!")
+	}
+	if !stripped {
+		t.Error("expected stripped=true")
 	}
 }
 
@@ -346,7 +355,7 @@ func TestThinkTagFilter_StreamedAcrossChunks(t *testing.T) {
 	}
 	var out strings.Builder
 	for _, c := range chunks {
-		out.WriteString(f.Feed(c))
+		out.WriteString(feedText(f, c))
 	}
 	want := "Hello! How can I help?"
 	if out.String() != want {
@@ -365,7 +374,7 @@ func TestThinkTagFilter_MultipleThinkBlocks(t *testing.T) {
 	}
 	var out strings.Builder
 	for _, c := range chunks {
-		out.WriteString(f.Feed(c))
+		out.WriteString(feedText(f, c))
 	}
 	want := "Visible 1 Visible 2"
 	if out.String() != want {
@@ -382,7 +391,7 @@ func TestThinkTagFilter_ThinkingTag(t *testing.T) {
 	}
 	var out strings.Builder
 	for _, c := range chunks {
-		out.WriteString(f.Feed(c))
+		out.WriteString(feedText(f, c))
 	}
 	want := "The answer is 42."
 	if out.String() != want {
@@ -403,7 +412,7 @@ func TestThinkTagFilter_ThinkingTagStreamed(t *testing.T) {
 	}
 	var out strings.Builder
 	for _, c := range chunks {
-		out.WriteString(f.Feed(c))
+		out.WriteString(feedText(f, c))
 	}
 	want := "Result"
 	if out.String() != want {
@@ -417,7 +426,7 @@ func TestThinkTagFilter_NoThinkTags(t *testing.T) {
 	chunks := []string{"Hello ", "world! ", "How are you?"}
 	var out strings.Builder
 	for _, c := range chunks {
-		out.WriteString(f.Feed(c))
+		out.WriteString(feedText(f, c))
 	}
 	want := "Hello world! How are you?"
 	if out.String() != want {
@@ -435,7 +444,7 @@ func TestThinkTagFilter_OnlyThinkContent(t *testing.T) {
 	}
 	var out strings.Builder
 	for _, c := range chunks {
-		out.WriteString(f.Feed(c))
+		out.WriteString(feedText(f, c))
 	}
 	if out.String() != "" {
 		t.Errorf("got %q, want empty", out.String())
@@ -448,7 +457,7 @@ func TestThinkTagFilter_TagSplitAtEveryByte(t *testing.T) {
 	f := &thinkTagFilter{}
 	var out strings.Builder
 	for _, b := range []byte(input) {
-		out.WriteString(f.Feed(string(b)))
+		out.WriteString(feedText(f, string(b)))
 	}
 	want := "visible"
 	if out.String() != want {
@@ -466,7 +475,7 @@ func TestThinkTagFilter_TextBeforeThinkTag(t *testing.T) {
 	}
 	var out strings.Builder
 	for _, c := range chunks {
-		out.WriteString(f.Feed(c))
+		out.WriteString(feedText(f, c))
 	}
 	want := "Sure! Here is the answer."
 	if out.String() != want {
@@ -488,7 +497,7 @@ func TestThinkTagFilter_NemotronExample(t *testing.T) {
 	}
 	var out strings.Builder
 	for _, c := range chunks {
-		out.WriteString(f.Feed(c))
+		out.WriteString(feedText(f, c))
 	}
 	want := "\nHere's today's stock market recap"
 	if out.String() != want {
@@ -499,9 +508,12 @@ func TestThinkTagFilter_NemotronExample(t *testing.T) {
 func TestThinkTagFilter_PartialOpenTagNotConsumed(t *testing.T) {
 	// A '<' that isn't part of a think tag should still be emitted.
 	f := &thinkTagFilter{}
-	got := f.Feed("a < b and c > d")
+	got, stripped := f.Feed("a < b and c > d")
 	if got != "a < b and c > d" {
 		t.Errorf("got %q, want %q", got, "a < b and c > d")
+	}
+	if stripped {
+		t.Error("expected stripped=false for text without think tags")
 	}
 }
 
@@ -511,7 +523,7 @@ func TestThinkTagFilter_AngleBracketInNormalText(t *testing.T) {
 	chunks := []string{"Use <b>", "bold</b>", " text"}
 	var out strings.Builder
 	for _, c := range chunks {
-		out.WriteString(f.Feed(c))
+		out.WriteString(feedText(f, c))
 	}
 	want := "Use <b>bold</b> text"
 	if out.String() != want {
@@ -596,7 +608,7 @@ func TestFilterEventThinkContent_WhitespaceOnlyAfterStrip(t *testing.T) {
 
 func TestFilterEventThinkContent_ToolCallPartPreserved(t *testing.T) {
 	// Parts with FunctionCall should pass through even when adjacent to
-	// think-tagged text parts that get dropped.
+	// whitespace-only text parts.
 	f := &thinkTagFilter{}
 	event := &session.Event{}
 	event.LLMResponse.Content = &genai.Content{
@@ -607,11 +619,66 @@ func TestFilterEventThinkContent_ToolCallPartPreserved(t *testing.T) {
 		},
 	}
 	filterEventThinkContent(f, event)
-	// The whitespace-only text part should be dropped, but the function call part must remain.
-	if len(event.LLMResponse.Content.Parts) != 1 {
-		t.Fatalf("expected 1 part (function call), got %d", len(event.LLMResponse.Content.Parts))
+	// Both parts should be preserved: the whitespace is legitimate (no think
+	// tags were stripped) and the function call is a non-text part.
+	if len(event.LLMResponse.Content.Parts) != 2 {
+		t.Fatalf("expected 2 parts (whitespace + function call), got %d", len(event.LLMResponse.Content.Parts))
 	}
-	if event.LLMResponse.Content.Parts[0].FunctionCall == nil {
+	if event.LLMResponse.Content.Parts[0].Text != "\n\n" {
+		t.Errorf("first part text = %q, want %q", event.LLMResponse.Content.Parts[0].Text, "\n\n")
+	}
+	if event.LLMResponse.Content.Parts[1].FunctionCall == nil {
 		t.Error("expected function call part to be preserved")
+	}
+}
+
+func TestFilterEventThinkContent_WhitespaceAfterThinkBeforeToolCall(t *testing.T) {
+	// Whitespace-only text parts that are remnants of think-tag stripping
+	// should be dropped, while the adjacent function call part is preserved.
+	f := &thinkTagFilter{}
+
+	// First event: open a think block
+	event1 := &session.Event{}
+	event1.LLMResponse.Content = &genai.Content{
+		Role:  "model",
+		Parts: []*genai.Part{{Text: "<think>reasoning</think>"}},
+	}
+	filterEventThinkContent(f, event1)
+
+	// Second event: whitespace remnant + tool call
+	event2 := &session.Event{}
+	event2.LLMResponse.Content = &genai.Content{
+		Role: "model",
+		Parts: []*genai.Part{
+			{Text: "\n\n"},
+			{FunctionCall: &genai.FunctionCall{Name: "shell_command", Args: map[string]any{"command": "ls"}}},
+		},
+	}
+	filterEventThinkContent(f, event2)
+	// The whitespace is NOT a remnant here because f.inside is already false
+	// after the first event fully closed the think block. The "\n\n" in event2
+	// passes through Feed() without any stripping, so stripped=false and
+	// the whitespace is preserved.
+	if len(event2.LLMResponse.Content.Parts) != 2 {
+		t.Fatalf("expected 2 parts, got %d", len(event2.LLMResponse.Content.Parts))
+	}
+}
+
+func TestFilterEventThinkContent_WhitespacePreservedInNormalStreaming(t *testing.T) {
+	// Whitespace-only chunks in normal streaming (no think tags at all)
+	// must be preserved — they carry markdown formatting.
+	f := &thinkTagFilter{}
+
+	event := &session.Event{}
+	event.LLMResponse.Content = &genai.Content{
+		Role:  "model",
+		Parts: []*genai.Part{{Text: "\n\n"}},
+	}
+	filterEventThinkContent(f, event)
+	if len(event.LLMResponse.Content.Parts) != 1 {
+		t.Fatalf("expected 1 part (whitespace preserved), got %d", len(event.LLMResponse.Content.Parts))
+	}
+	if event.LLMResponse.Content.Parts[0].Text != "\n\n" {
+		t.Errorf("got %q, want %q", event.LLMResponse.Content.Parts[0].Text, "\n\n")
 	}
 }

@@ -1,8 +1,10 @@
 package fleet
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -50,9 +52,17 @@ type FleetPlan struct {
 	CreatedAt time.Time `yaml:"created_at,omitempty" json:"created_at,omitempty"`
 	UpdatedAt time.Time `yaml:"updated_at,omitempty" json:"updated_at,omitempty"`
 
-	// WorkspaceDir is the resolved workspace directory path for this plan.
-	// Set at runtime (not persisted). Derived from artifact repo config using
-	// the standard ~/astonish_projects/<repo-name> convention.
+	// WorkspaceBaseDir overrides the base directory for the project workspace.
+	// When set on the plan, it takes precedence over the template's
+	// workspace_base_dir. The final workspace path is:
+	//   <workspace_base_dir>/<repo-name or plan-key>
+	// If neither the plan nor the template defines this, defaults to
+	// ~/astonish_projects.
+	WorkspaceBaseDir string `yaml:"workspace_base_dir,omitempty" json:"workspace_base_dir,omitempty"`
+
+	// WorkspaceDir is the fully resolved workspace directory path for this plan.
+	// Computed at runtime from WorkspaceBaseDir + artifact/plan-key derivation.
+	// Not persisted.
 	WorkspaceDir string `yaml:"-" json:"-"`
 }
 
@@ -67,40 +77,44 @@ type fleetPlanYAML struct {
 	CreatedFrom string `yaml:"created_from,omitempty"`
 
 	// FleetConfig fields (excluding Name and Description which are already above)
-	Communication  *CommunicationConfig        `yaml:"communication,omitempty"`
-	Agents         map[string]FleetAgentConfig `yaml:"agents"`
-	Settings       FleetSettings               `yaml:"settings,omitempty"`
-	ProjectContext *ProjectContextConfig       `yaml:"project_context,omitempty"`
+	Communication        *CommunicationConfig        `yaml:"communication,omitempty"`
+	Agents               map[string]FleetAgentConfig `yaml:"agents"`
+	Settings             FleetSettings               `yaml:"settings,omitempty"`
+	ProjectContext       *ProjectContextConfig       `yaml:"project_context,omitempty"`
+	TemplateWorkspaceDir string                      `yaml:"workspace_base_dir_template,omitempty"` // template-level default
 
 	// FleetPlan-specific fields
-	Credentials map[string]string             `yaml:"credentials,omitempty"`
-	Channel     PlanChannelConfig             `yaml:"channel"`
-	Artifacts   map[string]PlanArtifactConfig `yaml:"artifacts,omitempty"`
-	Validation  PlanValidationState           `yaml:"validation,omitempty"`
-	Activation  PlanActivationState           `yaml:"activation,omitempty"`
-	CreatedAt   time.Time                     `yaml:"created_at,omitempty"`
-	UpdatedAt   time.Time                     `yaml:"updated_at,omitempty"`
+	Credentials      map[string]string             `yaml:"credentials,omitempty"`
+	Channel          PlanChannelConfig             `yaml:"channel"`
+	Artifacts        map[string]PlanArtifactConfig `yaml:"artifacts,omitempty"`
+	WorkspaceBaseDir string                        `yaml:"workspace_base_dir,omitempty"` // plan-level override
+	Validation       PlanValidationState           `yaml:"validation,omitempty"`
+	Activation       PlanActivationState           `yaml:"activation,omitempty"`
+	CreatedAt        time.Time                     `yaml:"created_at,omitempty"`
+	UpdatedAt        time.Time                     `yaml:"updated_at,omitempty"`
 }
 
 // MarshalYAML implements custom YAML marshalling to avoid duplicate keys
 // from the embedded FleetConfig.
 func (p *FleetPlan) MarshalYAML() (interface{}, error) {
 	return &fleetPlanYAML{
-		Name:           p.Name,
-		Key:            p.Key,
-		Description:    p.Description,
-		CreatedFrom:    p.CreatedFrom,
-		Communication:  p.FleetConfig.Communication,
-		Agents:         p.FleetConfig.Agents,
-		Settings:       p.FleetConfig.Settings,
-		ProjectContext: p.FleetConfig.ProjectContext,
-		Credentials:    p.Credentials,
-		Channel:        p.Channel,
-		Artifacts:      p.Artifacts,
-		Validation:     p.Validation,
-		Activation:     p.Activation,
-		CreatedAt:      p.CreatedAt,
-		UpdatedAt:      p.UpdatedAt,
+		Name:                 p.Name,
+		Key:                  p.Key,
+		Description:          p.Description,
+		CreatedFrom:          p.CreatedFrom,
+		Communication:        p.FleetConfig.Communication,
+		Agents:               p.FleetConfig.Agents,
+		Settings:             p.FleetConfig.Settings,
+		ProjectContext:       p.FleetConfig.ProjectContext,
+		TemplateWorkspaceDir: p.FleetConfig.WorkspaceBaseDir,
+		Credentials:          p.Credentials,
+		Channel:              p.Channel,
+		Artifacts:            p.Artifacts,
+		WorkspaceBaseDir:     p.WorkspaceBaseDir,
+		Validation:           p.Validation,
+		Activation:           p.Activation,
+		CreatedAt:            p.CreatedAt,
+		UpdatedAt:            p.UpdatedAt,
 	}, nil
 }
 
@@ -117,16 +131,18 @@ func (p *FleetPlan) UnmarshalYAML(value *yaml.Node) error {
 	p.Description = raw.Description
 	p.CreatedFrom = raw.CreatedFrom
 	p.FleetConfig = FleetConfig{
-		Name:           raw.Name, // Use the plan name as the fleet name
-		Description:    raw.Description,
-		Communication:  raw.Communication,
-		Agents:         raw.Agents,
-		Settings:       raw.Settings,
-		ProjectContext: raw.ProjectContext,
+		Name:             raw.Name, // Use the plan name as the fleet name
+		Description:      raw.Description,
+		Communication:    raw.Communication,
+		Agents:           raw.Agents,
+		Settings:         raw.Settings,
+		ProjectContext:   raw.ProjectContext,
+		WorkspaceBaseDir: raw.TemplateWorkspaceDir,
 	}
 	p.Credentials = raw.Credentials
 	p.Channel = raw.Channel
 	p.Artifacts = raw.Artifacts
+	p.WorkspaceBaseDir = raw.WorkspaceBaseDir
 	p.Validation = raw.Validation
 	p.Activation = raw.Activation
 	p.CreatedAt = raw.CreatedAt
@@ -219,26 +235,37 @@ func (p *FleetPlan) IsActivated() bool {
 	return p.Activation.Activated
 }
 
-// ResolveWorkspaceDir derives the workspace directory from the plan's artifact
-// config and sets the WorkspaceDir field. The convention is:
+// ResolveWorkspaceDir derives the workspace directory for this plan.
+// The base directory is resolved in priority order:
 //
-//	~/astonish_projects/<repo-name>
+//  1. Plan-level WorkspaceBaseDir (set by the user during plan creation)
+//  2. Template-level FleetConfig.WorkspaceBaseDir (defined in the fleet template YAML)
+//  3. Default: ~/astonish_projects
 //
-// where <repo-name> is the last segment of the first git_repo artifact's repo
-// field (e.g., "schardosin/atari-astonish" → "atari-astonish"). If no git_repo
-// artifacts exist, falls back to ~/astonish_projects/<plan-key>.
+// The final path is <base_dir>/<project-name>, where project-name comes from
+// the first git_repo artifact's repo field (last segment), or the plan key.
 func (p *FleetPlan) ResolveWorkspaceDir() string {
 	if p.WorkspaceDir != "" {
 		return p.WorkspaceDir
 	}
 
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		homeDir = "/root"
+	// Determine base directory: plan override → template default → hardcoded fallback
+	baseDir := p.WorkspaceBaseDir
+	if baseDir == "" {
+		baseDir = p.FleetConfig.WorkspaceBaseDir
 	}
-	baseDir := filepath.Join(homeDir, "astonish_projects")
+	if baseDir == "" {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			homeDir = "/root"
+		}
+		baseDir = filepath.Join(homeDir, "astonish_projects")
+	}
 
-	// Try to derive name from the first git_repo artifact
+	// Expand ~ to home directory
+	baseDir = expandHome(baseDir)
+
+	// Try to derive project name from the first git_repo artifact
 	for _, artifact := range p.Artifacts {
 		if artifact.Type == "git_repo" && artifact.Repo != "" {
 			parts := strings.Split(artifact.Repo, "/")
@@ -251,4 +278,60 @@ func (p *FleetPlan) ResolveWorkspaceDir() string {
 	// Fallback to plan key
 	p.WorkspaceDir = filepath.Join(baseDir, p.Key)
 	return p.WorkspaceDir
+}
+
+// expandHome replaces a leading ~ with the user's home directory.
+func expandHome(path string) string {
+	if !strings.HasPrefix(path, "~") {
+		return path
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = "/root"
+	}
+	if path == "~" {
+		return homeDir
+	}
+	// Handle ~/something
+	if strings.HasPrefix(path, "~/") {
+		return filepath.Join(homeDir, path[2:])
+	}
+	return path
+}
+
+// slugUnsafeRe matches characters that are not safe in branch names or URL slugs.
+var slugUnsafeRe = regexp.MustCompile(`[^a-z0-9]+`)
+
+// TaskSlugFromIssue derives a short, branch-safe slug from a GitHub issue
+// number and title. Example: issue 6 "Improve Payoff Chart to show the Today
+// Line" → "issue-6-improve-payoff-chart-to-show-the-today-line".
+// The slug is capped at 60 characters (trimmed to last full word boundary).
+func TaskSlugFromIssue(number int, title string) string {
+	slug := strings.ToLower(strings.TrimSpace(title))
+	slug = slugUnsafeRe.ReplaceAllString(slug, "-")
+	slug = strings.Trim(slug, "-")
+
+	prefix := fmt.Sprintf("issue-%d", number)
+	slug = prefix + "-" + slug
+
+	// Cap at 60 characters on a word boundary
+	if len(slug) > 60 {
+		slug = slug[:60]
+		if idx := strings.LastIndex(slug, "-"); idx > len(prefix) {
+			slug = slug[:idx]
+		}
+	}
+	return slug
+}
+
+// ResolveBranchPattern replaces {task} (or <task> after escaping) in a branch
+// pattern with the given task slug. Returns the resolved branch name.
+func ResolveBranchPattern(pattern, taskSlug string) string {
+	if taskSlug == "" {
+		return pattern
+	}
+	// Handle both the raw {task} and the escaped <task> forms
+	result := strings.ReplaceAll(pattern, "{task}", taskSlug)
+	result = strings.ReplaceAll(result, "<task>", taskSlug)
+	return result
 }

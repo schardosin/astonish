@@ -516,6 +516,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   const [fleetDialogMessage, setFleetDialogMessage] = useState('') // pre-populated from /fleet command
   const [showTemplatePicker, setShowTemplatePicker] = useState(false) // /fleet-plan without template key
   const [pendingFleetPlanPrompt, setPendingFleetPlanPrompt] = useState(null) // deferred plan creation message
+  const [activeWizardContext, setActiveWizardContext] = useState(null) // persisted wizard system prompt for multi-turn sessions
 
   // Slash command popup
   const [showSlashPopup, setShowSlashPopup] = useState(false)
@@ -545,8 +546,11 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   ], [])
 
   // Wrapper to keep URL in sync with active session
-  const changeSession = useCallback((sessionId) => {
+  const changeSession = useCallback((sessionId, { userInitiated = false } = {}) => {
     setActiveSessionId(sessionId)
+    if (userInitiated) {
+      setActiveWizardContext(null) // only clear wizard context on explicit user navigation
+    }
     if (onSessionChange) onSessionChange(sessionId)
   }, [onSessionChange])
 
@@ -712,11 +716,11 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
         if (activeFleet) {
           // Reconnect to the active fleet session
           setIsFleetMode(true)
-          setFleetSessionId(sessionId)
+           setFleetSessionId(sessionId)
           setFleetState({ state: activeFleet.state, active_agent: activeFleet.active_agent })
           setMessages([])
           setIsStreaming(true)
-          changeSession(sessionId)
+          changeSession(sessionId, { userInitiated: true })
           connectToFleetStream(sessionId)
           return
         }
@@ -728,7 +732,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
       setFleetSessionId(sessionId)
       setFleetInfo({ fleet_key: session.fleetKey, fleet_name: session.fleetName })
       setFleetState({ state: 'stopped', active_agent: '' })
-      changeSession(sessionId)
+      changeSession(sessionId, { userInitiated: true })
       await loadSessionHistory(sessionId)
       return
     } else {
@@ -741,7 +745,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
       }
     }
 
-    changeSession(sessionId)
+    changeSession(sessionId, { userInitiated: true })
     await loadSessionHistory(sessionId)
   }, [sessions, isFleetMode, connectToFleetStream, changeSession])
 
@@ -758,7 +762,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
       setFleetState(null)
     }
     setIsStreaming(false)
-    changeSession(null)
+    changeSession(null, { userInitiated: true })
     setMessages([])
     if (inputRef.current) inputRef.current.focus()
   }, [isFleetMode, changeSession])
@@ -789,7 +793,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             abortRef.current = null
           }
         }
-        changeSession(null)
+        changeSession(null, { userInitiated: true })
         setMessages([])
       }
     } catch (err) {
@@ -872,7 +876,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     setFleetInfo(null)
     setFleetState(null)
     setIsStreaming(false)
-    changeSession(null)
+    changeSession(null, { userInitiated: true })
     setMessages([])
     loadSessions()
   }, [fleetSessionId, changeSession])
@@ -896,7 +900,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     const controller = connectChat({
       sessionId: activeSessionId || '',
       message: userMsg,
-      systemContext: options.systemContext || undefined,
+      systemContext: options.systemContext || activeWizardContext || undefined,
       onEvent: (eventType, data) => {
         switch (eventType) {
           case 'session':
@@ -941,6 +945,10 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
           case 'tool_result':
             setMessages(prev => [...prev, { type: 'tool_result', toolName: data.name, toolResult: data.result }])
+            // Clear wizard context once the fleet plan has been saved
+            if (data.name === 'save_fleet_plan') {
+              setActiveWizardContext(null)
+            }
             break
 
           case 'image':
@@ -1018,11 +1026,13 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               const wizardSystemPrompt = data.wizard_system_prompt || ''
 
               if (wizardSystemPrompt) {
-                // Template has a wizard: send a minimal trigger + system context
+                // Template has a wizard: persist the system prompt so it's sent on every turn
+                setActiveWizardContext(wizardSystemPrompt)
                 setPendingFleetPlanPrompt({ message: `Create a fleet plan from the "${hint}" template.`, systemContext: wizardSystemPrompt })
               } else if (hint) {
-                // No wizard in template: use generic prompt as system context
+                // No wizard in template: use generic prompt as system context, persist it too
                 const genericSystemPrompt = `You are helping the user create a fleet plan based on the "${hint}" fleet template. The base_fleet_key is "${hint}". Guide them through:\n1. Plan identity (key, name, description)\n2. Communication channel type and settings\n3. Artifact destinations\n4. Credentials for external services\n5. Any agent behavior customizations\n\nBefore saving, call validate_fleet_plan with all config including credentials. Only call save_fleet_plan after validation passes. Include the same credentials in the save call.`
+                setActiveWizardContext(genericSystemPrompt)
                 setPendingFleetPlanPrompt({ message: `Create a fleet plan from the "${hint}" template.`, systemContext: genericSystemPrompt })
               } else {
                 // No hint: show template picker so user selects one, then re-issue /fleet-plan <key>
@@ -1126,7 +1136,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     })
 
     abortRef.current = controller
-  }, [activeSessionId])
+  }, [activeSessionId, activeWizardContext])
 
   // Process deferred fleet plan prompt (set by fleet_plan_redirect SSE event)
   useEffect(() => {

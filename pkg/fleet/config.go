@@ -14,13 +14,14 @@ import (
 // a pipeline. Agents are autonomous actors that react to messages on a shared
 // channel and route work to each other via explicit @mentions.
 type FleetConfig struct {
-	Name           string                      `yaml:"name" json:"name"`
-	Description    string                      `yaml:"description,omitempty" json:"description,omitempty"`
-	PlanWizard     *PlanWizardConfig           `yaml:"plan_wizard,omitempty" json:"plan_wizard,omitempty"`
-	Communication  *CommunicationConfig        `yaml:"communication,omitempty" json:"communication,omitempty"`
-	Agents         map[string]FleetAgentConfig `yaml:"agents" json:"agents"`
-	Settings       FleetSettings               `yaml:"settings,omitempty" json:"settings,omitempty"`
-	ProjectContext *ProjectContextConfig       `yaml:"project_context,omitempty" json:"project_context,omitempty"`
+	Name             string                      `yaml:"name" json:"name"`
+	Description      string                      `yaml:"description,omitempty" json:"description,omitempty"`
+	PlanWizard       *PlanWizardConfig           `yaml:"plan_wizard,omitempty" json:"plan_wizard,omitempty"`
+	Communication    *CommunicationConfig        `yaml:"communication,omitempty" json:"communication,omitempty"`
+	Agents           map[string]FleetAgentConfig `yaml:"agents" json:"agents"`
+	Settings         FleetSettings               `yaml:"settings,omitempty" json:"settings,omitempty"`
+	ProjectContext   *ProjectContextConfig       `yaml:"project_context,omitempty" json:"project_context,omitempty"`
+	WorkspaceBaseDir string                      `yaml:"workspace_base_dir,omitempty" json:"workspace_base_dir,omitempty"` // Default base directory for project workspaces (e.g., "~/astonish_projects")
 }
 
 // PlanWizardConfig defines how an AI-guided plan creation session should behave

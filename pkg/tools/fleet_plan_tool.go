@@ -52,6 +52,10 @@ type SaveFleetPlanArgs struct {
 	IncludeAgents []string `json:"include_agents,omitempty" jsonschema:"Optional list of agent roles to include from the base fleet (e.g., ['dev'] or ['po', 'dev']). If omitted, all agents are included. When set, agents NOT in this list are removed along with their communication flow entries."`
 	// Credentials maps logical names to credential store entry names.
 	Credentials map[string]string `json:"credentials,omitempty" jsonschema:"Credential mappings for external service authentication. Key is a logical name agents use (e.g., 'github', 'jira', 'deploy-ssh'). Value is the credential name in the encrypted store. IMPORTANT: For github_issues channel plans, include a 'github' entry so the GitHub token is auto-injected into gh CLI commands. If credentials were validated with validate_fleet_plan, include the same mappings here."`
+	// WorkspaceBaseDir overrides the base directory where project files are stored.
+	// The final workspace path will be <workspace_base_dir>/<repo-name or plan-key>.
+	// If omitted, the template's default is used (typically ~/astonish_projects).
+	WorkspaceBaseDir string `json:"workspace_base_dir,omitempty" jsonschema:"Optional override for the base directory where project files are stored. The final workspace will be this path plus the repo name or plan key (e.g., '~/my-projects' → '~/my-projects/juicytrade'). If omitted, the fleet template's default is used."`
 	// ValidationPassed should be true if validate_fleet_plan was called and passed.
 	ValidationPassed bool `json:"validation_passed,omitempty" jsonschema:"Set to true after validate_fleet_plan passes. Required for non-chat channel plans."`
 }
@@ -215,14 +219,15 @@ func saveFleetPlan(_ tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult,
 	}
 
 	plan := &fleet.FleetPlan{
-		Name:        name,
-		Key:         key,
-		Description: strings.TrimSpace(args.Description),
-		CreatedFrom: baseKey,
-		FleetConfig: snapshotCfg,
-		Credentials: args.Credentials,
-		Channel:     channelCfg,
-		Artifacts:   artifacts,
+		Name:             name,
+		Key:              key,
+		Description:      strings.TrimSpace(args.Description),
+		CreatedFrom:      baseKey,
+		FleetConfig:      snapshotCfg,
+		Credentials:      args.Credentials,
+		Channel:          channelCfg,
+		Artifacts:        artifacts,
+		WorkspaceBaseDir: strings.TrimSpace(args.WorkspaceBaseDir),
 		Validation: fleet.PlanValidationState{
 			Status:        validationStatus,
 			LastValidated: now,

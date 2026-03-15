@@ -552,7 +552,7 @@ func TestBuildAgentPrompt(t *testing.T) {
 		},
 	}
 
-	prompt := BuildAgentPrompt(agentCfg, fleetCfg, "dev", nil, "")
+	prompt := BuildAgentPrompt(agentCfg, fleetCfg, "dev", nil, "", "")
 
 	if !strings.Contains(prompt, "You are a developer.") {
 		t.Error("expected prompt to contain identity")
@@ -608,7 +608,7 @@ func TestBuildAgentPrompt_NoDelegate(t *testing.T) {
 		},
 	}
 
-	prompt := BuildAgentPrompt(agentCfg, fleetCfg, "qa", nil, "")
+	prompt := BuildAgentPrompt(agentCfg, fleetCfg, "qa", nil, "", "")
 
 	if !strings.Contains(prompt, "You are a QA engineer.") {
 		t.Error("expected prompt to contain identity")
@@ -814,5 +814,195 @@ func TestCollectDelegateEnvVars(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestTaskSlugFromIssue(t *testing.T) {
+	tests := []struct {
+		number   int
+		title    string
+		expected string
+	}{
+		{6, "Improve Payoff Chart to show the Today Line", "issue-6-improve-payoff-chart-to-show-the-today-line"},
+		{123, "Fix bug", "issue-123-fix-bug"},
+		{1, "A very long title that exceeds the sixty character limit for branch names", "issue-1-a-very-long-title-that-exceeds-the-sixty-character"},
+		{42, "Special chars: $100 & 50% off!!!", "issue-42-special-chars-100-50-off"},
+		{0, "Edge case zero", "issue-0-edge-case-zero"},
+		{7, "  Trim spaces  ", "issue-7-trim-spaces"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.title, func(t *testing.T) {
+			result := TaskSlugFromIssue(tt.number, tt.title)
+			if result != tt.expected {
+				t.Errorf("TaskSlugFromIssue(%d, %q) = %q, want %q", tt.number, tt.title, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestResolveBranchPattern(t *testing.T) {
+	tests := []struct {
+		pattern  string
+		slug     string
+		expected string
+	}{
+		{"fleet/{task}", "issue-6-payoff-chart", "fleet/issue-6-payoff-chart"},
+		{"fleet/<task>", "issue-6-payoff-chart", "fleet/issue-6-payoff-chart"},
+		{"feature/{task}/dev", "issue-42-fix", "feature/issue-42-fix/dev"},
+		{"fleet/{task}", "", "fleet/{task}"},
+		{"main", "issue-1-test", "main"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.pattern+"_"+tt.slug, func(t *testing.T) {
+			result := ResolveBranchPattern(tt.pattern, tt.slug)
+			if result != tt.expected {
+				t.Errorf("ResolveBranchPattern(%q, %q) = %q, want %q", tt.pattern, tt.slug, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestBuildAgentPrompt_GitWorkflow(t *testing.T) {
+	agentCfg := FleetAgentConfig{
+		Name:      "Developer",
+		Identity:  "You are a developer.",
+		Behaviors: "Implement things.",
+	}
+
+	fleetCfg := &FleetConfig{
+		Name: "test",
+		Communication: &CommunicationConfig{
+			Flow: []CommunicationNode{
+				{Role: "po", TalksTo: []string{"customer", "dev"}, EntryPoint: true},
+				{Role: "dev", TalksTo: []string{"po"}},
+			},
+		},
+		Agents: map[string]FleetAgentConfig{
+			"po":  agentCfg,
+			"dev": agentCfg,
+		},
+	}
+
+	plan := &FleetPlan{
+		FleetConfig: *fleetCfg,
+		Artifacts: map[string]PlanArtifactConfig{
+			"code": {
+				Type:          "git_repo",
+				Repo:          "owner/repo",
+				BranchPattern: "fleet/{task}",
+				AutoPR:        true,
+			},
+		},
+	}
+
+	prompt := BuildAgentPrompt(agentCfg, fleetCfg, "dev", nil, "", "issue-6-payoff-chart", plan)
+
+	// Check git workflow section exists
+	if !strings.Contains(prompt, "## Git Workflow") {
+		t.Error("expected prompt to contain Git Workflow section")
+	}
+	if !strings.Contains(prompt, "NEVER push directly to the `main` or `master` branch") {
+		t.Error("expected prompt to contain never-push-to-main rule")
+	}
+	// Check resolved branch name
+	if !strings.Contains(prompt, "fleet/issue-6-payoff-chart") {
+		t.Error("expected prompt to contain resolved branch name")
+	}
+	if !strings.Contains(prompt, "git checkout -b fleet/issue-6-payoff-chart") {
+		t.Error("expected prompt to contain checkout command")
+	}
+	// Check commit and share instructions
+	if !strings.Contains(prompt, "Commit and share every document you write") {
+		t.Error("expected prompt to contain commit-and-share instructions")
+	}
+	// Check GitHub link template with resolved repo and branch
+	if !strings.Contains(prompt, "https://github.com/owner/repo/blob/fleet/issue-6-payoff-chart/") {
+		t.Error("expected prompt to contain GitHub link template with resolved repo and branch")
+	}
+}
+
+func TestBuildAgentPrompt_CommunicationMechanism(t *testing.T) {
+	agentCfg := FleetAgentConfig{
+		Name:      "Dev",
+		Identity:  "You are a dev.",
+		Behaviors: "Code.",
+	}
+
+	fleetCfg := &FleetConfig{
+		Name: "test",
+		Communication: &CommunicationConfig{
+			Flow: []CommunicationNode{
+				{Role: "po", TalksTo: []string{"customer", "dev"}, EntryPoint: true},
+				{Role: "dev", TalksTo: []string{"po"}},
+			},
+		},
+		Agents: map[string]FleetAgentConfig{
+			"po":  agentCfg,
+			"dev": agentCfg,
+		},
+	}
+
+	prompt := BuildAgentPrompt(agentCfg, fleetCfg, "dev", nil, "", "")
+
+	// Check improved communication explanation
+	if !strings.Contains(prompt, "Your TEXT OUTPUT is how you communicate") {
+		t.Error("expected prompt to explain text output IS the communication")
+	}
+	if !strings.Contains(prompt, "Do NOT use shell_command, echo, or any tool to") {
+		t.Error("expected prompt to warn against using tools for communication")
+	}
+}
+
+func TestBuildAgentPrompt_DocsPathFromArtifact(t *testing.T) {
+	agentCfg := FleetAgentConfig{
+		Name:      "PO",
+		Identity:  "You are a PO.",
+		Behaviors: "Manage things.",
+	}
+
+	fleetCfg := &FleetConfig{
+		Name: "test",
+		Communication: &CommunicationConfig{
+			Flow: []CommunicationNode{
+				{Role: "po", TalksTo: []string{"customer"}, EntryPoint: true},
+			},
+		},
+		Agents: map[string]FleetAgentConfig{
+			"po": agentCfg,
+		},
+	}
+
+	plan := &FleetPlan{
+		FleetConfig: *fleetCfg,
+		Artifacts: map[string]PlanArtifactConfig{
+			"code": {Type: "git_repo", Repo: "owner/repo", BranchPattern: "fleet/{task}"},
+			"docs": {Type: "git_repo", Repo: "owner/repo", BranchPattern: "fleet/{task}", SubPath: "documentation"},
+		},
+		// Set WorkspaceDir directly (the final resolved path) so ResolveWorkspaceDir()
+		// returns it as-is without appending a project name derived from the repo.
+		WorkspaceDir: "/tmp/test-workspace",
+	}
+
+	prompt := BuildAgentPrompt(agentCfg, fleetCfg, "po", nil, "", "issue-5-add-feature", plan)
+
+	// Should derive docs path from artifact sub_path, not hardcoded "docs"
+	if !strings.Contains(prompt, "/tmp/test-workspace/documentation/issue-5-add-feature/") {
+		// Find the docs reference in the prompt for debugging
+		idx := strings.Index(prompt, "Fleet documentation")
+		if idx < 0 {
+			t.Errorf("expected prompt to contain 'Fleet documentation' with docs path from artifact sub_path 'documentation'")
+		} else {
+			end := idx + 150
+			if end > len(prompt) {
+				end = len(prompt)
+			}
+			t.Errorf("expected prompt to derive docs path from artifact sub_path 'documentation', got prompt snippet: %s", prompt[idx:end])
+		}
+	}
+	// Should NOT contain the old hardcoded "docs/" path
+	if strings.Contains(prompt, "/tmp/test-workspace/docs/issue-5-add-feature/") {
+		t.Error("expected prompt to NOT hardcode 'docs/' when artifact sub_path is 'documentation'")
 	}
 }

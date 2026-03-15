@@ -76,7 +76,7 @@ func TestMergeConsecutiveSameRole(t *testing.T) {
 			},
 		},
 		{
-			name: "assistant with tool_calls not merged",
+			name: "assistant tool_calls then text merged (Case 3)",
 			input: []openailib.ChatCompletionMessage{
 				{
 					Role: openailib.ChatMessageRoleAssistant,
@@ -91,14 +91,116 @@ func TestMergeConsecutiveSameRole(t *testing.T) {
 			},
 			expected: []openailib.ChatCompletionMessage{
 				{
+					Role:    openailib.ChatMessageRoleAssistant,
+					Content: "done",
+					ToolCalls: []openailib.ToolCall{
+						{ID: "call_1", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "fn1"}},
+					},
+				},
+			},
+		},
+		{
+			name: "assistant text then tool_calls merged (Case 2 - streaming fix)",
+			input: []openailib.ChatCompletionMessage{
+				{
+					Role:    openailib.ChatMessageRoleAssistant,
+					Content: "Let me check that for you.",
+				},
+				{
+					Role: openailib.ChatMessageRoleAssistant,
+					ToolCalls: []openailib.ToolCall{
+						{ID: "call_abc123", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "shell_command", Arguments: `{"command":"free -h"}`}},
+					},
+				},
+			},
+			expected: []openailib.ChatCompletionMessage{
+				{
+					Role:    openailib.ChatMessageRoleAssistant,
+					Content: "Let me check that for you.",
+					ToolCalls: []openailib.ToolCall{
+						{ID: "call_abc123", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "shell_command", Arguments: `{"command":"free -h"}`}},
+					},
+				},
+			},
+		},
+		{
+			name: "full streaming tool call round-trip",
+			input: []openailib.ChatCompletionMessage{
+				{Role: openailib.ChatMessageRoleSystem, Content: "You are an assistant."},
+				{Role: openailib.ChatMessageRoleUser, Content: "Check memory"},
+				{Role: openailib.ChatMessageRoleAssistant, Content: "I'll check the memory usage."},
+				{
+					Role:    openailib.ChatMessageRoleAssistant,
+					Content: "",
+					ToolCalls: []openailib.ToolCall{
+						{ID: "resolve_credential:0", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "resolve_credential", Arguments: `{"name":"proxmox-ssh"}`}},
+					},
+				},
+				{Role: openailib.ChatMessageRoleTool, Content: `{"password":"secret"}`, ToolCallID: "resolve_credential:0"},
+			},
+			expected: []openailib.ChatCompletionMessage{
+				{Role: openailib.ChatMessageRoleSystem, Content: "You are an assistant."},
+				{Role: openailib.ChatMessageRoleUser, Content: "Check memory"},
+				{
+					Role:    openailib.ChatMessageRoleAssistant,
+					Content: "I'll check the memory usage.",
+					ToolCalls: []openailib.ToolCall{
+						{ID: "resolve_credential:0", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "resolve_credential", Arguments: `{"name":"proxmox-ssh"}`}},
+					},
+				},
+				{Role: openailib.ChatMessageRoleTool, Content: `{"password":"secret"}`, ToolCallID: "resolve_credential:0"},
+			},
+		},
+		{
+			name: "two assistant tool_calls messages not merged",
+			input: []openailib.ChatCompletionMessage{
+				{
 					Role: openailib.ChatMessageRoleAssistant,
 					ToolCalls: []openailib.ToolCall{
 						{ID: "call_1", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "fn1"}},
 					},
 				},
 				{
+					Role: openailib.ChatMessageRoleAssistant,
+					ToolCalls: []openailib.ToolCall{
+						{ID: "call_2", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "fn2"}},
+					},
+				},
+			},
+			expected: []openailib.ChatCompletionMessage{
+				{
+					Role: openailib.ChatMessageRoleAssistant,
+					ToolCalls: []openailib.ToolCall{
+						{ID: "call_1", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "fn1"}},
+					},
+				},
+				{
+					Role: openailib.ChatMessageRoleAssistant,
+					ToolCalls: []openailib.ToolCall{
+						{ID: "call_2", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "fn2"}},
+					},
+				},
+			},
+		},
+		{
+			name: "three consecutive assistant: text + text + tool_calls all merged",
+			input: []openailib.ChatCompletionMessage{
+				{Role: openailib.ChatMessageRoleAssistant, Content: "Thinking..."},
+				{Role: openailib.ChatMessageRoleAssistant, Content: "Let me check."},
+				{
+					Role: openailib.ChatMessageRoleAssistant,
+					ToolCalls: []openailib.ToolCall{
+						{ID: "call_1", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "fn1"}},
+					},
+				},
+			},
+			expected: []openailib.ChatCompletionMessage{
+				{
 					Role:    openailib.ChatMessageRoleAssistant,
-					Content: "done",
+					Content: "Thinking...\nLet me check.",
+					ToolCalls: []openailib.ToolCall{
+						{ID: "call_1", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "fn1"}},
+					},
 				},
 			},
 		},
@@ -154,6 +256,98 @@ func TestMergeConsecutiveSameRole(t *testing.T) {
 				}
 				if len(result[i].ToolCalls) != len(tt.expected[i].ToolCalls) {
 					t.Errorf("message[%d]: expected %d tool_calls, got %d", i, len(tt.expected[i].ToolCalls), len(result[i].ToolCalls))
+				}
+			}
+		})
+	}
+}
+
+func TestEnsureNotEndingWithTool(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       []openailib.ChatCompletionMessage
+		expectLen   int
+		expectLast  string // expected role of last message
+		expectExtra bool   // whether a synthetic user message was appended
+	}{
+		{
+			name:      "empty messages unchanged",
+			input:     nil,
+			expectLen: 0,
+		},
+		{
+			name: "ending with user unchanged",
+			input: []openailib.ChatCompletionMessage{
+				{Role: openailib.ChatMessageRoleUser, Content: "hello"},
+			},
+			expectLen:  1,
+			expectLast: openailib.ChatMessageRoleUser,
+		},
+		{
+			name: "ending with assistant unchanged",
+			input: []openailib.ChatCompletionMessage{
+				{Role: openailib.ChatMessageRoleUser, Content: "hello"},
+				{Role: openailib.ChatMessageRoleAssistant, Content: "hi there"},
+			},
+			expectLen:  2,
+			expectLast: openailib.ChatMessageRoleAssistant,
+		},
+		{
+			name: "ending with tool gets user appended",
+			input: []openailib.ChatCompletionMessage{
+				{Role: openailib.ChatMessageRoleUser, Content: "do something"},
+				{Role: openailib.ChatMessageRoleAssistant, ToolCalls: []openailib.ToolCall{
+					{ID: "call_1", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "my_tool", Arguments: "{}"}},
+				}},
+				{Role: openailib.ChatMessageRoleTool, Content: "result", ToolCallID: "call_1"},
+			},
+			expectLen:   4,
+			expectLast:  openailib.ChatMessageRoleUser,
+			expectExtra: true,
+		},
+		{
+			name: "ending with tool after multiple tool results",
+			input: []openailib.ChatCompletionMessage{
+				{Role: openailib.ChatMessageRoleUser, Content: "do two things"},
+				{Role: openailib.ChatMessageRoleAssistant, ToolCalls: []openailib.ToolCall{
+					{ID: "call_1", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "tool_a", Arguments: "{}"}},
+					{ID: "call_2", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "tool_b", Arguments: "{}"}},
+				}},
+				{Role: openailib.ChatMessageRoleTool, Content: "result_a", ToolCallID: "call_1"},
+				{Role: openailib.ChatMessageRoleTool, Content: "result_b", ToolCallID: "call_2"},
+			},
+			expectLen:   5,
+			expectLast:  openailib.ChatMessageRoleUser,
+			expectExtra: true,
+		},
+		{
+			name: "tool followed by user already present - unchanged",
+			input: []openailib.ChatCompletionMessage{
+				{Role: openailib.ChatMessageRoleUser, Content: "do something"},
+				{Role: openailib.ChatMessageRoleAssistant, ToolCalls: []openailib.ToolCall{
+					{ID: "call_1", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "my_tool", Arguments: "{}"}},
+				}},
+				{Role: openailib.ChatMessageRoleTool, Content: "result", ToolCallID: "call_1"},
+				{Role: openailib.ChatMessageRoleUser, Content: "now what?"},
+			},
+			expectLen:  4,
+			expectLast: openailib.ChatMessageRoleUser,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ensureNotEndingWithTool(tt.input)
+			if len(result) != tt.expectLen {
+				t.Fatalf("expected %d messages, got %d", tt.expectLen, len(result))
+			}
+			if tt.expectLen > 0 {
+				last := result[len(result)-1]
+				if last.Role != tt.expectLast {
+					t.Errorf("expected last role %q, got %q", tt.expectLast, last.Role)
+				}
+				if tt.expectExtra && last.Content == "" {
+					t.Error("expected synthetic user message to have non-empty content")
 				}
 			}
 		})

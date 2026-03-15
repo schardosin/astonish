@@ -56,6 +56,7 @@ type SeenIssueState struct {
 	FirstSeenAt   time.Time `json:"first_seen_at"`
 	Status        string    `json:"status"`                    // "agents", "customer", or "failed"
 	SessionID     string    `json:"session_id,omitempty"`      // fleet session ID (for recovery)
+	IssueTitle    string    `json:"issue_title,omitempty"`     // issue title (for task slug derivation on recovery)
 	LastCommentID int64     `json:"last_comment_id,omitempty"` // highest GitHub comment ID seen (for polling)
 	FailedAt      time.Time `json:"failed_at,omitempty"`       // when the session failed (status=failed only)
 	Error         string    `json:"error,omitempty"`           // error message (status=failed only)
@@ -64,6 +65,7 @@ type SeenIssueState struct {
 // AgentBallIssue is returned by GetAgentBallIssues for recovery on restart.
 type AgentBallIssue struct {
 	IssueNumber int
+	IssueTitle  string
 	SessionID   string
 }
 
@@ -233,14 +235,20 @@ func (m *GitHubMonitor) Poll() ([]GitHubIssue, error) {
 // session starts or when a customer comment triggers re-activation. The issue will
 // not be re-triggered by future polls. If the daemon restarts before the ball
 // moves to "customer", GetAgentBallIssues returns it for recovery.
-func (m *GitHubMonitor) MarkAgents(issueNumber int, sessionID string) {
+func (m *GitHubMonitor) MarkAgents(issueNumber int, sessionID string, issueTitle ...string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	title := ""
+	if len(issueTitle) > 0 {
+		title = issueTitle[0]
+	}
 
 	m.state.SeenIssues[issueNumber] = &SeenIssueState{
 		FirstSeenAt: time.Now(),
 		Status:      "agents",
 		SessionID:   sessionID,
+		IssueTitle:  title,
 	}
 
 	if err := m.saveStateLocked(); err != nil {
@@ -355,6 +363,7 @@ func (m *GitHubMonitor) GetAgentBallIssues() []AgentBallIssue {
 		if state.Status == "agents" && state.SessionID != "" {
 			result = append(result, AgentBallIssue{
 				IssueNumber: num,
+				IssueTitle:  state.IssueTitle,
 				SessionID:   state.SessionID,
 			})
 		}
@@ -380,6 +389,17 @@ func (m *GitHubMonitor) GetCustomerBallIssues() []CustomerBallIssue {
 		}
 	}
 	return result
+}
+
+// GetIssueTitle returns the stored title for a tracked issue, or empty string
+// if the issue is not tracked or the title was not recorded.
+func (m *GitHubMonitor) GetIssueTitle(issueNumber int) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s, ok := m.state.SeenIssues[issueNumber]; ok {
+		return s.IssueTitle
+	}
+	return ""
 }
 
 // MarkAllCurrentAsSeen polls current issues and marks them all as seen.
@@ -563,9 +583,13 @@ func (m *GitHubMonitor) checkCustomerReplies(callback CustomerReplyCallback) {
 }
 
 // fetchNewComments fetches comments on an issue that are newer than lastCommentID.
+// For issues with ≤100 comments, this makes a single API call. For issues with
+// more, it auto-paginates from page 2 onwards to find the newest comments.
 func (m *GitHubMonitor) fetchNewComments(issueNumber int, lastCommentID int64) []ghIssueComment {
+	// First call: fetch up to 100 comments (page 1, ascending order — the
+	// only order GitHub's Issues Comments API supports).
 	out, err := ghCommand(m.GHToken, "api",
-		fmt.Sprintf("repos/%s/issues/%d/comments?per_page=20&sort=created&direction=asc", m.Repo, issueNumber))
+		fmt.Sprintf("repos/%s/issues/%d/comments?per_page=100", m.Repo, issueNumber))
 	if err != nil {
 		log.Printf("[github-monitor] Error fetching comments for issue #%d: %v", issueNumber, err)
 		return nil
@@ -580,6 +604,32 @@ func (m *GitHubMonitor) fetchNewComments(issueNumber int, lastCommentID int64) [
 	// Filter to only comments newer than the cursor
 	var newer []ghIssueComment
 	for _, c := range comments {
+		if c.ID > lastCommentID {
+			newer = append(newer, c)
+		}
+	}
+
+	if len(newer) > 0 || len(comments) < 100 {
+		// Found new comments, or there are ≤100 total (no more pages).
+		return newer
+	}
+
+	// More than 100 comments and none are new on page 1 — the new comment
+	// is on a later page. Use --paginate from page 2 to fetch all remaining.
+	out, err = ghCommand(m.GHToken, "api", "--paginate",
+		fmt.Sprintf("repos/%s/issues/%d/comments?per_page=100&page=2", m.Repo, issueNumber))
+	if err != nil {
+		log.Printf("[github-monitor] Error fetching paginated comments for issue #%d: %v", issueNumber, err)
+		return nil
+	}
+
+	var moreComments []ghIssueComment
+	if err := json.Unmarshal([]byte(out), &moreComments); err != nil {
+		log.Printf("[github-monitor] Error parsing paginated comments for issue #%d: %v", issueNumber, err)
+		return nil
+	}
+
+	for _, c := range moreComments {
 		if c.ID > lastCommentID {
 			newer = append(newer, c)
 		}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -23,6 +24,10 @@ import (
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
 )
+
+// titleThinkTagRe strips <think>/<thinking> blocks that some models emit in
+// title-generation responses.
+var titleThinkTagRe = regexp.MustCompile(`(?s)<(?:think|thinking)>.*?</(?:think|thinking)>`)
 
 // StudioChatRequest is the request body for POST /api/studio/chat.
 type StudioChatRequest struct {
@@ -924,6 +929,7 @@ func generateStudioSessionTitle(llm model.LLM, store *persistentsession.FileStor
 		}
 	}
 
+	title = titleThinkTagRe.ReplaceAllString(title, "")
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return

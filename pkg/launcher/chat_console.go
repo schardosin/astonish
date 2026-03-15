@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -25,6 +26,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// consoleThinkTagRe strips <think>/<thinking> blocks that some models emit in
+// title-generation responses.
+var consoleThinkTagRe = regexp.MustCompile(`(?s)<(?:think|thinking)>.*?</(?:think|thinking)>`)
 
 // ChatConsoleConfig contains configuration for the chat console launcher.
 type ChatConsoleConfig struct {
@@ -730,6 +735,7 @@ func generateSessionTitle(ctx context.Context, llm model.LLM, store *persistents
 		}
 	}
 
+	title = consoleThinkTagRe.ReplaceAllString(title, "")
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return

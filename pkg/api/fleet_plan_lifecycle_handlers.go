@@ -151,6 +151,7 @@ func RetryFleetIssueHandler(w http.ResponseWriter, r *http.Request) {
 		Plan:        plan,
 		SessionID:   sessionID,
 		IssueNumber: issueNum,
+		IssueTitle:  monitor.GetIssueTitle(issueNum),
 		Repo:        repo,
 		GHToken:     planActivatorVar.ResolveGHTokenForPlan(plan),
 		CompletionFunc: func(sessionErr error) {

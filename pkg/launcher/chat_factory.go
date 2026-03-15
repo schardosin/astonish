@@ -921,6 +921,21 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		} else {
 			internalTools = append(internalTools, fleetPlanValidateTools...)
 		}
+
+		// Register opencode tool for the main chat agent (used by the plan wizard
+		// to analyze project workspaces via /init). Fleet worker agents also get
+		// access via fleetOnlyTools, but the main agent needs it for wizard-phase
+		// project analysis.
+		if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
+			ocTool, ocErr := tools.NewOpenCodeTool()
+			if ocErr != nil {
+				if cfg.DebugMode {
+					fmt.Printf("Warning: Failed to create opencode tool for wizard: %v\n", ocErr)
+				}
+			} else {
+				internalTools = append(internalTools, ocTool)
+			}
+		}
 	}
 
 	// --- 6. Create ChatAgent ---

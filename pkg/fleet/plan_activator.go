@@ -45,6 +45,7 @@ type HeadlessFleetConfig struct {
 	Plan           *FleetPlan
 	InitialMsg     string                             // the formatted issue context or trigger message
 	IssueNumber    int                                // GitHub issue number (0 if not issue-triggered)
+	IssueTitle     string                             // GitHub issue title (for task slug derivation)
 	Repo           string                             // GitHub repo "owner/repo"
 	GHToken        string                             // resolved GitHub token (injected as GH_TOKEN)
 	CompletionFunc func(err error)                    // called when the session finishes (nil=success, non-nil=failed)
@@ -56,6 +57,7 @@ type RecoverFleetConfig struct {
 	Plan           *FleetPlan
 	SessionID      string // original session ID (to resume the same transcript)
 	IssueNumber    int
+	IssueTitle     string // GitHub issue title (for task slug derivation)
 	Repo           string
 	GHToken        string                             // resolved GitHub token (injected as GH_TOKEN)
 	CompletionFunc func(err error)                    // called when the recovered session finishes
@@ -344,6 +346,7 @@ func (a *PlanActivator) RestoreActivated() error {
 						Plan:        plan,
 						SessionID:   ab.SessionID,
 						IssueNumber: issueNum,
+						IssueTitle:  ab.IssueTitle,
 						Repo:        repo,
 						GHToken:     a.ResolveGHTokenForPlan(plan),
 						CompletionFunc: func(sessionErr error) {
@@ -394,6 +397,7 @@ func (a *PlanActivator) RestoreActivated() error {
 							Plan:        planCopy,
 							SessionID:   sessID,
 							IssueNumber: issNum,
+							IssueTitle:  monRef.GetIssueTitle(issNum),
 							Repo:        repo,
 							GHToken:     a.ResolveGHTokenForPlan(planCopy),
 							CompletionFunc: func(sessionErr error) {
@@ -499,6 +503,7 @@ func (a *PlanActivator) pollGitHubIssues(ctx context.Context, planKey string, pl
 				Plan:        plan,
 				InitialMsg:  initialMsg,
 				IssueNumber: issueNum,
+				IssueTitle:  issue.Title,
 				Repo:        repo,
 				GHToken:     a.ResolveGHTokenForPlan(plan),
 				CompletionFunc: func(sessionErr error) {
@@ -525,7 +530,7 @@ func (a *PlanActivator) pollGitHubIssues(ctx context.Context, planKey string, pl
 				log.Printf("[plan-activator] Failed to start fleet session for issue #%d: %v", issue.Number, startErr)
 				continue
 			}
-			monitor.MarkAgents(issue.Number, sessionID)
+			monitor.MarkAgents(issue.Number, sessionID, issue.Title)
 			started++
 			log.Printf("[plan-activator] Started fleet session %s for issue #%d (%s)", sessionID, issue.Number, issue.Title)
 		}

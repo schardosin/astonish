@@ -60,6 +60,12 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 	fleetSession.Plan = plan
 	fleetSession.Headless = true
 
+	// Derive a task slug from the issue number and title so agents can use
+	// concrete branch names instead of the raw branch_pattern placeholder.
+	if cfg.IssueNumber > 0 && cfg.IssueTitle != "" {
+		fleetSession.TaskSlug = fleet.TaskSlugFromIssue(cfg.IssueNumber, cfg.IssueTitle)
+	}
+
 	// Generate or update project context (e.g., AGENTS.md) before any agent
 	// starts. This runs synchronously so the context is ready when the first
 	// agent is activated. The timeout and strategy are defined by the fleet

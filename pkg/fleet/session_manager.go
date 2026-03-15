@@ -113,6 +113,12 @@ type FleetSession struct {
 	// and build commands. Empty when the fleet template does not define a
 	// project_context section.
 	ProjectContext string
+
+	// TaskSlug is a short, URL/branch-safe identifier for the task this
+	// session is working on. For github_issues channels it is derived from
+	// the issue number and title (e.g., "issue-6-improve-payoff-chart").
+	// Used to resolve artifact branch_pattern placeholders like "fleet/{task}".
+	TaskSlug string
 }
 
 // NewFleetSession creates a new fleet session.
@@ -275,6 +281,12 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 			// Customer messages use fast-path routing (no LLM needed)
 			if msg.IsFromCustomer() {
 				targetAgent = RouteCustomerMessage(fs.FleetConfig, fs.waitingAgent)
+
+				// Persist customer message to transcript so it survives
+				// daemon restarts. Without this, recovery reads the JSONL
+				// and reconstructs the thread without any customer messages,
+				// causing agents to lose all customer feedback/approvals.
+				fs.notifyMessagePosted(msg)
 
 				// Clear waiting state since customer responded
 				if fs.waitingAgent != "" {
@@ -439,7 +451,7 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 	}
 
 	// Build system prompt with communication graph awareness
-	systemPrompt := BuildAgentPrompt(agentCfg, fs.FleetConfig, agentKey, fs.Progress, fs.ProjectContext, fs.Plan)
+	systemPrompt := BuildAgentPrompt(agentCfg, fs.FleetConfig, agentKey, fs.Progress, fs.ProjectContext, fs.TaskSlug, fs.Plan)
 
 	// Build thread context
 	threadContext, err := BuildThreadContext(ctx, fs.Channel, agentKey)

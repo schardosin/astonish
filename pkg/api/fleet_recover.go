@@ -99,6 +99,11 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 	fleetSession.Plan = plan
 	fleetSession.Headless = true
 
+	// Derive task slug from the issue context (same as initial start).
+	if cfg.IssueNumber > 0 && cfg.IssueTitle != "" {
+		fleetSession.TaskSlug = fleet.TaskSlugFromIssue(cfg.IssueNumber, cfg.IssueTitle)
+	}
+
 	// Load existing project context file from the workspace (no regeneration
 	// on recovery; the file should already exist from the original session).
 	if workspaceDir != "" && fleetCfg.ProjectContext != nil {

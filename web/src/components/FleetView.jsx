@@ -8,12 +8,12 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import YamlDrawer from './YamlDrawer'
 import {
-  fetchFleetPlans, fetchFleets, fetchFleetPlan, fetchFleetPlanYaml, saveFleetPlanYaml,
+  fetchFleetPlans, fetchFleets, fetchFleet, fetchFleetPlan, fetchFleetPlanYaml, saveFleetPlanYaml,
   activateFleetPlan, deactivateFleetPlan, getFleetPlanStatus, duplicateFleetPlan,
   deleteFleetPlan, startFleetSession, stopFleetSession, fetchFleetTrace,
   fetchFleetSessions, connectFleetStream, retryFleetIssue,
 } from '../api/fleetChat'
-import { fetchSessions } from '../api/studioChat'
+import { fetchSessions, deleteSession } from '../api/studioChat'
 import { buildPath } from '../hooks/useHashRouter'
 
 // Agent identity colors for trace view
@@ -63,7 +63,7 @@ function formatTimeAgo(dateStr) {
 // ─── Fleet Sidebar ───
 
 function FleetSidebar({
-  plans, sessions, templates, selectedItem, onSelect, onSearch, searchQuery,
+  plans, sessions, templates, selectedItem, onSelect, onDeleteSession, onSearch, searchQuery,
   isLoading, theme,
 }) {
   const [collapsedSections, setCollapsedSections] = useState({})
@@ -100,7 +100,7 @@ function FleetSidebar({
                 <button
                   key={`${type}-${item.key}`}
                   onClick={() => onSelect({ type, key: item.key })}
-                  className={`w-full text-left px-4 py-2.5 transition-colors ${
+                  className={`group w-full text-left px-4 py-2.5 transition-colors ${
                     isSelected ? 'bg-cyan-500/15 border-l-2 border-cyan-400' : 'hover:bg-white/5 border-l-2 border-transparent'
                   }`}
                 >
@@ -118,6 +118,15 @@ function FleetSidebar({
                       <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: badgeColor, color: '#fff' }}>
                         {item.badge}
                       </span>
+                    )}
+                    {item.onDelete && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); item.onDelete() }}
+                        className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/20 transition-all shrink-0"
+                        title="Delete session"
+                      >
+                        <Trash2 size={12} className="text-red-400" />
+                      </button>
                     )}
                   </div>
                   {item.subtitle && (
@@ -147,6 +156,7 @@ function FleetSidebar({
     name: s.title || `Session ${s.id.slice(0, 8)}`,
     subtitle: `${s.id.slice(0, 8)} | ${s.issueNumber ? `#${s.issueNumber}` : ''} ${formatTimeAgo(s.updatedAt)}`.trim(),
     badge: null,
+    onDelete: () => onDeleteSession(s.id),
   }))
 
   const templateItems = templates.map(t => ({
@@ -222,6 +232,11 @@ function PlanDetail({ planKey, onNavigate, onRefresh, theme }) {
   const [statusError, setStatusError] = useState(null)
   const [saveStatus, setSaveStatus] = useState(null)
   const [retryingIssue, setRetryingIssue] = useState(null)
+  const [expandedAgents, setExpandedAgents] = useState({})
+
+  const toggleAgent = (key) => {
+    setExpandedAgents(prev => ({ ...prev, [key]: !prev[key] }))
+  }
 
   const loadPlan = useCallback(async () => {
     setIsLoading(true)
@@ -635,27 +650,67 @@ function PlanDetail({ planKey, onNavigate, onRefresh, theme }) {
           <div className="space-y-3">
             {agents.map(([key, agent]) => {
               const color = getAgentColor(key)
+              const expanded = expandedAgents[key]
               return (
                 <div
                   key={key}
                   className="rounded-lg p-3"
                   style={{ background: color.bg, border: `1px solid ${color.border}` }}
                 >
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-medium" style={{ color: color.text }}>{key}</span>
+                  <div
+                    className="flex items-center justify-between cursor-pointer"
+                    onClick={() => toggleAgent(key)}
+                  >
+                    <div className="flex items-center gap-2">
+                      {expanded ? <ChevronDown size={12} style={{ color: color.text }} /> : <ChevronRight size={12} style={{ color: color.text }} />}
+                      <span className="text-sm font-medium" style={{ color: color.text }}>{key}</span>
+                    </div>
                     <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
                       <span>{agent.name}</span>
                       <span>Mode: {agent.mode || 'agentic'}</span>
                     </div>
                   </div>
-                  {agent.delegate && (
-                    <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                      Delegate: <code className="px-1 py-0.5 rounded text-[11px]" style={{ background: 'rgba(0,0,0,0.3)' }}>{agent.delegate.tool}</code>
-                    </div>
+                  {agent.description && (
+                    <p className="text-xs mt-1.5" style={{ color: 'var(--text-secondary)' }}>{agent.description}</p>
                   )}
-                  {agent.behaviors && (
-                    <div className="text-xs mt-1 line-clamp-2" style={{ color: 'var(--text-muted)' }}>
-                      {agent.behaviors.slice(0, 200)}{agent.behaviors.length > 200 ? '...' : ''}
+                  {!expanded && (
+                    <>
+                      {agent.delegate && (
+                        <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                          Delegate: <code className="px-1 py-0.5 rounded text-[11px]" style={{ background: 'rgba(0,0,0,0.3)' }}>{agent.delegate.tool}</code>
+                        </div>
+                      )}
+                      {agent.behaviors && (
+                        <div className="text-xs mt-1 line-clamp-2" style={{ color: 'var(--text-muted)' }}>
+                          {agent.behaviors.slice(0, 200)}{agent.behaviors.length > 200 ? '...' : ''}
+                        </div>
+                      )}
+                    </>
+                  )}
+                  {expanded && (
+                    <div className="mt-3 space-y-2">
+                      {agent.identity && (
+                        <div>
+                          <div className="text-[11px] font-medium mb-0.5" style={{ color: 'var(--text-muted)' }}>Identity</div>
+                          <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                            {agent.identity.slice(0, 300)}{agent.identity.length > 300 ? '...' : ''}
+                          </p>
+                        </div>
+                      )}
+                      {agent.delegate && (
+                        <div>
+                          <div className="text-[11px] font-medium mb-0.5" style={{ color: 'var(--text-muted)' }}>Delegate</div>
+                          <code className="text-xs px-1 py-0.5 rounded" style={{ background: 'rgba(0,0,0,0.3)', color: 'var(--text-secondary)' }}>
+                            {agent.delegate.tool}
+                          </code>
+                        </div>
+                      )}
+                      {agent.behaviors && (
+                        <div>
+                          <div className="text-[11px] font-medium mb-0.5" style={{ color: 'var(--text-muted)' }}>Behaviors</div>
+                          <p className="text-xs whitespace-pre-line" style={{ color: 'var(--text-secondary)' }}>{agent.behaviors}</p>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1122,6 +1177,31 @@ function TraceEntryRow({ entry, index, expanded, onToggle }) {
 
 function TemplateDetail({ templateKey, templates, onCreatePlan }) {
   const template = templates.find(t => t.key === templateKey)
+  // State: { config, key, error } — only set from async callbacks
+  const [state, setState] = useState({ config: null, key: null, error: null })
+  const [expandedAgents, setExpandedAgents] = useState({})
+
+  // Derive loading: fetching when key doesn't match loaded key
+  const loading = Boolean(templateKey && templateKey !== state.key)
+  const fullConfig = state.key === templateKey ? state.config : null
+  const error = state.key === templateKey ? state.error : null
+
+  // Fetch full template data when templateKey changes
+  useEffect(() => {
+    if (!templateKey) return
+    let cancelled = false
+    fetchFleet(templateKey)
+      .then(data => {
+        if (!cancelled) {
+          setState({ config: data.fleet, key: templateKey, error: null })
+          setExpandedAgents({})
+        }
+      })
+      .catch(err => {
+        if (!cancelled) setState({ config: null, key: templateKey, error: err.message })
+      })
+    return () => { cancelled = true }
+  }, [templateKey])
 
   if (!template) {
     return (
@@ -1137,6 +1217,14 @@ function TemplateDetail({ templateKey, templates, onCreatePlan }) {
     }
   }
 
+  const toggleAgent = (key) => {
+    setExpandedAgents(prev => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  const commFlow = fullConfig?.communication?.flow || []
+  const agents = fullConfig?.agents ? Object.entries(fullConfig.agents) : []
+  const settings = fullConfig?.settings || {}
+
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-4xl mx-auto p-6 space-y-6">
@@ -1144,8 +1232,8 @@ function TemplateDetail({ templateKey, templates, onCreatePlan }) {
         <div className="flex items-start justify-between">
           <div>
             <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{template.name}</h1>
-            {template.description && (
-              <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>{template.description}</p>
+            {(fullConfig?.description || template.description) && (
+              <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>{fullConfig?.description || template.description}</p>
             )}
             <div className="flex items-center gap-3 mt-2">
               <span className="text-xs px-2 py-0.5 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>
@@ -1166,24 +1254,179 @@ function TemplateDetail({ templateKey, templates, onCreatePlan }) {
           </div>
         </div>
 
-        {/* Agent List */}
-        <div className="rounded-lg p-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
-          <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>Agents</h3>
-          <div className="flex flex-wrap gap-2">
-            {(template.agent_names || []).map(name => {
-              const color = getAgentColor(name)
-              return (
-                <div
-                  key={name}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
-                  style={{ background: color.bg, border: `1px solid ${color.border}`, color: color.text }}
-                >
-                  {name}
-                </div>
-              )
-            })}
+        {/* Loading / Error states for full config */}
+        {loading && (
+          <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+            <Loader size={12} className="animate-spin" /> Loading template details...
           </div>
-        </div>
+        )}
+        {error && (
+          <div className="flex items-center gap-2 text-xs" style={{ color: '#f87171' }}>
+            <AlertCircle size={12} /> Failed to load details: {error}
+          </div>
+        )}
+
+        {/* Communication Flow */}
+        {commFlow.length > 0 && (
+          <div className="rounded-lg p-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+            <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>Communication Flow</h3>
+            <div className="flex items-center flex-wrap gap-2">
+              {commFlow.map((node, i) => {
+                const color = getAgentColor(node.role)
+                return (
+                  <div key={node.role} className="flex items-center gap-2">
+                    <div
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
+                      style={{ background: color.bg, border: `1px solid ${color.border}`, color: color.text }}
+                    >
+                      {node.entry_point && <Radio size={10} />}
+                      {node.role}
+                    </div>
+                    {i < commFlow.length - 1 && (
+                      <ArrowRight size={14} style={{ color: 'var(--text-muted)' }} />
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+            <div className="mt-3 space-y-1">
+              {commFlow.map(node => (
+                <div key={`talks-${node.role}`} className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  <span style={{ color: getAgentColor(node.role).text }}>{node.role}</span>
+                  {' talks to: '}
+                  {node.talks_to?.join(', ') || 'none'}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Agents */}
+        {agents.length > 0 && (
+          <div className="rounded-lg p-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+            <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>Agents ({agents.length})</h3>
+            <div className="space-y-3">
+              {agents.map(([key, agent]) => {
+                const color = getAgentColor(key)
+                const expanded = expandedAgents[key]
+                return (
+                  <div
+                    key={key}
+                    className="rounded-lg p-3"
+                    style={{ background: color.bg, border: `1px solid ${color.border}` }}
+                  >
+                    <div
+                      className="flex items-center justify-between cursor-pointer"
+                      onClick={() => toggleAgent(key)}
+                    >
+                      <div className="flex items-center gap-2">
+                        {expanded ? <ChevronDown size={12} style={{ color: color.text }} /> : <ChevronRight size={12} style={{ color: color.text }} />}
+                        <span className="text-sm font-medium" style={{ color: color.text }}>{key}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                        <span>{agent.name}</span>
+                        <span>Mode: {agent.mode || 'agentic'}</span>
+                      </div>
+                    </div>
+                    {agent.description && (
+                      <p className="text-xs mt-1.5" style={{ color: 'var(--text-secondary)' }}>{agent.description}</p>
+                    )}
+                    {!expanded && (
+                      <>
+                        {agent.delegate && (
+                          <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                            Delegate: <code className="px-1 py-0.5 rounded text-[11px]" style={{ background: 'rgba(0,0,0,0.3)' }}>{agent.delegate.tool}</code>
+                          </div>
+                        )}
+                        {agent.behaviors && (
+                          <div className="text-xs mt-1 line-clamp-2" style={{ color: 'var(--text-muted)' }}>
+                            {agent.behaviors.slice(0, 200)}{agent.behaviors.length > 200 ? '...' : ''}
+                          </div>
+                        )}
+                      </>
+                    )}
+                    {expanded && (
+                      <div className="mt-3 space-y-2">
+                        {agent.identity && (
+                          <div>
+                            <div className="text-[11px] font-medium mb-0.5" style={{ color: 'var(--text-muted)' }}>Identity</div>
+                            <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                              {agent.identity.slice(0, 300)}{agent.identity.length > 300 ? '...' : ''}
+                            </p>
+                          </div>
+                        )}
+                        {agent.delegate && (
+                          <div>
+                            <div className="text-[11px] font-medium mb-0.5" style={{ color: 'var(--text-muted)' }}>Delegate</div>
+                            <code className="text-xs px-1 py-0.5 rounded" style={{ background: 'rgba(0,0,0,0.3)', color: 'var(--text-secondary)' }}>
+                              {agent.delegate.tool}
+                            </code>
+                          </div>
+                        )}
+                        {agent.behaviors && (
+                          <div>
+                            <div className="text-[11px] font-medium mb-0.5" style={{ color: 'var(--text-muted)' }}>Behaviors</div>
+                            <p className="text-xs whitespace-pre-line" style={{ color: 'var(--text-secondary)' }}>{agent.behaviors}</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Fallback: show agent pills when full config hasn't loaded */}
+        {agents.length === 0 && !loading && (
+          <div className="rounded-lg p-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+            <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>Agents</h3>
+            <div className="flex flex-wrap gap-2">
+              {(template.agent_names || []).map(name => {
+                const color = getAgentColor(name)
+                return (
+                  <div
+                    key={name}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
+                    style={{ background: color.bg, border: `1px solid ${color.border}`, color: color.text }}
+                  >
+                    {name}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Settings */}
+        {fullConfig && (settings.max_turns_per_agent || fullConfig.workspace_base_dir || fullConfig.project_context) && (
+          <div className="rounded-lg p-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+            <h3 className="text-sm font-semibold mb-3 flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}>
+              <Wrench size={12} /> Settings
+            </h3>
+            <div className="space-y-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
+              {settings.max_turns_per_agent && (
+                <div className="flex items-center gap-2">
+                  <Clock size={11} style={{ color: 'var(--text-muted)' }} />
+                  <span>Max turns per agent: <strong>{settings.max_turns_per_agent}</strong></span>
+                </div>
+              )}
+              {fullConfig.workspace_base_dir && (
+                <div className="flex items-center gap-2">
+                  <Code size={11} style={{ color: 'var(--text-muted)' }} />
+                  <span>Workspace base: <code className="px-1 py-0.5 rounded text-[11px]" style={{ background: 'rgba(0,0,0,0.3)' }}>{fullConfig.workspace_base_dir}</code></span>
+                </div>
+              )}
+              {fullConfig.project_context && (
+                <div className="flex items-center gap-2">
+                  <FileText size={11} style={{ color: 'var(--text-muted)' }} />
+                  <span>Project context: <strong>enabled</strong></span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Info Note */}
         <div className="rounded-lg p-4" style={{ background: 'rgba(6, 182, 212, 0.05)', border: '1px solid rgba(6, 182, 212, 0.2)' }}>
@@ -1273,6 +1516,19 @@ export default function FleetView({ theme, path, onNavigate, onCreatePlan }) {
     onNavigate('#' + hashPath)
   }, [onNavigate])
 
+  const handleDeleteSession = useCallback(async (sessionId) => {
+    try {
+      await deleteSession(sessionId)
+      // If the deleted session is currently selected, clear selection
+      if (selectedItem?.type === 'session' && selectedItem?.key === sessionId) {
+        onNavigate('#' + buildPath('fleet'))
+      }
+      loadData()
+    } catch (err) {
+      console.error('Failed to delete session:', err)
+    }
+  }, [selectedItem, onNavigate, loadData])
+
   // Filter items by search query
   const filteredPlans = useMemo(() => {
     if (!searchQuery) return plans
@@ -1341,6 +1597,7 @@ export default function FleetView({ theme, path, onNavigate, onCreatePlan }) {
         templates={filteredTemplates}
         selectedItem={selectedItem}
         onSelect={handleSelect}
+        onDeleteSession={handleDeleteSession}
         onSearch={setSearchQuery}
         searchQuery={searchQuery}
         isLoading={isLoading}

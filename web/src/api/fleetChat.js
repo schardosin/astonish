@@ -19,6 +19,19 @@ export async function fetchFleets() {
 }
 
 /**
+ * Fetch a single fleet template with full config (agents, communication, settings, etc.)
+ * @param {string} key - Fleet template key (e.g., 'software-dev')
+ * @returns {Promise<{key: string, fleet: object}>}
+ */
+export async function fetchFleet(key) {
+  const response = await fetch(`${FLEET_API}/${encodeURIComponent(key)}`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch fleet: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+/**
  * Fetch available fleet plans
  * @returns {Promise<{plans: Array<{key: string, name: string, description: string, created_from: string, channel_type: string, agent_count: number, agent_names: string[]}>}>}
  */

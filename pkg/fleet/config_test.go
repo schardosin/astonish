@@ -1,10 +1,14 @@
 package fleet
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 const validFleetYAML = `name: test-fleet
@@ -1004,5 +1008,619 @@ func TestBuildAgentPrompt_DocsPathFromArtifact(t *testing.T) {
 	// Should NOT contain the old hardcoded "docs/" path
 	if strings.Contains(prompt, "/tmp/test-workspace/docs/issue-5-add-feature/") {
 		t.Error("expected prompt to NOT hardcode 'docs/' when artifact sub_path is 'documentation'")
+	}
+}
+
+func TestGetConfigStringSlice(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   map[string]any
+		key      string
+		expected []string
+	}{
+		{
+			name:     "nil config",
+			config:   nil,
+			key:      "labels",
+			expected: nil,
+		},
+		{
+			name:     "key not found",
+			config:   map[string]any{"other": "value"},
+			key:      "labels",
+			expected: nil,
+		},
+		{
+			name:     "single string value",
+			config:   map[string]any{"label": "astonish_fleet"},
+			key:      "label",
+			expected: []string{"astonish_fleet"},
+		},
+		{
+			name:     "empty string value",
+			config:   map[string]any{"label": ""},
+			key:      "label",
+			expected: nil,
+		},
+		{
+			name:     "string slice value",
+			config:   map[string]any{"labels": []string{"bug", "fleet"}},
+			key:      "labels",
+			expected: []string{"bug", "fleet"},
+		},
+		{
+			name:     "any slice value (from YAML)",
+			config:   map[string]any{"labels": []any{"bug", "fleet"}},
+			key:      "labels",
+			expected: []string{"bug", "fleet"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := getConfigStringSlice(tt.config, tt.key)
+			if tt.expected == nil {
+				if result != nil {
+					t.Errorf("expected nil, got %v", result)
+				}
+				return
+			}
+			if len(result) != len(tt.expected) {
+				t.Errorf("expected %v, got %v", tt.expected, result)
+				return
+			}
+			for i, v := range result {
+				if v != tt.expected[i] {
+					t.Errorf("expected[%d] = %q, got %q", i, tt.expected[i], v)
+				}
+			}
+		})
+	}
+}
+
+func TestNewGitHubMonitor_LabelFallback(t *testing.T) {
+	// Test that singular "label" key works as fallback for "labels"
+	stateDir := t.TempDir()
+
+	// Singular key (common in YAML configs)
+	m := NewGitHubMonitor("test-plan", map[string]any{
+		"repo":  "owner/repo",
+		"label": "astonish_fleet",
+	}, stateDir)
+
+	if len(m.Labels) != 1 || m.Labels[0] != "astonish_fleet" {
+		t.Errorf("expected labels=[astonish_fleet] from singular 'label' key, got %v", m.Labels)
+	}
+
+	// Plural key takes precedence
+	m2 := NewGitHubMonitor("test-plan", map[string]any{
+		"repo":   "owner/repo",
+		"labels": []any{"bug", "fleet"},
+		"label":  "ignored",
+	}, stateDir)
+
+	if len(m2.Labels) != 2 || m2.Labels[0] != "bug" || m2.Labels[1] != "fleet" {
+		t.Errorf("expected labels=[bug, fleet] from plural 'labels' key, got %v", m2.Labels)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Stateless GitHub Monitor tests
+// ---------------------------------------------------------------------------
+
+func TestGitHubMonitor_MarkSeenAndGetState(t *testing.T) {
+	stateDir := t.TempDir()
+	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
+
+	m.MarkSeen(42, "session-abc", "Fix the bug")
+
+	s := m.GetIssueState(42)
+	if s == nil {
+		t.Fatal("expected state for issue 42")
+	}
+	if s.SessionID != "session-abc" {
+		t.Errorf("expected session_id %q, got %q", "session-abc", s.SessionID)
+	}
+	if s.IssueTitle != "Fix the bug" {
+		t.Errorf("expected title %q, got %q", "Fix the bug", s.IssueTitle)
+	}
+
+	// Unknown issue should return nil
+	if m.GetIssueState(999) != nil {
+		t.Error("expected nil for unknown issue")
+	}
+}
+
+func TestGitHubMonitor_UpdateCursorOnlyAdvances(t *testing.T) {
+	stateDir := t.TempDir()
+	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
+
+	m.MarkSeen(10, "sess-1", "Issue 10")
+
+	m.UpdateCursor(10, 100)
+	s := m.GetIssueState(10)
+	if s.LastCommentID != 100 {
+		t.Errorf("expected cursor 100, got %d", s.LastCommentID)
+	}
+
+	// Cursor should not regress
+	m.UpdateCursor(10, 50)
+	s = m.GetIssueState(10)
+	if s.LastCommentID != 100 {
+		t.Errorf("expected cursor to stay at 100, got %d", s.LastCommentID)
+	}
+
+	// Cursor should advance
+	m.UpdateCursor(10, 200)
+	s = m.GetIssueState(10)
+	if s.LastCommentID != 200 {
+		t.Errorf("expected cursor 200, got %d", s.LastCommentID)
+	}
+}
+
+func TestGitHubMonitor_RetryCountAndBackoff(t *testing.T) {
+	stateDir := t.TempDir()
+	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
+
+	m.MarkSeen(10, "sess-1", "Issue 10")
+
+	// First failure
+	m.IncrementRetryCount(10, "connection timeout")
+	s := m.GetIssueState(10)
+	if s.RetryCount != 1 {
+		t.Fatalf("expected retry_count 1, got %d", s.RetryCount)
+	}
+	if s.LastError != "connection timeout" {
+		t.Errorf("expected error %q, got %q", "connection timeout", s.LastError)
+	}
+
+	// Second failure
+	m.IncrementRetryCount(10, "model error")
+	s = m.GetIssueState(10)
+	if s.RetryCount != 2 {
+		t.Fatalf("expected retry_count 2, got %d", s.RetryCount)
+	}
+
+	// Third failure — should now appear in GetIssuesNeedingAttention
+	m.IncrementRetryCount(10, "final error")
+	s = m.GetIssueState(10)
+	if s.RetryCount != 3 {
+		t.Fatalf("expected retry_count 3, got %d", s.RetryCount)
+	}
+
+	issues := m.GetIssuesNeedingAttention()
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 issue needing attention, got %d", len(issues))
+	}
+	if issues[0].IssueNumber != 10 {
+		t.Errorf("expected issue #10, got #%d", issues[0].IssueNumber)
+	}
+	if issues[0].RetryCount != 3 {
+		t.Errorf("expected retry_count 3, got %d", issues[0].RetryCount)
+	}
+}
+
+func TestGitHubMonitor_ResetRetryCount(t *testing.T) {
+	stateDir := t.TempDir()
+	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
+
+	m.MarkSeen(10, "sess-1", "Issue 10")
+	m.IncrementRetryCount(10, "error 1")
+	m.IncrementRetryCount(10, "error 2")
+	m.IncrementRetryCount(10, "error 3")
+
+	// Should be in "needs attention" now
+	if len(m.GetIssuesNeedingAttention()) != 1 {
+		t.Fatal("expected issue to need attention before reset")
+	}
+
+	// Reset
+	if err := m.ResetRetryCount(10); err != nil {
+		t.Fatal(err)
+	}
+
+	s := m.GetIssueState(10)
+	if s.RetryCount != 0 {
+		t.Errorf("expected retry_count 0 after reset, got %d", s.RetryCount)
+	}
+	if s.LastError != "" {
+		t.Errorf("expected empty error after reset, got %q", s.LastError)
+	}
+
+	// Should no longer need attention
+	if len(m.GetIssuesNeedingAttention()) != 0 {
+		t.Fatal("expected no issues needing attention after reset")
+	}
+
+	// Reset on unknown issue should error
+	if err := m.ResetRetryCount(999); err == nil {
+		t.Error("expected error when resetting unknown issue")
+	}
+}
+
+func TestGitHubMonitor_ClearRetryOnSuccess(t *testing.T) {
+	stateDir := t.TempDir()
+	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
+
+	m.MarkSeen(10, "sess-1", "Issue 10")
+	m.IncrementRetryCount(10, "transient error")
+
+	s := m.GetIssueState(10)
+	if s.RetryCount != 1 {
+		t.Fatalf("expected retry_count 1, got %d", s.RetryCount)
+	}
+
+	m.ClearRetryOnSuccess(10)
+
+	s = m.GetIssueState(10)
+	if s.RetryCount != 0 {
+		t.Errorf("expected retry_count 0 after success, got %d", s.RetryCount)
+	}
+}
+
+func TestGitHubMonitor_StatePersistence(t *testing.T) {
+	stateDir := t.TempDir()
+
+	// Create and populate a monitor
+	m1 := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
+	m1.MarkSeen(10, "sess-1", "Issue 10")
+	m1.UpdateCursor(10, 500)
+	m1.IncrementRetryCount(10, "some error")
+
+	// Create a new monitor and load state from disk
+	m2 := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
+	if err := m2.LoadState(); err != nil {
+		t.Fatal(err)
+	}
+
+	s := m2.GetIssueState(10)
+	if s == nil {
+		t.Fatal("expected state for issue 10 after reload")
+	}
+	if s.SessionID != "sess-1" {
+		t.Errorf("expected session_id %q, got %q", "sess-1", s.SessionID)
+	}
+	if s.LastCommentID != 500 {
+		t.Errorf("expected cursor 500, got %d", s.LastCommentID)
+	}
+	if s.RetryCount != 1 {
+		t.Errorf("expected retry_count 1, got %d", s.RetryCount)
+	}
+	if s.LastError != "some error" {
+		t.Errorf("expected error %q, got %q", "some error", s.LastError)
+	}
+}
+
+func TestGitHubMonitor_BackoffLogic(t *testing.T) {
+	stateDir := t.TempDir()
+	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
+
+	// No failures — backoff expired (should proceed)
+	s := &SeenIssueState{RetryCount: 0}
+	if !m.isBackoffExpired(s) {
+		t.Error("expected backoff to be expired with no failures")
+	}
+
+	// Recent failure — should NOT be expired
+	s = &SeenIssueState{RetryCount: 1, LastFailedAt: time.Now()}
+	if m.isBackoffExpired(s) {
+		t.Error("expected backoff to NOT be expired for recent failure")
+	}
+
+	// Old failure — should be expired (backoff for retry 1 = 1min)
+	s = &SeenIssueState{RetryCount: 1, LastFailedAt: time.Now().Add(-2 * time.Minute)}
+	if !m.isBackoffExpired(s) {
+		t.Error("expected backoff to be expired for failure 2 minutes ago")
+	}
+}
+
+func TestStripInlineToolCalls(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "no tool calls",
+			input:    "Here is the requirements document for the feature.",
+			expected: "Here is the requirements document for the feature.",
+		},
+		{
+			name:     "tool call at end",
+			input:    "Let me write the file.\nwrite_file{\"file_path\":\"/tmp/test.md\",\"content\":\"# Hello\\nWorld\"}",
+			expected: "Let me write the file.",
+		},
+		{
+			name:     "tool call in middle",
+			input:    "Let me search first.\ngrep_search{\"pattern\":\"foo\",\"search_path\":\"/src\"}\nNow I found it.",
+			expected: "Let me search first.\n\nNow I found it.",
+		},
+		{
+			name:     "multiple tool calls",
+			input:    "Step 1.\nread_file{\"file_path\":\"/a.go\"}\nStep 2.\nwrite_file{\"file_path\":\"/b.go\",\"content\":\"package main\"}\nDone.",
+			expected: "Step 1.\n\nStep 2.\n\nDone.",
+		},
+		{
+			name:     "nested braces in content",
+			input:    "Creating file.\nwrite_file{\"file_path\":\"/t.go\",\"content\":\"func main() {\\n  if true {\\n    fmt.Println()\\n  }\\n}\"}",
+			expected: "Creating file.",
+		},
+		{
+			name:     "tool call only",
+			input:    "grep_search{\"pattern\":\"test\"}",
+			expected: "",
+		},
+		{
+			name:     "not a tool call (normal text with braces)",
+			input:    "The config uses {key: value} format.",
+			expected: "The config uses {key: value} format.",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := stripInlineToolCalls(tt.input)
+			if result != tt.expected {
+				t.Errorf("stripInlineToolCalls(%q)\n  got:  %q\n  want: %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGitHubIssueChannelImplementsExternalPoster(t *testing.T) {
+	// Verify GitHubIssueChannel satisfies the ExternalPoster interface.
+	var ch interface{} = &GitHubIssueChannel{}
+	if _, ok := ch.(ExternalPoster); !ok {
+		t.Fatal("GitHubIssueChannel does not implement ExternalPoster")
+	}
+}
+
+func TestChatChannelDoesNotImplementExternalPoster(t *testing.T) {
+	// ChatChannel should NOT implement ExternalPoster (no external system).
+	var ch interface{} = &ChatChannel{}
+	if _, ok := ch.(ExternalPoster); ok {
+		t.Fatal("ChatChannel should not implement ExternalPoster")
+	}
+}
+
+func TestPostExternalSkipsCustomerMessages(t *testing.T) {
+	// PostExternal should silently skip customer messages
+	// (they originate FROM GitHub, posting them back would duplicate).
+	ch := &GitHubIssueChannel{
+		repo:        "test/repo",
+		issueNumber: 1,
+	}
+	ch.cond = sync.NewCond(&ch.mu)
+
+	// This should not panic or call postCommentAsync (which would fail
+	// without a valid ghToken/repo). If it tries to post, the gh command
+	// will fail and we'll get an error log, but the test is that it
+	// returns without attempting.
+	msg := Message{
+		Sender: "customer",
+		Text:   "Hello from GitHub",
+	}
+	ch.PostExternal(msg) // Should be a no-op
+}
+
+func TestPostExternalSkipsIntermediateMessages(t *testing.T) {
+	ch := &GitHubIssueChannel{
+		repo:        "test/repo",
+		issueNumber: 1,
+	}
+	ch.cond = sync.NewCond(&ch.mu)
+
+	msg := Message{
+		Sender: "po",
+		Text:   "Let me search for...",
+		Metadata: map[string]any{
+			"intermediate": true,
+		},
+	}
+	ch.PostExternal(msg) // Should be a no-op
+}
+
+func TestPostMessageDoesNotPostToGitHub(t *testing.T) {
+	// After the refactor, PostMessage should only add to internal list
+	// and notify subscribers. It should NOT attempt GitHub posting.
+	// We verify by checking that a message is added to the internal list
+	// without any GitHub API errors (since we have no valid token).
+	ch := &GitHubIssueChannel{
+		repo:        "test/repo",
+		issueNumber: 1,
+	}
+	ch.cond = sync.NewCond(&ch.mu)
+	ch.subscribers = make(map[string]chan Message)
+
+	msg := Message{
+		Sender: "po",
+		Text:   "This is a final agent message",
+	}
+	err := ch.PostMessage(context.Background(), msg)
+	if err != nil {
+		t.Fatalf("PostMessage returned error: %v", err)
+	}
+
+	// Verify message was added to internal list
+	ch.mu.RLock()
+	if len(ch.messages) != 1 {
+		t.Fatalf("Expected 1 message in internal list, got %d", len(ch.messages))
+	}
+	if ch.messages[0].Text != "This is a final agent message" {
+		t.Fatalf("Message text mismatch: %s", ch.messages[0].Text)
+	}
+	ch.mu.RUnlock()
+
+	// If PostMessage tried to post to GitHub, it would have logged an error
+	// (no valid ghToken). The absence of panics and the message being in the
+	// internal list confirms PostMessage only does internal operations.
+}
+
+// ---------------------------------------------------------------------------
+// Thread context building tests
+// ---------------------------------------------------------------------------
+
+func makeMessages(count int, charsPer int) []Message {
+	msgs := make([]Message, count)
+	for i := 0; i < count; i++ {
+		text := strings.Repeat("x", charsPer)
+		msgs[i] = Message{
+			Sender: "po",
+			Text:   fmt.Sprintf("Message %d: %s", i, text),
+		}
+	}
+	return msgs
+}
+
+func TestBuildThreadWithBudget_LastMessageNeverTruncated(t *testing.T) {
+	// Create a thread where the last message is very long (10K chars).
+	// It should ALWAYS appear in full, never truncated.
+	msgs := makeMessages(50, 500) // 50 messages × ~510 chars = ~25K
+	lastMsgText := strings.Repeat("IMPORTANT ", 1000)
+	msgs = append(msgs, Message{
+		Sender: "customer",
+		Text:   lastMsgText,
+	})
+
+	result := buildThreadWithBudget(msgs)
+
+	// The full last message text must appear in the result.
+	if !strings.Contains(result, lastMsgText) {
+		t.Fatal("Last message was truncated — it should ALWAYS be included in full")
+	}
+
+	// It should be in the "Message you must respond to" section.
+	if !strings.Contains(result, "### Message you must respond to") {
+		t.Fatal("Missing 'Message you must respond to' section header")
+	}
+}
+
+func TestBuildThreadWithBudget_SmallThread(t *testing.T) {
+	// Small thread should include everything in full, no summaries.
+	msgs := []Message{
+		{Sender: "customer", Text: "Please implement feature X"},
+		{Sender: "po", Text: "I'll analyze the requirements and get started."},
+		{Sender: "po", Text: "Here are the requirements for @dev to implement."},
+	}
+
+	result := buildThreadWithBudget(msgs)
+
+	// All messages should be present in full.
+	if !strings.Contains(result, "Please implement feature X") {
+		t.Fatal("Missing first message")
+	}
+	if !strings.Contains(result, "I'll analyze the requirements") {
+		t.Fatal("Missing second message")
+	}
+	if !strings.Contains(result, "Here are the requirements for @dev") {
+		t.Fatal("Missing last message")
+	}
+}
+
+func TestBuildThreadWithBudget_LargeThreadSummarizesOlder(t *testing.T) {
+	// Create a thread large enough to trigger summarization.
+	// 100 messages × 1000 chars each = 100K >> 50K budget.
+	msgs := makeMessages(100, 1000)
+
+	result := buildThreadWithBudget(msgs)
+
+	// Should have summary section for older messages.
+	if !strings.Contains(result, "### Earlier in the conversation (summary)") {
+		t.Fatal("Missing summary section for large thread")
+	}
+
+	// Last message should be in full.
+	if !strings.Contains(result, "Message 99:") {
+		t.Fatal("Last message missing")
+	}
+
+	// Total should not exceed budget (with the last message exception).
+	// The budget is soft for the last message, but the non-last portion should fit.
+	if !strings.Contains(result, "### Message you must respond to") {
+		t.Fatal("Missing last message section")
+	}
+}
+
+func TestDeduplicateRecoverySummaries(t *testing.T) {
+	thread := []Message{
+		{Sender: "customer", Text: "Initial request"},
+		{Sender: "po", Text: "Working on it"},
+		{Sender: "system", Text: "Fleet session resumed after daemon restart. Summary 1"},
+		{Sender: "po", Text: "Continuing work"},
+		{Sender: "system", Text: "Fleet session resumed after daemon restart. Summary 2"},
+		{Sender: "dev", Text: "Implementing now"},
+		{Sender: "system", Text: "Fleet session resumed after daemon restart. Summary 3"},
+		{Sender: "po", Text: "Final report"},
+	}
+
+	result := deduplicateRecoverySummaries(thread)
+
+	// Should have removed 2 of the 3 recovery summaries.
+	recoveryCount := 0
+	for _, msg := range result {
+		if isRecoverySummary(msg) {
+			recoveryCount++
+		}
+	}
+	if recoveryCount != 1 {
+		t.Fatalf("Expected 1 recovery summary, got %d", recoveryCount)
+	}
+
+	// The kept one should be the LAST one (Summary 3).
+	for _, msg := range result {
+		if isRecoverySummary(msg) {
+			if !strings.Contains(msg.Text, "Summary 3") {
+				t.Fatalf("Expected the last recovery summary to be kept, got: %s", msg.Text)
+			}
+		}
+	}
+
+	// Non-recovery messages should all be preserved.
+	if len(result) != 6 { // 8 - 2 removed = 6
+		t.Fatalf("Expected 6 messages after dedup, got %d", len(result))
+	}
+}
+
+func TestDeduplicateRecoverySummaries_NoSummaries(t *testing.T) {
+	thread := []Message{
+		{Sender: "customer", Text: "Hello"},
+		{Sender: "po", Text: "Hi there"},
+	}
+
+	result := deduplicateRecoverySummaries(thread)
+	if len(result) != 2 {
+		t.Fatalf("Expected 2 messages, got %d", len(result))
+	}
+}
+
+func TestDeduplicateRecoverySummaries_OneSummary(t *testing.T) {
+	thread := []Message{
+		{Sender: "customer", Text: "Hello"},
+		{Sender: "system", Text: "Fleet session resumed after daemon restart. Only one."},
+		{Sender: "po", Text: "Back to work"},
+	}
+
+	result := deduplicateRecoverySummaries(thread)
+	if len(result) != 3 {
+		t.Fatalf("Expected 3 messages (single summary kept), got %d", len(result))
+	}
+}
+
+func TestWriteSummarizedMessage_PreservesMentions(t *testing.T) {
+	var sb strings.Builder
+	msg := Message{
+		Sender: "po",
+		Text:   "I'm delegating this to @dev for implementation. @qa should review afterward. " + strings.Repeat("Details here. ", 50),
+	}
+	writeSummarizedMessage(&sb, msg)
+	result := sb.String()
+
+	if !strings.Contains(result, "[mentions: dev, qa]") {
+		t.Fatalf("Expected mentions to be preserved, got: %s", result)
 	}
 }

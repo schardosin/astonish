@@ -316,10 +316,11 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 			task.OnEvent(event)
 		}
 
-		// Collect text output
+		// Collect text output (skip thought/reasoning parts — these are
+		// internal chain-of-thought and should not appear in the result).
 		if event.LLMResponse.Content != nil {
 			for _, part := range event.LLMResponse.Content.Parts {
-				if part.Text != "" {
+				if part.Text != "" && !part.Thought {
 					outputParts = append(outputParts, part.Text)
 				}
 				// Record tool calls in trace

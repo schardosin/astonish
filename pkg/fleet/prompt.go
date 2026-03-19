@@ -406,4 +406,31 @@ func buildGitWorkflowSection(sb *strings.Builder, plan *FleetPlan, taskSlug, wor
 
 	sb.WriteString("**This is mandatory.** Do NOT just mention a file path — always include the clickable GitHub link.\n")
 	sb.WriteString("The customer and other agents need to be able to open and read your documents directly.\n")
+
+	// Auto-PR instructions — when any artifact has auto_pr enabled, inject
+	// explicit instructions for creating a pull request after all work is
+	// pushed. Without these, agents only see a vague "auto-PR enabled" hint
+	// and inconsistently create PRs.
+	hasAutoPR := false
+	for _, artifact := range plan.Artifacts {
+		if artifact.Type == "git_repo" && artifact.AutoPR {
+			hasAutoPR = true
+			break
+		}
+	}
+	if hasAutoPR && resolvedBranch != "" {
+		sb.WriteString("\n## Auto-PR: Pull Request Creation\n\n")
+		sb.WriteString("**Auto-PR is enabled.** After all work is complete and pushed to the feature branch,\n")
+		sb.WriteString("you MUST create a pull request. This is mandatory — do NOT skip this step.\n\n")
+		sb.WriteString("**Create the PR using the `gh` CLI** (already authenticated):\n")
+		sb.WriteString("```\n")
+		sb.WriteString(fmt.Sprintf("gh pr create --base main --head %s --title \"<title>\" --body \"<body>\"\n", resolvedBranch))
+		sb.WriteString("```\n\n")
+		sb.WriteString("**PR title:** Use the issue title or a clear summary of the changes.\n")
+		sb.WriteString("**PR body:** Include a brief summary of what was implemented, key files changed,\n")
+		sb.WriteString("and a reference to the issue (e.g., `Closes #<number>` or `Related to #<number>`).\n\n")
+		sb.WriteString("After creating the PR, include the PR link in your completion report.\n")
+		sb.WriteString("If `gh pr create` fails because a PR already exists for this branch, that is fine — just\n")
+		sb.WriteString("include the existing PR link instead.\n")
+	}
 }

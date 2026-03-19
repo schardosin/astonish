@@ -7,17 +7,21 @@ import (
 )
 
 const (
-	// maxRecentMessages is the default number of recent messages shown in full.
-	maxRecentMessages = 20
-	// summaryMaxChars is the max length for summarized older messages.
-	summaryMaxChars = 200
 	// maxThreadChars is the overall character budget for the thread context.
-	// ~10K tokens at ~4 chars/token. This leaves room for the system prompt
+	// ~12.5K tokens at ~4 chars/token. This leaves room for the system prompt
 	// and the agent's own tool call context within the model's context window.
-	maxThreadChars = 40000
-	// recentMsgMaxChars is the per-message character limit applied to recent
-	// messages when the thread exceeds the budget.
-	recentMsgMaxChars = 2000
+	maxThreadChars = 50000
+
+	// summaryMaxChars is the max length for summarized older messages.
+	summaryMaxChars = 300
+
+	// recentMsgMaxChars is the per-message truncation limit for recent messages
+	// (excluding the last message, which is never truncated).
+	recentMsgMaxChars = 3000
+
+	// recoverySummaryMarker is text that identifies daemon restart recovery
+	// summaries. These are deduplicated so only the most recent is kept.
+	recoverySummaryMarker = "Fleet session resumed after daemon restart"
 )
 
 // BuildThreadContext builds the conversation context for an agent activation.
@@ -26,9 +30,13 @@ const (
 // The agent sees all messages (from all participants), tagged with sender identity,
 // so it has full awareness of the conversation state.
 //
-// A total character budget (maxThreadChars) prevents the context from exceeding
-// the model's context window. When over budget, recent messages are truncated
-// and the recent window is reduced.
+// Key guarantees:
+//   - The last message is ALWAYS included in full (never truncated).
+//   - Duplicate recovery summaries are deduplicated (only the most recent kept).
+//   - A total character budget (maxThreadChars) prevents the context from
+//     exceeding the model's context window.
+//   - When over budget, older messages are summarized and recent messages are
+//     progressively truncated — but never the last message.
 func BuildThreadContext(ctx context.Context, channel Channel, agentKey string) (string, error) {
 	thread, err := channel.GetThread(ctx)
 	if err != nil {
@@ -39,64 +47,134 @@ func BuildThreadContext(ctx context.Context, channel Channel, agentKey string) (
 		return "", nil
 	}
 
-	// First pass: build with full recent messages
-	result := buildThread(thread, maxRecentMessages, 0)
+	// Deduplicate recovery summaries — keep only the most recent one.
+	thread = deduplicateRecoverySummaries(thread)
 
-	// If within budget, return as-is
-	if len(result) <= maxThreadChars {
-		return result, nil
-	}
-
-	// Over budget: truncate individual recent messages
-	result = buildThread(thread, maxRecentMessages, recentMsgMaxChars)
-	if len(result) <= maxThreadChars {
-		return result, nil
-	}
-
-	// Still over budget: reduce the recent window progressively
-	for _, recentCount := range []int{10, 5, 3} {
-		result = buildThread(thread, recentCount, recentMsgMaxChars)
-		if len(result) <= maxThreadChars {
-			return result, nil
-		}
-	}
-
-	// Last resort: minimal context with aggressive truncation
-	result = buildThread(thread, 3, 1000)
-	if len(result) > maxThreadChars {
-		result = result[:maxThreadChars] + "\n\n[... thread truncated due to length ...]"
-	}
-
-	return result, nil
+	return buildThreadWithBudget(thread), nil
 }
 
-// buildThread constructs the thread context string with the given parameters.
-// recentCount is how many recent messages to show in full.
-// msgMaxChars is the per-message truncation limit for recent messages (0 = no limit).
-func buildThread(thread []Message, recentCount, msgMaxChars int) string {
-	var sb strings.Builder
-	sb.WriteString("## Conversation Thread\n\n")
+// buildThreadWithBudget builds the thread context string with budget management.
+//
+// Algorithm:
+//  1. Reserve the last message (always full, never truncated).
+//  2. Fill backwards with recent messages (truncated to recentMsgMaxChars if needed).
+//  3. Summarize remaining older messages.
+//  4. If still over budget, reduce the number of recent messages.
+func buildThreadWithBudget(thread []Message) string {
+	if len(thread) == 0 {
+		return ""
+	}
 
-	if len(thread) <= recentCount {
-		for _, msg := range thread {
-			writeMessage(&sb, msg, msgMaxChars)
-		}
+	// The last message is always included in full.
+	lastMsg := thread[len(thread)-1]
+	lastMsgText := formatMessage(lastMsg, 0)
+	remaining := thread[:len(thread)-1]
+
+	// Budget for everything except the last message.
+	otherBudget := maxThreadChars - len(lastMsgText)
+	if otherBudget < 0 {
+		otherBudget = 0
+	}
+
+	// If there are no other messages, just return the last one.
+	if len(remaining) == 0 {
+		var sb strings.Builder
+		sb.WriteString("## Conversation Thread\n\n")
+		writeMessage(&sb, lastMsg, 0)
 		return sb.String()
 	}
 
-	// Split into older (summarized) and recent (full/truncated)
-	olderMessages := thread[:len(thread)-recentCount]
-	recentMessages := thread[len(thread)-recentCount:]
+	// Try with progressively fewer recent messages until we fit the budget.
+	// The "recent" messages get recentMsgMaxChars per message; older ones
+	// are summarized.
+	for _, recentCount := range []int{30, 20, 15, 10, 5, 3} {
+		if recentCount > len(remaining) {
+			recentCount = len(remaining)
+		}
 
-	sb.WriteString("### Earlier in the conversation (summary)\n\n")
-	for _, msg := range olderMessages {
-		writeSummarizedMessage(&sb, msg)
-	}
-	sb.WriteString("\n### Recent messages\n\n")
-	for _, msg := range recentMessages {
-		writeMessage(&sb, msg, msgMaxChars)
+		result := buildSections(remaining, recentCount, lastMsg, otherBudget)
+		if result != "" {
+			return result
+		}
 	}
 
+	// Last resort: only the last message + summarized history.
+	return buildSections(remaining, 0, lastMsg, otherBudget)
+}
+
+// buildSections tries to build thread context with the given recent count.
+// Returns "" if the result exceeds otherBudget (signal to try fewer recent messages).
+func buildSections(remaining []Message, recentCount int, lastMsg Message, otherBudget int) string {
+	var sb strings.Builder
+	sb.WriteString("## Conversation Thread\n\n")
+
+	olderCount := len(remaining) - recentCount
+	if olderCount > 0 {
+		sb.WriteString("### Earlier in the conversation (summary)\n\n")
+		for _, msg := range remaining[:olderCount] {
+			writeSummarizedMessage(&sb, msg)
+		}
+		sb.WriteString("\n")
+	}
+
+	if recentCount > 0 {
+		sb.WriteString("### Recent messages\n\n")
+		for _, msg := range remaining[olderCount:] {
+			writeMessage(&sb, msg, recentMsgMaxChars)
+		}
+	}
+
+	// Check if the non-last-message portion fits the budget.
+	if sb.Len() > otherBudget {
+		return ""
+	}
+
+	// Append the last message (always in full).
+	sb.WriteString("### Message you must respond to\n\n")
+	writeMessage(&sb, lastMsg, 0)
+
+	return sb.String()
+}
+
+// deduplicateRecoverySummaries removes duplicate daemon restart recovery
+// summaries, keeping only the most recent one. These summaries are generated
+// by RecoverFleetSession and accumulate when a session is recovered multiple
+// times. They bloat the thread context with redundant information.
+func deduplicateRecoverySummaries(thread []Message) []Message {
+	// Find the index of the last recovery summary.
+	lastRecoveryIdx := -1
+	for i := len(thread) - 1; i >= 0; i-- {
+		if isRecoverySummary(thread[i]) {
+			lastRecoveryIdx = i
+			break
+		}
+	}
+
+	// No recovery summaries, or only one — nothing to deduplicate.
+	if lastRecoveryIdx < 0 {
+		return thread
+	}
+
+	// Filter: keep everything that isn't a recovery summary, plus the last one.
+	result := make([]Message, 0, len(thread))
+	for i, msg := range thread {
+		if isRecoverySummary(msg) && i != lastRecoveryIdx {
+			continue // skip older recovery summaries
+		}
+		result = append(result, msg)
+	}
+	return result
+}
+
+// isRecoverySummary returns true if the message is a daemon restart recovery summary.
+func isRecoverySummary(msg Message) bool {
+	return msg.Sender == "system" && strings.Contains(msg.Text, recoverySummaryMarker)
+}
+
+// formatMessage formats a message as a string (for budget calculation).
+func formatMessage(msg Message, maxChars int) string {
+	var sb strings.Builder
+	writeMessage(&sb, msg, maxChars)
 	return sb.String()
 }
 
@@ -123,16 +201,33 @@ func writeMessage(sb *strings.Builder, msg Message, maxChars int) {
 	}
 }
 
-// writeSummarizedMessage writes a truncated message for older context.
+// writeSummarizedMessage writes a condensed single-line summary of a message.
+// Preserves the sender, first meaningful content, and any @mentions.
 func writeSummarizedMessage(sb *strings.Builder, msg Message) {
 	sender := formatSender(msg.Sender)
 	text := msg.Text
-	if len(text) > summaryMaxChars {
-		text = text[:summaryMaxChars] + "..."
+
+	// Extract @mentions before truncating.
+	mentions := ParseMentions(text)
+	mentionSuffix := ""
+	if len(mentions) > 0 {
+		mentionSuffix = " [mentions: " + strings.Join(mentions, ", ") + "]"
 	}
-	// Collapse to single line
+
+	// Truncate to summaryMaxChars, trying to break at sentence boundary.
+	if len(text) > summaryMaxChars {
+		text = truncateToSentence(text, summaryMaxChars)
+	}
+
+	// Collapse to single line.
 	text = strings.ReplaceAll(text, "\n", " ")
-	sb.WriteString(fmt.Sprintf("- **%s:** %s\n", sender, text))
+	// Collapse multiple spaces.
+	for strings.Contains(text, "  ") {
+		text = strings.ReplaceAll(text, "  ", " ")
+	}
+	text = strings.TrimSpace(text)
+
+	sb.WriteString(fmt.Sprintf("- **%s:** %s%s\n", sender, text, mentionSuffix))
 }
 
 // formatSender returns a display name for a message sender.

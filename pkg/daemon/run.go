@@ -484,6 +484,9 @@ func Run(cfg RunConfig) error {
 			// Make activator available to API handlers
 			api.SetPlanActivator(activator)
 
+			// Wire the session registry so CheckForWork can detect active sessions
+			activator.SetSessionRegistry(api.GetFleetSessionRegistry())
+
 			// Wire OpenCode binary finder for project context generation.
 			// Fleet templates can define a project_context section that runs
 			// OpenCode /init to generate AGENTS.md before agents start.

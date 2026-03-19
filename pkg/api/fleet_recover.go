@@ -80,6 +80,24 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 
 	log.Printf("[fleet-recover] Session %s: recovered %d messages from transcript", cfg.SessionID, len(recoveredMessages))
 
+	// If recovery was triggered by a customer reply, append it to the
+	// recovered messages so the session sees it in the thread context,
+	// recovery summary, and milestone tracker. The customer's comment
+	// exists on GitHub but was not in the JSONL transcript (the session
+	// was stopped when the customer replied).
+	if cfg.CustomerMessage != "" {
+		customerMsg := fleet.Message{
+			ID:        uuid.New().String(),
+			Sender:    "customer",
+			Text:      cfg.CustomerMessage,
+			Timestamp: time.Now(),
+			Mentions:  fleet.ParseMentions(cfg.CustomerMessage),
+		}
+		recoveredMessages = append(recoveredMessages, customerMsg)
+		log.Printf("[fleet-recover] Session %s: injected customer reply that triggered recovery (%d chars)",
+			cfg.SessionID, len(cfg.CustomerMessage))
+	}
+
 	// Create a GitHubIssueChannel pre-loaded with recovered messages.
 	// LoadMessages advances the read cursor past all recovered messages
 	// so Run() does not re-process them.
@@ -123,35 +141,47 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 			}
 		}
 	}
-	// Record the resume event itself
-	fleetSession.Progress.AddMilestone(fleet.Milestone{
-		Type:    fleet.MilestoneResume,
-		Agent:   "system",
-		Summary: "Session resumed after daemon restart",
-	})
 
 	milestoneCount := len(fleetSession.Progress.GetMilestones())
-	log.Printf("[fleet-recover] Session %s: reconstructed %d milestones from transcript", cfg.SessionID, milestoneCount)
 
-	// Generate an LLM summary of the full conversation so the resume agent
-	// has accurate context about what happened, what was approved, and what
-	// work remains. This replaces the generic "Fleet session resumed" message.
-	resumeText := "Fleet session resumed after daemon restart. Continuing from where we left off."
-	if subAgentMgr.LLM != nil {
-		if summary := generateRecoverySummary(recoveredMessages, subAgentMgr.LLM); summary != "" {
-			resumeText = summary
+	// When recovering after a customer reply (CustomerMessage is non-empty),
+	// skip the "daemon restart" announcement and LLM summary. The customer's
+	// reply is already in recoveredMessages and the agent has full thread
+	// context — adding a system comment would just be noise on the GitHub issue.
+	//
+	// For actual daemon restarts (CustomerMessage is empty), generate an LLM
+	// summary so the resume agent has accurate context about what happened.
+	isCustomerReply := cfg.CustomerMessage != ""
+
+	if !isCustomerReply {
+		fleetSession.Progress.AddMilestone(fleet.Milestone{
+			Type:    fleet.MilestoneResume,
+			Agent:   "system",
+			Summary: "Session resumed after daemon restart",
+		})
+		milestoneCount++
+
+		resumeText := "Fleet session resumed after daemon restart. Continuing from where we left off."
+		if subAgentMgr.LLM != nil {
+			if summary := generateRecoverySummary(recoveredMessages, subAgentMgr.LLM); summary != "" {
+				resumeText = summary
+			}
 		}
+
+		restartMsg := fleet.Message{
+			ID:        uuid.New().String(),
+			Sender:    "system",
+			Text:      resumeText,
+			Timestamp: time.Now(),
+		}
+		if postErr := ghChannel.PostMessage(context.Background(), restartMsg); postErr != nil {
+			log.Printf("[fleet-recover] Warning: could not post restart message: %v", postErr)
+		}
+		ghChannel.PostExternal(restartMsg)
 	}
 
-	restartMsg := fleet.Message{
-		ID:        uuid.New().String(),
-		Sender:    "system",
-		Text:      resumeText,
-		Timestamp: time.Now(),
-	}
-	if postErr := ghChannel.PostMessage(context.Background(), restartMsg); postErr != nil {
-		log.Printf("[fleet-recover] Warning: could not post restart message: %v", postErr)
-	}
+	log.Printf("[fleet-recover] Session %s: reconstructed %d milestones from transcript (customer_reply=%v)",
+		cfg.SessionID, milestoneCount, isCustomerReply)
 
 	// Determine who should act next based on the last message.
 	lastMsg := recoveredMessages[len(recoveredMessages)-1]
@@ -182,11 +212,6 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 	// Wire transcript in APPEND mode (do NOT write a new header).
 	// The existing transcript file already has the header and prior events.
 	wireFleetTranscriptAppend(fleetSession, transcriptPath, len(events))
-
-	// Persist the restart message to the transcript
-	if fleetSession.OnMessagePosted != nil {
-		fleetSession.OnMessagePosted(restartMsg)
-	}
 
 	// Register in the in-memory session registry
 	registry := getFleetSessionRegistry()

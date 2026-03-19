@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -54,14 +55,15 @@ type HeadlessFleetConfig struct {
 
 // RecoverFleetConfig holds parameters for recovering an interrupted fleet session.
 type RecoverFleetConfig struct {
-	Plan           *FleetPlan
-	SessionID      string // original session ID (to resume the same transcript)
-	IssueNumber    int
-	IssueTitle     string // GitHub issue title (for task slug derivation)
-	Repo           string
-	GHToken        string                             // resolved GitHub token (injected as GH_TOKEN)
-	CompletionFunc func(err error)                    // called when the recovered session finishes
-	BallChangeFunc func(ball string, commentID int64) // called when ball moves between agents/human
+	Plan            *FleetPlan
+	SessionID       string // original session ID (to resume the same transcript)
+	IssueNumber     int
+	IssueTitle      string // GitHub issue title (for task slug derivation)
+	Repo            string
+	GHToken         string                             // resolved GitHub token (injected as GH_TOKEN)
+	CustomerMessage string                             // customer comment that triggered recovery (empty for restart recovery)
+	CompletionFunc  func(err error)                    // called when the recovered session finishes
+	BallChangeFunc  func(ball string, commentID int64) // called when ball moves between agents/human
 }
 
 // GHTokenResolverFunc resolves the GitHub token for a fleet plan by looking
@@ -77,6 +79,10 @@ type PlanActivator struct {
 	fleetStart      FleetStartFunc
 	fleetRecover    FleetRecoverFunc
 	ghTokenResolver GHTokenResolverFunc
+
+	// sessionRegistry provides active session lookup for CheckForWork.
+	// Set by the daemon after initialization via SetSessionRegistry.
+	sessionRegistry *SessionRegistry
 
 	// monitors tracks active GitHub monitors by plan key
 	monitors   map[string]*GitHubMonitor
@@ -112,6 +118,12 @@ func (a *PlanActivator) SetRecoverFunc(fn FleetRecoverFunc) {
 // Called by the daemon after the plan activator is created.
 func (a *PlanActivator) SetGHTokenResolver(fn GHTokenResolverFunc) {
 	a.ghTokenResolver = fn
+}
+
+// SetSessionRegistry sets the session registry for active session lookups.
+// Called by the daemon after the plan activator is created.
+func (a *PlanActivator) SetSessionRegistry(reg *SessionRegistry) {
+	a.sessionRegistry = reg
 }
 
 // ResolveGHTokenForPlan resolves the GitHub token for a fleet plan.
@@ -260,6 +272,9 @@ func (a *PlanActivator) Status(planKey string) (*PlanActivationStatus, error) {
 // RestoreActivated re-creates monitors for plans that were activated before
 // a daemon restart. Called during startup. It verifies that the corresponding
 // scheduler job still exists; if not, it re-creates the job to heal the state.
+//
+// Recovery of interrupted sessions is handled by the first poll cycle via
+// CheckForWork — no separate recovery path needed.
 func (a *PlanActivator) RestoreActivated() error {
 	plans := a.registry().ListPlans()
 	restored := 0
@@ -326,105 +341,10 @@ func (a *PlanActivator) RestoreActivated() error {
 		restored++
 		log.Printf("[plan-activator] Restored activated plan %q (job: %s)", summary.Key, plan.Activation.SchedulerJobID)
 
-		// Check for interrupted fleet sessions that need recovery.
-		if plan.Channel.Type == "github_issues" && a.fleetRecover != nil {
-			a.monitorsMu.RLock()
-			mon := a.monitors[summary.Key]
-			a.monitorsMu.RUnlock()
-
-			if mon != nil {
-				// Recover sessions where agents had the ball (full recovery).
-				agentBall := mon.GetAgentBallIssues()
-				for _, ab := range agentBall {
-					repo := GetConfigString(plan.Channel.Config, "repo")
-					issueNum := ab.IssueNumber
-
-					log.Printf("[plan-activator] Recovering interrupted session %s for issue #%d (plan %q, ball=agents)",
-						ab.SessionID, issueNum, summary.Key)
-
-					recoverCfg := RecoverFleetConfig{
-						Plan:        plan,
-						SessionID:   ab.SessionID,
-						IssueNumber: issueNum,
-						IssueTitle:  ab.IssueTitle,
-						Repo:        repo,
-						GHToken:     a.ResolveGHTokenForPlan(plan),
-						CompletionFunc: func(sessionErr error) {
-							if sessionErr != nil {
-								mon.MarkFailed(issueNum, sessionErr.Error())
-							} else {
-								mon.MarkCustomer(issueNum, 0)
-							}
-						},
-						BallChangeFunc: func(ball string, commentID int64) {
-							switch ball {
-							case "customer":
-								mon.MarkCustomer(issueNum, commentID)
-							case "agents":
-								mon.UpdateLastCommentID(issueNum, commentID)
-							}
-						},
-					}
-					if err := a.fleetRecover(context.Background(), recoverCfg); err != nil {
-						log.Printf("[plan-activator] Failed to recover session %s for issue #%d: %v",
-							ab.SessionID, issueNum, err)
-						mon.MarkFailed(issueNum, fmt.Sprintf("recovery failed: %v", err))
-					}
-				}
-
-				// For sessions where the customer has the ball, start a
-				// lightweight comment watcher instead of full recovery.
-				// When a new customer comment arrives, it triggers recovery.
-				customerBall := mon.GetCustomerBallIssues()
-				if len(customerBall) > 0 {
-					log.Printf("[plan-activator] Starting comment watcher for %d customer-ball issues (plan %q)",
-						len(customerBall), summary.Key)
-
-					// Capture plan-level variables for the callback closure.
-					planCopy := plan
-					monRef := mon
-					planKey := summary.Key
-
-					mon.WatchForCustomerReplies(context.Background(), func(issueNumber int, sessionID string, _ string) {
-						repo := GetConfigString(planCopy.Channel.Config, "repo")
-						issNum := issueNumber
-						sessID := sessionID
-
-						log.Printf("[plan-activator] Customer replied on issue #%d (plan %q), triggering recovery for session %s",
-							issNum, planKey, sessID)
-
-						recoverCfg := RecoverFleetConfig{
-							Plan:        planCopy,
-							SessionID:   sessID,
-							IssueNumber: issNum,
-							IssueTitle:  monRef.GetIssueTitle(issNum),
-							Repo:        repo,
-							GHToken:     a.ResolveGHTokenForPlan(planCopy),
-							CompletionFunc: func(sessionErr error) {
-								if sessionErr != nil {
-									monRef.MarkFailed(issNum, sessionErr.Error())
-								} else {
-									monRef.MarkCustomer(issNum, 0)
-								}
-							},
-							BallChangeFunc: func(ball string, commentID int64) {
-								switch ball {
-								case "customer":
-									monRef.MarkCustomer(issNum, commentID)
-								case "agents":
-									monRef.UpdateLastCommentID(issNum, commentID)
-								}
-							},
-						}
-						if err := a.fleetRecover(context.Background(), recoverCfg); err != nil {
-							log.Printf("[plan-activator] Failed to recover session %s after customer reply on issue #%d: %v",
-								sessID, issNum, err)
-							monRef.MarkFailed(issNum, fmt.Sprintf("recovery after human reply failed: %v", err))
-						}
-					})
-				}
-			}
-		}
+		// NOTE: No explicit recovery of interrupted sessions here.
+		// The first poll cycle (triggered by the scheduler within seconds)
+		// runs CheckForWork which handles both new issues AND recovery of
+		// interrupted sessions (issues with a sessionID but no active session).
 	}
 
 	if restored > 0 {
@@ -453,7 +373,8 @@ func (a *PlanActivator) Poll(ctx context.Context, planKey string) (string, error
 	}
 }
 
-// pollGitHubIssues polls for new GitHub issues and starts fleet sessions.
+// pollGitHubIssues uses CheckForWork to handle both new issues and customer
+// replies in a single, unified pass.
 func (a *PlanActivator) pollGitHubIssues(ctx context.Context, planKey string, plan *FleetPlan) (string, error) {
 	a.monitorsMu.RLock()
 	monitor, ok := a.monitors[planKey]
@@ -463,10 +384,39 @@ func (a *PlanActivator) pollGitHubIssues(ctx context.Context, planKey string, pl
 		return "", fmt.Errorf("no monitor found for plan %q (was it activated properly?)", planKey)
 	}
 
-	// Poll for new issues
-	newIssues, err := monitor.Poll()
+	repo := GetConfigString(plan.Channel.Config, "repo")
 
-	// Update plan's poll state regardless of result
+	var (
+		newStarts  int
+		recoveries int
+	)
+
+	// isSessionActive checks if a session is currently running in the registry.
+	isSessionActive := func(sessionID string) bool {
+		if a.sessionRegistry == nil {
+			return false
+		}
+		return a.sessionRegistry.IsFleetSession(sessionID)
+	}
+
+	err := monitor.CheckForWork(isSessionActive, func(item WorkItem) {
+		if item.IsNewIssue {
+			a.startNewSession(ctx, monitor, plan, repo, item)
+			newStarts++
+		} else if item.SessionID != "" {
+			// Customer replied on a known issue with an existing session — recover it.
+			a.recoverSession(ctx, monitor, plan, repo, item)
+			recoveries++
+		} else {
+			// Customer replied on a known issue with no prior session
+			// (e.g., pre-existing issue marked seen at activation time).
+			// Start a fresh session.
+			a.startNewSession(ctx, monitor, plan, repo, item)
+			newStarts++
+		}
+	})
+
+	// Update plan's poll state
 	now := time.Now()
 	plan.Activation.LastPollAt = now
 	if err != nil {
@@ -476,70 +426,127 @@ func (a *PlanActivator) pollGitHubIssues(ctx context.Context, planKey string, pl
 		return "", fmt.Errorf("polling GitHub issues: %w", err)
 	}
 
-	if len(newIssues) == 0 {
-		plan.Activation.LastPollStatus = "no_new_items"
-		plan.Activation.LastPollError = ""
-		_ = a.registry().Save(plan)
-		return "no new issues", nil
+	var results []string
+	if newStarts > 0 {
+		plan.Activation.SessionsStarted += newStarts
+		results = append(results, fmt.Sprintf("started %d new session(s)", newStarts))
+	}
+	if recoveries > 0 {
+		results = append(results, fmt.Sprintf("recovered %d session(s)", recoveries))
+	}
+	if len(results) == 0 {
+		results = append(results, "no new work")
 	}
 
 	plan.Activation.LastPollStatus = "success"
 	plan.Activation.LastPollError = ""
-
-	// Start a fleet session for each new issue
-	repo := GetConfigString(plan.Channel.Config, "repo")
-	started := 0
-
-	for _, issue := range newIssues {
-		// Format the issue as the initial message
-		initialMsg := FormatIssueContext(issue, repo)
-
-		// Start a headless fleet session first to get the session ID.
-		// We need the session ID before marking in-progress so the monitor
-		// state has the correct reference for recovery after restart.
-		if a.fleetStart != nil {
-			issueNum := issue.Number
-			cfg := HeadlessFleetConfig{
-				Plan:        plan,
-				InitialMsg:  initialMsg,
-				IssueNumber: issueNum,
-				IssueTitle:  issue.Title,
-				Repo:        repo,
-				GHToken:     a.ResolveGHTokenForPlan(plan),
-				CompletionFunc: func(sessionErr error) {
-					if sessionErr != nil {
-						monitor.MarkFailed(issueNum, sessionErr.Error())
-					} else {
-						// Session exited cleanly. Ball moves to customer (waiting
-						// for potential new comments or the issue is done).
-						monitor.MarkCustomer(issueNum, 0)
-					}
-				},
-				BallChangeFunc: func(ball string, commentID int64) {
-					switch ball {
-					case "customer":
-						monitor.MarkCustomer(issueNum, commentID)
-					case "agents":
-						// Update the comment cursor even when ball stays with agents
-						monitor.UpdateLastCommentID(issueNum, commentID)
-					}
-				},
-			}
-			sessionID, startErr := a.fleetStart(ctx, cfg)
-			if startErr != nil {
-				log.Printf("[plan-activator] Failed to start fleet session for issue #%d: %v", issue.Number, startErr)
-				continue
-			}
-			monitor.MarkAgents(issue.Number, sessionID, issue.Title)
-			started++
-			log.Printf("[plan-activator] Started fleet session %s for issue #%d (%s)", sessionID, issue.Number, issue.Title)
-		}
-	}
-
-	plan.Activation.SessionsStarted += started
 	_ = a.registry().Save(plan)
 
-	return fmt.Sprintf("found %d new issue(s), started %d fleet session(s)", len(newIssues), started), nil
+	return strings.Join(results, "; "), nil
+}
+
+// startNewSession starts a fresh headless fleet session for a new GitHub issue.
+func (a *PlanActivator) startNewSession(ctx context.Context, monitor *GitHubMonitor, plan *FleetPlan, repo string, item WorkItem) {
+	if a.fleetStart == nil {
+		return
+	}
+
+	// Fetch the full issue to get the body for FormatIssueContext.
+	issues, err := monitor.fetchOpenLabeledIssues()
+	if err != nil {
+		log.Printf("[plan-activator] Failed to fetch issue details for #%d: %v", item.IssueNumber, err)
+		return
+	}
+
+	var issue *GitHubIssue
+	for i, iss := range issues {
+		if iss.Number == item.IssueNumber {
+			issue = &issues[i]
+			break
+		}
+	}
+	if issue == nil {
+		log.Printf("[plan-activator] Issue #%d not found in fetched issues (may have been closed)", item.IssueNumber)
+		return
+	}
+
+	initialMsg := FormatIssueContext(*issue, repo)
+	issueNum := item.IssueNumber
+
+	cfg := HeadlessFleetConfig{
+		Plan:        plan,
+		InitialMsg:  initialMsg,
+		IssueNumber: issueNum,
+		IssueTitle:  issue.Title,
+		Repo:        repo,
+		GHToken:     a.ResolveGHTokenForPlan(plan),
+		CompletionFunc: func(sessionErr error) {
+			if sessionErr != nil {
+				monitor.IncrementRetryCount(issueNum, sessionErr.Error())
+			} else {
+				monitor.ClearRetryOnSuccess(issueNum)
+			}
+		},
+		BallChangeFunc: func(_ string, commentID int64) {
+			monitor.UpdateCursor(issueNum, commentID)
+		},
+	}
+
+	sessionID, startErr := a.fleetStart(ctx, cfg)
+	if startErr != nil {
+		log.Printf("[plan-activator] Failed to start fleet session for issue #%d: %v", issueNum, startErr)
+		monitor.IncrementRetryCount(issueNum, fmt.Sprintf("start failed: %v", startErr))
+		return
+	}
+
+	monitor.MarkSeen(issueNum, sessionID, issue.Title)
+	log.Printf("[plan-activator] Started fleet session %s for issue #%d (%s)", sessionID, issueNum, issue.Title)
+}
+
+// recoverSession recovers an interrupted fleet session (daemon restart or customer reply).
+func (a *PlanActivator) recoverSession(ctx context.Context, monitor *GitHubMonitor, plan *FleetPlan, repo string, item WorkItem) {
+	if a.fleetRecover == nil {
+		return
+	}
+
+	issueNum := item.IssueNumber
+	sessionID := item.SessionID
+
+	if sessionID == "" {
+		log.Printf("[plan-activator] Cannot recover issue #%d: no session ID in state", issueNum)
+		return
+	}
+
+	logAction := "daemon restart"
+	if item.CustomerReply != "" {
+		logAction = "customer reply"
+	}
+	log.Printf("[plan-activator] Recovering session %s for issue #%d (trigger: %s)", sessionID, issueNum, logAction)
+
+	recoverCfg := RecoverFleetConfig{
+		Plan:            plan,
+		SessionID:       sessionID,
+		IssueNumber:     issueNum,
+		IssueTitle:      item.IssueTitle,
+		Repo:            repo,
+		GHToken:         a.ResolveGHTokenForPlan(plan),
+		CustomerMessage: item.CustomerReply,
+		CompletionFunc: func(sessionErr error) {
+			if sessionErr != nil {
+				monitor.IncrementRetryCount(issueNum, sessionErr.Error())
+			} else {
+				monitor.ClearRetryOnSuccess(issueNum)
+			}
+		},
+		BallChangeFunc: func(_ string, commentID int64) {
+			monitor.UpdateCursor(issueNum, commentID)
+		},
+	}
+
+	if err := a.fleetRecover(ctx, recoverCfg); err != nil {
+		log.Printf("[plan-activator] Failed to recover session %s for issue #%d: %v", sessionID, issueNum, err)
+		monitor.IncrementRetryCount(issueNum, fmt.Sprintf("recovery failed: %v", err))
+	}
 }
 
 // GetMonitor returns the GitHub monitor for a plan (for testing/inspection).
@@ -549,9 +556,9 @@ func (a *PlanActivator) GetMonitor(planKey string) *GitHubMonitor {
 	return a.monitors[planKey]
 }
 
-// GetFailedIssues returns failed issues for a plan. Returns nil if the plan
-// has no monitor (not a github_issues plan or not activated).
-func (a *PlanActivator) GetFailedIssues(planKey string) []FailedIssue {
+// GetIssuesNeedingAttention returns issues that exceeded max retries for a plan.
+// Returns nil if the plan has no monitor.
+func (a *PlanActivator) GetIssuesNeedingAttention(planKey string) []IssueNeedingAttention {
 	a.monitorsMu.RLock()
 	mon := a.monitors[planKey]
 	a.monitorsMu.RUnlock()
@@ -559,11 +566,12 @@ func (a *PlanActivator) GetFailedIssues(planKey string) []FailedIssue {
 	if mon == nil {
 		return nil
 	}
-	return mon.GetFailedIssues()
+	return mon.GetIssuesNeedingAttention()
 }
 
-// RetryFailedIssue resets a failed issue to "agents" so recovery can resume
-// the session. Returns the monitor for the caller to proceed with recovery.
+// RetryFailedIssue resets the retry count for an issue so it will be picked up
+// on the next poll cycle. Returns the monitor for the caller to proceed with
+// immediate recovery if desired.
 func (a *PlanActivator) RetryFailedIssue(planKey string, issueNumber int) (*GitHubMonitor, error) {
 	a.monitorsMu.RLock()
 	mon := a.monitors[planKey]
@@ -573,7 +581,7 @@ func (a *PlanActivator) RetryFailedIssue(planKey string, issueNumber int) (*GitH
 		return nil, fmt.Errorf("no monitor found for plan %q", planKey)
 	}
 
-	if err := mon.ResetToAgents(issueNumber); err != nil {
+	if err := mon.ResetRetryCount(issueNumber); err != nil {
 		return nil, err
 	}
 

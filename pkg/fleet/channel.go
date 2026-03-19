@@ -31,3 +31,15 @@ type Subscribable interface {
 	Subscribe(id string) <-chan Message
 	Unsubscribe(id string)
 }
+
+// ExternalPoster is an optional interface for channels that post messages to
+// an external system (e.g., GitHub issue comments). The Run loop uses this to
+// control WHEN external posting happens — specifically, to defer it until
+// after routing decides whether the message is part of a self-routing chain.
+//
+// PostMessage always adds to the internal thread and notifies SSE subscribers,
+// but never posts externally. The caller must explicitly call PostExternal
+// for messages that should appear on the external system.
+type ExternalPoster interface {
+	PostExternal(msg Message)
+}

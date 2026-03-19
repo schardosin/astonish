@@ -79,26 +79,29 @@ func FleetPlanStatusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Include failed issues in the status response so the Fleet UI can
-	// display them with a "Continue" button for manual intervention.
-	failedIssues := planActivatorVar.GetFailedIssues(key)
+	// Include issues needing attention in the status response so the Fleet UI
+	// can display them with a "Retry" button for manual intervention.
+	issuesNeedingAttention := planActivatorVar.GetIssuesNeedingAttention(key)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"activated":        status.Activated,
-		"scheduler_job_id": status.SchedulerJobID,
-		"activated_at":     status.ActivatedAt,
-		"last_poll_at":     status.LastPollAt,
-		"last_poll_status": status.LastPollStatus,
-		"last_poll_error":  status.LastPollError,
-		"sessions_started": status.SessionsStarted,
-		"failed_issues":    failedIssues,
+		"activated":                status.Activated,
+		"scheduler_job_id":         status.SchedulerJobID,
+		"activated_at":             status.ActivatedAt,
+		"last_poll_at":             status.LastPollAt,
+		"last_poll_status":         status.LastPollStatus,
+		"last_poll_error":          status.LastPollError,
+		"sessions_started":         status.SessionsStarted,
+		"issues_needing_attention": issuesNeedingAttention,
+		// Legacy field for backward compatibility with existing UI code
+		"failed_issues": issuesNeedingAttention,
 	})
 }
 
 // RetryFleetIssueHandler handles POST /api/fleet-plans/{key}/retry/{issueNumber}.
-// It resets a failed issue back to in_progress and triggers recovery using the
-// existing JSONL transcript, resuming the fleet session from where it left off.
+// It resets the retry count for a failed issue and triggers immediate recovery
+// using the existing JSONL transcript, resuming the fleet session from where it
+// left off.
 func RetryFleetIssueHandler(w http.ResponseWriter, r *http.Request) {
 	if planActivatorVar == nil {
 		http.Error(w, "Plan activation system not initialized", http.StatusServiceUnavailable)
@@ -124,7 +127,7 @@ func RetryFleetIssueHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reset the issue from "failed" to "in_progress"
+	// Reset the retry count so the issue can be picked up again
 	monitor, err := planActivatorVar.RetryFailedIssue(key, issueNum)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -132,18 +135,12 @@ func RetryFleetIssueHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Find the session ID from the monitor state
-	agentBall := monitor.GetAgentBallIssues()
-	var sessionID string
-	for _, ab := range agentBall {
-		if ab.IssueNumber == issueNum {
-			sessionID = ab.SessionID
-			break
-		}
-	}
-	if sessionID == "" {
+	issueState := monitor.GetIssueState(issueNum)
+	if issueState == nil || issueState.SessionID == "" {
 		http.Error(w, "Could not find session ID for the issue", http.StatusInternalServerError)
 		return
 	}
+	sessionID := issueState.SessionID
 
 	// Use the same recovery path as daemon-restart recovery
 	repo := fleet.GetConfigString(plan.Channel.Config, "repo")
@@ -156,24 +153,19 @@ func RetryFleetIssueHandler(w http.ResponseWriter, r *http.Request) {
 		GHToken:     planActivatorVar.ResolveGHTokenForPlan(plan),
 		CompletionFunc: func(sessionErr error) {
 			if sessionErr != nil {
-				monitor.MarkFailed(issueNum, sessionErr.Error())
+				monitor.IncrementRetryCount(issueNum, sessionErr.Error())
 			} else {
-				monitor.MarkCustomer(issueNum, 0)
+				monitor.ClearRetryOnSuccess(issueNum)
 			}
 		},
-		BallChangeFunc: func(ball string, commentID int64) {
-			switch ball {
-			case "customer":
-				monitor.MarkCustomer(issueNum, commentID)
-			case "agents":
-				monitor.UpdateLastCommentID(issueNum, commentID)
-			}
+		BallChangeFunc: func(_ string, commentID int64) {
+			monitor.UpdateCursor(issueNum, commentID)
 		},
 	}
 
 	if recoverErr := RecoverFleetSession(context.Background(), recoverCfg); recoverErr != nil {
-		// Recovery failed; mark back as failed
-		monitor.MarkFailed(issueNum, fmt.Sprintf("retry recovery failed: %v", recoverErr))
+		// Recovery failed; increment retry count
+		monitor.IncrementRetryCount(issueNum, fmt.Sprintf("retry recovery failed: %v", recoverErr))
 		http.Error(w, fmt.Sprintf("Recovery failed: %v", recoverErr), http.StatusInternalServerError)
 		return
 	}

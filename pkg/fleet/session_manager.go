@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -58,7 +59,7 @@ type FleetSession struct {
 	state            SessionState
 	activeAgent      string // which agent is currently processing (or last processed)
 	waitingAgent     string // which agent is waiting for human input
-	ballWithCustomer bool   // true when ball was moved to customer (routing returned "customer" or "none")
+	ballWithCustomer bool   // true when ball was moved to customer (used for state tracking)
 	mu               sync.RWMutex
 
 	// OnStateChange is called whenever the session state changes.
@@ -221,29 +222,20 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 		} else {
 			// Wait for the next message.
 			// For headless sessions, arm the idle watchdog so the session
-			// does not hang forever if an agent gets stuck. The watchdog
-			// is disabled when the ball is with the customer (there is
-			// nothing for agents to do until the customer responds).
+			// does not hang forever if an agent gets stuck.
+			// In headless mode, sessions exit cleanly when the ball is with
+			// the customer — the plan scheduler will detect the customer's
+			// reply and recover the session. This avoids keeping a session
+			// (and its 15s GitHub API poller) alive while a human thinks.
 			fs.setState(StateIdle, "")
 
 			var waitCtx context.Context
 			var waitCancel context.CancelFunc
 
 			if fs.Headless {
-				fs.mu.RLock()
-				customerHasBall := fs.ballWithCustomer
-				fs.mu.RUnlock()
-
-				if customerHasBall {
-					// Ball is with customer: wait indefinitely (no watchdog).
-					// The session will resume when the customer posts a
-					// message (e.g., a new GitHub comment is polled).
-					waitCtx, waitCancel = context.WithCancel(ctx)
-				} else {
-					// Ball is with agents: arm the watchdog so we can
-					// detect stuck sessions and re-activate the entry point.
-					waitCtx, waitCancel = context.WithTimeout(ctx, idleWatchdogTimeout)
-				}
+				// Ball is always with agents here (customer-ball exits above).
+				// Arm the watchdog so we detect stuck sessions.
+				waitCtx, waitCancel = context.WithTimeout(ctx, idleWatchdogTimeout)
 			} else {
 				waitCtx, waitCancel = context.WithCancel(ctx)
 			}
@@ -270,6 +262,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 						Timestamp: time.Now(),
 					}
 					_ = fs.Channel.PostMessage(ctx, watchdogMsg)
+					fs.postExternal(watchdogMsg)
 					fs.notifyMessagePosted(watchdogMsg)
 
 					pendingTarget = entryPoint
@@ -333,6 +326,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 			if postErr := fs.Channel.PostMessage(ctx, errMsg); postErr != nil {
 				log.Printf("[fleet] Error posting error message: %v", postErr)
 			}
+			fs.postExternal(errMsg)
 			fs.notifyMessagePosted(errMsg)
 
 			// Stop the session after too many consecutive failures.
@@ -348,6 +342,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 					Timestamp: time.Now(),
 				}
 				_ = fs.Channel.PostMessage(ctx, stopMsg)
+				fs.postExternal(stopMsg)
 				fs.notifyMessagePosted(stopMsg)
 				fs.setState(StateStopped, "")
 				return fmt.Errorf("stopped after %d consecutive errors", consecutiveErrors)
@@ -368,7 +363,9 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 		// Successful activation resets the error counter
 		consecutiveErrors = 0
 
-		// Post agent's response to the channel
+		// Post agent's response to the channel (internal thread + SSE only;
+		// GitHub posting is deferred until after routing to avoid flooding
+		// the issue with intermediate messages during self-routing chains).
 		if postErr := fs.Channel.PostMessage(ctx, response); postErr != nil {
 			log.Printf("[fleet] Error posting agent response: %v", postErr)
 			continue
@@ -394,23 +391,50 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 
 		switch routing.Target {
 		case "customer":
+			// Post to GitHub — this is a deliverable directed at the customer.
+			fs.postExternal(response)
+
 			fs.mu.Lock()
 			fs.waitingAgent = response.Sender
 			fs.mu.Unlock()
 			fs.setState(StateWaitingForCustomer, response.Sender)
 			fs.notifyBallChange("customer")
 
+			// In headless mode, exit cleanly. The plan scheduler will
+			// detect the customer's reply and recover the session.
+			if fs.Headless {
+				log.Printf("[fleet] Session %s: ball moved to customer, exiting (headless)", fs.ID)
+				return nil
+			}
+
 		case "self":
-			// Sender still has the action; re-activate them
+			// Sender still has the action; re-activate them.
+			// Do NOT post to GitHub — this is an intermediate step in a
+			// multi-activation chain. The message is already in the
+			// internal thread (for agent context) and SSE (for UI).
 			pendingTarget = response.Sender
 
 		case "none":
+			// Post to GitHub — this is a final message with no follow-up.
+			fs.postExternal(response)
+
 			// No one needs to act; go idle and wait for next message.
 			// Ball moves to customer since no agent has pending work.
 			fs.notifyBallChange("customer")
+
+			// In headless mode, exit cleanly. The plan scheduler will
+			// detect the customer's reply and recover the session.
+			if fs.Headless {
+				log.Printf("[fleet] Session %s: no agent has pending work, exiting (headless)", fs.ID)
+				return nil
+			}
 			continue
 
 		default:
+			// Post to GitHub — this message is being handed off to another agent,
+			// so it represents a meaningful communication step.
+			fs.postExternal(response)
+
 			// Route to the specified agent
 			if fs.FleetConfig.CanTalkTo(response.Sender, routing.Target) {
 				pendingTarget = routing.Target
@@ -429,8 +453,17 @@ func (fs *FleetSession) notifyMessagePosted(msg Message) {
 	}
 }
 
+// postExternal posts a message to the external system (e.g., GitHub) if the
+// channel supports it. This is separate from PostMessage so the Run loop can
+// control when external posting happens (e.g., deferring until after routing).
+func (fs *FleetSession) postExternal(msg Message) {
+	if poster, ok := fs.Channel.(ExternalPoster); ok {
+		poster.PostExternal(msg)
+	}
+}
+
 // notifyBallChange calls the OnBallChange callback if set and updates
-// the internal ballWithCustomer flag used by the idle watchdog.
+// the internal ballWithCustomer flag.
 func (fs *FleetSession) notifyBallChange(ball string) {
 	fs.mu.Lock()
 	fs.ballWithCustomer = (ball == "customer")
@@ -484,6 +517,7 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 
 	postIntermediateMessage := func(text string) {
 		text = strings.TrimSpace(text)
+		text = stripInlineToolCalls(text)
 		if text == "" {
 			return
 		}
@@ -518,11 +552,13 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 		// Examine the parts in this event. An LLM turn can contain both
 		// text and function calls. If there are function calls, any text
 		// in this turn is an intermediate progress update.
+		// Skip thought/reasoning parts (part.Thought) — these are internal
+		// chain-of-thought and should never appear in the channel.
 		var turnText string
 		hasFunctionCall := false
 
 		for _, part := range event.LLMResponse.Content.Parts {
-			if part.Text != "" {
+			if part.Text != "" && !part.Thought {
 				turnText += part.Text
 			}
 			if part.FunctionCall != nil {
@@ -543,6 +579,13 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 				// a subsequent tool call turn or become the final output.
 				intermediateTextBuf.WriteString(turnText)
 			}
+		} else if hasFunctionCall && intermediateTextBuf.Len() > 0 {
+			// FunctionCall arrived in a separate event from the text (some
+			// providers split text and tool calls across events instead of
+			// combining them). The previously buffered text is a progress
+			// update — flush it as intermediate.
+			postIntermediateMessage(intermediateTextBuf.String())
+			intermediateTextBuf.Reset()
 		}
 	}
 
@@ -579,6 +622,11 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 	if finalText == "" {
 		finalText = strings.TrimSpace(result.Result)
 	}
+
+	// Strip inline tool calls that some models emit as plain text (e.g.,
+	// write_file{"file_path":"...","content":"..."}) instead of structured
+	// FunctionCall parts. These pollute GitHub comments with raw file contents.
+	finalText = stripInlineToolCalls(finalText)
 
 	// Parse mentions from the final response
 	mentions := ParseMentions(finalText)
@@ -665,4 +713,80 @@ func isRetriableError(err error) bool {
 		}
 	}
 	return false
+}
+
+// inlineToolCallPattern matches tool call text that models sometimes emit as
+// plain text instead of structured FunctionCall parts. The pattern matches
+// snake_case identifiers (2+ chars) immediately followed by a '{' and captures
+// the start position so we can find the matching closing brace.
+var inlineToolCallPattern = regexp.MustCompile(`[a-z][a-z0-9_]+\{`)
+
+// stripInlineToolCalls removes tool call text that some models emit as plain
+// text (e.g., `write_file{"file_path":"...","content":"..."}`) instead of
+// structured FunctionCall parts. These pollute GitHub issue comments with
+// raw file contents and tool arguments.
+//
+// The function finds snake_case_name{ patterns and removes everything from
+// the tool name through the matching closing brace (handling nested braces).
+func stripInlineToolCalls(text string) string {
+	for {
+		loc := inlineToolCallPattern.FindStringIndex(text)
+		if loc == nil {
+			break
+		}
+
+		// Find the matching closing brace starting from the '{' position
+		braceStart := loc[1] - 1 // position of '{'
+		depth := 0
+		end := -1
+		inString := false
+		escaped := false
+
+		for i := braceStart; i < len(text); i++ {
+			ch := text[i]
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' && inString {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = !inString
+				continue
+			}
+			if inString {
+				continue
+			}
+			if ch == '{' {
+				depth++
+			} else if ch == '}' {
+				depth--
+				if depth == 0 {
+					end = i + 1
+					break
+				}
+			}
+		}
+
+		if end == -1 {
+			// No matching brace found — strip from tool name to end of text
+			text = strings.TrimSpace(text[:loc[0]])
+			break
+		}
+
+		// Remove the tool call and any surrounding whitespace
+		before := strings.TrimRight(text[:loc[0]], " \t")
+		after := strings.TrimLeft(text[end:], " \t\n")
+		text = before
+		if after != "" {
+			if text != "" {
+				text += "\n"
+			}
+			text += after
+		}
+	}
+
+	return strings.TrimSpace(text)
 }

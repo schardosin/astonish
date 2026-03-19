@@ -82,7 +82,9 @@ func (c *GitHubIssueChannel) StartPoller(ctx context.Context) {
 // ---------------------------------------------------------------------------
 
 // PostMessage adds a message to the internal list, notifies waiters and
-// subscribers, and (for agent/system messages) posts a comment on the issue.
+// subscribers. It does NOT post to GitHub — the caller must use PostExternal
+// for messages that should appear as GitHub issue comments. This separation
+// lets the Run loop defer GitHub posting until after routing decisions.
 func (c *GitHubIssueChannel) PostMessage(_ context.Context, msg Message) error {
 	c.mu.Lock()
 	if c.closed {
@@ -104,24 +106,28 @@ func (c *GitHubIssueChannel) PostMessage(_ context.Context, msg Message) error {
 	// Notify SSE subscribers.
 	c.notifySubscribers(msg)
 
-	// Post to GitHub for non-customer messages (customer messages originate FROM
-	// GitHub, so posting them back would duplicate them).
-	if msg.Sender != "customer" {
-		// Skip intermediate progress messages to reduce comment noise.
-		isIntermediate := false
-		if msg.Metadata != nil {
-			if v, ok := msg.Metadata["intermediate"]; ok {
-				if b, ok := v.(bool); ok && b {
-					isIntermediate = true
-				}
+	return nil
+}
+
+// PostExternal posts a message as a GitHub issue comment. This implements
+// the ExternalPoster interface. It skips customer messages (they originate
+// from GitHub) and intermediate messages (tagged in metadata).
+func (c *GitHubIssueChannel) PostExternal(msg Message) {
+	// Customer messages originate FROM GitHub; posting them back would duplicate.
+	if msg.Sender == "customer" {
+		return
+	}
+
+	// Skip intermediate progress messages.
+	if msg.Metadata != nil {
+		if v, ok := msg.Metadata["intermediate"]; ok {
+			if b, ok := v.(bool); ok && b {
+				return
 			}
-		}
-		if !isIntermediate {
-			go c.postCommentAsync(msg)
 		}
 	}
 
-	return nil
+	go c.postCommentAsync(msg)
 }
 
 // WaitForMessage blocks until a new message arrives that the Run loop hasn't

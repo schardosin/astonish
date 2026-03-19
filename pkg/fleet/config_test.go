@@ -1624,3 +1624,191 @@ func TestWriteSummarizedMessage_PreservesMentions(t *testing.T) {
 		t.Fatalf("Expected mentions to be preserved, got: %s", result)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Pairwise conversation threads
+// ---------------------------------------------------------------------------
+
+func TestMakeThreadKey(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want string
+	}{
+		{"po", "dev", "dev+po"},
+		{"dev", "po", "dev+po"}, // reversed order → same key
+		{"customer", "po", "customer+po"},
+		{"po", "customer", "customer+po"},
+		{"a", "a", "a+a"}, // same participant (degenerate case)
+		{"architect", "dev", "architect+dev"},
+		{"qa", "dev", "dev+qa"},
+	}
+	for _, tt := range tests {
+		got := MakeThreadKey(tt.a, tt.b)
+		if got != tt.want {
+			t.Errorf("MakeThreadKey(%q, %q) = %q, want %q", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
+
+func TestMakeThreadKey_Symmetric(t *testing.T) {
+	// Verify symmetry: MakeThreadKey(a, b) == MakeThreadKey(b, a) for all pairs
+	agents := []string{"po", "dev", "qa", "architect", "customer", "system"}
+	for _, a := range agents {
+		for _, b := range agents {
+			if MakeThreadKey(a, b) != MakeThreadKey(b, a) {
+				t.Errorf("MakeThreadKey not symmetric: MakeThreadKey(%q,%q)=%q != MakeThreadKey(%q,%q)=%q",
+					a, b, MakeThreadKey(a, b), b, a, MakeThreadKey(b, a))
+			}
+		}
+	}
+}
+
+func TestGetPairThread_ChatChannel(t *testing.T) {
+	ch := NewChatChannel("test-session")
+	ctx := context.Background()
+
+	// Post messages on different threads
+	msgs := []Message{
+		{Sender: "system", Text: "Session started", ThreadKey: ""},                    // global
+		{Sender: "customer", Text: "Please build X", ThreadKey: "customer+po"},        // customer↔po
+		{Sender: "po", Text: "Got it, delegating", ThreadKey: "customer+po"},          // customer↔po
+		{Sender: "po", Text: "@dev implement X", ThreadKey: "dev+po"},                 // po↔dev
+		{Sender: "dev", Text: "Working on it", ThreadKey: "dev+po"},                   // po↔dev
+		{Sender: "dev", Text: "Done, @po please review", ThreadKey: "dev+po"},         // po↔dev
+		{Sender: "po", Text: "@customer, X is ready", ThreadKey: "customer+po"},       // customer↔po
+		{Sender: "system", Text: "Milestone: implementation complete", ThreadKey: ""}, // global
+	}
+	for _, msg := range msgs {
+		if err := ch.PostMessage(ctx, msg); err != nil {
+			t.Fatalf("PostMessage: %v", err)
+		}
+	}
+
+	// GetPairThread with empty key → returns all messages
+	all, err := ch.GetPairThread(ctx, "")
+	if err != nil {
+		t.Fatalf("GetPairThread empty: %v", err)
+	}
+	if len(all) != 8 {
+		t.Errorf("GetPairThread('') returned %d messages, want 8", len(all))
+	}
+
+	// GetPairThread for "customer+po" → customer↔po messages + system messages
+	cpo, err := ch.GetPairThread(ctx, "customer+po")
+	if err != nil {
+		t.Fatalf("GetPairThread customer+po: %v", err)
+	}
+	// Should include: system started, customer msg, po reply, po→customer, system milestone = 5
+	if len(cpo) != 5 {
+		t.Errorf("GetPairThread('customer+po') returned %d messages, want 5", len(cpo))
+		for i, m := range cpo {
+			t.Logf("  [%d] sender=%s thread=%s text=%s", i, m.Sender, m.ThreadKey, m.Text[:min(40, len(m.Text))])
+		}
+	}
+
+	// GetPairThread for "dev+po" → dev↔po messages + system messages
+	dpo, err := ch.GetPairThread(ctx, "dev+po")
+	if err != nil {
+		t.Fatalf("GetPairThread dev+po: %v", err)
+	}
+	// Should include: system started, po→dev, dev working, dev done, system milestone = 5
+	if len(dpo) != 5 {
+		t.Errorf("GetPairThread('dev+po') returned %d messages, want 5", len(dpo))
+		for i, m := range dpo {
+			t.Logf("  [%d] sender=%s thread=%s text=%s", i, m.Sender, m.ThreadKey, m.Text[:min(40, len(m.Text))])
+		}
+	}
+
+	// GetPairThread for non-existent thread → only system messages
+	empty, err := ch.GetPairThread(ctx, "architect+qa")
+	if err != nil {
+		t.Fatalf("GetPairThread architect+qa: %v", err)
+	}
+	// Should only include the 2 system messages
+	if len(empty) != 2 {
+		t.Errorf("GetPairThread('architect+qa') returned %d messages, want 2 (system only)", len(empty))
+	}
+}
+
+func TestBuildThreadContext_WithThreadKey(t *testing.T) {
+	ch := NewChatChannel("test-session")
+	ctx := context.Background()
+
+	// Post a mix of threaded and system messages
+	msgs := []Message{
+		{Sender: "system", Text: "Session started", ThreadKey: ""},
+		{Sender: "customer", Text: "Build feature X", ThreadKey: "customer+po"},
+		{Sender: "po", Text: "@dev, implement feature X", ThreadKey: "dev+po"},
+		{Sender: "dev", Text: "I'll read the codebase first", ThreadKey: "dev+po"},
+		{Sender: "dev", Text: "Implementation complete, @po please review", ThreadKey: "dev+po"},
+	}
+	for _, msg := range msgs {
+		if err := ch.PostMessage(ctx, msg); err != nil {
+			t.Fatalf("PostMessage: %v", err)
+		}
+	}
+
+	// Build context for dev on the dev+po thread
+	result, err := BuildThreadContext(ctx, ch, "dev", "dev+po")
+	if err != nil {
+		t.Fatalf("BuildThreadContext: %v", err)
+	}
+
+	// Should include system message, po→dev, and both dev messages
+	if !strings.Contains(result, "Session started") {
+		t.Error("Expected system message in thread context")
+	}
+	if !strings.Contains(result, "implement feature X") {
+		t.Error("Expected po→dev message in thread context")
+	}
+	if !strings.Contains(result, "Implementation complete") {
+		t.Error("Expected dev's final message in thread context")
+	}
+
+	// Should NOT include customer→po message (different thread)
+	if strings.Contains(result, "Build feature X") {
+		t.Error("Customer→po message should NOT appear in dev+po thread")
+	}
+
+	// Build context with empty thread key → includes everything
+	allResult, err := BuildThreadContext(ctx, ch, "dev", "")
+	if err != nil {
+		t.Fatalf("BuildThreadContext empty: %v", err)
+	}
+	if !strings.Contains(allResult, "Build feature X") {
+		t.Error("Empty thread key should include all messages")
+	}
+}
+
+func TestBuildThreadContext_BackwardCompatible(t *testing.T) {
+	// Old messages with no ThreadKey (empty string) should all be visible
+	// regardless of the requested threadKey.
+	ch := NewChatChannel("test-session")
+	ctx := context.Background()
+
+	msgs := []Message{
+		{Sender: "customer", Text: "Old message 1", ThreadKey: ""},
+		{Sender: "po", Text: "Old message 2", ThreadKey: ""},
+		{Sender: "dev", Text: "Old message 3", ThreadKey: ""},
+	}
+	for _, msg := range msgs {
+		if err := ch.PostMessage(ctx, msg); err != nil {
+			t.Fatalf("PostMessage: %v", err)
+		}
+	}
+
+	// Even with a specific thread key, old messages (ThreadKey="") are visible
+	result, err := BuildThreadContext(ctx, ch, "dev", "dev+po")
+	if err != nil {
+		t.Fatalf("BuildThreadContext: %v", err)
+	}
+	if !strings.Contains(result, "Old message 1") {
+		t.Error("Old message 1 (empty ThreadKey) should be visible in any thread")
+	}
+	if !strings.Contains(result, "Old message 2") {
+		t.Error("Old message 2 (empty ThreadKey) should be visible in any thread")
+	}
+	if !strings.Contains(result, "Old message 3") {
+		t.Error("Old message 3 (empty ThreadKey) should be visible in any thread")
+	}
+}

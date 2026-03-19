@@ -105,8 +105,10 @@ func BuildAgentPrompt(agentCfg FleetAgentConfig, fleetCfg *FleetConfig, agentKey
 
 	// Communication graph awareness
 	sb.WriteString("\n## Communication Rules\n\n")
-	sb.WriteString("You are part of a team communicating through a shared conversation thread.\n")
-	sb.WriteString("You can see all messages in the thread from all participants.\n\n")
+	sb.WriteString("You are part of a team communicating through pairwise conversation threads.\n")
+	sb.WriteString("Each conversation between two participants (e.g., you and @dev, or you and @customer)\n")
+	sb.WriteString("has its own thread. You only see messages from YOUR current conversation, plus global\n")
+	sb.WriteString("system announcements. You do NOT see other agents' private conversations.\n\n")
 
 	talksTo := fleetCfg.GetTalksTo(agentKey)
 	if len(talksTo) > 0 {

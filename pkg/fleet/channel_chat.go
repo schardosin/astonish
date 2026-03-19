@@ -157,6 +157,28 @@ func (c *ChatChannel) GetThread(_ context.Context) ([]Message, error) {
 	return result, nil
 }
 
+// GetPairThread returns messages belonging to the given pairwise thread key,
+// plus system/global messages (ThreadKey == ""). If threadKey is empty, returns
+// all messages (same as GetThread).
+func (c *ChatChannel) GetPairThread(_ context.Context, threadKey string) ([]Message, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if threadKey == "" {
+		result := make([]Message, len(c.messages))
+		copy(result, c.messages)
+		return result, nil
+	}
+
+	result := make([]Message, 0, len(c.messages))
+	for _, msg := range c.messages {
+		if msg.ThreadKey == threadKey || msg.ThreadKey == "" {
+			result = append(result, msg)
+		}
+	}
+	return result, nil
+}
+
 // Close shuts down the channel and wakes up any blocked waiters.
 func (c *ChatChannel) Close() error {
 	c.mu.Lock()

@@ -850,4 +850,6 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/studio/fleet/sessions/{id}/stop", FleetSessionStopHandler).Methods("POST")
 	router.HandleFunc("/api/studio/fleet/sessions/{id}/stream", FleetSessionStreamHandler).Methods("GET")
 	router.HandleFunc("/api/studio/fleet/sessions/{id}/trace", FleetSessionTraceHandler).Methods("GET")
+	router.HandleFunc("/api/studio/fleet/sessions/{id}/threads", FleetSessionThreadsHandler).Methods("GET")
+	router.HandleFunc("/api/studio/fleet/sessions/{id}/messages", FleetSessionMessagesHandler).Methods("GET")
 }

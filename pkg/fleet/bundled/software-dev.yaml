@@ -89,10 +89,14 @@ plan_wizard:
     1. Walk through each numbered step IN ORDER. Do NOT skip steps.
     2. Do NOT bundle multiple steps into a single message. Each step gets its
        own question-and-answer exchange with the user.
-    3. Step 3 (project analysis) is MANDATORY. You MUST clone the repository
+    3. For **github_issues** plans, you MUST collect and validate credentials
+       in Step 3 BEFORE performing any GitHub operations (cloning, API calls,
+       etc.) in Step 4. NEVER attempt to clone a repository or call GitHub
+       APIs without first ensuring credentials are available.
+    4. Step 4 (project analysis) is MANDATORY. You MUST clone the repository
        and run opencode to analyze it before proceeding to artifacts.
-    4. Do NOT call save_fleet_plan until ALL steps are completed, including
-       the project analysis in step 3.
+    5. Do NOT call save_fleet_plan until ALL steps are completed, including
+       the project analysis in step 4.
 
     ## 1. Plan identity
     Ask for:
@@ -114,9 +118,45 @@ plan_wizard:
     - Ask for polling schedule (suggest "*/5 * * * *" for every 5 minutes, or
       "* * * * *" for every minute during testing)
 
-    If **chat**: no channel config needed, skip to step 3.
+    If **chat**: no channel config needed, skip to step 4 (project analysis).
 
-    ## 3. Project repository and workspace analysis
+    ## 3. Credentials
+
+    **For github_issues plans: this step is MANDATORY. Do NOT skip it.**
+    GitHub credentials must be in place BEFORE any repository operations (cloning,
+    API calls) in Step 4. Without credentials, clone and validation will fail.
+
+    **For chat plans:** Ask if the plan needs credentials for external services.
+    If the user says no, skip to Step 4.
+
+    **Sub-steps:**
+
+    **3a. Check for existing credentials.**
+    Call `list_credentials` to see what's already in the credential store.
+    If a "github" credential already exists, tell the user:
+    "I found an existing GitHub credential in the store. I'll use that for
+    this plan. Want to use a different one instead?"
+
+    **3b. Collect credential if needed.**
+    If no GitHub credential exists (or the user wants a new one):
+    - Explain: "I need a GitHub Personal Access Token (PAT) to authenticate
+      with GitHub for cloning the repo and posting issue comments. The token
+      needs `repo` scope (full control of private repositories)."
+    - Ask the user for their token value.
+    - Use `save_credential` to store it with a descriptive name
+      (e.g., "github-work-pat") and the logical name "github".
+
+    **3c. Validate the credential works.**
+    Run a quick check to confirm the credential is valid:
+    shell_command(command: "GH_TOKEN=<token_value> gh auth status")
+
+    If validation fails, tell the user and ask them to provide a corrected token.
+    Do NOT proceed to Step 4 until a valid credential is confirmed.
+
+    For other integrations (SSH, external APIs, etc.): ask if any are needed
+    and collect the logical name and store entry name for each.
+
+    ## 4. Project repository and workspace analysis
 
     **THIS STEP IS MANDATORY. DO NOT SKIP IT.**
 
@@ -127,29 +167,29 @@ plan_wizard:
 
     Once you know the repository or path, execute these sub-steps:
 
-    **3a. Set up the workspace directory.**
+    **4a. Set up the workspace directory.**
     The default workspace base is `~/astonish_projects/`. For repo `owner/myproject`,
     the workspace is `~/astonish_projects/myproject`. Tell the user:
     "I'll set up the project workspace at ~/astonish_projects/<repo-name>.
     Want a different location?"
 
-    **3b. Clone the repository (if not already present).**
+    **4b. Clone the repository (if not already present).**
     Use `shell_command` to check if the workspace exists and clone if needed:
 
     First check: shell_command(command: "ls ~/astonish_projects/<repo-name>/.git 2>/dev/null && echo EXISTS || echo MISSING")
 
-    If MISSING, clone:
-    shell_command(command: "git clone https://github.com/<owner>/<repo>.git ~/astonish_projects/<repo-name>")
-
-    If the clone requires authentication, use the GitHub credential. For example:
+    If MISSING, clone using `gh` (which uses the GitHub credential from Step 3):
     shell_command(command: "gh repo clone <owner>/<repo> ~/astonish_projects/<repo-name>")
 
-    **3c. Analyze the project with OpenCode.**
+    For non-GitHub repos or local paths, use `git clone` directly:
+    shell_command(command: "git clone https://github.com/<owner>/<repo>.git ~/astonish_projects/<repo-name>")
+
+    **4c. Analyze the project with OpenCode.**
     Use the `opencode` tool to analyze the codebase and generate AGENTS.md:
 
     opencode(task: "Analyze this codebase and generate or update the AGENTS.md file with project structure, build/test/lint commands, code conventions, and key architectural patterns. Keep it concise and focused on what an AI coding agent needs to know.", dir: "~/astonish_projects/<repo-name>")
 
-    **3d. Read and present the analysis.**
+    **4d. Read and present the analysis.**
     After opencode completes, read the AGENTS.md file:
     read_file(path: "~/astonish_projects/<repo-name>/AGENTS.md")
 
@@ -158,10 +198,10 @@ plan_wizard:
     source code in trade-app/ and a Go backend in cmd/. The fleet will work
     with this existing directory structure."
 
-    **Do NOT proceed to step 4 until this analysis is complete.**
+    **Do NOT proceed to step 5 until this analysis is complete.**
 
-    ## 4. Artifact destinations
-    Based on the project analysis from step 3, configure TWO artifact destinations.
+    ## 5. Artifact destinations
+    Based on the project analysis from step 4, configure TWO artifact destinations.
     **You MUST configure both a "code" and a "docs" artifact.**
 
     Default configuration (inform the user, do not ask):
@@ -189,24 +229,12 @@ plan_wizard:
       "docs": { type: "git_repo", repo: "<owner/repo>", branch_pattern: "fleet/{task}", sub_path: "docs", auto_pr: true }
     }
 
-    ## 5. Workspace directory (optional)
-    If the workspace base was already decided in step 3a, skip this.
+    ## 6. Workspace directory (optional)
+    If the workspace base was already decided in step 4a, skip this.
     Otherwise mention that project files will be stored under
     `~/astonish_projects/<repo-name>` by default. Ask only if the user
     wants to change it. Pass a custom path as `workspace_base_dir` when
     calling save_fleet_plan.
-
-    ## 6. Credentials
-    Ask whether the plan needs credentials for external services. Explain that
-    credentials are mapped by logical name to entries in the encrypted credential store.
-
-    For **github_issues** plans: a "github" credential is strongly recommended so that
-    GH_TOKEN is auto-injected into gh CLI commands. Ask the user for the credential
-    store entry name (e.g., "github-work-pat"). They can list existing credentials
-    with `astonish credentials list`.
-
-    For other integrations (SSH, external APIs, etc.): ask if any are needed and collect the
-    logical name and store entry name for each.
 
     ## 7. Agent selection and behavior customizations (optional)
     If the user already requested agent changes during the overview step (e.g.,
@@ -227,7 +255,7 @@ plan_wizard:
        - channel_type, channel_config, channel_schedule
        - artifacts: BOTH "code" and "docs" entries
        - credentials
-       - workspace_base_dir (if the user chose a custom one in step 3a/5)
+       - workspace_base_dir (if the user chose a custom one in step 4a/6)
        - validation_passed: true
        - include_agents (only if the user requested specific agents)
     3. If validation fails, show what went wrong and help fix it before retrying.

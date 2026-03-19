@@ -276,6 +276,43 @@ export async function fetchFleetTrace(sessionId, opts = {}) {
 }
 
 /**
+ * Fetch pairwise thread summaries for a fleet session.
+ * Works for both active and completed sessions.
+ * @param {string} sessionId - Fleet session ID
+ * @returns {Promise<{threads: Array<{thread_key: string, participants: string[], message_count: number, first_timestamp: string, last_timestamp: string}>}>}
+ */
+export async function fetchFleetThreads(sessionId) {
+  const url = `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/threads`
+  const response = await fetch(url)
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
+ * Fetch fleet-level conversation messages, optionally filtered by thread.
+ * Works for both active and completed sessions.
+ * @param {string} sessionId - Fleet session ID
+ * @param {object} [opts] - Optional filters
+ * @param {string} [opts.thread] - Thread key to filter by (e.g., "dev+po")
+ * @returns {Promise<{messages: Array<{id: string, sender: string, text: string, thread_key: string, artifacts: object, mentions: string[], timestamp: string, metadata: object}>}>}
+ */
+export async function fetchFleetMessages(sessionId, opts = {}) {
+  const params = new URLSearchParams()
+  if (opts.thread) params.set('thread', opts.thread)
+  const qs = params.toString()
+  const url = `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/messages${qs ? '?' + qs : ''}`
+  const response = await fetch(url)
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
  * Duplicate a fleet plan
  * @param {string} planKey - Fleet plan key to duplicate
  * @returns {Promise<{status: string, key: string}>}

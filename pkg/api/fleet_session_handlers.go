@@ -365,6 +365,11 @@ func wireFleetTranscript(fs *fleet.FleetSession) {
 
 // fleetMessageToEvent converts a fleet message to an ADK session event
 // so it can be stored in the JSONL transcript and read by `sessions show`.
+//
+// ThreadKey is encoded into the InvocationID field as a suffix:
+// "fleet-turn-N|thread:dev+po". This piggybacks on an existing free-form
+// string field to avoid schema changes to the ADK Event struct.
+// eventsToFleetMessages in fleet_recover.go parses it back out.
 func fleetMessageToEvent(msg fleet.Message, invocationNum int) *adksession.Event {
 	// Map fleet sender to ADK role
 	role := genai.RoleModel
@@ -381,13 +386,18 @@ func fleetMessageToEvent(msg fleet.Message, invocationNum int) *adksession.Event
 		},
 	}
 
+	invocationID := fmt.Sprintf("fleet-turn-%d", invocationNum)
+	if msg.ThreadKey != "" {
+		invocationID += "|thread:" + msg.ThreadKey
+	}
+
 	return &adksession.Event{
 		LLMResponse: adkmodel.LLMResponse{
 			Content: content,
 		},
 		ID:           msg.ID,
 		Timestamp:    msg.Timestamp,
-		InvocationID: fmt.Sprintf("fleet-turn-%d", invocationNum),
+		InvocationID: invocationID,
 		Author:       author,
 	}
 }
@@ -550,13 +560,14 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		for _, msg := range thread {
 			safeSendSSE("fleet_message", map[string]interface{}{
-				"id":        msg.ID,
-				"sender":    msg.Sender,
-				"text":      msg.Text,
-				"artifacts": msg.Artifacts,
-				"mentions":  msg.Mentions,
-				"timestamp": msg.Timestamp,
-				"metadata":  msg.Metadata,
+				"id":         msg.ID,
+				"sender":     msg.Sender,
+				"text":       msg.Text,
+				"thread_key": msg.ThreadKey,
+				"artifacts":  msg.Artifacts,
+				"mentions":   msg.Mentions,
+				"timestamp":  msg.Timestamp,
+				"metadata":   msg.Metadata,
 			})
 		}
 	}
@@ -612,13 +623,14 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			seen[msg.ID] = true
 			safeSendSSE("fleet_message", map[string]interface{}{
-				"id":        msg.ID,
-				"sender":    msg.Sender,
-				"text":      msg.Text,
-				"artifacts": msg.Artifacts,
-				"mentions":  msg.Mentions,
-				"timestamp": msg.Timestamp,
-				"metadata":  msg.Metadata,
+				"id":         msg.ID,
+				"sender":     msg.Sender,
+				"text":       msg.Text,
+				"thread_key": msg.ThreadKey,
+				"artifacts":  msg.Artifacts,
+				"mentions":   msg.Mentions,
+				"timestamp":  msg.Timestamp,
+				"metadata":   msg.Metadata,
 			})
 
 			// Update persistent meta (message count)
@@ -627,6 +639,151 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// FleetSessionThreadsHandler handles GET /api/studio/fleet/sessions/{id}/threads.
+// Returns a list of unique pairwise threads in a fleet session with summary info.
+// Works for both active sessions (from in-memory channel) and completed sessions
+// (from JSONL transcript).
+func FleetSessionThreadsHandler(w http.ResponseWriter, r *http.Request) {
+	sessionID := mux.Vars(r)["id"]
+
+	messages, err := getFleetMessages(sessionID, r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	// Group messages by ThreadKey and compute summaries
+	type threadSummary struct {
+		ThreadKey    string   `json:"thread_key"`
+		Participants []string `json:"participants"`
+		MessageCount int      `json:"message_count"`
+		FirstTS      string   `json:"first_timestamp,omitempty"`
+		LastTS       string   `json:"last_timestamp,omitempty"`
+	}
+
+	threadMap := make(map[string]*threadSummary)
+	participantMap := make(map[string]map[string]bool) // threadKey -> set of senders
+
+	for _, msg := range messages {
+		key := msg.ThreadKey
+		if key == "" {
+			key = "_system"
+		}
+
+		ts, ok := threadMap[key]
+		if !ok {
+			ts = &threadSummary{ThreadKey: msg.ThreadKey}
+			threadMap[key] = ts
+			participantMap[key] = make(map[string]bool)
+		}
+
+		ts.MessageCount++
+		participantMap[key][msg.Sender] = true
+
+		tsStr := msg.Timestamp.Format("2006-01-02T15:04:05Z07:00")
+		if ts.FirstTS == "" || tsStr < ts.FirstTS {
+			ts.FirstTS = tsStr
+		}
+		if tsStr > ts.LastTS {
+			ts.LastTS = tsStr
+		}
+	}
+
+	// Build participants lists
+	for key, ts := range threadMap {
+		pmap := participantMap[key]
+		parts := make([]string, 0, len(pmap))
+		for p := range pmap {
+			parts = append(parts, p)
+		}
+		ts.Participants = parts
+	}
+
+	// Collect into a sorted list (system thread first, then alphabetical)
+	threads := make([]threadSummary, 0, len(threadMap))
+	if sys, ok := threadMap["_system"]; ok {
+		threads = append(threads, *sys)
+	}
+	for key, ts := range threadMap {
+		if key != "_system" {
+			threads = append(threads, *ts)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"threads": threads,
+	})
+}
+
+// FleetSessionMessagesHandler handles GET /api/studio/fleet/sessions/{id}/messages.
+// Returns fleet-level conversation messages, optionally filtered by thread.
+// Works for both active sessions (from in-memory channel) and completed sessions
+// (from JSONL transcript).
+//
+// Query params:
+//
+//	thread=dev+po  - filter to a specific pairwise thread (includes system messages)
+func FleetSessionMessagesHandler(w http.ResponseWriter, r *http.Request) {
+	sessionID := mux.Vars(r)["id"]
+
+	messages, err := getFleetMessages(sessionID, r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	// Filter by thread if requested
+	threadFilter := r.URL.Query().Get("thread")
+	if threadFilter != "" {
+		filtered := make([]fleet.Message, 0, len(messages))
+		for _, msg := range messages {
+			if msg.ThreadKey == threadFilter || msg.ThreadKey == "" {
+				filtered = append(filtered, msg)
+			}
+		}
+		messages = filtered
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"messages": messages,
+	})
+}
+
+// getFleetMessages returns all fleet messages for a session. It first checks
+// the active session registry (in-memory), then falls back to reading the
+// JSONL transcript (completed sessions).
+func getFleetMessages(sessionID string, ctx context.Context) ([]fleet.Message, error) {
+	// Try active session first
+	registry := getFleetSessionRegistry()
+	if fs := registry.Get(sessionID); fs != nil {
+		thread, err := fs.Channel.GetThread(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get thread: %w", err)
+		}
+		return thread, nil
+	}
+
+	// Fall back to JSONL transcript
+	fileStore := getFleetFileStore()
+	if fileStore == nil {
+		return nil, fmt.Errorf("session %s not found (no active session, no file store)", sessionID)
+	}
+
+	events, err := fileStore.ReadTranscriptEvents(studioChatAppName, studioChatUserID, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("session %s not found: %w", sessionID, err)
+	}
+
+	messages := eventsToFleetMessages(events)
+	if len(messages) == 0 {
+		return nil, fmt.Errorf("session %s has no messages", sessionID)
+	}
+
+	return messages, nil
 }
 
 // buildAgentList creates a list of agent descriptions for the frontend.

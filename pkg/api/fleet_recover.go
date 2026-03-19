@@ -86,16 +86,32 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 	// exists on GitHub but was not in the JSONL transcript (the session
 	// was stopped when the customer replied).
 	if cfg.CustomerMessage != "" {
+		// Determine the thread for the customer message. If the last
+		// recovered message has a ThreadKey, derive from that. Otherwise
+		// use customer + entry point (the default customer routing target).
+		var customerThread string
+		if len(recoveredMessages) > 0 {
+			last := recoveredMessages[len(recoveredMessages)-1]
+			if last.ThreadKey != "" && last.IsFromAgent() {
+				// Customer is replying to the agent who last spoke
+				customerThread = fleet.MakeThreadKey("customer", last.Sender)
+			}
+		}
+		if customerThread == "" {
+			customerThread = fleet.MakeThreadKey("customer", fleetCfg.GetEntryPoint())
+		}
+
 		customerMsg := fleet.Message{
 			ID:        uuid.New().String(),
 			Sender:    "customer",
 			Text:      cfg.CustomerMessage,
+			ThreadKey: customerThread,
 			Timestamp: time.Now(),
 			Mentions:  fleet.ParseMentions(cfg.CustomerMessage),
 		}
 		recoveredMessages = append(recoveredMessages, customerMsg)
-		log.Printf("[fleet-recover] Session %s: injected customer reply that triggered recovery (%d chars)",
-			cfg.SessionID, len(cfg.CustomerMessage))
+		log.Printf("[fleet-recover] Session %s: injected customer reply that triggered recovery (%d chars, thread=%s)",
+			cfg.SessionID, len(cfg.CustomerMessage), customerThread)
 	}
 
 	// Create a GitHubIssueChannel pre-loaded with recovered messages.
@@ -188,8 +204,21 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 	resumeTarget := determineResumeTarget(lastMsg, fleetCfg, subAgentMgr)
 	fleetSession.ResumeTarget = resumeTarget
 
-	log.Printf("[fleet-recover] Session %s: resume target is %q (last sender: %s)",
-		cfg.SessionID, resumeTarget, lastMsg.Sender)
+	// Set the resume thread: derive from the last message's sender and the
+	// resume target. For backward compatibility, old JSONL with empty ThreadKey
+	// will produce a fresh pairwise thread for the resumed conversation.
+	if resumeTarget != "" {
+		if lastMsg.ThreadKey != "" {
+			// Prefer continuing on the same thread if the last message had one
+			fleetSession.ResumeThread = lastMsg.ThreadKey
+		} else {
+			// Old transcript without thread keys — create a fresh one
+			fleetSession.ResumeThread = fleet.MakeThreadKey(lastMsg.Sender, resumeTarget)
+		}
+	}
+
+	log.Printf("[fleet-recover] Session %s: resume target is %q, thread %q (last sender: %s)",
+		cfg.SessionID, resumeTarget, fleetSession.ResumeThread, lastMsg.Sender)
 
 	// Wire completion callback for issue lifecycle tracking
 	if cfg.CompletionFunc != nil {
@@ -236,6 +265,10 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 
 // eventsToFleetMessages converts ADK session events (from a JSONL transcript)
 // back into fleet.Message objects for channel recovery.
+//
+// ThreadKey is recovered from the InvocationID field where fleetMessageToEvent
+// encodes it as a "|thread:dev+po" suffix. Old JSONL without this suffix
+// produces ThreadKey="" (backward compatible — treated as system/global).
 func eventsToFleetMessages(events []*adksession.Event) []fleet.Message {
 	var messages []fleet.Message
 	for _, event := range events {
@@ -267,10 +300,17 @@ func eventsToFleetMessages(events []*adksession.Event) []fleet.Message {
 			sender = "customer"
 		}
 
+		// Extract ThreadKey from InvocationID suffix (e.g., "fleet-turn-5|thread:dev+po")
+		var threadKey string
+		if idx := strings.Index(event.InvocationID, "|thread:"); idx >= 0 {
+			threadKey = event.InvocationID[idx+len("|thread:"):]
+		}
+
 		msg := fleet.Message{
 			ID:        event.ID,
 			Sender:    sender,
 			Text:      text,
+			ThreadKey: threadKey,
 			Mentions:  fleet.ParseMentions(text),
 			Timestamp: event.Timestamp,
 		}

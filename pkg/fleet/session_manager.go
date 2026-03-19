@@ -58,6 +58,7 @@ type FleetSession struct {
 	// State
 	state            SessionState
 	activeAgent      string // which agent is currently processing (or last processed)
+	activeThread     string // current pairwise thread key (e.g., "dev+po"); empty = no thread assigned yet
 	waitingAgent     string // which agent is waiting for human input
 	ballWithCustomer bool   // true when ball was moved to customer (used for state tracking)
 	mu               sync.RWMutex
@@ -96,6 +97,11 @@ type FleetSession struct {
 	// target agent instead of waiting for a new message. This is used during
 	// session recovery to continue from where the session left off.
 	ResumeTarget string
+
+	// ResumeThread, when set before Run(), is used as the initial active
+	// thread key for recovery. Paired with ResumeTarget so the recovered
+	// session continues on the correct pairwise thread.
+	ResumeThread string
 
 	// Headless is true for sessions started by the scheduler (no human in
 	// the UI). Used by the idle watchdog to decide whether to auto-activate
@@ -197,6 +203,13 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 		pendingTarget = fs.ResumeTarget
 		fs.ResumeTarget = "" // consume it
 		log.Printf("[fleet] Resuming session with target agent %s", pendingTarget)
+
+		// Restore the pairwise thread for recovery.
+		if fs.ResumeThread != "" {
+			fs.activeThread = fs.ResumeThread
+			fs.ResumeThread = "" // consume it
+			log.Printf("[fleet] Resuming on thread %s", fs.activeThread)
+		}
 	}
 
 	// Track consecutive agent failures to prevent infinite error loops.
@@ -275,6 +288,14 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 			if msg.IsFromCustomer() {
 				targetAgent = RouteCustomerMessage(fs.FleetConfig, fs.waitingAgent)
 
+				// Set thread for customer→agent conversation
+				fs.mu.Lock()
+				fs.activeThread = MakeThreadKey("customer", targetAgent)
+				fs.mu.Unlock()
+
+				// Assign thread key to the customer message
+				msg.ThreadKey = fs.activeThread
+
 				// Persist customer message to transcript so it survives
 				// daemon restarts. Without this, recovery reads the JSONL
 				// and reconstructs the thread without any customer messages,
@@ -311,7 +332,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 		// Activate the target agent
 		fs.setState(StateProcessing, targetAgent)
 
-		response, err := fs.activateAgent(ctx, targetAgent)
+		response, err := fs.activateAgent(ctx, targetAgent, fs.activeThread)
 		if err != nil {
 			consecutiveErrors++
 			log.Printf("[fleet] Error activating agent %s (%d/%d): %v",
@@ -363,6 +384,10 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 		// Successful activation resets the error counter
 		consecutiveErrors = 0
 
+		// Stamp the response with the current thread key so it's visible
+		// in the correct pairwise thread.
+		response.ThreadKey = fs.activeThread
+
 		// Post agent's response to the channel (internal thread + SSE only;
 		// GitHub posting is deferred until after routing to avoid flooding
 		// the issue with intermediate messages during self-routing chains).
@@ -394,7 +419,11 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 			// Post to GitHub — this is a deliverable directed at the customer.
 			fs.postExternal(response)
 
+			// Thread transitions to sender↔customer for the response
+			// (already stamped on the response above; update activeThread
+			// for any future messages in this state).
 			fs.mu.Lock()
+			fs.activeThread = MakeThreadKey(response.Sender, "customer")
 			fs.waitingAgent = response.Sender
 			fs.mu.Unlock()
 			fs.setState(StateWaitingForCustomer, response.Sender)
@@ -412,6 +441,8 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 			// Do NOT post to GitHub — this is an intermediate step in a
 			// multi-activation chain. The message is already in the
 			// internal thread (for agent context) and SSE (for UI).
+			// activeThread stays the same — self-routing continues on
+			// the same pairwise thread.
 			pendingTarget = response.Sender
 
 		case "none":
@@ -435,9 +466,12 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 			// so it represents a meaningful communication step.
 			fs.postExternal(response)
 
-			// Route to the specified agent
+			// Route to the specified agent — transition to a new pairwise thread.
 			if fs.FleetConfig.CanTalkTo(response.Sender, routing.Target) {
 				pendingTarget = routing.Target
+				fs.mu.Lock()
+				fs.activeThread = MakeThreadKey(response.Sender, routing.Target)
+				fs.mu.Unlock()
 			} else {
 				log.Printf("[fleet] Warning: LLM routed to %s but %s cannot talk to them, ignoring",
 					routing.Target, response.Sender)
@@ -474,10 +508,13 @@ func (fs *FleetSession) notifyBallChange(ball string) {
 }
 
 // activateAgent builds the context and runs the agent as a sub-agent.
+// The threadKey parameter specifies which pairwise conversation thread to use
+// for building the agent's context. An empty threadKey includes all messages.
+//
 // It wires an OnEvent callback to post intermediate progress messages to the
 // channel as the agent works, so the team sees real-time status updates instead
 // of one large message at the end.
-func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Message, error) {
+func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string, threadKey string) (Message, error) {
 	agentCfg, ok := fs.FleetConfig.Agents[agentKey]
 	if !ok {
 		return Message{}, fmt.Errorf("agent %q not found in fleet", agentKey)
@@ -487,7 +524,7 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 	systemPrompt := BuildAgentPrompt(agentCfg, fs.FleetConfig, agentKey, fs.Progress, fs.ProjectContext, fs.TaskSlug, fs.Plan)
 
 	// Build thread context
-	threadContext, err := BuildThreadContext(ctx, fs.Channel, agentKey)
+	threadContext, err := BuildThreadContext(ctx, fs.Channel, agentKey, threadKey)
 	if err != nil {
 		return Message{}, fmt.Errorf("building thread context: %w", err)
 	}
@@ -525,6 +562,7 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 			ID:        uuid.New().String(),
 			Sender:    agentKey,
 			Text:      text,
+			ThreadKey: threadKey,
 			Mentions:  ParseMentions(text),
 			Timestamp: time.Now(),
 			Metadata: map[string]any{

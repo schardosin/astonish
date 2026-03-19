@@ -12,6 +12,7 @@ import {
   activateFleetPlan, deactivateFleetPlan, getFleetPlanStatus, duplicateFleetPlan,
   deleteFleetPlan, startFleetSession, stopFleetSession, fetchFleetTrace,
   fetchFleetSessions, connectFleetStream, retryFleetIssue,
+  fetchFleetThreads, fetchFleetMessages,
 } from '../api/fleetChat'
 import { fetchSessions, deleteSession } from '../api/studioChat'
 import { buildPath } from '../hooks/useHashRouter'
@@ -837,6 +838,13 @@ function SessionTrace({ sessionId, onRefresh }) {
   const abortRef = useRef(null)
   const pollRef = useRef(null)
 
+  // Thread filtering state
+  const [threads, setThreads] = useState([])
+  const [selectedThread, setSelectedThread] = useState(null) // null = "All" (raw trace view)
+  const [threadMessages, setThreadMessages] = useState([])
+  const [threadMsgsLoading, setThreadMsgsLoading] = useState(false)
+  const [expandedMsgs, setExpandedMsgs] = useState(new Set())
+
   const loadTrace = useCallback(async () => {
     try {
       const data = await fetchFleetTrace(sessionId, { toolsOnly })
@@ -848,6 +856,33 @@ function SessionTrace({ sessionId, onRefresh }) {
       setIsLoading(false)
     }
   }, [sessionId, toolsOnly])
+
+  const loadThreads = useCallback(async () => {
+    try {
+      const data = await fetchFleetThreads(sessionId)
+      setThreads(data.threads || [])
+    } catch {
+      // threads endpoint may fail for very old sessions — just show empty
+    }
+  }, [sessionId])
+
+  const loadThreadMessages = useCallback(async (threadKey) => {
+    setThreadMsgsLoading(true)
+    try {
+      const opts = threadKey !== '_system' ? { thread: threadKey } : {}
+      const data = await fetchFleetMessages(sessionId, opts)
+      let msgs = data.messages || []
+      // For the _system thread, only show messages with empty thread_key
+      if (threadKey === '_system') {
+        msgs = msgs.filter(m => !m.thread_key)
+      }
+      setThreadMessages(msgs)
+    } catch {
+      setThreadMessages([])
+    } finally {
+      setThreadMsgsLoading(false)
+    }
+  }, [sessionId])
 
   // Check if session is active and connect to live stream
   useEffect(() => {
@@ -869,6 +904,7 @@ function SessionTrace({ sessionId, onRefresh }) {
                 setLiveSession(prev => prev ? { ...prev, state: 'stopped' } : prev)
                 // Final trace load to capture remaining events
                 loadTrace()
+                loadThreads()
               }
             },
             onError: () => {},
@@ -885,25 +921,39 @@ function SessionTrace({ sessionId, onRefresh }) {
       cancelled = true
       if (abortRef.current) abortRef.current.abort()
     }
-  }, [sessionId])
+  }, [sessionId, loadTrace, loadThreads])
 
-  // Load trace data
+  // Load trace data and threads on mount
   useEffect(() => {
     setIsLoading(true)
     loadTrace()
-  }, [loadTrace])
+    loadThreads()
+  }, [loadTrace, loadThreads])
 
-  // Poll trace every 5s for active sessions
+  // Poll trace + threads every 5s for active sessions
   useEffect(() => {
     if (!liveSession || liveSession.state === 'stopped' || liveSession.state === 'completed') return
-    pollRef.current = setInterval(loadTrace, 5000)
+    pollRef.current = setInterval(() => {
+      loadTrace()
+      loadThreads()
+      if (selectedThread !== null) {
+        loadThreadMessages(selectedThread)
+      }
+    }, 5000)
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
-  }, [liveSession, loadTrace])
+  }, [liveSession, loadTrace, loadThreads, selectedThread, loadThreadMessages])
+
+  // Load thread messages when a thread is selected
+  useEffect(() => {
+    if (selectedThread !== null) {
+      loadThreadMessages(selectedThread)
+    }
+  }, [selectedThread, loadThreadMessages])
 
   // Auto-scroll when new trace events arrive (only if already near bottom)
   useEffect(() => {
     const el = scrollRef.current
-    const eventCount = trace?.events?.length || 0
+    const eventCount = selectedThread !== null ? threadMessages.length : (trace?.events?.length || 0)
     if (el && eventCount > prevEventCountRef.current) {
       const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100
       if (isNearBottom) {
@@ -911,7 +961,7 @@ function SessionTrace({ sessionId, onRefresh }) {
       }
     }
     prevEventCountRef.current = eventCount
-  }, [trace])
+  }, [trace, threadMessages, selectedThread])
 
   const handleStop = async () => {
     if (isStopping) return
@@ -935,6 +985,28 @@ function SessionTrace({ sessionId, onRefresh }) {
       return next
     })
   }
+
+  const toggleMsg = (index) => {
+    setExpandedMsgs(prev => {
+      const next = new Set(prev)
+      if (next.has(index)) next.delete(index)
+      else next.add(index)
+      return next
+    })
+  }
+
+  // Format thread key for display: "dev+po" -> "dev <-> po", "" -> "system"
+  const formatThreadLabel = (threadKey) => {
+    if (!threadKey) return 'system'
+    const parts = threadKey.split('+')
+    if (parts.length === 2) return `${parts[0]} \u2194 ${parts[1]}`
+    return threadKey
+  }
+
+  // Get the non-system threads for the tab bar
+  const conversationThreads = threads.filter(t => t.thread_key !== '')
+  const systemThread = threads.find(t => t.thread_key === '')
+  const hasThreads = conversationThreads.length > 0
 
   if (isLoading && !trace) {
     return (
@@ -984,15 +1056,17 @@ function SessionTrace({ sessionId, onRefresh }) {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: 'var(--text-secondary)' }}>
-            <input
-              type="checkbox"
-              checked={toolsOnly}
-              onChange={(e) => setToolsOnly(e.target.checked)}
-              className="accent-cyan-500"
-            />
-            Tools only
-          </label>
+          {selectedThread === null && (
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: 'var(--text-secondary)' }}>
+              <input
+                type="checkbox"
+                checked={toolsOnly}
+                onChange={(e) => setToolsOnly(e.target.checked)}
+                className="accent-cyan-500"
+              />
+              Tools only
+            </label>
+          )}
           {isActive && (
             <button
               onClick={handleStop}
@@ -1005,23 +1079,95 @@ function SessionTrace({ sessionId, onRefresh }) {
         </div>
       </div>
 
-      {/* Timeline */}
+      {/* Thread selector tabs */}
+      {hasThreads && (
+        <div className="flex items-center gap-1.5 px-6 py-2 overflow-x-auto" style={{ borderBottom: '1px solid var(--border-color)' }}>
+          <button
+            onClick={() => setSelectedThread(null)}
+            className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full transition-colors whitespace-nowrap"
+            style={selectedThread === null
+              ? { background: 'rgba(6, 182, 212, 0.2)', color: '#22d3ee', border: '1px solid rgba(6, 182, 212, 0.4)' }
+              : { background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }
+            }
+          >
+            All
+            <span className="text-[10px] opacity-70">{events.length}</span>
+          </button>
+
+          {conversationThreads.map(t => {
+            const isSelected = selectedThread === t.thread_key
+            // Pick color from the first non-customer, non-system participant
+            const colorAgent = t.participants?.find(p => p !== 'customer' && p !== 'system') || t.participants?.[0]
+            const color = getAgentColor(colorAgent || 'system')
+
+            return (
+              <button
+                key={t.thread_key}
+                onClick={() => setSelectedThread(t.thread_key)}
+                className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full transition-colors whitespace-nowrap"
+                style={isSelected
+                  ? { background: color.bg, color: color.text, border: `1px solid ${color.border}` }
+                  : { background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }
+                }
+              >
+                {formatThreadLabel(t.thread_key)}
+                <span className="text-[10px] opacity-70">{t.message_count}</span>
+              </button>
+            )
+          })}
+
+          {systemThread && systemThread.message_count > 0 && (
+            <button
+              onClick={() => setSelectedThread('_system')}
+              className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full transition-colors whitespace-nowrap"
+              style={selectedThread === '_system'
+                ? { background: 'rgba(107, 114, 128, 0.2)', color: '#9ca3af', border: '1px solid rgba(107, 114, 128, 0.4)' }
+                : { background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }
+              }
+            >
+              system
+              <span className="text-[10px] opacity-70">{systemThread.message_count}</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Content area: raw trace or thread messages */}
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-1" ref={scrollRef}>
-        {events.length === 0 && !isActive ? (
-          <div className="text-center py-12">
-            <FileText size={32} className="mx-auto mb-2" style={{ color: 'var(--text-muted)' }} />
-            <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No trace events found</p>
-          </div>
+        {selectedThread !== null ? (
+          /* Thread-filtered message view */
+          threadMsgsLoading && threadMessages.length === 0 ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader size={20} className="animate-spin text-cyan-400" />
+            </div>
+          ) : threadMessages.length === 0 ? (
+            <div className="text-center py-12">
+              <FileText size={32} className="mx-auto mb-2" style={{ color: 'var(--text-muted)' }} />
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No messages in this thread</p>
+            </div>
+          ) : (
+            threadMessages.map((msg, i) => (
+              <ThreadMessageRow key={msg.id || i} msg={msg} index={i} expanded={expandedMsgs.has(i)} onToggle={toggleMsg} />
+            ))
+          )
         ) : (
-          events.map((entry, i) => (
-            <TraceEntryRow key={i} entry={entry} index={i} expanded={expandedEntries.has(i)} onToggle={toggleEntry} />
-          ))
+          /* Raw trace view (original behavior) */
+          events.length === 0 && !isActive ? (
+            <div className="text-center py-12">
+              <FileText size={32} className="mx-auto mb-2" style={{ color: 'var(--text-muted)' }} />
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No trace events found</p>
+            </div>
+          ) : (
+            events.map((entry, i) => (
+              <TraceEntryRow key={i} entry={entry} index={i} expanded={expandedEntries.has(i)} onToggle={toggleEntry} />
+            ))
+          )
         )}
 
         {isActive && (
           <div className="flex items-center gap-2 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>
             <Loader size={12} className="animate-spin text-cyan-400" />
-            <span>Session is active, trace updates every 5s...</span>
+            <span>Session is active{selectedThread !== null ? ', thread updates every 5s...' : ', trace updates every 5s...'}</span>
           </div>
         )}
       </div>
@@ -1171,6 +1317,74 @@ function TraceEntryRow({ entry, index, expanded, onToggle }) {
   }
 
   return null
+}
+
+// Single thread message row (conversation-level view for pairwise threads)
+function ThreadMessageRow({ msg, index, expanded, onToggle }) {
+  const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : ''
+  const isCustomer = msg.sender === 'customer'
+  const isSystem = msg.sender === 'system'
+  const roleColor = isCustomer
+    ? getAgentColor('system')
+    : isSystem
+      ? { text: '#9ca3af', bg: 'rgba(107, 114, 128, 0.1)' }
+      : getAgentColor(msg.sender)
+  const roleLabel = isCustomer ? 'customer' : isSystem ? 'system' : `@${msg.sender}`
+  const textPreview = msg.text?.length > 400 ? msg.text.slice(0, 400) + '...' : msg.text
+
+  // Check if message has metadata indicating it's intermediate
+  const isIntermediate = msg.metadata?.intermediate === true
+
+  return (
+    <div className={`py-1.5 ${isIntermediate ? 'opacity-60' : ''}`}>
+      <div className="flex items-start gap-2 text-xs">
+        <span className="text-[10px] font-mono flex-shrink-0 w-16 text-right" style={{ color: 'var(--text-muted)' }}>{time}</span>
+        <span className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 min-w-[60px] text-center font-medium" style={{ background: roleColor.bg, color: roleColor.text }}>
+          {roleLabel}
+        </span>
+        {isIntermediate && (
+          <span className="text-[10px] italic flex-shrink-0" style={{ color: 'var(--text-muted)' }}>progress</span>
+        )}
+        <div className="flex-1 min-w-0">
+          {expanded ? (
+            <div className="rounded p-3 text-xs" style={{ background: 'rgba(255,255,255,0.03)', color: 'var(--text-secondary)' }}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text || ''}</ReactMarkdown>
+              {msg.artifacts && Object.keys(msg.artifacts).length > 0 && (
+                <div className="mt-2 pt-2" style={{ borderTop: '1px solid var(--border-color)' }}>
+                  <span className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Artifacts: </span>
+                  {Object.entries(msg.artifacts).map(([name, path]) => (
+                    <span key={name} className="text-[10px] ml-1" style={{ color: '#22d3ee' }}>
+                      {name} &rarr; <code>{path}</code>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {msg.mentions && msg.mentions.length > 0 && (
+                <div className="mt-1">
+                  <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                    Mentions: {msg.mentions.map(m => `@${m}`).join(', ')}
+                  </span>
+                </div>
+              )}
+            </div>
+          ) : (
+            <button
+              onClick={() => onToggle(index)}
+              className="text-left w-full hover:underline cursor-pointer"
+              style={{ color: 'var(--text-secondary)' }}
+            >
+              {textPreview}
+            </button>
+          )}
+          {expanded && (
+            <button onClick={() => onToggle(index)} className="text-[10px] text-cyan-400 hover:text-cyan-300 mt-1 cursor-pointer">
+              Collapse
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // ─── Template Detail View ───

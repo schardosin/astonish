@@ -1,6 +1,8 @@
 package fleet
 
 import (
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -8,12 +10,25 @@ import (
 // Messages are the fundamental unit of communication between agents and the customer.
 type Message struct {
 	ID        string            `json:"id"`
-	Sender    string            `json:"sender"`              // "customer", or agent key (e.g., "po", "architect")
-	Text      string            `json:"text"`                // Message content
-	Artifacts map[string]string `json:"artifacts,omitempty"` // name -> file path (produced artifacts)
-	Mentions  []string          `json:"mentions,omitempty"`  // Parsed @mentions from text
+	Sender    string            `json:"sender"`               // "customer", or agent key (e.g., "po", "architect")
+	Text      string            `json:"text"`                 // Message content
+	ThreadKey string            `json:"thread_key,omitempty"` // Pairwise conversation thread (e.g., "dev+po"); empty = system/global
+	Artifacts map[string]string `json:"artifacts,omitempty"`  // name -> file path (produced artifacts)
+	Mentions  []string          `json:"mentions,omitempty"`   // Parsed @mentions from text
 	Timestamp time.Time         `json:"timestamp"`
 	Metadata  map[string]any    `json:"metadata,omitempty"` // Additional context (e.g., tool calls made)
+}
+
+// MakeThreadKey returns a canonical pairwise thread key for two participants.
+// The key is deterministic: participants are sorted alphabetically and joined
+// with "+". For example, MakeThreadKey("po", "dev") returns "dev+po".
+//
+// This ensures that both directions of a conversation (A→B and B→A) map to
+// the same thread, regardless of who initiates.
+func MakeThreadKey(a, b string) string {
+	pair := []string{a, b}
+	sort.Strings(pair)
+	return strings.Join(pair, "+")
 }
 
 // IsFromCustomer returns true if the message was sent by the customer.

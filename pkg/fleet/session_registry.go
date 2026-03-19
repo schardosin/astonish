@@ -70,6 +70,11 @@ func (r *SessionRegistry) IsFleetSession(sessionID string) bool {
 
 // PostHumanMessage posts a human message to the fleet session's channel.
 // Returns an error if the session is not found or not running.
+//
+// MemoryKeys are stamped before posting so the message is correctly scoped
+// to the target agent's memory (not globally visible). The Run() loop's
+// notifyMessagePosted call handles transcript persistence — we do NOT
+// persist here to avoid double entries.
 func (r *SessionRegistry) PostHumanMessage(sessionID, text string) error {
 	fs := r.Get(sessionID)
 	if fs == nil {
@@ -79,16 +84,19 @@ func (r *SessionRegistry) PostHumanMessage(sessionID, text string) error {
 	if ctx == nil {
 		return fmt.Errorf("fleet session %s is not running", sessionID)
 	}
+
+	// Determine target agent for memory scoping.
+	fs.mu.RLock()
+	waiting := fs.waitingAgent
+	fs.mu.RUnlock()
+	targetAgent := RouteCustomerMessage(fs.FleetConfig, waiting)
+
 	msg := Message{
-		Sender: "customer",
-		Text:   text,
+		Sender:     "customer",
+		Text:       text,
+		MemoryKeys: []string{targetAgent},
 	}
-	if err := fs.Channel.PostMessage(ctx, msg); err != nil {
-		return err
-	}
-	// Persist to transcript
-	fs.notifyMessagePosted(msg)
-	return nil
+	return fs.Channel.PostMessage(ctx, msg)
 }
 
 // FleetSessionInfo is a read-only view of a fleet session for API responses.

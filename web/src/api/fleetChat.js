@@ -292,16 +292,16 @@ export async function fetchFleetThreads(sessionId) {
 }
 
 /**
- * Fetch fleet-level conversation messages, optionally filtered by thread.
+ * Fetch fleet-level conversation messages, optionally filtered by agent memory.
  * Works for both active and completed sessions.
  * @param {string} sessionId - Fleet session ID
  * @param {object} [opts] - Optional filters
- * @param {string} [opts.thread] - Thread key to filter by (e.g., "dev+po")
- * @returns {Promise<{messages: Array<{id: string, sender: string, text: string, thread_key: string, artifacts: object, mentions: string[], timestamp: string, metadata: object}>}>}
+ * @param {string} [opts.agent] - Agent key to filter by (e.g., "dev") — returns messages in that agent's memory
+ * @returns {Promise<{messages: Array<{id: string, sender: string, text: string, memory_keys: string[], artifacts: object, mentions: string[], timestamp: string, metadata: object}>}>}
  */
 export async function fetchFleetMessages(sessionId, opts = {}) {
   const params = new URLSearchParams()
-  if (opts.thread) params.set('thread', opts.thread)
+  if (opts.agent) params.set('agent', opts.agent)
   const qs = params.toString()
   const url = `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/messages${qs ? '?' + qs : ''}`
   const response = await fetch(url)

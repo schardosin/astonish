@@ -86,32 +86,31 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 	// exists on GitHub but was not in the JSONL transcript (the session
 	// was stopped when the customer replied).
 	if cfg.CustomerMessage != "" {
-		// Determine the thread for the customer message. If the last
-		// recovered message has a ThreadKey, derive from that. Otherwise
-		// use customer + entry point (the default customer routing target).
-		var customerThread string
+		// Determine which agent should see this customer message.
+		// If the last recovered message was from an agent, the customer
+		// is replying to that agent. Otherwise use the entry point.
+		var targetAgent string
 		if len(recoveredMessages) > 0 {
 			last := recoveredMessages[len(recoveredMessages)-1]
-			if last.ThreadKey != "" && last.IsFromAgent() {
-				// Customer is replying to the agent who last spoke
-				customerThread = fleet.MakeThreadKey("customer", last.Sender)
+			if last.IsFromAgent() {
+				targetAgent = last.Sender
 			}
 		}
-		if customerThread == "" {
-			customerThread = fleet.MakeThreadKey("customer", fleetCfg.GetEntryPoint())
+		if targetAgent == "" {
+			targetAgent = fleetCfg.GetEntryPoint()
 		}
 
 		customerMsg := fleet.Message{
-			ID:        uuid.New().String(),
-			Sender:    "customer",
-			Text:      cfg.CustomerMessage,
-			ThreadKey: customerThread,
-			Timestamp: time.Now(),
-			Mentions:  fleet.ParseMentions(cfg.CustomerMessage),
+			ID:         uuid.New().String(),
+			Sender:     "customer",
+			Text:       cfg.CustomerMessage,
+			MemoryKeys: []string{targetAgent},
+			Timestamp:  time.Now(),
+			Mentions:   fleet.ParseMentions(cfg.CustomerMessage),
 		}
 		recoveredMessages = append(recoveredMessages, customerMsg)
-		log.Printf("[fleet-recover] Session %s: injected customer reply that triggered recovery (%d chars, thread=%s)",
-			cfg.SessionID, len(cfg.CustomerMessage), customerThread)
+		log.Printf("[fleet-recover] Session %s: injected customer reply that triggered recovery (%d chars, memory=[%s])",
+			cfg.SessionID, len(cfg.CustomerMessage), targetAgent)
 	}
 
 	// Create a GitHubIssueChannel pre-loaded with recovered messages.
@@ -204,21 +203,8 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 	resumeTarget := determineResumeTarget(lastMsg, fleetCfg, subAgentMgr)
 	fleetSession.ResumeTarget = resumeTarget
 
-	// Set the resume thread: derive from the last message's sender and the
-	// resume target. For backward compatibility, old JSONL with empty ThreadKey
-	// will produce a fresh pairwise thread for the resumed conversation.
-	if resumeTarget != "" {
-		if lastMsg.ThreadKey != "" {
-			// Prefer continuing on the same thread if the last message had one
-			fleetSession.ResumeThread = lastMsg.ThreadKey
-		} else {
-			// Old transcript without thread keys — create a fresh one
-			fleetSession.ResumeThread = fleet.MakeThreadKey(lastMsg.Sender, resumeTarget)
-		}
-	}
-
-	log.Printf("[fleet-recover] Session %s: resume target is %q, thread %q (last sender: %s)",
-		cfg.SessionID, resumeTarget, fleetSession.ResumeThread, lastMsg.Sender)
+	log.Printf("[fleet-recover] Session %s: resume target is %q (last sender: %s)",
+		cfg.SessionID, resumeTarget, lastMsg.Sender)
 
 	// Wire completion callback for issue lifecycle tracking
 	if cfg.CompletionFunc != nil {
@@ -300,19 +286,28 @@ func eventsToFleetMessages(events []*adksession.Event) []fleet.Message {
 			sender = "customer"
 		}
 
-		// Extract ThreadKey from InvocationID suffix (e.g., "fleet-turn-5|thread:dev+po")
+		// Extract MemoryKeys or ThreadKey from InvocationID suffix.
+		// New format: "fleet-turn-5|mem:architect,po" (per-agent memory)
+		// Old format: "fleet-turn-5|thread:dev+po" (pairwise, backward compat)
+		var memoryKeys []string
 		var threadKey string
-		if idx := strings.Index(event.InvocationID, "|thread:"); idx >= 0 {
+		if idx := strings.Index(event.InvocationID, "|mem:"); idx >= 0 {
+			raw := event.InvocationID[idx+len("|mem:"):]
+			memoryKeys = strings.Split(raw, ",")
+		} else if idx := strings.Index(event.InvocationID, "|thread:"); idx >= 0 {
 			threadKey = event.InvocationID[idx+len("|thread:"):]
+			// Backward compat: derive MemoryKeys from old pairwise ThreadKey
+			memoryKeys = strings.Split(threadKey, "+")
 		}
 
 		msg := fleet.Message{
-			ID:        event.ID,
-			Sender:    sender,
-			Text:      text,
-			ThreadKey: threadKey,
-			Mentions:  fleet.ParseMentions(text),
-			Timestamp: event.Timestamp,
+			ID:         event.ID,
+			Sender:     sender,
+			Text:       text,
+			ThreadKey:  threadKey,  // preserved for backward compat display
+			MemoryKeys: memoryKeys, // authoritative memory ownership
+			Mentions:   fleet.ParseMentions(text),
+			Timestamp:  event.Timestamp,
 		}
 
 		messages = append(messages, msg)

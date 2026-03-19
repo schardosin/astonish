@@ -157,14 +157,14 @@ func (c *ChatChannel) GetThread(_ context.Context) ([]Message, error) {
 	return result, nil
 }
 
-// GetPairThread returns messages belonging to the given pairwise thread key,
-// plus system/global messages (ThreadKey == ""). If threadKey is empty, returns
-// all messages (same as GetThread).
-func (c *ChatChannel) GetPairThread(_ context.Context, threadKey string) ([]Message, error) {
+// GetAgentMemory returns messages belonging to the given agent's memory,
+// plus system/global messages (no MemoryKeys). If agentKey is empty, returns
+// all messages (same as GetThread). Supports backward compat with old ThreadKey.
+func (c *ChatChannel) GetAgentMemory(_ context.Context, agentKey string) ([]Message, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if threadKey == "" {
+	if agentKey == "" {
 		result := make([]Message, len(c.messages))
 		copy(result, c.messages)
 		return result, nil
@@ -172,7 +172,7 @@ func (c *ChatChannel) GetPairThread(_ context.Context, threadKey string) ([]Mess
 
 	result := make([]Message, 0, len(c.messages))
 	for _, msg := range c.messages {
-		if msg.ThreadKey == threadKey || msg.ThreadKey == "" {
+		if msg.InAgentMemory(agentKey) {
 			result = append(result, msg)
 		}
 	}

@@ -105,10 +105,11 @@ func BuildAgentPrompt(agentCfg FleetAgentConfig, fleetCfg *FleetConfig, agentKey
 
 	// Communication graph awareness
 	sb.WriteString("\n## Communication Rules\n\n")
-	sb.WriteString("You are part of a team communicating through pairwise conversation threads.\n")
-	sb.WriteString("Each conversation between two participants (e.g., you and @dev, or you and @customer)\n")
-	sb.WriteString("has its own thread. You only see messages from YOUR current conversation, plus global\n")
-	sb.WriteString("system announcements. You do NOT see other agents' private conversations.\n\n")
+	sb.WriteString("You are part of a team. Each agent has their own personal memory.\n")
+	sb.WriteString("When you work by yourself (thinking, using tools, writing code), that work is\n")
+	sb.WriteString("only in YOUR memory. When you hand off to another agent or receive a message\n")
+	sb.WriteString("from them, that exchange is stored in BOTH agents' memories.\n")
+	sb.WriteString("You do NOT see other agents' private work — only their messages to you.\n\n")
 
 	talksTo := fleetCfg.GetTalksTo(agentKey)
 	if len(talksTo) > 0 {
@@ -275,6 +276,7 @@ func buildEnvironmentPromptSection(sb *strings.Builder, plan *FleetPlan, taskSlu
 	sb.WriteString("\n")
 
 	// Artifact destinations
+	hasGitArtifacts := false
 	if len(plan.Artifacts) > 0 {
 		sb.WriteString("**Artifact Destinations:**\n")
 		for name, artifact := range plan.Artifacts {
@@ -285,6 +287,7 @@ func buildEnvironmentPromptSection(sb *strings.Builder, plan *FleetPlan, taskSlu
 					sb.WriteString(fmt.Sprintf(": path `%s`", artifact.Path))
 				}
 			case "git_repo":
+				hasGitArtifacts = true
 				if artifact.Repo != "" {
 					sb.WriteString(fmt.Sprintf(": repo `%s`", artifact.Repo))
 				}
@@ -307,6 +310,14 @@ func buildEnvironmentPromptSection(sb *strings.Builder, plan *FleetPlan, taskSlu
 			sb.WriteString(fmt.Sprintf("All artifact destinations are relative to the project workspace at `%s`.\n", workspaceDir))
 		} else {
 			sb.WriteString("If an artifact destination specifies a git repo, work within that repo's directory.\n")
+		}
+
+		// Explicit version control mode indicator so agents can adapt behavior
+		if hasGitArtifacts {
+			sb.WriteString("\n**Version Control:** Git-based workflow. See the **Git Workflow** section below for branching and commit instructions.\n")
+		} else {
+			sb.WriteString("\n**Version Control:** Local-only mode. No git repository, no branching, no commits, no push.\n")
+			sb.WriteString("Just write files directly to the workspace. Do NOT run git commands.\n")
 		}
 	}
 

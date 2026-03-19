@@ -25,11 +25,9 @@ const (
 )
 
 // BuildThreadContext builds the conversation context for an agent activation.
-// It returns only the messages from the agent's pairwise thread (identified
-// by threadKey), plus system/global messages (ThreadKey == "").
-//
-// When threadKey is empty, all messages are included (backward compatible
-// with old sessions that have no thread assignments).
+// It returns only the messages from the agent's personal memory — messages
+// where the agent appears in MemoryKeys (or derived from the deprecated
+// ThreadKey), plus system/global messages (no memory keys).
 //
 // Key guarantees:
 //   - The last message is ALWAYS included in full (never truncated).
@@ -38,10 +36,10 @@ const (
 //     exceeding the model's context window.
 //   - When over budget, older messages are summarized and recent messages are
 //     progressively truncated — but never the last message.
-func BuildThreadContext(ctx context.Context, channel Channel, agentKey string, threadKey string) (string, error) {
-	thread, err := channel.GetPairThread(ctx, threadKey)
+func BuildThreadContext(ctx context.Context, channel Channel, agentKey string) (string, error) {
+	thread, err := channel.GetAgentMemory(ctx, agentKey)
 	if err != nil {
-		return "", fmt.Errorf("getting thread: %w", err)
+		return "", fmt.Errorf("getting agent memory: %w", err)
 	}
 
 	if len(thread) == 0 {

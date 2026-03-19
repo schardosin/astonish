@@ -1663,84 +1663,157 @@ func TestMakeThreadKey_Symmetric(t *testing.T) {
 	}
 }
 
-func TestGetPairThread_ChatChannel(t *testing.T) {
-	ch := NewChatChannel("test-session")
-	ctx := context.Background()
-
-	// Post messages on different threads
-	msgs := []Message{
-		{Sender: "system", Text: "Session started", ThreadKey: ""},                    // global
-		{Sender: "customer", Text: "Please build X", ThreadKey: "customer+po"},        // customer↔po
-		{Sender: "po", Text: "Got it, delegating", ThreadKey: "customer+po"},          // customer↔po
-		{Sender: "po", Text: "@dev implement X", ThreadKey: "dev+po"},                 // po↔dev
-		{Sender: "dev", Text: "Working on it", ThreadKey: "dev+po"},                   // po↔dev
-		{Sender: "dev", Text: "Done, @po please review", ThreadKey: "dev+po"},         // po↔dev
-		{Sender: "po", Text: "@customer, X is ready", ThreadKey: "customer+po"},       // customer↔po
-		{Sender: "system", Text: "Milestone: implementation complete", ThreadKey: ""}, // global
+func TestResolveMemoryKeys(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  Message
+		want []string
+	}{
+		{
+			name: "new message with MemoryKeys",
+			msg:  Message{MemoryKeys: []string{"po", "dev"}},
+			want: []string{"po", "dev"},
+		},
+		{
+			name: "single agent memory",
+			msg:  Message{MemoryKeys: []string{"dev"}},
+			want: []string{"dev"},
+		},
+		{
+			name: "old message with ThreadKey only",
+			msg:  Message{ThreadKey: "dev+po"},
+			want: []string{"dev", "po"},
+		},
+		{
+			name: "old message with customer ThreadKey",
+			msg:  Message{ThreadKey: "customer+po"},
+			want: []string{"customer", "po"},
+		},
+		{
+			name: "MemoryKeys takes precedence over ThreadKey",
+			msg:  Message{MemoryKeys: []string{"architect"}, ThreadKey: "dev+po"},
+			want: []string{"architect"},
+		},
+		{
+			name: "system message — no keys at all",
+			msg:  Message{Sender: "system", Text: "Session started"},
+			want: nil,
+		},
+		{
+			name: "empty MemoryKeys with empty ThreadKey",
+			msg:  Message{},
+			want: nil,
+		},
 	}
-	for _, msg := range msgs {
-		if err := ch.PostMessage(ctx, msg); err != nil {
-			t.Fatalf("PostMessage: %v", err)
-		}
-	}
-
-	// GetPairThread with empty key → returns all messages
-	all, err := ch.GetPairThread(ctx, "")
-	if err != nil {
-		t.Fatalf("GetPairThread empty: %v", err)
-	}
-	if len(all) != 8 {
-		t.Errorf("GetPairThread('') returned %d messages, want 8", len(all))
-	}
-
-	// GetPairThread for "customer+po" → customer↔po messages + system messages
-	cpo, err := ch.GetPairThread(ctx, "customer+po")
-	if err != nil {
-		t.Fatalf("GetPairThread customer+po: %v", err)
-	}
-	// Should include: system started, customer msg, po reply, po→customer, system milestone = 5
-	if len(cpo) != 5 {
-		t.Errorf("GetPairThread('customer+po') returned %d messages, want 5", len(cpo))
-		for i, m := range cpo {
-			t.Logf("  [%d] sender=%s thread=%s text=%s", i, m.Sender, m.ThreadKey, m.Text[:min(40, len(m.Text))])
-		}
-	}
-
-	// GetPairThread for "dev+po" → dev↔po messages + system messages
-	dpo, err := ch.GetPairThread(ctx, "dev+po")
-	if err != nil {
-		t.Fatalf("GetPairThread dev+po: %v", err)
-	}
-	// Should include: system started, po→dev, dev working, dev done, system milestone = 5
-	if len(dpo) != 5 {
-		t.Errorf("GetPairThread('dev+po') returned %d messages, want 5", len(dpo))
-		for i, m := range dpo {
-			t.Logf("  [%d] sender=%s thread=%s text=%s", i, m.Sender, m.ThreadKey, m.Text[:min(40, len(m.Text))])
-		}
-	}
-
-	// GetPairThread for non-existent thread → only system messages
-	empty, err := ch.GetPairThread(ctx, "architect+qa")
-	if err != nil {
-		t.Fatalf("GetPairThread architect+qa: %v", err)
-	}
-	// Should only include the 2 system messages
-	if len(empty) != 2 {
-		t.Errorf("GetPairThread('architect+qa') returned %d messages, want 2 (system only)", len(empty))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.msg.ResolveMemoryKeys()
+			if tt.want == nil {
+				if got != nil {
+					t.Errorf("ResolveMemoryKeys() = %v, want nil", got)
+				}
+				return
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("ResolveMemoryKeys() = %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("ResolveMemoryKeys()[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
 	}
 }
 
-func TestBuildThreadContext_WithThreadKey(t *testing.T) {
+func TestInAgentMemory(t *testing.T) {
+	tests := []struct {
+		name     string
+		msg      Message
+		agentKey string
+		want     bool
+	}{
+		{
+			name:     "agent in MemoryKeys",
+			msg:      Message{MemoryKeys: []string{"po", "dev"}},
+			agentKey: "dev",
+			want:     true,
+		},
+		{
+			name:     "agent not in MemoryKeys",
+			msg:      Message{MemoryKeys: []string{"po", "dev"}},
+			agentKey: "architect",
+			want:     false,
+		},
+		{
+			name:     "system message visible to all",
+			msg:      Message{Sender: "system", Text: "Session started"},
+			agentKey: "dev",
+			want:     true,
+		},
+		{
+			name:     "no keys at all visible to all",
+			msg:      Message{},
+			agentKey: "qa",
+			want:     true,
+		},
+		{
+			name:     "single agent memory — match",
+			msg:      Message{MemoryKeys: []string{"dev"}},
+			agentKey: "dev",
+			want:     true,
+		},
+		{
+			name:     "single agent memory — no match",
+			msg:      Message{MemoryKeys: []string{"dev"}},
+			agentKey: "po",
+			want:     false,
+		},
+		{
+			name:     "backward compat — agent in ThreadKey",
+			msg:      Message{ThreadKey: "dev+po"},
+			agentKey: "po",
+			want:     true,
+		},
+		{
+			name:     "backward compat — agent not in ThreadKey",
+			msg:      Message{ThreadKey: "dev+po"},
+			agentKey: "architect",
+			want:     false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.msg.InAgentMemory(tt.agentKey)
+			if got != tt.want {
+				t.Errorf("InAgentMemory(%q) = %v, want %v", tt.agentKey, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetAgentMemory_ChatChannel(t *testing.T) {
 	ch := NewChatChannel("test-session")
 	ctx := context.Background()
 
-	// Post a mix of threaded and system messages
+	// Simulate a typical session with per-agent memory keys:
+	// - System messages (no keys) → visible to all
+	// - Customer → po (only po remembers)
+	// - po self-work (only po remembers)
+	// - po → dev handoff (both po and dev remember)
+	// - dev self-work (only dev remembers)
+	// - dev → po handoff (both dev and po remember)
+	// - po → customer (only po remembers)
 	msgs := []Message{
-		{Sender: "system", Text: "Session started", ThreadKey: ""},
-		{Sender: "customer", Text: "Build feature X", ThreadKey: "customer+po"},
-		{Sender: "po", Text: "@dev, implement feature X", ThreadKey: "dev+po"},
-		{Sender: "dev", Text: "I'll read the codebase first", ThreadKey: "dev+po"},
-		{Sender: "dev", Text: "Implementation complete, @po please review", ThreadKey: "dev+po"},
+		{Sender: "system", Text: "Session started"},                                         // global
+		{Sender: "customer", Text: "Please build X", MemoryKeys: []string{"po"}},            // customer→po: po's memory
+		{Sender: "po", Text: "Analyzing requirements", MemoryKeys: []string{"po"}},          // po self-work
+		{Sender: "po", Text: "@dev implement X", MemoryKeys: []string{"po", "dev"}},         // po→dev handoff: shared
+		{Sender: "dev", Text: "Reading codebase", MemoryKeys: []string{"dev"}},              // dev self-work
+		{Sender: "dev", Text: "Working on it", MemoryKeys: []string{"dev"}},                 // dev self-work
+		{Sender: "dev", Text: "Done, @po please review", MemoryKeys: []string{"dev", "po"}}, // dev→po handoff: shared
+		{Sender: "po", Text: "@customer, X is ready", MemoryKeys: []string{"po"}},           // po→customer: po's memory
+		{Sender: "system", Text: "Milestone: implementation complete"},                      // global
 	}
 	for _, msg := range msgs {
 		if err := ch.PostMessage(ctx, msg); err != nil {
@@ -1748,48 +1821,156 @@ func TestBuildThreadContext_WithThreadKey(t *testing.T) {
 		}
 	}
 
-	// Build context for dev on the dev+po thread
-	result, err := BuildThreadContext(ctx, ch, "dev", "dev+po")
+	// Empty agentKey → returns all messages (same as GetThread)
+	all, err := ch.GetAgentMemory(ctx, "")
+	if err != nil {
+		t.Fatalf("GetAgentMemory empty: %v", err)
+	}
+	if len(all) != 9 {
+		t.Errorf("GetAgentMemory('') returned %d messages, want 9", len(all))
+	}
+
+	// po's memory: system(2) + customer→po(1) + po-self(1) + po→dev handoff(1) + dev→po handoff(1) + po→customer(1) = 7
+	poMem, err := ch.GetAgentMemory(ctx, "po")
+	if err != nil {
+		t.Fatalf("GetAgentMemory po: %v", err)
+	}
+	expectedPO := 7
+	if len(poMem) != expectedPO {
+		t.Errorf("GetAgentMemory('po') returned %d messages, want %d", len(poMem), expectedPO)
+		for i, m := range poMem {
+			t.Logf("  [%d] sender=%s keys=%v text=%s", i, m.Sender, m.MemoryKeys, m.Text[:min(40, len(m.Text))])
+		}
+	}
+
+	// dev's memory: system(2) + po→dev handoff(1) + dev-self(2) + dev→po handoff(1) = 6
+	devMem, err := ch.GetAgentMemory(ctx, "dev")
+	if err != nil {
+		t.Fatalf("GetAgentMemory dev: %v", err)
+	}
+	expectedDev := 6
+	if len(devMem) != expectedDev {
+		t.Errorf("GetAgentMemory('dev') returned %d messages, want %d", len(devMem), expectedDev)
+		for i, m := range devMem {
+			t.Logf("  [%d] sender=%s keys=%v text=%s", i, m.Sender, m.MemoryKeys, m.Text[:min(40, len(m.Text))])
+		}
+	}
+
+	// Verify dev does NOT see customer→po message or po self-work
+	for _, m := range devMem {
+		if m.Text == "Please build X" {
+			t.Error("dev should NOT see customer→po message")
+		}
+		if m.Text == "Analyzing requirements" {
+			t.Error("dev should NOT see po's self-work")
+		}
+		if m.Text == "@customer, X is ready" {
+			t.Error("dev should NOT see po→customer message")
+		}
+	}
+
+	// Verify handoff messages appear in both memories
+	foundHandoffInPO := false
+	foundHandoffInDev := false
+	for _, m := range poMem {
+		if m.Text == "@dev implement X" {
+			foundHandoffInPO = true
+		}
+	}
+	for _, m := range devMem {
+		if m.Text == "@dev implement X" {
+			foundHandoffInDev = true
+		}
+	}
+	if !foundHandoffInPO {
+		t.Error("po→dev handoff message should appear in po's memory")
+	}
+	if !foundHandoffInDev {
+		t.Error("po→dev handoff message should appear in dev's memory")
+	}
+
+	// architect has no messages → only system messages
+	archMem, err := ch.GetAgentMemory(ctx, "architect")
+	if err != nil {
+		t.Fatalf("GetAgentMemory architect: %v", err)
+	}
+	if len(archMem) != 2 {
+		t.Errorf("GetAgentMemory('architect') returned %d messages, want 2 (system only)", len(archMem))
+	}
+}
+
+func TestBuildThreadContext_AgentMemory(t *testing.T) {
+	ch := NewChatChannel("test-session")
+	ctx := context.Background()
+
+	// Post messages with per-agent memory keys
+	msgs := []Message{
+		{Sender: "system", Text: "Session started"},
+		{Sender: "customer", Text: "Build feature X", MemoryKeys: []string{"po"}},
+		{Sender: "po", Text: "@dev, implement feature X", MemoryKeys: []string{"po", "dev"}},
+		{Sender: "dev", Text: "I'll read the codebase first", MemoryKeys: []string{"dev"}},
+		{Sender: "dev", Text: "Implementation complete, @po please review", MemoryKeys: []string{"dev", "po"}},
+	}
+	for _, msg := range msgs {
+		if err := ch.PostMessage(ctx, msg); err != nil {
+			t.Fatalf("PostMessage: %v", err)
+		}
+	}
+
+	// Build context for dev — should see system, po→dev handoff, dev self-work, dev→po handoff
+	result, err := BuildThreadContext(ctx, ch, "dev")
 	if err != nil {
 		t.Fatalf("BuildThreadContext: %v", err)
 	}
 
-	// Should include system message, po→dev, and both dev messages
 	if !strings.Contains(result, "Session started") {
-		t.Error("Expected system message in thread context")
+		t.Error("Expected system message in dev's memory context")
 	}
 	if !strings.Contains(result, "implement feature X") {
-		t.Error("Expected po→dev message in thread context")
+		t.Error("Expected po→dev handoff message in dev's memory context")
 	}
 	if !strings.Contains(result, "Implementation complete") {
-		t.Error("Expected dev's final message in thread context")
+		t.Error("Expected dev's final message in dev's memory context")
 	}
 
-	// Should NOT include customer→po message (different thread)
+	// Should NOT include customer→po message (not in dev's memory)
 	if strings.Contains(result, "Build feature X") {
-		t.Error("Customer→po message should NOT appear in dev+po thread")
+		t.Error("Customer→po message should NOT appear in dev's memory context")
 	}
 
-	// Build context with empty thread key → includes everything
-	allResult, err := BuildThreadContext(ctx, ch, "dev", "")
+	// Build context for po — should see everything except dev's self-work
+	poResult, err := BuildThreadContext(ctx, ch, "po")
 	if err != nil {
-		t.Fatalf("BuildThreadContext empty: %v", err)
+		t.Fatalf("BuildThreadContext po: %v", err)
 	}
-	if !strings.Contains(allResult, "Build feature X") {
-		t.Error("Empty thread key should include all messages")
+	if !strings.Contains(poResult, "Build feature X") {
+		t.Error("Expected customer→po message in po's memory context")
+	}
+	if !strings.Contains(poResult, "implement feature X") {
+		t.Error("Expected po→dev handoff in po's memory context")
+	}
+	if !strings.Contains(poResult, "Implementation complete") {
+		t.Error("Expected dev→po handoff in po's memory context")
+	}
+
+	// po should NOT see dev's self-work
+	if strings.Contains(poResult, "I'll read the codebase first") {
+		t.Error("Dev's self-work should NOT appear in po's memory context")
 	}
 }
 
 func TestBuildThreadContext_BackwardCompatible(t *testing.T) {
-	// Old messages with no ThreadKey (empty string) should all be visible
-	// regardless of the requested threadKey.
+	// Old messages with ThreadKey (pairwise model) should be correctly resolved
+	// to per-agent memory via ResolveMemoryKeys.
 	ch := NewChatChannel("test-session")
 	ctx := context.Background()
 
 	msgs := []Message{
-		{Sender: "customer", Text: "Old message 1", ThreadKey: ""},
-		{Sender: "po", Text: "Old message 2", ThreadKey: ""},
-		{Sender: "dev", Text: "Old message 3", ThreadKey: ""},
+		{Sender: "system", Text: "Session started"},
+		{Sender: "customer", Text: "Old message from customer", ThreadKey: "customer+po"},
+		{Sender: "po", Text: "Old po response", ThreadKey: "customer+po"},
+		{Sender: "po", Text: "Old delegation to dev", ThreadKey: "dev+po"},
+		{Sender: "dev", Text: "Old dev work", ThreadKey: "dev+po"},
 	}
 	for _, msg := range msgs {
 		if err := ch.PostMessage(ctx, msg); err != nil {
@@ -1797,18 +1978,76 @@ func TestBuildThreadContext_BackwardCompatible(t *testing.T) {
 		}
 	}
 
-	// Even with a specific thread key, old messages (ThreadKey="") are visible
-	result, err := BuildThreadContext(ctx, ch, "dev", "dev+po")
+	// dev's memory via backward compat: system + dev+po thread messages
+	devResult, err := BuildThreadContext(ctx, ch, "dev")
 	if err != nil {
-		t.Fatalf("BuildThreadContext: %v", err)
+		t.Fatalf("BuildThreadContext dev: %v", err)
 	}
-	if !strings.Contains(result, "Old message 1") {
-		t.Error("Old message 1 (empty ThreadKey) should be visible in any thread")
+	if !strings.Contains(devResult, "Session started") {
+		t.Error("System message should be in dev's memory")
 	}
-	if !strings.Contains(result, "Old message 2") {
-		t.Error("Old message 2 (empty ThreadKey) should be visible in any thread")
+	if !strings.Contains(devResult, "Old delegation to dev") {
+		t.Error("po→dev message (ThreadKey=dev+po) should be in dev's memory")
 	}
-	if !strings.Contains(result, "Old message 3") {
-		t.Error("Old message 3 (empty ThreadKey) should be visible in any thread")
+	if !strings.Contains(devResult, "Old dev work") {
+		t.Error("dev's own message (ThreadKey=dev+po) should be in dev's memory")
+	}
+
+	// dev should NOT see customer+po thread messages
+	if strings.Contains(devResult, "Old message from customer") {
+		t.Error("customer→po message should NOT be in dev's memory")
+	}
+	if strings.Contains(devResult, "Old po response") {
+		t.Error("po→customer response should NOT be in dev's memory")
+	}
+
+	// po sees everything (in both customer+po and dev+po threads)
+	poResult, err := BuildThreadContext(ctx, ch, "po")
+	if err != nil {
+		t.Fatalf("BuildThreadContext po: %v", err)
+	}
+	if !strings.Contains(poResult, "Old message from customer") {
+		t.Error("customer→po message should be in po's memory (backward compat)")
+	}
+	if !strings.Contains(poResult, "Old delegation to dev") {
+		t.Error("po→dev message should be in po's memory (backward compat)")
+	}
+	if !strings.Contains(poResult, "Old dev work") {
+		t.Error("dev's message on dev+po thread should be in po's memory (backward compat)")
+	}
+}
+
+func TestBuildThreadContext_NoKeysMessages(t *testing.T) {
+	// Messages with no MemoryKeys and no ThreadKey (truly old or system messages)
+	// should be visible to ALL agents.
+	ch := NewChatChannel("test-session")
+	ctx := context.Background()
+
+	msgs := []Message{
+		{Sender: "customer", Text: "Very old message 1"},
+		{Sender: "po", Text: "Very old message 2"},
+		{Sender: "dev", Text: "Very old message 3"},
+	}
+	for _, msg := range msgs {
+		if err := ch.PostMessage(ctx, msg); err != nil {
+			t.Fatalf("PostMessage: %v", err)
+		}
+	}
+
+	// All agents should see all messages (no memory scoping)
+	for _, agent := range []string{"dev", "po", "architect", "qa"} {
+		result, err := BuildThreadContext(ctx, ch, agent)
+		if err != nil {
+			t.Fatalf("BuildThreadContext %s: %v", agent, err)
+		}
+		if !strings.Contains(result, "Very old message 1") {
+			t.Errorf("Agent %s: message 1 (no keys) should be visible", agent)
+		}
+		if !strings.Contains(result, "Very old message 2") {
+			t.Errorf("Agent %s: message 2 (no keys) should be visible", agent)
+		}
+		if !strings.Contains(result, "Very old message 3") {
+			t.Errorf("Agent %s: message 3 (no keys) should be visible", agent)
+		}
 	}
 }

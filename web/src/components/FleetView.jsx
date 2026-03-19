@@ -873,15 +873,15 @@ function SessionTrace({ sessionId, onRefresh, onNavigate }) {
     }
   }, [sessionId])
 
-  const loadThreadMessages = useCallback(async (threadKey) => {
+  const loadThreadMessages = useCallback(async (agentKey) => {
     setThreadMsgsLoading(true)
     try {
-      const opts = threadKey !== '_system' ? { thread: threadKey } : {}
+      const opts = agentKey !== '_system' ? { agent: agentKey } : {}
       const data = await fetchFleetMessages(sessionId, opts)
       let msgs = data.messages || []
-      // For the _system thread, only show messages with empty thread_key
-      if (threadKey === '_system') {
-        msgs = msgs.filter(m => !m.thread_key)
+      // For the _system view, only show messages with no memory_keys
+      if (agentKey === '_system') {
+        msgs = msgs.filter(m => !m.memory_keys || m.memory_keys.length === 0)
       }
       setThreadMessages(msgs)
     } catch {
@@ -1003,16 +1003,15 @@ function SessionTrace({ sessionId, onRefresh, onNavigate }) {
   }
 
   // Format thread key for display: "dev+po" -> "dev <-> po", "" -> "system"
-  const formatThreadLabel = (threadKey) => {
-    if (!threadKey) return 'system'
-    const parts = threadKey.split('+')
-    if (parts.length === 2) return `${parts[0]} \u2194 ${parts[1]}`
-    return threadKey
+  const formatThreadLabel = (agentKey) => {
+    if (!agentKey) return 'system'
+    return `@${agentKey}`
   }
 
-  // Get the non-system threads for the tab bar
-  const conversationThreads = threads.filter(t => t.thread_key !== '')
-  const systemThread = threads.find(t => t.thread_key === '')
+  // Get the non-system agent memory tabs for the tab bar.
+  // The /threads endpoint now returns agent_key instead of thread_key.
+  const conversationThreads = threads.filter(t => (t.agent_key || t.thread_key) && (t.agent_key || t.thread_key) !== '_system')
+  const systemThread = threads.find(t => (t.agent_key || t.thread_key) === '_system' || (!t.agent_key && !t.thread_key))
   const hasThreads = conversationThreads.length > 0
 
   if (isLoading && !trace) {
@@ -1112,22 +1111,22 @@ function SessionTrace({ sessionId, onRefresh, onNavigate }) {
           </button>
 
           {conversationThreads.map(t => {
-            const isSelected = selectedThread === t.thread_key
-            // Pick color from the first non-customer, non-system participant
-            const colorAgent = t.participants?.find(p => p !== 'customer' && p !== 'system') || t.participants?.[0]
-            const color = getAgentColor(colorAgent || 'system')
+            const agentKey = t.agent_key || t.thread_key
+            const isSelected = selectedThread === agentKey
+            // Use the agent's own color for their memory tab
+            const color = getAgentColor(agentKey || 'system')
 
             return (
               <button
-                key={t.thread_key}
-                onClick={() => setSelectedThread(t.thread_key)}
+                key={agentKey}
+                onClick={() => setSelectedThread(agentKey)}
                 className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full transition-colors whitespace-nowrap"
                 style={isSelected
                   ? { background: color.bg, color: color.text, border: `1px solid ${color.border}` }
                   : { background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }
                 }
               >
-                {formatThreadLabel(t.thread_key)}
+                {formatThreadLabel(agentKey)}
                 <span className="text-[10px] opacity-70">{t.message_count}</span>
               </button>
             )

@@ -20,12 +20,13 @@ type Channel interface {
 	// GetThread returns all messages in the current thread, ordered chronologically.
 	GetThread(ctx context.Context) ([]Message, error)
 
-	// GetPairThread returns messages belonging to a specific pairwise conversation
-	// thread (identified by threadKey), plus all system/global messages (ThreadKey == "").
+	// GetAgentMemory returns all messages that belong to the given agent's
+	// memory: messages where the agent appears in MemoryKeys (or derived
+	// from the deprecated ThreadKey), plus system/global messages (no keys).
 	// Messages are returned in chronological order.
 	//
-	// If threadKey is empty, this behaves identically to GetThread (returns everything).
-	GetPairThread(ctx context.Context, threadKey string) ([]Message, error)
+	// If agentKey is empty, this behaves identically to GetThread (returns everything).
+	GetAgentMemory(ctx context.Context, agentKey string) ([]Message, error)
 
 	// Close shuts down the channel and releases resources.
 	Close() error

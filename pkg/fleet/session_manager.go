@@ -176,10 +176,27 @@ func (fs *FleetSession) setState(state SessionState, activeAgent string) {
 
 // Run starts the fleet session message loop.
 // It blocks until the context is cancelled or the session is stopped.
-func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
-	ctx, cancel := context.WithCancel(ctx)
+// InitContext pre-initializes the session context and cancel function.
+// This allows the session to appear as "running" to external callers
+// (e.g., PostHumanMessage) before Run() is called. Run() will reuse
+// this context if it was pre-initialized.
+func (fs *FleetSession) InitContext(ctx context.Context, cancel context.CancelFunc) {
 	fs.ctx = ctx
 	fs.cancel = cancel
+}
+
+func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
+	// If context was pre-initialized via InitContext, reuse it.
+	// Otherwise create a new cancellable context from the provided one.
+	if fs.ctx != nil {
+		ctx = fs.ctx
+	} else {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		fs.ctx = ctx
+		fs.cancel = cancel
+	}
+	cancel := fs.cancel
 	log.Printf("[fleet] Session %s started for fleet %q", fs.ID, fs.FleetKey)
 	defer func() {
 		cancel()

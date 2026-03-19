@@ -121,15 +121,22 @@ func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionRes
 	fleetSession := fleet.NewFleetSession(planKey, fleetCfg, channel, subAgentMgr)
 	fleetSession.Plan = plan
 
-	// Generate project context if configured
+	// Pre-initialize the session context so that the session appears as
+	// "running" immediately (PostHumanMessage checks fs.ctx != nil).
+	// Run() will reuse this context instead of creating its own.
+	sessionCtx, sessionCancel := context.WithCancel(context.Background())
+	fleetSession.InitContext(sessionCtx, sessionCancel)
+
+	// Pre-compute workspace dir (fast) so we can create it before returning.
+	// The actual project context generation (which may run OpenCode) happens
+	// in the background goroutine to avoid blocking the HTTP response.
+	var workspaceDir string
 	if fleetCfg.ProjectContext != nil {
-		workspaceDir := plan.ResolveWorkspaceDir()
+		workspaceDir = plan.ResolveWorkspaceDir()
 		if workspaceDir != "" {
 			if err := os.MkdirAll(workspaceDir, 0755); err != nil {
 				log.Printf("[fleet] Warning: could not create workspace %s: %v", workspaceDir, err)
-			} else {
-				fleetSession.ProjectContext = fleet.GenerateProjectContext(
-					context.Background(), workspaceDir, fleetCfg.ProjectContext)
+				workspaceDir = "" // skip context generation
 			}
 		}
 	}
@@ -144,30 +151,59 @@ func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionRes
 	transcriptCallback := fleetSession.OnMessagePosted
 	existingDoneCallback := fleetSession.OnSessionDone
 
-	// Start in background
+	// Auto-start: set ResumeTarget to the entry point agent so Run()
+	// activates it immediately on the first iteration without needing
+	// a message in the channel. This avoids posting fake customer messages.
+	entryPoint := fleetCfg.GetEntryPoint()
+	if entryPoint != "" {
+		fleetSession.ResumeTarget = entryPoint
+	}
+
+	// Start in background. Post the real initial message (if any) and run
+	// the session loop immediately. Project context generation (which may
+	// run OpenCode for up to 15 minutes) happens in a separate goroutine
+	// and is injected when ready — agents can start working without it.
 	go func() {
 		defer func() {
 			registry.Unregister(fleetSession.ID)
 			log.Printf("[fleet] Session %s removed from registry", fleetSession.ID)
 		}()
-		if err := fleetSession.Run(context.Background()); err != nil {
+
+		// Kick off project context generation in the background.
+		// When it finishes, the ProjectContext field is set and subsequent
+		// agent activations will include it in their prompts.
+		if workspaceDir != "" && fleetCfg.ProjectContext != nil {
+			go func() {
+				pc := fleet.GenerateProjectContext(
+					sessionCtx, workspaceDir, fleetCfg.ProjectContext)
+				if pc != "" {
+					fleetSession.ProjectContext = pc
+					log.Printf("[fleet] Project context ready for session %s (%d bytes)",
+						fleetSession.ID, len(pc))
+				}
+			}()
+		}
+
+		// Post the real initial customer message if the user provided one.
+		// This goes into the channel so the entry point agent sees it in
+		// its thread context when activated via ResumeTarget.
+		if initialMessage != "" {
+			msg := fleet.Message{
+				Sender: "customer",
+				Text:   initialMessage,
+			}
+			if err := channel.PostMessage(context.Background(), msg); err != nil {
+				log.Printf("[fleet] Error posting initial message: %v", err)
+			}
+			if fleetSession.OnMessagePosted != nil {
+				fleetSession.OnMessagePosted(msg)
+			}
+		}
+
+		if err := fleetSession.Run(sessionCtx); err != nil {
 			log.Printf("[fleet] Session %s error: %v", fleetSession.ID, err)
 		}
 	}()
-
-	// Post initial message if provided
-	if initialMessage != "" {
-		msg := fleet.Message{
-			Sender: "customer",
-			Text:   initialMessage,
-		}
-		if err := channel.PostMessage(context.Background(), msg); err != nil {
-			log.Printf("[fleet] Error posting initial message: %v", err)
-		}
-		if fleetSession.OnMessagePosted != nil {
-			fleetSession.OnMessagePosted(msg)
-		}
-	}
 
 	return &FleetSessionResult{
 		Session:   fleetSession,

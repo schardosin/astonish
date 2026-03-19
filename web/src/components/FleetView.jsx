@@ -347,7 +347,14 @@ function PlanDetail({ planKey, onNavigate, onRefresh, theme }) {
       setShowLaunchDialog(false)
       setLaunchMessage('')
       if (onRefresh) onRefresh()
-      onNavigate(buildPath('fleet', { subView: 'session', subKey: result.session_id }))
+      // Chat plans are interactive — open in StudioChat where the user can
+      // type messages. Non-chat plans go to the read-only session trace.
+      const isChat = plan?.channel?.type === 'chat' || !plan?.channel?.type
+      if (isChat) {
+        onNavigate(buildPath('chat', { sessionId: result.session_id }))
+      } else {
+        onNavigate(buildPath('fleet', { subView: 'session', subKey: result.session_id }))
+      }
     } catch (err) {
       alert('Launch failed: ' + err.message)
     } finally {
@@ -825,7 +832,7 @@ function PlanDetail({ planKey, onNavigate, onRefresh, theme }) {
 
 // ─── Session Execution Trace View ───
 
-function SessionTrace({ sessionId, onRefresh }) {
+function SessionTrace({ sessionId, onRefresh, onNavigate }) {
   const [trace, setTrace] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -1066,6 +1073,16 @@ function SessionTrace({ sessionId, onRefresh }) {
               />
               Tools only
             </label>
+          )}
+          {isActive && onNavigate && (
+            <button
+              onClick={() => onNavigate(buildPath('chat', { sessionId }))}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
+              style={{ background: 'rgba(6, 182, 212, 0.15)', color: '#22d3ee' }}
+              title="Open in Chat to send messages"
+            >
+              <ExternalLink size={12} /> Open in Chat
+            </button>
           )}
           {isActive && (
             <button
@@ -1787,6 +1804,7 @@ export default function FleetView({ theme, path, onNavigate, onCreatePlan }) {
             key={selectedItem.key}
             sessionId={selectedItem.key}
             onRefresh={loadData}
+            onNavigate={handleNavigate}
           />
         )
       case 'template':

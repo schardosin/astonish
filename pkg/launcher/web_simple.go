@@ -138,7 +138,7 @@ func (s *chatServer) handleChat(w http.ResponseWriter, r *http.Request) {
 	// Create user message
 	var userMsg *genai.Content
 	if req.Message != "" {
-		userMsg = genai.NewContentFromText(req.Message, genai.RoleUser)
+		userMsg = agent.NewTimestampedUserContent(req.Message)
 	}
 
 	// Set up SSE headers

@@ -411,8 +411,9 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 			continue
 		}
 
-		// Send message to agent
-		userMsg := genai.NewContentFromText(input, genai.RoleUser)
+		// Send message to agent (with absolute timestamp for temporal context;
+		// see agent.NewTimestampedUserContent for cache-stability rationale).
+		userMsg := agent.NewTimestampedUserContent(input)
 
 		// Wait for background indexing to complete before the first agent call.
 		// This ensures memory_search and flow matching have indexed data available.
@@ -584,7 +585,7 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				fmt.Println(ui.RenderStatusBadge("Command rejected", false))
 			}
 			// Feed approval response back
-			userMsg = genai.NewContentFromText(selection, genai.RoleUser)
+			userMsg = agent.NewTimestampedUserContent(selection)
 
 			// Re-run with approval response
 			startSpinner("Executing...")

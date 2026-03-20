@@ -12,7 +12,6 @@ import (
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
-	"google.golang.org/genai"
 )
 
 // RunHeadlessFunc is a function type for running a flow headlessly.
@@ -153,8 +152,9 @@ CRITICAL RULES:
 		return "", fmt.Errorf("failed to create runner: %w", err)
 	}
 
-	// Send instructions as user message
-	userContent := genai.NewContentFromText(job.Payload.Instructions, genai.RoleUser)
+	// Send instructions as user message (with absolute timestamp for temporal
+	// context; see agent.NewTimestampedUserContent for cache-stability rationale).
+	userContent := agent.NewTimestampedUserContent(job.Payload.Instructions)
 	var responseText strings.Builder
 
 	for event, err := range r.Run(ctx, userID, sess.ID(), userContent, adkagent.RunConfig{}) {

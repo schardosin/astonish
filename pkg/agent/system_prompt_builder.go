@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
-	//"time"
 
 	"google.golang.org/adk/tool"
 )
@@ -543,9 +542,9 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("\n")
 	}
 
-	// 8. Current date — the LAST item in the system prompt so that everything
-	// above is a stable prefix for provider KV cache reuse across turns.
-	//sb.WriteString(fmt.Sprintf("\n- Date: %s\n", time.Now().Format("2006-01-02 15:04 MST")))
+	// NOTE: Date/time is NOT included here. It is prepended to each user
+	// message via NewTimestampedUserContent(), keeping the system prompt
+	// 100% static for optimal provider KV-cache reuse across turns.
 
 	return sb.String()
 }

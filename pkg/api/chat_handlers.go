@@ -338,10 +338,11 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		defer func() { chatAgent.SystemPrompt.SessionContext = "" }()
 	}
 
-	// Prepare user message
+	// Prepare user message (with absolute timestamp for temporal context;
+	// see agent.NewTimestampedUserContent for cache-stability rationale).
 	var userMsg *genai.Content
 	if msg != "" {
-		userMsg = genai.NewContentFromText(msg, genai.RoleUser)
+		userMsg = agent.NewTimestampedUserContent(msg)
 	}
 
 	// Mutex for safe concurrent SSE writes

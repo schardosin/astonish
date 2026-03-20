@@ -302,7 +302,7 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 		if waitingForInput || isInputNode {
 			if cfg.Parameters != nil {
 				if val, ok := cfg.Parameters[currentNodeName]; ok {
-					userMsg = genai.NewContentFromText(val, genai.RoleUser)
+					userMsg = agent.NewTimestampedUserContent(val)
 					continue
 				}
 			}
@@ -312,7 +312,7 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 
 		// Handle approval — always approve
 		if waitingForApproval {
-			userMsg = genai.NewContentFromText("Yes", genai.RoleUser)
+			userMsg = agent.NewTimestampedUserContent("Yes")
 			continue
 		}
 

@@ -15,7 +15,6 @@ import (
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
-	"google.golang.org/genai"
 )
 
 // ChannelManager owns the lifecycle of all registered channels and routes
@@ -372,8 +371,9 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 		return fmt.Errorf("failed to create runner: %w", err)
 	}
 
-	// Run the agent
-	userContent := genai.NewContentFromText(msg.Text, genai.RoleUser)
+	// Run the agent (with absolute timestamp for temporal context;
+	// see agent.NewTimestampedUserContent for cache-stability rationale).
+	userContent := agent.NewTimestampedUserContent(msg.Text)
 
 	// Start typing indicator — shows "typing..." in the chat while the
 	// agent is processing. Telegram typing expires after ~5 seconds, so

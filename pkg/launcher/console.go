@@ -757,9 +757,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 						fmt.Println(ui.RenderStatusBadge("Auto Approved", true))
 
 						// Simulate "Yes" selection
-						userMsg = genai.NewContentFromText("Yes", genai.RoleUser)
-
-						// Reset flags
+						userMsg = agent.NewTimestampedUserContent("Yes") // Reset flags
 						waitingForApproval = false
 						isAutoApproved = false
 
@@ -1101,7 +1099,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					fmt.Printf("✓ Using provided value for '%s': %s\n", currentNodeName, val)
 
 					// Create user message with provided value
-					userMsg = genai.NewContentFromText(val, genai.RoleUser)
+					userMsg = agent.NewTimestampedUserContent(val)
 
 					// Reset state and continue loop
 					waitingForInput = false
@@ -1122,7 +1120,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					fmt.Println(ui.RenderStatusBadge("Auto Approved", true))
 
 					// Simulate "Yes" selection
-					userMsg = genai.NewContentFromText("Yes", genai.RoleUser)
+					userMsg = agent.NewTimestampedUserContent("Yes")
 
 					// Reset state
 					waitingForApproval = false
@@ -1152,7 +1150,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				} else {
 					fmt.Println(ui.RenderStatusBadge("Command rejected", false))
 				}
-				userMsg = genai.NewContentFromText(selection, genai.RoleUser)
+				userMsg = agent.NewTimestampedUserContent(selection)
 				continue
 
 				// Reset state
@@ -1174,7 +1172,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					// Strip trailing colon from title for cleaner display
 					displayTitle := strings.TrimSuffix(title, ":")
 					fmt.Println(ui.RenderStatusBadge(fmt.Sprintf("%s: %s", displayTitle, selection), true))
-					userMsg = genai.NewContentFromText(selection, genai.RoleUser)
+					userMsg = agent.NewTimestampedUserContent(selection)
 					continue
 				} else {
 					// Free text input
@@ -1185,7 +1183,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 					// Strip trailing colon from title for cleaner display
 					displayTitle := strings.TrimSuffix(title, ":")
 					fmt.Println(ui.RenderStatusBadge(fmt.Sprintf("%s: %s", displayTitle, input), true))
-					userMsg = genai.NewContentFromText(input, genai.RoleUser)
+					userMsg = agent.NewTimestampedUserContent(input)
 					continue
 				}
 

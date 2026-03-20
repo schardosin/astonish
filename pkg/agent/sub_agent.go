@@ -13,7 +13,6 @@ import (
 	"google.golang.org/adk/runner"
 	adksession "google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
-	"google.golang.org/genai"
 
 	"github.com/google/uuid"
 	"github.com/schardosin/astonish/pkg/credentials"
@@ -285,8 +284,9 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		}
 	}
 
-	// Build user message from task description
-	userMsg := genai.NewContentFromText(task.Description, genai.RoleUser)
+	// Build user message from task description (with absolute timestamp for
+	// temporal context; see NewTimestampedUserContent for cache-stability rationale).
+	userMsg := NewTimestampedUserContent(task.Description)
 
 	// Execute the agent and collect results
 	trace := NewExecutionTrace(task.Description)

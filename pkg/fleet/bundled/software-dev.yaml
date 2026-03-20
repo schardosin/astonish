@@ -165,18 +165,25 @@ plan_wizard:
     - **git_repo**: repository in owner/repo format
     - **local**: filesystem path to an existing project
 
+    **Important:** Each fleet session gets its own isolated workspace created
+    via `git clone --local` from a permanent base clone. The base clone lives at
+    `~/astonish_projects/<repo-name>/` and is shared across all sessions (git
+    hardlinks the object store making per-session clones near-instant). The
+    AGENTS.md you generate here is also read from the base, so sessions start
+    immediately without needing to regenerate it.
+
     Once you know the repository or path, execute these sub-steps:
 
-    **4a. Set up the workspace directory.**
+    **4a. Confirm the project source.**
 
-    For **git_repo**: The default workspace base is `~/astonish_projects/`.
-    For repo `owner/myproject`, the workspace is `~/astonish_projects/myproject`.
-    Tell the user: "I'll set up the project workspace at
-    ~/astonish_projects/<repo-name>. Want a different location?"
+    For **git_repo**: Tell the user:
+    "I'll clone <owner/repo> into ~/astonish_projects/<repo-name>/ as the
+    permanent base. Each session will use `git clone --local` from this base
+    for near-instant workspace creation."
 
-    For **local**: The user's provided path IS the workspace. Use it directly.
-    Tell the user: "I'll use <path> as the project workspace."
-    Do NOT copy, move, or clone the project elsewhere.
+    For **local**: Tell the user:
+    "Each session will automatically create an isolated copy of <path>.
+    Your original directory will not be modified."
 
     **4b. Clone the repository (git_repo only).**
     **SKIP THIS STEP ENTIRELY if the user chose "local".** For local projects,
@@ -184,7 +191,8 @@ plan_wizard:
     run any git commands. Proceed directly to step 4c.
 
     For **git_repo** only:
-    Use `shell_command` to check if the workspace exists and clone if needed:
+    Clone into the permanent base workspace at ~/astonish_projects/<repo-name>/.
+    This is the base that all sessions will clone from via `git clone --local`.
 
     First check: shell_command(command: "ls ~/astonish_projects/<repo-name>/.git 2>/dev/null && echo EXISTS || echo MISSING")
 
@@ -194,21 +202,44 @@ plan_wizard:
     For non-GitHub repos, use `git clone` directly:
     shell_command(command: "git clone https://github.com/<owner>/<repo>.git ~/astonish_projects/<repo-name>")
 
-    **4c. Analyze the project with OpenCode.**
-    Use the `opencode` tool to analyze the codebase and generate AGENTS.md:
+    **4c. Check for existing AGENTS.md and analyze if needed.**
 
-    opencode(task: "Analyze this codebase and generate or update the AGENTS.md file with project structure, build/test/lint commands, code conventions, and key architectural patterns. Keep it concise and focused on what an AI coding agent needs to know.", dir: "~/astonish_projects/<repo-name>")
+    First, check if AGENTS.md already exists in the workspace:
+    shell_command(command: "test -f ~/astonish_projects/<repo-name>/AGENTS.md && echo EXISTS || echo MISSING")
 
-    **4d. Read and present the analysis.**
-    After opencode completes, read the AGENTS.md file:
+    **If EXISTS:** Read it directly — no need to regenerate:
     read_file(path: "~/astonish_projects/<repo-name>/AGENTS.md")
 
-    Present a brief summary to the user. For example:
+    Present a brief summary to the user:
+    "Found an existing AGENTS.md in the base workspace. Here's what it says:
+    [summarize key points: stack, structure, build commands]."
+
+    **If MISSING:** Generate it using the `opencode` tool:
+    opencode(task: "Analyze this codebase and generate or update the AGENTS.md file with project structure, build/test/lint commands, code conventions, and key architectural patterns. Keep it concise and focused on what an AI coding agent needs to know.", dir: "~/astonish_projects/<repo-name>")
+
+    After generation, read and present the result:
+    read_file(path: "~/astonish_projects/<repo-name>/AGENTS.md")
+
+    Present a brief summary. For example:
     "I analyzed the project and found it's a Vue.js + Go application with
     source code in trade-app/ and a Go backend in cmd/. The fleet will work
     with this existing directory structure."
 
-    **Do NOT proceed to step 5 until this analysis is complete.**
+    **4d. Commit and push AGENTS.md (git_repo only, newly generated only).**
+    **SKIP this step if AGENTS.md already existed (was not just generated).**
+    **SKIP this step for local projects (no remote to push to).**
+
+    After generating a new AGENTS.md, ask the user:
+    "I've generated AGENTS.md for the project. Would you like me to commit
+    and push it to the repository so it's available for the whole team?"
+
+    If the user agrees:
+    shell_command(command: "cd ~/astonish_projects/<repo-name> && git add AGENTS.md && git commit -m 'docs: add AGENTS.md with project analysis for fleet agents' && git push origin HEAD")
+
+    If the user declines, that's fine — the file stays local in the base
+    workspace and fleet sessions will still use it.
+
+    **Do NOT proceed to step 5 until the analysis is complete.**
 
     ## 5. Artifact destinations
     Based on the project analysis from step 4, configure TWO artifact destinations.
@@ -262,12 +293,14 @@ plan_wizard:
 
     Only modify if the user explicitly requests changes.
 
-    ## 6. Workspace directory (optional)
-    If the workspace base was already decided in step 4a, skip this.
-    Otherwise mention that project files will be stored under
-    `~/astonish_projects/<repo-name>` by default. Ask only if the user
-    wants to change it. Pass a custom path as `workspace_base_dir` when
-    calling save_fleet_plan.
+    ## 6. Workspace and project source (informational)
+    Per-session workspaces are automatic. Inform the user:
+    "The base clone at ~/astonish_projects/<repo-name>/ stores the shared git
+    objects and AGENTS.md. Each session creates an instant workspace from it
+    via `git clone --local` — no network clone needed, no collisions between
+    parallel sessions."
+
+    No user input needed unless they want to change the project source.
 
     ## 7. Agent selection and behavior customizations (optional)
     If the user already requested agent changes during the overview step (e.g.,
@@ -288,7 +321,7 @@ plan_wizard:
        - channel_type, channel_config, channel_schedule
        - artifacts: BOTH "code" and "docs" entries
        - credentials
-       - workspace_base_dir (if the user chose a custom one in step 4a/6)
+       - project_source: { type: "git_repo", repo: "<owner/repo>" } or { type: "local", path: "<path>" }
        - validation_passed: true
        - include_agents (only if the user requested specific agents)
     3. If validation fails, show what went wrong and help fix it before retrying.

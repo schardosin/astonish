@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"path/filepath"
 	"regexp"
@@ -17,6 +18,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/schardosin/astonish/pkg/fleet"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
@@ -740,6 +742,16 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 	if fs := registry.Get(sessionID); fs != nil {
 		fs.Stop()
 		registry.Unregister(sessionID)
+	}
+
+	// Clean up per-session workspace directory if one was recorded.
+	// Read metadata before deleting the session (deletion removes metadata).
+	if fileStore := getFleetFileStore(); fileStore != nil {
+		if meta, metaErr := fileStore.GetSessionMeta(sessionID); metaErr == nil && meta.WorkspaceDir != "" {
+			if cleanErr := fleet.CleanupSessionWorkspace(meta.WorkspaceDir); cleanErr != nil {
+				log.Printf("[fleet] Warning: could not clean up workspace %s: %v", meta.WorkspaceDir, cleanErr)
+			}
+		}
 	}
 
 	sessionService := cm.components.SessionService

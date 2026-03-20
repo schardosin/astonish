@@ -23,11 +23,12 @@ type SessionMeta struct {
 	UpdatedAt    time.Time `json:"updatedAt"`
 	Title        string    `json:"title,omitempty"`
 	MessageCount int       `json:"messageCount"`
-	ParentID     string    `json:"parentId,omitempty"`    // Non-empty for sub-agent sessions
-	FleetKey     string    `json:"fleetKey,omitempty"`    // Non-empty for fleet sessions
-	FleetName    string    `json:"fleetName,omitempty"`   // Human-readable fleet name
-	IssueNumber  int       `json:"issueNumber,omitempty"` // GitHub issue number (if triggered by issue)
-	Repo         string    `json:"repo,omitempty"`        // GitHub repo "owner/repo" (if triggered by issue)
+	ParentID     string    `json:"parentId,omitempty"`     // Non-empty for sub-agent sessions
+	FleetKey     string    `json:"fleetKey,omitempty"`     // Non-empty for fleet sessions
+	FleetName    string    `json:"fleetName,omitempty"`    // Human-readable fleet name
+	IssueNumber  int       `json:"issueNumber,omitempty"`  // GitHub issue number (if triggered by issue)
+	Repo         string    `json:"repo,omitempty"`         // GitHub repo "owner/repo" (if triggered by issue)
+	WorkspaceDir string    `json:"workspaceDir,omitempty"` // Per-session workspace directory (for cleanup on delete)
 }
 
 // IndexData is the top-level structure of the index file.

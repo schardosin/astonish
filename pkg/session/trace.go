@@ -156,6 +156,20 @@ func CollectTraceEntries(events []*adksession.Event, sessionLabel string, opts T
 // to TraceEntry objects. Recurses into grandchildren.
 // Returns all collected entries, total tool calls, and total errors.
 func CollectChildSessionEntries(sessDir, parentID string, index *SessionIndex, opts TraceOpts) ([]TraceEntry, int, int) {
+	return collectChildSessions(sessDir, parentID, index, opts, nil)
+}
+
+// CollectChildSessionEntriesFiltered is like CollectChildSessionEntries but
+// only includes child sessions whose title passes the provided filter function.
+// Grandchildren of matching sessions are always included (the filter only
+// applies to direct children of the parent).
+func CollectChildSessionEntriesFiltered(sessDir, parentID string, index *SessionIndex, opts TraceOpts, titleFilter func(string) bool) ([]TraceEntry, int, int) {
+	return collectChildSessions(sessDir, parentID, index, opts, titleFilter)
+}
+
+// collectChildSessions is the shared implementation for collecting child
+// session trace entries with an optional title filter.
+func collectChildSessions(sessDir, parentID string, index *SessionIndex, opts TraceOpts, titleFilter func(string) bool) ([]TraceEntry, int, int) {
 	children, err := index.ListChildren(parentID)
 	if err != nil || len(children) == 0 {
 		return nil, 0, 0
@@ -179,6 +193,11 @@ func CollectChildSessionEntries(sessDir, parentID string, index *SessionIndex, o
 			if len(label) > 12 {
 				label = label[:12]
 			}
+		}
+
+		// Apply title filter if provided (skip non-matching children)
+		if titleFilter != nil && !titleFilter(label) {
+			continue
 		}
 
 		transcriptPath := fmt.Sprintf("%s/%s/%s/%s.jsonl", sessDir, child.AppName, child.UserID, child.ID)

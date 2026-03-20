@@ -873,23 +873,42 @@ function SessionTrace({ sessionId, onRefresh, onNavigate }) {
     }
   }, [sessionId])
 
+  // Thread/agent trace state: when an agent tab is selected, we load
+  // the trace filtered to that agent (shows tool calls + text).
+  // The _system tab still uses fleet messages.
+  const [agentTrace, setAgentTrace] = useState(null)
+  const [agentTraceLoading, setAgentTraceLoading] = useState(false)
+  const [expandedAgentEntries, setExpandedAgentEntries] = useState(new Set())
+
   const loadThreadMessages = useCallback(async (agentKey) => {
-    setThreadMsgsLoading(true)
-    try {
-      const opts = agentKey !== '_system' ? { agent: agentKey } : {}
-      const data = await fetchFleetMessages(sessionId, opts)
-      let msgs = data.messages || []
-      // For the _system view, only show messages with no memory_keys
-      if (agentKey === '_system') {
+    if (agentKey === '_system') {
+      // System tab: use fleet messages (system messages don't have trace events)
+      setThreadMsgsLoading(true)
+      setAgentTrace(null)
+      try {
+        const data = await fetchFleetMessages(sessionId, {})
+        let msgs = data.messages || []
         msgs = msgs.filter(m => !m.memory_keys || m.memory_keys.length === 0)
+        setThreadMessages(msgs)
+      } catch {
+        setThreadMessages([])
+      } finally {
+        setThreadMsgsLoading(false)
       }
-      setThreadMessages(msgs)
-    } catch {
+    } else {
+      // Agent tab: use trace filtered by agent (includes tool calls)
+      setAgentTraceLoading(true)
       setThreadMessages([])
-    } finally {
-      setThreadMsgsLoading(false)
+      try {
+        const data = await fetchFleetTrace(sessionId, { agent: agentKey, toolsOnly })
+        setAgentTrace(data)
+      } catch {
+        setAgentTrace(null)
+      } finally {
+        setAgentTraceLoading(false)
+      }
     }
-  }, [sessionId])
+  }, [sessionId, toolsOnly])
 
   // Check if session is active and connect to live stream
   useEffect(() => {
@@ -960,7 +979,11 @@ function SessionTrace({ sessionId, onRefresh, onNavigate }) {
   // Auto-scroll when new trace events arrive (only if already near bottom)
   useEffect(() => {
     const el = scrollRef.current
-    const eventCount = selectedThread !== null ? threadMessages.length : (trace?.events?.length || 0)
+    const eventCount = selectedThread === null
+      ? (trace?.events?.length || 0)
+      : selectedThread === '_system'
+        ? threadMessages.length
+        : (agentTrace?.events?.length || 0)
     if (el && eventCount > prevEventCountRef.current) {
       const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100
       if (isNearBottom) {
@@ -968,7 +991,7 @@ function SessionTrace({ sessionId, onRefresh, onNavigate }) {
       }
     }
     prevEventCountRef.current = eventCount
-  }, [trace, threadMessages, selectedThread])
+  }, [trace, threadMessages, agentTrace, selectedThread])
 
   const handleStop = async () => {
     if (isStopping) return
@@ -995,6 +1018,15 @@ function SessionTrace({ sessionId, onRefresh, onNavigate }) {
 
   const toggleMsg = (index) => {
     setExpandedMsgs(prev => {
+      const next = new Set(prev)
+      if (next.has(index)) next.delete(index)
+      else next.add(index)
+      return next
+    })
+  }
+
+  const toggleAgentEntry = (index) => {
+    setExpandedAgentEntries(prev => {
       const next = new Set(prev)
       if (next.has(index)) next.delete(index)
       else next.add(index)
@@ -1062,7 +1094,7 @@ function SessionTrace({ sessionId, onRefresh, onNavigate }) {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          {selectedThread === null && (
+          {(selectedThread === null || (selectedThread !== null && selectedThread !== '_system')) && (
             <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: 'var(--text-secondary)' }}>
               <input
                 type="checkbox"
@@ -1148,10 +1180,26 @@ function SessionTrace({ sessionId, onRefresh, onNavigate }) {
         </div>
       )}
 
-      {/* Content area: raw trace or thread messages */}
+      {/* Content area: raw trace, agent trace, or system messages */}
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-1" ref={scrollRef}>
-        {selectedThread !== null ? (
-          /* Thread-filtered message view */
+        {selectedThread !== null && selectedThread !== '_system' ? (
+          /* Agent trace view (with tool calls) */
+          agentTraceLoading && !agentTrace ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader size={20} className="animate-spin text-cyan-400" />
+            </div>
+          ) : (!agentTrace || (agentTrace.events || []).length === 0) ? (
+            <div className="text-center py-12">
+              <FileText size={32} className="mx-auto mb-2" style={{ color: 'var(--text-muted)' }} />
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No trace events for @{selectedThread}</p>
+            </div>
+          ) : (
+            (agentTrace.events || []).map((entry, i) => (
+              <TraceEntryRow key={i} entry={entry} index={i} expanded={expandedAgentEntries.has(i)} onToggle={toggleAgentEntry} />
+            ))
+          )
+        ) : selectedThread === '_system' ? (
+          /* System messages view */
           threadMsgsLoading && threadMessages.length === 0 ? (
             <div className="flex items-center justify-center py-12">
               <Loader size={20} className="animate-spin text-cyan-400" />
@@ -1159,7 +1207,7 @@ function SessionTrace({ sessionId, onRefresh, onNavigate }) {
           ) : threadMessages.length === 0 ? (
             <div className="text-center py-12">
               <FileText size={32} className="mx-auto mb-2" style={{ color: 'var(--text-muted)' }} />
-              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No messages in this thread</p>
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No system messages</p>
             </div>
           ) : (
             threadMessages.map((msg, i) => (

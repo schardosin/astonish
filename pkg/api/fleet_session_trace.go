@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/session"
@@ -19,6 +20,7 @@ import (
 //
 //	tools_only=true  - only include tool_call and tool_result events
 //	last_n=50        - only include the last N events
+//	agent=dev        - only include events from the specified agent's sub-sessions
 func FleetSessionTraceHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
 
@@ -45,6 +47,7 @@ func FleetSessionTraceHandler(w http.ResponseWriter, r *http.Request) {
 			opts.LastN = n
 		}
 	}
+	agentFilter := r.URL.Query().Get("agent")
 
 	// Read parent session transcript
 	events, err := fileStore.ReadTranscriptEvents(meta.AppName, meta.UserID, sessionID)
@@ -53,16 +56,32 @@ func FleetSessionTraceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Collect parent trace entries
-	entries, toolCalls, toolErrors := session.CollectTraceEntries(events, "", opts)
+	var entries []session.TraceEntry
+	var toolCalls, toolErrors int
 
-	// Collect child session entries (sub-agent traces)
-	sessDir := fileStore.BaseDir()
-	index := fileStore.Index()
-	childEntries, childTC, childTE := session.CollectChildSessionEntries(sessDir, sessionID, index, opts)
-	entries = append(entries, childEntries...)
-	toolCalls += childTC
-	toolErrors += childTE
+	if agentFilter == "" {
+		// No filter: collect parent + all child entries (original behavior)
+		entries, toolCalls, toolErrors = session.CollectTraceEntries(events, "", opts)
+
+		sessDir := fileStore.BaseDir()
+		index := fileStore.Index()
+		childEntries, childTC, childTE := session.CollectChildSessionEntries(sessDir, sessionID, index, opts)
+		entries = append(entries, childEntries...)
+		toolCalls += childTC
+		toolErrors += childTE
+	} else {
+		// Agent filter: only include child sessions whose title ends with
+		// "-<agentKey>" (e.g., "fleet-myplan-dev" matches agent "dev").
+		// Parent events are excluded since they are fleet-level messages
+		// (the agent's actual work lives in the child sessions).
+		sessDir := fileStore.BaseDir()
+		index := fileStore.Index()
+		suffix := "-" + agentFilter
+		entries, toolCalls, toolErrors = session.CollectChildSessionEntriesFiltered(
+			sessDir, sessionID, index, opts, func(title string) bool {
+				return strings.HasSuffix(title, suffix)
+			})
+	}
 
 	// Sort all entries chronologically so parent and child events interleave
 	sort.Slice(entries, func(i, j int) bool {

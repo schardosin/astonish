@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 const validFleetYAML = `name: test-fleet
@@ -556,7 +559,7 @@ func TestBuildAgentPrompt(t *testing.T) {
 		},
 	}
 
-	prompt := BuildAgentPrompt(agentCfg, fleetCfg, "dev", nil, "", "")
+	prompt := BuildAgentPrompt(agentCfg, fleetCfg, "dev", nil, "", "", "")
 
 	if !strings.Contains(prompt, "You are a developer.") {
 		t.Error("expected prompt to contain identity")
@@ -612,7 +615,7 @@ func TestBuildAgentPrompt_NoDelegate(t *testing.T) {
 		},
 	}
 
-	prompt := BuildAgentPrompt(agentCfg, fleetCfg, "qa", nil, "", "")
+	prompt := BuildAgentPrompt(agentCfg, fleetCfg, "qa", nil, "", "", "")
 
 	if !strings.Contains(prompt, "You are a QA engineer.") {
 		t.Error("expected prompt to contain identity")
@@ -901,7 +904,7 @@ func TestBuildAgentPrompt_GitWorkflow(t *testing.T) {
 		},
 	}
 
-	prompt := BuildAgentPrompt(agentCfg, fleetCfg, "dev", nil, "", "issue-6-payoff-chart", plan)
+	prompt := BuildAgentPrompt(agentCfg, fleetCfg, "dev", nil, "", "issue-6-payoff-chart", "", plan)
 
 	// Check git workflow section exists
 	if !strings.Contains(prompt, "## Git Workflow") {
@@ -948,7 +951,7 @@ func TestBuildAgentPrompt_CommunicationMechanism(t *testing.T) {
 		},
 	}
 
-	prompt := BuildAgentPrompt(agentCfg, fleetCfg, "dev", nil, "", "")
+	prompt := BuildAgentPrompt(agentCfg, fleetCfg, "dev", nil, "", "", "")
 
 	// Check improved communication explanation
 	if !strings.Contains(prompt, "Your TEXT OUTPUT is how you communicate") {
@@ -989,7 +992,7 @@ func TestBuildAgentPrompt_DocsPathFromArtifact(t *testing.T) {
 		WorkspaceDir: "/tmp/test-workspace",
 	}
 
-	prompt := BuildAgentPrompt(agentCfg, fleetCfg, "po", nil, "", "issue-5-add-feature", plan)
+	prompt := BuildAgentPrompt(agentCfg, fleetCfg, "po", nil, "", "issue-5-add-feature", "", plan)
 
 	// Should derive docs path from artifact sub_path, not hardcoded "docs"
 	if !strings.Contains(prompt, "/tmp/test-workspace/documentation/issue-5-add-feature/") {
@@ -2049,5 +2052,406 @@ func TestBuildThreadContext_NoKeysMessages(t *testing.T) {
 		if !strings.Contains(result, "Very old message 3") {
 			t.Errorf("Agent %s: message 3 (no keys) should be visible", agent)
 		}
+	}
+}
+
+// --- Per-Session Workspace Tests ---
+
+func TestResolveSessionWorkspaceDir(t *testing.T) {
+	tests := []struct {
+		name       string
+		baseDir    string
+		sessionID  string
+		taskSlug   string
+		wantSuffix string
+	}{
+		{
+			name:       "task slug used as container name",
+			baseDir:    "/home/user/.config/astonish/sessions",
+			sessionID:  "abc12345-6789-0000-1111-222233334444",
+			taskSlug:   "issue-6-payoff-chart",
+			wantSuffix: "/workspaces/issue-6-payoff-chart",
+		},
+		{
+			name:       "session ID fallback (first 8 chars)",
+			baseDir:    "/home/user/.config/astonish/sessions",
+			sessionID:  "abc12345-6789-0000-1111-222233334444",
+			taskSlug:   "",
+			wantSuffix: "/workspaces/abc12345",
+		},
+		{
+			name:       "short session ID (less than 8 chars)",
+			baseDir:    "/tmp/sess",
+			sessionID:  "abc",
+			taskSlug:   "",
+			wantSuffix: "/workspaces/abc",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ResolveSessionWorkspaceDir(tc.baseDir, tc.sessionID, tc.taskSlug)
+			if !strings.HasSuffix(got, tc.wantSuffix) {
+				t.Errorf("got %q, want suffix %q", got, tc.wantSuffix)
+			}
+			if !strings.HasPrefix(got, tc.baseDir) {
+				t.Errorf("got %q, want prefix %q", got, tc.baseDir)
+			}
+		})
+	}
+}
+
+func TestResolveProjectSource(t *testing.T) {
+	t.Run("explicit project source returned as-is", func(t *testing.T) {
+		plan := &FleetPlan{
+			ProjectSource: &ProjectSourceConfig{
+				Type: "git_repo",
+				Repo: "owner/myrepo",
+			},
+			Artifacts: map[string]PlanArtifactConfig{
+				"code": {Type: "git_repo", Repo: "owner/other-repo"},
+			},
+		}
+		src := plan.ResolveProjectSource()
+		if src == nil {
+			t.Fatal("expected non-nil ProjectSource")
+		}
+		if src.Type != "git_repo" || src.Repo != "owner/myrepo" {
+			t.Errorf("expected git_repo/owner/myrepo, got %s/%s", src.Type, src.Repo)
+		}
+	})
+
+	t.Run("backward compat: derive from git_repo artifact", func(t *testing.T) {
+		plan := &FleetPlan{
+			Artifacts: map[string]PlanArtifactConfig{
+				"code": {Type: "git_repo", Repo: "owner/legacy-repo"},
+			},
+		}
+		src := plan.ResolveProjectSource()
+		if src == nil {
+			t.Fatal("expected non-nil ProjectSource from artifact")
+		}
+		if src.Type != "git_repo" || src.Repo != "owner/legacy-repo" {
+			t.Errorf("expected git_repo/owner/legacy-repo, got %s/%s", src.Type, src.Repo)
+		}
+	})
+
+	t.Run("backward compat: derive from local artifact", func(t *testing.T) {
+		plan := &FleetPlan{
+			Artifacts: map[string]PlanArtifactConfig{
+				"code": {Type: "local", Path: "/home/user/myproject"},
+			},
+		}
+		src := plan.ResolveProjectSource()
+		if src == nil {
+			t.Fatal("expected non-nil ProjectSource from local artifact")
+		}
+		if src.Type != "local" || src.Path != "/home/user/myproject" {
+			t.Errorf("expected local//home/user/myproject, got %s/%s", src.Type, src.Path)
+		}
+	})
+
+	t.Run("no artifacts returns nil", func(t *testing.T) {
+		plan := &FleetPlan{}
+		src := plan.ResolveProjectSource()
+		if src != nil {
+			t.Errorf("expected nil ProjectSource, got %+v", src)
+		}
+	})
+}
+
+func TestSetupSessionWorkspace_EmptyDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	wsDir := filepath.Join(tmpDir, "workspace")
+
+	// No source: should create empty directory
+	err := SetupSessionWorkspace(wsDir, nil, "")
+	if err != nil {
+		t.Fatalf("SetupSessionWorkspace with nil source: %v", err)
+	}
+	info, err := os.Stat(wsDir)
+	if err != nil {
+		t.Fatalf("workspace dir not created: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error("workspace is not a directory")
+	}
+}
+
+func TestSetupSessionWorkspace_AlreadyExists(t *testing.T) {
+	tmpDir := t.TempDir()
+	wsDir := filepath.Join(tmpDir, "existing")
+	if err := os.MkdirAll(wsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Write a marker file to verify the directory is NOT re-created
+	marker := filepath.Join(wsDir, "marker.txt")
+	if err := os.WriteFile(marker, []byte("keep"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should return nil and leave the directory as-is
+	err := SetupSessionWorkspace(wsDir, &ProjectSourceConfig{Type: "git_repo", Repo: "owner/repo"}, "")
+	if err != nil {
+		t.Fatalf("SetupSessionWorkspace for existing dir: %v", err)
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil || string(data) != "keep" {
+		t.Error("existing workspace was modified when it should have been left alone")
+	}
+}
+
+func TestSetupSessionWorkspace_CopyLocal(t *testing.T) {
+	// Create a source directory with some files
+	srcDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(srcDir, "hello.txt"), []byte("world"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	subDir := filepath.Join(srcDir, "sub")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "nested.txt"), []byte("deep"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Setup workspace via local copy
+	tmpDir := t.TempDir()
+	wsDir := filepath.Join(tmpDir, "ws-copy")
+	err := SetupSessionWorkspace(wsDir, &ProjectSourceConfig{Type: "local", Path: srcDir}, "")
+	if err != nil {
+		t.Fatalf("SetupSessionWorkspace local copy: %v", err)
+	}
+
+	// Verify files were copied
+	data, err := os.ReadFile(filepath.Join(wsDir, "hello.txt"))
+	if err != nil || string(data) != "world" {
+		t.Error("hello.txt not copied correctly")
+	}
+	data, err = os.ReadFile(filepath.Join(wsDir, "sub", "nested.txt"))
+	if err != nil || string(data) != "deep" {
+		t.Error("sub/nested.txt not copied correctly")
+	}
+}
+
+func TestSetupSessionWorkspace_GitCloneLocal(t *testing.T) {
+	// Create a base git repo with some content
+	baseDir := t.TempDir()
+	cmds := [][]string{
+		{"git", "init", baseDir},
+		{"git", "-C", baseDir, "config", "user.email", "test@test.com"},
+		{"git", "-C", baseDir, "config", "user.name", "Test"},
+	}
+	for _, args := range cmds {
+		cmd := exec.Command(args[0], args[1:]...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("cmd %v: %v\n%s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(baseDir, "README.md"), []byte("# Test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	addCmd := exec.Command("git", "-C", baseDir, "add", ".")
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	commitCmd := exec.Command("git", "-C", baseDir, "commit", "-m", "init")
+	if out, err := commitCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+
+	// Setup session workspace via --local clone from the base
+	tmpDir := t.TempDir()
+	wsDir := filepath.Join(tmpDir, "session-ws")
+	err := SetupSessionWorkspace(wsDir, &ProjectSourceConfig{Type: "git_repo", Repo: "owner/repo"}, baseDir)
+	if err != nil {
+		t.Fatalf("SetupSessionWorkspace with --local: %v", err)
+	}
+
+	// Verify the clone has the file
+	data, err := os.ReadFile(filepath.Join(wsDir, "README.md"))
+	if err != nil || string(data) != "# Test" {
+		t.Error("README.md not present in --local clone")
+	}
+
+	// Verify it's a git repo
+	if !isGitRepo(wsDir) {
+		t.Error("session workspace should be a git repo")
+	}
+}
+
+func TestSetupSessionWorkspace_GitCloneLocalFallsBackToRemote(t *testing.T) {
+	// When baseDir doesn't exist, it should attempt remote clone.
+	// We can't test a real remote clone, but we can verify the error mentions
+	// the remote URL (proving it fell through to the remote path).
+	tmpDir := t.TempDir()
+	wsDir := filepath.Join(tmpDir, "session-ws")
+	err := SetupSessionWorkspace(wsDir, &ProjectSourceConfig{
+		Type: "git_repo",
+		Repo: "owner/nonexistent-test-repo-12345",
+	}, "/nonexistent/base/dir")
+
+	// Should fail because the remote repo doesn't exist, but the error should
+	// mention the remote URL (not --local)
+	if err == nil {
+		t.Fatal("expected error when both --local and remote fail")
+	}
+	if !strings.Contains(err.Error(), "git clone") {
+		t.Errorf("expected error to mention git clone, got: %v", err)
+	}
+}
+
+func TestSetupSessionWorkspace_LocalGitSource(t *testing.T) {
+	// Local source that IS a git repo should use --local clone
+	srcDir := t.TempDir()
+	cmds := [][]string{
+		{"git", "init", srcDir},
+		{"git", "-C", srcDir, "config", "user.email", "test@test.com"},
+		{"git", "-C", srcDir, "config", "user.name", "Test"},
+	}
+	for _, args := range cmds {
+		cmd := exec.Command(args[0], args[1:]...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("cmd %v: %v\n%s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "app.go"), []byte("package main"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	addCmd := exec.Command("git", "-C", srcDir, "add", ".")
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	commitCmd := exec.Command("git", "-C", srcDir, "commit", "-m", "init")
+	if out, err := commitCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+
+	tmpDir := t.TempDir()
+	wsDir := filepath.Join(tmpDir, "ws-local-git")
+	err := SetupSessionWorkspace(wsDir, &ProjectSourceConfig{Type: "local", Path: srcDir}, "")
+	if err != nil {
+		t.Fatalf("SetupSessionWorkspace local git source: %v", err)
+	}
+
+	// Verify the file was cloned
+	data, err := os.ReadFile(filepath.Join(wsDir, "app.go"))
+	if err != nil || string(data) != "package main" {
+		t.Error("app.go not present in local git clone")
+	}
+
+	// Verify it's a git repo (--local was used)
+	if !isGitRepo(wsDir) {
+		t.Error("session workspace from local git source should be a git repo")
+	}
+}
+
+func TestCleanupSessionWorkspace(t *testing.T) {
+	tmpDir := t.TempDir()
+	wsDir := filepath.Join(tmpDir, "workspace-to-delete")
+	if err := os.MkdirAll(filepath.Join(wsDir, "subdir"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wsDir, "file.txt"), []byte("data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := CleanupSessionWorkspace(wsDir)
+	if err != nil {
+		t.Fatalf("CleanupSessionWorkspace: %v", err)
+	}
+	if _, err := os.Stat(wsDir); !os.IsNotExist(err) {
+		t.Error("workspace directory should have been removed")
+	}
+}
+
+func TestCleanupSessionWorkspace_EmptyPath(t *testing.T) {
+	// Should be a no-op
+	err := CleanupSessionWorkspace("")
+	if err != nil {
+		t.Fatalf("CleanupSessionWorkspace with empty path: %v", err)
+	}
+}
+
+func TestCleanupSessionWorkspace_NonExistent(t *testing.T) {
+	// Should be a no-op
+	err := CleanupSessionWorkspace("/nonexistent/path/that/doesnt/exist")
+	if err != nil {
+		t.Fatalf("CleanupSessionWorkspace with nonexistent path: %v", err)
+	}
+}
+
+func TestBuildAgentPromptWithWorkspaceDir(t *testing.T) {
+	agentCfg := FleetAgentConfig{
+		Name:     "Dev",
+		Identity: "You are a developer.",
+		Tools:    ToolsConfig{All: true},
+	}
+
+	fleetCfg := &FleetConfig{
+		Agents: map[string]FleetAgentConfig{
+			"dev": agentCfg,
+		},
+	}
+
+	plan := &FleetPlan{
+		Channel: PlanChannelConfig{Type: "chat"},
+		Artifacts: map[string]PlanArtifactConfig{
+			"code": {Type: "local", Path: "/old/shared/path"},
+		},
+	}
+
+	// When workspaceDir is provided, it should appear in the prompt
+	// instead of the plan's ResolveWorkspaceDir result
+	prompt := BuildAgentPrompt(agentCfg, fleetCfg, "dev", nil, "", "", "/tmp/per-session-workspace", plan)
+
+	if !strings.Contains(prompt, "/tmp/per-session-workspace") {
+		t.Error("expected prompt to contain the per-session workspace dir")
+	}
+}
+
+func TestProjectSourceConfigYAML(t *testing.T) {
+	plan := &FleetPlan{
+		Name: "Test Plan",
+		Key:  "test",
+		FleetConfig: FleetConfig{
+			Agents: map[string]FleetAgentConfig{
+				"dev": {Name: "Dev", Identity: "You are a dev.", Tools: ToolsConfig{All: true}},
+			},
+		},
+		Channel: PlanChannelConfig{Type: "chat"},
+		ProjectSource: &ProjectSourceConfig{
+			Type: "git_repo",
+			Repo: "owner/myrepo",
+		},
+	}
+
+	// Marshal to YAML
+	data, err := yaml.Marshal(plan)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	yamlStr := string(data)
+
+	if !strings.Contains(yamlStr, "project_source:") {
+		t.Error("YAML should contain project_source key")
+	}
+	if !strings.Contains(yamlStr, "type: git_repo") {
+		t.Error("YAML should contain type: git_repo")
+	}
+	if !strings.Contains(yamlStr, "repo: owner/myrepo") {
+		t.Error("YAML should contain repo: owner/myrepo")
+	}
+
+	// Unmarshal back
+	var parsed FleetPlan
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if parsed.ProjectSource == nil {
+		t.Fatal("parsed ProjectSource is nil")
+	}
+	if parsed.ProjectSource.Type != "git_repo" || parsed.ProjectSource.Repo != "owner/myrepo" {
+		t.Errorf("round-trip failed: got %+v", parsed.ProjectSource)
 	}
 }

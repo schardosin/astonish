@@ -53,17 +53,20 @@ type FleetPlan struct {
 	UpdatedAt time.Time `yaml:"updated_at,omitempty" json:"updated_at,omitempty"`
 
 	// WorkspaceBaseDir overrides the base directory for the project workspace.
-	// When set on the plan, it takes precedence over the template's
-	// workspace_base_dir. The final workspace path is:
-	//   <workspace_base_dir>/<repo-name or plan-key>
-	// If neither the plan nor the template defines this, defaults to
-	// ~/astonish_projects.
+	// Deprecated: Per-session workspaces are now used instead. This field is
+	// kept for backward compatibility with old plans created before per-session
+	// isolation was introduced. New plans should not set this.
 	WorkspaceBaseDir string `yaml:"workspace_base_dir,omitempty" json:"workspace_base_dir,omitempty"`
 
 	// WorkspaceDir is the fully resolved workspace directory path for this plan.
-	// Computed at runtime from WorkspaceBaseDir + artifact/plan-key derivation.
+	// Deprecated: Use FleetSession.WorkspaceDir instead. This is now only used
+	// as a fallback for old plans during the transition to per-session workspaces.
 	// Not persisted.
 	WorkspaceDir string `yaml:"-" json:"-"`
+
+	// ProjectSource describes where the project code lives so each session
+	// can create its own isolated workspace by cloning or copying.
+	ProjectSource *ProjectSourceConfig `yaml:"project_source,omitempty" json:"project_source,omitempty"`
 }
 
 // fleetPlanYAML is the on-disk YAML representation of FleetPlan.
@@ -87,7 +90,8 @@ type fleetPlanYAML struct {
 	Credentials      map[string]string             `yaml:"credentials,omitempty"`
 	Channel          PlanChannelConfig             `yaml:"channel"`
 	Artifacts        map[string]PlanArtifactConfig `yaml:"artifacts,omitempty"`
-	WorkspaceBaseDir string                        `yaml:"workspace_base_dir,omitempty"` // plan-level override
+	ProjectSource    *ProjectSourceConfig          `yaml:"project_source,omitempty"`
+	WorkspaceBaseDir string                        `yaml:"workspace_base_dir,omitempty"` // plan-level override (deprecated)
 	Validation       PlanValidationState           `yaml:"validation,omitempty"`
 	Activation       PlanActivationState           `yaml:"activation,omitempty"`
 	CreatedAt        time.Time                     `yaml:"created_at,omitempty"`
@@ -110,6 +114,7 @@ func (p *FleetPlan) MarshalYAML() (interface{}, error) {
 		Credentials:          p.Credentials,
 		Channel:              p.Channel,
 		Artifacts:            p.Artifacts,
+		ProjectSource:        p.ProjectSource,
 		WorkspaceBaseDir:     p.WorkspaceBaseDir,
 		Validation:           p.Validation,
 		Activation:           p.Activation,
@@ -142,6 +147,7 @@ func (p *FleetPlan) UnmarshalYAML(value *yaml.Node) error {
 	p.Credentials = raw.Credentials
 	p.Channel = raw.Channel
 	p.Artifacts = raw.Artifacts
+	p.ProjectSource = raw.ProjectSource
 	p.WorkspaceBaseDir = raw.WorkspaceBaseDir
 	p.Validation = raw.Validation
 	p.Activation = raw.Activation
@@ -179,6 +185,17 @@ type PlanArtifactConfig struct {
 	SubPath string `yaml:"sub_path,omitempty" json:"sub_path,omitempty"`
 	// AutoPR creates a pull request when the artifact is ready
 	AutoPR bool `yaml:"auto_pr,omitempty" json:"auto_pr,omitempty"`
+}
+
+// ProjectSourceConfig describes where the project code lives so each session
+// can create its own isolated workspace clone or copy.
+type ProjectSourceConfig struct {
+	// Type is the source type: "git_repo" or "local"
+	Type string `yaml:"type" json:"type"`
+	// Repo is the git repository in owner/repo or full URL format (for type "git_repo")
+	Repo string `yaml:"repo,omitempty" json:"repo,omitempty"`
+	// Path is the local filesystem path (for type "local")
+	Path string `yaml:"path,omitempty" json:"path,omitempty"`
 }
 
 // PlanValidationState tracks whether the fleet plan's tool dependencies
@@ -233,6 +250,53 @@ type PlanActivationState struct {
 // IsActivated returns true if the plan is actively monitoring its channel.
 func (p *FleetPlan) IsActivated() bool {
 	return p.Activation.Activated
+}
+
+// ResolveSessionWorkspaceDir returns the per-session workspace directory path.
+// Each session gets its own isolated workspace under the sessions base directory:
+//
+//	<sessionsDir>/workspaces/<containerName>/
+//
+// The container name is the task slug (e.g., "issue-6-payoff-chart") if available,
+// otherwise the first 8 characters of the session ID.
+func ResolveSessionWorkspaceDir(sessionsBaseDir, sessionID, taskSlug string) string {
+	containerName := taskSlug
+	if containerName == "" {
+		// Use first 8 chars of session ID as fallback
+		containerName = sessionID
+		if len(containerName) > 8 {
+			containerName = containerName[:8]
+		}
+	}
+	return filepath.Join(sessionsBaseDir, "workspaces", containerName)
+}
+
+// ResolveProjectSource derives a ProjectSourceConfig from the plan.
+// If the plan has an explicit ProjectSource, that is returned.
+// Otherwise, it infers the source from the artifact configuration
+// (backward compatibility with old plans).
+func (p *FleetPlan) ResolveProjectSource() *ProjectSourceConfig {
+	if p.ProjectSource != nil {
+		return p.ProjectSource
+	}
+
+	// Backward compat: derive from artifact config
+	for _, artifact := range p.Artifacts {
+		if artifact.Type == "git_repo" && artifact.Repo != "" {
+			return &ProjectSourceConfig{
+				Type: "git_repo",
+				Repo: artifact.Repo,
+			}
+		}
+		if artifact.Type == "local" && artifact.Path != "" {
+			return &ProjectSourceConfig{
+				Type: "local",
+				Path: artifact.Path,
+			}
+		}
+	}
+
+	return nil
 }
 
 // ResolveWorkspaceDir derives the workspace directory for this plan.

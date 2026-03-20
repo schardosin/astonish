@@ -128,19 +128,34 @@ func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionRes
 	sessionCtx, sessionCancel := context.WithCancel(context.Background())
 	fleetSession.InitContext(sessionCtx, sessionCancel)
 
-	// Pre-compute workspace dir (fast) so we can create it before returning.
-	// The actual project context generation (which may run OpenCode) happens
-	// in the background goroutine to avoid blocking the HTTP response.
+	// Resolve per-session workspace directory. Each session gets its own
+	// isolated workspace (via git clone --local from the base) under the sessions dir.
+	// The base workspace (~/astonish_projects/<repo-name>/) is where the wizard
+	// cloned the repo and generated AGENTS.md.
+	baseDir := plan.ResolveWorkspaceDir()
 	var workspaceDir string
-	if fleetCfg.ProjectContext != nil {
-		workspaceDir = plan.ResolveWorkspaceDir()
-		if workspaceDir != "" {
-			if err := os.MkdirAll(workspaceDir, 0755); err != nil {
-				log.Printf("[fleet] Warning: could not create workspace %s: %v", workspaceDir, err)
-				workspaceDir = "" // skip context generation
+	if fleetCfg.ProjectContext != nil || plan.ResolveProjectSource() != nil {
+		fileStore := getFleetFileStore()
+		if fileStore != nil {
+			workspaceDir = fleet.ResolveSessionWorkspaceDir(
+				fileStore.BaseDir(), fleetSession.ID, "" /* chat sessions use short session ID */)
+			if err := fleet.SetupSessionWorkspace(workspaceDir, plan.ResolveProjectSource(), baseDir); err != nil {
+				log.Printf("[fleet] Warning: could not set up workspace %s: %v", workspaceDir, err)
+				workspaceDir = "" // fall back to legacy behavior
+			}
+		}
+		// Fall back to the legacy shared workspace if no file store is available
+		if workspaceDir == "" {
+			workspaceDir = baseDir
+			if workspaceDir != "" {
+				if err := os.MkdirAll(workspaceDir, 0755); err != nil {
+					log.Printf("[fleet] Warning: could not create workspace %s: %v", workspaceDir, err)
+					workspaceDir = ""
+				}
 			}
 		}
 	}
+	fleetSession.WorkspaceDir = workspaceDir
 
 	// Register in session registry and persist metadata
 	registry := getFleetSessionRegistry()
@@ -161,28 +176,23 @@ func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionRes
 	}
 
 	// Start in background. Post the real initial message (if any) and run
-	// the session loop immediately. Project context generation (which may
-	// run OpenCode for up to 15 minutes) happens in a separate goroutine
-	// and is injected when ready — agents can start working without it.
+	// the session loop immediately. Project context (AGENTS.md) is loaded
+	// instantly from the base workspace where the wizard generated it.
 	go func() {
 		defer func() {
 			registry.Unregister(fleetSession.ID)
 			log.Printf("[fleet] Session %s removed from registry", fleetSession.ID)
 		}()
 
-		// Kick off project context generation in the background.
-		// When it finishes, the ProjectContext field is set and subsequent
-		// agent activations will include it in their prompts.
-		if workspaceDir != "" && fleetCfg.ProjectContext != nil {
-			go func() {
-				pc := fleet.GenerateProjectContext(
-					sessionCtx, workspaceDir, fleetCfg.ProjectContext)
-				if pc != "" {
-					fleetSession.ProjectContext = pc
-					log.Printf("[fleet] Project context ready for session %s (%d bytes)",
-						fleetSession.ID, len(pc))
-				}
-			}()
+		// Load project context (AGENTS.md) from the base workspace.
+		// The wizard generated it during plan creation; no regeneration needed.
+		if baseDir != "" && fleetCfg.ProjectContext != nil {
+			pc := fleet.LoadProjectContextFile(baseDir, fleetCfg.ProjectContext)
+			if pc != "" {
+				fleetSession.ProjectContext = pc
+				log.Printf("[fleet] Project context loaded from base for session %s (%d bytes)",
+					fleetSession.ID, len(pc))
+			}
 		}
 
 		// Post the real initial customer message if the user provided one.
@@ -340,16 +350,17 @@ func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig
 
 	now := time.Now()
 	meta := session.SessionMeta{
-		ID:          fs.ID,
-		AppName:     studioChatAppName,
-		UserID:      studioChatUserID,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-		Title:       fmt.Sprintf("Fleet: %s", fleetCfg.Name),
-		FleetKey:    fs.FleetKey,
-		FleetName:   fleetCfg.Name,
-		IssueNumber: issueNumber,
-		Repo:        repo,
+		ID:           fs.ID,
+		AppName:      studioChatAppName,
+		UserID:       studioChatUserID,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		Title:        fmt.Sprintf("Fleet: %s", fleetCfg.Name),
+		FleetKey:     fs.FleetKey,
+		FleetName:    fleetCfg.Name,
+		IssueNumber:  issueNumber,
+		Repo:         repo,
+		WorkspaceDir: fs.WorkspaceDir,
 	}
 
 	if err := fileStore.AddSessionMeta(meta); err != nil {

@@ -27,15 +27,38 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 
 	fleetCfg := &plan.FleetConfig
 
-	// Resolve and create workspace directory before the session starts.
-	// This ensures agents have a known project directory and don't need to
-	// search the filesystem.
-	workspaceDir := plan.ResolveWorkspaceDir()
-	if workspaceDir != "" {
-		if err := os.MkdirAll(workspaceDir, 0755); err != nil {
-			log.Printf("[fleet-headless] Warning: could not create workspace %s: %v", workspaceDir, err)
-		} else {
-			log.Printf("[fleet-headless] Workspace directory: %s", workspaceDir)
+	// Resolve the base workspace (~/astonish_projects/<repo-name>/) where
+	// the wizard cloned the repo and generated AGENTS.md.
+	baseDir := plan.ResolveWorkspaceDir()
+
+	// Resolve per-session workspace directory. Each session gets its own
+	// isolated workspace (via git clone --local from the base) under the
+	// sessions dir. For headless sessions with an issue number, the task
+	// slug provides a human-readable container name.
+	var taskSlug string
+	if cfg.IssueNumber > 0 && cfg.IssueTitle != "" {
+		taskSlug = fleet.TaskSlugFromIssue(cfg.IssueNumber, cfg.IssueTitle)
+	}
+
+	var workspaceDir string
+	fileStore := getFleetFileStore()
+	if fileStore != nil {
+		workspaceDir = fleet.ResolveSessionWorkspaceDir(
+			fileStore.BaseDir(), "", taskSlug)
+		if err := fleet.SetupSessionWorkspace(workspaceDir, plan.ResolveProjectSource(), baseDir); err != nil {
+			log.Printf("[fleet-headless] Warning: could not set up workspace %s: %v", workspaceDir, err)
+			workspaceDir = "" // fall back to legacy behavior
+		}
+	}
+	// Fall back to the legacy shared workspace if no file store or setup failed.
+	if workspaceDir == "" {
+		workspaceDir = baseDir
+		if workspaceDir != "" {
+			if err := os.MkdirAll(workspaceDir, 0755); err != nil {
+				log.Printf("[fleet-headless] Warning: could not create workspace %s: %v", workspaceDir, err)
+			} else {
+				log.Printf("[fleet-headless] Workspace directory (legacy): %s", workspaceDir)
+			}
 		}
 	}
 
@@ -59,19 +82,13 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 	fleetSession := fleet.NewFleetSession(plan.Key, fleetCfg, channel, subAgentMgr)
 	fleetSession.Plan = plan
 	fleetSession.Headless = true
+	fleetSession.TaskSlug = taskSlug
+	fleetSession.WorkspaceDir = workspaceDir
 
-	// Derive a task slug from the issue number and title so agents can use
-	// concrete branch names instead of the raw branch_pattern placeholder.
-	if cfg.IssueNumber > 0 && cfg.IssueTitle != "" {
-		fleetSession.TaskSlug = fleet.TaskSlugFromIssue(cfg.IssueNumber, cfg.IssueTitle)
-	}
-
-	// Generate or update project context (e.g., AGENTS.md) before any agent
-	// starts. This runs synchronously so the context is ready when the first
-	// agent is activated. The timeout and strategy are defined by the fleet
-	// template's project_context section.
-	if workspaceDir != "" && fleetCfg.ProjectContext != nil {
-		fleetSession.ProjectContext = fleet.GenerateProjectContext(ctx, workspaceDir, fleetCfg.ProjectContext)
+	// Load project context (AGENTS.md) from the base workspace.
+	// The wizard generated it during plan creation; no regeneration needed.
+	if baseDir != "" && fleetCfg.ProjectContext != nil {
+		fleetSession.ProjectContext = fleet.LoadProjectContextFile(baseDir, fleetCfg.ProjectContext)
 	}
 
 	// Register in the in-memory registry

@@ -88,7 +88,7 @@ func escapeCurlyPlaceholders(s string) string {
 // - Delegate tool instructions (if applicable)
 // - Progress tracker state (milestones from this session)
 // - Project context (e.g., AGENTS.md content from the workspace)
-func BuildAgentPrompt(agentCfg FleetAgentConfig, fleetCfg *FleetConfig, agentKey string, progress *ProgressTracker, projectContext string, taskSlug string, plan ...*FleetPlan) string {
+func BuildAgentPrompt(agentCfg FleetAgentConfig, fleetCfg *FleetConfig, agentKey string, progress *ProgressTracker, projectContext string, taskSlug string, workspaceDir string, plan ...*FleetPlan) string {
 	var sb strings.Builder
 
 	// Agent identity — escape {placeholders} to prevent ADK's
@@ -172,7 +172,7 @@ func BuildAgentPrompt(agentCfg FleetAgentConfig, fleetCfg *FleetConfig, agentKey
 	// ADK's InjectSessionState from treating them as session state keys.
 	if len(plan) > 0 && plan[0] != nil {
 		var envSb strings.Builder
-		buildEnvironmentPromptSection(&envSb, plan[0], taskSlug)
+		buildEnvironmentPromptSection(&envSb, plan[0], taskSlug, workspaceDir)
 		sb.WriteString(escapeCurlyPlaceholders(envSb.String()))
 	}
 
@@ -230,13 +230,17 @@ func buildDelegatePromptSection(sb *strings.Builder, d *DelegateConfig) {
 // from a fleet plan to the agent's prompt. This tells the agent where work
 // items come from, where artifacts should be delivered, and how to use the
 // git branching workflow when artifacts target git repositories.
-func buildEnvironmentPromptSection(sb *strings.Builder, plan *FleetPlan, taskSlug string) {
+func buildEnvironmentPromptSection(sb *strings.Builder, plan *FleetPlan, taskSlug string, workspaceDir string) {
 	sb.WriteString("\n## Environment Configuration\n\n")
 	sb.WriteString("This fleet session was started from a fleet plan with the following environment settings.\n")
 	sb.WriteString("Adjust your behavior accordingly.\n\n")
 
 	// Workspace directory (most important: prevents agents from searching the filesystem)
-	workspaceDir := plan.ResolveWorkspaceDir()
+	// Use the per-session workspaceDir if provided; fall back to the plan's
+	// legacy ResolveWorkspaceDir for backward compatibility with old sessions.
+	if workspaceDir == "" {
+		workspaceDir = plan.ResolveWorkspaceDir()
+	}
 	if workspaceDir != "" {
 		sb.WriteString("**Project Workspace:**\n")
 		sb.WriteString(fmt.Sprintf("- All project files live under: `%s`\n", workspaceDir))

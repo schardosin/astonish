@@ -121,6 +121,11 @@ type FleetSession struct {
 	// the issue number and title (e.g., "issue-6-improve-payoff-chart").
 	// Used to resolve artifact branch_pattern placeholders like "fleet/{task}".
 	TaskSlug string
+
+	// WorkspaceDir is the per-session isolated workspace directory.
+	// Each session gets its own copy of the project (via git clone or cp -a)
+	// so parallel sessions don't collide. Set at session creation before Run().
+	WorkspaceDir string
 }
 
 // NewFleetSession creates a new fleet session.
@@ -524,7 +529,7 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 	}
 
 	// Build system prompt with communication graph awareness
-	systemPrompt := BuildAgentPrompt(agentCfg, fs.FleetConfig, agentKey, fs.Progress, fs.ProjectContext, fs.TaskSlug, fs.Plan)
+	systemPrompt := BuildAgentPrompt(agentCfg, fs.FleetConfig, agentKey, fs.Progress, fs.ProjectContext, fs.TaskSlug, fs.WorkspaceDir, fs.Plan)
 
 	// Build thread context from the agent's personal memory
 	threadContext, err := BuildThreadContext(ctx, fs.Channel, agentKey)

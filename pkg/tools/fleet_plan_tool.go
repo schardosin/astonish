@@ -55,7 +55,12 @@ type SaveFleetPlanArgs struct {
 	// WorkspaceBaseDir overrides the base directory where project files are stored.
 	// The final workspace path will be <workspace_base_dir>/<repo-name or plan-key>.
 	// If omitted, the template's default is used (typically ~/astonish_projects).
-	WorkspaceBaseDir string `json:"workspace_base_dir,omitempty" jsonschema:"Optional override for the base directory where project files are stored. The final workspace will be this path plus the repo name or plan key (e.g., '~/my-projects' → '~/my-projects/juicytrade'). If omitted, the fleet template's default is used."`
+	// Deprecated: Use ProjectSource instead. Per-session workspaces are now created
+	// automatically from the project source. This field is kept for backward compat.
+	WorkspaceBaseDir string `json:"workspace_base_dir,omitempty" jsonschema:"Deprecated. Optional override for the base directory where project files are stored. Prefer project_source instead."`
+	// ProjectSource describes where the project code lives so each session can
+	// create its own isolated workspace by cloning or copying.
+	ProjectSource *SaveFleetPlanProjectSource `json:"project_source,omitempty" jsonschema:"Where the project code lives. Each session clones (git_repo) or copies (local) from this source into an isolated workspace. If omitted, the system infers from artifact config."`
 	// ValidationPassed should be true if validate_fleet_plan was called and passed.
 	ValidationPassed bool `json:"validation_passed,omitempty" jsonschema:"Set to true after validate_fleet_plan passes. Required for non-chat channel plans."`
 }
@@ -68,6 +73,13 @@ type SaveFleetPlanArtifact struct {
 	BranchPattern string `json:"branch_pattern,omitempty" jsonschema:"Git branch naming pattern for 'git_repo' type (e.g., 'fleet/{task}')"`
 	SubPath       string `json:"sub_path,omitempty" jsonschema:"Subdirectory within the repo for 'git_repo' type (e.g., '/src')"`
 	AutoPR        bool   `json:"auto_pr,omitempty" jsonschema:"Automatically create a pull request when work is complete (for 'git_repo' type)"`
+}
+
+// SaveFleetPlanProjectSource describes where the project code lives.
+type SaveFleetPlanProjectSource struct {
+	Type string `json:"type" jsonschema:"Source type: 'git_repo' (clone from GitHub) or 'local' (copy from local path)"`
+	Repo string `json:"repo,omitempty" jsonschema:"GitHub repository as 'owner/repo' for 'git_repo' type"`
+	Path string `json:"path,omitempty" jsonschema:"Filesystem path for 'local' type"`
 }
 
 // SaveFleetPlanResult is the result of the save_fleet_plan tool.
@@ -218,6 +230,16 @@ func saveFleetPlan(_ tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult,
 		validationStatus = "passed"
 	}
 
+	// Build ProjectSource config if provided
+	var projectSource *fleet.ProjectSourceConfig
+	if args.ProjectSource != nil {
+		projectSource = &fleet.ProjectSourceConfig{
+			Type: args.ProjectSource.Type,
+			Repo: args.ProjectSource.Repo,
+			Path: args.ProjectSource.Path,
+		}
+	}
+
 	plan := &fleet.FleetPlan{
 		Name:             name,
 		Key:              key,
@@ -227,6 +249,7 @@ func saveFleetPlan(_ tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult,
 		Credentials:      args.Credentials,
 		Channel:          channelCfg,
 		Artifacts:        artifacts,
+		ProjectSource:    projectSource,
 		WorkspaceBaseDir: strings.TrimSpace(args.WorkspaceBaseDir),
 		Validation: fleet.PlanValidationState{
 			Status:        validationStatus,

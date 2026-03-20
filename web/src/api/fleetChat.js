@@ -265,6 +265,7 @@ export async function fetchFleetTrace(sessionId, opts = {}) {
   const params = new URLSearchParams()
   if (opts.toolsOnly) params.set('tools_only', 'true')
   if (opts.lastN) params.set('last_n', String(opts.lastN))
+  if (opts.agent) params.set('agent', opts.agent)
   const qs = params.toString()
   const url = `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/trace${qs ? '?' + qs : ''}`
   const response = await fetch(url)

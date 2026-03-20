@@ -36,8 +36,20 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 
 	fleetCfg := &plan.FleetConfig
 
-	// Resolve and create workspace directory (may not exist after restart)
-	workspaceDir := plan.ResolveWorkspaceDir()
+	// Resolve workspace directory. For recovery, the per-session workspace
+	// should already exist on disk from the original session startup.
+	// Read the WorkspaceDir from session metadata if available, otherwise
+	// fall back to the legacy ResolveWorkspaceDir.
+	var workspaceDir string
+	if fileStore := getFleetFileStore(); fileStore != nil {
+		if meta, metaErr := fileStore.GetSessionMeta(cfg.SessionID); metaErr == nil && meta.WorkspaceDir != "" {
+			workspaceDir = meta.WorkspaceDir
+		}
+	}
+	if workspaceDir == "" {
+		// Legacy fallback: derive from plan config (shared workspace)
+		workspaceDir = plan.ResolveWorkspaceDir()
+	}
 	if workspaceDir != "" {
 		if mkErr := os.MkdirAll(workspaceDir, 0755); mkErr != nil {
 			log.Printf("[fleet-recover] Warning: could not create workspace %s: %v", workspaceDir, mkErr)
@@ -131,16 +143,19 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 	fleetSession.ID = cfg.SessionID // override with original session ID
 	fleetSession.Plan = plan
 	fleetSession.Headless = true
+	fleetSession.WorkspaceDir = workspaceDir
 
 	// Derive task slug from the issue context (same as initial start).
 	if cfg.IssueNumber > 0 && cfg.IssueTitle != "" {
 		fleetSession.TaskSlug = fleet.TaskSlugFromIssue(cfg.IssueNumber, cfg.IssueTitle)
 	}
 
-	// Load existing project context file from the workspace (no regeneration
-	// on recovery; the file should already exist from the original session).
-	if workspaceDir != "" && fleetCfg.ProjectContext != nil {
-		fleetSession.ProjectContext = fleet.LoadProjectContextFile(workspaceDir, fleetCfg.ProjectContext)
+	// Load project context (AGENTS.md) from the base workspace.
+	// The base (~/astonish_projects/<repo-name>/) is where the wizard generated
+	// AGENTS.md; it persists across sessions and daemon restarts.
+	baseDir := plan.ResolveWorkspaceDir()
+	if baseDir != "" && fleetCfg.ProjectContext != nil {
+		fleetSession.ProjectContext = fleet.LoadProjectContextFile(baseDir, fleetCfg.ProjectContext)
 	}
 
 	// Reconstruct the progress tracker from recovered messages so agents

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 
 	adkagent "google.golang.org/adk/agent"
@@ -17,14 +18,34 @@ import (
 //
 // The injected Part is prepended to the last user Content's Parts array,
 // placing it immediately before the user's actual message text.
-func EphemeralKnowledgeCallback(executionPlan, relevantKnowledge string) llmagent.BeforeModelCallback {
+//
+// When debugMode is true, the callback logs injection details (token estimate,
+// content type) to stdout. This output goes to server logs only — it is NOT
+// persisted to the session.
+func EphemeralKnowledgeCallback(executionPlan, relevantKnowledge string, debugMode bool) llmagent.BeforeModelCallback {
 	if executionPlan == "" && relevantKnowledge == "" {
+		if debugMode {
+			fmt.Println("[Chat DEBUG] Ephemeral knowledge callback: not created (no knowledge or plan)")
+		}
 		return nil
 	}
 
 	injectionText := buildKnowledgeInjectionText(executionPlan, relevantKnowledge)
 	if injectionText == "" {
 		return nil
+	}
+
+	// Estimate token count (~4 chars per token is a reasonable approximation)
+	estimatedTokens := len(injectionText) / 4
+
+	if debugMode {
+		contentType := "knowledge only"
+		if executionPlan != "" && relevantKnowledge != "" {
+			contentType = "execution plan + knowledge"
+		} else if executionPlan != "" {
+			contentType = "execution plan only"
+		}
+		fmt.Printf("[Chat DEBUG] Ephemeral knowledge callback: created (%s, ~%d tokens)\n", contentType, estimatedTokens)
 	}
 
 	return func(_ adkagent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
@@ -41,6 +62,9 @@ func EphemeralKnowledgeCallback(executionPlan, relevantKnowledge string) llmagen
 			}
 		}
 		if lastUserIdx < 0 {
+			if debugMode {
+				fmt.Println("[Chat DEBUG] Ephemeral knowledge injection: skipped (no user message in request)")
+			}
 			return nil, nil // no user message found
 		}
 
@@ -51,6 +75,10 @@ func EphemeralKnowledgeCallback(executionPlan, relevantKnowledge string) llmagen
 		knowledgePart := &genai.Part{Text: injectionText}
 		userContent := req.Contents[lastUserIdx]
 		userContent.Parts = append([]*genai.Part{knowledgePart}, userContent.Parts...)
+
+		if debugMode {
+			fmt.Printf("[Chat DEBUG] Ephemeral knowledge injection: injected ~%d tokens into user message (content index %d)\n", estimatedTokens, lastUserIdx)
+		}
 
 		return nil, nil // proceed with the modified request
 	}

@@ -27,9 +27,10 @@ import (
 
 // KnowledgeSearchResult holds a single result from the knowledge vector search.
 type KnowledgeSearchResult struct {
-	Path    string
-	Score   float64
-	Snippet string
+	Path     string
+	Score    float64
+	Snippet  string
+	Category string // e.g. "guidance", "skill", "flow", "knowledge"
 }
 
 // KnowledgeSearchFunc performs a vector search and returns matching results.
@@ -64,13 +65,11 @@ type ChatAgent struct {
 	// Memory and flow reuse
 	MemoryManager             *memory.Manager               // Persistent memory manager
 	FlowContextBuilder        *FlowContextBuilder           // Converts flow YAML to execution plan
-	FlowSearcher              FlowMemorySearcher            // Vector-based flow matching (nil = LLM-only)
 	KnowledgeSearch           KnowledgeSearchFunc           // Auto-retrieve relevant knowledge per turn (nil = disabled)
 	KnowledgeSearchByCategory KnowledgeSearchByCategoryFunc // Auto-retrieve guidance docs per turn (nil = disabled)
 
 	// Self-management callbacks
-	SelfMDRefresher  func() // Called after config changes to regenerate SELF.md
-	FlowKnowledgeDir string // Path to memory/flows/ for knowledge docs
+	SelfMDRefresher func() // Called after config changes to regenerate SELF.md
 
 	// Credential redaction
 	Redactor *credentials.Redactor // Redacts credential values from tool outputs (nil = disabled)
@@ -464,12 +463,12 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		// the system prompt stays 100% static for KV-cache reuse.
 		var executionPlan string
 		var relevantKnowledge string
+		var knowledgeTrackingResults []KnowledgeSearchResult // for session tracking event
 
-		var matchedFlowName string
 		var memContent string
 
 		if c.MemoryManager != nil {
-			// Load memory content for flow matching (not injected into system prompt)
+			// Load memory content for flow plan building (parameter resolution)
 			mc, memErr := c.MemoryManager.Load()
 			if memErr != nil {
 				if c.DebugMode {
@@ -478,33 +477,15 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			} else {
 				memContent = mc
 			}
-
-			// Check for matching saved flow
-			if c.FlowRegistry != nil && c.FlowContextBuilder != nil {
-				flowFile, plan := c.matchAndBuildPlan(userText, memContent)
-				if plan != "" {
-					matchedFlowName = flowFile
-					executionPlan = plan
-					// Emit conversational info about the flow match
-					flowDisplayName := strings.TrimSuffix(flowFile, ".yaml")
-					flowDisplayName = strings.ReplaceAll(flowDisplayName, "_", " ")
-					yield(&session.Event{
-						LLMResponse: model.LLMResponse{
-							Content: &genai.Content{
-								Parts: []*genai.Part{{Text: fmt.Sprintf("I found a saved workflow for this (%s), let me use it.\n", flowDisplayName)}},
-								Role:  "model",
-							},
-						},
-					}, nil)
-				}
-			}
 		}
 
 		// Auto-retrieve relevant knowledge from vector store.
-		// Two partitioned searches: guidance docs (capped at 3) + general knowledge (capped at 5).
-		// This ensures capability guidance surfaces alongside task-specific knowledge.
+		// Three partitioned searches: guidance (max 3) + general knowledge (max 5).
+		// Flow documents are discovered naturally through the general search.
+		// When a high-confidence flow match is found, it is loaded as an
+		// actionable execution plan rather than passive knowledge.
 		if (c.KnowledgeSearch != nil || c.KnowledgeSearchByCategory != nil) && userText != "" {
-			searchQuery := buildKnowledgeQuery(userText, matchedFlowName)
+			searchQuery := buildKnowledgeQuery(userText)
 			if len(searchQuery) < 5 {
 				if c.DebugMode {
 					fmt.Printf("[Chat DEBUG] Auto knowledge search: skipped (processed query too short: %q)\n", searchQuery)
@@ -536,10 +517,19 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 					}
 				}
 
-				// Deduplicate and format
+				// Deduplicate
 				allResults = deduplicateSearchResults(allResults)
 
+				// Check for flow matches among the results.
+				// If a single high-confidence flow is found, load the full flow
+				// YAML and build an execution plan. If multiple flows match above
+				// threshold, leave them as knowledge so the LLM can ask the user.
+				const flowScoreThreshold = 0.6
+				allResults, executionPlan = c.extractFlowFromResults(allResults, flowScoreThreshold, memContent, yield)
+
+				// Format remaining results as knowledge text
 				if len(allResults) > 0 {
+					knowledgeTrackingResults = allResults
 					var kb strings.Builder
 					for _, r := range allResults {
 						kb.WriteString(fmt.Sprintf("**%s** (relevance: %.0f%%)\n", r.Path, r.Score*100))
@@ -557,6 +547,12 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		} else if c.KnowledgeSearch == nil && c.KnowledgeSearchByCategory == nil && c.DebugMode {
 			fmt.Println("[Chat DEBUG] Auto knowledge search: disabled (no search functions wired)")
 		}
+
+		// Persist a tracking event recording what knowledge was injected.
+		// Content is nil so ADK's ContentsRequestProcessor skips it (never
+		// sent to the LLM) and eventsToMessages() skips it (never shown in UI).
+		// The event is still written to the session .jsonl file for diagnostics.
+		yieldKnowledgeTrackingEvent(yield, relevantKnowledge, executionPlan, knowledgeTrackingResults)
 
 		// Build system prompt (includes memory and execution plan if set)
 		instruction := c.SystemPrompt.Build()
@@ -598,7 +594,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		// Inject ephemeral knowledge/execution plan into the last user message.
 		// This content is visible to the LLM but never persisted to session history,
 		// keeping the conversation prefix stable for provider KV-cache reuse.
-		if knowledgeCb := EphemeralKnowledgeCallback(executionPlan, relevantKnowledge); knowledgeCb != nil {
+		if knowledgeCb := EphemeralKnowledgeCallback(executionPlan, relevantKnowledge, c.DebugMode); knowledgeCb != nil {
 			beforeModelCallbacks = append(beforeModelCallbacks, knowledgeCb)
 		}
 
@@ -624,11 +620,18 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		}
 
 		// Run the llmagent with retry for transient errors (429, 502, 503, etc.)
+		// Also handles unknown tool errors (model hallucinated a tool name).
 		const maxRetries = 3
+		const maxUnknownToolRetries = 2 // separate cap for tool name hallucinations
 		toolCallCount := 0
 		maxToolCalls := c.MaxToolCalls
 		lastToolCallSeen := false
 		anyTextYielded := false
+		unknownToolRetries := 0
+
+		// Track the last FunctionCall parts seen so we can build synthetic
+		// error responses when ADK rejects an unknown tool name.
+		var lastFunctionCalls []*genai.FunctionCall
 
 		for attempt := range maxRetries {
 			retried := false
@@ -649,6 +652,23 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 						}
 						retried = true
 						break // break inner for-range, continue outer retry loop
+					}
+
+					// Check for unknown tool error (model hallucinated a tool name).
+					// Instead of aborting the turn, inject a synthetic FunctionResponse
+					// with a corrective error message so the LLM can self-correct.
+					if isUnknownToolError(err) && unknownToolRetries < maxUnknownToolRetries && len(lastFunctionCalls) > 0 {
+						unknownToolRetries++
+						if c.DebugMode {
+							fmt.Printf("[Chat DEBUG] Unknown tool error (retry %d/%d): %v\n",
+								unknownToolRetries, maxUnknownToolRetries, err)
+						}
+						// Build synthetic FunctionResponse events for each orphaned call
+						syntheticEvent := buildUnknownToolResponse(lastFunctionCalls, c.Tools, c.Toolsets)
+						yield(syntheticEvent, nil) // runner persists this to session
+						lastFunctionCalls = nil
+						retried = true
+						break // re-run llmAgent to let the LLM see the error and retry
 					}
 
 					// Non-retryable error, or retries exhausted
@@ -677,8 +697,19 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 					return
 				}
 
-				// Count tool calls and capture text output
+				// Count tool calls, track FunctionCall parts, and capture text output
 				if event.LLMResponse.Content != nil {
+					// Collect FunctionCalls from this event for unknown-tool recovery
+					var eventFunctionCalls []*genai.FunctionCall
+					for _, p := range event.LLMResponse.Content.Parts {
+						if p.FunctionCall != nil {
+							eventFunctionCalls = append(eventFunctionCalls, p.FunctionCall)
+						}
+					}
+					if len(eventFunctionCalls) > 0 {
+						lastFunctionCalls = eventFunctionCalls
+					}
+
 					for _, p := range event.LLMResponse.Content.Parts {
 						if p.FunctionCall != nil {
 							toolCallCount++
@@ -1305,108 +1336,6 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 	return params
 }
 
-// matchAndBuildPlan checks if the user's request matches a saved flow.
-// Uses vector-based matching first (fast, no LLM call), falling back to
-// LLM-based matching when ambiguous or when vector search is unavailable.
-// Returns (flowFile, planText) -- both empty if no match.
-func (c *ChatAgent) matchAndBuildPlan(userText string, memoryContent string) (string, string) {
-	if c.FlowRegistry == nil || c.FlowContextBuilder == nil || c.FlowDistiller == nil {
-		return "", ""
-	}
-
-	entries := c.FlowRegistry.Entries()
-	if len(entries) == 0 {
-		return "", ""
-	}
-
-	var matchedFile string
-
-	// Strategy 1: Vector-based matching (fast, no LLM call)
-	if c.FlowSearcher != nil {
-		if c.DebugMode {
-			fmt.Printf("[Chat DEBUG] Checking flow registry via vector search...\n")
-		}
-		flowFile, score, err := c.FlowRegistry.FindMatchVector(context.Background(), c.FlowSearcher, userText)
-		if err == nil && flowFile != "" {
-			if score >= 0.8 {
-				// High confidence — use directly
-				matchedFile = flowFile
-				if c.DebugMode {
-					fmt.Printf("[Chat DEBUG] Vector match (high confidence %.2f): %s\n", score, flowFile)
-				}
-			} else if score >= 0.6 {
-				// Ambiguous — fall through to LLM disambiguation
-				if c.DebugMode {
-					fmt.Printf("[Chat DEBUG] Vector match (ambiguous %.2f): %s — falling back to LLM\n", score, flowFile)
-				}
-			}
-		}
-	}
-
-	// Strategy 2: LLM-based matching (fallback)
-	if matchedFile == "" {
-		matchPrompt := c.FlowRegistry.BuildMatchPrompt(userText)
-		if matchPrompt == "" {
-			return "", ""
-		}
-
-		if c.DebugMode {
-			fmt.Printf("[Chat DEBUG] Checking flow registry via LLM...\n")
-		}
-
-		response, err := c.FlowDistiller.LLM(context.Background(), matchPrompt)
-		if err != nil {
-			if c.DebugMode {
-				fmt.Printf("[Chat DEBUG] Flow match LLM call failed: %v\n", err)
-			}
-			return "", ""
-		}
-
-		matchedFile = strings.TrimSpace(response)
-		if c.DebugMode {
-			fmt.Printf("[Chat DEBUG] Flow match response: %q\n", matchedFile)
-		}
-
-		if strings.EqualFold(matchedFile, "NONE") || matchedFile == "" {
-			return "", ""
-		}
-
-		if !strings.HasSuffix(matchedFile, ".yaml") {
-			matchedFile += ".yaml"
-		}
-	}
-
-	// Find the flow file on disk
-	flowPath := c.resolveFlowPath(matchedFile)
-	if flowPath == "" {
-		if c.DebugMode {
-			fmt.Printf("[Chat DEBUG] Matched flow file not found on disk: %s\n", matchedFile)
-		}
-		return "", ""
-	}
-
-	// Read the flow YAML
-	flowData, err := os.ReadFile(flowPath)
-	if err != nil {
-		if c.DebugMode {
-			fmt.Printf("[Chat DEBUG] Failed to read flow file: %v\n", err)
-		}
-		return "", ""
-	}
-
-	// Build the execution plan
-	plan := c.FlowContextBuilder.BuildExecutionPlan(string(flowData), matchedFile, memoryContent)
-	if plan == "" {
-		return "", ""
-	}
-
-	if c.DebugMode {
-		fmt.Printf("[Chat DEBUG] Built execution plan from flow: %s (%d bytes)\n", matchedFile, len(plan))
-	}
-
-	return matchedFile, plan
-}
-
 // resolveFlowPath finds the full path for a flow file.
 // Checks FlowSaveDir, then the default agents directory.
 func (c *ChatAgent) resolveFlowPath(filename string) string {
@@ -1442,21 +1371,156 @@ func truncateQuery(s string, maxLen int) string {
 var urlPattern = regexp.MustCompile(`https?://\S+`)
 
 // buildKnowledgeQuery pre-processes a user query for semantic search.
-// It strips URLs (which dilute embedding semantics for models like MiniLM)
-// and appends matched flow name tokens to boost relevance.
-func buildKnowledgeQuery(userText, flowName string) string {
+// It strips URLs (which dilute embedding semantics for models like MiniLM).
+func buildKnowledgeQuery(userText string) string {
 	// Strip URLs — they carry no semantic meaning for the embedding model
 	q := urlPattern.ReplaceAllString(userText, "")
 	// Collapse whitespace
 	q = strings.Join(strings.Fields(q), " ")
-	// Append flow name tokens if available (e.g. "download-youtube-video" -> "download youtube video")
-	if flowName != "" {
-		name := strings.TrimSuffix(flowName, ".yaml")
-		name = strings.ReplaceAll(name, "-", " ")
-		name = strings.ReplaceAll(name, "_", " ")
-		q = strings.TrimSpace(q + " " + name)
-	}
 	return q
+}
+
+// extractFlowFromResults scans knowledge search results for flow documents.
+// If a single high-confidence flow is found (score >= threshold), it loads the
+// corresponding YAML, builds an execution plan, emits a user notification,
+// and returns the remaining (non-flow) results plus the plan text.
+// If multiple flows score above threshold, all are kept as regular knowledge
+// so the LLM can present the options and ask the user which to use.
+func (c *ChatAgent) extractFlowFromResults(
+	results []KnowledgeSearchResult,
+	threshold float64,
+	memContent string,
+	yield func(*session.Event, error) bool,
+) ([]KnowledgeSearchResult, string) {
+	if c.FlowContextBuilder == nil {
+		return results, ""
+	}
+
+	// Find flow results above threshold
+	var flowHits []KnowledgeSearchResult
+	for _, r := range results {
+		if r.Category == "flow" && r.Score >= threshold {
+			flowHits = append(flowHits, r)
+		}
+	}
+
+	// Multiple high-confidence flows: ambiguous — let the LLM ask the user.
+	// Keep all results as-is so the LLM sees both flow descriptions.
+	if len(flowHits) != 1 {
+		return results, ""
+	}
+
+	bestFlow := flowHits[0]
+
+	// Derive the YAML filename from the knowledge doc path:
+	// "flows/youtube_knowledge_extractor.md" -> "youtube_knowledge_extractor.yaml"
+	baseName := strings.TrimPrefix(bestFlow.Path, "flows/")
+	baseName = strings.TrimSuffix(baseName, ".md")
+	flowFile := baseName + ".yaml"
+
+	// Resolve the flow YAML path on disk
+	flowPath := c.resolveFlowPath(flowFile)
+	if flowPath == "" {
+		if c.DebugMode {
+			fmt.Printf("[Chat DEBUG] Flow doc found but YAML not on disk: %s\n", flowFile)
+		}
+		return results, ""
+	}
+
+	// Read the flow YAML
+	flowData, err := os.ReadFile(flowPath)
+	if err != nil {
+		if c.DebugMode {
+			fmt.Printf("[Chat DEBUG] Failed to read flow YAML: %v\n", err)
+		}
+		return results, ""
+	}
+
+	// Build the execution plan
+	plan := c.FlowContextBuilder.BuildExecutionPlan(string(flowData), flowFile, memContent)
+	if plan == "" {
+		return results, ""
+	}
+
+	if c.DebugMode {
+		fmt.Printf("[Chat DEBUG] Flow discovered via knowledge search: %s (score: %.2f), built execution plan (%d bytes)\n",
+			flowFile, bestFlow.Score, len(plan))
+	}
+
+	// Emit conversational notification about the flow match
+	flowDisplayName := strings.TrimSuffix(flowFile, ".yaml")
+	flowDisplayName = strings.ReplaceAll(flowDisplayName, "_", " ")
+	yield(&session.Event{
+		LLMResponse: model.LLMResponse{
+			Content: &genai.Content{
+				Parts: []*genai.Part{{Text: fmt.Sprintf("I found a saved workflow for this (%s), let me use it.\n", flowDisplayName)}},
+				Role:  "model",
+			},
+		},
+	}, nil)
+
+	// Remove the flow doc from knowledge results to avoid duplication
+	// (the execution plan already contains all the flow information).
+	var remaining []KnowledgeSearchResult
+	for _, r := range results {
+		if r.Path != bestFlow.Path {
+			remaining = append(remaining, r)
+		}
+	}
+
+	return remaining, plan
+}
+
+// isUnknownToolError checks whether an error from ADK is caused by the LLM
+// calling a tool name that doesn't exist. ADK returns this as a hard error
+// (fmt.Errorf("unknown tool: %q")) rather than a tool error response, which
+// means the LLM never gets feedback about its mistake.
+func isUnknownToolError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "unknown tool:")
+}
+
+// buildUnknownToolResponse creates a synthetic FunctionResponse event for
+// orphaned FunctionCall parts that referenced unknown tool names. The response
+// includes the error message and a hint listing available tool names so the
+// LLM can self-correct on retry.
+func buildUnknownToolResponse(calls []*genai.FunctionCall, tools []tool.Tool, toolsets []tool.Toolset) *session.Event {
+	// Collect available tool names for the hint
+	var toolNames []string
+	for _, t := range tools {
+		toolNames = append(toolNames, t.Name())
+	}
+	// Include toolset names as a group hint (individual tools require context to resolve)
+	for _, ts := range toolsets {
+		toolNames = append(toolNames, ts.Name()+".*")
+	}
+	hint := strings.Join(toolNames, ", ")
+
+	var parts []*genai.Part
+	for _, fc := range calls {
+		parts = append(parts, &genai.Part{
+			FunctionResponse: &genai.FunctionResponse{
+				ID:   fc.ID,
+				Name: fc.Name,
+				Response: map[string]any{
+					"error": fmt.Sprintf(
+						"Unknown tool %q. This tool does not exist. Available tools: %s. "+
+							"Use the correct tool name and try again.",
+						fc.Name, hint,
+					),
+				},
+			},
+		})
+	}
+
+	ev := session.NewEvent("unknown-tool-recovery")
+	ev.Author = "chat"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "user",
+			Parts: parts,
+		},
+	}
+	return ev
 }
 
 // deduplicateSearchResults removes duplicate knowledge results that appear
@@ -1478,4 +1542,55 @@ func deduplicateSearchResults(results []KnowledgeSearchResult) []KnowledgeSearch
 		}
 	}
 	return deduped
+}
+
+// yieldKnowledgeTrackingEvent emits a content-less session event that records
+// what knowledge was injected (or that none was found) for this turn.
+//
+// Because Content is nil, ADK's ContentsRequestProcessor skips the event when
+// building the LLM request (it checks content == nil at contents_processor.go:71)
+// and eventsToMessages() skips it in the Studio UI. The event is still persisted
+// to the session .jsonl file, making it available for diagnostic inspection.
+func yieldKnowledgeTrackingEvent(
+	yield func(*session.Event, error) bool,
+	relevantKnowledge, executionPlan string,
+	results []KnowledgeSearchResult,
+) {
+	// Build result summaries for the tracking payload.
+	resultEntries := make([]map[string]any, 0, len(results))
+	for _, r := range results {
+		resultEntries = append(resultEntries, map[string]any{
+			"path":     r.Path,
+			"score":    r.Score,
+			"category": r.Category,
+		})
+	}
+
+	// Determine injection type.
+	injectionType := "none"
+	if executionPlan != "" && relevantKnowledge != "" {
+		injectionType = "plan+knowledge"
+	} else if executionPlan != "" {
+		injectionType = "plan"
+	} else if relevantKnowledge != "" {
+		injectionType = "knowledge"
+	}
+
+	// Estimate token count (~4 chars per token).
+	estimatedTokens := (len(relevantKnowledge) + len(executionPlan)) / 4
+
+	yield(&session.Event{
+		ID:        fmt.Sprintf("knowledge-%d", time.Now().UnixMilli()),
+		Author:    "system",
+		Timestamp: time.Now(),
+		Actions: session.EventActions{
+			StateDelta: map[string]any{
+				"_knowledge_injection": map[string]any{
+					"type":             injectionType,
+					"results":          resultEntries,
+					"estimated_tokens": estimatedTokens,
+				},
+			},
+		},
+	}, nil)
 }

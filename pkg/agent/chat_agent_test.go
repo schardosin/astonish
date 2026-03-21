@@ -2,10 +2,13 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
+	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
 	"gopkg.in/yaml.v3"
 )
@@ -682,3 +685,125 @@ func TestFilterEventThinkContent_WhitespacePreservedInNormalStreaming(t *testing
 		t.Errorf("got %q, want %q", event.LLMResponse.Content.Parts[0].Text, "\n\n")
 	}
 }
+
+// --- Unknown tool error recovery tests ---
+
+func TestIsUnknownToolError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{"unrelated error", fmt.Errorf("connection refused"), false},
+		{"unknown tool error", fmt.Errorf("unknown tool: \"exec\""), true},
+		{"unknown tool with context", fmt.Errorf("handleFunctionCalls: unknown tool: \"foobar\""), true},
+		{"similar but different", fmt.Errorf("tool not found"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isUnknownToolError(tt.err)
+			if got != tt.want {
+				t.Errorf("isUnknownToolError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildUnknownToolResponse_SingleCall(t *testing.T) {
+	calls := []*genai.FunctionCall{
+		{ID: "call_123", Name: "exec", Args: map[string]any{"command": "ls"}},
+	}
+	tools := mockTools("shell_command", "read_file", "write_file")
+
+	ev := buildUnknownToolResponse(calls, tools, nil)
+
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if ev.LLMResponse.Content == nil {
+		t.Fatal("expected non-nil content")
+	}
+	if ev.LLMResponse.Content.Role != "user" {
+		t.Errorf("expected role 'user', got %q", ev.LLMResponse.Content.Role)
+	}
+	if len(ev.LLMResponse.Content.Parts) != 1 {
+		t.Fatalf("expected 1 part, got %d", len(ev.LLMResponse.Content.Parts))
+	}
+
+	fr := ev.LLMResponse.Content.Parts[0].FunctionResponse
+	if fr == nil {
+		t.Fatal("expected FunctionResponse part")
+	}
+	if fr.ID != "call_123" {
+		t.Errorf("expected ID 'call_123', got %q", fr.ID)
+	}
+	if fr.Name != "exec" {
+		t.Errorf("expected Name 'exec', got %q", fr.Name)
+	}
+
+	errMsg, ok := fr.Response["error"].(string)
+	if !ok {
+		t.Fatal("expected 'error' string in response")
+	}
+	if !strings.Contains(errMsg, "Unknown tool \"exec\"") {
+		t.Errorf("error message should mention the unknown tool, got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "shell_command") {
+		t.Errorf("error message should hint at available tools, got: %s", errMsg)
+	}
+}
+
+func TestBuildUnknownToolResponse_MultipleCalls(t *testing.T) {
+	calls := []*genai.FunctionCall{
+		{ID: "call_1", Name: "exec", Args: map[string]any{"command": "ls"}},
+		{ID: "call_2", Name: "run", Args: map[string]any{"script": "test.sh"}},
+	}
+	tools := mockTools("shell_command", "read_file")
+
+	ev := buildUnknownToolResponse(calls, tools, nil)
+
+	if len(ev.LLMResponse.Content.Parts) != 2 {
+		t.Fatalf("expected 2 parts for 2 calls, got %d", len(ev.LLMResponse.Content.Parts))
+	}
+
+	// Verify each response matches its call
+	for i, part := range ev.LLMResponse.Content.Parts {
+		fr := part.FunctionResponse
+		if fr == nil {
+			t.Fatalf("part %d: expected FunctionResponse", i)
+		}
+		if fr.ID != calls[i].ID {
+			t.Errorf("part %d: expected ID %q, got %q", i, calls[i].ID, fr.ID)
+		}
+		if fr.Name != calls[i].Name {
+			t.Errorf("part %d: expected Name %q, got %q", i, calls[i].Name, fr.Name)
+		}
+	}
+}
+
+func TestBuildUnknownToolResponse_IncludesToolsetHint(t *testing.T) {
+	calls := []*genai.FunctionCall{
+		{ID: "call_1", Name: "exec"},
+	}
+	tools := mockTools("shell_command")
+
+	// Create a mock toolset
+	ts := &mockToolset{name: "mcp_server"}
+
+	ev := buildUnknownToolResponse(calls, tools, []tool.Toolset{ts})
+
+	fr := ev.LLMResponse.Content.Parts[0].FunctionResponse
+	errMsg := fr.Response["error"].(string)
+	if !strings.Contains(errMsg, "mcp_server.*") {
+		t.Errorf("expected toolset hint 'mcp_server.*' in message, got: %s", errMsg)
+	}
+}
+
+// mockToolset implements tool.Toolset for testing.
+type mockToolset struct {
+	name string
+}
+
+func (m *mockToolset) Name() string                                          { return m.name }
+func (m *mockToolset) Tools(_ adkagent.ReadonlyContext) ([]tool.Tool, error) { return nil, nil }

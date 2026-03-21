@@ -359,6 +359,11 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	}) {
 		if runErr != nil {
 			safeSendSSE("error", map[string]string{"error": runErr.Error()})
+
+			// Persist the error to the session so it survives page refresh.
+			// Without this, the error SSE event is transient — on reload the
+			// user sees their message but no indication of the failure.
+			persistRunError(ctx, sessionService, sessionID, runErr)
 			break
 		}
 
@@ -782,6 +787,7 @@ func StudioStopHandler(w http.ResponseWriter, r *http.Request) {
 // An optional redactor is applied to tool args and results to prevent credential exposure.
 func eventsToMessages(events session.Events, redactor *credentials.Redactor) []StudioMessage {
 	var messages []StudioMessage
+	var lastInvocationID string // track invocation boundary for coalescing
 
 	for i := range events.Len() {
 		event := events.At(i)
@@ -790,6 +796,7 @@ func eventsToMessages(events session.Events, redactor *credentials.Redactor) []S
 		}
 
 		role := string(event.LLMResponse.Content.Role)
+		eventInvID := event.InvocationID
 
 		for _, part := range event.LLMResponse.Content.Parts {
 			if part.Text != "" {
@@ -801,8 +808,11 @@ func eventsToMessages(events session.Events, redactor *credentials.Redactor) []S
 					// Format: "[2026-03-20 14:30:05 UTC]\n<text>"
 					text = stripUserMessageTimestamp(text)
 				}
-				// Coalesce with previous message of same type
-				if len(messages) > 0 {
+				// Coalesce with previous message of same type, but only within
+				// the same invocation. Different invocations represent separate
+				// user turns — merging across them produces garbled messages
+				// (e.g. when multiple user messages have no model response between them).
+				if len(messages) > 0 && eventInvID == lastInvocationID {
 					last := &messages[len(messages)-1]
 					if last.Type == msgType && last.ToolName == "" {
 						last.Content += text
@@ -813,6 +823,7 @@ func eventsToMessages(events session.Events, redactor *credentials.Redactor) []S
 					Type:    msgType,
 					Content: text,
 				})
+				lastInvocationID = eventInvID
 			}
 			if part.FunctionCall != nil {
 				args := part.FunctionCall.Args
@@ -981,5 +992,37 @@ func toInt(v interface{}) int {
 		return int(n)
 	default:
 		return 0
+	}
+}
+
+// persistRunError saves a synthetic model event to the session when the runner
+// returns an error. Without this, errors are only sent as transient SSE events
+// and disappear on page reload — the user sees their message but no indication
+// that the model failed.
+func persistRunError(ctx context.Context, svc session.Service, sessionID string, runErr error) {
+	resp, err := svc.Get(ctx, &session.GetRequest{
+		AppName:   studioChatAppName,
+		UserID:    studioChatUserID,
+		SessionID: sessionID,
+	})
+	if err != nil {
+		log.Printf("[persistRunError] failed to get session %s: %v", sessionID, err)
+		return
+	}
+
+	errorEvent := &session.Event{
+		ID:        fmt.Sprintf("error-%d", time.Now().UnixMilli()),
+		Author:    "model",
+		Timestamp: time.Now(),
+		LLMResponse: model.LLMResponse{
+			Content: &genai.Content{
+				Role:  "model",
+				Parts: []*genai.Part{{Text: fmt.Sprintf("[Error: %s]", runErr.Error())}},
+			},
+		},
+	}
+
+	if err := svc.AppendEvent(ctx, resp.Session, errorEvent); err != nil {
+		log.Printf("[persistRunError] failed to append error event to session %s: %v", sessionID, err)
 	}
 }

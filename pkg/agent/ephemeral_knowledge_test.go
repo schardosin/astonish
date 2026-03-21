@@ -10,7 +10,7 @@ import (
 
 func TestEphemeralKnowledgeCallback_NilWhenEmpty(t *testing.T) {
 	// No knowledge, no plan → nil callback (not registered)
-	cb := EphemeralKnowledgeCallback("", "")
+	cb := EphemeralKnowledgeCallback("", "", false)
 	if cb != nil {
 		t.Error("expected nil callback when both plan and knowledge are empty")
 	}
@@ -18,7 +18,7 @@ func TestEphemeralKnowledgeCallback_NilWhenEmpty(t *testing.T) {
 
 func TestEphemeralKnowledgeCallback_InjectsKnowledge(t *testing.T) {
 	knowledge := "**MEMORY.md** (63%)\nProxmox at 192.168.1.200"
-	cb := EphemeralKnowledgeCallback("", knowledge)
+	cb := EphemeralKnowledgeCallback("", knowledge, false)
 	if cb == nil {
 		t.Fatal("expected non-nil callback")
 	}
@@ -66,7 +66,7 @@ func TestEphemeralKnowledgeCallback_InjectsKnowledge(t *testing.T) {
 
 func TestEphemeralKnowledgeCallback_InjectsExecutionPlan(t *testing.T) {
 	plan := "Step 1: SSH into proxmox\nStep 2: Run pct list"
-	cb := EphemeralKnowledgeCallback(plan, "")
+	cb := EphemeralKnowledgeCallback(plan, "", false)
 	if cb == nil {
 		t.Fatal("expected non-nil callback")
 	}
@@ -98,7 +98,7 @@ func TestEphemeralKnowledgeCallback_InjectsExecutionPlan(t *testing.T) {
 func TestEphemeralKnowledgeCallback_PlanWithKnowledge(t *testing.T) {
 	plan := "Step 1: Do something"
 	knowledge := "Use --verbose flag"
-	cb := EphemeralKnowledgeCallback(plan, knowledge)
+	cb := EphemeralKnowledgeCallback(plan, knowledge, false)
 	if cb == nil {
 		t.Fatal("expected non-nil callback")
 	}
@@ -130,7 +130,7 @@ func TestEphemeralKnowledgeCallback_PlanWithKnowledge(t *testing.T) {
 }
 
 func TestEphemeralKnowledgeCallback_NoUserMessage(t *testing.T) {
-	cb := EphemeralKnowledgeCallback("", "some knowledge")
+	cb := EphemeralKnowledgeCallback("", "some knowledge", false)
 	if cb == nil {
 		t.Fatal("expected non-nil callback")
 	}
@@ -157,7 +157,7 @@ func TestEphemeralKnowledgeCallback_NoUserMessage(t *testing.T) {
 }
 
 func TestEphemeralKnowledgeCallback_EmptyContents(t *testing.T) {
-	cb := EphemeralKnowledgeCallback("plan", "")
+	cb := EphemeralKnowledgeCallback("plan", "", false)
 	if cb == nil {
 		t.Fatal("expected non-nil callback")
 	}
@@ -173,7 +173,7 @@ func TestEphemeralKnowledgeCallback_EmptyContents(t *testing.T) {
 }
 
 func TestEphemeralKnowledgeCallback_NilRequest(t *testing.T) {
-	cb := EphemeralKnowledgeCallback("plan", "knowledge")
+	cb := EphemeralKnowledgeCallback("plan", "knowledge", false)
 	if cb == nil {
 		t.Fatal("expected non-nil callback")
 	}

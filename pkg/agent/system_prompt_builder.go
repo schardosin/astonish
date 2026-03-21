@@ -114,8 +114,18 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString("- When multiple approaches exist, briefly present options and ask the user which they prefer.\n")
 	sb.WriteString("- If a tool fails, try a different approach before giving up.\n")
 	sb.WriteString("- Prefer read_file/edit_file/write_file over shell sed/awk/echo/cat for file operations.\n")
+	sb.WriteString("- http_request CANNOT reach private/RFC1918 IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x) or localhost. Use curl via shell_command for private network endpoints.\n")
 	sb.WriteString("- For multi-step tasks, execute sequentially, report progress, and search memory first for prior solutions.\n")
 	sb.WriteString("- When the user asks you to do something, briefly acknowledge before starting work.\n")
+
+	// 3b. Knowledge Context — teaches the model about the injected knowledge blocks
+	sb.WriteString("\n## Knowledge Context\n\n")
+	sb.WriteString("Before your response, you may see a `[Knowledge For This Task]` or `[Execution Plan]` block prepended to the user's message. ")
+	sb.WriteString("This contains VERIFIED information retrieved from memory — real IPs, working commands, credentials, and workarounds proven in previous sessions.\n\n")
+	sb.WriteString("ALWAYS use the specific details from knowledge blocks (IPs, ports, URLs, tool choices, commands) instead of defaults or assumptions. ")
+	sb.WriteString("If knowledge says to use a specific IP, use that IP — not localhost or a standard default. ")
+	sb.WriteString("If knowledge says to use a specific tool or approach, follow it exactly.\n")
+	sb.WriteString("The knowledge block already contains the most relevant memory results for this task — do not call memory_search to re-fetch information already present in the block.\n")
 
 	// 4. Environment
 	sb.WriteString("\n## Environment\n\n")

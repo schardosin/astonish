@@ -1024,25 +1024,8 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 	}
 
-	// --- 6b2. Wire flow vector searcher ---
+	// --- 6b2. Wire knowledge search callbacks ---
 	if memorySearchAvailable && memStore != nil {
-		chatAgent.FlowSearcher = agent.NewFlowMemorySearcher(
-			func(ctx context.Context, query string, maxResults int, minScore float64) ([]agent.FlowSearchResult, error) {
-				results, err := memStore.Search(ctx, query, maxResults, minScore)
-				if err != nil {
-					return nil, err
-				}
-				var flowResults []agent.FlowSearchResult
-				for _, r := range results {
-					flowResults = append(flowResults, agent.FlowSearchResult{
-						Path:  r.Path,
-						Score: r.Score,
-					})
-				}
-				return flowResults, nil
-			},
-		)
-
 		chatAgent.KnowledgeSearch = func(ctx context.Context, query string, maxResults int, minScore float64) ([]agent.KnowledgeSearchResult, error) {
 			results, err := memStore.Search(ctx, query, maxResults, minScore)
 			if err != nil {
@@ -1051,9 +1034,10 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			var knowledgeResults []agent.KnowledgeSearchResult
 			for _, r := range results {
 				knowledgeResults = append(knowledgeResults, agent.KnowledgeSearchResult{
-					Path:    r.Path,
-					Score:   r.Score,
-					Snippet: r.Snippet,
+					Path:     r.Path,
+					Score:    r.Score,
+					Snippet:  r.Snippet,
+					Category: r.Category,
 				})
 			}
 			return knowledgeResults, nil
@@ -1067,24 +1051,21 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			var knowledgeResults []agent.KnowledgeSearchResult
 			for _, r := range results {
 				knowledgeResults = append(knowledgeResults, agent.KnowledgeSearchResult{
-					Path:    r.Path,
-					Score:   r.Score,
-					Snippet: r.Snippet,
+					Path:     r.Path,
+					Score:    r.Score,
+					Snippet:  r.Snippet,
+					Category: r.Category,
 				})
 			}
 			return knowledgeResults, nil
 		}
 
 		if cfg.DebugMode {
-			fmt.Println("Flow vector search: enabled")
 			fmt.Println("Auto knowledge retrieval: enabled")
 		}
 	}
 
-	// --- 6b3. Wire flow knowledge dir and SELF.md refresher ---
-	if memFlowsDir != "" {
-		chatAgent.FlowKnowledgeDir = memFlowsDir
-	}
+	// --- 6b3. Wire SELF.md refresher ---
 	if selfMDMemDir != "" {
 		chatAgent.SelfMDRefresher = func() {
 			selfCfg := factoryBuildSelfMDConfig(cfg, selfMDMemDir, internalTools, mcpToolsets, mcpCfg, memStore, memorySearchAvailable, loadedSkills)

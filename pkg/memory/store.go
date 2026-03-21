@@ -80,6 +80,7 @@ type SearchResult struct {
 	EndLine   int     `json:"endLine"`
 	Score     float64 `json:"score"`
 	Snippet   string  `json:"snippet"`
+	Category  string  `json:"category,omitempty"`
 }
 
 // Search performs semantic search across indexed memory.
@@ -124,6 +125,7 @@ func (s *Store) Search(ctx context.Context, query string, maxResults int, minSco
 			EndLine:   endLine,
 			Score:     score,
 			Snippet:   r.Content,
+			Category:  r.Metadata["category"],
 		})
 	}
 
@@ -229,6 +231,7 @@ func (s *Store) SearchByCategory(ctx context.Context, query string, maxResults i
 			EndLine:   endLine,
 			Score:     score,
 			Snippet:   r.Content,
+			Category:  r.Metadata["category"],
 		})
 	}
 	return filtered, nil

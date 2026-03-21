@@ -458,9 +458,12 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		// --- Phase A: Dynamic Execution ---
 		trace := NewExecutionTrace(userText)
 
-		// Reset per-turn dynamic fields
-		c.SystemPrompt.ExecutionPlan = ""
-		c.SystemPrompt.RelevantKnowledge = ""
+		// Per-turn dynamic content: execution plan and knowledge.
+		// These are injected as ephemeral Parts in the last user message
+		// via EphemeralKnowledgeCallback (not in the system prompt), so
+		// the system prompt stays 100% static for KV-cache reuse.
+		var executionPlan string
+		var relevantKnowledge string
 
 		var matchedFlowName string
 		var memContent string
@@ -481,7 +484,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 				flowFile, plan := c.matchAndBuildPlan(userText, memContent)
 				if plan != "" {
 					matchedFlowName = flowFile
-					c.SystemPrompt.ExecutionPlan = plan
+					executionPlan = plan
 					// Emit conversational info about the flow match
 					flowDisplayName := strings.TrimSuffix(flowFile, ".yaml")
 					flowDisplayName = strings.ReplaceAll(flowDisplayName, "_", " ")
@@ -543,7 +546,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 						kb.WriteString(r.Snippet)
 						kb.WriteString("\n\n")
 					}
-					c.SystemPrompt.RelevantKnowledge = EscapeCurlyPlaceholders(kb.String())
+					relevantKnowledge = EscapeCurlyPlaceholders(kb.String())
 					if c.DebugMode {
 						fmt.Printf("[Chat DEBUG] Auto knowledge search: %d results injected for query: %s\n", len(allResults), truncateQuery(searchQuery, 60))
 					}
@@ -591,6 +594,13 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 		// Truncate oversized tool responses before they reach the model
 		beforeModelCallbacks = append(beforeModelCallbacks, TruncateToolResponsesCallback())
+
+		// Inject ephemeral knowledge/execution plan into the last user message.
+		// This content is visible to the LLM but never persisted to session history,
+		// keeping the conversation prefix stable for provider KV-cache reuse.
+		if knowledgeCb := EphemeralKnowledgeCallback(executionPlan, relevantKnowledge); knowledgeCb != nil {
+			beforeModelCallbacks = append(beforeModelCallbacks, knowledgeCb)
+		}
 
 		if c.Compactor != nil {
 			beforeModelCallbacks = append(beforeModelCallbacks, c.Compactor.BeforeModelCallback())
@@ -649,8 +659,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 					// If we were using an execution plan and it failed, inform the user
 					// conversationally. The orphan cleanup in the provider layer ensures
 					// the next turn's history is valid.
-					if c.SystemPrompt.ExecutionPlan != "" {
-						c.SystemPrompt.ExecutionPlan = ""
+					if executionPlan != "" {
 						if c.DebugMode {
 							fmt.Printf("[Chat DEBUG] Flow execution failed: %v, cleared execution plan\n", err)
 						}

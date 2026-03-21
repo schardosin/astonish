@@ -236,28 +236,19 @@ func TestSystemPromptBuilder_DynamicSections(t *testing.T) {
 	}
 }
 
-func TestSystemPromptBuilder_KnowledgeInjection(t *testing.T) {
-	// With execution plan
-	builder := &SystemPromptBuilder{
-		ExecutionPlan:     "Step 1: Do something",
-		RelevantKnowledge: "Use --flag for best results",
-	}
+func TestSystemPromptBuilder_KnowledgeNotInBuild(t *testing.T) {
+	// Verify that Build() never includes knowledge or execution plan sections.
+	// These are now injected via EphemeralKnowledgeCallback into the user message.
+	builder := &SystemPromptBuilder{}
 	prompt := builder.Build()
 
-	if !strings.Contains(prompt, "## Execution Plan") {
-		t.Error("expected Execution Plan section")
-	}
-	if !strings.Contains(prompt, "### Knowledge From Previous Experience") {
-		t.Error("expected knowledge sub-section")
-	}
-
-	// Without execution plan but with knowledge
-	builder2 := &SystemPromptBuilder{
-		RelevantKnowledge: "Some useful knowledge",
-	}
-	prompt2 := builder2.Build()
-
-	if !strings.Contains(prompt2, "## Knowledge For This Task") {
-		t.Error("expected standalone knowledge section")
+	for _, section := range []string{
+		"## Execution Plan",
+		"## Knowledge For This Task",
+		"### Knowledge From Previous Experience",
+	} {
+		if strings.Contains(prompt, section) {
+			t.Errorf("Build() should NOT contain %q (now injected via EphemeralKnowledgeCallback)", section)
+		}
 	}
 }

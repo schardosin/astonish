@@ -34,16 +34,16 @@ func (id *AgentIdentity) IsConfigured() bool {
 //     ~800 tokens. Stable across turns for KV-cache reuse.
 //   - Tier 2 (Indexed Guidance): Detailed how-to docs for each capability, stored as
 //     memory/guidance/*.md and retrieved via the vector store. Zero tokens in the prompt.
-//   - Tier 3 (Per-Turn Dynamic): Channel hints, scheduler hints, session context,
-//     execution plans, auto-retrieved knowledge. Injected only when active.
+//   - Tier 3 (Per-Turn Dynamic): Channel hints, scheduler hints, session context.
+//     Execution plans and auto-retrieved knowledge are injected as ephemeral content
+//     in the last user message via BeforeModelCallback, NOT in the system prompt,
+//     so the full conversation history remains cacheable by providers.
 type SystemPromptBuilder struct {
 	Tools                 []tool.Tool
 	Toolsets              []tool.Toolset
 	WorkspaceDir          string
 	CustomPrompt          string
 	InstructionsContent   string         // Contents of INSTRUCTIONS.md (behavior directives)
-	ExecutionPlan         string         // Flow-based execution plan (set when a flow matches)
-	RelevantKnowledge     string         // Auto-retrieved knowledge from vector search (set per turn)
 	WebSearchAvailable    bool           // Whether a web search MCP tool is configured
 	WebExtractAvailable   bool           // Whether a web extract MCP tool is configured
 	WebSearchToolName     string         // Name of the configured search tool (e.g. "tavily-search")
@@ -182,31 +182,10 @@ func (b *SystemPromptBuilder) Build() string {
 	}
 
 	// ── Tier 3: Per-Turn Dynamic ─────────────────────────────────
-
-	// 7. Execution Plan with integrated knowledge (when a flow matches)
-	if b.ExecutionPlan != "" {
-		sb.WriteString("\n## Execution Plan\n\n")
-		if b.RelevantKnowledge != "" {
-			sb.WriteString("### Knowledge From Previous Experience\n\n")
-			sb.WriteString("CRITICAL — The following knowledge was learned from previous executions of this exact task. ")
-			sb.WriteString("It contains proven commands, specific flags, and workarounds that are KNOWN TO WORK. ")
-			sb.WriteString("If any step below conflicts with this knowledge, ALWAYS prefer the knowledge — ")
-			sb.WriteString("it reflects what actually succeeded in practice:\n\n")
-			sb.WriteString(b.RelevantKnowledge)
-			sb.WriteString("\n### Steps\n\n")
-		}
-		sb.WriteString(b.ExecutionPlan)
-	}
-
-	// 7b. Standalone knowledge (when no execution plan matched but knowledge was found)
-	if b.ExecutionPlan == "" && b.RelevantKnowledge != "" {
-		sb.WriteString("\n## Knowledge For This Task\n\n")
-		sb.WriteString("CRITICAL — You MUST apply the following knowledge when executing this task. ")
-		sb.WriteString("It contains proven commands, specific flags, and workarounds that are KNOWN TO WORK ")
-		sb.WriteString("from previous sessions. Use the exact commands and approaches described here:\n\n")
-		sb.WriteString(b.RelevantKnowledge)
-		sb.WriteString("\n")
-	}
+	// NOTE: Execution plans and auto-retrieved knowledge are injected as
+	// ephemeral content in the last user message via EphemeralKnowledgeCallback,
+	// NOT here. This keeps the system prompt 100% static for optimal
+	// provider KV-cache prefix matching across turns.
 
 	// NOTE: Date/time is NOT included here. It is prepended to each user
 	// message via NewTimestampedUserContent(), keeping the system prompt

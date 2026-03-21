@@ -794,20 +794,24 @@ func eventsToMessages(events session.Events, redactor *credentials.Redactor) []S
 		for _, part := range event.LLMResponse.Content.Parts {
 			if part.Text != "" {
 				msgType := "agent"
+				text := part.Text
 				if role == "user" {
 					msgType = "user"
+					// Strip the timestamp prefix injected by NewTimestampedUserContent.
+					// Format: "[2026-03-20 14:30:05 UTC]\n<text>"
+					text = stripUserMessageTimestamp(text)
 				}
 				// Coalesce with previous message of same type
 				if len(messages) > 0 {
 					last := &messages[len(messages)-1]
 					if last.Type == msgType && last.ToolName == "" {
-						last.Content += part.Text
+						last.Content += text
 						continue
 					}
 				}
 				messages = append(messages, StudioMessage{
 					Type:    msgType,
-					Content: part.Text,
+					Content: text,
 				})
 			}
 			if part.FunctionCall != nil {
@@ -836,6 +840,18 @@ func eventsToMessages(events session.Events, redactor *credentials.Redactor) []S
 	}
 
 	return messages
+}
+
+// userTimestampRe matches the timestamp prefix injected by NewTimestampedUserContent.
+// Format: "[2026-03-20 14:30:05 UTC]\n"
+var userTimestampRe = regexp.MustCompile(`^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \w+\]\n`)
+
+// stripUserMessageTimestamp removes the timestamp prefix from a user message
+// that was injected by NewTimestampedUserContent. This keeps the timestamp in
+// the persisted event (for the LLM's context) while displaying clean text to
+// the user in the Studio UI.
+func stripUserMessageTimestamp(text string) string {
+	return userTimestampRe.ReplaceAllString(text, "")
 }
 
 // summarizeToolResult converts a tool response map into a display-friendly value.

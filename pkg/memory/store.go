@@ -146,6 +146,7 @@ func (s *Store) AddDocuments(ctx context.Context, chunks []Chunk) error {
 				"path":      c.Path,
 				"startLine": strconv.Itoa(c.StartLine),
 				"endLine":   strconv.Itoa(c.EndLine),
+				"category":  c.Category,
 			},
 		}
 	}
@@ -175,6 +176,62 @@ func (s *Store) Count() int {
 // Config returns the store configuration.
 func (s *Store) Config() *StoreConfig {
 	return s.config
+}
+
+// SearchByCategory performs a semantic search filtered to a specific category.
+// If category is empty, searches all documents (same as Search).
+// Categories are derived from file paths: "guidance", "skill", "flow",
+// "self", "instructions", "knowledge".
+func (s *Store) SearchByCategory(ctx context.Context, query string, maxResults int,
+	minScore float64, category string) ([]SearchResult, error) {
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if maxResults <= 0 {
+		maxResults = s.config.MaxResults
+	}
+	if minScore <= 0 {
+		minScore = s.config.MinScore
+	}
+
+	docCount := s.collection.Count()
+	if docCount == 0 {
+		return nil, nil
+	}
+	if maxResults > docCount {
+		maxResults = docCount
+	}
+
+	var where map[string]string
+	if category != "" {
+		where = map[string]string{"category": category}
+	}
+
+	results, err := s.collection.Query(ctx, query, maxResults, where, nil)
+	if err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+
+	var filtered []SearchResult
+	for _, r := range results {
+		score := float64(r.Similarity)
+		if score < minScore {
+			continue
+		}
+
+		startLine, _ := strconv.Atoi(r.Metadata["startLine"])
+		endLine, _ := strconv.Atoi(r.Metadata["endLine"])
+
+		filtered = append(filtered, SearchResult{
+			Path:      r.Metadata["path"],
+			StartLine: startLine,
+			EndLine:   endLine,
+			Score:     score,
+			Snippet:   r.Content,
+		})
+	}
+	return filtered, nil
 }
 
 // ReindexFile triggers re-indexing of a single file. This is called after

@@ -400,25 +400,8 @@ func updateScheduledJob(ctx tool.Context, args UpdateScheduledJobArgs) (UpdateSc
 // NewScheduleJobTool creates the schedule_job tool.
 func NewScheduleJobTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
-		Name: "schedule_job",
-		Description: `Create a scheduled job that runs automatically on a cron schedule.
-
-Two modes:
-- "routine": Runs a saved flow with fixed parameters. Deterministic, same every time.
-- "adaptive": Runs an LLM-driven agentic task with stored instructions. Can reason and adapt.
-
-IMPORTANT — Context awareness:
-- When scheduling a task you just performed in this conversation, use the conversation context to populate ALL required parameters (routine) or write complete instructions (adaptive).
-- For routine mode: if the flow requires parameters, extract them from the conversation — you already have them. If no saved flow exists for this task, call distill_flow first to create one from the conversation traces, then use the resulting flow name here.
-- For adaptive mode: the instructions MUST reproduce the EXACT output format the user last saw. Include a concrete example of the expected output copied from your most recent response to the user.
-
-Delivery: Results are automatically broadcast to all active channels (e.g., all allowed Telegram users). You do NOT need to specify channel or target — delivery is handled automatically.
-
-The schedule uses standard 5-field cron syntax: minute hour day-of-month month day-of-week.
-Common patterns: "0 9 * * *" (daily 9 AM), "0 */2 * * *" (every 2 hours), "0 9 * * 1-5" (weekdays 9 AM).
-
-Set test_first=true to execute the job immediately for testing before enabling the schedule.
-Only call this tool AFTER the user has approved the plan — never execute without explicit user permission.`,
+		Name:        "schedule_job",
+		Description: `Create a scheduled job on a cron schedule. Modes: "routine" (run a saved flow with fixed params) or "adaptive" (LLM-driven agentic execution with instructions). Uses 5-field cron syntax. Set test_first=true to test before enabling. Results broadcast to all active channels automatically. Only call after user approval.`,
 	}, scheduleJob)
 }
 

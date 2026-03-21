@@ -122,47 +122,6 @@ func TestSystemPromptBuilder_NoIdentitySection(t *testing.T) {
 	}
 }
 
-func TestSystemPromptBuilder_HandoffGuidance(t *testing.T) {
-	builder := &SystemPromptBuilder{
-		BrowserAvailable: true,
-		Tools:            mockTools("browser_navigate", "browser_request_human"),
-	}
-
-	prompt := builder.Build()
-
-	checks := []string{
-		"Human-in-the-loop",
-		"CAPTCHAs",
-		"Two-step handoff flow",
-		"browser_request_human",
-		"browser_handoff_complete",
-		"RELAY the connection instructions",
-	}
-	for _, check := range checks {
-		if !strings.Contains(prompt, check) {
-			t.Errorf("expected prompt to contain %q", check)
-		}
-	}
-}
-
-func TestSystemPromptBuilder_NoHandoffGuidance(t *testing.T) {
-	builder := &SystemPromptBuilder{
-		BrowserAvailable: true,
-		Tools:            mockTools("browser_navigate"),
-	}
-
-	prompt := builder.Build()
-
-	// Browser section should be present
-	if !strings.Contains(prompt, "## Browser Automation") {
-		t.Error("expected browser automation section")
-	}
-	// But no handoff guidance since tool is not registered
-	if strings.Contains(prompt, "Human-in-the-loop") {
-		t.Error("handoff guidance should not appear without browser_request_human tool")
-	}
-}
-
 func TestSystemPromptBuilder_HasHandoffTool(t *testing.T) {
 	builder := &SystemPromptBuilder{
 		Tools: mockTools("browser_navigate", "browser_request_human"),
@@ -181,5 +140,124 @@ func TestSystemPromptBuilder_HasHandoffTool(t *testing.T) {
 	builder3 := &SystemPromptBuilder{}
 	if builder3.hasHandoffTool() {
 		t.Error("expected hasHandoffTool() to return false with no tools")
+	}
+}
+
+func TestSystemPromptBuilder_SlimPrompt(t *testing.T) {
+	// A fully-loaded builder should produce a compact prompt
+	builder := &SystemPromptBuilder{
+		WorkspaceDir:          "/root",
+		InstructionsContent:   "Be helpful.",
+		BrowserAvailable:      true,
+		MemorySearchAvailable: true,
+		WebSearchAvailable:    true,
+		Timezone:              "America/New_York",
+		Tools: mockTools(
+			"read_file", "shell_command", "save_credential",
+			"schedule_job", "process_read", "http_request",
+			"delegate_tasks", "email_list",
+		),
+	}
+
+	prompt := builder.Build()
+
+	// Should have compact sections
+	if !strings.Contains(prompt, "## Tool Use") {
+		t.Error("expected Tool Use section")
+	}
+	if !strings.Contains(prompt, "## Environment") {
+		t.Error("expected Environment section")
+	}
+	if !strings.Contains(prompt, "## Capabilities") {
+		t.Error("expected Capabilities section")
+	}
+	if !strings.Contains(prompt, "Timezone: America/New_York") {
+		t.Error("expected timezone in environment")
+	}
+
+	// Capabilities line should list all detected capabilities
+	for _, cap := range []string{
+		"browser automation", "credential management", "job scheduling",
+		"process management", "task delegation", "persistent memory",
+		"web search", "email",
+	} {
+		if !strings.Contains(prompt, cap) {
+			t.Errorf("expected capabilities to include %q", cap)
+		}
+	}
+
+	// Should NOT have old verbose sections (these are now in guidance docs)
+	for _, removed := range []string{
+		"## Available Tools",
+		"## Browser Automation",
+		"## Job Scheduling",
+		"## Credential Management",
+		"## Interactive Commands",
+		"## Commands That Open Text Editors",
+		"## HTTP Requests",
+		"## Task Delegation",
+		"## Persistent Memory",
+		"## Knowledge Recall",
+		"## Self-Configuration",
+	} {
+		if strings.Contains(prompt, removed) {
+			t.Errorf("prompt should NOT contain removed section %q", removed)
+		}
+	}
+
+	// Should reference memory_search for guidance
+	if !strings.Contains(prompt, "memory_search") {
+		t.Error("expected guidance hint referencing memory_search")
+	}
+
+	// Verify prompt is reasonably compact (under 4000 chars ~ 1000 tokens)
+	if len(prompt) > 4000 {
+		t.Errorf("prompt too large for slim design: %d chars (target < 4000)", len(prompt))
+	}
+}
+
+func TestSystemPromptBuilder_DynamicSections(t *testing.T) {
+	builder := &SystemPromptBuilder{
+		ChannelHints:   "Format as plain text.",
+		SchedulerHints: "This is a scheduled run.",
+		SessionContext: "You are in fleet wizard mode.",
+	}
+
+	prompt := builder.Build()
+
+	if !strings.Contains(prompt, "## Output Constraints") {
+		t.Error("expected Output Constraints section")
+	}
+	if !strings.Contains(prompt, "## Execution Context") {
+		t.Error("expected Execution Context section")
+	}
+	if !strings.Contains(prompt, "## Session Task") {
+		t.Error("expected Session Task section")
+	}
+}
+
+func TestSystemPromptBuilder_KnowledgeInjection(t *testing.T) {
+	// With execution plan
+	builder := &SystemPromptBuilder{
+		ExecutionPlan:     "Step 1: Do something",
+		RelevantKnowledge: "Use --flag for best results",
+	}
+	prompt := builder.Build()
+
+	if !strings.Contains(prompt, "## Execution Plan") {
+		t.Error("expected Execution Plan section")
+	}
+	if !strings.Contains(prompt, "### Knowledge From Previous Experience") {
+		t.Error("expected knowledge sub-section")
+	}
+
+	// Without execution plan but with knowledge
+	builder2 := &SystemPromptBuilder{
+		RelevantKnowledge: "Some useful knowledge",
+	}
+	prompt2 := builder2.Build()
+
+	if !strings.Contains(prompt2, "## Knowledge For This Task") {
+		t.Error("expected standalone knowledge section")
 	}
 }

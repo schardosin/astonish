@@ -186,6 +186,7 @@ type GeneralConfig struct {
 	WebSearchTool   string `yaml:"web_search_tool" json:"web_search_tool"`
 	WebExtractTool  string `yaml:"web_extract_tool" json:"web_extract_tool"`
 	ContextLength   int    `yaml:"context_length,omitempty" json:"context_length,omitempty"` // Override context window size (tokens)
+	Timezone        string `yaml:"timezone,omitempty" json:"timezone,omitempty"`             // IANA timezone (e.g. "America/New_York")
 }
 
 // DaemonConfig controls the background daemon service.

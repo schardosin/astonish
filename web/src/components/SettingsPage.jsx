@@ -155,7 +155,8 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
     default_provider: '', 
     default_model: '',
     web_search_tool: '',
-    web_extract_tool: ''
+    web_extract_tool: '',
+    timezone: ''
   })
   const [providerForms, setProviderForms] = useState({})
   const [mcpServers, setMcpServers] = useState({})
@@ -279,7 +280,8 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
         default_provider: settingsData.general.default_provider || '',
         default_model: settingsData.general.default_model || '',
         web_search_tool: settingsData.general.web_search_tool || '',
-        web_extract_tool: settingsData.general.web_extract_tool || ''
+        web_extract_tool: settingsData.general.web_extract_tool || '',
+        timezone: settingsData.general.timezone || ''
       })
       // Initialize provider forms
       const pForms = {}
@@ -932,6 +934,27 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                       >MCP Servers</button> section to quick-install a web search provider.
                     </p>
                   )}
+                </div>
+              </div>
+
+              {/* Timezone */}
+              <div className="rounded-lg border p-4" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-primary)' }}>
+                <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>Timezone</h3>
+                <div>
+                  <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
+                    IANA Timezone
+                  </label>
+                  <input
+                    type="text"
+                    value={generalForm.timezone}
+                    onChange={(e) => setGeneralForm({ ...generalForm, timezone: e.target.value })}
+                    placeholder="e.g. America/Sao_Paulo (leave empty for system default)"
+                    className="w-full px-4 py-2.5 rounded-lg border text-sm"
+                    style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                  />
+                  <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                    Used for scheduling and time display. Must be a valid IANA timezone identifier.
+                  </p>
                 </div>
               </div>
 

@@ -26,6 +26,16 @@ type Indexer struct {
 // fileIndexName is the filename used to persist the file index to disk.
 const fileIndexName = "file_index.json"
 
+// fileIndexVersion is bumped when the metadata schema changes (e.g. adding
+// the "category" field) to force a full re-index on the next startup.
+const fileIndexVersion = 2
+
+// fileIndexData is the versioned wrapper for the persisted file index.
+type fileIndexData struct {
+	Version int               `json:"version"`
+	Files   map[string]string `json:"files"`
+}
+
 // NewIndexer creates a new indexer bound to the given store.
 func NewIndexer(store *Store, cfg *StoreConfig, debugMode bool) *Indexer {
 	idx := &Indexer{
@@ -299,28 +309,56 @@ func (idx *Indexer) fileIndexPath() string {
 }
 
 // loadFileIndex loads the persisted file index from disk.
-// If the file doesn't exist or is corrupt, the index starts empty.
+// If the file doesn't exist, is corrupt, or has a stale schema version,
+// the index starts empty (triggering a full re-index).
 func (idx *Indexer) loadFileIndex() {
 	data, err := os.ReadFile(idx.fileIndexPath())
 	if err != nil {
 		return // File doesn't exist yet — first run.
 	}
-	loaded := make(map[string]string)
-	if err := json.Unmarshal(data, &loaded); err != nil {
+
+	// Try versioned format first
+	var versioned fileIndexData
+	if err := json.Unmarshal(data, &versioned); err == nil && versioned.Version > 0 {
+		if versioned.Version != fileIndexVersion {
+			if idx.debugMode {
+				fmt.Printf("[Memory Indexer] Schema version changed (%d -> %d), will re-index all files\n",
+					versioned.Version, fileIndexVersion)
+			}
+			return // Version mismatch — start empty to force full re-index
+		}
+		idx.fileIndex = versioned.Files
+		if idx.fileIndex == nil {
+			idx.fileIndex = make(map[string]string)
+		}
 		if idx.debugMode {
-			fmt.Printf("[Memory Indexer] Warning: corrupt file index, rebuilding: %v\n", err)
+			fmt.Printf("[Memory Indexer] Loaded file index v%d (%d entries)\n", versioned.Version, len(idx.fileIndex))
 		}
 		return
 	}
-	idx.fileIndex = loaded
+
+	// Legacy format: plain map[string]string (no version field).
+	// Treat as stale — start empty to force re-index with new metadata schema.
+	legacy := make(map[string]string)
+	if err := json.Unmarshal(data, &legacy); err == nil && len(legacy) > 0 {
+		if idx.debugMode {
+			fmt.Printf("[Memory Indexer] Legacy file index detected (%d entries), will re-index for metadata upgrade\n", len(legacy))
+		}
+		return // Don't load — force re-index
+	}
+
 	if idx.debugMode {
-		fmt.Printf("[Memory Indexer] Loaded file index (%d entries)\n", len(loaded))
+		fmt.Printf("[Memory Indexer] Warning: corrupt file index, rebuilding\n")
 	}
 }
 
-// saveFileIndex persists the current file index to disk.
+// saveFileIndex persists the current file index to disk with schema version.
 func (idx *Indexer) saveFileIndex() {
-	data, err := json.Marshal(idx.fileIndex)
+	versioned := fileIndexData{
+		Version: fileIndexVersion,
+		Files:   idx.fileIndex,
+	}
+	data, err := json.Marshal(versioned)
 	if err != nil {
 		if idx.debugMode {
 			fmt.Printf("[Memory Indexer] Warning: failed to marshal file index: %v\n", err)

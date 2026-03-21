@@ -754,6 +754,17 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		promptBuilder.MemorySearchAvailable = true
 	}
 
+	// Resolve timezone: general.timezone -> agent_identity.timezone -> system default
+	if cfg.AppConfig != nil {
+		tz := cfg.AppConfig.General.Timezone
+		if tz == "" && cfg.AppConfig.AgentIdentity.Timezone != "" {
+			tz = cfg.AppConfig.AgentIdentity.Timezone
+		}
+		if tz != "" {
+			promptBuilder.Timezone = tz
+		}
+	}
+
 	// Set skill index for system prompt
 	if skillIndex != "" {
 		promptBuilder.SkillIndex = skillIndex
@@ -797,11 +808,19 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			if cfg.DebugMode {
 				fmt.Printf("Warning: Failed to write SELF.md: %v\n", writeErr)
 			}
-		} else {
-			promptBuilder.SelfContent = selfContent
+		} else if cfg.DebugMode {
+			fmt.Printf("Generated SELF.md (%d bytes)\n", len(selfContent))
+		}
+
+		// Sync guidance documents to memory/guidance/ for vector indexing.
+		// Guidance docs replace the hardcoded system prompt sections —
+		// they are retrieved via auto-knowledge search per turn.
+		if syncErr := agent.SyncGuidanceToMemory(memDir); syncErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Generated SELF.md (%d bytes)\n", len(selfContent))
+				fmt.Printf("Warning: Failed to sync guidance docs: %v\n", syncErr)
 			}
+		} else if cfg.DebugMode {
+			fmt.Printf("Synced guidance docs to memory/guidance/\n")
 		}
 	}
 
@@ -1040,6 +1059,22 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			return knowledgeResults, nil
 		}
 
+		chatAgent.KnowledgeSearchByCategory = func(ctx context.Context, query string, maxResults int, minScore float64, category string) ([]agent.KnowledgeSearchResult, error) {
+			results, err := memStore.SearchByCategory(ctx, query, maxResults, minScore, category)
+			if err != nil {
+				return nil, err
+			}
+			var knowledgeResults []agent.KnowledgeSearchResult
+			for _, r := range results {
+				knowledgeResults = append(knowledgeResults, agent.KnowledgeSearchResult{
+					Path:    r.Path,
+					Score:   r.Score,
+					Snippet: r.Snippet,
+				})
+			}
+			return knowledgeResults, nil
+		}
+
 		if cfg.DebugMode {
 			fmt.Println("Flow vector search: enabled")
 			fmt.Println("Auto knowledge retrieval: enabled")
@@ -1063,7 +1098,6 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			}
 			content := memory.GenerateSelfMD(selfCfg)
 			if writeErr := memory.WriteSelfMD(selfMDMemDir, content); writeErr == nil {
-				promptBuilder.SelfContent = content
 				if cfg.DebugMode {
 					fmt.Printf("[SELF.md] Refreshed (%d bytes)\n", len(content))
 				}

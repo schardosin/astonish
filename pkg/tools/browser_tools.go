@@ -91,10 +91,8 @@ func GetBrowserTools(mgr *browser.Manager) ([]tool.Tool, error) {
 	// --- Observation ---
 
 	snapshotTool, err := functiontool.New(functiontool.Config{
-		Name: "browser_snapshot",
-		Description: `Capture an accessibility snapshot of the current page. Returns a text tree with ref IDs that can be used for interaction (browser_click, browser_type, etc.). This is better than screenshots for understanding page structure.
-
-Use mode="efficient" for large pages (compact, interactive-only, depth=6, maxChars=10000).`,
+		Name:        "browser_snapshot",
+		Description: "Capture an accessibility snapshot of the current page. Returns a text tree with ref IDs for interaction. Use mode=\"efficient\" for large pages (compact, interactive-only, depth=6, maxChars=10000).",
 	}, BrowserSnapshot(mgr, refs))
 	if err != nil {
 		return nil, err
@@ -151,10 +149,8 @@ Use mode="efficient" for large pages (compact, interactive-only, depth=6, maxCha
 	}
 
 	waitForTool, err := functiontool.New(functiontool.Config{
-		Name: "browser_wait_for",
-		Description: `Wait for a condition: text to appear/disappear, CSS selector to be visible, URL to match, page load state, or a JavaScript expression to be truthy.
-
-IMPORTANT: Avoid state="networkidle" on single-page applications (Reddit, Twitter, Gmail, etc.) as they maintain persistent WebSocket connections and never truly go network-idle, causing the full timeout to elapse. Prefer waiting for specific text, selectors, or URL changes instead.`,
+		Name:        "browser_wait_for",
+		Description: "Wait for a condition: text to appear/disappear, CSS selector visible, URL match, page load state, or JS expression truthy. Avoid state=\"networkidle\" on SPAs (persistent WebSocket connections cause full timeout).",
 	}, BrowserWaitFor(mgr))
 	if err != nil {
 		return nil, err
@@ -169,10 +165,8 @@ IMPORTANT: Avoid state="networkidle" on single-page applications (Reddit, Twitte
 	}
 
 	handleDialogTool, err := functiontool.New(functiontool.Config{
-		Name: "browser_handle_dialog",
-		Description: `Handle a native JavaScript dialog (alert, confirm, prompt). Must be called before the action that triggers the dialog.
-
-IMPORTANT: This only works for native JS dialogs (window.alert, window.confirm, window.prompt). Most modern websites use custom modal/inline UI instead of native dialogs. If no dialog appears within the timeout (default 10s), the tool returns gracefully. Use browser_snapshot to check for inline error messages or modals instead.`,
+		Name:        "browser_handle_dialog",
+		Description: "Handle a native JS dialog (alert, confirm, prompt). Must be called before the triggering action. Only works for native dialogs — use browser_snapshot for custom modals.",
 	}, BrowserHandleDialog(mgr))
 	if err != nil {
 		return nil, err
@@ -205,15 +199,8 @@ IMPORTANT: This only works for native JS dialogs (window.alert, window.confirm, 
 	}
 
 	responseBodyTool, err := functiontool.New(functiontool.Config{
-		Name: "browser_response_body",
-		Description: `Intercept and read HTTP response bodies from network requests.
-
-Three-step workflow:
-1. action="listen" urlPattern="*api/data*" — start intercepting matching responses
-2. Trigger the action that produces the request (click, navigate, etc.)
-3. action="read" — retrieve the captured response body
-
-Use action="stop" to remove the interceptor when done.`,
+		Name:        "browser_response_body",
+		Description: "Intercept and read HTTP response bodies. Workflow: action=\"listen\" urlPattern=\"*api/data*\" → trigger request → action=\"read\" to get body. Use action=\"stop\" to remove interceptor.",
 	}, BrowserResponseBody(mgr))
 	if err != nil {
 		return nil, err
@@ -294,12 +281,8 @@ Use action="stop" to remove the interceptor when done.`,
 	}
 
 	setDeviceTool, err := functiontool.New(functiontool.Config{
-		Name: "browser_set_device",
-		Description: `Emulate a mobile or tablet device. Sets viewport, user agent, touch, and DPR.
-
-Available devices: iPhone 4, iPhone 5/SE, iPhone 6/7/8, iPhone 6/7/8 Plus, iPhone X, iPad, iPad Mini, iPad Pro, Pixel 2, Pixel 2 XL, Galaxy S5, Galaxy S III, Galaxy Note 3, Galaxy Fold, Nexus 5, Nexus 6, Moto G4, Surface Duo, Kindle Fire HDX, and more.
-
-Use device="clear" to remove device emulation.`,
+		Name:        "browser_set_device",
+		Description: "Emulate a mobile/tablet device (viewport, user agent, touch, DPR). Supports iPhone, iPad, Pixel, Galaxy, etc. Use device=\"clear\" to remove emulation.",
 	}, BrowserSetDevice(mgr))
 	if err != nil {
 		return nil, err
@@ -308,30 +291,16 @@ Use device="clear" to remove device emulation.`,
 	// --- Human-in-the-loop ---
 
 	requestHumanTool, err := functiontool.New(functiontool.Config{
-		Name: "browser_request_human",
-		Description: `Start a browser handoff session so a human can take over via Chrome DevTools Protocol (CDP). Returns IMMEDIATELY with connection instructions that you MUST relay to the user.
-
-Use this when you encounter something you cannot handle autonomously:
-- CAPTCHAs that need manual solving
-- Complex multi-factor auth flows
-- Payment forms requiring real credentials
-- Any situation where a human eye/hand is needed
-
-IMPORTANT: This tool returns immediately. After showing the user the connection instructions, you MUST call browser_handoff_complete to wait for them to finish. Then take a browser_snapshot to see the result.`,
+		Name:        "browser_request_human",
+		Description: "Start a browser handoff session for human intervention (CAPTCHAs, MFA, payment forms). Returns immediately with CDP connection instructions — relay these to the user, then call browser_handoff_complete.",
 	}, BrowserRequestHuman(mgr))
 	if err != nil {
 		return nil, err
 	}
 
 	handoffCompleteTool, err := functiontool.New(functiontool.Config{
-		Name: "browser_handoff_complete",
-		Description: `Wait for the user to finish an active browser handoff session. Call this AFTER you have relayed the connection instructions from browser_request_human to the user.
-
-The tool blocks until the user signals completion by:
-- Closing the Chrome DevTools window (auto-detected after 10s)
-- Visiting the /handoff/done URL
-
-After this returns, take a browser_snapshot to see what the user did.`,
+		Name:        "browser_handoff_complete",
+		Description: "Wait for user to finish an active browser handoff. Call after relaying connection instructions from browser_request_human. Blocks until user signals done. Take browser_snapshot afterward.",
 	}, BrowserHandoffComplete(mgr))
 	if err != nil {
 		return nil, err

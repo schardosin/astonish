@@ -14,6 +14,26 @@ type Chunk struct {
 	StartLine int
 	EndLine   int
 	Hash      string // SHA-256 of text content
+	Category  string // Derived from path prefix (guidance, skill, flow, knowledge, etc.)
+}
+
+// CategoryFromPath derives a chunk category from the relative file path.
+// Categories enable partitioned vector search (e.g. guidance-only queries).
+func CategoryFromPath(path string) string {
+	switch {
+	case strings.HasPrefix(path, "guidance/"):
+		return "guidance"
+	case strings.HasPrefix(path, "skills/"):
+		return "skill"
+	case strings.HasPrefix(path, "flows/"):
+		return "flow"
+	case path == "SELF.md":
+		return "self"
+	case path == "INSTRUCTIONS.md":
+		return "instructions"
+	default:
+		return "knowledge"
+	}
 }
 
 // ChunkFile splits a file into overlapping chunks.
@@ -33,6 +53,7 @@ func ChunkFile(path string, content string, maxChars int, overlapChars int) []Ch
 
 	lines := strings.Split(content, "\n")
 	var chunks []Chunk
+	category := CategoryFromPath(path)
 
 	startLine := 1
 	var currentLines []string
@@ -53,6 +74,7 @@ func ChunkFile(path string, content string, maxChars int, overlapChars int) []Ch
 			StartLine: startLine,
 			EndLine:   endLine,
 			Hash:      contentHash,
+			Category:  category,
 		})
 	}
 

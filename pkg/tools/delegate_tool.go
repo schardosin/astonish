@@ -137,24 +137,8 @@ func delegateTasks(ctx tool.Context, args DelegateTasksArgs) (DelegateTasksResul
 // NewDelegateTasksTool creates the delegate_tasks tool.
 func NewDelegateTasksTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
-		Name: "delegate_tasks",
-		Description: `Delegate multiple HEAVY tasks to parallel sub-agents for concurrent execution.
-
-IMPORTANT: This tool has significant overhead — use it only for 3+ independent tasks that each require multiple tool calls. For 1-2 tasks or quick lookups, call tools directly instead. The user sees NO output until all sub-agents finish, so only delegate when the parallelism benefit outweighs the UX cost.
-
-Each sub-agent runs independently with its own session and tool context.
-
-Use this ONLY when:
-- You have 3 or more independent tasks that each need multiple tool calls
-- Combined sequential execution would take over 2-3 minutes
-- Tasks are truly independent and don't need streaming output
-
-Do NOT use for:
-- 1-2 tasks (just call the tools yourself)
-- Quick lookups, status checks, or API calls
-- Anything the user expects a fast response to
-
-Each sub-task gets an isolated session, read-only memory access, filtered tools (no memory_save, scheduling, or credential management), and a 5-minute timeout. Max 10 tasks per call.`,
+		Name:        "delegate_tasks",
+		Description: `Delegate multiple tasks to parallel sub-agents. Only use for 3+ independent tasks that each require multiple tool calls. For 1-2 tasks, call tools directly. Each sub-agent gets an isolated session, read-only memory, filtered tools, and a 5-minute timeout. Max 10 tasks per call.`,
 	}, delegateTasks)
 }
 

@@ -36,6 +36,10 @@ type KnowledgeSearchResult struct {
 // Used to auto-retrieve relevant knowledge before LLM execution.
 type KnowledgeSearchFunc func(ctx context.Context, query string, maxResults int, minScore float64) ([]KnowledgeSearchResult, error)
 
+// KnowledgeSearchByCategoryFunc performs a vector search filtered by category.
+// Categories: "guidance", "skill", "flow", "self", "instructions", "knowledge".
+type KnowledgeSearchByCategoryFunc func(ctx context.Context, query string, maxResults int, minScore float64, category string) ([]KnowledgeSearchResult, error)
+
 // ChatAgent implements a dynamic chat agent without flow definitions.
 // It wraps ADK's llmagent in a persistent chat session where the LLM
 // decides which tools to call and how to proceed.
@@ -58,10 +62,11 @@ type ChatAgent struct {
 	FlowDistiller *FlowDistiller // Distiller for trace-to-YAML conversion
 
 	// Memory and flow reuse
-	MemoryManager      *memory.Manager     // Persistent memory manager
-	FlowContextBuilder *FlowContextBuilder // Converts flow YAML to execution plan
-	FlowSearcher       FlowMemorySearcher  // Vector-based flow matching (nil = LLM-only)
-	KnowledgeSearch    KnowledgeSearchFunc // Auto-retrieve relevant knowledge per turn (nil = disabled)
+	MemoryManager             *memory.Manager               // Persistent memory manager
+	FlowContextBuilder        *FlowContextBuilder           // Converts flow YAML to execution plan
+	FlowSearcher              FlowMemorySearcher            // Vector-based flow matching (nil = LLM-only)
+	KnowledgeSearch           KnowledgeSearchFunc           // Auto-retrieve relevant knowledge per turn (nil = disabled)
+	KnowledgeSearchByCategory KnowledgeSearchByCategoryFunc // Auto-retrieve guidance docs per turn (nil = disabled)
 
 	// Self-management callbacks
 	SelfMDRefresher  func() // Called after config changes to regenerate SELF.md
@@ -453,24 +458,22 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		// --- Phase A: Dynamic Execution ---
 		trace := NewExecutionTrace(userText)
 
-		// Load memory and inject into system prompt
-		c.SystemPrompt.MemoryContent = ""
+		// Reset per-turn dynamic fields
 		c.SystemPrompt.ExecutionPlan = ""
 		c.SystemPrompt.RelevantKnowledge = ""
 
 		var matchedFlowName string
+		var memContent string
 
 		if c.MemoryManager != nil {
-			memContent, memErr := c.MemoryManager.Load()
+			// Load memory content for flow matching (not injected into system prompt)
+			mc, memErr := c.MemoryManager.Load()
 			if memErr != nil {
 				if c.DebugMode {
 					fmt.Printf("[Chat DEBUG] Failed to load memory: %v\n", memErr)
 				}
-			} else if memContent != "" {
-				c.SystemPrompt.MemoryContent = EscapeCurlyPlaceholders(memContent)
-				if c.DebugMode {
-					fmt.Printf("[Chat DEBUG] Loaded memory (%d bytes)\n", len(memContent))
-				}
+			} else {
+				memContent = mc
 			}
 
 			// Check for matching saved flow
@@ -494,36 +497,62 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			}
 		}
 
-		// Auto-retrieve relevant knowledge from vector store
-		if c.KnowledgeSearch != nil && userText != "" {
+		// Auto-retrieve relevant knowledge from vector store.
+		// Two partitioned searches: guidance docs (capped at 3) + general knowledge (capped at 5).
+		// This ensures capability guidance surfaces alongside task-specific knowledge.
+		if (c.KnowledgeSearch != nil || c.KnowledgeSearchByCategory != nil) && userText != "" {
 			searchQuery := buildKnowledgeQuery(userText, matchedFlowName)
 			if len(searchQuery) < 5 {
 				if c.DebugMode {
 					fmt.Printf("[Chat DEBUG] Auto knowledge search: skipped (processed query too short: %q)\n", searchQuery)
 				}
 			} else {
-				results, searchErr := c.KnowledgeSearch(context.Background(), searchQuery, 5, 0.3)
-				if searchErr != nil {
-					if c.DebugMode {
-						fmt.Printf("[Chat DEBUG] Auto knowledge search failed: %v\n", searchErr)
+				var allResults []KnowledgeSearchResult
+
+				// Partition 1: Guidance docs (how-to instructions for capabilities)
+				if c.KnowledgeSearchByCategory != nil {
+					guidanceResults, err := c.KnowledgeSearchByCategory(context.Background(), searchQuery, 3, 0.3, "guidance")
+					if err != nil {
+						if c.DebugMode {
+							fmt.Printf("[Chat DEBUG] Guidance search failed: %v\n", err)
+						}
+					} else {
+						allResults = append(allResults, guidanceResults...)
 					}
-				} else if len(results) > 0 {
+				}
+
+				// Partition 2: Everything else (memory, skills, flows, knowledge)
+				if c.KnowledgeSearch != nil {
+					knowledgeResults, err := c.KnowledgeSearch(context.Background(), searchQuery, 5, 0.3)
+					if err != nil {
+						if c.DebugMode {
+							fmt.Printf("[Chat DEBUG] Knowledge search failed: %v\n", err)
+						}
+					} else {
+						allResults = append(allResults, knowledgeResults...)
+					}
+				}
+
+				// Deduplicate and format
+				allResults = deduplicateSearchResults(allResults)
+
+				if len(allResults) > 0 {
 					var kb strings.Builder
-					for _, r := range results {
+					for _, r := range allResults {
 						kb.WriteString(fmt.Sprintf("**%s** (relevance: %.0f%%)\n", r.Path, r.Score*100))
 						kb.WriteString(r.Snippet)
 						kb.WriteString("\n\n")
 					}
 					c.SystemPrompt.RelevantKnowledge = EscapeCurlyPlaceholders(kb.String())
 					if c.DebugMode {
-						fmt.Printf("[Chat DEBUG] Auto knowledge search: %d results injected for query: %s\n", len(results), truncateQuery(searchQuery, 60))
+						fmt.Printf("[Chat DEBUG] Auto knowledge search: %d results injected for query: %s\n", len(allResults), truncateQuery(searchQuery, 60))
 					}
 				} else if c.DebugMode {
 					fmt.Printf("[Chat DEBUG] Auto knowledge search: no results for query: %s\n", truncateQuery(searchQuery, 60))
 				}
 			}
-		} else if c.KnowledgeSearch == nil && c.DebugMode {
-			fmt.Println("[Chat DEBUG] Auto knowledge search: disabled (KnowledgeSearch not wired)")
+		} else if c.KnowledgeSearch == nil && c.KnowledgeSearchByCategory == nil && c.DebugMode {
+			fmt.Println("[Chat DEBUG] Auto knowledge search: disabled (no search functions wired)")
 		}
 
 		// Build system prompt (includes memory and execution plan if set)
@@ -1419,4 +1448,25 @@ func buildKnowledgeQuery(userText, flowName string) string {
 		q = strings.TrimSpace(q + " " + name)
 	}
 	return q
+}
+
+// deduplicateSearchResults removes duplicate knowledge results that appear
+// in both the guidance and general knowledge partitions. Deduplication is by
+// path + snippet content. Earlier entries (guidance) take priority.
+func deduplicateSearchResults(results []KnowledgeSearchResult) []KnowledgeSearchResult {
+	seen := make(map[string]bool)
+	var deduped []KnowledgeSearchResult
+	for _, r := range results {
+		// Key by path + first 100 chars of snippet to catch overlapping chunks
+		snippet := r.Snippet
+		if len(snippet) > 100 {
+			snippet = snippet[:100]
+		}
+		k := r.Path + ":" + snippet
+		if !seen[k] {
+			seen[k] = true
+			deduped = append(deduped, r)
+		}
+	}
+	return deduped
 }

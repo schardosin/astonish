@@ -484,12 +484,8 @@ func GetInternalTools() ([]tool.Tool, error) {
 	}
 
 	shellCommandTool, err := functiontool.New(functiontool.Config{
-		Name: "shell_command",
-		Description: `Execute a shell command with full PTY support.
-
-One-shot mode (default): Runs the command and waits for it to complete. If the command is waiting for interactive input (SSH prompts, password, confirmations), it returns early with waiting_for_input=true and a session_id. Use process_write to respond to the prompt, and process_read to check output.
-
-Background mode (background=true): Starts the command and returns immediately with a session_id. Use process_read, process_write, and process_kill to manage the process.`,
+		Name:        "shell_command",
+		Description: `Execute a shell command with PTY support. Returns stdout, exit_code. If the command waits for input, returns waiting_for_input=true with a session_id — use process_write to respond. Set background=true to start without waiting.`,
 	}, ShellCommand)
 	if err != nil {
 		return nil, err
@@ -546,7 +542,7 @@ Background mode (background=true): Starts the command and returns immediately wi
 
 	webFetchTool, err := functiontool.New(functiontool.Config{
 		Name:        "web_fetch",
-		Description: "Fetch a URL and extract its content as clean markdown, readable text, or raw HTML. PREFERRED tool for fetching specific URLs — always try this first before other web extraction tools. Fast, free, no API key required. Uses Mozilla Readability for article-focused extraction. If this tool returns empty or navigation-only content (common with JavaScript-heavy pages), then retry with the configured MCP web extract tool.",
+		Description: "Fetch a URL and extract content as markdown, text, or HTML. Preferred tool for fetching specific URLs — try this first. Fast, free, no API key. If it returns empty content (JS-heavy pages), retry with browser tools or the configured MCP extract tool.",
 	}, WebFetch)
 	if err != nil {
 		return nil, err
@@ -561,10 +557,8 @@ Background mode (background=true): Starts the command and returns immediately wi
 	}
 
 	httpRequestTool, err := functiontool.New(functiontool.Config{
-		Name: "http_request",
-		Description: `Make an HTTP request to an API endpoint. Supports GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS.
-
-Use this instead of curl via shell_command for cleaner API calls. Set 'credential' to a stored credential name for automatic authentication header injection (supports API key, bearer, basic, OAuth). JSON Content-Type is set automatically when the body starts with { or [.`,
+		Name:        "http_request",
+		Description: `Make an HTTP request (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS). Set 'credential' to a stored credential name for automatic auth header injection. JSON Content-Type is set automatically when body starts with { or [.`,
 	}, HttpRequest)
 	if err != nil {
 		return nil, err

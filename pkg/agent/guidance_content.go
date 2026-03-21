@@ -1,0 +1,261 @@
+package agent
+
+// Guidance documents are written to memory/guidance/*.md at startup and indexed
+// into the vector store. They replace the hardcoded guidance sections that were
+// previously embedded in the system prompt, delivering the same instructional
+// content on-demand via semantic search.
+
+const guidanceBrowserAutomation = `# Guidance: Browser Automation
+
+You have a built-in browser with tools for navigating, interacting, and observing web pages.
+The browser uses a persistent profile — login sessions, cookies, and site data survive across restarts. Once the user logs into a site, they stay logged in.
+
+**Core workflow:**
+1. ` + "`browser_navigate`" + ` to load a page
+2. ` + "`browser_snapshot`" + ` to see the page structure (accessibility tree with ref IDs)
+3. Use refs from the snapshot to interact: ` + "`browser_click ref=ref5`" + `, ` + "`browser_type ref=ref7 text=\"hello\"`" + `
+4. ` + "`browser_snapshot`" + ` again to see the result
+
+**When to use the browser:**
+- After ` + "`web_fetch`" + ` fails for content extraction (JS-heavy pages)
+- When you need to interact with a page (click buttons, fill forms, log in)
+- When you need a visual screenshot of a page
+- When you need to navigate through multi-page workflows
+
+**Tips:**
+- Prefer ` + "`web_fetch`" + ` for simple content extraction — it's faster
+- Use ` + "`browser_snapshot`" + ` over ` + "`browser_take_screenshot`" + ` for decision-making — text is cheaper than images
+- Use ` + "`mode=\"efficient\"`" + ` on snapshots for large pages — shows only interactive elements
+- Refs are valid until the next snapshot. If a ref fails, take a new snapshot.
+- Use ` + "`browser_tabs`" + ` with ` + "`action=\"new\"`" + ` and ` + "`incognito=true`" + ` to open a tab with isolated cookies/storage (for testing login flows or browsing without personal session data)
+
+**Authenticated websites:**
+When a page requires login, check the credential store FIRST — don't ask the user for passwords.
+1. ` + "`list_credentials`" + ` — look for a credential matching the site's domain or name
+2. If found: ` + "`resolve_credential(name=\"...\")`" + ` to get username + password
+3. ` + "`browser_type`" + ` to fill the login form fields, ` + "`browser_click`" + ` to submit
+4. If no matching credential exists: ask the user for the credentials, then ` + "`save_credential`" + ` to store them securely BEFORE typing them into the form
+NEVER ask the user to type passwords in chat if a credential already exists in the store.
+
+**Human-in-the-loop (browser handoff):**
+Use ` + "`browser_request_human`" + ` when you encounter something that requires human intervention:
+- CAPTCHAs (reCAPTCHA, hCaptcha, Cloudflare Turnstile)
+- Complex multi-factor authentication flows
+- Payment forms requiring real card details
+- Any visual challenge you cannot solve programmatically
+
+**Two-step handoff flow (CRITICAL):**
+1. Call ` + "`browser_request_human`" + ` with a specific reason. It returns IMMEDIATELY with CDP connection instructions.
+2. **RELAY the connection instructions to the user in your response.** Include the listen address and steps.
+3. Call ` + "`browser_handoff_complete`" + ` to wait for the user to finish.
+4. After completion, take a fresh ` + "`browser_snapshot`" + ` to see what changed.
+
+You MUST show the user the connection details before calling browser_handoff_complete, otherwise they won't know how to connect.
+`
+
+const guidanceCredentialManagement = `# Guidance: Credential Management
+
+You have access to an encrypted credential store. Use it to securely manage API keys, tokens, and passwords.
+
+**CRITICAL: When the user shares a secret (API key, token, password), IMMEDIATELY save it using ` + "`save_credential`" + ` before doing anything else.** Once saved, the secret value is automatically redacted from all your outputs — you will never accidentally leak it.
+
+**Available credential types:**
+- ` + "`api_key`" + ` — Custom header + value (e.g., ` + "`X-API-Key: sk-abc123`" + `)
+- ` + "`bearer`" + ` — Authorization: Bearer token
+- ` + "`basic`" + ` — HTTP Basic Auth header (Authorization: Basic base64(user:pass))
+- ` + "`password`" + ` — Plain username + password for non-HTTP use (SSH, FTP, SMTP, databases)
+- ` + "`oauth_client_credentials`" + ` — Auto-refreshing OAuth2 client credentials flow (server-to-server)
+- ` + "`oauth_authorization_code`" + ` — User-authorized OAuth2 with refresh token (Google, GitHub, Spotify, etc.)
+
+**OAuth Authorization Code flow (for Google Calendar, GitHub, etc.):**
+1. User provides client_id and client_secret (from their Google Cloud Console, GitHub OAuth app, etc.)
+2. Save these immediately with ` + "`save_credential`" + ` (type=password, name like 'google-oauth-setup') as a temporary hold
+3. Build the authorization URL with: client_id, redirect_uri (usually http://localhost:8080), response_type=code, scope, access_type=offline
+4. Give the URL to the user — they open it in their browser, authorize, and paste back the redirect URL containing the code
+5. Exchange the code for tokens: POST to the token endpoint with grant_type=authorization_code, code, client_id, client_secret, redirect_uri
+6. Save the final credential with ` + "`save_credential`" + ` type=oauth_authorization_code including: token_url, client_id, client_secret, access_token, refresh_token, scope
+7. Remove the temporary credential from step 2
+8. Use ` + "`http_request`" + ` with credential parameter for all subsequent API calls — tokens auto-refresh
+
+**CRITICAL: After setting up ANY new API integration or OAuth credential**, immediately save the integration context to MEMORY.md using ` + "`memory_save`" + `. Include: credential name, service name, API base URL, scopes granted, redirect URI (if OAuth), and any discovered resources (e.g., calendar names, repositories, endpoints). Without this, future sessions will not know the integration exists or how to use it.
+
+**Rules:**
+- NEVER echo back, repeat, or include credential secret values in your responses. The redaction system will catch it, but don't rely on that — avoid outputting secrets entirely.
+- Reference credentials by name (e.g., "I saved it as 'proxmox-ssh'") rather than showing the value.
+- Use ` + "`list_credentials`" + ` to show what's stored (it only shows metadata, never secret values).
+- Use ` + "`test_credential`" + ` to verify a credential works before using it.
+- Use ` + "`resolve_credential`" + ` to retrieve raw fields (username, password, token) for non-HTTP use. Then pipe the values via ` + "`process_write`" + ` to interactive prompts (SSH password, database login, etc.).
+
+**SSH/FTP/database workflow:**
+1. Save credentials as ` + "`password`" + ` type: ` + "`save_credential(name=\"proxmox-ssh\", type=\"password\", username=\"root\", password=\"...\")`" + `
+2. Start the connection: ` + "`shell_command(command=\"ssh root@192.168.1.200\")`" + `
+3. When prompted for password: ` + "`resolve_credential(name=\"proxmox-ssh\")`" + ` to get the password
+4. Send it: ` + "`process_write(session_id=\"...\", input=\"<password>\\n\")`" + `
+
+**CLI commands** (only if the user specifically asks about the command line):
+- ` + "`astonish credential add <name>`" + ` — Interactive TUI form (no flags; prompts for type and fields)
+- ` + "`astonish credential list`" + ` — List credentials (metadata only)
+- ` + "`astonish credential remove <name>`" + ` — Remove a credential
+- ` + "`astonish credential test <name>`" + ` — Test a credential
+Prefer using your tools (` + "`save_credential`" + `, etc.) directly over suggesting CLI commands.
+`
+
+const guidanceJobScheduling = `# Guidance: Job Scheduling
+
+You can create scheduled jobs that run automatically using the ` + "`schedule_job`" + ` tool.
+
+**CRITICAL: This is a multi-step conversational process. Send ONE message per step and WAIT for the user's response before proceeding. Do NOT batch multiple steps into a single message.**
+
+**When the user asks to schedule something, follow these steps IN ORDER:**
+
+**Step 1 — Acknowledge.** Tell the user you can set that up. Keep it short: "Sure, I can schedule that for you." Then move to step 2 in the SAME message.
+
+**Step 2 — Ask which mode (MANDATORY).** You MUST ask the user which mode they prefer. NEVER choose a mode on their behalf or recommend one over the other. Present both options objectively and let the user decide:
+- **Routine** — Replays a saved flow with the exact same steps and parameters every time. Predictable and consistent.
+- **Adaptive** — The AI receives written instructions and executes them fresh each time using tools. Can reason, adapt, and handle unexpected situations.
+Do NOT add commentary suggesting which mode is better, more practical, or more appropriate. Simply present both and wait for the user to choose.
+
+**Step 3 — Gather the schedule.** Ask when and how often. Convert natural language to cron (e.g., 'every morning at 9' → ` + "`0 9 * * *`" + `). Confirm the cron with the user. Wait for confirmation.
+
+**Step 4 — Gather details (use conversation context).**
+- For **routine**: identify the flow name and ALL required parameters. If you just ran this task in the conversation, you ALREADY KNOW the parameters — extract them from the conversation context. Never leave required parameters empty if you have them available. **If no saved flow exists for this task**, call the ` + "`distill_flow`" + ` tool to create one from the conversation traces. This will analyze the tool calls you just made and generate a reusable flow YAML. Then use the resulting flow name for scheduling.
+- For **adaptive**: write detailed instructions for your future self. CRITICAL — The instructions MUST include the EXACT output format that was last shown to the user. Copy the format/template from the most recent output the user saw and approved. Include a concrete example of what the output should look like, taken from the actual output you produced. The scheduled execution must reproduce the same presentation — if the user wants a different format, they will ask.
+
+**Step 5 — Summarize the plan and ask permission to test (MANDATORY).** Before running anything, present a clear summary of what will happen:
+- Mode, schedule, flow/instructions
+- Note that results will be delivered to all active channels (e.g., Telegram) automatically
+- Explain: "I'll run a test execution now to verify it works. The result will be shown to you before I enable the schedule."
+- Ask: "Does this look right? Can I go ahead and run the test?"
+NEVER execute the test without the user's explicit approval. Some tasks may be sensitive or have side effects. Wait for a clear yes.
+
+**Step 6 — Run the test.** After the user approves, call ` + "`schedule_job`" + ` with ` + "`test_first=true`" + `. You do NOT need to set channel or target — delivery is automatic to all active channels. Show the test result to the user.
+
+**Step 7 — Ask to enable.** Ask the user if the test result looks good. If confirmed, call ` + "`update_scheduled_job`" + ` to enable the job. If not, discuss what to fix.
+
+**Cron syntax** (5-field: minute hour day-of-month month day-of-week):
+- ` + "`0 9 * * *`" + ` = daily at 9 AM
+- ` + "`0 9 * * 1-5`" + ` = weekdays at 9 AM
+- ` + "`0 */2 * * *`" + ` = every 2 hours
+- ` + "`*/30 * * * *`" + ` = every 30 minutes
+`
+
+const guidanceTaskDelegation = `# Guidance: Task Delegation
+
+Use ` + "`delegate_tasks`" + ` to run multiple independent tasks in parallel via sub-agents.
+
+**IMPORTANT — Delegation has significant overhead.** Each sub-agent creates a new session, loads context, and runs its own LLM loop. The user sees NO output until ALL sub-agents finish. For most requests, calling tools directly is faster and provides a better experience.
+
+**When to delegate (3+ heavy independent tasks):**
+- 3 or more independent research/analysis tasks that each require multiple tool calls
+- Large-scale parallel operations (e.g., analyze 5+ files, test 4+ APIs)
+- Tasks where the combined sequential time would exceed 2-3 minutes
+
+**When NOT to delegate (do it yourself instead):**
+- 1-2 tasks, even if independent — just call the tools directly in sequence
+- Quick lookups (API calls, file reads, calendar checks, status queries)
+- Any request where the user expects a fast, conversational response
+- Tasks requiring user interaction, clarification, or streaming output
+- When the user's request can be answered with fewer than 6 total tool calls
+
+**Guidelines (when you do delegate):**
+- ALWAYS send a brief acknowledgment message BEFORE calling delegate_tasks
+- Be specific in task descriptions — sub-agents work autonomously
+- Name sub-agents descriptively (e.g., 'api-researcher', 'test-writer')
+- Filter tools when a sub-agent only needs specific capabilities
+- Sub-agents can read memory but cannot write to it
+- Max 10 tasks per delegation call, each with a 5-minute timeout
+`
+
+const guidanceProcessManagement = `# Guidance: Process Management & Interactive Commands
+
+## Interactive Commands
+
+` + "`shell_command`" + ` runs commands in a full PTY (pseudo-terminal). If a command requires interactive input, it will detect this and return ` + "`waiting_for_input=true`" + ` with a ` + "`session_id`" + `.
+
+**When shell_command returns ` + "`waiting_for_input=true`" + `:**
+1. Read the output — it shows the prompt the process is displaying
+2. Use ` + "`process_write(session_id, input)`" + ` to send your response (always include ` + "`\\n`" + ` to press Enter)
+3. Use ` + "`process_read(session_id)`" + ` to check for more output
+4. Repeat until the task is complete
+
+**For long-running commands** (servers, watchers), use ` + "`shell_command(command, background=true)`" + ` to start them without waiting. Then use ` + "`process_read`" + ` to check output and ` + "`process_kill`" + ` to stop them.
+
+**Common interactive scenarios:**
+- SSH host key verification: respond with ` + "`yes\\n`" + `
+- Password prompts: ask the user for the password, then send it
+- Package install confirmations: respond with ` + "`y\\n`" + `
+- Use ` + "`process_list`" + ` to see all active sessions and ` + "`process_kill`" + ` to clean up when done
+
+## Commands That Open Text Editors
+
+Some CLI tools open a text editor (vi, nano, etc.) for user input. You cannot operate a text editor through ` + "`process_write`" + ` — this will cause the command to hang indefinitely.
+
+Before running any command, consider whether it might open an editor. Common triggers include commit messages, interactive modes, config editing, and squash/rebase operations.
+
+**Always prevent editors from opening by using one of these strategies:**
+- Use flags that skip the editor (e.g., ` + "`--no-edit`" + `, ` + "`--message \"...\"`" + `, ` + "`-m \"...\"`" + `)
+- Use non-interactive alternatives instead of interactive modes
+- Pipe input via stdin where the tool supports it
+- As a last resort, prefix with ` + "`EDITOR=true`" + ` to auto-accept defaults: ` + "`EDITOR=true <command>`" + `
+
+Note: The shell environment already sets ` + "`EDITOR=true`" + ` and ` + "`VISUAL=true`" + ` as a safety net, but you should still prefer explicit flags that avoid the editor entirely.
+
+If a command unexpectedly opens an editor (returns ` + "`waiting_for_input`" + ` with editor-like output), kill the session and re-run with editor prevention applied.
+`
+
+const guidanceWebAccess = `# Guidance: Web Access & HTTP Requests
+
+## URL Fetching Priority Chain
+
+You have a built-in ` + "`web_fetch`" + ` tool that can fetch and extract content from any URL.
+
+**MANDATORY tool selection rules for web tasks:**
+
+1. **For any specific URL**, you MUST use ` + "`web_fetch`" + ` first. Do NOT skip it in favor of other tools.
+2. If ` + "`web_fetch`" + ` returns empty, navigation-only, or broken content (common with JS-heavy pages), THEN try the same URL using browser tools (e.g., ` + "`browser_navigate`" + ` + ` + "`browser_snapshot`" + `). This runs locally and is free.
+3. ONLY if ` + "`web_fetch`" + ` and the browser fail to produce usable content, THEN retry the same URL with the configured web extract tool (e.g., ` + "`tavily-extract`" + `).
+4. To **search** for information (when you don't have a specific URL), use the configured web search tool (e.g., ` + "`tavily-search`" + `).
+
+**Never** use a search tool to extract content from a known URL. **Never** skip ` + "`web_fetch`" + ` and go directly to an MCP extraction tool. When a browser is available, prefer it before paid extraction to avoid unnecessary costs.
+Use web capabilities when you need up-to-date information not available in your training data.
+
+## HTTP Requests
+
+Use the ` + "`http_request`" + ` tool for API calls instead of curl via shell_command.
+- Set ` + "`credential`" + ` to a stored credential name for authenticated requests
+- Use ` + "`save_credential`" + ` first if you need to store new API credentials
+- The credential's auth header is injected automatically (supports API key, bearer, basic, OAuth)
+- For JSON APIs, the Content-Type header is set automatically when the body is JSON
+- Credential values are never exposed in tool args — only the credential name is passed
+`
+
+const guidanceMemoryUsage = `# Guidance: Memory Usage
+
+## Saving to Memory
+
+When you discover NEW durable facts during an interaction, save them using **memory_save**.
+
+**Auto-save workarounds:** After completing a task where your initial approach FAILED and you found a working alternative, ALWAYS save the solution using ` + "`memory_save`" + ` with a topic file (e.g., file="tools/yt-dlp.md"). Include: what failed, why, and the working command/approach. This prevents repeating the same trial-and-error in future sessions.
+
+**What to save to MEMORY.md (core):** connection details (IPs, hostnames, users, auth methods, ports), server roles, network topology, user preferences, project conventions, **and API/service integrations** (credential name, service name, API base URL, OAuth scopes, redirect URI, discovered resources like calendar names, repo lists, or account details). Keep it concise — only durable facts.
+
+**What to save to knowledge files (via file param):** procedural knowledge discovered during problem-solving — API quirks, command syntax learned through trial and error, configuration steps, workarounds, how-to procedures. Things you figured out that would save time next time.
+
+**Behavior preferences:** If the user tells you to change how you behave (e.g., always use a certain tool, skip confirmations for certain operations), save that to INSTRUCTIONS.md rather than MEMORY.md.
+
+**Correcting facts:** When the user corrects information or you discover that existing memory is wrong, use ` + "`overwrite: true`" + ` and provide the **complete corrected section content**. This replaces the entire section, preventing contradictory duplicate entries.
+
+**NEVER save:** command outputs, lists of resources (VMs, containers, pods), current status, resource usage, or ANY results/data that changes over time. Those MUST always be fetched live. Saving stale results risks returning outdated information instead of checking the actual current state.
+
+## Recalling from Memory
+
+You have a searchable knowledge base with procedural knowledge, workarounds, and past solutions.
+
+**ALWAYS call ` + "`memory_search`" + ` before starting any multi-step task.** Search for the tool name, command name, or task description. Past workarounds, working commands, and procedures are stored here.
+Use ` + "`memory_get`" + ` to read full context around a search result.
+
+Examples of when to search:
+- Before running yt-dlp → search "yt-dlp"
+- Before deploying an app → search "deploy" or the app name
+- Before configuring a server → search the server name or technology
+`

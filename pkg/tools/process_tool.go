@@ -223,24 +223,15 @@ func processKill(_ tool.Context, args ProcessKillArgs) (ProcessKillResult, error
 
 func NewProcessReadTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
-		Name: "process_read",
-		Description: `Read output from a running or completed process session.
-
-Use this after shell_command returns waiting_for_input=true or when checking on a background process.
-Pass offset=<total_bytes from previous read> to get only new output since your last read.`,
+		Name:        "process_read",
+		Description: "Read output from a running or completed process session. Pass offset=<total_bytes from previous read> to get only new output.",
 	}, processRead)
 }
 
 func NewProcessWriteTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
-		Name: "process_write",
-		Description: `Send input to a running process session.
-
-Use this to respond to interactive prompts (SSH host key verification, passwords, confirmations, etc.).
-ALWAYS include a trailing newline (\n) to press Enter — do not send the text without it.
-Send the input exactly ONCE; do not retry without a newline and then again with one, as this
-corrupts the input buffer (the process receives the text twice).
-Returns only the NEW output produced after your write, so you can see the process's response.`,
+		Name:        "process_write",
+		Description: "Send input to a running process session. ALWAYS include trailing newline (\\n). Send input exactly once per prompt — do not retry without then with newline. Returns only new output after the write.",
 	}, processWrite)
 }
 

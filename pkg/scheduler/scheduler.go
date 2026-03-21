@@ -163,8 +163,10 @@ func (s *Scheduler) tick() {
 			result, err := s.executeJob(s.ctx, j)
 			s.mu.Unlock()
 
-			// Deliver results to configured channel
-			if s.deliver != nil {
+			// Deliver results to configured channel.
+			// Fleet poll jobs handle their own communication (via the fleet
+			// channel), so we skip the scheduler's delivery pipeline for them.
+			if s.deliver != nil && j.Mode != ModeFleetPoll {
 				if deliverErr := s.deliver(s.ctx, j, result, err); deliverErr != nil {
 					s.logger.Printf("[scheduler] Delivery failed for job %q: %v", j.Name, deliverErr)
 				}

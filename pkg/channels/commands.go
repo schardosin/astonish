@@ -69,6 +69,10 @@ type CommandContext struct {
 
 	// RawText is the full command text as typed by the user (e.g. "/authorize A7X-K2M").
 	RawText string
+
+	// Manager is the ChannelManager that processed this command.
+	// Used by fleet commands to manage fleet sessions and route messages.
+	Manager *ChannelManager
 }
 
 // CommandFunc is the handler signature for a slash command.

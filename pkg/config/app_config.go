@@ -22,6 +22,18 @@ type AppConfig struct {
 	SubAgents     SubAgentAppConfig          `yaml:"sub_agents,omitempty"`
 	Skills        SkillsConfig               `yaml:"skills,omitempty"`
 	AgentIdentity AgentIdentityConfig        `yaml:"agent_identity,omitempty"`
+	OpenCode      OpenCodeConfig             `yaml:"opencode,omitempty"`
+}
+
+// OpenCodeConfig controls the managed OpenCode delegate tool.
+// Astonish generates an OpenCode config file from these settings and its
+// own provider configuration, so users do not need to configure OpenCode
+// independently.
+type OpenCodeConfig struct {
+	// Model overrides the model used by OpenCode. Empty means "use the same
+	// model as Astonish" (general.default_model). Format: plain model name
+	// (e.g., "claude-4.6-opus") — the provider prefix is added automatically.
+	Model string `yaml:"model,omitempty" json:"model,omitempty"`
 }
 
 // MemoryConfig controls the semantic memory / RAG system.
@@ -174,6 +186,7 @@ type GeneralConfig struct {
 	WebSearchTool   string `yaml:"web_search_tool" json:"web_search_tool"`
 	WebExtractTool  string `yaml:"web_extract_tool" json:"web_extract_tool"`
 	ContextLength   int    `yaml:"context_length,omitempty" json:"context_length,omitempty"` // Override context window size (tokens)
+	Timezone        string `yaml:"timezone,omitempty" json:"timezone,omitempty"`             // IANA timezone (e.g. "America/New_York")
 }
 
 // DaemonConfig controls the background daemon service.
@@ -531,6 +544,26 @@ func GetModelsDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(configDir, "models"), nil
+}
+
+// GetFleetsDir returns the directory for fleet YAML definitions.
+// Defaults to ~/.config/astonish/fleets/.
+func GetFleetsDir() (string, error) {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, "fleets"), nil
+}
+
+// GetFleetPlansDir returns the directory for custom fleet plan YAML definitions.
+// Defaults to ~/.config/astonish/fleet_plans/.
+func GetFleetPlansDir() (string, error) {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, "fleet_plans"), nil
 }
 
 // GetSessionsDir returns the session storage directory.

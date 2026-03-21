@@ -433,25 +433,8 @@ func resolveCredential(_ tool.Context, args ResolveCredentialArgs) (ResolveCrede
 
 func NewSaveCredentialTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
-		Name: "save_credential",
-		Description: `Save a credential (API key, token, password, or OAuth config) to the encrypted credential store.
-
-The credential is encrypted at rest and never exposed in conversation history. 
-Use this IMMEDIATELY when the user provides any secret (API key, token, password, client secret).
-Do NOT repeat the secret value in your response — just confirm it was saved.
-
-Types:
-- api_key: Custom header + value (e.g., X-API-Key: sk-...)
-- bearer: Authorization: Bearer <token>
-- basic: HTTP Basic Auth header (Authorization: Basic <base64(user:pass)>)
-- password: Plain username + password for non-HTTP use (SSH, FTP, SMTP, databases)
-- oauth_client_credentials: Auto-refreshing OAuth2 server-to-server (provide auth_url, client_id, client_secret)
-- oauth_authorization_code: User-authorized OAuth2 with refresh token (Google, GitHub, etc.)
-  Provide: token_url, client_id, client_secret, access_token, refresh_token, scope
-  The access token auto-refreshes using the refresh token when it expires.
-
-After saving, HTTP credentials (api_key, bearer, basic, oauth_*) can be used with http_request.
-Password credentials can be resolved with resolve_credential for use with process_write (SSH, etc).`,
+		Name:        "save_credential",
+		Description: `Save a credential to the encrypted store. Use IMMEDIATELY when the user provides any secret. Types: api_key, bearer, basic, password, oauth_client_credentials, oauth_authorization_code. HTTP credentials work with http_request; password credentials with resolve_credential.`,
 	}, saveCredential)
 }
 
@@ -478,22 +461,8 @@ func NewTestCredentialTool() (tool.Tool, error) {
 
 func NewResolveCredentialTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
-		Name: "resolve_credential",
-		Description: `Retrieve the raw fields of a stored credential by name.
-
-Use this to get username/password for SSH, FTP, SMTP, database connections — anything that is not an HTTP API.
-The returned values can then be piped to interactive prompts via process_write.
-
-Returns different fields depending on the credential type:
-- password: username, password
-- basic: username, password
-- bearer: token
-- api_key: header, value
-- oauth_client_credentials: auth_url, client_id (no secret — use http_request instead)
-
-The returned values are NOT redacted so you can use them directly in commands (e.g., sshpass, process_write).
-However, the output redaction system will scrub them from your text responses to the user.
-Do NOT echo secrets back to the user — use them only for programmatic purposes.`,
+		Name:        "resolve_credential",
+		Description: `Retrieve raw fields of a stored credential by name. Use for non-HTTP auth (SSH, FTP, databases) — pipe values to process_write. Returns type-specific fields (username/password, token, header/value). Values are NOT redacted in the result but ARE scrubbed from text responses.`,
 	}, resolveCredential)
 }
 

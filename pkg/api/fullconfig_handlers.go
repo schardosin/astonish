@@ -7,6 +7,8 @@ import (
 
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/schardosin/astonish/pkg/fleet"
+	"github.com/schardosin/astonish/pkg/tools"
 )
 
 // --- Full Config API types ---
@@ -23,6 +25,7 @@ type FullConfigResponse struct {
 	SubAgents     SubAgentsResponse          `json:"sub_agents"`
 	Skills        SkillsResponse             `json:"skills"`
 	AgentIdentity config.AgentIdentityConfig `json:"agent_identity"`
+	OpenCode      OpenCodeResponse           `json:"open_code"`
 }
 
 // SessionsResponse wraps SessionConfig with resolved defaults for the UI.
@@ -115,6 +118,11 @@ type SkillsResponse struct {
 	Allowlist []string `json:"allowlist"`
 }
 
+// OpenCodeResponse wraps OpenCodeConfig for the UI.
+type OpenCodeResponse struct {
+	Model string `json:"model"`
+}
+
 // --- Update request types ---
 
 // FullConfigUpdateRequest is the request for PUT /api/settings/full.
@@ -130,6 +138,7 @@ type FullConfigUpdateRequest struct {
 	SubAgents     *SubAgentsUpdateRequest `json:"sub_agents,omitempty"`
 	Skills        *SkillsUpdateRequest    `json:"skills,omitempty"`
 	AgentIdentity *IdentityUpdateRequest  `json:"agent_identity,omitempty"`
+	OpenCode      *OpenCodeUpdateRequest  `json:"open_code,omitempty"`
 }
 
 // ChatUpdateRequest for updating chat settings.
@@ -273,6 +282,11 @@ type IdentityUpdateRequest struct {
 	Timezone string `json:"timezone"`
 }
 
+// OpenCodeUpdateRequest for updating OpenCode delegate settings.
+type OpenCodeUpdateRequest struct {
+	Model string `json:"model"`
+}
+
 // --- Handlers ---
 
 // GetFullConfigHandler handles GET /api/settings/full
@@ -353,6 +367,9 @@ func GetFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 			Allowlist: cfg.Skills.Allowlist,
 		},
 		AgentIdentity: cfg.AgentIdentity,
+		OpenCode: OpenCodeResponse{
+			Model: cfg.OpenCode.Model,
+		},
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -555,9 +572,20 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if req.OpenCode != nil {
+		cfg.OpenCode = config.OpenCodeConfig{
+			Model: req.OpenCode.Model,
+		}
+	}
+
 	if err := config.SaveAppConfig(cfg); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// Regenerate OpenCode config if the OpenCode section was changed.
+	if req.OpenCode != nil {
+		regenerateOpenCodeConfig(cfg)
 	}
 
 	// Reset the Studio chat agent so the next request picks up fresh config.
@@ -573,6 +601,30 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// --- OpenCode config regeneration ---
+
+// regenerateOpenCodeConfig regenerates the managed OpenCode config file and
+// updates in-memory state so the OpenCode tool and fleet context generator
+// pick up changes immediately. This should be called whenever settings that
+// affect the OpenCode config are saved (provider, model, or OpenCode section).
+func regenerateOpenCodeConfig(cfg *config.AppConfig) {
+	store := getAPICredentialStore()
+	var getSecret config.SecretGetter
+	if store != nil {
+		getSecret = store.GetSecret
+	}
+	ocResult, err := config.GenerateOpenCodeConfig(cfg, getSecret)
+	if err != nil {
+		log.Printf("Warning: Failed to regenerate OpenCode config: %v", err)
+		return
+	}
+	tools.SetOpenCodeConfig(ocResult.ConfigPath, ocResult.ProviderID, ocResult.ModelID, ocResult.ExtraEnv)
+	fleet.OpenCodeConfigPath = ocResult.ConfigPath
+	fleet.OpenCodeExtraEnv = ocResult.ExtraEnv
+	fleet.OpenCodeModelFlag = ocResult.FullModelID()
+	log.Printf("OpenCode config regenerated (provider: %s, model: %s)", ocResult.ProviderID, ocResult.ModelID)
 }
 
 // --- Helper functions ---

@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"os/exec"
@@ -171,7 +172,7 @@ func (pm *ProcessManager) Start(command, workDir string, rows, cols uint16) (*Pr
 
 	cmd := exec.Command("sh", "-c", command)
 	if workDir != "" {
-		cmd.Dir = workDir
+		cmd.Dir = expandPath(workDir)
 	}
 
 	// Set environment: inherit parent env and add safe defaults.
@@ -371,11 +372,17 @@ func (s *ProcessSession) waitLoop() {
 }
 
 // Write sends data to the process's stdin via the PTY.
+// Newlines (\n) are translated to carriage returns (\r) to match real
+// terminal behavior — keyboards send \r for Enter, and the PTY line
+// discipline normally converts it. Programs in raw mode (like SSH
+// password prompts) disable that translation, so sending \r directly
+// ensures interactive prompts receive the expected Enter keypress.
 func (s *ProcessSession) Write(data []byte) (int, error) {
 	if !s.IsRunning() {
 		return 0, io.EOF
 	}
-	return s.pty.Write(data)
+	translated := bytes.ReplaceAll(data, []byte("\n"), []byte("\r"))
+	return s.pty.Write(translated)
 }
 
 // IdleDuration returns how long since the last output was received.

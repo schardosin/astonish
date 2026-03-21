@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -25,6 +26,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// consoleThinkTagRe strips <think>/<thinking> blocks that some models emit in
+// title-generation responses.
+var consoleThinkTagRe = regexp.MustCompile(`(?s)<(?:think|thinking)>.*?</(?:think|thinking)>`)
 
 // ChatConsoleConfig contains configuration for the chat console launcher.
 type ChatConsoleConfig struct {
@@ -376,21 +381,39 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				}
 			case input == "/help":
 				fmt.Printf("%sAvailable commands:%s\n", ColorCyan, ColorReset)
-				fmt.Println("  /status   - Show current provider, model, tools, and memory status")
-				fmt.Println("  /new      - Start a fresh conversation (new session)")
-				fmt.Println("  /compact  - Show context window usage and compaction status")
-				fmt.Println("  /distill  - Distill the last task into a reusable flow")
-				fmt.Println("  /help     - Show this help message")
-				fmt.Println("  exit      - Exit the chat")
+				fmt.Println("  /status      - Show current provider, model, tools, and memory status")
+				fmt.Println("  /new         - Start a fresh conversation (new session)")
+				fmt.Println("  /compact     - Show context window usage and compaction status")
+				fmt.Println("  /distill     - Distill the last task into a reusable flow")
+				fmt.Println("  /fleet       - Show available fleets and CLI commands")
+				fmt.Println("  /fleet-plan  - Create a fleet plan (use Studio UI for guided conversation)")
+				fmt.Println("  /help        - Show this help message")
+				fmt.Println("  exit         - Exit the chat")
 				fmt.Println()
+			case strings.HasPrefix(input, "/fleet-plan"):
+				// Fleet plans require the guided conversation in Studio UI
+				fmt.Printf("%sFleet plan creation requires the Studio UI for the guided conversation.%s\n", ColorCyan, ColorReset)
+				fmt.Printf("Run: astonish studio, then type /fleet-plan in the chat.\n")
+				fmt.Printf("To manage existing plans: astonish fleet list\n\n")
+			case strings.HasPrefix(input, "/fleet"):
+				// Show available fleets; fleet sessions are started via Studio UI
+				fmt.Println(tools.ListAvailableFleets())
+				fmt.Printf("%sFleet CLI commands:%s\n", ColorCyan, ColorReset)
+				fmt.Printf("  astonish fleet list               List fleet plans\n")
+				fmt.Printf("  astonish fleet show <key>         Show plan details\n")
+				fmt.Printf("  astonish fleet activate <key>     Start polling\n")
+				fmt.Printf("  astonish fleet deactivate <key>   Stop polling\n")
+				fmt.Printf("  astonish fleet status <key>       Check status\n")
+				fmt.Printf("  astonish fleet templates          List templates\n\n")
 			default:
 				fmt.Printf("Unknown command: %s. Type /help for available commands.\n\n", input)
 			}
 			continue
 		}
 
-		// Send message to agent
-		userMsg := genai.NewContentFromText(input, genai.RoleUser)
+		// Send message to agent (with absolute timestamp for temporal context;
+		// see agent.NewTimestampedUserContent for cache-stability rationale).
+		userMsg := agent.NewTimestampedUserContent(input)
 
 		// Wait for background indexing to complete before the first agent call.
 		// This ensures memory_search and flow matching have indexed data available.
@@ -562,7 +585,7 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				fmt.Println(ui.RenderStatusBadge("Command rejected", false))
 			}
 			// Feed approval response back
-			userMsg = genai.NewContentFromText(selection, genai.RoleUser)
+			userMsg = agent.NewTimestampedUserContent(selection)
 
 			// Re-run with approval response
 			startSpinner("Executing...")
@@ -713,6 +736,7 @@ func generateSessionTitle(ctx context.Context, llm model.LLM, store *persistents
 		}
 	}
 
+	title = consoleThinkTagRe.ReplaceAllString(title, "")
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return

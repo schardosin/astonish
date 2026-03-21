@@ -70,6 +70,13 @@ function parseHash(hash) {
     return { view: 'canvas', params: {} }
   }
 
+  if (view === 'fleet') {
+    // #/fleet, #/fleet/plan/{key}, #/fleet/session/{id}, #/fleet/template/{key}
+    const subView = parts[1] || ''
+    const subKey = parts[2] ? decodeURIComponent(parts[2]) : ''
+    return { view: 'fleet', params: { subView, subKey } }
+  }
+
   // Legacy: #/home redirects to chat
   if (view === 'home') {
     return { view: 'chat', params: {} }
@@ -94,6 +101,11 @@ export function buildPath(view, params = {}) {
       return '/chat'
     case 'canvas':
       return '/canvas'
+    case 'fleet':
+      if (params.subView && params.subKey) {
+        return `/fleet/${params.subView}/${encodeURIComponent(params.subKey)}`
+      }
+      return '/fleet'
     default:
       return '/chat'
   }

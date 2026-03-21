@@ -65,7 +65,7 @@ func FileTree(ctx tool.Context, args FileTreeArgs) (FileTreeResult, error) {
 	}
 
 	// Make path absolute
-	absPath, err := filepath.Abs(rootPath)
+	absPath, err := filepath.Abs(expandPath(rootPath))
 	if err != nil {
 		return FileTreeResult{}, err
 	}

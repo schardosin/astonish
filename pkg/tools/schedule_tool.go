@@ -29,7 +29,7 @@ type SchedulerAccess interface {
 type SchedulerJob struct {
 	ID        string            `json:"id"`
 	Name      string            `json:"name"`
-	Mode      string            `json:"mode"` // "routine" or "adaptive"
+	Mode      string            `json:"mode"` // "routine", "adaptive", or "fleet_poll"
 	Cron      string            `json:"cron"`
 	Timezone  string            `json:"timezone,omitempty"`
 	Flow      string            `json:"flow,omitempty"`
@@ -89,7 +89,7 @@ func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, err
 	if args.Mode != "routine" && args.Mode != "adaptive" {
 		return ScheduleJobResult{
 			Status:  "error",
-			Message: "Mode must be 'routine' or 'adaptive'",
+			Message: "Mode must be 'routine' or 'adaptive'. Note: 'fleet_poll' jobs are created automatically when a fleet plan is activated, not via this tool.",
 		}, nil
 	}
 
@@ -193,6 +193,7 @@ type JobSummary struct {
 	Mode     string `json:"mode"`
 	Schedule string `json:"schedule"`
 	Timezone string `json:"timezone,omitempty"`
+	PlanKey  string `json:"plan_key,omitempty"` // fleet plan key for fleet_poll jobs
 	Enabled  bool   `json:"enabled"`
 	Status   string `json:"last_status"`
 	NextRun  string `json:"next_run,omitempty"`
@@ -221,6 +222,10 @@ func listScheduledJobs(ctx tool.Context, args ListScheduledJobsArgs) (ListSchedu
 			Enabled:  j.Enabled,
 			Status:   j.LastStatus,
 			Failures: j.Failures,
+		}
+		// For fleet_poll jobs, the Flow field holds the plan key
+		if j.Mode == "fleet_poll" {
+			summary.PlanKey = j.Flow
 		}
 		if j.NextRun != nil {
 			summary.NextRun = j.NextRun.Format(time.RFC3339)
@@ -377,9 +382,16 @@ func updateScheduledJob(ctx tool.Context, args UpdateScheduledJobArgs) (UpdateSc
 		}, nil
 	}
 
+	msg := fmt.Sprintf("Job %q updated: %s", job.Name, strings.Join(changes, ", "))
+	// Add a note for fleet_poll jobs that schedule changes should ideally
+	// be done through deactivate/reactivate to stay in sync with the plan.
+	if job.Mode == "fleet_poll" && args.Schedule != "" {
+		msg += ". Note: for fleet_poll jobs, consider deactivating and reactivating the fleet plan to keep the plan config in sync."
+	}
+
 	return UpdateScheduledJobResult{
 		Status:  "updated",
-		Message: fmt.Sprintf("Job %q updated: %s", job.Name, strings.Join(changes, ", ")),
+		Message: msg,
 	}, nil
 }
 
@@ -388,25 +400,8 @@ func updateScheduledJob(ctx tool.Context, args UpdateScheduledJobArgs) (UpdateSc
 // NewScheduleJobTool creates the schedule_job tool.
 func NewScheduleJobTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
-		Name: "schedule_job",
-		Description: `Create a scheduled job that runs automatically on a cron schedule.
-
-Two modes:
-- "routine": Runs a saved flow with fixed parameters. Deterministic, same every time.
-- "adaptive": Runs an LLM-driven agentic task with stored instructions. Can reason and adapt.
-
-IMPORTANT — Context awareness:
-- When scheduling a task you just performed in this conversation, use the conversation context to populate ALL required parameters (routine) or write complete instructions (adaptive).
-- For routine mode: if the flow requires parameters, extract them from the conversation — you already have them. If no saved flow exists for this task, call distill_flow first to create one from the conversation traces, then use the resulting flow name here.
-- For adaptive mode: the instructions MUST reproduce the EXACT output format the user last saw. Include a concrete example of the expected output copied from your most recent response to the user.
-
-Delivery: Results are automatically broadcast to all active channels (e.g., all allowed Telegram users). You do NOT need to specify channel or target — delivery is handled automatically.
-
-The schedule uses standard 5-field cron syntax: minute hour day-of-month month day-of-week.
-Common patterns: "0 9 * * *" (daily 9 AM), "0 */2 * * *" (every 2 hours), "0 9 * * 1-5" (weekdays 9 AM).
-
-Set test_first=true to execute the job immediately for testing before enabling the schedule.
-Only call this tool AFTER the user has approved the plan — never execute without explicit user permission.`,
+		Name:        "schedule_job",
+		Description: `Create a scheduled job on a cron schedule. Modes: "routine" (run a saved flow with fixed params) or "adaptive" (LLM-driven agentic execution with instructions). Uses 5-field cron syntax. Set test_first=true to test before enabling. Results broadcast to all active channels automatically. Only call after user approval.`,
 	}, scheduleJob)
 }
 
@@ -430,7 +425,7 @@ func NewRemoveScheduledJobTool() (tool.Tool, error) {
 func NewUpdateScheduledJobTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "update_scheduled_job",
-		Description: "Update a scheduled job. Can enable/disable, change schedule, timezone, or name.",
+		Description: "Update a scheduled job. Can enable/disable, change schedule, timezone, or name. Works for all job modes (routine, adaptive, fleet_poll). For fleet_poll jobs, schedule changes should ideally be done by deactivating and reactivating the fleet plan.",
 	}, updateScheduledJob)
 }
 

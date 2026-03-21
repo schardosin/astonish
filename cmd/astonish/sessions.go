@@ -2,6 +2,7 @@ package astonish
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -128,6 +129,8 @@ func handleSessionsShow(sessionID string, flags []string) error {
 			opts.ToolsOnly = true
 		case "--verbose", "-v":
 			opts.Verbose = true
+		case "--recursive", "-r":
+			opts.Recursive = true
 		case "--last", "-n":
 			if i+1 < len(flags) {
 				i++
@@ -199,7 +202,38 @@ func handleSessionsShow(sessionID string, flags []string) error {
 	}
 
 	if opts.JSONOutput {
-		renderSessionTraceJSON(meta.ID, meta.AppName, meta.UserID, events, opts)
+		entries, toolCalls, toolErrors := collectTraceEntries(events, "", opts)
+
+		// Include sub-session traces when --recursive is set
+		if opts.Recursive {
+			childEntries, childTC, childTE := collectChildSessionEntries(sessDir, fullID, index, opts)
+			entries = append(entries, childEntries...)
+			toolCalls += childTC
+			toolErrors += childTE
+
+			// Sort all entries chronologically so parent and child events interleave
+			sort.Slice(entries, func(i, j int) bool {
+				return entries[i].Timestamp < entries[j].Timestamp
+			})
+		}
+
+		output := traceJSON{
+			SessionID: meta.ID,
+			App:       meta.AppName,
+			User:      meta.UserID,
+			Events:    entries,
+			Summary: traceSummary{
+				TotalEvents: len(events),
+				ToolCalls:   toolCalls,
+				Errors:      toolErrors,
+			},
+		}
+
+		data, err := json.MarshalIndent(output, "", "  ")
+		if err != nil {
+			return fmt.Errorf("error serializing trace: %w", err)
+		}
+		fmt.Println(string(data))
 		return nil
 	}
 
@@ -227,6 +261,11 @@ func handleSessionsShow(sessionID string, flags []string) error {
 
 	// Render the trace
 	renderSessionTrace(events, opts)
+
+	// Render child sessions inline if --recursive
+	if opts.Recursive && len(children) > 0 {
+		renderChildSessions(sessDir, fullID, index, opts)
+	}
 
 	return nil
 }
@@ -398,6 +437,7 @@ func printSessionsUsage() {
 	fmt.Println("  --json                Output as JSON")
 	fmt.Println("  -t, --tools-only      Only show tool calls (skip LLM text)")
 	fmt.Println("  -v, --verbose         Show full tool args/results (no truncation)")
+	fmt.Println("  -r, --recursive       Include sub-agent session traces inline")
 	fmt.Println("  -n, --last N          Only show last N events")
 	fmt.Println("")
 	fmt.Println("Session IDs can be abbreviated (prefix match).")
@@ -406,6 +446,8 @@ func printSessionsUsage() {
 	fmt.Println("  astonish sessions list")
 	fmt.Println("  astonish sessions show abc123")
 	fmt.Println("  astonish sessions show abc123 -t")
+	fmt.Println("  astonish sessions show abc123 -r              # include sub-agent traces")
+	fmt.Println("  astonish sessions show abc123 -r -v           # recursive + verbose")
 	fmt.Println("  astonish sessions show telegram:direct:123 --tools-only --last 20")
 	fmt.Println("  astonish sessions show abc123 --json")
 	fmt.Println("  astonish sessions delete abc123")

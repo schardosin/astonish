@@ -61,6 +61,8 @@ func Execute() error {
 		return handleChannelsCommand(os.Args[2:])
 	case "scheduler":
 		return handleSchedulerCommand(os.Args[2:])
+	case "fleet":
+		return handleFleetCommand(os.Args[2:])
 	case "credential", "credentials":
 		return handleCredentialCommand(os.Args[2:])
 	case "skills":
@@ -74,10 +76,10 @@ func Execute() error {
 }
 
 func printUsage() {
-	fmt.Println("usage: astonish [-h] [-v] {chat,sessions,flows,tap,studio,daemon,channels,scheduler,credential,skills,config,setup,tools,memory} ...")
+	fmt.Println("usage: astonish [-h] [-v] {chat,sessions,flows,tap,studio,daemon,channels,scheduler,fleet,credential,skills,config,setup,tools,memory} ...")
 	fmt.Println("")
 	fmt.Println("positional arguments:")
-	fmt.Println("  {chat,sessions,flows,tap,studio,daemon,channels,scheduler,credential,skills,config,setup,tools,memory}")
+	fmt.Println("  {chat,sessions,flows,tap,studio,daemon,channels,scheduler,fleet,credential,skills,config,setup,tools,memory}")
 	fmt.Println("                        Astonish CLI commands")
 	fmt.Println("    chat                Start an interactive chat session")
 	fmt.Println("    sessions            Manage persistent sessions")
@@ -87,6 +89,7 @@ func printUsage() {
 	fmt.Println("    daemon              Manage the background daemon service")
 	fmt.Println("    channels            Manage communication channels")
 	fmt.Println("    scheduler           Manage scheduled jobs")
+	fmt.Println("    fleet               Manage fleet plans and agent teams")
 	fmt.Println("    credential          Manage the encrypted credential store")
 	fmt.Println("    skills              Manage CLI tool skill guides")
 	fmt.Println("    config              Manage configuration")

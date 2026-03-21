@@ -280,6 +280,7 @@ type ModelConfig struct {
 // ModelConfigs contains configuration for all supported models
 var ModelConfigs = map[string]ModelConfig{
 	// Anthropic models via Bedrock
+	"anthropic--claude-4.6-opus":   {MaxTokens: 64000, ContextWindow: 200000},
 	"anthropic--claude-4.5-sonnet": {MaxTokens: 64000, ContextWindow: 200000},
 	"anthropic--claude-4-sonnet":   {MaxTokens: 64000, ContextWindow: 200000},
 	"anthropic--claude-4-opus":     {MaxTokens: 64000, ContextWindow: 200000},
@@ -320,7 +321,7 @@ func GetModelConfig(modelName string) ModelConfig {
 		return config
 	}
 	// Default fallback
-	return ModelConfig{MaxTokens: 8192, ContextWindow: 200000}
+	return ModelConfig{MaxTokens: 64000, ContextWindow: 200000}
 }
 
 // ModelIDMap maps friendly model names to SAP AI Core model names

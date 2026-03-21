@@ -68,7 +68,7 @@ func GrepSearch(ctx tool.Context, args GrepSearchArgs) (GrepSearchResult, error)
 	}
 
 	// Make path absolute
-	absPath, err := filepath.Abs(searchPath)
+	absPath, err := filepath.Abs(expandPath(searchPath))
 	if err != nil {
 		return GrepSearchResult{}, err
 	}

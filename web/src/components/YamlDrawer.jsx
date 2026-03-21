@@ -1,11 +1,11 @@
 import { useState } from 'react'
-import { X, Maximize2, Minimize2 } from 'lucide-react'
+import { X, Maximize2, Minimize2, Save } from 'lucide-react'
 import CodeMirror from '@uiw/react-codemirror'
 import { yaml } from '@codemirror/lang-yaml'
 import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/search'
 import { keymap, EditorView } from '@codemirror/view'
 
-export default function YamlDrawer({ content, onChange, onClose, theme }) {
+export default function YamlDrawer({ content, onChange, onClose, theme, subtitle, onSave, isSaving, saveStatus }) {
   const [isFullscreen, setIsFullscreen] = useState(false)
 
   return (
@@ -14,12 +14,25 @@ export default function YamlDrawer({ content, onChange, onClose, theme }) {
       style={{ background: 'var(--bg-secondary)' }}
     >
       {/* Header */}
-      <div className="flex items-center justify-between p-4" style={{ borderBottom: '1px solid var(--border-color)' }}>
+      <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--border-color)' }}>
         <div>
-          <h2 className="font-semibold" style={{ color: 'var(--text-primary)' }}>Source (YAML)</h2>
-          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Live synchronized with flow</p>
+          <h2 className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>Source (YAML)</h2>
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{subtitle || 'Live synchronized with flow'}</p>
         </div>
         <div className="flex items-center gap-2">
+          {onSave && (
+            <>
+              {saveStatus === 'saved' && <span className="text-xs text-green-400">Saved</span>}
+              {saveStatus === 'error' && <span className="text-xs text-red-400">Save failed</span>}
+              <button
+                onClick={onSave}
+                disabled={isSaving}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white transition-colors disabled:opacity-50"
+              >
+                <Save size={12} /> {isSaving ? 'Saving...' : 'Save'}
+              </button>
+            </>
+          )}
           <button
             onClick={() => setIsFullscreen(!isFullscreen)}
             className="p-2 rounded-lg transition-colors hover:bg-purple-500/20"

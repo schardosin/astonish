@@ -195,6 +195,7 @@ func TestExcludedChildTools(t *testing.T) {
 		"schedule_job":      true,
 		"save_credential":   true,
 		"remove_credential": true,
+		"opencode":          true,
 	}
 
 	for name := range expected {

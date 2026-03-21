@@ -14,16 +14,18 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/api"
 	"github.com/schardosin/astonish/pkg/config"
+	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/tools"
 	"github.com/schardosin/astonish/web"
 )
 
 // StudioServer wraps the HTTP server with lifecycle management.
 type StudioServer struct {
-	server   *http.Server
-	listener net.Listener
-	port     int
-	Auth     *api.AuthManager // nil means no auth (direct CLI mode)
+	server       *http.Server
+	listener     net.Listener
+	port         int
+	Auth         *api.AuthManager // nil means no auth (direct CLI mode)
+	sessionStore *persistentsession.FileStore
 }
 
 // StudioOption configures optional StudioServer behavior.
@@ -34,6 +36,13 @@ func WithAuth(am *api.AuthManager) StudioOption {
 	return func(s *StudioServer) { s.Auth = am }
 }
 
+// WithSessionStore injects a shared FileStore for session persistence.
+// When set, the Studio chat agent reuses this store instead of creating its own,
+// ensuring a single FileStore instance across the daemon process.
+func WithSessionStore(store *persistentsession.FileStore) StudioOption {
+	return func(s *StudioServer) { s.sessionStore = store }
+}
+
 // NewStudioServer creates a configured Studio server without starting it.
 func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 	s := &StudioServer{port: port}
@@ -42,6 +51,7 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 	}
 
 	// Wire Studio Chat initialization (lazy, runs on first chat request)
+	sharedStore := s.sessionStore // capture for closure
 	api.SetStudioChatInitFunc(func(ctx context.Context) (*api.StudioChatComponents, error) {
 		appCfg, err := config.LoadAppConfig()
 		if err != nil {
@@ -56,6 +66,7 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 			AutoApprove:  false,
 			WorkspaceDir: "",
 			IsDaemon:     false,
+			SessionStore: sharedStore,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize chat agent: %w", err)

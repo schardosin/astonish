@@ -444,7 +444,7 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	// 8. Run & Stream
 	var userMsg *genai.Content
 	if req.Message != "" {
-		userMsg = genai.NewContentFromText(req.Message, genai.RoleUser)
+		userMsg = agent.NewTimestampedUserContent(req.Message)
 	}
 
 	SendSSE(w, flusher, "status", map[string]string{"status": "running"})

@@ -35,6 +35,8 @@ func EditFile(ctx tool.Context, args EditFileArgs) (EditFileResult, error) {
 		return EditFileResult{}, fmt.Errorf("old_string is required")
 	}
 
+	args.Path = expandPath(args.Path)
+
 	// Read the file
 	data, err := os.ReadFile(args.Path)
 	if err != nil {

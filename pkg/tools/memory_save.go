@@ -130,12 +130,8 @@ func MemorySave(mgr *memory.Manager, store MemorySaveStore) func(ctx tool.Contex
 func NewMemorySaveTool(mgr *memory.Manager, store MemorySaveStore) (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name: "memory_save",
-		Description: "Save durable facts to persistent memory for future recall. " +
-			"For core identity/preferences/connection details, save to MEMORY.md (default). " +
-			"For procedural knowledge discovered during problem-solving (API quirks, command " +
-			"recipes, workarounds, configuration steps), save to a topic file like " +
-			"'infrastructure/proxmox.md'. To correct outdated facts, set overwrite=true and " +
-			"provide the complete corrected section content. NEVER save command outputs, " +
-			"resource listings, or any data that changes over time — those must be fetched live.",
+		Description: "Save durable facts to persistent memory. Default file is MEMORY.md (core identity/preferences). " +
+			"Use file param for topic-specific knowledge (e.g., 'infrastructure/proxmox.md'). " +
+			"Set overwrite=true to replace outdated sections. NEVER save ephemeral data (command outputs, resource lists).",
 	}, MemorySave(mgr, store))
 }

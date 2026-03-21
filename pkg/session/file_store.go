@@ -388,6 +388,50 @@ func (s *FileStore) SetSessionTitle(sessionID, title string) error {
 	})
 }
 
+// ListChildren returns metadata for all child sessions of the given parent.
+func (s *FileStore) ListChildren(parentID string) ([]SessionMeta, error) {
+	return s.index.ListChildren(parentID)
+}
+
+// AddSessionMeta adds a metadata entry to the session index directly.
+// This is used by fleet sessions that need to appear in the session list
+// without creating a full ADK session or transcript file.
+func (s *FileStore) AddSessionMeta(meta SessionMeta) error {
+	return s.index.Add(meta)
+}
+
+// UpdateSessionMeta updates an existing session's metadata in the index.
+func (s *FileStore) UpdateSessionMeta(sessionID string, fn func(*SessionMeta)) error {
+	return s.index.Update(sessionID, fn)
+}
+
+// RemoveSessionMeta removes a session's metadata from the index.
+func (s *FileStore) RemoveSessionMeta(sessionID string) error {
+	return s.index.Remove(sessionID)
+}
+
+// BaseDir returns the base directory for session storage.
+func (s *FileStore) BaseDir() string {
+	return s.baseDir
+}
+
+// Index returns the underlying SessionIndex for direct access.
+// This is used by the trace API to walk child sessions.
+func (s *FileStore) Index() *SessionIndex {
+	return s.index
+}
+
+// ReadTranscriptEvents reads all events from a session's transcript file.
+// This is a lightweight read that does not load the full session into the cache.
+func (s *FileStore) ReadTranscriptEvents(appName, userID, sessionID string) ([]*adksession.Event, error) {
+	transcriptPath := filepath.Join(s.baseDir, appName, userID, sessionID+".jsonl")
+	transcript := NewTranscript(transcriptPath)
+	if !transcript.Exists() {
+		return nil, nil
+	}
+	return transcript.ReadEvents()
+}
+
 // loadFromDisk loads a session from its transcript file and index metadata.
 // Caller must hold s.mu lock.
 func (s *FileStore) loadFromDisk(appName, userID, sessionID string) (*fileSession, error) {

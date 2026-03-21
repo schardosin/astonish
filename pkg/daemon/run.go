@@ -19,8 +19,10 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
 	emailpkg "github.com/schardosin/astonish/pkg/email"
+	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/launcher"
 	"github.com/schardosin/astonish/pkg/scheduler"
+	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/tools"
 )
 
@@ -76,8 +78,10 @@ func Run(cfg RunConfig) error {
 
 	// Set up provider environment variables (credential store → config → env fallback)
 	configDir, _ := config.GetConfigDir()
+	var credStore *credentials.Store
 	if configDir != "" {
 		if cs, csErr := credentials.Open(configDir); csErr == nil {
+			credStore = cs
 			config.SetInstalledSecretGetter(cs.GetSecret)
 			api.SetAPICredentialStore(cs)
 
@@ -106,9 +110,46 @@ func Run(cfg RunConfig) error {
 		config.SetupMCPEnv(mcpCfg)
 	}
 
+	// --- Generate managed OpenCode config ---
+	// This creates ~/.config/astonish/opencode.json from the current provider
+	// settings so that OpenCode (used as a delegate tool in fleet sessions)
+	// does not need independent configuration.
+	var getSecret config.SecretGetter
+	if credStore != nil {
+		getSecret = credStore.GetSecret
+	}
+	if ocResult, ocErr := config.GenerateOpenCodeConfig(appCfg, getSecret); ocErr != nil {
+		logger.Printf("Warning: Failed to generate OpenCode config: %v", ocErr)
+	} else {
+		tools.SetOpenCodeConfig(ocResult.ConfigPath, ocResult.ProviderID, ocResult.ModelID, ocResult.ExtraEnv)
+		// Also set fleet project context vars so opencode_init uses the managed config
+		fleet.OpenCodeConfigPath = ocResult.ConfigPath
+		fleet.OpenCodeExtraEnv = ocResult.ExtraEnv
+		fleet.OpenCodeModelFlag = ocResult.FullModelID()
+		logger.Printf("OpenCode config generated (%s, provider: %s, model: %s)", ocResult.ConfigPath, ocResult.ProviderID, ocResult.ModelID)
+	}
+
 	// Initialize tools cache
 	ctx := context.Background()
 	api.InitToolsCache(ctx)
+
+	// --- Initialize file store for session persistence ---
+	// A single shared FileStore is used for ALL session persistence in the daemon:
+	// fleet session transcripts, Studio chat sub-agent sessions, and channel
+	// sub-agent sessions. Using one instance prevents index.json race conditions
+	// that caused child sessions to become orphaned (invisible in trace view).
+	var sharedFileStore *persistentsession.FileStore
+	if sessDir, dirErr := config.GetSessionsDir(&appCfg.Sessions); dirErr == nil {
+		if store, fsErr := persistentsession.NewFileStore(sessDir); fsErr == nil {
+			sharedFileStore = store
+			api.SetFleetSessionStore(store)
+			logger.Printf("Session store initialized (%s)", sessDir)
+		} else {
+			logger.Printf("Warning: Failed to initialize session store: %v", fsErr)
+		}
+	} else {
+		logger.Printf("Warning: Failed to resolve sessions directory: %v", dirErr)
+	}
 
 	// --- Initialize device authorization for Studio ---
 	var authManager *api.AuthManager
@@ -154,6 +195,7 @@ func Run(cfg RunConfig) error {
 			DebugMode:    cfg.Debug,
 			AutoApprove:  true, // Channels/scheduler auto-approve all tools
 			IsDaemon:     true, // We ARE the daemon — always run indexing/watchers.
+			SessionStore: sharedFileStore,
 		})
 		if factoryErr != nil {
 			logger.Printf("Warning: Failed to initialize ChatAgent: %v", factoryErr)
@@ -363,6 +405,7 @@ func Run(cfg RunConfig) error {
 
 	// --- Initialize scheduler if enabled ---
 	var sched *scheduler.Scheduler
+	var schedExec *scheduler.Executor
 
 	if appCfg.Scheduler.IsSchedulerEnabled() {
 		storePath, storeErr := scheduler.DefaultStorePath()
@@ -374,7 +417,7 @@ func Run(cfg RunConfig) error {
 				logger.Printf("Warning: Failed to initialize scheduler store: %v", storeErr)
 			} else {
 				// Create executor with injected headless runner
-				exec := &scheduler.Executor{
+				schedExec = &scheduler.Executor{
 					AppConfig:    appCfg,
 					ProviderName: appCfg.General.DefaultProvider,
 					ModelName:    appCfg.General.DefaultModel,
@@ -382,8 +425,8 @@ func Run(cfg RunConfig) error {
 					RunHeadless:  makeHeadlessRunner(),
 				}
 				if factoryResult != nil {
-					exec.ChatAgent = factoryResult.ChatAgent
-					exec.SessionService = factoryResult.SessionService
+					schedExec.ChatAgent = factoryResult.ChatAgent
+					schedExec.SessionService = factoryResult.SessionService
 				}
 
 				// Create delivery function (only if channels are available)
@@ -392,7 +435,7 @@ func Run(cfg RunConfig) error {
 					deliver = scheduler.NewDeliverFunc(channelMgr)
 				}
 
-				sched = scheduler.New(store, exec.Execute, deliver, log.Default())
+				sched = scheduler.New(store, schedExec.Execute, deliver, log.Default())
 				sched.Start(ctx)
 
 				// Make scheduler available to API handlers and LLM tools
@@ -402,10 +445,127 @@ func Run(cfg RunConfig) error {
 		}
 	}
 
+	// --- Initialize fleet plan activator ---
+	// This bridges fleet plans to the scheduler for automated polling.
+	// Requires both the scheduler and the plan registry to be initialized.
+	if sched != nil {
+		planReg := api.GetFleetPlanRegistry()
+		if planReg != nil {
+			fleetSchedBridge := newFleetSchedulerBridge(sched)
+			fleetStarter := func(fCtx context.Context, fCfg fleet.HeadlessFleetConfig) (string, error) {
+				return api.StartHeadlessFleetSession(fCtx, fCfg)
+			}
+			// Pass api.GetFleetPlanRegistry as a function so the activator
+			// always sees the current registry instance, even if the Studio
+			// lazy chat init replaces it with a new one.
+			activator := fleet.NewPlanActivator(api.GetFleetPlanRegistry, fleetSchedBridge, fleetStarter)
+
+			// Wire the poll function into the scheduler executor
+			if schedExec != nil {
+				schedExec.FleetPoll = activator.Poll
+			}
+
+			// Wire the recover function for session recovery after restart
+			activator.SetRecoverFunc(func(rCtx context.Context, rCfg fleet.RecoverFleetConfig) error {
+				return api.RecoverFleetSession(rCtx, rCfg)
+			})
+
+			// Wire credential-based GitHub token resolver for fleet plans.
+			// When a plan has credentials: { github: "some-store-entry" }, this
+			// resolver extracts the token from the encrypted credential store so
+			// it can be injected as GH_TOKEN into gh CLI commands.
+			if credStore != nil {
+				activator.SetGHTokenResolver(func(plan *fleet.FleetPlan) string {
+					resolved, _ := fleet.ResolveCredentials(plan, credStore)
+					return fleet.GitHubToken(resolved)
+				})
+			}
+
+			// Make activator available to API handlers
+			api.SetPlanActivator(activator)
+
+			// Wire the session registry so CheckForWork can detect active sessions
+			activator.SetSessionRegistry(api.GetFleetSessionRegistry())
+
+			// Wire OpenCode binary finder for project context generation.
+			// Fleet templates can define a project_context section that runs
+			// OpenCode /init to generate AGENTS.md before agents start.
+			fleet.OpenCodeBinaryFinder = tools.FindOpenCodeBinary
+
+			// Restore previously activated plans (re-create monitors)
+			if err := activator.RestoreActivated(); err != nil {
+				logger.Printf("Warning: Failed to restore activated plans: %v", err)
+			}
+
+			logger.Printf("Fleet plan activator initialized")
+		}
+	}
+
+	// --- Wire fleet commands into channels ---
+	// Must happen after both channelMgr and fleet registries are initialized.
+	if channelMgr != nil {
+		channelMgr.SetFleetDeps(&channels.FleetDeps{
+			GetSessionRegistry: func() channels.FleetSessionRegistry {
+				return api.GetFleetSessionRegistry()
+			},
+			GetPlanRegistry: func() channels.FleetPlanRegistry {
+				reg := api.GetFleetPlanRegistry()
+				if reg == nil {
+					return nil
+				}
+				return &fleetPlanRegistryAdapter{reg: reg}
+			},
+			GetFleetRegistry: func() channels.FleetTemplateRegistry {
+				reg := api.GetFleetRegistry()
+				if reg == nil {
+					return nil
+				}
+				return &fleetTemplateRegistryAdapter{reg: reg}
+			},
+			StartSessionFromPlan: func(planKey, initialMessage string) (*channels.FleetSessionStartResult, error) {
+				result, err := api.StartFleetSessionFromPlan(planKey, initialMessage)
+				if err != nil {
+					return nil, err
+				}
+				return &channels.FleetSessionStartResult{
+					SessionID: result.Session.ID,
+					FleetKey:  result.FleetKey,
+					FleetName: result.FleetName,
+					SetOnMessagePosted: func(fn func(sender, text string)) {
+						if result.SetOnMessagePosted != nil {
+							result.SetOnMessagePosted(func(msg fleet.Message) {
+								fn(msg.Sender, msg.Text)
+							})
+						}
+					},
+					SetOnSessionDone: func(fn func(sessionID string, err error)) {
+						if result.SetOnSessionDone != nil {
+							result.SetOnSessionDone(fn)
+						}
+					},
+				}, nil
+			},
+			StopSession: func(sessionID string) error {
+				registry := api.GetFleetSessionRegistry()
+				fs := registry.Get(sessionID)
+				if fs == nil {
+					return fmt.Errorf("fleet session %s not found", sessionID)
+				}
+				fs.Stop()
+				registry.Unregister(sessionID)
+				return nil
+			},
+		})
+		logger.Printf("Fleet commands wired into channels")
+	}
+
 	// Create and start the Studio server
 	var studioOpts []launcher.StudioOption
 	if authManager != nil {
 		studioOpts = append(studioOpts, launcher.WithAuth(authManager))
+	}
+	if sharedFileStore != nil {
+		studioOpts = append(studioOpts, launcher.WithSessionStore(sharedFileStore))
 	}
 	studio, err := launcher.NewStudioServer(port, studioOpts...)
 	if err != nil {
@@ -664,4 +824,123 @@ func setupEmailTools(cfg *emailToolConfig) {
 		return
 	}
 	tools.SetEmailClient(client)
+}
+
+// fleetSchedulerBridge adapts scheduler.Scheduler to fleet.SchedulerAccess,
+// bridging the two packages without import cycles.
+type fleetSchedulerBridge struct {
+	sched *scheduler.Scheduler
+}
+
+func newFleetSchedulerBridge(s *scheduler.Scheduler) *fleetSchedulerBridge {
+	return &fleetSchedulerBridge{sched: s}
+}
+
+func (b *fleetSchedulerBridge) AddJob(job *fleet.SchedulerJob) error {
+	sj := &scheduler.Job{
+		Name: job.Name,
+		Mode: scheduler.JobMode(job.Mode),
+		Schedule: scheduler.JobSchedule{
+			Cron: job.Cron,
+		},
+		Payload: scheduler.JobPayload{
+			Flow: job.Flow,
+		},
+		Enabled: job.Enabled,
+	}
+	log.Printf("[fleet-sched-bridge] Adding job %q: mode=%s cron=%q flow=%q enabled=%v",
+		job.Name, job.Mode, job.Cron, job.Flow, job.Enabled)
+	if err := b.sched.Store().Add(sj); err != nil {
+		return err
+	}
+	job.ID = sj.ID
+	b.sched.RefreshNextRun(sj.ID)
+	log.Printf("[fleet-sched-bridge] Job created with ID %s", sj.ID)
+	return nil
+}
+
+func (b *fleetSchedulerBridge) RemoveJob(id string) error {
+	return b.sched.Store().Remove(id)
+}
+
+func (b *fleetSchedulerBridge) RemoveJobByName(name string) error {
+	for _, j := range b.sched.Store().List() {
+		if j.Name == name {
+			return b.sched.Store().Remove(j.ID)
+		}
+	}
+	return nil // job not found is not an error
+}
+
+func (b *fleetSchedulerBridge) GetJob(id string) *fleet.SchedulerJob {
+	sj := b.sched.Store().Get(id)
+	if sj == nil {
+		return nil
+	}
+	return &fleet.SchedulerJob{
+		ID:      sj.ID,
+		Name:    sj.Name,
+		Mode:    string(sj.Mode),
+		Cron:    sj.Schedule.Cron,
+		Flow:    sj.Payload.Flow,
+		Enabled: sj.Enabled,
+	}
+}
+
+func (b *fleetSchedulerBridge) ValidateCron(expr string) error {
+	return scheduler.ValidateCron(expr)
+}
+
+// fleetPlanRegistryAdapter adapts fleet.PlanRegistry to channels.FleetPlanRegistry.
+type fleetPlanRegistryAdapter struct {
+	reg *fleet.PlanRegistry
+}
+
+func (a *fleetPlanRegistryAdapter) ListPlans() []channels.FleetPlanSummary {
+	plans := a.reg.ListPlans()
+	result := make([]channels.FleetPlanSummary, len(plans))
+	for i, p := range plans {
+		result[i] = channels.FleetPlanSummary{
+			Key:         p.Key,
+			Name:        p.Name,
+			Description: p.Description,
+			ChannelType: p.ChannelType,
+			AgentNames:  p.AgentNames,
+		}
+	}
+	return result
+}
+
+// fleetTemplateRegistryAdapter adapts fleet.Registry to channels.FleetTemplateRegistry.
+type fleetTemplateRegistryAdapter struct {
+	reg *fleet.Registry
+}
+
+func (a *fleetTemplateRegistryAdapter) ListFleets() []channels.FleetTemplateSummary {
+	fleets := a.reg.ListFleets()
+	result := make([]channels.FleetTemplateSummary, len(fleets))
+	for i, f := range fleets {
+		result[i] = channels.FleetTemplateSummary{
+			Key:         f.Key,
+			Name:        f.Name,
+			Description: f.Description,
+			AgentNames:  f.AgentNames,
+		}
+	}
+	return result
+}
+
+func (a *fleetTemplateRegistryAdapter) GetFleet(key string) (channels.FleetTemplateWithWizard, bool) {
+	cfg, ok := a.reg.GetFleet(key)
+	if !ok {
+		return channels.FleetTemplateWithWizard{}, false
+	}
+	var wizardPrompt string
+	if cfg.PlanWizard != nil {
+		wizardPrompt = cfg.PlanWizard.SystemPrompt
+	}
+	return channels.FleetTemplateWithWizard{
+		Name:               cfg.Name,
+		WizardSystemPrompt: wizardPrompt,
+	}, true
 }

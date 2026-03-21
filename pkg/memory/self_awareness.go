@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 )
 
 // SelfMDConfig holds everything needed to generate SELF.md.
@@ -66,7 +65,7 @@ func GenerateSelfMD(cfg *SelfMDConfig) string {
 	var sb strings.Builder
 
 	sb.WriteString("# Astonish Self-Configuration\n\n")
-	sb.WriteString(fmt.Sprintf("_Auto-generated at %s. Do not edit manually — changes will be overwritten._\n\n", time.Now().Format("2006-01-02 15:04 MST")))
+	sb.WriteString("_Auto-generated. Do not edit manually — changes will be overwritten._\n\n")
 
 	// Config file location
 	sb.WriteString("## Config Files\n")

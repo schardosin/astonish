@@ -14,6 +14,11 @@ type SpinnerModel struct {
 	quitting bool
 }
 
+// SpinnerTextMsg is sent to update the spinner's display text.
+type SpinnerTextMsg struct {
+	Text string
+}
+
 func NewSpinner(text string) SpinnerModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
@@ -36,6 +41,9 @@ func (m SpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.QuitMsg:
 		m.quitting = true
 		return m, tea.Quit
+	case SpinnerTextMsg:
+		m.text = msg.Text
+		return m, nil
 	}
 
 	var cmd tea.Cmd

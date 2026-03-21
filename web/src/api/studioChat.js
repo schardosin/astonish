@@ -53,20 +53,24 @@ export async function deleteSession(id) {
  * @param {function} params.onDone - Callback when stream completes
  * @returns {AbortController}
  */
-export function connectChat({ sessionId, message, autoApprove, onEvent, onError, onDone }) {
+export function connectChat({ sessionId, message, systemContext, autoApprove, onEvent, onError, onDone }) {
   const controller = new AbortController()
 
   const run = async () => {
     try {
+      const body = {
+        sessionId: sessionId || '',
+        message: message || '',
+        autoApprove: !!autoApprove,
+      }
+      if (systemContext) {
+        body.systemContext = systemContext
+      }
       const response = await fetch(`${API_BASE}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
-        body: JSON.stringify({
-          sessionId: sessionId || '',
-          message: message || '',
-          autoApprove: !!autoApprove,
-        }),
+        body: JSON.stringify(body),
       })
 
       if (!response.ok) {

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package, Store, GitBranch, RefreshCw, Search, Play, Download, MessageSquare, Globe, Radio, Database, Brain, GitFork, Wand2, Clock, Shield, User, KeyRound } from 'lucide-react'
+import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package, Store, GitBranch, RefreshCw, Search, Play, Download, MessageSquare, Globe, Radio, Database, Brain, GitFork, Wand2, Clock, Shield, User, KeyRound, Terminal } from 'lucide-react'
 import MCPStoreModal from './MCPStoreModal'
 import FlowStorePanel from './FlowStorePanel'
 import ProviderModelSelector from './ProviderModelSelector'
@@ -20,6 +20,7 @@ import SchedulerSettings from './settings/SchedulerSettings'
 import DaemonSettings from './settings/DaemonSettings'
 import IdentitySettings from './settings/IdentitySettings'
 import CredentialsSettings from './settings/CredentialsSettings'
+import OpenCodeSettings from './settings/OpenCodeSettings'
 
 // API functions
 const fetchSettings = async () => {
@@ -138,7 +139,7 @@ const refreshMCPServer = async (serverName) => {
 }
 
 // Section keys that use the full config API
-const FULL_CONFIG_SECTIONS = ['chat', 'browser', 'channels', 'sessions', 'memory', 'sub_agents', 'skills', 'scheduler', 'daemon', 'identity']
+const FULL_CONFIG_SECTIONS = ['chat', 'browser', 'channels', 'sessions', 'memory', 'sub_agents', 'skills', 'scheduler', 'daemon', 'identity', 'open_code']
 
 export default function SettingsPage({ onClose, activeSection = 'general', onSectionChange, onToolsRefresh, onSettingsSaved, updateAvailable = null, onUpdateClick = null, appVersion = 'dev', theme = 'dark' }) {
   // Use prop for active section, default to 'general'
@@ -154,7 +155,8 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
     default_provider: '', 
     default_model: '',
     web_search_tool: '',
-    web_extract_tool: ''
+    web_extract_tool: '',
+    timezone: ''
   })
   const [providerForms, setProviderForms] = useState({})
   const [mcpServers, setMcpServers] = useState({})
@@ -278,7 +280,8 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
         default_provider: settingsData.general.default_provider || '',
         default_model: settingsData.general.default_model || '',
         web_search_tool: settingsData.general.web_search_tool || '',
-        web_extract_tool: settingsData.general.web_extract_tool || ''
+        web_extract_tool: settingsData.general.web_extract_tool || '',
+        timezone: settingsData.general.timezone || ''
       })
       // Initialize provider forms
       const pForms = {}
@@ -653,6 +656,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
     { id: 'sessions', label: 'Sessions', icon: Database },
     { id: 'memory', label: 'Memory', icon: Brain },
     { id: 'sub_agents', label: 'Sub-Agents', icon: GitFork },
+    { id: 'open_code', label: 'OpenCode', icon: Terminal },
     { id: 'skills', label: 'Skills', icon: Wand2 },
     { id: 'scheduler', label: 'Scheduler', icon: Clock },
     { id: 'daemon', label: 'Daemon', icon: Shield },
@@ -784,8 +788,11 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                   Default Model
                 </label>
                 
-                {/* Providers with enhanced selector */}
-                {['openrouter', 'anthropic', 'gemini', 'groq', 'litellm', 'openai', 'poe', 'sap_ai_core', 'xai', 'lm_studio', 'ollama'].includes(generalForm.default_provider) ? (
+                {/* Providers with enhanced selector — resolve instance name to type */}
+                {(() => {
+                  const providerType = settings?.providers?.find(p => p.name === generalForm.default_provider)?.type || ''
+                  return ['openrouter', 'anthropic', 'gemini', 'groq', 'litellm', 'openai', 'poe', 'sap_ai_core', 'xai', 'lm_studio', 'ollama', 'openai_compat'].includes(providerType)
+                })() ? (
                   <div>
                     <button
                       onClick={() => setShowModelSelector(true)}
@@ -802,11 +809,14 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                       <Search size={16} style={{ color: 'var(--text-muted)' }} />
                     </button>
                     <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                      {generalForm.default_provider === 'openrouter' 
-                        ? 'Click to open model browser with pricing info'
-                        : ['gemini', 'groq'].includes(generalForm.default_provider)
-                          ? 'Click to open model browser with context window'
-                          : 'Click to open model browser'}
+                      {(() => {
+                        const pt = settings?.providers?.find(p => p.name === generalForm.default_provider)?.type || ''
+                        return pt === 'openrouter'
+                          ? 'Click to open model browser with pricing info'
+                          : ['gemini', 'groq'].includes(pt)
+                            ? 'Click to open model browser with context window'
+                            : 'Click to open model browser'
+                      })()}
                     </p>
                   </div>
                 ) : (
@@ -924,6 +934,27 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
                       >MCP Servers</button> section to quick-install a web search provider.
                     </p>
                   )}
+                </div>
+              </div>
+
+              {/* Timezone */}
+              <div className="rounded-lg border p-4" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-primary)' }}>
+                <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>Timezone</h3>
+                <div>
+                  <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
+                    IANA Timezone
+                  </label>
+                  <input
+                    type="text"
+                    value={generalForm.timezone}
+                    onChange={(e) => setGeneralForm({ ...generalForm, timezone: e.target.value })}
+                    placeholder="e.g. America/Sao_Paulo (leave empty for system default)"
+                    className="w-full px-4 py-2.5 rounded-lg border text-sm"
+                    style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                  />
+                  <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                    Used for scheduling and time display. Must be a valid IANA timezone identifier.
+                  </p>
                 </div>
               </div>
 
@@ -2010,6 +2041,10 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
 
           {activeSection === 'identity' && fullConfig && (
             <IdentitySettings config={fullConfig.agent_identity} onSaved={() => setFullConfig(null)} />
+          )}
+
+          {activeSection === 'open_code' && fullConfig && (
+            <OpenCodeSettings config={fullConfig.open_code} onSaved={() => setFullConfig(null)} />
           )}
 
           {activeSection === 'credentials' && (

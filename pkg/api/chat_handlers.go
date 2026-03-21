@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -14,6 +17,8 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/schardosin/astonish/pkg/fleet"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
@@ -22,11 +27,16 @@ import (
 	"google.golang.org/genai"
 )
 
+// titleThinkTagRe strips <think>/<thinking> blocks that some models emit in
+// title-generation responses.
+var titleThinkTagRe = regexp.MustCompile(`(?s)<(?:think|thinking)>.*?</(?:think|thinking)>`)
+
 // StudioChatRequest is the request body for POST /api/studio/chat.
 type StudioChatRequest struct {
-	SessionID   string `json:"sessionId,omitempty"`
-	Message     string `json:"message"`
-	AutoApprove bool   `json:"autoApprove,omitempty"`
+	SessionID     string `json:"sessionId,omitempty"`
+	Message       string `json:"message"`
+	AutoApprove   bool   `json:"autoApprove,omitempty"`
+	SystemContext string `json:"systemContext,omitempty"` // per-turn system instructions (not shown to user)
 }
 
 // StudioSessionResponse is a single session in list responses.
@@ -36,12 +46,27 @@ type StudioSessionResponse struct {
 	CreatedAt    string `json:"createdAt"`
 	UpdatedAt    string `json:"updatedAt"`
 	MessageCount int    `json:"messageCount"`
+	FleetKey     string `json:"fleetKey,omitempty"`
+	FleetName    string `json:"fleetName,omitempty"`
+	IssueNumber  int    `json:"issueNumber,omitempty"`
+	Repo         string `json:"repo,omitempty"`
 }
 
 // StudioSessionDetailResponse is the response for GET /api/studio/sessions/{id}.
 type StudioSessionDetailResponse struct {
 	StudioSessionResponse
-	Messages []StudioMessage `json:"messages"`
+	Messages      []StudioMessage       `json:"messages"`
+	FleetMessages []FleetMessageSummary `json:"fleetMessages,omitempty"`
+}
+
+// FleetMessageSummary is a fleet message returned when loading fleet session history.
+type FleetMessageSummary struct {
+	ID        string         `json:"id,omitempty"`
+	Sender    string         `json:"sender"`
+	Text      string         `json:"text"`
+	Mentions  []string       `json:"mentions,omitempty"`
+	Timestamp string         `json:"timestamp,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
 }
 
 // StudioMessage is a simplified message for the frontend.
@@ -219,6 +244,37 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Handle slash commands server-side
 	msg := strings.TrimSpace(req.Message)
+
+	// /fleet [task]: open fleet dialog, optionally pre-populated with the task
+	if msg == "/fleet" || strings.HasPrefix(msg, "/fleet ") {
+		task := strings.TrimSpace(strings.TrimPrefix(msg, "/fleet"))
+		SendSSE(w, flusher, "fleet_redirect", map[string]interface{}{
+			"task": task,
+		})
+		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+		return
+	}
+
+	// /fleet-plan: start a fleet plan creation conversation
+	if msg == "/fleet-plan" || strings.HasPrefix(msg, "/fleet-plan ") {
+		hint := strings.TrimSpace(strings.TrimPrefix(msg, "/fleet-plan"))
+		eventData := map[string]interface{}{
+			"hint": hint,
+		}
+		// If the hint is a fleet template key, look up the wizard config
+		if hint != "" {
+			if reg := GetFleetRegistry(); reg != nil {
+				if cfg, ok := reg.GetFleet(hint); ok && cfg.PlanWizard != nil {
+					eventData["wizard_description"] = cfg.PlanWizard.Description
+					eventData["wizard_system_prompt"] = cfg.PlanWizard.SystemPrompt
+				}
+			}
+		}
+		SendSSE(w, flusher, "fleet_plan_redirect", eventData)
+		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+		return
+	}
+
 	if strings.HasPrefix(msg, "/") {
 		handleSlashCommand(ctx, w, flusher, cm, msg, req.SessionID)
 		return
@@ -274,10 +330,27 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	// Set auto-approve for this request
 	chatAgent.AutoApprove = req.AutoApprove
 
-	// Prepare user message
+	// Inject per-turn session context (e.g., fleet plan wizard instructions).
+	// Escape {variable} patterns to prevent ADK's InjectSessionState from
+	// trying to resolve them as session state keys (e.g. {task} in YAML examples).
+	if req.SystemContext != "" {
+		chatAgent.SystemPrompt.SessionContext = agent.EscapeCurlyPlaceholders(req.SystemContext)
+		defer func() { chatAgent.SystemPrompt.SessionContext = "" }()
+	}
+
+	// Prepare user message (with absolute timestamp for temporal context;
+	// see agent.NewTimestampedUserContent for cache-stability rationale).
 	var userMsg *genai.Content
 	if msg != "" {
-		userMsg = genai.NewContentFromText(msg, genai.RoleUser)
+		userMsg = agent.NewTimestampedUserContent(msg)
+	}
+
+	// Mutex for safe concurrent SSE writes
+	var sseMu sync.Mutex
+	safeSendSSE := func(eventType string, data interface{}) {
+		sseMu.Lock()
+		defer sseMu.Unlock()
+		SendSSE(w, flusher, eventType, data)
 	}
 
 	// Run the agent and stream events
@@ -285,7 +358,12 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		StreamingMode: adkagent.StreamingModeSSE,
 	}) {
 		if runErr != nil {
-			SendErrorSSE(w, flusher, runErr.Error())
+			safeSendSSE("error", map[string]string{"error": runErr.Error()})
+
+			// Persist the error to the session so it survives page refresh.
+			// Without this, the error SSE event is transient — on reload the
+			// user sees their message but no indication of the failure.
+			persistRunError(ctx, sessionService, sessionID, runErr)
 			break
 		}
 
@@ -305,7 +383,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 				case []interface{}:
 					options = v
 				}
-				SendSSE(w, flusher, "approval", map[string]interface{}{
+				safeSendSSE("approval", map[string]interface{}{
 					"tool":    toolName,
 					"options": options,
 				})
@@ -314,7 +392,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			// Auto-approval notification
 			if autoApproved, ok := delta["auto_approved"].(bool); ok && autoApproved {
 				if toolName, ok := delta["approval_tool"].(string); ok {
-					SendSSE(w, flusher, "auto_approved", map[string]interface{}{
+					safeSendSSE("auto_approved", map[string]interface{}{
 						"tool": toolName,
 					})
 				}
@@ -326,7 +404,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 					attempt := toInt(retryInfo["attempt"])
 					maxRetries := toInt(retryInfo["max_retries"])
 					reason, _ := retryInfo["reason"].(string)
-					SendSSE(w, flusher, "retry", map[string]interface{}{
+					safeSendSSE("retry", map[string]interface{}{
 						"attempt":    attempt,
 						"maxRetries": maxRetries,
 						"reason":     reason,
@@ -341,7 +419,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 					reason, _ := failureInfo["reason"].(string)
 					originalError, _ := failureInfo["original_error"].(string)
 					suggestion, _ := failureInfo["suggestion"].(string)
-					SendSSE(w, flusher, "error_info", map[string]interface{}{
+					safeSendSSE("error_info", map[string]interface{}{
 						"title":         title,
 						"reason":        reason,
 						"suggestion":    suggestion,
@@ -352,7 +430,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 
 			// Spinner / thinking text
 			if spinnerText, ok := delta["_spinner_text"].(string); ok {
-				SendSSE(w, flusher, "thinking", map[string]interface{}{
+				safeSendSSE("thinking", map[string]interface{}{
 					"text": spinnerText,
 				})
 			}
@@ -363,22 +441,33 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			for _, part := range event.LLMResponse.Content.Parts {
 				// Streaming text
 				if part.Text != "" {
-					SendSSE(w, flusher, "text", map[string]interface{}{
+					safeSendSSE("text", map[string]interface{}{
 						"text": part.Text,
 					})
 				}
-				// Tool call
+				// Tool call — redact args so piped secrets (e.g. process_write
+				// with a password from resolve_credential) are not exposed in the UI.
 				if part.FunctionCall != nil {
-					SendSSE(w, flusher, "tool_call", map[string]interface{}{
+					args := part.FunctionCall.Args
+					if chatAgent.Redactor != nil && args != nil {
+						args = chatAgent.Redactor.RedactMap(args)
+					}
+					safeSendSSE("tool_call", map[string]interface{}{
 						"name": part.FunctionCall.Name,
-						"args": part.FunctionCall.Args,
+						"args": args,
 					})
 				}
-				// Tool result
+				// Tool result — redact so resolve_credential raw secrets
+				// (which are intentionally unredacted for the LLM) are not
+				// exposed in the UI.
 				if part.FunctionResponse != nil {
-					SendSSE(w, flusher, "tool_result", map[string]interface{}{
+					resp := part.FunctionResponse.Response
+					if chatAgent.Redactor != nil && resp != nil {
+						resp = chatAgent.Redactor.RedactMap(resp)
+					}
+					safeSendSSE("tool_result", map[string]interface{}{
 						"name":   part.FunctionResponse.Name,
-						"result": summarizeToolResult(part.FunctionResponse.Response),
+						"result": summarizeToolResult(resp),
 					})
 					// Drain any images stashed by the tool (e.g., browser screenshots)
 					for _, img := range chatAgent.DrainImages() {
@@ -386,7 +475,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 						if img.Format == "jpeg" || img.Format == "jpg" {
 							mimeType = "image/jpeg"
 						}
-						SendSSE(w, flusher, "image", map[string]interface{}{
+						safeSendSSE("image", map[string]interface{}{
 							"data":     base64.StdEncoding.EncodeToString(img.Data),
 							"mimeType": mimeType,
 						})
@@ -420,6 +509,8 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 				"- `/new` — Start a fresh conversation\n" +
 				"- `/compact` — Show context window usage and compaction status\n" +
 				"- `/distill` — Distill the last task into a reusable flow\n" +
+				"- `/fleet [task]` — Start a fleet session with an autonomous agent team\n" +
+				"- `/fleet-plan [hint]` — Create a reusable fleet plan through guided conversation\n" +
 				"- `/help` — Show this help message",
 		})
 
@@ -545,6 +636,10 @@ func StudioSessionsHandler(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:    m.CreatedAt.Format(time.RFC3339),
 			UpdatedAt:    m.UpdatedAt.Format(time.RFC3339),
 			MessageCount: m.MessageCount,
+			FleetKey:     m.FleetKey,
+			FleetName:    m.FleetName,
+			IssueNumber:  m.IssueNumber,
+			Repo:         m.Repo,
 		})
 	}
 
@@ -574,6 +669,37 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fleet sessions: read transcript and return fleet-style messages
+	if meta.FleetKey != "" {
+		transcriptPath := filepath.Join(fs.BaseDir(), studioChatAppName, studioChatUserID, sessionID+".jsonl")
+		transcript := persistentsession.NewTranscript(transcriptPath)
+		events, readErr := transcript.ReadEvents()
+
+		var fleetMessages []FleetMessageSummary
+		if readErr == nil && len(events) > 0 {
+			fleetMessages = fleetEventsToMessages(events)
+		}
+
+		resp := StudioSessionDetailResponse{
+			StudioSessionResponse: StudioSessionResponse{
+				ID:           meta.ID,
+				Title:        meta.Title,
+				CreatedAt:    meta.CreatedAt.Format(time.RFC3339),
+				UpdatedAt:    meta.UpdatedAt.Format(time.RFC3339),
+				MessageCount: meta.MessageCount,
+				FleetKey:     meta.FleetKey,
+				FleetName:    meta.FleetName,
+				IssueNumber:  meta.IssueNumber,
+				Repo:         meta.Repo,
+			},
+			Messages:      []StudioMessage{},
+			FleetMessages: fleetMessages,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
 	// Get session transcript
 	getResp, err := fs.Get(r.Context(), &session.GetRequest{
 		AppName:   studioChatAppName,
@@ -586,7 +712,11 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Transform ADK events into simplified messages
-	messages := eventsToMessages(getResp.Session.Events())
+	var redactor *credentials.Redactor
+	if cm.components != nil && cm.components.ChatAgent != nil {
+		redactor = cm.components.ChatAgent.Redactor
+	}
+	messages := eventsToMessages(getResp.Session.Events(), redactor)
 
 	resp := StudioSessionDetailResponse{
 		StudioSessionResponse: StudioSessionResponse{
@@ -612,6 +742,24 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionID := mux.Vars(r)["id"]
+
+	// If this is an active fleet session, stop it
+	registry := getFleetSessionRegistry()
+	if fs := registry.Get(sessionID); fs != nil {
+		fs.Stop()
+		registry.Unregister(sessionID)
+	}
+
+	// Clean up per-session workspace directory if one was recorded.
+	// Read metadata before deleting the session (deletion removes metadata).
+	if fileStore := getFleetFileStore(); fileStore != nil {
+		if meta, metaErr := fileStore.GetSessionMeta(sessionID); metaErr == nil && meta.WorkspaceDir != "" {
+			if cleanErr := fleet.CleanupSessionWorkspace(meta.WorkspaceDir); cleanErr != nil {
+				log.Printf("[fleet] Warning: could not clean up workspace %s: %v", meta.WorkspaceDir, cleanErr)
+			}
+		}
+	}
+
 	sessionService := cm.components.SessionService
 
 	err := sessionService.Delete(r.Context(), &session.DeleteRequest{
@@ -636,8 +784,10 @@ func StudioStopHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // eventsToMessages transforms ADK session events into a flat message list for the frontend.
-func eventsToMessages(events session.Events) []StudioMessage {
+// An optional redactor is applied to tool args and results to prevent credential exposure.
+func eventsToMessages(events session.Events, redactor *credentials.Redactor) []StudioMessage {
 	var messages []StudioMessage
+	var lastInvocationID string // track invocation boundary for coalescing
 
 	for i := range events.Len() {
 		event := events.At(i)
@@ -646,44 +796,73 @@ func eventsToMessages(events session.Events) []StudioMessage {
 		}
 
 		role := string(event.LLMResponse.Content.Role)
+		eventInvID := event.InvocationID
 
 		for _, part := range event.LLMResponse.Content.Parts {
 			if part.Text != "" {
 				msgType := "agent"
+				text := part.Text
 				if role == "user" {
 					msgType = "user"
+					// Strip the timestamp prefix injected by NewTimestampedUserContent.
+					// Format: "[2026-03-20 14:30:05 UTC]\n<text>"
+					text = stripUserMessageTimestamp(text)
 				}
-				// Coalesce with previous message of same type
-				if len(messages) > 0 {
+				// Coalesce with previous message of same type, but only within
+				// the same invocation. Different invocations represent separate
+				// user turns — merging across them produces garbled messages
+				// (e.g. when multiple user messages have no model response between them).
+				if len(messages) > 0 && eventInvID == lastInvocationID {
 					last := &messages[len(messages)-1]
 					if last.Type == msgType && last.ToolName == "" {
-						last.Content += part.Text
+						last.Content += text
 						continue
 					}
 				}
 				messages = append(messages, StudioMessage{
 					Type:    msgType,
-					Content: part.Text,
+					Content: text,
 				})
+				lastInvocationID = eventInvID
 			}
 			if part.FunctionCall != nil {
+				args := part.FunctionCall.Args
+				if redactor != nil && args != nil {
+					args = redactor.RedactMap(args)
+				}
 				messages = append(messages, StudioMessage{
 					Type:     "tool_call",
 					ToolName: part.FunctionCall.Name,
-					ToolArgs: part.FunctionCall.Args,
+					ToolArgs: args,
 				})
 			}
 			if part.FunctionResponse != nil {
+				resp := part.FunctionResponse.Response
+				if redactor != nil && resp != nil {
+					resp = redactor.RedactMap(resp)
+				}
 				messages = append(messages, StudioMessage{
 					Type:       "tool_result",
 					ToolName:   part.FunctionResponse.Name,
-					ToolResult: summarizeToolResult(part.FunctionResponse.Response),
+					ToolResult: summarizeToolResult(resp),
 				})
 			}
 		}
 	}
 
 	return messages
+}
+
+// userTimestampRe matches the timestamp prefix injected by NewTimestampedUserContent.
+// Format: "[2026-03-20 14:30:05 UTC]\n"
+var userTimestampRe = regexp.MustCompile(`^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \w+\]\n`)
+
+// stripUserMessageTimestamp removes the timestamp prefix from a user message
+// that was injected by NewTimestampedUserContent. This keeps the timestamp in
+// the persisted event (for the LLM's context) while displaying clean text to
+// the user in the Studio UI.
+func stripUserMessageTimestamp(text string) string {
+	return userTimestampRe.ReplaceAllString(text, "")
 }
 
 // summarizeToolResult converts a tool response map into a display-friendly value.
@@ -714,6 +893,49 @@ func truncateResult(s string) string {
 		return s
 	}
 	return s[:maxLen] + "\n\n... (truncated)"
+}
+
+// fleetEventsToMessages converts ADK events from a fleet transcript back into
+// fleet-style message summaries for the frontend.
+func fleetEventsToMessages(events []*session.Event) []FleetMessageSummary {
+	var messages []FleetMessageSummary
+	for _, event := range events {
+		if event.LLMResponse.Content == nil {
+			continue
+		}
+		// Extract text from all parts
+		var text string
+		for _, part := range event.LLMResponse.Content.Parts {
+			if part.Text != "" {
+				text += part.Text
+			}
+		}
+		if text == "" {
+			continue
+		}
+
+		// Determine sender from Author field (set by fleetMessageToEvent)
+		sender := event.Author
+		if sender == "" {
+			// Fallback: infer from role
+			if event.LLMResponse.Content.Role == genai.RoleUser {
+				sender = "customer"
+			} else {
+				sender = "agent"
+			}
+		}
+		if sender == "user" {
+			sender = "customer"
+		}
+
+		messages = append(messages, FleetMessageSummary{
+			ID:        event.ID,
+			Sender:    sender,
+			Text:      text,
+			Timestamp: event.Timestamp.Format(time.RFC3339Nano),
+		})
+	}
+	return messages
 }
 
 // generateStudioSessionTitle calls the LLM to produce a short session title.
@@ -747,6 +969,7 @@ func generateStudioSessionTitle(llm model.LLM, store *persistentsession.FileStor
 		}
 	}
 
+	title = titleThinkTagRe.ReplaceAllString(title, "")
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return
@@ -769,5 +992,37 @@ func toInt(v interface{}) int {
 		return int(n)
 	default:
 		return 0
+	}
+}
+
+// persistRunError saves a synthetic model event to the session when the runner
+// returns an error. Without this, errors are only sent as transient SSE events
+// and disappear on page reload — the user sees their message but no indication
+// that the model failed.
+func persistRunError(ctx context.Context, svc session.Service, sessionID string, runErr error) {
+	resp, err := svc.Get(ctx, &session.GetRequest{
+		AppName:   studioChatAppName,
+		UserID:    studioChatUserID,
+		SessionID: sessionID,
+	})
+	if err != nil {
+		log.Printf("[persistRunError] failed to get session %s: %v", sessionID, err)
+		return
+	}
+
+	errorEvent := &session.Event{
+		ID:        fmt.Sprintf("error-%d", time.Now().UnixMilli()),
+		Author:    "model",
+		Timestamp: time.Now(),
+		LLMResponse: model.LLMResponse{
+			Content: &genai.Content{
+				Role:  "model",
+				Parts: []*genai.Part{{Text: fmt.Sprintf("[Error: %s]", runErr.Error())}},
+			},
+		},
+	}
+
+	if err := svc.AppendEvent(ctx, resp.Session, errorEvent); err != nil {
+		log.Printf("[persistRunError] failed to append error event to session %s: %v", sessionID, err)
 	}
 }

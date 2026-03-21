@@ -822,4 +822,34 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/studio/sessions/{id}", StudioSessionHandler).Methods("GET")
 	router.HandleFunc("/api/studio/sessions/{id}", StudioDeleteSessionHandler).Methods("DELETE")
 	router.HandleFunc("/api/studio/sessions/{id}/stop", StudioStopHandler).Methods("POST")
+
+	// Fleet endpoints
+	router.HandleFunc("/api/fleets", ListFleetsHandler).Methods("GET")
+	router.HandleFunc("/api/fleets/{key}", GetFleetHandler).Methods("GET")
+	router.HandleFunc("/api/fleets/{key}", SaveFleetHandler).Methods("PUT")
+	router.HandleFunc("/api/fleets/{key}", DeleteFleetHandler).Methods("DELETE")
+
+	// Fleet Plan endpoints
+	router.HandleFunc("/api/fleet-plans", ListFleetPlansHandler).Methods("GET")
+	router.HandleFunc("/api/fleet-plans/{key}", GetFleetPlanHandler).Methods("GET")
+	router.HandleFunc("/api/fleet-plans/{key}", SaveFleetPlanHandler).Methods("PUT")
+	router.HandleFunc("/api/fleet-plans/{key}", DeleteFleetPlanHandler).Methods("DELETE")
+	router.HandleFunc("/api/fleet-plans/{key}/activate", ActivateFleetPlanHandler).Methods("POST")
+	router.HandleFunc("/api/fleet-plans/{key}/deactivate", DeactivateFleetPlanHandler).Methods("POST")
+	router.HandleFunc("/api/fleet-plans/{key}/status", FleetPlanStatusHandler).Methods("GET")
+	router.HandleFunc("/api/fleet-plans/{key}/retry/{issueNumber}", RetryFleetIssueHandler).Methods("POST")
+	router.HandleFunc("/api/fleet-plans/{key}/duplicate", DuplicateFleetPlanHandler).Methods("POST")
+	router.HandleFunc("/api/fleet-plans/{key}/yaml", GetFleetPlanYAMLHandler).Methods("GET")
+	router.HandleFunc("/api/fleet-plans/{key}/yaml", SaveFleetPlanYAMLHandler).Methods("PUT")
+
+	// Fleet Session endpoints (fleet v2: autonomous agent team)
+	router.HandleFunc("/api/studio/fleet/start", FleetStartHandler).Methods("POST")
+	router.HandleFunc("/api/studio/fleet/sessions", FleetSessionsListHandler).Methods("GET")
+	router.HandleFunc("/api/studio/fleet/sessions/{id}", FleetSessionStatusHandler).Methods("GET")
+	router.HandleFunc("/api/studio/fleet/sessions/{id}/message", FleetMessageHandler).Methods("POST")
+	router.HandleFunc("/api/studio/fleet/sessions/{id}/stop", FleetSessionStopHandler).Methods("POST")
+	router.HandleFunc("/api/studio/fleet/sessions/{id}/stream", FleetSessionStreamHandler).Methods("GET")
+	router.HandleFunc("/api/studio/fleet/sessions/{id}/trace", FleetSessionTraceHandler).Methods("GET")
+	router.HandleFunc("/api/studio/fleet/sessions/{id}/threads", FleetSessionThreadsHandler).Methods("GET")
+	router.HandleFunc("/api/studio/fleet/sessions/{id}/messages", FleetSessionMessagesHandler).Methods("GET")
 }

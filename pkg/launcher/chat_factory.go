@@ -15,6 +15,7 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
 	emailpkg "github.com/schardosin/astonish/pkg/email"
+	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/provider"
@@ -35,6 +36,13 @@ type ChatFactoryConfig struct {
 	AutoApprove  bool
 	WorkspaceDir string
 	IsDaemon     bool // When true, always run indexing/watchers (we ARE the daemon).
+
+	// SessionStore is an optional pre-created FileStore for session persistence.
+	// When set, the factory reuses this store instead of creating a new one.
+	// This ensures a single FileStore instance across the daemon process,
+	// preventing index.json race conditions between fleet sessions and
+	// sub-agent sessions.
+	SessionStore *persistentsession.FileStore
 }
 
 // ChatFactoryResult holds everything produced by the factory.
@@ -455,6 +463,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 
 	// --- 2g. Sub-agent delegation tool ---
 	var subAgentMgr *agent.SubAgentManager
+	var fleetOnlyTools []tool.Tool // fleet-only tools (run_fleet_phase), assigned to SubAgentManager.FleetTools
 	if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
 		delegateTool, delegateErr := tools.GetDelegateTasksTool()
 		if delegateErr != nil {
@@ -564,7 +573,13 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 
 	// --- 4. Create session service ---
 	var sessionService session.Service
-	if cfg.AppConfig != nil && cfg.AppConfig.Sessions.Storage == "memory" {
+	if cfg.SessionStore != nil {
+		// Reuse the pre-created store (shared with fleet sessions in the daemon).
+		sessionService = cfg.SessionStore
+		if cfg.DebugMode {
+			fmt.Println("Session storage: file (shared store)")
+		}
+	} else if cfg.AppConfig != nil && cfg.AppConfig.Sessions.Storage == "memory" {
 		sessionService = session.InMemoryService()
 		if cfg.DebugMode {
 			fmt.Println("Session storage: memory")
@@ -739,6 +754,17 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		promptBuilder.MemorySearchAvailable = true
 	}
 
+	// Resolve timezone: general.timezone -> agent_identity.timezone -> system default
+	if cfg.AppConfig != nil {
+		tz := cfg.AppConfig.General.Timezone
+		if tz == "" && cfg.AppConfig.AgentIdentity.Timezone != "" {
+			tz = cfg.AppConfig.AgentIdentity.Timezone
+		}
+		if tz != "" {
+			promptBuilder.Timezone = tz
+		}
+	}
+
 	// Set skill index for system prompt
 	if skillIndex != "" {
 		promptBuilder.SkillIndex = skillIndex
@@ -782,11 +808,19 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			if cfg.DebugMode {
 				fmt.Printf("Warning: Failed to write SELF.md: %v\n", writeErr)
 			}
-		} else {
-			promptBuilder.SelfContent = selfContent
+		} else if cfg.DebugMode {
+			fmt.Printf("Generated SELF.md (%d bytes)\n", len(selfContent))
+		}
+
+		// Sync guidance documents to memory/guidance/ for vector indexing.
+		// Guidance docs replace the hardcoded system prompt sections —
+		// they are retrieved via auto-knowledge search per turn.
+		if syncErr := agent.SyncGuidanceToMemory(memDir); syncErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Generated SELF.md (%d bytes)\n", len(selfContent))
+				fmt.Printf("Warning: Failed to sync guidance docs: %v\n", syncErr)
 			}
+		} else if cfg.DebugMode {
+			fmt.Printf("Synced guidance docs to memory/guidance/\n")
 		}
 	}
 
@@ -802,13 +836,134 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		promptBuilder.CustomPrompt = cfg.AppConfig.Chat.SystemPrompt
 	}
 
+	// --- 5b. Initialize fleet registry ---
+	fleetsDir, flErr := config.GetFleetsDir()
+	if flErr == nil {
+		// Ensure bundled fleets exist on disk
+		fWritten, fEnsErr := fleet.EnsureBundled(fleetsDir)
+		if fEnsErr != nil {
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Failed to bootstrap bundled fleets: %v\n", fEnsErr)
+			}
+		} else if fWritten > 0 && cfg.DebugMode {
+			fmt.Printf("Bootstrapped %d bundled fleets to %s\n", fWritten, fleetsDir)
+		}
+
+		fleetReg, fRegErr := fleet.NewRegistry(fleetsDir)
+		if fRegErr != nil {
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Failed to load fleet registry: %v\n", fRegErr)
+			}
+		} else {
+			// Wire fleet registry to API handlers
+			api.SetFleetRegistry(fleetReg)
+
+			// Wire registry to fleet execution tool
+			tools.SetFleetRegistry(fleetReg)
+
+			// Set up env vars declared by delegate configs (e.g. BIFROST_API_KEY for OpenCode).
+			// This must happen before any fleet tool runs so the delegate subprocess inherits them.
+			delegateEnvNames := fleet.CollectDelegateEnvVars(fleetReg.AllFleets())
+			if len(delegateEnvNames) > 0 {
+				var getSecret config.SecretGetter
+				if credStore != nil {
+					getSecret = credStore.GetSecret
+				}
+				config.SetupDelegateEnv(delegateEnvNames, getSecret)
+			}
+
+			// Register fleet tools (requires sub-agents to be enabled)
+			if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
+				// Build fleet-only tools (opencode delegate). These are NOT added to
+				// internalTools (so the main agent can't call them). Instead they go
+				// on SubAgentManager.FleetTools, accessible only to fleet
+				// worker agents via their explicit tool filter.
+				var ftErr error
+				fleetOnlyTools, ftErr = tools.GetFleetTools()
+				if ftErr != nil {
+					if cfg.DebugMode {
+						fmt.Printf("Warning: Failed to create fleet internal tools: %v\n", ftErr)
+					}
+				}
+			}
+
+			// Build fleet awareness section for system prompt
+			if fleetReg.Count() > 0 {
+				summaries := fleetReg.ListFleets()
+				promptBuilder.FleetSection = fleet.BuildSystemPromptSection(
+					summaries,
+					func(key string) (*fleet.FleetConfig, bool) {
+						return fleetReg.GetFleet(key)
+					},
+				)
+				if cfg.DebugMode {
+					fmt.Printf("Fleet awareness: %d fleet(s)\n", fleetReg.Count())
+				}
+			}
+		}
+
+		// Initialize fleet plan registry
+		fleetPlansDir, fpErr := config.GetFleetPlansDir()
+		if fpErr == nil {
+			planReg, prErr := fleet.NewPlanRegistry(fleetPlansDir)
+			if prErr != nil {
+				if cfg.DebugMode {
+					fmt.Printf("Warning: Failed to load fleet plan registry: %v\n", prErr)
+				}
+			} else {
+				// Wire plan registry to API handlers
+				api.SetFleetPlanRegistry(planReg)
+				// Wire plan registry to the save_fleet_plan tool
+				tools.SetFleetPlanRegistry(planReg)
+				if cfg.DebugMode {
+					fmt.Printf("Fleet plans: %d loaded from %s\n", planReg.Count(), fleetPlansDir)
+				}
+			}
+		}
+
+		// Register save_fleet_plan tool (available to main chat agent)
+		fleetPlanTools, fptErr := tools.GetFleetPlanTools()
+		if fptErr != nil {
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Failed to create fleet plan tools: %v\n", fptErr)
+			}
+		} else {
+			internalTools = append(internalTools, fleetPlanTools...)
+		}
+
+		// Register validate_fleet_plan tool (available to main chat agent)
+		fleetPlanValidateTools, fpvErr := tools.GetFleetPlanValidateTools()
+		if fpvErr != nil {
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Failed to create fleet plan validate tools: %v\n", fpvErr)
+			}
+		} else {
+			internalTools = append(internalTools, fleetPlanValidateTools...)
+		}
+
+		// Register opencode tool for the main chat agent (used by the plan wizard
+		// to analyze project workspaces via /init). Fleet worker agents also get
+		// access via fleetOnlyTools, but the main agent needs it for wizard-phase
+		// project analysis.
+		if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
+			ocTool, ocErr := tools.NewOpenCodeTool()
+			if ocErr != nil {
+				if cfg.DebugMode {
+					fmt.Printf("Warning: Failed to create opencode tool for wizard: %v\n", ocErr)
+				}
+			} else {
+				internalTools = append(internalTools, ocTool)
+			}
+		}
+	}
+
 	// --- 6. Create ChatAgent ---
 	chatAgent := agent.NewChatAgent(
 		llm, internalTools, mcpToolsets, sessionService,
 		promptBuilder, cfg.DebugMode, cfg.AutoApprove,
 	)
 
-	// Wire credential redactor to ChatAgent and session service
+	// Wire credential redactor to ChatAgent, session service, and sub-agents
 	if credStore != nil {
 		redactor := credStore.Redactor()
 		chatAgent.Redactor = redactor
@@ -822,9 +977,11 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	if subAgentMgr != nil {
 		subAgentMgr.LLM = llm
 		subAgentMgr.Tools = internalTools
+		subAgentMgr.FleetTools = fleetOnlyTools
 		subAgentMgr.Toolsets = mcpToolsets
 		subAgentMgr.SessionService = sessionService
 		subAgentMgr.MemoryManager = memMgr
+		subAgentMgr.Redactor = chatAgent.Redactor
 		subAgentMgr.AppName = "astonish"
 		subAgentMgr.UserID = "console_user"
 		tools.SetSubAgentManager(subAgentMgr)
@@ -867,25 +1024,8 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 	}
 
-	// --- 6b2. Wire flow vector searcher ---
+	// --- 6b2. Wire knowledge search callbacks ---
 	if memorySearchAvailable && memStore != nil {
-		chatAgent.FlowSearcher = agent.NewFlowMemorySearcher(
-			func(ctx context.Context, query string, maxResults int, minScore float64) ([]agent.FlowSearchResult, error) {
-				results, err := memStore.Search(ctx, query, maxResults, minScore)
-				if err != nil {
-					return nil, err
-				}
-				var flowResults []agent.FlowSearchResult
-				for _, r := range results {
-					flowResults = append(flowResults, agent.FlowSearchResult{
-						Path:  r.Path,
-						Score: r.Score,
-					})
-				}
-				return flowResults, nil
-			},
-		)
-
 		chatAgent.KnowledgeSearch = func(ctx context.Context, query string, maxResults int, minScore float64) ([]agent.KnowledgeSearchResult, error) {
 			results, err := memStore.Search(ctx, query, maxResults, minScore)
 			if err != nil {
@@ -894,24 +1034,38 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			var knowledgeResults []agent.KnowledgeSearchResult
 			for _, r := range results {
 				knowledgeResults = append(knowledgeResults, agent.KnowledgeSearchResult{
-					Path:    r.Path,
-					Score:   r.Score,
-					Snippet: r.Snippet,
+					Path:     r.Path,
+					Score:    r.Score,
+					Snippet:  r.Snippet,
+					Category: r.Category,
+				})
+			}
+			return knowledgeResults, nil
+		}
+
+		chatAgent.KnowledgeSearchByCategory = func(ctx context.Context, query string, maxResults int, minScore float64, category string) ([]agent.KnowledgeSearchResult, error) {
+			results, err := memStore.SearchByCategory(ctx, query, maxResults, minScore, category)
+			if err != nil {
+				return nil, err
+			}
+			var knowledgeResults []agent.KnowledgeSearchResult
+			for _, r := range results {
+				knowledgeResults = append(knowledgeResults, agent.KnowledgeSearchResult{
+					Path:     r.Path,
+					Score:    r.Score,
+					Snippet:  r.Snippet,
+					Category: r.Category,
 				})
 			}
 			return knowledgeResults, nil
 		}
 
 		if cfg.DebugMode {
-			fmt.Println("Flow vector search: enabled")
 			fmt.Println("Auto knowledge retrieval: enabled")
 		}
 	}
 
-	// --- 6b3. Wire flow knowledge dir and SELF.md refresher ---
-	if memFlowsDir != "" {
-		chatAgent.FlowKnowledgeDir = memFlowsDir
-	}
+	// --- 6b3. Wire SELF.md refresher ---
 	if selfMDMemDir != "" {
 		chatAgent.SelfMDRefresher = func() {
 			selfCfg := factoryBuildSelfMDConfig(cfg, selfMDMemDir, internalTools, mcpToolsets, mcpCfg, memStore, memorySearchAvailable, loadedSkills)
@@ -925,7 +1079,6 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			}
 			content := memory.GenerateSelfMD(selfCfg)
 			if writeErr := memory.WriteSelfMD(selfMDMemDir, content); writeErr == nil {
-				promptBuilder.SelfContent = content
 				if cfg.DebugMode {
 					fmt.Printf("[SELF.md] Refreshed (%d bytes)\n", len(content))
 				}
@@ -969,11 +1122,21 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		compactor.DebugMode = cfg.DebugMode
 		compactor.LLM = makeLLMFunc(llm)
 		chatAgent.Compactor = compactor
+		if subAgentMgr != nil {
+			subAgentMgr.Compactor = compactor
+		}
 		if cfg.DebugMode {
 			fmt.Printf("Context compaction: enabled (window: %d tokens, threshold: %.0f%%)\n",
 				contextWindow, compactor.Threshold*100)
 		}
 	}
+
+	// --- 6e-bis. Wire OpenCode response summarizer ---
+	// Uses the same LLM function as the compactor. When set, verbose OpenCode
+	// outputs (>4KB) are replaced with concise summaries before they enter the
+	// calling agent's ADK session, keeping context lean. OpenCode retains full
+	// context internally via session_id continuation.
+	tools.SetOpenCodeSummarizer(makeLLMFunc(llm))
 
 	// --- 6d. Wire memory and flow context ---
 	if memMgr != nil {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"sort"
 	"strings"
 
 	"github.com/sashabaranov/go-openai"
@@ -152,9 +153,15 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 						// Emit all accumulated tool calls
 						var parts []*genai.Part
 
-						// Sort by index to maintain order? Map iteration is random.
-						// Let's just iterate.
-						for _, tc := range toolCallAccumulator {
+						// Sort by index to maintain deterministic order
+						indices := make([]int, 0, len(toolCallAccumulator))
+						for idx := range toolCallAccumulator {
+							indices = append(indices, idx)
+						}
+						sort.Ints(indices)
+
+						for _, idx := range indices {
+							tc := toolCallAccumulator[idx]
 							var args map[string]any
 							if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
 								// Try to recover or just use empty
@@ -345,14 +352,30 @@ func (p *Provider) toOpenAIMessages(req *model.LLMRequest) []openai.ChatCompleti
 	// its own tool_call_id.
 	messages = mergeConsecutiveSameRole(messages)
 
+	// Post-process: ensure conversation doesn't end with a tool message.
+	// Some OpenAI-compatible providers (e.g. kimi-k2.5) reject requests
+	// where the final message has role "tool". The standard OpenAI flow
+	// expects the model to process tool results and continue, but these
+	// providers require a user message after tool responses. We append
+	// a minimal user prompt to trigger the model to process the results.
+	messages = ensureNotEndingWithTool(messages)
+
 	return messages
 }
 
 // mergeConsecutiveSameRole collapses adjacent messages that share the same role
-// into a single message. Only user and assistant text messages are merged; tool
-// messages are kept separate because each one carries a distinct tool_call_id.
-// For assistant messages with tool_calls, consecutive entries are also kept
-// separate to preserve call/response ordering.
+// into a single message. This handles two cases:
+//
+//  1. Consecutive text-only user/assistant messages are joined with "\n".
+//  2. An assistant text message followed by an assistant tool_calls message
+//     are merged into one message carrying both content and tool_calls.
+//     During streaming the provider emits text chunks and tool calls as
+//     separate events, so they end up as separate Contents in session history.
+//     Many OpenAI-compatible providers (e.g. kimi, Mistral) reject two
+//     consecutive assistant messages — the OpenAI spec allows a single
+//     assistant message to carry both content and tool_calls simultaneously.
+//
+// Tool messages are never merged because each carries a distinct tool_call_id.
 func mergeConsecutiveSameRole(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
 	if len(messages) <= 1 {
 		return messages
@@ -365,9 +388,10 @@ func mergeConsecutiveSameRole(messages []openai.ChatCompletionMessage) []openai.
 		prev := &merged[len(merged)-1]
 		cur := messages[i]
 
-		// Only merge if roles match, both are user or assistant, and neither
-		// carries tool calls or a tool_call_id.
 		sameRole := prev.Role == cur.Role
+		bothAssistant := prev.Role == openai.ChatMessageRoleAssistant && cur.Role == openai.ChatMessageRoleAssistant
+
+		// Case 1: merge consecutive text-only user or assistant messages.
 		mergeable := cur.Role == openai.ChatMessageRoleUser || cur.Role == openai.ChatMessageRoleAssistant
 		noToolCalls := len(prev.ToolCalls) == 0 && len(cur.ToolCalls) == 0
 		noToolID := prev.ToolCallID == "" && cur.ToolCallID == ""
@@ -378,12 +402,62 @@ func mergeConsecutiveSameRole(messages []openai.ChatCompletionMessage) []openai.
 			} else if cur.Content != "" {
 				prev.Content = cur.Content
 			}
-		} else {
-			merged = append(merged, cur)
+			continue
 		}
+
+		// Case 2: assistant text message followed by assistant tool_calls message.
+		// Streaming produces these as separate events — merge them so providers
+		// that enforce strict message alternation don't reject the request.
+		if bothAssistant && len(prev.ToolCalls) == 0 && len(cur.ToolCalls) > 0 && prev.ToolCallID == "" {
+			// Absorb cur's tool calls (and any text) into prev.
+			if cur.Content != "" {
+				if prev.Content != "" {
+					prev.Content = prev.Content + "\n" + cur.Content
+				} else {
+					prev.Content = cur.Content
+				}
+			}
+			prev.ToolCalls = cur.ToolCalls
+			continue
+		}
+
+		// Case 3: assistant tool_calls message followed by assistant text message
+		// (less common, but handle symmetrically).
+		if bothAssistant && len(prev.ToolCalls) > 0 && len(cur.ToolCalls) == 0 && cur.ToolCallID == "" {
+			if cur.Content != "" {
+				if prev.Content != "" {
+					prev.Content = prev.Content + "\n" + cur.Content
+				} else {
+					prev.Content = cur.Content
+				}
+			}
+			continue
+		}
+
+		merged = append(merged, cur)
 	}
 
 	return merged
+}
+
+// ensureNotEndingWithTool appends a synthetic user message when the
+// conversation ends with a tool-role message. Some OpenAI-compatible providers
+// (notably kimi-k2.5) return HTTP 400 when the last message is a tool response
+// — they require a user message to follow. Standard OpenAI allows the model to
+// pick up from a tool response directly, but this workaround is harmless for
+// providers that don't need it: the model simply sees an extra "continue" nudge.
+func ensureNotEndingWithTool(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	if len(messages) == 0 {
+		return messages
+	}
+	last := messages[len(messages)-1]
+	if last.Role == openai.ChatMessageRoleTool {
+		messages = append(messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: "Above are the tool results. Process them and continue.",
+		})
+	}
+	return messages
 }
 
 func (p *Provider) toLLMResponse(resp openai.ChatCompletionResponse) *model.LLMResponse {
@@ -450,7 +524,23 @@ func wrapOpenAIError(err error) error {
 
 	var apiErr *openai.APIError
 	if errors.As(err, &apiErr) {
-		return llmerror.NewLLMError("openai", apiErr.HTTPStatusCode, apiErr.Message, "")
+		// Build a detailed message that includes Code and Type when available,
+		// since apiErr.Message alone may be empty for non-standard endpoints.
+		msg := apiErr.Message
+		if msg == "" {
+			// Reconstruct from available fields for better debugging
+			var parts []string
+			if apiErr.Type != "" {
+				parts = append(parts, apiErr.Type)
+			}
+			if code, ok := apiErr.Code.(string); ok && code != "" {
+				parts = append(parts, code)
+			}
+			if len(parts) > 0 {
+				msg = strings.Join(parts, ": ")
+			}
+		}
+		return llmerror.NewLLMError("openai", apiErr.HTTPStatusCode, msg, "")
 	}
 
 	var reqErr *openai.RequestError

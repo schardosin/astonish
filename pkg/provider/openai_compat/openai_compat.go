@@ -44,7 +44,7 @@ func NewProvider(apiKey, baseURL, modelName string, debug bool) model.LLM {
 	client := openai.NewClientWithConfig(config)
 
 	return &Provider{
-		Provider: openai_provider.NewProvider(client, modelName, true),
+		Provider: openai_provider.NewProviderWithMaxTokens(client, modelName, true, 64000),
 	}
 }
 

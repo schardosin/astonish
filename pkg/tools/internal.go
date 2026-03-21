@@ -52,6 +52,25 @@ func isProtectedPath(filePath string) bool {
 	return false
 }
 
+// expandPath resolves ~ to the user's home directory. Go's os and filepath
+// packages do not expand ~ (it's a shell feature), so LLM-provided paths
+// like "~/snake/main.py" would fail without this. Only the leading "~/" or
+// bare "~" is expanded; ~user syntax is not supported.
+func expandPath(path string) string {
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+		return path
+	}
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
+}
+
 // commandReferencesProtectedFile checks if a shell command string references
 // protected credential store files. Returns true and the matched filename
 // if found. This is a best-effort check for defense-in-depth — it catches
@@ -81,6 +100,14 @@ func commandReferencesProtectedFile(command string) (bool, string) {
 	return false, ""
 }
 
+// truncateString truncates a string to the given max length with ellipsis.
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
 type ReadFileArgs struct {
 	Path string `json:"path" jsonschema:"The path to the file to read"`
 }
@@ -90,6 +117,7 @@ type ReadFileResult struct {
 }
 
 func ReadFile(ctx tool.Context, args ReadFileArgs) (ReadFileResult, error) {
+	args.Path = expandPath(args.Path)
 	if isProtectedPath(args.Path) {
 		return ReadFileResult{}, fmt.Errorf("access denied: this file is part of the credential store and cannot be read")
 	}
@@ -103,8 +131,8 @@ func ReadFile(ctx tool.Context, args ReadFileArgs) (ReadFileResult, error) {
 // --- Write File Tool ---
 
 type WriteFileArgs struct {
-	FilePath string      `json:"file_path" jsonschema:"The path to the file where content will be written."`
-	Content  interface{} `json:"content" jsonschema:"The content to write to the file. Can be a single string or a list of strings."`
+	FilePath string `json:"file_path" jsonschema:"The path to the file where content will be written."`
+	Content  string `json:"content" jsonschema:"The content to write to the file."`
 }
 
 type WriteFileResult struct {
@@ -139,41 +167,25 @@ func tryExtractStdout(input string) (string, bool) {
 	return "", false
 }
 
-// contentToString converts the content (string or []interface{}) to a single string
-func contentToString(content interface{}) (string, error) {
-	switch v := content.(type) {
-	case string:
-		return v, nil
-	case []interface{}:
-		var lines []string
-		for _, item := range v {
-			lines = append(lines, fmt.Sprintf("%v", item))
-		}
-		return strings.Join(lines, "\n"), nil
-	case []string:
-		return strings.Join(v, "\n"), nil
-	default:
-		return fmt.Sprintf("%v", content), nil
-	}
-}
-
 func WriteFile(ctx tool.Context, args WriteFileArgs) (WriteFileResult, error) {
+	args.FilePath = expandPath(args.FilePath)
 	if isProtectedPath(args.FilePath) {
 		return WriteFileResult{}, fmt.Errorf("access denied: this file is part of the credential store and cannot be modified")
 	}
 
-	// Convert content to string
-	preliminaryString, err := contentToString(args.Content)
-	if err != nil {
-		return WriteFileResult{}, fmt.Errorf("failed to process content: %w", err)
-	}
-
 	// Try to extract stdout from JSON (for shell_command output)
 	var finalContent string
-	if extracted, ok := tryExtractStdout(preliminaryString); ok {
+	if extracted, ok := tryExtractStdout(args.Content); ok {
 		finalContent = extracted
 	} else {
-		finalContent = preliminaryString
+		finalContent = args.Content
+	}
+
+	// Ensure parent directories exist
+	if dir := filepath.Dir(args.FilePath); dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return WriteFileResult{}, fmt.Errorf("failed to create directory %s: %w", dir, err)
+		}
 	}
 
 	// Write to file
@@ -316,8 +328,8 @@ func looksLikePrompt(output string) bool {
 // --- Filter JSON Tool ---
 
 type FilterJsonArgs struct {
-	JsonData        interface{} `json:"json_data" jsonschema:"The JSON data to filter. Can be a JSON string, a list of dicts, or a dict."`
-	FieldsToExtract []string    `json:"fields_to_extract" jsonschema:"A list of fields to extract. Use dot notation for nested fields."`
+	JsonData        string   `json:"json_data" jsonschema:"The JSON data to filter, as a JSON string."`
+	FieldsToExtract []string `json:"fields_to_extract" jsonschema:"A list of fields to extract. Use dot notation for nested fields."`
 }
 
 type FilterJsonResult struct {
@@ -399,41 +411,31 @@ func filterItem(item interface{}, fields []string) interface{} {
 func FilterJson(ctx tool.Context, args FilterJsonArgs) (FilterJsonResult, error) {
 	var data interface{}
 
-	// 1. Handle input parsing
-	switch v := args.JsonData.(type) {
-	case string:
-		// Try to parse string as JSON
-		var parsed interface{}
-		if err := json.Unmarshal([]byte(v), &parsed); err != nil {
-			// If not valid JSON, maybe it's a Python literal? Go doesn't support that natively easily.
-			// But let's assume valid JSON for now as per Python's main path.
-			// If unmarshal fails, return error or treat as raw string?
-			// Python returns error string.
-			return FilterJsonResult{Result: fmt.Sprintf("Error: Invalid JSON input - %v", err)}, nil
-		}
+	// 1. Parse the JSON string
+	var parsed interface{}
+	if err := json.Unmarshal([]byte(args.JsonData), &parsed); err != nil {
+		return FilterJsonResult{Result: fmt.Sprintf("Error: Invalid JSON input - %v", err)}, nil
+	}
 
-		// Check for 'stdout' wrapping
-		if m, ok := parsed.(map[string]interface{}); ok {
-			if stdout, exists := m["stdout"]; exists {
-				// If stdout is a string, try to parse IT as JSON
-				if stdoutStr, ok := stdout.(string); ok {
-					var innerParsed interface{}
-					if err := json.Unmarshal([]byte(stdoutStr), &innerParsed); err == nil {
-						data = innerParsed
-					} else {
-						data = stdoutStr
-					}
+	// Check for 'stdout' wrapping
+	if m, ok := parsed.(map[string]interface{}); ok {
+		if stdout, exists := m["stdout"]; exists {
+			// If stdout is a string, try to parse IT as JSON
+			if stdoutStr, ok := stdout.(string); ok {
+				var innerParsed interface{}
+				if err := json.Unmarshal([]byte(stdoutStr), &innerParsed); err == nil {
+					data = innerParsed
 				} else {
-					data = stdout
+					data = stdoutStr
 				}
 			} else {
-				data = parsed
+				data = stdout
 			}
 		} else {
 			data = parsed
 		}
-	default:
-		data = v
+	} else {
+		data = parsed
 	}
 
 	// 2. Validate data type
@@ -482,12 +484,8 @@ func GetInternalTools() ([]tool.Tool, error) {
 	}
 
 	shellCommandTool, err := functiontool.New(functiontool.Config{
-		Name: "shell_command",
-		Description: `Execute a shell command with full PTY support.
-
-One-shot mode (default): Runs the command and waits for it to complete. If the command is waiting for interactive input (SSH prompts, password, confirmations), it returns early with waiting_for_input=true and a session_id. Use process_write to respond to the prompt, and process_read to check output.
-
-Background mode (background=true): Starts the command and returns immediately with a session_id. Use process_read, process_write, and process_kill to manage the process.`,
+		Name:        "shell_command",
+		Description: `Execute a shell command with PTY support. Returns stdout, exit_code. If the command waits for input, returns waiting_for_input=true with a session_id — use process_write to respond. Set background=true to start without waiting.`,
 	}, ShellCommand)
 	if err != nil {
 		return nil, err
@@ -544,7 +542,7 @@ Background mode (background=true): Starts the command and returns immediately wi
 
 	webFetchTool, err := functiontool.New(functiontool.Config{
 		Name:        "web_fetch",
-		Description: "Fetch a URL and extract its content as clean markdown, readable text, or raw HTML. PREFERRED tool for fetching specific URLs — always try this first before other web extraction tools. Fast, free, no API key required. Uses Mozilla Readability for article-focused extraction. If this tool returns empty or navigation-only content (common with JavaScript-heavy pages), then retry with the configured MCP web extract tool.",
+		Description: "Fetch a URL and extract content as markdown, text, or HTML. Preferred tool for fetching specific URLs — try this first. Fast, free, no API key. If it returns empty content (JS-heavy pages), retry with browser tools or the configured MCP extract tool.",
 	}, WebFetch)
 	if err != nil {
 		return nil, err
@@ -559,10 +557,8 @@ Background mode (background=true): Starts the command and returns immediately wi
 	}
 
 	httpRequestTool, err := functiontool.New(functiontool.Config{
-		Name: "http_request",
-		Description: `Make an HTTP request to an API endpoint. Supports GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS.
-
-Use this instead of curl via shell_command for cleaner API calls. Set 'credential' to a stored credential name for automatic authentication header injection (supports API key, bearer, basic, OAuth). JSON Content-Type is set automatically when the body starts with { or [.`,
+		Name:        "http_request",
+		Description: `Make an HTTP request (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS). Set 'credential' to a stored credential name for automatic auth header injection. JSON Content-Type is set automatically when body starts with { or [.`,
 	}, HttpRequest)
 	if err != nil {
 		return nil, err

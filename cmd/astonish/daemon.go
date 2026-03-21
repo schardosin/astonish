@@ -7,6 +7,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/daemon"
+	"github.com/schardosin/astonish/pkg/fleet"
 )
 
 func handleDaemonCommand(args []string) error {
@@ -78,6 +79,22 @@ func handleDaemonInstall(args []string) error {
 		}
 		if path := os.Getenv("PATH"); path != "" {
 			envVars["PATH"] = path
+		}
+	}
+
+	// Capture delegate env vars from the current shell (e.g. BIFROST_API_KEY).
+	// Fleet configs declare which env vars their delegates need. We snapshot
+	// the current values so the daemon service has them from the start.
+	fleetsDir, flErr := config.GetFleetsDir()
+	if flErr == nil {
+		// Ensure bundled fleets are on disk before loading
+		_, _ = fleet.EnsureBundled(fleetsDir)
+		if fleets, loadErr := fleet.LoadFleets(fleetsDir); loadErr == nil {
+			for _, name := range fleet.CollectDelegateEnvVars(fleets) {
+				if val := os.Getenv(name); val != "" {
+					envVars[name] = val
+				}
+			}
 		}
 	}
 

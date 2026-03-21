@@ -13,9 +13,9 @@ import (
 	"google.golang.org/adk/runner"
 	adksession "google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
-	"google.golang.org/genai"
 
 	"github.com/google/uuid"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/memory"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 )
@@ -36,6 +36,27 @@ type SubAgentTask struct {
 	Model        string   // Override model (empty = use parent's model)
 	Provider     string   // Override provider (empty = use parent's provider)
 
+	// CustomPrompt, when true, uses Instructions directly as the LLM system prompt
+	// instead of wrapping it with buildChildPrompt(). This is used by fleet agents
+	// that build their own complete prompt (via fleet.BuildAgentPrompt).
+	CustomPrompt bool
+
+	// TimeoutOverride, when > 0, overrides the SubAgentManager's Config.TaskTimeout
+	// for this specific task. Used by the fleet orchestrator which needs more time
+	// than individual worker sub-agents.
+	TimeoutOverride time.Duration
+
+	// SessionState holds additional key-value pairs to inject into the child session's
+	// initial state. This allows callers to pass metadata that tools running inside
+	// the sub-agent can access via ctx.State().Get(key).
+	SessionState map[string]any
+
+	// OnEvent is an optional callback invoked for each event produced by the
+	// sub-agent's runner. It enables real-time progress streaming from sub-agents
+	// (e.g., fleet orchestrator progress). The callback must be safe to call
+	// from the RunTask goroutine. If nil, events are consumed silently.
+	OnEvent func(event *adksession.Event)
+
 	// Internal: set by SubAgentManager, not by callers
 	ParentDepth int    // Current nesting depth
 	ParentID    string // Parent session ID for linking
@@ -55,13 +76,16 @@ type TaskResult struct {
 // SubAgentManager orchestrates the execution of sub-agent tasks.
 type SubAgentManager struct {
 	// Parent context
-	LLM            model.LLM          // Parent's LLM (used for children unless overridden)
-	Tools          []tool.Tool        // All internal tools available
-	Toolsets       []tool.Toolset     // MCP toolsets
-	SessionService adksession.Service // Session persistence
-	MemoryManager  *memory.Manager    // Memory manager for context injection (nil = disabled)
-	AppName        string             // Application name for sessions
-	UserID         string             // User ID for sessions
+	LLM            model.LLM                    // Parent's LLM (used for children unless overridden)
+	Tools          []tool.Tool                  // All internal tools available
+	FleetTools     []tool.Tool                  // Fleet-only tools (e.g., run_fleet_phase) not in main agent's tool list
+	Toolsets       []tool.Toolset               // MCP toolsets
+	SessionService adksession.Service           // Session persistence
+	MemoryManager  *memory.Manager              // Memory manager for context injection (nil = disabled)
+	Compactor      *persistentsession.Compactor // Context window compactor for sub-agents (nil = disabled)
+	Redactor       *credentials.Redactor        // Redacts credential values from tool outputs (nil = disabled)
+	AppName        string                       // Application name for sessions
+	UserID         string                       // User ID for sessions
 
 	// Configuration
 	Config SubAgentConfig
@@ -77,6 +101,7 @@ var excludedChildTools = map[string]bool{
 	"schedule_job":      true, // Children can't schedule jobs
 	"save_credential":   true, // Children can't modify credentials
 	"remove_credential": true, // Children can't remove credentials
+	"opencode":          true, // OpenCode delegation is fleet-agent-only (via FleetTools)
 }
 
 // NewSubAgentManager creates a new SubAgentManager with the given configuration.
@@ -137,8 +162,12 @@ func (m *SubAgentManager) RunTasks(ctx context.Context, tasks []SubAgentTask) []
 func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskResult {
 	start := time.Now()
 
-	// Apply task timeout
-	taskCtx, cancel := context.WithTimeout(ctx, m.Config.TaskTimeout)
+	// Apply task timeout (use override if set)
+	timeout := m.Config.TaskTimeout
+	if task.TimeoutOverride > 0 {
+		timeout = task.TimeoutOverride
+	}
+	taskCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	// Depth check
@@ -154,14 +183,23 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	// Filter tools for the child
 	childTools := m.filterTools(task.ToolFilter)
 
-	// Build child system prompt
-	childPrompt := m.buildChildPrompt(task)
+	// Build child system prompt: use custom prompt if set, otherwise build default
+	var childPrompt string
+	if task.CustomPrompt && task.Instructions != "" {
+		childPrompt = task.Instructions
+	} else {
+		childPrompt = m.buildChildPrompt(task)
+	}
 
 	// Create child session linked to parent
 	childSessionID := uuid.NewString()
 	createState := map[string]any{}
 	if task.ParentID != "" {
 		createState[persistentsession.StateKeyParentID] = task.ParentID
+	}
+	// Inject caller-provided session state
+	for k, v := range task.SessionState {
+		createState[k] = v
 	}
 
 	_, err := m.SessionService.Create(taskCtx, &adksession.CreateRequest{
@@ -179,13 +217,48 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		}
 	}
 
+	// Persist the task name as the session title so fleet reconstruction
+	// can derive phase/agent info from titles like "fleet-<fleet>-<phase>".
+	if fs, ok := m.SessionService.(*persistentsession.FileStore); ok {
+		_ = fs.SetSessionTitle(childSessionID, task.Name)
+	}
+
+	// Wire context compaction for sub-agents to prevent exceeding the context window
+	// during long multi-step tool work (e.g., fleet agents reading/writing many files).
+	var beforeModelCallbacks []llmagent.BeforeModelCallback
+
+	// Truncate oversized tool responses before they reach the model. This prevents
+	// a single large response (e.g., file_tree on /) from causing a 400 Bad Request.
+	// Must run BEFORE compaction so the compactor sees reasonable-sized content.
+	beforeModelCallbacks = append(beforeModelCallbacks, TruncateToolResponsesCallback())
+
+	if m.Compactor != nil {
+		beforeModelCallbacks = append(beforeModelCallbacks, m.Compactor.BeforeModelCallback())
+	}
+
+	// Wire credential redaction so sub-agent tool outputs don't leak secrets
+	// into the session transcript. The resolve_credential exemption is kept so
+	// the sub-agent LLM can still use raw values programmatically.
+	var afterToolCallbacks []llmagent.AfterToolCallback
+	if m.Redactor != nil {
+		redactor := m.Redactor
+		afterToolCallbacks = append(afterToolCallbacks, func(ctx tool.Context, t tool.Tool, input, output map[string]any, err error) (map[string]any, error) {
+			if output != nil && t.Name() != "resolve_credential" {
+				return redactor.RedactMap(output), err
+			}
+			return output, err
+		})
+	}
+
 	// Create child LLM agent via ADK
 	childAgent, err := llmagent.New(llmagent.Config{
-		Name:        task.Name,
-		Model:       m.LLM,
-		Instruction: childPrompt,
-		Tools:       childTools,
-		Toolsets:    m.filterToolsets(),
+		Name:                 task.Name,
+		Model:                m.LLM,
+		Instruction:          childPrompt,
+		Tools:                childTools,
+		Toolsets:             m.filterToolsets(),
+		BeforeModelCallbacks: beforeModelCallbacks,
+		AfterToolCallbacks:   afterToolCallbacks,
 	})
 	if err != nil {
 		return TaskResult{
@@ -211,8 +284,9 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		}
 	}
 
-	// Build user message from task description
-	userMsg := genai.NewContentFromText(task.Description, genai.RoleUser)
+	// Build user message from task description (with absolute timestamp for
+	// temporal context; see NewTimestampedUserContent for cache-stability rationale).
+	userMsg := NewTimestampedUserContent(task.Description)
 
 	// Execute the agent and collect results
 	trace := NewExecutionTrace(task.Description)
@@ -237,10 +311,16 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 			continue
 		}
 
-		// Collect text output
+		// Forward event to callback for real-time progress streaming
+		if task.OnEvent != nil {
+			task.OnEvent(event)
+		}
+
+		// Collect text output (skip thought/reasoning parts — these are
+		// internal chain-of-thought and should not appear in the result).
 		if event.LLMResponse.Content != nil {
 			for _, part := range event.LLMResponse.Content.Parts {
-				if part.Text != "" {
+				if part.Text != "" && !part.Thought {
 					outputParts = append(outputParts, part.Text)
 				}
 				// Record tool calls in trace
@@ -296,6 +376,9 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 
 // filterTools returns tools allowed for sub-agents, excluding dangerous ones
 // and optionally filtering to a specific set.
+// When an allow list is specified, tools are drawn from both Tools and FleetTools.
+// Fleet tools are only accessible via explicit allow list (they are in excludedChildTools
+// so they are always excluded from the default "all tools" path).
 func (m *SubAgentManager) filterTools(allowList []string) []tool.Tool {
 	allowSet := make(map[string]bool, len(allowList))
 	for _, name := range allowList {
@@ -303,10 +386,12 @@ func (m *SubAgentManager) filterTools(allowList []string) []tool.Tool {
 	}
 
 	var filtered []tool.Tool
+
+	// Search main tools
 	for _, t := range m.Tools {
 		name := t.Name()
 
-		// Always exclude dangerous tools
+		// Always exclude dangerous tools (unless explicitly allowed AND tool is in FleetTools)
 		if excludedChildTools[name] {
 			continue
 		}
@@ -317,6 +402,18 @@ func (m *SubAgentManager) filterTools(allowList []string) []tool.Tool {
 		}
 
 		filtered = append(filtered, t)
+	}
+
+	// If an allow list is specified, also search FleetTools for requested tools.
+	// This allows the orchestrator to get run_fleet_phase via its tool filter
+	// even though it's in excludedChildTools for the main tools path.
+	if len(allowSet) > 0 {
+		for _, t := range m.FleetTools {
+			name := t.Name()
+			if allowSet[name] {
+				filtered = append(filtered, t)
+			}
+		}
 	}
 
 	return filtered
@@ -379,7 +476,7 @@ func (m *SubAgentManager) buildChildPrompt(task SubAgentTask) string {
 		memContent, err := m.MemoryManager.Load()
 		if err == nil && memContent != "" {
 			sb.WriteString("\n## Context (from persistent memory)\n")
-			sb.WriteString(memContent)
+			sb.WriteString(EscapeCurlyPlaceholders(memContent))
 			sb.WriteString("\n")
 		}
 	}

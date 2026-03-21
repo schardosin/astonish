@@ -34,10 +34,9 @@ func (id *AgentIdentity) IsConfigured() bool {
 //     ~800 tokens. Stable across turns for KV-cache reuse.
 //   - Tier 2 (Indexed Guidance): Detailed how-to docs for each capability, stored as
 //     memory/guidance/*.md and retrieved via the vector store. Zero tokens in the prompt.
-//   - Tier 3 (Per-Turn Dynamic): Channel hints, scheduler hints, session context.
-//     Execution plans and auto-retrieved knowledge are injected as ephemeral content
-//     in the last user message via BeforeModelCallback, NOT in the system prompt,
-//     so the full conversation history remains cacheable by providers.
+//   - Tier 3 (Per-Turn Dynamic): Channel hints, scheduler hints, session context,
+//     execution plans, and auto-retrieved knowledge. These are appended at the end
+//     of the system prompt so the static prefix remains cacheable by providers.
 type SystemPromptBuilder struct {
 	Tools                 []tool.Tool
 	Toolsets              []tool.Toolset
@@ -57,6 +56,8 @@ type SystemPromptBuilder struct {
 	FleetSection          string         // Pre-built "Available Fleets" section (empty = no fleets loaded)
 	SessionContext        string         // Per-turn context injected by the caller (e.g., fleet plan wizard instructions)
 	Timezone              string         // IANA timezone (e.g. "America/New_York")
+	ExecutionPlan         string         // Per-turn execution plan from matched flow (empty = no plan)
+	RelevantKnowledge     string         // Per-turn auto-retrieved knowledge from vector store (empty = none)
 }
 
 // Build constructs the full system prompt.
@@ -118,14 +119,14 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString("- For multi-step tasks, execute sequentially, report progress, and search memory first for prior solutions.\n")
 	sb.WriteString("- When the user asks you to do something, briefly acknowledge before starting work.\n")
 
-	// 3b. Knowledge Context — teaches the model about the injected knowledge blocks
+	// 3b. Knowledge Context — teaches the model about injected knowledge
 	sb.WriteString("\n## Knowledge Context\n\n")
-	sb.WriteString("Before your response, you may see a `[Knowledge For This Task]` or `[Execution Plan]` block prepended to the user's message. ")
+	sb.WriteString("Your system prompt may include a `[Knowledge For This Task]` or `[Execution Plan]` section at the end. ")
 	sb.WriteString("This contains VERIFIED information retrieved from memory — real IPs, working commands, credentials, and workarounds proven in previous sessions.\n\n")
-	sb.WriteString("ALWAYS use the specific details from knowledge blocks (IPs, ports, URLs, tool choices, commands) instead of defaults or assumptions. ")
+	sb.WriteString("ALWAYS use the specific details from knowledge sections (IPs, ports, URLs, tool choices, commands) instead of defaults or assumptions. ")
 	sb.WriteString("If knowledge says to use a specific IP, use that IP — not localhost or a standard default. ")
 	sb.WriteString("If knowledge says to use a specific tool or approach, follow it exactly.\n")
-	sb.WriteString("The knowledge block already contains the most relevant memory results for this task — do not call memory_search to re-fetch information already present in the block.\n")
+	sb.WriteString("The knowledge section already contains the most relevant memory results for this task — do not call memory_search to re-fetch information already present in it.\n")
 
 	// 4. Environment
 	sb.WriteString("\n## Environment\n\n")
@@ -192,14 +193,34 @@ func (b *SystemPromptBuilder) Build() string {
 	}
 
 	// ── Tier 3: Per-Turn Dynamic ─────────────────────────────────
-	// NOTE: Execution plans and auto-retrieved knowledge are injected as
-	// ephemeral content in the last user message via EphemeralKnowledgeCallback,
-	// NOT here. This keeps the system prompt 100% static for optimal
-	// provider KV-cache prefix matching across turns.
+	// Execution plans and auto-retrieved knowledge are appended here at
+	// the end of the system prompt. Placing them last means the static
+	// prefix (Tier 1 + Tier 2) remains stable for provider KV-cache
+	// prefix matching, while the dynamic tail changes per turn.
+
+	if b.ExecutionPlan != "" {
+		sb.WriteString("\n## Execution Plan\n\n")
+		if b.RelevantKnowledge != "" {
+			sb.WriteString("### Knowledge From Previous Experience\n\n")
+			sb.WriteString("CRITICAL — The following knowledge was learned from previous executions of this exact task. ")
+			sb.WriteString("It contains proven commands, specific flags, and workarounds that are KNOWN TO WORK. ")
+			sb.WriteString("If any step below conflicts with this knowledge, ALWAYS prefer the knowledge — ")
+			sb.WriteString("it reflects what actually succeeded in practice:\n\n")
+			sb.WriteString(b.RelevantKnowledge)
+			sb.WriteString("\n### Steps\n\n")
+		}
+		sb.WriteString(b.ExecutionPlan)
+	} else if b.RelevantKnowledge != "" {
+		sb.WriteString("\n## Knowledge For This Task\n\n")
+		sb.WriteString("CRITICAL — You MUST apply the following knowledge when executing the user's current request. ")
+		sb.WriteString("It contains proven commands, specific flags, and workarounds that are KNOWN TO WORK ")
+		sb.WriteString("from previous sessions. Use the exact commands and approaches described here:\n\n")
+		sb.WriteString(b.RelevantKnowledge)
+	}
 
 	// NOTE: Date/time is NOT included here. It is prepended to each user
 	// message via NewTimestampedUserContent(), keeping the system prompt
-	// 100% static for optimal provider KV-cache reuse across turns.
+	// prefix as stable as possible for provider KV-cache reuse.
 
 	return sb.String()
 }

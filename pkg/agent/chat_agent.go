@@ -458,9 +458,9 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		trace := NewExecutionTrace(userText)
 
 		// Per-turn dynamic content: execution plan and knowledge.
-		// These are injected as ephemeral Parts in the last user message
-		// via EphemeralKnowledgeCallback (not in the system prompt), so
-		// the system prompt stays 100% static for KV-cache reuse.
+		// These are appended to the end of the system prompt via
+		// SystemPromptBuilder.ExecutionPlan / RelevantKnowledge fields,
+		// so they carry system-level authority for instruction following.
 		var executionPlan string
 		var relevantKnowledge string
 		var knowledgeTrackingResults []KnowledgeSearchResult // for session tracking event
@@ -554,7 +554,11 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		// The event is still written to the session .jsonl file for diagnostics.
 		yieldKnowledgeTrackingEvent(yield, relevantKnowledge, executionPlan, knowledgeTrackingResults)
 
-		// Build system prompt (includes memory and execution plan if set)
+		// Set per-turn dynamic fields on the system prompt builder, then build.
+		// These are appended at the end of the system prompt so the static prefix
+		// remains cacheable by providers.
+		c.SystemPrompt.ExecutionPlan = executionPlan
+		c.SystemPrompt.RelevantKnowledge = relevantKnowledge
 		instruction := c.SystemPrompt.Build()
 
 		// Create the AfterToolCallback for trace recording
@@ -590,13 +594,6 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 		// Truncate oversized tool responses before they reach the model
 		beforeModelCallbacks = append(beforeModelCallbacks, TruncateToolResponsesCallback())
-
-		// Inject ephemeral knowledge/execution plan into the last user message.
-		// This content is visible to the LLM but never persisted to session history,
-		// keeping the conversation prefix stable for provider KV-cache reuse.
-		if knowledgeCb := EphemeralKnowledgeCallback(executionPlan, relevantKnowledge, c.DebugMode); knowledgeCb != nil {
-			beforeModelCallbacks = append(beforeModelCallbacks, knowledgeCb)
-		}
 
 		if c.Compactor != nil {
 			beforeModelCallbacks = append(beforeModelCallbacks, c.Compactor.BeforeModelCallback())

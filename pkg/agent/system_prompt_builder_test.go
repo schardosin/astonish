@@ -236,9 +236,23 @@ func TestSystemPromptBuilder_DynamicSections(t *testing.T) {
 	}
 }
 
-func TestSystemPromptBuilder_KnowledgeNotInBuild(t *testing.T) {
-	// Verify that Build() never includes knowledge or execution plan sections.
-	// These are now injected via EphemeralKnowledgeCallback into the user message.
+func TestSystemPromptBuilder_KnowledgeInBuild(t *testing.T) {
+	// When knowledge/plan fields are set, Build() includes them at the end.
+	builder := &SystemPromptBuilder{
+		RelevantKnowledge: "**infra/portainer.md** (53%)\nPortainer at 192.168.1.223",
+	}
+	prompt := builder.Build()
+
+	if !strings.Contains(prompt, "## Knowledge For This Task") {
+		t.Error("expected Knowledge For This Task section when RelevantKnowledge is set")
+	}
+	if !strings.Contains(prompt, "Portainer at 192.168.1.223") {
+		t.Error("expected knowledge content in prompt")
+	}
+}
+
+func TestSystemPromptBuilder_KnowledgeNotInBuildWhenEmpty(t *testing.T) {
+	// When no knowledge/plan is set, Build() should not include those sections.
 	builder := &SystemPromptBuilder{}
 	prompt := builder.Build()
 
@@ -248,7 +262,28 @@ func TestSystemPromptBuilder_KnowledgeNotInBuild(t *testing.T) {
 		"### Knowledge From Previous Experience",
 	} {
 		if strings.Contains(prompt, section) {
-			t.Errorf("Build() should NOT contain %q (now injected via EphemeralKnowledgeCallback)", section)
+			t.Errorf("Build() should NOT contain %q when fields are empty", section)
 		}
+	}
+}
+
+func TestSystemPromptBuilder_ExecutionPlanWithKnowledge(t *testing.T) {
+	builder := &SystemPromptBuilder{
+		ExecutionPlan:     "Step 1: SSH into server\nStep 2: Run pct list",
+		RelevantKnowledge: "Use --verbose flag",
+	}
+	prompt := builder.Build()
+
+	if !strings.Contains(prompt, "## Execution Plan") {
+		t.Error("expected Execution Plan section")
+	}
+	if !strings.Contains(prompt, "### Knowledge From Previous Experience") {
+		t.Error("expected Knowledge From Previous Experience sub-section")
+	}
+	if !strings.Contains(prompt, "Use --verbose flag") {
+		t.Error("expected knowledge content")
+	}
+	if !strings.Contains(prompt, "Step 1: SSH into server") {
+		t.Error("expected plan steps")
 	}
 }

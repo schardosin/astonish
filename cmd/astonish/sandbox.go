@@ -179,6 +179,9 @@ func handleSandboxStatus() error {
 	}
 	fmt.Printf("Templates:        %d\n", status.TemplateCount)
 	fmt.Printf("Session containers: %d\n", status.SessionCount)
+	if status.OrphanCount > 0 {
+		fmt.Printf("Orphan containers:  %d (run 'astonish sandbox prune' to clean up)\n", status.OrphanCount)
+	}
 
 	return nil
 }
@@ -243,7 +246,10 @@ func handleSandboxList() error {
 	fmt.Printf("%-20s %-38s %-12s %-10s %-20s\n", "CONTAINER", "SESSION", "TEMPLATE", "STATUS", "CREATED")
 	fmt.Printf("%-20s %-38s %-12s %-10s %-20s\n", strings.Repeat("-", 20), strings.Repeat("-", 38), strings.Repeat("-", 12), strings.Repeat("-", 10), strings.Repeat("-", 20))
 
+	registeredNames := make(map[string]bool)
 	for _, entry := range entries {
+		registeredNames[entry.ContainerName] = true
+
 		var status string
 		if client.IsRunning(entry.ContainerName) {
 			status = "running"
@@ -260,6 +266,26 @@ func handleSandboxList() error {
 			status,
 			entry.CreatedAt.Format("2006-01-02 15:04:05"),
 		)
+	}
+
+	// Check for unregistered session containers (containers that exist in
+	// Incus but have no registry entry). These are orphans from crashes,
+	// failed registrations, or Incus being down during cleanup.
+	sessionContainers, err := client.ListSessionContainers()
+	if err == nil {
+		var orphans []string
+		for _, inst := range sessionContainers {
+			if !registeredNames[inst.Name] {
+				orphans = append(orphans, inst.Name)
+			}
+		}
+		if len(orphans) > 0 {
+			fmt.Printf("\nWarning: %d unregistered container(s) found:\n", len(orphans))
+			for _, name := range orphans {
+				fmt.Printf("  %s\n", name)
+			}
+			fmt.Println("Run 'astonish sandbox prune' to clean up.")
+		}
 	}
 
 	return nil

@@ -619,6 +619,14 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			go sandbox.RefreshAllIfNeeded(sandboxClient, tplRegistry)
 		}
 
+		// Auto-prune stale session containers from previous daemon runs.
+		// This catches containers left over from SIGKILL, crashes, or
+		// disk-full scenarios where graceful shutdown never ran.
+		if pruned := sandbox.PruneStaleOnStartup(sandboxClient, sessRegistry); pruned > 0 {
+			startupNotices = append(startupNotices,
+				fmt.Sprintf("Cleaned up %d stale session container(s) from previous run", pruned))
+		}
+
 		cleanups = append(cleanups, func() {
 			// Cleanup destroys all per-session containers
 			nodePool.Cleanup()

@@ -13,6 +13,7 @@ type SandboxStatus struct {
 	OverlayReady   bool
 	TemplateCount  int
 	SessionCount   int
+	OrphanCount    int // containers in Incus with no registry entry
 }
 
 // SetupSandboxRuntime detects the platform and connects to Incus.
@@ -115,6 +116,20 @@ func Status(client *IncusClient, tplRegistry *TemplateRegistry, sessRegistry *Se
 	// Counts
 	status.TemplateCount = len(tplRegistry.List())
 	status.SessionCount = len(sessRegistry.List())
+
+	// Count orphan containers (exist in Incus but not in registry)
+	sessionContainers, err := client.ListSessionContainers()
+	if err == nil {
+		registeredNames := make(map[string]bool)
+		for _, entry := range sessRegistry.List() {
+			registeredNames[entry.ContainerName] = true
+		}
+		for _, inst := range sessionContainers {
+			if !registeredNames[inst.Name] {
+				status.OrphanCount++
+			}
+		}
+	}
 
 	return status, nil
 }

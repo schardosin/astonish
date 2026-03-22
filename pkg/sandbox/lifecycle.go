@@ -207,7 +207,20 @@ func TryDestroySessionContainer(sessionID string) {
 		return
 	}
 
-	_ = DestroyForSession(client, registry, sessionID)
+	// Try the registry-based path first (finds container by session ID lookup)
+	if entry := registry.Get(sessionID); entry != nil {
+		_ = DestroyForSession(client, registry, sessionID)
+		return
+	}
+
+	// Registry has no entry — the entry may have been cleaned already (e.g.,
+	// by LazyNodeClient.Cleanup or fleet session stop) but the container might
+	// still exist if Incus was down when destruction was attempted.
+	// Try to destroy by the derived container name directly.
+	containerName := SessionContainerName(sessionID)
+	if client.InstanceExists(containerName) {
+		_ = destroyOverlayContainer(client, containerName)
+	}
 }
 
 // PruneOrphans finds and destroys containers whose sessions no longer exist.
@@ -271,4 +284,43 @@ func PruneOrphans(client *IncusClient, registry *SessionRegistry, existingSessio
 	}
 
 	return pruned, nil
+}
+
+// PruneStaleOnStartup removes session containers left over from previous daemon
+// runs (SIGKILL, crash, power loss, disk-full). It destroys all stopped session
+// containers and removes their registry entries. Running containers are left
+// alone — they might belong to a concurrent process (unlikely but safe).
+// Returns the number of containers cleaned up.
+func PruneStaleOnStartup(client *IncusClient, registry *SessionRegistry) int {
+	// 1. Clean registry entries pointing to non-existent containers
+	pruned := registry.Reap(client)
+
+	// 2. Destroy stopped session containers (both registered and unregistered)
+	sessionContainers, err := client.ListSessionContainers()
+	if err != nil {
+		return pruned
+	}
+
+	for _, inst := range sessionContainers {
+		if inst.Status == "Running" {
+			continue // leave running containers alone
+		}
+
+		// Stopped container — destroy it
+		if err := destroyOverlayContainer(client, inst.Name); err != nil {
+			continue
+		}
+
+		// Also clean registry entry if one exists
+		for _, entry := range registry.List() {
+			if entry.ContainerName == inst.Name {
+				_ = registry.Remove(entry.SessionID)
+				break
+			}
+		}
+
+		pruned++
+	}
+
+	return pruned
 }

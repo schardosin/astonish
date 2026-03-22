@@ -90,6 +90,8 @@ type StudioChatComponents struct {
 	Compactor         *persistentsession.Compactor
 	InternalToolCount int
 	MemoryActive      bool
+	SandboxEnabled    bool
+	StartupNotices    []string
 	Cleanup           func()
 }
 
@@ -306,6 +308,15 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		"sessionId": sessionID,
 		"isNew":     isNew,
 	})
+
+	// Send startup notices for new sessions (sandbox status, MCP warnings, etc.)
+	if isNew && len(comp.StartupNotices) > 0 {
+		content := "**Startup**\n"
+		for _, notice := range comp.StartupNotices {
+			content += "- " + notice + "\n"
+		}
+		SendSSE(w, flusher, "system", map[string]interface{}{"content": content})
+	}
 
 	// Prepare the ADK runner
 	adkAgent, err := adkagent.New(adkagent.Config{
@@ -526,6 +537,11 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 			status += fmt.Sprintf("- Context: %d / %d tokens (%.0f%%)\n", est, win, pct)
 		}
 		status += fmt.Sprintf("- Tools: %d internal\n", comp.InternalToolCount)
+		if comp.SandboxEnabled {
+			status += "- Sandbox: enabled\n"
+		} else {
+			status += "- Sandbox: disabled\n"
+		}
 		if comp.MemoryActive {
 			status += "- Memory: active\n"
 		} else {

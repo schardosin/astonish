@@ -927,9 +927,10 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 
 	fleetSession.SandboxTools = wrappedTools
 
-	// Override workspace to container root (SetupSessionWorkspace is skipped
-	// when sandbox is active — the container IS the workspace)
-	fleetSession.WorkspaceDir = "/root"
+	// Set workspace to the project directory inside the container.
+	// The wizard clones into /root/<repo-name>/, so we derive the repo name
+	// from the plan's project source or artifact configuration.
+	fleetSession.WorkspaceDir = resolveContainerWorkspaceDir(plan)
 
 	// Wire cleanup to destroy the container on session deletion (NOT on Run() exit)
 	fleetSession.OnCleanup = func() {
@@ -938,6 +939,24 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 
 	log.Printf("[fleet-sandbox] Session %s: sandbox enabled (template=%q, env_keys=%d)",
 		fleetSession.ID, template, len(lazyNode.Env))
+}
+
+// resolveContainerWorkspaceDir derives the project workspace path inside a
+// sandbox container. The wizard clones the repo into /root/<repo-name>/, so
+// we extract the repo name from the plan's project source or artifact config.
+// Falls back to /root if no repo can be determined.
+func resolveContainerWorkspaceDir(plan *fleet.FleetPlan) string {
+	if plan != nil {
+		// Try project source first
+		if ps := plan.ResolveProjectSource(); ps != nil && ps.Repo != "" {
+			parts := strings.Split(ps.Repo, "/")
+			repoName := parts[len(parts)-1]
+			if repoName != "" {
+				return "/root/" + repoName
+			}
+		}
+	}
+	return "/root"
 }
 
 // buildSandboxEnv builds the environment variable map for a fleet session's

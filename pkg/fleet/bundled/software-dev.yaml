@@ -166,21 +166,25 @@ plan_wizard:
     pre-installed.
 
     **Context:** You are already running inside a sandbox container. The shell
-    commands you run execute inside this container. The container workspace is
-    `/root/`. When you are done, you will snapshot this container as a template.
+    commands you run execute inside this container. When you are done, you will
+    snapshot this container as a reusable template.
 
     If the user already provided a GitHub repo in step 1 (for github_issues
     channel), use that same repo. Otherwise, ask where the project code lives:
     - **git_repo**: repository in owner/repo format
+
+    Derive `<repo-name>` from the repository (e.g., "juicytrade" from
+    "schardosin/juicytrade"). The project will be cloned to `/root/<repo-name>/`.
+    Use this path consistently in ALL subsequent commands and tool calls.
 
     Once you know the repository, execute these sub-steps IN ORDER:
 
     **3a. Confirm the project source.**
 
     Tell the user:
-    "I'll clone <owner/repo> into the sandbox container workspace at /root/.
-    This container will become the template for all fleet sessions — each
-    session gets its own fresh clone of this pre-provisioned environment."
+    "I'll clone <owner/repo> into `/root/<repo-name>/` inside the sandbox
+    container. This container will become the template for all fleet sessions —
+    each session gets its own fresh copy of this pre-provisioned environment."
 
     **3b. Install system tools needed for the project.**
 
@@ -216,31 +220,32 @@ plan_wizard:
 
     **3d. Clone the repository into the container.**
 
-    Clone into the container workspace root (/root/):
+    Clone into `/root/<repo-name>/`:
     ```
-    shell_command(command: "cd /root && gh repo clone <owner>/<repo> .")
+    shell_command(command: "cd /root && gh repo clone <owner>/<repo>")
     ```
+    This creates `/root/<repo-name>/` automatically.
 
     For non-GitHub repos where gh is not available, use git clone directly:
     ```
-    shell_command(command: "git clone https://<host>/<owner>/<repo>.git /root/project && mv /root/project/* /root/project/.* /root/ 2>/dev/null; rm -rf /root/project")
+    shell_command(command: "git clone https://<host>/<owner>/<repo>.git /root/<repo-name>")
     ```
 
     Verify the clone succeeded:
     ```
-    shell_command(command: "ls -la /root/ && git -C /root log --oneline -3")
+    shell_command(command: "ls -la /root/<repo-name>/ && git -C /root/<repo-name> log --oneline -3")
     ```
 
     **3e. Check for existing AGENTS.md and analyze if needed.**
 
     First, check if AGENTS.md already exists in the project:
     ```
-    shell_command(command: "test -f /root/AGENTS.md && echo EXISTS || echo MISSING")
+    shell_command(command: "test -f /root/<repo-name>/AGENTS.md && echo EXISTS || echo MISSING")
     ```
 
     **If EXISTS:** Read it directly — no need to regenerate:
     ```
-    read_file(path: "/root/AGENTS.md")
+    read_file(path: "/root/<repo-name>/AGENTS.md")
     ```
     Present a brief summary to the user:
     "Found an existing AGENTS.md. Here's what it says:
@@ -248,12 +253,12 @@ plan_wizard:
 
     **If MISSING:** Generate it using the `opencode` tool:
     ```
-    opencode(task: "Analyze this codebase and generate or update the AGENTS.md file with project structure, build/test/lint commands, code conventions, and key architectural patterns. Keep it concise and focused on what an AI coding agent needs to know.", dir: "/root")
+    opencode(task: "Analyze this codebase and generate or update the AGENTS.md file with project structure, build/test/lint commands, code conventions, and key architectural patterns. Keep it concise and focused on what an AI coding agent needs to know.", dir: "/root/<repo-name>")
     ```
 
     After generation, read and present the result:
     ```
-    read_file(path: "/root/AGENTS.md")
+    read_file(path: "/root/<repo-name>/AGENTS.md")
     ```
 
     Present a brief summary. For example:
@@ -269,7 +274,7 @@ plan_wizard:
 
     If the user agrees:
     ```
-    shell_command(command: "cd /root && git add AGENTS.md && git commit -m 'docs: add AGENTS.md with project analysis for fleet agents' && git push origin HEAD")
+    shell_command(command: "cd /root/<repo-name> && git add AGENTS.md && git commit -m 'docs: add AGENTS.md with project analysis for fleet agents' && git push origin HEAD")
     ```
 
     If the user declines, that's fine — the file stays in the container and
@@ -281,17 +286,17 @@ plan_wizard:
     required toolchains and runtimes. Inspect the project files to determine
     what is needed:
     ```
-    shell_command(command: "ls /root/go.mod /root/package.json /root/Cargo.toml /root/requirements.txt /root/pyproject.toml /root/Gemfile /root/pom.xml /root/build.gradle 2>/dev/null")
+    shell_command(command: "ls /root/<repo-name>/go.mod /root/<repo-name>/package.json /root/<repo-name>/Cargo.toml /root/<repo-name>/requirements.txt /root/<repo-name>/pyproject.toml /root/<repo-name>/Gemfile /root/<repo-name>/pom.xml /root/<repo-name>/build.gradle 2>/dev/null")
     ```
 
     Install what the project needs. Examples:
     - Go project (go.mod found): ensure Go is installed (step 3b), then:
-      `shell_command(command: "cd /root && go mod download")`
+      `shell_command(command: "cd /root/<repo-name> && go mod download")`
     - Node project (package.json found):
-      `shell_command(command: "cd /root && npm install")`
+      `shell_command(command: "cd /root/<repo-name> && npm install")`
     - Python project (requirements.txt or pyproject.toml found):
-      `shell_command(command: "cd /root && pip install -r requirements.txt")`
-      or `shell_command(command: "cd /root && uv sync")`
+      `shell_command(command: "cd /root/<repo-name> && pip install -r requirements.txt")`
+      or `shell_command(command: "cd /root/<repo-name> && uv sync")`
     - Multi-language projects: install each set of dependencies
 
     **3h. Run the build and verify it works.**
@@ -299,7 +304,7 @@ plan_wizard:
     This step is CRITICAL. You MUST verify the project builds successfully
     before saving the template. Use the build commands from AGENTS.md:
     ```
-    shell_command(command: "cd /root && <build-command-from-agents-md>")
+    shell_command(command: "cd /root/<repo-name> && <build-command-from-agents-md>")
     ```
 
     **If the build fails:** This is expected for complex projects. You MUST

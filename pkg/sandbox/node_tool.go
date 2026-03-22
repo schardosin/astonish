@@ -30,14 +30,26 @@ type ToolWithDeclaration interface {
 type NodeTool struct {
 	tool.Tool // Embed the original tool for Name(), Description(), IsLongRunning()
 
-	lazyClient *LazyNodeClient
+	pool       *NodeClientPool // for chat sessions (per-session containers)
+	lazyClient *LazyNodeClient // for fleet sessions (dedicated per-session client)
 }
 
-// NewNodeTool creates a NodeTool that proxies the given tool through a lazy node client.
-func NewNodeTool(original tool.Tool, lazyClient *LazyNodeClient) *NodeTool {
+// NewNodeTool creates a NodeTool that proxies the given tool through a pool.
+// Used by chat/Studio sessions where each session gets its own container.
+func NewNodeTool(original tool.Tool, pool *NodeClientPool) *NodeTool {
+	return &NodeTool{
+		Tool: original,
+		pool: pool,
+	}
+}
+
+// NewNodeToolWithClient creates a NodeTool that proxies through a single
+// LazyNodeClient. Used by fleet sessions where one dedicated container
+// is created per fleet session.
+func NewNodeToolWithClient(original tool.Tool, client *LazyNodeClient) *NodeTool {
 	return &NodeTool{
 		Tool:       original,
-		lazyClient: lazyClient,
+		lazyClient: client,
 	}
 }
 
@@ -63,7 +75,10 @@ func (nt *NodeTool) ProcessRequest(ctx tool.Context, req *model.LLMRequest) erro
 	// Idempotent: only the first call per session triggers init.
 	if ctx != nil {
 		if sessionID := ctx.SessionID(); sessionID != "" {
-			nt.lazyClient.BindSession(sessionID)
+			client := nt.getClient(sessionID)
+			if client != nil {
+				client.BindSession(sessionID)
+			}
 		}
 	}
 
@@ -124,6 +139,11 @@ func (nt *NodeTool) Run(ctx tool.Context, args any) (map[string]any, error) {
 		return nil, fmt.Errorf("tool %q: no session ID and no local fallback", nt.Name())
 	}
 
+	client := nt.getClient(sessionID)
+	if client == nil {
+		return nil, fmt.Errorf("tool %q: no sandbox client available for session %s", nt.Name(), sessionID)
+	}
+
 	// Convert args to map[string]interface{}
 	argsMap, ok := args.(map[string]interface{})
 	if !ok {
@@ -139,7 +159,7 @@ func (nt *NodeTool) Run(ctx tool.Context, args any) (map[string]any, error) {
 	}
 
 	// Send to node (lazy init on first call)
-	rawResult, err := nt.lazyClient.Call(sessionID, nt.Name(), argsMap)
+	rawResult, err := client.Call(sessionID, nt.Name(), argsMap)
 	if err != nil {
 		return nil, err
 	}
@@ -156,13 +176,69 @@ func (nt *NodeTool) Run(ctx tool.Context, args any) (map[string]any, error) {
 	return result, nil
 }
 
-// WrapToolsWithNode wraps a slice of tools with NodeTool proxies.
-// Each wrapped tool delegates its Run() to the given LazyNodeClient while
-// preserving the original tool's identity (name, description, schema).
-func WrapToolsWithNode(tools []tool.Tool, lazyClient *LazyNodeClient) []tool.Tool {
+// getClient returns the LazyNodeClient for the given session. If the NodeTool
+// was created with a pool (chat sessions), it gets or creates a client from
+// the pool. If created with a direct client (fleet sessions), returns that.
+func (nt *NodeTool) getClient(sessionID string) *LazyNodeClient {
+	if nt.lazyClient != nil {
+		return nt.lazyClient
+	}
+	if nt.pool != nil {
+		return nt.pool.GetOrCreate(sessionID)
+	}
+	return nil
+}
+
+// containerTools lists tool names that should execute inside the container.
+// Tools NOT in this set run on the host (memory, credentials, scheduler, etc.).
+var containerTools = map[string]bool{
+	"read_file":                 true,
+	"write_file":                true,
+	"edit_file":                 true,
+	"file_tree":                 true,
+	"grep_search":               true,
+	"find_files":                true,
+	"shell_command":             true,
+	"process_read":              true,
+	"process_write":             true,
+	"process_list":              true,
+	"process_kill":              true,
+	"http_request":              true,
+	"web_fetch":                 true,
+	"read_pdf":                  true,
+	"filter_json":               true,
+	"git_diff_add_line_numbers": true,
+}
+
+// WrapToolsWithNode wraps tools with NodeTool proxies using a pool, selectively.
+// Only tools listed in containerTools are wrapped — they run inside the container.
+// Host-side tools (memory, credentials, scheduler, delegate_tasks, browser,
+// email, etc.) pass through unwrapped and continue to run on the host.
+// Used by chat/Studio sessions where each session gets its own container.
+func WrapToolsWithNode(tools []tool.Tool, pool *NodeClientPool) []tool.Tool {
 	wrapped := make([]tool.Tool, len(tools))
 	for i, t := range tools {
-		wrapped[i] = NewNodeTool(t, lazyClient)
+		if containerTools[t.Name()] {
+			wrapped[i] = NewNodeTool(t, pool)
+		} else {
+			wrapped[i] = t // pass through unwrapped
+		}
+	}
+	return wrapped
+}
+
+// WrapToolsWithNodeClient wraps tools with NodeTool proxies using a single
+// LazyNodeClient, selectively. Same filtering as WrapToolsWithNode but uses
+// a dedicated client instead of a pool. Used by fleet sessions where each
+// session has its own LazyNodeClient.
+func WrapToolsWithNodeClient(tools []tool.Tool, lazyClient *LazyNodeClient) []tool.Tool {
+	wrapped := make([]tool.Tool, len(tools))
+	for i, t := range tools {
+		if containerTools[t.Name()] {
+			wrapped[i] = NewNodeToolWithClient(t, lazyClient)
+		} else {
+			wrapped[i] = t // pass through unwrapped
+		}
 	}
 	return wrapped
 }

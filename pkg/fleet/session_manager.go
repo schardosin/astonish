@@ -13,6 +13,7 @@ import (
 	"github.com/schardosin/astonish/pkg/agent"
 	"google.golang.org/adk/model"
 	adksession "google.golang.org/adk/session"
+	"google.golang.org/adk/tool"
 )
 
 // SessionState represents the current state of a fleet session.
@@ -125,7 +126,20 @@ type FleetSession struct {
 	// WorkspaceDir is the per-session isolated workspace directory.
 	// Each session gets its own copy of the project (via git clone or cp -a)
 	// so parallel sessions don't collide. Set at session creation before Run().
+	// When sandbox is active, this is set to "/root" (container workspace).
 	WorkspaceDir string
+
+	// SandboxTools holds sandbox-wrapped tool copies for this fleet session.
+	// When set, activateAgent() uses these instead of the global SubAgentManager
+	// tools. This allows fleet sessions to route tool calls through their own
+	// per-session container without mutating the shared SubAgentManager singleton.
+	SandboxTools []tool.Tool
+
+	// OnCleanup is called to destroy the sandbox container when the session is
+	// deleted. IMPORTANT: this is NOT called when Run() exits — headless sessions
+	// exit Run() on "ball to customer" (poll/recover cycle) and the container
+	// must survive for recovery. OnCleanup is invoked from session deletion paths.
+	OnCleanup func()
 }
 
 // NewFleetSession creates a new fleet session.
@@ -145,6 +159,33 @@ func NewFleetSession(
 		state:           StateIdle,
 		Progress:        NewProgressTracker(),
 	}
+}
+
+// Cleanup calls the OnCleanup callback if set. Used by session deletion
+// paths to destroy sandbox containers. Safe to call multiple times.
+func (fs *FleetSession) Cleanup() {
+	if fs.OnCleanup != nil {
+		fs.OnCleanup()
+	}
+}
+
+// filterSandboxTools filters sandbox-wrapped tools by an allow list.
+// If allowList is empty, all tools are returned (no filtering).
+func filterSandboxTools(tools []tool.Tool, allowList []string) []tool.Tool {
+	if len(allowList) == 0 {
+		return tools
+	}
+	allowSet := make(map[string]bool, len(allowList))
+	for _, name := range allowList {
+		allowSet[name] = true
+	}
+	var filtered []tool.Tool
+	for _, t := range tools {
+		if allowSet[t.Name()] {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered
 }
 
 // GetState returns the current session state and active agent.
@@ -658,6 +699,13 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 		ParentDepth:     0,
 		TimeoutOverride: timeoutOverride,
 		OnEvent:         onEvent,
+	}
+
+	// When sandbox tools are set, filter them by the agent's tool filter
+	// and use as OverrideTools. This routes tool calls through the fleet
+	// session's own container without mutating the global SubAgentManager.
+	if fs.SandboxTools != nil {
+		task.OverrideTools = filterSandboxTools(fs.SandboxTools, toolFilter)
 	}
 
 	result := fs.SubAgentManager.RunTask(ctx, task)

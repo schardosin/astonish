@@ -332,6 +332,43 @@ plan_wizard:
     CRITICAL: The artifacts map MUST include BOTH "code" and "docs" entries.
     Do NOT save a plan with only a "code" artifact.
 
+    ## Sandbox template provisioning (when save_sandbox_template tool is available)
+    If the `save_sandbox_template` tool is in your tool list, sandbox container
+    isolation is enabled. In this mode, every fleet session runs inside its own
+    Linux container. You should create a custom template with the project
+    pre-cloned and dependencies pre-installed so sessions start instantly.
+
+    **Add these steps BETWEEN step 4d and step 5 (artifacts):**
+
+    **4e. Clone the project INSIDE the container.**
+    The session is already running in a sandbox container. Clone the repo into
+    /root (the container workspace):
+    shell_command(command: "cd /root && gh repo clone <owner>/<repo> .")
+    or for local projects, the files are already at /root.
+
+    **4f. Install project dependencies.**
+    Based on the AGENTS.md analysis from step 4c, install the required
+    toolchains and dependencies inside the container. For example:
+    - Go projects: shell_command(command: "cd /root && go mod download")
+    - Node projects: shell_command(command: "cd /root && npm install")
+    - Python: shell_command(command: "cd /root && pip install -r requirements.txt")
+    - Multi-language: install each runtime/toolchain as needed
+
+    **4g. Save the sandbox template.**
+    Once everything is installed, freeze the container:
+    save_sandbox_template(template_name: "<plan-key>", description: "<stack summary>")
+
+    The returned template_name MUST be passed to save_fleet_plan's `template`
+    field. This ensures future fleet sessions clone from this pre-provisioned
+    template instead of the bare @base template.
+
+    Tell the user:
+    "I've saved a sandbox template with the project repo and all dependencies
+    pre-installed. Fleet sessions will start from this template — no setup time."
+
+    **When sandbox is NOT available** (save_sandbox_template not in tool list):
+    Skip steps 4e-4g entirely. The wizard flow works the same as before.
+
     ## After saving — next steps guidance
 
     After the plan is saved successfully, tell the user exactly what to do next.

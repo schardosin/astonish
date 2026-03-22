@@ -1,10 +1,15 @@
 package sandbox
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/lxc/incus/v6/shared/api"
@@ -124,6 +129,9 @@ func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry) error {
 		Name:       BaseTemplate,
 		CreatedAt:  now,
 		SnapshotAt: now,
+	}
+	if hash, hashErr := ComputeBinaryHash(); hashErr == nil {
+		meta.BinaryHash = hash
 	}
 
 	if err := registry.Add(meta); err != nil {
@@ -336,32 +344,237 @@ func DeleteTemplate(client *IncusClient, registry *TemplateRegistry, name string
 // RefreshBase re-snapshots the @base template.
 // Use this after manually customizing the base template.
 func RefreshBase(client *IncusClient, registry *TemplateRegistry) error {
-	containerName := TemplateName(BaseTemplate)
+	return RefreshTemplate(client, registry, BaseTemplate)
+}
+
+// RefreshTemplate pushes the current astonish binary into a template and
+// re-snapshots it. This is the generalized version of the old RefreshBase.
+// Works for any template (@base or custom project templates).
+func RefreshTemplate(client *IncusClient, registry *TemplateRegistry, name string) error {
+	containerName := TemplateName(name)
 
 	if !client.InstanceExists(containerName) {
-		return fmt.Errorf("base template does not exist; run 'astonish sandbox init' first")
+		return fmt.Errorf("template %q does not exist; run 'astonish sandbox init' first", name)
 	}
 
 	// Start the template so we can push the updated binary
-	wasRunning := client.IsRunning(containerName)
-	if !wasRunning {
-		fmt.Println("Starting base template...")
+	if !client.IsRunning(containerName) {
+		fmt.Printf("Starting template %q...\n", name)
 		if err := client.StartInstance(containerName); err != nil {
-			return fmt.Errorf("failed to start base template: %w", err)
+			return fmt.Errorf("failed to start template %q: %w", name, err)
 		}
 		if err := waitForReady(client, containerName, 30*time.Second); err != nil {
-			return fmt.Errorf("base template not ready: %w", err)
+			return fmt.Errorf("template %q not ready: %w", name, err)
 		}
 	}
 
 	// Push the current astonish binary into the template
-	fmt.Println("Pushing astonish binary into template...")
+	fmt.Printf("Pushing astonish binary into template %q...\n", name)
 	if err := pushAstonishBinary(client, containerName); err != nil {
 		return fmt.Errorf("failed to push astonish binary: %w", err)
 	}
 
+	// Compute the binary hash for tracking
+	hash, hashErr := ComputeBinaryHash()
+
 	// Re-snapshot (this stops the container first)
-	return SnapshotTemplate(client, registry, BaseTemplate)
+	if err := SnapshotTemplate(client, registry, name); err != nil {
+		return err
+	}
+
+	// Update the BinaryHash in the registry
+	if hashErr == nil && hash != "" {
+		meta := registry.Get(name)
+		if meta != nil {
+			meta.BinaryHash = hash
+			if updateErr := registry.Update(meta); updateErr != nil {
+				log.Printf("[sandbox] Warning: could not update BinaryHash for template %q: %v", name, updateErr)
+			}
+		}
+	}
+
+	return nil
+}
+
+// ComputeBinaryHash returns the SHA-256 hex digest of the running astonish binary.
+// This is used to detect when the binary has been rebuilt and templates need
+// refreshing (the in-container binary is stale).
+func ComputeBinaryHash() (string, error) {
+	exePath, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("failed to determine binary path: %w", err)
+	}
+
+	realPath, err := filepath.EvalSymlinks(exePath)
+	if err != nil {
+		realPath = exePath
+	}
+
+	f, err := os.Open(realPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open binary %s: %w", realPath, err)
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", fmt.Errorf("failed to hash binary: %w", err)
+	}
+
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// CreateTemplateFromContainer snapshots a running session container and creates
+// a new template from it. This is the wizard's "save_sandbox_template" operation:
+//
+//  1. Stop the node process (caller must do this before calling)
+//  2. Create a temporary snapshot on the session container
+//  3. Copy the snapshot as a new template container
+//  4. Snapshot the new template container (for cloning)
+//  5. Register in the template registry
+//  6. Clean up the temporary snapshot
+//
+// The container must be running (but with node stopped). The template name must
+// not already exist.
+func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry, containerName, templateName, description string) error {
+	if templateName == BaseTemplate {
+		return fmt.Errorf("cannot create a template named %q (reserved)", BaseTemplate)
+	}
+
+	tplContainerName := TemplateName(templateName)
+	if client.InstanceExists(tplContainerName) {
+		return fmt.Errorf("template %q already exists", templateName)
+	}
+
+	// Temporary snapshot name (unique to avoid conflicts)
+	tmpSnapName := fmt.Sprintf("tpl-save-%d", time.Now().Unix())
+
+	// Stop the container for a consistent snapshot
+	if client.IsRunning(containerName) {
+		log.Printf("[sandbox] Stopping container %q for template snapshot...", containerName)
+		if err := client.StopInstance(containerName, false); err != nil {
+			return fmt.Errorf("failed to stop container %q: %w", containerName, err)
+		}
+	}
+
+	// Create temporary snapshot on the session container
+	log.Printf("[sandbox] Creating temporary snapshot %q on %q...", tmpSnapName, containerName)
+	if err := client.CreateSnapshot(containerName, tmpSnapName); err != nil {
+		return fmt.Errorf("failed to create snapshot on %q: %w", containerName, err)
+	}
+
+	// Ensure cleanup of temporary snapshot
+	defer func() {
+		if client.HasSnapshot(containerName, tmpSnapName) {
+			_ = client.DeleteSnapshot(containerName, tmpSnapName)
+		}
+	}()
+
+	// Copy the snapshot as a new template container
+	log.Printf("[sandbox] Copying snapshot to template %q...", tplContainerName)
+	if err := client.CopyFromAnySnapshot(tplContainerName, containerName, tmpSnapName, nil); err != nil {
+		return fmt.Errorf("failed to copy snapshot to template: %w", err)
+	}
+
+	// Snapshot the new template (so it can be used for cloning via CreateContainerFromSnapshot)
+	log.Printf("[sandbox] Creating clone-ready snapshot on template %q...", tplContainerName)
+	if err := client.CreateSnapshot(tplContainerName, SnapshotName); err != nil {
+		// Clean up template container on failure
+		_ = client.DeleteInstance(tplContainerName)
+		return fmt.Errorf("failed to snapshot template %q: %w", templateName, err)
+	}
+
+	// Compute binary hash
+	hash, _ := ComputeBinaryHash()
+
+	// Register in the template registry
+	now := time.Now()
+	meta := &TemplateMeta{
+		Name:        templateName,
+		Description: description,
+		CreatedAt:   now,
+		SnapshotAt:  now,
+		BasedOn:     BaseTemplate,
+		BinaryHash:  hash,
+	}
+
+	if err := registry.Add(meta); err != nil {
+		return fmt.Errorf("failed to register template: %w", err)
+	}
+
+	// Restart the session container so the session can continue
+	log.Printf("[sandbox] Restarting session container %q...", containerName)
+	if err := client.StartInstance(containerName); err != nil {
+		log.Printf("[sandbox] Warning: failed to restart session container %q: %v", containerName, err)
+	}
+
+	log.Printf("[sandbox] Template %q created from container %q", templateName, containerName)
+	return nil
+}
+
+// refreshAllOnce ensures RefreshAllIfNeeded runs at most once per process.
+var refreshAllOnce sync.Once
+
+// RefreshAllIfNeeded is an async, process-wide singleton that checks all
+// templates and refreshes those with stale binaries. It must be called as
+// `go RefreshAllIfNeeded(...)` or from a goroutine — it must NOT block
+// the daemon startup path (this was the cause of the 502 bug).
+func RefreshAllIfNeeded(client *IncusClient, registry *TemplateRegistry) {
+	refreshAllOnce.Do(func() {
+		currentHash, err := ComputeBinaryHash()
+		if err != nil {
+			log.Printf("[sandbox] Warning: could not compute binary hash for refresh check: %v", err)
+			return
+		}
+
+		templates := registry.List()
+		for _, meta := range templates {
+			if meta.BinaryHash == currentHash {
+				continue // binary matches, no refresh needed
+			}
+
+			containerName := TemplateName(meta.Name)
+			if !client.InstanceExists(containerName) {
+				continue // template container missing, skip
+			}
+
+			if !client.HasSnapshot(containerName, SnapshotName) {
+				continue // no snapshot to refresh
+			}
+
+			log.Printf("[sandbox] Template %q has stale binary (hash mismatch), refreshing...", meta.Name)
+			if err := RefreshTemplate(client, registry, meta.Name); err != nil {
+				log.Printf("[sandbox] Warning: failed to refresh template %q: %v", meta.Name, err)
+			} else {
+				log.Printf("[sandbox] Template %q refreshed with current binary", meta.Name)
+			}
+		}
+	})
+}
+
+// RefreshAll refreshes all templates unconditionally. Used by `astonish sandbox refresh --force`.
+func RefreshAll(client *IncusClient, registry *TemplateRegistry) error {
+	templates := registry.List()
+	if len(templates) == 0 {
+		return fmt.Errorf("no templates to refresh")
+	}
+
+	for _, meta := range templates {
+		containerName := TemplateName(meta.Name)
+		if !client.InstanceExists(containerName) {
+			fmt.Printf("Skipping %q (container missing)\n", meta.Name)
+			continue
+		}
+
+		fmt.Printf("Refreshing template %q...\n", meta.Name)
+		if err := RefreshTemplate(client, registry, meta.Name); err != nil {
+			fmt.Printf("  Warning: failed to refresh %q: %v\n", meta.Name, err)
+		} else {
+			fmt.Printf("  Done.\n")
+		}
+	}
+
+	return nil
 }
 
 // waitForReady waits for a container to be ready (network available).

@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"strconv"
@@ -267,4 +268,31 @@ func ExecNonInteractive(client *IncusClient, containerName string, command []str
 	}()
 
 	return cp, nil
+}
+
+// ExecSimpleWithEnv runs a non-interactive command inside a container with
+// environment variables, captures stdout, waits for completion, and returns
+// the output and any error. Used for fire-and-forget commands like
+// `gh auth setup-git` where we need env vars but not full NDJSON I/O.
+func ExecSimpleWithEnv(client *IncusClient, containerName string, command []string, env map[string]string) (string, error) {
+	proc, err := ExecNonInteractive(client, containerName, command, ExecOpts{Env: env})
+	if err != nil {
+		return "", err
+	}
+	defer proc.Close()
+
+	var buf bytes.Buffer
+	go func() {
+		_, _ = io.Copy(&buf, proc.Stdout)
+	}()
+
+	exitCode, err := proc.Wait()
+	if err != nil {
+		return buf.String(), fmt.Errorf("command failed: %w", err)
+	}
+	if exitCode != 0 {
+		return buf.String(), fmt.Errorf("command exited with code %d", exitCode)
+	}
+
+	return buf.String(), nil
 }

@@ -158,12 +158,18 @@ func (c *IncusClient) LaunchFromImage(name, image string, config map[string]stri
 
 // CreateContainerFromSnapshot clones a container from a template snapshot.
 func (c *IncusClient) CreateContainerFromSnapshot(name, templateName string, config map[string]string) error {
-	srcContainerName := TemplateName(templateName)
+	return c.CopyFromAnySnapshot(name, TemplateName(templateName), SnapshotName, config)
+}
 
+// CopyFromAnySnapshot copies a container from any named snapshot on any source container.
+// This is more general than CreateContainerFromSnapshot — it works with arbitrary
+// snapshot names (not just "snap") and arbitrary source containers (not just templates).
+// Used for creating templates from running session containers.
+func (c *IncusClient) CopyFromAnySnapshot(name, sourceContainer, snapshotName string, config map[string]string) error {
 	// Get the snapshot
-	snap, _, err := c.server.GetInstanceSnapshot(srcContainerName, SnapshotName)
+	snap, _, err := c.server.GetInstanceSnapshot(sourceContainer, snapshotName)
 	if err != nil {
-		return fmt.Errorf("snapshot %q not found on template %q: %w", SnapshotName, templateName, err)
+		return fmt.Errorf("snapshot %q not found on %q: %w", snapshotName, sourceContainer, err)
 	}
 
 	// Build config with defaults for nested LXC environments
@@ -181,7 +187,7 @@ func (c *IncusClient) CreateContainerFromSnapshot(name, templateName string, con
 		},
 		Source: api.InstanceSource{
 			Type:         "copy",
-			Source:       srcContainerName + "/" + snap.Name,
+			Source:       sourceContainer + "/" + snap.Name,
 			BaseImage:    "",
 			InstanceOnly: true,
 		},
@@ -189,7 +195,7 @@ func (c *IncusClient) CreateContainerFromSnapshot(name, templateName string, con
 
 	op, err := c.server.CreateInstance(req)
 	if err != nil {
-		return fmt.Errorf("failed to clone from %s/%s to %s: %w", srcContainerName, SnapshotName, name, err)
+		return fmt.Errorf("failed to clone from %s/%s to %s: %w", sourceContainer, snapshotName, name, err)
 	}
 
 	return op.Wait()

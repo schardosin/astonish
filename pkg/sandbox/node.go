@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -43,6 +44,11 @@ type NodeClient struct {
 	nextID  atomic.Int64
 	started bool
 	closed  bool
+
+	// Env holds environment variables to inject into the node process.
+	// Set before Start() or startLocked() to pass credentials (GH_TOKEN,
+	// BIFROST_API_KEY, etc.) into the container.
+	Env map[string]string
 }
 
 // NewNodeClient creates a NodeClient for the given container.
@@ -73,7 +79,7 @@ func (nc *NodeClient) startLocked() error {
 	nc.stopLocked()
 
 	cmd := []string{BinaryDestPath, "node"}
-	proc, err := ExecNonInteractive(nc.client, nc.containerName, cmd, ExecOpts{})
+	proc, err := ExecNonInteractive(nc.client, nc.containerName, cmd, ExecOpts{Env: nc.Env})
 	if err != nil {
 		return fmt.Errorf("failed to start astonish node in %q: %w", nc.containerName, err)
 	}
@@ -253,6 +259,10 @@ type LazyNodeClient struct {
 	initialized   bool
 	closed        bool
 
+	// Env holds environment variables to inject into the node process.
+	// Set before BindSession() to pass credentials into the container.
+	Env map[string]string
+
 	// initDone is created by BindSession and closed when background init completes.
 	// Call() waits on this channel before forwarding to the NodeClient.
 	initDone chan struct{}
@@ -313,6 +323,7 @@ func (lnc *LazyNodeClient) initBackground(sessionID string) {
 
 	// Create and start the node client
 	nc := NewNodeClient(lnc.incusClient, containerName)
+	nc.Env = lnc.Env // Forward environment variables (credentials) to node
 	if err := nc.Start(); err != nil {
 		lnc.mu.Lock()
 		lnc.initErr = fmt.Errorf("failed to start node in %q: %w", containerName, err)
@@ -326,6 +337,20 @@ func (lnc *LazyNodeClient) initBackground(sessionID string) {
 	lnc.nodeClient = nc
 	lnc.initialized = true
 	lnc.mu.Unlock()
+
+	// If GH_TOKEN is available, configure git credential helper in the background.
+	// gh auth setup-git configures git to use `gh` as a credential helper, which
+	// reads GH_TOKEN from the environment. This enables `git clone` of private repos.
+	if ghToken := lnc.Env["GH_TOKEN"]; ghToken != "" {
+		go func() {
+			_, err := ExecSimpleWithEnv(lnc.incusClient, containerName,
+				[]string{"sh", "-c", "command -v gh >/dev/null 2>&1 && gh auth setup-git"},
+				map[string]string{"GH_TOKEN": ghToken})
+			if err != nil {
+				log.Printf("[sandbox] Warning: failed to run gh auth setup-git in %q: %v", containerName, err)
+			}
+		}()
+	}
 }
 
 // Call proxies a tool call to the container node. If BindSession was called,
@@ -420,4 +445,191 @@ func (lnc *LazyNodeClient) GetContainerName() string {
 	lnc.mu.Lock()
 	defer lnc.mu.Unlock()
 	return lnc.containerName
+}
+
+// GetIncusClient returns the Incus client for host-side operations (e.g., snapshotting).
+func (lnc *LazyNodeClient) GetIncusClient() *IncusClient {
+	return lnc.incusClient
+}
+
+// GetSessionRegistry returns the session registry.
+func (lnc *LazyNodeClient) GetSessionRegistry() *SessionRegistry {
+	return lnc.sessRegistry
+}
+
+// StopNode stops the node process without destroying the container.
+// Used when snapshotting the container (must be quiescent).
+// Call RestartNode() to bring the node back up afterward.
+func (lnc *LazyNodeClient) StopNode() error {
+	lnc.mu.Lock()
+	defer lnc.mu.Unlock()
+
+	if lnc.nodeClient == nil {
+		return nil
+	}
+
+	return lnc.nodeClient.Close()
+}
+
+// RestartNode restarts the node process after it was stopped.
+// Re-injects the Env variables for credentials.
+func (lnc *LazyNodeClient) RestartNode() error {
+	lnc.mu.Lock()
+	defer lnc.mu.Unlock()
+
+	if lnc.containerName == "" {
+		return fmt.Errorf("no container to restart node in")
+	}
+
+	nc := NewNodeClient(lnc.incusClient, lnc.containerName)
+	nc.Env = lnc.Env
+	if err := nc.Start(); err != nil {
+		return fmt.Errorf("failed to restart node in %q: %w", lnc.containerName, err)
+	}
+
+	lnc.nodeClient = nc
+	lnc.initialized = true
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// NodeClientPool — per-session container multiplexer
+// ---------------------------------------------------------------------------
+
+// NodeClientPool manages a set of LazyNodeClient instances, one per session.
+// When a tool call arrives for a session that doesn't have a client yet, the
+// pool creates one. This gives every chat/Studio session its own container.
+//
+// Fleet sessions bypass the pool — they create LazyNodeClient directly via
+// wireFleetSandbox(), which is correct because each fleet session already
+// has its own lifecycle.
+type NodeClientPool struct {
+	incusClient  *IncusClient
+	sessRegistry *SessionRegistry
+	template     string
+
+	mu      sync.Mutex
+	clients map[string]*LazyNodeClient
+	env     map[string]string
+	closed  bool
+}
+
+// NewNodeClientPool creates a pool that will create per-session LazyNodeClients
+// on demand. The template parameter selects which container template to clone
+// from (empty = @base).
+func NewNodeClientPool(client *IncusClient, registry *SessionRegistry, template string) *NodeClientPool {
+	return &NodeClientPool{
+		incusClient:  client,
+		sessRegistry: registry,
+		template:     template,
+		clients:      make(map[string]*LazyNodeClient),
+	}
+}
+
+// SetEnv sets environment variables that will be injected into all future
+// LazyNodeClient instances created by this pool. Must be called before any
+// GetOrCreate calls (typically at factory init time).
+func (p *NodeClientPool) SetEnv(env map[string]string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.env = env
+}
+
+// GetOrCreate returns the LazyNodeClient for the given session ID, creating
+// one if it doesn't exist yet. Thread-safe.
+func (p *NodeClientPool) GetOrCreate(sessionID string) *LazyNodeClient {
+	if sessionID == "" {
+		return nil
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.closed {
+		return nil
+	}
+
+	if client, ok := p.clients[sessionID]; ok {
+		return client
+	}
+
+	// Create a new LazyNodeClient for this session
+	client := NewLazyNodeClient(p.incusClient, p.sessRegistry, p.template)
+	client.Env = p.env
+	p.clients[sessionID] = client
+	return client
+}
+
+// Remove stops the node for a session and removes it from the pool.
+// Does NOT destroy the Incus container — that's TryDestroySessionContainer's
+// job from the session deletion handler.
+func (p *NodeClientPool) Remove(sessionID string) {
+	p.mu.Lock()
+	client, ok := p.clients[sessionID]
+	if ok {
+		delete(p.clients, sessionID)
+	}
+	p.mu.Unlock()
+
+	if ok && client != nil {
+		_ = client.Close()
+	}
+}
+
+// Cleanup destroys all session containers managed by this pool. Called on
+// factory shutdown / daemon restart.
+func (p *NodeClientPool) Cleanup() {
+	p.mu.Lock()
+	p.closed = true
+	clients := make(map[string]*LazyNodeClient, len(p.clients))
+	for k, v := range p.clients {
+		clients[k] = v
+	}
+	p.clients = nil
+	p.mu.Unlock()
+
+	for _, client := range clients {
+		client.Cleanup()
+	}
+}
+
+// GetContainerName returns the container name for a session (empty if not initialized).
+func (p *NodeClientPool) GetContainerName(sessionID string) string {
+	p.mu.Lock()
+	client, ok := p.clients[sessionID]
+	p.mu.Unlock()
+
+	if !ok || client == nil {
+		return ""
+	}
+	return client.GetContainerName()
+}
+
+// StopNode stops the node process for a session without destroying the container.
+func (p *NodeClientPool) StopNode(sessionID string) error {
+	p.mu.Lock()
+	client, ok := p.clients[sessionID]
+	p.mu.Unlock()
+
+	if !ok || client == nil {
+		return fmt.Errorf("no client for session %s", sessionID)
+	}
+	return client.StopNode()
+}
+
+// RestartNode restarts the node process for a session.
+func (p *NodeClientPool) RestartNode(sessionID string) error {
+	p.mu.Lock()
+	client, ok := p.clients[sessionID]
+	p.mu.Unlock()
+
+	if !ok || client == nil {
+		return fmt.Errorf("no client for session %s", sessionID)
+	}
+	return client.RestartNode()
+}
+
+// GetIncusClient returns the shared Incus client.
+func (p *NodeClientPool) GetIncusClient() *IncusClient {
+	return p.incusClient
 }

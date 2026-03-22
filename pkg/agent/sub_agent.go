@@ -57,6 +57,13 @@ type SubAgentTask struct {
 	// from the RunTask goroutine. If nil, events are consumed silently.
 	OnEvent func(event *adksession.Event)
 
+	// OverrideTools, when non-nil, replaces the tools that would normally be
+	// selected by filterTools(). This is used by fleet sessions to provide
+	// sandbox-wrapped tool copies without mutating the global SubAgentManager
+	// singleton. The caller is responsible for applying any tool filter before
+	// setting this field.
+	OverrideTools []tool.Tool
+
 	// Internal: set by SubAgentManager, not by callers
 	ParentDepth int    // Current nesting depth
 	ParentID    string // Parent session ID for linking
@@ -181,7 +188,10 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	}
 
 	// Filter tools for the child
-	childTools := m.filterTools(task.ToolFilter)
+	childTools := task.OverrideTools
+	if childTools == nil {
+		childTools = m.filterTools(task.ToolFilter)
+	}
 
 	// Build child system prompt: use custom prompt if set, otherwise build default
 	var childPrompt string

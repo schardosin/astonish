@@ -597,6 +597,13 @@ func ExecuteTool(ctx context.Context, name string, args map[string]interface{}) 
 		// ShellCommand doesn't use ctx.
 		return ReadFile(nil, toolArgs)
 
+	case "write_file":
+		var toolArgs WriteFileArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for write_file: %w", err)
+		}
+		return WriteFile(nil, toolArgs)
+
 	case "shell_command":
 		var toolArgs ShellCommandArgs
 		if err := toStruct(args, &toolArgs); err != nil {

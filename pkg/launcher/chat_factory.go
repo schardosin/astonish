@@ -577,6 +577,9 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// proxies that route execution to an astonish node inside an Incus
 	// container. Container creation is lazy — the first tool call triggers
 	// cloning from the template and starting the node process.
+	var sandboxNodePool *sandbox.NodeClientPool      // hoisted for save_sandbox_template tool
+	var sandboxIncusClient *sandbox.IncusClient      // hoisted for save_sandbox_template tool
+	var sandboxTplRegistry *sandbox.TemplateRegistry // hoisted for save_sandbox_template tool
 	if cfg.AppConfig != nil && sandbox.IsSandboxEnabled(&cfg.AppConfig.Sandbox) {
 		sandboxClient, sandboxErr := sandbox.SetupSandboxRuntime()
 		if sandboxErr != nil {
@@ -592,17 +595,37 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				}
 				startupNotices = append(startupNotices, fmt.Sprintf("Sandbox: disabled (registry error: %v)", regErr))
 			} else {
-				// Create a lazy node client — container + node are created on first tool call
-				lazyNode := sandbox.NewLazyNodeClient(sandboxClient, sessRegistry, "")
+				tplRegistry, tplErr := sandbox.NewTemplateRegistry()
+				if tplErr != nil {
+					if cfg.DebugMode {
+						fmt.Printf("Warning: Failed to create template registry: %v\n", tplErr)
+					}
+				}
 
-				// Wrap all internal tools with NodeTool proxies
-				internalTools = sandbox.WrapToolsWithNode(internalTools, lazyNode)
+				// Create a pool that manages per-session LazyNodeClients.
+				// Each chat session gets its own container, created lazily
+				// on the first tool call for that session.
+				nodePool := sandbox.NewNodeClientPool(sandboxClient, sessRegistry, "")
+
+				// Wrap all internal tools with NodeTool proxies (pool-backed)
+				internalTools = sandbox.WrapToolsWithNode(internalTools, nodePool)
 
 				startupNotices = append(startupNotices, "Sandbox: enabled (node architecture)")
 
+				// Hoist references for template tool registration
+				sandboxNodePool = nodePool
+				sandboxIncusClient = sandboxClient
+				sandboxTplRegistry = tplRegistry
+
+				// Async refresh: check all templates for stale binaries in the background.
+				// Must NOT block startup (was the cause of the 502 bug).
+				if tplRegistry != nil {
+					go sandbox.RefreshAllIfNeeded(sandboxClient, tplRegistry)
+				}
+
 				cleanups = append(cleanups, func() {
-					// Cleanup destroys the node + container
-					lazyNode.Cleanup()
+					// Cleanup destroys all per-session containers
+					nodePool.Cleanup()
 				})
 			}
 		}
@@ -990,6 +1013,19 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				}
 			} else {
 				internalTools = append(internalTools, ocTool)
+			}
+		}
+
+		// Register save_sandbox_template tool (available to wizard in chat sessions)
+		// Only when sandbox is enabled and we have all required dependencies.
+		if sandboxNodePool != nil && sandboxIncusClient != nil && sandboxTplRegistry != nil {
+			tplTool, tplErr := tools.NewSaveSandboxTemplateTool(sandboxNodePool, sandboxIncusClient, sandboxTplRegistry)
+			if tplErr != nil {
+				if cfg.DebugMode {
+					fmt.Printf("Warning: Failed to create save_sandbox_template tool: %v\n", tplErr)
+				}
+			} else {
+				internalTools = append(internalTools, tplTool)
 			}
 		}
 	}

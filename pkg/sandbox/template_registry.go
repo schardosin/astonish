@@ -17,6 +17,7 @@ type TemplateMeta struct {
 	SnapshotAt  time.Time `json:"snapshot_at,omitempty"`
 	FleetPlans  []string  `json:"fleet_plans,omitempty"`
 	BasedOn     string    `json:"based_on,omitempty"`
+	BinaryHash  string    `json:"binary_hash,omitempty"` // SHA256 of the astonish binary baked into the template
 }
 
 // TemplateRegistry manages template metadata with JSON file persistence.

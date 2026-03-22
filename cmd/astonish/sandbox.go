@@ -108,7 +108,7 @@ func printSandboxUsage() {
 	fmt.Println("  init                One-time setup: create base template with core tools")
 	fmt.Println("  list (ls)           List active session containers")
 	fmt.Println("  shell <session-id>  Open interactive shell in a session container")
-	fmt.Println("  refresh             Re-snapshot the @base template")
+	fmt.Println("  refresh             Re-snapshot templates with updated binary (--force for all)")
 	fmt.Println("  destroy (rm) <id>   Destroy a session container")
 	fmt.Println("  prune               Remove orphaned session containers")
 	fmt.Println("  template (tpl)      Manage container templates")
@@ -272,7 +272,52 @@ func handleSandboxRefresh() error {
 		return err
 	}
 
-	return sandbox.RefreshBase(client, registry)
+	// Check for --force flag (refresh all templates unconditionally)
+	// Without --force, only refresh templates with stale binaries
+	for _, arg := range os.Args {
+		if arg == "--force" || arg == "-f" {
+			fmt.Println("Force-refreshing all templates...")
+			return sandbox.RefreshAll(client, registry)
+		}
+	}
+
+	// Smart refresh: compute current binary hash and only refresh stale templates
+	currentHash, hashErr := sandbox.ComputeBinaryHash()
+	if hashErr != nil {
+		fmt.Printf("Warning: could not compute binary hash: %v\nFalling back to refreshing @base only.\n", hashErr)
+		return sandbox.RefreshTemplate(client, registry, sandbox.BaseTemplate)
+	}
+
+	templates := registry.List()
+	refreshed := 0
+	for _, meta := range templates {
+		if meta.BinaryHash == currentHash {
+			fmt.Printf("Template %q: binary is current, skipping.\n", meta.Name)
+			continue
+		}
+
+		containerName := sandbox.TemplateName(meta.Name)
+		if !client.InstanceExists(containerName) {
+			fmt.Printf("Template %q: container missing, skipping.\n", meta.Name)
+			continue
+		}
+
+		fmt.Printf("Refreshing template %q (stale binary)...\n", meta.Name)
+		if err := sandbox.RefreshTemplate(client, registry, meta.Name); err != nil {
+			fmt.Printf("  Warning: failed to refresh %q: %v\n", meta.Name, err)
+		} else {
+			fmt.Printf("  Done.\n")
+			refreshed++
+		}
+	}
+
+	if refreshed == 0 {
+		fmt.Println("All templates are up to date.")
+	} else {
+		fmt.Printf("Refreshed %d template(s).\n", refreshed)
+	}
+
+	return nil
 }
 
 // --- Destroy ---
@@ -555,6 +600,9 @@ func handleTemplateInfo(name string) error {
 	}
 	if meta.BasedOn != "" {
 		fmt.Printf("Based on:      @%s\n", meta.BasedOn)
+	}
+	if meta.BinaryHash != "" {
+		fmt.Printf("Binary hash:   %s\n", meta.BinaryHash[:min(16, len(meta.BinaryHash))]+"...")
 	}
 	if len(meta.FleetPlans) > 0 {
 		fmt.Printf("Fleet plans:   %s\n", strings.Join(meta.FleetPlans, ", "))

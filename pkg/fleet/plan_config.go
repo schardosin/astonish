@@ -67,6 +67,13 @@ type FleetPlan struct {
 	// ProjectSource describes where the project code lives so each session
 	// can create its own isolated workspace by cloning or copying.
 	ProjectSource *ProjectSourceConfig `yaml:"project_source,omitempty" json:"project_source,omitempty"`
+
+	// Template is the name of the sandbox container template to use for this plan.
+	// When set (and sandbox is enabled), fleet sessions clone from this template
+	// instead of @base. The template should have the project repo pre-cloned,
+	// dependencies installed, and toolchain configured.
+	// When empty and sandbox is enabled, sessions clone from @base.
+	Template string `yaml:"template,omitempty" json:"template,omitempty"`
 }
 
 // fleetPlanYAML is the on-disk YAML representation of FleetPlan.
@@ -91,6 +98,7 @@ type fleetPlanYAML struct {
 	Channel          PlanChannelConfig             `yaml:"channel"`
 	Artifacts        map[string]PlanArtifactConfig `yaml:"artifacts,omitempty"`
 	ProjectSource    *ProjectSourceConfig          `yaml:"project_source,omitempty"`
+	Template         string                        `yaml:"template,omitempty"`
 	WorkspaceBaseDir string                        `yaml:"workspace_base_dir,omitempty"` // plan-level override (deprecated)
 	Validation       PlanValidationState           `yaml:"validation,omitempty"`
 	Activation       PlanActivationState           `yaml:"activation,omitempty"`
@@ -115,6 +123,7 @@ func (p *FleetPlan) MarshalYAML() (interface{}, error) {
 		Channel:              p.Channel,
 		Artifacts:            p.Artifacts,
 		ProjectSource:        p.ProjectSource,
+		Template:             p.Template,
 		WorkspaceBaseDir:     p.WorkspaceBaseDir,
 		Validation:           p.Validation,
 		Activation:           p.Activation,
@@ -148,6 +157,7 @@ func (p *FleetPlan) UnmarshalYAML(value *yaml.Node) error {
 	p.Channel = raw.Channel
 	p.Artifacts = raw.Artifacts
 	p.ProjectSource = raw.ProjectSource
+	p.Template = raw.Template
 	p.WorkspaceBaseDir = raw.WorkspaceBaseDir
 	p.Validation = raw.Validation
 	p.Activation = raw.Activation

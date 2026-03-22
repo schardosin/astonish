@@ -14,7 +14,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/fleet"
+	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/tools"
 	adkmodel "google.golang.org/adk/model"
@@ -156,6 +158,14 @@ func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionRes
 		}
 	}
 	fleetSession.WorkspaceDir = workspaceDir
+
+	// Wire sandbox container for this fleet session (no-op if sandbox disabled)
+	ghToken := ""
+	if credStore := getAPICredentialStore(); credStore != nil {
+		resolved, _ := fleet.ResolveCredentials(plan, credStore)
+		ghToken = fleet.GitHubToken(resolved)
+	}
+	wireFleetSandbox(fleetSession, plan, ghToken)
 
 	// Register in session registry and persist metadata
 	registry := getFleetSessionRegistry()
@@ -842,6 +852,117 @@ func getFleetMessages(sessionID string, ctx context.Context) ([]fleet.Message, e
 	}
 
 	return messages, nil
+}
+
+// wireFleetSandbox creates sandbox infrastructure for a fleet session when
+// sandbox mode is enabled. It creates a LazyNodeClient, wraps the global
+// SubAgentManager tools with NodeTool proxies, and wires cleanup.
+//
+// When sandbox is NOT enabled, this is a no-op and the fleet session runs
+// tools on the host as before.
+//
+// Parameters:
+//   - fleetSession: the fleet session to wire sandbox into
+//   - plan: the fleet plan (for Template and Credentials fields)
+//   - ghToken: resolved GitHub token (may be empty)
+func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, ghToken string) {
+	// Load config to check if sandbox is enabled
+	appCfg, err := config.LoadAppConfig()
+	if err != nil || appCfg == nil {
+		return
+	}
+
+	if !sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
+		return
+	}
+
+	sandboxClient, sandboxErr := sandbox.SetupSandboxRuntime()
+	if sandboxErr != nil {
+		log.Printf("[fleet-sandbox] Warning: sandbox enabled but setup failed: %v (tools will run on host)", sandboxErr)
+		return
+	}
+
+	sessRegistry, regErr := sandbox.NewSessionRegistry()
+	if regErr != nil {
+		log.Printf("[fleet-sandbox] Warning: failed to create session registry: %v", regErr)
+		return
+	}
+
+	// Determine which template to use: plan template or @base
+	template := ""
+	if plan != nil {
+		template = plan.Template
+	}
+
+	// Create a lazy node client for this fleet session
+	lazyNode := sandbox.NewLazyNodeClient(sandboxClient, sessRegistry, template)
+
+	// Build env vars to inject into the container
+	lazyNode.Env = buildSandboxEnv(plan, ghToken)
+
+	// Wrap the global SubAgentManager tools with NodeTool proxies.
+	// The SubAgentManager.Tools already contains the host-wrapped tools
+	// (for chat sessions). Fleet sessions need their own copy wrapped
+	// with their own LazyNodeClient. Double-wrapping is harmless.
+	subAgentMgr := tools.GetSubAgentManager()
+	if subAgentMgr == nil {
+		log.Printf("[fleet-sandbox] Warning: sub-agent manager not available")
+		lazyNode.Cleanup()
+		return
+	}
+
+	// Wrap both regular tools and fleet-only tools
+	wrappedTools := sandbox.WrapToolsWithNodeClient(subAgentMgr.Tools, lazyNode)
+	if subAgentMgr.FleetTools != nil {
+		wrappedFleetTools := sandbox.WrapToolsWithNodeClient(subAgentMgr.FleetTools, lazyNode)
+		wrappedTools = append(wrappedTools, wrappedFleetTools...)
+	}
+
+	fleetSession.SandboxTools = wrappedTools
+
+	// Override workspace to container root (SetupSessionWorkspace is skipped
+	// when sandbox is active — the container IS the workspace)
+	fleetSession.WorkspaceDir = "/root"
+
+	// Wire cleanup to destroy the container on session deletion (NOT on Run() exit)
+	fleetSession.OnCleanup = func() {
+		lazyNode.Cleanup()
+	}
+
+	log.Printf("[fleet-sandbox] Session %s: sandbox enabled (template=%q, env_keys=%d)",
+		fleetSession.ID, template, len(lazyNode.Env))
+}
+
+// buildSandboxEnv builds the environment variable map for a fleet session's
+// sandbox container. This injects credentials into the container so tools
+// like `gh` and `git` can authenticate.
+func buildSandboxEnv(plan *fleet.FleetPlan, ghToken string) map[string]string {
+	env := make(map[string]string)
+
+	// GH_TOKEN enables GitHub CLI and git credential helper
+	if ghToken != "" {
+		env["GH_TOKEN"] = ghToken
+	}
+
+	// Resolve BIFROST_API_KEY from credential store for delegate subprocess auth
+	credStore := getAPICredentialStore()
+	if credStore != nil && plan != nil {
+		resolved, _ := fleet.ResolveCredentials(plan, credStore)
+		// If the plan has a github credential but we didn't get ghToken from
+		// the plan activator, try to resolve it here
+		if ghToken == "" {
+			if t := fleet.GitHubToken(resolved); t != "" {
+				env["GH_TOKEN"] = t
+			}
+		}
+	}
+
+	// BIFROST_API_KEY for delegate sub-processes (OpenCode)
+	if key := os.Getenv("BIFROST_API_KEY"); key != "" {
+		env["BIFROST_API_KEY"] = key
+	}
+
+	return env
 }
 
 // buildAgentList creates a list of agent descriptions for the frontend.

@@ -63,6 +63,11 @@ type SaveFleetPlanArgs struct {
 	ProjectSource *SaveFleetPlanProjectSource `json:"project_source,omitempty" jsonschema:"Where the project code lives. Each session clones (git_repo) or copies (local) from this source into an isolated workspace. If omitted, the system infers from artifact config."`
 	// ValidationPassed should be true if validate_fleet_plan was called and passed.
 	ValidationPassed bool `json:"validation_passed,omitempty" jsonschema:"Set to true after validate_fleet_plan passes. Required for non-chat channel plans."`
+	// Template is the name of the sandbox container template for this plan.
+	// When sandbox mode is enabled, fleet sessions clone from this template
+	// instead of @base. The template should have the project repo pre-cloned
+	// and dependencies installed. Created by the wizard via save_sandbox_template.
+	Template string `json:"template,omitempty" jsonschema:"Optional sandbox container template name. When set and sandbox is enabled, fleet sessions use this pre-provisioned template instead of @base. Created by save_sandbox_template during wizard setup."`
 }
 
 // SaveFleetPlanArtifact describes a single artifact destination.
@@ -250,6 +255,7 @@ func saveFleetPlan(_ tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult,
 		Channel:          channelCfg,
 		Artifacts:        artifacts,
 		ProjectSource:    projectSource,
+		Template:         strings.TrimSpace(args.Template),
 		WorkspaceBaseDir: strings.TrimSpace(args.WorkspaceBaseDir),
 		Validation: fleet.PlanValidationState{
 			Status:        validationStatus,

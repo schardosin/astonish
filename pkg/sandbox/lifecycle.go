@@ -178,8 +178,20 @@ func ensureOverlayMounted(client *IncusClient, containerName, templateName strin
 		return nil // already mounted
 	}
 
-	// Resolve lower layers (supports stacked overlays for custom templates)
-	lowerDir, err := ResolveLowerLayers(poolPath, templateName, tplRegistry)
+	// Determine the correct lower layers to resolve.
+	// If the container IS the template itself (e.g., ShellIntoTemplate or
+	// RefreshTemplate), the lower layers come from the template's parent —
+	// the template's own upper dir is the overlay upperdir, not a lowerdir.
+	// Without this distinction, the same path ends up in both lowerdir and
+	// upperdir, causing ELOOP ("Too many levels of symbolic links").
+	resolveTemplate := templateName
+	if containerName == TemplateName(templateName) && tplRegistry != nil {
+		if meta := tplRegistry.Get(templateName); meta != nil && meta.BasedOn != "" {
+			resolveTemplate = meta.BasedOn
+		}
+	}
+
+	lowerDir, err := ResolveLowerLayers(poolPath, resolveTemplate, tplRegistry)
 	if err != nil {
 		return err
 	}

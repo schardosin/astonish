@@ -736,9 +736,13 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 		log.Printf("[sandbox] Warning: failed to create template work dir: %v", err)
 	}
 
-	// Now mount overlay on the template container so it can be started/shelled into
+	// Mount overlay on the template container so it can be started/shelled into.
+	// The lower layer is only the @base snapshot — the template's own upper dir
+	// (pre-populated with session content above) serves as the overlay upperdir.
+	// Including tplUpperDir in lowerdir would cause ELOOP because MountOverlay
+	// also sets upperdir to the same path.
 	lowerDir := SnapshotRootfsPath(poolPath, BaseTemplate)
-	if err := MountOverlay(poolPath, tplContainerName, tplUpperDir+":"+lowerDir); err != nil {
+	if err := MountOverlay(poolPath, tplContainerName, lowerDir); err != nil {
 		_ = client.DeleteInstance(tplContainerName)
 		restartSession()
 		return fmt.Errorf("failed to mount overlay on template: %w", err)

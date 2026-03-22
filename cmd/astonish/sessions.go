@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/sandbox"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 )
 
@@ -314,6 +315,12 @@ func handleSessionsDelete(sessionID string) error {
 		return fmt.Errorf("failed to delete session: %w", err)
 	}
 
+	// Best-effort: destroy sandbox container if one exists for this session
+	sandbox.TryDestroySessionContainer(fullID)
+	for _, child := range children {
+		sandbox.TryDestroySessionContainer(child.ID)
+	}
+
 	if len(children) > 0 {
 		fmt.Printf("Deleted session %s and %d sub-session(s)\n", fullID, len(children))
 	} else {
@@ -362,9 +369,11 @@ func handleSessionsClear() error {
 
 	// Delete all transcript files
 	deleted := 0
-	for _, meta := range data.Sessions {
+	for id, meta := range data.Sessions {
 		transcriptPath := fmt.Sprintf("%s/%s/%s/%s.jsonl", sessDir, meta.AppName, meta.UserID, meta.ID)
 		os.Remove(transcriptPath)
+		// Best-effort: destroy sandbox container if one exists
+		sandbox.TryDestroySessionContainer(id)
 		deleted++
 	}
 

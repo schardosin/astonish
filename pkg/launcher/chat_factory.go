@@ -19,6 +19,7 @@ import (
 	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/provider"
+	"github.com/schardosin/astonish/pkg/sandbox"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/skills"
 	"github.com/schardosin/astonish/pkg/tools"
@@ -569,6 +570,42 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		startupNotices = append(startupNotices,
 			"MCP servers are configured but no tools are cached yet. "+
 				"Run 'astonish studio' or 'astonish tools refresh' to set them up.")
+	}
+
+	// --- 3b. Initialize sandbox (session container isolation) ---
+	// When sandbox is enabled, all internal tools are wrapped with NodeTool
+	// proxies that route execution to an astonish node inside an Incus
+	// container. Container creation is lazy — the first tool call triggers
+	// cloning from the template and starting the node process.
+	if cfg.AppConfig != nil && sandbox.IsSandboxEnabled(&cfg.AppConfig.Sandbox) {
+		sandboxClient, sandboxErr := sandbox.SetupSandboxRuntime()
+		if sandboxErr != nil {
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Sandbox enabled but setup failed: %v (tools will run on host)\n", sandboxErr)
+			}
+			startupNotices = append(startupNotices, fmt.Sprintf("Sandbox: disabled (setup failed: %v)", sandboxErr))
+		} else {
+			sessRegistry, regErr := sandbox.NewSessionRegistry()
+			if regErr != nil {
+				if cfg.DebugMode {
+					fmt.Printf("Warning: Failed to create session registry: %v\n", regErr)
+				}
+				startupNotices = append(startupNotices, fmt.Sprintf("Sandbox: disabled (registry error: %v)", regErr))
+			} else {
+				// Create a lazy node client — container + node are created on first tool call
+				lazyNode := sandbox.NewLazyNodeClient(sandboxClient, sessRegistry, "")
+
+				// Wrap all internal tools with NodeTool proxies
+				internalTools = sandbox.WrapToolsWithNode(internalTools, lazyNode)
+
+				startupNotices = append(startupNotices, "Sandbox: enabled (node architecture)")
+
+				cleanups = append(cleanups, func() {
+					// Cleanup destroys the node + container
+					lazyNode.Cleanup()
+				})
+			}
+		}
 	}
 
 	// --- 4. Create session service ---

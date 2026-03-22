@@ -2,6 +2,8 @@ package astonish
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -28,6 +30,11 @@ func handleSandboxCommand(args []string) error {
 			return fmt.Errorf("usage: astonish sandbox destroy <session-id>")
 		}
 		return handleSandboxDestroy(args[1])
+	case "shell":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: astonish sandbox shell <session-id>")
+		}
+		return handleSandboxShell(args[1])
 	case "prune":
 		return handleSandboxPrune()
 	case "template", "tpl":
@@ -92,7 +99,7 @@ func handleSandboxTemplateCommand(args []string) error {
 }
 
 func printSandboxUsage() {
-	fmt.Println("usage: astonish sandbox {status,init,list,refresh,destroy,prune,template} ...")
+	fmt.Println("usage: astonish sandbox {status,init,list,shell,refresh,destroy,prune,template} ...")
 	fmt.Println("")
 	fmt.Println("Manage session container isolation.")
 	fmt.Println("")
@@ -100,6 +107,7 @@ func printSandboxUsage() {
 	fmt.Println("  status              Show sandbox environment info")
 	fmt.Println("  init                One-time setup: create base template with core tools")
 	fmt.Println("  list (ls)           List active session containers")
+	fmt.Println("  shell <session-id>  Open interactive shell in a session container")
 	fmt.Println("  refresh             Re-snapshot the @base template")
 	fmt.Println("  destroy (rm) <id>   Destroy a session container")
 	fmt.Println("  prune               Remove orphaned session containers")
@@ -226,8 +234,8 @@ func handleSandboxList() error {
 		return nil
 	}
 
-	fmt.Printf("%-20s %-12s %-12s %-10s %-20s\n", "CONTAINER", "SESSION", "TEMPLATE", "STATUS", "CREATED")
-	fmt.Printf("%-20s %-12s %-12s %-10s %-20s\n", strings.Repeat("-", 20), strings.Repeat("-", 12), strings.Repeat("-", 12), strings.Repeat("-", 10), strings.Repeat("-", 20))
+	fmt.Printf("%-20s %-38s %-12s %-10s %-20s\n", "CONTAINER", "SESSION", "TEMPLATE", "STATUS", "CREATED")
+	fmt.Printf("%-20s %-38s %-12s %-10s %-20s\n", strings.Repeat("-", 20), strings.Repeat("-", 38), strings.Repeat("-", 12), strings.Repeat("-", 10), strings.Repeat("-", 20))
 
 	for _, entry := range entries {
 		var status string
@@ -239,14 +247,9 @@ func handleSandboxList() error {
 			status = "missing"
 		}
 
-		sessionShort := entry.SessionID
-		if len(sessionShort) > 10 {
-			sessionShort = sessionShort[:10] + ".."
-		}
-
-		fmt.Printf("%-20s %-12s %-12s %-10s %-20s\n",
+		fmt.Printf("%-20s %-38s %-12s %-10s %-20s\n",
 			entry.ContainerName,
-			sessionShort,
+			entry.SessionID,
 			entry.TemplateName,
 			status,
 			entry.CreatedAt.Format("2006-01-02 15:04:05"),
@@ -274,7 +277,7 @@ func handleSandboxRefresh() error {
 
 // --- Destroy ---
 
-func handleSandboxDestroy(sessionID string) error {
+func handleSandboxDestroy(identifier string) error {
 	client, err := connectOrFail()
 	if err != nil {
 		return err
@@ -285,7 +288,88 @@ func handleSandboxDestroy(sessionID string) error {
 		return err
 	}
 
-	return sandbox.DestroyForSession(client, registry, sessionID)
+	// Resolve the identifier (session ID, container name, or prefix)
+	sessionID, found := registry.ResolveSessionID(identifier)
+	if !found {
+		return fmt.Errorf("no container found for %q\nUse 'astonish sandbox list' to see active containers", identifier)
+	}
+
+	entry := registry.Get(sessionID)
+	containerName := ""
+	if entry != nil {
+		containerName = entry.ContainerName
+	}
+
+	if err := sandbox.DestroyForSession(client, registry, sessionID); err != nil {
+		return err
+	}
+
+	if containerName != "" {
+		fmt.Printf("Destroyed container %s (session %s)\n", containerName, sessionID[:min(8, len(sessionID))])
+	} else {
+		fmt.Printf("Destroyed session %s\n", sessionID[:min(8, len(sessionID))])
+	}
+
+	return nil
+}
+
+// --- Shell (session) ---
+
+func handleSandboxShell(sessionID string) error {
+	client, err := connectOrFail()
+	if err != nil {
+		return err
+	}
+
+	registry, err := sandbox.NewSessionRegistry()
+	if err != nil {
+		return err
+	}
+
+	// Look up the container — accept session ID, container name, or prefix
+	containerName := registry.GetContainerName(sessionID)
+	if containerName == "" {
+		for _, entry := range registry.List() {
+			// Match by container name
+			if entry.ContainerName == sessionID {
+				containerName = entry.ContainerName
+				break
+			}
+			// Match by session ID prefix
+			if strings.HasPrefix(entry.SessionID, sessionID) {
+				containerName = entry.ContainerName
+				break
+			}
+		}
+	}
+
+	if containerName == "" {
+		return fmt.Errorf("no container found for session %q\nUse 'astonish sandbox list' to see active sessions", sessionID)
+	}
+
+	if !client.InstanceExists(containerName) {
+		return fmt.Errorf("container %q no longer exists (stale registry entry)", containerName)
+	}
+
+	if !client.IsRunning(containerName) {
+		fmt.Printf("Starting container %q...\n", containerName)
+		if err := client.StartInstance(containerName); err != nil {
+			return fmt.Errorf("failed to start container: %w", err)
+		}
+	}
+
+	// Use the incus CLI for interactive shell (it handles PTY properly)
+	cmd := exec.Command("incus", "exec", containerName, "--", "bash", "-l")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	fmt.Printf("Entering session container %q. Type 'exit' to leave.\n", containerName)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("shell session ended with error: %w", err)
+	}
+
+	return nil
 }
 
 // --- Prune ---

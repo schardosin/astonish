@@ -69,6 +69,8 @@ func Execute() error {
 		return handleSkillsCommand(os.Args[2:])
 	case "sandbox":
 		return handleSandboxCommand(os.Args[2:])
+	case "node":
+		return handleNodeCommand(os.Args[2:])
 	case "demo":
 		return handleDemoCommand(os.Args[2:])
 	default:

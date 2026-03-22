@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -393,6 +394,23 @@ func (c *IncusClient) ExecSimple(containerName string, command []string) (int, e
 	}
 
 	return exitCode, nil
+}
+
+// PushFile uploads a file into a container.
+// The container must be running. The content is read from an io.ReadSeeker.
+// Mode is a Unix permission mode (e.g., 0755).
+func (c *IncusClient) PushFile(containerName, destPath string, content io.ReadSeeker, mode int) error {
+	args := incus.InstanceFileArgs{
+		Content: content,
+		Mode:    mode,
+		Type:    "file",
+	}
+
+	if err := c.server.CreateInstanceFile(containerName, destPath, args); err != nil {
+		return fmt.Errorf("failed to push file to %s:%s: %w", containerName, destPath, err)
+	}
+
+	return nil
 }
 
 // GetServerInfo returns basic Incus server information.

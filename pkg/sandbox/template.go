@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/lxc/incus/v6/shared/api"
@@ -93,6 +94,14 @@ func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry) error {
 			client.StopAndDeleteInstance(containerName)
 			return fmt.Errorf("command %v exited with code %d", cmd, exitCode)
 		}
+	}
+
+	// Push astonish binary into the template so session containers can run
+	// `astonish node` (headless tool execution server) without any additional setup.
+	fmt.Println("Pushing astonish binary into template...")
+	if err := pushAstonishBinary(client, containerName); err != nil {
+		client.StopAndDeleteInstance(containerName)
+		return fmt.Errorf("failed to push astonish binary: %w", err)
 	}
 
 	// Stop before snapshotting (for consistency)
@@ -327,6 +336,31 @@ func DeleteTemplate(client *IncusClient, registry *TemplateRegistry, name string
 // RefreshBase re-snapshots the @base template.
 // Use this after manually customizing the base template.
 func RefreshBase(client *IncusClient, registry *TemplateRegistry) error {
+	containerName := TemplateName(BaseTemplate)
+
+	if !client.InstanceExists(containerName) {
+		return fmt.Errorf("base template does not exist; run 'astonish sandbox init' first")
+	}
+
+	// Start the template so we can push the updated binary
+	wasRunning := client.IsRunning(containerName)
+	if !wasRunning {
+		fmt.Println("Starting base template...")
+		if err := client.StartInstance(containerName); err != nil {
+			return fmt.Errorf("failed to start base template: %w", err)
+		}
+		if err := waitForReady(client, containerName, 30*time.Second); err != nil {
+			return fmt.Errorf("base template not ready: %w", err)
+		}
+	}
+
+	// Push the current astonish binary into the template
+	fmt.Println("Pushing astonish binary into template...")
+	if err := pushAstonishBinary(client, containerName); err != nil {
+		return fmt.Errorf("failed to push astonish binary: %w", err)
+	}
+
+	// Re-snapshot (this stops the container first)
 	return SnapshotTemplate(client, registry, BaseTemplate)
 }
 
@@ -345,6 +379,53 @@ func waitForReady(client *IncusClient, containerName string, timeout time.Durati
 	}
 
 	return fmt.Errorf("timeout waiting for container %q to be ready", containerName)
+}
+
+// BinaryDestPath is where the astonish binary is placed inside templates/containers.
+const BinaryDestPath = "/usr/local/bin/astonish"
+
+// pushAstonishBinary copies the running astonish binary into a container.
+// The container must be running. The binary is placed at /usr/local/bin/astonish
+// with executable permissions (0755).
+func pushAstonishBinary(client *IncusClient, containerName string) error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to determine astonish binary path: %w", err)
+	}
+
+	// Resolve symlinks to get the real binary
+	realPath, err := filepath.EvalSymlinks(exePath)
+	if err != nil {
+		realPath = exePath
+	}
+
+	f, err := os.Open(realPath)
+	if err != nil {
+		return fmt.Errorf("failed to open binary %s: %w", realPath, err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat binary: %w", err)
+	}
+
+	fmt.Printf("  Binary: %s (%.1f MB)\n", realPath, float64(info.Size())/(1024*1024))
+
+	if err := client.PushFile(containerName, BinaryDestPath, f, 0755); err != nil {
+		return fmt.Errorf("failed to push binary to container: %w", err)
+	}
+
+	// Verify it's accessible
+	exitCode, err := client.ExecSimple(containerName, []string{BinaryDestPath, "--version"})
+	if err != nil {
+		return fmt.Errorf("binary verification failed: %w", err)
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("binary verification exited with code %d", exitCode)
+	}
+
+	return nil
 }
 
 // ensureIncusEnvironment checks and fixes the Incus environment for Astonish.

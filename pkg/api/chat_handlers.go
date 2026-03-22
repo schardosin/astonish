@@ -19,6 +19,7 @@ import (
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/fleet"
+	"github.com/schardosin/astonish/pkg/sandbox"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
@@ -771,6 +772,9 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to delete session: %v", err), http.StatusInternalServerError)
 		return
 	}
+
+	// Best-effort: destroy sandbox container if one exists for this session
+	sandbox.TryDestroySessionContainer(sessionID)
 
 	w.WriteHeader(http.StatusNoContent)
 }

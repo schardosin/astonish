@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -151,4 +152,32 @@ func (r *SessionRegistry) SessionIDs() []string {
 	}
 
 	return ids
+}
+
+// ResolveSessionID resolves a user-provided identifier to a session ID.
+// It accepts: exact session ID, container name, session ID prefix, or
+// container name prefix. Returns the full session ID and true if found.
+func (r *SessionRegistry) ResolveSessionID(input string) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	// Exact session ID match
+	if _, ok := r.entries[input]; ok {
+		return input, true
+	}
+
+	// Match by container name, session ID prefix, or container name prefix
+	for sessID, entry := range r.entries {
+		if entry.ContainerName == input {
+			return sessID, true
+		}
+		if strings.HasPrefix(sessID, input) {
+			return sessID, true
+		}
+		if strings.HasPrefix(entry.ContainerName, input) {
+			return sessID, true
+		}
+	}
+
+	return "", false
 }

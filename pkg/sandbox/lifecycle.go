@@ -93,6 +93,29 @@ func DestroyForSession(client *IncusClient, registry *SessionRegistry, sessionID
 	return registry.Remove(sessionID)
 }
 
+// TryDestroySessionContainer is a best-effort helper that destroys the sandbox
+// container for a session. It connects to Incus, looks up the container, and
+// tears it down. Errors are silently ignored — this is designed to be called
+// from session deletion paths where sandbox may or may not be active.
+func TryDestroySessionContainer(sessionID string) {
+	platform := DetectPlatform()
+	if platform == PlatformUnsupported {
+		return
+	}
+
+	client, err := Connect(platform)
+	if err != nil {
+		return
+	}
+
+	registry, err := NewSessionRegistry()
+	if err != nil {
+		return
+	}
+
+	_ = DestroyForSession(client, registry, sessionID)
+}
+
 // PruneOrphans finds and destroys containers whose sessions no longer exist.
 // existingSessionIDs is the set of session IDs that are still valid.
 // Returns the number of containers pruned.

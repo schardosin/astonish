@@ -583,52 +583,46 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	if cfg.AppConfig != nil && sandbox.IsSandboxEnabled(&cfg.AppConfig.Sandbox) {
 		sandboxClient, sandboxErr := sandbox.SetupSandboxRuntime()
 		if sandboxErr != nil {
+			return nil, fmt.Errorf("sandbox is enabled but the runtime is not available: %w\n\nTo disable sandbox, set 'sandbox.enabled: false' in ~/.config/astonish/config.yaml", sandboxErr)
+		}
+
+		sessRegistry, regErr := sandbox.NewSessionRegistry()
+		if regErr != nil {
+			return nil, fmt.Errorf("sandbox is enabled but session registry failed: %w", regErr)
+		}
+
+		tplRegistry, tplErr := sandbox.NewTemplateRegistry()
+		if tplErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Sandbox enabled but setup failed: %v (tools will run on host)\n", sandboxErr)
-			}
-			startupNotices = append(startupNotices, fmt.Sprintf("Sandbox: disabled (setup failed: %v)", sandboxErr))
-		} else {
-			sessRegistry, regErr := sandbox.NewSessionRegistry()
-			if regErr != nil {
-				if cfg.DebugMode {
-					fmt.Printf("Warning: Failed to create session registry: %v\n", regErr)
-				}
-				startupNotices = append(startupNotices, fmt.Sprintf("Sandbox: disabled (registry error: %v)", regErr))
-			} else {
-				tplRegistry, tplErr := sandbox.NewTemplateRegistry()
-				if tplErr != nil {
-					if cfg.DebugMode {
-						fmt.Printf("Warning: Failed to create template registry: %v\n", tplErr)
-					}
-				}
-
-				// Create a pool that manages per-session LazyNodeClients.
-				// Each chat session gets its own container, created lazily
-				// on the first tool call for that session.
-				nodePool := sandbox.NewNodeClientPool(sandboxClient, sessRegistry, tplRegistry, "")
-
-				// Wrap all internal tools with NodeTool proxies (pool-backed)
-				internalTools = sandbox.WrapToolsWithNode(internalTools, nodePool)
-
-				startupNotices = append(startupNotices, "Sandbox: enabled (node architecture)")
-
-				// Hoist references for template tool registration
-				sandboxNodePool = nodePool
-				sandboxIncusClient = sandboxClient
-				sandboxTplRegistry = tplRegistry
-
-				// Async refresh: check all templates for stale binaries in the background.
-				// Must NOT block startup (was the cause of the 502 bug).
-				if tplRegistry != nil {
-					go sandbox.RefreshAllIfNeeded(sandboxClient, tplRegistry)
-				}
-
-				cleanups = append(cleanups, func() {
-					// Cleanup destroys all per-session containers
-					nodePool.Cleanup()
-				})
+				fmt.Printf("Warning: Failed to create template registry: %v\n", tplErr)
 			}
 		}
+
+		// Create a pool that manages per-session LazyNodeClients.
+		// Each chat session gets its own container, created lazily
+		// on the first tool call for that session.
+		nodePool := sandbox.NewNodeClientPool(sandboxClient, sessRegistry, tplRegistry, "")
+
+		// Wrap all internal tools with NodeTool proxies (pool-backed)
+		internalTools = sandbox.WrapToolsWithNode(internalTools, nodePool)
+
+		startupNotices = append(startupNotices, "Sandbox: enabled (node architecture)")
+
+		// Hoist references for template tool registration
+		sandboxNodePool = nodePool
+		sandboxIncusClient = sandboxClient
+		sandboxTplRegistry = tplRegistry
+
+		// Async refresh: check all templates for stale binaries in the background.
+		// Must NOT block startup (was the cause of the 502 bug).
+		if tplRegistry != nil {
+			go sandbox.RefreshAllIfNeeded(sandboxClient, tplRegistry)
+		}
+
+		cleanups = append(cleanups, func() {
+			// Cleanup destroys all per-session containers
+			nodePool.Cleanup()
+		})
 	}
 
 	// --- 4. Create session service ---

@@ -145,8 +145,10 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 	fleetSession.Headless = true
 	fleetSession.WorkspaceDir = workspaceDir
 
-	// Wire sandbox container for the recovered session (no-op if sandbox disabled)
-	wireFleetSandbox(fleetSession, plan, cfg.GHToken)
+	// Wire sandbox container for the recovered session (fails if sandbox is enabled but unavailable)
+	if err := wireFleetSandbox(fleetSession, plan, cfg.GHToken); err != nil {
+		return fmt.Errorf("cannot recover fleet session: %w", err)
+	}
 
 	// Derive task slug from the issue context (same as initial start).
 	if cfg.IssueNumber > 0 && cfg.IssueTitle != "" {

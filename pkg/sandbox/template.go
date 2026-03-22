@@ -660,11 +660,26 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 		return fmt.Errorf("failed to get pool path: %w", err)
 	}
 
-	// Stop the session container for a consistent view
+	// Stop the session container for a consistent view.
+	// We track whether we stopped it so we can restart it on ANY exit path.
+	stoppedContainer := false
 	if client.IsRunning(containerName) {
 		log.Printf("[sandbox] Stopping container %q for template creation...", containerName)
 		if err := client.StopInstance(containerName, false); err != nil {
 			return fmt.Errorf("failed to stop container %q: %w", containerName, err)
+		}
+		stoppedContainer = true
+	}
+
+	// Ensure the session container is restarted on any failure or success.
+	// This is critical — if we leave it stopped, the wizard session is dead.
+	restartSession := func() {
+		if !stoppedContainer {
+			return
+		}
+		log.Printf("[sandbox] Restarting session container %q...", containerName)
+		if startErr := client.StartInstance(containerName); startErr != nil {
+			log.Printf("[sandbox] ERROR: failed to restart session container %q: %v", containerName, startErr)
 		}
 	}
 
@@ -687,9 +702,11 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 
 	op, err := client.server.CreateInstance(req)
 	if err != nil {
+		restartSession()
 		return fmt.Errorf("failed to create template container: %w", err)
 	}
 	if err := op.Wait(); err != nil {
+		restartSession()
 		return fmt.Errorf("failed to wait for template container creation: %w", err)
 	}
 
@@ -701,6 +718,7 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 
 	if err := os.MkdirAll(filepath.Dir(tplUpperDir), 0755); err != nil {
 		_ = client.DeleteInstance(tplContainerName)
+		restartSession()
 		return fmt.Errorf("failed to create template overlay dir: %w", err)
 	}
 
@@ -708,6 +726,7 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 	cmd := exec.Command("cp", "-a", sessionUpperDir, tplUpperDir)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		_ = client.DeleteInstance(tplContainerName)
+		restartSession()
 		return fmt.Errorf("failed to copy session overlay: %w\nOutput: %s", err, string(output))
 	}
 
@@ -721,6 +740,7 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 	lowerDir := SnapshotRootfsPath(poolPath, BaseTemplate)
 	if err := MountOverlay(poolPath, tplContainerName, tplUpperDir+":"+lowerDir); err != nil {
 		_ = client.DeleteInstance(tplContainerName)
+		restartSession()
 		return fmt.Errorf("failed to mount overlay on template: %w", err)
 	}
 
@@ -739,14 +759,12 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 	}
 
 	if err := registry.Add(meta); err != nil {
+		restartSession()
 		return fmt.Errorf("failed to register template: %w", err)
 	}
 
-	// Restart the session container so the session can continue
-	log.Printf("[sandbox] Restarting session container %q...", containerName)
-	if err := client.StartInstance(containerName); err != nil {
-		log.Printf("[sandbox] Warning: failed to restart session container %q: %v", containerName, err)
-	}
+	// Success path — restart session container
+	restartSession()
 
 	log.Printf("[sandbox] Template %q created from container %q", templateName, containerName)
 	return nil

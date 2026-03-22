@@ -53,6 +53,9 @@ func ResolveLowerLayers(poolPath, templateName string, registry *TemplateRegistr
 	}
 
 	// For custom templates, look up what they're based on
+	if registry == nil {
+		return "", fmt.Errorf("template registry is nil; cannot resolve custom template %q", templateName)
+	}
 	meta := registry.Get(templateName)
 	if meta == nil {
 		return "", fmt.Errorf("template %q not found in registry", templateName)

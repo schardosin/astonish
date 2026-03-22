@@ -85,8 +85,10 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 	fleetSession.TaskSlug = taskSlug
 	fleetSession.WorkspaceDir = workspaceDir
 
-	// Wire sandbox container for this fleet session (no-op if sandbox disabled)
-	wireFleetSandbox(fleetSession, plan, cfg.GHToken)
+	// Wire sandbox container for this fleet session (fails if sandbox is enabled but unavailable)
+	if err := wireFleetSandbox(fleetSession, plan, cfg.GHToken); err != nil {
+		return "", fmt.Errorf("cannot start headless fleet session: %w", err)
+	}
 
 	// Load project context (AGENTS.md) from the base workspace.
 	// The wizard generated it during plan creation; no regeneration needed.

@@ -159,13 +159,15 @@ func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionRes
 	}
 	fleetSession.WorkspaceDir = workspaceDir
 
-	// Wire sandbox container for this fleet session (no-op if sandbox disabled)
+	// Wire sandbox container for this fleet session (fails if sandbox is enabled but unavailable)
 	ghToken := ""
 	if credStore := getAPICredentialStore(); credStore != nil {
 		resolved, _ := fleet.ResolveCredentials(plan, credStore)
 		ghToken = fleet.GitHubToken(resolved)
 	}
-	wireFleetSandbox(fleetSession, plan, ghToken)
+	if err := wireFleetSandbox(fleetSession, plan, ghToken); err != nil {
+		return nil, fmt.Errorf("cannot start fleet session: %w", err)
+	}
 
 	// Register in session registry and persist metadata
 	registry := getFleetSessionRegistry()
@@ -859,40 +861,38 @@ func getFleetMessages(sessionID string, ctx context.Context) ([]fleet.Message, e
 // sandbox mode is enabled. It creates a LazyNodeClient, wraps the global
 // SubAgentManager tools with NodeTool proxies, and wires cleanup.
 //
-// When sandbox is NOT enabled, this is a no-op and the fleet session runs
-// tools on the host as before.
+// When sandbox is NOT enabled (config says disabled), this returns nil.
+// When sandbox IS enabled but the runtime is unavailable, this returns an error
+// to prevent the session from starting without isolation.
 //
 // Parameters:
 //   - fleetSession: the fleet session to wire sandbox into
 //   - plan: the fleet plan (for Template and Credentials fields)
 //   - ghToken: resolved GitHub token (may be empty)
-func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, ghToken string) {
+func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, ghToken string) error {
 	// Load config to check if sandbox is enabled
 	appCfg, err := config.LoadAppConfig()
 	if err != nil || appCfg == nil {
-		return
+		return nil // config not available — sandbox not configured
 	}
 
 	if !sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
-		return
+		return nil // sandbox explicitly disabled — ok
 	}
 
 	sandboxClient, sandboxErr := sandbox.SetupSandboxRuntime()
 	if sandboxErr != nil {
-		log.Printf("[fleet-sandbox] Warning: sandbox enabled but setup failed: %v (tools will run on host)", sandboxErr)
-		return
+		return fmt.Errorf("sandbox is enabled but the runtime is not available: %w", sandboxErr)
 	}
 
 	sessRegistry, regErr := sandbox.NewSessionRegistry()
 	if regErr != nil {
-		log.Printf("[fleet-sandbox] Warning: failed to create session registry: %v", regErr)
-		return
+		return fmt.Errorf("sandbox session registry failed: %w", regErr)
 	}
 
 	tplRegistry, tplErr := sandbox.NewTemplateRegistry()
 	if tplErr != nil {
-		log.Printf("[fleet-sandbox] Warning: failed to create template registry: %v", tplErr)
-		// Continue with nil — overlay will fall back gracefully
+		return fmt.Errorf("sandbox template registry failed: %w", tplErr)
 	}
 
 	// Determine which template to use: plan template or @base
@@ -908,14 +908,10 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 	lazyNode.Env = buildSandboxEnv(plan, ghToken)
 
 	// Wrap the global SubAgentManager tools with NodeTool proxies.
-	// The SubAgentManager.Tools already contains the host-wrapped tools
-	// (for chat sessions). Fleet sessions need their own copy wrapped
-	// with their own LazyNodeClient. Double-wrapping is harmless.
 	subAgentMgr := tools.GetSubAgentManager()
 	if subAgentMgr == nil {
-		log.Printf("[fleet-sandbox] Warning: sub-agent manager not available")
 		lazyNode.Cleanup()
-		return
+		return fmt.Errorf("sandbox is enabled but sub-agent manager is not available")
 	}
 
 	// Wrap both regular tools and fleet-only tools
@@ -928,9 +924,6 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 	fleetSession.SandboxTools = wrappedTools
 
 	// Set workspace to the project directory inside the container.
-	// The wizard records this path when it clones the repo during template
-	// creation (e.g., "/root/juicytrade"). Falls back to /root for plans
-	// without a configured container workspace.
 	if plan != nil && plan.ContainerWorkspaceDir != "" {
 		fleetSession.WorkspaceDir = plan.ContainerWorkspaceDir
 	} else {
@@ -944,6 +937,7 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 
 	log.Printf("[fleet-sandbox] Session %s: sandbox enabled (template=%q, env_keys=%d)",
 		fleetSession.ID, template, len(lazyNode.Env))
+	return nil
 }
 
 // buildSandboxEnv builds the environment variable map for a fleet session's

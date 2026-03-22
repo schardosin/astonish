@@ -16,9 +16,9 @@ type SandboxStatus struct {
 }
 
 // SetupSandboxRuntime detects the platform and connects to Incus.
-// Returns a connected IncusClient or an error.
+// Returns a connected IncusClient or an error with actionable guidance.
 func SetupSandboxRuntime() (*IncusClient, error) {
-	platform := DetectPlatform()
+	platform, reason := DetectPlatformReason()
 
 	switch platform {
 	case PlatformLinuxNative:
@@ -41,7 +41,7 @@ func SetupSandboxRuntime() (*IncusClient, error) {
 		return client, nil
 
 	default:
-		return nil, fmt.Errorf("no container runtime available.\nLinux: install Incus (apt install incus)\nmacOS/Windows: install Docker (any Docker-compatible runtime)")
+		return nil, fmt.Errorf("sandbox is enabled but the container runtime is not available.\n%s", reason)
 	}
 }
 

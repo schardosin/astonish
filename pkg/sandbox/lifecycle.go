@@ -2,7 +2,6 @@ package sandbox
 
 import (
 	"fmt"
-	"log"
 	"time"
 )
 
@@ -25,9 +24,10 @@ func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, 
 
 		// Exists but not running — try to re-mount overlay and start it
 		if client.InstanceExists(containerName) {
-			// Re-mount overlay if needed (might have been lost on reboot)
+			// Re-mount overlay if needed (might have been lost on reboot).
+			// This MUST succeed — without it the container starts with empty rootfs.
 			if err := ensureOverlayMounted(client, containerName, entry.TemplateName, tplRegistry); err != nil {
-				log.Printf("[sandbox] Warning: failed to re-mount overlay for %q: %v", containerName, err)
+				return "", fmt.Errorf("failed to re-mount overlay for %q: %w (try 'astonish sandbox prune' and retry)", containerName, err)
 			}
 
 			if err := client.StartInstance(containerName); err != nil {
@@ -84,10 +84,20 @@ func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, 
 		return "", fmt.Errorf("failed to start session container: %w", err)
 	}
 
+	// Health check — verify the overlay is actually providing the rootfs.
+	// Without this, a failed overlay mount results in a container that runs
+	// but has an empty/wrong filesystem (just the tiny shell image).
+	if err := verifyContainerHealth(client, containerName); err != nil {
+		destroyOverlayContainer(client, containerName)
+		return "", fmt.Errorf("session container health check failed: %w", err)
+	}
+
 	// Register
 	if err := sessRegistry.Put(sessionID, containerName, templateName); err != nil {
-		// Non-fatal: container works, metadata just won't survive restart
-		fmt.Printf("Warning: failed to register session container: %v\n", err)
+		// Registry write failed — the container works but won't be tracked.
+		// Destroy it so we don't leak an untracked container.
+		destroyOverlayContainer(client, containerName)
+		return "", fmt.Errorf("failed to register session container: %w", err)
 	}
 
 	return containerName, nil
@@ -133,6 +143,21 @@ func destroyOverlayContainer(client *IncusClient, containerName string) error {
 
 	// Delete the container
 	return client.DeleteInstance(containerName)
+}
+
+// verifyContainerHealth checks that a running container has a working rootfs
+// by verifying /bin/sh exists (present in all real rootfs, absent in the tiny
+// overlay shell image). This catches the case where the overlay mount failed
+// silently and the container is running with an empty filesystem.
+func verifyContainerHealth(client *IncusClient, containerName string) error {
+	exitCode, err := client.ExecSimple(containerName, []string{"test", "-x", "/bin/sh"})
+	if err != nil {
+		return fmt.Errorf("cannot execute health check in %q: %w", containerName, err)
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("container %q appears to have an empty rootfs (overlay may not be mounted)", containerName)
+	}
+	return nil
 }
 
 // ensureOverlayMounted re-mounts the overlay if it's not currently mounted.

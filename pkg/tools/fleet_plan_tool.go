@@ -83,6 +83,10 @@ type SaveFleetPlanArgs struct {
 	// instead of @base. The template should have the project repo pre-cloned
 	// and dependencies installed. Created by the wizard via save_sandbox_template.
 	Template string `json:"template,omitempty" jsonschema:"Optional sandbox container template name. When set and sandbox is enabled, fleet sessions use this pre-provisioned template instead of @base. Created by save_sandbox_template during wizard setup."`
+	// ContainerWorkspaceDir is the absolute path inside the sandbox container
+	// where the project lives (e.g., "/root/juicytrade"). Set during wizard
+	// template creation to tell fleet sessions where the project root is.
+	ContainerWorkspaceDir string `json:"container_workspace_dir,omitempty" jsonschema:"Absolute path inside the sandbox container where the project was cloned (e.g., '/root/juicytrade'). Set this when a sandbox template is used so fleet agents know the project root."`
 }
 
 // SaveFleetPlanArtifact describes a single artifact destination.
@@ -261,17 +265,18 @@ func saveFleetPlan(_ tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult,
 	}
 
 	plan := &fleet.FleetPlan{
-		Name:             name,
-		Key:              key,
-		Description:      strings.TrimSpace(args.Description),
-		CreatedFrom:      baseKey,
-		FleetConfig:      snapshotCfg,
-		Credentials:      args.Credentials,
-		Channel:          channelCfg,
-		Artifacts:        artifacts,
-		ProjectSource:    projectSource,
-		Template:         strings.TrimSpace(args.Template),
-		WorkspaceBaseDir: strings.TrimSpace(args.WorkspaceBaseDir),
+		Name:                  name,
+		Key:                   key,
+		Description:           strings.TrimSpace(args.Description),
+		CreatedFrom:           baseKey,
+		FleetConfig:           snapshotCfg,
+		Credentials:           args.Credentials,
+		Channel:               channelCfg,
+		Artifacts:             artifacts,
+		ProjectSource:         projectSource,
+		Template:              strings.TrimSpace(args.Template),
+		ContainerWorkspaceDir: strings.TrimSpace(args.ContainerWorkspaceDir),
+		WorkspaceBaseDir:      strings.TrimSpace(args.WorkspaceBaseDir),
 		Validation: fleet.PlanValidationState{
 			Status:        validationStatus,
 			LastValidated: now,

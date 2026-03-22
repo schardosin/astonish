@@ -74,6 +74,12 @@ type FleetPlan struct {
 	// dependencies installed, and toolchain configured.
 	// When empty and sandbox is enabled, sessions clone from @base.
 	Template string `yaml:"template,omitempty" json:"template,omitempty"`
+
+	// ContainerWorkspaceDir is the absolute path inside the sandbox container
+	// where the project lives (e.g., "/root/juicytrade"). Set by the wizard
+	// when it clones the repo during template creation. Used as WorkspaceDir
+	// for sandbox-enabled fleet sessions.
+	ContainerWorkspaceDir string `yaml:"container_workspace_dir,omitempty" json:"container_workspace_dir,omitempty"`
 }
 
 // fleetPlanYAML is the on-disk YAML representation of FleetPlan.
@@ -94,41 +100,43 @@ type fleetPlanYAML struct {
 	TemplateWorkspaceDir string                      `yaml:"workspace_base_dir_template,omitempty"` // template-level default
 
 	// FleetPlan-specific fields
-	Credentials      map[string]string             `yaml:"credentials,omitempty"`
-	Channel          PlanChannelConfig             `yaml:"channel"`
-	Artifacts        map[string]PlanArtifactConfig `yaml:"artifacts,omitempty"`
-	ProjectSource    *ProjectSourceConfig          `yaml:"project_source,omitempty"`
-	Template         string                        `yaml:"template,omitempty"`
-	WorkspaceBaseDir string                        `yaml:"workspace_base_dir,omitempty"` // plan-level override (deprecated)
-	Validation       PlanValidationState           `yaml:"validation,omitempty"`
-	Activation       PlanActivationState           `yaml:"activation,omitempty"`
-	CreatedAt        time.Time                     `yaml:"created_at,omitempty"`
-	UpdatedAt        time.Time                     `yaml:"updated_at,omitempty"`
+	Credentials           map[string]string             `yaml:"credentials,omitempty"`
+	Channel               PlanChannelConfig             `yaml:"channel"`
+	Artifacts             map[string]PlanArtifactConfig `yaml:"artifacts,omitempty"`
+	ProjectSource         *ProjectSourceConfig          `yaml:"project_source,omitempty"`
+	Template              string                        `yaml:"template,omitempty"`
+	ContainerWorkspaceDir string                        `yaml:"container_workspace_dir,omitempty"`
+	WorkspaceBaseDir      string                        `yaml:"workspace_base_dir,omitempty"` // plan-level override (deprecated)
+	Validation            PlanValidationState           `yaml:"validation,omitempty"`
+	Activation            PlanActivationState           `yaml:"activation,omitempty"`
+	CreatedAt             time.Time                     `yaml:"created_at,omitempty"`
+	UpdatedAt             time.Time                     `yaml:"updated_at,omitempty"`
 }
 
 // MarshalYAML implements custom YAML marshalling to avoid duplicate keys
 // from the embedded FleetConfig.
 func (p *FleetPlan) MarshalYAML() (interface{}, error) {
 	return &fleetPlanYAML{
-		Name:                 p.Name,
-		Key:                  p.Key,
-		Description:          p.Description,
-		CreatedFrom:          p.CreatedFrom,
-		Communication:        p.FleetConfig.Communication,
-		Agents:               p.FleetConfig.Agents,
-		Settings:             p.FleetConfig.Settings,
-		ProjectContext:       p.FleetConfig.ProjectContext,
-		TemplateWorkspaceDir: p.FleetConfig.WorkspaceBaseDir,
-		Credentials:          p.Credentials,
-		Channel:              p.Channel,
-		Artifacts:            p.Artifacts,
-		ProjectSource:        p.ProjectSource,
-		Template:             p.Template,
-		WorkspaceBaseDir:     p.WorkspaceBaseDir,
-		Validation:           p.Validation,
-		Activation:           p.Activation,
-		CreatedAt:            p.CreatedAt,
-		UpdatedAt:            p.UpdatedAt,
+		Name:                  p.Name,
+		Key:                   p.Key,
+		Description:           p.Description,
+		CreatedFrom:           p.CreatedFrom,
+		Communication:         p.FleetConfig.Communication,
+		Agents:                p.FleetConfig.Agents,
+		Settings:              p.FleetConfig.Settings,
+		ProjectContext:        p.FleetConfig.ProjectContext,
+		TemplateWorkspaceDir:  p.FleetConfig.WorkspaceBaseDir,
+		Credentials:           p.Credentials,
+		Channel:               p.Channel,
+		Artifacts:             p.Artifacts,
+		ProjectSource:         p.ProjectSource,
+		Template:              p.Template,
+		ContainerWorkspaceDir: p.ContainerWorkspaceDir,
+		WorkspaceBaseDir:      p.WorkspaceBaseDir,
+		Validation:            p.Validation,
+		Activation:            p.Activation,
+		CreatedAt:             p.CreatedAt,
+		UpdatedAt:             p.UpdatedAt,
 	}, nil
 }
 
@@ -158,6 +166,7 @@ func (p *FleetPlan) UnmarshalYAML(value *yaml.Node) error {
 	p.Artifacts = raw.Artifacts
 	p.ProjectSource = raw.ProjectSource
 	p.Template = raw.Template
+	p.ContainerWorkspaceDir = raw.ContainerWorkspaceDir
 	p.WorkspaceBaseDir = raw.WorkspaceBaseDir
 	p.Validation = raw.Validation
 	p.Activation = raw.Activation

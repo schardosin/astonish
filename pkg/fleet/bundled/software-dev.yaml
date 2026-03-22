@@ -413,6 +413,7 @@ plan_wizard:
        - credentials
        - project_source: { type: "git_repo", repo: "<owner/repo>" }
        - template: "<repo-name>" (the template_name returned by save_sandbox_template in step 3i)
+       - container_workspace_dir: "/root/<repo-name>" (the project path inside the container)
        - validation_passed: true
        - include_agents (only if the user requested specific agents)
     3. If validation fails, show what went wrong and help fix it before retrying.

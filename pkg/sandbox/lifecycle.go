@@ -299,15 +299,27 @@ func PruneOrphans(client *IncusClient, registry *SessionRegistry, existingSessio
 }
 
 // PruneStaleOnStartup removes session containers left over from previous daemon
-// runs (SIGKILL, crash, power loss, disk-full). It destroys all stopped session
-// containers and removes their registry entries. Running containers are left
-// alone — they might belong to a concurrent process (unlikely but safe).
+// runs whose sessions no longer exist in the session store. Containers that
+// belong to live sessions are preserved — the session persists across daemon
+// restarts and will reconnect to its container on the next tool call.
+//
+// existingSessionIDs is the set of session IDs that still exist in the session
+// store. Containers belonging to these sessions are never destroyed.
+//
 // Returns the number of containers cleaned up.
-func PruneStaleOnStartup(client *IncusClient, registry *SessionRegistry) int {
+func PruneStaleOnStartup(client *IncusClient, registry *SessionRegistry, existingSessionIDs map[string]bool) int {
 	// 1. Clean registry entries pointing to non-existent containers
 	pruned := registry.Reap(client)
 
-	// 2. Destroy stopped session containers (both registered and unregistered)
+	// 2. Build a set of container names that belong to live sessions
+	liveContainers := make(map[string]bool)
+	for _, entry := range registry.List() {
+		if existingSessionIDs[entry.SessionID] {
+			liveContainers[entry.ContainerName] = true
+		}
+	}
+
+	// 3. Destroy stopped session containers that don't belong to any live session
 	sessionContainers, err := client.ListSessionContainers()
 	if err != nil {
 		return pruned
@@ -318,7 +330,11 @@ func PruneStaleOnStartup(client *IncusClient, registry *SessionRegistry) int {
 			continue // leave running containers alone
 		}
 
-		// Stopped container — destroy it
+		if liveContainers[inst.Name] {
+			continue // belongs to a live session, preserve it
+		}
+
+		// Stopped + no live session → orphan, destroy it
 		if err := destroyOverlayContainer(client, inst.Name); err != nil {
 			continue
 		}

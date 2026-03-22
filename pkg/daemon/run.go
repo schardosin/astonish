@@ -625,10 +625,11 @@ func Run(cfg RunConfig) error {
 		}
 	}
 
-	// Tear down Studio chat agent (destroys sandbox session containers).
-	// Must run before HTTP server shutdown so the Incus client is still usable.
-	logger.Printf("Cleaning up Studio chat agent...")
-	api.GetChatManager().Reset()
+	// Stop sandbox containers gracefully (preserve them for reconnection after restart).
+	// Unlike Reset(), this does NOT destroy containers — sessions persist and will
+	// get their containers back via EnsureSessionContainer on the next tool call.
+	logger.Printf("Stopping sandbox containers...")
+	api.GetChatManager().ShutdownContainers()
 
 	if err := studio.Shutdown(shutdownCtx); err != nil {
 		logger.Printf("Shutdown error: %v", err)

@@ -92,6 +92,7 @@ type StudioChatComponents struct {
 	MemoryActive      bool
 	SandboxEnabled    bool
 	StartupNotices    []string
+	ShutdownSandbox   func() // stops containers without destroying (for daemon shutdown)
 	Cleanup           func()
 }
 
@@ -151,6 +152,19 @@ func (cm *ChatManager) Reset() {
 			cm.components.Cleanup()
 		}
 		cm.components = nil
+	}
+}
+
+// ShutdownContainers stops sandbox containers without destroying them.
+// Used during graceful daemon shutdown — containers are preserved so sessions
+// can reconnect after restart. Unlike Reset(), this does not tear down the
+// chat agent or destroy containers.
+func (cm *ChatManager) ShutdownContainers() {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	if cm.components != nil && cm.components.ShutdownSandbox != nil {
+		cm.components.ShutdownSandbox()
 	}
 }
 

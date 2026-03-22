@@ -69,6 +69,11 @@ type ChatFactoryResult struct {
 	// Cleanup aggregates all deferred cleanups (embedder, MCP, file watcher).
 	// The caller must call this when the ChatAgent is no longer needed.
 	Cleanup func()
+
+	// ShutdownSandbox stops sandbox containers without destroying them.
+	// Used during graceful daemon shutdown to preserve containers across restarts.
+	// Nil when sandbox is not enabled.
+	ShutdownSandbox func()
 }
 
 // NewWiredChatAgent creates a fully-wired ChatAgent ready for use by any caller
@@ -620,9 +625,16 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 
 		// Auto-prune stale session containers from previous daemon runs.
-		// This catches containers left over from SIGKILL, crashes, or
-		// disk-full scenarios where graceful shutdown never ran.
-		if pruned := sandbox.PruneStaleOnStartup(sandboxClient, sessRegistry); pruned > 0 {
+		// Only destroy containers whose sessions no longer exist in the store.
+		existingSessionIDs := make(map[string]bool)
+		if cfg.SessionStore != nil {
+			if indexData, err := cfg.SessionStore.Index().Load(); err == nil {
+				for id := range indexData.Sessions {
+					existingSessionIDs[id] = true
+				}
+			}
+		}
+		if pruned := sandbox.PruneStaleOnStartup(sandboxClient, sessRegistry, existingSessionIDs); pruned > 0 {
 			startupNotices = append(startupNotices,
 				fmt.Sprintf("Cleaned up %d stale session container(s) from previous run", pruned))
 		}
@@ -1219,6 +1231,15 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	}
 	chatAgent.FlowContextBuilder = &agent.FlowContextBuilder{DebugMode: cfg.DebugMode}
 
+	// Build ShutdownSandbox callback (nil when sandbox is not enabled)
+	var shutdownSandbox func()
+	if sandboxNodePool != nil {
+		pool := sandboxNodePool
+		shutdownSandbox = func() {
+			pool.CleanupForShutdown()
+		}
+	}
+
 	return &ChatFactoryResult{
 		ChatAgent:             chatAgent,
 		LLM:                   llm,
@@ -1237,6 +1258,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		PromptBuilder:         promptBuilder,
 		CredentialStore:       credStore,
 		Cleanup:               cleanup,
+		ShutdownSandbox:       shutdownSandbox,
 	}, nil
 }
 

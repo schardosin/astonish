@@ -400,6 +400,7 @@ func (lnc *LazyNodeClient) Close() error {
 }
 
 // Cleanup closes the node and destroys the session container.
+// Used when a session is explicitly deleted or the agent is re-created.
 func (lnc *LazyNodeClient) Cleanup() {
 	// If init is in progress, wait for it to finish before cleaning up
 	lnc.mu.Lock()
@@ -430,6 +431,39 @@ func (lnc *LazyNodeClient) Cleanup() {
 				_ = lnc.sessRegistry.Remove(entry.SessionID)
 				break
 			}
+		}
+	}
+
+	lnc.initialized = false
+	lnc.closed = true
+}
+
+// CleanupForShutdown stops the node process and container but preserves
+// the container and its overlay for reconnection after daemon restart.
+// Unlike Cleanup(), this does NOT destroy the container or remove the
+// sandbox registry entry — the session persists in the session store and
+// will get its container back via EnsureSessionContainer on the next tool call.
+func (lnc *LazyNodeClient) CleanupForShutdown() {
+	lnc.mu.Lock()
+	done := lnc.initDone
+	lnc.mu.Unlock()
+	if done != nil {
+		<-done
+	}
+
+	lnc.mu.Lock()
+	defer lnc.mu.Unlock()
+
+	if lnc.nodeClient != nil {
+		lnc.nodeClient.Close()
+		lnc.nodeClient = nil
+	}
+
+	// Stop the container but don't destroy it or its overlay.
+	// EnsureSessionContainer will re-mount and restart it later.
+	if lnc.containerName != "" && lnc.incusClient != nil {
+		if lnc.incusClient.IsRunning(lnc.containerName) {
+			_ = lnc.incusClient.StopInstance(lnc.containerName, true)
 		}
 	}
 
@@ -583,7 +617,7 @@ func (p *NodeClientPool) Remove(sessionID string) {
 }
 
 // Cleanup destroys all session containers managed by this pool. Called on
-// factory shutdown / daemon restart.
+// agent re-creation (settings change) or explicit session deletion.
 func (p *NodeClientPool) Cleanup() {
 	p.mu.Lock()
 	p.closed = true
@@ -596,6 +630,23 @@ func (p *NodeClientPool) Cleanup() {
 
 	for _, client := range clients {
 		client.Cleanup()
+	}
+}
+
+// CleanupForShutdown stops all session containers without destroying them.
+// Containers and overlays are preserved for reconnection after daemon restart.
+func (p *NodeClientPool) CleanupForShutdown() {
+	p.mu.Lock()
+	p.closed = true
+	clients := make(map[string]*LazyNodeClient, len(p.clients))
+	for k, v := range p.clients {
+		clients[k] = v
+	}
+	p.clients = nil
+	p.mu.Unlock()
+
+	for _, client := range clients {
+		client.CleanupForShutdown()
 	}
 }
 

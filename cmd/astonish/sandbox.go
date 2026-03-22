@@ -7,7 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/sandbox"
+	persistentsession "github.com/schardosin/astonish/pkg/session"
 )
 
 func handleSandboxCommand(args []string) error {
@@ -462,8 +464,23 @@ func handleSandboxPrune() error {
 		return err
 	}
 
-	// For now, pass empty map (prune all). In Phase 2+, we'll check active sessions.
-	pruned, err := sandbox.PruneOrphans(client, registry, map[string]bool{})
+	// Load existing session IDs from the session store so we don't destroy
+	// containers that still belong to active sessions.
+	existingSessionIDs := make(map[string]bool)
+	appCfg, cfgErr := config.LoadAppConfig()
+	if cfgErr == nil {
+		if sessDir, dirErr := config.GetSessionsDir(&appCfg.Sessions); dirErr == nil {
+			if store, fsErr := persistentsession.NewFileStore(sessDir); fsErr == nil {
+				if indexData, loadErr := store.Index().Load(); loadErr == nil {
+					for id := range indexData.Sessions {
+						existingSessionIDs[id] = true
+					}
+				}
+			}
+		}
+	}
+
+	pruned, err := sandbox.PruneOrphans(client, registry, existingSessionIDs)
 	if err != nil {
 		return err
 	}

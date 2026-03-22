@@ -90,6 +90,7 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 			MemoryActive:      result.MemoryManager != nil,
 			SandboxEnabled:    sandbox.IsSandboxEnabled(&appCfg.Sandbox),
 			StartupNotices:    result.StartupNotices,
+			ShutdownSandbox:   result.ShutdownSandbox,
 			Cleanup:           result.Cleanup,
 		}, nil
 	})

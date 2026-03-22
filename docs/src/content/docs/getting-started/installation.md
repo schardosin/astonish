@@ -1,48 +1,31 @@
 ---
 title: Installation
 description: Install Astonish on macOS, Linux, or Windows
-sidebar:
-  order: 2
 ---
 
-# Installation
+Astonish ships as a single binary with no external dependencies.
 
-Astonish is distributed as a single binary with no dependencies. Choose your preferred installation method.
-
-## Quick Install (Recommended)
-
-### macOS (Homebrew)
+## macOS (Homebrew)
 
 ```bash
-brew tap schardosin/astonish
-brew install astonish
+brew install schardosin/tap/astonish
 ```
 
-### Linux / macOS (Install Script)
+## Linux / macOS (curl)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/schardosin/astonish/refs/heads/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/schardosin/astonish/main/install.sh | bash
 ```
 
-### Windows
+This downloads the latest release and installs it to your PATH.
 
-Download the latest `astonish-windows-amd64.exe` from the [releases page](https://github.com/schardosin/astonish/releases) and add it to your PATH.
+## Windows
 
-## Verify Installation
-
-```bash
-astonish --version
-```
-
-You should see output like:
-
-```
-Astonish v0.x.x
-```
+Download the latest `.exe` from the [GitHub Releases](https://github.com/schardosin/astonish/releases) page and place it in a directory on your PATH.
 
 ## Build from Source
 
-If you prefer to build from source:
+Requires **Go 1.24.4+** and **Node.js** (for the web UI).
 
 ```bash
 git clone https://github.com/schardosin/astonish.git
@@ -50,30 +33,18 @@ cd astonish
 make build-all
 ```
 
-**Requirements:**
-- Go 1.21 or later
-- Node.js 18+ (for Studio development only)
+This builds the React frontend and compiles the Go binary. The resulting binary will be in the project root.
 
-## Configuration Directory
-
-Astonish stores its configuration in:
-
-| Platform | Location |
-|----------|----------|
-| macOS | `~/Library/Application Support/astonish/` |
-| Linux | `~/.config/astonish/` |
-| Windows | `%APPDATA%\astonish\` |
-
-You can verify this with:
+To build only the Go binary without the web UI:
 
 ```bash
-astonish config directory
+make build
 ```
 
-## Next Steps
+## Verify Installation
 
-Now that Astonish is installed:
+```bash
+astonish --version
+```
 
-1. **[Choose Your Path](/astonish/getting-started/choose-your-path/)** — Decide how you want to work
-2. **[Studio Quickstart](/astonish/getting-started/quickstart/studio/)** — Visual approach
-3. **[CLI Quickstart](/astonish/getting-started/quickstart/cli/)** — Command-line approach
+If this prints a version number, you are ready to go. Next step: [Quick Setup](/getting-started/quick-setup/).

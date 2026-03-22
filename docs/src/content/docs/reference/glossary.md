@@ -1,99 +1,134 @@
 ---
 title: Glossary
-description: Key terms and definitions for Astonish
+description: Key terms and concepts in Astonish
 sidebar:
   order: 2
 ---
 
-# Glossary
-
-Key terms and definitions used throughout Astonish.
+Key terms and concepts used throughout Astonish, listed alphabetically.
 
 ---
-
-## A
 
 ### Agent
-See [Flow](#flow).
 
----
+The AI entity you interact with in chat. Uses tools and memory to accomplish tasks.
 
-## E
+### Channel
+
+A communication adapter connecting Astonish to external messaging platforms (Telegram, Email).
+
+### Compaction
+
+Automatic summarization of older conversation messages when the context window gets full.
+
+### Credential
+
+An encrypted secret stored in the credential store. Used for API authentication, OAuth, and service access.
+
+### Daemon
+
+The Astonish background service that runs Studio, channels, scheduler, and fleet sessions.
+
+### Delegation
+
+When the agent spawns sub-agents to handle parts of a task in parallel.
+
+### Distillation
+
+Converting an interactive chat session into a reusable YAML flow.
 
 ### Edge
-A connection between two nodes in a flow. Edges can be **conditional** (with a `condition` property) or **unconditional** (direct connection).
 
----
+A connection between nodes in a flow. Can be unconditional or conditional.
 
-## F
+### Embedding
+
+A vector representation of text used for semantic search in the memory system.
+
+### Fleet
+
+Multi-agent team system. A group of specialized AI agents that collaborate on complex tasks.
 
 ### Flow
-A directed graph of nodes and edges that defines an AI workflow. Flows are stored as YAML files and can be run via CLI or Studio.
 
----
+A structured automation workflow defined in YAML as a directed graph of nodes and edges.
 
-## L
+### Knowledge
 
-### LLM
-**Large Language Model**. An AI model that generates text, such as GPT, Claude, or Gemini. LLM nodes call these models.
+Information stored in the memory system. Retrieved automatically or via `memory_search`.
 
----
+### Master Key
 
-## M
-
-### Manifest
-A `manifest.yaml` file in a tap repository that indexes available flows and MCP server configurations.
+An optional password protecting credential store values from being viewed.
 
 ### MCP
-**Model Context Protocol**. An open standard for connecting AI models to external tools and data sources. See [MCP Concepts](/astonish/concepts/mcp/).
 
-### MCP Server
-A process that provides tools to Astonish via the MCP protocol. Configured in `mcp_config.json`.
+Model Context Protocol -- an open standard for connecting AI agents to external tool servers.
 
----
+### Memory
 
-## N
+Persistent vector store where Astonish saves and retrieves knowledge across sessions.
 
 ### Node
-A processing step in a flow. Node types include: `input`, `llm`, `tool`, `output`, `update_state`.
 
----
+A unit of work in a flow (`input`, `llm`, `tool`, `output`, or `update_state`).
 
-## O
+### Plan
 
-### Output Model
-A structured definition of variables that a node produces. Defined in YAML as `output_model`.
-
----
-
-## P
+A configured fleet template instance bound to a specific project, channel, and credentials.
 
 ### Provider
-An AI model provider such as OpenAI, Anthropic, Google, or OpenRouter. Configured in `config.yaml`.
 
----
+An AI model service (OpenAI, Anthropic, Ollama, etc.) that Astonish connects to for inference.
 
-## S
+### Redaction
+
+The 5-layer security system that prevents secrets from appearing in logs or LLM context.
+
+### Scheduler
+
+The cron-based job execution system that runs tasks on a schedule.
+
+### Session
+
+A persisted conversation with its full history, stored as a JSONL file.
+
+### Skill
+
+A pre-built instruction guide that teaches the agent how to use a specific CLI tool or workflow.
 
 ### State
-A shared object that carries data between nodes during flow execution. Variables are added by nodes and read using `{variable}` syntax.
 
-### Studio
-The visual, browser-based editor for creating and editing flows. Launch with `astonish studio`.
+The shared key-value store that passes data between nodes in a flow.
 
----
+### Sub-agent
 
-## T
+A child agent spawned by delegation, with its own session and filtered tool access.
+
+### Sub-session
+
+A session created by a sub-agent, linked to its parent session.
 
 ### Tap
-A GitHub repository that provides flows and MCP configurations. Managed with `astonish tap` commands.
+
+A Git repository that provides flows and MCP server configurations as extensions.
+
+### Template
+
+A fleet team definition specifying agent roles, models, and capabilities.
+
+### Thread
+
+A pairwise conversation between two agents in a fleet session.
 
 ### Tool
-A capability provided by an MCP server or built into Astonish. Internal tools: `shell_command`, `read_file`, `write_file`. External tools come from MCP servers.
 
----
+A capability the agent can invoke (file operations, shell commands, web requests, etc.).
 
-## Y
+### Toolset
 
-### YAML
-The file format used for flow definitions. All flows are stored as `.yaml` files in `~/.config/astonish/flows/`.
+A group of related tools (e.g., browser tools, email tools).
+
+### Vector Store
+
+The chromem-go database that stores embeddings for semantic memory search.

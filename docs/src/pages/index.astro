@@ -1,7 +1,7 @@
 ---
 // Custom landing page for Astonish
-const title = 'Astonish - Build Production AI Agents in Minutes';
-const description = 'Design AI agent flows visually, run anywhere. No servers required. A single Go binary with YAML-based workflows.';
+const title = 'Astonish - A Personal AI Assistant That Learns, Remembers, and Automates';
+const description = 'Chat with an AI assistant that uses 74+ tools, remembers everything, works in teams, and automates your workflows. Single Go binary.';
 import '../styles/custom.css';
 ---
 
@@ -57,8 +57,6 @@ import '../styles/custom.css';
 
     html {
       height: 100%;
-      /* scroll-behavior: smooth; REMOVED to prevent conflict with GSAP */
-      /* scroll-snap-type removed - GSAP handles it */
       scroll-padding-top: 60px;
     }
 
@@ -154,7 +152,6 @@ import '../styles/custom.css';
       padding: 6rem 1.5rem 4rem;
       position: relative;
       overflow: hidden;
-      /* scroll-snap-align: start; - GSAP handles it */
     }
 
     .hero-bg {
@@ -220,11 +217,12 @@ import '../styles/custom.css';
     }
 
     .hero-title {
-      font-size: clamp(2.5rem, 8vw, 4.5rem);
+      font-size: clamp(1.5rem, 4.5vw, 3.5rem);
       font-weight: 800;
       color: var(--slate-900);
-      line-height: 1.1;
+      line-height: 1.2;
       margin-bottom: 1.5rem;
+      white-space: nowrap;
     }
 
     .hero-title-gradient {
@@ -326,6 +324,7 @@ import '../styles/custom.css';
       font-size: 0.875rem;
       color: var(--slate-300);
       line-height: 1.7;
+      min-height: 300px;
     }
 
     .terminal-prompt {
@@ -344,7 +343,7 @@ import '../styles/custom.css';
       color: var(--purple-400);
     }
 
-    /* Demo Terminal for Step 7 */
+    /* Demo Terminal for Story Step */
     .demo-terminal {
       width: 100%;
       text-align: left;
@@ -417,13 +416,11 @@ import '../styles/custom.css';
     .section {
       padding: 6rem 1.5rem;
       min-height: 100vh;
-      /* scroll-snap-align: start; - GSAP handles it */
     }
 
     .section-alt {
       background: var(--slate-50);
       min-height: 100vh;
-      /* scroll-snap-align: start; - GSAP handles it */
     }
 
     .section-inner {
@@ -449,8 +446,6 @@ import '../styles/custom.css';
       max-width: 600px;
       margin: 0 auto;
     }
-
-
 
     /* Code block */
     .code-card {
@@ -583,21 +578,11 @@ import '../styles/custom.css';
       font-weight: 500;
     }
 
-    /* CTA Section */
-    .cta-section {
-      padding: 6rem 1.5rem;
-      background: linear-gradient(135deg, var(--purple-600), var(--violet-600), var(--indigo-600));
-      text-align: center;
-      min-height: 100vh;
-      /* scroll-snap-align: start; - GSAP handles it */
-    }
-
-    /* Combined Final Section - Both parts in one viewport */
+    /* Combined Final Section */
     .combined-final-section {
       display: flex;
       flex-direction: column;
       min-height: 100vh;
-      /* scroll-snap-align: start; - GSAP handles it */
     }
 
     .comparison-part {
@@ -767,27 +752,6 @@ import '../styles/custom.css';
     .feature-card:nth-child(5) { transition-delay: 0.5s; }
     .feature-card:nth-child(6) { transition-delay: 0.6s; }
 
-    /* Flow node animation */
-    .flow-node, .flow-connector {
-      opacity: 0;
-      transform: translateY(20px);
-      transition: opacity 0.4s ease-out, transform 0.4s ease-out;
-    }
-
-    .flow-nodes.visible .flow-node,
-    .flow-nodes.visible .flow-connector {
-      opacity: 1;
-      transform: translateY(0);
-    }
-
-    .flow-nodes.visible .flow-node:nth-child(1) { transition-delay: 0.1s; }
-    .flow-nodes.visible .flow-connector:nth-child(2) { transition-delay: 0.2s; }
-    .flow-nodes.visible .flow-node:nth-child(3) { transition-delay: 0.3s; }
-    .flow-nodes.visible .flow-connector:nth-child(4) { transition-delay: 0.4s; }
-    .flow-nodes.visible .flow-node:nth-child(5) { transition-delay: 0.5s; }
-    .flow-nodes.visible .flow-connector:nth-child(6) { transition-delay: 0.6s; }
-    .flow-nodes.visible .flow-node:nth-child(7) { transition-delay: 0.7s; }
-
     /* Terminal typing animation */
     @keyframes typing {
       from { width: 0; }
@@ -807,7 +771,7 @@ import '../styles/custom.css';
     /* Reduced motion preference */
     @media (prefers-reduced-motion: reduce) {
       .reveal, .reveal-left, .reveal-right, .reveal-scale,
-      .flow-node, .flow-connector, .feature-card {
+      .feature-card {
         opacity: 1;
         transform: none;
         transition: none;
@@ -842,21 +806,18 @@ import '../styles/custom.css';
     <div class="hero-content">
       <div class="hero-badge">
         <span class="hero-badge-dot"></span>
-        Built with Google ADK
+        74+ Built-in Tools | 15+ AI Providers
       </div>
       
       <h1 class="hero-title">
-        Build Production AI Agents<br>
-        <span class="hero-title-gradient">in Minutes, Not Months</span>
+        Your Personal AI Assistant<br>
+        <span class="hero-title-gradient">That Learns and Automates</span>
       </h1>
       
-      <p class="hero-subtitle">
-        Design visually. Run anywhere. No servers required.<br>
-        <span>A single Go binary with YAML-based workflows.</span>
-      </p>
+      <p class="hero-subtitle">Chat with an AI that remembers everything, uses real tools, and turns conversations into automations.</p>
       
       <div class="hero-actions">
-        <a href="/astonish/getting-started/installation/" class="btn btn-primary">
+        <a href="/astonish/getting-started/quick-setup/" class="btn btn-primary">
           Get Started
           <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
         </a>
@@ -880,169 +841,124 @@ import '../styles/custom.css';
     </div>
   </section>
 
-  <!-- Workflow Section -->
   <!-- The Astonish Experience - Full Viewport Storytelling -->
   <section class="story-section" id="experience">
     <div class="story-header">
       <h2 class="section-title">The Astonish Experience</h2>
-      <p class="section-subtitle">Discover how Astonish transforms your AI workflow</p>
+      <p class="section-subtitle">From first install to a fully automated personal assistant</p>
     </div>
 
     <div class="story-slides" id="story-slides">
-      <!-- Step 1: Design Your Flow (Two-Column Visual) -->
+      <!-- Step 1: Set Up in Minutes -->
       <div class="story-slide active" data-step="1">
         <div class="story-slide-inner">
-          <!-- Visual on top (split: flow image + yaml code) -->
-          <div class="story-visual story-visual-split">
+          <div class="story-visual">
             <div class="story-visual-container">
-              <img src="/astonish/images/flow-visual.png" alt="Visual flow diagram showing connected nodes" />
+              <img src="/astonish/images/experience-setup.webp" alt="Studio setup wizard — choose your AI provider and configure in seconds" />
             </div>
-<div class="story-visual-container code-visual">
-  <div class="code-header">agent.yaml</div>
-  <div class="code-body">
-    <pre set:html={`<span class="code-key">name:</span> <span class="code-string">simple_search</span>
-<span class="code-key">description:</span> <span class="code-string">Simple internet search flow</span>
-<span class="code-key">nodes:</span>
-  - <span class="code-prop">name:</span> <span class="code-string">get_query</span>
-    <span class="code-prop">type:</span> <span class="code-string">input</span>
-    <span class="code-prop">prompt:</span> <span class="code-string">What would you like to search for?</span>
-    <span class="code-prop">output_model:</span>
-      <span class="code-prop">query:</span> <span class="code-string">str</span>
-  - <span class="code-prop">name:</span> <span class="code-string">search</span>
-    <span class="code-prop">type:</span> <span class="code-string">llm</span>
-    <span class="code-prop">system:</span> <span class="code-string">You are a helpful assistant</span>
-    <span class="code-prop">prompt:</span> <span class="code-string">"Search for: {query}"</span>
-    <span class="code-prop">tools:</span> <span class="code-string">true</span>
-    <span class="code-prop">tools_selection:</span>
-      - <span class="code-string">tavily-search</span>
-    <span class="code-prop">output_model:</span>
-      <span class="code-prop">output:</span> <span class="code-string">str</span>
-    <span class="code-prop">user_message:</span>
-      - <span class="code-string">output</span>
-<span class="code-key">flow:</span>
-  - <span class="code-prop">from:</span> <span class="code-string">START</span>
-    <span class="code-prop">to:</span> <span class="code-string">get_query</span>
-  - <span class="code-prop">from:</span> <span class="code-string">get_query</span>
-    <span class="code-prop">to:</span> <span class="code-string">search</span>
-  - <span class="code-prop">from:</span> <span class="code-string">search</span>
-    <span class="code-prop">to:</span> <span class="code-string">END</span>`} />
-  </div>
-</div>
           </div>
-          <!-- Text on bottom -->
           <div class="story-text">
             <div class="story-step-badge">
               <span class="step-count">Step 1 of 6</span>
-              <span class="step-label">YAML Design</span>
+              <span class="step-label">Setup</span>
             </div>
-            <h3 class="story-title">Design Your Flow</h3>
-            <p class="story-description">Design AI agent workflows visually. Every flow becomes a portable YAML file, git-friendly, version-controlled, and ready to run anywhere.</p>
+            <h3 class="story-title">Set Up in Minutes</h3>
+            <p class="story-description">Open the Studio setup wizard, pick your AI provider, enter your API key, and start the daemon. You're ready to chat.</p>
           </div>
         </div>
       </div>
 
-      <!-- Step 2: AI Creates For You -->
+      <!-- Step 2: Chat With Real Tools -->
       <div class="story-slide" data-step="2">
         <div class="story-slide-inner">
           <div class="story-visual">
             <div class="story-visual-container">
-              <img src="/astonish/images/ai-creation.gif" onerror="this.src='/astonish/images/flow-visual.png'" alt="AI generating a flow from natural language" />
+              <img src="/astonish/images/experience-chat.webp" alt="Studio Chat — conversational AI with tool calls for file search, shell commands, and more" />
             </div>
           </div>
           <div class="story-text">
             <div class="story-step-badge">
               <span class="step-count">Step 2 of 6</span>
-              <span class="step-label">AI Powered</span>
+              <span class="step-label">Chat</span>
             </div>
-            <h3 class="story-title">AI Creates For You</h3>
-            <p class="story-description">Describe what you want in plain English. The AI Assistant understands your intent and builds the complete flow in seconds—no manual configuration needed.</p>
+            <h3 class="story-title">Chat With Real Tools</h3>
+            <p class="story-description">Ask your assistant to read files, run shell commands, search the web, manage credentials, or browse websites. 74+ tools are available out of the box.</p>
           </div>
         </div>
       </div>
 
-
-
-      <!-- Step 3: MCP Store -->
+      <!-- Step 3: It Remembers Everything -->
       <div class="story-slide" data-step="3">
         <div class="story-slide-inner">
           <div class="story-visual">
             <div class="story-visual-container">
-               <img src="/astonish/images/mcp-store.gif" onerror="this.src='/astonish/images/flow-visual.png'" alt="MCP Store interface" />
+              <img src="/astonish/images/experience-memory.webp" alt="Memory recall — the agent uses knowledge from previous sessions automatically" />
             </div>
           </div>
           <div class="story-text">
             <div class="story-step-badge">
               <span class="step-count">Step 3 of 6</span>
-              <span class="step-label">Store</span>
+              <span class="step-label">Memory</span>
             </div>
-            <h3 class="story-title">MCP Store</h3>
-            <p class="story-description">Hundreds of ready-to-use MCP servers at your fingertips. Browse by category, search by name, and install with a single click—no configuration required.</p>
+            <h3 class="story-title">It Remembers Everything</h3>
+            <p class="story-description">Persistent memory across all sessions. Your infrastructure details, preferences, and past solutions are recalled automatically. Never repeat yourself.</p>
           </div>
         </div>
       </div>
 
-      <!-- Step 4: Smart Suggestions -->
+      <!-- Step 4: Chat From Anywhere -->
       <div class="story-slide" data-step="4">
         <div class="story-slide-inner">
           <div class="story-visual">
             <div class="story-visual-container">
-              <img src="/astonish/images/ai-suggestions.gif" onerror="this.src='/astonish/images/flow-visual.png'" alt="AI suggesting MCP servers to install" />
+              <img src="/astonish/images/experience-channels.webp" alt="Telegram integration — chat with your Astonish assistant from your phone" />
             </div>
           </div>
           <div class="story-text">
             <div class="story-step-badge">
               <span class="step-count">Step 4 of 6</span>
-              <span class="step-label">Suggestions</span>
+              <span class="step-label">Channels</span>
             </div>
-            <h3 class="story-title">Smart Suggestions</h3>
-            <p class="story-description">AI Assistant identifies which MCP servers your flow needs and installs them automatically. Not in the store? It finds alternatives online and configures them for you.</p>
+            <h3 class="story-title">Chat From Anywhere</h3>
+            <p class="story-description">Connect Telegram or Email as communication channels. Chat with your assistant from your phone, get scheduled results, and manage tasks on the go.</p>
           </div>
         </div>
       </div>
 
-      <!-- Step 5: Share & Discover -->
+      <!-- Step 5: Automate What Works -->
       <div class="story-slide" data-step="5">
         <div class="story-slide-inner">
           <div class="story-visual">
             <div class="story-visual-container">
-              <img src="/astonish/images/community-taps.gif" onerror="this.src='/astonish/images/flow-visual.png'" alt="Community sharing flows with tap mechanism" />
+              <img src="/astonish/images/experience-automate.webp" alt="Studio Flow Editor — visual flow graph distilled from a successful chat session" />
             </div>
           </div>
           <div class="story-text">
             <div class="story-step-badge">
               <span class="step-count">Step 5 of 6</span>
-              <span class="step-label">Community</span>
+              <span class="step-label">Automate</span>
             </div>
-            <h3 class="story-title">Share & Discover</h3>
-            <p class="story-description">Share your flows via Taps—like Homebrew for AI agents. Every flow includes all MCP dependencies for one-command install. Join the community and discover powerful flows others have built.</p>
+            <h3 class="story-title">Automate What Works</h3>
+            <p class="story-description">Had a successful chat session? Distill it into a reusable flow. Schedule it with cron, broadcast results to Telegram, and never do that task manually again.</p>
           </div>
         </div>
       </div>
 
-      <!-- Step 6: Run Anywhere -->
+      <!-- Step 6: Build Agent Teams -->
       <div class="story-slide" data-step="6">
         <div class="story-slide-inner">
           <div class="story-visual">
-            <div class="story-visual-container code-visual" style="overflow: visible;">
-              <!-- Embedded Terminal Demo -->
-              <div class="demo-terminal">
-                <div class="demo-terminal-header">
-                  <span class="demo-dot demo-dot-red"></span>
-                  <span class="demo-dot demo-dot-yellow"></span>
-                  <span class="demo-dot demo-dot-green"></span>
-                </div>
-                <!-- ID updated to match validation logic if any, though mostly visual -->
-                <div class="demo-terminal-body" id="step6-terminal-demo"></div>
-              </div>
+            <div class="story-visual-container">
+              <img src="/astonish/images/experience-fleet.webp" alt="Fleet — multi-agent team with specialized roles collaborating on complex tasks" />
             </div>
           </div>
           <div class="story-text">
             <div class="story-step-badge">
               <span class="step-count">Step 6 of 6</span>
-              <span class="step-label">Execute</span>
+              <span class="step-label">Fleet</span>
             </div>
-            <h3 class="story-title">Run Anywhere</h3>
-            <p class="story-description">Once ready, run your flows in the terminal, CI/CD, or anywhere with a single binary. No infrastructure management, just pure execution.</p>
+            <h3 class="story-title">Build Agent Teams</h3>
+            <p class="story-description">For complex projects, assemble a fleet of specialized agents. A researcher, a coder, a reviewer -- working together with hub-and-spoke coordination.</p>
           </div>
         </div>
       </div>
@@ -1070,44 +986,56 @@ import '../styles/custom.css';
     <div class="section-inner">
       <div class="section-header reveal">
         <h2 class="section-title">Why Astonish?</h2>
-        <p class="section-subtitle">The simplicity of no-code with the power of code-level control.</p>
+        <p class="section-subtitle">A personal AI assistant platform, not just another chatbot.</p>
       </div>
 
       <div class="features-grid">
         <div class="feature-card">
-          <div class="feature-icon feature-icon-green">📦</div>
-          <h3 class="feature-title">Single Binary, Zero Infrastructure</h3>
-          <p class="feature-desc">No web servers. No cloud subscriptions. Run on your laptop, Raspberry Pi, or in CI/CD. Just download and go.</p>
+          <div class="feature-icon feature-icon-purple">
+            <svg width="28" height="28" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg>
+          </div>
+          <h3 class="feature-title">Chat-First Experience</h3>
+          <p class="feature-desc">Conversational AI with 74+ real tools. Read files, run commands, search the web, browse pages, manage credentials, send email, and more.</p>
         </div>
 
         <div class="feature-card">
-          <div class="feature-icon feature-icon-purple">📄</div>
-          <h3 class="feature-title">YAML as Source of Truth</h3>
-          <p class="feature-desc">Your agent logic lives in simple YAML files. Version control them. Review in PRs. No platform lock-in.</p>
+          <div class="feature-icon feature-icon-blue">
+            <svg width="28" height="28" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.663 17h4.674M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+          </div>
+          <h3 class="feature-title">Learns and Remembers</h3>
+          <p class="feature-desc">Persistent memory with vector search. Infrastructure details, preferences, and past solutions are recalled automatically across sessions.</p>
         </div>
 
         <div class="feature-card">
-          <div class="feature-icon feature-icon-blue">🎨</div>
-          <h3 class="feature-title">Design Visually, Run Anywhere</h3>
-          <p class="feature-desc">Use Astonish Studio to design flows visually, then run the exact same YAML from the command line.</p>
+          <div class="feature-icon feature-icon-green">
+            <svg width="28" height="28" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
+          </div>
+          <h3 class="feature-title">Always-On Daemon</h3>
+          <p class="feature-desc">Background service that powers everything. Studio web UI, Telegram and Email channels, scheduled tasks, and fleet coordination -- all from one daemon.</p>
         </div>
 
         <div class="feature-card">
-          <div class="feature-icon feature-icon-orange">🔌</div>
-          <h3 class="feature-title">MCP Integration</h3>
-          <p class="feature-desc">Connect to any MCP server—GitHub, Slack, databases, or custom tools. Your flows stay clean; capabilities plug in.</p>
+          <div class="feature-icon feature-icon-orange">
+            <svg width="28" height="28" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+          </div>
+          <h3 class="feature-title">Multi-Agent Fleet</h3>
+          <p class="feature-desc">Assemble teams of specialized agents for complex projects. A researcher, a coder, a reviewer -- collaborating with hub-and-spoke coordination.</p>
         </div>
 
         <div class="feature-card">
-          <div class="feature-icon feature-icon-red">🏪</div>
-          <h3 class="feature-title">Flow Store & Taps</h3>
-          <p class="feature-desc">Browse, install, and share community flows with Homebrew-style taps. One command to add any extension.</p>
+          <div class="feature-icon feature-icon-red">
+            <svg width="28" height="28" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          </div>
+          <h3 class="feature-title">Flow Distillation</h3>
+          <p class="feature-desc">Successful chat session? Distill it into a repeatable YAML flow. Schedule with cron, broadcast results to Telegram, and never do it manually again.</p>
         </div>
 
         <div class="feature-card">
-          <div class="feature-icon feature-icon-indigo">🤖</div>
-          <h3 class="feature-title">AI Assistant</h3>
-          <p class="feature-desc">Describe what you want in plain English. The AI generates the flow, refines nodes, and optimizes sequences.</p>
+          <div class="feature-icon feature-icon-indigo">
+            <svg width="28" height="28" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+          </div>
+          <h3 class="feature-title">Secure by Default</h3>
+          <p class="feature-desc">AES-256-GCM encrypted credential store with 5-layer output redaction. Studio auth. Secrets never reach the LLM context.</p>
         </div>
       </div>
     </div>
@@ -1119,50 +1047,56 @@ import '../styles/custom.css';
     <div class="comparison-part">
       <div class="section-inner" style="max-width: 1100px;">
         <div class="section-header reveal">
-          <h2 class="section-title">When to Choose Astonish</h2>
-          <p class="section-subtitle">Compare how different tools approach AI agent development.</p>
+          <h2 class="section-title">How Astonish Compares</h2>
+          <p class="section-subtitle">More than a chatbot. More than an automation tool.</p>
         </div>
 
         <div class="comparison-card reveal-scale" style="overflow-x: auto;">
           <table class="comparison-table">
             <thead>
               <tr>
-                <th>Aspect</th>
+                <th>Capability</th>
+                <th>ChatGPT / Claude</th>
                 <th>LangChain / CrewAI</th>
-                <th>n8n</th>
                 <th style="color: var(--purple-600);">Astonish</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td>Workflow Design</td>
-                <td>Write code from scratch</td>
-                <td>Visual editor (requires server)</td>
-                <td><strong>Built-in Studio or YAML files</strong></td>
+                <td>Real tool execution</td>
+                <td>Sandboxed / limited</td>
+                <td>Code your own integrations</td>
+                <td><strong>74+ built-in tools, runs locally</strong></td>
               </tr>
               <tr>
-                <td>LLM Providers</td>
-                <td>Implement your own connections</td>
-                <td>Built-in integrations</td>
-                <td><strong>Built-in providers, easy config</strong></td>
+                <td>Persistent memory</td>
+                <td>Session-only or limited</td>
+                <td>Build your own RAG</td>
+                <td><strong>Automatic cross-session memory</strong></td>
               </tr>
               <tr>
-                <td>Error Handling</td>
-                <td>Code it yourself</td>
-                <td>Built-in retry logic</td>
-                <td><strong>Built-in retries & fallbacks</strong></td>
+                <td>Multi-agent teams</td>
+                <td>Not available</td>
+                <td>Code-defined crews</td>
+                <td><strong>Fleet with YAML templates</strong></td>
               </tr>
               <tr>
-                <td>Portability</td>
+                <td>Chat channels</td>
+                <td>Web only</td>
+                <td>Not included</td>
+                <td><strong>Telegram, Email, Studio, CLI</strong></td>
+              </tr>
+              <tr>
+                <td>Automation</td>
+                <td>Not available</td>
+                <td>Code pipelines</td>
+                <td><strong>Distill chat to flows, cron schedule</strong></td>
+              </tr>
+              <tr>
+                <td>Runs on</td>
+                <td>Cloud only</td>
                 <td>Python environment + deps</td>
-                <td>Docker + database required</td>
-                <td><strong>Single binary, runs anywhere</strong></td>
-              </tr>
-              <tr>
-                <td>Best For</td>
-                <td>Custom research, experiments</td>
-                <td>Server-based automations</td>
-                <td><strong>Production agents, CI/CD pipelines</strong></td>
+                <td><strong>Single binary, your machine</strong></td>
               </tr>
             </tbody>
           </table>
@@ -1172,15 +1106,15 @@ import '../styles/custom.css';
 
     <!-- CTA Part -->
     <div class="cta-part">
-      <h2 class="cta-title">Ready to build your first agent?</h2>
-      <p class="cta-subtitle">Install in seconds. Design in minutes. Run forever.</p>
+      <h2 class="cta-title">Ready to meet your AI assistant?</h2>
+      <p class="cta-subtitle">Install in seconds. Set up in minutes. Chat forever.</p>
       <div class="cta-actions">
-        <a href="/astonish/getting-started/installation/" class="btn btn-white">
+        <a href="/astonish/getting-started/quick-setup/" class="btn btn-white">
           Get Started
           <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="20" height="20"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
         </a>
-        <a href="/astonish/getting-started/quickstart/studio/" class="btn btn-ghost">
-          Build Your First Agent
+        <a href="/astonish/chat/overview/" class="btn btn-ghost">
+          Explore Chat Features
         </a>
       </div>
     </div>
@@ -1199,7 +1133,7 @@ import '../styles/custom.css';
         <a href="https://github.com/schardosin/astonish/issues" class="footer-link">Issues</a>
       </div>
       <p class="footer-credit">
-        Built with ❤️ using <a href="https://google.github.io/adk-go/">Google ADK</a>
+        Built with <a href="https://google.github.io/adk-go/">Google ADK</a>
       </p>
     </div>
   </footer>
@@ -1210,7 +1144,6 @@ import '../styles/custom.css';
     // Intersection Observer for scroll animations
     document.addEventListener('DOMContentLoaded', () => {
       const revealElements = document.querySelectorAll('.reveal, .reveal-left, .reveal-right, .reveal-scale');
-      const flowNodes = document.querySelector('.flow-nodes');
       const featuresGrid = document.querySelector('.features-grid');
 
       const observerOptions = {
@@ -1223,11 +1156,6 @@ import '../styles/custom.css';
         entries.forEach(entry => {
           if (entry.isIntersecting) {
             entry.target.classList.add('visible');
-            
-            // For workflow container, trigger children animations
-            if (entry.target.classList.contains('flow-nodes')) {
-                // The CSS handles the stagger for direct children and paths
-            }
 
             // For features grid, add visible to all children
             if (entry.target.classList.contains('features-grid')) {
@@ -1241,18 +1169,21 @@ import '../styles/custom.css';
       }, observerOptions);
 
       revealElements.forEach(el => observer.observe(el));
-      if (flowNodes) observer.observe(flowNodes);
       if (featuresGrid) observer.observe(featuresGrid);
 
-      // Terminal Typewriter Effect
+      // ===== Hero Terminal Typewriter Effect =====
       const terminalDemo = document.getElementById('terminal-demo');
       
-      const commands = [
+      const heroCommands = [
         { type: 'input', text: 'brew install schardosin/astonish/astonish' },
-        { type: 'output', text: '🍺 Installing astonish...' },
-        { type: 'output', text: '✓ Installed to /usr/local/bin/astonish' },
-        { type: 'input', text: 'astonish studio' },
-        { type: 'output', html: '🚀 <span class="terminal-highlight">Astonish Studio</span> running at http://localhost:9393' }
+        { type: 'output', text: '==> Installing astonish...' },
+        { type: 'output', text: '==> Installed to /usr/local/bin/astonish' },
+        { type: 'input', text: 'astonish setup' },
+        { type: 'output', html: '<span class="terminal-highlight">? Select AI provider:</span> OpenAI' },
+        { type: 'output', html: '<span class="terminal-highlight">? API key:</span> sk-****' },
+        { type: 'output', text: 'Configuration saved.' },
+        { type: 'input', text: 'astonish daemon install && astonish daemon start' },
+        { type: 'output', html: 'Daemon running at <span class="terminal-highlight">http://localhost:9393</span>' }
       ];
 
       async function typeWriter(text, element, speed = 30) {
@@ -1281,11 +1212,11 @@ import '../styles/custom.css';
         });
       }
 
-      async function runTerminalDemo() {
+      async function runHeroTerminalDemo() {
         if (!terminalDemo) return;
         terminalDemo.innerHTML = '';
         
-        for (const cmd of commands) {
+        for (const cmd of heroCommands) {
           const div = document.createElement('div');
           
           if (cmd.type === 'input') {
@@ -1301,22 +1232,20 @@ import '../styles/custom.css';
               div.textContent = cmd.text;
             }
             terminalDemo.appendChild(div);
-            // small pause after output
-            await new Promise(r => setTimeout(r, 400));
+            await new Promise(r => setTimeout(r, 300));
           }
           
-          // Pause between commands
           if (cmd.type === 'input') {
-             await new Promise(r => setTimeout(r, 800));
+            await new Promise(r => setTimeout(r, 600));
           }
         }
       }
 
-      // Start terminal demo when it comes into view
+      // Start hero terminal demo when it comes into view
       const terminalObserver = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
           if (entry.isIntersecting) {
-            runTerminalDemo();
+            runHeroTerminalDemo();
             terminalObserver.unobserve(entry.target);
           }
         });
@@ -1324,108 +1253,6 @@ import '../styles/custom.css';
       
       if (terminalDemo) {
         terminalObserver.observe(terminalDemo);
-      }
-
-      // ===== Step 6 Terminal Demo =====
-      const step6Events = [
-        { type: 'command', text: "astonish flows run simple_web_search -p get_query=\"Apple News December 2025\"" },
-        { type: 'success', text: "✓ Using provided value for 'get_query': Apple News December 2025" },
-        { type: 'success', text: "✓ Processing search..." },
-        { type: 'tool_box', text: `<div style="display: inline-block; border: 1px solid #475569; border-radius: 6px; margin: 0.3rem 0; padding: 0.5rem 0.75rem; background: #1e293b; min-width: 200px; max-width: 300px; font-size: 0.65rem;">
-          <div style="display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.3rem; padding-bottom: 0.3rem; border-bottom: 1px solid #475569;">
-            <span>🛠</span>
-            <span style="color: #fb923c; font-weight: bold;">tavily-search</span>
-          </div>
-          <div style="color: #94a3b8;">
-            <div><span style="color: #64748b;">max_results:</span> <span style="color: #22d3ee;">5</span></div>
-            <div><span style="color: #64748b;">query:</span> <span style="color: #22d3ee;">Apple news December 2025</span></div>
-            <div><span style="color: #64748b;">search_depth:</span> <span style="color: #22d3ee;">basic</span></div>
-            <div><span style="color: #64748b;">topic:</span> <span style="color: #22d3ee;">news</span></div>
-          </div>
-        </div>` },
-        { type: 'success', text: "✓ Auto Approved" },
-        { type: 'agent', text: "" },
-        { type: 'agent_text', text: "- Apple entered December 2025 with strong iPhone 17 demand and expectations for new AI capabilities." },
-        { type: 'agent_text', text: "- Wall Street raised Apple's price target to $315, driven by AI roadmap optimism." },
-        { type: 'agent_text', text: "- Global regulation focused on the App Store intensified." },
-        { type: 'agent_text', text: "- Apple maintained 25% market share in China." },
-        { type: 'success', text: "✓ Processing END..." }
-      ];
-
-      async function step7TypeWriter(text, element, speed = 25, signal = null) {
-        return new Promise(resolve => {
-          let i = 0;
-          const span = document.createElement('span');
-          span.style.color = 'white';
-          element.appendChild(span);
-          
-          const cursor = document.createElement('span');
-          cursor.className = 'cursor';
-          element.appendChild(cursor);
-
-          function type() {
-            if (signal && signal.aborted) {
-              cursor.remove();
-              resolve();
-              return;
-            }
-            if (i < text.length) {
-              span.textContent += text.charAt(i);
-              i++;
-              setTimeout(type, speed);
-            } else {
-              cursor.remove();
-              resolve();
-            }
-          }
-          type();
-        });
-      }
-
-      let step6AbortController = null;
-
-      async function runStep6Demo() {
-        // Cancel any previous running animation
-        if (step6AbortController) {
-          step6AbortController.abort();
-        }
-        step6AbortController = new AbortController();
-        const signal = step6AbortController.signal;
-
-        const terminal = document.getElementById('step6-terminal-demo');
-        if (!terminal) return;
-        terminal.innerHTML = '';
-        
-        for (const event of step6Events) {
-          if (signal.aborted) return;
-          await new Promise(r => setTimeout(r, 400));
-          if (signal.aborted) return;
-
-          const div = document.createElement('div');
-          div.style.marginBottom = '0.2rem';
-          terminal.appendChild(div);
-
-          switch(event.type) {
-            case 'command':
-              div.innerHTML = '<span style="color: #4ade80; font-weight: bold;">$</span> ';
-              await step7TypeWriter(event.text, div, 20, signal);
-              break;
-            case 'success':
-              div.style.color = '#4ade80';
-              div.textContent = event.text;
-              break;
-            case 'agent':
-              div.innerHTML = '<span style="color: #facc15; font-weight: bold;">Agent:</span>';
-              break;
-            case 'agent_text':
-              div.style.color = '#cbd5e1';
-              div.textContent = event.text;
-              break;
-            case 'tool_box':
-              div.innerHTML = event.text;
-              break;
-          }
-        }
       }
 
       // ===== Story Section Navigation =====
@@ -1437,15 +1264,12 @@ import '../styles/custom.css';
       let currentStep = 1;
       const totalSteps = storySlides.length;
 
-      // Ensure we have slides before running logic
       if (totalSteps > 0) {
         let storyAnimating = false;
         
-        // Initialize GSAP for slides
         const slidesArray = gsap.utils.toArray('.story-slide');
-        const innerWrappers = gsap.utils.toArray('.story-slide-inner');
         
-        // Initial setup - hide all except first (simple fade setup)
+        // Initial setup - hide all except first
         slidesArray.forEach((slide, i) => {
           if (i === 0) {
             gsap.set(slide, { autoAlpha: 1 });
@@ -1455,10 +1279,8 @@ import '../styles/custom.css';
         });
         
         function showSlide(targetStep, direction = 1) {
-          // Clamp step to valid range
           targetStep = Math.max(1, Math.min(targetStep, totalSteps));
           
-          // Prevent rapid transitions
           if (storyAnimating) return;
           if (targetStep === currentStep) return;
           
@@ -1468,45 +1290,26 @@ import '../styles/custom.css';
           
           const fromIndex = fromStep - 1;
           const toIndex = targetStep - 1;
-          const dFactor = direction;
           
-          // Create animation timeline - simple fade transition
           const tl = gsap.timeline({
             defaults: { duration: 0.25, ease: "power1.inOut" },
             onComplete: () => {
               storyAnimating = false;
-              // Trigger step 6 demo
-              if (targetStep === 6) {
-                runStep6Demo();
-              }
             }
           });
           
-          // Fade out old slide
           if (fromIndex >= 0 && fromIndex < slidesArray.length) {
             tl.to(slidesArray[fromIndex], { autoAlpha: 0 }, 0);
           }
           
-          // Fade in new slide
           tl.to(slidesArray[toIndex], { autoAlpha: 1 }, 0);
           
-          // Update step counter
           if (currentStepSpan) currentStepSpan.textContent = targetStep;
           
-          // Update button states
           if (storyPrev) storyPrev.disabled = targetStep === 1;
           if (storyNext) storyNext.disabled = targetStep === totalSteps;
-          
-          // Restart any GIF animations in the active slide
-          const gifs = slidesArray[toIndex].querySelectorAll('img[src$=".gif"]');
-          gifs.forEach(gif => {
-            const src = gif.src;
-            gif.src = '';
-            gif.src = src;
-          });
         }
 
-        // Navigation button handlers
         if (storyPrev) {
           storyPrev.addEventListener('click', () => {
             if (currentStep > 1 && !storyAnimating) {
@@ -1523,14 +1326,12 @@ import '../styles/custom.css';
           });
         }
 
-
         // Keyboard navigation
         document.addEventListener('keydown', (e) => {
           const storySection = document.getElementById('experience');
           if (!storySection) return;
           
           const rect = storySection.getBoundingClientRect();
-          // Check if section is somewhat visible in viewport
           const isVisible = rect.top < window.innerHeight && rect.bottom > 0;
           
           if (isVisible && !storyAnimating) {
@@ -1565,8 +1366,8 @@ import '../styles/custom.css';
            canGoPrev: () => currentStep > 1 && !storyAnimating
         };
 
-        // Initialize first slide (already set up, just update state)
-        currentStepSpan.textContent = 1;
+        // Initialize first slide
+        if (currentStepSpan) currentStepSpan.textContent = 1;
       }
     });
   </script>
@@ -1578,17 +1379,12 @@ import '../styles/custom.css';
     import { Observer } from 'gsap/Observer';
     
     gsap.registerPlugin(ScrollTrigger, ScrollToPlugin, Observer);
-    
-    console.log('GSAP Unified Scroll: Initializing...');
 
     // Get all sections
     const sections = gsap.utils.toArray('section, .hero, .story-section, .section, .combined-final-section');
-    // Filter duplicates if any class names overlap with tag names or multiple classes
     const uniqueSections = [...new Set(sections)];
 
-    if (uniqueSections.length === 0) {
-      console.error('No sections found!');
-    } else {
+    if (uniqueSections.length > 0) {
       let currentIndex = 0;
       let animating = false;
       
@@ -1599,7 +1395,6 @@ import '../styles/custom.css';
         animating = true;
         currentIndex = index;
         
-        // Use smaller offset for combined-final-section to show CTA buttons
         const targetSection = uniqueSections[currentIndex];
         const sectionOffset = targetSection.classList.contains('combined-final-section') ? 20 : 60;
         
@@ -1611,22 +1406,18 @@ import '../styles/custom.css';
         });
       }
       
-      // Initialize index based on scroll position
       function initIndex() {
-        const scrollY = window.scrollY + 100; // Larger offset for better detection
+        const scrollY = window.scrollY + 100;
         for (let i = uniqueSections.length - 1; i >= 0; i--) {
            if (scrollY >= uniqueSections[i].offsetTop) {
              currentIndex = i;
              break;
            }
         }
-        console.log('GSAP Init: Current section index =', currentIndex);
       }
       
-      // Init on script load
       initIndex();
       
-      // Also re-init after full page load (in case of scroll restoration)
       window.addEventListener('load', () => {
         setTimeout(initIndex, 100);
       });
@@ -1635,40 +1426,38 @@ import '../styles/custom.css';
         target: window,
         type: "wheel,touch",
         wheelSpeed: -1,
-        onDown: () => { // Scroll Up (Previous)
+        onDown: () => {
           if (animating) return;
 
           const currentSection = uniqueSections[currentIndex];
           const isStory = currentSection && currentSection.classList.contains('story-section');
           
           if (isStory && window.astonishStory) {
-            // Block page navigation while story is animating
             if (window.astonishStory.animating) return;
             
             if (window.astonishStory.canGoPrev()) {
                window.astonishStory.prev();
                animating = true;
-               setTimeout(() => animating = false, 1200); // Match animation duration
+               setTimeout(() => animating = false, 1200);
                return;
             }
           }
           
           gotoSection(currentIndex - 1);
         },
-        onUp: () => { // Scroll Down (Next)
+        onUp: () => {
           if (animating) return;
 
           const currentSection = uniqueSections[currentIndex];
           const isStory = currentSection && currentSection.classList.contains('story-section');
           
           if (isStory && window.astonishStory) {
-            // Block page navigation while story is animating
             if (window.astonishStory.animating) return;
             
             if (window.astonishStory.canGoNext()) {
                window.astonishStory.next();
                animating = true;
-               setTimeout(() => animating = false, 1200); // Match animation duration
+               setTimeout(() => animating = false, 1200);
                return;
             }
           }
@@ -1684,7 +1473,6 @@ import '../styles/custom.css';
          if (animating) return;
          if (e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === ' ') {
             e.preventDefault();
-            // Reuse logic? simpler map for now
              const currentSection = uniqueSections[currentIndex];
              const isStory = currentSection && currentSection.classList.contains('story-section');
              if (isStory && window.astonishStory && window.astonishStory.canGoNext()) {
@@ -1703,8 +1491,6 @@ import '../styles/custom.css';
             gotoSection(currentIndex - 1);
          }
       });
-      
-      console.log('GSAP Unified Scroll: Ready!');
     }
   </script>
 </body>

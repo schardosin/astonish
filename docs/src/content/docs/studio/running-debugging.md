@@ -1,132 +1,33 @@
 ---
-title: Running & Debugging
-description: Execute flows and debug issues in Astonish Studio
-sidebar:
-  order: 5
+title: "Running & Debugging"
+description: "Execute flows and debug issues in Studio"
 ---
 
-# Running & Debugging
+Studio supports two execution modes, each suited to different tasks.
 
-Studio provides real-time execution and debugging tools to test your flows before deploying them.
+## Execution modes
 
-## Running a Flow
+1. **Chat** — Conversational AI with dynamic tool use. No predefined steps; the agent decides what to do based on your messages.
+2. **Flow** — Structured execution following the visual flow graph. Each node runs in sequence according to the edges and conditions you defined.
 
-### Start Execution
+## Running a flow
 
-1. Open a flow in the canvas
-2. Click the **▶ Run** button in the top bar
-3. The chat panel opens on the right
+1. Click the **Run** button in the flow editor.
+2. If the flow has input nodes, a dialog prompts you for values.
+3. Nodes highlight as they execute and edges show data flow in real-time.
+4. The chat panel displays agent responses and tool outputs alongside the visual execution.
 
-![Run Button](/astonish/images/studio-flow_run.webp)
-*The Run Dialog*
+## Debugging tips
 
-### Execution Flow
+- **Execution panel** — Check the step-by-step progress to see which node is active and what data it produced.
+- **Tool call blocks** — Expand them to inspect full input and output for each tool invocation.
+- **YAML source drawer** — Verify the flow structure matches your intent.
+- **`/status` command** — In chat sessions, use this to inspect current session state.
+- **CLI traces** — Run `astonish sessions show <id> --verbose` from the terminal for detailed execution traces.
 
-1. Flow starts at the **START** node
-2. Each node executes in sequence
-3. Node output appears in the chat panel
-4. Branches follow their conditions
-5. Flow ends at the **END** node
+## Error handling
 
-## The Chat Panel
+When a node fails, the error is displayed inline on the canvas and in the execution panel. Two configuration options help manage failures:
 
-The right panel shows execution in real-time:
-
-![Chat Panel](/astonish/images/studio-flow_run_execution.webp)
-*The chat panel during execution*
-
-### What You'll See
-
-| Element | Meaning |
-|---------|---------|
-| **Execution started...** | Flow has begun |
-| **Agent** | Prompts from Input nodes or responses from LLM nodes |
-| **User** | Your input responses |
-| **✦ Executing Node: [name]** | Shows which node is currently running |
-| **Start Again** | Button to restart the flow from the beginning |
-
-### Auto-Approve Toggle
-
-In the Chat Panel header, you'll see an **Auto-Approve** checkbox:
-
-- **Checked**: All tool executions proceed automatically without prompts
-- **Unchecked**: Tools require manual approval before executing
-
-This toggle is disabled while a flow is running. Set it before clicking **Run**.
-
-## Interactive Input
-
-When the flow reaches an **Input** node:
-
-1. The chat panel prompts you
-2. Type your response
-3. Press **Enter** to continue
-
-If the Input node has **Options**, each option appears as a button you can click.
-
-
-
-## Common Issues
-
-### Node Not Executing
-
-**Symptom:** Flow skips a node or stops unexpectedly.
-
-**Check:**
-- Is the node connected to the flow?
-- Are incoming edges properly connected?
-- Is a condition blocking execution?
-
-### Wrong Branch Taken
-
-**Symptom:** Flow goes to unexpected path.
-
-**Check:**
-- Verify condition syntax
-- Print the variable being checked
-- Check for typos in variable names
-
-### AI Not Responding
-
-**Symptom:** LLM node hangs or errors.
-
-**Check:**
-- Is your provider configured correctly?
-- Is the API key valid?
-- Check provider status page
-
-### Tool Call Fails
-
-**Symptom:** Tool returns an error.
-
-**Check:**
-- Is the MCP server running?
-- Are required parameters provided?
-- Check the tool's input requirements
-
-## Stopping Execution
-
-To stop a running flow:
-- Click the **■ Stop** button
-- Or close the chat panel
-
-## Re-running
-
-To run again:
-1. Click **▶ Run** again
-2. Previous state is cleared
-3. Execution starts fresh from START
-
-
-
-## Tips for Debugging
-
-1. **Add Output nodes** — Display intermediate values to see what's happening
-2. **Test simple flows first** — Verify nodes work individually before building complex flows
-3. **Check the YAML** — Click **View Source** to see the raw flow definition
-4. **Use CLI debug mode** — Run `astonish flows run --debug <name>` for verbose output
-
-## Next Steps
-
-- **[Keyboard Shortcuts](/astonish/studio/keyboard-shortcuts/)** — Speed up your workflow
-- **[Exporting & Sharing](/astonish/studio/exporting-sharing/)** — Share your flows
+- `continue_on_error: true` — Set on individual nodes to let the flow proceed past a failure.
+- `max_retries` — Set on a node to automatically retry it a specified number of times before marking it as failed.

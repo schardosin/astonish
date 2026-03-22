@@ -1,14 +1,14 @@
 ---
 title: Astonish Documentation
-description: Build powerful AI agents with visual flows or YAML - your choice, same magic.
+description: A personal AI assistant platform that learns, remembers, and automates.
 template: splash
 hero:
-  tagline: Design AI workflows visually in Studio or craft them in YAML. Run anywhere, share everywhere.
+  tagline: A personal AI assistant that learns, remembers, and automates. Chat with AI agents that use 74+ tools, browse the web, manage email, and work in teams.
   image:
     file: ../../assets/houston.webp
   actions:
     - text: Get Started
-      link: /getting-started/introduction/
+      link: /getting-started/quick-setup/
       icon: right-arrow
     - text: View on GitHub
       link: https://github.com/schardosin/astonish
@@ -18,40 +18,74 @@ hero:
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
-## Choose Your Way to Build AI Agents
+## The Astonish Experience
 
-<CardGrid stagger>
-	<Card title="Visual Studio" icon="puzzle">
-		Design flows with a drag-and-drop canvas. Perfect for rapid prototyping and visual thinkers.
-		[Launch Studio →](/astonish/studio/)
-	</Card>
-	<Card title="Command Line" icon="terminal">
-		Write YAML flows and run them from the terminal. Ideal for automation and power users.
-		[Explore CLI →](/astonish/cli/)
-	</Card>
-	<Card title="Extend with Tools" icon="add-document">
-		Connect MCP servers, add repositories, and extend Astonish with powerful integrations.
-		[Add Tools →](/astonish/using-the-app/add-mcp-servers/)
-	</Card>
-	<Card title="Understand Concepts" icon="open-book">
-		Learn about flows, nodes, state management, and the YAML schema that powers everything.
-		[Key Concepts →](/astonish/concepts/flows/)
-	</Card>
-</CardGrid>
+### Talk to your AI assistant
+
+Start a conversation in the Studio web UI or the CLI. Ask it to read files, run commands, search the web, manage infrastructure — anything. The agent picks the right tools, asks for confirmation, and gets it done.
+
+![Studio Chat — conversational AI with tool use](/astonish/images/experience-chat.webp)
+
+### It remembers everything
+
+Astonish maintains a persistent memory across all sessions. Infrastructure details, credentials, preferences, past solutions — the agent recalls relevant knowledge automatically so you never repeat yourself.
+
+![Memory recall — the agent uses knowledge from previous sessions](/astonish/images/experience-memory.webp)
+
+### Chat from anywhere
+
+Connect Telegram or Email as communication channels. Chat with your assistant from your phone, receive scheduled task results, and manage fleet sessions — all from the same bot.
+
+![Telegram integration — chat with Astonish from your phone](/astonish/images/experience-telegram.webp)
+
+### Automate what works
+
+Had a successful chat session? Distill it into a reusable flow with one command. Schedule it to run on a cron, broadcast results to Telegram, and never do that task manually again.
+
+![Flow distillation — convert chat sessions into repeatable automations](/astonish/images/experience-distill.webp)
+
+---
 
 ## Why Astonish?
 
 <CardGrid>
-	<Card title="One Source of Truth" icon="document">
-		Both Studio and CLI work with the same YAML files. Design visually, run anywhere.
+	<Card title="Learns & Remembers" icon="open-book">
+		Persistent memory with vector search. The agent remembers your infrastructure, preferences, and past solutions across sessions.
 	</Card>
-	<Card title="Multi-Provider Support" icon="setting">
-		Connect to OpenAI, Anthropic, Google, Ollama, and 8+ other AI providers.
+	<Card title="74+ Built-in Tools" icon="add-document">
+		File ops, shell, browser automation, email, credentials, scheduling, web scraping, and more. No external dependencies needed.
 	</Card>
-	<Card title="MCP Integration" icon="puzzle">
-		Leverage the Model Context Protocol for extensible, standard tool integrations.
+	<Card title="15+ AI Providers" icon="setting">
+		OpenAI, Anthropic, Gemini, Ollama, Groq, DeepSeek, OpenRouter, AWS Bedrock, and more. Switch providers with a flag.
 	</Card>
-	<Card title="Share & Collaborate" icon="rocket">
-		Use taps to share flows and tools with your team or the community.
+	<Card title="Multi-Agent Teams" icon="rocket">
+		Fleet system for complex missions. Specialized agents collaborate through pairwise conversations with hub-and-spoke routing.
+	</Card>
+	<Card title="Automate Everything" icon="document">
+		Distill chat sessions into reusable flows. Schedule tasks with cron. Broadcast results to Telegram or Email.
+	</Card>
+	<Card title="Secure by Default" icon="approve-check">
+		AES-256-GCM encrypted credential store with 5-layer output redaction. Studio auth. Secrets never reach the LLM context.
+	</Card>
+</CardGrid>
+
+## Get Started
+
+<CardGrid stagger>
+	<Card title="Quick Setup" icon="right-arrow">
+		From install to first conversation in 3 minutes. Configure a provider, start the daemon, and chat.
+		[Get Started](/astonish/getting-started/quick-setup/)
+	</Card>
+	<Card title="Built-in Tools" icon="add-document">
+		Explore the 74+ tools your agent can use — file ops, browser automation, email, credentials, and more.
+		[Browse Tools](/astonish/tools/overview/)
+	</Card>
+	<Card title="Communication Channels" icon="forward-slash">
+		Connect Telegram or Email to chat with your assistant from anywhere.
+		[Connect Channels](/astonish/channels/overview/)
+	</Card>
+	<Card title="Fleet Teams" icon="rocket">
+		Build multi-agent teams for complex projects with specialized roles.
+		[Learn About Fleet](/astonish/fleet/overview/)
 	</Card>
 </CardGrid>

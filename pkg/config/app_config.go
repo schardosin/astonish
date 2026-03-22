@@ -23,6 +23,30 @@ type AppConfig struct {
 	Skills        SkillsConfig               `yaml:"skills,omitempty"`
 	AgentIdentity AgentIdentityConfig        `yaml:"agent_identity,omitempty"`
 	OpenCode      OpenCodeConfig             `yaml:"opencode,omitempty"`
+	Sandbox       SandboxConfig              `yaml:"sandbox,omitempty"`
+}
+
+// SandboxConfig controls the session container isolation system.
+// Types are defined here (not in pkg/sandbox) because this package owns
+// YAML deserialization. pkg/sandbox imports these types for runtime use.
+type SandboxConfig struct {
+	Enabled  *bool              `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Limits   SandboxLimits      `yaml:"limits,omitempty" json:"limits,omitempty"`
+	Network  string             `yaml:"network,omitempty" json:"network,omitempty"`
+	WarmPool int                `yaml:"warm_pool,omitempty" json:"warm_pool,omitempty"`
+	Prune    SandboxPruneConfig `yaml:"prune,omitempty" json:"prune,omitempty"`
+}
+
+// SandboxLimits defines resource limits for session containers.
+type SandboxLimits struct {
+	Memory    string `yaml:"memory,omitempty" json:"memory,omitempty"`
+	CPU       int    `yaml:"cpu,omitempty" json:"cpu,omitempty"`
+	Processes int    `yaml:"processes,omitempty" json:"processes,omitempty"`
+}
+
+// SandboxPruneConfig controls periodic cleanup of orphaned containers.
+type SandboxPruneConfig struct {
+	OrphanCheckHours int `yaml:"orphan_check_hours,omitempty" json:"orphan_check_hours,omitempty"`
 }
 
 // OpenCodeConfig controls the managed OpenCode delegate tool.

@@ -1,0 +1,421 @@
+package sandbox
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	incus "github.com/lxc/incus/v6/client"
+	"github.com/lxc/incus/v6/shared/api"
+)
+
+// Container naming prefixes.
+const (
+	TemplatePrefix = "astn-tpl-"
+	SessionPrefix  = "astn-sess-"
+	FleetPrefix    = "astn-fleet-"
+	SnapshotName   = "snap"
+	BaseTemplate   = "base"
+)
+
+// IncusClient wraps the Incus Go SDK client with convenience methods
+// for Astonish's container management needs.
+type IncusClient struct {
+	server   incus.InstanceServer
+	platform Platform
+}
+
+// Connect creates a new IncusClient connected to the Incus daemon.
+// On Linux, it connects via Unix socket. On macOS/Windows (Docker+Incus),
+// it connects via TCP to localhost:8443.
+func Connect(platform Platform) (*IncusClient, error) {
+	var server incus.InstanceServer
+	var err error
+
+	switch platform {
+	case PlatformLinuxNative:
+		// Connect via Unix socket (default path)
+		server, err = incus.ConnectIncusUnix("", nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to Incus via Unix socket: %w", err)
+		}
+
+	case PlatformDockerIncus:
+		// Connect via TCP to the Incus container forwarded port
+		server, err = incus.ConnectIncus("https://localhost:8443", &incus.ConnectionArgs{
+			InsecureSkipVerify: true, // self-signed cert inside Docker
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to Incus via TCP (localhost:8443): %w", err)
+		}
+
+	default:
+		return nil, fmt.Errorf("unsupported platform for Incus connection: %s", platform)
+	}
+
+	return &IncusClient{server: server, platform: platform}, nil
+}
+
+// Server returns the underlying Incus InstanceServer for advanced operations.
+func (c *IncusClient) Server() incus.InstanceServer {
+	return c.server
+}
+
+// defaultContainerConfig returns the base config for all containers.
+// In nested LXC environments (e.g., Proxmox), containers must run as
+// privileged because unprivileged containers cannot mount /proc inside
+// a user namespace that is itself inside an outer LXC container.
+func (c *IncusClient) defaultContainerConfig() map[string]string {
+	config := map[string]string{
+		"security.privileged": "true",
+		"security.nesting":    "false",
+	}
+
+	return config
+}
+
+// TemplateName returns the full Incus container name for a template.
+func TemplateName(name string) string {
+	return TemplatePrefix + name
+}
+
+// SessionContainerName returns the full Incus container name for a session.
+func SessionContainerName(sessionID string) string {
+	if len(sessionID) > 8 {
+		return SessionPrefix + sessionID[:8]
+	}
+	return SessionPrefix + sessionID
+}
+
+// FleetContainerName returns the full Incus container name for a fleet session.
+func FleetContainerName(planKey, agentKey, taskSlug string) string {
+	name := FleetPrefix + planKey + "-" + agentKey
+	if taskSlug != "" {
+		name += "-" + taskSlug
+	}
+	return name
+}
+
+// SnapshotSource returns the snapshot source string for cloning.
+// Format: "containerName/snapshotName"
+func SnapshotSource(templateName string) string {
+	return TemplateName(templateName) + "/" + SnapshotName
+}
+
+// LaunchFromImage creates a new container from a remote image (e.g., ubuntu/24.04).
+func (c *IncusClient) LaunchFromImage(name, image string, config map[string]string) error {
+	// Parse image as "remote:alias" — default remote is "images"
+	remote := "images"
+	alias := image
+	if parts := strings.SplitN(image, ":", 2); len(parts) == 2 {
+		remote = parts[0]
+		alias = parts[1]
+	}
+
+	// Connect to the image server
+	imageServer, err := incus.ConnectSimpleStreams(
+		"https://images.linuxcontainers.org",
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to connect to image server %q: %w", remote, err)
+	}
+
+	// Find the image by alias
+	imgAlias, _, err := imageServer.GetImageAlias(alias)
+	if err != nil {
+		return fmt.Errorf("image alias %q not found on %q: %w", alias, remote, err)
+	}
+
+	img, _, err := imageServer.GetImage(imgAlias.Target)
+	if err != nil {
+		return fmt.Errorf("failed to get image %q: %w", imgAlias.Target, err)
+	}
+
+	// Build config with defaults for nested LXC environments
+	effectiveConfig := c.defaultContainerConfig()
+	for k, v := range config {
+		effectiveConfig[k] = v
+	}
+
+	// Create the instance
+	req := api.InstancesPost{
+		Name: name,
+		Type: api.InstanceTypeContainer,
+		InstancePut: api.InstancePut{
+			Config: effectiveConfig,
+		},
+	}
+
+	op, err := c.server.CreateInstanceFromImage(imageServer, *img, req)
+	if err != nil {
+		return fmt.Errorf("failed to create instance %q from image %q: %w", name, image, err)
+	}
+
+	return op.Wait()
+}
+
+// CreateContainerFromSnapshot clones a container from a template snapshot.
+func (c *IncusClient) CreateContainerFromSnapshot(name, templateName string, config map[string]string) error {
+	srcContainerName := TemplateName(templateName)
+
+	// Get the snapshot
+	snap, _, err := c.server.GetInstanceSnapshot(srcContainerName, SnapshotName)
+	if err != nil {
+		return fmt.Errorf("snapshot %q not found on template %q: %w", SnapshotName, templateName, err)
+	}
+
+	// Build config with defaults for nested LXC environments
+	effectiveConfig := c.defaultContainerConfig()
+	for k, v := range config {
+		effectiveConfig[k] = v
+	}
+
+	// Copy the snapshot as a new instance
+	req := api.InstancesPost{
+		Name: name,
+		Type: api.InstanceTypeContainer,
+		InstancePut: api.InstancePut{
+			Config: effectiveConfig,
+		},
+		Source: api.InstanceSource{
+			Type:         "copy",
+			Source:       srcContainerName + "/" + snap.Name,
+			BaseImage:    "",
+			InstanceOnly: true,
+		},
+	}
+
+	op, err := c.server.CreateInstance(req)
+	if err != nil {
+		return fmt.Errorf("failed to clone from %s/%s to %s: %w", srcContainerName, SnapshotName, name, err)
+	}
+
+	return op.Wait()
+}
+
+// StartInstance starts a stopped container.
+func (c *IncusClient) StartInstance(name string) error {
+	req := api.InstanceStatePut{
+		Action:  "start",
+		Timeout: -1,
+	}
+
+	op, err := c.server.UpdateInstanceState(name, req, "")
+	if err != nil {
+		return fmt.Errorf("failed to start instance %q: %w", name, err)
+	}
+
+	return op.Wait()
+}
+
+// StopInstance stops a running container.
+func (c *IncusClient) StopInstance(name string, force bool) error {
+	req := api.InstanceStatePut{
+		Action:  "stop",
+		Timeout: 30,
+		Force:   force,
+	}
+
+	op, err := c.server.UpdateInstanceState(name, req, "")
+	if err != nil {
+		return fmt.Errorf("failed to stop instance %q: %w", name, err)
+	}
+
+	return op.Wait()
+}
+
+// DeleteInstance deletes a container. It must be stopped first.
+func (c *IncusClient) DeleteInstance(name string) error {
+	op, err := c.server.DeleteInstance(name)
+	if err != nil {
+		return fmt.Errorf("failed to delete instance %q: %w", name, err)
+	}
+
+	return op.Wait()
+}
+
+// StopAndDeleteInstance stops (if running) and deletes a container.
+func (c *IncusClient) StopAndDeleteInstance(name string) error {
+	state, _, err := c.server.GetInstanceState(name)
+	if err != nil {
+		return fmt.Errorf("failed to get state of %q: %w", name, err)
+	}
+
+	if state.Status == "Running" {
+		if err := c.StopInstance(name, true); err != nil {
+			return err
+		}
+	}
+
+	return c.DeleteInstance(name)
+}
+
+// CreateSnapshot creates a named snapshot of a container.
+// The container should be stopped for a consistent snapshot.
+func (c *IncusClient) CreateSnapshot(containerName, snapshotName string) error {
+	req := api.InstanceSnapshotsPost{
+		Name:     snapshotName,
+		Stateful: false,
+	}
+
+	op, err := c.server.CreateInstanceSnapshot(containerName, req)
+	if err != nil {
+		return fmt.Errorf("failed to create snapshot %q on %q: %w", snapshotName, containerName, err)
+	}
+
+	return op.Wait()
+}
+
+// DeleteSnapshot deletes a named snapshot from a container.
+func (c *IncusClient) DeleteSnapshot(containerName, snapshotName string) error {
+	op, err := c.server.DeleteInstanceSnapshot(containerName, snapshotName)
+	if err != nil {
+		return fmt.Errorf("failed to delete snapshot %q on %q: %w", snapshotName, containerName, err)
+	}
+
+	return op.Wait()
+}
+
+// HasSnapshot checks if a container has a specific snapshot.
+func (c *IncusClient) HasSnapshot(containerName, snapshotName string) bool {
+	_, _, err := c.server.GetInstanceSnapshot(containerName, snapshotName)
+	return err == nil
+}
+
+// GetInstanceState returns the current state (running/stopped) of a container.
+func (c *IncusClient) GetInstanceState(name string) (*api.InstanceState, error) {
+	state, _, err := c.server.GetInstanceState(name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get state of %q: %w", name, err)
+	}
+
+	return state, nil
+}
+
+// GetInstance returns the instance configuration.
+func (c *IncusClient) GetInstance(name string) (*api.Instance, error) {
+	inst, _, err := c.server.GetInstance(name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get instance %q: %w", name, err)
+	}
+
+	return inst, nil
+}
+
+// InstanceExists checks if a container exists.
+func (c *IncusClient) InstanceExists(name string) bool {
+	_, _, err := c.server.GetInstance(name)
+	return err == nil
+}
+
+// IsRunning checks if a container is currently running.
+func (c *IncusClient) IsRunning(name string) bool {
+	state, err := c.GetInstanceState(name)
+	if err != nil {
+		return false
+	}
+
+	return state.Status == "Running"
+}
+
+// ListInstances returns all instances matching a name prefix.
+func (c *IncusClient) ListInstances(prefix string) ([]api.Instance, error) {
+	instances, err := c.server.GetInstances(api.InstanceTypeContainer)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list instances: %w", err)
+	}
+
+	if prefix == "" {
+		return instances, nil
+	}
+
+	var filtered []api.Instance
+	for _, inst := range instances {
+		if strings.HasPrefix(inst.Name, prefix) {
+			filtered = append(filtered, inst)
+		}
+	}
+
+	return filtered, nil
+}
+
+// ListTemplates returns all template containers.
+func (c *IncusClient) ListTemplates() ([]api.Instance, error) {
+	return c.ListInstances(TemplatePrefix)
+}
+
+// ListSessionContainers returns all session containers.
+func (c *IncusClient) ListSessionContainers() ([]api.Instance, error) {
+	sessions, err := c.ListInstances(SessionPrefix)
+	if err != nil {
+		return nil, err
+	}
+
+	fleet, err := c.ListInstances(FleetPrefix)
+	if err != nil {
+		return nil, err
+	}
+
+	return append(sessions, fleet...), nil
+}
+
+// ExecSimple runs a non-interactive command inside a container and waits for completion.
+// Returns the exit code.
+func (c *IncusClient) ExecSimple(containerName string, command []string) (int, error) {
+	req := api.InstanceExecPost{
+		Command:     command,
+		WaitForWS:   false,
+		Interactive: false,
+	}
+
+	op, err := c.server.ExecInstance(containerName, req, nil)
+	if err != nil {
+		return -1, fmt.Errorf("failed to exec in %q: %w", containerName, err)
+	}
+
+	if err := op.Wait(); err != nil {
+		return -1, fmt.Errorf("exec failed in %q: %w", containerName, err)
+	}
+
+	// Get exit code from operation metadata
+	opAPI := op.Get()
+	exitCode := -1
+	if opAPI.Metadata != nil {
+		if rc, ok := opAPI.Metadata["return"]; ok {
+			switch v := rc.(type) {
+			case float64:
+				exitCode = int(v)
+			case string:
+				exitCode, _ = strconv.Atoi(v)
+			}
+		}
+	}
+
+	return exitCode, nil
+}
+
+// GetServerInfo returns basic Incus server information.
+func (c *IncusClient) GetServerInfo() (*api.Server, error) {
+	server, _, err := c.server.GetServer()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get server info: %w", err)
+	}
+
+	return server, nil
+}
+
+// GetStorageBackend returns the storage backend used by the default pool.
+func (c *IncusClient) GetStorageBackend() (string, error) {
+	pools, err := c.server.GetStoragePools()
+	if err != nil {
+		return "", fmt.Errorf("failed to list storage pools: %w", err)
+	}
+
+	if len(pools) == 0 {
+		return "none", nil
+	}
+
+	// Return the driver of the first (default) pool
+	return pools[0].Driver, nil
+}

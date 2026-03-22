@@ -744,10 +744,11 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 
 	sessionID := mux.Vars(r)["id"]
 
-	// If this is an active fleet session, stop it
+	// If this is an active fleet session, stop it and clean up sandbox
 	registry := getFleetSessionRegistry()
 	if fs := registry.Get(sessionID); fs != nil {
 		fs.Stop()
+		fs.Cleanup() // destroy sandbox container + clean session registry
 		registry.Unregister(sessionID)
 	}
 

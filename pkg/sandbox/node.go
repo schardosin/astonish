@@ -418,7 +418,9 @@ func (lnc *LazyNodeClient) Cleanup() {
 	}
 
 	if lnc.containerName != "" && lnc.incusClient != nil {
-		_ = lnc.incusClient.StopAndDeleteInstance(lnc.containerName)
+		// Use destroyOverlayContainer to properly unmount overlayfs
+		// and clean up overlay dirs before deleting the container.
+		_ = destroyOverlayContainer(lnc.incusClient, lnc.containerName)
 	}
 
 	if lnc.containerName != "" && lnc.sessRegistry != nil {

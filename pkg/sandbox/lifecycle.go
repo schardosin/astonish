@@ -61,6 +61,13 @@ func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, 
 
 	// Guard against name collision (unlikely with 8-char prefix, but safe)
 	if client.InstanceExists(containerName) {
+		// Also clean the registry entry for whatever session owned this container
+		for _, entry := range sessRegistry.List() {
+			if entry.ContainerName == containerName && entry.SessionID != sessionID {
+				_ = sessRegistry.Remove(entry.SessionID)
+				break
+			}
+		}
 		if err := destroyOverlayContainer(client, containerName); err != nil {
 			return "", fmt.Errorf("failed to clean up existing container %q: %w", containerName, err)
 		}

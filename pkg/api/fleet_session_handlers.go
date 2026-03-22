@@ -551,6 +551,7 @@ func FleetSessionStopHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fs.Stop()
+	fs.Cleanup() // destroy sandbox container + clean session registry
 	registry.Unregister(sessionID)
 
 	w.Header().Set("Content-Type", "application/json")

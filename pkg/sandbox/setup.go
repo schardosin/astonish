@@ -109,6 +109,9 @@ func Status(client *IncusClient, tplRegistry *TemplateRegistry, sessRegistry *Se
 	_, _, aliasErr := client.Server().GetImageAlias(OverlayImageAlias)
 	status.OverlayReady = aliasErr == nil
 
+	// Auto-reap stale registry entries before counting
+	sessRegistry.Reap(client)
+
 	// Counts
 	status.TemplateCount = len(tplRegistry.List())
 	status.SessionCount = len(sessRegistry.List())

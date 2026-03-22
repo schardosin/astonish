@@ -227,6 +227,13 @@ func handleSandboxList() error {
 		return err
 	}
 
+	// Auto-reap stale entries whose containers no longer exist.
+	// This self-heals after code paths that destroy containers without
+	// cleaning the registry (e.g., fleet session exit, node cleanup).
+	if reaped := sessRegistry.Reap(client); reaped > 0 {
+		fmt.Printf("(cleaned up %d stale registry entries)\n\n", reaped)
+	}
+
 	entries := sessRegistry.List()
 	if len(entries) == 0 {
 		fmt.Println("No active session containers.")

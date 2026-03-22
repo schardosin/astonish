@@ -181,3 +181,32 @@ func (r *SessionRegistry) ResolveSessionID(input string) (string, bool) {
 
 	return "", false
 }
+
+// Reap removes registry entries whose containers no longer exist in Incus.
+// Returns the number of entries removed. This is the self-healing mechanism
+// that prevents "missing" entries from accumulating after container destruction
+// by code paths that don't clean the registry (e.g., LazyNodeClient.Cleanup,
+// fleet session exit).
+func (r *SessionRegistry) Reap(client *IncusClient) int {
+	r.mu.RLock()
+	var stale []string
+	for sessID, entry := range r.entries {
+		if !client.InstanceExists(entry.ContainerName) {
+			stale = append(stale, sessID)
+		}
+	}
+	r.mu.RUnlock()
+
+	if len(stale) == 0 {
+		return 0
+	}
+
+	r.mu.Lock()
+	for _, sessID := range stale {
+		delete(r.entries, sessID)
+	}
+	r.mu.Unlock()
+
+	_ = r.Save()
+	return len(stale)
+}

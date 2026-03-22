@@ -10,6 +10,7 @@ type SandboxStatus struct {
 	IncusConnected bool
 	IncusVersion   string
 	StorageBackend string
+	OverlayReady   bool
 	TemplateCount  int
 	SessionCount   int
 }
@@ -72,9 +73,14 @@ func ValidateEnvironment() error {
 		fmt.Printf("Warning: could not determine storage backend: %v\n", err)
 	} else {
 		fmt.Printf("Storage backend: %s\n", backend)
-		if backend == "dir" {
-			fmt.Println("Note: 'dir' backend uses full copies (10-30s per clone). ZFS or btrfs recommended for fast CoW clones.")
-		}
+	}
+
+	// Check overlay image
+	_, _, aliasErr := client.Server().GetImageAlias(OverlayImageAlias)
+	if aliasErr == nil {
+		fmt.Println("Overlay image:  ready (instant session creation)")
+	} else {
+		fmt.Println("Overlay image:  not found (run 'astonish sandbox init')")
 	}
 
 	return nil
@@ -98,6 +104,10 @@ func Status(client *IncusClient, tplRegistry *TemplateRegistry, sessRegistry *Se
 	if err == nil {
 		status.StorageBackend = backend
 	}
+
+	// Overlay image readiness
+	_, _, aliasErr := client.Server().GetImageAlias(OverlayImageAlias)
+	status.OverlayReady = aliasErr == nil
 
 	// Counts
 	status.TemplateCount = len(tplRegistry.List())

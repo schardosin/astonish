@@ -484,6 +484,10 @@ func Run(cfg RunConfig) error {
 			// Make activator available to API handlers
 			api.SetPlanActivator(activator)
 
+			// Wire auto-activation into save_fleet_plan tool so non-chat
+			// plans start polling immediately after the wizard saves them.
+			tools.SetPlanActivatorFunc(activator.Activate)
+
 			// Wire the session registry so CheckForWork can detect active sessions
 			activator.SetSessionRegistry(api.GetFleetSessionRegistry())
 

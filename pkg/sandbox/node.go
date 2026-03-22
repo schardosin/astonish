@@ -250,6 +250,7 @@ func (nc *NodeClient) ContainerName() string {
 type LazyNodeClient struct {
 	incusClient  *IncusClient
 	sessRegistry *SessionRegistry
+	tplRegistry  *TemplateRegistry
 	template     string // template to clone from (empty = @base)
 
 	mu            sync.Mutex
@@ -271,10 +272,11 @@ type LazyNodeClient struct {
 
 // NewLazyNodeClient creates a lazy node client that defers container creation
 // until BindSession is called (typically from ProcessRequest, before the LLM call).
-func NewLazyNodeClient(client *IncusClient, registry *SessionRegistry, template string) *LazyNodeClient {
+func NewLazyNodeClient(client *IncusClient, sessRegistry *SessionRegistry, tplRegistry *TemplateRegistry, template string) *LazyNodeClient {
 	return &LazyNodeClient{
 		incusClient:  client,
-		sessRegistry: registry,
+		sessRegistry: sessRegistry,
+		tplRegistry:  tplRegistry,
 		template:     template,
 	}
 }
@@ -313,7 +315,7 @@ func (lnc *LazyNodeClient) initBackground(sessionID string) {
 	defer close(lnc.initDone)
 
 	// Create or get the session container
-	containerName, err := EnsureSessionContainer(lnc.incusClient, lnc.sessRegistry, sessionID, lnc.template)
+	containerName, err := EnsureSessionContainer(lnc.incusClient, lnc.sessRegistry, lnc.tplRegistry, sessionID, lnc.template)
 	if err != nil {
 		lnc.mu.Lock()
 		lnc.initErr = fmt.Errorf("failed to create session container: %w", err)
@@ -506,6 +508,7 @@ func (lnc *LazyNodeClient) RestartNode() error {
 type NodeClientPool struct {
 	incusClient  *IncusClient
 	sessRegistry *SessionRegistry
+	tplRegistry  *TemplateRegistry
 	template     string
 
 	mu      sync.Mutex
@@ -517,10 +520,11 @@ type NodeClientPool struct {
 // NewNodeClientPool creates a pool that will create per-session LazyNodeClients
 // on demand. The template parameter selects which container template to clone
 // from (empty = @base).
-func NewNodeClientPool(client *IncusClient, registry *SessionRegistry, template string) *NodeClientPool {
+func NewNodeClientPool(client *IncusClient, sessRegistry *SessionRegistry, tplRegistry *TemplateRegistry, template string) *NodeClientPool {
 	return &NodeClientPool{
 		incusClient:  client,
-		sessRegistry: registry,
+		sessRegistry: sessRegistry,
+		tplRegistry:  tplRegistry,
 		template:     template,
 		clients:      make(map[string]*LazyNodeClient),
 	}
@@ -554,7 +558,7 @@ func (p *NodeClientPool) GetOrCreate(sessionID string) *LazyNodeClient {
 	}
 
 	// Create a new LazyNodeClient for this session
-	client := NewLazyNodeClient(p.incusClient, p.sessRegistry, p.template)
+	client := NewLazyNodeClient(p.incusClient, p.sessRegistry, p.tplRegistry, p.template)
 	client.Env = p.env
 	p.clients[sessionID] = client
 	return client

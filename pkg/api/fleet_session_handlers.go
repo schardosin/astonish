@@ -888,6 +888,12 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 		return
 	}
 
+	tplRegistry, tplErr := sandbox.NewTemplateRegistry()
+	if tplErr != nil {
+		log.Printf("[fleet-sandbox] Warning: failed to create template registry: %v", tplErr)
+		// Continue with nil — overlay will fall back gracefully
+	}
+
 	// Determine which template to use: plan template or @base
 	template := ""
 	if plan != nil {
@@ -895,7 +901,7 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 	}
 
 	// Create a lazy node client for this fleet session
-	lazyNode := sandbox.NewLazyNodeClient(sandboxClient, sessRegistry, template)
+	lazyNode := sandbox.NewLazyNodeClient(sandboxClient, sessRegistry, tplRegistry, template)
 
 	// Build env vars to inject into the container
 	lazyNode.Env = buildSandboxEnv(plan, ghToken)

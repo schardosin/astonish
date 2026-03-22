@@ -2,23 +2,34 @@ package sandbox
 
 import (
 	"fmt"
+	"log"
 	"time"
 )
 
 // EnsureSessionContainer creates or retrieves a session container.
 // If the session already has a container, it ensures it's running.
-// If not, it clones from the specified template (default: @base).
-func EnsureSessionContainer(client *IncusClient, registry *SessionRegistry, sessionID, templateName string) (string, error) {
+// If not, it creates an overlay-based container from the specified template.
+//
+// Instead of cloning the full template filesystem (10-30s on dir backend),
+// this creates a lightweight container from a tiny shell image (~45ms) and
+// mounts an overlayfs backed by the template's lower layers (~4ms). Total: ~200ms.
+// For custom templates, the overlay is stacked: template-upper:@base-snapshot.
+func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, tplRegistry *TemplateRegistry, sessionID, templateName string) (string, error) {
 	// Check registry — already exists?
-	if entry := registry.Get(sessionID); entry != nil {
+	if entry := sessRegistry.Get(sessionID); entry != nil {
 		containerName := entry.ContainerName
 
 		if client.IsRunning(containerName) {
 			return containerName, nil
 		}
 
-		// Exists but not running — try to start it
+		// Exists but not running — try to re-mount overlay and start it
 		if client.InstanceExists(containerName) {
+			// Re-mount overlay if needed (might have been lost on reboot)
+			if err := ensureOverlayMounted(client, containerName, entry.TemplateName, tplRegistry); err != nil {
+				log.Printf("[sandbox] Warning: failed to re-mount overlay for %q: %v", containerName, err)
+			}
+
 			if err := client.StartInstance(containerName); err != nil {
 				return "", fmt.Errorf("failed to start existing session container %q: %w", containerName, err)
 			}
@@ -26,7 +37,7 @@ func EnsureSessionContainer(client *IncusClient, registry *SessionRegistry, sess
 		}
 
 		// Container was registered but no longer exists — clean up and recreate
-		registry.Remove(sessionID)
+		sessRegistry.Remove(sessionID)
 	}
 
 	// Resolve template
@@ -34,40 +45,40 @@ func EnsureSessionContainer(client *IncusClient, registry *SessionRegistry, sess
 		templateName = BaseTemplate
 	}
 
-	// Verify template has a snapshot
+	// Verify template exists (either as an Incus container or in the registry)
 	tplContainerName := TemplateName(templateName)
 	if !client.InstanceExists(tplContainerName) {
 		return "", fmt.Errorf("template %q does not exist; run 'astonish sandbox init' first", templateName)
 	}
 
-	if !client.HasSnapshot(tplContainerName, SnapshotName) {
-		return "", fmt.Errorf("template %q has no snapshot; run 'astonish sandbox template snapshot %s' first", templateName, templateName)
+	// For @base, verify snapshot exists (it's the root of the overlay chain)
+	if templateName == BaseTemplate && !client.HasSnapshot(tplContainerName, SnapshotName) {
+		return "", fmt.Errorf("template %q has no snapshot; run 'astonish sandbox init' first", templateName)
 	}
 
-	// Clone from template snapshot
+	// Create overlay-based session container
 	containerName := SessionContainerName(sessionID)
 
 	// Guard against name collision (unlikely with 8-char prefix, but safe)
 	if client.InstanceExists(containerName) {
-		// Probably orphaned from a previous session with same ID prefix.
-		// Destroy it and recreate.
-		if err := client.StopAndDeleteInstance(containerName); err != nil {
+		if err := destroyOverlayContainer(client, containerName); err != nil {
 			return "", fmt.Errorf("failed to clean up existing container %q: %w", containerName, err)
 		}
 	}
 
-	if err := client.CreateContainerFromSnapshot(containerName, templateName, nil); err != nil {
+	// Create the container with overlayfs (tiny image + overlay mount)
+	if err := CreateOverlayContainer(client, containerName, templateName, tplRegistry); err != nil {
 		return "", fmt.Errorf("failed to create session container: %w", err)
 	}
 
 	// Start
 	if err := client.StartInstance(containerName); err != nil {
-		client.DeleteInstance(containerName)
+		destroyOverlayContainer(client, containerName)
 		return "", fmt.Errorf("failed to start session container: %w", err)
 	}
 
 	// Register
-	if err := registry.Put(sessionID, containerName, templateName); err != nil {
+	if err := sessRegistry.Put(sessionID, containerName, templateName); err != nil {
 		// Non-fatal: container works, metadata just won't survive restart
 		fmt.Printf("Warning: failed to register session container: %v\n", err)
 	}
@@ -75,7 +86,8 @@ func EnsureSessionContainer(client *IncusClient, registry *SessionRegistry, sess
 	return containerName, nil
 }
 
-// DestroyForSession stops and deletes the container for a session.
+// DestroyForSession stops and deletes the container for a session,
+// including unmounting any overlayfs.
 func DestroyForSession(client *IncusClient, registry *SessionRegistry, sessionID string) error {
 	entry := registry.Get(sessionID)
 	if entry == nil {
@@ -85,12 +97,62 @@ func DestroyForSession(client *IncusClient, registry *SessionRegistry, sessionID
 	containerName := entry.ContainerName
 
 	if client.InstanceExists(containerName) {
-		if err := client.StopAndDeleteInstance(containerName); err != nil {
+		if err := destroyOverlayContainer(client, containerName); err != nil {
 			return fmt.Errorf("failed to destroy session container %q: %w", containerName, err)
 		}
 	}
 
 	return registry.Remove(sessionID)
+}
+
+// destroyOverlayContainer unmounts overlay, stops, and deletes a container.
+func destroyOverlayContainer(client *IncusClient, containerName string) error {
+	// Stop the container first (overlay can't be unmounted while in use)
+	state, _, err := client.server.GetInstanceState(containerName)
+	if err == nil && state.Status == "Running" {
+		if err := client.StopInstance(containerName, true); err != nil {
+			return err
+		}
+	}
+
+	// Unmount overlay
+	poolName, err := GetPoolForProfile(client)
+	if err == nil {
+		poolPath, err := GetPoolSourcePath(client, poolName)
+		if err == nil {
+			UnmountSessionOverlay(poolPath, containerName)
+		}
+	}
+
+	// Delete the container
+	return client.DeleteInstance(containerName)
+}
+
+// ensureOverlayMounted re-mounts the overlay if it's not currently mounted.
+// This handles the case where the system was rebooted — the container exists
+// in Incus's database but the overlay mount was lost.
+func ensureOverlayMounted(client *IncusClient, containerName, templateName string, tplRegistry *TemplateRegistry) error {
+	poolName, err := GetPoolForProfile(client)
+	if err != nil {
+		return err
+	}
+
+	poolPath, err := GetPoolSourcePath(client, poolName)
+	if err != nil {
+		return err
+	}
+
+	if IsOverlayMounted(poolPath, containerName) {
+		return nil // already mounted
+	}
+
+	// Resolve lower layers (supports stacked overlays for custom templates)
+	lowerDir, err := ResolveLowerLayers(poolPath, templateName, tplRegistry)
+	if err != nil {
+		return err
+	}
+
+	return MountOverlay(poolPath, containerName, lowerDir)
 }
 
 // TryDestroySessionContainer is a best-effort helper that destroys the sandbox
@@ -132,7 +194,7 @@ func PruneOrphans(client *IncusClient, registry *SessionRegistry, existingSessio
 		fmt.Printf("Pruning orphaned container %q (session %s)...\n", entry.ContainerName, entry.SessionID[:8])
 
 		if client.InstanceExists(entry.ContainerName) {
-			if err := client.StopAndDeleteInstance(entry.ContainerName); err != nil {
+			if err := destroyOverlayContainer(client, entry.ContainerName); err != nil {
 				fmt.Printf("  Warning: failed to destroy %q: %v\n", entry.ContainerName, err)
 				continue
 			}
@@ -168,7 +230,7 @@ func PruneOrphans(client *IncusClient, registry *SessionRegistry, existingSessio
 		}
 
 		fmt.Printf("Pruning unregistered container %q (created %s ago)...\n", inst.Name, time.Since(inst.CreatedAt).Round(time.Minute))
-		if err := client.StopAndDeleteInstance(inst.Name); err != nil {
+		if err := destroyOverlayContainer(client, inst.Name); err != nil {
 			fmt.Printf("  Warning: failed to destroy %q: %v\n", inst.Name, err)
 			continue
 		}

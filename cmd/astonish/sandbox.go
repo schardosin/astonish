@@ -172,14 +172,13 @@ func handleSandboxStatus() error {
 	if status.StorageBackend != "" {
 		fmt.Printf("Storage backend:  %s\n", status.StorageBackend)
 	}
+	if status.OverlayReady {
+		fmt.Printf("Session creation: instant (overlayfs)\n")
+	} else {
+		fmt.Printf("Session creation: not configured (run 'astonish sandbox init')\n")
+	}
 	fmt.Printf("Templates:        %d\n", status.TemplateCount)
 	fmt.Printf("Session containers: %d\n", status.SessionCount)
-
-	if status.StorageBackend == "dir" {
-		fmt.Println("")
-		fmt.Println("Note: 'dir' backend uses full copies (10-30s per clone).")
-		fmt.Println("      ZFS or btrfs is recommended for fast CoW clones (<1s).")
-	}
 
 	return nil
 }
@@ -523,8 +522,12 @@ func handleTemplateShell(name string) error {
 		return fmt.Errorf("failed to connect to Incus: %w", err)
 	}
 
-	_ = client // verify connection only
-	return sandbox.ShellIntoTemplate(client, name)
+	registry, err := sandbox.NewTemplateRegistry()
+	if err != nil {
+		return fmt.Errorf("failed to load template registry: %w", err)
+	}
+
+	return sandbox.ShellIntoTemplate(client, registry, name)
 }
 
 // --- Template Snapshot ---

@@ -138,11 +138,27 @@ func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry) error {
 		return fmt.Errorf("failed to register base template: %w", err)
 	}
 
+	// Create the tiny overlay shell image for instant session container creation.
+	// This image (~670 bytes) is used instead of cloning the full template —
+	// session containers get their filesystem via overlayfs.
+	if err := EnsureOverlayImage(client); err != nil {
+		return fmt.Errorf("failed to create overlay image: %w", err)
+	}
+
+	// Ensure the overlay base directory exists
+	if err := EnsureOverlayBaseDir(); err != nil {
+		return fmt.Errorf("failed to create overlay base directory: %w", err)
+	}
+
 	fmt.Println("Base template initialized successfully.")
 	return nil
 }
 
-// CreateTemplate creates a new custom template by cloning from @base.
+// CreateTemplate creates a new custom template from @base using overlayfs.
+// The template container is created instantly (~260ms) from the tiny shell image
+// with an overlayfs mount backed by @base's snapshot. The user can then shell in
+// to customize it. When they run 'template snapshot', the overlay is materialized
+// into a flat rootfs and snapshotted for use as a lower layer in sessions.
 func CreateTemplate(client *IncusClient, registry *TemplateRegistry, name, description string) error {
 	if name == BaseTemplate {
 		return fmt.Errorf("cannot create a template named %q (reserved)", BaseTemplate)
@@ -167,9 +183,9 @@ func CreateTemplate(client *IncusClient, registry *TemplateRegistry, name, descr
 
 	fmt.Printf("Creating template %q from @base...\n", name)
 
-	// Clone from @base snapshot
-	if err := client.CreateContainerFromSnapshot(containerName, BaseTemplate, nil); err != nil {
-		return fmt.Errorf("failed to clone from @base: %w", err)
+	// Create overlay-based container (tiny image + overlayfs mount backed by @base snapshot)
+	if err := CreateOverlayContainer(client, containerName, BaseTemplate, registry); err != nil {
+		return fmt.Errorf("failed to create template container: %w", err)
 	}
 
 	// Register in metadata
@@ -190,7 +206,8 @@ func CreateTemplate(client *IncusClient, registry *TemplateRegistry, name, descr
 
 // ShellIntoTemplate starts an interactive shell in a template container.
 // The template must exist. It will be started if stopped.
-func ShellIntoTemplate(client *IncusClient, name string) error {
+// For overlay-based templates, the overlay is re-mounted if needed.
+func ShellIntoTemplate(client *IncusClient, registry *TemplateRegistry, name string) error {
 	containerName := TemplateName(name)
 
 	if !client.InstanceExists(containerName) {
@@ -199,6 +216,14 @@ func ShellIntoTemplate(client *IncusClient, name string) error {
 
 	// Start if not running
 	if !client.IsRunning(containerName) {
+		// Re-mount overlay if this template is based on another (not @base itself)
+		meta := registry.Get(name)
+		if meta != nil && meta.BasedOn != "" {
+			if err := ensureOverlayMounted(client, containerName, meta.BasedOn, registry); err != nil {
+				log.Printf("[sandbox] Warning: failed to ensure overlay for template %q: %v", name, err)
+			}
+		}
+
 		fmt.Printf("Starting template %q...\n", name)
 		if err := client.StartInstance(containerName); err != nil {
 			return fmt.Errorf("failed to start template: %w", err)
@@ -219,13 +244,48 @@ func ShellIntoTemplate(client *IncusClient, name string) error {
 	return nil
 }
 
-// SnapshotTemplate stops the template (if running) and creates/refreshes its snapshot.
+// SnapshotTemplate handles template snapshotting.
+//
+// For @base: stops the container, takes an Incus snapshot of its real rootfs.
+// This snapshot becomes the root lower layer for all overlay chains.
+//
+// For custom templates (overlay-based): no Incus snapshot is needed.
+// The template's state IS its overlay upper directory. Sessions from this
+// template use stacked overlayfs (template-upper:@base-snapshot). This
+// function just updates the registry metadata.
 func SnapshotTemplate(client *IncusClient, registry *TemplateRegistry, name string) error {
 	containerName := TemplateName(name)
 
 	if !client.InstanceExists(containerName) {
 		return fmt.Errorf("template %q does not exist", name)
 	}
+
+	meta := registry.Get(name)
+
+	// Custom template (overlay-based) — no Incus snapshot needed
+	if meta != nil && meta.BasedOn != "" {
+		// Stop if running (for consistent state)
+		if client.IsRunning(containerName) {
+			fmt.Printf("Stopping template %q...\n", name)
+			if err := client.StopInstance(containerName, false); err != nil {
+				return fmt.Errorf("failed to stop template: %w", err)
+			}
+		}
+
+		// Update metadata
+		meta.SnapshotAt = time.Now()
+		if hash, hashErr := ComputeBinaryHash(); hashErr == nil {
+			meta.BinaryHash = hash
+		}
+		if err := registry.Update(meta); err != nil {
+			return fmt.Errorf("failed to update template metadata: %w", err)
+		}
+
+		fmt.Printf("Template %q state saved (overlay-based, no snapshot needed).\n", name)
+		return nil
+	}
+
+	// @base template — real Incus snapshot required
 
 	// Stop if running (for consistent snapshot)
 	if client.IsRunning(containerName) {
@@ -250,15 +310,17 @@ func SnapshotTemplate(client *IncusClient, registry *TemplateRegistry, name stri
 	}
 
 	// Update metadata
-	meta := registry.Get(name)
 	if meta != nil {
 		meta.SnapshotAt = time.Now()
+		if hash, hashErr := ComputeBinaryHash(); hashErr == nil {
+			meta.BinaryHash = hash
+		}
 		if err := registry.Update(meta); err != nil {
 			return fmt.Errorf("failed to update template metadata: %w", err)
 		}
 	}
 
-	fmt.Printf("Template %q snapshot created. It is now ready for cloning.\n", name)
+	fmt.Printf("Template %q snapshot created.\n", name)
 	return nil
 }
 
@@ -276,31 +338,134 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 		return fmt.Errorf("template %q does not exist", name)
 	}
 
-	if !client.HasSnapshot(containerName, SnapshotName) {
-		return fmt.Errorf("template %q has no snapshot; run 'astonish sandbox template snapshot %s' first", name, name)
-	}
+	meta := registry.Get(name)
 
 	fmt.Printf("Promoting template %q to @base...\n", name)
 	fmt.Println("WARNING: This will replace the current @base template.")
 
-	// Delete the old @base
-	if client.InstanceExists(baseName) {
-		if err := client.StopAndDeleteInstance(baseName); err != nil {
-			return fmt.Errorf("failed to remove old @base: %w", err)
+	// Resolve pool paths
+	poolName, err := GetPoolForProfile(client)
+	if err != nil {
+		return fmt.Errorf("failed to determine storage pool: %w", err)
+	}
+	poolPath, err := GetPoolSourcePath(client, poolName)
+	if err != nil {
+		return fmt.Errorf("failed to get pool path: %w", err)
+	}
+
+	// Determine if this is an overlay-based custom template or a traditional one
+	isOverlayBased := meta != nil && meta.BasedOn != ""
+
+	if isOverlayBased {
+		// Overlay-based promotion: mount the stacked overlay read-only on a
+		// temp dir to get the full merged view, then materialize it into @base.
+		lowerLayers, err := ResolveLowerLayers(poolPath, name, registry)
+		if err != nil {
+			return fmt.Errorf("failed to resolve overlay layers for %q: %w", name, err)
+		}
+
+		// Create a temporary mount point for the merged view
+		mergedDir, err := os.MkdirTemp("", "astonish-promote-*")
+		if err != nil {
+			return fmt.Errorf("failed to create temp dir for merge: %w", err)
+		}
+		defer os.RemoveAll(mergedDir)
+
+		// Mount read-only overlay to get the merged view
+		// For a read-only mount, we don't need upperdir/workdir
+		mountOpts := fmt.Sprintf("lowerdir=%s", lowerLayers)
+		cmd := exec.Command("mount", "-t", "overlay", "overlay", "-o", mountOpts, mergedDir)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to mount merged overlay: %w\nOutput: %s", err, string(output))
+		}
+		defer func() {
+			exec.Command("umount", mergedDir).Run()
+		}()
+
+		// Stop and unmount old @base overlay (if any)
+		if client.IsRunning(baseName) {
+			if err := client.StopInstance(baseName, false); err != nil {
+				return fmt.Errorf("failed to stop old @base: %w", err)
+			}
+		}
+		if IsOverlayMounted(poolPath, baseName) {
+			_ = UnmountSessionOverlay(poolPath, baseName)
+		}
+
+		// Delete old @base snapshot and container
+		if client.HasSnapshot(baseName, SnapshotName) {
+			if err := client.DeleteSnapshot(baseName, SnapshotName); err != nil {
+				return fmt.Errorf("failed to delete old @base snapshot: %w", err)
+			}
+		}
+		if client.InstanceExists(baseName) {
+			if err := client.StopAndDeleteInstance(baseName); err != nil {
+				return fmt.Errorf("failed to remove old @base: %w", err)
+			}
+		}
+
+		// Create new @base container from tiny image
+		fmt.Println("Creating new @base container...")
+		req := api.InstancesPost{
+			Name: baseName,
+			Type: api.InstanceTypeContainer,
+			InstancePut: api.InstancePut{
+				Config: map[string]string{
+					"security.privileged": "true",
+					"security.nesting":    "false",
+				},
+			},
+			Source: api.InstanceSource{
+				Type:  "image",
+				Alias: OverlayImageAlias,
+			},
+		}
+		op, err := client.server.CreateInstance(req)
+		if err != nil {
+			return fmt.Errorf("failed to create new @base container: %w", err)
+		}
+		if err := op.Wait(); err != nil {
+			return fmt.Errorf("failed to wait for @base container creation: %w", err)
+		}
+
+		// Copy the merged overlay view into @base's real rootfs
+		baseRootfs := ContainerRootfsPath(poolPath, baseName)
+		fmt.Println("Materializing template into @base rootfs (this may take a moment)...")
+		rsyncCmd := exec.Command("rsync", "-a", "--delete", mergedDir+"/", baseRootfs+"/")
+		if output, err := rsyncCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to materialize into @base: %w\nOutput: %s", err, string(output))
+		}
+
+		// Snapshot the new @base
+		fmt.Println("Snapshotting new @base...")
+		if err := client.CreateSnapshot(baseName, SnapshotName); err != nil {
+			return fmt.Errorf("failed to snapshot new @base: %w", err)
+		}
+	} else {
+		// Traditional template with real Incus snapshot — use the old approach
+		if !client.HasSnapshot(containerName, SnapshotName) {
+			return fmt.Errorf("template %q has no snapshot; run 'astonish sandbox template snapshot %s' first", name, name)
+		}
+
+		// Delete the old @base
+		if client.InstanceExists(baseName) {
+			if err := client.StopAndDeleteInstance(baseName); err != nil {
+				return fmt.Errorf("failed to remove old @base: %w", err)
+			}
+		}
+
+		// Clone from the promoted template's snapshot
+		if err := client.CreateContainerFromSnapshot(baseName, name, nil); err != nil {
+			return fmt.Errorf("failed to clone promoted template to @base: %w", err)
+		}
+
+		// Snapshot the new @base
+		if err := client.CreateSnapshot(baseName, SnapshotName); err != nil {
+			return fmt.Errorf("failed to snapshot new @base: %w", err)
 		}
 	}
 
-	// Clone from the promoted template's snapshot
-	if err := client.CreateContainerFromSnapshot(baseName, name, nil); err != nil {
-		return fmt.Errorf("failed to clone promoted template to @base: %w", err)
-	}
-
-	// Snapshot the new @base
-	if err := client.CreateSnapshot(baseName, SnapshotName); err != nil {
-		return fmt.Errorf("failed to snapshot new @base: %w", err)
-	}
-
-	// Update metadata
+	// Update @base metadata
 	baseMeta := registry.Get(BaseTemplate)
 	if baseMeta == nil {
 		baseMeta = &TemplateMeta{
@@ -310,6 +475,9 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 	}
 
 	baseMeta.SnapshotAt = time.Now()
+	if hash, hashErr := ComputeBinaryHash(); hashErr == nil {
+		baseMeta.BinaryHash = hash
+	}
 	if err := registry.Update(baseMeta); err != nil {
 		return fmt.Errorf("failed to update base template metadata: %w", err)
 	}
@@ -318,7 +486,7 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 	return nil
 }
 
-// DeleteTemplate removes a template container and its metadata.
+// DeleteTemplate removes a template container, its overlay storage, and its metadata.
 func DeleteTemplate(client *IncusClient, registry *TemplateRegistry, name string) error {
 	if name == BaseTemplate {
 		return fmt.Errorf("cannot delete the base template")
@@ -326,10 +494,35 @@ func DeleteTemplate(client *IncusClient, registry *TemplateRegistry, name string
 
 	containerName := TemplateName(name)
 
+	// Resolve pool path for overlay operations
+	poolName, poolErr := GetPoolForProfile(client)
+	var poolPath string
+	if poolErr == nil {
+		poolPath, _ = GetPoolSourcePath(client, poolName)
+	}
+
+	// Unmount any active overlay before deleting
+	if poolPath != "" && IsOverlayMounted(poolPath, containerName) {
+		if err := UnmountSessionOverlay(poolPath, containerName); err != nil {
+			log.Printf("[sandbox] Warning: failed to unmount overlay for %q: %v", containerName, err)
+		}
+	}
+
 	if client.InstanceExists(containerName) {
 		fmt.Printf("Destroying template container %q...\n", name)
 		if err := client.StopAndDeleteInstance(containerName); err != nil {
 			return fmt.Errorf("failed to destroy template container: %w", err)
+		}
+	}
+
+	// Clean up overlay upper/work dirs (UnmountSessionOverlay already removes
+	// session dirs, but for templates the overlay dir might still exist if
+	// unmount was skipped or the template never had an active mount)
+	overlayDir := OverlaySessionDir(containerName)
+	if _, err := os.Stat(overlayDir); err == nil {
+		fmt.Printf("Removing overlay storage for %q...\n", name)
+		if err := os.RemoveAll(overlayDir); err != nil {
+			log.Printf("[sandbox] Warning: failed to remove overlay dir %s: %v", overlayDir, err)
 		}
 	}
 
@@ -359,6 +552,14 @@ func RefreshTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 
 	// Start the template so we can push the updated binary
 	if !client.IsRunning(containerName) {
+		// Re-mount overlay if this template is overlay-based (custom, not @base)
+		meta := registry.Get(name)
+		if meta != nil && meta.BasedOn != "" {
+			if err := ensureOverlayMounted(client, containerName, meta.BasedOn, registry); err != nil {
+				log.Printf("[sandbox] Warning: failed to ensure overlay for template %q: %v", name, err)
+			}
+		}
+
 		fmt.Printf("Starting template %q...\n", name)
 		if err := client.StartInstance(containerName); err != nil {
 			return fmt.Errorf("failed to start template %q: %w", name, err)
@@ -424,18 +625,20 @@ func ComputeBinaryHash() (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// CreateTemplateFromContainer snapshots a running session container and creates
-// a new template from it. This is the wizard's "save_sandbox_template" operation:
+// CreateTemplateFromContainer creates a new template from a running session
+// container. This is the wizard's "save_sandbox_template" operation.
 //
-//  1. Stop the node process (caller must do this before calling)
-//  2. Create a temporary snapshot on the session container
-//  3. Copy the snapshot as a new template container
-//  4. Snapshot the new template container (for cloning)
-//  5. Register in the template registry
-//  6. Clean up the temporary snapshot
+// For overlay-based session containers, only the overlay upper layer (the
+// session's writes/customizations) needs to be captured — not the full
+// 900MB+ rootfs. The new template gets its own overlay container with the
+// session's upper layer copied into it.
 //
-// The container must be running (but with node stopped). The template name must
-// not already exist.
+// Steps:
+//  1. Stop the session container
+//  2. Create overlay container for the new template (from tiny image)
+//  3. Copy the session's overlay upper layer to the template's overlay upper
+//  4. Register the template (stacked overlay, no Incus snapshot needed)
+//  5. Restart the session container
 func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry, containerName, templateName, description string) error {
 	if templateName == BaseTemplate {
 		return fmt.Errorf("cannot create a template named %q (reserved)", BaseTemplate)
@@ -446,48 +649,85 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 		return fmt.Errorf("template %q already exists", templateName)
 	}
 
-	// Temporary snapshot name (unique to avoid conflicts)
-	tmpSnapName := fmt.Sprintf("tpl-save-%d", time.Now().Unix())
+	// Resolve pool paths
+	poolName, err := GetPoolForProfile(client)
+	if err != nil {
+		return fmt.Errorf("failed to determine storage pool: %w", err)
+	}
 
-	// Stop the container for a consistent snapshot
+	poolPath, err := GetPoolSourcePath(client, poolName)
+	if err != nil {
+		return fmt.Errorf("failed to get pool path: %w", err)
+	}
+
+	// Stop the session container for a consistent view
 	if client.IsRunning(containerName) {
-		log.Printf("[sandbox] Stopping container %q for template snapshot...", containerName)
+		log.Printf("[sandbox] Stopping container %q for template creation...", containerName)
 		if err := client.StopInstance(containerName, false); err != nil {
 			return fmt.Errorf("failed to stop container %q: %w", containerName, err)
 		}
 	}
 
-	// Create temporary snapshot on the session container
-	log.Printf("[sandbox] Creating temporary snapshot %q on %q...", tmpSnapName, containerName)
-	if err := client.CreateSnapshot(containerName, tmpSnapName); err != nil {
-		return fmt.Errorf("failed to create snapshot on %q: %w", containerName, err)
+	// Create the template container from the tiny overlay image
+	log.Printf("[sandbox] Creating template container %q...", tplContainerName)
+	req := api.InstancesPost{
+		Name: tplContainerName,
+		Type: api.InstanceTypeContainer,
+		InstancePut: api.InstancePut{
+			Config: map[string]string{
+				"security.privileged": "true",
+				"security.nesting":    "false",
+			},
+		},
+		Source: api.InstanceSource{
+			Type:  "image",
+			Alias: OverlayImageAlias,
+		},
 	}
 
-	// Ensure cleanup of temporary snapshot
-	defer func() {
-		if client.HasSnapshot(containerName, tmpSnapName) {
-			_ = client.DeleteSnapshot(containerName, tmpSnapName)
-		}
-	}()
-
-	// Copy the snapshot as a new template container
-	log.Printf("[sandbox] Copying snapshot to template %q...", tplContainerName)
-	if err := client.CopyFromAnySnapshot(tplContainerName, containerName, tmpSnapName, nil); err != nil {
-		return fmt.Errorf("failed to copy snapshot to template: %w", err)
+	op, err := client.server.CreateInstance(req)
+	if err != nil {
+		return fmt.Errorf("failed to create template container: %w", err)
+	}
+	if err := op.Wait(); err != nil {
+		return fmt.Errorf("failed to wait for template container creation: %w", err)
 	}
 
-	// Snapshot the new template (so it can be used for cloning via CreateContainerFromSnapshot)
-	log.Printf("[sandbox] Creating clone-ready snapshot on template %q...", tplContainerName)
-	if err := client.CreateSnapshot(tplContainerName, SnapshotName); err != nil {
-		// Clean up template container on failure
+	// Copy the session's overlay upper layer to the template's overlay dir.
+	// This captures just the session's customizations (typically a few MB — repos,
+	// configs, installed packages), not the full 900MB+ base filesystem.
+	sessionUpperDir := OverlayUpperDir(containerName)
+	tplUpperDir := OverlayUpperDir(tplContainerName)
+
+	if err := os.MkdirAll(filepath.Dir(tplUpperDir), 0755); err != nil {
 		_ = client.DeleteInstance(tplContainerName)
-		return fmt.Errorf("failed to snapshot template %q: %w", templateName, err)
+		return fmt.Errorf("failed to create template overlay dir: %w", err)
+	}
+
+	log.Printf("[sandbox] Copying session overlay to template %q...", tplContainerName)
+	cmd := exec.Command("cp", "-a", sessionUpperDir, tplUpperDir)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		_ = client.DeleteInstance(tplContainerName)
+		return fmt.Errorf("failed to copy session overlay: %w\nOutput: %s", err, string(output))
+	}
+
+	// Also create the work dir for the template's overlay
+	tplWorkDir := filepath.Join(overlayBaseDir, tplContainerName, "work")
+	if err := os.MkdirAll(tplWorkDir, 0755); err != nil {
+		log.Printf("[sandbox] Warning: failed to create template work dir: %v", err)
+	}
+
+	// Now mount overlay on the template container so it can be started/shelled into
+	lowerDir := SnapshotRootfsPath(poolPath, BaseTemplate)
+	if err := MountOverlay(poolPath, tplContainerName, tplUpperDir+":"+lowerDir); err != nil {
+		_ = client.DeleteInstance(tplContainerName)
+		return fmt.Errorf("failed to mount overlay on template: %w", err)
 	}
 
 	// Compute binary hash
 	hash, _ := ComputeBinaryHash()
 
-	// Register in the template registry
+	// Register in the template registry (overlay-based, no Incus snapshot)
 	now := time.Now()
 	meta := &TemplateMeta{
 		Name:        templateName,

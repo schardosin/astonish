@@ -1,8 +1,10 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -23,6 +25,19 @@ func SetFleetPlanRegistry(reg *fleet.PlanRegistry) {
 // GetFleetPlanRegistry returns the plan registry (for use by other packages).
 func GetFleetPlanRegistry() *fleet.PlanRegistry {
 	return fleetPlanRegistryVar
+}
+
+// PlanActivatorFunc is a function that activates a fleet plan by creating
+// the scheduler job for its channel polling. Used to auto-activate non-chat
+// plans immediately after saving.
+type PlanActivatorFunc func(ctx context.Context, planKey string) error
+
+var planActivatorFuncVar PlanActivatorFunc
+
+// SetPlanActivatorFunc registers the activation function for auto-activation
+// after save. Called by the daemon during initialization.
+func SetPlanActivatorFunc(fn PlanActivatorFunc) {
+	planActivatorFuncVar = fn
 }
 
 // SaveFleetPlanArgs are the arguments for the save_fleet_plan tool.
@@ -272,14 +287,25 @@ func saveFleetPlan(_ tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult,
 		}, nil
 	}
 
-	// Build a channel-type-aware success message with next-step guidance.
+	// Auto-activate non-chat plans so polling starts immediately.
+	activated := false
+	if channelType != "chat" && planActivatorFuncVar != nil {
+		if err := planActivatorFuncVar(context.Background(), key); err != nil {
+			log.Printf("[fleet-plan] Warning: auto-activation failed for plan %q: %v", key, err)
+		} else {
+			activated = true
+		}
+	}
+
+	// Build a channel-type-aware success message.
 	var msg string
-	switch channelType {
-	case "chat":
+	switch {
+	case channelType == "chat":
 		msg = fmt.Sprintf("Fleet plan %q saved successfully. To start a session, go to the Fleet tab in Studio and click Launch on the plan.", name)
+	case activated:
+		msg = fmt.Sprintf("Fleet plan %q saved and activated. Monitoring is now live — new items on the configured channel will automatically trigger fleet sessions.", name)
 	default:
-		// Non-chat channels (github_issues, etc.) need activation to start polling.
-		msg = fmt.Sprintf("Fleet plan %q saved successfully. IMPORTANT: The plan is not active yet. To start monitoring, go to the Fleet tab in Studio, select the plan, and click the Activate button. This creates a scheduled job that polls for new items automatically.", name)
+		msg = fmt.Sprintf("Fleet plan %q saved successfully, but automatic activation failed. Go to the Fleet tab in Studio, select the plan, and click Activate to start monitoring.", name)
 	}
 
 	return SaveFleetPlanResult{

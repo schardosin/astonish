@@ -422,10 +422,17 @@ func SnapshotTemplate(client *IncusClient, registry *TemplateRegistry, name stri
 		}
 	}
 
+	// Acquire exclusive lock to prevent session containers from being created
+	// while the snapshot is being replaced. Session creation holds a read lock
+	// on templateSnapshotMu and uses the snapshot as the overlay lowerdir —
+	// deleting it here without synchronization causes "Failed to exec /sbin/init".
+	templateSnapshotMu.Lock()
+
 	// Delete existing snapshot if present
 	if client.HasSnapshot(containerName, SnapshotName) {
 		fmt.Println("Removing existing snapshot...")
 		if err := client.DeleteSnapshot(containerName, SnapshotName); err != nil {
+			templateSnapshotMu.Unlock()
 			return fmt.Errorf("failed to delete old snapshot: %w", err)
 		}
 	}
@@ -433,8 +440,11 @@ func SnapshotTemplate(client *IncusClient, registry *TemplateRegistry, name stri
 	// Create new snapshot
 	fmt.Println("Creating snapshot...")
 	if err := client.CreateSnapshot(containerName, SnapshotName); err != nil {
+		templateSnapshotMu.Unlock()
 		return fmt.Errorf("failed to create snapshot: %w", err)
 	}
+
+	templateSnapshotMu.Unlock()
 
 	// Update metadata
 	if meta != nil {
@@ -520,13 +530,16 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 		}
 
 		// Delete old @base snapshot and container
+		templateSnapshotMu.Lock()
 		if client.HasSnapshot(baseName, SnapshotName) {
 			if err := client.DeleteSnapshot(baseName, SnapshotName); err != nil {
+				templateSnapshotMu.Unlock()
 				return fmt.Errorf("failed to delete old @base snapshot: %w", err)
 			}
 		}
 		if client.InstanceExists(baseName) {
 			if err := client.StopAndDeleteInstance(baseName); err != nil {
+				templateSnapshotMu.Unlock()
 				return fmt.Errorf("failed to remove old @base: %w", err)
 			}
 		}
@@ -549,9 +562,11 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 		}
 		op, err := client.server.CreateInstance(req)
 		if err != nil {
+			templateSnapshotMu.Unlock()
 			return fmt.Errorf("failed to create new @base container: %w", err)
 		}
 		if err := op.Wait(); err != nil {
+			templateSnapshotMu.Unlock()
 			return fmt.Errorf("failed to wait for @base container creation: %w", err)
 		}
 
@@ -560,36 +575,46 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 		fmt.Println("Materializing template into @base rootfs (this may take a moment)...")
 		rsyncCmd := exec.Command("rsync", "-a", "--delete", mergedDir+"/", baseRootfs+"/")
 		if output, err := rsyncCmd.CombinedOutput(); err != nil {
+			templateSnapshotMu.Unlock()
 			return fmt.Errorf("failed to materialize into @base: %w\nOutput: %s", err, string(output))
 		}
 
 		// Snapshot the new @base
 		fmt.Println("Snapshotting new @base...")
 		if err := client.CreateSnapshot(baseName, SnapshotName); err != nil {
+			templateSnapshotMu.Unlock()
 			return fmt.Errorf("failed to snapshot new @base: %w", err)
 		}
+		templateSnapshotMu.Unlock()
 	} else {
 		// Traditional template with real Incus snapshot — use the old approach
 		if !client.HasSnapshot(containerName, SnapshotName) {
 			return fmt.Errorf("template %q has no snapshot; run 'astonish sandbox template snapshot %s' first", name, name)
 		}
 
+		templateSnapshotMu.Lock()
+
 		// Delete the old @base
 		if client.InstanceExists(baseName) {
 			if err := client.StopAndDeleteInstance(baseName); err != nil {
+				templateSnapshotMu.Unlock()
 				return fmt.Errorf("failed to remove old @base: %w", err)
 			}
 		}
 
 		// Clone from the promoted template's snapshot
 		if err := client.CreateContainerFromSnapshot(baseName, name, nil); err != nil {
+			templateSnapshotMu.Unlock()
 			return fmt.Errorf("failed to clone promoted template to @base: %w", err)
 		}
 
 		// Snapshot the new @base
 		if err := client.CreateSnapshot(baseName, SnapshotName); err != nil {
+			templateSnapshotMu.Unlock()
 			return fmt.Errorf("failed to snapshot new @base: %w", err)
 		}
+
+		templateSnapshotMu.Unlock()
 	}
 
 	// Update @base metadata

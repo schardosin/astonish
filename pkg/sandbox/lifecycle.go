@@ -3,8 +3,18 @@ package sandbox
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
+
+// templateSnapshotMu protects template snapshots from being deleted while
+// session containers are being created. Session creation takes a read lock
+// (multiple sessions can be created concurrently); template refresh takes a
+// write lock (exclusive — blocks session creation while the snapshot is being
+// recreated). Without this, RefreshAllIfNeeded can delete the snapshot that
+// a concurrent CreateOverlayContainer is using as its overlay lowerdir,
+// causing "Failed to exec /sbin/init" errors.
+var templateSnapshotMu sync.RWMutex
 
 // EnsureSessionContainer creates or retrieves a session container.
 // If the session already has a container, it ensures it's running.
@@ -74,6 +84,12 @@ func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, 
 		}
 	}
 
+	// Hold a read lock on the template snapshot while creating and starting
+	// the container. This prevents RefreshTemplate from deleting the snapshot
+	// (our overlay lowerdir) out from under us.
+	templateSnapshotMu.RLock()
+	defer templateSnapshotMu.RUnlock()
+
 	// Create the container with overlayfs (tiny image + overlay mount)
 	if err := CreateOverlayContainer(client, containerName, templateName, tplRegistry); err != nil {
 		return "", fmt.Errorf("failed to create session container: %w", err)
@@ -81,7 +97,12 @@ func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, 
 
 	// Start
 	if err := client.StartInstance(containerName); err != nil {
-		destroyOverlayContainer(client, containerName)
+		// destroyOverlayContainer unmounts the overlay, removes overlay dirs,
+		// and deletes the Incus instance. If it fails (e.g., container in
+		// ABORTING state), fall back to a direct delete to avoid zombies.
+		if destroyErr := destroyOverlayContainer(client, containerName); destroyErr != nil {
+			_ = client.DeleteInstance(containerName)
+		}
 		return "", fmt.Errorf("failed to start session container: %w", err)
 	}
 
@@ -89,7 +110,9 @@ func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, 
 	// Without this, a failed overlay mount results in a container that runs
 	// but has an empty/wrong filesystem (just the tiny shell image).
 	if err := verifyContainerHealth(client, containerName); err != nil {
-		destroyOverlayContainer(client, containerName)
+		if destroyErr := destroyOverlayContainer(client, containerName); destroyErr != nil {
+			_ = client.DeleteInstance(containerName)
+		}
 		return "", fmt.Errorf("session container health check failed: %w", err)
 	}
 
@@ -97,7 +120,9 @@ func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, 
 	if err := sessRegistry.Put(sessionID, containerName, templateName); err != nil {
 		// Registry write failed — the container works but won't be tracked.
 		// Destroy it so we don't leak an untracked container.
-		destroyOverlayContainer(client, containerName)
+		if destroyErr := destroyOverlayContainer(client, containerName); destroyErr != nil {
+			_ = client.DeleteInstance(containerName)
+		}
 		return "", fmt.Errorf("failed to register session container: %w", err)
 	}
 

@@ -611,8 +611,6 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		// Wrap all internal tools with NodeTool proxies (pool-backed)
 		internalTools = sandbox.WrapToolsWithNode(internalTools, nodePool)
 
-		startupNotices = append(startupNotices, "Sandbox: enabled (node architecture)")
-
 		// Hoist references for template tool registration
 		sandboxNodePool = nodePool
 		sandboxIncusClient = sandboxClient

@@ -1232,11 +1232,6 @@ func handleSandboxSetup() error {
 	for {
 		platform, reason := sandbox.DetectPlatformReason()
 
-		if platform == sandbox.PlatformDockerIncus {
-			reason = "Docker+Incus setup is not yet implemented.\nCurrently only Linux with native Incus is supported."
-			platform = sandbox.PlatformUnsupported
-		}
-
 		if platform == sandbox.PlatformUnsupported {
 			// Build description with install instructions and reason
 			desc := "Sandbox runs AI tools inside isolated Linux containers,\n" +
@@ -1244,9 +1239,9 @@ func handleSandboxSetup() error {
 			if reason != "" {
 				desc += reason + "\n\n"
 			}
-			desc += "To install Incus (Ubuntu/Debian):\n" +
-				"  sudo apt install incus\n" +
-				"  sudo incus admin init\n\n" +
+			desc += "To enable sandbox:\n" +
+				"  Linux:         sudo apt install incus && sudo incus admin init\n" +
+				"  macOS/Windows: Install Docker Desktop\n\n" +
 				"Docs: https://linuxcontainers.org/incus/docs/main/installing/"
 
 			var action string
@@ -1254,10 +1249,10 @@ func handleSandboxSetup() error {
 			err := huh.NewForm(
 				huh.NewGroup(
 					huh.NewSelect[string]().
-						Title("Sandbox Setup — Incus not available").
+						Title("Sandbox Setup — Container runtime not available").
 						Description(desc).
 						Options(
-							huh.NewOption("Continue — I've installed Incus", "retry"),
+							huh.NewOption("Continue — I've installed the runtime", "retry"),
 							huh.NewOption("Skip — proceed without sandbox", "skip"),
 						).
 						Value(&action),
@@ -1297,7 +1292,23 @@ func handleSandboxSetup() error {
 			return nil
 		}
 
-		// Incus is available — proceed with sandbox setup
+		// Container runtime is available — set up the sandbox
+
+		// On Docker+Incus (macOS/Windows), ensure the Docker container is running first
+		if platform == sandbox.PlatformDockerIncus {
+			clearScreen()
+			fmt.Println("Setting up Docker+Incus sandbox runtime...")
+			fmt.Println("This will pull the Incus Docker image and create a container.")
+			fmt.Println("(This may take a few minutes on first run.)")
+			fmt.Println()
+
+			if err := sandbox.EnsureIncusDockerContainer(); err != nil {
+				return fmt.Errorf("failed to set up Docker+Incus: %w", err)
+			}
+			fmt.Println("Docker+Incus runtime ready.")
+		}
+
+		sandbox.SetActivePlatform(platform)
 		client, err := sandbox.Connect(platform)
 		if err != nil {
 			return fmt.Errorf("failed to connect to Incus: %w", err)

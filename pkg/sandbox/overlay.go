@@ -6,9 +6,8 @@ import (
 	"compress/gzip"
 	"fmt"
 	"log"
-	"os"
-	"os/exec"
 	"path/filepath"
+	"strings"
 
 	incus "github.com/lxc/incus/v6/client"
 	"github.com/lxc/incus/v6/shared/api"
@@ -46,7 +45,7 @@ func ResolveLowerLayers(poolPath, templateName string, registry *TemplateRegistr
 	// For @base, just return the snapshot rootfs path
 	if templateName == BaseTemplate {
 		lower := SnapshotRootfsPath(poolPath, BaseTemplate)
-		if _, err := os.Stat(lower); err != nil {
+		if err := statOnSandboxHost(lower); err != nil {
 			return "", fmt.Errorf("@base snapshot rootfs not found at %s: %w", lower, err)
 		}
 		return lower, nil
@@ -64,7 +63,7 @@ func ResolveLowerLayers(poolPath, templateName string, registry *TemplateRegistr
 	// Check if this custom template has a real Incus snapshot (materialized)
 	tplContainerName := TemplateName(templateName)
 	snapshotRootfs := SnapshotRootfsPath(poolPath, templateName)
-	if _, err := os.Stat(snapshotRootfs); err == nil {
+	if err := statOnSandboxHost(snapshotRootfs); err == nil {
 		// Template has a real snapshot — use it directly (like @base)
 		return snapshotRootfs, nil
 	}
@@ -72,7 +71,7 @@ func ResolveLowerLayers(poolPath, templateName string, registry *TemplateRegistr
 	// No snapshot — this is an overlay-based custom template.
 	// Stack: template-upper on top of the base it's derived from.
 	tplUpperDir := OverlayUpperDir(tplContainerName)
-	if _, err := os.Stat(tplUpperDir); err != nil {
+	if err := statOnSandboxHost(tplUpperDir); err != nil {
 		return "", fmt.Errorf("template %q overlay upper dir not found at %s: %w", templateName, tplUpperDir, err)
 	}
 
@@ -410,6 +409,7 @@ func resolveNesting(templateName string, registry *TemplateRegistry) bool {
 // MountOverlay mounts an overlayfs on a container's rootfs directory with
 // pre-resolved lower layers. The lowerDir can be a single path or a
 // colon-separated list of paths for stacked overlays.
+// On Docker+Incus, the mount command runs inside the Docker container.
 func MountOverlay(poolSourcePath, containerName, lowerDir string) error {
 	containerRootfs := ContainerRootfsPath(poolSourcePath, containerName)
 
@@ -418,21 +418,16 @@ func MountOverlay(poolSourcePath, containerName, lowerDir string) error {
 	upperDir := filepath.Join(sessionDir, "upper")
 	workDir := filepath.Join(sessionDir, "work")
 
-	if err := os.MkdirAll(upperDir, 0755); err != nil {
+	if err := mkdirAllOnSandboxHost(upperDir, 0755); err != nil {
 		return fmt.Errorf("failed to create overlay upper dir: %w", err)
 	}
-	if err := os.MkdirAll(workDir, 0755); err != nil {
+	if err := mkdirAllOnSandboxHost(workDir, 0755); err != nil {
 		return fmt.Errorf("failed to create overlay work dir: %w", err)
 	}
 
 	// Mount overlayfs
 	opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)
-	cmd := exec.Command("mount", "-t", "overlay", "overlay", "-o", opts, containerRootfs)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to mount overlayfs on %s: %w\nOutput: %s", containerRootfs, err, string(output))
-	}
-
-	return nil
+	return mountOverlayOnSandboxHost(opts, containerRootfs)
 }
 
 // MountSessionOverlay mounts an overlayfs on a container's rootfs directory.
@@ -446,19 +441,19 @@ func MountSessionOverlay(poolSourcePath, containerName, templateName string) err
 
 // UnmountSessionOverlay unmounts the overlayfs from a container's rootfs
 // and removes the per-session overlay directories.
+// On Docker+Incus, these operations run inside the Docker container.
 func UnmountSessionOverlay(poolSourcePath, containerName string) error {
 	containerRootfs := ContainerRootfsPath(poolSourcePath, containerName)
 
 	// Unmount overlayfs (ignore error if not mounted)
-	cmd := exec.Command("umount", containerRootfs)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if err := umountOnSandboxHost(containerRootfs); err != nil {
 		// Not fatal — might not be overlay-mounted (old container, or already unmounted)
-		log.Printf("[sandbox] Warning: failed to unmount overlay on %s: %v (%s)", containerRootfs, err, string(output))
+		log.Printf("[sandbox] Warning: failed to unmount overlay on %s: %v", containerRootfs, err)
 	}
 
 	// Remove per-session overlay dirs
 	sessionDir := filepath.Join(overlayBaseDir, containerName)
-	if err := os.RemoveAll(sessionDir); err != nil {
+	if err := removeAllOnSandboxHost(sessionDir); err != nil {
 		log.Printf("[sandbox] Warning: failed to clean up overlay dir %s: %v", sessionDir, err)
 	}
 
@@ -466,47 +461,31 @@ func UnmountSessionOverlay(poolSourcePath, containerName string) error {
 }
 
 // IsOverlayMounted checks if a container's rootfs has an overlayfs mounted on it.
+// On Docker+Incus, reads /proc/mounts from inside the Docker container.
 func IsOverlayMounted(poolSourcePath, containerName string) bool {
 	containerRootfs := ContainerRootfsPath(poolSourcePath, containerName)
-
-	// Check /proc/mounts for an overlay mount at this path
-	data, err := os.ReadFile("/proc/mounts")
-	if err != nil {
-		return false
-	}
-
-	// Each line: device mountpoint fstype options ...
-	target := containerRootfs
-	for _, line := range bytes.Split(data, []byte("\n")) {
-		fields := bytes.Fields(line)
-		if len(fields) >= 3 && string(fields[1]) == target && string(fields[2]) == "overlay" {
-			return true
-		}
-	}
-
-	return false
+	return isOverlayMountedOnSandboxHost(containerRootfs)
 }
 
 // MergeOverlayToRootfs copies the merged overlay view into a flat directory.
 // Used when creating a template from a running session container — we need
 // to materialize the overlay into a real rootfs for the template snapshot.
+// On Docker+Incus, these operations run inside the Docker container.
 func MergeOverlayToRootfs(poolSourcePath, containerName, destRootfs string) error {
 	containerRootfs := ContainerRootfsPath(poolSourcePath, containerName)
 
 	if !IsOverlayMounted(poolSourcePath, containerName) {
 		// Not overlay-mounted — just copy directly
-		cmd := exec.Command("cp", "-a", containerRootfs+"/.", destRootfs+"/")
-		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to copy rootfs: %w\nOutput: %s", err, string(output))
+		if err := cpOnSandboxHost(containerRootfs+"/.", destRootfs+"/"); err != nil {
+			return fmt.Errorf("failed to copy rootfs: %w", err)
 		}
 		return nil
 	}
 
 	// The overlay is mounted — the merged view at containerRootfs IS what we want.
 	// rsync is more efficient than cp -a for large trees.
-	cmd := exec.Command("rsync", "-a", "--delete", containerRootfs+"/", destRootfs+"/")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to rsync overlay rootfs: %w\nOutput: %s", err, string(output))
+	if err := rsyncOnSandboxHost(containerRootfs+"/", destRootfs+"/"); err != nil {
+		return fmt.Errorf("failed to rsync overlay rootfs: %w", err)
 	}
 
 	return nil
@@ -514,36 +493,194 @@ func MergeOverlayToRootfs(poolSourcePath, containerName, destRootfs string) erro
 
 // CleanupAllOverlays unmounts all overlay mounts and removes the overlay base directory.
 // Used during sandbox reset or cleanup.
+// On Docker+Incus, these operations run inside the Docker container.
 func CleanupAllOverlays() {
-	entries, err := os.ReadDir(overlayBaseDir)
+	entries, err := readDirOnSandboxHost(overlayBaseDir)
 	if err != nil {
 		return // directory doesn't exist or can't be read
 	}
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
+	for _, entryName := range entries {
+		// readDirOnSandboxHost may include trailing "/" for dirs
+		name := filepath.Base(entryName)
+		if name == "" || name == "." {
 			continue
 		}
 
 		// Try to find and unmount the corresponding container rootfs
 		// We don't know the pool path here, so just try to unmount by reading /proc/mounts
-		data, _ := os.ReadFile("/proc/mounts")
+		data, _ := readMountsOnSandboxHost()
 		for _, line := range bytes.Split(data, []byte("\n")) {
 			fields := bytes.Fields(line)
 			if len(fields) >= 3 && string(fields[2]) == "overlay" {
 				mountpoint := string(fields[1])
 				// Check if this mount's workdir points to our session dir
-				if bytes.Contains(line, []byte(filepath.Join(overlayBaseDir, entry.Name()))) {
-					exec.Command("umount", mountpoint).Run()
+				if bytes.Contains(line, []byte(filepath.Join(overlayBaseDir, name))) {
+					_ = umountOnSandboxHost(mountpoint)
 				}
 			}
 		}
 	}
 
-	os.RemoveAll(overlayBaseDir)
+	_ = removeAllOnSandboxHost(overlayBaseDir)
+}
+
+// RemountDependentOverlays finds all overlay mounts whose lowerdir includes
+// the given path and remounts them. This is critical after a base snapshot is
+// recreated (delete + create): the old directory inode is gone, so existing
+// overlay mounts that referenced it as a lowerdir become stale (empty rootfs).
+//
+// The function parses /proc/mounts, identifies affected overlays, stops any
+// running containers that use the mount (umount fails on busy mounts),
+// unmounts, recreates the work directory (overlayfs requires a clean workdir
+// after remount), remounts with the same options, and restarts stopped containers.
+//
+// This MUST be called while templateSnapshotMu is held (write lock) to prevent
+// new overlay mounts from being created between the snapshot swap and remount.
+func RemountDependentOverlays(client *IncusClient, snapshotPath string) error {
+	data, err := readMountsOnSandboxHost()
+	if err != nil {
+		return fmt.Errorf("failed to read mounts: %w", err)
+	}
+
+	type overlayMount struct {
+		mountpoint    string
+		containerName string
+		opts          string
+		wasRunning    bool
+	}
+
+	var affected []overlayMount
+
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		fields := bytes.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		if string(fields[2]) != "overlay" {
+			continue
+		}
+
+		mountpoint := string(fields[1])
+		opts := string(fields[3])
+
+		// Check if this overlay's lowerdir includes the snapshot path.
+		// The options field looks like:
+		//   rw,relatime,lowerdir=/path/a:/path/b,upperdir=/path/c,workdir=/path/d,...
+		if !strings.Contains(opts, snapshotPath) {
+			continue
+		}
+
+		// Extract the container name from the mountpoint path.
+		// Pattern: .../containers/<containerName>/rootfs
+		containerName := containerNameFromRootfs(mountpoint)
+
+		affected = append(affected, overlayMount{
+			mountpoint:    mountpoint,
+			containerName: containerName,
+			opts:          opts,
+		})
+	}
+
+	if len(affected) == 0 {
+		return nil
+	}
+
+	log.Printf("[sandbox] Remounting %d overlay(s) after snapshot recreation at %s", len(affected), snapshotPath)
+
+	// Phase 1: stop running containers so we can unmount their rootfs
+	for i := range affected {
+		m := &affected[i]
+		if m.containerName != "" && client.IsRunning(m.containerName) {
+			log.Printf("[sandbox] Stopping %s for overlay remount...", m.containerName)
+			if err := client.StopInstance(m.containerName, true); err != nil {
+				log.Printf("[sandbox] Warning: failed to stop %s: %v", m.containerName, err)
+				continue
+			}
+			m.wasRunning = true
+		}
+	}
+
+	// Phase 2: unmount + remount each overlay
+	for i := range affected {
+		m := &affected[i]
+		lowerDir := extractMountOpt(m.opts, "lowerdir")
+		upperDir := extractMountOpt(m.opts, "upperdir")
+		workDir := extractMountOpt(m.opts, "workdir")
+
+		if lowerDir == "" || upperDir == "" || workDir == "" {
+			log.Printf("[sandbox] Warning: could not parse overlay opts for %s, skipping remount", m.mountpoint)
+			continue
+		}
+
+		// Unmount the stale overlay
+		if err := umountOnSandboxHost(m.mountpoint); err != nil {
+			log.Printf("[sandbox] Warning: failed to unmount stale overlay at %s: %v", m.mountpoint, err)
+			continue
+		}
+
+		// Overlayfs requires a clean workdir after remount — recreate it
+		if err := removeAllOnSandboxHost(workDir); err != nil {
+			log.Printf("[sandbox] Warning: failed to clean workdir %s: %v", workDir, err)
+		}
+		if err := mkdirAllOnSandboxHost(workDir, 0755); err != nil {
+			log.Printf("[sandbox] Warning: failed to recreate workdir %s: %v", workDir, err)
+			continue
+		}
+
+		// Remount with the same options (paths are the same strings,
+		// but the kernel will resolve them to the new inodes)
+		newOpts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)
+		if err := mountOverlayOnSandboxHost(newOpts, m.mountpoint); err != nil {
+			log.Printf("[sandbox] ERROR: failed to remount overlay at %s: %v", m.mountpoint, err)
+			continue
+		}
+
+		log.Printf("[sandbox] Remounted overlay at %s", m.mountpoint)
+	}
+
+	// Phase 3: restart containers that were running before
+	for i := range affected {
+		m := &affected[i]
+		if m.wasRunning && m.containerName != "" {
+			log.Printf("[sandbox] Restarting %s after overlay remount...", m.containerName)
+			if err := client.StartInstance(m.containerName); err != nil {
+				log.Printf("[sandbox] Warning: failed to restart %s: %v", m.containerName, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// containerNameFromRootfs extracts the Incus container name from a rootfs
+// mountpoint path like ".../containers/<name>/rootfs".
+func containerNameFromRootfs(mountpoint string) string {
+	// Split the path and find the segment after "containers"
+	parts := strings.Split(mountpoint, "/")
+	for i, p := range parts {
+		if p == "containers" && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return ""
+}
+
+// extractMountOpt extracts a named option value from a comma-separated
+// mount options string. For example, extractMountOpt("rw,lowerdir=/a:/b,upperdir=/c", "lowerdir")
+// returns "/a:/b".
+func extractMountOpt(opts, key string) string {
+	prefix := key + "="
+	for _, part := range strings.Split(opts, ",") {
+		if strings.HasPrefix(part, prefix) {
+			return part[len(prefix):]
+		}
+	}
+	return ""
 }
 
 // EnsureOverlayBaseDir creates the overlay base directory if it doesn't exist.
+// On Docker+Incus, this creates the directory inside the Docker container.
 func EnsureOverlayBaseDir() error {
-	return os.MkdirAll(overlayBaseDir, 0755)
+	return mkdirAllOnSandboxHost(overlayBaseDir, 0755)
 }

@@ -2,27 +2,36 @@ package sandbox
 
 import (
 	"fmt"
+	"log"
 )
 
 // SandboxStatus holds information about the sandbox runtime environment.
 type SandboxStatus struct {
-	Platform       Platform
-	IncusConnected bool
-	IncusVersion   string
-	StorageBackend string
-	OverlayReady   bool
-	TemplateCount  int
-	SessionCount   int
-	OrphanCount    int // containers in Incus with no registry entry
+	Platform           Platform
+	IncusConnected     bool
+	IncusVersion       string
+	StorageBackend     string
+	OverlayReady       bool
+	TemplateCount      int
+	SessionCount       int
+	OrphanCount        int    // containers in Incus with no registry entry
+	DockerContainerUp  bool   // Docker+Incus: whether the Docker container is running
+	DockerImageVersion string // Docker+Incus: version label on the Docker container
+	DockerNeedsUpgrade bool   // Docker+Incus: version mismatch detected
 }
 
 // SetupSandboxRuntime detects the platform and connects to Incus.
 // Returns a connected IncusClient or an error with actionable guidance.
+//
+// On Docker+Incus (macOS/Windows), this also ensures the Docker container
+// is running and handles version-based auto-upgrades. The Docker layer
+// is fully transparent — the user never interacts with Docker directly.
 func SetupSandboxRuntime() (*IncusClient, error) {
 	platform, reason := DetectPlatformReason()
 
 	switch platform {
 	case PlatformLinuxNative:
+		SetActivePlatform(platform)
 		client, err := Connect(platform)
 		if err != nil {
 			return nil, fmt.Errorf("Incus is installed but not reachable: %w\nMake sure the Incus daemon is running: sudo systemctl start incus", err)
@@ -30,15 +39,22 @@ func SetupSandboxRuntime() (*IncusClient, error) {
 		return client, nil
 
 	case PlatformDockerIncus:
-		// Check if the Incus Docker container is running
-		if !IsIncusDockerContainerRunning() {
-			return nil, fmt.Errorf("Incus Docker container is not running.\nRun 'astonish sandbox init' to set up the container runtime")
+		// Ensure the Docker container is running (pulls image, creates
+		// container, or starts existing one). Also handles auto-upgrade
+		// when the astonish binary version doesn't match the container's label.
+		if err := EnsureIncusDockerContainer(); err != nil {
+			return nil, fmt.Errorf("failed to set up Docker+Incus runtime: %w\n\n"+
+				"Make sure Docker is running and try again.\n"+
+				"If this is a fresh install, run: astonish setup", err)
 		}
 
+		SetActivePlatform(platform)
 		client, err := Connect(platform)
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to Incus inside Docker: %w", err)
 		}
+
+		log.Printf("[sandbox] Connected to Incus via Docker+Incus (TCP localhost:8443)")
 		return client, nil
 
 	default:
@@ -52,6 +68,23 @@ func ValidateEnvironment() error {
 
 	if platform == PlatformUnsupported {
 		return fmt.Errorf("no container runtime available.\nLinux: install Incus (apt install incus)\nmacOS/Windows: install Docker (any Docker-compatible runtime)")
+	}
+
+	// On Docker+Incus, ensure the container is running before connecting
+	if platform == PlatformDockerIncus {
+		if !IsIncusDockerContainerRunning() {
+			fmt.Println("Docker container: not running")
+			fmt.Println("Run 'astonish setup' to initialize the sandbox runtime.")
+			return nil
+		}
+		fmt.Println("Docker container: running")
+		containerVersion := GetDockerContainerVersion()
+		if containerVersion != "" {
+			fmt.Printf("Container version: %s\n", containerVersion)
+		}
+		if NeedsUpgrade() {
+			fmt.Println("Upgrade needed:  yes (version mismatch)")
+		}
 	}
 
 	// Try connecting
@@ -92,6 +125,13 @@ func Status(client *IncusClient, tplRegistry *TemplateRegistry, sessRegistry *Se
 	status := &SandboxStatus{
 		Platform:       client.platform,
 		IncusConnected: true,
+	}
+
+	// Docker+Incus specific status
+	if client.platform == PlatformDockerIncus {
+		status.DockerContainerUp = IsIncusDockerContainerRunning()
+		status.DockerImageVersion = GetDockerContainerVersion()
+		status.DockerNeedsUpgrade = NeedsUpgrade()
 	}
 
 	// Incus version

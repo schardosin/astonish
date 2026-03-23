@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -357,8 +358,16 @@ func ShellIntoTemplate(client *IncusClient, registry *TemplateRegistry, name str
 		}
 	}
 
-	// Use the incus CLI for interactive shell (it handles PTY properly)
-	cmd := exec.Command("incus", "exec", containerName, "--", "bash", "-l")
+	// Use the incus CLI for interactive shell (it handles PTY properly).
+	// On Docker+Incus, chain through docker exec to reach the Incus daemon.
+	var cmd *exec.Cmd
+	if activePlatform == PlatformDockerIncus {
+		cmd = ExecInDockerHostInteractive([]string{
+			"incus", "exec", containerName, "--", "bash", "-l",
+		})
+	} else {
+		cmd = exec.Command("incus", "exec", containerName, "--", "bash", "-l")
+	}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -444,6 +453,24 @@ func SnapshotTemplate(client *IncusClient, registry *TemplateRegistry, name stri
 		return fmt.Errorf("failed to create snapshot: %w", err)
 	}
 
+	// Remount all overlay mounts that depend on the base snapshot.
+	// The old snapshot directory was deleted (old inode gone) and a new one
+	// created (new inode). Existing overlay mounts still reference the old
+	// inode via the kernel's mount table, so they see an empty directory.
+	// We must unmount+remount each one so the kernel resolves the path to
+	// the new inode. This runs while templateSnapshotMu is still held to
+	// prevent new overlays from being created mid-remount.
+	poolName, poolErr := GetPoolForProfile(client)
+	if poolErr == nil {
+		poolPath, pathErr := GetPoolSourcePath(client, poolName)
+		if pathErr == nil {
+			snapPath := SnapshotRootfsPath(poolPath, name)
+			if remountErr := RemountDependentOverlays(client, snapPath); remountErr != nil {
+				log.Printf("[sandbox] Warning: failed to remount dependent overlays: %v", remountErr)
+			}
+		}
+	}
+
 	templateSnapshotMu.Unlock()
 
 	// Update metadata
@@ -501,22 +528,21 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 			return fmt.Errorf("failed to resolve overlay layers for %q: %w", name, err)
 		}
 
-		// Create a temporary mount point for the merged view
-		mergedDir, err := os.MkdirTemp("", "astonish-promote-*")
-		if err != nil {
+		// Create a temporary mount point for the merged view (on sandbox host)
+		mergedDir := "/tmp/astonish-promote-" + name
+		if err := mkdirAllOnSandboxHost(mergedDir, 0755); err != nil {
 			return fmt.Errorf("failed to create temp dir for merge: %w", err)
 		}
-		defer os.RemoveAll(mergedDir)
+		defer removeAllOnSandboxHost(mergedDir)
 
 		// Mount read-only overlay to get the merged view
 		// For a read-only mount, we don't need upperdir/workdir
 		mountOpts := fmt.Sprintf("lowerdir=%s", lowerLayers)
-		cmd := exec.Command("mount", "-t", "overlay", "overlay", "-o", mountOpts, mergedDir)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to mount merged overlay: %w\nOutput: %s", err, string(output))
+		if err := mountOverlayOnSandboxHost(mountOpts, mergedDir); err != nil {
+			return fmt.Errorf("failed to mount merged overlay: %w", err)
 		}
 		defer func() {
-			exec.Command("umount", mergedDir).Run()
+			_ = umountOnSandboxHost(mergedDir)
 		}()
 
 		// Stop and unmount old @base overlay (if any)
@@ -573,10 +599,9 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 		// Copy the merged overlay view into @base's real rootfs
 		baseRootfs := ContainerRootfsPath(poolPath, baseName)
 		fmt.Println("Materializing template into @base rootfs (this may take a moment)...")
-		rsyncCmd := exec.Command("rsync", "-a", "--delete", mergedDir+"/", baseRootfs+"/")
-		if output, err := rsyncCmd.CombinedOutput(); err != nil {
+		if err := rsyncOnSandboxHost(mergedDir+"/", baseRootfs+"/"); err != nil {
 			templateSnapshotMu.Unlock()
-			return fmt.Errorf("failed to materialize into @base: %w\nOutput: %s", err, string(output))
+			return fmt.Errorf("failed to materialize into @base: %w", err)
 		}
 
 		// Snapshot the new @base
@@ -585,6 +610,13 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 			templateSnapshotMu.Unlock()
 			return fmt.Errorf("failed to snapshot new @base: %w", err)
 		}
+
+		// Remount any overlays that depended on the old base snapshot
+		snapPath := SnapshotRootfsPath(poolPath, BaseTemplate)
+		if remountErr := RemountDependentOverlays(client, snapPath); remountErr != nil {
+			log.Printf("[sandbox] Warning: failed to remount dependent overlays after promote: %v", remountErr)
+		}
+
 		templateSnapshotMu.Unlock()
 	} else {
 		// Traditional template with real Incus snapshot — use the old approach
@@ -612,6 +644,12 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 		if err := client.CreateSnapshot(baseName, SnapshotName); err != nil {
 			templateSnapshotMu.Unlock()
 			return fmt.Errorf("failed to snapshot new @base: %w", err)
+		}
+
+		// Remount any overlays that depended on the old base snapshot
+		snapPath := SnapshotRootfsPath(poolPath, BaseTemplate)
+		if remountErr := RemountDependentOverlays(client, snapPath); remountErr != nil {
+			log.Printf("[sandbox] Warning: failed to remount dependent overlays after promote: %v", remountErr)
 		}
 
 		templateSnapshotMu.Unlock()
@@ -671,9 +709,9 @@ func DeleteTemplate(client *IncusClient, registry *TemplateRegistry, name string
 	// session dirs, but for templates the overlay dir might still exist if
 	// unmount was skipped or the template never had an active mount)
 	overlayDir := OverlaySessionDir(containerName)
-	if _, err := os.Stat(overlayDir); err == nil {
+	if err := statOnSandboxHost(overlayDir); err == nil {
 		fmt.Printf("Removing overlay storage for %q...\n", name)
-		if err := os.RemoveAll(overlayDir); err != nil {
+		if err := removeAllOnSandboxHost(overlayDir); err != nil {
 			log.Printf("[sandbox] Warning: failed to remove overlay dir %s: %v", overlayDir, err)
 		}
 	}
@@ -868,23 +906,22 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 	sessionUpperDir := OverlayUpperDir(containerName)
 	tplUpperDir := OverlayUpperDir(tplContainerName)
 
-	if err := os.MkdirAll(filepath.Dir(tplUpperDir), 0755); err != nil {
+	if err := mkdirAllOnSandboxHost(filepath.Dir(tplUpperDir), 0755); err != nil {
 		_ = client.DeleteInstance(tplContainerName)
 		restartSession()
 		return fmt.Errorf("failed to create template overlay dir: %w", err)
 	}
 
 	log.Printf("[sandbox] Copying session overlay to template %q...", tplContainerName)
-	cmd := exec.Command("cp", "-a", sessionUpperDir, tplUpperDir)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if err := cpOnSandboxHost(sessionUpperDir, tplUpperDir); err != nil {
 		_ = client.DeleteInstance(tplContainerName)
 		restartSession()
-		return fmt.Errorf("failed to copy session overlay: %w\nOutput: %s", err, string(output))
+		return fmt.Errorf("failed to copy session overlay: %w", err)
 	}
 
 	// Also create the work dir for the template's overlay
 	tplWorkDir := filepath.Join(overlayBaseDir, tplContainerName, "work")
-	if err := os.MkdirAll(tplWorkDir, 0755); err != nil {
+	if err := mkdirAllOnSandboxHost(tplWorkDir, 0755); err != nil {
 		log.Printf("[sandbox] Warning: failed to create template work dir: %v", err)
 	}
 
@@ -1011,10 +1048,25 @@ func waitForReady(client *IncusClient, containerName string, timeout time.Durati
 // BinaryDestPath is where the astonish binary is placed inside templates/containers.
 const BinaryDestPath = "/usr/local/bin/astonish"
 
-// pushAstonishBinary copies the running astonish binary into a container.
+// pushAstonishBinary copies the astonish binary into a container.
 // The container must be running. The binary is placed at /usr/local/bin/astonish
 // with executable permissions (0755).
+//
+// On Linux native: pushes the running host binary directly (same arch).
+// On Docker+Incus: the Linux binary is pre-baked into the Docker image at
+// /usr/local/bin/astonish. We copy it from the Docker container into the
+// Incus template via the Incus API. For dev builds where the baked binary
+// may be stale, the developer uses `sandbox refresh` after cross-compiling.
 func pushAstonishBinary(client *IncusClient, containerName string) error {
+	if activePlatform == PlatformDockerIncus {
+		return pushAstonishBinaryFromDocker(client, containerName)
+	}
+	return pushAstonishBinaryFromHost(client, containerName)
+}
+
+// pushAstonishBinaryFromHost pushes the running host binary into a container.
+// Used on Linux native where host and container share the same architecture.
+func pushAstonishBinaryFromHost(client *IncusClient, containerName string) error {
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to determine astonish binary path: %w", err)
@@ -1043,7 +1095,41 @@ func pushAstonishBinary(client *IncusClient, containerName string) error {
 		return fmt.Errorf("failed to push binary to container: %w", err)
 	}
 
-	// Verify it's accessible
+	return verifyBinaryInContainer(client, containerName)
+}
+
+// pushAstonishBinaryFromDocker copies the pre-baked Linux binary from the
+// astonish-incus Docker container into an Incus template container.
+// The binary in the Docker image was built for linux/amd64 during the release.
+func pushAstonishBinaryFromDocker(client *IncusClient, containerName string) error {
+	// The binary is at /usr/local/bin/astonish inside the Docker container.
+	// We use docker exec to read it and pipe it into the Incus container via PushFile.
+	fmt.Println("  Binary: from Docker image (pre-baked linux binary)")
+
+	// Read the binary from the Docker container into memory.
+	// The binary is typically ~50-80 MB so this is acceptable.
+	binaryData, err := ExecInDockerHost([]string{"cat", BinaryDestPath})
+	if err != nil {
+		return fmt.Errorf("failed to read binary from Docker container: %w", err)
+	}
+
+	if len(binaryData) == 0 {
+		return fmt.Errorf("binary in Docker container is empty (image may be corrupted)")
+	}
+
+	fmt.Printf("  Size: %.1f MB\n", float64(len(binaryData))/(1024*1024))
+
+	// Push the binary into the Incus template container via the Incus API
+	reader := bytes.NewReader(binaryData)
+	if err := client.PushFile(containerName, BinaryDestPath, reader, 0755); err != nil {
+		return fmt.Errorf("failed to push binary to container: %w", err)
+	}
+
+	return verifyBinaryInContainer(client, containerName)
+}
+
+// verifyBinaryInContainer checks that the pushed binary is executable inside the container.
+func verifyBinaryInContainer(client *IncusClient, containerName string) error {
 	exitCode, err := client.ExecSimple(containerName, []string{BinaryDestPath, "--version"})
 	if err != nil {
 		return fmt.Errorf("binary verification failed: %w", err)
@@ -1051,7 +1137,6 @@ func pushAstonishBinary(client *IncusClient, containerName string) error {
 	if exitCode != 0 {
 		return fmt.Errorf("binary verification exited with code %d", exitCode)
 	}
-
 	return nil
 }
 

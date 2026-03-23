@@ -147,6 +147,24 @@ func handleSandboxStatus() error {
 		return nil
 	}
 
+	// Docker+Incus: show Docker container status
+	if platform == sandbox.PlatformDockerIncus {
+		if sandbox.IsIncusDockerContainerRunning() {
+			fmt.Println("Docker container: running")
+			if v := sandbox.GetDockerContainerVersion(); v != "" {
+				fmt.Printf("Docker version:   %s\n", v)
+			}
+			if sandbox.NeedsUpgrade() {
+				fmt.Println("Upgrade needed:   yes (version mismatch)")
+			}
+		} else {
+			fmt.Println("Docker container: not running")
+			fmt.Println("Run 'astonish sandbox init' to set up the runtime.")
+			return nil
+		}
+	}
+
+	sandbox.SetActivePlatform(platform)
 	client, err := sandbox.Connect(platform)
 	if err != nil {
 		fmt.Printf("Incus connection: FAILED (%v)\n", err)
@@ -198,10 +216,16 @@ func handleSandboxInit() error {
 		return fmt.Errorf("no container runtime available.\nLinux: install Incus (apt install incus && incus admin init)\nmacOS/Windows: install Docker (any Docker-compatible runtime)")
 	}
 
+	// On Docker+Incus, ensure the Docker container is set up first
 	if platform == sandbox.PlatformDockerIncus {
-		return fmt.Errorf("Docker+Incus setup is not yet implemented (Phase 5).\nCurrently only Linux with native Incus is supported")
+		fmt.Println("Setting up Docker+Incus runtime...")
+		if err := sandbox.EnsureIncusDockerContainer(); err != nil {
+			return fmt.Errorf("failed to set up Docker+Incus: %w", err)
+		}
+		fmt.Println("Docker+Incus runtime ready.")
 	}
 
+	sandbox.SetActivePlatform(platform)
 	client, err := sandbox.Connect(platform)
 	if err != nil {
 		return fmt.Errorf("failed to connect to Incus: %w", err)
@@ -484,8 +508,16 @@ func handleSandboxShell(sessionID string) error {
 		}
 	}
 
-	// Use the incus CLI for interactive shell (it handles PTY properly)
-	cmd := exec.Command("incus", "exec", containerName, "--", "bash", "-l")
+	// Use the incus CLI for interactive shell (it handles PTY properly).
+	// On Docker+Incus, chain through docker exec to reach the Incus daemon.
+	var cmd *exec.Cmd
+	if sandbox.GetActivePlatform() == sandbox.PlatformDockerIncus {
+		cmd = sandbox.ExecInDockerHostInteractive([]string{
+			"incus", "exec", containerName, "--", "bash", "-l",
+		})
+	} else {
+		cmd = exec.Command("incus", "exec", containerName, "--", "bash", "-l")
+	}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -614,6 +646,14 @@ func handleTemplateShell(name string) error {
 		return fmt.Errorf("no container runtime available")
 	}
 
+	// On Docker+Incus, ensure the Docker container is running
+	if platform == sandbox.PlatformDockerIncus {
+		if !sandbox.IsIncusDockerContainerRunning() {
+			return fmt.Errorf("Docker+Incus container is not running.\nRun 'astonish sandbox init' to set up the runtime")
+		}
+	}
+
+	sandbox.SetActivePlatform(platform)
 	client, err := sandbox.Connect(platform)
 	if err != nil {
 		return fmt.Errorf("failed to connect to Incus: %w", err)
@@ -737,13 +777,22 @@ func handleTemplateInfo(name string) error {
 }
 
 // connectOrFail is a helper that detects the platform and connects to Incus,
-// returning an error if not available.
+// returning an error if not available. On Docker+Incus, ensures the Docker
+// container is running and sets the active platform.
 func connectOrFail() (*sandbox.IncusClient, error) {
 	platform := sandbox.DetectPlatform()
 	if platform == sandbox.PlatformUnsupported {
 		return nil, fmt.Errorf("no container runtime available")
 	}
 
+	// On Docker+Incus, ensure the Docker container is running
+	if platform == sandbox.PlatformDockerIncus {
+		if !sandbox.IsIncusDockerContainerRunning() {
+			return nil, fmt.Errorf("Docker+Incus container is not running.\nRun 'astonish sandbox init' to set up the runtime")
+		}
+	}
+
+	sandbox.SetActivePlatform(platform)
 	client, err := sandbox.Connect(platform)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Incus: %w", err)

@@ -1,0 +1,46 @@
+# Dockerfile.incus — Incus runtime container for Astonish sandbox on macOS/Windows.
+#
+# This image runs the Incus daemon inside a Docker container, providing
+# Linux container isolation on non-Linux hosts. Astonish on the host
+# connects to this container's Incus API via TCP (localhost:8443).
+#
+# Build:
+#   GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o astonish-linux .
+#   docker build -f Dockerfile.incus -t astonish/incus:v1.2.3 .
+#
+# The image is published to Docker Hub as part of the release process.
+# Users never build this image — astonish pulls it automatically.
+
+FROM ubuntu:24.04
+
+# Avoid interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Incus daemon, client, and essential tools
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        incus \
+        incus-client \
+        rsync \
+        ca-certificates \
+        iptables \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the pre-built Linux astonish binary.
+# This is the binary that gets pushed into Incus template containers
+# for running `astonish node` (headless tool execution server).
+COPY astonish-linux /usr/local/bin/astonish
+RUN chmod +x /usr/local/bin/astonish
+
+# Copy the entrypoint script
+COPY docker/entrypoint-incus.sh /usr/local/bin/entrypoint-incus.sh
+RUN chmod +x /usr/local/bin/entrypoint-incus.sh
+
+# Incus API port (HTTPS with self-signed cert)
+EXPOSE 8443
+
+# Persistent storage for Incus data (containers, images, storage pools, certs)
+VOLUME /var/lib/incus
+
+ENTRYPOINT ["/usr/local/bin/entrypoint-incus.sh"]

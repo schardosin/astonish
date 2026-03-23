@@ -127,13 +127,7 @@ type OpenCodeResponse struct {
 
 // SandboxResponse wraps SandboxConfig with resolved defaults for the UI.
 type SandboxResponse struct {
-	Enabled          bool   `json:"enabled"`
-	Memory           string `json:"memory"`
-	CPU              int    `json:"cpu"`
-	Processes        int    `json:"processes"`
-	Network          string `json:"network"`
-	WarmPool         int    `json:"warm_pool"`
-	OrphanCheckHours int    `json:"orphan_check_hours"`
+	Enabled bool `json:"enabled"`
 }
 
 // --- Update request types ---
@@ -303,13 +297,7 @@ type OpenCodeUpdateRequest struct {
 
 // SandboxUpdateRequest for updating sandbox settings.
 type SandboxUpdateRequest struct {
-	Enabled          bool   `json:"enabled"`
-	Memory           string `json:"memory"`
-	CPU              int    `json:"cpu"`
-	Processes        int    `json:"processes"`
-	Network          string `json:"network"`
-	WarmPool         int    `json:"warm_pool"`
-	OrphanCheckHours int    `json:"orphan_check_hours"`
+	Enabled bool `json:"enabled"`
 }
 
 // --- Handlers ---
@@ -606,23 +594,7 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 	if req.Sandbox != nil {
 		enabled := req.Sandbox.Enabled
-		cfg.Sandbox = config.SandboxConfig{
-			Enabled: &enabled,
-			Limits: config.SandboxLimits{
-				Memory:    req.Sandbox.Memory,
-				CPU:       req.Sandbox.CPU,
-				Processes: req.Sandbox.Processes,
-			},
-			Network:  req.Sandbox.Network,
-			WarmPool: req.Sandbox.WarmPool,
-			Prune: config.SandboxPruneConfig{
-				OrphanCheckHours: req.Sandbox.OrphanCheckHours,
-			},
-		}
-		if err := sandbox.ValidateSandboxConfig(&cfg.Sandbox); err != nil {
-			http.Error(w, "Invalid sandbox config: "+err.Error(), http.StatusBadRequest)
-			return
-		}
+		cfg.Sandbox.Enabled = &enabled
 	}
 
 	if err := config.SaveAppConfig(cfg); err != nil {
@@ -678,15 +650,8 @@ func regenerateOpenCodeConfig(cfg *config.AppConfig) {
 
 // buildSandboxResponse constructs the sandbox response with resolved defaults.
 func buildSandboxResponse(cfg *config.AppConfig) SandboxResponse {
-	limits := sandbox.EffectiveLimits(&cfg.Sandbox)
 	return SandboxResponse{
-		Enabled:          sandbox.IsSandboxEnabled(&cfg.Sandbox),
-		Memory:           limits.Memory,
-		CPU:              limits.CPU,
-		Processes:        limits.Processes,
-		Network:          sandbox.EffectiveNetwork(&cfg.Sandbox),
-		WarmPool:         cfg.Sandbox.WarmPool,
-		OrphanCheckHours: cfg.Sandbox.Prune.OrphanCheckHours,
+		Enabled: sandbox.IsSandboxEnabled(&cfg.Sandbox),
 	}
 }
 

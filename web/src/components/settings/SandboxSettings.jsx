@@ -1,19 +1,10 @@
 import { useState, useEffect } from 'react'
-import { Save, AlertCircle, Check, ChevronDown, ChevronRight, Shield, ShieldOff, Loader2 } from 'lucide-react'
-import { saveFullConfigSection, inputClass, inputStyle, labelStyle, hintStyle, sectionBorderStyle, saveButtonStyle } from './settingsApi'
+import { Save, AlertCircle, Check, Shield, ShieldOff, Loader2 } from 'lucide-react'
+import { saveFullConfigSection, hintStyle, saveButtonStyle } from './settingsApi'
 import { fetchSandboxStatus } from '../../api/sandbox'
 
 export default function SandboxSettings({ config, onSaved }) {
-  const [form, setForm] = useState({
-    enabled: true,
-    memory: '2GB',
-    cpu: 2,
-    processes: 500,
-    network: 'bridged',
-    warm_pool: 2,
-    orphan_check_hours: 6
-  })
-  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [form, setForm] = useState({ enabled: true })
   const [saving, setSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [error, setError] = useState(null)
@@ -22,15 +13,7 @@ export default function SandboxSettings({ config, onSaved }) {
 
   useEffect(() => {
     if (config) {
-      setForm({
-        enabled: config.enabled ?? true,
-        memory: config.memory || '2GB',
-        cpu: config.cpu || 2,
-        processes: config.processes || 500,
-        network: config.network || 'bridged',
-        warm_pool: config.warm_pool || 2,
-        orphan_check_hours: config.orphan_check_hours || 6
-      })
+      setForm({ enabled: config.enabled ?? true })
     }
   }, [config])
 
@@ -58,7 +41,6 @@ export default function SandboxSettings({ config, onSaved }) {
     }
   }
 
-  // Status badge
   const renderStatus = () => {
     if (statusLoading) {
       return (
@@ -153,132 +135,6 @@ export default function SandboxSettings({ config, onSaved }) {
           <span style={{ color: '#ef4444' }}>
             Sandbox is disabled. AI tools will execute directly on your host system with full access to files, network, and system resources.
           </span>
-        </div>
-      )}
-
-      {/* Advanced Settings Toggle */}
-      <div className="pt-4 border-t" style={sectionBorderStyle}>
-        <button
-          onClick={() => setShowAdvanced(!showAdvanced)}
-          className="flex items-center gap-2 text-sm font-medium transition-colors"
-          style={{ color: 'var(--text-secondary)' }}
-        >
-          {showAdvanced ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-          Advanced Settings
-        </button>
-      </div>
-
-      {showAdvanced && (
-        <div className="space-y-5">
-          {/* Resource Limits */}
-          <div>
-            <h4 className="text-sm font-medium mb-3" style={{ color: 'var(--text-primary)' }}>
-              Resource Limits
-            </h4>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-2" style={labelStyle}>
-                  Memory
-                </label>
-                <input
-                  type="text"
-                  value={form.memory}
-                  onChange={(e) => setForm({ ...form, memory: e.target.value })}
-                  placeholder="2GB"
-                  className={inputClass}
-                  style={inputStyle}
-                />
-                <p className="text-xs mt-1" style={hintStyle}>
-                  Memory limit per container (e.g. &quot;2GB&quot;, &quot;4GB&quot;)
-                </p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium mb-2" style={labelStyle}>
-                    CPU Cores
-                  </label>
-                  <input
-                    type="number"
-                    value={form.cpu}
-                    onChange={(e) => setForm({ ...form, cpu: parseInt(e.target.value) || 2 })}
-                    min="1"
-                    max="32"
-                    className={inputClass}
-                    style={inputStyle}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-2" style={labelStyle}>
-                    Max Processes
-                  </label>
-                  <input
-                    type="number"
-                    value={form.processes}
-                    onChange={(e) => setForm({ ...form, processes: parseInt(e.target.value) || 500 })}
-                    min="50"
-                    max="10000"
-                    className={inputClass}
-                    style={inputStyle}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Network */}
-          <div>
-            <label className="block text-sm font-medium mb-2" style={labelStyle}>
-              Network Mode
-            </label>
-            <select
-              value={form.network}
-              onChange={(e) => setForm({ ...form, network: e.target.value })}
-              className={inputClass}
-              style={inputStyle}
-            >
-              <option value="bridged">Bridged (containers have network access)</option>
-              <option value="none">None (no network access)</option>
-            </select>
-          </div>
-
-          {/* Warm Pool */}
-          <div>
-            <label className="block text-sm font-medium mb-2" style={labelStyle}>
-              Warm Pool Size
-            </label>
-            <input
-              type="number"
-              value={form.warm_pool}
-              onChange={(e) => setForm({ ...form, warm_pool: parseInt(e.target.value) || 0 })}
-              min="0"
-              max="10"
-              className={inputClass}
-              style={inputStyle}
-            />
-            <p className="text-xs mt-1" style={hintStyle}>
-              Number of pre-warmed containers kept ready for instant session creation
-            </p>
-          </div>
-
-          {/* Prune */}
-          <div>
-            <label className="block text-sm font-medium mb-2" style={labelStyle}>
-              Orphan Check Interval (hours)
-            </label>
-            <input
-              type="number"
-              value={form.orphan_check_hours}
-              onChange={(e) => setForm({ ...form, orphan_check_hours: parseInt(e.target.value) || 6 })}
-              min="1"
-              max="168"
-              className={inputClass}
-              style={inputStyle}
-            />
-            <p className="text-xs mt-1" style={hintStyle}>
-              How often to check for and clean up orphaned containers
-            </p>
-          </div>
         </div>
       )}
 

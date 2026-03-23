@@ -42,7 +42,7 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # Verify incusd was installed correctly
-RUN test -x /usr/libexec/incus/incusd || { echo "ERROR: incusd not found"; exit 1; }
+RUN test -x /opt/incus/bin/incusd || { echo "ERROR: incusd not found"; exit 1; }
 
 # Copy the pre-built Linux astonish binary.
 # This is the binary that gets pushed into Incus template containers

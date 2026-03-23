@@ -7,9 +7,10 @@
 
 set -e
 
-# Incus packages install incusd to /usr/libexec/incus/ which is not in
-# the default PATH. Add it so incusd and helper binaries are accessible.
-export PATH="/usr/libexec/incus:$PATH"
+# Zabbly packages install Incus binaries to /opt/incus/bin/ and shared
+# libraries to /opt/incus/lib/. Add both to PATH and LD_LIBRARY_PATH.
+export PATH="/opt/incus/bin:$PATH"
+export LD_LIBRARY_PATH="/opt/incus/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 echo "[astonish-incus] Starting Incus daemon..."
 

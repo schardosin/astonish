@@ -20,22 +20,29 @@ ENV DEBIAN_FRONTEND=noninteractive
 # the 'main' component; Incus is in 'universe' which is not enabled by
 # default in Docker images. Zabbly provides the official Incus packages
 # with up-to-date stable releases.)
+#
+# The Zabbly incus-base package depends on systemd and apparmor which
+# need to be present before installing. We also install dnsmasq-base
+# and iptables which Incus needs for container networking.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         curl \
         ca-certificates \
+        systemd \
+        apparmor \
+        dnsmasq-base \
     && mkdir -p /etc/apt/keyrings \
     && curl -fsSL https://pkgs.zabbly.com/key.asc -o /etc/apt/keyrings/zabbly.asc \
     && printf 'Enabled: yes\nTypes: deb\nURIs: https://pkgs.zabbly.com/incus/stable\nSuites: noble\nComponents: main\nArchitectures: %s\nSigned-By: /etc/apt/keyrings/zabbly.asc\n' \
         "$(dpkg --print-architecture)" \
         > /etc/apt/sources.list.d/zabbly-incus-stable.sources \
     && apt-get update \
-    && apt-get install -y --no-install-recommends \
-        incus \
-        rsync \
-        iptables \
+    && apt-get install -y incus \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Verify incusd was installed correctly
+RUN test -x /usr/libexec/incus/incusd || { echo "ERROR: incusd not found"; exit 1; }
 
 # Copy the pre-built Linux astonish binary.
 # This is the binary that gets pushed into Incus template containers

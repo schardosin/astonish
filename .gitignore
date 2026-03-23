@@ -47,6 +47,6 @@ mcp_servers/
 
 # New local files
 #AGENTS.md
-docs/specs/
+#docs/specs/
 /astonish
 !/astonish/

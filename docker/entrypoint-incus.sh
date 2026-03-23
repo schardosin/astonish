@@ -80,5 +80,30 @@ fi
 
 echo "[astonish-incus] Incus API listening on :8443"
 
+# Generate a client certificate for the host to authenticate over TCP.
+# The cert/key are stored on the persistent volume so they survive container
+# recreation. The cert is added to the Incus trust store on first run.
+CLIENT_CERT_DIR="/var/lib/incus/astonish-client"
+CLIENT_CERT="$CLIENT_CERT_DIR/client.crt"
+CLIENT_KEY="$CLIENT_CERT_DIR/client.key"
+
+if [ ! -f "$CLIENT_CERT" ] || [ ! -f "$CLIENT_KEY" ]; then
+    echo "[astonish-incus] Generating client certificate for host access..."
+    mkdir -p "$CLIENT_CERT_DIR"
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+        -sha256 -nodes -days 3650 \
+        -subj "/CN=astonish-host-client" \
+        -keyout "$CLIENT_KEY" -out "$CLIENT_CERT" >/dev/null 2>&1
+    # Add the cert to Incus trust store
+    incus config trust add-certificate "$CLIENT_CERT" --name astonish-host 2>/dev/null || true
+    echo "[astonish-incus] Client certificate generated and trusted."
+else
+    # Ensure the cert is in the trust store (may have been lost if Incus DB was recreated)
+    if ! incus config trust list --format csv 2>/dev/null | grep -q "astonish-host"; then
+        incus config trust add-certificate "$CLIENT_CERT" --name astonish-host 2>/dev/null || true
+        echo "[astonish-incus] Client certificate re-added to trust store."
+    fi
+fi
+
 # Keep the container running by waiting on incusd
 wait $INCUSD_PID

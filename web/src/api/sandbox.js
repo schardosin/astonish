@@ -1,19 +1,15 @@
-// Sandbox API client functions for the Studio Setup Wizard.
+// Sandbox API client functions for the Studio UI.
 
-/**
- * Fetch sandbox platform detection status.
- * @returns {Promise<{platform: string, reason: string, sandboxEnabled: boolean, incusAvailable: boolean, baseTemplateExists: boolean}>}
- */
+// --- Setup Wizard (existing) ---
+
+/** Fetch sandbox platform detection status. */
 export async function fetchSandboxStatus() {
   const res = await fetch('/api/sandbox/status')
   if (!res.ok) throw new Error(`Failed to fetch sandbox status: ${res.statusText}`)
   return res.json()
 }
 
-/**
- * Fetch optional tools available for sandbox base template.
- * @returns {Promise<{tools: Array<{id: string, name: string, description: string, url: string, recommended: boolean, requiresNesting: boolean}>}>}
- */
+/** Fetch optional tools available for sandbox base template. */
 export async function fetchOptionalTools() {
   const res = await fetch('/api/sandbox/optional-tools')
   if (!res.ok) throw new Error(`Failed to fetch optional tools: ${res.statusText}`)
@@ -23,13 +19,6 @@ export async function fetchOptionalTools() {
 /**
  * Initialize the sandbox base template with selected tools.
  * Returns an SSE stream with progress events.
- *
- * @param {Object} params
- * @param {Object<string, boolean>} params.installTools - Map of tool IDs to install flags
- * @param {function(string)} params.onProgress - Called with each progress message
- * @param {function()} params.onDone - Called when initialization completes
- * @param {function(string)} params.onError - Called with error message on failure
- * @returns {{ abort: function }} Controller to cancel the request
  */
 export function initSandbox({ installTools, onProgress, onDone, onError }) {
   const controller = new AbortController()
@@ -57,7 +46,7 @@ export function initSandbox({ installTools, onProgress, onDone, onError }) {
 
         buffer += decoder.decode(value, { stream: true })
         const lines = buffer.split('\n')
-        buffer = lines.pop() // keep incomplete line in buffer
+        buffer = lines.pop()
 
         let currentEvent = ''
         for (const line of lines) {
@@ -89,4 +78,111 @@ export function initSandbox({ installTools, onProgress, onDone, onError }) {
     })
 
   return { abort: () => controller.abort() }
+}
+
+// --- Settings: Container & Template Management ---
+
+/** Fetch extended sandbox details (Incus version, storage, counts). */
+export async function fetchSandboxDetails() {
+  const res = await fetch('/api/sandbox/details')
+  if (!res.ok) throw new Error(`Failed to fetch sandbox details: ${res.statusText}`)
+  return res.json()
+}
+
+/** Fetch all session containers. */
+export async function fetchContainers() {
+  const res = await fetch('/api/sandbox/containers')
+  if (!res.ok) throw new Error(`Failed to fetch containers: ${res.statusText}`)
+  return res.json()
+}
+
+/** Destroy a session container by session ID or container name. */
+export async function deleteContainer(id) {
+  const res = await fetch(`/api/sandbox/containers/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+  return res.json()
+}
+
+/** Prune orphaned containers. */
+export async function pruneOrphans() {
+  const res = await fetch('/api/sandbox/prune', { method: 'POST' })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+  return res.json()
+}
+
+/** Fetch all registered templates. */
+export async function fetchTemplates() {
+  const res = await fetch('/api/sandbox/templates')
+  if (!res.ok) throw new Error(`Failed to fetch templates: ${res.statusText}`)
+  return res.json()
+}
+
+/** Fetch detailed info about a single template. */
+export async function fetchTemplateInfo(name) {
+  const res = await fetch(`/api/sandbox/templates/${encodeURIComponent(name)}`)
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+  return res.json()
+}
+
+/** Create a new template from @base. */
+export async function createTemplate(name, description) {
+  const res = await fetch('/api/sandbox/templates', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, description }),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+  return res.json()
+}
+
+/** Delete a template. */
+export async function deleteTemplate(name) {
+  const res = await fetch(`/api/sandbox/templates/${encodeURIComponent(name)}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+  return res.json()
+}
+
+/** Snapshot a template. */
+export async function snapshotTemplate(name) {
+  const res = await fetch(`/api/sandbox/templates/${encodeURIComponent(name)}/snapshot`, { method: 'POST' })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+  return res.json()
+}
+
+/** Promote a template to replace @base. */
+export async function promoteTemplate(name) {
+  const res = await fetch(`/api/sandbox/templates/${encodeURIComponent(name)}/promote`, { method: 'POST' })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+  return res.json()
+}
+
+/** Refresh all templates with the current astonish binary. */
+export async function refreshTemplates() {
+  const res = await fetch('/api/sandbox/refresh', { method: 'POST' })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+  return res.json()
 }

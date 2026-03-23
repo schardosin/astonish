@@ -757,8 +757,19 @@ func RegisterRoutes(router *mux.Router) {
 
 	// Sandbox endpoints
 	router.HandleFunc("/api/sandbox/status", SandboxStatusHandler).Methods("GET")
+	router.HandleFunc("/api/sandbox/details", SandboxDetailsHandler).Methods("GET")
 	router.HandleFunc("/api/sandbox/optional-tools", SandboxOptionalToolsHandler).Methods("GET")
 	router.HandleFunc("/api/sandbox/init", SandboxInitHandler).Methods("POST")
+	router.HandleFunc("/api/sandbox/containers", SandboxContainerListHandler).Methods("GET")
+	router.HandleFunc("/api/sandbox/containers/{id}", SandboxContainerDeleteHandler).Methods("DELETE")
+	router.HandleFunc("/api/sandbox/prune", SandboxPruneHandler).Methods("POST")
+	router.HandleFunc("/api/sandbox/templates", SandboxTemplateListHandler).Methods("GET")
+	router.HandleFunc("/api/sandbox/templates", SandboxTemplateCreateHandler).Methods("POST")
+	router.HandleFunc("/api/sandbox/templates/{name}/snapshot", SandboxTemplateSnapshotHandler).Methods("POST")
+	router.HandleFunc("/api/sandbox/templates/{name}/promote", SandboxTemplatePromoteHandler).Methods("POST")
+	router.HandleFunc("/api/sandbox/templates/{name}", SandboxTemplateInfoHandler).Methods("GET")
+	router.HandleFunc("/api/sandbox/templates/{name}", SandboxTemplateDeleteHandler).Methods("DELETE")
+	router.HandleFunc("/api/sandbox/refresh", SandboxRefreshHandler).Methods("POST")
 
 	// Standard servers endpoints
 	router.HandleFunc("/api/standard-servers", ListStandardServersHandler).Methods("GET")

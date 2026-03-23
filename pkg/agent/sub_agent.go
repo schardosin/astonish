@@ -117,6 +117,12 @@ var excludedChildTools = map[string]bool{
 	"opencode":          true, // OpenCode delegation is fleet-agent-only (via FleetTools)
 }
 
+// IsExcludedChildTool returns true if the named tool is in the exclusion list.
+// Used by sandbox wrapping to replicate the same filtering as filterTools().
+func IsExcludedChildTool(name string) bool {
+	return excludedChildTools[name]
+}
+
 // NewSubAgentManager creates a new SubAgentManager with the given configuration.
 func NewSubAgentManager(cfg SubAgentConfig) *SubAgentManager {
 	if cfg.MaxDepth <= 0 {

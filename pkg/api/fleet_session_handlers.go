@@ -907,6 +907,11 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 	// Create a lazy node client for this fleet session
 	lazyNode := sandbox.NewLazyNodeClient(sandboxClient, sessRegistry, tplRegistry, template)
 
+	// Use the fleet session ID for container lookup/creation so that recovered
+	// sessions (which preserve the fleet session ID but generate new ADK child
+	// session IDs) find and reuse the original container.
+	lazyNode.OverrideSessionID = fleetSession.ID
+
 	// Build env vars to inject into the container
 	lazyNode.Env = buildSandboxEnv(plan, ghToken)
 
@@ -917,8 +922,17 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 		return fmt.Errorf("sandbox is enabled but sub-agent manager is not available")
 	}
 
-	// Wrap both regular tools and fleet-only tools
-	wrappedTools := sandbox.WrapToolsWithNodeClient(subAgentMgr.Tools, lazyNode)
+	// Wrap tools with sandbox node proxies. Replicate the excludedChildTools
+	// filter from SubAgentManager.filterTools() — tools in that set (opencode,
+	// delegate_tasks, etc.) come exclusively from FleetTools so they must be
+	// excluded from the base Tools slice to avoid duplicates.
+	var baseTools []tool.Tool
+	for _, t := range subAgentMgr.Tools {
+		if !agent.IsExcludedChildTool(t.Name()) {
+			baseTools = append(baseTools, t)
+		}
+	}
+	wrappedTools := sandbox.WrapToolsWithNodeClient(baseTools, lazyNode)
 	if subAgentMgr.FleetTools != nil {
 		wrappedFleetTools := sandbox.WrapToolsWithNodeClient(subAgentMgr.FleetTools, lazyNode)
 		wrappedTools = append(wrappedTools, wrappedFleetTools...)
@@ -984,8 +998,8 @@ func createFleetMCPToolsets(incusClient *sandbox.IncusClient, lazyNode *sandbox.
 }
 
 // buildSandboxEnv builds the environment variable map for a fleet session's
-// sandbox container. This injects credentials into the container so tools
-// like `gh` and `git` can authenticate.
+// sandbox container. This injects credentials and OpenCode provider config
+// into the container so tools like `gh`, `git`, and `opencode` work correctly.
 func buildSandboxEnv(plan *fleet.FleetPlan, ghToken string) map[string]string {
 	env := make(map[string]string)
 
@@ -1010,6 +1024,26 @@ func buildSandboxEnv(plan *fleet.FleetPlan, ghToken string) map[string]string {
 	// BIFROST_API_KEY for delegate sub-processes (OpenCode)
 	if key := os.Getenv("BIFROST_API_KEY"); key != "" {
 		env["BIFROST_API_KEY"] = key
+	}
+
+	// OpenCode provider configuration — pass the generated config file content
+	// and provider/model IDs so the in-container astonish node can configure
+	// opencode correctly. The node reads these env vars at startup.
+	ocConfigPath := tools.GetOpenCodeConfigPath()
+	if ocConfigPath != "" {
+		if data, err := os.ReadFile(ocConfigPath); err == nil {
+			env["ASTONISH_OC_CONFIG_JSON"] = string(data)
+		}
+	}
+	ocProviderID, ocModelID := tools.GetOpenCodeConfigProviderModel()
+	if ocProviderID != "" {
+		env["ASTONISH_OC_PROVIDER_ID"] = ocProviderID
+	}
+	if ocModelID != "" {
+		env["ASTONISH_OC_MODEL_ID"] = ocModelID
+	}
+	for k, v := range tools.GetOpenCodeConfigExtraEnv() {
+		env[k] = v
 	}
 
 	return env

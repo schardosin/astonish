@@ -264,6 +264,13 @@ type LazyNodeClient struct {
 	// Set before BindSession() to pass credentials into the container.
 	Env map[string]string
 
+	// OverrideSessionID, when set, is used instead of the ADK child session ID
+	// for container lookup and creation. Fleet sessions set this to the fleet
+	// session ID so that recovered sessions reuse the same container — the ADK
+	// child session ID changes on every RunTask() call, but the fleet session
+	// ID is stable across recovery cycles.
+	OverrideSessionID string
+
 	// containerReady is closed when the container is created and running,
 	// BEFORE the astonish node process is started. MCP transport only needs
 	// the container, not the node, so it waits on this channel.
@@ -295,6 +302,14 @@ func NewLazyNodeClient(client *IncusClient, sessRegistry *SessionRegistry, tplRe
 func (lnc *LazyNodeClient) BindSession(sessionID string) {
 	if sessionID == "" {
 		return
+	}
+
+	// Fleet sessions set OverrideSessionID to the fleet session ID (stable
+	// across recovery), so the sandbox registry lookup finds the original
+	// container. Without this, each RunTask() would use a fresh ADK child
+	// session ID that doesn't match the registry entry.
+	if lnc.OverrideSessionID != "" {
+		sessionID = lnc.OverrideSessionID
 	}
 
 	lnc.mu.Lock()

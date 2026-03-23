@@ -702,6 +702,13 @@ func ExecuteTool(ctx context.Context, name string, args map[string]interface{}) 
 		}
 		return HttpRequest(nil, toolArgs)
 
+	case "opencode":
+		var toolArgs OpenCodeArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for opencode: %w", err)
+		}
+		return runOpenCode(nil, toolArgs)
+
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}

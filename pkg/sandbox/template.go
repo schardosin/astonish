@@ -49,10 +49,98 @@ func CoreToolInstallCommands() [][]string {
 	}
 }
 
+// OptionalTool describes an optional tool that can be installed into the base template.
+type OptionalTool struct {
+	// ID is the unique identifier for this tool (used in BaseTemplateOptions).
+	ID string
+	// Name is the display name shown in the setup prompt.
+	Name string
+	// Description is a short explanation of what the tool does and why it's useful.
+	Description string
+	// URL is a link to the tool's homepage or docs.
+	URL string
+	// InstallCommands returns the commands to install this tool inside a container.
+	InstallCommands func() [][]string
+	// Recommended indicates this tool should be pre-selected / promoted during setup.
+	Recommended bool
+	// RequiresNesting indicates this tool needs security.nesting=true on containers
+	// (e.g., Docker daemon needs to create its own namespaces and cgroups).
+	RequiresNesting bool
+}
+
+// OptionalTools returns the catalog of optional tools available for installation
+// into the base template. The order here is the order they are presented.
+func OptionalTools() []OptionalTool {
+	return []OptionalTool{
+		{
+			ID:          "opencode",
+			Name:        "OpenCode",
+			Description: "AI coding agent used as a delegate tool by fleet sub-agents.\nEnables autonomous code generation, editing, and analysis inside containers.",
+			URL:         "https://opencode.ai",
+			Recommended: true,
+			InstallCommands: func() [][]string {
+				return [][]string{
+					{"sh", "-c", "curl -fsSL https://opencode.ai/install | bash"},
+				}
+			},
+		},
+		{
+			ID:              "docker",
+			Name:            "Docker",
+			Description:     "Full Docker runtime (daemon + CLI) for running MCP servers,\nbuilding container images, and Docker-based workflows.",
+			URL:             "https://docs.docker.com/engine",
+			Recommended:     true,
+			RequiresNesting: true,
+			InstallCommands: func() [][]string {
+				return [][]string{
+					// Install Docker from Ubuntu repos (daemon + CLI + containerd)
+					{"apt-get", "update"},
+					{"apt-get", "install", "-y", "docker.io"},
+					// Remove apparmor — cannot work inside nested LXC containers
+					// and blocks Docker from starting containers
+					{"apt-get", "remove", "-y", "apparmor"},
+					{"apt-get", "clean"},
+					{"rm", "-rf", "/var/lib/apt/lists/*"},
+				}
+			},
+		},
+	}
+}
+
+// BaseTemplateOptions configures which optional tools to install in the base template.
+type BaseTemplateOptions struct {
+	// InstallTools maps optional tool IDs to true if they should be installed.
+	InstallTools map[string]bool
+
+	// ProgressFunc, when non-nil, receives progress messages instead of
+	// printing them to stdout. This allows callers (e.g. API handlers)
+	// to stream progress to clients.
+	ProgressFunc func(string)
+}
+
+// DefaultBaseTemplateOptions returns options with no optional tools selected.
+func DefaultBaseTemplateOptions() BaseTemplateOptions {
+	return BaseTemplateOptions{
+		InstallTools: make(map[string]bool),
+	}
+}
+
 // InitBaseTemplate creates the @base template container from a fresh image
-// and installs core tools. This is run during `astonish sandbox init`.
-func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry) error {
+// and installs core tools plus any selected optional tools.
+// This is run during `astonish sandbox init` or `astonish setup`.
+func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry, opts BaseTemplateOptions) error {
 	containerName := TemplateName(BaseTemplate)
+
+	// progress routes messages to the caller's callback (e.g. SSE stream)
+	// or falls back to stdout when no callback is set.
+	progress := func(msg string, args ...any) {
+		s := fmt.Sprintf(msg, args...)
+		if opts.ProgressFunc != nil {
+			opts.ProgressFunc(s)
+		} else {
+			fmt.Print(s)
+		}
+	}
 
 	// Check if already exists
 	if client.InstanceExists(containerName) {
@@ -64,7 +152,7 @@ func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry) error {
 		return fmt.Errorf("failed to set up Incus environment: %w", err)
 	}
 
-	fmt.Printf("Creating base template from %s...\n", DefaultBaseImage)
+	progress("Creating base template from %s...\n", DefaultBaseImage)
 
 	// Launch from image
 	if err := client.LaunchFromImage(containerName, DefaultBaseImage, nil); err != nil {
@@ -72,7 +160,7 @@ func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry) error {
 	}
 
 	// Start the container
-	fmt.Println("Starting base template...")
+	progress("Starting base template...\n")
 	if err := client.StartInstance(containerName); err != nil {
 		// Clean up on failure
 		client.DeleteInstance(containerName)
@@ -80,16 +168,16 @@ func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry) error {
 	}
 
 	// Wait for the container to be fully ready (network, etc.)
-	fmt.Println("Waiting for container to be ready...")
+	progress("Waiting for container to be ready...\n")
 	if err := waitForReady(client, containerName, 60*time.Second); err != nil {
 		client.StopAndDeleteInstance(containerName)
 		return fmt.Errorf("container did not become ready: %w", err)
 	}
 
 	// Install core tools
-	fmt.Println("Installing core tools...")
+	progress("Installing core tools...\n")
 	for _, cmd := range CoreToolInstallCommands() {
-		fmt.Printf("  Running: %v\n", cmd)
+		progress("  Running: %v\n", cmd)
 		exitCode, err := client.ExecSimple(containerName, cmd)
 		if err != nil {
 			client.StopAndDeleteInstance(containerName)
@@ -101,23 +189,61 @@ func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry) error {
 		}
 	}
 
+	// Install optional tools selected by the user
+	selectedTools := OptionalTools()
+	needsNesting := false
+	for _, tool := range selectedTools {
+		if !opts.InstallTools[tool.ID] {
+			continue
+		}
+		if tool.RequiresNesting {
+			needsNesting = true
+		}
+		progress("Installing %s...\n", tool.Name)
+		for _, cmd := range tool.InstallCommands() {
+			progress("  Running: %v\n", cmd)
+			exitCode, err := client.ExecSimple(containerName, cmd)
+			if err != nil {
+				client.StopAndDeleteInstance(containerName)
+				return fmt.Errorf("failed to install %s (%v): %w", tool.Name, cmd, err)
+			}
+			if exitCode != 0 {
+				client.StopAndDeleteInstance(containerName)
+				return fmt.Errorf("install %s: command %v exited with code %d", tool.Name, cmd, exitCode)
+			}
+		}
+		progress("  %s installed.\n", tool.Name)
+	}
+
+	// Enable security.nesting if any installed tool requires it (e.g., Docker
+	// needs to create its own namespaces and cgroups inside the container).
+	if needsNesting {
+		progress("Enabling container nesting (required by Docker)...\n")
+		if err := client.SetInstanceConfig(containerName, map[string]string{
+			"security.nesting": "true",
+		}); err != nil {
+			client.StopAndDeleteInstance(containerName)
+			return fmt.Errorf("failed to enable nesting: %w", err)
+		}
+	}
+
 	// Push astonish binary into the template so session containers can run
 	// `astonish node` (headless tool execution server) without any additional setup.
-	fmt.Println("Pushing astonish binary into template...")
+	progress("Pushing astonish binary into template...\n")
 	if err := pushAstonishBinary(client, containerName); err != nil {
 		client.StopAndDeleteInstance(containerName)
 		return fmt.Errorf("failed to push astonish binary: %w", err)
 	}
 
 	// Stop before snapshotting (for consistency)
-	fmt.Println("Stopping template for snapshot...")
+	progress("Stopping template for snapshot...\n")
 	if err := client.StopInstance(containerName, false); err != nil {
 		client.StopAndDeleteInstance(containerName)
 		return fmt.Errorf("failed to stop base template: %w", err)
 	}
 
 	// Create snapshot
-	fmt.Println("Creating snapshot...")
+	progress("Creating snapshot...\n")
 	if err := client.CreateSnapshot(containerName, SnapshotName); err != nil {
 		client.DeleteInstance(containerName)
 		return fmt.Errorf("failed to snapshot base template: %w", err)
@@ -129,6 +255,7 @@ func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry) error {
 		Name:       BaseTemplate,
 		CreatedAt:  now,
 		SnapshotAt: now,
+		Nesting:    needsNesting,
 	}
 	if hash, hashErr := ComputeBinaryHash(); hashErr == nil {
 		meta.BinaryHash = hash
@@ -150,7 +277,7 @@ func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry) error {
 		return fmt.Errorf("failed to create overlay base directory: %w", err)
 	}
 
-	fmt.Println("Base template initialized successfully.")
+	progress("Base template initialized successfully.\n")
 	return nil
 }
 

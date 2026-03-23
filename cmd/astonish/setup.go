@@ -25,6 +25,7 @@ import (
 	"github.com/schardosin/astonish/pkg/provider/poe"
 	"github.com/schardosin/astonish/pkg/provider/sap"
 	"github.com/schardosin/astonish/pkg/provider/xai"
+	"github.com/schardosin/astonish/pkg/sandbox"
 )
 
 func handleSetupCommand() error {
@@ -65,7 +66,7 @@ func handleSetupCommand() error {
 
 	// --- STEP 1: Select existing or add new ---
 	var selectedInstance string
-
+	clearScreen()
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -250,6 +251,7 @@ func handleSetupCommand() error {
 	// Only ask if not already handled (like in SAP AI Core)
 	{
 		var defaultModel string = cfg.General.DefaultModel
+		clearScreen()
 		err = huh.NewForm(
 			huh.NewGroup(
 				huh.NewInput().
@@ -267,6 +269,7 @@ SaveConfig:
 	// For new providers, ask for instance name at the end
 	if isNewProvider {
 		var instanceName string
+		clearScreen()
 		err = huh.NewForm(
 			huh.NewGroup(
 				huh.NewInput().
@@ -333,6 +336,13 @@ SaveConfig:
 		}
 	}
 
+	// --- Sandbox Setup ---
+	if err := handleSandboxSetup(); err != nil {
+		if !isUserAborted(err) {
+			fmt.Printf("Warning: Sandbox setup failed: %v\n", err)
+		}
+	}
+
 	return nil
 }
 
@@ -373,6 +383,7 @@ func selectProviderType() string {
 // Helper functions for forms
 
 func runAPIKeyForm(title string, key string, pCfg config.ProviderConfig) {
+	clearScreen()
 	val := pCfg[key]
 	err := huh.NewForm(
 		huh.NewGroup(
@@ -389,6 +400,7 @@ func runAPIKeyForm(title string, key string, pCfg config.ProviderConfig) {
 }
 
 func runBaseURLForm(title string, defaultVal string, pCfg config.ProviderConfig) {
+	clearScreen()
 	val := pCfg["base_url"]
 	if val == "" {
 		val = defaultVal
@@ -407,6 +419,7 @@ func runBaseURLForm(title string, defaultVal string, pCfg config.ProviderConfig)
 }
 
 func runOllamaForm(pCfg config.ProviderConfig) {
+	clearScreen()
 	baseURL := pCfg["base_url"]
 	if baseURL == "" {
 		baseURL = "http://localhost:11434"
@@ -426,6 +439,7 @@ func runOllamaForm(pCfg config.ProviderConfig) {
 }
 
 func runSAPAICoreForm(pCfg config.ProviderConfig) {
+	clearScreen()
 	clientID := pCfg["client_id"]
 	clientSecret := pCfg["client_secret"]
 	authURL := pCfg["auth_url"]
@@ -518,7 +532,6 @@ func saveProviderSecretsToStore(instanceName, providerType string, pCfg config.P
 func fetchAndSelectSAPModel(pCfg config.ProviderConfig, appCfg *config.AppConfig) error {
 	runSpinner("Connecting to SAP AI Core...")
 
-	// Fetch models
 	models, err := sap.ListModels(context.Background(),
 		pCfg["client_id"],
 		pCfg["client_secret"],
@@ -534,17 +547,14 @@ func fetchAndSelectSAPModel(pCfg config.ProviderConfig, appCfg *config.AppConfig
 		return fmt.Errorf("no running models found")
 	}
 
-	// Sort models for better UX
 	sort.Strings(models)
 
-	// Create Options dynamically
 	var modelOptions []huh.Option[string]
 	for _, m := range models {
 		modelOptions = append(modelOptions, huh.NewOption(m, m))
 	}
 
 	var selectedModel string
-	// Pre-select current default if it exists in the list
 	if appCfg.General.DefaultModel != "" {
 		for _, m := range models {
 			if m == appCfg.General.DefaultModel {
@@ -554,6 +564,7 @@ func fetchAndSelectSAPModel(pCfg config.ProviderConfig, appCfg *config.AppConfig
 		}
 	}
 
+	clearScreen()
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -579,51 +590,27 @@ func fetchAndSelectGoogleModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 		return fmt.Errorf("API key is missing")
 	}
 
-	fmt.Println("Fetching available models from Google GenAI...")
+	runSpinner("Fetching models from Google GenAI...")
 
-	// Create a spinner
-	s := spinner.New()
-	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-
-	// Run fetching in a goroutine to show spinner
-	type result struct {
-		models []string
-		err    error
-	}
-	ch := make(chan result)
-
-	go func() {
-		models, err := google.ListModels(context.Background(), apiKey)
-		ch <- result{models: models, err: err}
-	}()
-
-	// Wait for result while spinning
-	// Note: In a real CLI app we'd use Bubble Tea properly, but here we just want a simple spinner
-	// For simplicity in this setup script, we'll just wait.
-	// The spinner library requires a loop or Bubble Tea program.
-	// Let's just print "..." for now to match other providers.
-
-	res := <-ch
-	if res.err != nil {
-		return res.err
+	models, err := google.ListModels(context.Background(), apiKey)
+	if err != nil {
+		return err
 	}
 
-	if len(res.models) == 0 {
+	if len(models) == 0 {
 		return fmt.Errorf("no models found")
 	}
 
 	// Create options for huh.Select
 	var options []huh.Option[string]
-	for _, m := range res.models {
+	for _, m := range models {
 		options = append(options, huh.NewOption(m, m))
 	}
 
 	var selectedModel string
 
-	// Use a form with a Select field
-	// Set a height limit to ensure scrolling works nicely
-	err := huh.NewForm(
+	clearScreen()
+	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Select a Google GenAI Model").
@@ -636,10 +623,7 @@ func fetchAndSelectGoogleModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 		return err
 	}
 
-	// Save selected model as default
 	appCfg.General.DefaultModel = selectedModel
-	fmt.Printf("Selected default model: %s\n", selectedModel)
-
 	return nil
 }
 func fetchAndSelectOpenRouterModel(pCfg config.ProviderConfig, appCfg *config.AppConfig) error {
@@ -657,14 +641,11 @@ func fetchAndSelectOpenRouterModel(pCfg config.ProviderConfig, appCfg *config.Ap
 	// Create Options dynamically
 	var modelOptions []huh.Option[string]
 	for _, m := range models {
-		// Format: [Group] Name
-		// We use the ID as the value
 		label := fmt.Sprintf("[%s] %s", m.Group, m.DisplayName)
 		modelOptions = append(modelOptions, huh.NewOption(label, m.ID))
 	}
 
 	var selectedModel string
-	// Pre-select current default if it exists
 	if appCfg.General.DefaultModel != "" {
 		for _, m := range models {
 			if m.ID == appCfg.General.DefaultModel {
@@ -674,6 +655,7 @@ func fetchAndSelectOpenRouterModel(pCfg config.ProviderConfig, appCfg *config.Ap
 		}
 	}
 
+	clearScreen()
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -698,8 +680,7 @@ func fetchAndSelectOllamaModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 		baseURL = "http://localhost:11434"
 	}
 
-	fmt.Println("Fetching available models from Ollama...")
-	runSpinner("Connecting to Ollama...")
+	runSpinner("Fetching models from Ollama...")
 
 	models, err := ollama.ListModels(context.Background(), baseURL)
 	if err != nil {
@@ -710,7 +691,6 @@ func fetchAndSelectOllamaModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 		return fmt.Errorf("no models found")
 	}
 
-	// Create options for huh.Select
 	var options []huh.Option[string]
 	for _, m := range models {
 		options = append(options, huh.NewOption(m, m))
@@ -718,6 +698,7 @@ func fetchAndSelectOllamaModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 
 	var selectedModel string
 
+	clearScreen()
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -731,10 +712,7 @@ func fetchAndSelectOllamaModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 		return err
 	}
 
-	// Save selected model as default
 	appCfg.General.DefaultModel = selectedModel
-	fmt.Printf("Selected default model: %s\n", selectedModel)
-
 	return nil
 }
 
@@ -744,8 +722,7 @@ func fetchAndSelectLMStudioModel(pCfg config.ProviderConfig, appCfg *config.AppC
 		baseURL = "http://localhost:1234/v1"
 	}
 
-	fmt.Println("Fetching available models from LM Studio...")
-	runSpinner("Connecting to LM Studio...")
+	runSpinner("Fetching models from LM Studio...")
 
 	models, err := lmstudio.ListModels(context.Background(), baseURL)
 	if err != nil {
@@ -756,7 +733,6 @@ func fetchAndSelectLMStudioModel(pCfg config.ProviderConfig, appCfg *config.AppC
 		return fmt.Errorf("no models found")
 	}
 
-	// Create options for huh.Select
 	var options []huh.Option[string]
 	for _, m := range models {
 		options = append(options, huh.NewOption(m, m))
@@ -764,6 +740,7 @@ func fetchAndSelectLMStudioModel(pCfg config.ProviderConfig, appCfg *config.AppC
 
 	var selectedModel string
 
+	clearScreen()
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -777,10 +754,7 @@ func fetchAndSelectLMStudioModel(pCfg config.ProviderConfig, appCfg *config.AppC
 		return err
 	}
 
-	// Save selected model as default
 	appCfg.General.DefaultModel = selectedModel
-	fmt.Printf("Selected default model: %s\n", selectedModel)
-
 	return nil
 }
 
@@ -790,8 +764,7 @@ func fetchAndSelectGroqModel(pCfg config.ProviderConfig, appCfg *config.AppConfi
 		return fmt.Errorf("API key required")
 	}
 
-	fmt.Println("Fetching available models from Groq...")
-	runSpinner("Connecting to Groq...")
+	runSpinner("Fetching models from Groq...")
 
 	models, err := groq.ListModels(context.Background(), apiKey)
 	if err != nil {
@@ -802,7 +775,6 @@ func fetchAndSelectGroqModel(pCfg config.ProviderConfig, appCfg *config.AppConfi
 		return fmt.Errorf("no models found")
 	}
 
-	// Create options for huh.Select
 	var options []huh.Option[string]
 	for _, m := range models {
 		options = append(options, huh.NewOption(m, m))
@@ -810,6 +782,7 @@ func fetchAndSelectGroqModel(pCfg config.ProviderConfig, appCfg *config.AppConfi
 
 	var selectedModel string
 
+	clearScreen()
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -823,10 +796,7 @@ func fetchAndSelectGroqModel(pCfg config.ProviderConfig, appCfg *config.AppConfi
 		return err
 	}
 
-	// Save selected model as default
 	appCfg.General.DefaultModel = selectedModel
-	fmt.Printf("Selected default model: %s\n", selectedModel)
-
 	return nil
 }
 
@@ -853,6 +823,11 @@ func runSpinner(msg string) {
 	// For simplicity in this setup script, we just print the message.
 }
 
+// clearScreen resets the terminal so each wizard page starts fresh.
+func clearScreen() {
+	fmt.Print("\033[2J\033[H")
+}
+
 func printSuccess(msg string) {
 	style := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("42")). // Green
@@ -870,8 +845,7 @@ func fetchAndSelectOpenAIModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 		return fmt.Errorf("API key required")
 	}
 
-	fmt.Println("Fetching available models from OpenAI...")
-	runSpinner("Connecting to OpenAI...")
+	runSpinner("Fetching models from OpenAI...")
 
 	models, err := openai_provider.ListModels(context.Background(), apiKey)
 	if err != nil {
@@ -882,7 +856,6 @@ func fetchAndSelectOpenAIModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 		return fmt.Errorf("no models found")
 	}
 
-	// Create options for huh.Select
 	var options []huh.Option[string]
 	for _, m := range models {
 		options = append(options, huh.NewOption(m, m))
@@ -890,6 +863,7 @@ func fetchAndSelectOpenAIModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 
 	var selectedModel string
 
+	clearScreen()
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -903,10 +877,7 @@ func fetchAndSelectOpenAIModel(pCfg config.ProviderConfig, appCfg *config.AppCon
 		return err
 	}
 
-	// Save selected model as default
 	appCfg.General.DefaultModel = selectedModel
-	fmt.Printf("Selected default model: %s\n", selectedModel)
-
 	return nil
 }
 
@@ -916,8 +887,7 @@ func fetchAndSelectAnthropicModel(pCfg config.ProviderConfig, appCfg *config.App
 		return fmt.Errorf("API key required")
 	}
 
-	fmt.Println("Fetching available models from Anthropic...")
-	runSpinner("Connecting to Anthropic...")
+	runSpinner("Fetching models from Anthropic...")
 
 	models, err := anthropic.ListModels(context.Background(), apiKey)
 	if err != nil {
@@ -936,6 +906,7 @@ func fetchAndSelectAnthropicModel(pCfg config.ProviderConfig, appCfg *config.App
 
 	var selectedModel string
 
+	clearScreen()
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -949,10 +920,7 @@ func fetchAndSelectAnthropicModel(pCfg config.ProviderConfig, appCfg *config.App
 		return err
 	}
 
-	// Save selected model as default
 	appCfg.General.DefaultModel = selectedModel
-	fmt.Printf("Selected default model: %s\n", selectedModel)
-
 	return nil
 }
 
@@ -962,8 +930,7 @@ func fetchAndSelectXAIModel(pCfg config.ProviderConfig, appCfg *config.AppConfig
 		return fmt.Errorf("API key required")
 	}
 
-	fmt.Println("Fetching available models from xAI...")
-	runSpinner("Connecting to xAI...")
+	runSpinner("Fetching models from xAI...")
 
 	models, err := xai.ListModels(context.Background(), apiKey)
 	if err != nil {
@@ -974,7 +941,6 @@ func fetchAndSelectXAIModel(pCfg config.ProviderConfig, appCfg *config.AppConfig
 		return fmt.Errorf("no models found")
 	}
 
-	// Create options for huh.Select
 	var options []huh.Option[string]
 	for _, m := range models {
 		options = append(options, huh.NewOption(m, m))
@@ -982,6 +948,7 @@ func fetchAndSelectXAIModel(pCfg config.ProviderConfig, appCfg *config.AppConfig
 
 	var selectedModel string
 
+	clearScreen()
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -995,16 +962,12 @@ func fetchAndSelectXAIModel(pCfg config.ProviderConfig, appCfg *config.AppConfig
 		return err
 	}
 
-	// Save selected model as default
 	appCfg.General.DefaultModel = selectedModel
-	fmt.Printf("Selected default model: %s\n", selectedModel)
-
 	return nil
 }
 
 func fetchAndSelectPoeModel(pCfg config.ProviderConfig, appCfg *config.AppConfig) error {
-	fmt.Println("Fetching available models from Poe...")
-	runSpinner("Connecting to Poe...")
+	runSpinner("Fetching models from Poe...")
 
 	ctx := context.Background()
 	models, err := poe.ListModels(ctx, pCfg["api_key"])
@@ -1016,13 +979,13 @@ func fetchAndSelectPoeModel(pCfg config.ProviderConfig, appCfg *config.AppConfig
 		return fmt.Errorf("no models available from Poe")
 	}
 
-	// Create options for huh.Select
 	options := make([]huh.Option[string], len(models))
 	for i, m := range models {
 		options[i] = huh.NewOption(m, m)
 	}
 
 	var selectedModel string
+	clearScreen()
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -1036,10 +999,7 @@ func fetchAndSelectPoeModel(pCfg config.ProviderConfig, appCfg *config.AppConfig
 		return err
 	}
 
-	// Save selected model as default
 	appCfg.General.DefaultModel = selectedModel
-	fmt.Printf("Selected default model: %s\n", selectedModel)
-
 	return nil
 }
 
@@ -1050,8 +1010,7 @@ func fetchAndSelectLiteLLMModel(pCfg config.ProviderConfig, appCfg *config.AppCo
 		baseURL = "http://localhost:4000/v1"
 	}
 
-	fmt.Println("Fetching available models from LiteLLM...")
-	runSpinner("Connecting to LiteLLM...")
+	runSpinner("Fetching models from LiteLLM...")
 
 	models, err := litellm.ListModels(context.Background(), apiKey, baseURL)
 	if err != nil {
@@ -1062,7 +1021,6 @@ func fetchAndSelectLiteLLMModel(pCfg config.ProviderConfig, appCfg *config.AppCo
 		return fmt.Errorf("no models found")
 	}
 
-	// Create options for huh.Select
 	var options []huh.Option[string]
 	for _, m := range models {
 		options = append(options, huh.NewOption(m, m))
@@ -1070,6 +1028,7 @@ func fetchAndSelectLiteLLMModel(pCfg config.ProviderConfig, appCfg *config.AppCo
 
 	var selectedModel string
 
+	clearScreen()
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -1083,10 +1042,7 @@ func fetchAndSelectLiteLLMModel(pCfg config.ProviderConfig, appCfg *config.AppCo
 		return err
 	}
 
-	// Save selected model as default
 	appCfg.General.DefaultModel = selectedModel
-	fmt.Printf("Selected default model: %s\n", selectedModel)
-
 	return nil
 }
 
@@ -1097,8 +1053,7 @@ func fetchAndSelectOpenAICompatModel(pCfg config.ProviderConfig, appCfg *config.
 		baseURL = "https://api.openai.com/v1"
 	}
 
-	fmt.Println("Fetching available models...")
-	runSpinner("Connecting to OpenAI Compatible endpoint...")
+	runSpinner("Fetching models...")
 
 	models, err := openai_compat.ListModels(context.Background(), apiKey, baseURL)
 	if err != nil {
@@ -1109,7 +1064,6 @@ func fetchAndSelectOpenAICompatModel(pCfg config.ProviderConfig, appCfg *config.
 		return fmt.Errorf("no models found")
 	}
 
-	// Create options for huh.Select
 	var options []huh.Option[string]
 	for _, m := range models {
 		options = append(options, huh.NewOption(m, m))
@@ -1117,6 +1071,7 @@ func fetchAndSelectOpenAICompatModel(pCfg config.ProviderConfig, appCfg *config.
 
 	var selectedModel string
 
+	clearScreen()
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -1130,10 +1085,7 @@ func fetchAndSelectOpenAICompatModel(pCfg config.ProviderConfig, appCfg *config.
 		return err
 	}
 
-	// Save selected model as default
 	appCfg.General.DefaultModel = selectedModel
-	fmt.Printf("Selected default model: %s\n", selectedModel)
-
 	return nil
 }
 
@@ -1143,6 +1095,7 @@ func handleWebToolSetup() error {
 	appCfg, err := config.LoadAppConfig()
 	if err == nil && appCfg.General.WebSearchTool != "" {
 		var reconfigure bool
+		clearScreen()
 		err := huh.NewForm(
 			huh.NewGroup(
 				huh.NewConfirm().
@@ -1158,6 +1111,7 @@ func handleWebToolSetup() error {
 
 	// Ask if user wants to set up web tools
 	var setupWeb bool
+	clearScreen()
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
@@ -1190,6 +1144,7 @@ func handleWebToolSetup() error {
 	}
 
 	var selectedServer string
+	clearScreen()
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -1212,6 +1167,7 @@ func handleWebToolSetup() error {
 	envValues := make(map[string]string)
 	for _, ev := range srv.EnvVars {
 		var val string
+		clearScreen()
 		err := huh.NewForm(
 			huh.NewGroup(
 				huh.NewInput().
@@ -1226,13 +1182,13 @@ func handleWebToolSetup() error {
 		}
 		val = strings.TrimSpace(val)
 		if val == "" && ev.Required {
-			fmt.Printf("Skipped: %s is required but was left empty.\n", ev.Name)
 			return nil
 		}
 		envValues[ev.Name] = val
 	}
 
 	// Install the server
+	clearScreen()
 	runSpinner(fmt.Sprintf("Configuring %s...", srv.DisplayName))
 
 	// Save API key to credential store
@@ -1240,7 +1196,6 @@ func handleWebToolSetup() error {
 	configDir, _ := config.GetConfigDir()
 	if configDir != "" {
 		if store, storeErr := credentials.Open(configDir); storeErr == nil {
-			// Extract the first non-empty env value as the API key
 			for _, ev := range srv.EnvVars {
 				if val, ok := envValues[ev.Name]; ok && val != "" {
 					storeKey := "web_servers." + selectedServer + ".api_key"
@@ -1257,6 +1212,7 @@ func handleWebToolSetup() error {
 		return fmt.Errorf("failed to configure %s: %w", srv.DisplayName, err)
 	}
 
+	clearScreen()
 	msg := fmt.Sprintf("%s configured! Web search is now available.", srv.DisplayName)
 	if srv.WebExtractTool != "" {
 		msg = fmt.Sprintf("%s configured! Web search and content extraction are now available.", srv.DisplayName)
@@ -1268,3 +1224,104 @@ func handleWebToolSetup() error {
 
 // handleBrowserSetup is defined in browser_setup.go — it runs the interactive
 // browser engine configuration flow (default Chromium, CloakBrowser, or custom).
+
+// handleSandboxSetup initializes the sandbox (container isolation) as part of
+// the main setup wizard. If Incus is not available, it guides the user to
+// install it and warns about the security risk of running without sandbox.
+func handleSandboxSetup() error {
+	for {
+		platform, reason := sandbox.DetectPlatformReason()
+
+		if platform == sandbox.PlatformDockerIncus {
+			reason = "Docker+Incus setup is not yet implemented.\nCurrently only Linux with native Incus is supported."
+			platform = sandbox.PlatformUnsupported
+		}
+
+		if platform == sandbox.PlatformUnsupported {
+			// Build description with install instructions and reason
+			desc := "Sandbox runs AI tools inside isolated Linux containers,\n" +
+				"preventing them from accessing your host system directly.\n\n"
+			if reason != "" {
+				desc += reason + "\n\n"
+			}
+			desc += "To install Incus (Ubuntu/Debian):\n" +
+				"  sudo apt install incus\n" +
+				"  sudo incus admin init\n\n" +
+				"Docs: https://linuxcontainers.org/incus/docs/main/installing/"
+
+			var action string
+			clearScreen()
+			err := huh.NewForm(
+				huh.NewGroup(
+					huh.NewSelect[string]().
+						Title("Sandbox Setup — Incus not available").
+						Description(desc).
+						Options(
+							huh.NewOption("Continue — I've installed Incus", "retry"),
+							huh.NewOption("Skip — proceed without sandbox", "skip"),
+						).
+						Value(&action),
+				),
+			).Run()
+			if err != nil {
+				return err
+			}
+
+			if action == "retry" {
+				continue
+			}
+
+			// User chose to skip — show security warning
+			var acceptRisk bool
+			clearScreen()
+			err = huh.NewForm(
+				huh.NewGroup(
+					huh.NewConfirm().
+						Title("Continue without sandbox?").
+						Description("Without sandbox, AI tools will execute directly on your host\n" +
+							"system with full access to your files, network, and system resources.\n" +
+							"This is a security risk.").
+						Affirmative("Yes, I accept the risk").
+						Negative("Go back").
+						Value(&acceptRisk),
+				),
+			).Run()
+			if err != nil {
+				return err
+			}
+
+			if !acceptRisk {
+				continue
+			}
+
+			return nil
+		}
+
+		// Incus is available — proceed with sandbox setup
+		client, err := sandbox.Connect(platform)
+		if err != nil {
+			return fmt.Errorf("failed to connect to Incus: %w", err)
+		}
+
+		// Check if base template already exists
+		containerName := sandbox.TemplateName(sandbox.BaseTemplate)
+		if client.InstanceExists(containerName) {
+			return nil
+		}
+
+		registry, err := sandbox.NewTemplateRegistry()
+		if err != nil {
+			return err
+		}
+
+		opts := promptOptionalTools()
+
+		if err := sandbox.InitBaseTemplate(client, registry, opts); err != nil {
+			return fmt.Errorf("sandbox setup: %w", err)
+		}
+
+		clearScreen()
+		printSuccess("Sandbox initialized! AI tools will run inside isolated containers.")
+		return nil
+	}
+}

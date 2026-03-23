@@ -31,9 +31,9 @@ func handleBrowserSetup() error {
 		}
 	}
 
-	// Show current configuration
+	// Build description with current status
 	currentEngine := detectCurrentEngine(cfg)
-	printBrowserStatus(currentEngine, cfg)
+	desc := browserStatusDescription(currentEngine, cfg)
 
 	// Step 1: Select browser engine
 	var engine string
@@ -44,11 +44,12 @@ func handleBrowserSetup() error {
 		huh.NewOption("Connect to your browser (Chrome on your machine)", "remote"),
 	}
 
+	clearScreen()
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Select browser engine").
-				Description("Choose which browser to use for web automation").
+				Description(desc).
 				Options(engineOptions...).
 				Value(&engine),
 		),
@@ -71,6 +72,26 @@ func handleBrowserSetup() error {
 	}
 }
 
+// browserStatusDescription returns the current browser config as a description string.
+func browserStatusDescription(engine string, cfg *config.AppConfig) string {
+	switch engine {
+	case "default":
+		return "Currently using: Default Chromium (auto-downloaded)"
+	case "cloakbrowser":
+		desc := fmt.Sprintf("Currently using: CloakBrowser at %s", cfg.Browser.ChromePath)
+		if cfg.Browser.FingerprintPlatform != "" {
+			desc += fmt.Sprintf(" (platform: %s)", cfg.Browser.FingerprintPlatform)
+		}
+		return desc
+	case "remote":
+		return fmt.Sprintf("Currently using: Remote browser at %s", cfg.Browser.RemoteCDPURL)
+	case "custom":
+		return fmt.Sprintf("Currently using: Custom Chrome at %s", cfg.Browser.ChromePath)
+	default:
+		return "Choose which browser to use for web automation"
+	}
+}
+
 // detectCurrentEngine determines which browser engine is currently configured.
 func detectCurrentEngine(cfg *config.AppConfig) string {
 	if cfg.Browser.RemoteCDPURL != "" {
@@ -83,31 +104,6 @@ func detectCurrentEngine(cfg *config.AppConfig) string {
 		return "cloakbrowser"
 	}
 	return "custom"
-}
-
-// printBrowserStatus displays the current browser configuration.
-func printBrowserStatus(engine string, cfg *config.AppConfig) {
-	style := lipgloss.NewStyle().
-		Padding(0, 2).
-		Foreground(lipgloss.Color("252"))
-
-	var status string
-	switch engine {
-	case "default":
-		status = "Currently using: Default Chromium (auto-downloaded)"
-	case "cloakbrowser":
-		status = fmt.Sprintf("Currently using: CloakBrowser at %s", cfg.Browser.ChromePath)
-		if cfg.Browser.FingerprintPlatform != "" {
-			status += fmt.Sprintf(" (platform: %s)", cfg.Browser.FingerprintPlatform)
-		}
-	case "remote":
-		status = fmt.Sprintf("Currently using: Remote browser at %s", cfg.Browser.RemoteCDPURL)
-	case "custom":
-		status = fmt.Sprintf("Currently using: Custom Chrome at %s", cfg.Browser.ChromePath)
-	}
-
-	fmt.Println(style.Render(status))
-	fmt.Println()
 }
 
 // configureBrowserDefault resets browser config to use the auto-downloaded Chromium.
@@ -128,7 +124,7 @@ func configureBrowserDefault(cfg *config.AppConfig) error {
 // configureBrowserCloak sets up CloakBrowser with dependency validation,
 // automatic installation, and fingerprint configuration.
 func configureBrowserCloak(cfg *config.AppConfig) error {
-	fmt.Println()
+	clearScreen()
 	fmt.Println("  Checking dependencies...")
 	fmt.Println()
 
@@ -269,11 +265,9 @@ func configureBrowserCloak(cfg *config.AppConfig) error {
 	version := strings.TrimSpace(string(verOut))
 	printBrowserCheck(true, "CloakBrowser", version)
 
-	fmt.Printf("      Binary: %s\n", binaryPath)
-	fmt.Println()
-
 	// 6. Fingerprint platform selection
 	var platform string
+	clearScreen()
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -293,6 +287,7 @@ func configureBrowserCloak(cfg *config.AppConfig) error {
 
 	// 7. Fingerprint seed
 	var seedChoice string
+	clearScreen()
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -313,6 +308,7 @@ func configureBrowserCloak(cfg *config.AppConfig) error {
 	if seedChoice == "auto" {
 		seed = generateFingerprintSeed()
 	} else {
+		clearScreen()
 		err = huh.NewForm(
 			huh.NewGroup(
 				huh.NewInput().
@@ -347,6 +343,7 @@ func configureBrowserCustom(cfg *config.AppConfig) error {
 	var chromePath string
 	currentPath := cfg.Browser.ChromePath
 
+	clearScreen()
 	err := huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
@@ -409,32 +406,14 @@ func configureBrowserCustom(cfg *config.AppConfig) error {
 // user's machine (or anywhere on the network). The user launches Chrome with
 // --remote-debugging-port and Astonish auto-discovers the CDP WebSocket URL.
 func configureBrowserRemote(cfg *config.AppConfig) error {
-	fmt.Println()
-
-	infoStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("33")).
-		Padding(1, 2).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("33"))
-
-	fmt.Println(infoStyle.Render(
-		"How it works:\n" +
-			"1. On your machine, launch Chrome with remote debugging enabled\n" +
-			"2. Astonish connects over the network and controls that browser\n" +
-			"3. You get your real cookies, extensions, and browsing history\n\n" +
-			"Launch Chrome on your machine with:\n\n" +
-			"  Windows:  chrome.exe --remote-debugging-port=9222\n" +
-			"  macOS:    /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222\n" +
-			"  Linux:    google-chrome --remote-debugging-port=9222"))
-	fmt.Println()
-
 	// Ask for host
 	var host string
+	clearScreen()
 	err := huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Your machine's IP address or hostname").
-				Description("The IP/hostname where Chrome is running (must be reachable from this server)").
+				Description("Launch Chrome with --remote-debugging-port=9222, then enter its IP here.\nThe host must be reachable from this server.").
 				Placeholder("192.168.1.100").
 				Value(&host),
 		),
@@ -450,6 +429,7 @@ func configureBrowserRemote(cfg *config.AppConfig) error {
 
 	// Ask for port
 	var portStr string
+	clearScreen()
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
@@ -468,8 +448,8 @@ func configureBrowserRemote(cfg *config.AppConfig) error {
 	portStr = strings.TrimSpace(portStr)
 
 	endpoint := fmt.Sprintf("%s:%s", host, portStr)
-	fmt.Println()
-	fmt.Printf("  Connecting to %s...\n", endpoint)
+	clearScreen()
+	runSpinner(fmt.Sprintf("Connecting to %s...", endpoint))
 
 	// Probe the endpoint and auto-discover the WebSocket URL
 	wsURL, browserVersion, err := discoverCDPEndpoint(endpoint)
@@ -488,8 +468,6 @@ func configureBrowserRemote(cfg *config.AppConfig) error {
 	}
 
 	printBrowserCheck(true, "Connected", browserVersion)
-	fmt.Printf("      CDP endpoint: %s\n", wsURL)
-	fmt.Println()
 
 	// Save config
 	cfg.Browser.RemoteCDPURL = wsURL

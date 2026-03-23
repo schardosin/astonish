@@ -18,6 +18,7 @@ type TemplateMeta struct {
 	FleetPlans  []string  `json:"fleet_plans,omitempty"`
 	BasedOn     string    `json:"based_on,omitempty"`
 	BinaryHash  string    `json:"binary_hash,omitempty"` // SHA256 of the astonish binary baked into the template
+	Nesting     bool      `json:"nesting,omitempty"`     // true if containers need security.nesting=true (e.g., Docker installed)
 }
 
 // TemplateRegistry manages template metadata with JSON file persistence.

@@ -75,6 +75,26 @@ func (c *IncusClient) defaultContainerConfig() map[string]string {
 	return config
 }
 
+// SetInstanceConfig updates specific config keys on an existing instance.
+// The instance can be running or stopped.
+func (c *IncusClient) SetInstanceConfig(name string, updates map[string]string) error {
+	inst, etag, err := c.server.GetInstance(name)
+	if err != nil {
+		return fmt.Errorf("failed to get instance %q: %w", name, err)
+	}
+
+	for k, v := range updates {
+		inst.Config[k] = v
+	}
+
+	op, err := c.server.UpdateInstance(name, inst.Writable(), etag)
+	if err != nil {
+		return fmt.Errorf("failed to update instance %q config: %w", name, err)
+	}
+
+	return op.Wait()
+}
+
 // TemplateName returns the full Incus container name for a template.
 func TemplateName(name string) string {
 	return TemplatePrefix + name

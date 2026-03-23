@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/huh"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
@@ -211,7 +212,53 @@ func handleSandboxInit() error {
 		return err
 	}
 
-	return sandbox.InitBaseTemplate(client, registry)
+	opts := promptOptionalTools()
+
+	return sandbox.InitBaseTemplate(client, registry, opts)
+}
+
+// promptOptionalTools walks the user through each optional tool with an
+// individual confirm prompt. Each prompt includes the tool description and URL
+// in the form's Description field, keeping the wizard clean.
+func promptOptionalTools() sandbox.BaseTemplateOptions {
+	opts := sandbox.DefaultBaseTemplateOptions()
+	tools := sandbox.OptionalTools()
+
+	if len(tools) == 0 {
+		return opts
+	}
+
+	for _, tool := range tools {
+		// Build description with tool info and URL
+		desc := tool.Description + "\n" + tool.URL
+
+		var install bool
+		affirmative := "Yes, install"
+		negative := "Skip"
+		if tool.Recommended {
+			affirmative = "Yes, install (recommended)"
+		}
+
+		clearScreen()
+		err := huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title(fmt.Sprintf("Install %s?", tool.Name)).
+					Description(desc).
+					Affirmative(affirmative).
+					Negative(negative).
+					Value(&install),
+			),
+		).Run()
+		if err != nil {
+			// User aborted — return what we have so far
+			return opts
+		}
+
+		opts.InstallTools[tool.ID] = install
+	}
+
+	return opts
 }
 
 // --- List ---

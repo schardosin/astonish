@@ -755,6 +755,11 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/settings/status", GetSetupStatusHandler).Methods("GET")
 	router.HandleFunc("/api/version", GetVersionHandler).Methods("GET")
 
+	// Sandbox endpoints
+	router.HandleFunc("/api/sandbox/status", SandboxStatusHandler).Methods("GET")
+	router.HandleFunc("/api/sandbox/optional-tools", SandboxOptionalToolsHandler).Methods("GET")
+	router.HandleFunc("/api/sandbox/init", SandboxInitHandler).Methods("POST")
+
 	// Standard servers endpoints
 	router.HandleFunc("/api/standard-servers", ListStandardServersHandler).Methods("GET")
 	router.HandleFunc("/api/standard-servers/{id}/install", InstallStandardServerHandler).Methods("POST")

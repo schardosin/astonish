@@ -335,6 +335,10 @@ func CreateOverlayContainer(client *IncusClient, containerName, templateName str
 		return fmt.Errorf("failed to resolve lower layers for template %q: %w", templateName, err)
 	}
 
+	// Determine if nesting is required by walking the template chain.
+	// Custom templates inherit nesting from their base.
+	nesting := resolveNesting(templateName, registry)
+
 	// Create the container from the tiny overlay image
 	req := api.InstancesPost{
 		Name: containerName,
@@ -342,7 +346,7 @@ func CreateOverlayContainer(client *IncusClient, containerName, templateName str
 		InstancePut: api.InstancePut{
 			Config: map[string]string{
 				"security.privileged": "true",
-				"security.nesting":    "false",
+				"security.nesting":    fmt.Sprintf("%t", nesting),
 			},
 		},
 		Source: api.InstanceSource{
@@ -368,6 +372,39 @@ func CreateOverlayContainer(client *IncusClient, containerName, templateName str
 	}
 
 	return nil
+}
+
+// resolveNesting determines whether containers based on the given template
+// need security.nesting enabled. It walks the template chain (custom → base)
+// and returns true if any template in the chain has Nesting set.
+func resolveNesting(templateName string, registry *TemplateRegistry) bool {
+	if registry == nil {
+		return false
+	}
+
+	// Check the template itself
+	meta := registry.Get(templateName)
+	if meta != nil && meta.Nesting {
+		return true
+	}
+
+	// Check the parent (base) template if this is a custom template
+	if meta != nil && meta.BasedOn != "" {
+		parent := registry.Get(meta.BasedOn)
+		if parent != nil && parent.Nesting {
+			return true
+		}
+	}
+
+	// For "base" template or if no meta found, check the base directly
+	if templateName != BaseTemplate {
+		base := registry.Get(BaseTemplate)
+		if base != nil && base.Nesting {
+			return true
+		}
+	}
+
+	return false
 }
 
 // MountOverlay mounts an overlayfs on a container's rootfs directory with

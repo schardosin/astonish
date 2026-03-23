@@ -16,13 +16,23 @@ FROM ubuntu:24.04
 # Avoid interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install Incus daemon, client, and essential tools
+# Add Zabbly repository for Incus (Ubuntu 24.04 base image only ships
+# the 'main' component; Incus is in 'universe' which is not enabled by
+# default in Docker images. Zabbly provides the official Incus packages
+# with up-to-date stable releases.)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        incus \
-        incus-client \
-        rsync \
+        curl \
         ca-certificates \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://pkgs.zabbly.com/key.asc -o /etc/apt/keyrings/zabbly.asc \
+    && printf 'Enabled: yes\nTypes: deb\nURIs: https://pkgs.zabbly.com/incus/stable\nSuites: noble\nComponents: main\nArchitectures: %s\nSigned-By: /etc/apt/keyrings/zabbly.asc\n' \
+        "$(dpkg --print-architecture)" \
+        > /etc/apt/sources.list.d/zabbly-incus-stable.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        incus \
+        rsync \
         iptables \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*

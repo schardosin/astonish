@@ -618,6 +618,13 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		sandboxIncusClient = sandboxClient
 		sandboxTplRegistry = tplRegistry
 
+		// Wire sandbox pool to all lazy MCP toolsets so stdio MCP servers
+		// start inside the session's container instead of on the host.
+		// SSE transport servers are unaffected (isSSETransport check inside).
+		for _, lt := range lazyToolsets {
+			lt.SetSandboxPool(nodePool)
+		}
+
 		// Async refresh: check all templates for stale binaries in the background.
 		// Must NOT block startup (was the cause of the 502 bug).
 		if tplRegistry != nil {
@@ -628,9 +635,24 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		// Only destroy containers whose sessions no longer exist in the store.
 		existingSessionIDs := make(map[string]bool)
 		if cfg.SessionStore != nil {
+			// Preferred: use the shared store's index (daemon/studio path).
 			if indexData, err := cfg.SessionStore.Index().Load(); err == nil {
 				for id := range indexData.Sessions {
 					existingSessionIDs[id] = true
+				}
+			}
+		} else if cfg.AppConfig != nil {
+			// Fallback: read the index file directly (console/CLI path).
+			// Without this, existingSessionIDs is empty and prune would
+			// destroy every stopped container — even valid ones.
+			var sessCfg *config.SessionConfig
+			sessCfg = &cfg.AppConfig.Sessions
+			if sessDir, dirErr := config.GetSessionsDir(sessCfg); dirErr == nil {
+				idx := persistentsession.NewSessionIndex(filepath.Join(sessDir, "index.json"))
+				if indexData, err := idx.Load(); err == nil {
+					for id := range indexData.Sessions {
+						existingSessionIDs[id] = true
+					}
 				}
 			}
 		}

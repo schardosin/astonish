@@ -64,6 +64,12 @@ type SubAgentTask struct {
 	// setting this field.
 	OverrideTools []tool.Tool
 
+	// OverrideToolsets, when non-nil, replaces the MCP toolsets that would
+	// normally come from filterToolsets(). Used by fleet sessions to provide
+	// sandbox-wired MCP toolset copies (with ContainerMCPTransport) that route
+	// MCP server processes through the fleet's container.
+	OverrideToolsets []tool.Toolset
+
 	// Internal: set by SubAgentManager, not by callers
 	ParentDepth int    // Current nesting depth
 	ParentID    string // Parent session ID for linking
@@ -193,6 +199,12 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		childTools = m.filterTools(task.ToolFilter)
 	}
 
+	// Determine toolsets for the child
+	childToolsets := task.OverrideToolsets
+	if childToolsets == nil {
+		childToolsets = m.filterToolsets()
+	}
+
 	// Build child system prompt: use custom prompt if set, otherwise build default
 	var childPrompt string
 	if task.CustomPrompt && task.Instructions != "" {
@@ -266,7 +278,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		Model:                m.LLM,
 		Instruction:          childPrompt,
 		Tools:                childTools,
-		Toolsets:             m.filterToolsets(),
+		Toolsets:             childToolsets,
 		BeforeModelCallbacks: beforeModelCallbacks,
 		AfterToolCallbacks:   afterToolCallbacks,
 	})

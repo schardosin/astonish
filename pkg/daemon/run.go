@@ -178,6 +178,13 @@ func Run(cfg RunConfig) error {
 	var factoryResult *launcher.ChatFactoryResult
 	defer func() {
 		if factoryResult != nil {
+			// Preserve sandbox containers for reconnection after restart,
+			// then clean up everything else (LLM, embedder, MCP, etc.).
+			// ShutdownSandbox marks containers as "already shut down" so
+			// Cleanup() skips destructive container removal.
+			if factoryResult.ShutdownSandbox != nil {
+				factoryResult.ShutdownSandbox()
+			}
 			factoryResult.Cleanup()
 		}
 	}()
@@ -373,6 +380,7 @@ func Run(cfg RunConfig) error {
 				ModelName:    freshCfg.General.DefaultModel,
 				DebugMode:    cfg.Debug,
 				AutoApprove:  true,
+				SessionStore: sharedFileStore,
 			})
 			if factoryErr != nil {
 				return fmt.Errorf("failed to initialize ChatAgent: %w", factoryErr)

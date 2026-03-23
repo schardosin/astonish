@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -334,7 +335,16 @@ func PruneStaleOnStartup(client *IncusClient, registry *SessionRegistry, existin
 			continue // belongs to a live session, preserve it
 		}
 
-		// Stopped + no live session → orphan, destroy it
+		// Direct name-matching fallback: the registry may have lost the
+		// entry (e.g., Cleanup removed it but container destruction failed).
+		// Derive the session ID from the container name and check the store.
+		if matchedID := matchContainerToSession(inst.Name, existingSessionIDs); matchedID != "" {
+			// Self-heal: re-register so future lookups work.
+			_ = registry.Put(matchedID, inst.Name, BaseTemplate)
+			continue
+		}
+
+		// Stopped + no live session + no name match → orphan, destroy it
 		if err := destroyOverlayContainer(client, inst.Name); err != nil {
 			continue
 		}
@@ -351,4 +361,27 @@ func PruneStaleOnStartup(client *IncusClient, registry *SessionRegistry, existin
 	}
 
 	return pruned
+}
+
+// matchContainerToSession tries to find a session ID in existingSessionIDs
+// that matches an astn-sess-* container name by its 8-char prefix.
+// Fleet containers (astn-fleet-*) use a different naming scheme that can't
+// be reversed to a session ID, so they return empty.
+func matchContainerToSession(containerName string, existingSessionIDs map[string]bool) string {
+	if !strings.HasPrefix(containerName, SessionPrefix) {
+		return ""
+	}
+
+	prefix := strings.TrimPrefix(containerName, SessionPrefix)
+	if prefix == "" {
+		return ""
+	}
+
+	for sessionID := range existingSessionIDs {
+		if strings.HasPrefix(sessionID, prefix) {
+			return sessionID
+		}
+	}
+
+	return ""
 }

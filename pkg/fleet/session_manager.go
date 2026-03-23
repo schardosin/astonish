@@ -135,6 +135,12 @@ type FleetSession struct {
 	// per-session container without mutating the shared SubAgentManager singleton.
 	SandboxTools []tool.Tool
 
+	// SandboxToolsets holds sandbox-wired MCP toolset copies for this fleet session.
+	// When set, activateAgent() uses these instead of the global SubAgentManager
+	// toolsets. This allows fleet sessions to route MCP server processes through
+	// their own container using ContainerMCPTransport.
+	SandboxToolsets []tool.Toolset
+
 	// OnCleanup is called to destroy the sandbox container when the session is
 	// deleted. IMPORTANT: this is NOT called when Run() exits — headless sessions
 	// exit Run() on "ball to customer" (poll/recover cycle) and the container
@@ -706,6 +712,12 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 	// session's own container without mutating the global SubAgentManager.
 	if fs.SandboxTools != nil {
 		task.OverrideTools = filterSandboxTools(fs.SandboxTools, toolFilter)
+	}
+
+	// When sandbox toolsets are set, use them as OverrideToolsets.
+	// This routes MCP server processes through the fleet session's container.
+	if fs.SandboxToolsets != nil {
+		task.OverrideToolsets = fs.SandboxToolsets
 	}
 
 	result := fs.SubAgentManager.RunTask(ctx, task)

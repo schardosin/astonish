@@ -264,8 +264,15 @@ type LazyNodeClient struct {
 	// Set before BindSession() to pass credentials into the container.
 	Env map[string]string
 
-	// initDone is created by BindSession and closed when background init completes.
-	// Call() waits on this channel before forwarding to the NodeClient.
+	// containerReady is closed when the container is created and running,
+	// BEFORE the astonish node process is started. MCP transport only needs
+	// the container, not the node, so it waits on this channel.
+	containerReady chan struct{}
+	containerErr   error
+
+	// initDone is created by BindSession and closed when background init completes
+	// (both container creation AND node startup). Call() waits on this channel
+	// before forwarding to the NodeClient.
 	initDone chan struct{}
 	initErr  error
 }
@@ -303,6 +310,7 @@ func (lnc *LazyNodeClient) BindSession(sessionID string) {
 	}
 
 	lnc.sessionID = sessionID
+	lnc.containerReady = make(chan struct{})
 	lnc.initDone = make(chan struct{})
 	lnc.mu.Unlock()
 
@@ -311,31 +319,40 @@ func (lnc *LazyNodeClient) BindSession(sessionID string) {
 }
 
 // initBackground runs container creation and node startup, then signals completion.
+// Phase 1: container creation → closes containerReady (MCP transport can proceed)
+// Phase 2: node startup → closes initDone (built-in tool calls can proceed)
 func (lnc *LazyNodeClient) initBackground(sessionID string) {
 	defer close(lnc.initDone)
 
-	// Create or get the session container
+	// Phase 1: Create or get the session container
 	containerName, err := EnsureSessionContainer(lnc.incusClient, lnc.sessRegistry, lnc.tplRegistry, sessionID, lnc.template)
 	if err != nil {
 		lnc.mu.Lock()
-		lnc.initErr = fmt.Errorf("failed to create session container: %w", err)
+		lnc.containerErr = fmt.Errorf("failed to create session container: %w", err)
+		lnc.initErr = lnc.containerErr
 		lnc.mu.Unlock()
+		close(lnc.containerReady)
 		return
 	}
 
-	// Create and start the node client
+	// Store container name and signal that the container is ready.
+	// MCP transport (EnsureContainerReady) can proceed from here.
+	lnc.mu.Lock()
+	lnc.containerName = containerName
+	lnc.mu.Unlock()
+	close(lnc.containerReady)
+
+	// Phase 2: Create and start the node client
 	nc := NewNodeClient(lnc.incusClient, containerName)
 	nc.Env = lnc.Env // Forward environment variables (credentials) to node
 	if err := nc.Start(); err != nil {
 		lnc.mu.Lock()
 		lnc.initErr = fmt.Errorf("failed to start node in %q: %w", containerName, err)
-		lnc.containerName = containerName // store for cleanup even on failure
 		lnc.mu.Unlock()
 		return
 	}
 
 	lnc.mu.Lock()
-	lnc.containerName = containerName
 	lnc.nodeClient = nc
 	lnc.initialized = true
 	lnc.mu.Unlock()
@@ -405,6 +422,7 @@ func (lnc *LazyNodeClient) Cleanup() {
 	// If init is in progress, wait for it to finish before cleaning up
 	lnc.mu.Lock()
 	done := lnc.initDone
+	alreadyShutdown := lnc.closed
 	lnc.mu.Unlock()
 	if done != nil {
 		<-done
@@ -418,18 +436,22 @@ func (lnc *LazyNodeClient) Cleanup() {
 		lnc.nodeClient = nil
 	}
 
-	if lnc.containerName != "" && lnc.incusClient != nil {
-		// Use destroyOverlayContainer to properly unmount overlayfs
-		// and clean up overlay dirs before deleting the container.
-		_ = destroyOverlayContainer(lnc.incusClient, lnc.containerName)
-	}
+	// Skip container destruction if CleanupForShutdown already ran —
+	// the container was intentionally preserved for reconnection.
+	if !alreadyShutdown {
+		if lnc.containerName != "" && lnc.incusClient != nil {
+			// Use destroyOverlayContainer to properly unmount overlayfs
+			// and clean up overlay dirs before deleting the container.
+			_ = destroyOverlayContainer(lnc.incusClient, lnc.containerName)
+		}
 
-	if lnc.containerName != "" && lnc.sessRegistry != nil {
-		// Find and remove the session registry entry for this container
-		for _, entry := range lnc.sessRegistry.List() {
-			if entry.ContainerName == lnc.containerName {
-				_ = lnc.sessRegistry.Remove(entry.SessionID)
-				break
+		if lnc.containerName != "" && lnc.sessRegistry != nil {
+			// Find and remove the session registry entry for this container
+			for _, entry := range lnc.sessRegistry.List() {
+				if entry.ContainerName == lnc.containerName {
+					_ = lnc.sessRegistry.Remove(entry.SessionID)
+					break
+				}
 			}
 		}
 	}
@@ -493,6 +515,43 @@ func (lnc *LazyNodeClient) GetIncusClient() *IncusClient {
 // GetSessionRegistry returns the session registry.
 func (lnc *LazyNodeClient) GetSessionRegistry() *SessionRegistry {
 	return lnc.sessRegistry
+}
+
+// EnsureReady blocks until the container AND node are ready and returns the
+// container name. If either failed to start, returns an error.
+// Used by built-in tool calls that need both the container and the NDJSON node.
+func (lnc *LazyNodeClient) EnsureReady(sessionID string) (string, error) {
+	lnc.BindSession(sessionID)
+	<-lnc.initDone
+
+	lnc.mu.Lock()
+	defer lnc.mu.Unlock()
+
+	if lnc.initErr != nil {
+		return "", lnc.initErr
+	}
+	return lnc.containerName, nil
+}
+
+// EnsureContainerReady blocks until the container is created and running,
+// but does NOT wait for the astonish node process to start. Returns the
+// container name and the Incus client.
+//
+// This is used by MCP transport creation — MCP servers run as separate
+// processes inside the container via ExecNonInteractive and do not need
+// the NDJSON tool server. If the container creation itself fails, returns
+// an error; if only the node fails, this still succeeds.
+func (lnc *LazyNodeClient) EnsureContainerReady(sessionID string) (string, error) {
+	lnc.BindSession(sessionID)
+	<-lnc.containerReady
+
+	lnc.mu.Lock()
+	defer lnc.mu.Unlock()
+
+	if lnc.containerErr != nil {
+		return "", lnc.containerErr
+	}
+	return lnc.containerName, nil
 }
 
 // StopNode stops the node process without destroying the container.

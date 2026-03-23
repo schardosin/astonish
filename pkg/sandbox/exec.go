@@ -18,6 +18,12 @@ type ExecOpts struct {
 	Env     map[string]string // Additional environment variables
 	Rows    int               // Terminal height (default 24)
 	Cols    int               // Terminal width (default 80)
+
+	// SeparateStderr, when non-nil, receives the process's stderr output
+	// on a separate stream instead of merging it into stdout. This is
+	// essential for MCP servers where JSON-RPC over stdout must not be
+	// corrupted by stderr diagnostic messages.
+	SeparateStderr io.Writer
 }
 
 // ContainerProcess represents a running interactive process inside an Incus container.
@@ -246,8 +252,15 @@ func ExecNonInteractive(client *IncusClient, containerName string, command []str
 	args := &incus.InstanceExecArgs{
 		Stdin:    stdinReader,
 		Stdout:   stdoutWriter,
-		Stderr:   stdoutWriter, // merge stderr into stdout
 		DataDone: dataDone,
+	}
+
+	// Route stderr: separate writer if requested, otherwise merge into stdout.
+	// MCP transport needs separate stderr so JSON-RPC on stdout is not corrupted.
+	if opts.SeparateStderr != nil {
+		args.Stderr = opts.SeparateStderr
+	} else {
+		args.Stderr = stdoutWriter // merge stderr into stdout
 	}
 
 	op, err := client.server.ExecInstance(containerName, req, args)

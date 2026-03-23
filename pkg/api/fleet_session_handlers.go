@@ -14,6 +14,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/sandbox"
@@ -21,6 +23,7 @@ import (
 	"github.com/schardosin/astonish/pkg/tools"
 	adkmodel "google.golang.org/adk/model"
 	adksession "google.golang.org/adk/session"
+	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
 )
 
@@ -923,6 +926,15 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 
 	fleetSession.SandboxTools = wrappedTools
 
+	// Create sandbox-wired MCP toolsets for this fleet session.
+	// Each fleet session gets fresh LazyMCPToolset clones that route MCP server
+	// processes through the fleet's dedicated container (via ContainerMCPTransport).
+	// SSE transport servers are unaffected — they connect to remote URLs.
+	sandboxToolsets := createFleetMCPToolsets(sandboxClient, lazyNode)
+	if len(sandboxToolsets) > 0 {
+		fleetSession.SandboxToolsets = sandboxToolsets
+	}
+
 	// Set workspace to the project directory inside the container.
 	if plan != nil && plan.ContainerWorkspaceDir != "" {
 		fleetSession.WorkspaceDir = plan.ContainerWorkspaceDir
@@ -938,6 +950,37 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 	log.Printf("[fleet-sandbox] Session %s: sandbox enabled (template=%q, env_keys=%d)",
 		fleetSession.ID, template, len(lazyNode.Env))
 	return nil
+}
+
+// createFleetMCPToolsets creates sandbox-wired MCP toolsets for a fleet session.
+// It loads the MCP config, creates fresh LazyMCPToolset instances from cached
+// metadata, and wires them with the fleet's LazyNodeClient so MCP server
+// processes run inside the fleet's container.
+func createFleetMCPToolsets(incusClient *sandbox.IncusClient, lazyNode *sandbox.LazyNodeClient) []tool.Toolset {
+	mcpCfg, err := config.LoadMCPConfig()
+	if err != nil || mcpCfg == nil || len(mcpCfg.MCPServers) == 0 {
+		return nil
+	}
+
+	if _, loadErr := cache.LoadCache(); loadErr != nil {
+		return nil
+	}
+
+	var toolsets []tool.Toolset
+	for name, serverCfg := range mcpCfg.MCPServers {
+		if !serverCfg.IsEnabled() {
+			continue
+		}
+		cachedTools := cache.GetToolsForServer(name)
+		if len(cachedTools) == 0 {
+			continue
+		}
+		lt := agent.NewLazyMCPToolset(name, cachedTools, serverCfg, false)
+		lt.SetSandboxClient(lazyNode, incusClient)
+		toolsets = append(toolsets, agent.NewSanitizedToolset(lt, false))
+	}
+
+	return toolsets
 }
 
 // buildSandboxEnv builds the environment variable map for a fleet session's

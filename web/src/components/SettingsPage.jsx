@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package, Store, GitBranch, RefreshCw, Search, Play, Download, MessageSquare, Globe, Radio, Database, Brain, GitFork, Wand2, Clock, Shield, User, KeyRound, Terminal } from 'lucide-react'
+import { Settings, Key, Server, ChevronRight, Save, Plus, Trash2, X, Check, AlertCircle, Code, LayoutGrid, Loader2, Package, Store, GitBranch, RefreshCw, Search, Play, Download, MessageSquare, Globe, Radio, Database, Brain, GitFork, Wand2, Clock, Shield, User, KeyRound, Terminal, Box } from 'lucide-react'
 import MCPStoreModal from './MCPStoreModal'
 import FlowStorePanel from './FlowStorePanel'
 import ProviderModelSelector from './ProviderModelSelector'
@@ -21,6 +21,7 @@ import DaemonSettings from './settings/DaemonSettings'
 import IdentitySettings from './settings/IdentitySettings'
 import CredentialsSettings from './settings/CredentialsSettings'
 import OpenCodeSettings from './settings/OpenCodeSettings'
+import SandboxSettings from './settings/SandboxSettings'
 
 // API functions
 const fetchSettings = async () => {
@@ -139,7 +140,7 @@ const refreshMCPServer = async (serverName) => {
 }
 
 // Section keys that use the full config API
-const FULL_CONFIG_SECTIONS = ['chat', 'browser', 'channels', 'sessions', 'memory', 'sub_agents', 'skills', 'scheduler', 'daemon', 'identity', 'open_code']
+const FULL_CONFIG_SECTIONS = ['chat', 'browser', 'channels', 'sessions', 'memory', 'sub_agents', 'skills', 'scheduler', 'daemon', 'sandbox', 'identity', 'open_code']
 
 export default function SettingsPage({ onClose, activeSection = 'general', onSectionChange, onToolsRefresh, onSettingsSaved, updateAvailable = null, onUpdateClick = null, appVersion = 'dev', theme = 'dark' }) {
   // Use prop for active section, default to 'general'
@@ -660,6 +661,7 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
     { id: 'skills', label: 'Skills', icon: Wand2 },
     { id: 'scheduler', label: 'Scheduler', icon: Clock },
     { id: 'daemon', label: 'Daemon', icon: Shield },
+    { id: 'sandbox', label: 'Sandbox', icon: Box },
     { id: 'identity', label: 'Agent Identity', icon: User },
     { id: 'taps', label: 'Repositories', icon: GitBranch },
     { id: 'flows', label: 'Flow Store', icon: Store },
@@ -2037,6 +2039,10 @@ export default function SettingsPage({ onClose, activeSection = 'general', onSec
 
           {activeSection === 'daemon' && fullConfig && (
             <DaemonSettings config={fullConfig.daemon} onSaved={() => setFullConfig(null)} />
+          )}
+
+          {activeSection === 'sandbox' && fullConfig && (
+            <SandboxSettings config={fullConfig.sandbox} onSaved={() => setFullConfig(null)} />
           )}
 
           {activeSection === 'identity' && fullConfig && (

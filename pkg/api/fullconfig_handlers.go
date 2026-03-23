@@ -8,6 +8,7 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/fleet"
+	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/tools"
 )
 
@@ -26,6 +27,7 @@ type FullConfigResponse struct {
 	Skills        SkillsResponse             `json:"skills"`
 	AgentIdentity config.AgentIdentityConfig `json:"agent_identity"`
 	OpenCode      OpenCodeResponse           `json:"open_code"`
+	Sandbox       SandboxResponse            `json:"sandbox"`
 }
 
 // SessionsResponse wraps SessionConfig with resolved defaults for the UI.
@@ -123,6 +125,17 @@ type OpenCodeResponse struct {
 	Model string `json:"model"`
 }
 
+// SandboxResponse wraps SandboxConfig with resolved defaults for the UI.
+type SandboxResponse struct {
+	Enabled          bool   `json:"enabled"`
+	Memory           string `json:"memory"`
+	CPU              int    `json:"cpu"`
+	Processes        int    `json:"processes"`
+	Network          string `json:"network"`
+	WarmPool         int    `json:"warm_pool"`
+	OrphanCheckHours int    `json:"orphan_check_hours"`
+}
+
 // --- Update request types ---
 
 // FullConfigUpdateRequest is the request for PUT /api/settings/full.
@@ -139,6 +152,7 @@ type FullConfigUpdateRequest struct {
 	Skills        *SkillsUpdateRequest    `json:"skills,omitempty"`
 	AgentIdentity *IdentityUpdateRequest  `json:"agent_identity,omitempty"`
 	OpenCode      *OpenCodeUpdateRequest  `json:"open_code,omitempty"`
+	Sandbox       *SandboxUpdateRequest   `json:"sandbox,omitempty"`
 }
 
 // ChatUpdateRequest for updating chat settings.
@@ -287,6 +301,17 @@ type OpenCodeUpdateRequest struct {
 	Model string `json:"model"`
 }
 
+// SandboxUpdateRequest for updating sandbox settings.
+type SandboxUpdateRequest struct {
+	Enabled          bool   `json:"enabled"`
+	Memory           string `json:"memory"`
+	CPU              int    `json:"cpu"`
+	Processes        int    `json:"processes"`
+	Network          string `json:"network"`
+	WarmPool         int    `json:"warm_pool"`
+	OrphanCheckHours int    `json:"orphan_check_hours"`
+}
+
 // --- Handlers ---
 
 // GetFullConfigHandler handles GET /api/settings/full
@@ -370,6 +395,7 @@ func GetFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 		OpenCode: OpenCodeResponse{
 			Model: cfg.OpenCode.Model,
 		},
+		Sandbox: buildSandboxResponse(cfg),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -578,6 +604,27 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if req.Sandbox != nil {
+		enabled := req.Sandbox.Enabled
+		cfg.Sandbox = config.SandboxConfig{
+			Enabled: &enabled,
+			Limits: config.SandboxLimits{
+				Memory:    req.Sandbox.Memory,
+				CPU:       req.Sandbox.CPU,
+				Processes: req.Sandbox.Processes,
+			},
+			Network:  req.Sandbox.Network,
+			WarmPool: req.Sandbox.WarmPool,
+			Prune: config.SandboxPruneConfig{
+				OrphanCheckHours: req.Sandbox.OrphanCheckHours,
+			},
+		}
+		if err := sandbox.ValidateSandboxConfig(&cfg.Sandbox); err != nil {
+			http.Error(w, "Invalid sandbox config: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
 	if err := config.SaveAppConfig(cfg); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -628,6 +675,20 @@ func regenerateOpenCodeConfig(cfg *config.AppConfig) {
 }
 
 // --- Helper functions ---
+
+// buildSandboxResponse constructs the sandbox response with resolved defaults.
+func buildSandboxResponse(cfg *config.AppConfig) SandboxResponse {
+	limits := sandbox.EffectiveLimits(&cfg.Sandbox)
+	return SandboxResponse{
+		Enabled:          sandbox.IsSandboxEnabled(&cfg.Sandbox),
+		Memory:           limits.Memory,
+		CPU:              limits.CPU,
+		Processes:        limits.Processes,
+		Network:          sandbox.EffectiveNetwork(&cfg.Sandbox),
+		WarmPool:         cfg.Sandbox.WarmPool,
+		OrphanCheckHours: cfg.Sandbox.Prune.OrphanCheckHours,
+	}
+}
 
 // maskSecret masks a secret string, showing only the last 4 chars.
 func maskSecret(s string) string {

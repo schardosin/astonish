@@ -39,7 +39,8 @@ if ! incus storage list --format csv 2>/dev/null | grep -q "^default,"; then
 
     # Preseed Incus with a minimal configuration:
     # - dir storage backend (overlayfs handles CoW for fast clones)
-    # - managed bridge network with NAT
+    # - managed bridge network with NAT (static subnet to avoid auto-detect
+    #   failures in Docker's limited network namespace)
     # - default profile with root disk and network device
     cat <<'PRESEED' | incus admin init --preseed
 config:
@@ -51,7 +52,7 @@ networks:
   - name: incusbr0
     type: bridge
     config:
-      ipv4.address: auto
+      ipv4.address: "10.99.0.1/24"
       ipv4.nat: "true"
       ipv6.address: none
 profiles:

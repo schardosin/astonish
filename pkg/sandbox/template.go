@@ -1162,13 +1162,21 @@ func ensureIncusEnvironment(client *IncusClient) error {
 	networkName := "incusbr0"
 	_, _, err = server.GetNetwork(networkName)
 	if err != nil {
+		// Inside Docker, the auto-detection of unused subnets often fails
+		// because of the limited network namespace. Use a static subnet
+		// that won't conflict with Docker's default ranges (172.17-31.x.x).
+		ipv4Address := "auto"
+		if client.platform == PlatformDockerIncus {
+			ipv4Address = "10.99.0.1/24"
+		}
+
 		fmt.Printf("Creating network bridge %s...\n", networkName)
 		err = server.CreateNetwork(api.NetworksPost{
 			Name: networkName,
 			Type: "bridge",
 			NetworkPut: api.NetworkPut{
 				Config: map[string]string{
-					"ipv4.address": "auto",
+					"ipv4.address": ipv4Address,
 					"ipv4.nat":     "true",
 					"ipv6.address": "none",
 				},

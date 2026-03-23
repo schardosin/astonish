@@ -2,10 +2,15 @@ package agent
 
 import (
 	"fmt"
+	"regexp"
 	"time"
 
 	"google.golang.org/genai"
 )
+
+// userTimestampRe matches the timestamp prefix injected by NewTimestampedUserContent.
+// Format: "[2026-03-20 14:30:05 UTC]\n"
+var userTimestampRe = regexp.MustCompile(`^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \w+\]\n`)
 
 // NewTimestampedUserContent creates a user message with an absolute timestamp
 // prepended. The timestamp is baked in at creation time and never changes,

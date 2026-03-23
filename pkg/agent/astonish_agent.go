@@ -1026,6 +1026,10 @@ func (a *AstonishAgent) handleToolApproval(ctx agent.InvocationContext, state se
 			responseText += part.Text
 		}
 	}
+
+	// Strip the timestamp prefix injected by NewTimestampedUserContent
+	// (format: "[2026-03-20 14:30:05 UTC]\n") before checking approval.
+	responseText = userTimestampRe.ReplaceAllString(responseText, "")
 	responseText = strings.ToLower(strings.TrimSpace(responseText))
 
 	approved := responseText == "yes" || responseText == "y" || responseText == "approve"

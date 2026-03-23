@@ -7,6 +7,10 @@
 
 set -e
 
+# Incus packages install incusd to /usr/libexec/incus/ which is not in
+# the default PATH. Add it so incusd and helper binaries are accessible.
+export PATH="/usr/libexec/incus:$PATH"
+
 echo "[astonish-incus] Starting Incus daemon..."
 
 # Start incusd in the background

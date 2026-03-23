@@ -380,7 +380,7 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 					inputBuilder.WriteString(part.Text)
 				}
 			}
-			input := strings.TrimSpace(inputBuilder.String())
+			input := strings.TrimSpace(StripTimestamp(inputBuilder.String()))
 
 			if a.DebugMode {
 				fmt.Printf("[DEBUG] Run: Awaiting=true, Tool='%s', Input='%s'\n", toolNameStr, input)
@@ -571,7 +571,7 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 						inputBuilder.WriteString(part.Text)
 					}
 				}
-				input := strings.TrimSpace(inputBuilder.String())
+				input := strings.TrimSpace(StripTimestamp(inputBuilder.String()))
 
 				// Build state delta with the input value
 				stateDelta := make(map[string]any)
@@ -1029,8 +1029,7 @@ func (a *AstonishAgent) handleToolApproval(ctx agent.InvocationContext, state se
 
 	// Strip the timestamp prefix injected by NewTimestampedUserContent
 	// (format: "[2026-03-20 14:30:05 UTC]\n") before checking approval.
-	responseText = userTimestampRe.ReplaceAllString(responseText, "")
-	responseText = strings.ToLower(strings.TrimSpace(responseText))
+	responseText = strings.ToLower(strings.TrimSpace(StripTimestamp(responseText)))
 
 	approved := responseText == "yes" || responseText == "y" || responseText == "approve"
 

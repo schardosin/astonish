@@ -31,3 +31,10 @@ func NewTimestampedUserContent(text string) *genai.Content {
 	stamped := fmt.Sprintf("[%s]\n%s", ts, text)
 	return genai.NewContentFromText(stamped, genai.RoleUser)
 }
+
+// StripTimestamp removes the timestamp prefix injected by NewTimestampedUserContent.
+// Use this when the flow engine needs the raw user text for programmatic purposes
+// (state storage, approval checks) rather than passing it to the LLM.
+func StripTimestamp(text string) string {
+	return userTimestampRe.ReplaceAllString(text, "")
+}

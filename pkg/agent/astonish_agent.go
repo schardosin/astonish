@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -50,8 +49,9 @@ var (
 // minimalReadonlyContext implements agent.ReadonlyContext for fetching tools from toolsets
 type minimalReadonlyContext struct {
 	context.Context
-	actions *session.EventActions
-	state   session.State
+	actions   *session.EventActions
+	state     session.State
+	sessionID string
 }
 
 func (m *minimalReadonlyContext) AgentName() string                    { return "astonish-agent" }
@@ -60,7 +60,7 @@ func (m *minimalReadonlyContext) UserContent() *genai.Content          { return 
 func (m *minimalReadonlyContext) InvocationID() string                 { return "" }
 func (m *minimalReadonlyContext) ReadonlyState() session.ReadonlyState { return nil }
 func (m *minimalReadonlyContext) UserID() string                       { return "" }
-func (m *minimalReadonlyContext) SessionID() string                    { return "" }
+func (m *minimalReadonlyContext) SessionID() string                    { return m.sessionID }
 func (m *minimalReadonlyContext) Branch() string                       { return "" }
 func (m *minimalReadonlyContext) Actions() *session.EventActions {
 	if m.actions == nil {
@@ -640,13 +640,6 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 				}
 				currentNodeName = nextNode
 				continue
-			}
-
-			// DEBUG LOGGING TO ABSOLUTE PATH
-			f, _ := os.OpenFile("/Users/I851355/Projects/astonish/agent_debug_absolute.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-			if f != nil {
-				fmt.Fprintf(f, "[DEBUG] Processing Node: %s, Type: %s\n", node.Name, node.Type)
-				f.Close()
 			}
 
 			if node.Type == "input" {
@@ -3002,12 +2995,19 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 	}
 
 	// Execute using RunnableTool interface
-	// Create tool context
+	// Create tool context with session ID for sandbox routing
 	stateDelta := make(map[string]any)
+	var sessID string
+	if sc, ok := ctx.(interface{ SessionID() string }); ok {
+		sessID = sc.SessionID()
+	} else if ic, ok := ctx.(agent.InvocationContext); ok && ic.Session() != nil {
+		sessID = ic.Session().ID()
+	}
 	toolCtx := &minimalReadonlyContext{
-		Context: ctx,
-		actions: &session.EventActions{StateDelta: stateDelta},
-		state:   state,
+		Context:   ctx,
+		actions:   &session.EventActions{StateDelta: stateDelta},
+		state:     state,
+		sessionID: sessID,
 	}
 
 	runnable, ok := selectedTool.(RunnableTool)

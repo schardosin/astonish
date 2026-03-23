@@ -16,6 +16,7 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/provider"
+	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/tools"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
@@ -36,11 +37,13 @@ type ChatRequest struct {
 
 // SessionManager manages active sessions
 type SessionManager struct {
-	service      session.Service
-	sessions     map[string]session.Session
-	mcpManagers  map[string]*mcp.Manager // MCP manager per session
-	lastActivity map[string]time.Time    // Last activity time per session
-	mu           sync.RWMutex
+	service         session.Service
+	sessions        map[string]session.Session
+	mcpManagers     map[string]*mcp.Manager // MCP manager per session
+	lastActivity    map[string]time.Time    // Last activity time per session
+	sandboxCleanups map[string]func()       // Per-session sandbox cleanup (flow containers)
+	sandboxTools    map[string][]tool.Tool  // Per-session sandbox-wrapped tools (reused across resumes)
+	mu              sync.RWMutex
 }
 
 // Session timeout - cleanup sessions with no activity for this duration
@@ -86,10 +89,12 @@ func GetSessionManager() *SessionManager {
 	sessionOnce.Do(func() {
 		baseService := session.InMemoryService()
 		globalSessionManager = &SessionManager{
-			service:      common.NewAutoInitService(baseService),
-			sessions:     make(map[string]session.Session),
-			mcpManagers:  make(map[string]*mcp.Manager),
-			lastActivity: make(map[string]time.Time),
+			service:         common.NewAutoInitService(baseService),
+			sessions:        make(map[string]session.Session),
+			mcpManagers:     make(map[string]*mcp.Manager),
+			lastActivity:    make(map[string]time.Time),
+			sandboxCleanups: make(map[string]func()),
+			sandboxTools:    make(map[string][]tool.Tool),
 		}
 		// Start background cleanup goroutine
 		go globalSessionManager.cleanupStaleSessionsLoop()
@@ -120,6 +125,12 @@ func (sm *SessionManager) cleanupStaleSessions() {
 				mgr.Cleanup()
 				delete(sm.mcpManagers, sessionID)
 			}
+			// Cleanup sandbox container
+			if cleanup, exists := sm.sandboxCleanups[sessionID]; exists {
+				cleanup()
+				delete(sm.sandboxCleanups, sessionID)
+			}
+			delete(sm.sandboxTools, sessionID)
 			delete(sm.sessions, sessionID)
 			delete(sm.lastActivity, sessionID)
 			fmt.Printf("[Session] Cleaned up stale session: %s (inactive for %v)\n", sessionID, now.Sub(lastActive))
@@ -177,6 +188,11 @@ func (sm *SessionManager) CleanupSession(sessionID string) {
 		mgr.Cleanup()
 		delete(sm.mcpManagers, sessionID)
 	}
+	if cleanup, exists := sm.sandboxCleanups[sessionID]; exists {
+		cleanup()
+		delete(sm.sandboxCleanups, sessionID)
+	}
+	delete(sm.sandboxTools, sessionID)
 	delete(sm.sessions, sessionID)
 }
 
@@ -383,6 +399,27 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	// Register browser automation tools (shared manager across sessions)
 	if browserTools, browserErr := tools.GetBrowserTools(GetBrowserManager()); browserErr == nil {
 		internalTools = append(internalTools, browserTools...)
+	}
+
+	// Wrap tools with sandbox proxies (reuse across resumes of the same flow session)
+	sm.mu.RLock()
+	cachedTools, hasCached := sm.sandboxTools[req.SessionID]
+	sm.mu.RUnlock()
+	if hasCached {
+		internalTools = cachedTools
+	} else {
+		result, sbErr := sandbox.SetupFlowSandbox(appCfg, internalTools)
+		if sbErr != nil {
+			SendErrorSSE(w, flusher, fmt.Sprintf("Sandbox setup failed: %v", sbErr))
+			return
+		}
+		internalTools = result.Tools
+		if result.Cleanup != nil {
+			sm.mu.Lock()
+			sm.sandboxCleanups[req.SessionID] = result.Cleanup
+			sm.sandboxTools[req.SessionID] = result.Tools
+			sm.mu.Unlock()
+		}
 	}
 
 	// Initialize MCP - per-session, only servers needed for this flow

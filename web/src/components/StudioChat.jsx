@@ -516,6 +516,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   const [fleetDialogMessage, setFleetDialogMessage] = useState('') // pre-populated from /fleet command
   const [showTemplatePicker, setShowTemplatePicker] = useState(false) // /fleet-plan without template key
   const [pendingFleetPlanPrompt, setPendingFleetPlanPrompt] = useState(null) // deferred plan creation message
+  const [pendingTestPlanPrompt, setPendingTestPlanPrompt] = useState(null) // deferred test plan creation message
   const [activeWizardContext, setActiveWizardContext] = useState(null) // persisted wizard system prompt for multi-turn sessions
 
   // Slash command popup
@@ -543,6 +544,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     { cmd: '/distill', desc: 'Distill last task into a flow' },
     { cmd: '/fleet', desc: 'Start a fleet-based task with specialized agents' },
     { cmd: '/fleet-plan', desc: 'Create a reusable fleet plan' },
+    { cmd: '/test-plan', desc: 'Create a test suite with guided wizard' },
   ], [])
 
   // Wrapper to keep URL in sync with active session
@@ -945,8 +947,8 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
           case 'tool_result':
             setMessages(prev => [...prev, { type: 'tool_result', toolName: data.name, toolResult: data.result }])
-            // Clear wizard context once the fleet plan has been saved
-            if (data.name === 'save_fleet_plan') {
+            // Clear wizard context once the fleet plan or test suite has been saved
+            if (data.name === 'save_fleet_plan' || data.name === 'save_test_suite') {
               setActiveWizardContext(null)
             }
             break
@@ -1037,6 +1039,23 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               } else {
                 // No hint: show template picker so user selects one, then re-issue /fleet-plan <key>
                 setShowTemplatePicker(true)
+              }
+            }
+            break
+
+          case 'test_plan_redirect':
+            // /test-plan [hint] command: start test suite creation wizard
+            setIsStreaming(false)
+            {
+              const hint = data.hint || ''
+              const wizardSystemPrompt = data.wizard_system_prompt || ''
+
+              if (wizardSystemPrompt) {
+                setActiveWizardContext(wizardSystemPrompt)
+                const kickoff = hint
+                  ? `I'd like to create a test suite. Here's what I want to test: ${hint}`
+                  : 'I\'d like to create a test suite for my project.'
+                setPendingTestPlanPrompt({ message: kickoff, systemContext: wizardSystemPrompt })
               }
             }
             break
@@ -1146,6 +1165,15 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
       sendMessage(message, { systemContext })
     }
   }, [pendingFleetPlanPrompt, isStreaming, sendMessage])
+
+  // Process deferred test plan prompt (set by test_plan_redirect SSE event)
+  useEffect(() => {
+    if (pendingTestPlanPrompt && !isStreaming) {
+      const { message, systemContext } = pendingTestPlanPrompt
+      setPendingTestPlanPrompt(null)
+      sendMessage(message, { systemContext })
+    }
+  }, [pendingTestPlanPrompt, isStreaming, sendMessage])
 
   // Process pending chat message passed from another view (e.g., Fleet UI "Create Plan with AI Guide")
   useEffect(() => {

@@ -67,6 +67,8 @@ func Execute() error {
 		return handleCredentialCommand(os.Args[2:])
 	case "skills":
 		return handleSkillsCommand(os.Args[2:])
+	case "test":
+		return handleTestCommand(os.Args[2:])
 	case "sandbox":
 		return handleSandboxCommand(os.Args[2:])
 	case "node":
@@ -80,10 +82,10 @@ func Execute() error {
 }
 
 func printUsage() {
-	fmt.Println("usage: astonish [-h] [-v] {chat,sessions,flows,tap,studio,daemon,channels,scheduler,fleet,credential,skills,sandbox,config,setup,tools,memory} ...")
+	fmt.Println("usage: astonish [-h] [-v] {chat,sessions,flows,tap,studio,daemon,channels,scheduler,fleet,credential,skills,sandbox,test,config,setup,tools,memory} ...")
 	fmt.Println("")
 	fmt.Println("positional arguments:")
-	fmt.Println("  {chat,sessions,flows,tap,studio,daemon,channels,scheduler,fleet,credential,skills,sandbox,config,setup,tools,memory}")
+	fmt.Println("  {chat,sessions,flows,tap,studio,daemon,channels,scheduler,fleet,credential,skills,sandbox,test,config,setup,tools,memory}")
 	fmt.Println("                        Astonish CLI commands")
 	fmt.Println("    chat                Start an interactive chat session")
 	fmt.Println("    sessions            Manage persistent sessions")
@@ -97,6 +99,7 @@ func printUsage() {
 	fmt.Println("    credential          Manage the encrypted credential store")
 	fmt.Println("    skills              Manage CLI tool skill guides")
 	fmt.Println("    sandbox             Manage session container isolation")
+	fmt.Println("    test                Run deterministic test suites")
 	fmt.Println("    config              Manage configuration")
 	fmt.Println("    setup               Run interactive setup")
 	fmt.Println("    tools               Manage MCP tools")

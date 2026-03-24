@@ -1062,7 +1062,41 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			} else {
 				internalTools = append(internalTools, tplTool)
 			}
+
+			// Register list_sandbox_templates tool (runs on host, not inside container).
+			// This lets the AI list available templates without shell_command (which
+			// runs inside the container and can't see the host's template registry).
+			listTplTool, listErr := tools.NewListSandboxTemplatesTool(sandboxTplRegistry)
+			if listErr != nil {
+				if cfg.DebugMode {
+					fmt.Printf("Warning: Failed to create list_sandbox_templates tool: %v\n", listErr)
+				}
+			} else {
+				internalTools = append(internalTools, listTplTool)
+			}
+
+			// Register use_sandbox_template tool (runs on host, not inside container).
+			// This lets the AI switch the session container to a specific template
+			// (tears down the @base container and creates one from the selected template).
+			useTplTool, useErr := tools.NewUseSandboxTemplateTool(sandboxNodePool, sandboxTplRegistry)
+			if useErr != nil {
+				if cfg.DebugMode {
+					fmt.Printf("Warning: Failed to create use_sandbox_template tool: %v\n", useErr)
+				}
+			} else {
+				internalTools = append(internalTools, useTplTool)
+			}
 		}
+	}
+
+	// Register test suite tools (save_test_suite, validate_test_suite)
+	testSuiteTools, tstErr := tools.GetTestSuiteTools()
+	if tstErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("Warning: Failed to create test suite tools: %v\n", tstErr)
+		}
+	} else {
+		internalTools = append(internalTools, testSuiteTools...)
 	}
 
 	// --- 6. Create ChatAgent ---

@@ -802,6 +802,37 @@ func (p *NodeClientPool) RestartNode(sessionID string) error {
 	return client.RestartNode()
 }
 
+// ReplaceSession tears down the existing container for a session and creates a
+// new LazyNodeClient with the specified template. The next tool call for this
+// session will create a container cloned from the new template. This is used by
+// the use_sandbox_template tool to switch a chat session from @base to a
+// project-specific template.
+func (p *NodeClientPool) ReplaceSession(sessionID, template string) error {
+	// Remove existing client from pool (outside cleanup lock to avoid deadlock)
+	p.mu.Lock()
+	existing, hadExisting := p.clients[sessionID]
+	delete(p.clients, sessionID)
+	p.mu.Unlock()
+
+	// Tear down existing client — waits for init, destroys container + registry entry
+	if hadExisting && existing != nil {
+		existing.Cleanup()
+	}
+
+	// Create new client with the specified template
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.closed {
+		return fmt.Errorf("pool is closed")
+	}
+
+	client := NewLazyNodeClient(p.incusClient, p.sessRegistry, p.tplRegistry, template, p.limits)
+	client.Env = p.env
+	p.clients[sessionID] = client
+	return nil
+}
+
 // GetIncusClient returns the shared Incus client.
 func (p *NodeClientPool) GetIncusClient() *IncusClient {
 	return p.incusClient

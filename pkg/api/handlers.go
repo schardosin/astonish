@@ -77,6 +77,11 @@ func scanAgentsDir(dir string, source string, agents map[string]AgentListItem) {
 			continue
 		}
 
+		// Skip test suites and tests — they are not regular flows
+		if cfg.Type == "test" || cfg.Type == "test_suite" {
+			continue
+		}
+
 		agents[name] = AgentListItem{
 			ID:          name,
 			Name:        name,

@@ -255,6 +255,20 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 			break
 		}
 
+		// /test-plan: inject wizard prompt and convert to agent message
+		if strings.HasPrefix(input, "/test-plan") {
+			hint := strings.TrimSpace(strings.TrimPrefix(input, "/test-plan"))
+			wizardPrompt := tools.GetTestSuiteWizardPrompt()
+			chatAgent.SystemPrompt.SessionContext = agent.EscapeCurlyPlaceholders(wizardPrompt)
+			fmt.Printf("%sStarting test suite creation wizard...%s\n\n", ColorCyan, ColorReset)
+			if hint != "" {
+				input = fmt.Sprintf("I'd like to create a test suite. Here's what I want to test: %s", hint)
+			} else {
+				input = "I'd like to create a test suite for my project."
+			}
+			// Fall through to send this as a regular message to the agent
+		}
+
 		// Slash command dispatch
 		if strings.HasPrefix(input, "/") {
 			switch {
@@ -385,6 +399,7 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				fmt.Println("  /new         - Start a fresh conversation (new session)")
 				fmt.Println("  /compact     - Show context window usage and compaction status")
 				fmt.Println("  /distill     - Distill the last task into a reusable flow")
+				fmt.Println("  /test-plan   - Create a test suite with guided wizard")
 				fmt.Println("  /fleet       - Show available fleets and CLI commands")
 				fmt.Println("  /fleet-plan  - Create a fleet plan (use Studio UI for guided conversation)")
 				fmt.Println("  /help        - Show this help message")
@@ -534,6 +549,10 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 					// Start spinner showing which tool is running
 					startSpinner(fmt.Sprintf("Running %s...", p.FunctionCall.Name))
 					spinnerStopped = false
+					// Clear wizard context after test suite is saved
+					if p.FunctionCall.Name == "save_test_suite" {
+						chatAgent.SystemPrompt.SessionContext = ""
+					}
 				}
 				if p.FunctionResponse != nil {
 					hasTool = true

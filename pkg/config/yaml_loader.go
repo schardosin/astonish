@@ -8,10 +8,51 @@ import (
 
 // AgentConfig represents the top-level structure of the agent YAML.
 type AgentConfig struct {
-	Description     string          `yaml:"description"`
-	Nodes           []Node          `yaml:"nodes"`
-	Flow            []FlowItem      `yaml:"flow"`
-	MCPDependencies []MCPDependency `yaml:"mcp_dependencies,omitempty"`
+	Description     string           `yaml:"description"`
+	Type            string           `yaml:"type,omitempty"`         // "test", "test_suite", or empty for regular flows
+	Suite           string           `yaml:"suite,omitempty"`        // For type: test — which suite this belongs to
+	SuiteConfig     *TestSuiteConfig `yaml:"suite_config,omitempty"` // For type: test_suite — infrastructure config
+	TestConfig      *TestConfig      `yaml:"test_config,omitempty"`  // For type: test — test-specific config
+	Nodes           []Node           `yaml:"nodes"`
+	Flow            []FlowItem       `yaml:"flow"`
+	MCPDependencies []MCPDependency  `yaml:"mcp_dependencies,omitempty"`
+}
+
+// TestSuiteConfig defines infrastructure for running tests.
+// Used by type: test_suite flows.
+type TestSuiteConfig struct {
+	Template    string            `yaml:"template,omitempty"`    // Container template name (e.g., "@myapp")
+	Setup       []string          `yaml:"setup,omitempty"`       // Shell commands to run before tests
+	ReadyCheck  *ReadyCheck       `yaml:"ready_check,omitempty"` // Wait for application readiness
+	Teardown    []string          `yaml:"teardown,omitempty"`    // Shell commands after all tests
+	Environment map[string]string `yaml:"environment,omitempty"` // Shared environment variables
+}
+
+// ReadyCheck defines how to verify the application under test is ready.
+type ReadyCheck struct {
+	Type     string `yaml:"type"`               // "http", "port", "output_contains"
+	URL      string `yaml:"url,omitempty"`      // For http type: URL to poll
+	Host     string `yaml:"host,omitempty"`     // For port type (default: "localhost")
+	Port     int    `yaml:"port,omitempty"`     // For port type: TCP port number
+	Pattern  string `yaml:"pattern,omitempty"`  // For output_contains type: string to match
+	Timeout  int    `yaml:"timeout,omitempty"`  // Max wait in seconds (default: 30)
+	Interval int    `yaml:"interval,omitempty"` // Poll interval in seconds (default: 2)
+}
+
+// TestConfig holds per-test configuration (lightweight — infrastructure is in the suite).
+type TestConfig struct {
+	Tags        []string `yaml:"tags,omitempty"`         // For filtering (e.g., "smoke", "regression")
+	Timeout     int      `yaml:"timeout,omitempty"`      // Per-test timeout in seconds (default: 120)
+	StepTimeout int      `yaml:"step_timeout,omitempty"` // Per-step timeout in seconds (default: 30)
+	OnFail      string   `yaml:"on_fail,omitempty"`      // "stop" (default), "continue", "triage"
+}
+
+// AssertConfig defines what to check after a step executes.
+type AssertConfig struct {
+	Type     string `yaml:"type"`              // "contains", "not_contains", "regex", "exit_code", "element_exists", "semantic"
+	Source   string `yaml:"source,omitempty"`  // "output" (default), "snapshot", "screenshot", "pty_buffer"
+	Expected string `yaml:"expected"`          // Expected value (string, regex, or natural language for semantic)
+	OnFail   string `yaml:"on_fail,omitempty"` // Override per-step: "stop", "continue", "triage"
 }
 
 // MCPDependency represents a required MCP server for the flow.
@@ -48,6 +89,7 @@ type Node struct {
 	MaxRetries        int                    `yaml:"max_retries,omitempty"`    // Maximum retry attempts (default: 3)
 	RetryStrategy     string                 `yaml:"retry_strategy,omitempty"` // "intelligent" or "simple" (default: intelligent)
 	Silent            bool                   `yaml:"silent,omitempty"`         // If true, node execution is not shown in UI/CLI
+	Assert            *AssertConfig          `yaml:"assert,omitempty"`         // Assertion for test flows (Spec 17)
 }
 
 // ParallelConfig defines configuration for parallel execution.

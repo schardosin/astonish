@@ -21,6 +21,7 @@ import (
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
+	"github.com/schardosin/astonish/pkg/tools"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/runner"
@@ -268,6 +269,18 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		SendSSE(w, flusher, "fleet_redirect", map[string]interface{}{
 			"task": task,
 		})
+		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+		return
+	}
+
+	// /test-plan: start a test suite creation conversation
+	if msg == "/test-plan" || strings.HasPrefix(msg, "/test-plan ") {
+		hint := strings.TrimSpace(strings.TrimPrefix(msg, "/test-plan"))
+		eventData := map[string]interface{}{
+			"hint":                 hint,
+			"wizard_system_prompt": tools.GetTestSuiteWizardPrompt(),
+		}
+		SendSSE(w, flusher, "test_plan_redirect", eventData)
 		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
 		return
 	}
@@ -537,6 +550,7 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 				"- `/distill` — Distill the last task into a reusable flow\n" +
 				"- `/fleet [task]` — Start a fleet session with an autonomous agent team\n" +
 				"- `/fleet-plan [hint]` — Create a reusable fleet plan through guided conversation\n" +
+				"- `/test-plan [hint]` — Create a test suite with guided wizard\n" +
 				"- `/help` — Show this help message",
 		})
 

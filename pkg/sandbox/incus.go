@@ -71,6 +71,23 @@ func (c *IncusClient) Server() incus.InstanceServer {
 	return c.server
 }
 
+// ServerArchitecture returns the primary architecture of the Incus server
+// (e.g., "x86_64", "aarch64"). On Docker+Incus, this is the Docker container's
+// architecture, not the host's. Used to ensure containers and images are
+// created with the correct architecture.
+func (c *IncusClient) ServerArchitecture() (string, error) {
+	info, _, err := c.server.GetServer()
+	if err != nil {
+		return "", fmt.Errorf("failed to get server info: %w", err)
+	}
+
+	if len(info.Environment.Architectures) == 0 {
+		return "", fmt.Errorf("server reports no supported architectures")
+	}
+
+	return info.Environment.Architectures[0], nil
+}
+
 // defaultContainerConfig returns the base config for all containers.
 // In nested LXC environments (e.g., Proxmox), containers must run as
 // privileged because unprivileged containers cannot mount /proc inside

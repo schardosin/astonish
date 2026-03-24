@@ -144,9 +144,15 @@ func EnsureOverlayImage(client *IncusClient) error {
 		return nil // already exists
 	}
 
+	// Get the server's architecture so the image metadata matches
+	arch, err := client.ServerArchitecture()
+	if err != nil {
+		return fmt.Errorf("failed to detect server architecture for overlay image: %w", err)
+	}
+
 	fmt.Println("Creating overlay shell image...")
 
-	tarball, err := buildOverlayImageTarball()
+	tarball, err := buildOverlayImageTarball(arch)
 	if err != nil {
 		return fmt.Errorf("failed to build overlay image: %w", err)
 	}
@@ -203,16 +209,18 @@ func EnsureOverlayImage(client *IncusClient) error {
 
 // buildOverlayImageTarball creates a minimal Incus image tarball in memory.
 // This is a unified image (metadata.yaml + rootfs/ in a single tarball).
-func buildOverlayImageTarball() ([]byte, error) {
+// The architecture parameter should match the Incus server's architecture
+// (e.g., "x86_64", "aarch64") to avoid mismatches on cross-arch setups.
+func buildOverlayImageTarball(architecture string) ([]byte, error) {
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
 
 	// metadata.yaml
-	metadata := `architecture: amd64
+	metadata := fmt.Sprintf(`architecture: %s
 creation_date: 1700000000
 properties:
-  architecture: amd64
+  architecture: %s
   description: Astonish overlay base (minimal)
   os: ubuntu
   release: noble
@@ -223,7 +231,7 @@ templates:
   /etc/hosts:
     when: [create, copy]
     template: hosts.tpl
-`
+`, architecture, architecture)
 	if err := addTarFile(tw, "metadata.yaml", []byte(metadata), 0644); err != nil {
 		return nil, err
 	}
@@ -338,11 +346,20 @@ func CreateOverlayContainer(client *IncusClient, containerName, templateName str
 	// Custom templates inherit nesting from their base.
 	nesting := resolveNesting(templateName, registry)
 
+	// Get the server's architecture to set explicitly on the container.
+	// On Docker+Incus (macOS ARM64 host with amd64 container), Incus
+	// may default to the wrong architecture if not specified.
+	arch, err := client.ServerArchitecture()
+	if err != nil {
+		return fmt.Errorf("failed to detect server architecture: %w", err)
+	}
+
 	// Create the container from the tiny overlay image
 	req := api.InstancesPost{
 		Name: containerName,
 		Type: api.InstanceTypeContainer,
 		InstancePut: api.InstancePut{
+			Architecture: arch,
 			Config: map[string]string{
 				"security.privileged": "true",
 				"security.nesting":    fmt.Sprintf("%t", nesting),

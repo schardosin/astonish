@@ -572,10 +572,17 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 
 		// Create new @base container from tiny image
 		fmt.Println("Creating new @base container...")
+		arch, err := client.ServerArchitecture()
+		if err != nil {
+			templateSnapshotMu.Unlock()
+			return fmt.Errorf("failed to detect server architecture: %w", err)
+		}
+
 		req := api.InstancesPost{
 			Name: baseName,
 			Type: api.InstanceTypeContainer,
 			InstancePut: api.InstancePut{
+				Architecture: arch,
 				Config: map[string]string{
 					"security.privileged": "true",
 					"security.nesting":    "false",
@@ -875,10 +882,17 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 
 	// Create the template container from the tiny overlay image
 	log.Printf("[sandbox] Creating template container %q...", tplContainerName)
+	arch, err := client.ServerArchitecture()
+	if err != nil {
+		restartSession()
+		return fmt.Errorf("failed to detect server architecture: %w", err)
+	}
+
 	req := api.InstancesPost{
 		Name: tplContainerName,
 		Type: api.InstanceTypeContainer,
 		InstancePut: api.InstancePut{
+			Architecture: arch,
 			Config: map[string]string{
 				"security.privileged": "true",
 				"security.nesting":    "false",

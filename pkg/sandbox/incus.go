@@ -151,10 +151,36 @@ func (c *IncusClient) LaunchFromImage(name, image string, config map[string]stri
 		return fmt.Errorf("failed to connect to image server %q: %w", remote, err)
 	}
 
-	// Find the image by alias
-	imgAlias, _, err := imageServer.GetImageAlias(alias)
+	// Get the server's supported architectures so we fetch the right image.
+	// On Docker+Incus (macOS ARM64 host), the Incus daemon runs inside an
+	// amd64 Docker container — we must fetch the amd64 image, not aarch64.
+	serverInfo, _, err := c.server.GetServer()
+	if err != nil {
+		return fmt.Errorf("failed to get server info for architecture detection: %w", err)
+	}
+
+	serverArchs := serverInfo.Environment.Architectures
+	if len(serverArchs) == 0 {
+		return fmt.Errorf("server reports no supported architectures")
+	}
+
+	// Find the image matching one of the server's supported architectures
+	archAliases, err := imageServer.GetImageAliasArchitectures("container", alias)
 	if err != nil {
 		return fmt.Errorf("image alias %q not found on %q: %w", alias, remote, err)
+	}
+
+	var imgAlias *api.ImageAliasesEntry
+	for _, arch := range serverArchs {
+		if entry, ok := archAliases[arch]; ok {
+			imgAlias = entry
+			break
+		}
+	}
+
+	if imgAlias == nil {
+		return fmt.Errorf("no image %q available for server architectures %v (available: %v)",
+			alias, serverArchs, mapKeys(archAliases))
 	}
 
 	img, _, err := imageServer.GetImage(imgAlias.Target)
@@ -471,4 +497,13 @@ func (c *IncusClient) GetStorageBackend() (string, error) {
 
 	// Return the driver of the first (default) pool
 	return pools[0].Driver, nil
+}
+
+// mapKeys returns the keys of a map as a string slice (for error messages).
+func mapKeys[K comparable, V any](m map[K]V) []K {
+	keys := make([]K, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

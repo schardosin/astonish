@@ -194,12 +194,13 @@ func (c *IncusClient) LaunchFromImage(name, image string, config map[string]stri
 		effectiveConfig[k] = v
 	}
 
-	// Create the instance
+	// Create the instance with explicit architecture from the selected image
 	req := api.InstancesPost{
 		Name: name,
 		Type: api.InstanceTypeContainer,
 		InstancePut: api.InstancePut{
-			Config: effectiveConfig,
+			Architecture: img.Architecture,
+			Config:       effectiveConfig,
 		},
 	}
 
@@ -227,6 +228,14 @@ func (c *IncusClient) CopyFromAnySnapshot(name, sourceContainer, snapshotName st
 		return fmt.Errorf("snapshot %q not found on %q: %w", snapshotName, sourceContainer, err)
 	}
 
+	// Get the source container's architecture. On Docker+Incus (macOS ARM64
+	// host with amd64 container), the Incus API may default to the wrong
+	// architecture if not explicitly specified in the clone request.
+	sourceInst, _, err := c.server.GetInstance(sourceContainer)
+	if err != nil {
+		return fmt.Errorf("failed to get source instance %q: %w", sourceContainer, err)
+	}
+
 	// Build config with defaults for nested LXC environments
 	effectiveConfig := c.defaultContainerConfig()
 	for k, v := range config {
@@ -238,7 +247,8 @@ func (c *IncusClient) CopyFromAnySnapshot(name, sourceContainer, snapshotName st
 		Name: name,
 		Type: api.InstanceTypeContainer,
 		InstancePut: api.InstancePut{
-			Config: effectiveConfig,
+			Architecture: sourceInst.Architecture,
+			Config:       effectiveConfig,
 		},
 		Source: api.InstanceSource{
 			Type:         "copy",

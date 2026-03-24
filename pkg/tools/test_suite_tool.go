@@ -220,7 +220,90 @@ func validateTestSuite(_ tool.Context, args ValidateTestSuiteArgs) (ValidateTest
 				Message: "Suite config present",
 			})
 
-			// Validate ready_check if present
+			// Validate services if present
+			if len(suiteCfg.SuiteConfig.Services) > 0 {
+				namesSeen := make(map[string]bool)
+				for i, svc := range suiteCfg.SuiteConfig.Services {
+					svcLabel := fmt.Sprintf("service[%d]", i)
+					if svc.Name == "" {
+						checks = append(checks, ValidationCheck{
+							Name:    svcLabel + "_name",
+							Status:  "failed",
+							Message: fmt.Sprintf("Service at index %d is missing a 'name' field", i),
+						})
+						allPassed = false
+					} else if namesSeen[svc.Name] {
+						checks = append(checks, ValidationCheck{
+							Name:    svcLabel + "_name",
+							Status:  "failed",
+							Message: fmt.Sprintf("Duplicate service name %q", svc.Name),
+						})
+						allPassed = false
+					} else {
+						namesSeen[svc.Name] = true
+					}
+
+					if svc.Setup == "" {
+						checks = append(checks, ValidationCheck{
+							Name:    svcLabel + "_setup",
+							Status:  "failed",
+							Message: fmt.Sprintf("Service %q is missing a 'setup' command", svc.Name),
+						})
+						allPassed = false
+					}
+
+					// Validate per-service ready check
+					if svc.ReadyCheck != nil {
+						svcRC := svc.ReadyCheck
+						switch svcRC.Type {
+						case "http":
+							if svcRC.URL == "" {
+								checks = append(checks, ValidationCheck{
+									Name:    svcLabel + "_ready_check",
+									Status:  "failed",
+									Message: fmt.Sprintf("Service %q: ready check type 'http' requires a non-empty 'url' field", svc.Name),
+								})
+								allPassed = false
+							}
+						case "port":
+							if svcRC.Port <= 0 {
+								checks = append(checks, ValidationCheck{
+									Name:    svcLabel + "_ready_check",
+									Status:  "failed",
+									Message: fmt.Sprintf("Service %q: ready check type 'port' requires a positive 'port' value", svc.Name),
+								})
+								allPassed = false
+							}
+						case "output_contains":
+							if svcRC.Pattern == "" {
+								checks = append(checks, ValidationCheck{
+									Name:    svcLabel + "_ready_check",
+									Status:  "failed",
+									Message: fmt.Sprintf("Service %q: ready check type 'output_contains' requires a non-empty 'pattern' field", svc.Name),
+								})
+								allPassed = false
+							}
+						case "":
+							checks = append(checks, ValidationCheck{
+								Name:    svcLabel + "_ready_check",
+								Status:  "failed",
+								Message: fmt.Sprintf("Service %q: ready check is present but missing 'type' field", svc.Name),
+							})
+							allPassed = false
+						}
+					}
+				}
+
+				if allPassed {
+					checks = append(checks, ValidationCheck{
+						Name:    "services",
+						Status:  "passed",
+						Message: fmt.Sprintf("%d service(s) configured", len(suiteCfg.SuiteConfig.Services)),
+					})
+				}
+			}
+
+			// Validate ready_check if present (legacy single-service)
 			rc := suiteCfg.SuiteConfig.ReadyCheck
 			if rc != nil {
 				switch rc.Type {

@@ -22,10 +22,22 @@ type AgentConfig struct {
 // Used by type: test_suite flows.
 type TestSuiteConfig struct {
 	Template    string            `yaml:"template,omitempty"`    // Container template name (e.g., "@myapp")
-	Setup       []string          `yaml:"setup,omitempty"`       // Shell commands to run before tests
-	ReadyCheck  *ReadyCheck       `yaml:"ready_check,omitempty"` // Wait for application readiness
-	Teardown    []string          `yaml:"teardown,omitempty"`    // Shell commands after all tests
+	Services    []ServiceConfig   `yaml:"services,omitempty"`    // Multi-service definitions (started in order, stopped in reverse)
+	Setup       []string          `yaml:"setup,omitempty"`       // Shell commands to run before tests (legacy single-service)
+	ReadyCheck  *ReadyCheck       `yaml:"ready_check,omitempty"` // Wait for application readiness (legacy single-service)
+	Teardown    []string          `yaml:"teardown,omitempty"`    // Shell commands after all tests (legacy single-service)
 	Environment map[string]string `yaml:"environment,omitempty"` // Shared environment variables
+	BaseURL     string            `yaml:"base_url,omitempty"`    // Base URL for browser tests (e.g., "http://localhost:3000")
+}
+
+// ServiceConfig defines a single service in a multi-service test suite.
+// Services are started in declaration order and stopped in reverse order.
+type ServiceConfig struct {
+	Name        string            `yaml:"name"`                  // Service identifier (e.g., "database", "backend", "frontend")
+	Setup       string            `yaml:"setup"`                 // Shell command to start this service
+	ReadyCheck  *ReadyCheck       `yaml:"ready_check,omitempty"` // Per-service readiness check
+	Teardown    string            `yaml:"teardown,omitempty"`    // Shell command to stop this service
+	Environment map[string]string `yaml:"environment,omitempty"` // Per-service environment variables
 }
 
 // ReadyCheck defines how to verify the application under test is ready.

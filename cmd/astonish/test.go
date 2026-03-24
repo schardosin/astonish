@@ -2,13 +2,16 @@ package astonish
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
+	"github.com/schardosin/astonish/pkg/browser"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/flowstore"
 	atesting "github.com/schardosin/astonish/pkg/testing"
@@ -55,6 +58,335 @@ func (e *internalToolExecutor) Execute(ctx context.Context, name string, args ma
 	return tools.ExecuteTool(ctx, name, args)
 }
 
+// browserToolNames lists all browser tool names for detection.
+var browserToolNames = map[string]bool{
+	"browser_navigate": true, "browser_navigate_back": true,
+	"browser_click": true, "browser_type": true, "browser_hover": true,
+	"browser_drag": true, "browser_press_key": true, "browser_select_option": true,
+	"browser_fill_form": true, "browser_snapshot": true, "browser_take_screenshot": true,
+	"browser_console_messages": true, "browser_network_requests": true,
+	"browser_tabs": true, "browser_close": true, "browser_resize": true,
+	"browser_wait_for": true, "browser_file_upload": true, "browser_handle_dialog": true,
+	"browser_evaluate": true, "browser_run_code": true, "browser_pdf": true,
+	"browser_response_body": true, "browser_cookies": true, "browser_storage": true,
+	"browser_set_offline": true, "browser_set_headers": true, "browser_set_credentials": true,
+	"browser_set_geolocation": true, "browser_set_media": true, "browser_set_timezone": true,
+	"browser_set_locale": true, "browser_set_device": true,
+	"browser_request_human": true, "browser_handoff_complete": true,
+}
+
+// browserToolExecutor lazily initializes a browser.Manager and dispatches browser tool calls
+// using the same closure-based factory pattern as GetBrowserTools.
+type browserToolExecutor struct {
+	mu       sync.Mutex
+	mgr      *browser.Manager
+	guard    *browser.NavigationGuard
+	refs     *browser.RefMap
+	headless bool
+}
+
+func newBrowserToolExecutor(headless bool) *browserToolExecutor {
+	return &browserToolExecutor{headless: headless}
+}
+
+// ensureInit lazily creates the browser manager, guard, and ref map.
+func (b *browserToolExecutor) ensureInit() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.mgr != nil {
+		return
+	}
+	cfg := browser.DefaultConfig()
+	cfg.Headless = b.headless
+	b.mgr = browser.NewManager(cfg)
+	b.guard = browser.DefaultNavigationGuard()
+	b.refs = browser.NewRefMap()
+}
+
+// Close shuts down the browser if it was started.
+func (b *browserToolExecutor) Close() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.mgr != nil {
+		b.mgr.Cleanup()
+	}
+}
+
+// Execute dispatches a browser tool call by name.
+func (b *browserToolExecutor) Execute(_ context.Context, name string, args map[string]interface{}) (any, error) {
+	b.ensureInit()
+
+	argsJSON, err := json.Marshal(args)
+	if err != nil {
+		return nil, fmt.Errorf("marshal browser tool args: %w", err)
+	}
+
+	// Each browser tool uses a different args struct. We dispatch to the factory closure
+	// and unmarshal the JSON args into the appropriate struct type.
+	switch name {
+	case "browser_navigate":
+		var a tools.BrowserNavigateArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserNavigate(b.mgr, b.guard)(nil, a)
+
+	case "browser_navigate_back":
+		var a tools.BrowserNavigateBackArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserNavigateBack(b.mgr)(nil, a)
+
+	case "browser_click":
+		var a tools.BrowserClickArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserClick(b.mgr, b.refs)(nil, a)
+
+	case "browser_type":
+		var a tools.BrowserTypeArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserType(b.mgr, b.refs)(nil, a)
+
+	case "browser_hover":
+		var a tools.BrowserHoverArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserHover(b.mgr, b.refs)(nil, a)
+
+	case "browser_drag":
+		var a tools.BrowserDragArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserDrag(b.mgr, b.refs)(nil, a)
+
+	case "browser_press_key":
+		var a tools.BrowserPressKeyArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserPressKey(b.mgr)(nil, a)
+
+	case "browser_select_option":
+		var a tools.BrowserSelectOptionArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserSelectOption(b.mgr, b.refs)(nil, a)
+
+	case "browser_fill_form":
+		var a tools.BrowserFillFormArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserFillForm(b.mgr, b.refs)(nil, a)
+
+	case "browser_snapshot":
+		var a tools.BrowserSnapshotArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserSnapshot(b.mgr, b.refs)(nil, a)
+
+	case "browser_take_screenshot":
+		var a tools.BrowserScreenshotArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserTakeScreenshot(b.mgr, b.refs)(nil, a)
+
+	case "browser_console_messages":
+		var a tools.BrowserConsoleMessagesArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserConsoleMessages(b.mgr)(nil, a)
+
+	case "browser_network_requests":
+		var a tools.BrowserNetworkRequestsArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserNetworkRequests(b.mgr)(nil, a)
+
+	case "browser_tabs":
+		var a tools.BrowserTabsArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserTabs(b.mgr, b.guard)(nil, a)
+
+	case "browser_close":
+		var a tools.BrowserCloseArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserClose(b.mgr)(nil, a)
+
+	case "browser_resize":
+		var a tools.BrowserResizeArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserResize(b.mgr)(nil, a)
+
+	case "browser_wait_for":
+		var a tools.BrowserWaitForArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserWaitFor(b.mgr)(nil, a)
+
+	case "browser_file_upload":
+		var a tools.BrowserFileUploadArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserFileUpload(b.mgr, b.refs)(nil, a)
+
+	case "browser_handle_dialog":
+		var a tools.BrowserHandleDialogArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserHandleDialog(b.mgr)(nil, a)
+
+	case "browser_evaluate":
+		var a tools.BrowserEvaluateArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserEvaluate(b.mgr, b.refs)(nil, a)
+
+	case "browser_run_code":
+		var a tools.BrowserRunCodeArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserRunCode(b.mgr)(nil, a)
+
+	case "browser_pdf":
+		var a tools.BrowserPDFArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserPDF(b.mgr)(nil, a)
+
+	case "browser_response_body":
+		var a tools.BrowserResponseBodyArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserResponseBody(b.mgr)(nil, a)
+
+	case "browser_cookies":
+		var a tools.BrowserCookiesArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserCookies(b.mgr)(nil, a)
+
+	case "browser_storage":
+		var a tools.BrowserStorageArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserStorage(b.mgr)(nil, a)
+
+	case "browser_set_offline":
+		var a tools.BrowserSetOfflineArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserSetOffline(b.mgr)(nil, a)
+
+	case "browser_set_headers":
+		var a tools.BrowserSetHeadersArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserSetHeaders(b.mgr)(nil, a)
+
+	case "browser_set_credentials":
+		var a tools.BrowserSetCredentialsArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserSetCredentials(b.mgr)(nil, a)
+
+	case "browser_set_geolocation":
+		var a tools.BrowserSetGeolocationArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserSetGeolocation(b.mgr)(nil, a)
+
+	case "browser_set_media":
+		var a tools.BrowserSetMediaArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserSetMedia(b.mgr)(nil, a)
+
+	case "browser_set_timezone":
+		var a tools.BrowserSetTimezoneArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserSetTimezone(b.mgr)(nil, a)
+
+	case "browser_set_locale":
+		var a tools.BrowserSetLocaleArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserSetLocale(b.mgr)(nil, a)
+
+	case "browser_set_device":
+		var a tools.BrowserSetDeviceArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserSetDevice(b.mgr)(nil, a)
+
+	case "browser_request_human":
+		var a tools.BrowserRequestHumanArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserRequestHuman(b.mgr)(nil, a)
+
+	case "browser_handoff_complete":
+		var a tools.BrowserHandoffCompleteArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return tools.BrowserHandoffComplete(b.mgr)(nil, a)
+
+	default:
+		return nil, fmt.Errorf("unknown browser tool: %s", name)
+	}
+}
+
+// compositeToolExecutor tries the internal executor first, then the browser executor.
+type compositeToolExecutor struct {
+	internal *internalToolExecutor
+	browser  *browserToolExecutor
+}
+
+func (c *compositeToolExecutor) Execute(ctx context.Context, name string, args map[string]interface{}) (any, error) {
+	if browserToolNames[name] {
+		return c.browser.Execute(ctx, name, args)
+	}
+	return c.internal.Execute(ctx, name, args)
+}
+
 func handleTestRunCommand(args []string) error {
 	runCmd := flag.NewFlagSet("test run", flag.ExitOnError)
 	tagFlag := runCmd.String("tag", "", "Filter tests by tag (comma-separated)")
@@ -97,8 +429,13 @@ func handleTestRunCommand(args []string) error {
 		fmt.Printf("Warning: could not create artifact manager: %v\n", err)
 	}
 
-	// Create tool executor
-	executor := &internalToolExecutor{}
+	// Create tool executor (supports both internal and browser tools)
+	browserExec := newBrowserToolExecutor(true) // headless for CI
+	defer browserExec.Close()
+	executor := &compositeToolExecutor{
+		internal: &internalToolExecutor{},
+		browser:  browserExec,
+	}
 	runner := atesting.NewSuiteRunner(executor, am, *verbose)
 
 	// Try to find as suite first
@@ -223,6 +560,16 @@ func handleTestListCommand(args []string) error {
 		if sc != nil {
 			if sc.Template != "" {
 				fmt.Printf("  Template: %s\n", sc.Template)
+			}
+			if sc.BaseURL != "" {
+				fmt.Printf("  Base URL: %s\n", sc.BaseURL)
+			}
+			if len(sc.Services) > 0 {
+				names := make([]string, len(sc.Services))
+				for i, svc := range sc.Services {
+					names[i] = svc.Name
+				}
+				fmt.Printf("  Services: %s\n", strings.Join(names, ", "))
 			}
 			if len(sc.Setup) > 0 {
 				fmt.Printf("  Setup: %d commands\n", len(sc.Setup))

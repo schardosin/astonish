@@ -173,12 +173,13 @@ Based on everything learned, generate the suite YAML.
 The suite YAML defines shared infrastructure: how to start and stop the
 application, and how to verify it is ready.
 
-### Suite YAML Format:
+### Suite YAML Format (Single Service / Simple):
 
     description: "Brief description of what this suite tests"
     type: test_suite
     suite_config:
       template: "<template-name>"        # Sandbox template (from Step 1i). Omit if no sandbox.
+      base_url: "http://localhost:3000"   # OPTIONAL — base URL for browser tests
       setup:
         - "<build command>"              # e.g., "cd /root/myapp && go build -o myapp ."
         - "<start command> &"            # e.g., "cd /root/myapp && ./myapp &"
@@ -194,15 +195,70 @@ application, and how to verify it is ready.
       environment:
         MY_ENV_VAR: "test-value"         # Optional shared env vars
 
+### Suite YAML Format (Multi-Service):
+
+For applications with multiple services (database + backend + frontend, etc.),
+use the services list instead of top-level setup/ready_check/teardown.
+Services are started in declaration order and torn down in reverse order.
+Each service has its own setup command, optional ready check, and teardown.
+
+    description: "Full-stack E2E Tests"
+    type: test_suite
+    suite_config:
+      template: "@fullstack"
+      base_url: "http://localhost:3000"
+      environment:
+        NODE_ENV: test
+      services:
+        - name: database
+          setup: "pg_ctl start -D /var/lib/postgresql/data"
+          ready_check:
+            type: port
+            port: 5432
+            timeout: 15
+          teardown: "pg_ctl stop -D /var/lib/postgresql/data"
+          environment:
+            POSTGRES_DB: testdb
+        - name: backend
+          setup: "cd /workspace/api && npm start &"
+          ready_check:
+            type: http
+            url: "http://localhost:8080/health"
+            timeout: 30
+            interval: 2
+          teardown: "pkill -f 'npm start' || true"
+          environment:
+            DATABASE_URL: "postgres://localhost:5432/testdb"
+        - name: frontend
+          setup: "cd /workspace/web && npm run dev &"
+          ready_check:
+            type: output_contains
+            pattern: "ready in"
+            timeout: 20
+          teardown: "pkill -f 'npm run dev' || true"
+
+### When to use services vs. top-level setup:
+
+- **Single process (API server, CLI, library):** Use top-level setup/ready_check/teardown.
+- **Multiple processes (database + server, backend + frontend, etc.):**
+  Use the services list. Each service gets its own lifecycle.
+  If one service fails to start, already-started services are torn down
+  in reverse order automatically.
+
 ### When to include ready_check vs. omit it:
 
-- **Servers, APIs, daemons** (anything started with & in setup that listens on
+- **Servers, APIs, daemons** (anything started with & that listens on
   a port or URL): INCLUDE ready_check. Use type: http with a health endpoint,
   or type: port with the listen port.
 - **CLI tools, build checks, library tests, file operations**: OMIT
   ready_check entirely. There is no long-running process to wait for.
   Do NOT generate a placeholder ready_check with port: 0 or empty values —
   that will cause the test runner to fail.
+
+### When to include base_url:
+
+- Include base_url when the suite includes browser-based tests that interact
+  with a web UI. This documents the entry point for browser_navigate steps.
 
 ### Example: CLI tool suite (NO ready_check)
 
@@ -228,9 +284,43 @@ application, and how to verify it is ready.
       teardown:
         - "pkill -f myapp || true"
 
+### Example: Multi-service suite (database + API + frontend)
+
+    description: "E2E Tests for MyApp with Postgres"
+    type: test_suite
+    suite_config:
+      template: "myapp-fullstack"
+      base_url: "http://localhost:3000"
+      environment:
+        NODE_ENV: test
+      services:
+        - name: postgres
+          setup: "pg_ctl start -D /var/lib/postgresql/data -l /tmp/pg.log"
+          ready_check:
+            type: port
+            port: 5432
+            timeout: 15
+          teardown: "pg_ctl stop -D /var/lib/postgresql/data"
+        - name: api
+          setup: "cd /root/myapp/api && ./server &"
+          ready_check:
+            type: http
+            url: "http://localhost:8080/health"
+            timeout: 30
+          teardown: "pkill -f server || true"
+        - name: frontend
+          setup: "cd /root/myapp/web && npx serve -s build -l 3000 &"
+          ready_check:
+            type: port
+            port: 3000
+            timeout: 10
+          teardown: "pkill -f 'npx serve' || true"
+
 Guidelines:
 - Setup commands run IN ORDER before any tests.
-- Use & to background long-running processes (servers, daemons).
+- For single-service suites, use & to background long-running processes.
+- For multi-service suites, each service setup command is a single string.
+  Use & to background it if it is a long-running daemon.
 - Always include teardown to kill background processes.
 - Use "|| true" in teardown so cleanup never fails the suite.
 - Ready check should match what you verified in Step 1h.
@@ -282,12 +372,13 @@ For each test scenario from Step 2, generate a test YAML.
 - not_contains: Output does NOT contain the expected string
 - regex: Output matches the expected regex pattern
 - exit_code: Shell command exit code equals expected value (use source: exit_code)
-- element_exists: DOM element exists (browser tests, Phase 2+)
+- element_exists: DOM element exists in browser snapshot (use source: snapshot)
 - semantic: Natural language comparison (placeholder, Phase 3+)
 
 ### Assert Source:
 - output (default): Assert against command stdout
 - exit_code: Assert against the exit code (use with type: exit_code)
+- snapshot: Assert against browser accessibility snapshot (for element_exists)
 
 ### Exit Code Assertion Example:
 
@@ -301,13 +392,68 @@ For each test scenario from Step 2, generate a test YAML.
         source: exit_code
         expected: "0"
 
+### Browser Test Steps (for web UI testing):
+
+When the suite has a base_url, you can write tests that use browser tools.
+Browser tools are available in the deterministic test runner.
+
+    - name: navigate_to_app
+      type: tool
+      args:
+        tool: browser_navigate
+        url: "http://localhost:3000"
+    - name: verify_page_loaded
+      type: tool
+      args:
+        tool: browser_snapshot
+      assert:
+        type: element_exists
+        source: snapshot
+        expected: "heading"
+    - name: click_login
+      type: tool
+      args:
+        tool: browser_click
+        ref: "ref5"
+    - name: type_username
+      type: tool
+      args:
+        tool: browser_type
+        ref: "ref10"
+        text: "admin"
+    - name: take_screenshot
+      type: tool
+      args:
+        tool: browser_take_screenshot
+
+Browser tools available for test steps:
+- browser_navigate — Navigate to a URL
+- browser_navigate_back — Go back in history
+- browser_click — Click an element by ref
+- browser_type — Type text into an input by ref
+- browser_hover — Hover over an element
+- browser_press_key — Press a keyboard key (Enter, Tab, etc.)
+- browser_select_option — Select dropdown option
+- browser_fill_form — Fill multiple form fields
+- browser_snapshot — Get accessibility tree (returns refs for interaction)
+- browser_take_screenshot — Capture a screenshot
+- browser_wait_for — Wait for text, selector, URL, or page state
+- browser_evaluate — Run JavaScript in the page
+- browser_run_code — Run multi-line JS snippet
+- browser_console_messages — Get console output
+- browser_network_requests — Get network requests
+
+Note: Browser tests need a ref from browser_snapshot before they can
+click/type/interact with elements. The typical flow is:
+navigate → snapshot → interact (using refs) → snapshot/screenshot to verify.
+
 ### Important:
 - Every test MUST have "suite: <suite-name>" matching the suite filename.
 - The flow section defines step execution order. If omitted, nodes run in
   declaration order.
 - Use meaningful step names that describe what is being tested.
 - Each test file should be named descriptively (e.g., test_api_health,
-  test_build_succeeds, test_cli_help).
+  test_build_succeeds, test_cli_help, test_login_flow).
 
 Show each test YAML to the user. Get confirmation before proceeding.
 
@@ -359,7 +505,62 @@ These tools can be used in test step args.tool fields:
 - web_fetch — Fetch a web page
 - grep_search — Search for patterns in files
 - file_tree — List directory structure
+- browser_navigate — Navigate browser to a URL
+- browser_navigate_back — Go back in browser history
+- browser_click — Click an element by ref
+- browser_type — Type text into an input field
+- browser_hover — Hover over an element
+- browser_press_key — Press a keyboard key
+- browser_select_option — Select a dropdown option
+- browser_fill_form — Fill multiple form fields at once
+- browser_snapshot — Capture accessibility tree (returns element refs)
+- browser_take_screenshot — Take a visual screenshot
+- browser_wait_for — Wait for text/selector/URL/page state
+- browser_evaluate — Evaluate JavaScript in page context
+- browser_run_code — Run multi-line JavaScript snippet
+- browser_console_messages — Get browser console output
+- browser_network_requests — Get network request log
 
-For Phase 1, shell_command is the primary tool for test steps since it
-covers most testing scenarios (curl, CLI invocations, build commands, etc.).
+shell_command covers most testing scenarios (curl, CLI invocations, build
+commands). Use browser_* tools when testing web UIs that require interaction
+(clicking, typing, form submission, visual verification).
+
+## Interactive App Configuration (during Step 1h)
+
+Some applications prompt for configuration during first run (database setup,
+admin account creation, config wizards, etc.). When this happens:
+
+1. Start the app with shell_command using background=true
+2. Use process_read to see what the app is asking
+3. If you know the answer (from project docs, README, etc.), use process_write
+   to respond
+4. If you don't know the answer, ask the user: "The application is asking:
+   '<prompt text>'. What should I enter?"
+5. Use process_write to send the user's response
+6. Repeat until configuration is complete
+
+For web-based config wizards:
+1. Start the app in background
+2. Use browser_navigate to open the config page
+3. Use browser_snapshot to understand the form
+4. Ask the user what values to enter
+5. Use browser_fill_form or browser_type + browser_click to complete it
+
+After interactive configuration is complete, determine the non-interactive
+equivalent for test replay:
+- Environment variables that bypass the wizard
+- Config file that can be pre-populated in setup
+- CLI flags that skip interactive prompts
+Document this in the suite setup commands so tests are deterministic.
+
+## Visual Feedback (screenshots)
+
+When exploring the app with browser tools and you encounter unexpected behavior
+or need the user's help:
+1. Take a screenshot with browser_take_screenshot
+2. Show it to the user: "Here's what I'm seeing on the page"
+3. Ask for guidance: "I see [description]. How should I proceed?"
+
+Screenshots are for the user's benefit. For your own understanding of the page,
+use browser_snapshot (accessibility tree) which returns structured text.
 `

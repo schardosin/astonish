@@ -286,6 +286,226 @@ flow:
 	}
 }
 
+func TestMultiServiceSuiteParsing(t *testing.T) {
+	input := `
+description: "Full-stack E2E Tests"
+type: test_suite
+suite_config:
+  template: "@fullstack"
+  base_url: "http://localhost:3000"
+  environment:
+    NODE_ENV: test
+  services:
+    - name: database
+      setup: "pg_ctl start -D /var/lib/postgresql/data"
+      ready_check:
+        type: port
+        port: 5432
+        timeout: 15
+      teardown: "pg_ctl stop -D /var/lib/postgresql/data"
+      environment:
+        POSTGRES_DB: testdb
+    - name: backend
+      setup: "cd /workspace/api && npm start &"
+      ready_check:
+        type: http
+        url: "http://localhost:8080/health"
+        timeout: 30
+        interval: 2
+      teardown: "pkill -f 'npm start'"
+      environment:
+        DATABASE_URL: "postgres://localhost:5432/testdb"
+    - name: frontend
+      setup: "cd /workspace/web && npm run dev &"
+      ready_check:
+        type: output_contains
+        pattern: "ready in"
+        timeout: 20
+      teardown: "pkill -f 'npm run dev'"
+`
+	var cfg AgentConfig
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	if cfg.Type != "test_suite" {
+		t.Errorf("Type = %q, want %q", cfg.Type, "test_suite")
+	}
+	sc := cfg.SuiteConfig
+	if sc == nil {
+		t.Fatal("SuiteConfig is nil")
+	}
+	if sc.Template != "@fullstack" {
+		t.Errorf("Template = %q, want %q", sc.Template, "@fullstack")
+	}
+	if sc.BaseURL != "http://localhost:3000" {
+		t.Errorf("BaseURL = %q, want %q", sc.BaseURL, "http://localhost:3000")
+	}
+	if sc.Environment["NODE_ENV"] != "test" {
+		t.Errorf("Environment[NODE_ENV] = %q, want %q", sc.Environment["NODE_ENV"], "test")
+	}
+
+	// Should have no legacy setup/teardown
+	if len(sc.Setup) != 0 {
+		t.Errorf("Legacy Setup should be empty, got %d entries", len(sc.Setup))
+	}
+	if len(sc.Teardown) != 0 {
+		t.Errorf("Legacy Teardown should be empty, got %d entries", len(sc.Teardown))
+	}
+	if sc.ReadyCheck != nil {
+		t.Error("Legacy ReadyCheck should be nil")
+	}
+
+	// Validate services
+	if len(sc.Services) != 3 {
+		t.Fatalf("Services length = %d, want 3", len(sc.Services))
+	}
+
+	// Database service
+	db := sc.Services[0]
+	if db.Name != "database" {
+		t.Errorf("Services[0].Name = %q, want %q", db.Name, "database")
+	}
+	if db.Setup != "pg_ctl start -D /var/lib/postgresql/data" {
+		t.Errorf("Services[0].Setup = %q, unexpected", db.Setup)
+	}
+	if db.ReadyCheck == nil {
+		t.Fatal("Services[0].ReadyCheck is nil")
+	}
+	if db.ReadyCheck.Type != "port" {
+		t.Errorf("Services[0].ReadyCheck.Type = %q, want %q", db.ReadyCheck.Type, "port")
+	}
+	if db.ReadyCheck.Port != 5432 {
+		t.Errorf("Services[0].ReadyCheck.Port = %d, want 5432", db.ReadyCheck.Port)
+	}
+	if db.Teardown != "pg_ctl stop -D /var/lib/postgresql/data" {
+		t.Errorf("Services[0].Teardown = %q, unexpected", db.Teardown)
+	}
+	if db.Environment["POSTGRES_DB"] != "testdb" {
+		t.Errorf("Services[0].Environment[POSTGRES_DB] = %q, want %q", db.Environment["POSTGRES_DB"], "testdb")
+	}
+
+	// Backend service
+	be := sc.Services[1]
+	if be.Name != "backend" {
+		t.Errorf("Services[1].Name = %q, want %q", be.Name, "backend")
+	}
+	if be.ReadyCheck == nil || be.ReadyCheck.Type != "http" {
+		t.Error("Services[1].ReadyCheck should be http type")
+	}
+	if be.ReadyCheck.URL != "http://localhost:8080/health" {
+		t.Errorf("Services[1].ReadyCheck.URL = %q, unexpected", be.ReadyCheck.URL)
+	}
+	if be.ReadyCheck.Interval != 2 {
+		t.Errorf("Services[1].ReadyCheck.Interval = %d, want 2", be.ReadyCheck.Interval)
+	}
+
+	// Frontend service
+	fe := sc.Services[2]
+	if fe.Name != "frontend" {
+		t.Errorf("Services[2].Name = %q, want %q", fe.Name, "frontend")
+	}
+	if fe.ReadyCheck == nil || fe.ReadyCheck.Type != "output_contains" {
+		t.Error("Services[2].ReadyCheck should be output_contains type")
+	}
+	if fe.ReadyCheck.Pattern != "ready in" {
+		t.Errorf("Services[2].ReadyCheck.Pattern = %q, want %q", fe.ReadyCheck.Pattern, "ready in")
+	}
+}
+
+func TestMultiServiceBackwardCompat(t *testing.T) {
+	// Legacy single-service suite should still parse with empty Services
+	input := `
+description: "Legacy Suite"
+type: test_suite
+suite_config:
+  setup:
+    - "npm start &"
+  ready_check:
+    type: http
+    url: "http://localhost:3000"
+  teardown:
+    - "pkill -f npm"
+`
+	var cfg AgentConfig
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	sc := cfg.SuiteConfig
+	if sc == nil {
+		t.Fatal("SuiteConfig is nil")
+	}
+	if len(sc.Services) != 0 {
+		t.Errorf("Services should be empty for legacy suite, got %d", len(sc.Services))
+	}
+	if len(sc.Setup) != 1 {
+		t.Fatalf("Legacy Setup length = %d, want 1", len(sc.Setup))
+	}
+	if sc.ReadyCheck == nil {
+		t.Fatal("Legacy ReadyCheck should not be nil")
+	}
+	if sc.ReadyCheck.Type != "http" {
+		t.Errorf("ReadyCheck.Type = %q, want %q", sc.ReadyCheck.Type, "http")
+	}
+}
+
+func TestServiceConfigMinimal(t *testing.T) {
+	// Service with only name and setup (no ready check, no teardown, no env)
+	input := `
+description: "Minimal Service Suite"
+type: test_suite
+suite_config:
+  services:
+    - name: worker
+      setup: "python worker.py &"
+`
+	var cfg AgentConfig
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	sc := cfg.SuiteConfig
+	if len(sc.Services) != 1 {
+		t.Fatalf("Services length = %d, want 1", len(sc.Services))
+	}
+	svc := sc.Services[0]
+	if svc.Name != "worker" {
+		t.Errorf("Name = %q, want %q", svc.Name, "worker")
+	}
+	if svc.Setup != "python worker.py &" {
+		t.Errorf("Setup = %q, unexpected", svc.Setup)
+	}
+	if svc.ReadyCheck != nil {
+		t.Error("ReadyCheck should be nil for minimal service")
+	}
+	if svc.Teardown != "" {
+		t.Errorf("Teardown should be empty, got %q", svc.Teardown)
+	}
+	if len(svc.Environment) != 0 {
+		t.Errorf("Environment should be empty, got %d entries", len(svc.Environment))
+	}
+}
+
+func TestBaseURLParsing(t *testing.T) {
+	input := `
+description: "Browser Test Suite"
+type: test_suite
+suite_config:
+  base_url: "http://localhost:5173"
+  setup:
+    - "npm run dev &"
+`
+	var cfg AgentConfig
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	if cfg.SuiteConfig.BaseURL != "http://localhost:5173" {
+		t.Errorf("BaseURL = %q, want %q", cfg.SuiteConfig.BaseURL, "http://localhost:5173")
+	}
+}
+
 func TestReadyCheckPortParsing(t *testing.T) {
 	input := `
 type: port

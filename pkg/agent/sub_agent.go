@@ -57,6 +57,19 @@ type SubAgentTask struct {
 	// from the RunTask goroutine. If nil, events are consumed silently.
 	OnEvent func(event *adksession.Event)
 
+	// OverrideTools, when non-nil, replaces the tools that would normally be
+	// selected by filterTools(). This is used by fleet sessions to provide
+	// sandbox-wrapped tool copies without mutating the global SubAgentManager
+	// singleton. The caller is responsible for applying any tool filter before
+	// setting this field.
+	OverrideTools []tool.Tool
+
+	// OverrideToolsets, when non-nil, replaces the MCP toolsets that would
+	// normally come from filterToolsets(). Used by fleet sessions to provide
+	// sandbox-wired MCP toolset copies (with ContainerMCPTransport) that route
+	// MCP server processes through the fleet's container.
+	OverrideToolsets []tool.Toolset
+
 	// Internal: set by SubAgentManager, not by callers
 	ParentDepth int    // Current nesting depth
 	ParentID    string // Parent session ID for linking
@@ -102,6 +115,12 @@ var excludedChildTools = map[string]bool{
 	"save_credential":   true, // Children can't modify credentials
 	"remove_credential": true, // Children can't remove credentials
 	"opencode":          true, // OpenCode delegation is fleet-agent-only (via FleetTools)
+}
+
+// IsExcludedChildTool returns true if the named tool is in the exclusion list.
+// Used by sandbox wrapping to replicate the same filtering as filterTools().
+func IsExcludedChildTool(name string) bool {
+	return excludedChildTools[name]
 }
 
 // NewSubAgentManager creates a new SubAgentManager with the given configuration.
@@ -181,7 +200,16 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	}
 
 	// Filter tools for the child
-	childTools := m.filterTools(task.ToolFilter)
+	childTools := task.OverrideTools
+	if childTools == nil {
+		childTools = m.filterTools(task.ToolFilter)
+	}
+
+	// Determine toolsets for the child
+	childToolsets := task.OverrideToolsets
+	if childToolsets == nil {
+		childToolsets = m.filterToolsets()
+	}
 
 	// Build child system prompt: use custom prompt if set, otherwise build default
 	var childPrompt string
@@ -256,7 +284,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		Model:                m.LLM,
 		Instruction:          childPrompt,
 		Tools:                childTools,
-		Toolsets:             m.filterToolsets(),
+		Toolsets:             childToolsets,
 		BeforeModelCallbacks: beforeModelCallbacks,
 		AfterToolCallbacks:   afterToolCallbacks,
 	})

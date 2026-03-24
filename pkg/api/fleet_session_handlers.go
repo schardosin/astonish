@@ -14,11 +14,16 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/cache"
+	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/fleet"
+	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/tools"
 	adkmodel "google.golang.org/adk/model"
 	adksession "google.golang.org/adk/session"
+	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
 )
 
@@ -156,6 +161,16 @@ func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionRes
 		}
 	}
 	fleetSession.WorkspaceDir = workspaceDir
+
+	// Wire sandbox container for this fleet session (fails if sandbox is enabled but unavailable)
+	ghToken := ""
+	if credStore := getAPICredentialStore(); credStore != nil {
+		resolved, _ := fleet.ResolveCredentials(plan, credStore)
+		ghToken = fleet.GitHubToken(resolved)
+	}
+	if err := wireFleetSandbox(fleetSession, plan, ghToken); err != nil {
+		return nil, fmt.Errorf("cannot start fleet session: %w", err)
+	}
 
 	// Register in session registry and persist metadata
 	registry := getFleetSessionRegistry()
@@ -541,6 +556,7 @@ func FleetSessionStopHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fs.Stop()
+	fs.Cleanup() // destroy sandbox container + clean session registry
 	registry.Unregister(sessionID)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -842,6 +858,196 @@ func getFleetMessages(sessionID string, ctx context.Context) ([]fleet.Message, e
 	}
 
 	return messages, nil
+}
+
+// wireFleetSandbox creates sandbox infrastructure for a fleet session when
+// sandbox mode is enabled. It creates a LazyNodeClient, wraps the global
+// SubAgentManager tools with NodeTool proxies, and wires cleanup.
+//
+// When sandbox is NOT enabled (config says disabled), this returns nil.
+// When sandbox IS enabled but the runtime is unavailable, this returns an error
+// to prevent the session from starting without isolation.
+//
+// Parameters:
+//   - fleetSession: the fleet session to wire sandbox into
+//   - plan: the fleet plan (for Template and Credentials fields)
+//   - ghToken: resolved GitHub token (may be empty)
+func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, ghToken string) error {
+	// Load config to check if sandbox is enabled
+	appCfg, err := config.LoadAppConfig()
+	if err != nil || appCfg == nil {
+		return nil // config not available — sandbox not configured
+	}
+
+	if !sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
+		return nil // sandbox explicitly disabled — ok
+	}
+
+	sandboxClient, sandboxErr := sandbox.SetupSandboxRuntime()
+	if sandboxErr != nil {
+		return fmt.Errorf("sandbox is enabled but the runtime is not available: %w", sandboxErr)
+	}
+
+	sessRegistry, regErr := sandbox.NewSessionRegistry()
+	if regErr != nil {
+		return fmt.Errorf("sandbox session registry failed: %w", regErr)
+	}
+
+	tplRegistry, tplErr := sandbox.NewTemplateRegistry()
+	if tplErr != nil {
+		return fmt.Errorf("sandbox template registry failed: %w", tplErr)
+	}
+
+	// Determine which template to use: plan template or @base
+	template := ""
+	if plan != nil {
+		template = plan.Template
+	}
+
+	// Create a lazy node client for this fleet session
+	limits := sandbox.EffectiveLimits(&appCfg.Sandbox)
+	lazyNode := sandbox.NewLazyNodeClient(sandboxClient, sessRegistry, tplRegistry, template, &limits)
+
+	// Use the fleet session ID for container lookup/creation so that recovered
+	// sessions (which preserve the fleet session ID but generate new ADK child
+	// session IDs) find and reuse the original container.
+	lazyNode.OverrideSessionID = fleetSession.ID
+
+	// Build env vars to inject into the container
+	lazyNode.Env = buildSandboxEnv(plan, ghToken)
+
+	// Wrap the global SubAgentManager tools with NodeTool proxies.
+	subAgentMgr := tools.GetSubAgentManager()
+	if subAgentMgr == nil {
+		lazyNode.Cleanup()
+		return fmt.Errorf("sandbox is enabled but sub-agent manager is not available")
+	}
+
+	// Wrap tools with sandbox node proxies. Replicate the excludedChildTools
+	// filter from SubAgentManager.filterTools() — tools in that set (opencode,
+	// delegate_tasks, etc.) come exclusively from FleetTools so they must be
+	// excluded from the base Tools slice to avoid duplicates.
+	var baseTools []tool.Tool
+	for _, t := range subAgentMgr.Tools {
+		if !agent.IsExcludedChildTool(t.Name()) {
+			baseTools = append(baseTools, t)
+		}
+	}
+	wrappedTools := sandbox.WrapToolsWithNodeClient(baseTools, lazyNode)
+	if subAgentMgr.FleetTools != nil {
+		wrappedFleetTools := sandbox.WrapToolsWithNodeClient(subAgentMgr.FleetTools, lazyNode)
+		wrappedTools = append(wrappedTools, wrappedFleetTools...)
+	}
+
+	fleetSession.SandboxTools = wrappedTools
+
+	// Create sandbox-wired MCP toolsets for this fleet session.
+	// Each fleet session gets fresh LazyMCPToolset clones that route MCP server
+	// processes through the fleet's dedicated container (via ContainerMCPTransport).
+	// SSE transport servers are unaffected — they connect to remote URLs.
+	sandboxToolsets := createFleetMCPToolsets(sandboxClient, lazyNode)
+	if len(sandboxToolsets) > 0 {
+		fleetSession.SandboxToolsets = sandboxToolsets
+	}
+
+	// Set workspace to the project directory inside the container.
+	if plan != nil && plan.ContainerWorkspaceDir != "" {
+		fleetSession.WorkspaceDir = plan.ContainerWorkspaceDir
+	} else {
+		fleetSession.WorkspaceDir = "/root"
+	}
+
+	// Wire cleanup to destroy the container on session deletion (NOT on Run() exit)
+	fleetSession.OnCleanup = func() {
+		lazyNode.Cleanup()
+	}
+
+	log.Printf("[fleet-sandbox] Session %s: sandbox enabled (template=%q, env_keys=%d)",
+		fleetSession.ID, template, len(lazyNode.Env))
+	return nil
+}
+
+// createFleetMCPToolsets creates sandbox-wired MCP toolsets for a fleet session.
+// It loads the MCP config, creates fresh LazyMCPToolset instances from cached
+// metadata, and wires them with the fleet's LazyNodeClient so MCP server
+// processes run inside the fleet's container.
+func createFleetMCPToolsets(incusClient *sandbox.IncusClient, lazyNode *sandbox.LazyNodeClient) []tool.Toolset {
+	mcpCfg, err := config.LoadMCPConfig()
+	if err != nil || mcpCfg == nil || len(mcpCfg.MCPServers) == 0 {
+		return nil
+	}
+
+	if _, loadErr := cache.LoadCache(); loadErr != nil {
+		return nil
+	}
+
+	var toolsets []tool.Toolset
+	for name, serverCfg := range mcpCfg.MCPServers {
+		if !serverCfg.IsEnabled() {
+			continue
+		}
+		cachedTools := cache.GetToolsForServer(name)
+		if len(cachedTools) == 0 {
+			continue
+		}
+		lt := agent.NewLazyMCPToolset(name, cachedTools, serverCfg, false)
+		lt.SetSandboxClient(lazyNode, incusClient)
+		toolsets = append(toolsets, agent.NewSanitizedToolset(lt, false))
+	}
+
+	return toolsets
+}
+
+// buildSandboxEnv builds the environment variable map for a fleet session's
+// sandbox container. This injects credentials and OpenCode provider config
+// into the container so tools like `gh`, `git`, and `opencode` work correctly.
+func buildSandboxEnv(plan *fleet.FleetPlan, ghToken string) map[string]string {
+	env := make(map[string]string)
+
+	// GH_TOKEN enables GitHub CLI and git credential helper
+	if ghToken != "" {
+		env["GH_TOKEN"] = ghToken
+	}
+
+	// Resolve BIFROST_API_KEY from credential store for delegate subprocess auth
+	credStore := getAPICredentialStore()
+	if credStore != nil && plan != nil {
+		resolved, _ := fleet.ResolveCredentials(plan, credStore)
+		// If the plan has a github credential but we didn't get ghToken from
+		// the plan activator, try to resolve it here
+		if ghToken == "" {
+			if t := fleet.GitHubToken(resolved); t != "" {
+				env["GH_TOKEN"] = t
+			}
+		}
+	}
+
+	// BIFROST_API_KEY for delegate sub-processes (OpenCode)
+	if key := os.Getenv("BIFROST_API_KEY"); key != "" {
+		env["BIFROST_API_KEY"] = key
+	}
+
+	// OpenCode provider configuration — pass the generated config file content
+	// and provider/model IDs so the in-container astonish node can configure
+	// opencode correctly. The node reads these env vars at startup.
+	ocConfigPath := tools.GetOpenCodeConfigPath()
+	if ocConfigPath != "" {
+		if data, err := os.ReadFile(ocConfigPath); err == nil {
+			env["ASTONISH_OC_CONFIG_JSON"] = string(data)
+		}
+	}
+	ocProviderID, ocModelID := tools.GetOpenCodeConfigProviderModel()
+	if ocProviderID != "" {
+		env["ASTONISH_OC_PROVIDER_ID"] = ocProviderID
+	}
+	if ocModelID != "" {
+		env["ASTONISH_OC_MODEL_ID"] = ocModelID
+	}
+	for k, v := range tools.GetOpenCodeConfigExtraEnv() {
+		env[k] = v
+	}
+
+	return env
 }
 
 // buildAgentList creates a list of agent descriptions for the frontend.

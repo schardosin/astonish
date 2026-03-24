@@ -21,6 +21,7 @@ import (
 	emailpkg "github.com/schardosin/astonish/pkg/email"
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/launcher"
+	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/scheduler"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/tools"
@@ -40,6 +41,12 @@ func Run(cfg RunConfig) error {
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Validate sandbox config early so invalid values are caught at startup
+	// rather than producing cryptic Incus errors during container creation.
+	if err := sandbox.ValidateSandboxConfig(&appCfg.Sandbox); err != nil {
+		log.Printf("WARNING: %v — using defaults", err)
 	}
 
 	// Resolve port
@@ -130,7 +137,8 @@ func Run(cfg RunConfig) error {
 	}
 
 	// Initialize tools cache
-	ctx := context.Background()
+	ctx, ctxCancel := context.WithCancel(context.Background())
+	defer ctxCancel()
 	api.InitToolsCache(ctx)
 
 	// --- Initialize file store for session persistence ---
@@ -178,6 +186,13 @@ func Run(cfg RunConfig) error {
 	var factoryResult *launcher.ChatFactoryResult
 	defer func() {
 		if factoryResult != nil {
+			// Preserve sandbox containers for reconnection after restart,
+			// then clean up everything else (LLM, embedder, MCP, etc.).
+			// ShutdownSandbox marks containers as "already shut down" so
+			// Cleanup() skips destructive container removal.
+			if factoryResult.ShutdownSandbox != nil {
+				factoryResult.ShutdownSandbox()
+			}
 			factoryResult.Cleanup()
 		}
 	}()
@@ -373,6 +388,7 @@ func Run(cfg RunConfig) error {
 				ModelName:    freshCfg.General.DefaultModel,
 				DebugMode:    cfg.Debug,
 				AutoApprove:  true,
+				SessionStore: sharedFileStore,
 			})
 			if factoryErr != nil {
 				return fmt.Errorf("failed to initialize ChatAgent: %w", factoryErr)
@@ -484,6 +500,10 @@ func Run(cfg RunConfig) error {
 			// Make activator available to API handlers
 			api.SetPlanActivator(activator)
 
+			// Wire auto-activation into save_fleet_plan tool so non-chat
+			// plans start polling immediately after the wizard saves them.
+			tools.SetPlanActivatorFunc(activator.Activate)
+
 			// Wire the session registry so CheckForWork can detect active sessions
 			activator.SetSessionRegistry(api.GetFleetSessionRegistry())
 
@@ -559,6 +579,13 @@ func Run(cfg RunConfig) error {
 		logger.Printf("Fleet commands wired into channels")
 	}
 
+	// Start periodic cleanup goroutine (session expiry + orphan container pruning)
+	cleanupDone := make(chan struct{})
+	go func() {
+		defer close(cleanupDone)
+		runPeriodicCleanup(ctx, appCfg, sharedFileStore, logger)
+	}()
+
 	// Create and start the Studio server
 	var studioOpts []launcher.StudioOption
 	if authManager != nil {
@@ -607,6 +634,9 @@ func Run(cfg RunConfig) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// Cancel the main context to stop background goroutines (cleanup, etc.)
+	ctxCancel()
+
 	// Stop scheduler first (finish in-flight jobs)
 	if sched != nil {
 		logger.Printf("Stopping scheduler...")
@@ -620,6 +650,12 @@ func Run(cfg RunConfig) error {
 			logger.Printf("Warning: Channel shutdown error: %v", err)
 		}
 	}
+
+	// Stop sandbox containers gracefully (preserve them for reconnection after restart).
+	// Unlike Reset(), this does NOT destroy containers — sessions persist and will
+	// get their containers back via EnsureSessionContainer on the next tool call.
+	logger.Printf("Stopping sandbox containers...")
+	api.GetChatManager().ShutdownContainers()
 
 	if err := studio.Shutdown(shutdownCtx); err != nil {
 		logger.Printf("Shutdown error: %v", err)
@@ -943,4 +979,78 @@ func (a *fleetTemplateRegistryAdapter) GetFleet(key string) (channels.FleetTempl
 		Name:               cfg.Name,
 		WizardSystemPrompt: wizardPrompt,
 	}, true
+}
+
+// runPeriodicCleanup runs session expiry and orphan container pruning on a timer.
+// It runs once shortly after startup, then periodically based on config.
+func runPeriodicCleanup(ctx context.Context, appCfg *config.AppConfig, sessionStore *persistentsession.FileStore, logger *Logger) {
+	// Initial delay to avoid slowing down startup
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(30 * time.Second):
+	}
+
+	// Run once immediately after the initial delay
+	runCleanupCycle(appCfg, sessionStore, logger)
+
+	// Then run periodically
+	interval := time.Duration(appCfg.Sandbox.Prune.OrphanCheckHours) * time.Hour
+	if interval <= 0 {
+		interval = 6 * time.Hour // default
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runCleanupCycle(appCfg, sessionStore, logger)
+		}
+	}
+}
+
+// runCleanupCycle performs a single cleanup pass: expired sessions + orphan containers.
+func runCleanupCycle(appCfg *config.AppConfig, sessionStore *persistentsession.FileStore, logger *Logger) {
+	// Reload config to pick up changes without restart
+	freshCfg, err := config.LoadAppConfig()
+	if err == nil {
+		appCfg = freshCfg
+	}
+
+	// 1. Clean up expired sessions
+	if sessionStore != nil {
+		maxAge := appCfg.Sessions.Cleanup.EffectiveMaxAgeDays()
+		if maxAge > 0 {
+			deletedIDs := sessionStore.CleanupExpiredSessions(maxAge)
+			// Destroy sandbox containers for deleted sessions
+			for _, id := range deletedIDs {
+				sandbox.TryDestroySessionContainer(id)
+			}
+		}
+	}
+
+	// 2. Prune orphan sandbox containers
+	if sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
+		platform := sandbox.DetectPlatform()
+		if platform != sandbox.PlatformUnsupported {
+			sandbox.SetActivePlatform(platform)
+			client, connErr := sandbox.Connect(platform)
+			if connErr == nil {
+				registry, regErr := sandbox.NewSessionRegistry()
+				if regErr == nil {
+					var liveSessionIDs map[string]bool
+					if sessionStore != nil {
+						liveSessionIDs = sessionStore.AllSessionIDs()
+					}
+					pruned, _ := sandbox.PruneOrphans(client, registry, liveSessionIDs)
+					if pruned > 0 {
+						logger.Printf("[cleanup] Pruned %d orphaned sandbox container(s)", pruned)
+					}
+				}
+			}
+		}
+	}
 }

@@ -105,6 +105,13 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 	}
 	defer browserMgr.Cleanup()
 
+	// Wrap tools with sandbox if enabled (container isolation for file/shell/network tools)
+	internalTools, sandboxCleanup, sandboxErr := setupFlowSandbox(cfg.AppConfig, internalTools, cfg.DebugMode)
+	if sandboxErr != nil {
+		return "", fmt.Errorf("sandbox is enabled but the runtime is not available: %w", sandboxErr)
+	}
+	defer sandboxCleanup()
+
 	// Initialize MCP tools needed for this flow
 	requiredServers := getRequiredMCPServersFromConfig(ctx, cfg.AgentConfig, cfg.DebugMode)
 

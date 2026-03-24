@@ -8,6 +8,7 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/fleet"
+	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/tools"
 )
 
@@ -26,6 +27,7 @@ type FullConfigResponse struct {
 	Skills        SkillsResponse             `json:"skills"`
 	AgentIdentity config.AgentIdentityConfig `json:"agent_identity"`
 	OpenCode      OpenCodeResponse           `json:"open_code"`
+	Sandbox       SandboxResponse            `json:"sandbox"`
 }
 
 // SessionsResponse wraps SessionConfig with resolved defaults for the UI.
@@ -33,6 +35,7 @@ type SessionsResponse struct {
 	Storage    string             `json:"storage"`
 	BaseDir    string             `json:"base_dir"`
 	Compaction CompactionResponse `json:"compaction"`
+	Cleanup    CleanupResponse    `json:"cleanup"`
 }
 
 // CompactionResponse wraps CompactionConfig with resolved booleans.
@@ -40,6 +43,11 @@ type CompactionResponse struct {
 	Enabled        bool    `json:"enabled"`
 	Threshold      float64 `json:"threshold"`
 	PreserveRecent int     `json:"preserve_recent"`
+}
+
+// CleanupResponse wraps SessionCleanupConfig with resolved defaults.
+type CleanupResponse struct {
+	MaxAgeDays int `json:"max_age_days"`
 }
 
 // MemoryResponse wraps MemoryConfig with resolved defaults.
@@ -123,6 +131,14 @@ type OpenCodeResponse struct {
 	Model string `json:"model"`
 }
 
+// SandboxResponse wraps SandboxConfig with resolved defaults for the UI.
+type SandboxResponse struct {
+	Enabled   bool   `json:"enabled"`
+	Memory    string `json:"memory"`
+	CPU       int    `json:"cpu"`
+	Processes int    `json:"processes"`
+}
+
 // --- Update request types ---
 
 // FullConfigUpdateRequest is the request for PUT /api/settings/full.
@@ -139,6 +155,7 @@ type FullConfigUpdateRequest struct {
 	Skills        *SkillsUpdateRequest    `json:"skills,omitempty"`
 	AgentIdentity *IdentityUpdateRequest  `json:"agent_identity,omitempty"`
 	OpenCode      *OpenCodeUpdateRequest  `json:"open_code,omitempty"`
+	Sandbox       *SandboxUpdateRequest   `json:"sandbox,omitempty"`
 }
 
 // ChatUpdateRequest for updating chat settings.
@@ -156,6 +173,7 @@ type SessionsUpdateRequest struct {
 	Storage    string                  `json:"storage"`
 	BaseDir    string                  `json:"base_dir"`
 	Compaction CompactionUpdateRequest `json:"compaction"`
+	Cleanup    CleanupUpdateRequest    `json:"cleanup"`
 }
 
 // CompactionUpdateRequest for updating compaction settings.
@@ -163,6 +181,11 @@ type CompactionUpdateRequest struct {
 	Enabled        bool    `json:"enabled"`
 	Threshold      float64 `json:"threshold"`
 	PreserveRecent int     `json:"preserve_recent"`
+}
+
+// CleanupUpdateRequest for updating session cleanup settings.
+type CleanupUpdateRequest struct {
+	MaxAgeDays int `json:"max_age_days"`
 }
 
 // MemoryUpdateRequest for updating memory settings.
@@ -287,6 +310,14 @@ type OpenCodeUpdateRequest struct {
 	Model string `json:"model"`
 }
 
+// SandboxUpdateRequest for updating sandbox settings.
+type SandboxUpdateRequest struct {
+	Enabled   bool   `json:"enabled"`
+	Memory    string `json:"memory,omitempty"`
+	CPU       int    `json:"cpu,omitempty"`
+	Processes int    `json:"processes,omitempty"`
+}
+
 // --- Handlers ---
 
 // GetFullConfigHandler handles GET /api/settings/full
@@ -308,6 +339,9 @@ func GetFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 				Enabled:        cfg.Sessions.Compaction.IsCompactionEnabled(),
 				Threshold:      cfg.Sessions.Compaction.GetThreshold(),
 				PreserveRecent: cfg.Sessions.Compaction.GetPreserveRecent(),
+			},
+			Cleanup: CleanupResponse{
+				MaxAgeDays: cfg.Sessions.Cleanup.EffectiveMaxAgeDays(),
 			},
 		},
 		Memory: MemoryResponse{
@@ -370,6 +404,7 @@ func GetFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 		OpenCode: OpenCodeResponse{
 			Model: cfg.OpenCode.Model,
 		},
+		Sandbox: buildSandboxResponse(cfg),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -406,6 +441,7 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 	if req.Sessions != nil {
 		enabled := req.Sessions.Compaction.Enabled
+		maxAge := req.Sessions.Cleanup.MaxAgeDays
 		cfg.Sessions = config.SessionConfig{
 			Storage: req.Sessions.Storage,
 			BaseDir: req.Sessions.BaseDir,
@@ -413,6 +449,9 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 				Enabled:        &enabled,
 				Threshold:      req.Sessions.Compaction.Threshold,
 				PreserveRecent: req.Sessions.Compaction.PreserveRecent,
+			},
+			Cleanup: config.SessionCleanupConfig{
+				MaxAgeDays: &maxAge,
 			},
 		}
 	}
@@ -578,6 +617,25 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if req.Sandbox != nil {
+		enabled := req.Sandbox.Enabled
+		cfg.Sandbox.Enabled = &enabled
+		if req.Sandbox.Memory != "" {
+			cfg.Sandbox.Limits.Memory = req.Sandbox.Memory
+		}
+		if req.Sandbox.CPU > 0 {
+			cfg.Sandbox.Limits.CPU = req.Sandbox.CPU
+		}
+		if req.Sandbox.Processes > 0 {
+			cfg.Sandbox.Limits.Processes = req.Sandbox.Processes
+		}
+
+		if err := sandbox.ValidateSandboxConfig(&cfg.Sandbox); err != nil {
+			http.Error(w, "Invalid sandbox config: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
 	if err := config.SaveAppConfig(cfg); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -628,6 +686,17 @@ func regenerateOpenCodeConfig(cfg *config.AppConfig) {
 }
 
 // --- Helper functions ---
+
+// buildSandboxResponse constructs the sandbox response with resolved defaults.
+func buildSandboxResponse(cfg *config.AppConfig) SandboxResponse {
+	limits := sandbox.EffectiveLimits(&cfg.Sandbox)
+	return SandboxResponse{
+		Enabled:   sandbox.IsSandboxEnabled(&cfg.Sandbox),
+		Memory:    limits.Memory,
+		CPU:       limits.CPU,
+		Processes: limits.Processes,
+	}
+}
 
 // maskSecret masks a secret string, showing only the last 4 chars.
 func maskSecret(s string) string {

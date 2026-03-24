@@ -1,6 +1,6 @@
-import { Moon, Sun, Settings, Cpu, Grid, MessageSquare, Rocket } from 'lucide-react'
+import { Moon, Sun, Settings, Cpu, Grid, MessageSquare, Rocket, ShieldCheck, ShieldAlert } from 'lucide-react'
 
-export default function TopBar({ theme, onToggleTheme, onOpenSettings, defaultProvider, defaultModel, currentView, onNavigate }) {
+export default function TopBar({ theme, onToggleTheme, onOpenSettings, onOpenSandbox, defaultProvider, defaultModel, currentView, onNavigate, sandboxStatus }) {
   const navBackground = theme === 'dark' ? 'rgba(15, 23, 42, 0.92)' : 'rgba(255,255,255,0.86)'
   const navBorder = theme === 'dark' ? 'rgba(255,255,255,0.08)' : 'var(--border-color)'
 
@@ -87,6 +87,20 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, defaultPr
       )}
 
       <div className="flex items-center gap-2">
+        {sandboxStatus && (() => {
+          const isSecure = sandboxStatus.sandboxEnabled && sandboxStatus.incusAvailable && sandboxStatus.baseTemplateExists
+          return (
+            <button
+              onClick={onOpenSandbox}
+              className="p-2 rounded-full transition-colors hover:bg-purple-500/15"
+              title={isSecure ? 'Sandbox: Secure — sessions run in isolated containers' : 'Sandbox: Disabled — sessions run on host (click to configure)'}
+              style={{ border: `1px solid ${navBorder}`, color: isSecure ? '#22c55e' : '#f59e0b' }}
+            >
+              {isSecure ? <ShieldCheck size={18} /> : <ShieldAlert size={18} />}
+            </button>
+          )
+        })()}
+
         <button
           onClick={onToggleTheme}
           className="p-2 rounded-full transition-colors hover:bg-purple-500/15"

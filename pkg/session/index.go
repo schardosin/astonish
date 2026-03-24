@@ -206,3 +206,20 @@ func (idx *SessionIndex) ListChildren(parentID string) ([]SessionMeta, error) {
 
 	return result, nil
 }
+
+// AllSessionIDs returns a set of all session IDs (including sub-sessions).
+func (idx *SessionIndex) AllSessionIDs() (map[string]bool, error) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	index, err := idx.loadUnsafe()
+	if err != nil {
+		return nil, err
+	}
+
+	ids := make(map[string]bool, len(index.Sessions))
+	for id := range index.Sessions {
+		ids[id] = true
+	}
+	return ids, nil
+}

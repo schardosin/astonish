@@ -28,6 +28,10 @@ help:
 	@echo "  make docker-up       - Start persistent container (maps ./.astonish-data)"
 	@echo "  make docker-down     - Stop persistent container"
 	@echo "  make docker-rebuild  - Rebuild and restart persistent container"
+	@echo ""
+	@echo "Sandbox (Docker+Incus for macOS/Windows):"
+	@echo "  make build-linux     - Cross-compile Linux binary (for dev sandbox push)"
+	@echo "  make docker-incus    - Build the Incus Docker image (for CI release)"
 
 # Build the Go binary only
 build:
@@ -101,7 +105,7 @@ update-mcp-stars:
 	GITHUB_TOKEN=$$(gh auth token) python3 scripts/update-mcp-stars.py
 	@echo "Star counts updated!"
 
-.PHONY: all help build build-ui build-all run studio studio-dev test install clean update-mcp-stars setup-hooks e2e-up e2e-down e2e-rebuild docker-up docker-down docker-rebuild
+.PHONY: all help build build-ui build-all run studio studio-dev test install clean update-mcp-stars setup-hooks e2e-up e2e-down e2e-rebuild docker-up docker-down docker-rebuild build-linux docker-incus
 
 # E2E Testing - Docker-based isolated environment
 e2e-up:
@@ -138,5 +142,19 @@ docker-rebuild:
 	docker compose down
 	docker compose up -d --build
 	@echo "Astonish running at http://localhost:9393"
+
+# Cross-compile Linux binary (for macOS/Windows dev pushing into sandbox containers)
+build-linux:
+	@echo "Cross-compiling Linux binary..."
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o astonish-linux .
+	@echo "Linux binary built: astonish-linux"
+
+# Build the Incus Docker image (for CI release pipeline)
+# Requires: astonish-linux binary to exist (run build-linux first)
+VERSION ?= dev
+docker-incus: build-linux
+	@echo "Building Incus Docker image..."
+	docker build -f Dockerfile.incus -t astonish/incus:$(VERSION) .
+	@echo "Image built: astonish/incus:$(VERSION)"
 
 

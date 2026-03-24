@@ -19,6 +19,7 @@ import (
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/fleet"
+	"github.com/schardosin/astonish/pkg/sandbox"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
@@ -89,6 +90,9 @@ type StudioChatComponents struct {
 	Compactor         *persistentsession.Compactor
 	InternalToolCount int
 	MemoryActive      bool
+	SandboxEnabled    bool
+	StartupNotices    []string
+	ShutdownSandbox   func() // stops containers without destroying (for daemon shutdown)
 	Cleanup           func()
 }
 
@@ -148,6 +152,19 @@ func (cm *ChatManager) Reset() {
 			cm.components.Cleanup()
 		}
 		cm.components = nil
+	}
+}
+
+// ShutdownContainers stops sandbox containers without destroying them.
+// Used during graceful daemon shutdown — containers are preserved so sessions
+// can reconnect after restart. Unlike Reset(), this does not tear down the
+// chat agent or destroy containers.
+func (cm *ChatManager) ShutdownContainers() {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	if cm.components != nil && cm.components.ShutdownSandbox != nil {
+		cm.components.ShutdownSandbox()
 	}
 }
 
@@ -305,6 +322,15 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		"sessionId": sessionID,
 		"isNew":     isNew,
 	})
+
+	// Send startup notices for new sessions (sandbox status, MCP warnings, etc.)
+	if isNew && len(comp.StartupNotices) > 0 {
+		content := "**Startup**\n"
+		for _, notice := range comp.StartupNotices {
+			content += "- " + notice + "\n"
+		}
+		SendSSE(w, flusher, "system", map[string]interface{}{"content": content})
+	}
 
 	// Prepare the ADK runner
 	adkAgent, err := adkagent.New(adkagent.Config{
@@ -525,6 +551,11 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 			status += fmt.Sprintf("- Context: %d / %d tokens (%.0f%%)\n", est, win, pct)
 		}
 		status += fmt.Sprintf("- Tools: %d internal\n", comp.InternalToolCount)
+		if comp.SandboxEnabled {
+			status += "- Sandbox: enabled\n"
+		} else {
+			status += "- Sandbox: disabled\n"
+		}
 		if comp.MemoryActive {
 			status += "- Memory: active\n"
 		} else {
@@ -743,10 +774,11 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 
 	sessionID := mux.Vars(r)["id"]
 
-	// If this is an active fleet session, stop it
+	// If this is an active fleet session, stop it and clean up sandbox
 	registry := getFleetSessionRegistry()
 	if fs := registry.Get(sessionID); fs != nil {
 		fs.Stop()
+		fs.Cleanup() // destroy sandbox container + clean session registry
 		registry.Unregister(sessionID)
 	}
 
@@ -771,6 +803,9 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to delete session: %v", err), http.StatusInternalServerError)
 		return
 	}
+
+	// Best-effort: destroy sandbox container if one exists for this session
+	sandbox.TryDestroySessionContainer(sessionID)
 
 	w.WriteHeader(http.StatusNoContent)
 }

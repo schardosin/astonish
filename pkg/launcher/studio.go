@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/api"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/sandbox"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/tools"
 	"github.com/schardosin/astonish/web"
@@ -87,6 +88,9 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 			Compactor:         result.Compactor,
 			InternalToolCount: len(result.InternalTools),
 			MemoryActive:      result.MemoryManager != nil,
+			SandboxEnabled:    sandbox.IsSandboxEnabled(&appCfg.Sandbox),
+			StartupNotices:    result.StartupNotices,
+			ShutdownSandbox:   result.ShutdownSandbox,
 			Cleanup:           result.Cleanup,
 		}, nil
 	})

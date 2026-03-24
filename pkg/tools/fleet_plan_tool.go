@@ -1,8 +1,10 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -23,6 +25,19 @@ func SetFleetPlanRegistry(reg *fleet.PlanRegistry) {
 // GetFleetPlanRegistry returns the plan registry (for use by other packages).
 func GetFleetPlanRegistry() *fleet.PlanRegistry {
 	return fleetPlanRegistryVar
+}
+
+// PlanActivatorFunc is a function that activates a fleet plan by creating
+// the scheduler job for its channel polling. Used to auto-activate non-chat
+// plans immediately after saving.
+type PlanActivatorFunc func(ctx context.Context, planKey string) error
+
+var planActivatorFuncVar PlanActivatorFunc
+
+// SetPlanActivatorFunc registers the activation function for auto-activation
+// after save. Called by the daemon during initialization.
+func SetPlanActivatorFunc(fn PlanActivatorFunc) {
+	planActivatorFuncVar = fn
 }
 
 // SaveFleetPlanArgs are the arguments for the save_fleet_plan tool.
@@ -63,6 +78,15 @@ type SaveFleetPlanArgs struct {
 	ProjectSource *SaveFleetPlanProjectSource `json:"project_source,omitempty" jsonschema:"Where the project code lives. Each session clones (git_repo) or copies (local) from this source into an isolated workspace. If omitted, the system infers from artifact config."`
 	// ValidationPassed should be true if validate_fleet_plan was called and passed.
 	ValidationPassed bool `json:"validation_passed,omitempty" jsonschema:"Set to true after validate_fleet_plan passes. Required for non-chat channel plans."`
+	// Template is the name of the sandbox container template for this plan.
+	// When sandbox mode is enabled, fleet sessions clone from this template
+	// instead of @base. The template should have the project repo pre-cloned
+	// and dependencies installed. Created by the wizard via save_sandbox_template.
+	Template string `json:"template,omitempty" jsonschema:"Optional sandbox container template name. When set and sandbox is enabled, fleet sessions use this pre-provisioned template instead of @base. Created by save_sandbox_template during wizard setup."`
+	// ContainerWorkspaceDir is the absolute path inside the sandbox container
+	// where the project lives (e.g., "/root/juicytrade"). Set during wizard
+	// template creation to tell fleet sessions where the project root is.
+	ContainerWorkspaceDir string `json:"container_workspace_dir,omitempty" jsonschema:"Absolute path inside the sandbox container where the project was cloned (e.g., '/root/juicytrade'). Set this when a sandbox template is used so fleet agents know the project root."`
 }
 
 // SaveFleetPlanArtifact describes a single artifact destination.
@@ -241,16 +265,18 @@ func saveFleetPlan(_ tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult,
 	}
 
 	plan := &fleet.FleetPlan{
-		Name:             name,
-		Key:              key,
-		Description:      strings.TrimSpace(args.Description),
-		CreatedFrom:      baseKey,
-		FleetConfig:      snapshotCfg,
-		Credentials:      args.Credentials,
-		Channel:          channelCfg,
-		Artifacts:        artifacts,
-		ProjectSource:    projectSource,
-		WorkspaceBaseDir: strings.TrimSpace(args.WorkspaceBaseDir),
+		Name:                  name,
+		Key:                   key,
+		Description:           strings.TrimSpace(args.Description),
+		CreatedFrom:           baseKey,
+		FleetConfig:           snapshotCfg,
+		Credentials:           args.Credentials,
+		Channel:               channelCfg,
+		Artifacts:             artifacts,
+		ProjectSource:         projectSource,
+		Template:              strings.TrimSpace(args.Template),
+		ContainerWorkspaceDir: strings.TrimSpace(args.ContainerWorkspaceDir),
+		WorkspaceBaseDir:      strings.TrimSpace(args.WorkspaceBaseDir),
 		Validation: fleet.PlanValidationState{
 			Status:        validationStatus,
 			LastValidated: now,
@@ -266,14 +292,25 @@ func saveFleetPlan(_ tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult,
 		}, nil
 	}
 
-	// Build a channel-type-aware success message with next-step guidance.
+	// Auto-activate non-chat plans so polling starts immediately.
+	activated := false
+	if channelType != "chat" && planActivatorFuncVar != nil {
+		if err := planActivatorFuncVar(context.Background(), key); err != nil {
+			log.Printf("[fleet-plan] Warning: auto-activation failed for plan %q: %v", key, err)
+		} else {
+			activated = true
+		}
+	}
+
+	// Build a channel-type-aware success message.
 	var msg string
-	switch channelType {
-	case "chat":
+	switch {
+	case channelType == "chat":
 		msg = fmt.Sprintf("Fleet plan %q saved successfully. To start a session, go to the Fleet tab in Studio and click Launch on the plan.", name)
+	case activated:
+		msg = fmt.Sprintf("Fleet plan %q saved and activated. Monitoring is now live — new items on the configured channel will automatically trigger fleet sessions.", name)
 	default:
-		// Non-chat channels (github_issues, etc.) need activation to start polling.
-		msg = fmt.Sprintf("Fleet plan %q saved successfully. IMPORTANT: The plan is not active yet. To start monitoring, go to the Fleet tab in Studio, select the plan, and click the Activate button. This creates a scheduled job that polls for new items automatically.", name)
+		msg = fmt.Sprintf("Fleet plan %q saved successfully, but automatic activation failed. Go to the Fleet tab in Studio, select the plan, and click Activate to start monitoring.", name)
 	}
 
 	return SaveFleetPlanResult{

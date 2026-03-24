@@ -19,6 +19,7 @@ import (
 	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/provider"
+	"github.com/schardosin/astonish/pkg/sandbox"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/skills"
 	"github.com/schardosin/astonish/pkg/tools"
@@ -68,6 +69,11 @@ type ChatFactoryResult struct {
 	// Cleanup aggregates all deferred cleanups (embedder, MCP, file watcher).
 	// The caller must call this when the ChatAgent is no longer needed.
 	Cleanup func()
+
+	// ShutdownSandbox stops sandbox containers without destroying them.
+	// Used during graceful daemon shutdown to preserve containers across restarts.
+	// Nil when sandbox is not enabled.
+	ShutdownSandbox func()
 }
 
 // NewWiredChatAgent creates a fully-wired ChatAgent ready for use by any caller
@@ -571,6 +577,95 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				"Run 'astonish studio' or 'astonish tools refresh' to set them up.")
 	}
 
+	// --- 3b. Initialize sandbox (session container isolation) ---
+	// When sandbox is enabled, all internal tools are wrapped with NodeTool
+	// proxies that route execution to an astonish node inside an Incus
+	// container. Container creation is lazy — the first tool call triggers
+	// cloning from the template and starting the node process.
+	var sandboxNodePool *sandbox.NodeClientPool      // hoisted for save_sandbox_template tool
+	var sandboxIncusClient *sandbox.IncusClient      // hoisted for save_sandbox_template tool
+	var sandboxTplRegistry *sandbox.TemplateRegistry // hoisted for save_sandbox_template tool
+	if cfg.AppConfig != nil && sandbox.IsSandboxEnabled(&cfg.AppConfig.Sandbox) {
+		sandboxClient, sandboxErr := sandbox.SetupSandboxRuntime()
+		if sandboxErr != nil {
+			return nil, fmt.Errorf("sandbox is enabled but the runtime is not available: %w\n\nTo disable sandbox, set 'sandbox.enabled: false' in ~/.config/astonish/config.yaml", sandboxErr)
+		}
+
+		sessRegistry, regErr := sandbox.NewSessionRegistry()
+		if regErr != nil {
+			return nil, fmt.Errorf("sandbox is enabled but session registry failed: %w", regErr)
+		}
+
+		tplRegistry, tplErr := sandbox.NewTemplateRegistry()
+		if tplErr != nil {
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Failed to create template registry: %v\n", tplErr)
+			}
+		}
+
+		// Create a pool that manages per-session LazyNodeClients.
+		// Each chat session gets its own container, created lazily
+		// on the first tool call for that session.
+		limits := sandbox.EffectiveLimits(&cfg.AppConfig.Sandbox)
+		nodePool := sandbox.NewNodeClientPool(sandboxClient, sessRegistry, tplRegistry, "", &limits)
+
+		// Wrap all internal tools with NodeTool proxies (pool-backed)
+		internalTools = sandbox.WrapToolsWithNode(internalTools, nodePool)
+
+		// Hoist references for template tool registration
+		sandboxNodePool = nodePool
+		sandboxIncusClient = sandboxClient
+		sandboxTplRegistry = tplRegistry
+
+		// Wire sandbox pool to all lazy MCP toolsets so stdio MCP servers
+		// start inside the session's container instead of on the host.
+		// SSE transport servers are unaffected (isSSETransport check inside).
+		for _, lt := range lazyToolsets {
+			lt.SetSandboxPool(nodePool)
+		}
+
+		// Async refresh: check all templates for stale binaries in the background.
+		// Must NOT block startup (was the cause of the 502 bug).
+		if tplRegistry != nil {
+			go sandbox.RefreshAllIfNeeded(sandboxClient, tplRegistry)
+		}
+
+		// Auto-prune stale session containers from previous daemon runs.
+		// Only destroy containers whose sessions no longer exist in the store.
+		existingSessionIDs := make(map[string]bool)
+		if cfg.SessionStore != nil {
+			// Preferred: use the shared store's index (daemon/studio path).
+			if indexData, err := cfg.SessionStore.Index().Load(); err == nil {
+				for id := range indexData.Sessions {
+					existingSessionIDs[id] = true
+				}
+			}
+		} else if cfg.AppConfig != nil {
+			// Fallback: read the index file directly (console/CLI path).
+			// Without this, existingSessionIDs is empty and prune would
+			// destroy every stopped container — even valid ones.
+			var sessCfg *config.SessionConfig
+			sessCfg = &cfg.AppConfig.Sessions
+			if sessDir, dirErr := config.GetSessionsDir(sessCfg); dirErr == nil {
+				idx := persistentsession.NewSessionIndex(filepath.Join(sessDir, "index.json"))
+				if indexData, err := idx.Load(); err == nil {
+					for id := range indexData.Sessions {
+						existingSessionIDs[id] = true
+					}
+				}
+			}
+		}
+		if pruned := sandbox.PruneStaleOnStartup(sandboxClient, sessRegistry, existingSessionIDs); pruned > 0 {
+			startupNotices = append(startupNotices,
+				fmt.Sprintf("Cleaned up %d stale session container(s) from previous run", pruned))
+		}
+
+		cleanups = append(cleanups, func() {
+			// Cleanup destroys all per-session containers
+			nodePool.Cleanup()
+		})
+	}
+
 	// --- 4. Create session service ---
 	var sessionService session.Service
 	if cfg.SessionStore != nil {
@@ -955,6 +1050,19 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				internalTools = append(internalTools, ocTool)
 			}
 		}
+
+		// Register save_sandbox_template tool (available to wizard in chat sessions)
+		// Only when sandbox is enabled and we have all required dependencies.
+		if sandboxNodePool != nil && sandboxIncusClient != nil && sandboxTplRegistry != nil {
+			tplTool, tplErr := tools.NewSaveSandboxTemplateTool(sandboxNodePool, sandboxIncusClient, sandboxTplRegistry)
+			if tplErr != nil {
+				if cfg.DebugMode {
+					fmt.Printf("Warning: Failed to create save_sandbox_template tool: %v\n", tplErr)
+				}
+			} else {
+				internalTools = append(internalTools, tplTool)
+			}
+		}
 	}
 
 	// --- 6. Create ChatAgent ---
@@ -1144,6 +1252,15 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	}
 	chatAgent.FlowContextBuilder = &agent.FlowContextBuilder{DebugMode: cfg.DebugMode}
 
+	// Build ShutdownSandbox callback (nil when sandbox is not enabled)
+	var shutdownSandbox func()
+	if sandboxNodePool != nil {
+		pool := sandboxNodePool
+		shutdownSandbox = func() {
+			pool.CleanupForShutdown()
+		}
+	}
+
 	return &ChatFactoryResult{
 		ChatAgent:             chatAgent,
 		LLM:                   llm,
@@ -1162,6 +1279,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		PromptBuilder:         promptBuilder,
 		CredentialStore:       credStore,
 		Cleanup:               cleanup,
+		ShutdownSandbox:       shutdownSandbox,
 	}, nil
 }
 

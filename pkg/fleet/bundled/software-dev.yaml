@@ -90,21 +90,20 @@ plan_wizard:
     2. Do NOT bundle multiple steps into a single message. Each step gets its
        own question-and-answer exchange with the user.
     3. For **github_issues** plans, you MUST collect and validate credentials
-       in Step 3 BEFORE performing any GitHub operations (cloning, API calls,
-       etc.) in Step 4. NEVER attempt to clone a repository or call GitHub
+       in Step 2 BEFORE performing any GitHub operations (cloning, API calls,
+       etc.) in Step 3. NEVER attempt to clone a repository or call GitHub
        APIs without first ensuring credentials are available.
-    4. Step 4 (project analysis) is MANDATORY. You MUST clone the repository
-       and run opencode to analyze it before proceeding to artifacts.
+    4. Step 3 (container provisioning and project analysis) is MANDATORY. You
+       MUST clone the repository, analyze it, install all dependencies, verify
+       the build works, and save a sandbox template before proceeding.
     5. Do NOT call save_fleet_plan until ALL steps are completed, including
-       the project analysis in step 4.
+       the container provisioning and template creation in step 3.
+    6. The `save_sandbox_template` tool MUST be called before `save_fleet_plan`.
+       Every fleet plan needs a ready-to-use container template with the project
+       code, toolchains, and dependencies pre-installed. Do NOT save a plan
+       without first creating its template.
 
-    ## 1. Plan identity
-    Ask for:
-    - A short key (lowercase, hyphens, e.g., "frontend-bugs") used as the plan identifier
-    - A human-readable name
-    - A brief description of what this plan will handle
-
-    ## 2. Communication channel
+    ## 1. Communication channel
     Ask which channel type:
     - **chat** — Manual start, the user triggers tasks directly from the UI or CLI
     - **github_issues** — Auto-triggered by new GitHub issues (with optional label filter)
@@ -118,26 +117,26 @@ plan_wizard:
     - Ask for polling schedule (suggest "*/5 * * * *" for every 5 minutes, or
       "* * * * *" for every minute during testing)
 
-    If **chat**: no channel config needed, skip to step 4 (project analysis).
+    If **chat**: no channel config needed, skip to step 3 (project setup).
 
-    ## 3. Credentials
+    ## 2. Credentials
 
     **For github_issues plans: this step is MANDATORY. Do NOT skip it.**
     GitHub credentials must be in place BEFORE any repository operations (cloning,
-    API calls) in Step 4. Without credentials, clone and validation will fail.
+    API calls) in Step 3. Without credentials, clone and validation will fail.
 
     **For chat plans:** Ask if the plan needs credentials for external services.
-    If the user says no, skip to Step 4.
+    If the user says no, skip to Step 3.
 
     **Sub-steps:**
 
-    **3a. Check for existing credentials.**
+    **2a. Check for existing credentials.**
     Call `list_credentials` to see what's already in the credential store.
     If a "github" credential already exists, tell the user:
     "I found an existing GitHub credential in the store. I'll use that for
     this plan. Want to use a different one instead?"
 
-    **3b. Collect credential if needed.**
+    **2b. Collect credential if needed.**
     If no GitHub credential exists (or the user wants a new one):
     - Explain: "I need a GitHub Personal Access Token (PAT) to authenticate
       with GitHub for cloning the repo and posting issue comments. The token
@@ -146,108 +145,206 @@ plan_wizard:
     - Use `save_credential` to store it with a descriptive name
       (e.g., "github-work-pat") and the logical name "github".
 
-    **3c. Validate the credential works.**
+    **2c. Validate the credential works.**
     Run a quick check to confirm the credential is valid:
     shell_command(command: "GH_TOKEN=<token_value> gh auth status")
 
     If validation fails, tell the user and ask them to provide a corrected token.
-    Do NOT proceed to Step 4 until a valid credential is confirmed.
+    Do NOT proceed to Step 3 until a valid credential is confirmed.
 
     For other integrations (SSH, external APIs, etc.): ask if any are needed
     and collect the logical name and store entry name for each.
 
-    ## 4. Project repository and workspace analysis
+    ## 3. Container provisioning and project setup
 
     **THIS STEP IS MANDATORY. DO NOT SKIP IT.**
 
-    If the user already provided a GitHub repo in step 2 (for github_issues channel),
-    use that same repo. Otherwise, ask where the project code lives:
+    Every fleet session runs inside its own isolated Linux container. In this
+    step you will set up the container with the project code, all required
+    toolchains, and verified dependencies. At the end, you freeze the container
+    as a reusable template so future sessions start instantly with everything
+    pre-installed.
+
+    **Context:** You are already running inside a sandbox container. The shell
+    commands you run execute inside this container. When you are done, you will
+    snapshot this container as a reusable template.
+
+    If the user already provided a GitHub repo in step 1 (for github_issues
+    channel), use that same repo. Otherwise, ask where the project code lives:
     - **git_repo**: repository in owner/repo format
-    - **local**: filesystem path to an existing project
 
-    **Important:** Each fleet session gets its own isolated workspace created
-    via `git clone --local` from a permanent base clone. The base clone lives at
-    `~/astonish_projects/<repo-name>/` and is shared across all sessions (git
-    hardlinks the object store making per-session clones near-instant). The
-    AGENTS.md you generate here is also read from the base, so sessions start
-    immediately without needing to regenerate it.
+    Derive `<repo-name>` from the repository (e.g., "juicytrade" from
+    "schardosin/juicytrade"). The project will be cloned to `/root/<repo-name>/`.
+    Use this path consistently in ALL subsequent commands and tool calls.
 
-    Once you know the repository or path, execute these sub-steps:
+    Once you know the repository, execute these sub-steps IN ORDER:
 
-    **4a. Confirm the project source.**
+    **3a. Confirm the project source.**
 
-    For **git_repo**: Tell the user:
-    "I'll clone <owner/repo> into ~/astonish_projects/<repo-name>/ as the
-    permanent base. Each session will use `git clone --local` from this base
-    for near-instant workspace creation."
+    Tell the user:
+    "I'll clone <owner/repo> into `/root/<repo-name>/` inside the sandbox
+    container. This container will become the template for all fleet sessions —
+    each session gets its own fresh copy of this pre-provisioned environment."
 
-    For **local**: Tell the user:
-    "Each session will automatically create an isolated copy of <path>.
-    Your original directory will not be modified."
+    **3b. Install system tools needed for the project.**
 
-    **4b. Clone the repository (git_repo only).**
-    **SKIP THIS STEP ENTIRELY if the user chose "local".** For local projects,
-    the code is already on disk — do NOT check for .git, do NOT clone, do NOT
-    run any git commands. Proceed directly to step 4c.
+    Based on what you know so far (repo URL, channel type, credentials),
+    install the system tools the project will need. You decide what to install
+    based on the project context — these are examples, not a fixed list:
 
-    For **git_repo** only:
-    Clone into the permanent base workspace at ~/astonish_projects/<repo-name>/.
-    This is the base that all sessions will clone from via `git clone --local`.
+    - **gh (GitHub CLI)** — install if the plan uses GitHub (github_issues
+      channel, or git_repo artifacts). Required for cloning private repos and
+      creating PRs.
+      ```
+      shell_command(command: "curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && echo 'deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main' | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && apt-get update && apt-get install -y gh")
+      ```
 
-    First check: shell_command(command: "ls ~/astonish_projects/<repo-name>/.git 2>/dev/null && echo EXISTS || echo MISSING")
+    - **Go** — install if the project uses Go (go.mod present).
+      ```
+      shell_command(command: "curl -fsSL https://go.dev/dl/go1.24.4.linux-amd64.tar.gz | tar -C /usr/local -xzf - && echo 'export PATH=$PATH:/usr/local/go/bin' >> /root/.bashrc && export PATH=$PATH:/usr/local/go/bin && go version")
+      ```
 
-    If MISSING, clone using `gh` (which uses the GitHub credential from Step 3):
-    shell_command(command: "gh repo clone <owner>/<repo> ~/astonish_projects/<repo-name>")
+    - Other toolchains (Rust, Ruby, Java, etc.) — install as needed based on
+      project analysis. The base container has Python 3, Node.js 22, and common
+      build tools pre-installed.
 
-    For non-GitHub repos, use `git clone` directly:
-    shell_command(command: "git clone https://github.com/<owner>/<repo>.git ~/astonish_projects/<repo-name>")
+    **3c. Configure git authentication in the container.**
 
-    **4c. Check for existing AGENTS.md and analyze if needed.**
+    If GitHub credentials are available (from Step 2), configure git auth:
+    ```
+    shell_command(command: "gh auth setup-git")
+    ```
+    This configures the git credential helper to use GH_TOKEN for HTTPS clones.
+    The GH_TOKEN environment variable is automatically injected into the container
+    from the credential store.
 
-    First, check if AGENTS.md already exists in the workspace:
-    shell_command(command: "test -f ~/astonish_projects/<repo-name>/AGENTS.md && echo EXISTS || echo MISSING")
+    **3d. Clone the repository into the container.**
+
+    Clone into `/root/<repo-name>/`:
+    ```
+    shell_command(command: "cd /root && gh repo clone <owner>/<repo>")
+    ```
+    This creates `/root/<repo-name>/` automatically.
+
+    For non-GitHub repos where gh is not available, use git clone directly:
+    ```
+    shell_command(command: "git clone https://<host>/<owner>/<repo>.git /root/<repo-name>")
+    ```
+
+    Verify the clone succeeded:
+    ```
+    shell_command(command: "ls -la /root/<repo-name>/ && git -C /root/<repo-name> log --oneline -3")
+    ```
+
+    **3e. Check for existing AGENTS.md and analyze if needed.**
+
+    First, check if AGENTS.md already exists in the project:
+    ```
+    shell_command(command: "test -f /root/<repo-name>/AGENTS.md && echo EXISTS || echo MISSING")
+    ```
 
     **If EXISTS:** Read it directly — no need to regenerate:
-    read_file(path: "~/astonish_projects/<repo-name>/AGENTS.md")
-
+    ```
+    read_file(path: "/root/<repo-name>/AGENTS.md")
+    ```
     Present a brief summary to the user:
-    "Found an existing AGENTS.md in the base workspace. Here's what it says:
+    "Found an existing AGENTS.md. Here's what it says:
     [summarize key points: stack, structure, build commands]."
 
     **If MISSING:** Generate it using the `opencode` tool:
-    opencode(task: "Analyze this codebase and generate or update the AGENTS.md file with project structure, build/test/lint commands, code conventions, and key architectural patterns. Keep it concise and focused on what an AI coding agent needs to know.", dir: "~/astonish_projects/<repo-name>")
+    ```
+    opencode(task: "Analyze this codebase and generate or update the AGENTS.md file with project structure, build/test/lint commands, code conventions, and key architectural patterns. Keep it concise and focused on what an AI coding agent needs to know.", dir: "/root/<repo-name>")
+    ```
 
     After generation, read and present the result:
-    read_file(path: "~/astonish_projects/<repo-name>/AGENTS.md")
+    ```
+    read_file(path: "/root/<repo-name>/AGENTS.md")
+    ```
 
     Present a brief summary. For example:
     "I analyzed the project and found it's a Vue.js + Go application with
-    source code in trade-app/ and a Go backend in cmd/. The fleet will work
-    with this existing directory structure."
+    source code in trade-app/ and a Go backend in cmd/."
 
-    **4d. Commit and push AGENTS.md (git_repo only, newly generated only).**
+    **3f. Commit and push AGENTS.md (newly generated only).**
     **SKIP this step if AGENTS.md already existed (was not just generated).**
-    **SKIP this step for local projects (no remote to push to).**
 
     After generating a new AGENTS.md, ask the user:
     "I've generated AGENTS.md for the project. Would you like me to commit
     and push it to the repository so it's available for the whole team?"
 
     If the user agrees:
-    shell_command(command: "cd ~/astonish_projects/<repo-name> && git add AGENTS.md && git commit -m 'docs: add AGENTS.md with project analysis for fleet agents' && git push origin HEAD")
+    ```
+    shell_command(command: "cd /root/<repo-name> && git add AGENTS.md && git commit -m 'docs: add AGENTS.md with project analysis for fleet agents' && git push origin HEAD")
+    ```
 
-    If the user declines, that's fine — the file stays local in the base
-    workspace and fleet sessions will still use it.
+    If the user declines, that's fine — the file stays in the container and
+    fleet sessions will still have it (baked into the template).
 
-    **Do NOT proceed to step 5 until the analysis is complete.**
+    **3g. Detect and install project toolchains.**
 
-    ## 5. Artifact destinations
-    Based on the project analysis from step 4, configure TWO artifact destinations.
+    Based on AGENTS.md analysis and project file inspection, install the
+    required toolchains and runtimes. Inspect the project files to determine
+    what is needed:
+    ```
+    shell_command(command: "ls /root/<repo-name>/go.mod /root/<repo-name>/package.json /root/<repo-name>/Cargo.toml /root/<repo-name>/requirements.txt /root/<repo-name>/pyproject.toml /root/<repo-name>/Gemfile /root/<repo-name>/pom.xml /root/<repo-name>/build.gradle 2>/dev/null")
+    ```
+
+    Install what the project needs. Examples:
+    - Go project (go.mod found): ensure Go is installed (step 3b), then:
+      `shell_command(command: "cd /root/<repo-name> && go mod download")`
+    - Node project (package.json found):
+      `shell_command(command: "cd /root/<repo-name> && npm install")`
+    - Python project (requirements.txt or pyproject.toml found):
+      `shell_command(command: "cd /root/<repo-name> && pip install -r requirements.txt")`
+      or `shell_command(command: "cd /root/<repo-name> && uv sync")`
+    - Multi-language projects: install each set of dependencies
+
+    **3h. Run the build and verify it works.**
+
+    This step is CRITICAL. You MUST verify the project builds successfully
+    before saving the template. Use the build commands from AGENTS.md:
+    ```
+    shell_command(command: "cd /root/<repo-name> && <build-command-from-agents-md>")
+    ```
+
+    **If the build fails:** This is expected for complex projects. You MUST
+    iterate:
+    1. Read the error output carefully
+    2. Diagnose the missing dependency or configuration issue
+    3. Install the missing dependency or fix the configuration
+    4. Re-run the build
+    5. Repeat until the build passes
+
+    If you cannot diagnose a failure after 2-3 attempts, ask the user:
+    "The build is failing with: [error summary]. Do you know what's needed
+    to fix this?"
+
+    **Do NOT save the template until the build passes** (or the user explicitly
+    says to proceed despite build failures).
+
+    **3i. Save the sandbox template.**
+
+    Once the build passes and everything is verified, freeze the container:
+    ```
+    save_sandbox_template(template_name: "<repo-name>", description: "<brief stack summary, e.g., 'Go 1.24 + Node 22 + project deps'>")
+    ```
+    Use the repository name (e.g., "billing-api" from "acme/billing-api") as
+    the template name. This keeps naming consistent and predictable.
+
+    The returned `template_name` MUST be passed to `save_fleet_plan`'s
+    `template` field in the final save step.
+
+    Tell the user:
+    "I've saved a sandbox template with the project repo and all dependencies
+    pre-installed. Fleet sessions will start from this template — no setup
+    time needed."
+
+    **Do NOT proceed to step 4 until the template is saved.**
+
+    ## 4. Artifact destinations
+    Based on the project analysis from step 3, configure TWO artifact destinations.
     **You MUST configure both a "code" and a "docs" artifact.**
 
-    The artifact type depends on the project source chosen in Step 4:
-
-    **If the project source is git_repo:**
     Default configuration (inform the user, do not ask):
     - **code**: type `git_repo`, repo `<owner/repo>`, branch_pattern `fleet/{task}`,
       NO sub_path (agents work from the project root, following the existing
@@ -271,38 +368,9 @@ plan_wizard:
       "docs": { type: "git_repo", repo: "<owner/repo>", branch_pattern: "fleet/{task}", sub_path: "docs", auto_pr: true }
     }
 
-    **If the project source is local:**
-    Default configuration (inform the user, do not ask):
-    - **code**: type `local`, path `<workspace-path>` (the local project path
-      from Step 4a — agents work directly in this directory)
-    - **docs**: type `local`, path `<workspace-path>`, sub_path `docs`
-      (fleet documentation organized in `docs/<task-name>/` subfolders)
-
-    Tell the user:
-    "Based on the project analysis, I'll configure:
-    - Code: agents work directly in <workspace-path> following the existing structure
-    - Docs: fleet documentation goes in <workspace-path>/docs/<task>/
-    - No git branching or PRs (local-only mode)
-    Want to change any of these?"
-
-    When calling save_fleet_plan, include BOTH artifacts:
-    artifacts: {
-      "code": { type: "local", path: "<workspace-path>" },
-      "docs": { type: "local", path: "<workspace-path>", sub_path: "docs" }
-    }
-
     Only modify if the user explicitly requests changes.
 
-    ## 6. Workspace and project source (informational)
-    Per-session workspaces are automatic. Inform the user:
-    "The base clone at ~/astonish_projects/<repo-name>/ stores the shared git
-    objects and AGENTS.md. Each session creates an instant workspace from it
-    via `git clone --local` — no network clone needed, no collisions between
-    parallel sessions."
-
-    No user input needed unless they want to change the project source.
-
-    ## 7. Agent selection and behavior customizations (optional)
+    ## 5. Agent selection and behavior customizations (optional)
     If the user already requested agent changes during the overview step (e.g.,
     "keep only dev" or "remove QA"), confirm those changes. You will pass them
     as `include_agents` when calling save_fleet_plan.
@@ -310,6 +378,28 @@ plan_wizard:
     Then ask if they want to add any behavior overrides for the agents that will
     be included. Remind them that overrides are appended to the base behaviors,
     not replacing them.
+
+    ## 6. Plan identity
+    By now you have enough context from the previous steps (channel type, repo,
+    project analysis) to propose sensible defaults. Present all three to the
+    user in a single message and let them adjust if needed:
+
+    - **key** (lowercase, hyphens, e.g., "frontend-bugs") — derive from the
+      repo name and/or channel type. For example, repo "acme/billing-api" with
+      github_issues channel → key "billing-api".
+    - **name** — a human-readable version of the key, e.g., "Billing API".
+    - **description** — a one-sentence summary of what this plan handles, based
+      on the project and channel. E.g., "Autonomous software development for
+      acme/billing-api, triggered by GitHub issues."
+
+    Present your proposal:
+    "Based on the configuration so far, I'll use:
+    - Key: <key>
+    - Name: <name>
+    - Description: <description>
+    Want to change any of these?"
+
+    Adjust if the user requests changes, then proceed to validation.
 
     ## Validation and saving
     Once all information is collected:
@@ -321,7 +411,9 @@ plan_wizard:
        - channel_type, channel_config, channel_schedule
        - artifacts: BOTH "code" and "docs" entries
        - credentials
-       - project_source: { type: "git_repo", repo: "<owner/repo>" } or { type: "local", path: "<path>" }
+       - project_source: { type: "git_repo", repo: "<owner/repo>" }
+       - template: "<repo-name>" (the template_name returned by save_sandbox_template in step 3i)
+       - container_workspace_dir: "/root/<repo-name>" (the project path inside the container)
        - validation_passed: true
        - include_agents (only if the user requested specific agents)
     3. If validation fails, show what went wrong and help fix it before retrying.
@@ -334,18 +426,17 @@ plan_wizard:
 
     ## After saving — next steps guidance
 
-    After the plan is saved successfully, tell the user exactly what to do next.
-    This is critical because the plan is NOT active yet, it needs to be activated.
+    After the plan is saved successfully, tell the user what to do next.
+
+    The `save_fleet_plan` tool automatically activates non-chat plans, so
+    polling starts immediately. You do NOT need to tell the user to activate
+    manually.
 
     If the channel type is **github_issues** (or any non-chat channel):
-    - Tell the user: "Your plan has been saved but is **not yet active**. To start
-      monitoring for new issues, you need to **activate** it."
-    - Direct them to: **Fleet tab** (in the top navigation bar) → click on the plan
-      name in the sidebar → click the **Activate** button.
-    - Explain: Activating creates a scheduled job that polls the configured channel
-      on the schedule they configured. New items trigger autonomous fleet sessions.
-    - Mention that "Launch" is different from "Activate". Launch starts a single
-      interactive session. Activate starts continuous monitoring.
+    - Tell the user: "Your plan is saved and **monitoring is now live**. New
+      issues matching your configuration will automatically trigger fleet
+      sessions."
+    - Mention they can view active sessions in the **Fleet tab** in Studio.
 
     If the channel type is **chat**:
     - Tell the user: "Your plan is saved and ready to use."
@@ -1008,8 +1099,6 @@ agents:
         tests failed: [details]. Test results: [link]. Please have the developer
         fix these."
         Include the test file paths and failure messages.
-
-workspace_base_dir: ~/astonish_projects
 
 settings:
   max_turns_per_agent: 20

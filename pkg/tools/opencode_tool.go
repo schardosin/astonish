@@ -102,6 +102,16 @@ func GetOpenCodeConfigPath() string {
 	return openCodeConfigPath
 }
 
+// GetOpenCodeConfigProviderModel returns the provider and model IDs.
+func GetOpenCodeConfigProviderModel() (string, string) {
+	return openCodeConfigProviderID, openCodeConfigModelID
+}
+
+// GetOpenCodeConfigExtraEnv returns the extra env vars for OpenCode invocation.
+func GetOpenCodeConfigExtraEnv() map[string]string {
+	return openCodeConfigExtraEnv
+}
+
 // FindOpenCodeBinary locates the opencode binary.
 func FindOpenCodeBinary() (string, error) {
 	if openCodeBinaryPath != "" {
@@ -473,7 +483,13 @@ OpenCode session ID: %s
 %s`, status, sessionID, inputForSummary)
 
 	// Use a short timeout for the summarization call
-	summaryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	var summaryCtx context.Context
+	var cancel context.CancelFunc
+	if ctx != nil {
+		summaryCtx, cancel = context.WithTimeout(ctx, 30*time.Second)
+	} else {
+		summaryCtx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+	}
 	defer cancel()
 
 	summary, err := openCodeSummarizer(summaryCtx, prompt)

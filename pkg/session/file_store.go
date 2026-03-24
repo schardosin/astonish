@@ -806,3 +806,68 @@ func trimTempDeltaState(event *adksession.Event) *adksession.Event {
 
 // Compile-time assertion that FileStore implements session.Service.
 var _ adksession.Service = (*FileStore)(nil)
+
+// AllSessionIDs returns a set of all known session IDs from the index.
+func (s *FileStore) AllSessionIDs() map[string]bool {
+	ids, err := s.index.AllSessionIDs()
+	if err != nil {
+		return nil
+	}
+	return ids
+}
+
+// CleanupExpiredSessions deletes all top-level sessions whose last activity
+// (UpdatedAt) is older than maxAgeDays. Child sub-sessions are cascade-deleted
+// with their parent. Returns the IDs of deleted top-level sessions so the
+// caller can clean up associated resources (e.g., sandbox containers).
+func (s *FileStore) CleanupExpiredSessions(maxAgeDays int) []string {
+	if maxAgeDays <= 0 {
+		return nil
+	}
+
+	cutoff := time.Now().AddDate(0, 0, -maxAgeDays)
+
+	// Load the index to find expired sessions
+	index, err := s.index.Load()
+	if err != nil {
+		log.Printf("[session-cleanup] Failed to load index: %v", err)
+		return nil
+	}
+
+	// Collect expired top-level sessions
+	var expired []SessionMeta
+	for _, meta := range index.Sessions {
+		if meta.ParentID != "" {
+			continue // children are cascade-deleted with parent
+		}
+		if meta.UpdatedAt.Before(cutoff) {
+			expired = append(expired, meta)
+		}
+	}
+
+	if len(expired) == 0 {
+		return nil
+	}
+
+	var deletedIDs []string
+	ctx := context.Background()
+	for _, meta := range expired {
+		err := s.Delete(ctx, &adksession.DeleteRequest{
+			AppName:   meta.AppName,
+			UserID:    meta.UserID,
+			SessionID: meta.ID,
+		})
+		if err != nil {
+			log.Printf("[session-cleanup] Failed to delete session %s: %v", meta.ID, err)
+			continue
+		}
+		deletedIDs = append(deletedIDs, meta.ID)
+		log.Printf("[session-cleanup] Deleted expired session %s (last activity: %s)", meta.ID, meta.UpdatedAt.Format(time.RFC3339))
+	}
+
+	if len(deletedIDs) > 0 {
+		log.Printf("[session-cleanup] Cleaned up %d expired session(s) (older than %d days)", len(deletedIDs), maxAgeDays)
+	}
+
+	return deletedIDs
+}

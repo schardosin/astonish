@@ -285,6 +285,13 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	}
 	defer browserMgr.Cleanup()
 
+	// Wrap tools with sandbox if enabled (container isolation for file/shell/network tools)
+	internalTools, sandboxCleanup, sandboxErr := setupFlowSandbox(cfg.AppConfig, internalTools, cfg.DebugMode)
+	if sandboxErr != nil {
+		return fmt.Errorf("sandbox is enabled but the runtime is not available: %w\n\nTo disable sandbox, set 'sandbox.enabled: false' in ~/.config/astonish/config.yaml", sandboxErr)
+	}
+	defer sandboxCleanup()
+
 	if cfg.DebugMode {
 		fmt.Printf("✓ Internal tools initialized: %d tools available\n", len(internalTools))
 	}

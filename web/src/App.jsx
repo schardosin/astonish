@@ -23,6 +23,7 @@ import { useHashRouter, buildPath } from './hooks/useHashRouter'
 import { yamlToFlowAsync, extractLayout } from './utils/yamlToFlow'
 import { addStandaloneNode, addConnection, removeConnection, updateNode, orderYamlKeys } from './utils/flowToYaml'
 import { fetchAgents, fetchAgent, saveAgent, deleteAgent, fetchTools, checkMcpDependencies, installMcpServer, getMcpStoreServer, installInlineMcpServer } from './api/agents'
+import { fetchSandboxStatus } from './api/sandbox'
 import { snakeToTitleCase } from './utils/formatters'
 import { Store, Lock, Copy, Loader2, Download, Terminal, ExternalLink } from 'lucide-react'
 import './index.css'
@@ -131,6 +132,7 @@ function App() {
   const [isCheckingSetup, setIsCheckingSetup] = useState(true)
   const [view, setView] = useState('chat')
   const [pendingChatMessage, setPendingChatMessage] = useState(null)
+  const [sandboxStatus, setSandboxStatus] = useState(null)
 
   // Check if setup is required on mount
   useEffect(() => {
@@ -153,6 +155,13 @@ function App() {
       setIsCheckingSetup(false)
     }
   }
+
+  // Fetch sandbox status on mount (for security badge in top bar)
+  useEffect(() => {
+    fetchSandboxStatus()
+      .then(setSandboxStatus)
+      .catch(() => setSandboxStatus(null))
+  }, [])
 
   // Load app version from backend (always runs)
   const loadAppVersion = async () => {
@@ -1307,10 +1316,12 @@ layout:
           theme={theme} 
           onToggleTheme={toggleTheme}
           onOpenSettings={() => navigate(buildPath('settings', { section: 'general' }))}
+          onOpenSandbox={() => navigate(buildPath('settings', { section: 'sandbox' }))}
           defaultProvider={defaultProvider}
           defaultModel={defaultModel}
           currentView={view}
           onNavigate={(v) => navigate(buildPath(v))}
+          sandboxStatus={sandboxStatus}
         />
 
         {/* Main Content Area */}

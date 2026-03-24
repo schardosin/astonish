@@ -235,6 +235,8 @@ func TryDestroySessionContainer(sessionID string) {
 		return
 	}
 
+	SetActivePlatform(platform)
+
 	client, err := Connect(platform)
 	if err != nil {
 		return

@@ -501,6 +501,33 @@ func (c *IncusClient) PushFile(containerName, destPath string, content io.ReadSe
 	return nil
 }
 
+// PullFile downloads a file from a container. Returns the file content as a
+// ReadCloser and metadata (UID, GID, mode, type). The caller must close the
+// reader. The container must be running.
+func (c *IncusClient) PullFile(containerName, srcPath string) (io.ReadCloser, *incus.InstanceFileResponse, error) {
+	reader, resp, err := c.server.GetInstanceFile(containerName, srcPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to pull file from %s:%s: %w", containerName, srcPath, err)
+	}
+
+	return reader, resp, nil
+}
+
+// ListDirectory returns the entries in a directory inside a container.
+// The container must be running.
+func (c *IncusClient) ListDirectory(containerName, dirPath string) ([]string, error) {
+	_, resp, err := c.server.GetInstanceFile(containerName, dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list directory %s:%s: %w", containerName, dirPath, err)
+	}
+
+	if resp.Type != "directory" {
+		return nil, fmt.Errorf("%s:%s is not a directory (type: %s)", containerName, dirPath, resp.Type)
+	}
+
+	return resp.Entries, nil
+}
+
 // GetServerInfo returns basic Incus server information.
 func (c *IncusClient) GetServerInfo() (*api.Server, error) {
 	server, _, err := c.server.GetServer()

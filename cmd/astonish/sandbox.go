@@ -2,8 +2,11 @@ package astonish
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -38,6 +41,15 @@ func handleSandboxCommand(args []string) error {
 			return fmt.Errorf("usage: astonish sandbox shell <session-id>")
 		}
 		return handleSandboxShell(args[1])
+	case "cp":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: astonish sandbox cp <session-id>:<container-path> [local-path]")
+		}
+		localPath := ""
+		if len(args) >= 3 {
+			localPath = args[2]
+		}
+		return handleSandboxCp(args[1], localPath)
 	case "prune":
 		return handleSandboxPrune()
 	case "template", "tpl":
@@ -102,7 +114,7 @@ func handleSandboxTemplateCommand(args []string) error {
 }
 
 func printSandboxUsage() {
-	fmt.Println("usage: astonish sandbox {status,init,list,shell,refresh,destroy,prune,template} ...")
+	fmt.Println("usage: astonish sandbox {status,init,list,shell,cp,refresh,destroy,prune,template} ...")
 	fmt.Println("")
 	fmt.Println("Manage session container isolation.")
 	fmt.Println("")
@@ -111,6 +123,7 @@ func printSandboxUsage() {
 	fmt.Println("  init                One-time setup: create base template with core tools")
 	fmt.Println("  list (ls)           List active session containers")
 	fmt.Println("  shell <session-id>  Open interactive shell in a session container")
+	fmt.Println("  cp <id>:<path> [.]  Copy files from a session container to local machine")
 	fmt.Println("  refresh             Re-snapshot templates with updated binary (--force for all)")
 	fmt.Println("  destroy (rm) <id>   Destroy a session container")
 	fmt.Println("  prune               Remove orphaned session containers")
@@ -774,6 +787,184 @@ func handleTemplateInfo(name string) error {
 	}
 
 	return nil
+}
+
+// --- Copy files from container ---
+
+// handleSandboxCp copies files from a session container to the local machine.
+// The source argument uses scp-style syntax: <identifier>:<container-path>
+// The identifier can be a session ID, container name, or prefix of either.
+func handleSandboxCp(source, localPath string) error {
+	// Parse scp-style source argument: <identifier>:<container-path>
+	colonIdx := strings.Index(source, ":")
+	if colonIdx < 1 {
+		return fmt.Errorf("invalid source format: expected <session-id>:<path>\n" +
+			"Example: astonish sandbox cp ff5c1146:/tmp/video.mp4 ./video.mp4")
+	}
+
+	identifier := source[:colonIdx]
+	containerPath := source[colonIdx+1:]
+	if containerPath == "" {
+		return fmt.Errorf("missing container path after ':'")
+	}
+
+	client, err := connectOrFail()
+	if err != nil {
+		return err
+	}
+
+	registry, err := sandbox.NewSessionRegistry()
+	if err != nil {
+		return err
+	}
+
+	// Resolve the identifier to a session/container
+	sessionID, found := registry.ResolveSessionID(identifier)
+	if !found {
+		return fmt.Errorf("no container found for %q\nUse 'astonish sandbox list' to see active containers", identifier)
+	}
+
+	entry := registry.Get(sessionID)
+	if entry == nil {
+		return fmt.Errorf("session %q not found in registry", sessionID)
+	}
+	containerName := entry.ContainerName
+
+	// Check container is running
+	if !client.IsRunning(containerName) {
+		return fmt.Errorf("container %s is not running", containerName)
+	}
+
+	// Probe the source path to determine if it's a file or directory
+	reader, resp, err := client.PullFile(containerName, containerPath)
+	if err != nil {
+		return fmt.Errorf("failed to access %s:%s: %w", containerName, containerPath, err)
+	}
+
+	if resp.Type == "directory" {
+		// Directory copy
+		if localPath == "" {
+			localPath = filepath.Base(containerPath)
+		}
+		fmt.Printf("Copying %s from %s...\n", containerPath, containerName)
+		stats, err := copyDirectoryFromContainer(client, containerName, containerPath, localPath)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Done (%d files, %s total)\n", stats.fileCount, formatBytes(stats.totalBytes))
+		return nil
+	}
+
+	// Single file copy
+	defer reader.Close()
+
+	if localPath == "" {
+		localPath = filepath.Base(containerPath)
+	}
+
+	// If localPath is a directory, append the filename
+	if info, err := os.Stat(localPath); err == nil && info.IsDir() {
+		localPath = filepath.Join(localPath, filepath.Base(containerPath))
+	}
+
+	fmt.Printf("Copying %s from %s... ", containerPath, containerName)
+
+	outFile, err := os.OpenFile(localPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(resp.Mode))
+	if err != nil {
+		return fmt.Errorf("failed to create local file %s: %w", localPath, err)
+	}
+	defer outFile.Close()
+
+	written, err := io.Copy(outFile, reader)
+	if err != nil {
+		return fmt.Errorf("failed to write to %s: %w", localPath, err)
+	}
+
+	fmt.Printf("done (%s)\n", formatBytes(written))
+	return nil
+}
+
+// copyStats tracks progress during recursive directory copy.
+type copyStats struct {
+	fileCount  int
+	totalBytes int64
+}
+
+// copyDirectoryFromContainer recursively copies a directory from a container
+// to the local filesystem. Uses the Incus file API to list entries and pull
+// each file individually.
+func copyDirectoryFromContainer(client *sandbox.IncusClient, containerName, containerDir, localDir string) (*copyStats, error) {
+	stats := &copyStats{}
+
+	if err := os.MkdirAll(localDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create local directory %s: %w", localDir, err)
+	}
+
+	entries, err := client.ListDirectory(containerName, containerDir)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range entries {
+		containerEntryPath := path.Join(containerDir, entry)
+		localEntryPath := filepath.Join(localDir, entry)
+
+		reader, resp, err := client.PullFile(containerName, containerEntryPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to access %s: %w", containerEntryPath, err)
+		}
+
+		if resp.Type == "directory" {
+			// Recurse into subdirectory
+			subStats, err := copyDirectoryFromContainer(client, containerName, containerEntryPath, localEntryPath)
+			if err != nil {
+				return nil, err
+			}
+			stats.fileCount += subStats.fileCount
+			stats.totalBytes += subStats.totalBytes
+			continue
+		}
+
+		// Copy file
+		outFile, err := os.OpenFile(localEntryPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(resp.Mode))
+		if err != nil {
+			reader.Close()
+			return nil, fmt.Errorf("failed to create %s: %w", localEntryPath, err)
+		}
+
+		written, err := io.Copy(outFile, reader)
+		reader.Close()
+		outFile.Close()
+		if err != nil {
+			return nil, fmt.Errorf("failed to write %s: %w", localEntryPath, err)
+		}
+
+		stats.fileCount++
+		stats.totalBytes += written
+		fmt.Printf("  %s (%s)\n", path.Join(filepath.Base(containerDir), entry), formatBytes(written))
+	}
+
+	return stats, nil
+}
+
+// formatBytes returns a human-readable byte size string.
+func formatBytes(b int64) string {
+	const (
+		kb = 1024
+		mb = 1024 * kb
+		gb = 1024 * mb
+	)
+
+	switch {
+	case b >= gb:
+		return fmt.Sprintf("%.1f GB", float64(b)/float64(gb))
+	case b >= mb:
+		return fmt.Sprintf("%.1f MB", float64(b)/float64(mb))
+	case b >= kb:
+		return fmt.Sprintf("%.1f KB", float64(b)/float64(kb))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
 }
 
 // connectOrFail is a helper that detects the platform and connects to Incus,

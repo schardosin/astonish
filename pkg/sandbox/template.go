@@ -145,7 +145,28 @@ func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry, opts Base
 
 	// Check if already exists
 	if client.InstanceExists(containerName) {
-		return fmt.Errorf("base template %q already exists; use 'astonish sandbox refresh' to re-snapshot", containerName)
+		if client.HasSnapshot(containerName, SnapshotName) {
+			// Template exists with a valid snapshot — already initialized.
+			// Ensure supporting resources (overlay image, base dir) also exist.
+			if err := ensureIncusEnvironment(client); err != nil {
+				return fmt.Errorf("failed to set up Incus environment: %w", err)
+			}
+			if err := EnsureOverlayImage(client); err != nil {
+				return fmt.Errorf("failed to create overlay image: %w", err)
+			}
+			if err := EnsureOverlayBaseDir(); err != nil {
+				return fmt.Errorf("failed to create overlay base directory: %w", err)
+			}
+			progress("Base template already initialized (use 'astonish sandbox refresh' to re-snapshot).\n")
+			return nil
+		}
+
+		// Template exists but has no snapshot — incomplete/broken state.
+		// Clean up and re-create from scratch.
+		progress("Found incomplete base template, cleaning up...\n")
+		if err := client.StopAndDeleteInstance(containerName); err != nil {
+			return fmt.Errorf("failed to clean up incomplete template: %w", err)
+		}
 	}
 
 	// Ensure the Incus environment is properly configured (network, profile)

@@ -27,10 +27,12 @@ var CoreTools = []string{
 	"jq",
 	"unzip",
 	"build-essential",
+	"docker.io",
 }
 
 // CoreToolInstallCommands returns the commands to install core tools in a template.
-// These run inside the container after creation.
+// These run inside the container after creation. Docker is included as a core
+// tool because it's required for containerized MCP servers (stdio transport).
 func CoreToolInstallCommands() [][]string {
 	return [][]string{
 		{"apt-get", "update"},
@@ -38,7 +40,13 @@ func CoreToolInstallCommands() [][]string {
 			"git", "curl", "wget", "jq", "unzip", "build-essential",
 			"python3", "python3-pip", "python3-venv",
 			"ca-certificates", "gnupg",
+			// Docker runtime (daemon + CLI + containerd) — required for
+			// containerized MCP servers and Docker-based workflows
+			"docker.io",
 		},
+		// Remove apparmor — cannot work inside nested LXC containers
+		// and blocks Docker from starting containers
+		{"apt-get", "remove", "-y", "apparmor"},
 		// Install Node.js via NodeSource
 		{"sh", "-c", "curl -fsSL https://deb.nodesource.com/setup_22.x | bash -"},
 		{"apt-get", "install", "-y", "nodejs"},
@@ -71,6 +79,8 @@ type OptionalTool struct {
 
 // OptionalTools returns the catalog of optional tools available for installation
 // into the base template. The order here is the order they are presented.
+// Note: Docker is NOT optional — it's installed as a core tool because it's
+// required for containerized MCP servers (stdio transport).
 func OptionalTools() []OptionalTool {
 	return []OptionalTool{
 		{
@@ -82,26 +92,6 @@ func OptionalTools() []OptionalTool {
 			InstallCommands: func() [][]string {
 				return [][]string{
 					{"sh", "-c", "curl -fsSL https://opencode.ai/install | bash"},
-				}
-			},
-		},
-		{
-			ID:              "docker",
-			Name:            "Docker",
-			Description:     "Full Docker runtime (daemon + CLI) for running MCP servers,\nbuilding container images, and Docker-based workflows.",
-			URL:             "https://docs.docker.com/engine",
-			Recommended:     true,
-			RequiresNesting: true,
-			InstallCommands: func() [][]string {
-				return [][]string{
-					// Install Docker from Ubuntu repos (daemon + CLI + containerd)
-					{"apt-get", "update"},
-					{"apt-get", "install", "-y", "docker.io"},
-					// Remove apparmor — cannot work inside nested LXC containers
-					// and blocks Docker from starting containers
-					{"apt-get", "remove", "-y", "apparmor"},
-					{"apt-get", "clean"},
-					{"rm", "-rf", "/var/lib/apt/lists/*"},
 				}
 			},
 		},
@@ -213,13 +203,9 @@ func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry, opts Base
 
 	// Install optional tools selected by the user
 	selectedTools := OptionalTools()
-	needsNesting := false
 	for _, tool := range selectedTools {
 		if !opts.InstallTools[tool.ID] {
 			continue
-		}
-		if tool.RequiresNesting {
-			needsNesting = true
 		}
 		progress("Installing %s...\n", tool.Name)
 		for _, cmd := range tool.InstallCommands() {
@@ -237,16 +223,14 @@ func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry, opts Base
 		progress("  %s installed.\n", tool.Name)
 	}
 
-	// Enable security.nesting if any installed tool requires it (e.g., Docker
-	// needs to create its own namespaces and cgroups inside the container).
-	if needsNesting {
-		progress("Enabling container nesting (required by Docker)...\n")
-		if err := client.SetInstanceConfig(containerName, map[string]string{
-			"security.nesting": "true",
-		}); err != nil {
-			client.StopAndDeleteInstance(containerName)
-			return fmt.Errorf("failed to enable nesting: %w", err)
-		}
+	// Enable security.nesting — Docker is a core tool and requires nesting
+	// to create its own namespaces and cgroups inside the container.
+	progress("Enabling container nesting (required by Docker)...\n")
+	if err := client.SetInstanceConfig(containerName, map[string]string{
+		"security.nesting": "true",
+	}); err != nil {
+		client.StopAndDeleteInstance(containerName)
+		return fmt.Errorf("failed to enable nesting: %w", err)
 	}
 
 	// Push astonish binary into the template so session containers can run
@@ -277,7 +261,7 @@ func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry, opts Base
 		Name:       BaseTemplate,
 		CreatedAt:  now,
 		SnapshotAt: now,
-		Nesting:    needsNesting,
+		Nesting:    true, // Docker is a core tool and requires nesting
 	}
 	if hash, hashErr := ComputeBinaryHash(); hashErr == nil {
 		meta.BinaryHash = hash

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Save, AlertCircle, Check, Shield, ShieldOff, Loader2, Trash2, RefreshCw, Plus, Camera, ArrowUpCircle, Eye, ChevronDown, ChevronRight, Server, Box } from 'lucide-react'
-import { saveFullConfigSection, hintStyle, saveButtonStyle } from './settingsApi'
+import { saveFullConfigSection, inputClass, inputStyle, labelStyle, hintStyle, sectionBorderStyle, saveButtonStyle } from './settingsApi'
 import {
   fetchSandboxDetails, fetchContainers, deleteContainer, pruneOrphans,
   fetchTemplates, fetchTemplateInfo, createTemplate, deleteTemplate,
@@ -42,7 +42,7 @@ function TemplateBadge({ name }) {
 
 export default function SandboxSettings({ config, onSaved }) {
   // Config form (enable/disable)
-  const [form, setForm] = useState({ enabled: true })
+  const [form, setForm] = useState({ enabled: true, memory: '2GB', cpu: 2, processes: 500 })
   const [saving, setSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [saveError, setSaveError] = useState(null)
@@ -75,7 +75,12 @@ export default function SandboxSettings({ config, onSaved }) {
 
   // Init form from config
   useEffect(() => {
-    if (config) setForm({ enabled: config.enabled ?? true })
+    if (config) setForm({
+      enabled: config.enabled ?? true,
+      memory: config.memory || '2GB',
+      cpu: config.cpu || 2,
+      processes: config.processes || 500
+    })
   }, [config])
 
   // Load details on mount
@@ -759,6 +764,66 @@ export default function SandboxSettings({ config, onSaved }) {
           <span style={{ color: '#ef4444' }}>
             Sandbox is disabled. AI tools will execute directly on your host system with full access to files, network, and system resources.
           </span>
+        </div>
+      )}
+
+      {/* Resource Limits */}
+      {form.enabled && (
+        <div className="pt-4 border-t" style={sectionBorderStyle}>
+          <div className="mb-4">
+            <h4 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+              Resource Limits
+            </h4>
+            <p className="text-xs mt-0.5" style={hintStyle}>
+              Limits applied to each session container. Changes apply to new containers only.
+            </p>
+          </div>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-2" style={labelStyle}>
+                Memory
+              </label>
+              <input
+                type="text"
+                value={form.memory}
+                onChange={(e) => setForm({ ...form, memory: e.target.value })}
+                placeholder="2GB"
+                className={inputClass}
+                style={inputStyle}
+              />
+              <p className="text-xs mt-1" style={hintStyle}>e.g. 2GB, 4GB, 512MB</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-2" style={labelStyle}>
+                CPU Cores
+              </label>
+              <input
+                type="number"
+                value={form.cpu}
+                onChange={(e) => setForm({ ...form, cpu: parseInt(e.target.value) || 0 })}
+                min="1"
+                max="64"
+                className={inputClass}
+                style={inputStyle}
+              />
+              <p className="text-xs mt-1" style={hintStyle}>Default: 2</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-2" style={labelStyle}>
+                Max Processes
+              </label>
+              <input
+                type="number"
+                value={form.processes}
+                onChange={(e) => setForm({ ...form, processes: parseInt(e.target.value) || 0 })}
+                min="50"
+                max="10000"
+                className={inputClass}
+                style={inputStyle}
+              />
+              <p className="text-xs mt-1" style={hintStyle}>Default: 500</p>
+            </div>
+          </div>
         </div>
       )}
 

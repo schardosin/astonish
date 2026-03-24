@@ -905,7 +905,8 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 	}
 
 	// Create a lazy node client for this fleet session
-	lazyNode := sandbox.NewLazyNodeClient(sandboxClient, sessRegistry, tplRegistry, template)
+	limits := sandbox.EffectiveLimits(&appCfg.Sandbox)
+	lazyNode := sandbox.NewLazyNodeClient(sandboxClient, sessRegistry, tplRegistry, template, &limits)
 
 	// Use the fleet session ID for container lookup/creation so that recovered
 	// sessions (which preserve the fleet session ID but generate new ADK child

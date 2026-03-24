@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/schardosin/astonish/pkg/config"
 )
 
 // templateSnapshotMu protects template snapshots from being deleted while
@@ -24,7 +26,7 @@ var templateSnapshotMu sync.RWMutex
 // this creates a lightweight container from a tiny shell image (~45ms) and
 // mounts an overlayfs backed by the template's lower layers (~4ms). Total: ~200ms.
 // For custom templates, the overlay is stacked: template-upper:@base-snapshot.
-func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, tplRegistry *TemplateRegistry, sessionID, templateName string) (string, error) {
+func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, tplRegistry *TemplateRegistry, sessionID, templateName string, limits *config.SandboxLimits) (string, error) {
 	// Check registry — already exists?
 	if entry := sessRegistry.Get(sessionID); entry != nil {
 		containerName := entry.ContainerName
@@ -91,7 +93,7 @@ func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, 
 	defer templateSnapshotMu.RUnlock()
 
 	// Create the container with overlayfs (tiny image + overlay mount)
-	if err := CreateOverlayContainer(client, containerName, templateName, tplRegistry); err != nil {
+	if err := CreateOverlayContainer(client, containerName, templateName, tplRegistry, limits); err != nil {
 		return "", fmt.Errorf("failed to create session container: %w", err)
 	}
 

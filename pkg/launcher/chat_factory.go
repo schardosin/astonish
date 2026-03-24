@@ -606,7 +606,8 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		// Create a pool that manages per-session LazyNodeClients.
 		// Each chat session gets its own container, created lazily
 		// on the first tool call for that session.
-		nodePool := sandbox.NewNodeClientPool(sandboxClient, sessRegistry, tplRegistry, "")
+		limits := sandbox.EffectiveLimits(&cfg.AppConfig.Sandbox)
+		nodePool := sandbox.NewNodeClientPool(sandboxClient, sessRegistry, tplRegistry, "", &limits)
 
 		// Wrap all internal tools with NodeTool proxies (pool-backed)
 		internalTools = sandbox.WrapToolsWithNode(internalTools, nodePool)

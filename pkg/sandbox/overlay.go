@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	incus "github.com/lxc/incus/v6/client"
 	"github.com/lxc/incus/v6/shared/api"
+	"github.com/schardosin/astonish/pkg/config"
 )
 
 // OverlayImageAlias is the alias for the minimal shell image used for
@@ -324,7 +326,7 @@ func addTarDir(tw *tar.Writer, name string, mode int64) error {
 //
 // The container is NOT started — caller should start it after this returns.
 // Pass registry=nil when the template is @base (no registry lookup needed).
-func CreateOverlayContainer(client *IncusClient, containerName, templateName string, registry *TemplateRegistry) error {
+func CreateOverlayContainer(client *IncusClient, containerName, templateName string, registry *TemplateRegistry, limits *config.SandboxLimits) error {
 	// Resolve the storage pool and paths
 	poolName, err := GetPoolForProfile(client)
 	if err != nil {
@@ -355,15 +357,29 @@ func CreateOverlayContainer(client *IncusClient, containerName, templateName str
 	}
 
 	// Create the container from the tiny overlay image
+	containerConfig := map[string]string{
+		"security.privileged": "true",
+		"security.nesting":    fmt.Sprintf("%t", nesting),
+	}
+	// Apply resource limits if provided (session containers only, not templates)
+	if limits != nil {
+		if limits.Memory != "" {
+			containerConfig["limits.memory"] = limits.Memory
+		}
+		if limits.CPU > 0 {
+			containerConfig["limits.cpu"] = strconv.Itoa(limits.CPU)
+		}
+		if limits.Processes > 0 {
+			containerConfig["limits.processes"] = strconv.Itoa(limits.Processes)
+		}
+	}
+
 	req := api.InstancesPost{
 		Name: containerName,
 		Type: api.InstanceTypeContainer,
 		InstancePut: api.InstancePut{
 			Architecture: arch,
-			Config: map[string]string{
-				"security.privileged": "true",
-				"security.nesting":    fmt.Sprintf("%t", nesting),
-			},
+			Config:       containerConfig,
 		},
 		Source: api.InstanceSource{
 			Type:  "image",

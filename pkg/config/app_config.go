@@ -30,11 +30,10 @@ type AppConfig struct {
 // Types are defined here (not in pkg/sandbox) because this package owns
 // YAML deserialization. pkg/sandbox imports these types for runtime use.
 type SandboxConfig struct {
-	Enabled  *bool              `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-	Limits   SandboxLimits      `yaml:"limits,omitempty" json:"limits,omitempty"`
-	Network  string             `yaml:"network,omitempty" json:"network,omitempty"`
-	WarmPool int                `yaml:"warm_pool,omitempty" json:"warm_pool,omitempty"`
-	Prune    SandboxPruneConfig `yaml:"prune,omitempty" json:"prune,omitempty"`
+	Enabled *bool              `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Limits  SandboxLimits      `yaml:"limits,omitempty" json:"limits,omitempty"`
+	Network string             `yaml:"network,omitempty" json:"network,omitempty"`
+	Prune   SandboxPruneConfig `yaml:"prune,omitempty" json:"prune,omitempty"`
 }
 
 // SandboxLimits defines resource limits for session containers.
@@ -157,6 +156,16 @@ type SessionConfig struct {
 	BaseDir string `yaml:"base_dir,omitempty" json:"base_dir,omitempty"`
 	// Compaction controls automatic context window compaction.
 	Compaction CompactionConfig `yaml:"compaction,omitempty" json:"compaction,omitempty"`
+	// Cleanup controls automatic session expiry.
+	Cleanup SessionCleanupConfig `yaml:"cleanup,omitempty" json:"cleanup,omitempty"`
+}
+
+// SessionCleanupConfig controls automatic deletion of old sessions.
+type SessionCleanupConfig struct {
+	// MaxAgeDays is the maximum age (in days since last activity) before a session
+	// is automatically deleted. 0 means disabled (sessions persist forever).
+	// Default: 5 days. Use a pointer so explicit 0 can be distinguished from unset.
+	MaxAgeDays *int `yaml:"max_age_days,omitempty" json:"max_age_days,omitempty"`
 }
 
 // CompactionConfig controls how and when context is compacted.
@@ -193,6 +202,18 @@ func (c *CompactionConfig) GetPreserveRecent() int {
 		return 4
 	}
 	return c.PreserveRecent
+}
+
+// EffectiveMaxAgeDays returns the session cleanup max age (default 5 days).
+// Returns 0 if cleanup is disabled.
+func (c *SessionCleanupConfig) EffectiveMaxAgeDays() int {
+	if c.MaxAgeDays == nil {
+		return 5 // default: enabled at 5 days
+	}
+	if *c.MaxAgeDays <= 0 {
+		return 0 // explicitly disabled
+	}
+	return *c.MaxAgeDays
 }
 
 type ChatConfig struct {

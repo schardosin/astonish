@@ -16,8 +16,7 @@ func DefaultSandboxConfig() config.SandboxConfig {
 			CPU:       2,
 			Processes: 500,
 		},
-		Network:  "bridged",
-		WarmPool: 2,
+		Network: "bridged",
 		Prune: config.SandboxPruneConfig{
 			OrphanCheckHours: 6,
 		},
@@ -36,9 +35,6 @@ func IsSandboxEnabled(c *config.SandboxConfig) bool {
 func ValidateSandboxConfig(c *config.SandboxConfig) error {
 	if c.Network != "" && c.Network != "bridged" && c.Network != "none" {
 		return fmt.Errorf("sandbox.network must be 'bridged' or 'none', got %q", c.Network)
-	}
-	if c.WarmPool < 0 {
-		return fmt.Errorf("sandbox.warm_pool must be >= 0, got %d", c.WarmPool)
 	}
 	if c.Limits.CPU < 0 {
 		return fmt.Errorf("sandbox.limits.cpu must be >= 0, got %d", c.Limits.CPU)

@@ -10,6 +10,9 @@ export default function SessionsSettings({ config, onSaved }) {
       enabled: true,
       threshold: 0.8,
       preserve_recent: 4
+    },
+    cleanup: {
+      max_age_days: 5
     }
   })
   const [saving, setSaving] = useState(false)
@@ -25,6 +28,9 @@ export default function SessionsSettings({ config, onSaved }) {
           enabled: config.compaction?.enabled !== false,
           threshold: config.compaction?.threshold || 0.8,
           preserve_recent: config.compaction?.preserve_recent || 4
+        },
+        cleanup: {
+          max_age_days: config.cleanup?.max_age_days ?? 5
         }
       })
     }
@@ -156,6 +162,36 @@ export default function SessionsSettings({ config, onSaved }) {
             </div>
           </div>
         )}
+      </div>
+
+      {/* Session Cleanup */}
+      <div className="pt-4 border-t" style={sectionBorderStyle}>
+        <div className="mb-4">
+          <h4 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+            Session Cleanup
+          </h4>
+          <p className="text-xs mt-0.5" style={hintStyle}>
+            Automatically delete sessions that have been inactive for a period of time.
+            Containers associated with expired sessions are also destroyed.
+          </p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-2" style={labelStyle}>
+            Auto-delete after (days)
+          </label>
+          <input
+            type="number"
+            value={form.cleanup.max_age_days}
+            onChange={(e) => setForm({ ...form, cleanup: { ...form.cleanup, max_age_days: parseInt(e.target.value) || 0 } })}
+            min="0"
+            max="365"
+            className={inputClass}
+            style={{ ...inputStyle, maxWidth: '120px' }}
+          />
+          <p className="text-xs mt-1" style={hintStyle}>
+            Sessions with no activity for this many days are automatically deleted. Set to 0 to disable. Default: 5 days.
+          </p>
+        </div>
       </div>
 
       {/* Save */}

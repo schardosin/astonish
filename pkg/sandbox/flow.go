@@ -38,7 +38,8 @@ func SetupFlowSandbox(appCfg *config.AppConfig, internalTools []tool.Tool) (*Flo
 
 	tplRegistry, _ := NewTemplateRegistry()
 
-	pool := NewNodeClientPool(client, sessRegistry, tplRegistry, "")
+	limits := EffectiveLimits(&appCfg.Sandbox)
+	pool := NewNodeClientPool(client, sessRegistry, tplRegistry, "", &limits)
 	wrapped := WrapToolsWithNode(internalTools, pool)
 
 	return &FlowSandboxResult{

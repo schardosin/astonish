@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/schardosin/astonish/pkg/config"
 )
 
 // nodeRequest mirrors cmd/astonish.NodeRequest for the host side.
@@ -252,6 +254,7 @@ type LazyNodeClient struct {
 	sessRegistry *SessionRegistry
 	tplRegistry  *TemplateRegistry
 	template     string // template to clone from (empty = @base)
+	limits       *config.SandboxLimits
 
 	mu            sync.Mutex
 	sessionID     string
@@ -286,12 +289,13 @@ type LazyNodeClient struct {
 
 // NewLazyNodeClient creates a lazy node client that defers container creation
 // until BindSession is called (typically from ProcessRequest, before the LLM call).
-func NewLazyNodeClient(client *IncusClient, sessRegistry *SessionRegistry, tplRegistry *TemplateRegistry, template string) *LazyNodeClient {
+func NewLazyNodeClient(client *IncusClient, sessRegistry *SessionRegistry, tplRegistry *TemplateRegistry, template string, limits *config.SandboxLimits) *LazyNodeClient {
 	return &LazyNodeClient{
 		incusClient:  client,
 		sessRegistry: sessRegistry,
 		tplRegistry:  tplRegistry,
 		template:     template,
+		limits:       limits,
 	}
 }
 
@@ -340,7 +344,7 @@ func (lnc *LazyNodeClient) initBackground(sessionID string) {
 	defer close(lnc.initDone)
 
 	// Phase 1: Create or get the session container
-	containerName, err := EnsureSessionContainer(lnc.incusClient, lnc.sessRegistry, lnc.tplRegistry, sessionID, lnc.template)
+	containerName, err := EnsureSessionContainer(lnc.incusClient, lnc.sessRegistry, lnc.tplRegistry, sessionID, lnc.template, lnc.limits)
 	if err != nil {
 		lnc.mu.Lock()
 		lnc.containerErr = fmt.Errorf("failed to create session container: %w", err)
@@ -620,6 +624,7 @@ type NodeClientPool struct {
 	sessRegistry *SessionRegistry
 	tplRegistry  *TemplateRegistry
 	template     string
+	limits       *config.SandboxLimits
 
 	mu      sync.Mutex
 	clients map[string]*LazyNodeClient
@@ -630,12 +635,13 @@ type NodeClientPool struct {
 // NewNodeClientPool creates a pool that will create per-session LazyNodeClients
 // on demand. The template parameter selects which container template to clone
 // from (empty = @base).
-func NewNodeClientPool(client *IncusClient, sessRegistry *SessionRegistry, tplRegistry *TemplateRegistry, template string) *NodeClientPool {
+func NewNodeClientPool(client *IncusClient, sessRegistry *SessionRegistry, tplRegistry *TemplateRegistry, template string, limits *config.SandboxLimits) *NodeClientPool {
 	return &NodeClientPool{
 		incusClient:  client,
 		sessRegistry: sessRegistry,
 		tplRegistry:  tplRegistry,
 		template:     template,
+		limits:       limits,
 		clients:      make(map[string]*LazyNodeClient),
 	}
 }
@@ -668,7 +674,7 @@ func (p *NodeClientPool) GetOrCreate(sessionID string) *LazyNodeClient {
 	}
 
 	// Create a new LazyNodeClient for this session
-	client := NewLazyNodeClient(p.incusClient, p.sessRegistry, p.tplRegistry, p.template)
+	client := NewLazyNodeClient(p.incusClient, p.sessRegistry, p.tplRegistry, p.template, p.limits)
 	client.Env = p.env
 	p.clients[sessionID] = client
 	return client

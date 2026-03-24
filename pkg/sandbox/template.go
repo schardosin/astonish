@@ -317,7 +317,7 @@ func CreateTemplate(client *IncusClient, registry *TemplateRegistry, name, descr
 	fmt.Printf("Creating template %q from @base...\n", name)
 
 	// Create overlay-based container (tiny image + overlayfs mount backed by @base snapshot)
-	if err := CreateOverlayContainer(client, containerName, BaseTemplate, registry); err != nil {
+	if err := CreateOverlayContainer(client, containerName, BaseTemplate, registry, nil); err != nil {
 		return fmt.Errorf("failed to create template container: %w", err)
 	}
 

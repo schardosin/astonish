@@ -207,6 +207,95 @@ func FilterTestsByTag(tests []LoadedTest, tags []string) []LoadedTest {
 	return filtered
 }
 
+// FindTestsForSuite finds all test files that reference the given suite name.
+// Unlike FindSuite (which only returns tests already associated during discovery),
+// this scans all directories for test files that have suite: <suiteName>.
+func FindTestsForSuite(dirs []string, suiteName string) ([]LoadedTest, error) {
+	var tests []LoadedTest
+
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("read dir %s: %w", dir, err)
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() || !isYAMLFile(entry.Name()) {
+				continue
+			}
+
+			path := filepath.Join(dir, entry.Name())
+			cfg, err := config.LoadAgent(path)
+			if err != nil {
+				continue
+			}
+
+			if cfg.Type == "test" && cfg.Suite == suiteName {
+				name := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
+				tests = append(tests, LoadedTest{
+					Name:   name,
+					File:   path,
+					Config: cfg,
+				})
+			}
+		}
+	}
+
+	return tests, nil
+}
+
+// DeleteSuite removes a suite file and optionally all its associated test files.
+// Returns the list of deleted file paths. If deleteTests is true, associated
+// test files are deleted first, then the suite file.
+func DeleteSuite(dirs []string, suiteName string, deleteTests bool) ([]string, error) {
+	suite, err := FindSuite(dirs, suiteName)
+	if err != nil {
+		return nil, err
+	}
+
+	var deleted []string
+
+	// Delete associated test files first
+	if deleteTests {
+		tests, err := FindTestsForSuite(dirs, suiteName)
+		if err != nil {
+			return deleted, fmt.Errorf("finding tests for suite %q: %w", suiteName, err)
+		}
+		for _, test := range tests {
+			if err := os.Remove(test.File); err != nil {
+				return deleted, fmt.Errorf("removing test %q: %w", test.Name, err)
+			}
+			deleted = append(deleted, test.File)
+		}
+	}
+
+	// Delete the suite file
+	if err := os.Remove(suite.File); err != nil {
+		return deleted, fmt.Errorf("removing suite %q: %w", suiteName, err)
+	}
+	deleted = append(deleted, suite.File)
+
+	return deleted, nil
+}
+
+// DeleteTest removes a single test file by name.
+// Returns the deleted file path and the suite name it belonged to.
+func DeleteTest(dirs []string, testName string) (string, string, error) {
+	test, suite, err := FindTestAndSuite(dirs, testName)
+	if err != nil {
+		return "", "", err
+	}
+
+	if err := os.Remove(test.File); err != nil {
+		return "", "", fmt.Errorf("removing test %q: %w", testName, err)
+	}
+
+	return test.File, suite.Name, nil
+}
+
 func isYAMLFile(name string) bool {
 	ext := strings.ToLower(filepath.Ext(name))
 	return ext == ".yaml" || ext == ".yml"

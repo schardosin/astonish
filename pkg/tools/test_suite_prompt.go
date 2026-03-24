@@ -563,4 +563,29 @@ or need the user's help:
 
 Screenshots are for the user's benefit. For your own understanding of the page,
 use browser_snapshot (accessibility tree) which returns structured text.
+
+## Deleting Tests and Suites
+
+You have the delete_test_suite tool available. Use it when:
+- The user asks to remove/delete a test suite or individual test
+- You need to replace an existing suite (delete old, then save new)
+- The user wants to clean up test files they no longer need
+
+### Deleting a suite and all its tests:
+Call delete_test_suite with suite_name. This deletes the suite file AND
+all test files that reference it.
+
+### Deleting a single test:
+Call delete_test_suite with test_name (leave suite_name empty).
+This deletes only the individual test file.
+
+### Before deleting:
+Always confirm with the user before calling delete. Show what will be deleted:
+- "I'll delete suite 'myapp' and its 3 test files: test_health, test_login, test_api.
+   Shall I proceed?"
+
+The user can also delete from the CLI:
+- astonish test remove <suite_name>     (deletes suite + all tests)
+- astonish test remove <test_name>      (deletes single test)
+- astonish test remove <name> --keep-tests  (deletes suite, keeps tests)
 `

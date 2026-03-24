@@ -1089,7 +1089,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 	}
 
-	// Register test suite tools (save_test_suite, validate_test_suite)
+	// Register test suite tools (save_test_suite, validate_test_suite, delete_test_suite)
 	testSuiteTools, tstErr := tools.GetTestSuiteTools()
 	if tstErr != nil {
 		if cfg.DebugMode {

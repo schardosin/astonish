@@ -8,6 +8,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/flowstore"
+	atesting "github.com/schardosin/astonish/pkg/testing"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 	"gopkg.in/yaml.v3"
@@ -472,7 +473,92 @@ func validateTestSuite(_ tool.Context, args ValidateTestSuiteArgs) (ValidateTest
 	}, nil
 }
 
-// GetTestSuiteTools returns the save_test_suite and validate_test_suite tools.
+// DeleteTestSuiteArgs are the arguments for the delete_test_suite tool.
+type DeleteTestSuiteArgs struct {
+	SuiteName   string `json:"suite_name" jsonschema:"Name of the suite to delete (without .yaml extension)"`
+	DeleteTests bool   `json:"delete_tests,omitempty" jsonschema:"Also delete all test files belonging to this suite (default: true)"`
+	TestName    string `json:"test_name,omitempty" jsonschema:"Delete a single test file by name instead of a whole suite. When set, suite_name is ignored."`
+}
+
+// DeleteTestSuiteResult is the result of the delete_test_suite tool.
+type DeleteTestSuiteResult struct {
+	Status  string   `json:"status"`  // "deleted" or "error"
+	Deleted []string `json:"deleted"` // Paths of deleted files
+	Message string   `json:"message"`
+}
+
+func deleteTestSuite(_ tool.Context, args DeleteTestSuiteArgs) (DeleteTestSuiteResult, error) {
+	// Determine search directories (same as CLI getTestDirs)
+	var dirs []string
+	if sysDir, err := config.GetAgentsDir(); err == nil {
+		dirs = append(dirs, sysDir)
+	}
+	if flowsDir, err := flowstore.GetFlowsDir(); err == nil {
+		dirs = append(dirs, flowsDir)
+	}
+
+	// Single test deletion mode
+	if args.TestName != "" {
+		deletedPath, suiteName, err := atesting.DeleteTest(dirs, args.TestName)
+		if err != nil {
+			return DeleteTestSuiteResult{
+				Status:  "error",
+				Message: fmt.Sprintf("Failed to delete test %q: %v", args.TestName, err),
+			}, nil
+		}
+		return DeleteTestSuiteResult{
+			Status:  "deleted",
+			Deleted: []string{deletedPath},
+			Message: fmt.Sprintf("Deleted test %q (was in suite %q)", args.TestName, suiteName),
+		}, nil
+	}
+
+	// Suite deletion mode
+	if args.SuiteName == "" {
+		return DeleteTestSuiteResult{
+			Status:  "error",
+			Message: "Either suite_name or test_name is required",
+		}, nil
+	}
+
+	// Determine whether to delete associated tests.
+	// Go's zero value for bool is false, so we can't distinguish "not passed" from
+	// "explicitly false". Since deleting tests is the safer default (avoids orphans),
+	// we delete tests unless DeleteTests is explicitly false AND there are no tests,
+	// OR the AI explicitly passes delete_tests: false (which we honor).
+	deleteTests := args.DeleteTests
+	if !args.DeleteTests {
+		// Check if there are actually tests — if so, default to deleting them
+		// This handles the common case where the AI omits delete_tests entirely
+		tests, _ := atesting.FindTestsForSuite(dirs, args.SuiteName)
+		if len(tests) > 0 {
+			deleteTests = true
+		}
+	}
+
+	deleted, err := atesting.DeleteSuite(dirs, args.SuiteName, deleteTests)
+	if err != nil {
+		return DeleteTestSuiteResult{
+			Status:  "error",
+			Deleted: deleted, // partial deletions may have occurred
+			Message: fmt.Sprintf("Failed to delete suite %q: %v", args.SuiteName, err),
+		}, nil
+	}
+
+	msg := fmt.Sprintf("Deleted suite %q", args.SuiteName)
+	testCount := len(deleted) - 1 // subtract the suite file itself
+	if testCount > 0 {
+		msg += fmt.Sprintf(" and %d test file(s)", testCount)
+	}
+
+	return DeleteTestSuiteResult{
+		Status:  "deleted",
+		Deleted: deleted,
+		Message: msg,
+	}, nil
+}
+
+// GetTestSuiteTools returns the save_test_suite, validate_test_suite, and delete_test_suite tools.
 func GetTestSuiteTools() ([]tool.Tool, error) {
 	saveTool, err := functiontool.New(functiontool.Config{
 		Name: "save_test_suite",
@@ -494,5 +580,15 @@ func GetTestSuiteTools() ([]tool.Tool, error) {
 		return nil, fmt.Errorf("create validate_test_suite tool: %w", err)
 	}
 
-	return []tool.Tool{saveTool, validateTool}, nil
+	deleteTool, err := functiontool.New(functiontool.Config{
+		Name: "delete_test_suite",
+		Description: "Delete a test suite and its associated test files, or delete a single test file. " +
+			"When deleting a suite, all test files that reference it are also removed by default. " +
+			"To delete a single test without touching the suite, pass test_name instead of suite_name.",
+	}, deleteTestSuite)
+	if err != nil {
+		return nil, fmt.Errorf("create delete_test_suite tool: %w", err)
+	}
+
+	return []tool.Tool{saveTool, validateTool, deleteTool}, nil
 }

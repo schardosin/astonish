@@ -263,6 +263,266 @@ func TestValidateTest(t *testing.T) {
 	}
 }
 
+func TestFindTestsForSuite(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "suite-test-*")
+	if err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	writeYAML(t, tmpDir, "myapp.yaml", `
+description: "MyApp Tests"
+type: test_suite
+suite_config:
+  template: "@myapp"
+`)
+
+	writeYAML(t, tmpDir, "test_login.yaml", `
+description: "Test: Login"
+type: test
+suite: myapp
+nodes:
+  - name: step1
+    type: tool
+`)
+
+	writeYAML(t, tmpDir, "test_api.yaml", `
+description: "Test: API"
+type: test
+suite: myapp
+nodes:
+  - name: step1
+    type: tool
+`)
+
+	writeYAML(t, tmpDir, "test_other.yaml", `
+description: "Test for other suite"
+type: test
+suite: other
+nodes:
+  - name: step1
+    type: tool
+`)
+
+	tests, err := FindTestsForSuite([]string{tmpDir}, "myapp")
+	if err != nil {
+		t.Fatalf("FindTestsForSuite: %v", err)
+	}
+	if len(tests) != 2 {
+		t.Fatalf("expected 2 tests for myapp, got %d", len(tests))
+	}
+
+	// Verify the right tests were found
+	names := map[string]bool{}
+	for _, test := range tests {
+		names[test.Name] = true
+	}
+	if !names["test_login"] || !names["test_api"] {
+		t.Errorf("expected test_login and test_api, got %v", names)
+	}
+
+	// Finding tests for nonexistent suite should return empty
+	tests, err = FindTestsForSuite([]string{tmpDir}, "nonexistent")
+	if err != nil {
+		t.Fatalf("FindTestsForSuite nonexistent: %v", err)
+	}
+	if len(tests) != 0 {
+		t.Errorf("expected 0 tests for nonexistent suite, got %d", len(tests))
+	}
+}
+
+func TestDeleteSuiteWithTests(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "suite-test-*")
+	if err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	writeYAML(t, tmpDir, "myapp.yaml", `
+description: "MyApp Tests"
+type: test_suite
+suite_config:
+  template: "@myapp"
+`)
+
+	writeYAML(t, tmpDir, "test_login.yaml", `
+description: "Test: Login"
+type: test
+suite: myapp
+nodes:
+  - name: step1
+    type: tool
+`)
+
+	writeYAML(t, tmpDir, "test_api.yaml", `
+description: "Test: API"
+type: test
+suite: myapp
+nodes:
+  - name: step1
+    type: tool
+`)
+
+	// Also have a test for another suite — it should NOT be deleted
+	writeYAML(t, tmpDir, "test_other.yaml", `
+description: "Test for other suite"
+type: test
+suite: other
+nodes:
+  - name: step1
+    type: tool
+`)
+
+	dirs := []string{tmpDir}
+
+	deleted, err := DeleteSuite(dirs, "myapp", true)
+	if err != nil {
+		t.Fatalf("DeleteSuite: %v", err)
+	}
+
+	// Should have deleted 3 files (2 tests + 1 suite)
+	if len(deleted) != 3 {
+		t.Errorf("expected 3 deleted files, got %d: %v", len(deleted), deleted)
+	}
+
+	// Verify files are actually gone
+	for _, path := range deleted {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("file should be deleted: %s", path)
+		}
+	}
+
+	// Verify the other suite's test was NOT deleted
+	otherPath := filepath.Join(tmpDir, "test_other.yaml")
+	if _, err := os.Stat(otherPath); os.IsNotExist(err) {
+		t.Error("test_other.yaml should NOT have been deleted")
+	}
+}
+
+func TestDeleteSuiteKeepTests(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "suite-test-*")
+	if err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	writeYAML(t, tmpDir, "myapp.yaml", `
+description: "MyApp Tests"
+type: test_suite
+suite_config:
+  template: "@myapp"
+`)
+
+	writeYAML(t, tmpDir, "test_login.yaml", `
+description: "Test: Login"
+type: test
+suite: myapp
+nodes:
+  - name: step1
+    type: tool
+`)
+
+	dirs := []string{tmpDir}
+
+	deleted, err := DeleteSuite(dirs, "myapp", false)
+	if err != nil {
+		t.Fatalf("DeleteSuite: %v", err)
+	}
+
+	// Should have deleted only the suite file
+	if len(deleted) != 1 {
+		t.Errorf("expected 1 deleted file, got %d: %v", len(deleted), deleted)
+	}
+
+	// Test file should still exist
+	testPath := filepath.Join(tmpDir, "test_login.yaml")
+	if _, err := os.Stat(testPath); os.IsNotExist(err) {
+		t.Error("test_login.yaml should still exist when keep-tests is true")
+	}
+}
+
+func TestDeleteTest(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "suite-test-*")
+	if err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	writeYAML(t, tmpDir, "myapp.yaml", `
+description: "MyApp Tests"
+type: test_suite
+suite_config:
+  template: "@myapp"
+`)
+
+	writeYAML(t, tmpDir, "test_login.yaml", `
+description: "Test: Login"
+type: test
+suite: myapp
+nodes:
+  - name: step1
+    type: tool
+`)
+
+	writeYAML(t, tmpDir, "test_api.yaml", `
+description: "Test: API"
+type: test
+suite: myapp
+nodes:
+  - name: step1
+    type: tool
+`)
+
+	dirs := []string{tmpDir}
+
+	deletedPath, suiteName, err := DeleteTest(dirs, "test_login")
+	if err != nil {
+		t.Fatalf("DeleteTest: %v", err)
+	}
+
+	if suiteName != "myapp" {
+		t.Errorf("suiteName = %q, want %q", suiteName, "myapp")
+	}
+
+	// Verify the file is gone
+	if _, err := os.Stat(deletedPath); !os.IsNotExist(err) {
+		t.Errorf("test_login.yaml should be deleted")
+	}
+
+	// Suite and other test should still exist
+	suitePath := filepath.Join(tmpDir, "myapp.yaml")
+	if _, err := os.Stat(suitePath); os.IsNotExist(err) {
+		t.Error("suite file should still exist")
+	}
+
+	apiPath := filepath.Join(tmpDir, "test_api.yaml")
+	if _, err := os.Stat(apiPath); os.IsNotExist(err) {
+		t.Error("test_api.yaml should still exist")
+	}
+}
+
+func TestDeleteNonexistent(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "suite-test-*")
+	if err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dirs := []string{tmpDir}
+
+	// Delete nonexistent suite
+	_, err = DeleteSuite(dirs, "nonexistent", true)
+	if err == nil {
+		t.Error("expected error when deleting nonexistent suite")
+	}
+
+	// Delete nonexistent test
+	_, _, err = DeleteTest(dirs, "nonexistent")
+	if err == nil {
+		t.Error("expected error when deleting nonexistent test")
+	}
+}
+
 func TestFilterTestsByTag(t *testing.T) {
 	tests := []LoadedTest{
 		{Name: "t1", Config: configWithTags("smoke", "auth")},

@@ -31,6 +31,8 @@ func handleTestCommand(args []string) error {
 		return handleTestListCommand(args[1:])
 	case "report":
 		return handleTestReportCommand(args[1:])
+	case "remove", "rm", "delete":
+		return handleTestRemoveCommand(args[1:])
 	default:
 		printTestUsage()
 		return fmt.Errorf("unknown test command: %s", args[0])
@@ -38,7 +40,7 @@ func handleTestCommand(args []string) error {
 }
 
 func printTestUsage() {
-	fmt.Println("usage: astonish test [-h] {run,list,report} ...")
+	fmt.Println("usage: astonish test [-h] {run,list,report,remove} ...")
 	fmt.Println("")
 	fmt.Println("Deterministic test runner for AI-authored test suites.")
 	fmt.Println("")
@@ -46,6 +48,7 @@ func printTestUsage() {
 	fmt.Println("  run                 Run a test suite or single test")
 	fmt.Println("  list                List all test suites and tests")
 	fmt.Println("  report              Show the last test report")
+	fmt.Println("  remove              Remove a test suite or single test")
 	fmt.Println("")
 	fmt.Println("options:")
 	fmt.Println("  -h, --help          Show this help message")
@@ -660,6 +663,181 @@ func handleTestReportCommand(args []string) error {
 		fmt.Println("Run tests first with: astonish test run <suite>")
 	}
 
+	return nil
+}
+
+func handleTestRemoveCommand(args []string) error {
+	removeCmd := flag.NewFlagSet("test remove", flag.ExitOnError)
+	forceFlag := removeCmd.Bool("force", false, "Skip confirmation prompt")
+	keepTests := removeCmd.Bool("keep-tests", false, "When removing a suite, keep its test files")
+
+	// Extract positional argument before flags
+	var targetName string
+	var flagArgs []string
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			flagArgs = append(flagArgs, arg)
+		} else if targetName == "" {
+			targetName = arg
+		} else {
+			flagArgs = append(flagArgs, arg)
+		}
+	}
+
+	if err := removeCmd.Parse(flagArgs); err != nil {
+		return fmt.Errorf("failed to parse flags: %w", err)
+	}
+
+	if targetName == "" {
+		fmt.Println("usage: astonish test remove <suite_or_test> [--force] [--keep-tests]")
+		fmt.Println("")
+		fmt.Println("Removes a test suite and all its test files, or a single test file.")
+		fmt.Println("When removing a suite, all associated test files are also deleted")
+		fmt.Println("unless --keep-tests is specified.")
+		return fmt.Errorf("no suite or test name provided")
+	}
+
+	// Strip .yaml extension if provided
+	targetName = strings.TrimSuffix(targetName, ".yaml")
+	targetName = strings.TrimSuffix(targetName, ".yml")
+
+	dirs := getTestDirs()
+
+	// Try as suite first
+	suite, err := atesting.FindSuite(dirs, targetName)
+	if err == nil {
+		return handleRemoveSuite(dirs, suite, !*keepTests, *forceFlag)
+	}
+
+	// Try as individual test
+	test, parentSuite, err := atesting.FindTestAndSuite(dirs, targetName)
+	if err == nil {
+		return handleRemoveTest(dirs, test, parentSuite, *forceFlag)
+	}
+
+	return fmt.Errorf("not found as suite or test: %s", targetName)
+}
+
+func handleRemoveSuite(dirs []string, suite *atesting.LoadedSuite, deleteTests bool, force bool) error {
+	// Find all associated tests
+	tests, _ := atesting.FindTestsForSuite(dirs, suite.Name)
+
+	// Show what will be deleted
+	fmt.Printf("Suite: %s (%s)\n", suite.Name, suite.File)
+	if len(tests) > 0 && deleteTests {
+		fmt.Printf("Tests (%d):\n", len(tests))
+		for _, t := range tests {
+			desc := t.Name
+			if t.Config.Description != "" {
+				desc = t.Config.Description
+			}
+			fmt.Printf("  - %s (%s)\n", desc, t.File)
+		}
+	} else if len(tests) > 0 {
+		fmt.Printf("Warning: %d test file(s) reference this suite and will become orphaned.\n", len(tests))
+	}
+
+	// Check for report artifacts
+	reportDir := filepath.Join(".astonish", "reports", suite.Name)
+	hasReports := false
+	if info, err := os.Stat(reportDir); err == nil && info.IsDir() {
+		hasReports = true
+		fmt.Printf("Reports: %s (will also be removed)\n", reportDir)
+	}
+
+	// Confirm
+	if !force {
+		totalFiles := 1 // suite file
+		if deleteTests {
+			totalFiles += len(tests)
+		}
+		fmt.Printf("\nRemove %d file(s)? [y/N]: ", totalFiles)
+		var response string
+		fmt.Scanln(&response)
+		if strings.ToLower(response) != "y" {
+			fmt.Println("Cancelled.")
+			return nil
+		}
+	}
+
+	// Perform deletion
+	deleted, err := atesting.DeleteSuite(dirs, suite.Name, deleteTests)
+	if err != nil {
+		// Show partial results
+		for _, path := range deleted {
+			fmt.Printf("  Deleted: %s\n", path)
+		}
+		return fmt.Errorf("deletion failed: %w", err)
+	}
+
+	for _, path := range deleted {
+		fmt.Printf("  Deleted: %s\n", path)
+	}
+
+	// Clean up report artifacts
+	if hasReports {
+		if err := os.RemoveAll(reportDir); err == nil {
+			fmt.Printf("  Deleted: %s\n", reportDir)
+		}
+	}
+
+	// Clean up knowledge docs (best-effort)
+	if memDir, err := config.GetMemoryDir(nil); err == nil {
+		docPath := filepath.Join(memDir, "flows", suite.Name+".md")
+		os.Remove(docPath)
+		for _, t := range tests {
+			docPath = filepath.Join(memDir, "flows", t.Name+".md")
+			os.Remove(docPath)
+		}
+	}
+
+	testCount := len(deleted) - 1
+	if testCount > 0 {
+		fmt.Printf("\nRemoved suite %q and %d test(s).\n", suite.Name, testCount)
+	} else {
+		fmt.Printf("\nRemoved suite %q.\n", suite.Name)
+	}
+	return nil
+}
+
+func handleRemoveTest(dirs []string, test *atesting.LoadedTest, suite *atesting.LoadedSuite, force bool) error {
+	fmt.Printf("Test: %s (%s)\n", test.Name, test.File)
+	fmt.Printf("Suite: %s\n", suite.Name)
+
+	if !force {
+		fmt.Printf("\nRemove this test? [y/N]: ")
+		var response string
+		fmt.Scanln(&response)
+		if strings.ToLower(response) != "y" {
+			fmt.Println("Cancelled.")
+			return nil
+		}
+	}
+
+	deletedPath, _, err := atesting.DeleteTest(dirs, test.Name)
+	if err != nil {
+		return fmt.Errorf("deletion failed: %w", err)
+	}
+
+	fmt.Printf("  Deleted: %s\n", deletedPath)
+
+	// Clean up knowledge doc (best-effort)
+	if memDir, err := config.GetMemoryDir(nil); err == nil {
+		docPath := filepath.Join(memDir, "flows", test.Name+".md")
+		os.Remove(docPath)
+	}
+
+	// Check for report artifacts
+	reportDir := filepath.Join(".astonish", "reports", test.Name)
+	if info, err := os.Stat(reportDir); err == nil && info.IsDir() {
+		if err := os.RemoveAll(reportDir); err == nil {
+			fmt.Printf("  Deleted: %s\n", reportDir)
+		}
+	}
+
+	// Warn about remaining tests in suite
+	remaining, _ := atesting.FindTestsForSuite(dirs, suite.Name)
+	fmt.Printf("\nRemoved test %q. Suite %q has %d remaining test(s).\n", test.Name, suite.Name, len(remaining))
 	return nil
 }
 

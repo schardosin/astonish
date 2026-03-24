@@ -72,7 +72,11 @@ func (r *SessionRegistry) Load() error {
 func (r *SessionRegistry) Save() error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	return r.saveLocked()
+}
 
+// saveLocked writes the session registry to disk. Caller must hold r.mu (read or write).
+func (r *SessionRegistry) saveLocked() error {
 	entries := make([]*SessionEntry, 0, len(r.entries))
 	for _, e := range r.entries {
 		entries = append(entries, e)
@@ -93,14 +97,14 @@ func (r *SessionRegistry) Save() error {
 // Put registers a session-to-container mapping and saves.
 func (r *SessionRegistry) Put(sessionID, containerName, templateName string) error {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.entries[sessionID] = &SessionEntry{
 		SessionID:     sessionID,
 		ContainerName: containerName,
 		TemplateName:  templateName,
 		CreatedAt:     time.Now(),
 	}
-	r.mu.Unlock()
-	return r.Save()
+	return r.saveLocked()
 }
 
 // Get returns the session entry, or nil if not found.
@@ -123,9 +127,9 @@ func (r *SessionRegistry) GetContainerName(sessionID string) string {
 // Remove deletes a session-to-container mapping and saves.
 func (r *SessionRegistry) Remove(sessionID string) error {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	delete(r.entries, sessionID)
-	r.mu.Unlock()
-	return r.Save()
+	return r.saveLocked()
 }
 
 // List returns all session entries.
@@ -188,25 +192,24 @@ func (r *SessionRegistry) ResolveSessionID(input string) (string, bool) {
 // by code paths that don't clean the registry (e.g., LazyNodeClient.Cleanup,
 // fleet session exit).
 func (r *SessionRegistry) Reap(client *IncusClient) int {
-	r.mu.RLock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	var stale []string
 	for sessID, entry := range r.entries {
 		if !client.InstanceExists(entry.ContainerName) {
 			stale = append(stale, sessID)
 		}
 	}
-	r.mu.RUnlock()
 
 	if len(stale) == 0 {
 		return 0
 	}
 
-	r.mu.Lock()
 	for _, sessID := range stale {
 		delete(r.entries, sessID)
 	}
-	r.mu.Unlock()
 
-	_ = r.Save()
+	_ = r.saveLocked()
 	return len(stale)
 }

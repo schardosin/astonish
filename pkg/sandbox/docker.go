@@ -206,8 +206,8 @@ func EnsureIncusDockerContainer() error {
 		"--restart", "unless-stopped",
 		// Persist all Incus data (containers, images, storage pools)
 		"-v", DockerVolumeName + ":/var/lib/incus",
-		// Expose Incus API for the host astonish to connect via TCP
-		"-p", DockerIncusPort + ":" + DockerIncusPort,
+		// Expose Incus API for the host astonish to connect via TCP (localhost only)
+		"-p", "127.0.0.1:" + DockerIncusPort + ":" + DockerIncusPort,
 		// Label with astonish version for upgrade detection
 		"--label", DockerVersionLabel + "=" + currentVersion,
 		imageTag,
@@ -261,7 +261,7 @@ func UpgradeIncusDockerContainer() error {
 		"--privileged",
 		"--restart", "unless-stopped",
 		"-v", DockerVolumeName + ":/var/lib/incus",
-		"-p", DockerIncusPort + ":" + DockerIncusPort,
+		"-p", "127.0.0.1:" + DockerIncusPort + ":" + DockerIncusPort,
 		"--label", DockerVersionLabel + "=" + currentVersion,
 		imageTag,
 	}

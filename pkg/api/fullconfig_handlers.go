@@ -629,6 +629,11 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 		if req.Sandbox.Processes > 0 {
 			cfg.Sandbox.Limits.Processes = req.Sandbox.Processes
 		}
+
+		if err := sandbox.ValidateSandboxConfig(&cfg.Sandbox); err != nil {
+			http.Error(w, "Invalid sandbox config: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
 	if err := config.SaveAppConfig(cfg); err != nil {

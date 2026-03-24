@@ -398,8 +398,16 @@ func (lnc *LazyNodeClient) Call(sessionID, toolName string, args map[string]inte
 	// Ensure BindSession was called (idempotent — no-op if already called)
 	lnc.BindSession(sessionID)
 
-	// Wait for background init to complete
-	<-lnc.initDone
+	// Wait for background init to complete.
+	// initDone is guaranteed non-nil after BindSession (if sessionID != "")
+	// or after Close(). Guard against nil to prevent deadlock.
+	lnc.mu.Lock()
+	done := lnc.initDone
+	lnc.mu.Unlock()
+	if done == nil {
+		return nil, fmt.Errorf("lazy node client: no session bound (empty session ID)")
+	}
+	<-done
 
 	lnc.mu.Lock()
 	if lnc.closed {
@@ -430,6 +438,20 @@ func (lnc *LazyNodeClient) Close() error {
 
 	if lnc.nodeClient != nil {
 		lnc.nodeClient.Close()
+	}
+
+	// If BindSession was never called, initialize channels as already-closed
+	// so any goroutine that later calls Call()/EnsureReady()/EnsureContainerReady()
+	// unblocks immediately instead of deadlocking on a nil channel.
+	if lnc.containerReady == nil {
+		lnc.containerReady = make(chan struct{})
+		close(lnc.containerReady)
+		lnc.containerErr = fmt.Errorf("lazy node client is closed")
+	}
+	if lnc.initDone == nil {
+		lnc.initDone = make(chan struct{})
+		close(lnc.initDone)
+		lnc.initErr = fmt.Errorf("lazy node client is closed")
 	}
 
 	return nil
@@ -541,7 +563,14 @@ func (lnc *LazyNodeClient) GetSessionRegistry() *SessionRegistry {
 // Used by built-in tool calls that need both the container and the NDJSON node.
 func (lnc *LazyNodeClient) EnsureReady(sessionID string) (string, error) {
 	lnc.BindSession(sessionID)
-	<-lnc.initDone
+
+	lnc.mu.Lock()
+	done := lnc.initDone
+	lnc.mu.Unlock()
+	if done == nil {
+		return "", fmt.Errorf("lazy node client: no session bound (empty session ID)")
+	}
+	<-done
 
 	lnc.mu.Lock()
 	defer lnc.mu.Unlock()
@@ -562,7 +591,14 @@ func (lnc *LazyNodeClient) EnsureReady(sessionID string) (string, error) {
 // an error; if only the node fails, this still succeeds.
 func (lnc *LazyNodeClient) EnsureContainerReady(sessionID string) (string, error) {
 	lnc.BindSession(sessionID)
-	<-lnc.containerReady
+
+	lnc.mu.Lock()
+	ready := lnc.containerReady
+	lnc.mu.Unlock()
+	if ready == nil {
+		return "", fmt.Errorf("lazy node client: no session bound (empty session ID)")
+	}
+	<-ready
 
 	lnc.mu.Lock()
 	defer lnc.mu.Unlock()

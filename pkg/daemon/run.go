@@ -43,6 +43,12 @@ func Run(cfg RunConfig) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
+	// Validate sandbox config early so invalid values are caught at startup
+	// rather than producing cryptic Incus errors during container creation.
+	if err := sandbox.ValidateSandboxConfig(&appCfg.Sandbox); err != nil {
+		log.Printf("WARNING: %v — using defaults", err)
+	}
+
 	// Resolve port
 	port := cfg.Port
 	if port <= 0 {

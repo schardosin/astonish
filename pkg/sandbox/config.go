@@ -2,6 +2,8 @@ package sandbox
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
 
 	"github.com/schardosin/astonish/pkg/config"
 )
@@ -31,10 +33,16 @@ func IsSandboxEnabled(c *config.SandboxConfig) bool {
 	return *c.Enabled
 }
 
+// validMemoryPattern matches Incus memory limit strings like "512MB", "2GB", "1024kB".
+var validMemoryPattern = regexp.MustCompile(`(?i)^\d+\s*(kB|MB|GB|TB|EB|PB)$`)
+
 // ValidateSandboxConfig checks the sandbox configuration for errors.
 func ValidateSandboxConfig(c *config.SandboxConfig) error {
 	if c.Network != "" && c.Network != "bridged" && c.Network != "none" {
 		return fmt.Errorf("sandbox.network must be 'bridged' or 'none', got %q", c.Network)
+	}
+	if c.Limits.Memory != "" && !validMemoryPattern.MatchString(strings.TrimSpace(c.Limits.Memory)) {
+		return fmt.Errorf("sandbox.limits.memory must be a valid size (e.g. '2GB', '512MB'), got %q", c.Limits.Memory)
 	}
 	if c.Limits.CPU < 0 {
 		return fmt.Errorf("sandbox.limits.cpu must be >= 0, got %d", c.Limits.CPU)

@@ -32,6 +32,7 @@ type sandboxTemplateDeps struct {
 	nodePool         *sandbox.NodeClientPool
 	incusClient      *sandbox.IncusClient
 	templateRegistry *sandbox.TemplateRegistry
+	sessionRegistry  *sandbox.SessionRegistry
 }
 
 var sandboxTemplateDepsVar *sandboxTemplateDeps
@@ -44,11 +45,12 @@ var sandboxTemplateDepsVar *sandboxTemplateDeps
 // The wizard calls it after installing all project dependencies and cloning
 // the repo inside the container. Later, fleet sessions clone from this
 // custom template instead of @base.
-func NewSaveSandboxTemplateTool(nodePool *sandbox.NodeClientPool, incusClient *sandbox.IncusClient, templateRegistry *sandbox.TemplateRegistry) (tool.Tool, error) {
+func NewSaveSandboxTemplateTool(nodePool *sandbox.NodeClientPool, incusClient *sandbox.IncusClient, templateRegistry *sandbox.TemplateRegistry, sessionRegistry *sandbox.SessionRegistry) (tool.Tool, error) {
 	sandboxTemplateDepsVar = &sandboxTemplateDeps{
 		nodePool:         nodePool,
 		incusClient:      incusClient,
 		templateRegistry: templateRegistry,
+		sessionRegistry:  sessionRegistry,
 	}
 
 	t, err := functiontool.New(functiontool.Config{
@@ -121,6 +123,18 @@ func saveSandboxTemplate(ctx tool.Context, args SaveSandboxTemplateArgs) (SaveSa
 		log.Printf("[sandbox-template] Warning: failed to stop node: %v (continuing anyway)", err)
 	}
 
+	// Determine the source template this session was based on.
+	// This is critical for the overlay chain — the new template must
+	// reference the source template as its BasedOn, not just @base.
+	// Otherwise, files from intermediate template layers are lost.
+	sourceTemplate := ""
+	if deps.sessionRegistry != nil {
+		if entry := deps.sessionRegistry.Get(sessionID); entry != nil {
+			sourceTemplate = entry.TemplateName
+			log.Printf("[sandbox-template] Session %s is based on template %q", sessionID[:min(8, len(sessionID))], sourceTemplate)
+		}
+	}
+
 	// 2. Create the template from the container
 	log.Printf("[sandbox-template] Creating template %q from container %q...", name, containerName)
 	if err := sandbox.CreateTemplateFromContainer(
@@ -129,6 +143,7 @@ func saveSandboxTemplate(ctx tool.Context, args SaveSandboxTemplateArgs) (SaveSa
 		containerName,
 		name,
 		strings.TrimSpace(args.Description),
+		sourceTemplate,
 	); err != nil {
 		// Try to restart node even on failure
 		if restartErr := deps.nodePool.RestartNode(sessionID); restartErr != nil {

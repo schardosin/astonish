@@ -939,6 +939,14 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 		wrappedTools = append(wrappedTools, wrappedFleetTools...)
 	}
 
+	// Add run_test_suite tool (runs on host, proxies shell/file steps into
+	// the fleet's container). This tool is NOT in containerTools so it won't
+	// be double-wrapped — it orchestrates on the host.
+	runTestTool, runTestErr := tools.NewRunTestSuiteToolWithClient(lazyNode, fleetSession.ID)
+	if runTestErr == nil {
+		wrappedTools = append(wrappedTools, runTestTool)
+	}
+
 	fleetSession.SandboxTools = wrappedTools
 
 	// Create sandbox-wired MCP toolsets for this fleet session.

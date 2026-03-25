@@ -5,15 +5,18 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/schardosin/astonish/pkg/browser"
 	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/flowstore"
+	"github.com/schardosin/astonish/pkg/provider"
+	"github.com/schardosin/astonish/pkg/sandbox"
 	atesting "github.com/schardosin/astonish/pkg/testing"
 	"github.com/schardosin/astonish/pkg/tools"
 )
@@ -81,11 +84,12 @@ var browserToolNames = map[string]bool{
 // browserToolExecutor lazily initializes a browser.Manager and dispatches browser tool calls
 // using the same closure-based factory pattern as GetBrowserTools.
 type browserToolExecutor struct {
-	mu       sync.Mutex
-	mgr      *browser.Manager
-	guard    *browser.NavigationGuard
-	refs     *browser.RefMap
-	headless bool
+	mu             sync.Mutex
+	mgr            *browser.Manager
+	guard          *browser.NavigationGuard
+	refs           *browser.RefMap
+	headless       bool
+	allowPrivateIP bool // when true, browser can reach private IPs (sandbox container bridge)
 }
 
 func newBrowserToolExecutor(headless bool) *browserToolExecutor {
@@ -101,8 +105,13 @@ func (b *browserToolExecutor) ensureInit() {
 	}
 	cfg := browser.DefaultConfig()
 	cfg.Headless = b.headless
+	cfg.UserDataDir = "" // temp dir avoids SingletonLock conflict with other browser instances
 	b.mgr = browser.NewManager(cfg)
-	b.guard = browser.DefaultNavigationGuard()
+	if b.allowPrivateIP {
+		b.guard = &browser.NavigationGuard{BlockPrivateNetworks: false}
+	} else {
+		b.guard = browser.DefaultNavigationGuard()
+	}
 	b.refs = browser.NewRefMap()
 }
 
@@ -377,17 +386,61 @@ func (b *browserToolExecutor) Execute(_ context.Context, name string, args map[s
 	}
 }
 
-// compositeToolExecutor tries the internal executor first, then the browser executor.
+// compositeToolExecutor routes tool calls to the appropriate executor.
+// When sandbox is non-nil, container tools (shell_command, file tools, etc.)
+// are routed into the sandbox container. Browser tools always run on the host.
 type compositeToolExecutor struct {
 	internal *internalToolExecutor
 	browser  *browserToolExecutor
+	sandbox  *sandboxToolExecutor // nil when no sandbox
 }
 
 func (c *compositeToolExecutor) Execute(ctx context.Context, name string, args map[string]interface{}) (any, error) {
 	if browserToolNames[name] {
 		return c.browser.Execute(ctx, name, args)
 	}
+	if c.sandbox != nil && containerToolNames[name] {
+		return c.sandbox.Execute(ctx, name, args)
+	}
 	return c.internal.Execute(ctx, name, args)
+}
+
+// sandboxToolExecutor proxies tool calls into a sandbox container via LazyNodeClient.
+type sandboxToolExecutor struct {
+	lazyClient *sandbox.LazyNodeClient
+	sessionID  string
+}
+
+func (e *sandboxToolExecutor) Execute(_ context.Context, name string, args map[string]interface{}) (any, error) {
+	raw, err := e.lazyClient.Call(e.sessionID, name, args)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox call %s: %w", name, err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal sandbox result for %s: %w", name, err)
+	}
+	return result, nil
+}
+
+// containerToolNames lists tools that should route into the sandbox container.
+var containerToolNames = map[string]bool{
+	"shell_command":             true,
+	"read_file":                 true,
+	"write_file":                true,
+	"edit_file":                 true,
+	"file_tree":                 true,
+	"grep_search":               true,
+	"find_files":                true,
+	"process_read":              true,
+	"process_write":             true,
+	"process_list":              true,
+	"process_kill":              true,
+	"http_request":              true,
+	"web_fetch":                 true,
+	"read_pdf":                  true,
+	"filter_json":               true,
+	"git_diff_add_line_numbers": true,
 }
 
 func handleTestRunCommand(args []string) error {
@@ -395,6 +448,7 @@ func handleTestRunCommand(args []string) error {
 	tagFlag := runCmd.String("tag", "", "Filter tests by tag (comma-separated)")
 	verbose := runCmd.Bool("verbose", false, "Verbose output")
 	reportDir := runCmd.String("report-dir", "", "Directory to save report (default: .astonish/reports)")
+	analyze := runCmd.Bool("analyze", false, "Enable AI triage analysis on failures (uses default LLM provider)")
 
 	// Extract positional argument (suite or test name) before flags
 	var targetName string
@@ -414,11 +468,11 @@ func handleTestRunCommand(args []string) error {
 	}
 
 	if targetName == "" {
-		fmt.Println("usage: astonish test run <suite_or_test> [--tag tag1,tag2] [--verbose] [--report-dir dir]")
+		fmt.Println("usage: astonish test run <suite_or_test> [--tag tag1,tag2] [--verbose] [--analyze] [--report-dir dir]")
 		return fmt.Errorf("no suite or test name provided")
 	}
 
-	dirs := getTestDirs()
+	dirs := atesting.DefaultTestDirs()
 
 	// Determine report directory
 	rdir := *reportDir
@@ -426,30 +480,19 @@ func handleTestRunCommand(args []string) error {
 		rdir = filepath.Join(".astonish", "reports", targetName)
 	}
 
-	// Create artifact manager
-	am, err := atesting.NewArtifactManager(rdir, targetName)
-	if err != nil {
-		fmt.Printf("Warning: could not create artifact manager: %v\n", err)
-	}
+	// --- Discover suite and tests FIRST (before building executor) ---
 
-	// Create tool executor (supports both internal and browser tools)
-	browserExec := newBrowserToolExecutor(true) // headless for CI
-	defer browserExec.Close()
-	executor := &compositeToolExecutor{
-		internal: &internalToolExecutor{},
-		browser:  browserExec,
-	}
-	runner := atesting.NewSuiteRunner(executor, am, *verbose)
+	var suite *atesting.LoadedSuite
+	var tests []atesting.LoadedTest
 
-	// Try to find as suite first
-	suite, err := atesting.FindSuite(dirs, targetName)
-	if err == nil {
-		// Found a suite — run all its tests (optionally filtered by tag)
-		if err := atesting.ValidateSuite(suite); err != nil {
+	foundSuite, sErr := atesting.FindSuite(dirs, targetName)
+	if sErr == nil {
+		// Found as a suite
+		if err := atesting.ValidateSuite(foundSuite); err != nil {
 			return fmt.Errorf("invalid suite: %w", err)
 		}
-
-		tests := suite.Tests
+		suite = foundSuite
+		tests = suite.Tests
 		if *tagFlag != "" {
 			tags := strings.Split(*tagFlag, ",")
 			for i := range tags {
@@ -461,47 +504,115 @@ func handleTestRunCommand(args []string) error {
 				return nil
 			}
 		}
-
-		fmt.Printf("Running suite: %s (%d tests)\n", suite.Name, len(tests))
-		report, err := runner.RunSuite(context.Background(), suite, tests)
-		if err != nil {
-			return fmt.Errorf("suite run failed: %w", err)
+	} else {
+		// Try as individual test
+		test, parentSuite, tErr := atesting.FindTestAndSuite(dirs, targetName)
+		if tErr != nil {
+			return fmt.Errorf("not found as suite or test: %s", targetName)
 		}
+		if err := atesting.ValidateSuite(parentSuite); err != nil {
+			return fmt.Errorf("invalid suite %q for test %q: %w", parentSuite.Name, test.Name, err)
+		}
+		suite = parentSuite
+		tests = []atesting.LoadedTest{*test}
+	}
 
-		atesting.PrintReport(report, os.Stdout)
+	// --- Build executor (sandbox-aware if suite has a template) ---
 
-		// Save report
-		reportPath, err := atesting.SaveReport(report, rdir)
-		if err != nil {
-			fmt.Printf("Warning: could not save report: %v\n", err)
+	suiteTemplate := ""
+	if suite.Config.SuiteConfig != nil {
+		suiteTemplate = suite.Config.SuiteConfig.Template
+	}
+
+	// Determine if sandbox should be used
+	var lazyNode *sandbox.LazyNodeClient
+	var testSessionID string
+	useSandbox := false
+
+	if suiteTemplate != "" {
+		// Suite references a sandbox template — try to initialize sandbox
+		lazyNode, testSessionID, useSandbox = initSandboxForTest(suiteTemplate)
+		if lazyNode != nil {
+			defer lazyNode.Cleanup()
+		}
+	}
+
+	// Browser executor: allow private IPs when sandbox is active (browser needs
+	// to reach the container's bridge IP like 10.99.0.x)
+	browserExec := newBrowserToolExecutor(true) // headless for CI
+	if useSandbox {
+		browserExec.allowPrivateIP = true
+	}
+	defer browserExec.Close()
+
+	executor := &compositeToolExecutor{
+		internal: &internalToolExecutor{},
+		browser:  browserExec,
+	}
+
+	if useSandbox && lazyNode != nil {
+		executor.sandbox = &sandboxToolExecutor{
+			lazyClient: lazyNode,
+			sessionID:  testSessionID,
+		}
+	}
+
+	// --- Discover container IP and set vars ---
+
+	vars := map[string]string{"CONTAINER_IP": "localhost"}
+	if useSandbox && lazyNode != nil {
+		ip, err := lazyNode.GetContainerIP(testSessionID)
+		if err == nil && ip != "" {
+			vars["CONTAINER_IP"] = ip
+			if *verbose {
+				fmt.Printf("Container IP: %s\n", ip)
+			}
 		} else {
-			fmt.Printf("\nReport saved: %s\n", reportPath)
+			log.Printf("Warning: could not discover container IP: %v", err)
 		}
+	}
 
-		if report.Status != "passed" {
-			return fmt.Errorf("suite %s: %s", suite.Name, report.Status)
+	// Create artifact manager
+	am, amErr := atesting.NewArtifactManager(rdir, targetName)
+	if amErr != nil {
+		fmt.Printf("Warning: could not create artifact manager: %v\n", amErr)
+	}
+
+	runner := atesting.NewSuiteRunner(executor, am, *verbose)
+	runner.SetVars(vars)
+
+	// --- Set up AI triage if --analyze is enabled ---
+
+	if *analyze {
+		if err := setupTriageAgent(runner, executor, am, *verbose); err != nil {
+			fmt.Printf("Warning: could not enable AI triage: %v\n", err)
+			fmt.Println("Continuing without triage analysis.")
+		} else {
+			fmt.Println("AI triage: enabled (failures will be analyzed)")
 		}
-		return nil
 	}
 
-	// Not a suite — try as individual test
-	test, suite, err := atesting.FindTestAndSuite(dirs, targetName)
+	// --- Run ---
+
+	if len(tests) == 1 && sErr != nil {
+		// Individual test
+		fmt.Printf("Running test: %s (suite: %s)\n", tests[0].Name, suite.Name)
+	} else {
+		modeStr := ""
+		if useSandbox {
+			modeStr = fmt.Sprintf(" [sandbox: %s]", suiteTemplate)
+		}
+		fmt.Printf("Running suite: %s (%d tests)%s\n", suite.Name, len(tests), modeStr)
+	}
+
+	report, err := runner.RunSuite(context.Background(), suite, tests)
 	if err != nil {
-		return fmt.Errorf("not found as suite or test: %s", targetName)
-	}
-
-	if err := atesting.ValidateSuite(suite); err != nil {
-		return fmt.Errorf("invalid suite %q for test %q: %w", suite.Name, test.Name, err)
-	}
-
-	fmt.Printf("Running test: %s (suite: %s)\n", test.Name, suite.Name)
-	report, err := runner.RunSuite(context.Background(), suite, []atesting.LoadedTest{*test})
-	if err != nil {
-		return fmt.Errorf("test run failed: %w", err)
+		return fmt.Errorf("suite run failed: %w", err)
 	}
 
 	atesting.PrintReport(report, os.Stdout)
 
+	// Save report
 	reportPath, err := atesting.SaveReport(report, rdir)
 	if err != nil {
 		fmt.Printf("Warning: could not save report: %v\n", err)
@@ -510,8 +621,96 @@ func handleTestRunCommand(args []string) error {
 	}
 
 	if report.Status != "passed" {
-		return fmt.Errorf("test %s: %s", test.Name, report.Status)
+		return fmt.Errorf("suite %s: %s", suite.Name, report.Status)
 	}
+	return nil
+}
+
+// initSandboxForTest initializes sandbox infrastructure for a CLI test run.
+// Returns (lazyClient, sessionID, true) on success, or (nil, "", false) if
+// sandbox is not available or initialization fails.
+func initSandboxForTest(template string) (*sandbox.LazyNodeClient, string, bool) {
+	// Load app config to check if sandbox is enabled
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		log.Printf("Warning: could not load app config for sandbox: %v", err)
+		fmt.Println("Warning: Suite requires sandbox template but app config not available. Running locally.")
+		return nil, "", false
+	}
+
+	if !sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
+		fmt.Println("Warning: Suite requires sandbox template but sandbox is disabled. Running locally.")
+		return nil, "", false
+	}
+
+	// Connect to Incus
+	sandboxClient, err := sandbox.SetupSandboxRuntime()
+	if err != nil {
+		log.Printf("Warning: sandbox setup failed: %v", err)
+		fmt.Printf("Warning: Suite requires sandbox template %q but sandbox setup failed: %v\nRunning locally.\n", template, err)
+		return nil, "", false
+	}
+
+	// Create registries
+	sessRegistry, err := sandbox.NewSessionRegistry()
+	if err != nil {
+		log.Printf("Warning: session registry failed: %v", err)
+		return nil, "", false
+	}
+
+	tplRegistry, err := sandbox.NewTemplateRegistry()
+	if err != nil {
+		log.Printf("Warning: template registry failed: %v", err)
+		return nil, "", false
+	}
+
+	// Check that the template exists
+	if err := tplRegistry.Load(); err == nil {
+		if !tplRegistry.Exists(template) {
+			fmt.Printf("Warning: Sandbox template %q not found. Running locally.\n", template)
+			fmt.Println("Available templates can be listed with: astonish sandbox template list")
+			return nil, "", false
+		}
+	}
+
+	// Create LazyNodeClient with the suite's template
+	limits := sandbox.EffectiveLimits(&appCfg.Sandbox)
+	lazyNode := sandbox.NewLazyNodeClient(sandboxClient, sessRegistry, tplRegistry, template, &limits)
+
+	// Generate a unique session ID for this test run
+	testSessionID := "test-" + uuid.New().String()[:8]
+
+	// Trigger container creation
+	lazyNode.BindSession(testSessionID)
+
+	fmt.Printf("Sandbox: creating container from template %q...\n", template)
+	return lazyNode, testSessionID, true
+}
+
+// setupTriageAgent initializes an AI triage agent using the user's default LLM
+// provider and attaches it to the runner. Returns an error if the provider
+// cannot be initialized (missing API key, etc.).
+func setupTriageAgent(runner *atesting.SuiteRunner, executor atesting.ToolExecutor, am *atesting.ArtifactManager, verbose bool) error {
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		return fmt.Errorf("load app config: %w", err)
+	}
+
+	providerName := appCfg.General.DefaultProvider
+	modelName := appCfg.General.DefaultModel
+
+	if providerName == "" {
+		return fmt.Errorf("no default provider configured — set general.default_provider in astonish config")
+	}
+
+	llm, err := provider.GetProvider(context.Background(), providerName, modelName, appCfg)
+	if err != nil {
+		return fmt.Errorf("initialize %s provider: %w", providerName, err)
+	}
+
+	ta := atesting.NewTriageAgent(llm, executor, am, verbose)
+	runner.SetTriageAgent(ta, true) // enableForAll=true because --analyze means "triage everything"
+
 	return nil
 }
 
@@ -522,7 +721,7 @@ func handleTestListCommand(args []string) error {
 		return err
 	}
 
-	dirs := getTestDirs()
+	dirs := atesting.DefaultTestDirs()
 	suites, err := atesting.DiscoverSuites(dirs)
 	if err != nil {
 		return fmt.Errorf("discovery failed: %w", err)
@@ -701,7 +900,7 @@ func handleTestRemoveCommand(args []string) error {
 	targetName = strings.TrimSuffix(targetName, ".yaml")
 	targetName = strings.TrimSuffix(targetName, ".yml")
 
-	dirs := getTestDirs()
+	dirs := atesting.DefaultTestDirs()
 
 	// Try as suite first
 	suite, err := atesting.FindSuite(dirs, targetName)
@@ -839,26 +1038,4 @@ func handleRemoveTest(dirs []string, test *atesting.LoadedTest, suite *atesting.
 	remaining, _ := atesting.FindTestsForSuite(dirs, suite.Name)
 	fmt.Printf("\nRemoved test %q. Suite %q has %d remaining test(s).\n", test.Name, suite.Name, len(remaining))
 	return nil
-}
-
-// getTestDirs returns the directories to scan for test suites and tests.
-func getTestDirs() []string {
-	var dirs []string
-
-	// System agents directory
-	if sysDir, err := config.GetAgentsDir(); err == nil {
-		dirs = append(dirs, sysDir)
-	}
-
-	// Local agents directory
-	if info, err := os.Stat("agents"); err == nil && info.IsDir() {
-		dirs = append(dirs, "agents")
-	}
-
-	// User flows directory
-	if flowsDir, err := flowstore.GetFlowsDir(); err == nil {
-		dirs = append(dirs, flowsDir)
-	}
-
-	return dirs
 }

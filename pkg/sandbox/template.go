@@ -835,13 +835,19 @@ func ComputeBinaryHash() (string, error) {
 // 900MB+ rootfs. The new template gets its own overlay container with the
 // session's upper layer copied into it.
 //
+// sourceTemplate is the template that the session container was created from
+// (e.g., "juicytrade" if the session used use_sandbox_template to switch).
+// The new template's BasedOn field is set to this value so that the overlay
+// chain correctly includes the source template's layers. If empty, defaults
+// to BaseTemplate ("base").
+//
 // Steps:
 //  1. Stop the session container
 //  2. Create overlay container for the new template (from tiny image)
 //  3. Copy the session's overlay upper layer to the template's overlay upper
 //  4. Register the template (stacked overlay, no Incus snapshot needed)
 //  5. Restart the session container
-func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry, containerName, templateName, description string) error {
+func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry, containerName, templateName, description, sourceTemplate string) error {
 	if templateName == BaseTemplate {
 		return fmt.Errorf("cannot create a template named %q (reserved)", BaseTemplate)
 	}
@@ -849,6 +855,11 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 	tplContainerName := TemplateName(templateName)
 	if client.InstanceExists(tplContainerName) {
 		return fmt.Errorf("template %q already exists", templateName)
+	}
+
+	// Default to @base if source template not specified
+	if sourceTemplate == "" {
+		sourceTemplate = BaseTemplate
 	}
 
 	// Resolve pool paths
@@ -945,11 +956,17 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 	}
 
 	// Mount overlay on the template container so it can be started/shelled into.
-	// The lower layer is only the @base snapshot — the template's own upper dir
-	// (pre-populated with session content above) serves as the overlay upperdir.
-	// Including tplUpperDir in lowerdir would cause ELOOP because MountOverlay
-	// also sets upperdir to the same path.
-	lowerDir := SnapshotRootfsPath(poolPath, BaseTemplate)
+	// The lower layers come from the source template that the session was based on.
+	// For @base sessions, this is just the @base snapshot rootfs.
+	// For custom template sessions (e.g., juicytrade), this includes the custom
+	// template's upper dir stacked on top of @base — preserving all the files
+	// from the parent template that the session inherited.
+	lowerDir, err := ResolveLowerLayers(poolPath, sourceTemplate, registry)
+	if err != nil {
+		_ = client.DeleteInstance(tplContainerName)
+		restartSession()
+		return fmt.Errorf("failed to resolve lower layers for source template %q: %w", sourceTemplate, err)
+	}
 	if err := MountOverlay(poolPath, tplContainerName, lowerDir); err != nil {
 		_ = client.DeleteInstance(tplContainerName)
 		restartSession()
@@ -966,7 +983,7 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 		Description: description,
 		CreatedAt:   now,
 		SnapshotAt:  now,
-		BasedOn:     BaseTemplate,
+		BasedOn:     sourceTemplate,
 		BinaryHash:  hash,
 	}
 

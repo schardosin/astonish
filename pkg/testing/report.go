@@ -20,6 +20,7 @@ type SuiteReport struct {
 	SetupLog   string       `json:"setup_log,omitempty"`
 	Tests      []TestReport `json:"tests"`
 	Summary    string       `json:"summary"`
+	Analysis   string       `json:"analysis,omitempty"` // AI triage summary (from --analyze or on_fail: triage)
 }
 
 // TestReport holds results of a single test.
@@ -32,6 +33,7 @@ type TestReport struct {
 	FinishedAt time.Time    `json:"finished_at"`
 	Steps      []StepResult `json:"steps"`
 	Tags       []string     `json:"tags,omitempty"`
+	Retries    int          `json:"retries,omitempty"` // number of retries attempted
 }
 
 // StepResult holds the result of a single test step.
@@ -43,6 +45,20 @@ type StepResult struct {
 	Assertion *AssertionResult `json:"assertion,omitempty"`
 	Artifacts []string         `json:"artifacts,omitempty"`
 	Error     string           `json:"error,omitempty"`
+	Output    string           `json:"output,omitempty"` // raw tool output for failed/errored steps (capped at 10KB)
+	Triage    *TriageVerdict   `json:"triage,omitempty"` // AI diagnosis (when on_fail: triage or --analyze)
+}
+
+// TriageVerdict is the structured output from the L1 triage agent.
+type TriageVerdict struct {
+	Classification string   `json:"classification"` // "transient", "bug", "environment", "test_issue"
+	Confidence     float64  `json:"confidence"`     // 0.0 - 1.0
+	RootCause      string   `json:"root_cause"`
+	Evidence       []string `json:"evidence"`
+	Location       string   `json:"location,omitempty"` // file:line if applicable
+	Recommendation string   `json:"recommendation"`
+	Retry          bool     `json:"retry"`                   // whether the runner should retry
+	FullAnalysis   string   `json:"full_analysis,omitempty"` // raw LLM analysis text (for verbose output)
 }
 
 // ComputeSummary sets the Summary field based on test results.
@@ -120,7 +136,11 @@ func PrintReport(report *SuiteReport, w io.Writer) {
 		if len(test.Tags) > 0 {
 			tags = " [" + strings.Join(test.Tags, ", ") + "]"
 		}
-		fmt.Fprintf(w, "  %s %s (%dms)%s\n", statusIcon(test.Status), test.Name, test.Duration, tags)
+		retryNote := ""
+		if test.Retries > 0 {
+			retryNote = fmt.Sprintf(" (retried %dx)", test.Retries)
+		}
+		fmt.Fprintf(w, "  %s %s (%dms)%s%s\n", statusIcon(test.Status), test.Name, test.Duration, tags, retryNote)
 
 		for _, step := range test.Steps {
 			icon := statusIcon(step.Status)
@@ -131,8 +151,50 @@ func PrintReport(report *SuiteReport, w io.Writer) {
 			} else {
 				fmt.Fprintf(w, "    %s %s (%dms)\n", icon, step.Name, step.Duration)
 			}
+
+			// Print triage verdict inline with the failed step
+			if step.Triage != nil {
+				printTriageVerdict(w, step.Triage)
+			}
 		}
 	}
+
+	// Print overall analysis at the bottom
+	if report.Analysis != "" {
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "--- AI Analysis ---\n")
+		fmt.Fprintf(w, "%s\n", report.Analysis)
+	}
+}
+
+// printTriageVerdict renders a triage verdict below a failed step.
+func printTriageVerdict(w io.Writer, v *TriageVerdict) {
+	fmt.Fprintln(w)
+	classIcon := "BUG"
+	switch v.Classification {
+	case "transient":
+		classIcon = "TRANSIENT"
+	case "environment":
+		classIcon = "ENV"
+	case "test_issue":
+		classIcon = "TEST"
+	}
+	fmt.Fprintf(w, "         Verdict: %s (confidence: %.0f%%)\n", classIcon, v.Confidence*100)
+	fmt.Fprintf(w, "         Root cause: %s\n", v.RootCause)
+	if len(v.Evidence) > 0 {
+		fmt.Fprintf(w, "         Evidence:\n")
+		for _, e := range v.Evidence {
+			fmt.Fprintf(w, "           - %s\n", e)
+		}
+	}
+	if v.Location != "" {
+		fmt.Fprintf(w, "         Location: %s\n", v.Location)
+	}
+	fmt.Fprintf(w, "         Recommendation: %s\n", v.Recommendation)
+	if v.Retry {
+		fmt.Fprintf(w, "         Action: Retrying (classified as transient)\n")
+	}
+	fmt.Fprintln(w)
 }
 
 func statusIcon(status string) string {

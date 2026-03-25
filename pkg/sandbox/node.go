@@ -558,6 +558,17 @@ func (lnc *LazyNodeClient) GetSessionRegistry() *SessionRegistry {
 	return lnc.sessRegistry
 }
 
+// GetContainerIP returns the container's bridge IPv4 address. It waits for the
+// container to be ready first. This is the IP the host can use to reach services
+// running inside the container (e.g., for browser_navigate in sandbox mode).
+func (lnc *LazyNodeClient) GetContainerIP(sessionID string) (string, error) {
+	containerName, err := lnc.EnsureContainerReady(sessionID)
+	if err != nil {
+		return "", fmt.Errorf("container not ready: %w", err)
+	}
+	return lnc.incusClient.GetContainerIPv4(containerName)
+}
+
 // EnsureReady blocks until the container AND node are ready and returns the
 // container name. If either failed to start, returns an error.
 // Used by built-in tool calls that need both the container and the NDJSON node.

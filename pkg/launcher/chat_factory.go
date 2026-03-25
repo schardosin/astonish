@@ -417,7 +417,16 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// --- 2f. Initialize browser automation tools ---
 	browserCfg := browserConfigFromApp(cfg.AppConfig)
 	browserMgr := browser.NewManager(browserCfg)
-	browserTools, browserErr := tools.GetBrowserTools(browserMgr)
+	// When sandbox is enabled, services run inside containers on private IPs.
+	// The browser (on the host) must be able to navigate to those IPs, so we
+	// disable private network blocking in the NavigationGuard.
+	var browserTools []tool.Tool
+	var browserErr error
+	if cfg.AppConfig != nil && sandbox.IsSandboxEnabled(&cfg.AppConfig.Sandbox) {
+		browserTools, browserErr = tools.GetBrowserToolsForSandbox(browserMgr)
+	} else {
+		browserTools, browserErr = tools.GetBrowserTools(browserMgr)
+	}
 	if browserErr != nil {
 		if cfg.DebugMode {
 			fmt.Printf("Warning: Failed to create browser tools: %v\n", browserErr)
@@ -585,6 +594,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	var sandboxNodePool *sandbox.NodeClientPool      // hoisted for save_sandbox_template tool
 	var sandboxIncusClient *sandbox.IncusClient      // hoisted for save_sandbox_template tool
 	var sandboxTplRegistry *sandbox.TemplateRegistry // hoisted for save_sandbox_template tool
+	var sandboxSessRegistry *sandbox.SessionRegistry // hoisted for save_sandbox_template tool
 	if cfg.AppConfig != nil && sandbox.IsSandboxEnabled(&cfg.AppConfig.Sandbox) {
 		sandboxClient, sandboxErr := sandbox.SetupSandboxRuntime()
 		if sandboxErr != nil {
@@ -616,6 +626,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		sandboxNodePool = nodePool
 		sandboxIncusClient = sandboxClient
 		sandboxTplRegistry = tplRegistry
+		sandboxSessRegistry = sessRegistry
 
 		// Wire sandbox pool to all lazy MCP toolsets so stdio MCP servers
 		// start inside the session's container instead of on the host.
@@ -1054,7 +1065,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		// Register save_sandbox_template tool (available to wizard in chat sessions)
 		// Only when sandbox is enabled and we have all required dependencies.
 		if sandboxNodePool != nil && sandboxIncusClient != nil && sandboxTplRegistry != nil {
-			tplTool, tplErr := tools.NewSaveSandboxTemplateTool(sandboxNodePool, sandboxIncusClient, sandboxTplRegistry)
+			tplTool, tplErr := tools.NewSaveSandboxTemplateTool(sandboxNodePool, sandboxIncusClient, sandboxTplRegistry, sandboxSessRegistry)
 			if tplErr != nil {
 				if cfg.DebugMode {
 					fmt.Printf("Warning: Failed to create save_sandbox_template tool: %v\n", tplErr)
@@ -1097,6 +1108,19 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 	} else {
 		internalTools = append(internalTools, testSuiteTools...)
+	}
+
+	// Register run_test_suite tool (orchestrates test execution on the host,
+	// proxying shell/file tool steps into the sandbox container when active).
+	// sandboxNodePool is nil when sandbox is not enabled; the tool falls back
+	// to local execution.
+	runTestTool, runTestErr := tools.NewRunTestSuiteTool(sandboxNodePool)
+	if runTestErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("Warning: Failed to create run_test_suite tool: %v\n", runTestErr)
+		}
+	} else {
+		internalTools = append(internalTools, runTestTool)
 	}
 
 	// --- 6. Create ChatAgent ---

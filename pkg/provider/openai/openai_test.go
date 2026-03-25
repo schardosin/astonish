@@ -353,3 +353,129 @@ func TestEnsureNotEndingWithTool(t *testing.T) {
 		})
 	}
 }
+
+func TestPatchOrphanedToolCalls(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     []openailib.ChatCompletionMessage
+		expectLen int
+		// expectOrphanPatched: the tool_call_id that should have a synthetic response
+		expectOrphanPatched []string
+	}{
+		{
+			name:      "no messages",
+			input:     nil,
+			expectLen: 0,
+		},
+		{
+			name: "no orphans - all tool_calls have responses",
+			input: []openailib.ChatCompletionMessage{
+				{Role: openailib.ChatMessageRoleUser, Content: "hello"},
+				{
+					Role: openailib.ChatMessageRoleAssistant,
+					ToolCalls: []openailib.ToolCall{
+						{ID: "call_1", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "shell_command", Arguments: "{}"}},
+					},
+				},
+				{Role: openailib.ChatMessageRoleTool, ToolCallID: "call_1", Content: "ok"},
+			},
+			expectLen:           3,
+			expectOrphanPatched: nil,
+		},
+		{
+			name: "orphan at end - no tool response",
+			input: []openailib.ChatCompletionMessage{
+				{Role: openailib.ChatMessageRoleUser, Content: "hello"},
+				{
+					Role: openailib.ChatMessageRoleAssistant,
+					ToolCalls: []openailib.ToolCall{
+						{ID: "call_1", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "browser_snapshot", Arguments: "{}"}},
+					},
+				},
+			},
+			expectLen:           3, // original 2 + 1 synthetic tool response
+			expectOrphanPatched: []string{"call_1"},
+		},
+		{
+			name: "multiple orphans in one assistant message",
+			input: []openailib.ChatCompletionMessage{
+				{
+					Role: openailib.ChatMessageRoleAssistant,
+					ToolCalls: []openailib.ToolCall{
+						{ID: "call_a", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "tool1", Arguments: "{}"}},
+						{ID: "call_b", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "tool2", Arguments: "{}"}},
+						{ID: "call_c", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "tool3", Arguments: "{}"}},
+					},
+				},
+			},
+			expectLen:           4, // 1 assistant + 3 synthetic
+			expectOrphanPatched: []string{"call_a", "call_b", "call_c"},
+		},
+		{
+			name: "partial orphan - one answered one not",
+			input: []openailib.ChatCompletionMessage{
+				{
+					Role: openailib.ChatMessageRoleAssistant,
+					ToolCalls: []openailib.ToolCall{
+						{ID: "call_1", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "tool1", Arguments: "{}"}},
+						{ID: "call_2", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "tool2", Arguments: "{}"}},
+					},
+				},
+				{Role: openailib.ChatMessageRoleTool, ToolCallID: "call_1", Content: "ok"},
+			},
+			expectLen:           3, // assistant + synthetic for call_2 + existing tool for call_1
+			expectOrphanPatched: []string{"call_2"},
+		},
+		{
+			name: "orphan in middle of conversation",
+			input: []openailib.ChatCompletionMessage{
+				{Role: openailib.ChatMessageRoleUser, Content: "do something"},
+				{
+					Role: openailib.ChatMessageRoleAssistant,
+					ToolCalls: []openailib.ToolCall{
+						{ID: "call_old", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "hung_tool", Arguments: "{}"}},
+					},
+				},
+				// No tool response — then user sent another message
+				{Role: openailib.ChatMessageRoleUser, Content: "?"},
+			},
+			expectLen:           4, // user + assistant + synthetic tool + user
+			expectOrphanPatched: []string{"call_old"},
+		},
+		{
+			name: "no tool_calls in assistant - untouched",
+			input: []openailib.ChatCompletionMessage{
+				{Role: openailib.ChatMessageRoleUser, Content: "hello"},
+				{Role: openailib.ChatMessageRoleAssistant, Content: "hi there"},
+			},
+			expectLen:           2,
+			expectOrphanPatched: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := patchOrphanedToolCalls(tt.input)
+			if len(result) != tt.expectLen {
+				t.Fatalf("expected %d messages, got %d", tt.expectLen, len(result))
+			}
+
+			// Verify that the expected orphan IDs now have tool responses
+			for _, expectedID := range tt.expectOrphanPatched {
+				found := false
+				for _, msg := range result {
+					if msg.Role == openailib.ChatMessageRoleTool && msg.ToolCallID == expectedID {
+						found = true
+						if msg.Content == "" {
+							t.Errorf("synthetic tool response for %q should have content", expectedID)
+						}
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected synthetic tool response for orphan %q, not found", expectedID)
+				}
+			}
+		})
+	}
+}

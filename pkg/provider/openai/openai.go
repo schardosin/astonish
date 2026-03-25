@@ -352,6 +352,13 @@ func (p *Provider) toOpenAIMessages(req *model.LLMRequest) []openai.ChatCompleti
 	// its own tool_call_id.
 	messages = mergeConsecutiveSameRole(messages)
 
+	// Post-process: patch orphaned tool_calls. If an assistant message has
+	// tool_calls but there are no corresponding tool-role messages with
+	// matching tool_call_id, inject synthetic error responses. This prevents
+	// 400 errors when a tool call hung or crashed mid-stream without
+	// persisting a result to the session history.
+	messages = patchOrphanedToolCalls(messages)
+
 	// Post-process: ensure conversation doesn't end with a tool message.
 	// Some OpenAI-compatible providers (e.g. kimi-k2.5) reject requests
 	// where the final message has role "tool". The standard OpenAI flow
@@ -438,6 +445,59 @@ func mergeConsecutiveSameRole(messages []openai.ChatCompletionMessage) []openai.
 	}
 
 	return merged
+}
+
+// patchOrphanedToolCalls scans the message history for assistant messages
+// with tool_calls that have no corresponding tool-role response message.
+// For each orphan, a synthetic error tool response is injected so the API
+// doesn't reject the request with a 400 error.
+//
+// This handles the scenario where a tool call hung, crashed, or timed out
+// without persisting a result to the session history — leaving a dangling
+// tool_call that breaks the conversation permanently.
+func patchOrphanedToolCalls(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	// Collect all tool_call_ids that have responses.
+	answeredIDs := make(map[string]bool)
+	for _, msg := range messages {
+		if msg.Role == openai.ChatMessageRoleTool && msg.ToolCallID != "" {
+			answeredIDs[msg.ToolCallID] = true
+		}
+	}
+
+	// Scan assistant messages for unanswered tool_calls.
+	var result []openai.ChatCompletionMessage
+	for _, msg := range messages {
+		result = append(result, msg)
+
+		if msg.Role != openai.ChatMessageRoleAssistant || len(msg.ToolCalls) == 0 {
+			continue
+		}
+
+		// Find orphaned tool_call IDs in this assistant message.
+		var orphans []openai.ToolCall
+		for _, tc := range msg.ToolCalls {
+			if !answeredIDs[tc.ID] {
+				orphans = append(orphans, tc)
+			}
+		}
+
+		if len(orphans) == 0 {
+			continue
+		}
+
+		// Inject synthetic error responses for each orphan.
+		for _, tc := range orphans {
+			result = append(result, openai.ChatCompletionMessage{
+				Role:       openai.ChatMessageRoleTool,
+				ToolCallID: tc.ID,
+				Content:    `{"error": "Tool call was not executed (timed out or crashed)."}`,
+			})
+			// Mark as answered so we don't double-patch.
+			answeredIDs[tc.ID] = true
+		}
+	}
+
+	return result
 }
 
 // ensureNotEndingWithTool appends a synthetic user message when the

@@ -57,6 +57,7 @@ type TestConfig struct {
 	Timeout     int      `yaml:"timeout,omitempty"`      // Per-test timeout in seconds (default: 120)
 	StepTimeout int      `yaml:"step_timeout,omitempty"` // Per-step timeout in seconds (default: 30)
 	OnFail      string   `yaml:"on_fail,omitempty"`      // "stop" (default), "continue", "triage"
+	MaxRetries  int      `yaml:"max_retries,omitempty"`  // Max auto-retries for transient failures (default: 1 when triage is active)
 }
 
 // AssertConfig defines what to check after a step executes.

@@ -20,6 +20,7 @@ type UseSandboxTemplateArgs struct {
 type UseSandboxTemplateResult struct {
 	Status       string `json:"status"`
 	TemplateName string `json:"template_name,omitempty"`
+	ContainerIP  string `json:"container_ip,omitempty"`
 	Message      string `json:"message"`
 }
 
@@ -48,6 +49,8 @@ func NewUseSandboxTemplateTool(nodePool *sandbox.NodeClientPool, templateRegistr
 			"from the specified template, which includes all pre-installed dependencies and " +
 			"project code. Call this after the user selects a template from list_sandbox_templates. " +
 			"After this call, all file and shell tools will operate inside the new container. " +
+			"The response includes the container's bridge IP (container_ip field) which is " +
+			"needed for browser_navigate calls to reach container services. " +
 			"IMPORTANT: This operation takes a few seconds as it recreates the container.",
 	}, useSandboxTemplate)
 	if err != nil {
@@ -113,10 +116,31 @@ func useSandboxTemplate(ctx tool.Context, args UseSandboxTemplateArgs) (UseSandb
 	}
 
 	log.Printf("[sandbox-template] Session %s now using template %q", sessionID[:min(8, len(sessionID))], name)
+
+	// Eagerly bind the new session to trigger container creation, then
+	// discover the container's bridge IP. This lets the AI know the IP
+	// immediately instead of requiring a separate hostname -I call.
+	var containerIP string
+	if client := deps.nodePool.GetOrCreate(sessionID); client != nil {
+		if ip, err := client.GetContainerIP(sessionID); err == nil {
+			containerIP = ip
+			log.Printf("[sandbox-template] Session %s container IP: %s", sessionID[:min(8, len(sessionID))], ip)
+		} else {
+			log.Printf("[sandbox-template] Warning: could not discover container IP for session %s: %v", sessionID[:min(8, len(sessionID))], err)
+		}
+	}
+
+	msg := fmt.Sprintf("Sandbox container switched to template %q. All file and shell tools now "+
+		"operate inside a container with the template's pre-installed dependencies and project code.", name)
+	if containerIP != "" {
+		msg += fmt.Sprintf(" The container's bridge IP is %s — use this IP (not localhost) in "+
+			"browser_navigate URLs to reach services running in the container.", containerIP)
+	}
+
 	return UseSandboxTemplateResult{
 		Status:       "ok",
 		TemplateName: name,
-		Message: fmt.Sprintf("Sandbox container switched to template %q. All file and shell tools now "+
-			"operate inside a container with the template's pre-installed dependencies and project code.", name),
+		ContainerIP:  containerIP,
+		Message:      msg,
 	}, nil
 }

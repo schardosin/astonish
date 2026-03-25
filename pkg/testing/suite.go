@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/flowstore"
 )
 
 // LoadedSuite holds a parsed suite with its associated tests.
@@ -299,4 +300,29 @@ func DeleteTest(dirs []string, testName string) (string, string, error) {
 func isYAMLFile(name string) bool {
 	ext := strings.ToLower(filepath.Ext(name))
 	return ext == ".yaml" || ext == ".yml"
+}
+
+// DefaultTestDirs returns the standard directories to scan for test suites
+// and tests: the system agents dir, a local ./agents/ dir, and the user
+// flows dir. This is the canonical set used by both the CLI and the
+// run_test_suite tool.
+func DefaultTestDirs() []string {
+	var dirs []string
+
+	// System agents directory
+	if sysDir, err := config.GetAgentsDir(); err == nil {
+		dirs = append(dirs, sysDir)
+	}
+
+	// Local agents directory
+	if info, err := os.Stat("agents"); err == nil && info.IsDir() {
+		dirs = append(dirs, "agents")
+	}
+
+	// User flows directory
+	if flowsDir, err := flowstore.GetFlowsDir(); err == nil {
+		dirs = append(dirs, flowsDir)
+	}
+
+	return dirs
 }

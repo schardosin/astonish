@@ -8,8 +8,22 @@ import (
 
 // GetBrowserTools creates all browser automation tools sharing a single
 // BrowserManager instance. The browser is launched lazily on first use.
+// Navigation to private/localhost IPs is blocked (SSRF protection).
 func GetBrowserTools(mgr *browser.Manager) ([]tool.Tool, error) {
 	guard := browser.DefaultNavigationGuard()
+	return getBrowserToolsWithGuard(mgr, guard)
+}
+
+// GetBrowserToolsForSandbox creates browser tools with private network
+// blocking disabled. When sandbox is enabled, services run inside containers
+// on private bridge IPs (e.g., 10.99.0.x) and the browser (on the host)
+// must be able to navigate to them.
+func GetBrowserToolsForSandbox(mgr *browser.Manager) ([]tool.Tool, error) {
+	guard := &browser.NavigationGuard{BlockPrivateNetworks: false}
+	return getBrowserToolsWithGuard(mgr, guard)
+}
+
+func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGuard) ([]tool.Tool, error) {
 	refs := browser.NewRefMap()
 
 	// --- Navigation ---

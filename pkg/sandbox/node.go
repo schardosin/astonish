@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -79,6 +80,15 @@ func (nc *NodeClient) Start() error {
 func (nc *NodeClient) startLocked() error {
 	// Clean up any existing process
 	nc.stopLocked()
+
+	// If the container is stopped (e.g., idle timeout, OOM kill, external stop),
+	// restart it before attempting to exec the node process. Without this check,
+	// ExecNonInteractive fails because you cannot exec in a stopped container.
+	if !nc.client.IsRunning(nc.containerName) {
+		if err := nc.client.StartInstance(nc.containerName); err != nil {
+			return fmt.Errorf("failed to restart stopped container %q: %w", nc.containerName, err)
+		}
+	}
 
 	cmd := []string{BinaryDestPath, "node"}
 	proc, err := ExecNonInteractive(nc.client, nc.containerName, cmd, ExecOpts{Env: nc.Env})
@@ -263,6 +273,10 @@ type LazyNodeClient struct {
 	initialized   bool
 	closed        bool
 
+	// lastActivity records the Unix timestamp (seconds) of the last Call().
+	// Used by the idle watchdog to detect containers that should be stopped.
+	lastActivity atomic.Int64
+
 	// Env holds environment variables to inject into the node process.
 	// Set before BindSession() to pass credentials into the container.
 	Env map[string]string
@@ -376,6 +390,10 @@ func (lnc *LazyNodeClient) initBackground(sessionID string) {
 	lnc.initialized = true
 	lnc.mu.Unlock()
 
+	// Record initial activity so the idle watchdog doesn't immediately stop
+	// a freshly-created container.
+	lnc.lastActivity.Store(time.Now().Unix())
+
 	// If GH_TOKEN is available, configure git credential helper in the background.
 	// gh auth setup-git configures git to use `gh` as a credential helper, which
 	// reads GH_TOKEN from the environment. This enables `git clone` of private repos.
@@ -395,6 +413,9 @@ func (lnc *LazyNodeClient) initBackground(sessionID string) {
 // it waits for the background init to complete. If not, it does a synchronous
 // init as a fallback (safety net for code paths that skip ProcessRequest).
 func (lnc *LazyNodeClient) Call(sessionID, toolName string, args map[string]interface{}) (json.RawMessage, error) {
+	// Record activity for idle watchdog
+	lnc.lastActivity.Store(time.Now().Unix())
+
 	// Ensure BindSession was called (idempotent — no-op if already called)
 	lnc.BindSession(sessionID)
 
@@ -534,11 +555,65 @@ func (lnc *LazyNodeClient) CleanupForShutdown() {
 	lnc.closed = true
 }
 
+// StopForIdle stops the node process and container to reclaim resources after
+// an idle period. Unlike CleanupForShutdown, this does NOT set closed=true.
+// The pool removes this client from its map, so the next tool call for the
+// same session creates a fresh LazyNodeClient which calls EnsureSessionContainer
+// to restart the stopped container. The container and its overlay are preserved.
+func (lnc *LazyNodeClient) StopForIdle() {
+	lnc.mu.Lock()
+	done := lnc.initDone
+	lnc.mu.Unlock()
+	if done != nil {
+		<-done
+	}
+
+	lnc.mu.Lock()
+	defer lnc.mu.Unlock()
+
+	if lnc.nodeClient != nil {
+		lnc.nodeClient.Close()
+		lnc.nodeClient = nil
+	}
+
+	// Stop the container but don't destroy it or its overlay.
+	// EnsureSessionContainer will re-mount and restart it on the next tool call.
+	if lnc.containerName != "" && lnc.incusClient != nil {
+		if lnc.incusClient.IsRunning(lnc.containerName) {
+			_ = lnc.incusClient.StopInstance(lnc.containerName, true)
+		}
+	}
+
+	lnc.initialized = false
+}
+
 // IsInitialized returns whether the container and node are running.
 func (lnc *LazyNodeClient) IsInitialized() bool {
 	lnc.mu.Lock()
 	defer lnc.mu.Unlock()
 	return lnc.initialized
+}
+
+// HasInitFailed returns true if background initialization completed with an
+// error. This is a non-blocking check used by NodeClientPool.GetOrCreate()
+// to discard clients that failed transiently (e.g., forkstart failure during
+// template refresh) so the pool creates a fresh client that can retry.
+func (lnc *LazyNodeClient) HasInitFailed() bool {
+	lnc.mu.Lock()
+	defer lnc.mu.Unlock()
+
+	// Only report failure if init has actually completed (initDone is closed).
+	// If init is still in progress, this returns false so the pool doesn't
+	// discard a client that's still starting up.
+	if lnc.initDone == nil {
+		return false
+	}
+	select {
+	case <-lnc.initDone:
+		return lnc.initErr != nil
+	default:
+		return false // still in progress
+	}
 }
 
 // GetContainerName returns the container name (empty if not yet initialized).
@@ -590,6 +665,16 @@ func (lnc *LazyNodeClient) EnsureReady(sessionID string) (string, error) {
 		return "", lnc.initErr
 	}
 	return lnc.containerName, nil
+}
+
+// LastActivity returns the time of the last Call() or init completion.
+// Returns zero time if no activity has been recorded.
+func (lnc *LazyNodeClient) LastActivity() time.Time {
+	ts := lnc.lastActivity.Load()
+	if ts == 0 {
+		return time.Time{}
+	}
+	return time.Unix(ts, 0)
 }
 
 // EnsureContainerReady blocks until the container is created and running,
@@ -704,6 +789,13 @@ func (p *NodeClientPool) SetEnv(env map[string]string) {
 
 // GetOrCreate returns the LazyNodeClient for the given session ID, creating
 // one if it doesn't exist yet. Thread-safe.
+//
+// If the cached client's background init failed (transient error), the client
+// is discarded and a fresh one is created. This handles the case where
+// initBackground() fails transiently (e.g., forkstart error during template
+// refresh at startup) and the error gets cached permanently in initErr —
+// without this check, every subsequent Call() for that session would return
+// the same stale error forever.
 func (p *NodeClientPool) GetOrCreate(sessionID string) *LazyNodeClient {
 	if sessionID == "" {
 		return nil
@@ -717,7 +809,18 @@ func (p *NodeClientPool) GetOrCreate(sessionID string) *LazyNodeClient {
 	}
 
 	if client, ok := p.clients[sessionID]; ok {
-		return client
+		// If the client's init failed, discard it and fall through to create
+		// a fresh one. The container itself may be fine (e.g., `incus start`
+		// works), so a retry with a new LazyNodeClient can succeed.
+		if !client.HasInitFailed() {
+			return client
+		}
+		log.Printf("[sandbox] Discarding failed client for session %s, will retry",
+			sessionID[:min(8, len(sessionID))])
+		delete(p.clients, sessionID)
+		// Don't call client.Cleanup() here — the container may be reusable.
+		// Close the node client (if any) but leave the container intact.
+		_ = client.Close()
 	}
 
 	// Create a new LazyNodeClient for this session
@@ -847,4 +950,80 @@ func (p *NodeClientPool) ReplaceSession(sessionID, template string) error {
 // GetIncusClient returns the shared Incus client.
 func (p *NodeClientPool) GetIncusClient() *IncusClient {
 	return p.incusClient
+}
+
+// StartIdleWatchdog runs a background goroutine that periodically checks each
+// managed LazyNodeClient for inactivity. If a client has been idle for longer
+// than idleTimeout, its container is stopped (preserving overlay and registry)
+// and the client is removed from the pool. The next tool call for that session
+// will create a fresh LazyNodeClient which restarts the stopped container via
+// EnsureSessionContainer (~200ms overlay + ~1s node startup).
+//
+// The watchdog checks every 60 seconds and stops when ctx is cancelled.
+func (p *NodeClientPool) StartIdleWatchdog(ctx context.Context, idleTimeout time.Duration) {
+	if idleTimeout <= 0 {
+		return // disabled
+	}
+
+	const checkInterval = 60 * time.Second
+	ticker := time.NewTicker(checkInterval)
+
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				p.stopIdleClients(idleTimeout)
+			}
+		}
+	}()
+}
+
+// stopIdleClients finds clients that have been idle for longer than the timeout,
+// stops their containers, and removes them from the pool.
+func (p *NodeClientPool) stopIdleClients(idleTimeout time.Duration) {
+	now := time.Now()
+
+	// Snapshot the client map under lock
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+	candidates := make(map[string]*LazyNodeClient, len(p.clients))
+	for id, client := range p.clients {
+		candidates[id] = client
+	}
+	p.mu.Unlock()
+
+	// Check each client outside the pool lock (StopForIdle may block)
+	for sessionID, client := range candidates {
+		if !client.IsInitialized() {
+			continue // not yet initialized, skip
+		}
+
+		lastAct := client.LastActivity()
+		if lastAct.IsZero() {
+			continue // no activity recorded yet
+		}
+
+		if now.Sub(lastAct) < idleTimeout {
+			continue // still active
+		}
+
+		log.Printf("[sandbox] Stopping idle container for session %s (idle for %s)",
+			sessionID[:min(8, len(sessionID))], now.Sub(lastAct).Round(time.Second))
+
+		// Stop the container and node process (preserves overlay + registry)
+		client.StopForIdle()
+
+		// Remove from pool so the next GetOrCreate() creates a fresh client
+		p.mu.Lock()
+		if p.clients[sessionID] == client {
+			delete(p.clients, sessionID)
+		}
+		p.mu.Unlock()
+	}
 }

@@ -232,9 +232,6 @@ func collectSkillDirs(cfg WatcherConfig) []string {
 	for _, d := range cfg.ExtraDirs {
 		add(d)
 	}
-	if cfg.WorkspaceDir != "" {
-		add(filepath.Join(cfg.WorkspaceDir, ".astonish", "skills"))
-	}
 
 	return dirs
 }

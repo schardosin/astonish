@@ -447,7 +447,7 @@ func handleDrillRunCommand(args []string) error {
 	runCmd := flag.NewFlagSet("test run", flag.ExitOnError)
 	tagFlag := runCmd.String("tag", "", "Filter tests by tag (comma-separated)")
 	verbose := runCmd.Bool("verbose", false, "Verbose output")
-	reportDir := runCmd.String("report-dir", "", "Directory to save report (default: .astonish/reports)")
+	reportDir := runCmd.String("report-dir", "", "Directory to save report (default: ~/.config/astonish/reports)")
 	analyze := runCmd.Bool("analyze", false, "Enable AI triage analysis on failures (uses default LLM provider)")
 
 	// Extract positional argument (suite or test name) before flags
@@ -477,7 +477,11 @@ func handleDrillRunCommand(args []string) error {
 	// Determine report directory
 	rdir := *reportDir
 	if rdir == "" {
-		rdir = filepath.Join(".astonish", "reports", targetName)
+		if reportsBase, err := config.GetReportsDir(); err == nil {
+			rdir = filepath.Join(reportsBase, targetName)
+		} else {
+			return fmt.Errorf("failed to determine reports directory: %w", err)
+		}
 	}
 
 	// --- Discover suite and tests FIRST (before building executor) ---
@@ -806,7 +810,7 @@ func handleDrillListCommand(args []string) error {
 
 func handleDrillReportCommand(args []string) error {
 	reportCmd := flag.NewFlagSet("test report", flag.ExitOnError)
-	reportDir := reportCmd.String("dir", "", "Report directory (default: .astonish/reports)")
+	reportDir := reportCmd.String("dir", "", "Report directory (default: ~/.config/astonish/reports)")
 	if err := reportCmd.Parse(args); err != nil {
 		return err
 	}
@@ -818,10 +822,14 @@ func handleDrillReportCommand(args []string) error {
 
 	rdir := *reportDir
 	if rdir == "" {
+		reportsBase, err := config.GetReportsDir()
+		if err != nil {
+			return fmt.Errorf("failed to determine reports directory: %w", err)
+		}
 		if targetName != "" {
-			rdir = filepath.Join(".astonish", "reports", targetName)
+			rdir = filepath.Join(reportsBase, targetName)
 		} else {
-			rdir = filepath.Join(".astonish", "reports")
+			rdir = reportsBase
 		}
 	}
 
@@ -937,11 +945,14 @@ func handleRemoveSuite(dirs []string, suite *adrill.LoadedSuite, deleteTests boo
 	}
 
 	// Check for report artifacts
-	reportDir := filepath.Join(".astonish", "reports", suite.Name)
+	var reportDir string
 	hasReports := false
-	if info, err := os.Stat(reportDir); err == nil && info.IsDir() {
-		hasReports = true
-		fmt.Printf("Reports: %s (will also be removed)\n", reportDir)
+	if reportsBase, err := config.GetReportsDir(); err == nil {
+		reportDir = filepath.Join(reportsBase, suite.Name)
+		if info, err := os.Stat(reportDir); err == nil && info.IsDir() {
+			hasReports = true
+			fmt.Printf("Reports: %s (will also be removed)\n", reportDir)
+		}
 	}
 
 	// Confirm
@@ -1027,10 +1038,12 @@ func handleRemoveTest(dirs []string, test *adrill.LoadedTest, suite *adrill.Load
 	}
 
 	// Check for report artifacts
-	reportDir := filepath.Join(".astonish", "reports", test.Name)
-	if info, err := os.Stat(reportDir); err == nil && info.IsDir() {
-		if err := os.RemoveAll(reportDir); err == nil {
-			fmt.Printf("  Deleted: %s\n", reportDir)
+	if reportsBase, err := config.GetReportsDir(); err == nil {
+		reportDir := filepath.Join(reportsBase, test.Name)
+		if info, err := os.Stat(reportDir); err == nil && info.IsDir() {
+			if err := os.RemoveAll(reportDir); err == nil {
+				fmt.Printf("  Deleted: %s\n", reportDir)
+			}
 		}
 	}
 

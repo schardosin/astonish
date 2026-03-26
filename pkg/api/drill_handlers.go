@@ -3,12 +3,14 @@ package api
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/gorilla/mux"
+	"github.com/schardosin/astonish/pkg/config"
 	adrill "github.com/schardosin/astonish/pkg/drill"
 	"gopkg.in/yaml.v3"
 )
@@ -224,7 +226,13 @@ func DeleteDrillHandler(w http.ResponseWriter, r *http.Request) {
 
 // ListDrillReportsHandler handles GET /api/drill-reports
 func ListDrillReportsHandler(w http.ResponseWriter, _ *http.Request) {
-	reportsDir := filepath.Join(".astonish", "reports")
+	reportsDir, err := config.GetReportsDir()
+	if err != nil {
+		log.Printf("[drill] Failed to get reports dir: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]DrillReportListItem{})
+		return
+	}
 	entries, err := os.ReadDir(reportsDir)
 	if err != nil {
 		// No reports directory yet — return empty list
@@ -273,9 +281,14 @@ func GetDrillReportHandler(w http.ResponseWriter, r *http.Request) {
 
 // loadLatestReport loads the most recent report for a suite from disk.
 func loadLatestReport(suiteName string) *adrill.SuiteReport {
+	reportsDir, err := config.GetReportsDir()
+	if err != nil {
+		return nil
+	}
+
 	// Check standard report locations
 	dirs := []string{
-		filepath.Join(".astonish", "reports", suiteName),
+		filepath.Join(reportsDir, suiteName),
 	}
 
 	for _, dir := range dirs {
@@ -287,7 +300,6 @@ func loadLatestReport(suiteName string) *adrill.SuiteReport {
 	}
 
 	// Also check if a report was saved with a sanitized name
-	reportsDir := filepath.Join(".astonish", "reports")
 	entries, err := os.ReadDir(reportsDir)
 	if err != nil {
 		return nil

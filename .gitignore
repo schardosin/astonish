@@ -50,3 +50,6 @@ mcp_servers/
 #docs/specs/
 /astonish
 !/astonish/
+
+# opencode workspace
+.opencode

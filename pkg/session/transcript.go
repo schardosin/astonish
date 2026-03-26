@@ -191,3 +191,48 @@ func (t *Transcript) Rewrite(sessionID string, events []*adksession.Event) error
 	// Atomic write to prevent corruption
 	return atomicWrite(t.path, content, 0644)
 }
+
+// RedactTranscript retroactively applies a redaction function to every line
+// of the transcript file and atomically rewrites it. This is used after new
+// credential values are registered (e.g. after save_credential) to scrub
+// secrets from user messages that were persisted before the secret was known.
+func (t *Transcript) RedactTranscript(redactFunc func(string) string) error {
+	if redactFunc == nil {
+		return nil
+	}
+
+	f, err := os.Open(t.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to open transcript for redaction: %w", err)
+	}
+	defer f.Close()
+
+	var content []byte
+	changed := false
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024) // up to 10MB per line
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		redacted := redactFunc(line)
+		if redacted != line {
+			changed = true
+		}
+		content = append(content, []byte(redacted)...)
+		content = append(content, '\n')
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("error reading transcript for redaction: %w", err)
+	}
+
+	// Only rewrite if something actually changed
+	if !changed {
+		return nil
+	}
+
+	return atomicWrite(t.path, content, 0644)
+}

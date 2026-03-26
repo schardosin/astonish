@@ -45,7 +45,8 @@ type SandboxLimits struct {
 
 // SandboxPruneConfig controls periodic cleanup of orphaned containers.
 type SandboxPruneConfig struct {
-	OrphanCheckHours int `yaml:"orphan_check_hours,omitempty" json:"orphan_check_hours,omitempty"`
+	OrphanCheckHours   int `yaml:"orphan_check_hours,omitempty" json:"orphan_check_hours,omitempty"`
+	IdleTimeoutMinutes int `yaml:"idle_timeout_minutes,omitempty" json:"idle_timeout_minutes,omitempty"` // Stop idle containers after this many minutes (default: 10, 0 = disabled)
 }
 
 // OpenCodeConfig controls the managed OpenCode delegate tool.
@@ -609,6 +610,16 @@ func GetFleetPlansDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(configDir, "fleet_plans"), nil
+}
+
+// GetReportsDir returns the directory for drill/test report artifacts.
+// Defaults to ~/.config/astonish/reports/.
+func GetReportsDir() (string, error) {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, "reports"), nil
 }
 
 // GetSessionsDir returns the session storage directory.

@@ -671,6 +671,18 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				fmt.Sprintf("Cleaned up %d stale session container(s) from previous run", pruned))
 		}
 
+		// Start idle watchdog: stops containers that have been inactive for the
+		// configured timeout (default 10 min), preserving them for fast restart.
+		idleTimeout := sandbox.EffectiveIdleTimeout(&cfg.AppConfig.Sandbox)
+		if idleTimeout > 0 {
+			idleCtx, idleCancel := context.WithCancel(context.Background())
+			nodePool.StartIdleWatchdog(idleCtx, idleTimeout)
+			cleanups = append(cleanups, idleCancel)
+			if cfg.DebugMode {
+				fmt.Printf("Sandbox idle watchdog: enabled (timeout: %s)\n", idleTimeout)
+			}
+		}
+
 		cleanups = append(cleanups, func() {
 			// Cleanup destroys all per-session containers
 			nodePool.Cleanup()
@@ -1136,6 +1148,10 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		// Also wire to file-based session store for transcript redaction
 		if fs, ok := sessionService.(*persistentsession.FileStore); ok {
 			fs.RedactFunc = redactor.Redact
+			// Wire retroactive redaction callback so that after save_credential
+			// completes, the current session's transcript is scrubbed of any
+			// secrets that were persisted before the credential was registered.
+			chatAgent.RedactSessionFunc = fs.RedactSession
 		}
 	}
 
@@ -1307,6 +1323,18 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// --- 6d. Wire memory and flow context ---
 	if memMgr != nil {
 		chatAgent.MemoryManager = memMgr
+
+		// Post-task memory reflection: silent LLM call after non-trivial
+		// tasks to save any discovered knowledge the model forgot to persist.
+		reflector := &agent.MemoryReflector{
+			LLM:           llm,
+			MemoryManager: memMgr,
+			DebugMode:     cfg.DebugMode,
+		}
+		if memStore != nil {
+			reflector.MemoryStore = memStore
+		}
+		chatAgent.MemoryReflector = reflector
 	}
 	chatAgent.FlowContextBuilder = &agent.FlowContextBuilder{DebugMode: cfg.DebugMode}
 

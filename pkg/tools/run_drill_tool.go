@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/schardosin/astonish/pkg/browser"
+	"github.com/schardosin/astonish/pkg/config"
 	adrill "github.com/schardosin/astonish/pkg/drill"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	"google.golang.org/adk/tool"
@@ -149,7 +150,8 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 	}
 
 	// Create artifact manager
-	reportDir := filepath.Join(".astonish", "reports", suiteName)
+	reportsDir, _ := config.GetReportsDir()
+	reportDir := filepath.Join(reportsDir, suiteName)
 	am, amErr := adrill.NewArtifactManager(reportDir, suiteName)
 	if amErr != nil {
 		am = nil // non-fatal

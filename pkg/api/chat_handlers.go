@@ -860,7 +860,9 @@ func StudioStopHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // eventsToMessages transforms ADK session events into a flat message list for the frontend.
-// An optional redactor is applied to tool args and results to prevent credential exposure.
+// An optional redactor is applied to all text parts and tool args/results to prevent
+// credential exposure. This is the defense-in-depth layer: even if retroactive transcript
+// redaction missed a secret, the UI will never display it in plaintext.
 func eventsToMessages(events session.Events, redactor *credentials.Redactor) []StudioMessage {
 	var messages []StudioMessage
 	var lastInvocationID string // track invocation boundary for coalescing
@@ -883,6 +885,13 @@ func eventsToMessages(events session.Events, redactor *credentials.Redactor) []S
 					// Strip the timestamp prefix injected by NewTimestampedUserContent.
 					// Format: "[2026-03-20 14:30:05 UTC]\n<text>"
 					text = stripUserMessageTimestamp(text)
+				}
+				// Defense-in-depth: redact any credential values from text
+				// before sending to the frontend. This catches secrets in user
+				// messages and agent responses that may have been persisted
+				// before the credential was registered with the redactor.
+				if redactor != nil {
+					text = redactor.Redact(text)
 				}
 				// Coalesce with previous message of same type, but only within
 				// the same invocation. Different invocations represent separate

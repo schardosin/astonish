@@ -64,6 +64,7 @@ type ChatAgent struct {
 
 	// Memory and flow reuse
 	MemoryManager             *memory.Manager               // Persistent memory manager
+	MemoryReflector           *MemoryReflector              // Post-task memory reflection (nil = disabled)
 	FlowContextBuilder        *FlowContextBuilder           // Converts flow YAML to execution plan
 	KnowledgeSearch           KnowledgeSearchFunc           // Auto-retrieve relevant knowledge per turn (nil = disabled)
 	KnowledgeSearchByCategory KnowledgeSearchByCategoryFunc // Auto-retrieve guidance docs per turn (nil = disabled)
@@ -72,7 +73,8 @@ type ChatAgent struct {
 	SelfMDRefresher func() // Called after config changes to regenerate SELF.md
 
 	// Credential redaction
-	Redactor *credentials.Redactor // Redacts credential values from tool outputs (nil = disabled)
+	Redactor          *credentials.Redactor                         // Redacts credential values from tool outputs (nil = disabled)
+	RedactSessionFunc func(appName, userID, sessionID string) error // Called after save_credential to retroactively redact the session transcript (nil = disabled)
 
 	// Context compaction
 	Compactor *persistentsession.Compactor // Manages context window compaction (nil = disabled)
@@ -428,7 +430,6 @@ func redactEventText(r *credentials.Redactor, event *session.Event) {
 func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
 	return func(yield func(*session.Event, error) bool) {
 		// Wrap yield to strip chain-of-thought content and redact credentials.
-		// Wrap yield to strip chain-of-thought content and redact credentials.
 		// The think-tag filter is stateful (tracks whether we are inside a
 		// <think> block across streaming chunks), so it must be created once
 		// per Run invocation.
@@ -561,6 +562,11 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		c.SystemPrompt.RelevantKnowledge = relevantKnowledge
 		instruction := c.SystemPrompt.Build()
 
+		// Capture session identity for use in AfterToolCallback closure.
+		sessionID := ctx.Session().ID()
+		sessionAppName := ctx.Session().AppName()
+		sessionUserID := ctx.Session().UserID()
+
 		// Create the AfterToolCallback for trace recording
 		afterToolCallback := func(ctx tool.Context, t tool.Tool, input, output map[string]any, err error) (map[string]any, error) {
 			// Redact credential values from tool output before the LLM sees them.
@@ -586,6 +592,21 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 				}
 				fmt.Printf("[Chat DEBUG] Tool call recorded: %s -> %s\n", t.Name(), status)
 			}
+
+			// After save_credential succeeds, retroactively redact the current
+			// session transcript. The redactor now knows the new secret values,
+			// so user messages that contained raw secrets (submitted before the
+			// credential was saved) can be scrubbed on disk and in memory.
+			if t.Name() == "save_credential" && err == nil && c.RedactSessionFunc != nil {
+				if redactErr := c.RedactSessionFunc(sessionAppName, sessionUserID, sessionID); redactErr != nil {
+					if c.DebugMode {
+						fmt.Printf("[Chat DEBUG] Retroactive session redaction failed: %v\n", redactErr)
+					}
+				} else if c.DebugMode {
+					fmt.Println("[Chat DEBUG] Retroactive session redaction completed")
+				}
+			}
+
 			return redactedOutput, err
 		}
 
@@ -597,11 +618,6 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 		if c.Compactor != nil {
 			beforeModelCallbacks = append(beforeModelCallbacks, c.Compactor.BeforeModelCallback())
-		}
-
-		// Memory nudge: remind the model to save knowledge after non-trivial tasks
-		if c.MemoryManager != nil {
-			beforeModelCallbacks = append(beforeModelCallbacks, MemoryNudgeCallback(c.DebugMode))
 		}
 
 		// Create llmagent with all tools
@@ -792,8 +808,14 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			}
 		}
 
+		// Post-task memory reflection: give the LLM one last chance to save
+		// durable knowledge discovered during the turn. Runs silently — no
+		// events are yielded to the user.
+		if c.MemoryReflector != nil {
+			c.MemoryReflector.Reflect(ctx, trace)
+		}
+
 		// Store the trace keyed by session ID for on-demand /distill
-		sessionID := ctx.Session().ID()
 		c.traceMu.Lock()
 		c.traceHistory[sessionID] = append(c.traceHistory[sessionID], trace)
 		// Prune: keep at most 20 traces per session

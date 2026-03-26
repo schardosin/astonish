@@ -1,4 +1,4 @@
-package testing
+package drill
 
 import (
 	"context"
@@ -60,8 +60,8 @@ func TestRunSuiteBasicPass(t *testing.T) {
 	suite := &LoadedSuite{
 		Name: "myapp",
 		Config: &config.AgentConfig{
-			Type:        "test_suite",
-			SuiteConfig: &config.TestSuiteConfig{},
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
 		},
 	}
 
@@ -69,7 +69,7 @@ func TestRunSuiteBasicPass(t *testing.T) {
 		{
 			Name: "test_basic",
 			Config: &config.AgentConfig{
-				Type:  "test",
+				Type:  "drill",
 				Suite: "myapp",
 				Nodes: []config.Node{
 					{
@@ -117,8 +117,8 @@ func TestRunSuiteAssertionFail(t *testing.T) {
 	suite := &LoadedSuite{
 		Name: "myapp",
 		Config: &config.AgentConfig{
-			Type:        "test_suite",
-			SuiteConfig: &config.TestSuiteConfig{},
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
 		},
 	}
 
@@ -126,7 +126,7 @@ func TestRunSuiteAssertionFail(t *testing.T) {
 		{
 			Name: "test_fail",
 			Config: &config.AgentConfig{
-				Type:  "test",
+				Type:  "drill",
 				Suite: "myapp",
 				Nodes: []config.Node{
 					{
@@ -165,8 +165,8 @@ func TestRunSuiteToolError(t *testing.T) {
 	suite := &LoadedSuite{
 		Name: "myapp",
 		Config: &config.AgentConfig{
-			Type:        "test_suite",
-			SuiteConfig: &config.TestSuiteConfig{},
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
 		},
 	}
 
@@ -174,7 +174,7 @@ func TestRunSuiteToolError(t *testing.T) {
 		{
 			Name: "test_err",
 			Config: &config.AgentConfig{
-				Type:  "test",
+				Type:  "drill",
 				Suite: "myapp",
 				Nodes: []config.Node{
 					{
@@ -205,8 +205,8 @@ func TestRunSuiteSetupFailure(t *testing.T) {
 	suite := &LoadedSuite{
 		Name: "myapp",
 		Config: &config.AgentConfig{
-			Type: "test_suite",
-			SuiteConfig: &config.TestSuiteConfig{
+			Type: "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{
 				Setup: []string{"failing_command"},
 			},
 		},
@@ -230,8 +230,8 @@ func TestRunSuiteMultipleTests(t *testing.T) {
 	suite := &LoadedSuite{
 		Name: "myapp",
 		Config: &config.AgentConfig{
-			Type:        "test_suite",
-			SuiteConfig: &config.TestSuiteConfig{},
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
 		},
 	}
 
@@ -239,7 +239,7 @@ func TestRunSuiteMultipleTests(t *testing.T) {
 		{
 			Name: "test1",
 			Config: &config.AgentConfig{
-				Type:  "test",
+				Type:  "drill",
 				Suite: "myapp",
 				Nodes: []config.Node{
 					{Name: "s1", Type: "tool", Args: map[string]interface{}{"tool": "shell_command"},
@@ -250,7 +250,7 @@ func TestRunSuiteMultipleTests(t *testing.T) {
 		{
 			Name: "test2",
 			Config: &config.AgentConfig{
-				Type:  "test",
+				Type:  "drill",
 				Suite: "myapp",
 				Nodes: []config.Node{
 					{Name: "s1", Type: "tool", Args: map[string]interface{}{"tool": "shell_command"},
@@ -281,8 +281,8 @@ func TestRunSuiteOnFailStop(t *testing.T) {
 	suite := &LoadedSuite{
 		Name: "myapp",
 		Config: &config.AgentConfig{
-			Type:        "test_suite",
-			SuiteConfig: &config.TestSuiteConfig{},
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
 		},
 	}
 
@@ -291,7 +291,7 @@ func TestRunSuiteOnFailStop(t *testing.T) {
 		{
 			Name: "test_stop",
 			Config: &config.AgentConfig{
-				Type:  "test",
+				Type:  "drill",
 				Suite: "myapp",
 				Nodes: []config.Node{
 					{Name: "step1", Type: "tool", Args: map[string]interface{}{"tool": "shell_command"},
@@ -320,8 +320,8 @@ func TestRunSuiteOnFailContinue(t *testing.T) {
 	suite := &LoadedSuite{
 		Name: "myapp",
 		Config: &config.AgentConfig{
-			Type:        "test_suite",
-			SuiteConfig: &config.TestSuiteConfig{},
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
 		},
 	}
 
@@ -329,9 +329,9 @@ func TestRunSuiteOnFailContinue(t *testing.T) {
 		{
 			Name: "test_continue",
 			Config: &config.AgentConfig{
-				Type:       "test",
-				Suite:      "myapp",
-				TestConfig: &config.TestConfig{OnFail: "continue"},
+				Type:        "drill",
+				Suite:       "myapp",
+				DrillConfig: &config.DrillConfig{OnFail: "continue"},
 				Nodes: []config.Node{
 					{Name: "step1", Type: "tool", Args: map[string]interface{}{"tool": "shell_command"},
 						Assert: &config.AssertConfig{Type: "contains", Expected: "good output"}},
@@ -358,8 +358,8 @@ func TestRunSuiteNoAssertionPass(t *testing.T) {
 	suite := &LoadedSuite{
 		Name: "myapp",
 		Config: &config.AgentConfig{
-			Type:        "test_suite",
-			SuiteConfig: &config.TestSuiteConfig{},
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
 		},
 	}
 
@@ -367,7 +367,7 @@ func TestRunSuiteNoAssertionPass(t *testing.T) {
 		{
 			Name: "test_noassert",
 			Config: &config.AgentConfig{
-				Type:  "test",
+				Type:  "drill",
 				Suite: "myapp",
 				Nodes: []config.Node{
 					{Name: "step1", Type: "tool", Args: map[string]interface{}{"tool": "shell_command"}},
@@ -397,8 +397,8 @@ func TestRunSuiteTeardownAlwaysRuns(t *testing.T) {
 	suite := &LoadedSuite{
 		Name: "myapp",
 		Config: &config.AgentConfig{
-			Type: "test_suite",
-			SuiteConfig: &config.TestSuiteConfig{
+			Type: "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{
 				Setup:    []string{"setup_cmd"},
 				Teardown: []string{"teardown_cmd"},
 			},
@@ -409,7 +409,7 @@ func TestRunSuiteTeardownAlwaysRuns(t *testing.T) {
 		{
 			Name: "test_err",
 			Config: &config.AgentConfig{
-				Type:  "test",
+				Type:  "drill",
 				Suite: "myapp",
 				Nodes: []config.Node{
 					{Name: "step1", Type: "tool", Args: map[string]interface{}{"tool": "shell_command"}},
@@ -474,8 +474,8 @@ func TestRunSuiteMultiServiceBasic(t *testing.T) {
 	suite := &LoadedSuite{
 		Name: "fullstack",
 		Config: &config.AgentConfig{
-			Type: "test_suite",
-			SuiteConfig: &config.TestSuiteConfig{
+			Type: "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{
 				Services: []config.ServiceConfig{
 					{Name: "database", Setup: "start_db", Teardown: "stop_db"},
 					{Name: "backend", Setup: "start_api", Teardown: "stop_api"},
@@ -489,7 +489,7 @@ func TestRunSuiteMultiServiceBasic(t *testing.T) {
 		{
 			Name: "test_basic",
 			Config: &config.AgentConfig{
-				Type:  "test",
+				Type:  "drill",
 				Suite: "fullstack",
 				Nodes: []config.Node{
 					{Name: "step1", Type: "tool", Args: map[string]interface{}{"tool": "shell_command", "command": "echo test"}},
@@ -528,8 +528,8 @@ func TestRunSuiteMultiServiceSetupFailure(t *testing.T) {
 	suite := &LoadedSuite{
 		Name: "fullstack",
 		Config: &config.AgentConfig{
-			Type: "test_suite",
-			SuiteConfig: &config.TestSuiteConfig{
+			Type: "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{
 				Services: []config.ServiceConfig{
 					{Name: "database", Setup: "start_db", Teardown: "stop_db"},
 					{Name: "backend", Setup: "start_api", Teardown: "stop_api"},
@@ -569,8 +569,8 @@ func TestRunSuiteMultiServiceTeardownReverse(t *testing.T) {
 	suite := &LoadedSuite{
 		Name: "trio",
 		Config: &config.AgentConfig{
-			Type: "test_suite",
-			SuiteConfig: &config.TestSuiteConfig{
+			Type: "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{
 				Services: []config.ServiceConfig{
 					{Name: "a", Setup: "start_a", Teardown: "stop_a"},
 					{Name: "b", Setup: "start_b", Teardown: "stop_b"},
@@ -606,8 +606,8 @@ func TestRunSuiteMultiServiceAlwaysTeardownOnTestFailure(t *testing.T) {
 	suite := &LoadedSuite{
 		Name: "svc",
 		Config: &config.AgentConfig{
-			Type: "test_suite",
-			SuiteConfig: &config.TestSuiteConfig{
+			Type: "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{
 				Services: []config.ServiceConfig{
 					{Name: "db", Setup: "start_db", Teardown: "stop_db"},
 					{Name: "app", Setup: "start_app", Teardown: "stop_app"},
@@ -620,7 +620,7 @@ func TestRunSuiteMultiServiceAlwaysTeardownOnTestFailure(t *testing.T) {
 		{
 			Name: "test_fail",
 			Config: &config.AgentConfig{
-				Type:  "test",
+				Type:  "drill",
 				Suite: "svc",
 				Nodes: []config.Node{
 					{Name: "step1", Type: "tool", Args: map[string]interface{}{"tool": "shell_command", "command": "echo failing"},
@@ -1221,7 +1221,7 @@ func TestBaseURLResolution(t *testing.T) {
 	suite := &LoadedSuite{
 		Name: "test-base-url",
 		Config: &config.AgentConfig{
-			SuiteConfig: &config.TestSuiteConfig{
+			SuiteConfig: &config.DrillSuiteConfig{
 				BaseURL: "http://{{CONTAINER_IP}}:3000",
 			},
 		},
@@ -1232,7 +1232,7 @@ func TestBaseURLResolution(t *testing.T) {
 		Config: &config.AgentConfig{
 			Description: "Test base_url resolution",
 			Suite:       "test-base-url",
-			TestConfig:  &config.TestConfig{Tags: []string{"test"}},
+			DrillConfig: &config.DrillConfig{Tags: []string{"test"}},
 			Nodes: []config.Node{
 				{
 					Name: "navigate_relative",
@@ -1292,7 +1292,7 @@ func TestBaseURLNotAppliedToNonBrowserTools(t *testing.T) {
 	suite := &LoadedSuite{
 		Name: "test-no-base-url",
 		Config: &config.AgentConfig{
-			SuiteConfig: &config.TestSuiteConfig{
+			SuiteConfig: &config.DrillSuiteConfig{
 				BaseURL: "http://{{CONTAINER_IP}}:3000",
 			},
 		},
@@ -1303,7 +1303,7 @@ func TestBaseURLNotAppliedToNonBrowserTools(t *testing.T) {
 		Config: &config.AgentConfig{
 			Description: "Shell command should not get base_url",
 			Suite:       "test-no-base-url",
-			TestConfig:  &config.TestConfig{Tags: []string{"test"}},
+			DrillConfig: &config.DrillConfig{Tags: []string{"test"}},
 			Nodes: []config.Node{
 				{
 					Name: "run_cmd",
@@ -1343,7 +1343,7 @@ func TestContainerIPFallbackToLocalhost(t *testing.T) {
 	suite := &LoadedSuite{
 		Name: "test-localhost-fallback",
 		Config: &config.AgentConfig{
-			SuiteConfig: &config.TestSuiteConfig{
+			SuiteConfig: &config.DrillSuiteConfig{
 				BaseURL: "http://{{CONTAINER_IP}}:3000",
 			},
 		},
@@ -1354,7 +1354,7 @@ func TestContainerIPFallbackToLocalhost(t *testing.T) {
 		Config: &config.AgentConfig{
 			Description: "Test localhost fallback",
 			Suite:       "test-localhost-fallback",
-			TestConfig:  &config.TestConfig{Tags: []string{"test"}},
+			DrillConfig: &config.DrillConfig{Tags: []string{"test"}},
 			Nodes: []config.Node{
 				{
 					Name: "navigate",

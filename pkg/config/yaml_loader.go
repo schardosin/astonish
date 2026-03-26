@@ -8,19 +8,69 @@ import (
 
 // AgentConfig represents the top-level structure of the agent YAML.
 type AgentConfig struct {
-	Description     string           `yaml:"description"`
-	Type            string           `yaml:"type,omitempty"`         // "test", "test_suite", or empty for regular flows
-	Suite           string           `yaml:"suite,omitempty"`        // For type: test — which suite this belongs to
-	SuiteConfig     *TestSuiteConfig `yaml:"suite_config,omitempty"` // For type: test_suite — infrastructure config
-	TestConfig      *TestConfig      `yaml:"test_config,omitempty"`  // For type: test — test-specific config
-	Nodes           []Node           `yaml:"nodes"`
-	Flow            []FlowItem       `yaml:"flow"`
-	MCPDependencies []MCPDependency  `yaml:"mcp_dependencies,omitempty"`
+	Description     string            `yaml:"description"`
+	Type            string            `yaml:"type,omitempty"`         // "drill", "drill_suite" (legacy: "test", "test_suite"), or empty for regular flows
+	Suite           string            `yaml:"suite,omitempty"`        // For type: drill — which suite this belongs to
+	SuiteConfig     *DrillSuiteConfig `yaml:"suite_config,omitempty"` // For type: drill_suite — infrastructure config
+	DrillConfig     *DrillConfig      `yaml:"drill_config,omitempty"` // For type: drill — drill-specific config
+	Nodes           []Node            `yaml:"nodes"`
+	Flow            []FlowItem        `yaml:"flow"`
+	MCPDependencies []MCPDependency   `yaml:"mcp_dependencies,omitempty"`
 }
 
-// TestSuiteConfig defines infrastructure for running tests.
-// Used by type: test_suite flows.
-type TestSuiteConfig struct {
+// agentConfigRaw is the intermediate struct used for backward-compatible YAML parsing.
+// It supports both old (test_config) and new (drill_config) YAML tags.
+type agentConfigRaw struct {
+	Description     string            `yaml:"description"`
+	Type            string            `yaml:"type,omitempty"`
+	Suite           string            `yaml:"suite,omitempty"`
+	SuiteConfig     *DrillSuiteConfig `yaml:"suite_config,omitempty"`
+	DrillConfig     *DrillConfig      `yaml:"drill_config,omitempty"`
+	TestConfig      *DrillConfig      `yaml:"test_config,omitempty"` // backward compat
+	Nodes           []Node            `yaml:"nodes"`
+	Flow            []FlowItem        `yaml:"flow"`
+	MCPDependencies []MCPDependency   `yaml:"mcp_dependencies,omitempty"`
+}
+
+// UnmarshalYAML implements custom unmarshaling for AgentConfig to support
+// backward compatibility: "test_config" YAML tag is accepted and mapped
+// to DrillConfig, and "test"/"test_suite" type values are normalized to
+// "drill"/"drill_suite".
+func (c *AgentConfig) UnmarshalYAML(value *yaml.Node) error {
+	var raw agentConfigRaw
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+
+	c.Description = raw.Description
+	c.Type = raw.Type
+	c.Suite = raw.Suite
+	c.SuiteConfig = raw.SuiteConfig
+	c.Nodes = raw.Nodes
+	c.Flow = raw.Flow
+	c.MCPDependencies = raw.MCPDependencies
+
+	// drill_config takes precedence; fall back to test_config for backward compat
+	if raw.DrillConfig != nil {
+		c.DrillConfig = raw.DrillConfig
+	} else if raw.TestConfig != nil {
+		c.DrillConfig = raw.TestConfig
+	}
+
+	// Normalize legacy type values
+	switch c.Type {
+	case "test":
+		c.Type = "drill"
+	case "test_suite":
+		c.Type = "drill_suite"
+	}
+
+	return nil
+}
+
+// DrillSuiteConfig defines infrastructure for running drills.
+// Used by type: drill_suite flows.
+type DrillSuiteConfig struct {
 	Template    string            `yaml:"template,omitempty"`    // Container template name (e.g., "@myapp")
 	Services    []ServiceConfig   `yaml:"services,omitempty"`    // Multi-service definitions (started in order, stopped in reverse)
 	Setup       []string          `yaml:"setup,omitempty"`       // Shell commands to run before tests (legacy single-service)
@@ -30,7 +80,7 @@ type TestSuiteConfig struct {
 	BaseURL     string            `yaml:"base_url,omitempty"`    // Base URL for browser tests (e.g., "http://localhost:3000")
 }
 
-// ServiceConfig defines a single service in a multi-service test suite.
+// ServiceConfig defines a single service in a multi-service drill suite.
 // Services are started in declaration order and stopped in reverse order.
 type ServiceConfig struct {
 	Name        string            `yaml:"name"`                  // Service identifier (e.g., "database", "backend", "frontend")
@@ -51,8 +101,8 @@ type ReadyCheck struct {
 	Interval int    `yaml:"interval,omitempty"` // Poll interval in seconds (default: 2)
 }
 
-// TestConfig holds per-test configuration (lightweight — infrastructure is in the suite).
-type TestConfig struct {
+// DrillConfig holds per-drill configuration (lightweight — infrastructure is in the suite).
+type DrillConfig struct {
 	Tags        []string `yaml:"tags,omitempty"`         // For filtering (e.g., "smoke", "regression")
 	Timeout     int      `yaml:"timeout,omitempty"`      // Per-test timeout in seconds (default: 120)
 	StepTimeout int      `yaml:"step_timeout,omitempty"` // Per-step timeout in seconds (default: 30)
@@ -62,10 +112,10 @@ type TestConfig struct {
 
 // AssertConfig defines what to check after a step executes.
 type AssertConfig struct {
-	Type     string `yaml:"type"`              // "contains", "not_contains", "regex", "exit_code", "element_exists", "semantic"
-	Source   string `yaml:"source,omitempty"`  // "output" (default), "snapshot", "screenshot", "pty_buffer"
-	Expected string `yaml:"expected"`          // Expected value (string, regex, or natural language for semantic)
-	OnFail   string `yaml:"on_fail,omitempty"` // Override per-step: "stop", "continue", "triage"
+	Type     string `yaml:"type" json:"type"`                           // "contains", "not_contains", "regex", "exit_code", "element_exists", "semantic"
+	Source   string `yaml:"source,omitempty" json:"source,omitempty"`   // "output" (default), "snapshot", "screenshot", "pty_buffer"
+	Expected string `yaml:"expected" json:"expected"`                   // Expected value (string, regex, or natural language for semantic)
+	OnFail   string `yaml:"on_fail,omitempty" json:"on_fail,omitempty"` // Override per-step: "stop", "continue", "triage"
 }
 
 // MCPDependency represents a required MCP server for the flow.
@@ -80,29 +130,29 @@ type MCPDependency struct {
 
 // Node represents a single step in the agent's execution.
 type Node struct {
-	Name              string                 `yaml:"name"`
-	Type              string                 `yaml:"type"` // "input", "llm", "tool"
-	Prompt            string                 `yaml:"prompt,omitempty"`
-	System            string                 `yaml:"system,omitempty"`
-	OutputModel       map[string]string      `yaml:"output_model,omitempty"`
-	Tools             bool                   `yaml:"tools,omitempty"`
-	ToolsSelection    []string               `yaml:"tools_selection,omitempty"`
-	Options           []string               `yaml:"options,omitempty"` // Simplified for now, assuming string list
-	UserMessage       []string               `yaml:"user_message,omitempty"`
-	Args              map[string]interface{} `yaml:"args,omitempty"`
-	RawToolOutput     map[string]string      `yaml:"raw_tool_output,omitempty"`
-	ToolsAutoApproval bool                   `yaml:"tools_auto_approval,omitempty"`
-	ContinueOnError   bool                   `yaml:"continue_on_error,omitempty"` // If true, tool errors are captured in output instead of stopping flow
-	Updates           map[string]string      `yaml:"updates,omitempty"`
-	Action            string                 `yaml:"action,omitempty"`
-	Value             interface{}            `yaml:"value,omitempty"`
-	SourceVariable    string                 `yaml:"source_variable,omitempty"`
-	Parallel          *ParallelConfig        `yaml:"parallel,omitempty"`
-	OutputAction      string                 `yaml:"output_action,omitempty"`  // "append" or other aggregation strategies
-	MaxRetries        int                    `yaml:"max_retries,omitempty"`    // Maximum retry attempts (default: 3)
-	RetryStrategy     string                 `yaml:"retry_strategy,omitempty"` // "intelligent" or "simple" (default: intelligent)
-	Silent            bool                   `yaml:"silent,omitempty"`         // If true, node execution is not shown in UI/CLI
-	Assert            *AssertConfig          `yaml:"assert,omitempty"`         // Assertion for test flows (Spec 17)
+	Name              string                 `yaml:"name" json:"name"`
+	Type              string                 `yaml:"type" json:"type"` // "input", "llm", "tool"
+	Prompt            string                 `yaml:"prompt,omitempty" json:"prompt,omitempty"`
+	System            string                 `yaml:"system,omitempty" json:"system,omitempty"`
+	OutputModel       map[string]string      `yaml:"output_model,omitempty" json:"output_model,omitempty"`
+	Tools             bool                   `yaml:"tools,omitempty" json:"tools,omitempty"`
+	ToolsSelection    []string               `yaml:"tools_selection,omitempty" json:"tools_selection,omitempty"`
+	Options           []string               `yaml:"options,omitempty" json:"options,omitempty"`
+	UserMessage       []string               `yaml:"user_message,omitempty" json:"user_message,omitempty"`
+	Args              map[string]interface{} `yaml:"args,omitempty" json:"args,omitempty"`
+	RawToolOutput     map[string]string      `yaml:"raw_tool_output,omitempty" json:"raw_tool_output,omitempty"`
+	ToolsAutoApproval bool                   `yaml:"tools_auto_approval,omitempty" json:"tools_auto_approval,omitempty"`
+	ContinueOnError   bool                   `yaml:"continue_on_error,omitempty" json:"continue_on_error,omitempty"`
+	Updates           map[string]string      `yaml:"updates,omitempty" json:"updates,omitempty"`
+	Action            string                 `yaml:"action,omitempty" json:"action,omitempty"`
+	Value             interface{}            `yaml:"value,omitempty" json:"value,omitempty"`
+	SourceVariable    string                 `yaml:"source_variable,omitempty" json:"source_variable,omitempty"`
+	Parallel          *ParallelConfig        `yaml:"parallel,omitempty" json:"parallel,omitempty"`
+	OutputAction      string                 `yaml:"output_action,omitempty" json:"output_action,omitempty"`   // "append" or other aggregation strategies
+	MaxRetries        int                    `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`       // Maximum retry attempts (default: 3)
+	RetryStrategy     string                 `yaml:"retry_strategy,omitempty" json:"retry_strategy,omitempty"` // "intelligent" or "simple" (default: intelligent)
+	Silent            bool                   `yaml:"silent,omitempty" json:"silent,omitempty"`                 // If true, node execution is not shown in UI/CLI
+	Assert            *AssertConfig          `yaml:"assert,omitempty" json:"assert,omitempty"`                 // Assertion for drill flows (Spec 17)
 }
 
 // ParallelConfig defines configuration for parallel execution.

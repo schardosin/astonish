@@ -939,12 +939,12 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 		wrappedTools = append(wrappedTools, wrappedFleetTools...)
 	}
 
-	// Add run_test_suite tool (runs on host, proxies shell/file steps into
+	// Add run_drill tool (runs on host, proxies shell/file steps into
 	// the fleet's container). This tool is NOT in containerTools so it won't
 	// be double-wrapped — it orchestrates on the host.
-	runTestTool, runTestErr := tools.NewRunTestSuiteToolWithClient(lazyNode, fleetSession.ID)
-	if runTestErr == nil {
-		wrappedTools = append(wrappedTools, runTestTool)
+	runDrillTool, runDrillErr := tools.NewRunDrillToolWithClient(lazyNode, fleetSession.ID)
+	if runDrillErr == nil {
+		wrappedTools = append(wrappedTools, runDrillTool)
 	}
 
 	fleetSession.SandboxTools = wrappedTools

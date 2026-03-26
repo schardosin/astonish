@@ -599,6 +599,11 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			beforeModelCallbacks = append(beforeModelCallbacks, c.Compactor.BeforeModelCallback())
 		}
 
+		// Memory nudge: remind the model to save knowledge after non-trivial tasks
+		if c.MemoryManager != nil {
+			beforeModelCallbacks = append(beforeModelCallbacks, MemoryNudgeCallback(c.DebugMode))
+		}
+
 		// Create llmagent with all tools
 		llmAgent, err := llmagent.New(llmagent.Config{
 			Name:                 "chat",

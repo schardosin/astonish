@@ -14,6 +14,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/config"
+	adrill "github.com/schardosin/astonish/pkg/drill"
 	"github.com/schardosin/astonish/pkg/provider"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/tools"
@@ -255,16 +256,38 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 			break
 		}
 
-		// /test-plan: inject wizard prompt and convert to agent message
-		if strings.HasPrefix(input, "/test-plan") {
-			hint := strings.TrimSpace(strings.TrimPrefix(input, "/test-plan"))
-			wizardPrompt := tools.GetTestSuiteWizardPrompt()
+		// /drill-add <suite>: add new drills to an existing suite
+		if strings.HasPrefix(input, "/drill-add") {
+			suiteName := strings.TrimSpace(strings.TrimPrefix(input, "/drill-add"))
+			if suiteName == "" {
+				fmt.Printf("%sUsage: /drill-add <suite_name>%s\n", ColorYellow, ColorReset)
+				continue
+			}
+			dirs := adrill.DefaultDrillDirs()
+			suite, err := adrill.FindSuite(dirs, suiteName)
+			if err != nil {
+				fmt.Printf("%sSuite %q not found: %v%s\n", ColorYellow, suiteName, err, ColorReset)
+				continue
+			}
+			suiteContext := adrill.BuildSuiteContext(suite)
+			addPrompt := tools.GetDrillAddPrompt(suiteName, suiteContext)
+			chatAgent.SystemPrompt.SessionContext = agent.EscapeCurlyPlaceholders(addPrompt)
+			fmt.Printf("%sStarting drill-add wizard for suite %q (%d existing drills)...%s\n\n",
+				ColorCyan, suiteName, len(suite.Tests), ColorReset)
+			input = fmt.Sprintf("I'd like to add new drills to the %q suite.", suiteName)
+			// Fall through to send as regular message
+		}
+
+		// /drill: inject wizard prompt and convert to agent message
+		if strings.HasPrefix(input, "/drill") && !strings.HasPrefix(input, "/drill-add") {
+			hint := strings.TrimSpace(strings.TrimPrefix(input, "/drill"))
+			wizardPrompt := tools.GetDrillWizardPrompt()
 			chatAgent.SystemPrompt.SessionContext = agent.EscapeCurlyPlaceholders(wizardPrompt)
-			fmt.Printf("%sStarting test suite creation wizard...%s\n\n", ColorCyan, ColorReset)
+			fmt.Printf("%sStarting drill suite creation wizard...%s\n\n", ColorCyan, ColorReset)
 			if hint != "" {
-				input = fmt.Sprintf("I'd like to create a test suite. Here's what I want to test: %s", hint)
+				input = fmt.Sprintf("I'd like to create a drill suite. Here's what I want to test: %s", hint)
 			} else {
-				input = "I'd like to create a test suite for my project."
+				input = "I'd like to create a drill suite for my project."
 			}
 			// Fall through to send this as a regular message to the agent
 		}
@@ -399,7 +422,8 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				fmt.Println("  /new         - Start a fresh conversation (new session)")
 				fmt.Println("  /compact     - Show context window usage and compaction status")
 				fmt.Println("  /distill     - Distill the last task into a reusable flow")
-				fmt.Println("  /test-plan   - Create a test suite with guided wizard")
+				fmt.Println("  /drill       - Create a drill suite with guided wizard")
+				fmt.Println("  /drill-add   - Add new drills to an existing suite")
 				fmt.Println("  /fleet       - Show available fleets and CLI commands")
 				fmt.Println("  /fleet-plan  - Create a fleet plan (use Studio UI for guided conversation)")
 				fmt.Println("  /help        - Show this help message")
@@ -550,7 +574,7 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 					startSpinner(fmt.Sprintf("Running %s...", p.FunctionCall.Name))
 					spinnerStopped = false
 					// Clear wizard context after test suite is saved
-					if p.FunctionCall.Name == "save_test_suite" {
+					if p.FunctionCall.Name == "save_drill" {
 						chatAgent.SystemPrompt.SessionContext = ""
 					}
 				}

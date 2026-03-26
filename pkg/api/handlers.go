@@ -77,8 +77,8 @@ func scanAgentsDir(dir string, source string, agents map[string]AgentListItem) {
 			continue
 		}
 
-		// Skip test suites and tests — they are not regular flows
-		if cfg.Type == "test" || cfg.Type == "test_suite" {
+		// Skip drill suites and drills — they are not regular flows
+		if cfg.Type == "drill" || cfg.Type == "drill_suite" || cfg.Type == "test" || cfg.Type == "test_suite" {
 			continue
 		}
 
@@ -873,4 +873,17 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/studio/fleet/sessions/{id}/trace", FleetSessionTraceHandler).Methods("GET")
 	router.HandleFunc("/api/studio/fleet/sessions/{id}/threads", FleetSessionThreadsHandler).Methods("GET")
 	router.HandleFunc("/api/studio/fleet/sessions/{id}/messages", FleetSessionMessagesHandler).Methods("GET")
+
+	// Drill endpoints
+	router.HandleFunc("/api/drills", ListDrillSuitesHandler).Methods("GET")
+	router.HandleFunc("/api/drills/{suite}", GetDrillSuiteHandler).Methods("GET")
+	router.HandleFunc("/api/drills/{suite}", DeleteDrillSuiteHandler).Methods("DELETE")
+	router.HandleFunc("/api/drills/{suite}/yaml", GetSuiteYAMLHandler).Methods("GET")
+	router.HandleFunc("/api/drills/{suite}/yaml", SaveSuiteYAMLHandler).Methods("PUT")
+	router.HandleFunc("/api/drills/{suite}/drills/{name}", GetDrillHandler).Methods("GET")
+	router.HandleFunc("/api/drills/{suite}/drills/{name}", DeleteDrillHandler).Methods("DELETE")
+	router.HandleFunc("/api/drills/{suite}/drills/{name}/yaml", GetDrillYAMLHandler).Methods("GET")
+	router.HandleFunc("/api/drills/{suite}/drills/{name}/yaml", SaveDrillYAMLHandler).Methods("PUT")
+	router.HandleFunc("/api/drill-reports", ListDrillReportsHandler).Methods("GET")
+	router.HandleFunc("/api/drill-reports/{suite}", GetDrillReportHandler).Methods("GET")
 }

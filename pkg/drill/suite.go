@@ -1,4 +1,4 @@
-package testing
+package drill
 
 import (
 	"fmt"
@@ -53,13 +53,13 @@ func DiscoverSuites(dirs []string) ([]LoadedSuite, error) {
 			name := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
 
 			switch cfg.Type {
-			case "test_suite":
+			case "drill_suite", "test_suite":
 				suites[name] = &LoadedSuite{
 					Name:   name,
 					File:   path,
 					Config: cfg,
 				}
-			case "test":
+			case "drill", "test":
 				tests = append(tests, LoadedTest{
 					Name:   name,
 					File:   path,
@@ -196,8 +196,8 @@ func FilterTestsByTag(tests []LoadedTest, tags []string) []LoadedTest {
 
 	var filtered []LoadedTest
 	for _, test := range tests {
-		if test.Config.TestConfig != nil {
-			for _, tag := range test.Config.TestConfig.Tags {
+		if test.Config.DrillConfig != nil {
+			for _, tag := range test.Config.DrillConfig.Tags {
 				if tagSet[tag] {
 					filtered = append(filtered, test)
 					break
@@ -234,7 +234,7 @@ func FindTestsForSuite(dirs []string, suiteName string) ([]LoadedTest, error) {
 				continue
 			}
 
-			if cfg.Type == "test" && cfg.Suite == suiteName {
+			if (cfg.Type == "drill" || cfg.Type == "test") && cfg.Suite == suiteName {
 				name := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
 				tests = append(tests, LoadedTest{
 					Name:   name,
@@ -302,11 +302,11 @@ func isYAMLFile(name string) bool {
 	return ext == ".yaml" || ext == ".yml"
 }
 
-// DefaultTestDirs returns the standard directories to scan for test suites
-// and tests: the system agents dir, a local ./agents/ dir, and the user
+// DefaultDrillDirs returns the standard directories to scan for drill suites
+// and drills: the system agents dir, a local ./agents/ dir, and the user
 // flows dir. This is the canonical set used by both the CLI and the
-// run_test_suite tool.
-func DefaultTestDirs() []string {
+// run_drill tool.
+func DefaultDrillDirs() []string {
 	var dirs []string
 
 	// System agents directory
@@ -325,4 +325,54 @@ func DefaultTestDirs() []string {
 	}
 
 	return dirs
+}
+
+// BuildSuiteContext returns a formatted string describing the suite and its
+// existing drills. This is used by the /drill-add prompt to give the LLM
+// context about what already exists.
+func BuildSuiteContext(suite *LoadedSuite) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Suite: %s\n", suite.Name))
+	b.WriteString(fmt.Sprintf("Description: %s\n", suite.Config.Description))
+	b.WriteString(fmt.Sprintf("File: %s\n", suite.File))
+
+	if suite.Config.SuiteConfig != nil {
+		sc := suite.Config.SuiteConfig
+		if sc.Template != "" {
+			b.WriteString(fmt.Sprintf("Template: %s\n", sc.Template))
+		}
+		if sc.BaseURL != "" {
+			b.WriteString(fmt.Sprintf("Base URL: %s\n", sc.BaseURL))
+		}
+		if len(sc.Services) > 0 {
+			b.WriteString("Services:\n")
+			for _, svc := range sc.Services {
+				b.WriteString(fmt.Sprintf("  - %s: %s\n", svc.Name, svc.Setup))
+			}
+		}
+	}
+
+	b.WriteString(fmt.Sprintf("\nExisting drills (%d):\n", len(suite.Tests)))
+	for _, test := range suite.Tests {
+		b.WriteString(fmt.Sprintf("  - %s: %s\n", test.Name, test.Config.Description))
+		if test.Config.DrillConfig != nil && len(test.Config.DrillConfig.Tags) > 0 {
+			b.WriteString(fmt.Sprintf("    Tags: %s\n", strings.Join(test.Config.DrillConfig.Tags, ", ")))
+		}
+		if len(test.Config.Nodes) > 0 {
+			b.WriteString("    Steps:\n")
+			for _, node := range test.Config.Nodes {
+				assertInfo := ""
+				if node.Assert != nil {
+					assertInfo = fmt.Sprintf(" [assert: %s %q]", node.Assert.Type, node.Assert.Expected)
+				}
+				tool := ""
+				if args, ok := node.Args["tool"]; ok {
+					tool = fmt.Sprintf(" (tool: %v)", args)
+				}
+				b.WriteString(fmt.Sprintf("      %s%s%s\n", node.Name, tool, assertInfo))
+			}
+		}
+	}
+
+	return b.String()
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/credentials"
+	adrill "github.com/schardosin/astonish/pkg/drill"
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
@@ -273,14 +274,39 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// /test-plan: start a test suite creation conversation
-	if msg == "/test-plan" || strings.HasPrefix(msg, "/test-plan ") {
-		hint := strings.TrimSpace(strings.TrimPrefix(msg, "/test-plan"))
+	// /drill: start a drill suite creation conversation
+	if msg == "/drill" || strings.HasPrefix(msg, "/drill ") {
+		hint := strings.TrimSpace(strings.TrimPrefix(msg, "/drill"))
 		eventData := map[string]interface{}{
 			"hint":                 hint,
-			"wizard_system_prompt": tools.GetTestSuiteWizardPrompt(),
+			"wizard_system_prompt": tools.GetDrillWizardPrompt(),
 		}
-		SendSSE(w, flusher, "test_plan_redirect", eventData)
+		SendSSE(w, flusher, "drill_redirect", eventData)
+		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+		return
+	}
+
+	// /drill-add <suite>: add new drills to an existing suite
+	if strings.HasPrefix(msg, "/drill-add ") {
+		suiteName := strings.TrimSpace(strings.TrimPrefix(msg, "/drill-add"))
+		if suiteName == "" {
+			SendSSE(w, flusher, "error", map[string]interface{}{"error": "Usage: /drill-add <suite_name>"})
+			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+			return
+		}
+		dirs := adrill.DefaultDrillDirs()
+		suite, err := adrill.FindSuite(dirs, suiteName)
+		if err != nil {
+			SendSSE(w, flusher, "error", map[string]interface{}{"error": fmt.Sprintf("Suite %q not found: %v", suiteName, err)})
+			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+			return
+		}
+		suiteContext := adrill.BuildSuiteContext(suite)
+		eventData := map[string]interface{}{
+			"suite_name":           suiteName,
+			"wizard_system_prompt": tools.GetDrillAddPrompt(suiteName, suiteContext),
+		}
+		SendSSE(w, flusher, "drill_add_redirect", eventData)
 		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
 		return
 	}
@@ -550,7 +576,8 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 				"- `/distill` — Distill the last task into a reusable flow\n" +
 				"- `/fleet [task]` — Start a fleet session with an autonomous agent team\n" +
 				"- `/fleet-plan [hint]` — Create a reusable fleet plan through guided conversation\n" +
-				"- `/test-plan [hint]` — Create a test suite with guided wizard\n" +
+				"- `/drill [hint]` — Create a drill suite with guided wizard\n" +
+				"- `/drill-add <suite>` — Add new drills to an existing suite\n" +
 				"- `/help` — Show this help message",
 		})
 

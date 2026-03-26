@@ -1,4 +1,4 @@
-package testing
+package drill
 
 import (
 	"os"
@@ -557,14 +557,14 @@ func TestFilterTestsByTag(t *testing.T) {
 
 func configWithSuiteConfig() config.AgentConfig {
 	return config.AgentConfig{
-		Type:        "test_suite",
-		SuiteConfig: &config.TestSuiteConfig{Template: "@test"},
+		Type:        "drill_suite",
+		SuiteConfig: &config.DrillSuiteConfig{Template: "@test"},
 	}
 }
 
 func configNoSuiteConfig() config.AgentConfig {
 	return config.AgentConfig{
-		Type: "test_suite",
+		Type: "drill_suite",
 	}
 }
 
@@ -572,7 +572,7 @@ func validLoadedTest() LoadedTest {
 	return LoadedTest{
 		Name: "test_ok",
 		Config: &config.AgentConfig{
-			Type:  "test",
+			Type:  "drill",
 			Suite: "myapp",
 			Nodes: []config.Node{{Name: "step1", Type: "tool"}},
 		},
@@ -581,21 +581,21 @@ func validLoadedTest() LoadedTest {
 
 func configTestNoSuite() *config.AgentConfig {
 	return &config.AgentConfig{
-		Type:  "test",
+		Type:  "drill",
 		Nodes: []config.Node{{Name: "step1", Type: "tool"}},
 	}
 }
 
 func configTestNoNodes() *config.AgentConfig {
 	return &config.AgentConfig{
-		Type:  "test",
+		Type:  "drill",
 		Suite: "myapp",
 	}
 }
 
 func configTestBadAssert() *config.AgentConfig {
 	return &config.AgentConfig{
-		Type:  "test",
+		Type:  "drill",
 		Suite: "myapp",
 		Nodes: []config.Node{
 			{
@@ -609,9 +609,9 @@ func configTestBadAssert() *config.AgentConfig {
 
 func configWithTags(tags ...string) *config.AgentConfig {
 	return &config.AgentConfig{
-		Type:       "test",
-		Suite:      "myapp",
-		TestConfig: &config.TestConfig{Tags: tags},
-		Nodes:      []config.Node{{Name: "s", Type: "tool"}},
+		Type:        "drill",
+		Suite:       "myapp",
+		DrillConfig: &config.DrillConfig{Tags: tags},
+		Nodes:       []config.Node{{Name: "s", Type: "tool"}},
 	}
 }

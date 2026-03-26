@@ -7,92 +7,95 @@ import (
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/config"
+	adrill "github.com/schardosin/astonish/pkg/drill"
 	"github.com/schardosin/astonish/pkg/flowstore"
-	atesting "github.com/schardosin/astonish/pkg/testing"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 	"gopkg.in/yaml.v3"
 )
 
-// SaveTestSuiteArgs are the arguments for the save_test_suite tool.
-type SaveTestSuiteArgs struct {
-	SuiteName string        `json:"suite_name" jsonschema:"Filename for the suite (without .yaml extension, e.g., 'myapp'). This name is what tests reference in their 'suite' field."`
-	SuiteYAML string        `json:"suite_yaml" jsonschema:"Full YAML content for the test suite file. Must have type: test_suite and a suite_config section."`
-	Tests     []TestFileArg `json:"tests" jsonschema:"Array of test files to save. Each test must reference this suite by name."`
-	Template  string        `json:"template,omitempty" jsonschema:"Optional sandbox template name (from save_sandbox_template). Stored for future container integration."`
+// SaveDrillArgs are the arguments for the save_drill tool.
+type SaveDrillArgs struct {
+	SuiteName string         `json:"suite_name" jsonschema:"Filename for the suite (without .yaml extension, e.g., 'myapp'). This name is what drills reference in their 'suite' field."`
+	SuiteYAML string         `json:"suite_yaml" jsonschema:"Full YAML content for the drill suite file. Must have type: drill_suite and a suite_config section."`
+	Tests     []DrillFileArg `json:"tests" jsonschema:"Array of drill files to save. Each drill must reference this suite by name."`
+	Template  string         `json:"template,omitempty" jsonschema:"Optional sandbox template name (from save_sandbox_template). Stored for future container integration."`
 }
 
-// TestFileArg represents a single test file to save.
-type TestFileArg struct {
-	Name string `json:"name" jsonschema:"Filename for the test (without .yaml extension, e.g., 'test_api_health')"`
-	YAML string `json:"yaml" jsonschema:"Full YAML content for the test file. Must have type: test and suite: <suite_name>."`
+// DrillFileArg represents a single drill file to save.
+type DrillFileArg struct {
+	Name string `json:"name" jsonschema:"Filename for the drill (without .yaml extension, e.g., 'test_api_health')"`
+	YAML string `json:"yaml" jsonschema:"Full YAML content for the drill file. Must have type: drill and suite: <suite_name>."`
 }
 
-// SaveTestSuiteResult is the result of the save_test_suite tool.
-type SaveTestSuiteResult struct {
+// SaveDrillResult is the result of the save_drill tool.
+type SaveDrillResult struct {
 	Status    string   `json:"status"`     // "saved" or "error"
 	SuitePath string   `json:"suite_path"` // Path where suite was saved
 	TestPaths []string `json:"test_paths"` // Paths where tests were saved
 	Message   string   `json:"message"`
 }
 
-// ValidateTestSuiteArgs are the arguments for the validate_test_suite tool.
-type ValidateTestSuiteArgs struct {
-	SuiteYAML string   `json:"suite_yaml" jsonschema:"Full YAML content for the test suite to validate."`
-	TestYAMLs []string `json:"test_yamls" jsonschema:"Array of YAML content strings, one per test file to validate."`
+// ValidateDrillArgs are the arguments for the validate_drill tool.
+type ValidateDrillArgs struct {
+	SuiteYAML string   `json:"suite_yaml" jsonschema:"Full YAML content for the drill suite to validate."`
+	TestYAMLs []string `json:"test_yamls" jsonschema:"Array of YAML content strings, one per drill file to validate."`
 }
 
-// ValidateTestSuiteResult is the result of the validate_test_suite tool.
+// ValidateDrillResult is the result of the validate_drill tool.
 // It reuses ValidationCheck from fleet_plan_validate_tool.go.
-type ValidateTestSuiteResult struct {
+type ValidateDrillResult struct {
 	Status string            `json:"status"` // "passed" or "failed"
 	Checks []ValidationCheck `json:"checks"`
 }
 
-func saveTestSuite(_ tool.Context, args SaveTestSuiteArgs) (SaveTestSuiteResult, error) {
+func saveDrill(_ tool.Context, args SaveDrillArgs) (SaveDrillResult, error) {
 	// Validate required fields
 	if args.SuiteName == "" {
-		return SaveTestSuiteResult{Status: "error", Message: "suite_name is required"}, nil
-	}
-	if args.SuiteYAML == "" {
-		return SaveTestSuiteResult{Status: "error", Message: "suite_yaml is required"}, nil
+		return SaveDrillResult{Status: "error", Message: "suite_name is required"}, nil
 	}
 	if len(args.Tests) == 0 {
-		return SaveTestSuiteResult{Status: "error", Message: "at least one test is required"}, nil
+		return SaveDrillResult{Status: "error", Message: "at least one drill is required"}, nil
 	}
 
-	// Validate suite YAML parses correctly
-	var suiteCfg config.AgentConfig
-	if err := yaml.Unmarshal([]byte(args.SuiteYAML), &suiteCfg); err != nil {
-		return SaveTestSuiteResult{
-			Status:  "error",
-			Message: fmt.Sprintf("invalid suite YAML: %v", err),
-		}, nil
-	}
+	// Append mode: when suite_yaml is empty, skip suite validation/writing
+	// and only save the new drill files (used by /drill-add).
+	appendMode := args.SuiteYAML == ""
 
-	if suiteCfg.Type != "test_suite" {
-		return SaveTestSuiteResult{
-			Status:  "error",
-			Message: fmt.Sprintf("suite must have type: test_suite, got %q", suiteCfg.Type),
-		}, nil
-	}
-	if suiteCfg.SuiteConfig == nil {
-		return SaveTestSuiteResult{
-			Status:  "error",
-			Message: "suite must have a suite_config section",
-		}, nil
+	if !appendMode {
+		// Validate suite YAML parses correctly
+		var suiteCfg config.AgentConfig
+		if err := yaml.Unmarshal([]byte(args.SuiteYAML), &suiteCfg); err != nil {
+			return SaveDrillResult{
+				Status:  "error",
+				Message: fmt.Sprintf("invalid suite YAML: %v", err),
+			}, nil
+		}
+
+		if suiteCfg.Type != "drill_suite" {
+			return SaveDrillResult{
+				Status:  "error",
+				Message: fmt.Sprintf("suite must have type: drill_suite (or type: test_suite for backward compat), got %q", suiteCfg.Type),
+			}, nil
+		}
+		if suiteCfg.SuiteConfig == nil {
+			return SaveDrillResult{
+				Status:  "error",
+				Message: "suite must have a suite_config section",
+			}, nil
+		}
 	}
 
 	// Validate each test YAML
 	for i, t := range args.Tests {
 		if t.Name == "" {
-			return SaveTestSuiteResult{
+			return SaveDrillResult{
 				Status:  "error",
 				Message: fmt.Sprintf("test[%d]: name is required", i),
 			}, nil
 		}
 		if t.YAML == "" {
-			return SaveTestSuiteResult{
+			return SaveDrillResult{
 				Status:  "error",
 				Message: fmt.Sprintf("test %q: yaml is required", t.Name),
 			}, nil
@@ -100,26 +103,26 @@ func saveTestSuite(_ tool.Context, args SaveTestSuiteArgs) (SaveTestSuiteResult,
 
 		var testCfg config.AgentConfig
 		if err := yaml.Unmarshal([]byte(t.YAML), &testCfg); err != nil {
-			return SaveTestSuiteResult{
+			return SaveDrillResult{
 				Status:  "error",
 				Message: fmt.Sprintf("test %q: invalid YAML: %v", t.Name, err),
 			}, nil
 		}
 
-		if testCfg.Type != "test" {
-			return SaveTestSuiteResult{
+		if testCfg.Type != "drill" {
+			return SaveDrillResult{
 				Status:  "error",
-				Message: fmt.Sprintf("test %q: must have type: test, got %q", t.Name, testCfg.Type),
+				Message: fmt.Sprintf("test %q: must have type: drill (or type: test for backward compat), got %q", t.Name, testCfg.Type),
 			}, nil
 		}
 		if testCfg.Suite != args.SuiteName {
-			return SaveTestSuiteResult{
+			return SaveDrillResult{
 				Status:  "error",
 				Message: fmt.Sprintf("test %q: suite field must be %q, got %q", t.Name, args.SuiteName, testCfg.Suite),
 			}, nil
 		}
 		if len(testCfg.Nodes) == 0 {
-			return SaveTestSuiteResult{
+			return SaveDrillResult{
 				Status:  "error",
 				Message: fmt.Sprintf("test %q: must have at least one node", t.Name),
 			}, nil
@@ -129,50 +132,58 @@ func saveTestSuite(_ tool.Context, args SaveTestSuiteArgs) (SaveTestSuiteResult,
 	// Determine save directory
 	flowsDir, err := flowstore.GetFlowsDir()
 	if err != nil {
-		return SaveTestSuiteResult{
+		return SaveDrillResult{
 			Status:  "error",
 			Message: fmt.Sprintf("failed to get flows directory: %v", err),
 		}, nil
 	}
 
 	if err := os.MkdirAll(flowsDir, 0o755); err != nil {
-		return SaveTestSuiteResult{
+		return SaveDrillResult{
 			Status:  "error",
 			Message: fmt.Sprintf("failed to create flows directory: %v", err),
 		}, nil
 	}
 
-	// Save suite file
-	suitePath := filepath.Join(flowsDir, args.SuiteName+".yaml")
-	if err := os.WriteFile(suitePath, []byte(args.SuiteYAML), 0o644); err != nil {
-		return SaveTestSuiteResult{
-			Status:  "error",
-			Message: fmt.Sprintf("failed to write suite file: %v", err),
-		}, nil
+	// Save suite file (skip in append mode)
+	var suitePath string
+	if !appendMode {
+		suitePath = filepath.Join(flowsDir, args.SuiteName+".yaml")
+		if err := os.WriteFile(suitePath, []byte(args.SuiteYAML), 0o644); err != nil {
+			return SaveDrillResult{
+				Status:  "error",
+				Message: fmt.Sprintf("failed to write suite file: %v", err),
+			}, nil
+		}
 	}
 
-	// Save test files
+	// Save drill files
 	var testPaths []string
 	for _, t := range args.Tests {
 		testPath := filepath.Join(flowsDir, t.Name+".yaml")
 		if err := os.WriteFile(testPath, []byte(t.YAML), 0o644); err != nil {
-			return SaveTestSuiteResult{
+			return SaveDrillResult{
 				Status:  "error",
-				Message: fmt.Sprintf("failed to write test file %q: %v", t.Name, err),
+				Message: fmt.Sprintf("failed to write drill file %q: %v", t.Name, err),
 			}, nil
 		}
 		testPaths = append(testPaths, testPath)
 	}
 
-	return SaveTestSuiteResult{
+	msg := fmt.Sprintf("Saved %d drill(s) to %s", len(args.Tests), flowsDir)
+	if !appendMode {
+		msg = fmt.Sprintf("Saved suite %q and %d drill(s) to %s", args.SuiteName, len(args.Tests), flowsDir)
+	}
+
+	return SaveDrillResult{
 		Status:    "saved",
 		SuitePath: suitePath,
 		TestPaths: testPaths,
-		Message:   fmt.Sprintf("Saved suite %q and %d test(s) to %s", args.SuiteName, len(args.Tests), flowsDir),
+		Message:   msg,
 	}, nil
 }
 
-func validateTestSuite(_ tool.Context, args ValidateTestSuiteArgs) (ValidateTestSuiteResult, error) {
+func validateDrill(_ tool.Context, args ValidateDrillArgs) (ValidateDrillResult, error) {
 	var checks []ValidationCheck
 	allPassed := true
 
@@ -192,18 +203,18 @@ func validateTestSuite(_ tool.Context, args ValidateTestSuiteArgs) (ValidateTest
 			Message: "Suite YAML parses correctly",
 		})
 
-		if suiteCfg.Type != "test_suite" {
+		if suiteCfg.Type != "drill_suite" {
 			checks = append(checks, ValidationCheck{
 				Name:    "suite_type",
 				Status:  "failed",
-				Message: fmt.Sprintf("Expected type: test_suite, got %q", suiteCfg.Type),
+				Message: fmt.Sprintf("Expected type: drill_suite (or test_suite), got %q", suiteCfg.Type),
 			})
 			allPassed = false
 		} else {
 			checks = append(checks, ValidationCheck{
 				Name:    "suite_type",
 				Status:  "passed",
-				Message: "Suite type is test_suite",
+				Message: "Suite type is drill_suite",
 			})
 		}
 
@@ -396,11 +407,11 @@ func validateTestSuite(_ tool.Context, args ValidateTestSuiteArgs) (ValidateTest
 			Message: "Test YAML parses correctly",
 		})
 
-		if testCfg.Type != "test" {
+		if testCfg.Type != "drill" {
 			checks = append(checks, ValidationCheck{
 				Name:    label + "_type",
 				Status:  "failed",
-				Message: fmt.Sprintf("Expected type: test, got %q", testCfg.Type),
+				Message: fmt.Sprintf("Expected type: drill (or test), got %q", testCfg.Type),
 			})
 			allPassed = false
 		}
@@ -467,27 +478,27 @@ func validateTestSuite(_ tool.Context, args ValidateTestSuiteArgs) (ValidateTest
 		status = "failed"
 	}
 
-	return ValidateTestSuiteResult{
+	return ValidateDrillResult{
 		Status: status,
 		Checks: checks,
 	}, nil
 }
 
-// DeleteTestSuiteArgs are the arguments for the delete_test_suite tool.
-type DeleteTestSuiteArgs struct {
+// DeleteDrillArgs are the arguments for the delete_drill tool.
+type DeleteDrillArgs struct {
 	SuiteName   string `json:"suite_name" jsonschema:"Name of the suite to delete (without .yaml extension)"`
-	DeleteTests bool   `json:"delete_tests,omitempty" jsonschema:"Also delete all test files belonging to this suite (default: true)"`
-	TestName    string `json:"test_name,omitempty" jsonschema:"Delete a single test file by name instead of a whole suite. When set, suite_name is ignored."`
+	DeleteTests bool   `json:"delete_tests,omitempty" jsonschema:"Also delete all drill files belonging to this suite (default: true)"`
+	TestName    string `json:"test_name,omitempty" jsonschema:"Delete a single drill file by name instead of a whole suite. When set, suite_name is ignored."`
 }
 
-// DeleteTestSuiteResult is the result of the delete_test_suite tool.
-type DeleteTestSuiteResult struct {
+// DeleteDrillResult is the result of the delete_drill tool.
+type DeleteDrillResult struct {
 	Status  string   `json:"status"`  // "deleted" or "error"
 	Deleted []string `json:"deleted"` // Paths of deleted files
 	Message string   `json:"message"`
 }
 
-func deleteTestSuite(_ tool.Context, args DeleteTestSuiteArgs) (DeleteTestSuiteResult, error) {
+func deleteDrill(_ tool.Context, args DeleteDrillArgs) (DeleteDrillResult, error) {
 	// Determine search directories (same as CLI getTestDirs)
 	var dirs []string
 	if sysDir, err := config.GetAgentsDir(); err == nil {
@@ -499,14 +510,14 @@ func deleteTestSuite(_ tool.Context, args DeleteTestSuiteArgs) (DeleteTestSuiteR
 
 	// Single test deletion mode
 	if args.TestName != "" {
-		deletedPath, suiteName, err := atesting.DeleteTest(dirs, args.TestName)
+		deletedPath, suiteName, err := adrill.DeleteTest(dirs, args.TestName)
 		if err != nil {
-			return DeleteTestSuiteResult{
+			return DeleteDrillResult{
 				Status:  "error",
 				Message: fmt.Sprintf("Failed to delete test %q: %v", args.TestName, err),
 			}, nil
 		}
-		return DeleteTestSuiteResult{
+		return DeleteDrillResult{
 			Status:  "deleted",
 			Deleted: []string{deletedPath},
 			Message: fmt.Sprintf("Deleted test %q (was in suite %q)", args.TestName, suiteName),
@@ -515,7 +526,7 @@ func deleteTestSuite(_ tool.Context, args DeleteTestSuiteArgs) (DeleteTestSuiteR
 
 	// Suite deletion mode
 	if args.SuiteName == "" {
-		return DeleteTestSuiteResult{
+		return DeleteDrillResult{
 			Status:  "error",
 			Message: "Either suite_name or test_name is required",
 		}, nil
@@ -530,15 +541,15 @@ func deleteTestSuite(_ tool.Context, args DeleteTestSuiteArgs) (DeleteTestSuiteR
 	if !args.DeleteTests {
 		// Check if there are actually tests — if so, default to deleting them
 		// This handles the common case where the AI omits delete_tests entirely
-		tests, _ := atesting.FindTestsForSuite(dirs, args.SuiteName)
+		tests, _ := adrill.FindTestsForSuite(dirs, args.SuiteName)
 		if len(tests) > 0 {
 			deleteTests = true
 		}
 	}
 
-	deleted, err := atesting.DeleteSuite(dirs, args.SuiteName, deleteTests)
+	deleted, err := adrill.DeleteSuite(dirs, args.SuiteName, deleteTests)
 	if err != nil {
-		return DeleteTestSuiteResult{
+		return DeleteDrillResult{
 			Status:  "error",
 			Deleted: deleted, // partial deletions may have occurred
 			Message: fmt.Sprintf("Failed to delete suite %q: %v", args.SuiteName, err),
@@ -551,43 +562,43 @@ func deleteTestSuite(_ tool.Context, args DeleteTestSuiteArgs) (DeleteTestSuiteR
 		msg += fmt.Sprintf(" and %d test file(s)", testCount)
 	}
 
-	return DeleteTestSuiteResult{
+	return DeleteDrillResult{
 		Status:  "deleted",
 		Deleted: deleted,
 		Message: msg,
 	}, nil
 }
 
-// GetTestSuiteTools returns the save_test_suite, validate_test_suite, and delete_test_suite tools.
-func GetTestSuiteTools() ([]tool.Tool, error) {
+// GetDrillTools returns the save_drill, validate_drill, and delete_drill tools.
+func GetDrillTools() ([]tool.Tool, error) {
 	saveTool, err := functiontool.New(functiontool.Config{
-		Name: "save_test_suite",
-		Description: "Save a test suite and its test files. Creates the suite YAML (type: test_suite) " +
-			"and all associated test YAML files (type: test) to the user's flows directory. " +
-			"Validates all YAML before saving. Call validate_test_suite first to check for issues.",
-	}, saveTestSuite)
+		Name: "save_drill",
+		Description: "Save a drill suite and its drill files. Creates the suite YAML (type: drill_suite) " +
+			"and all associated drill YAML files (type: drill) to the user's flows directory. " +
+			"Validates all YAML before saving. Call validate_drill first to check for issues.",
+	}, saveDrill)
 	if err != nil {
-		return nil, fmt.Errorf("create save_test_suite tool: %w", err)
+		return nil, fmt.Errorf("create save_drill tool: %w", err)
 	}
 
 	validateTool, err := functiontool.New(functiontool.Config{
-		Name: "validate_test_suite",
-		Description: "Validate a test suite and its tests without saving. Checks that YAML parses correctly, " +
+		Name: "validate_drill",
+		Description: "Validate a drill suite and its drills without saving. Checks that YAML parses correctly, " +
 			"types are correct, assertions are valid, and cross-references match. " +
-			"Call this before save_test_suite to catch issues early.",
-	}, validateTestSuite)
+			"Call this before save_drill to catch issues early.",
+	}, validateDrill)
 	if err != nil {
-		return nil, fmt.Errorf("create validate_test_suite tool: %w", err)
+		return nil, fmt.Errorf("create validate_drill tool: %w", err)
 	}
 
 	deleteTool, err := functiontool.New(functiontool.Config{
-		Name: "delete_test_suite",
-		Description: "Delete a test suite and its associated test files, or delete a single test file. " +
-			"When deleting a suite, all test files that reference it are also removed by default. " +
-			"To delete a single test without touching the suite, pass test_name instead of suite_name.",
-	}, deleteTestSuite)
+		Name: "delete_drill",
+		Description: "Delete a drill suite and its associated drill files, or delete a single drill file. " +
+			"When deleting a suite, all drill files that reference it are also removed by default. " +
+			"To delete a single drill without touching the suite, pass test_name instead of suite_name.",
+	}, deleteDrill)
 	if err != nil {
-		return nil, fmt.Errorf("create delete_test_suite tool: %w", err)
+		return nil, fmt.Errorf("create delete_drill tool: %w", err)
 	}
 
 	return []tool.Tool{saveTool, validateTool, deleteTool}, nil

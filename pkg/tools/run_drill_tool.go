@@ -10,73 +10,73 @@ import (
 	"sync"
 
 	"github.com/schardosin/astonish/pkg/browser"
+	adrill "github.com/schardosin/astonish/pkg/drill"
 	"github.com/schardosin/astonish/pkg/sandbox"
-	atesting "github.com/schardosin/astonish/pkg/testing"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )
 
-// RunTestSuiteArgs are the arguments for the run_test_suite tool.
-type RunTestSuiteArgs struct {
-	SuiteName string `json:"suite_name" jsonschema:"Name of the test suite to run (without .yaml extension)"`
-	Tag       string `json:"tag,omitempty" jsonschema:"Filter tests by tag (comma-separated)"`
+// RunDrillArgs are the arguments for the run_drill tool.
+type RunDrillArgs struct {
+	SuiteName string `json:"suite_name" jsonschema:"Name of the drill suite to run (without .yaml extension)"`
+	Tag       string `json:"tag,omitempty" jsonschema:"Filter drills by tag (comma-separated)"`
 	Verbose   bool   `json:"verbose,omitempty" jsonschema:"Show verbose output including setup logs"`
 }
 
-// RunTestSuiteResult is the result of the run_test_suite tool.
-type RunTestSuiteResult struct {
+// RunDrillResult is the result of the run_drill tool.
+type RunDrillResult struct {
 	Status  string `json:"status"`  // "passed", "failed", "error"
 	Summary string `json:"summary"` // Human-readable summary line
 	Report  string `json:"report"`  // Full formatted report text
 }
 
-// runTestSuiteDeps holds sandbox dependencies for the run_test_suite tool.
+// runDrillDeps holds sandbox dependencies for the run_drill tool.
 // For chat sessions, nodePool is set and lazyClient is resolved at runtime.
 // For fleet sessions, lazyClient and sessionID are set directly.
-type runTestSuiteDeps struct {
+type runDrillDeps struct {
 	nodePool   *sandbox.NodeClientPool // Chat/Studio sessions (nil when no sandbox)
 	lazyClient *sandbox.LazyNodeClient // Fleet sessions (nil for chat sessions)
 	sessionID  string                  // Fleet session ID (empty for chat sessions)
 }
 
-// NewRunTestSuiteTool creates the run_test_suite tool for chat/Studio sessions.
+// NewRunDrillTool creates the run_drill tool for chat/Studio sessions.
 // nodePool may be nil when sandbox is not enabled; the tool will use local execution.
-func NewRunTestSuiteTool(nodePool *sandbox.NodeClientPool) (tool.Tool, error) {
-	deps := &runTestSuiteDeps{
+func NewRunDrillTool(nodePool *sandbox.NodeClientPool) (tool.Tool, error) {
+	deps := &runDrillDeps{
 		nodePool: nodePool,
 	}
-	return newRunTestSuiteToolFromDeps(deps)
+	return newRunDrillToolFromDeps(deps)
 }
 
-// NewRunTestSuiteToolWithClient creates the run_test_suite tool for fleet sessions
+// NewRunDrillToolWithClient creates the run_drill tool for fleet sessions
 // with a dedicated LazyNodeClient that routes into the fleet's container.
-func NewRunTestSuiteToolWithClient(lazyClient *sandbox.LazyNodeClient, sessionID string) (tool.Tool, error) {
-	deps := &runTestSuiteDeps{
+func NewRunDrillToolWithClient(lazyClient *sandbox.LazyNodeClient, sessionID string) (tool.Tool, error) {
+	deps := &runDrillDeps{
 		lazyClient: lazyClient,
 		sessionID:  sessionID,
 	}
-	return newRunTestSuiteToolFromDeps(deps)
+	return newRunDrillToolFromDeps(deps)
 }
 
-func newRunTestSuiteToolFromDeps(deps *runTestSuiteDeps) (tool.Tool, error) {
+func newRunDrillToolFromDeps(deps *runDrillDeps) (tool.Tool, error) {
 	// Capture deps in the closure
-	fn := func(ctx tool.Context, args RunTestSuiteArgs) (RunTestSuiteResult, error) {
-		return executeRunTestSuite(ctx, deps, args)
+	fn := func(ctx tool.Context, args RunDrillArgs) (RunDrillResult, error) {
+		return executeRunDrill(ctx, deps, args)
 	}
 
 	return functiontool.New(functiontool.Config{
-		Name: "run_test_suite",
-		Description: "Run a deterministic test suite. Tests execute in the current sandbox container " +
+		Name: "run_drill",
+		Description: "Run a deterministic drill suite. Drills execute in the current sandbox container " +
 			"(if sandbox is active) or locally on the host. Shell and file tool steps are routed " +
 			"into the container; browser tool steps run on the host. " +
-			"Returns the full test report with pass/fail status for each test and step.",
+			"Returns the full report with pass/fail status for each drill and step.",
 	}, fn)
 }
 
-func executeRunTestSuite(ctx tool.Context, deps *runTestSuiteDeps, args RunTestSuiteArgs) (RunTestSuiteResult, error) {
+func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (RunDrillResult, error) {
 	suiteName := strings.TrimSpace(args.SuiteName)
 	if suiteName == "" {
-		return RunTestSuiteResult{
+		return RunDrillResult{
 			Status:  "error",
 			Summary: "suite_name is required",
 		}, nil
@@ -87,20 +87,20 @@ func executeRunTestSuite(ctx tool.Context, deps *runTestSuiteDeps, args RunTestS
 	suiteName = strings.TrimSuffix(suiteName, ".yml")
 
 	// Discover suites from standard directories
-	dirs := atesting.DefaultTestDirs()
+	dirs := adrill.DefaultDrillDirs()
 
 	// Find the suite
-	suite, err := atesting.FindSuite(dirs, suiteName)
+	suite, err := adrill.FindSuite(dirs, suiteName)
 	if err != nil {
-		return RunTestSuiteResult{
+		return RunDrillResult{
 			Status:  "error",
 			Summary: fmt.Sprintf("Suite %q not found: %v", suiteName, err),
 		}, nil
 	}
 
 	// Validate the suite
-	if err := atesting.ValidateSuite(suite); err != nil {
-		return RunTestSuiteResult{
+	if err := adrill.ValidateSuite(suite); err != nil {
+		return RunDrillResult{
 			Status:  "error",
 			Summary: fmt.Sprintf("Invalid suite: %v", err),
 		}, nil
@@ -113,9 +113,9 @@ func executeRunTestSuite(ctx tool.Context, deps *runTestSuiteDeps, args RunTestS
 		for i := range tags {
 			tags[i] = strings.TrimSpace(tags[i])
 		}
-		tests = atesting.FilterTestsByTag(tests, tags)
+		tests = adrill.FilterTestsByTag(tests, tags)
 		if len(tests) == 0 {
-			return RunTestSuiteResult{
+			return RunDrillResult{
 				Status:  "passed",
 				Summary: fmt.Sprintf("No tests matching tags: %s", args.Tag),
 				Report:  fmt.Sprintf("Suite: %s\nNo tests matched tags: %s\n", suiteName, args.Tag),
@@ -124,7 +124,7 @@ func executeRunTestSuite(ctx tool.Context, deps *runTestSuiteDeps, args RunTestS
 	}
 
 	if len(tests) == 0 {
-		return RunTestSuiteResult{
+		return RunDrillResult{
 			Status:  "passed",
 			Summary: fmt.Sprintf("Suite %q has no tests", suiteName),
 			Report:  fmt.Sprintf("Suite: %s\n(no tests)\n", suiteName),
@@ -150,17 +150,17 @@ func executeRunTestSuite(ctx tool.Context, deps *runTestSuiteDeps, args RunTestS
 
 	// Create artifact manager
 	reportDir := filepath.Join(".astonish", "reports", suiteName)
-	am, amErr := atesting.NewArtifactManager(reportDir, suiteName)
+	am, amErr := adrill.NewArtifactManager(reportDir, suiteName)
 	if amErr != nil {
 		am = nil // non-fatal
 	}
 
 	// Run the suite
-	runner := atesting.NewSuiteRunner(executor, am, args.Verbose)
+	runner := adrill.NewSuiteRunner(executor, am, args.Verbose)
 	runner.SetVars(vars)
 	report, err := runner.RunSuite(context.Background(), suite, tests)
 	if err != nil {
-		return RunTestSuiteResult{
+		return RunDrillResult{
 			Status:  "error",
 			Summary: fmt.Sprintf("Suite execution failed: %v", err),
 		}, nil
@@ -168,7 +168,7 @@ func executeRunTestSuite(ctx tool.Context, deps *runTestSuiteDeps, args RunTestS
 
 	// Format the report
 	var buf bytes.Buffer
-	atesting.PrintReport(report, &buf)
+	adrill.PrintReport(report, &buf)
 
 	// Enrich report with failure details for the conversational AI
 	if report.Status != "passed" {
@@ -176,12 +176,12 @@ func executeRunTestSuite(ctx tool.Context, deps *runTestSuiteDeps, args RunTestS
 	}
 
 	// Save report to disk
-	reportPath, saveErr := atesting.SaveReport(report, reportDir)
+	reportPath, saveErr := adrill.SaveReport(report, reportDir)
 	if saveErr == nil && reportPath != "" {
 		buf.WriteString(fmt.Sprintf("\nReport saved: %s\n", reportPath))
 	}
 
-	return RunTestSuiteResult{
+	return RunDrillResult{
 		Status:  report.Status,
 		Summary: report.Summary,
 		Report:  buf.String(),
@@ -189,7 +189,7 @@ func executeRunTestSuite(ctx tool.Context, deps *runTestSuiteDeps, args RunTestS
 }
 
 // ---------------------------------------------------------------------------
-// Executor types for the run_test_suite tool
+// Executor types for the run_drill tool
 // ---------------------------------------------------------------------------
 
 // testContainerTools lists tools that should be routed into the sandbox
@@ -233,13 +233,13 @@ var testBrowserToolNames = map[string]bool{
 
 // closableExecutor extends ToolExecutor with a Close method and sandbox check.
 type closableExecutor interface {
-	atesting.ToolExecutor
+	adrill.ToolExecutor
 	Close()
 	hasSandbox() bool
 }
 
-// buildTestExecutor creates the appropriate executor for the run_test_suite tool.
-func buildTestExecutor(ctx tool.Context, deps *runTestSuiteDeps) closableExecutor {
+// buildTestExecutor creates the appropriate executor for the run_drill tool.
+func buildTestExecutor(ctx tool.Context, deps *runDrillDeps) closableExecutor {
 	// Resolve the LazyNodeClient based on context
 	var lazyClient *sandbox.LazyNodeClient
 	var sessionID string
@@ -315,7 +315,7 @@ func discoverContainerIP(executor closableExecutor) (string, error) {
 		return "", fmt.Errorf("discover container IP: %w", err)
 	}
 
-	output := atesting.ExtractOutput(result)
+	output := adrill.ExtractOutput(result)
 	ip := strings.TrimSpace(output)
 	if ip == "" {
 		return "", fmt.Errorf("hostname -I returned empty output")
@@ -653,7 +653,7 @@ func (b *testBrowserExecutor) Execute(_ context.Context, name string, args map[s
 // report text so the conversational AI can diagnose issues without needing
 // to invoke the triage agent. Includes raw output, assertion details, and
 // setup log excerpts for each failed step.
-func enrichReportWithFailureContext(buf *bytes.Buffer, report *atesting.SuiteReport) {
+func enrichReportWithFailureContext(buf *bytes.Buffer, report *adrill.SuiteReport) {
 	buf.WriteString("\n--- Failure Details ---\n")
 
 	for _, test := range report.Tests {

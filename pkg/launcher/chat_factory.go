@@ -1100,27 +1100,27 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 	}
 
-	// Register test suite tools (save_test_suite, validate_test_suite, delete_test_suite)
-	testSuiteTools, tstErr := tools.GetTestSuiteTools()
-	if tstErr != nil {
+	// Register drill tools (save_drill, validate_drill, delete_drill)
+	drillTools, drillErr := tools.GetDrillTools()
+	if drillErr != nil {
 		if cfg.DebugMode {
-			fmt.Printf("Warning: Failed to create test suite tools: %v\n", tstErr)
+			fmt.Printf("Warning: Failed to create drill tools: %v\n", drillErr)
 		}
 	} else {
-		internalTools = append(internalTools, testSuiteTools...)
+		internalTools = append(internalTools, drillTools...)
 	}
 
-	// Register run_test_suite tool (orchestrates test execution on the host,
+	// Register run_drill tool (orchestrates drill execution on the host,
 	// proxying shell/file tool steps into the sandbox container when active).
 	// sandboxNodePool is nil when sandbox is not enabled; the tool falls back
 	// to local execution.
-	runTestTool, runTestErr := tools.NewRunTestSuiteTool(sandboxNodePool)
-	if runTestErr != nil {
+	runDrillTool, runDrillErr := tools.NewRunDrillTool(sandboxNodePool)
+	if runDrillErr != nil {
 		if cfg.DebugMode {
-			fmt.Printf("Warning: Failed to create run_test_suite tool: %v\n", runTestErr)
+			fmt.Printf("Warning: Failed to create run_drill tool: %v\n", runDrillErr)
 		}
 	} else {
-		internalTools = append(internalTools, runTestTool)
+		internalTools = append(internalTools, runDrillTool)
 	}
 
 	// --- 6. Create ChatAgent ---

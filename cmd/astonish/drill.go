@@ -15,43 +15,43 @@ import (
 	"github.com/google/uuid"
 	"github.com/schardosin/astonish/pkg/browser"
 	"github.com/schardosin/astonish/pkg/config"
+	adrill "github.com/schardosin/astonish/pkg/drill"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/sandbox"
-	atesting "github.com/schardosin/astonish/pkg/testing"
 	"github.com/schardosin/astonish/pkg/tools"
 )
 
-func handleTestCommand(args []string) error {
+func handleDrillCommand(args []string) error {
 	if len(args) < 1 || args[0] == "--help" || args[0] == "-h" {
-		printTestUsage()
+		printDrillUsage()
 		return nil
 	}
 
 	switch args[0] {
 	case "run":
-		return handleTestRunCommand(args[1:])
+		return handleDrillRunCommand(args[1:])
 	case "list":
-		return handleTestListCommand(args[1:])
+		return handleDrillListCommand(args[1:])
 	case "report":
-		return handleTestReportCommand(args[1:])
+		return handleDrillReportCommand(args[1:])
 	case "remove", "rm", "delete":
-		return handleTestRemoveCommand(args[1:])
+		return handleDrillRemoveCommand(args[1:])
 	default:
-		printTestUsage()
-		return fmt.Errorf("unknown test command: %s", args[0])
+		printDrillUsage()
+		return fmt.Errorf("unknown drill command: %s", args[0])
 	}
 }
 
-func printTestUsage() {
-	fmt.Println("usage: astonish test [-h] {run,list,report,remove} ...")
+func printDrillUsage() {
+	fmt.Println("usage: astonish drill [-h] {run,list,report,remove} ...")
 	fmt.Println("")
-	fmt.Println("Deterministic test runner for AI-authored test suites.")
+	fmt.Println("Deterministic drill runner for AI-authored drill suites.")
 	fmt.Println("")
 	fmt.Println("commands:")
-	fmt.Println("  run                 Run a test suite or single test")
-	fmt.Println("  list                List all test suites and tests")
-	fmt.Println("  report              Show the last test report")
-	fmt.Println("  remove              Remove a test suite or single test")
+	fmt.Println("  run                 Run a drill suite or single drill")
+	fmt.Println("  list                List all drill suites and drills")
+	fmt.Println("  report              Show the last drill report")
+	fmt.Println("  remove              Remove a drill suite or single drill")
 	fmt.Println("")
 	fmt.Println("options:")
 	fmt.Println("  -h, --help          Show this help message")
@@ -443,7 +443,7 @@ var containerToolNames = map[string]bool{
 	"git_diff_add_line_numbers": true,
 }
 
-func handleTestRunCommand(args []string) error {
+func handleDrillRunCommand(args []string) error {
 	runCmd := flag.NewFlagSet("test run", flag.ExitOnError)
 	tagFlag := runCmd.String("tag", "", "Filter tests by tag (comma-separated)")
 	verbose := runCmd.Bool("verbose", false, "Verbose output")
@@ -468,11 +468,11 @@ func handleTestRunCommand(args []string) error {
 	}
 
 	if targetName == "" {
-		fmt.Println("usage: astonish test run <suite_or_test> [--tag tag1,tag2] [--verbose] [--analyze] [--report-dir dir]")
+		fmt.Println("usage: astonish drill run <suite_or_drill> [--tag tag1,tag2] [--verbose] [--analyze] [--report-dir dir]")
 		return fmt.Errorf("no suite or test name provided")
 	}
 
-	dirs := atesting.DefaultTestDirs()
+	dirs := adrill.DefaultDrillDirs()
 
 	// Determine report directory
 	rdir := *reportDir
@@ -482,13 +482,13 @@ func handleTestRunCommand(args []string) error {
 
 	// --- Discover suite and tests FIRST (before building executor) ---
 
-	var suite *atesting.LoadedSuite
-	var tests []atesting.LoadedTest
+	var suite *adrill.LoadedSuite
+	var tests []adrill.LoadedTest
 
-	foundSuite, sErr := atesting.FindSuite(dirs, targetName)
+	foundSuite, sErr := adrill.FindSuite(dirs, targetName)
 	if sErr == nil {
 		// Found as a suite
-		if err := atesting.ValidateSuite(foundSuite); err != nil {
+		if err := adrill.ValidateSuite(foundSuite); err != nil {
 			return fmt.Errorf("invalid suite: %w", err)
 		}
 		suite = foundSuite
@@ -498,7 +498,7 @@ func handleTestRunCommand(args []string) error {
 			for i := range tags {
 				tags[i] = strings.TrimSpace(tags[i])
 			}
-			tests = atesting.FilterTestsByTag(tests, tags)
+			tests = adrill.FilterTestsByTag(tests, tags)
 			if len(tests) == 0 {
 				fmt.Printf("No tests matching tags: %s\n", *tagFlag)
 				return nil
@@ -506,15 +506,15 @@ func handleTestRunCommand(args []string) error {
 		}
 	} else {
 		// Try as individual test
-		test, parentSuite, tErr := atesting.FindTestAndSuite(dirs, targetName)
+		test, parentSuite, tErr := adrill.FindTestAndSuite(dirs, targetName)
 		if tErr != nil {
 			return fmt.Errorf("not found as suite or test: %s", targetName)
 		}
-		if err := atesting.ValidateSuite(parentSuite); err != nil {
+		if err := adrill.ValidateSuite(parentSuite); err != nil {
 			return fmt.Errorf("invalid suite %q for test %q: %w", parentSuite.Name, test.Name, err)
 		}
 		suite = parentSuite
-		tests = []atesting.LoadedTest{*test}
+		tests = []adrill.LoadedTest{*test}
 	}
 
 	// --- Build executor (sandbox-aware if suite has a template) ---
@@ -573,12 +573,12 @@ func handleTestRunCommand(args []string) error {
 	}
 
 	// Create artifact manager
-	am, amErr := atesting.NewArtifactManager(rdir, targetName)
+	am, amErr := adrill.NewArtifactManager(rdir, targetName)
 	if amErr != nil {
 		fmt.Printf("Warning: could not create artifact manager: %v\n", amErr)
 	}
 
-	runner := atesting.NewSuiteRunner(executor, am, *verbose)
+	runner := adrill.NewSuiteRunner(executor, am, *verbose)
 	runner.SetVars(vars)
 
 	// --- Set up AI triage if --analyze is enabled ---
@@ -610,10 +610,10 @@ func handleTestRunCommand(args []string) error {
 		return fmt.Errorf("suite run failed: %w", err)
 	}
 
-	atesting.PrintReport(report, os.Stdout)
+	adrill.PrintReport(report, os.Stdout)
 
 	// Save report
-	reportPath, err := atesting.SaveReport(report, rdir)
+	reportPath, err := adrill.SaveReport(report, rdir)
 	if err != nil {
 		fmt.Printf("Warning: could not save report: %v\n", err)
 	} else {
@@ -690,7 +690,7 @@ func initSandboxForTest(template string) (*sandbox.LazyNodeClient, string, bool)
 // setupTriageAgent initializes an AI triage agent using the user's default LLM
 // provider and attaches it to the runner. Returns an error if the provider
 // cannot be initialized (missing API key, etc.).
-func setupTriageAgent(runner *atesting.SuiteRunner, executor atesting.ToolExecutor, am *atesting.ArtifactManager, verbose bool) error {
+func setupTriageAgent(runner *adrill.SuiteRunner, executor adrill.ToolExecutor, am *adrill.ArtifactManager, verbose bool) error {
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
 		return fmt.Errorf("load app config: %w", err)
@@ -708,21 +708,21 @@ func setupTriageAgent(runner *atesting.SuiteRunner, executor atesting.ToolExecut
 		return fmt.Errorf("initialize %s provider: %w", providerName, err)
 	}
 
-	ta := atesting.NewTriageAgent(llm, executor, am, verbose)
+	ta := adrill.NewTriageAgent(llm, executor, am, verbose)
 	runner.SetTriageAgent(ta, true) // enableForAll=true because --analyze means "triage everything"
 
 	return nil
 }
 
-func handleTestListCommand(args []string) error {
+func handleDrillListCommand(args []string) error {
 	listCmd := flag.NewFlagSet("test list", flag.ExitOnError)
 	tagFlag := listCmd.String("tag", "", "Filter by tag (comma-separated)")
 	if err := listCmd.Parse(args); err != nil {
 		return err
 	}
 
-	dirs := atesting.DefaultTestDirs()
-	suites, err := atesting.DiscoverSuites(dirs)
+	dirs := adrill.DefaultDrillDirs()
+	suites, err := adrill.DiscoverSuites(dirs)
 	if err != nil {
 		return fmt.Errorf("discovery failed: %w", err)
 	}
@@ -749,7 +749,7 @@ func handleTestListCommand(args []string) error {
 	for _, suite := range suites {
 		tests := suite.Tests
 		if len(tags) > 0 {
-			tests = atesting.FilterTestsByTag(tests, tags)
+			tests = adrill.FilterTestsByTag(tests, tags)
 		}
 
 		fmt.Printf("Suite: %s", suite.Name)
@@ -790,8 +790,8 @@ func handleTestListCommand(args []string) error {
 					desc = test.Config.Description
 				}
 				tagStr := ""
-				if test.Config.TestConfig != nil && len(test.Config.TestConfig.Tags) > 0 {
-					tagStr = " [" + strings.Join(test.Config.TestConfig.Tags, ", ") + "]"
+				if test.Config.DrillConfig != nil && len(test.Config.DrillConfig.Tags) > 0 {
+					tagStr = " [" + strings.Join(test.Config.DrillConfig.Tags, ", ") + "]"
 				}
 				fmt.Printf("  - %s%s\n", desc, tagStr)
 			}
@@ -804,7 +804,7 @@ func handleTestListCommand(args []string) error {
 	return nil
 }
 
-func handleTestReportCommand(args []string) error {
+func handleDrillReportCommand(args []string) error {
 	reportCmd := flag.NewFlagSet("test report", flag.ExitOnError)
 	reportDir := reportCmd.String("dir", "", "Report directory (default: .astonish/reports)")
 	if err := reportCmd.Parse(args); err != nil {
@@ -828,11 +828,11 @@ func handleTestReportCommand(args []string) error {
 	// If a specific suite/test was given, look for its report directly
 	if targetName != "" {
 		reportPath := filepath.Join(rdir, "suite_report.json")
-		report, err := atesting.LoadReport(reportPath)
+		report, err := adrill.LoadReport(reportPath)
 		if err != nil {
 			return fmt.Errorf("no report found for %q: %w", targetName, err)
 		}
-		atesting.PrintReport(report, os.Stdout)
+		adrill.PrintReport(report, os.Stdout)
 		return nil
 	}
 
@@ -848,24 +848,24 @@ func handleTestReportCommand(args []string) error {
 			continue
 		}
 		reportPath := filepath.Join(rdir, entry.Name(), "suite_report.json")
-		report, err := atesting.LoadReport(reportPath)
+		report, err := adrill.LoadReport(reportPath)
 		if err != nil {
 			continue
 		}
 		found = true
-		atesting.PrintReport(report, os.Stdout)
+		adrill.PrintReport(report, os.Stdout)
 		fmt.Println()
 	}
 
 	if !found {
 		fmt.Println("No reports found.")
-		fmt.Println("Run tests first with: astonish test run <suite>")
+		fmt.Println("Run drills first with: astonish drill run <suite>")
 	}
 
 	return nil
 }
 
-func handleTestRemoveCommand(args []string) error {
+func handleDrillRemoveCommand(args []string) error {
 	removeCmd := flag.NewFlagSet("test remove", flag.ExitOnError)
 	forceFlag := removeCmd.Bool("force", false, "Skip confirmation prompt")
 	keepTests := removeCmd.Bool("keep-tests", false, "When removing a suite, keep its test files")
@@ -888,7 +888,7 @@ func handleTestRemoveCommand(args []string) error {
 	}
 
 	if targetName == "" {
-		fmt.Println("usage: astonish test remove <suite_or_test> [--force] [--keep-tests]")
+		fmt.Println("usage: astonish drill remove <suite_or_drill> [--force] [--keep-tests]")
 		fmt.Println("")
 		fmt.Println("Removes a test suite and all its test files, or a single test file.")
 		fmt.Println("When removing a suite, all associated test files are also deleted")
@@ -900,16 +900,16 @@ func handleTestRemoveCommand(args []string) error {
 	targetName = strings.TrimSuffix(targetName, ".yaml")
 	targetName = strings.TrimSuffix(targetName, ".yml")
 
-	dirs := atesting.DefaultTestDirs()
+	dirs := adrill.DefaultDrillDirs()
 
 	// Try as suite first
-	suite, err := atesting.FindSuite(dirs, targetName)
+	suite, err := adrill.FindSuite(dirs, targetName)
 	if err == nil {
 		return handleRemoveSuite(dirs, suite, !*keepTests, *forceFlag)
 	}
 
 	// Try as individual test
-	test, parentSuite, err := atesting.FindTestAndSuite(dirs, targetName)
+	test, parentSuite, err := adrill.FindTestAndSuite(dirs, targetName)
 	if err == nil {
 		return handleRemoveTest(dirs, test, parentSuite, *forceFlag)
 	}
@@ -917,9 +917,9 @@ func handleTestRemoveCommand(args []string) error {
 	return fmt.Errorf("not found as suite or test: %s", targetName)
 }
 
-func handleRemoveSuite(dirs []string, suite *atesting.LoadedSuite, deleteTests bool, force bool) error {
+func handleRemoveSuite(dirs []string, suite *adrill.LoadedSuite, deleteTests bool, force bool) error {
 	// Find all associated tests
-	tests, _ := atesting.FindTestsForSuite(dirs, suite.Name)
+	tests, _ := adrill.FindTestsForSuite(dirs, suite.Name)
 
 	// Show what will be deleted
 	fmt.Printf("Suite: %s (%s)\n", suite.Name, suite.File)
@@ -960,7 +960,7 @@ func handleRemoveSuite(dirs []string, suite *atesting.LoadedSuite, deleteTests b
 	}
 
 	// Perform deletion
-	deleted, err := atesting.DeleteSuite(dirs, suite.Name, deleteTests)
+	deleted, err := adrill.DeleteSuite(dirs, suite.Name, deleteTests)
 	if err != nil {
 		// Show partial results
 		for _, path := range deleted {
@@ -999,7 +999,7 @@ func handleRemoveSuite(dirs []string, suite *atesting.LoadedSuite, deleteTests b
 	return nil
 }
 
-func handleRemoveTest(dirs []string, test *atesting.LoadedTest, suite *atesting.LoadedSuite, force bool) error {
+func handleRemoveTest(dirs []string, test *adrill.LoadedTest, suite *adrill.LoadedSuite, force bool) error {
 	fmt.Printf("Test: %s (%s)\n", test.Name, test.File)
 	fmt.Printf("Suite: %s\n", suite.Name)
 
@@ -1013,7 +1013,7 @@ func handleRemoveTest(dirs []string, test *atesting.LoadedTest, suite *atesting.
 		}
 	}
 
-	deletedPath, _, err := atesting.DeleteTest(dirs, test.Name)
+	deletedPath, _, err := adrill.DeleteTest(dirs, test.Name)
 	if err != nil {
 		return fmt.Errorf("deletion failed: %w", err)
 	}
@@ -1035,7 +1035,7 @@ func handleRemoveTest(dirs []string, test *atesting.LoadedTest, suite *atesting.
 	}
 
 	// Warn about remaining tests in suite
-	remaining, _ := atesting.FindTestsForSuite(dirs, suite.Name)
+	remaining, _ := adrill.FindTestsForSuite(dirs, suite.Name)
 	fmt.Printf("\nRemoved test %q. Suite %q has %d remaining test(s).\n", test.Name, suite.Name, len(remaining))
 	return nil
 }

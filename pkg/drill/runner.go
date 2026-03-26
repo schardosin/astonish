@@ -1,4 +1,4 @@
-package testing
+package drill
 
 import (
 	"context"
@@ -81,7 +81,7 @@ func (sr *SuiteRunner) RunSuite(ctx context.Context, suite *LoadedSuite, tests [
 }
 
 // runLegacySuite handles the original single-service setup/readycheck/teardown lifecycle.
-func (sr *SuiteRunner) runLegacySuite(ctx context.Context, report *SuiteReport, sc *config.TestSuiteConfig, suite *LoadedSuite, tests []LoadedTest) (*SuiteReport, error) {
+func (sr *SuiteRunner) runLegacySuite(ctx context.Context, report *SuiteReport, sc *config.DrillSuiteConfig, suite *LoadedSuite, tests []LoadedTest) (*SuiteReport, error) {
 	// 2. Run setup commands
 	var setupLog strings.Builder
 	if sc != nil {
@@ -159,7 +159,7 @@ func (sr *SuiteRunner) runLegacySuite(ctx context.Context, report *SuiteReport, 
 
 // runMultiServiceSuite handles multi-service lifecycle:
 // start services in declaration order → per-service ready checks → run tests → teardown in reverse order.
-func (sr *SuiteRunner) runMultiServiceSuite(ctx context.Context, report *SuiteReport, sc *config.TestSuiteConfig, suite *LoadedSuite, tests []LoadedTest) (*SuiteReport, error) {
+func (sr *SuiteRunner) runMultiServiceSuite(ctx context.Context, report *SuiteReport, sc *config.DrillSuiteConfig, suite *LoadedSuite, tests []LoadedTest) (*SuiteReport, error) {
 	var setupLog strings.Builder
 	var startedServices []config.ServiceConfig // track which services started (for reverse teardown)
 
@@ -288,7 +288,7 @@ func (sr *SuiteRunner) teardownServices(ctx context.Context, services []config.S
 // When a triage agent is configured and a step fails with on_fail: "triage",
 // the agent investigates the failure and may trigger an automatic retry.
 func (sr *SuiteRunner) runTest(ctx context.Context, test *LoadedTest, suite *LoadedSuite) TestReport {
-	tc := test.Config.TestConfig
+	tc := test.Config.DrillConfig
 	timeout := 120
 	stepTimeout := 30
 	onFail := "stop"

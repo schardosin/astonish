@@ -1,4 +1,4 @@
-package testing
+package drill
 
 import (
 	"encoding/base64"

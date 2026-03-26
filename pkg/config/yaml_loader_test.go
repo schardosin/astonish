@@ -107,8 +107,8 @@ suite_config:
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
 
-	if cfg.Type != "test_suite" {
-		t.Errorf("Type = %q, want %q", cfg.Type, "test_suite")
+	if cfg.Type != "drill_suite" {
+		t.Errorf("Type = %q, want %q", cfg.Type, "drill_suite")
 	}
 	if cfg.Description != "MyApp Integration Tests" {
 		t.Errorf("Description = %q, want %q", cfg.Description, "MyApp Integration Tests")
@@ -192,29 +192,29 @@ flow:
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
 
-	if cfg.Type != "test" {
-		t.Errorf("Type = %q, want %q", cfg.Type, "test")
+	if cfg.Type != "drill" {
+		t.Errorf("Type = %q, want %q", cfg.Type, "drill")
 	}
 	if cfg.Suite != "myapp" {
 		t.Errorf("Suite = %q, want %q", cfg.Suite, "myapp")
 	}
-	if cfg.TestConfig == nil {
-		t.Fatal("TestConfig is nil")
+	if cfg.DrillConfig == nil {
+		t.Fatal("DrillConfig is nil")
 	}
-	if len(cfg.TestConfig.Tags) != 2 {
-		t.Fatalf("Tags length = %d, want 2", len(cfg.TestConfig.Tags))
+	if len(cfg.DrillConfig.Tags) != 2 {
+		t.Fatalf("Tags length = %d, want 2", len(cfg.DrillConfig.Tags))
 	}
-	if cfg.TestConfig.Tags[0] != "smoke" {
-		t.Errorf("Tags[0] = %q, want %q", cfg.TestConfig.Tags[0], "smoke")
+	if cfg.DrillConfig.Tags[0] != "smoke" {
+		t.Errorf("Tags[0] = %q, want %q", cfg.DrillConfig.Tags[0], "smoke")
 	}
-	if cfg.TestConfig.Timeout != 30 {
-		t.Errorf("Timeout = %d, want 30", cfg.TestConfig.Timeout)
+	if cfg.DrillConfig.Timeout != 30 {
+		t.Errorf("Timeout = %d, want 30", cfg.DrillConfig.Timeout)
 	}
-	if cfg.TestConfig.StepTimeout != 10 {
-		t.Errorf("StepTimeout = %d, want 10", cfg.TestConfig.StepTimeout)
+	if cfg.DrillConfig.StepTimeout != 10 {
+		t.Errorf("StepTimeout = %d, want 10", cfg.DrillConfig.StepTimeout)
 	}
-	if cfg.TestConfig.OnFail != "continue" {
-		t.Errorf("OnFail = %q, want %q", cfg.TestConfig.OnFail, "continue")
+	if cfg.DrillConfig.OnFail != "continue" {
+		t.Errorf("OnFail = %q, want %q", cfg.DrillConfig.OnFail, "continue")
 	}
 
 	// Check nodes with assertions
@@ -278,8 +278,8 @@ flow:
 	if cfg.SuiteConfig != nil {
 		t.Error("SuiteConfig should be nil for regular flows")
 	}
-	if cfg.TestConfig != nil {
-		t.Error("TestConfig should be nil for regular flows")
+	if cfg.DrillConfig != nil {
+		t.Error("DrillConfig should be nil for regular flows")
 	}
 	if cfg.Nodes[0].Assert != nil {
 		t.Error("Assert should be nil for regular flow nodes")
@@ -328,8 +328,8 @@ suite_config:
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
 
-	if cfg.Type != "test_suite" {
-		t.Errorf("Type = %q, want %q", cfg.Type, "test_suite")
+	if cfg.Type != "drill_suite" {
+		t.Errorf("Type = %q, want %q", cfg.Type, "drill_suite")
 	}
 	sc := cfg.SuiteConfig
 	if sc == nil {

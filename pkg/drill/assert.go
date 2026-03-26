@@ -1,7 +1,8 @@
-// Package testing provides the deterministic test runner for Astonish test flows.
-// It executes test suites and individual tests without LLM involvement,
-// evaluating assertions and capturing proof artifacts.
-package testing
+// Package drill provides the deterministic step execution engine for Astonish.
+// A "drill" is an AI-composed, mechanically-replayed sequence of tool calls
+// with assertions and reporting. Drills are used for tests, health checks,
+// deployment verification, and any repeatable multi-step automation.
+package drill
 
 import (
 	"fmt"

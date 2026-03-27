@@ -392,6 +392,9 @@ func handleSandboxList() error {
 			status,
 			entry.CreatedAt.Format("2006-01-02 15:04:05"),
 		)
+		if entry.Pinned {
+			fmt.Printf("  (pinned — exempt from automatic cleanup)\n")
+		}
 	}
 
 	// Check for unregistered session containers (containers that exist in
@@ -465,6 +468,14 @@ func handleSandboxCreate(templateName, label string) error {
 	containerName, err := sandbox.EnsureSessionContainer(client, sessRegistry, tplRegistry, sessionID, templateName, &limits)
 	if err != nil {
 		return fmt.Errorf("failed to create container: %w", err)
+	}
+
+	// Pin the container so automatic orphan cleanup doesn't destroy it.
+	// Manually created containers have no corresponding session in the
+	// persistent session store, so without pinning they'd be pruned as
+	// orphans on the next cleanup cycle or daemon restart.
+	if err := sessRegistry.SetPinned(containerName, true); err != nil {
+		fmt.Printf("Warning: failed to pin container: %v\n", err)
 	}
 
 	fmt.Printf("Container %q ready (session: %s)\n", containerName, sessionID)

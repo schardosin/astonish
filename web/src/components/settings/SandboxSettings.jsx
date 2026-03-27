@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Save, AlertCircle, Check, Shield, ShieldOff, Loader2, Trash2, RefreshCw, Plus, Camera, ArrowUpCircle, Eye, ChevronDown, ChevronRight, Server, Box, Globe, X, ExternalLink } from 'lucide-react'
+import { Save, AlertCircle, Check, Shield, ShieldOff, Loader2, Trash2, RefreshCw, Plus, Camera, ArrowUpCircle, Eye, ChevronDown, ChevronRight, Server, Box, Globe, X, ExternalLink, Pin } from 'lucide-react'
 import { saveFullConfigSection, inputClass, inputStyle, labelStyle, hintStyle, sectionBorderStyle, saveButtonStyle } from './settingsApi'
 import {
   fetchSandboxDetails, fetchContainers, deleteContainer, pruneOrphans,
   fetchTemplates, fetchTemplateInfo, createTemplate, deleteTemplate,
   snapshotTemplate, promoteTemplate, refreshTemplates,
-  exposePort, unexposePort
+  exposePort, unexposePort, pinContainer
 } from '../../api/sandbox'
 
 // --- Badge components ---
@@ -206,6 +206,16 @@ export default function SandboxSettings({ config, onSaved }) {
       setActionError(err.message)
     } finally {
       setExposeLoading(false)
+    }
+  }
+
+  const handleTogglePin = async (containerId, currentPinned) => {
+    setActionError(null)
+    try {
+      await pinContainer(containerId, !currentPinned)
+      loadContainers()
+    } catch (err) {
+      setActionError(err.message)
     }
   }
 
@@ -479,6 +489,14 @@ export default function SandboxSettings({ config, onSaved }) {
                             {exposedPorts.length} port{exposedPorts.length !== 1 ? 's' : ''}
                           </span>
                         )}
+                        {c.pinned && (
+                          <span className="text-xs px-1.5 py-0.5 rounded inline-flex items-center gap-1"
+                            style={{ background: 'rgba(234, 179, 8, 0.15)', color: '#eab308' }}
+                            title="Pinned — exempt from automatic cleanup">
+                            <Pin size={10} />
+                            pinned
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5">
                         <span className="text-xs font-mono truncate" style={{ color: 'var(--text-muted)' }}>
@@ -488,6 +506,13 @@ export default function SandboxSettings({ config, onSaved }) {
                       </div>
                     </div>
                     <div className="flex items-center gap-1 flex-shrink-0">
+                      {/* Pin toggle */}
+                      <button
+                        onClick={() => handleTogglePin(c.session_id, c.pinned)}
+                        className="p-1.5 rounded transition-colors hover:bg-white/10"
+                        title={c.pinned ? 'Unpin (allow automatic cleanup)' : 'Pin (prevent automatic cleanup)'}>
+                        <Pin size={14} style={{ color: c.pinned ? '#eab308' : 'var(--text-muted)' }} />
+                      </button>
                       {/* Port expose toggle (only for running containers) */}
                       {isRunning && (
                         <button

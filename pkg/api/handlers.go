@@ -770,6 +770,7 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/sandbox/containers/{id}/expose", SandboxListExposedPortsHandler).Methods("GET")
 	router.HandleFunc("/api/sandbox/containers/{id}/expose", SandboxExposePortHandler).Methods("POST")
 	router.HandleFunc("/api/sandbox/containers/{id}/expose/{port}", SandboxUnexposePortHandler).Methods("DELETE")
+	router.HandleFunc("/api/sandbox/containers/{id}/pin", SandboxPinContainerHandler).Methods("POST")
 	router.PathPrefix("/api/sandbox/proxy/{container}/{port}").HandlerFunc(SandboxProxyHandler)
 	router.HandleFunc("/api/sandbox/prune", SandboxPruneHandler).Methods("POST")
 	router.HandleFunc("/api/sandbox/templates", SandboxTemplateListHandler).Methods("GET")

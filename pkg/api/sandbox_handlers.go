@@ -64,6 +64,7 @@ type ContainerInfo struct {
 	Template     string            `json:"template"`
 	Status       string            `json:"status"`
 	Created      string            `json:"created"`
+	Pinned       bool              `json:"pinned,omitempty"`
 	ExposedPorts []int             `json:"exposed_ports,omitempty"`
 	HostPorts    map[string]int    `json:"host_ports,omitempty"`
 	ProxyHosts   map[string]string `json:"proxy_hosts,omitempty"`
@@ -328,6 +329,7 @@ func SandboxContainerListHandler(w http.ResponseWriter, r *http.Request) {
 			Template:  e.TemplateName,
 			Status:    status,
 			Created:   e.CreatedAt.Format("2006-01-02 15:04:05"),
+			Pinned:    e.Pinned,
 		}
 		if len(e.ExposedPorts) > 0 {
 			info.ExposedPorts = e.ExposedPorts
@@ -840,6 +842,47 @@ func SandboxUnexposePortHandler(w http.ResponseWriter, r *http.Request) {
 		"status":  "ok",
 		"removed": removed,
 		"port":    port,
+	})
+}
+
+// SandboxPinContainerHandler handles POST /api/sandbox/containers/{id}/pin.
+// Toggles the pinned state of a container.
+func SandboxPinContainerHandler(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	if id == "" {
+		http.Error(w, "missing container id", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Pinned bool `json:"pinned"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	sessRegistry, err := sandbox.NewSessionRegistry()
+	if err != nil {
+		http.Error(w, "failed to load session registry: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	containerName := resolveContainerName(sessRegistry, id)
+	if containerName == "" {
+		http.Error(w, fmt.Sprintf("container %q not found", id), http.StatusNotFound)
+		return
+	}
+
+	if err := sessRegistry.SetPinned(containerName, req.Pinned); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"status": "ok",
+		"pinned": req.Pinned,
 	})
 }
 

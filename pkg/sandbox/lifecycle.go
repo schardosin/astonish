@@ -288,6 +288,10 @@ func PruneOrphans(client *IncusClient, registry *SessionRegistry, existingSessio
 			continue // session still exists
 		}
 
+		if entry.Pinned {
+			continue // manually created, exempt from cleanup
+		}
+
 		// Orphaned — destroy
 		fmt.Printf("Pruning orphaned container %q (session %s)...\n", entry.ContainerName, entry.SessionID[:8])
 
@@ -352,10 +356,10 @@ func PruneStaleOnStartup(client *IncusClient, registry *SessionRegistry, existin
 	// 1. Clean registry entries pointing to non-existent containers
 	pruned := registry.Reap(client)
 
-	// 2. Build a set of container names that belong to live sessions
+	// 2. Build a set of container names that belong to live sessions or are pinned
 	liveContainers := make(map[string]bool)
 	for _, entry := range registry.List() {
-		if existingSessionIDs[entry.SessionID] {
+		if existingSessionIDs[entry.SessionID] || entry.Pinned {
 			liveContainers[entry.ContainerName] = true
 		}
 	}

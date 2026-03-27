@@ -214,3 +214,17 @@ export async function unexposePort(containerId, port) {
   }
   return res.json()
 }
+
+/** Toggle the pinned state of a container. */
+export async function pinContainer(containerId, pinned) {
+  const res = await fetch(`/api/sandbox/containers/${encodeURIComponent(containerId)}/pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pinned }),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+  return res.json()
+}

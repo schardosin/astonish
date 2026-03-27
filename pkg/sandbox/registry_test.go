@@ -446,3 +446,72 @@ func TestBaseDomainPersistence(t *testing.T) {
 		t.Errorf("GetBaseDomain after reload = %q, want %q", got, "astonish.local.muxpie.com")
 	}
 }
+
+func TestSetPinned(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "sessions.json")
+	r := &SessionRegistry{
+		entries:  make(map[string]*SessionEntry),
+		filePath: filePath,
+	}
+
+	_ = r.Put("sess-1", "astn-sess-abc123", "base")
+
+	// Not pinned by default
+	entry := r.GetByContainerName("astn-sess-abc123")
+	if entry.Pinned {
+		t.Error("expected Pinned to be false by default")
+	}
+
+	// Pin
+	if err := r.SetPinned("astn-sess-abc123", true); err != nil {
+		t.Fatalf("SetPinned(true): %v", err)
+	}
+	entry = r.GetByContainerName("astn-sess-abc123")
+	if !entry.Pinned {
+		t.Error("expected Pinned to be true after SetPinned(true)")
+	}
+
+	// Unpin
+	if err := r.SetPinned("astn-sess-abc123", false); err != nil {
+		t.Fatalf("SetPinned(false): %v", err)
+	}
+	entry = r.GetByContainerName("astn-sess-abc123")
+	if entry.Pinned {
+		t.Error("expected Pinned to be false after SetPinned(false)")
+	}
+
+	// Error for unknown container
+	if err := r.SetPinned("nonexistent", true); err == nil {
+		t.Error("SetPinned for unknown container should return error")
+	}
+}
+
+func TestPinnedPersistence(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "sessions.json")
+	r1 := &SessionRegistry{
+		entries:  make(map[string]*SessionEntry),
+		filePath: filePath,
+	}
+
+	_ = r1.Put("sess-1", "astn-sess-abc123", "base")
+	_ = r1.SetPinned("astn-sess-abc123", true)
+
+	// Load into a new registry
+	r2 := &SessionRegistry{
+		entries:  make(map[string]*SessionEntry),
+		filePath: filePath,
+	}
+	if err := r2.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	entry := r2.GetByContainerName("astn-sess-abc123")
+	if entry == nil {
+		t.Fatal("expected entry to exist after reload")
+	}
+	if !entry.Pinned {
+		t.Error("expected Pinned to persist across save/load")
+	}
+}

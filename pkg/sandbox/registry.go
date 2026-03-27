@@ -18,6 +18,7 @@ type SessionEntry struct {
 	CreatedAt     time.Time `json:"created_at"`
 	ExposedPorts  []int     `json:"exposed_ports,omitempty"`
 	BaseDomain    string    `json:"base_domain,omitempty"`
+	Pinned        bool      `json:"pinned,omitempty"`
 }
 
 // SessionRegistry maps session IDs to container names with JSON persistence.
@@ -327,4 +328,20 @@ func (r *SessionRegistry) GetBaseDomain(containerName string) string {
 		}
 	}
 	return ""
+}
+
+// SetPinned marks a container as pinned (exempt from orphan cleanup) and saves.
+// Pinned containers are manually created via `sandbox create` and should not be
+// destroyed by automatic cleanup cycles.
+func (r *SessionRegistry) SetPinned(containerName string, pinned bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, e := range r.entries {
+		if e.ContainerName == containerName {
+			e.Pinned = pinned
+			return r.saveLocked()
+		}
+	}
+	return fmt.Errorf("container %q not found in registry", containerName)
 }

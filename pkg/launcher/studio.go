@@ -114,11 +114,6 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 		// Wrap router + SPA into a single handler
 		spaHandler := spaFileServer(http.FS(webFS))
 		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Check subdomain proxy routing first
-			if containerName, port, ok := api.GetSubdomainRouter().Lookup(r.Host); ok {
-				api.ServeSubdomainProxy(w, r, containerName, port)
-				return
-			}
 			// Let mux handle /api/* routes
 			if len(r.URL.Path) >= 4 && r.URL.Path[:4] == "/api" {
 				router.ServeHTTP(w, r)
@@ -131,11 +126,6 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 		log.Printf("Warning: No web assets found. Run 'npm run build' in the web directory first.")
 		fallback := noAssetsHandler()
 		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Check subdomain proxy routing first
-			if containerName, port, ok := api.GetSubdomainRouter().Lookup(r.Host); ok {
-				api.ServeSubdomainProxy(w, r, containerName, port)
-				return
-			}
 			if len(r.URL.Path) >= 4 && r.URL.Path[:4] == "/api" {
 				router.ServeHTTP(w, r)
 				return
@@ -148,6 +138,19 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 	if s.Auth != nil {
 		handler = api.AuthMiddleware(s.Auth, handler)
 	}
+
+	// Wrap with subdomain proxy check OUTSIDE auth — subdomain-proxied
+	// requests serve the container's app, not Studio, so they bypass
+	// Studio authentication. The auth cookie is scoped to the Studio
+	// domain and won't be sent on subdomain requests anyway.
+	studioHandler := handler
+	handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if containerName, port, ok := api.GetSubdomainRouter().Lookup(r.Host); ok {
+			api.ServeSubdomainProxy(w, r, containerName, port)
+			return
+		}
+		studioHandler.ServeHTTP(w, r)
+	})
 
 	addr := fmt.Sprintf(":%d", port)
 	listener, err := net.Listen("tcp", addr)

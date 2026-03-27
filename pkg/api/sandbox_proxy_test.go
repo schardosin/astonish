@@ -1,11 +1,7 @@
 package api
 
 import (
-	"bytes"
-	"compress/gzip"
-	"io"
 	"net/http"
-	"strconv"
 	"testing"
 	"time"
 )
@@ -124,167 +120,63 @@ func TestIPCacheExpiry(t *testing.T) {
 		expiry: time.Now().Add(-1 * time.Second),
 	})
 
-	// getCachedIP should find the expired entry and delete it, then try to
-	// resolve via Incus (which will fail since there's no Incus in tests).
-	// We just verify the expired entry doesn't return stale data.
 	if entry, ok := ipCache.Load(containerName); ok {
 		cached := entry.(*ipCacheEntry)
 		if time.Now().After(cached.expiry) {
-			// Entry is expired — getCachedIP would delete it and re-resolve.
-			// We can't call getCachedIP directly without Incus, but we verify
-			// the expiry logic is sound.
 			ipCache.Delete(containerName)
 		}
 	}
 
-	// After simulated cleanup, entry should be gone
 	if _, ok := ipCache.Load(containerName); ok {
 		t.Error("expected expired cache entry to be cleaned up")
 	}
 }
 
-func TestInjectBaseTag(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		baseHref string
-		want     string
-	}{
-		{
-			name:     "simple head tag",
-			input:    `<!DOCTYPE html><html><head><title>App</title></head><body></body></html>`,
-			baseHref: "/api/sandbox/proxy/mycontainer/3000/",
-			want:     `<!DOCTYPE html><html><head><base href="/api/sandbox/proxy/mycontainer/3000/"><title>App</title></head><body></body></html>`,
-		},
-		{
-			name:     "head with attributes",
-			input:    `<html><head lang="en"><meta charset="utf-8"></head></html>`,
-			baseHref: "/api/sandbox/proxy/c1/8080/",
-			want:     `<html><head lang="en"><base href="/api/sandbox/proxy/c1/8080/"><meta charset="utf-8"></head></html>`,
-		},
-		{
-			name:     "uppercase HEAD",
-			input:    `<HTML><HEAD><TITLE>Test</TITLE></HEAD></HTML>`,
-			baseHref: "/proxy/",
-			want:     `<HTML><HEAD><base href="/proxy/"><TITLE>Test</TITLE></HEAD></HTML>`,
-		},
-		{
-			name:     "no head tag",
-			input:    `<html><body>Hello</body></html>`,
-			baseHref: "/proxy/",
-			want:     `<html><body>Hello</body></html>`,
-		},
-		{
-			name:     "empty body",
-			input:    "",
-			baseHref: "/proxy/",
-			want:     "",
-		},
-		{
-			name:     "vue SPA typical output",
-			input:    `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><link rel="icon" href="/favicon.ico"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Trade App</title><script type="module" crossorigin src="/assets/index-abc123.js"></script><link rel="stylesheet" crossorigin href="/assets/index-def456.css"></head><body><div id="app"></div></body></html>`,
-			baseHref: "/api/sandbox/proxy/astn-sess-abc/3001/",
-			want:     `<!DOCTYPE html><html lang="en"><head><base href="/api/sandbox/proxy/astn-sess-abc/3001/"><meta charset="UTF-8"><link rel="icon" href="/favicon.ico"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Trade App</title><script type="module" crossorigin src="/assets/index-abc123.js"></script><link rel="stylesheet" crossorigin href="/assets/index-def456.css"></head><body><div id="app"></div></body></html>`,
-		},
-		{
-			name:     "head tag with newline",
-			input:    "<html>\n<head>\n<title>T</title>\n</head></html>",
-			baseHref: "/p/",
-			want:     "<html>\n<head><base href=\"/p/\">\n<title>T</title>\n</head></html>",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := string(injectBaseTag([]byte(tt.input), tt.baseHref))
-			if got != tt.want {
-				t.Errorf("injectBaseTag():\n  got:  %s\n  want: %s", got, tt.want)
-			}
-		})
+func TestPortProxyManagerSingleton(t *testing.T) {
+	mgr1 := GetPortProxyManager()
+	mgr2 := GetPortProxyManager()
+	if mgr1 != mgr2 {
+		t.Error("GetPortProxyManager should return the same instance")
 	}
 }
 
-func TestMakeBaseTagInjectorHTML(t *testing.T) {
-	injector := makeBaseTagInjector("/api/sandbox/proxy/c1/3000/")
-
-	body := `<!DOCTYPE html><html><head><title>App</title></head><body></body></html>`
-	resp := &http.Response{
-		StatusCode: 200,
-		Header:     http.Header{"Content-Type": []string{"text/html; charset=utf-8"}},
-		Body:       io.NopCloser(bytes.NewBufferString(body)),
-	}
-
-	if err := injector(resp); err != nil {
-		t.Fatalf("injector error: %v", err)
-	}
-
-	result, _ := io.ReadAll(resp.Body)
-	got := string(result)
-	want := `<!DOCTYPE html><html><head><base href="/api/sandbox/proxy/c1/3000/"><title>App</title></head><body></body></html>`
-	if got != want {
-		t.Errorf("injector result:\n  got:  %s\n  want: %s", got, want)
-	}
-
-	// Content-Length should be updated
-	cl := resp.Header.Get("Content-Length")
-	if cl != strconv.Itoa(len(want)) {
-		t.Errorf("Content-Length = %s, want %d", cl, len(want))
+func TestPortProxyManagerGetHostPortNotRunning(t *testing.T) {
+	mgr := GetPortProxyManager()
+	// Port that was never started should return 0
+	hp := mgr.GetHostPort("nonexistent-container", 3000)
+	if hp != 0 {
+		t.Errorf("GetHostPort for non-running proxy returned %d, want 0", hp)
 	}
 }
 
-func TestMakeBaseTagInjectorNonHTML(t *testing.T) {
-	injector := makeBaseTagInjector("/api/sandbox/proxy/c1/3000/")
-
-	jsBody := `console.log("<head>should not be modified</head>")`
-	resp := &http.Response{
-		StatusCode: 200,
-		Header:     http.Header{"Content-Type": []string{"application/javascript"}},
-		Body:       io.NopCloser(bytes.NewBufferString(jsBody)),
-	}
-
-	if err := injector(resp); err != nil {
-		t.Fatalf("injector error: %v", err)
-	}
-
-	result, _ := io.ReadAll(resp.Body)
-	if string(result) != jsBody {
-		t.Errorf("non-HTML body was modified: got %s", string(result))
+func TestPortProxyManagerListForContainer(t *testing.T) {
+	mgr := GetPortProxyManager()
+	// Container with no active proxies should return empty map
+	result := mgr.ListForContainer("nonexistent-container")
+	if len(result) != 0 {
+		t.Errorf("ListForContainer for unknown container returned %d entries, want 0", len(result))
 	}
 }
 
-func TestMakeBaseTagInjectorGzip(t *testing.T) {
-	injector := makeBaseTagInjector("/api/sandbox/proxy/c1/3000/")
-
-	htmlBody := `<!DOCTYPE html><html><head><title>Gzipped</title></head></html>`
-
-	// Gzip the body
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	gz.Write([]byte(htmlBody))
-	gz.Close()
-
-	resp := &http.Response{
-		StatusCode: 200,
-		Header: http.Header{
-			"Content-Type":     []string{"text/html"},
-			"Content-Encoding": []string{"gzip"},
-		},
-		Body: io.NopCloser(&buf),
+func TestPortProxyManagerStopNonexistent(t *testing.T) {
+	mgr := GetPortProxyManager()
+	stopped := mgr.StopProxy("nonexistent-container", 3000)
+	if stopped {
+		t.Error("StopProxy should return false for non-running proxy")
 	}
+}
 
-	if err := injector(resp); err != nil {
-		t.Fatalf("injector error: %v", err)
+func TestPortProxyManagerStopAllNonexistent(t *testing.T) {
+	mgr := GetPortProxyManager()
+	count := mgr.StopAllForContainer("nonexistent-container")
+	if count != 0 {
+		t.Errorf("StopAllForContainer returned %d, want 0", count)
 	}
+}
 
-	// Should be decompressed and modified
-	result, _ := io.ReadAll(resp.Body)
-	want := `<!DOCTYPE html><html><head><base href="/api/sandbox/proxy/c1/3000/"><title>Gzipped</title></head></html>`
-	if string(result) != want {
-		t.Errorf("gzip injector result:\n  got:  %s\n  want: %s", string(result), want)
-	}
-
-	// Content-Encoding should be removed
-	if ce := resp.Header.Get("Content-Encoding"); ce != "" {
-		t.Errorf("Content-Encoding should be removed, got %q", ce)
+func TestProxyKey(t *testing.T) {
+	key := proxyKey("astn-sess-abc123", 3000)
+	if key != "astn-sess-abc123:3000" {
+		t.Errorf("proxyKey = %q, want %q", key, "astn-sess-abc123:3000")
 	}
 }

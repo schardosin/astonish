@@ -1,8 +1,7 @@
 package api
 
 import (
-	"bytes"
-	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -10,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,9 +18,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/schardosin/astonish/pkg/sandbox"
 )
-
-// headTagRe matches <head> or <head ...> (case-insensitive).
-var headTagRe = regexp.MustCompile(`(?i)(<head[^>]*>)`)
 
 // ipCacheEntry holds a cached container IP with an expiry time.
 type ipCacheEntry struct {
@@ -71,6 +66,10 @@ func InvalidateIPCache(containerName string) {
 // It reverse-proxies HTTP (and WebSocket) requests to a service running inside
 // a sandbox container. The port must be explicitly exposed via the session
 // registry before the proxy will forward traffic.
+//
+// NOTE: This path-based proxy works well for API-only services but breaks SPAs
+// that use absolute asset paths (e.g., /assets/main.js). For SPAs, use the
+// per-port proxy managed by PortProxyManager instead.
 func SandboxProxyHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	containerName := vars["container"]
@@ -161,7 +160,6 @@ func SandboxProxyHandler(w http.ResponseWriter, r *http.Request) {
 			req.Header.Set("X-Forwarded-Host", r.Host)
 			req.Header.Set("X-Forwarded-Proto", "http")
 		},
-		ModifyResponse: makeBaseTagInjector(prefix + "/"),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadGateway)
@@ -172,71 +170,260 @@ func SandboxProxyHandler(w http.ResponseWriter, r *http.Request) {
 	proxy.ServeHTTP(w, r)
 }
 
-// injectBaseTag inserts a <base href="..."> tag immediately after the <head>
-// tag in an HTML document. This ensures the browser resolves all relative and
-// absolute asset paths against the proxy prefix, so SPAs served through the
-// reverse proxy load their JS/CSS/images correctly.
-//
-// If no <head> tag is found, the body is returned unmodified.
-func injectBaseTag(body []byte, baseHref string) []byte {
-	tag := fmt.Sprintf(`<base href="%s">`, baseHref)
-	loc := headTagRe.FindIndex(body)
-	if loc == nil {
-		return body
+// ---------------------------------------------------------------------------
+// Per-port proxy manager
+// ---------------------------------------------------------------------------
+// Instead of proxying through a path prefix (which breaks SPAs), we allocate
+// a dedicated host port for each exposed container port. The browser connects
+// directly to http://{host}:{hostPort}/ and all requests are reverse-proxied
+// to http://{containerIP}:{containerPort}/. Since there is no path prefix,
+// absolute asset paths like /assets/main.js resolve correctly.
+
+const (
+	// portRangeStart is the first host port we try to allocate.
+	portRangeStart = 19000
+	// portRangeEnd is one past the last host port we try.
+	portRangeEnd = 19200
+)
+
+// portProxyEntry tracks one per-port listener.
+type portProxyEntry struct {
+	containerName string
+	containerPort int
+	hostPort      int
+	server        *http.Server
+	cancel        context.CancelFunc
+}
+
+// PortProxyManager manages per-port reverse proxy listeners.
+type PortProxyManager struct {
+	mu      sync.Mutex
+	entries map[string]*portProxyEntry // key: "containerName:containerPort"
+	used    map[int]bool               // host ports currently in use
+}
+
+// portProxyMgr is the singleton manager. Initialized lazily.
+var (
+	portProxyMgr     *PortProxyManager
+	portProxyMgrOnce sync.Once
+)
+
+// GetPortProxyManager returns the singleton PortProxyManager.
+func GetPortProxyManager() *PortProxyManager {
+	portProxyMgrOnce.Do(func() {
+		portProxyMgr = &PortProxyManager{
+			entries: make(map[string]*portProxyEntry),
+			used:    make(map[int]bool),
+		}
+	})
+	return portProxyMgr
+}
+
+// proxyKey builds the map key for a container+port combo.
+func proxyKey(containerName string, containerPort int) string {
+	return fmt.Sprintf("%s:%d", containerName, containerPort)
+}
+
+// allocatePort finds the next free host port in the range.
+func (m *PortProxyManager) allocatePort() (int, error) {
+	for p := portRangeStart; p < portRangeEnd; p++ {
+		if m.used[p] {
+			continue
+		}
+		// Try to bind to verify it's actually free
+		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", p))
+		if err != nil {
+			continue // port in use by something else
+		}
+		ln.Close()
+		return p, nil
 	}
-	// Insert right after the <head...> match
-	insertPos := loc[1]
-	result := make([]byte, 0, len(body)+len(tag))
-	result = append(result, body[:insertPos]...)
-	result = append(result, []byte(tag)...)
-	result = append(result, body[insertPos:]...)
+	return 0, fmt.Errorf("no free host ports in range %d-%d", portRangeStart, portRangeEnd-1)
+}
+
+// StartProxy starts a per-port reverse proxy listener for a container port.
+// Returns the allocated host port. If already running, returns the existing port.
+func (m *PortProxyManager) StartProxy(containerName string, containerPort int) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := proxyKey(containerName, containerPort)
+
+	// Already running?
+	if entry, ok := m.entries[key]; ok {
+		return entry.hostPort, nil
+	}
+
+	// Allocate a host port
+	hostPort, err := m.allocatePort()
+	if err != nil {
+		return 0, err
+	}
+
+	// Resolve container IP
+	client, err := sandboxConnect()
+	if err != nil {
+		return 0, fmt.Errorf("sandbox unavailable: %w", err)
+	}
+	ip, err := getCachedIP(client, containerName)
+	if err != nil {
+		return 0, fmt.Errorf("cannot resolve container IP: %w", err)
+	}
+
+	targetBase := fmt.Sprintf("http://%s:%d", ip, containerPort)
+	target, _ := url.Parse(targetBase)
+
+	// Build the handler: reverse proxy + WebSocket support
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Re-resolve IP on each request (uses cache with TTL)
+		currentIP, err := getCachedIP(client, containerName)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("cannot resolve container IP: %s", err), http.StatusBadGateway)
+			return
+		}
+
+		if isWebSocketUpgrade(r) {
+			proxyWebSocket(w, r, currentIP, containerPort, r.URL.Path)
+			return
+		}
+
+		currentTarget, _ := url.Parse(fmt.Sprintf("http://%s:%d", currentIP, containerPort))
+		proxy := &httputil.ReverseProxy{
+			Director: func(req *http.Request) {
+				req.URL.Scheme = currentTarget.Scheme
+				req.URL.Host = currentTarget.Host
+				// Pass path and query through unchanged — no prefix stripping needed
+				req.URL.Path = r.URL.Path
+				req.URL.RawQuery = r.URL.RawQuery
+				req.Host = currentTarget.Host
+
+				if clientIP, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+					if existing := req.Header.Get("X-Forwarded-For"); existing != "" {
+						req.Header.Set("X-Forwarded-For", existing+", "+clientIP)
+					} else {
+						req.Header.Set("X-Forwarded-For", clientIP)
+					}
+				}
+				req.Header.Set("X-Forwarded-Host", r.Host)
+				req.Header.Set("X-Forwarded-Proto", "http")
+			},
+			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+				http.Error(w, fmt.Sprintf("proxy error: %s", err), http.StatusBadGateway)
+			},
+		}
+		proxy.ServeHTTP(w, r)
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	srv := &http.Server{
+		Addr:    fmt.Sprintf("0.0.0.0:%d", hostPort),
+		Handler: handler,
+	}
+
+	// Start listener in background
+	go func() {
+		log.Printf("[sandbox-proxy] Listening on :%d → %s:%d (%s)", hostPort, ip, containerPort, containerName)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("[sandbox-proxy] Listener :%d error: %v", hostPort, err)
+		}
+	}()
+
+	// Shutdown goroutine
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		srv.Shutdown(shutdownCtx)
+	}()
+
+	_ = target // suppress unused warning from initial parse
+
+	entry := &portProxyEntry{
+		containerName: containerName,
+		containerPort: containerPort,
+		hostPort:      hostPort,
+		server:        srv,
+		cancel:        cancel,
+	}
+
+	m.entries[key] = entry
+	m.used[hostPort] = true
+
+	return hostPort, nil
+}
+
+// StopProxy stops the per-port proxy listener for a container port.
+// Returns true if a listener was stopped.
+func (m *PortProxyManager) StopProxy(containerName string, containerPort int) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := proxyKey(containerName, containerPort)
+	entry, ok := m.entries[key]
+	if !ok {
+		return false
+	}
+
+	entry.cancel()
+	delete(m.entries, key)
+	delete(m.used, entry.hostPort)
+
+	log.Printf("[sandbox-proxy] Stopped listener :%d for %s:%d", entry.hostPort, containerName, containerPort)
+	return true
+}
+
+// StopAllForContainer stops all per-port proxy listeners for a container.
+func (m *PortProxyManager) StopAllForContainer(containerName string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var toDelete []string
+	for key, entry := range m.entries {
+		if entry.containerName == containerName {
+			entry.cancel()
+			delete(m.used, entry.hostPort)
+			toDelete = append(toDelete, key)
+			log.Printf("[sandbox-proxy] Stopped listener :%d for %s:%d", entry.hostPort, containerName, entry.containerPort)
+		}
+	}
+
+	for _, key := range toDelete {
+		delete(m.entries, key)
+	}
+
+	return len(toDelete)
+}
+
+// GetHostPort returns the allocated host port for a container port, or 0 if not running.
+func (m *PortProxyManager) GetHostPort(containerName string, containerPort int) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := proxyKey(containerName, containerPort)
+	if entry, ok := m.entries[key]; ok {
+		return entry.hostPort
+	}
+	return 0
+}
+
+// ListForContainer returns a map of containerPort → hostPort for all active
+// proxies for the given container.
+func (m *PortProxyManager) ListForContainer(containerName string) map[int]int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	result := make(map[int]int)
+	for _, entry := range m.entries {
+		if entry.containerName == containerName {
+			result[entry.containerPort] = entry.hostPort
+		}
+	}
 	return result
 }
 
-// makeBaseTagInjector returns a ModifyResponse function that injects a
-// <base href> tag into HTML responses. Non-HTML responses pass through
-// untouched. Gzipped HTML responses are decompressed, modified, and served
-// uncompressed (HTML pages are small enough that this has no noticeable
-// impact on performance).
-func makeBaseTagInjector(baseHref string) func(*http.Response) error {
-	return func(resp *http.Response) error {
-		ct := resp.Header.Get("Content-Type")
-		if !strings.HasPrefix(ct, "text/html") {
-			return nil
-		}
-
-		// Read the response body
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return err
-		}
-
-		// Handle gzip encoding
-		if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
-			gz, err := gzip.NewReader(bytes.NewReader(body))
-			if err != nil {
-				// Not valid gzip — use body as-is
-				goto inject
-			}
-			decompressed, err := io.ReadAll(gz)
-			gz.Close()
-			if err != nil {
-				goto inject
-			}
-			body = decompressed
-			resp.Header.Del("Content-Encoding")
-		}
-
-	inject:
-		modified := injectBaseTag(body, baseHref)
-
-		resp.Body = io.NopCloser(bytes.NewReader(modified))
-		resp.ContentLength = int64(len(modified))
-		resp.Header.Set("Content-Length", strconv.Itoa(len(modified)))
-		return nil
-	}
-}
+// ---------------------------------------------------------------------------
+// WebSocket and utility functions
+// ---------------------------------------------------------------------------
 
 // isWebSocketUpgrade checks if the request is a WebSocket upgrade request.
 func isWebSocketUpgrade(r *http.Request) bool {

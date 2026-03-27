@@ -522,7 +522,7 @@ func handleSandboxExpose(containerID string, portArgs []string) error {
 		} else {
 			fmt.Printf("Port %d already exposed on %s\n", port, containerName)
 		}
-		fmt.Printf("  Proxy URL: /api/sandbox/proxy/%s/%d/\n", containerName, port)
+		fmt.Printf("  Access via Studio UI for the direct proxy URL\n")
 	}
 
 	return nil
@@ -551,7 +551,7 @@ func handleSandboxExposeList(containerID string) error {
 
 	fmt.Printf("Exposed ports on %s:\n", containerName)
 	for _, port := range entry.ExposedPorts {
-		fmt.Printf("  %d → /api/sandbox/proxy/%s/%d/\n", port, containerName, port)
+		fmt.Printf("  %d (access via Studio UI for direct proxy URL)\n", port)
 	}
 
 	return nil
@@ -609,11 +609,16 @@ func handleSandboxURL(containerID string, portStr string) error {
 		return fmt.Errorf("port %d is not exposed on %s\nRun 'astonish sandbox expose %s %d' first", port, containerName, containerName, port)
 	}
 
-	// Default studio port. The actual port is a CLI flag, but we use the default
-	// here since there's no persistent config for it.
+	// The per-port proxy listener runs in the Studio daemon process,
+	// so the CLI cannot resolve the host port directly. Print the
+	// path-based fallback URL (works for API services) and direct the
+	// user to Studio for the full-featured URL.
 	studioPort := 9393
-
-	fmt.Printf("http://localhost:%d/api/sandbox/proxy/%s/%d/\n", studioPort, containerName, port)
+	fmt.Printf("Path-based proxy (API services):\n")
+	fmt.Printf("  http://localhost:%d/api/sandbox/proxy/%s/%d/\n\n", studioPort, containerName, port)
+	fmt.Printf("For SPAs and full UI access, use the proxy URL shown in Studio > Settings > Sandbox.\n")
+	fmt.Printf("Studio starts a dedicated port listener that proxies at the root path,\n")
+	fmt.Printf("so absolute asset paths (e.g., /assets/main.js) resolve correctly.\n")
 	return nil
 }
 

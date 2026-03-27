@@ -5,7 +5,7 @@ import {
   fetchSandboxDetails, fetchContainers, deleteContainer, pruneOrphans,
   fetchTemplates, fetchTemplateInfo, createTemplate, deleteTemplate,
   snapshotTemplate, promoteTemplate, refreshTemplates,
-  exposePort, unexposePort, getProxyUrl
+  exposePort, unexposePort
 } from '../../api/sandbox'
 
 // --- Badge components ---
@@ -547,7 +547,8 @@ export default function SandboxSettings({ config, onSaved }) {
                       {exposedPorts.length > 0 ? (
                         <div className="space-y-1">
                           {exposedPorts.map(port => {
-                            const proxyUrl = getProxyUrl(c.name, port)
+                            const proxyUrls = c.proxy_urls || {}
+                            const proxyUrl = proxyUrls[String(port)] || `/api/sandbox/proxy/${c.name}/${port}/`
                             return (
                               <div key={port} className="flex items-center justify-between px-2 py-1 rounded text-xs"
                                 style={{ background: 'var(--bg-tertiary)' }}>

@@ -440,6 +440,10 @@ type subdomainTarget struct {
 type SubdomainRouter struct {
 	mu      sync.RWMutex
 	hostMap map[string]*subdomainTarget // hostname → target
+
+	clientMu   sync.Mutex
+	client     *sandbox.IncusClient
+	clientInit bool
 }
 
 var (
@@ -533,10 +537,32 @@ func (sr *SubdomainRouter) ListForContainer(containerName string) map[int]string
 	return result
 }
 
+// getClient returns a cached Incus client, creating one on first call.
+// The client is reused across all subdomain proxy requests to avoid
+// the overhead of sandboxConnect() (platform detection + Incus dial)
+// on every request.
+func (sr *SubdomainRouter) getClient() (*sandbox.IncusClient, error) {
+	sr.clientMu.Lock()
+	defer sr.clientMu.Unlock()
+
+	if sr.clientInit && sr.client != nil {
+		return sr.client, nil
+	}
+
+	client, err := sandboxConnect()
+	if err != nil {
+		return nil, err
+	}
+	sr.client = client
+	sr.clientInit = true
+	return client, nil
+}
+
 // ServeSubdomainProxy handles an HTTP request by proxying it to the matched
 // container. Called from the Studio main handler when a subdomain match is found.
 func ServeSubdomainProxy(w http.ResponseWriter, r *http.Request, containerName string, containerPort int) {
-	client, err := sandboxConnect()
+	sr := GetSubdomainRouter()
+	client, err := sr.getClient()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("sandbox unavailable: %s", err), http.StatusServiceUnavailable)
 		return
@@ -682,9 +708,11 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request, ip string, port int,
 		return
 	}
 
-	// Write the 101 response to the client
+	// Write the 101 response to the client.
+	// resp.Status is the full status text (e.g., "101 Switching Protocols"),
+	// so we only prepend the HTTP version, not the status code again.
 	var respBuf strings.Builder
-	fmt.Fprintf(&respBuf, "HTTP/1.1 %d %s\r\n", resp.StatusCode, resp.Status)
+	fmt.Fprintf(&respBuf, "HTTP/%d.%d %s\r\n", resp.ProtoMajor, resp.ProtoMinor, resp.Status)
 	for key, vals := range resp.Header {
 		for _, v := range vals {
 			fmt.Fprintf(&respBuf, "%s: %s\r\n", key, v)

@@ -59,13 +59,14 @@ type SandboxDetailResponse struct {
 
 // ContainerInfo represents a session container in the list.
 type ContainerInfo struct {
-	Name         string         `json:"name"`
-	SessionID    string         `json:"session_id"`
-	Template     string         `json:"template"`
-	Status       string         `json:"status"`
-	Created      string         `json:"created"`
-	ExposedPorts []int          `json:"exposed_ports,omitempty"`
-	HostPorts    map[string]int `json:"host_ports,omitempty"`
+	Name         string            `json:"name"`
+	SessionID    string            `json:"session_id"`
+	Template     string            `json:"template"`
+	Status       string            `json:"status"`
+	Created      string            `json:"created"`
+	ExposedPorts []int             `json:"exposed_ports,omitempty"`
+	HostPorts    map[string]int    `json:"host_ports,omitempty"`
+	ProxyHosts   map[string]string `json:"proxy_hosts,omitempty"`
 }
 
 // ContainerListResponse is the JSON response for GET /api/sandbox/containers.
@@ -331,7 +332,9 @@ func SandboxContainerListHandler(w http.ResponseWriter, r *http.Request) {
 		if len(e.ExposedPorts) > 0 {
 			info.ExposedPorts = e.ExposedPorts
 			mgr := GetPortProxyManager()
+			sr := GetSubdomainRouter()
 			hostPorts := make(map[string]int, len(e.ExposedPorts))
+			proxyHosts := make(map[string]string, len(e.ExposedPorts))
 			for _, port := range e.ExposedPorts {
 				portStr := strconv.Itoa(port)
 				hp := mgr.GetHostPort(e.ContainerName, port)
@@ -342,9 +345,21 @@ func SandboxContainerListHandler(w http.ResponseWriter, r *http.Request) {
 				if hp > 0 {
 					hostPorts[portStr] = hp
 				}
+
+				// Auto-recover subdomain routes from persisted base domain
+				if e.BaseDomain != "" {
+					hostname := SubdomainHostname(e.ContainerName, port, e.BaseDomain)
+					if _, _, ok := sr.Lookup(hostname); !ok && status == "running" {
+						sr.RegisterHost(hostname, e.ContainerName, port)
+					}
+					proxyHosts[portStr] = hostname
+				}
 			}
 			if len(hostPorts) > 0 {
 				info.HostPorts = hostPorts
+			}
+			if len(proxyHosts) > 0 {
+				info.ProxyHosts = proxyHosts
 			}
 		}
 		containers = append(containers, info)
@@ -698,7 +713,8 @@ func SandboxRefreshHandler(w http.ResponseWriter, r *http.Request) {
 
 // ExposePortRequest is the JSON body for POST /api/sandbox/containers/{id}/expose.
 type ExposePortRequest struct {
-	Port int `json:"port"`
+	Port       int    `json:"port"`
+	BaseDomain string `json:"base_domain,omitempty"`
 }
 
 // SandboxExposePortHandler handles POST /api/sandbox/containers/{id}/expose.
@@ -750,12 +766,23 @@ func SandboxExposePortHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[sandbox-proxy] Failed to start port listener for %s:%d: %v", containerName, req.Port, proxyErr)
 	}
 
+	// Register subdomain proxy route if base_domain was provided
+	var proxyHost string
+	if req.BaseDomain != "" {
+		// Persist the base domain so it can be recovered after daemon restart
+		_ = sessRegistry.SetBaseDomain(containerName, req.BaseDomain)
+
+		proxyHost = SubdomainHostname(containerName, req.Port, req.BaseDomain)
+		GetSubdomainRouter().RegisterHost(proxyHost, containerName, req.Port)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"status":      "ok",
 		"added":       added,
 		"port":        req.Port,
 		"host_port":   hostPort,
+		"proxy_host":  proxyHost,
 		"proxy_error": proxyErrMsg,
 	})
 }
@@ -798,6 +825,14 @@ func SandboxUnexposePortHandler(w http.ResponseWriter, r *http.Request) {
 	// Stop per-port proxy listener
 	if removed {
 		GetPortProxyManager().StopProxy(containerName, port)
+
+		// Unregister any subdomain proxy route for this container+port
+		sr := GetSubdomainRouter()
+		for portNum, hostname := range sr.ListForContainer(containerName) {
+			if portNum == port {
+				sr.UnregisterHost(hostname)
+			}
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -841,11 +876,19 @@ func SandboxListExposedPortsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mgr := GetPortProxyManager()
+	sr := GetSubdomainRouter()
 	hostPorts := make(map[string]int, len(ports))
+	proxyHosts := make(map[string]string, len(ports))
 	for _, p := range ports {
+		portStr := strconv.Itoa(p)
 		hp := mgr.GetHostPort(containerName, p)
 		if hp > 0 {
-			hostPorts[strconv.Itoa(p)] = hp
+			hostPorts[portStr] = hp
+		}
+		// Look up subdomain route
+		subdomainHosts := sr.ListForContainer(containerName)
+		if hostname, ok := subdomainHosts[p]; ok {
+			proxyHosts[portStr] = hostname
 		}
 	}
 
@@ -854,6 +897,7 @@ func SandboxListExposedPortsHandler(w http.ResponseWriter, r *http.Request) {
 		"container":     containerName,
 		"exposed_ports": ports,
 		"host_ports":    hostPorts,
+		"proxy_hosts":   proxyHosts,
 	})
 }
 

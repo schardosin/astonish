@@ -180,3 +180,123 @@ func TestProxyKey(t *testing.T) {
 		t.Errorf("proxyKey = %q, want %q", key, "astn-sess-abc123:3000")
 	}
 }
+
+// --- SubdomainRouter tests ---
+
+func TestSubdomainRouterSingleton(t *testing.T) {
+	sr1 := GetSubdomainRouter()
+	sr2 := GetSubdomainRouter()
+	if sr1 != sr2 {
+		t.Error("GetSubdomainRouter should return the same instance")
+	}
+}
+
+func TestSubdomainHostname(t *testing.T) {
+	got := SubdomainHostname("astn-sess-abc123", 3000, "astonish.local.muxpie.com")
+	want := "astn-sess-abc123-3000.astonish.local.muxpie.com"
+	if got != want {
+		t.Errorf("SubdomainHostname = %q, want %q", got, want)
+	}
+}
+
+func TestSubdomainRouterRegisterAndLookup(t *testing.T) {
+	sr := GetSubdomainRouter()
+	hostname := "test-container-9999.example.com"
+
+	// Register
+	sr.RegisterHost(hostname, "test-container", 9999)
+
+	// Lookup without port
+	cn, port, ok := sr.Lookup(hostname)
+	if !ok {
+		t.Fatal("expected Lookup to find registered host")
+	}
+	if cn != "test-container" || port != 9999 {
+		t.Errorf("Lookup = (%q, %d), want (%q, %d)", cn, port, "test-container", 9999)
+	}
+
+	// Lookup with port suffix (as it appears in r.Host)
+	cn, port, ok = sr.Lookup(hostname + ":9393")
+	if !ok {
+		t.Fatal("expected Lookup to find host with port suffix")
+	}
+	if cn != "test-container" || port != 9999 {
+		t.Errorf("Lookup with port = (%q, %d), want (%q, %d)", cn, port, "test-container", 9999)
+	}
+
+	// Lookup for unknown host
+	_, _, ok = sr.Lookup("unknown.example.com")
+	if ok {
+		t.Error("expected Lookup to return false for unknown host")
+	}
+
+	// Clean up
+	sr.UnregisterHost(hostname)
+}
+
+func TestSubdomainRouterUnregister(t *testing.T) {
+	sr := GetSubdomainRouter()
+	hostname := "unreg-test-3000.example.com"
+
+	sr.RegisterHost(hostname, "unreg-test", 3000)
+	sr.UnregisterHost(hostname)
+
+	_, _, ok := sr.Lookup(hostname)
+	if ok {
+		t.Error("expected Lookup to return false after UnregisterHost")
+	}
+}
+
+func TestSubdomainRouterUnregisterAllForContainer(t *testing.T) {
+	sr := GetSubdomainRouter()
+
+	sr.RegisterHost("multi-test-3000.example.com", "multi-test", 3000)
+	sr.RegisterHost("multi-test-8080.example.com", "multi-test", 8080)
+	sr.RegisterHost("other-container-3000.example.com", "other-container", 3000)
+
+	count := sr.UnregisterAllForContainer("multi-test")
+	if count != 2 {
+		t.Errorf("UnregisterAllForContainer returned %d, want 2", count)
+	}
+
+	_, _, ok := sr.Lookup("multi-test-3000.example.com")
+	if ok {
+		t.Error("expected multi-test-3000 to be unregistered")
+	}
+
+	// Other container should still be registered
+	_, _, ok = sr.Lookup("other-container-3000.example.com")
+	if !ok {
+		t.Error("expected other-container-3000 to still be registered")
+	}
+
+	// Clean up
+	sr.UnregisterHost("other-container-3000.example.com")
+}
+
+func TestSubdomainRouterListForContainer(t *testing.T) {
+	sr := GetSubdomainRouter()
+
+	sr.RegisterHost("list-test-3000.example.com", "list-test", 3000)
+	sr.RegisterHost("list-test-8080.example.com", "list-test", 8080)
+
+	result := sr.ListForContainer("list-test")
+	if len(result) != 2 {
+		t.Errorf("ListForContainer returned %d entries, want 2", len(result))
+	}
+	if result[3000] != "list-test-3000.example.com" {
+		t.Errorf("ListForContainer[3000] = %q, want %q", result[3000], "list-test-3000.example.com")
+	}
+	if result[8080] != "list-test-8080.example.com" {
+		t.Errorf("ListForContainer[8080] = %q, want %q", result[8080], "list-test-8080.example.com")
+	}
+
+	// Unknown container
+	result = sr.ListForContainer("nonexistent")
+	if len(result) != 0 {
+		t.Errorf("ListForContainer for unknown returned %d entries, want 0", len(result))
+	}
+
+	// Clean up
+	sr.UnregisterAllForContainer("list-test")
+}

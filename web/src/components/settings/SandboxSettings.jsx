@@ -551,18 +551,28 @@ export default function SandboxSettings({ config, onSaved }) {
                         <div className="space-y-1">
                           {exposedPorts.map(port => {
                             const hostPorts = c.host_ports || {}
+                            const proxyHosts = c.proxy_hosts || {}
                             const hp = hostPorts[String(port)]
+                            const ph = proxyHosts[String(port)]
+                            // Prefer subdomain URL (works with HTTPS via reverse proxy),
+                            // fall back to per-port direct URL, then "Proxy not running"
+                            const proxyUrl = ph
+                              ? `${window.location.protocol}//${ph}/`
+                              : hp
+                                ? `http://${window.location.hostname}:${hp}/`
+                                : null
+                            const proxyLabel = ph || (hp ? `${window.location.hostname}:${hp}` : null)
                             return (
                               <div key={port} className="flex items-center justify-between px-2 py-1 rounded text-xs"
                                 style={{ background: 'var(--bg-tertiary)' }}>
                                 <div className="flex items-center gap-2">
                                   <span className="font-mono" style={{ color: '#22c55e' }}>:{port}</span>
-                                  {hp ? (
-                                    <a href={`http://${window.location.hostname}:${hp}/`} target="_blank" rel="noopener noreferrer"
+                                  {proxyUrl ? (
+                                    <a href={proxyUrl} target="_blank" rel="noopener noreferrer"
                                       className="flex items-center gap-1 transition-colors hover:underline"
                                       style={{ color: 'var(--text-secondary)' }}>
                                       <ExternalLink size={10} />
-                                      {window.location.hostname}:{hp}
+                                      {proxyLabel}
                                     </a>
                                   ) : (
                                     <span style={{ color: 'var(--text-muted)' }}>Proxy not running</span>

@@ -385,3 +385,64 @@ func TestSessionRegistryExposedPortsPersistence(t *testing.T) {
 		t.Error("port 9999 should not be exposed")
 	}
 }
+
+func TestBaseDomainSetAndGet(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "sessions.json")
+	r := &SessionRegistry{
+		entries:  make(map[string]*SessionEntry),
+		filePath: filePath,
+	}
+
+	_ = r.Put("sess-1", "astn-sess-abc123", "base")
+
+	// Initially empty
+	if got := r.GetBaseDomain("astn-sess-abc123"); got != "" {
+		t.Errorf("GetBaseDomain initially = %q, want empty", got)
+	}
+
+	// Set domain
+	if err := r.SetBaseDomain("astn-sess-abc123", "astonish.local.muxpie.com"); err != nil {
+		t.Fatalf("SetBaseDomain: %v", err)
+	}
+
+	// Get domain
+	if got := r.GetBaseDomain("astn-sess-abc123"); got != "astonish.local.muxpie.com" {
+		t.Errorf("GetBaseDomain = %q, want %q", got, "astonish.local.muxpie.com")
+	}
+
+	// Unknown container
+	if got := r.GetBaseDomain("nonexistent"); got != "" {
+		t.Errorf("GetBaseDomain for unknown = %q, want empty", got)
+	}
+
+	// Error for unknown container
+	if err := r.SetBaseDomain("nonexistent", "example.com"); err == nil {
+		t.Error("SetBaseDomain for unknown container should return error")
+	}
+}
+
+func TestBaseDomainPersistence(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "sessions.json")
+	r1 := &SessionRegistry{
+		entries:  make(map[string]*SessionEntry),
+		filePath: filePath,
+	}
+
+	_ = r1.Put("sess-1", "astn-sess-abc123", "base")
+	_ = r1.SetBaseDomain("astn-sess-abc123", "astonish.local.muxpie.com")
+
+	// Load into a new registry
+	r2 := &SessionRegistry{
+		entries:  make(map[string]*SessionEntry),
+		filePath: filePath,
+	}
+	if err := r2.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if got := r2.GetBaseDomain("astn-sess-abc123"); got != "astonish.local.muxpie.com" {
+		t.Errorf("GetBaseDomain after reload = %q, want %q", got, "astonish.local.muxpie.com")
+	}
+}

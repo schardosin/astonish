@@ -423,6 +423,163 @@ func (m *PortProxyManager) ListForContainer(containerName string) map[int]int {
 }
 
 // ---------------------------------------------------------------------------
+// Subdomain-based proxy router
+// ---------------------------------------------------------------------------
+// Maps full hostnames (e.g., "astn-sess-abc-3000.example.com") to container
+// targets. When Studio receives a request whose Host header matches a
+// registered hostname, it reverse-proxies the request to the container
+// instead of serving the Studio UI or API.
+
+// subdomainTarget describes where to proxy a matched subdomain request.
+type subdomainTarget struct {
+	containerName string
+	containerPort int
+}
+
+// SubdomainRouter maps hostnames to container proxy targets.
+type SubdomainRouter struct {
+	mu      sync.RWMutex
+	hostMap map[string]*subdomainTarget // hostname → target
+}
+
+var (
+	subdomainRouter     *SubdomainRouter
+	subdomainRouterOnce sync.Once
+)
+
+// GetSubdomainRouter returns the singleton SubdomainRouter.
+func GetSubdomainRouter() *SubdomainRouter {
+	subdomainRouterOnce.Do(func() {
+		subdomainRouter = &SubdomainRouter{
+			hostMap: make(map[string]*subdomainTarget),
+		}
+	})
+	return subdomainRouter
+}
+
+// SubdomainHostname constructs the subdomain hostname for a container+port.
+// Format: {containerName}-{port}.{baseDomain}
+func SubdomainHostname(containerName string, port int, baseDomain string) string {
+	return fmt.Sprintf("%s-%d.%s", containerName, port, baseDomain)
+}
+
+// RegisterHost adds a hostname → container mapping.
+func (sr *SubdomainRouter) RegisterHost(hostname, containerName string, port int) {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	sr.hostMap[hostname] = &subdomainTarget{
+		containerName: containerName,
+		containerPort: port,
+	}
+	log.Printf("[sandbox-proxy] Registered subdomain route: %s → %s:%d", hostname, containerName, port)
+}
+
+// UnregisterHost removes a hostname mapping.
+func (sr *SubdomainRouter) UnregisterHost(hostname string) {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	if _, ok := sr.hostMap[hostname]; ok {
+		delete(sr.hostMap, hostname)
+		log.Printf("[sandbox-proxy] Unregistered subdomain route: %s", hostname)
+	}
+}
+
+// UnregisterAllForContainer removes all hostname mappings for a container.
+func (sr *SubdomainRouter) UnregisterAllForContainer(containerName string) int {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	var toDelete []string
+	for host, target := range sr.hostMap {
+		if target.containerName == containerName {
+			toDelete = append(toDelete, host)
+		}
+	}
+	for _, host := range toDelete {
+		delete(sr.hostMap, host)
+		log.Printf("[sandbox-proxy] Unregistered subdomain route: %s", host)
+	}
+	return len(toDelete)
+}
+
+// Lookup checks if a host matches a registered subdomain proxy.
+// The host may include a port (e.g., "foo.example.com:9393"), which is stripped.
+func (sr *SubdomainRouter) Lookup(host string) (containerName string, port int, ok bool) {
+	// Strip port from host if present
+	hostname := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		hostname = h
+	}
+
+	sr.mu.RLock()
+	defer sr.mu.RUnlock()
+	target, found := sr.hostMap[hostname]
+	if !found {
+		return "", 0, false
+	}
+	return target.containerName, target.containerPort, true
+}
+
+// ListForContainer returns a map of containerPort → hostname for all active
+// subdomain routes for the given container.
+func (sr *SubdomainRouter) ListForContainer(containerName string) map[int]string {
+	sr.mu.RLock()
+	defer sr.mu.RUnlock()
+	result := make(map[int]string)
+	for host, target := range sr.hostMap {
+		if target.containerName == containerName {
+			result[target.containerPort] = host
+		}
+	}
+	return result
+}
+
+// ServeSubdomainProxy handles an HTTP request by proxying it to the matched
+// container. Called from the Studio main handler when a subdomain match is found.
+func ServeSubdomainProxy(w http.ResponseWriter, r *http.Request, containerName string, containerPort int) {
+	client, err := sandboxConnect()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("sandbox unavailable: %s", err), http.StatusServiceUnavailable)
+		return
+	}
+
+	currentIP, err := getCachedIP(client, containerName)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("cannot resolve container IP: %s", err), http.StatusBadGateway)
+		return
+	}
+
+	if isWebSocketUpgrade(r) {
+		proxyWebSocket(w, r, currentIP, containerPort, r.URL.Path)
+		return
+	}
+
+	currentTarget, _ := url.Parse(fmt.Sprintf("http://%s:%d", currentIP, containerPort))
+	proxy := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			req.URL.Scheme = currentTarget.Scheme
+			req.URL.Host = currentTarget.Host
+			req.URL.Path = r.URL.Path
+			req.URL.RawQuery = r.URL.RawQuery
+			req.Host = currentTarget.Host
+
+			if clientIP, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+				if existing := req.Header.Get("X-Forwarded-For"); existing != "" {
+					req.Header.Set("X-Forwarded-For", existing+", "+clientIP)
+				} else {
+					req.Header.Set("X-Forwarded-For", clientIP)
+				}
+			}
+			req.Header.Set("X-Forwarded-Host", r.Host)
+			req.Header.Set("X-Forwarded-Proto", "http")
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			http.Error(w, fmt.Sprintf("proxy error: %s", err), http.StatusBadGateway)
+		},
+	}
+	proxy.ServeHTTP(w, r)
+}
+
+// ---------------------------------------------------------------------------
 // WebSocket and utility functions
 // ---------------------------------------------------------------------------
 

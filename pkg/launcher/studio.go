@@ -114,6 +114,11 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 		// Wrap router + SPA into a single handler
 		spaHandler := spaFileServer(http.FS(webFS))
 		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Check subdomain proxy routing first
+			if containerName, port, ok := api.GetSubdomainRouter().Lookup(r.Host); ok {
+				api.ServeSubdomainProxy(w, r, containerName, port)
+				return
+			}
 			// Let mux handle /api/* routes
 			if len(r.URL.Path) >= 4 && r.URL.Path[:4] == "/api" {
 				router.ServeHTTP(w, r)
@@ -126,6 +131,11 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 		log.Printf("Warning: No web assets found. Run 'npm run build' in the web directory first.")
 		fallback := noAssetsHandler()
 		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Check subdomain proxy routing first
+			if containerName, port, ok := api.GetSubdomainRouter().Lookup(r.Host); ok {
+				api.ServeSubdomainProxy(w, r, containerName, port)
+				return
+			}
 			if len(r.URL.Path) >= 4 && r.URL.Path[:4] == "/api" {
 				router.ServeHTTP(w, r)
 				return

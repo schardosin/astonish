@@ -17,6 +17,7 @@ type SessionEntry struct {
 	TemplateName  string    `json:"template_name"`
 	CreatedAt     time.Time `json:"created_at"`
 	ExposedPorts  []int     `json:"exposed_ports,omitempty"`
+	BaseDomain    string    `json:"base_domain,omitempty"`
 }
 
 // SessionRegistry maps session IDs to container names with JSON persistence.
@@ -298,4 +299,32 @@ func (r *SessionRegistry) IsPortExposed(containerName string, port int) bool {
 		}
 	}
 	return false
+}
+
+// SetBaseDomain sets the base domain for a container's session entry and saves.
+// The base domain is used to construct subdomain proxy hostnames.
+func (r *SessionRegistry) SetBaseDomain(containerName, baseDomain string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, e := range r.entries {
+		if e.ContainerName == containerName {
+			e.BaseDomain = baseDomain
+			return r.saveLocked()
+		}
+	}
+	return fmt.Errorf("container %q not found in registry", containerName)
+}
+
+// GetBaseDomain returns the stored base domain for a container, or empty string.
+func (r *SessionRegistry) GetBaseDomain(containerName string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, e := range r.entries {
+		if e.ContainerName == containerName {
+			return e.BaseDomain
+		}
+	}
+	return ""
 }

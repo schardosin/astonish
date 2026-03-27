@@ -194,7 +194,7 @@ export async function exposePort(containerId, port) {
   const res = await fetch(`/api/sandbox/containers/${encodeURIComponent(containerId)}/expose`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ port }),
+    body: JSON.stringify({ port, base_domain: window.location.hostname }),
   })
   if (!res.ok) {
     const text = await res.text()

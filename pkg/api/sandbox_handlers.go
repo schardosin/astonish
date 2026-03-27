@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -60,13 +59,13 @@ type SandboxDetailResponse struct {
 
 // ContainerInfo represents a session container in the list.
 type ContainerInfo struct {
-	Name         string            `json:"name"`
-	SessionID    string            `json:"session_id"`
-	Template     string            `json:"template"`
-	Status       string            `json:"status"`
-	Created      string            `json:"created"`
-	ExposedPorts []int             `json:"exposed_ports,omitempty"`
-	ProxyURLs    map[string]string `json:"proxy_urls,omitempty"`
+	Name         string         `json:"name"`
+	SessionID    string         `json:"session_id"`
+	Template     string         `json:"template"`
+	Status       string         `json:"status"`
+	Created      string         `json:"created"`
+	ExposedPorts []int          `json:"exposed_ports,omitempty"`
+	HostPorts    map[string]int `json:"host_ports,omitempty"`
 }
 
 // ContainerListResponse is the JSON response for GET /api/sandbox/containers.
@@ -331,20 +330,17 @@ func SandboxContainerListHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(e.ExposedPorts) > 0 {
 			info.ExposedPorts = e.ExposedPorts
-			info.ProxyURLs = make(map[string]string, len(e.ExposedPorts))
 			mgr := GetPortProxyManager()
-			host := r.Host
-			if h, _, err := net.SplitHostPort(host); err == nil {
-				host = h
-			}
+			hostPorts := make(map[string]int, len(e.ExposedPorts))
 			for _, port := range e.ExposedPorts {
 				portStr := strconv.Itoa(port)
 				hp := mgr.GetHostPort(e.ContainerName, port)
 				if hp > 0 {
-					info.ProxyURLs[portStr] = fmt.Sprintf("http://%s:%d/", host, hp)
-				} else {
-					info.ProxyURLs[portStr] = fmt.Sprintf("/api/sandbox/proxy/%s/%d/", e.ContainerName, port)
+					hostPorts[portStr] = hp
 				}
+			}
+			if len(hostPorts) > 0 {
+				info.HostPorts = hostPorts
 			}
 		}
 		containers = append(containers, info)
@@ -744,18 +740,8 @@ func SandboxExposePortHandler(w http.ResponseWriter, r *http.Request) {
 	mgr := GetPortProxyManager()
 	hostPort, proxyErr := mgr.StartProxy(containerName, req.Port)
 
-	var proxyURL string
 	if proxyErr != nil {
-		// Fall back to path-based proxy URL if listener fails
 		log.Printf("[sandbox-proxy] Failed to start port listener for %s:%d: %v", containerName, req.Port, proxyErr)
-		proxyURL = fmt.Sprintf("/api/sandbox/proxy/%s/%d/", containerName, req.Port)
-	} else {
-		// Use the host from the request so it works from the user's machine
-		host := r.Host
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			host = h
-		}
-		proxyURL = fmt.Sprintf("http://%s:%d/", host, hostPort)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -764,7 +750,6 @@ func SandboxExposePortHandler(w http.ResponseWriter, r *http.Request) {
 		"added":     added,
 		"port":      req.Port,
 		"host_port": hostPort,
-		"proxy_url": proxyURL,
 	})
 }
 
@@ -849,20 +834,11 @@ func SandboxListExposedPortsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mgr := GetPortProxyManager()
-	host := r.Host
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-
-	proxyURLs := make(map[string]string, len(ports))
 	hostPorts := make(map[string]int, len(ports))
 	for _, p := range ports {
 		hp := mgr.GetHostPort(containerName, p)
 		if hp > 0 {
-			proxyURLs[strconv.Itoa(p)] = fmt.Sprintf("http://%s:%d/", host, hp)
 			hostPorts[strconv.Itoa(p)] = hp
-		} else {
-			proxyURLs[strconv.Itoa(p)] = fmt.Sprintf("/api/sandbox/proxy/%s/%d/", containerName, p)
 		}
 	}
 
@@ -870,7 +846,6 @@ func SandboxListExposedPortsHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"container":     containerName,
 		"exposed_ports": ports,
-		"proxy_urls":    proxyURLs,
 		"host_ports":    hostPorts,
 	})
 }

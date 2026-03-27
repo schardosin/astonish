@@ -547,8 +547,11 @@ export default function SandboxSettings({ config, onSaved }) {
                       {exposedPorts.length > 0 ? (
                         <div className="space-y-1">
                           {exposedPorts.map(port => {
-                            const proxyUrls = c.proxy_urls || {}
-                            const proxyUrl = proxyUrls[String(port)] || `/api/sandbox/proxy/${c.name}/${port}/`
+                            const hostPorts = c.host_ports || {}
+                            const hp = hostPorts[String(port)]
+                            const proxyUrl = hp
+                              ? `http://${window.location.hostname}:${hp}/`
+                              : `/api/sandbox/proxy/${c.name}/${port}/`
                             return (
                               <div key={port} className="flex items-center justify-between px-2 py-1 rounded text-xs"
                                 style={{ background: 'var(--bg-tertiary)' }}>

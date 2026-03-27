@@ -200,3 +200,188 @@ func TestSessionRegistryConcurrentPutRemove(t *testing.T) {
 		t.Errorf("List() has %d entries but SessionIDs() has %d", len(entries), len(ids))
 	}
 }
+
+func TestSessionRegistryGetByContainerName(t *testing.T) {
+	r := newTestRegistry(t)
+	_ = r.Put("sess-1", "astn-sess-abc123", "base")
+	_ = r.Put("sess-2", "astn-sess-def456", "custom")
+
+	// Found
+	entry := r.GetByContainerName("astn-sess-abc123")
+	if entry == nil {
+		t.Fatal("expected entry for astn-sess-abc123")
+	}
+	if entry.SessionID != "sess-1" {
+		t.Errorf("SessionID = %q, want sess-1", entry.SessionID)
+	}
+
+	// Found second
+	entry = r.GetByContainerName("astn-sess-def456")
+	if entry == nil {
+		t.Fatal("expected entry for astn-sess-def456")
+	}
+	if entry.SessionID != "sess-2" {
+		t.Errorf("SessionID = %q, want sess-2", entry.SessionID)
+	}
+
+	// Not found
+	entry = r.GetByContainerName("nonexistent")
+	if entry != nil {
+		t.Errorf("expected nil for nonexistent container, got %+v", entry)
+	}
+}
+
+func TestSessionRegistryExposePort(t *testing.T) {
+	r := newTestRegistry(t)
+	_ = r.Put("sess-1", "astn-sess-abc123", "base")
+
+	// Expose port 3000
+	added, err := r.ExposePort("astn-sess-abc123", 3000)
+	if err != nil {
+		t.Fatalf("ExposePort: %v", err)
+	}
+	if !added {
+		t.Error("expected port to be newly added")
+	}
+
+	// Verify it's exposed
+	if !r.IsPortExposed("astn-sess-abc123", 3000) {
+		t.Error("port 3000 should be exposed")
+	}
+
+	// Expose same port again — should not add duplicate
+	added, err = r.ExposePort("astn-sess-abc123", 3000)
+	if err != nil {
+		t.Fatalf("ExposePort duplicate: %v", err)
+	}
+	if added {
+		t.Error("expected port to NOT be newly added (duplicate)")
+	}
+
+	// Expose a second port
+	added, err = r.ExposePort("astn-sess-abc123", 8080)
+	if err != nil {
+		t.Fatalf("ExposePort 8080: %v", err)
+	}
+	if !added {
+		t.Error("expected port 8080 to be newly added")
+	}
+
+	// Verify both are exposed
+	entry := r.GetByContainerName("astn-sess-abc123")
+	if entry == nil {
+		t.Fatal("entry not found")
+	}
+	if len(entry.ExposedPorts) != 2 {
+		t.Fatalf("ExposedPorts has %d entries, want 2", len(entry.ExposedPorts))
+	}
+
+	// Expose on nonexistent container
+	_, err = r.ExposePort("nonexistent", 3000)
+	if err == nil {
+		t.Error("expected error for nonexistent container")
+	}
+}
+
+func TestSessionRegistryUnexposePort(t *testing.T) {
+	r := newTestRegistry(t)
+	_ = r.Put("sess-1", "astn-sess-abc123", "base")
+
+	// Expose two ports
+	_, _ = r.ExposePort("astn-sess-abc123", 3000)
+	_, _ = r.ExposePort("astn-sess-abc123", 8080)
+
+	// Unexpose port 3000
+	removed, err := r.UnexposePort("astn-sess-abc123", 3000)
+	if err != nil {
+		t.Fatalf("UnexposePort: %v", err)
+	}
+	if !removed {
+		t.Error("expected port 3000 to be removed")
+	}
+
+	// Verify 3000 is gone
+	if r.IsPortExposed("astn-sess-abc123", 3000) {
+		t.Error("port 3000 should no longer be exposed")
+	}
+
+	// 8080 should remain
+	if !r.IsPortExposed("astn-sess-abc123", 8080) {
+		t.Error("port 8080 should still be exposed")
+	}
+
+	// Unexpose port that isn't exposed
+	removed, err = r.UnexposePort("astn-sess-abc123", 9999)
+	if err != nil {
+		t.Fatalf("UnexposePort 9999: %v", err)
+	}
+	if removed {
+		t.Error("expected port 9999 to NOT be removed (not exposed)")
+	}
+
+	// Unexpose on nonexistent container
+	_, err = r.UnexposePort("nonexistent", 3000)
+	if err == nil {
+		t.Error("expected error for nonexistent container")
+	}
+}
+
+func TestSessionRegistryIsPortExposed(t *testing.T) {
+	r := newTestRegistry(t)
+	_ = r.Put("sess-1", "astn-sess-abc123", "base")
+
+	// Not exposed yet
+	if r.IsPortExposed("astn-sess-abc123", 3000) {
+		t.Error("port 3000 should not be exposed initially")
+	}
+
+	// Not exposed on nonexistent container
+	if r.IsPortExposed("nonexistent", 3000) {
+		t.Error("should return false for nonexistent container")
+	}
+
+	// Expose and check
+	_, _ = r.ExposePort("astn-sess-abc123", 3000)
+	if !r.IsPortExposed("astn-sess-abc123", 3000) {
+		t.Error("port 3000 should be exposed after ExposePort")
+	}
+
+	// Different port on same container
+	if r.IsPortExposed("astn-sess-abc123", 8080) {
+		t.Error("port 8080 should not be exposed")
+	}
+}
+
+func TestSessionRegistryExposedPortsPersistence(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "sessions.json")
+
+	// Create registry, add entry with exposed ports
+	r1 := &SessionRegistry{
+		entries:  make(map[string]*SessionEntry),
+		filePath: filePath,
+	}
+	_ = r1.Put("sess-1", "astn-sess-abc123", "base")
+	_, _ = r1.ExposePort("astn-sess-abc123", 3000)
+	_, _ = r1.ExposePort("astn-sess-abc123", 8080)
+
+	// Load into fresh registry
+	r2 := &SessionRegistry{
+		entries:  make(map[string]*SessionEntry),
+		filePath: filePath,
+	}
+	if err := r2.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Verify ports persisted
+	if !r2.IsPortExposed("astn-sess-abc123", 3000) {
+		t.Error("port 3000 should persist across save/load")
+	}
+	if !r2.IsPortExposed("astn-sess-abc123", 8080) {
+		t.Error("port 8080 should persist across save/load")
+	}
+	if r2.IsPortExposed("astn-sess-abc123", 9999) {
+		t.Error("port 9999 should not be exposed")
+	}
+}

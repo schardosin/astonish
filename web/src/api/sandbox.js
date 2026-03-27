@@ -186,3 +186,36 @@ export async function refreshTemplates() {
   }
   return res.json()
 }
+
+// --- Port Exposure ---
+
+/** Expose a port on a container through the reverse proxy. */
+export async function exposePort(containerId, port) {
+  const res = await fetch(`/api/sandbox/containers/${encodeURIComponent(containerId)}/expose`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ port }),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+  return res.json()
+}
+
+/** Remove a port from the reverse proxy. */
+export async function unexposePort(containerId, port) {
+  const res = await fetch(`/api/sandbox/containers/${encodeURIComponent(containerId)}/expose/${port}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+  return res.json()
+}
+
+/** Get the proxy URL for a container and port. */
+export function getProxyUrl(containerName, port, path = '') {
+  return `/api/sandbox/proxy/${containerName}/${port}${path ? '/' + path : '/'}`
+}

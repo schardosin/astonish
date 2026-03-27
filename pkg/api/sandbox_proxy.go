@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -15,7 +16,6 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/gorilla/websocket"
 	"github.com/schardosin/astonish/pkg/sandbox"
 )
 
@@ -440,85 +440,137 @@ func isWebSocketUpgrade(r *http.Request) bool {
 	return false
 }
 
-// proxyWebSocket forwards a WebSocket connection to the container.
+// proxyWebSocket forwards a WebSocket connection to the container using raw
+// TCP hijacking. This avoids message-level copying and works transparently
+// with any WebSocket application (including Vite HMR, Socket.IO, etc.).
+//
+// The approach:
+//  1. Dial a raw TCP connection to the backend container
+//  2. Write the original HTTP upgrade request to the backend
+//  3. Read the backend's 101 Switching Protocols response
+//  4. Hijack the client connection from the HTTP server
+//  5. Forward the 101 response to the client
+//  6. Bidirectionally pipe raw bytes between the two TCP connections
 func proxyWebSocket(w http.ResponseWriter, r *http.Request, ip string, port int, path string) {
-	// Dial the backend container
-	backendURL := fmt.Sprintf("ws://%s:%d%s", ip, port, path)
+	// Build the backend address
+	backendAddr := net.JoinHostPort(ip, strconv.Itoa(port))
+
+	// Dial the backend
+	backendConn, err := net.DialTimeout("tcp", backendAddr, 10*time.Second)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("WebSocket backend dial failed: %s", err), http.StatusBadGateway)
+		return
+	}
+
+	// Build the request URI
+	reqURI := path
+	if reqURI == "" {
+		reqURI = "/"
+	}
 	if r.URL.RawQuery != "" {
-		backendURL += "?" + r.URL.RawQuery
+		reqURI += "?" + r.URL.RawQuery
 	}
 
-	dialer := websocket.Dialer{
-		HandshakeTimeout: 10 * time.Second,
-	}
+	// Write the HTTP upgrade request to the backend.
+	// Set Host to the backend address so the upstream server (e.g. Vite)
+	// doesn't reject based on host mismatch.
+	var reqBuf strings.Builder
+	fmt.Fprintf(&reqBuf, "%s %s HTTP/1.1\r\n", r.Method, reqURI)
+	fmt.Fprintf(&reqBuf, "Host: %s\r\n", backendAddr)
 
-	// Forward relevant headers to backend
-	reqHeader := http.Header{}
-	for _, key := range []string{"Origin", "Sec-WebSocket-Protocol", "Sec-WebSocket-Extensions"} {
-		if v := r.Header.Get(key); v != "" {
-			reqHeader.Set(key, v)
+	// Forward all headers except Host (already set above)
+	for key, vals := range r.Header {
+		if strings.EqualFold(key, "Host") {
+			continue
+		}
+		for _, v := range vals {
+			fmt.Fprintf(&reqBuf, "%s: %s\r\n", key, v)
 		}
 	}
+	reqBuf.WriteString("\r\n")
 
-	backendConn, resp, err := dialer.Dial(backendURL, reqHeader)
-	if err != nil {
-		if resp != nil {
-			http.Error(w, fmt.Sprintf("WebSocket dial failed: %s (status %d)", err, resp.StatusCode), http.StatusBadGateway)
-		} else {
-			http.Error(w, fmt.Sprintf("WebSocket dial failed: %s", err), http.StatusBadGateway)
-		}
+	if _, err := backendConn.Write([]byte(reqBuf.String())); err != nil {
+		backendConn.Close()
+		http.Error(w, fmt.Sprintf("WebSocket backend write failed: %s", err), http.StatusBadGateway)
 		return
 	}
-	defer backendConn.Close()
 
-	// Upgrade the client connection
-	upgrader := websocket.Upgrader{
-		CheckOrigin:  func(r *http.Request) bool { return true },
-		Subprotocols: websocket.Subprotocols(r),
-	}
-
-	clientConn, err := upgrader.Upgrade(w, r, nil)
+	// Read the backend's response
+	backendBuf := bufio.NewReader(backendConn)
+	resp, err := http.ReadResponse(backendBuf, r)
 	if err != nil {
-		log.Printf("[sandbox-proxy] WebSocket upgrade failed: %v", err)
+		backendConn.Close()
+		http.Error(w, fmt.Sprintf("WebSocket backend response read failed: %s", err), http.StatusBadGateway)
 		return
 	}
-	defer clientConn.Close()
 
-	// Bidirectional forwarding
-	done := make(chan struct{})
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		backendConn.Close()
+		http.Error(w, fmt.Sprintf("WebSocket backend returned %d, expected 101", resp.StatusCode), http.StatusBadGateway)
+		return
+	}
 
-	go func() {
-		defer close(done)
-		forwardWS(clientConn, backendConn)
-	}()
+	// Hijack the client connection
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		backendConn.Close()
+		http.Error(w, "WebSocket hijack not supported", http.StatusInternalServerError)
+		return
+	}
 
-	forwardWS(backendConn, clientConn)
-	<-done
-}
+	clientConn, clientBuf, err := hijacker.Hijack()
+	if err != nil {
+		backendConn.Close()
+		log.Printf("[sandbox-proxy] WebSocket hijack failed: %v", err)
+		return
+	}
 
-// forwardWS copies WebSocket messages from src to dst until an error occurs.
-func forwardWS(src, dst *websocket.Conn) {
-	for {
-		msgType, msg, err := src.ReadMessage()
-		if err != nil {
-			// Send close message to the other side
-			closeMsg := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")
-			_ = dst.WriteControl(websocket.CloseMessage, closeMsg, time.Now().Add(time.Second))
-			return
-		}
-		if err := dst.WriteMessage(msgType, msg); err != nil {
-			return
+	// Write the 101 response to the client
+	var respBuf strings.Builder
+	fmt.Fprintf(&respBuf, "HTTP/1.1 %d %s\r\n", resp.StatusCode, resp.Status)
+	for key, vals := range resp.Header {
+		for _, v := range vals {
+			fmt.Fprintf(&respBuf, "%s: %s\r\n", key, v)
 		}
 	}
-}
+	respBuf.WriteString("\r\n")
 
-// forwardRaw copies data bidirectionally between two io.ReadWriteClosers.
-func forwardRaw(a, b io.ReadWriteCloser) {
+	if _, err := clientConn.Write([]byte(respBuf.String())); err != nil {
+		clientConn.Close()
+		backendConn.Close()
+		log.Printf("[sandbox-proxy] WebSocket client write failed: %v", err)
+		return
+	}
+
+	// If there's buffered data from the backend (read past the HTTP response),
+	// flush it to the client first.
+	if backendBuf.Buffered() > 0 {
+		buffered := make([]byte, backendBuf.Buffered())
+		n, _ := backendBuf.Read(buffered)
+		if n > 0 {
+			clientConn.Write(buffered[:n])
+		}
+	}
+
+	// If there's buffered data from the client, flush it to the backend.
+	if clientBuf.Reader.Buffered() > 0 {
+		buffered := make([]byte, clientBuf.Reader.Buffered())
+		n, _ := clientBuf.Reader.Read(buffered)
+		if n > 0 {
+			backendConn.Write(buffered[:n])
+		}
+	}
+
+	log.Printf("[sandbox-proxy] WebSocket connected: %s → %s%s", r.RemoteAddr, backendAddr, path)
+
+	// Bidirectional raw byte forwarding
 	done := make(chan struct{})
 	go func() {
-		io.Copy(b, a)
+		io.Copy(backendConn, clientConn)
+		backendConn.Close()
 		close(done)
 	}()
-	io.Copy(a, b)
+	io.Copy(clientConn, backendConn)
+	clientConn.Close()
 	<-done
 }

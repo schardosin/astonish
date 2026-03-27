@@ -214,8 +214,3 @@ export async function unexposePort(containerId, port) {
   }
   return res.json()
 }
-
-/** Get the proxy URL for a container and port. */
-export function getProxyUrl(containerName, port, path = '') {
-  return `/api/sandbox/proxy/${containerName}/${port}${path ? '/' + path : '/'}`
-}

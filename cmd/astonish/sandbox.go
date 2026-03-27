@@ -609,16 +609,11 @@ func handleSandboxURL(containerID string, portStr string) error {
 		return fmt.Errorf("port %d is not exposed on %s\nRun 'astonish sandbox expose %s %d' first", port, containerName, containerName, port)
 	}
 
-	// The per-port proxy listener runs in the Studio daemon process,
-	// so the CLI cannot resolve the host port directly. Print the
-	// path-based fallback URL (works for API services) and direct the
-	// user to Studio for the full-featured URL.
-	studioPort := 9393
-	fmt.Printf("Path-based proxy (API services):\n")
-	fmt.Printf("  http://localhost:%d/api/sandbox/proxy/%s/%d/\n\n", studioPort, containerName, port)
-	fmt.Printf("For SPAs and full UI access, use the proxy URL shown in Studio > Settings > Sandbox.\n")
-	fmt.Printf("Studio starts a dedicated port listener that proxies at the root path,\n")
-	fmt.Printf("so absolute asset paths (e.g., /assets/main.js) resolve correctly.\n")
+	// The per-port proxy listener runs in the Studio daemon process.
+	// The CLI cannot resolve the allocated host port directly.
+	fmt.Printf("Port %d is exposed on %s.\n", port, containerName)
+	fmt.Printf("The proxy URL is shown in Studio > Settings > Sandbox.\n")
+	fmt.Printf("Studio allocates a dedicated host port (19000+) for each exposed service.\n")
 	return nil
 }
 

@@ -552,20 +552,21 @@ export default function SandboxSettings({ config, onSaved }) {
                           {exposedPorts.map(port => {
                             const hostPorts = c.host_ports || {}
                             const hp = hostPorts[String(port)]
-                            const proxyUrl = hp
-                              ? `http://${window.location.hostname}:${hp}/`
-                              : `/api/sandbox/proxy/${c.name}/${port}/`
                             return (
                               <div key={port} className="flex items-center justify-between px-2 py-1 rounded text-xs"
                                 style={{ background: 'var(--bg-tertiary)' }}>
                                 <div className="flex items-center gap-2">
                                   <span className="font-mono" style={{ color: '#22c55e' }}>:{port}</span>
-                                  <a href={proxyUrl} target="_blank" rel="noopener noreferrer"
-                                    className="flex items-center gap-1 transition-colors hover:underline"
-                                    style={{ color: 'var(--text-secondary)' }}>
-                                    <ExternalLink size={10} />
-                                    Open in browser
-                                  </a>
+                                  {hp ? (
+                                    <a href={`http://${window.location.hostname}:${hp}/`} target="_blank" rel="noopener noreferrer"
+                                      className="flex items-center gap-1 transition-colors hover:underline"
+                                      style={{ color: 'var(--text-secondary)' }}>
+                                      <ExternalLink size={10} />
+                                      {window.location.hostname}:{hp}
+                                    </a>
+                                  ) : (
+                                    <span style={{ color: 'var(--text-muted)' }}>Proxy not running</span>
+                                  )}
                                 </div>
                                 <button
                                   onClick={() => handleUnexposePort(c.session_id, port)}

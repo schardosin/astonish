@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bytes"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"log"
@@ -8,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +20,9 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/schardosin/astonish/pkg/sandbox"
 )
+
+// headTagRe matches <head> or <head ...> (case-insensitive).
+var headTagRe = regexp.MustCompile(`(?i)(<head[^>]*>)`)
 
 // ipCacheEntry holds a cached container IP with an expiry time.
 type ipCacheEntry struct {
@@ -155,6 +161,7 @@ func SandboxProxyHandler(w http.ResponseWriter, r *http.Request) {
 			req.Header.Set("X-Forwarded-Host", r.Host)
 			req.Header.Set("X-Forwarded-Proto", "http")
 		},
+		ModifyResponse: makeBaseTagInjector(prefix + "/"),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadGateway)
@@ -163,6 +170,72 @@ func SandboxProxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxy.ServeHTTP(w, r)
+}
+
+// injectBaseTag inserts a <base href="..."> tag immediately after the <head>
+// tag in an HTML document. This ensures the browser resolves all relative and
+// absolute asset paths against the proxy prefix, so SPAs served through the
+// reverse proxy load their JS/CSS/images correctly.
+//
+// If no <head> tag is found, the body is returned unmodified.
+func injectBaseTag(body []byte, baseHref string) []byte {
+	tag := fmt.Sprintf(`<base href="%s">`, baseHref)
+	loc := headTagRe.FindIndex(body)
+	if loc == nil {
+		return body
+	}
+	// Insert right after the <head...> match
+	insertPos := loc[1]
+	result := make([]byte, 0, len(body)+len(tag))
+	result = append(result, body[:insertPos]...)
+	result = append(result, []byte(tag)...)
+	result = append(result, body[insertPos:]...)
+	return result
+}
+
+// makeBaseTagInjector returns a ModifyResponse function that injects a
+// <base href> tag into HTML responses. Non-HTML responses pass through
+// untouched. Gzipped HTML responses are decompressed, modified, and served
+// uncompressed (HTML pages are small enough that this has no noticeable
+// impact on performance).
+func makeBaseTagInjector(baseHref string) func(*http.Response) error {
+	return func(resp *http.Response) error {
+		ct := resp.Header.Get("Content-Type")
+		if !strings.HasPrefix(ct, "text/html") {
+			return nil
+		}
+
+		// Read the response body
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return err
+		}
+
+		// Handle gzip encoding
+		if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
+			gz, err := gzip.NewReader(bytes.NewReader(body))
+			if err != nil {
+				// Not valid gzip — use body as-is
+				goto inject
+			}
+			decompressed, err := io.ReadAll(gz)
+			gz.Close()
+			if err != nil {
+				goto inject
+			}
+			body = decompressed
+			resp.Header.Del("Content-Encoding")
+		}
+
+	inject:
+		modified := injectBaseTag(body, baseHref)
+
+		resp.Body = io.NopCloser(bytes.NewReader(modified))
+		resp.ContentLength = int64(len(modified))
+		resp.Header.Set("Content-Length", strconv.Itoa(len(modified)))
+		return nil
+	}
 }
 
 // isWebSocketUpgrade checks if the request is a WebSocket upgrade request.

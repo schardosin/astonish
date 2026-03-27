@@ -273,6 +273,33 @@ plan_wizard:
     "I analyzed the project and found it's a Vue.js + Go application with
     source code in trade-app/ and a Go backend in cmd/."
 
+    **3e-scope. Identify services and confirm scope with the user.**
+
+    If the project contains MULTIPLE services (e.g., backend + frontend,
+    API + microservices, monorepo with subprojects):
+
+    1. List the services you found and their roles (from AGENTS.md, README,
+       docker-compose.yml, or directory structure).
+    2. Present them to the user and explicitly ask:
+
+       "I found these services in the project:
+       - **<service 1>**: <language>, port <port> — <brief description>
+       - **<service 2>**: <language>, port <port> — <brief description>
+       - ...
+
+       Which of these should be included in the fleet scope?
+       (All of them, or just a subset?)"
+
+    3. **WAIT for the user's answer.** Do NOT proceed until they confirm.
+       Do NOT assume "all services" — the user may want only a subset.
+    4. Record the in-scope services — you will build, run, and test ONLY
+       these in Steps 3g through 3i. Services not in scope should be
+       skipped during dependency installation, build verification, runtime
+       verification, and drill creation.
+
+    If the project is a single service/application, skip this step and
+    proceed — all steps implicitly apply to the single service.
+
     **3f. Commit and push AGENTS.md (newly generated only).**
     **SKIP this step if AGENTS.md already existed (was not just generated).**
 
@@ -291,8 +318,9 @@ plan_wizard:
     **3g. Detect and install project toolchains.**
 
     Based on AGENTS.md analysis and project file inspection, install the
-    required toolchains and runtimes. Inspect the project files to determine
-    what is needed:
+    required toolchains and runtimes **for in-scope services only** (as
+    confirmed by the user in Step 3e-scope). Inspect the project files to
+    determine what is needed:
     ```
     shell_command(command: "ls /root/<repo-name>/go.mod /root/<repo-name>/package.json /root/<repo-name>/Cargo.toml /root/<repo-name>/requirements.txt /root/<repo-name>/pyproject.toml /root/<repo-name>/Gemfile /root/<repo-name>/pom.xml /root/<repo-name>/build.gradle 2>/dev/null")
     ```
@@ -309,8 +337,9 @@ plan_wizard:
 
     **3h. Run the build and verify it works.**
 
-    This step is CRITICAL. You MUST verify the project builds successfully
-    before saving the template. Use the build commands from AGENTS.md:
+    This step is CRITICAL. You MUST verify that each **in-scope service**
+    builds successfully before saving the template. Use the build commands
+    from AGENTS.md:
     ```
     shell_command(command: "cd /root/<repo-name> && <build-command-from-agents-md>")
     ```

@@ -320,9 +320,10 @@ func (m *PortProxyManager) StartProxy(containerName string, containerPort int) (
 		Handler: handler,
 	}
 
+	log.Printf("[sandbox-proxy] Starting listener :%d → %s:%d (%s)", hostPort, ip, containerPort, containerName)
+
 	// Start listener in background
 	go func() {
-		log.Printf("[sandbox-proxy] Listening on :%d → %s:%d (%s)", hostPort, ip, containerPort, containerName)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("[sandbox-proxy] Listener :%d error: %v", hostPort, err)
 		}

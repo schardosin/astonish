@@ -183,7 +183,10 @@ export default function SandboxSettings({ config, onSaved }) {
     setExposeLoading(true)
     setActionError(null)
     try {
-      await exposePort(containerId, port)
+      const result = await exposePort(containerId, port)
+      if (result.proxy_error) {
+        setActionError(`Port exposed but proxy listener failed: ${result.proxy_error}`)
+      }
       setExposePortInput('')
       loadContainers()
     } catch (err) {

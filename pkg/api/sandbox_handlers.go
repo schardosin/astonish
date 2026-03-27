@@ -335,6 +335,10 @@ func SandboxContainerListHandler(w http.ResponseWriter, r *http.Request) {
 			for _, port := range e.ExposedPorts {
 				portStr := strconv.Itoa(port)
 				hp := mgr.GetHostPort(e.ContainerName, port)
+				if hp == 0 && status == "running" {
+					// Auto-start: listener lost after daemon restart
+					hp, _ = mgr.StartProxy(e.ContainerName, port)
+				}
 				if hp > 0 {
 					hostPorts[portStr] = hp
 				}
@@ -740,16 +744,19 @@ func SandboxExposePortHandler(w http.ResponseWriter, r *http.Request) {
 	mgr := GetPortProxyManager()
 	hostPort, proxyErr := mgr.StartProxy(containerName, req.Port)
 
+	var proxyErrMsg string
 	if proxyErr != nil {
+		proxyErrMsg = proxyErr.Error()
 		log.Printf("[sandbox-proxy] Failed to start port listener for %s:%d: %v", containerName, req.Port, proxyErr)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"status":    "ok",
-		"added":     added,
-		"port":      req.Port,
-		"host_port": hostPort,
+		"status":      "ok",
+		"added":       added,
+		"port":        req.Port,
+		"host_port":   hostPort,
+		"proxy_error": proxyErrMsg,
 	})
 }
 

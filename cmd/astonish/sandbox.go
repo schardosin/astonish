@@ -29,6 +29,17 @@ func handleSandboxCommand(args []string) error {
 		return handleSandboxInit()
 	case "list", "ls":
 		return handleSandboxList()
+	case "create":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: astonish sandbox create <template> [--name <label>]")
+		}
+		name := ""
+		for i, a := range args[2:] {
+			if (a == "--name" || a == "-n") && i+1 < len(args[2:]) {
+				name = args[2:][i+1]
+			}
+		}
+		return handleSandboxCreate(args[1], name)
 	case "refresh":
 		return handleSandboxRefresh()
 	case "destroy", "rm":
@@ -114,7 +125,7 @@ func handleSandboxTemplateCommand(args []string) error {
 }
 
 func printSandboxUsage() {
-	fmt.Println("usage: astonish sandbox {status,init,list,shell,cp,refresh,destroy,prune,template} ...")
+	fmt.Println("usage: astonish sandbox {status,init,list,create,shell,cp,refresh,destroy,prune,template} ...")
 	fmt.Println("")
 	fmt.Println("Manage session container isolation.")
 	fmt.Println("")
@@ -122,6 +133,7 @@ func printSandboxUsage() {
 	fmt.Println("  status              Show sandbox environment info")
 	fmt.Println("  init                One-time setup: create base template with core tools")
 	fmt.Println("  list (ls)           List active session containers")
+	fmt.Println("  create <template>   Create a sandbox container from a template and open a shell")
 	fmt.Println("  shell <session-id>  Open interactive shell in a session container")
 	fmt.Println("  cp <id>:<path> [.]  Copy files from a session container to local machine")
 	fmt.Println("  refresh             Re-snapshot templates with updated binary (--force for all)")
@@ -372,6 +384,81 @@ func handleSandboxList() error {
 			}
 			fmt.Println("Run 'astonish sandbox prune' to clean up.")
 		}
+	}
+
+	return nil
+}
+
+// --- Create ---
+
+func handleSandboxCreate(templateName, label string) error {
+	client, err := connectOrFail()
+	if err != nil {
+		return err
+	}
+
+	sessRegistry, err := sandbox.NewSessionRegistry()
+	if err != nil {
+		return err
+	}
+
+	tplRegistry, err := sandbox.NewTemplateRegistry()
+	if err != nil {
+		return err
+	}
+
+	// Verify template exists
+	if !tplRegistry.Exists(templateName) {
+		return fmt.Errorf("template %q not found\nUse 'astonish sandbox template list' to see available templates", templateName)
+	}
+
+	// Generate a session ID. If --name is provided, use it directly so
+	// it is easy to identify in `sandbox list`. Otherwise generate one
+	// from the template name and a timestamp.
+	// The session ID must produce valid Incus container names (alphanumeric
+	// and hyphens only) since SessionContainerName uses the first 8 chars.
+	var sessionID string
+	if label != "" {
+		sessionID = label
+		// Check for duplicate
+		if entry := sessRegistry.Get(sessionID); entry != nil {
+			return fmt.Errorf("a container with name %q already exists\nUse 'astonish sandbox shell %s' to open a shell, or 'astonish sandbox destroy %s' to remove it",
+				label, entry.ContainerName, entry.ContainerName)
+		}
+	} else {
+		sessionID = fmt.Sprintf("%s-%d", templateName, time.Now().UnixNano())
+	}
+
+	// Use default limits
+	defaultCfg := sandbox.DefaultSandboxConfig()
+	limits := sandbox.EffectiveLimits(&defaultCfg)
+
+	fmt.Printf("Creating sandbox from template %q...\n", templateName)
+	containerName, err := sandbox.EnsureSessionContainer(client, sessRegistry, tplRegistry, sessionID, templateName, &limits)
+	if err != nil {
+		return fmt.Errorf("failed to create container: %w", err)
+	}
+
+	fmt.Printf("Container %q ready (session: %s)\n", containerName, sessionID)
+
+	// Open interactive shell
+	var cmd *exec.Cmd
+	if sandbox.GetActivePlatform() == sandbox.PlatformDockerIncus {
+		cmd = sandbox.ExecInDockerHostInteractive([]string{
+			"incus", "exec", containerName, "--", "bash", "-l",
+		})
+	} else {
+		cmd = exec.Command("incus", "exec", containerName, "--", "bash", "-l")
+	}
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	fmt.Printf("Entering container. Type 'exit' to leave.\n")
+	fmt.Printf("To re-enter later:  astonish sandbox shell %s\n", containerName)
+	fmt.Printf("To destroy:         astonish sandbox destroy %s\n", containerName)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("shell session ended with error: %w", err)
 	}
 
 	return nil

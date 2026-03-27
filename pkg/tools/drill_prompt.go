@@ -62,14 +62,32 @@ without any AI or human involvement at runtime. This means:
 
 Start by determining the execution environment.
 
-**1a. Check if sandbox is available.**
+**1a. Check if sandbox is available and detect existing projects.**
 Look at your available tools. If you have the save_sandbox_template tool,
-sandbox (container isolation) is enabled. Tell the user:
+sandbox (container isolation) is enabled.
 
-- If sandbox IS available:
-  "I can see sandbox containers are available. Would you like to:
-   (A) Use an existing sandbox template (if you already set one up), or
-   (B) Set up a new container from scratch?"
+BEFORE asking the user about templates, check if the current container
+already has a project set up. Run:
+  shell_command(command: "ls /root/")
+Look for directories that contain source code. Then check for project markers:
+  shell_command(command: "ls /root/*/go.mod /root/*/package.json /root/*/Cargo.toml /root/*/requirements.txt /root/*/pyproject.toml /root/*/Gemfile /root/*/pom.xml /root/*/build.gradle 2>/dev/null")
+
+**If a project is found in /root/<project>/:**
+The container already has a project provisioned (likely from a fleet plan or
+a previous template). Tell the user:
+"I detected a project already set up in this container at /root/<project>/.
+I'll use the existing environment — no need to set up a new container."
+
+- Skip Steps 1b-1d (project source, git auth, cloning) entirely.
+- Jump directly to Step 1e (analyze the project).
+- Skip Step 1i (save template) — the container already has a working template.
+  When generating the suite YAML, omit the template field or leave it empty.
+- Do NOT call save_sandbox_template — using the existing environment as-is.
+
+**If NO project is found and sandbox IS available:**
+"I can see sandbox containers are available. Would you like to:
+ (A) Use an existing sandbox template (if you already set one up), or
+ (B) Set up a new container from scratch?"
 
   - If (A): First, call the list_sandbox_templates tool (no arguments) to
     show the user all available templates. Present the list and let the user

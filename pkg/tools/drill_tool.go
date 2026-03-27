@@ -440,22 +440,66 @@ func validateDrill(_ tool.Context, args ValidateDrillArgs) (ValidateDrillResult,
 			})
 		}
 
-		// Validate assertions
-		for _, node := range testCfg.Nodes {
+		// Validate node schema and assertions
+		nodesWithAssert := 0
+		for j, node := range testCfg.Nodes {
+			nodeLabel := fmt.Sprintf("%s_node[%d]", label, j)
+			if node.Name != "" {
+				nodeLabel = fmt.Sprintf("%s_node_%s", label, node.Name)
+			}
+
+			// Check node type is "tool" (the only valid type for drill nodes)
+			if node.Type != "tool" {
+				checks = append(checks, ValidationCheck{
+					Name:    nodeLabel + "_type",
+					Status:  "failed",
+					Message: fmt.Sprintf("Node %q has type %q but drill nodes must have type: tool. Use 'type: tool' with 'args.tool: <tool_name>'.", node.Name, node.Type),
+				})
+				allPassed = false
+			}
+
+			// Check args.tool is present and non-empty
+			if node.Type == "tool" {
+				toolName, _ := node.Args["tool"].(string)
+				if toolName == "" {
+					checks = append(checks, ValidationCheck{
+						Name:    nodeLabel + "_args_tool",
+						Status:  "failed",
+						Message: fmt.Sprintf("Node %q is missing 'args.tool'. Each drill node must specify the tool to run, e.g.: args: { tool: shell_command, command: \"...\" }", node.Name),
+					})
+					allPassed = false
+				}
+			}
+
+			// Validate assertion if present
 			if node.Assert != nil {
+				nodesWithAssert++
 				validTypes := map[string]bool{
 					"contains": true, "not_contains": true, "regex": true,
 					"exit_code": true, "element_exists": true, "semantic": true,
 				}
 				if !validTypes[node.Assert.Type] {
 					checks = append(checks, ValidationCheck{
-						Name:    label + "_assert_" + node.Name,
+						Name:    nodeLabel + "_assert_type",
 						Status:  "failed",
 						Message: fmt.Sprintf("Unknown assertion type %q in node %q", node.Assert.Type, node.Name),
 					})
 					allPassed = false
 				}
 			}
+		}
+
+		// Warn if no nodes have assertions — drills without assertions always
+		// pass regardless of output, which is almost certainly unintended.
+		// Common mistake: using "assertions:" (plural) instead of "assert:" (singular),
+		// or "value:" instead of "expected:" — these YAML keys are silently ignored.
+		if len(testCfg.Nodes) > 0 && nodesWithAssert == 0 {
+			checks = append(checks, ValidationCheck{
+				Name:    label + "_no_assertions",
+				Status:  "failed",
+				Message: "No nodes have assertions. Every drill should have at least one node with an 'assert:' block (singular, not 'assertions:'). Use: assert: { type: contains, expected: \"...\" }",
+			})
+			allPassed = false
 		}
 	}
 

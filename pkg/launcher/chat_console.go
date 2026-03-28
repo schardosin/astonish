@@ -10,6 +10,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/schardosin/astonish/pkg/agent"
@@ -504,6 +505,33 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 			lineHasContent = !strings.HasSuffix(text, "\n")
 		}
 
+		// Wire transparent sub-agent streaming for console: sub-agent tool calls
+		// and text output are rendered in real-time. Uses a mutex since sub-agent
+		// goroutines call this concurrently while the main loop also writes.
+		var consoleMu sync.Mutex
+		chatAgent.UIEventCallback = func(event *session.Event) {
+			if event == nil || event.LLMResponse.Content == nil {
+				return
+			}
+			consoleMu.Lock()
+			defer consoleMu.Unlock()
+			for _, part := range event.LLMResponse.Content.Parts {
+				if part.FunctionCall != nil {
+					// Show sub-agent tool call as a brief status line
+					if !spinnerStopped {
+						stopSpinner()
+						spinnerStopped = true
+					}
+					fmt.Printf("%s  ↳ %s%s\n", ColorCyan, part.FunctionCall.Name, ColorReset)
+					lineHasContent = false
+					lastEventWasTool = true
+				}
+				if part.Text != "" && !part.Thought {
+					printText(part.Text)
+				}
+			}
+		}
+
 		for event, err := range r.Run(ctx, userID, sess.ID(), userMsg, adkagent.RunConfig{
 			StreamingMode: adkagent.StreamingModeSSE,
 		}) {
@@ -611,6 +639,7 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 		}
 
 		stopSpinner()
+		chatAgent.UIEventCallback = nil
 
 		// Handle approval if needed
 		if waitingForApproval {

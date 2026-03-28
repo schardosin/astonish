@@ -31,7 +31,7 @@ type SubTaskInput struct {
 	Name         string   `json:"name" jsonschema:"Short identifier for this sub-agent (e.g., 'researcher', 'code-reviewer', 'api-tester'). Must be unique within the delegation call."`
 	Task         string   `json:"task" jsonschema:"Clear description of what the sub-agent should accomplish. Be specific about the expected output."`
 	Instructions string   `json:"instructions,omitempty" jsonschema:"Additional context or constraints for this sub-agent. Include relevant file paths, API details, or formatting requirements."`
-	Tools        []string `json:"tools,omitempty" jsonschema:"Specific tool names this sub-agent should use (e.g., ['grep_search', 'read_file']). If empty, the sub-agent gets all safe tools."`
+	Tools        []string `json:"tools,omitempty" jsonschema:"Tool group names or individual tool names for this sub-agent (e.g., ['core'], ['browser'], ['core', 'web'], ['mcp:github']). If omitted, tools are auto-discovered based on the task description. Available groups are listed in the system prompt under Task Delegation."`
 }
 
 // DelegateTasksArgs is the input schema for the delegate_tasks tool.
@@ -81,13 +81,19 @@ func delegateTasks(ctx tool.Context, args DelegateTasksArgs) (DelegateTasksResul
 	// Convert tool inputs to SubAgentTasks
 	tasks := make([]agent.SubAgentTask, len(args.Tasks))
 	for i, input := range args.Tasks {
+		// Escape curly-brace patterns (e.g., %{http_code} from curl format strings)
+		// to prevent ADK's InjectSessionState from misinterpreting them as state variables.
+		safeTask := agent.EscapeCurlyPlaceholders(input.Task)
+		safeInstructions := agent.EscapeCurlyPlaceholders(input.Instructions)
+
 		tasks[i] = agent.SubAgentTask{
 			Name:         input.Name,
-			Description:  input.Task,
-			Instructions: input.Instructions,
+			Description:  safeTask,
+			Instructions: safeInstructions,
 			ToolFilter:   input.Tools,
 			ParentID:     ctx.SessionID(),
-			ParentDepth:  0, // delegate_tasks creates top-level sub-agents
+			ParentDepth:  0,                                 // delegate_tasks creates top-level sub-agents
+			OnEvent:      subAgentManagerVar.EventForwarder, // transparent streaming to UI
 		}
 	}
 
@@ -138,7 +144,7 @@ func delegateTasks(ctx tool.Context, args DelegateTasksArgs) (DelegateTasksResul
 func NewDelegateTasksTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "delegate_tasks",
-		Description: `Delegate multiple tasks to parallel sub-agents. Only use for 3+ independent tasks that each require multiple tool calls. For 1-2 tasks, call tools directly. Each sub-agent gets an isolated session, read-only memory, filtered tools, and a 5-minute timeout. Max 10 tasks per call.`,
+		Description: `Delegate tasks to parallel sub-agents with isolated sessions. Each sub-agent gets the tool groups you specify (e.g., ["core"], ["browser"], ["core", "web"]) or auto-discovers tools based on the task description if tools is omitted. Use this for specialized tasks like browser automation, web fetching, email, API calls, or any task requiring tools not on the main thread. Each sub-agent has read-only memory, a search_tools capability, and a 5-minute timeout. Max 10 tasks per call.`,
 	}, delegateTasks)
 }
 

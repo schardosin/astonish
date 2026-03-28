@@ -616,6 +616,16 @@ func (lnc *LazyNodeClient) HasInitFailed() bool {
 	}
 }
 
+// IsClosed returns true if the client has been closed or cleaned up.
+// Used by NodeClientPool.GetOrCreate() as a safety net to detect clients that
+// were destroyed by ReplaceSession (e.g., when a sub-agent switches templates
+// and the parent's alias wasn't properly updated).
+func (lnc *LazyNodeClient) IsClosed() bool {
+	lnc.mu.Lock()
+	defer lnc.mu.Unlock()
+	return lnc.closed
+}
+
 // GetContainerName returns the container name (empty if not yet initialized).
 func (lnc *LazyNodeClient) GetContainerName() string {
 	lnc.mu.Lock()
@@ -809,14 +819,15 @@ func (p *NodeClientPool) GetOrCreate(sessionID string) *LazyNodeClient {
 	}
 
 	if client, ok := p.clients[sessionID]; ok {
-		// If the client's init failed, discard it and fall through to create
-		// a fresh one. The container itself may be fine (e.g., `incus start`
-		// works), so a retry with a new LazyNodeClient can succeed.
-		if !client.HasInitFailed() {
+		// If the client's init failed or it was closed/destroyed (e.g., by
+		// ReplaceSession from a sub-agent alias), discard it and fall through
+		// to create a fresh one. The container itself may be fine (e.g.,
+		// `incus start` works), so a retry with a new LazyNodeClient can succeed.
+		if !client.HasInitFailed() && !client.IsClosed() {
 			return client
 		}
-		log.Printf("[sandbox] Discarding failed client for session %s, will retry",
-			sessionID[:min(8, len(sessionID))])
+		log.Printf("[sandbox] Discarding stale client for session %s (initFailed=%v, closed=%v), will retry",
+			sessionID[:min(8, len(sessionID))], client.HasInitFailed(), client.IsClosed())
 		delete(p.clients, sessionID)
 		// Don't call client.Cleanup() here — the container may be reusable.
 		// Close the node client (if any) but leave the container intact.
@@ -828,6 +839,31 @@ func (p *NodeClientPool) GetOrCreate(sessionID string) *LazyNodeClient {
 	client.Env = p.env
 	p.clients[sessionID] = client
 	return client
+}
+
+// Alias maps a child session ID to the same LazyNodeClient as the parent
+// session. This enables sub-agents (which get fresh session IDs) to share
+// the parent's sandbox container instead of creating a new one. Thread-safe.
+// If the parent session has no client yet, Alias is a no-op — the child will
+// create its own container via GetOrCreate on the first tool call.
+func (p *NodeClientPool) Alias(childSessionID, parentSessionID string) {
+	if childSessionID == "" || parentSessionID == "" {
+		return
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.closed {
+		return
+	}
+
+	parent, ok := p.clients[parentSessionID]
+	if !ok || parent == nil {
+		return
+	}
+
+	p.clients[childSessionID] = parent
 }
 
 // Remove stops the node for a session and removes it from the pool.
@@ -921,11 +957,30 @@ func (p *NodeClientPool) RestartNode(sessionID string) error {
 // session will create a container cloned from the new template. This is used by
 // the use_sandbox_template tool to switch a chat session from @base to a
 // project-specific template.
+//
+// IMPORTANT: If the session ID is an alias (e.g., a sub-agent sharing the
+// parent's container), ALL session IDs pointing to the same LazyNodeClient
+// are updated to the new client. Without this, the parent's pool entry would
+// be left pointing at the destroyed client while only the sub-agent gets the
+// new one (resulting in "lazy node client is closed" errors on the parent).
 func (p *NodeClientPool) ReplaceSession(sessionID, template string) error {
-	// Remove existing client from pool (outside cleanup lock to avoid deadlock)
+	// Remove existing client and find all aliases sharing the same pointer.
 	p.mu.Lock()
 	existing, hadExisting := p.clients[sessionID]
-	delete(p.clients, sessionID)
+
+	// Collect ALL session IDs that point to the same LazyNodeClient.
+	// This handles the aliasing case: sub-agent and parent share one client.
+	var aliasedIDs []string
+	if hadExisting && existing != nil {
+		for id, client := range p.clients {
+			if client == existing {
+				aliasedIDs = append(aliasedIDs, id)
+				delete(p.clients, id)
+			}
+		}
+	} else {
+		delete(p.clients, sessionID)
+	}
 	p.mu.Unlock()
 
 	// Tear down existing client — waits for init, destroys container + registry entry
@@ -943,7 +998,15 @@ func (p *NodeClientPool) ReplaceSession(sessionID, template string) error {
 
 	client := NewLazyNodeClient(p.incusClient, p.sessRegistry, p.tplRegistry, template, p.limits)
 	client.Env = p.env
+
+	// Point ALL previously-aliased session IDs to the new client.
+	// This ensures both the sub-agent AND the parent get the new container.
 	p.clients[sessionID] = client
+	for _, id := range aliasedIDs {
+		if id != sessionID {
+			p.clients[id] = client
+		}
+	}
 	return nil
 }
 

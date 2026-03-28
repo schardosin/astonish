@@ -924,11 +924,11 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 	}
 
 	// Wrap tools with sandbox node proxies. Replicate the excludedChildTools
-	// filter from SubAgentManager.filterTools() — tools in that set (opencode,
+	// filter from SubAgentManager.resolveTools() — tools in that set (opencode,
 	// delegate_tasks, etc.) come exclusively from FleetTools so they must be
-	// excluded from the base Tools slice to avoid duplicates.
+	// excluded from the base tools to avoid duplicates.
 	var baseTools []tool.Tool
-	for _, t := range subAgentMgr.Tools {
+	for _, t := range subAgentMgr.AllTools() {
 		if !agent.IsExcludedChildTool(t.Name()) {
 			baseTools = append(baseTools, t)
 		}

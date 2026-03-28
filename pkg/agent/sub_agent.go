@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -58,14 +59,14 @@ type SubAgentTask struct {
 	OnEvent func(event *adksession.Event)
 
 	// OverrideTools, when non-nil, replaces the tools that would normally be
-	// selected by filterTools(). This is used by fleet sessions to provide
+	// selected by resolveTools(). This is used by fleet sessions to provide
 	// sandbox-wrapped tool copies without mutating the global SubAgentManager
 	// singleton. The caller is responsible for applying any tool filter before
 	// setting this field.
 	OverrideTools []tool.Tool
 
 	// OverrideToolsets, when non-nil, replaces the MCP toolsets that would
-	// normally come from filterToolsets(). Used by fleet sessions to provide
+	// normally come from resolveTools(). Used by fleet sessions to provide
 	// sandbox-wired MCP toolset copies (with ContainerMCPTransport) that route
 	// MCP server processes through the fleet's container.
 	OverrideToolsets []tool.Toolset
@@ -86,13 +87,23 @@ type TaskResult struct {
 	Error     string          // Error message if Status != "success"
 }
 
+// ToolGroup defines a named group of tools that sub-agents can request.
+// The LLM references groups by name in the delegate_tasks tool's "tools" field
+// (e.g., ["core", "browser", "mcp:github"]). Groups can contain regular tools,
+// MCP toolsets, or both.
+type ToolGroup struct {
+	Name        string         // Group identifier (e.g., "core", "browser", "mcp:github")
+	Description string         // Human-readable description for system prompt guidance
+	Tools       []tool.Tool    // Regular tools in this group
+	Toolsets    []tool.Toolset // MCP toolsets in this group
+}
+
 // SubAgentManager orchestrates the execution of sub-agent tasks.
 type SubAgentManager struct {
 	// Parent context
 	LLM            model.LLM                    // Parent's LLM (used for children unless overridden)
-	Tools          []tool.Tool                  // All internal tools available
+	ToolGroups     map[string]*ToolGroup        // Named tool groups for sub-agent tool resolution
 	FleetTools     []tool.Tool                  // Fleet-only tools (e.g., run_fleet_phase) not in main agent's tool list
-	Toolsets       []tool.Toolset               // MCP toolsets
 	SessionService adksession.Service           // Session persistence
 	MemoryManager  *memory.Manager              // Memory manager for context injection (nil = disabled)
 	Compactor      *persistentsession.Compactor // Context window compactor for sub-agents (nil = disabled)
@@ -102,6 +113,29 @@ type SubAgentManager struct {
 
 	// Configuration
 	Config SubAgentConfig
+
+	// EventForwarder, when set, is called for each event produced by sub-agent
+	// runners spawned via delegate_tasks. It enables transparent delegation:
+	// events stream to the UI in real-time while the main LLM only receives
+	// a compact summary. Set by the launcher to ChatAgent.ForwardSubTaskEvent.
+	// Thread-safe: may be called from multiple sub-agent goroutines.
+	EventForwarder func(event *adksession.Event)
+
+	// OnChildSession, when set, is called after a sub-agent session is created
+	// but before the sub-agent starts running. It receives the parent and child
+	// session IDs. Used to alias the child session to the parent's sandbox
+	// container so sub-agents share the same container instead of creating new
+	// ones. Set by the launcher to NodeClientPool.Alias.
+	OnChildSession func(parentSessionID, childSessionID string)
+
+	// Tool discovery: ToolIndex enables sub-agents to auto-discover which tools
+	// they need based on the task description. When a sub-agent is created with
+	// an empty ToolFilter, the index is queried to find relevant tool groups.
+	ToolIndex *ToolIndex
+
+	// SearchToolsTool is injected into every sub-agent so it can discover
+	// additional tools mid-execution via explicit search.
+	SearchToolsTool tool.Tool
 
 	// Internal
 	sem chan struct{} // concurrency semaphore
@@ -118,7 +152,7 @@ var excludedChildTools = map[string]bool{
 }
 
 // IsExcludedChildTool returns true if the named tool is in the exclusion list.
-// Used by sandbox wrapping to replicate the same filtering as filterTools().
+// Used by sandbox wrapping to replicate the same filtering as resolveTools().
 func IsExcludedChildTool(name string) bool {
 	return excludedChildTools[name]
 }
@@ -199,16 +233,44 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		}
 	}
 
-	// Filter tools for the child
+	// Resolve tools for the child from requested groups/names
 	childTools := task.OverrideTools
+	var childToolsets []tool.Toolset
+	if task.OverrideToolsets != nil {
+		childToolsets = task.OverrideToolsets
+	}
+	var resolveWarnings []string
 	if childTools == nil {
-		childTools = m.filterTools(task.ToolFilter)
+		// If the parent specified tool groups, use those directly.
+		// If the parent specified nothing (empty ToolFilter), auto-discover
+		// tools using the ToolIndex based on the task description.
+		toolFilter := task.ToolFilter
+		if len(toolFilter) == 0 && m.ToolIndex != nil && task.Description != "" {
+			discoveredGroups := m.ToolIndex.SearchGroupsHybrid(
+				context.Background(), task.Description, 12, 0.005,
+			)
+			if len(discoveredGroups) > 0 {
+				toolFilter = discoveredGroups
+			}
+		}
+		childTools, childToolsets, resolveWarnings = m.resolveTools(toolFilter)
 	}
 
-	// Determine toolsets for the child
-	childToolsets := task.OverrideToolsets
-	if childToolsets == nil {
-		childToolsets = m.filterToolsets()
+	// Inject search_tools into every sub-agent so it can discover additional
+	// tools mid-execution if its initial set is insufficient.
+	if m.SearchToolsTool != nil {
+		childTools = append(childTools, m.SearchToolsTool)
+	}
+
+	// If tool resolution produced warnings AND resolved zero tools, fail early
+	// with a clear message so the calling LLM can self-correct.
+	if len(resolveWarnings) > 0 && len(childTools) == 0 && len(childToolsets) == 0 {
+		return TaskResult{
+			Name:     task.Name,
+			Status:   "error",
+			Error:    strings.Join(resolveWarnings, "; "),
+			Duration: time.Since(start),
+		}
 	}
 
 	// Build child system prompt: use custom prompt if set, otherwise build default
@@ -249,6 +311,12 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	// can derive phase/agent info from titles like "fleet-<fleet>-<phase>".
 	if fs, ok := m.SessionService.(*persistentsession.FileStore); ok {
 		_ = fs.SetSessionTitle(childSessionID, task.Name)
+	}
+
+	// Alias the child session to the parent's sandbox container so sub-agents
+	// share the same container instead of creating new ones.
+	if m.OnChildSession != nil && task.ParentID != "" {
+		m.OnChildSession(task.ParentID, childSessionID)
 	}
 
 	// Wire context compaction for sub-agents to prevent exceeding the context window
@@ -383,6 +451,11 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	finalOutput := strings.Join(outputParts, "")
 	trace.AppendOutput(finalOutput)
 
+	// Prepend any tool resolution warnings so the calling LLM sees them
+	if len(resolveWarnings) > 0 {
+		finalOutput = strings.Join(resolveWarnings, "\n") + "\n\n" + finalOutput
+	}
+
 	// Check if context was cancelled (timeout)
 	status := "success"
 	errMsg := ""
@@ -402,54 +475,134 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	}
 }
 
-// filterTools returns tools allowed for sub-agents, excluding dangerous ones
-// and optionally filtering to a specific set.
-// When an allow list is specified, tools are drawn from both Tools and FleetTools.
-// Fleet tools are only accessible via explicit allow list (they are in excludedChildTools
-// so they are always excluded from the default "all tools" path).
-func (m *SubAgentManager) filterTools(allowList []string) []tool.Tool {
-	allowSet := make(map[string]bool, len(allowList))
-	for _, name := range allowList {
-		allowSet[name] = true
+// resolveTools resolves the requested tool names/groups into concrete tools
+// and toolsets for a sub-agent. Each name in the request can be:
+//   - A group name (e.g., "core", "browser", "mcp:github") → expands to all tools/toolsets in that group
+//   - An individual tool name (e.g., "grep_search") → includes that specific tool
+//
+// If the request is empty, the sub-agent gets ZERO tools (callers must be explicit).
+// Excluded tools (delegate_tasks, memory_save, etc.) are always removed unless
+// the tool comes from FleetTools via explicit allow-list.
+func (m *SubAgentManager) resolveTools(request []string) ([]tool.Tool, []tool.Toolset, []string) {
+	if len(request) == 0 {
+		return nil, nil, nil
 	}
 
-	var filtered []tool.Tool
-
-	// Search main tools
-	for _, t := range m.Tools {
-		name := t.Name()
-
-		// Always exclude dangerous tools (unless explicitly allowed AND tool is in FleetTools)
-		if excludedChildTools[name] {
-			continue
+	// Separate group names from individual tool names
+	var groupNames []string
+	individualNames := make(map[string]bool)
+	var unknownGroups []string
+	for _, name := range request {
+		if _, isGroup := m.ToolGroups[name]; isGroup {
+			groupNames = append(groupNames, name)
+		} else {
+			individualNames[name] = true
 		}
-
-		// If allow list specified, only include those tools
-		if len(allowSet) > 0 && !allowSet[name] {
-			continue
-		}
-
-		filtered = append(filtered, t)
 	}
 
-	// If an allow list is specified, also search FleetTools for requested tools.
-	// This allows the orchestrator to get run_fleet_phase via its tool filter
-	// even though it's in excludedChildTools for the main tools path.
-	if len(allowSet) > 0 {
+	// Collect tools and toolsets from requested groups
+	seen := make(map[string]bool) // dedup by tool name
+	var resultTools []tool.Tool
+	var resultToolsets []tool.Toolset
+
+	for _, gName := range groupNames {
+		g := m.ToolGroups[gName]
+		for _, t := range g.Tools {
+			name := t.Name()
+			if excludedChildTools[name] || seen[name] {
+				continue
+			}
+			seen[name] = true
+			resultTools = append(resultTools, t)
+		}
+		resultToolsets = append(resultToolsets, g.Toolsets...)
+	}
+
+	// Resolve individual tool names by searching all groups
+	if len(individualNames) > 0 {
+		for _, g := range m.ToolGroups {
+			for _, t := range g.Tools {
+				name := t.Name()
+				if !individualNames[name] || excludedChildTools[name] || seen[name] {
+					continue
+				}
+				seen[name] = true
+				resultTools = append(resultTools, t)
+			}
+		}
+		// Also search FleetTools for individually requested tools
+		// (fleet tools are only accessible via explicit request)
 		for _, t := range m.FleetTools {
 			name := t.Name()
-			if allowSet[name] {
-				filtered = append(filtered, t)
+			if individualNames[name] && !seen[name] {
+				seen[name] = true
+				resultTools = append(resultTools, t)
+			}
+		}
+
+		// Check for individual names that didn't resolve to any tool —
+		// these are likely misspelled group names (e.g., "drills" instead of "drill").
+		for name := range individualNames {
+			if !seen[name] && !excludedChildTools[name] {
+				unknownGroups = append(unknownGroups, name)
 			}
 		}
 	}
 
-	return filtered
+	// Build warnings for unresolved names
+	var warnings []string
+	if len(unknownGroups) > 0 {
+		sort.Strings(unknownGroups)
+		available := make([]string, 0, len(m.ToolGroups))
+		for gName := range m.ToolGroups {
+			available = append(available, gName)
+		}
+		sort.Strings(available)
+		warnings = append(warnings, fmt.Sprintf(
+			"WARNING: unknown tool group(s) or tool name(s): %v — not found in any group. Available groups: %v",
+			unknownGroups, available,
+		))
+	}
+
+	return resultTools, resultToolsets, warnings
 }
 
-// filterToolsets returns toolsets for sub-agents (passes through all MCP toolsets).
-func (m *SubAgentManager) filterToolsets() []tool.Toolset {
-	return m.Toolsets
+// AllTools returns all tools from all groups (used for SELF.md generation and flow distillation).
+func (m *SubAgentManager) AllTools() []tool.Tool {
+	seen := make(map[string]bool)
+	var all []tool.Tool
+	for _, g := range m.ToolGroups {
+		for _, t := range g.Tools {
+			if !seen[t.Name()] {
+				seen[t.Name()] = true
+				all = append(all, t)
+			}
+		}
+	}
+	return all
+}
+
+// AllToolsets returns all toolsets from all groups (used for SELF.md generation and flow distillation).
+func (m *SubAgentManager) AllToolsets() []tool.Toolset {
+	var all []tool.Toolset
+	for _, g := range m.ToolGroups {
+		all = append(all, g.Toolsets...)
+	}
+	return all
+}
+
+// AvailableGroups returns summaries of all tool groups for system prompt generation.
+// Returns groups sorted by name for deterministic output.
+func (m *SubAgentManager) AvailableGroups() []*ToolGroup {
+	groups := make([]*ToolGroup, 0, len(m.ToolGroups))
+	for _, g := range m.ToolGroups {
+		groups = append(groups, g)
+	}
+	// Sort by name for deterministic output
+	sort.Slice(groups, func(i, j int) bool {
+		return groups[i].Name < groups[j].Name
+	})
+	return groups
 }
 
 // buildChildPrompt constructs the system prompt for a sub-agent.
@@ -478,9 +631,9 @@ func (m *SubAgentManager) buildChildPrompt(task SubAgentTask) string {
 	sb.WriteString("- If you encounter an error, report it clearly in your response.\n")
 
 	// Tool-specific operational guidance based on what tools the child actually has
-	childTools := m.filterTools(task.ToolFilter)
-	childToolSet := make(map[string]bool, len(childTools))
-	for _, t := range childTools {
+	resolvedTools, _, _ := m.resolveTools(task.ToolFilter)
+	childToolSet := make(map[string]bool, len(resolvedTools))
+	for _, t := range resolvedTools {
 		childToolSet[t.Name()] = true
 	}
 

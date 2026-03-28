@@ -73,6 +73,13 @@ func (s *Store) SetIndexer(idx *Indexer) {
 	s.indexer = idx
 }
 
+// DB returns the underlying chromem-go database instance.
+// This allows creating additional collections on the same DB (e.g., a dedicated
+// tool index collection) while sharing the same persistence directory.
+func (s *Store) DB() *chromem.DB {
+	return s.db
+}
+
 // SearchResult represents a single search hit.
 type SearchResult struct {
 	Path      string  `json:"path"`

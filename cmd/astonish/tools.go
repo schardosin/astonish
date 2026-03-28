@@ -8,15 +8,19 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/mcpstore"
+	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
@@ -46,6 +50,8 @@ func handleToolsCommand(args []string) error {
 	switch args[0] {
 	case "list":
 		return handleToolsListCommand(args[1:])
+	case "search":
+		return handleToolsSearchCommand(args[1:])
 	case "edit":
 		return handleToolsEditCommand()
 	case "store":
@@ -64,12 +70,13 @@ func handleToolsCommand(args []string) error {
 }
 
 func printToolsUsage() {
-	fmt.Println("usage: astonish tools [-h] {list,edit,store,servers,enable,disable,refresh} ...")
+	fmt.Println("usage: astonish tools [-h] {list,search,edit,store,servers,enable,disable,refresh} ...")
 	fmt.Println("")
 	fmt.Println("positional arguments:")
-	fmt.Println("  {list,edit,store,servers,enable,disable,refresh}")
+	fmt.Println("  {list,search,edit,store,servers,enable,disable,refresh}")
 	fmt.Println("                        Tools management commands")
 	fmt.Println("    list                List available tools (internal + MCP)")
+	fmt.Println("    search <query>      Semantic search across the tool index (use '*' to list all)")
 	fmt.Println("    edit                Edit MCP configuration")
 	fmt.Println("    store               Browse and install MCP servers from the store")
 	fmt.Println("    servers             List MCP servers with their enabled/disabled status")
@@ -818,4 +825,238 @@ func handleToolsRefreshCommand(args []string) error {
 	fmt.Println()
 
 	return nil
+}
+
+// handleToolsSearchCommand performs a semantic search across the tool index.
+// This is a diagnostic command that mirrors how the chat agent discovers tools,
+// allowing users to verify tool index behavior, check similarity scores, and
+// diagnose tool discovery issues.
+func handleToolsSearchCommand(args []string) error {
+	searchCmd := flag.NewFlagSet("search", flag.ExitOnError)
+	maxResults := searchCmd.Int("max-results", 10, "Maximum number of results")
+	minScore := searchCmd.Float64("min-score", 0, "Minimum similarity score 0.0-1.0 (default: 0 = show all)")
+	verbose := searchCmd.Bool("verbose", false, "Show debug output")
+	searchCmd.Parse(args)
+
+	remaining := searchCmd.Args()
+	if len(remaining) == 0 {
+		fmt.Println("usage: astonish tools search [--max-results N] [--min-score F] [--verbose] <query>")
+		fmt.Println("")
+		fmt.Println("Semantic search across the tool index. Shows which tools match a query")
+		fmt.Println("and their similarity scores — the same search the chat agent performs.")
+		fmt.Println("")
+		fmt.Println("Use '*' or 'all' to list every indexed tool.")
+		fmt.Println("")
+		fmt.Println("examples:")
+		fmt.Println("  astonish tools search 'activate container'")
+		fmt.Println("  astonish tools search --min-score 0.1 'take a screenshot'")
+		fmt.Println("  astonish tools search '*'")
+		return fmt.Errorf("no search query provided")
+	}
+
+	query := strings.Join(remaining, " ")
+
+	// --- Initialize embedding function ---
+	fmt.Printf("Initializing embedding model...\n")
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	memCfg := &appCfg.Memory
+	if !memCfg.IsMemoryEnabled() {
+		return fmt.Errorf("memory system is disabled — tool index requires memory.enabled: true in config.yaml")
+	}
+
+	vecDir, err := config.GetVectorDir(memCfg)
+	if err != nil {
+		return fmt.Errorf("failed to resolve vector directory: %w", err)
+	}
+
+	var embGetSecret config.SecretGetter
+	if cfgDir, err := config.GetConfigDir(); err == nil {
+		if store, err := credentials.Open(cfgDir); err == nil {
+			embGetSecret = store.GetSecret
+		}
+	}
+	embResult, err := memory.ResolveEmbeddingFunc(appCfg, memCfg, *verbose, embGetSecret)
+	if err != nil {
+		return fmt.Errorf("failed to initialize embedder: %w", err)
+	}
+	if embResult.Cleanup != nil {
+		defer embResult.Cleanup()
+	}
+
+	// --- Open the persistent DB (same as memory store uses) ---
+	storeCfg := memory.DefaultStoreConfig()
+	storeCfg.VectorDir = vecDir
+	store, err := memory.NewStore(storeCfg, embResult.EmbeddingFunc)
+	if err != nil {
+		return fmt.Errorf("failed to open vector store: %w", err)
+	}
+
+	// --- Create tool index on the shared DB ---
+	toolIndex, err := agent.NewToolIndex(store.DB(), embResult.EmbeddingFunc)
+	if err != nil {
+		return fmt.Errorf("failed to create tool index: %w", err)
+	}
+
+	// --- Gather tools ---
+	ctx := context.Background()
+	minCtx := &minimalReadonlyContext{Context: ctx}
+
+	// Internal tools
+	internalTools, err := tools.GetInternalTools()
+	if err != nil {
+		return fmt.Errorf("failed to get internal tools: %w", err)
+	}
+
+	// Build tool groups: main thread + groups for MCP servers
+	var mainThreadTools []tool.Tool
+	var toolGroups []*agent.ToolGroup
+
+	// All internal tools go into a single "internal" group for indexing
+	for _, t := range internalTools {
+		mainThreadTools = append(mainThreadTools, t)
+	}
+
+	// MCP tools
+	mcpManager, mcpErr := mcp.NewManager()
+	if mcpErr == nil {
+		if initErr := mcpManager.InitializeToolsets(ctx); initErr == nil {
+			namedToolsets := mcpManager.GetNamedToolsets()
+			for _, nt := range namedToolsets {
+				mcpTools, err := nt.Toolset.Tools(minCtx)
+				if err != nil {
+					if *verbose {
+						fmt.Printf("  Warning: Failed to get tools from MCP server %s: %v\n", nt.Name, err)
+					}
+					continue
+				}
+				groupName := "mcp:" + nt.Name
+				group := &agent.ToolGroup{
+					Name:        groupName,
+					Description: fmt.Sprintf("MCP server: %s", nt.Name),
+					Tools:       mcpTools,
+				}
+				toolGroups = append(toolGroups, group)
+			}
+		}
+		defer mcpManager.Cleanup()
+	}
+
+	// --- Sync tools into the index ---
+	fmt.Printf("Syncing tools to index...\n")
+	start := time.Now()
+	if err := toolIndex.SyncTools(ctx, mainThreadTools, toolGroups); err != nil {
+		return fmt.Errorf("failed to sync tools: %w", err)
+	}
+	syncTime := time.Since(start)
+	fmt.Printf("Indexed %d tools in %s.\n\n", toolIndex.Count(), syncTime.Round(time.Millisecond))
+
+	if toolIndex.Count() == 0 {
+		fmt.Println("Tool index is empty — no tools were indexed.")
+		return nil
+	}
+
+	// --- Handle list-all mode ---
+	isListAll := query == "*" || query == "all" || query == "list all"
+	if isListAll {
+		groups := toolIndex.ListAll()
+		groupNames := make([]string, 0, len(groups))
+		for g := range groups {
+			groupNames = append(groupNames, g)
+		}
+		sort.Strings(groupNames)
+
+		total := 0
+		for _, gName := range groupNames {
+			tools := groups[gName]
+			total += len(tools)
+			label := gName
+			if gName == "_main" {
+				label = "main thread (call directly)"
+			} else {
+				label = fmt.Sprintf("%s (delegate_tasks with tools: [\"%s\"])", gName, gName)
+			}
+			fmt.Printf("  %s (%d tools)\n", label, len(tools))
+			for _, m := range tools {
+				desc := truncateToolDesc(m.Description, 80)
+				fmt.Printf("    %-35s %s\n", m.ToolName, desc)
+			}
+			fmt.Println()
+		}
+		fmt.Printf("Total: %d tools across %d groups\n", total, len(groups))
+		return nil
+	}
+
+	// --- Semantic search ---
+	fmt.Printf("Searching for: %q\n\n", query)
+
+	// Use minScore 0 to show ALL results with their scores (diagnostic mode)
+	searchMinScore := *minScore
+	matches, err := toolIndex.SearchHybrid(ctx, query, *maxResults, searchMinScore)
+	if err != nil {
+		fmt.Printf("ERROR: search failed: %v\n", err)
+		return fmt.Errorf("search failed: %w", err)
+	}
+	if *verbose {
+		fmt.Printf("[debug] Hybrid search returned %d matches (minScore=%.4f)\n", len(matches), searchMinScore)
+	}
+
+	if len(matches) == 0 {
+		fmt.Printf("No matches found for: %q\n", query)
+		if searchMinScore > 0 {
+			fmt.Printf("Tip: Try --min-score 0 to see all results regardless of score.\n")
+		} else {
+			fmt.Println("This means the tool index is empty or the query produced no cosine similarity above 0.")
+			fmt.Println("Check that the embedding model is working correctly.")
+		}
+		return nil
+	}
+
+	fmt.Printf("Found %d result(s):\n\n", len(matches))
+
+	for i, m := range matches {
+		access := fmt.Sprintf("delegate_tasks with tools: [\"%s\"]", m.GroupName)
+		if m.IsMainTool {
+			access = "call directly (main thread)"
+		}
+		desc := truncateToolDesc(m.Description, 100)
+		fmt.Printf("  %d. [%.4f] %s (%s)\n", i+1, m.Score, m.ToolName, m.GroupName)
+		fmt.Printf("     %s\n", desc)
+		fmt.Printf("     Access: %s\n", access)
+		if i < len(matches)-1 {
+			fmt.Println()
+		}
+	}
+
+	// Show threshold summary
+	fmt.Println()
+	if len(matches) > 0 {
+		topScore := matches[0].Score
+		botScore := matches[len(matches)-1].Score
+		fmt.Printf("Score range: %.4f - %.4f (RRF scores, max possible ~0.0328)\n", botScore, topScore)
+		fmt.Printf("Hybrid search threshold (prompt injection, search_tools, sub-agent): 0.005\n")
+		aboveThreshold := 0
+		for _, m := range matches {
+			if m.Score >= 0.005 {
+				aboveThreshold++
+			}
+		}
+		fmt.Printf("Results above threshold: %d\n", aboveThreshold)
+	}
+
+	return nil
+}
+
+// truncateToolDesc shortens a tool description for display.
+func truncateToolDesc(s string, maxLen int) string {
+	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+		s = s[:idx]
+	}
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }

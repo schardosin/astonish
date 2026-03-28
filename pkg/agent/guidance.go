@@ -19,6 +19,7 @@ var GuidanceDocs = map[string]string{
 	"process-management":    guidanceProcessManagement,
 	"web-access":            guidanceWebAccess,
 	"memory-usage":          guidanceMemoryUsage,
+	"sandbox-templates":     guidanceSandboxTemplates,
 }
 
 // SyncGuidanceToMemory writes guidance docs to memory/guidance/.

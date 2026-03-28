@@ -418,6 +418,58 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		SendSSE(w, flusher, eventType, data)
 	}
 
+	// Wire transparent sub-agent streaming: sub-agent events are forwarded
+	// to the Studio UI in real-time via UIEventCallback. The main LLM only
+	// receives a compact summary (DelegateTasksResult), but the user sees
+	// every tool call, result, and image as if the main thread did the work.
+	chatAgent.UIEventCallback = func(event *session.Event) {
+		if event == nil {
+			return
+		}
+		if event.LLMResponse.Content == nil {
+			return
+		}
+		for _, part := range event.LLMResponse.Content.Parts {
+			if part.Text != "" && !part.Thought {
+				safeSendSSE("text", map[string]interface{}{
+					"text": part.Text,
+				})
+			}
+			if part.FunctionCall != nil {
+				args := part.FunctionCall.Args
+				if chatAgent.Redactor != nil && args != nil {
+					args = chatAgent.Redactor.RedactMap(args)
+				}
+				safeSendSSE("tool_call", map[string]interface{}{
+					"name": part.FunctionCall.Name,
+					"args": args,
+				})
+			}
+			if part.FunctionResponse != nil {
+				resp := part.FunctionResponse.Response
+				if chatAgent.Redactor != nil && resp != nil {
+					resp = chatAgent.Redactor.RedactMap(resp)
+				}
+				safeSendSSE("tool_result", map[string]interface{}{
+					"name":   part.FunctionResponse.Name,
+					"result": summarizeToolResult(resp),
+				})
+				// Drain images stashed by ForwardSubTaskEvent's extractAndStripImages
+				for _, img := range chatAgent.DrainImages() {
+					mimeType := "image/png"
+					if img.Format == "jpeg" || img.Format == "jpg" {
+						mimeType = "image/jpeg"
+					}
+					safeSendSSE("image", map[string]interface{}{
+						"data":     base64.StdEncoding.EncodeToString(img.Data),
+						"mimeType": mimeType,
+					})
+				}
+			}
+		}
+	}
+	defer func() { chatAgent.UIEventCallback = nil }()
+
 	// Run the agent and stream events
 	for event, runErr := range rnr.Run(ctx, studioChatUserID, sessionID, userMsg, adkagent.RunConfig{
 		StreamingMode: adkagent.StreamingModeSSE,

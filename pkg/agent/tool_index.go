@@ -97,6 +97,18 @@ func NewToolIndex(db *chromem.DB, embeddingFunc chromem.EmbeddingFunc) (*ToolInd
 	}, nil
 }
 
+// SortedGroups returns tool groups sorted by name for deterministic output.
+func SortedGroups(groups map[string]*ToolGroup) []*ToolGroup {
+	sorted := make([]*ToolGroup, 0, len(groups))
+	for _, g := range groups {
+		sorted = append(sorted, g)
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Name < sorted[j].Name
+	})
+	return sorted
+}
+
 // SyncTools indexes all tools from main-thread tools and tool groups.
 // Each tool becomes a single document: "{tool_name}: {tool_description}"
 // with metadata for group_name and tool_name.

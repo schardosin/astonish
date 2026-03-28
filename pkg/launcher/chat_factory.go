@@ -1243,20 +1243,6 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 	}
 
-	// Sync tool reference docs to memory for vector indexing.
-	// Each tool group gets a markdown file describing its tools so semantic
-	// search can find the right tool/group when the user mentions a capability.
-	if memDir != "" {
-		sortedGroups := agent.SortedGroups(toolGroups)
-		if syncErr := agent.SyncToolsToMemory(memDir, mainThreadTools, sortedGroups); syncErr != nil {
-			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to sync tool docs: %v\n", syncErr)
-			}
-		} else if cfg.DebugMode {
-			fmt.Printf("Synced tool reference docs to memory/tools-ref/\n")
-		}
-	}
-
 	// Create the dedicated tool index for retrieval-based tool discovery.
 	// One document per tool (name + description) enables accurate semantic
 	// search without the chunking problems of the general memory store.

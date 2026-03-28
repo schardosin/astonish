@@ -726,6 +726,18 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		var toolSearchQuery string
 		if c.ToolIndex != nil && userText != "" {
 			toolSearchQuery = buildKnowledgeQuery(userText)
+			// For short messages ("looks good", "use it", "yes"), the user text
+			// alone lacks topical signal for tool discovery. Augment the query
+			// with the tail of the last LLM response, which typically contains
+			// the question or action prompt that gives us context.
+			if len(toolSearchQuery) < shortQueryThreshold {
+				if tail := lastModelResponseTail(ctx.Session().Events(), 200); tail != "" {
+					toolSearchQuery = tail + " " + toolSearchQuery
+					if c.DebugMode {
+						fmt.Printf("[Chat DEBUG] Short message — augmented tool search query with LLM context\n")
+					}
+				}
+			}
 			if len(toolSearchQuery) >= 5 {
 				matches, err := c.ToolIndex.SearchHybrid(context.Background(), toolSearchQuery, 8, 0.005)
 				if err != nil {
@@ -1612,6 +1624,79 @@ func buildKnowledgeQuery(userText string) string {
 	// Collapse whitespace
 	q = strings.Join(strings.Fields(q), " ")
 	return q
+}
+
+// shortQueryThreshold is the maximum character length for a user message to
+// be considered "short" — i.e., lacking enough context for accurate tool
+// discovery. When the cleaned query is shorter than this, we augment it
+// with the tail of the last LLM response to provide topical context.
+// Examples: "looks good" (10), "use it" (6), "go for it" (9), "yes" (3).
+const shortQueryThreshold = 40
+
+// lastModelResponseTail extracts the trailing text from the last model
+// response in the session event history. This provides topical context
+// when the user's message is too short to be meaningful for search
+// (e.g., "looks good", "use it"). The tail is where the LLM's question
+// or action prompt typically lives (e.g., "shall I proceed with the
+// fleet plan?"), which carries the semantic signal we need.
+//
+// Returns at most maxLen characters from the end of the combined model
+// text parts. Returns "" if no model response is found.
+func lastModelResponseTail(events session.Events, maxLen int) string {
+	if events == nil {
+		return ""
+	}
+	// Walk backwards to find the last model content event.
+	// Model responses may be split across multiple streaming events
+	// (each with a small text fragment). We want the last *complete*
+	// response, which is the contiguous sequence of model events
+	// ending at the most recent model event before the user's message.
+	n := events.Len()
+	var textParts []string
+	foundModel := false
+	for i := n - 1; i >= 0; i-- {
+		ev := events.At(i)
+		if ev.Author == "user" {
+			if foundModel {
+				break // we've collected all model parts before this user message
+			}
+			continue // skip user events before we find model events
+		}
+		if ev.Author != "chat" {
+			if foundModel {
+				break // non-model, non-user event after finding model text
+			}
+			continue
+		}
+		// It's a model event — extract text parts
+		if ev.Content != nil {
+			for _, part := range ev.Content.Parts {
+				if part.Text != "" {
+					textParts = append(textParts, part.Text)
+					foundModel = true
+				}
+			}
+		}
+	}
+	if len(textParts) == 0 {
+		return ""
+	}
+	// textParts are in reverse order (we walked backwards), reverse them
+	for i, j := 0, len(textParts)-1; i < j; i, j = i+1, j-1 {
+		textParts[i], textParts[j] = textParts[j], textParts[i]
+	}
+	full := strings.Join(textParts, "")
+	// Take the tail — the question/prompt is usually at the end
+	if len(full) > maxLen {
+		full = full[len(full)-maxLen:]
+	}
+	// Strip markdown formatting noise
+	full = strings.ReplaceAll(full, "**", "")
+	full = strings.ReplaceAll(full, "```", "")
+	full = strings.ReplaceAll(full, "#", "")
+	// Collapse whitespace
+	full = strings.Join(strings.Fields(full), " ")
+	return full
 }
 
 // extractFlowFromResults scans knowledge search results for flow documents.

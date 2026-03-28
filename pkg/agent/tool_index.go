@@ -102,8 +102,9 @@ func NewToolIndex(db *chromem.DB, embeddingFunc chromem.EmbeddingFunc) (*ToolInd
 // with metadata for group_name and tool_name.
 //
 // This is called at startup and whenever tool groups change.
-// It performs a full re-index (delete all, re-add) to keep things simple
-// since the tool count is small (~90 tools, takes <2s).
+// It performs an incremental sync: only tools with new or changed content
+// are re-embedded. Unchanged tools reuse their persisted embeddings,
+// making restarts near-instant when the tool set hasn't changed.
 func (idx *ToolIndex) SyncTools(ctx context.Context, mainTools []tool.Tool, groups []*ToolGroup) error {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
@@ -194,24 +195,17 @@ func (idx *ToolIndex) SyncTools(ctx context.Context, mainTools []tool.Tool, grou
 		}
 	}
 
-	// Reset the collection: delete all existing docs, then add new ones.
-	// chromem-go doesn't have a "reset" method, so we delete by IDs.
-	// For small collections (<200 docs), this is fast.
-	if idx.collection.Count() > 0 {
-		// Get all existing doc IDs by querying with a dummy — but chromem-go
-		// doesn't support listing all IDs. Instead, we rebuild by deleting
-		// the collection and recreating it. Since we hold the lock, this is safe.
-		//
-		// Actually, chromem-go's Delete with nil where/whereDoc and no IDs would
-		// be a no-op. We need to track IDs ourselves or use a different approach.
-		//
-		// Simplest: delete docs by the IDs we know from the registry.
-		// But we don't have old IDs. Let's just add with upsert semantics —
-		// chromem-go's AddDocuments replaces docs with the same ID.
-		// New tools get new IDs, old tools with same name get same ID (overwritten).
-		// Orphaned tools (removed groups) stay as stale docs until next restart.
-		//
-		// For correctness, let's track the IDs we've added and delete orphans.
+	// Incremental sync: only embed tools whose content has changed.
+	// On a typical restart where tools haven't changed, this skips all
+	// embedding calls — the only cost is GetByID lookups against the
+	// in-memory map (nanoseconds per tool).
+	var toEmbed []chromem.Document
+	for _, doc := range docs {
+		existing, err := idx.collection.GetByID(ctx, doc.ID)
+		if err == nil && existing.Content == doc.Content {
+			continue // already embedded with same content
+		}
+		toEmbed = append(toEmbed, doc)
 	}
 
 	if len(docs) == 0 {
@@ -220,9 +214,11 @@ func (idx *ToolIndex) SyncTools(ctx context.Context, mainTools []tool.Tool, grou
 		return nil
 	}
 
-	// AddDocuments with concurrency=4 for embedding
-	if err := idx.collection.AddDocuments(ctx, docs, 4); err != nil {
-		return fmt.Errorf("failed to index tools: %w", err)
+	if len(toEmbed) > 0 {
+		// Only embed the new/changed documents (concurrency=4)
+		if err := idx.collection.AddDocuments(ctx, toEmbed, 4); err != nil {
+			return fmt.Errorf("failed to index tools: %w", err)
+		}
 	}
 
 	// Build BM25 inverted index from the same documents.

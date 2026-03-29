@@ -1670,11 +1670,15 @@ agents:
          run_drill(suite_name: "<suite>", test_name: "<drill-name>")
          ```
          This runs ONLY the new drill (not the full suite), so you get fast
-         feedback. Fix any failures before moving to the next drill.
+         feedback. `run_drill` automatically starts services (setup) and
+         waits for them (ready_check) — do NOT manually start services
+         before calling it. Fix any failures before moving to the next drill.
 
       ## Phase 4: Run full regression
 
-      After creating new drills, run the entire suite to verify everything:
+      After creating new drills, run the entire suite to verify everything.
+      `run_drill` handles setup/ready_check/teardown automatically — you
+      do NOT need to start or stop services yourself.
 
       1. Call `run_drill` with the suite name.
       2. **If NEW drills fail:** Investigate — is it a code bug or a drill
@@ -1718,6 +1722,11 @@ agents:
         presence, page content. If `.active` class is added to a button,
         the user does not see that — they see the button text or the
         resulting content change.
+      - Do NOT manually start services before calling `run_drill`. The
+        drill runner reads the suite's `setup`/`ready_check`/`teardown`
+        commands and executes them automatically. If you start services
+        yourself, they may conflict with the runner's own startup or use
+        wrong ports/paths.
 
 settings:
   max_turns_per_agent: 20

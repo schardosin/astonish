@@ -69,9 +69,10 @@ func newRunDrillToolFromDeps(deps *runDrillDeps) (tool.Tool, error) {
 
 	return functiontool.New(functiontool.Config{
 		Name: "run_drill",
-		Description: "Run a deterministic drill suite. Drills execute in the current sandbox container " +
-			"(if sandbox is active) or locally on the host. Shell and file tool steps are routed " +
-			"into the container; browser tool steps run on the host. " +
+		Description: "Run a deterministic drill suite (or a single drill with test_name). " +
+			"Automatically handles setup, ready_check, and teardown from the suite config — " +
+			"do NOT manually start services before calling this tool. " +
+			"Shell and file tool steps are routed into the sandbox container; browser tool steps run on the host. " +
 			"Returns the full report with pass/fail status for each drill and step.",
 	}, fn)
 }

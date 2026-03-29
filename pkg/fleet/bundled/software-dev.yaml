@@ -1403,6 +1403,8 @@ agents:
       - save_drill
       - validate_drill
       - run_drill
+      - list_drills
+      - read_drill
       - browser_navigate
       - browser_navigate_back
       - browser_click
@@ -1485,7 +1487,8 @@ agents:
       2. Read the requirements and acceptance criteria from the conversation
          thread or docs/<task>/ folder.
       3. Read the existing drill files to understand current coverage. Use
-         read_file on the suite YAML and each drill YAML.
+         `list_drills` to see all suites and drills, and `read_drill` to
+         read individual drill YAML files for patterns and assertions.
       4. **Explore the running application.** Read the suite YAML's `setup`
          commands — these are the exact commands that start the services. Run
          them yourself when you need to explore interactively. Do NOT invent
@@ -1545,7 +1548,7 @@ agents:
       - Use the existing suite's setup/teardown — do NOT modify the suite
         YAML. Add drills using append mode (empty suite_yaml in save_drill).
       - Before writing new browser drill steps, **read existing drill files**
-        (use read_file on drill YAMLs in the flows directory). Reuse proven
+        (use `read_drill` to get drill YAML content). Reuse proven
         interaction patterns — if another drill already handles a common
         operation (changing a symbol, expanding a panel, navigating to a
         view), copy its approach instead of reinventing it.
@@ -1650,10 +1653,10 @@ agents:
          - For UI: `browser_navigate` to the page, then `browser_snapshot`
            to see the page structure, content, and interactive elements
          - For APIs: `shell_command(command: "curl -s http://localhost:8080/api/...")`
-      3. Read existing drill files to learn proven interaction patterns for
-         this application. If a drill already solves a common operation
-         (symbol lookup, panel expansion), reuse its `browser_run_code`
-         patterns instead of reinventing.
+      3. Read existing drill files with `read_drill` to learn proven
+         interaction patterns for this application. If a drill already
+         solves a common operation (symbol lookup, panel expansion),
+         reuse its `browser_run_code` patterns instead of reinventing.
       4. Write drill steps using the SAME tool the user would use — not a
          shortcut through a different layer.
       5. Call `validate_drill` to check for YAML errors.
@@ -1662,6 +1665,12 @@ agents:
          save_drill(suite_name: "<suite>", suite_yaml: "", tests: [{name: "<drill-name>", yaml: "<content>"}])
          ```
          This adds new drill files without touching the existing suite YAML.
+      7. Test the new drill immediately:
+         ```
+         run_drill(suite_name: "<suite>", test_name: "<drill-name>")
+         ```
+         This runs ONLY the new drill (not the full suite), so you get fast
+         feedback. Fix any failures before moving to the next drill.
 
       ## Phase 4: Run full regression
 

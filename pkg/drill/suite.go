@@ -183,6 +183,16 @@ func validateAssert(nodeName string, assert *config.AssertConfig) error {
 	return nil
 }
 
+// FilterTestByName returns the test matching the given name, or nil if not found.
+func FilterTestByName(tests []LoadedTest, name string) *LoadedTest {
+	for _, test := range tests {
+		if test.Name == name {
+			return &test
+		}
+	}
+	return nil
+}
+
 // FilterTestsByTag returns tests that have at least one of the specified tags.
 func FilterTestsByTag(tests []LoadedTest, tags []string) []LoadedTest {
 	if len(tags) == 0 {

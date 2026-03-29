@@ -20,6 +20,7 @@ import (
 // RunDrillArgs are the arguments for the run_drill tool.
 type RunDrillArgs struct {
 	SuiteName string `json:"suite_name" jsonschema:"Name of the drill suite to run (without .yaml extension)"`
+	TestName  string `json:"test_name,omitempty" jsonschema:"Run a single drill by name instead of the full suite. The drill must belong to the specified suite."`
 	Tag       string `json:"tag,omitempty" jsonschema:"Filter drills by tag (comma-separated)"`
 	Verbose   bool   `json:"verbose,omitempty" jsonschema:"Show verbose output including setup logs"`
 	Force     bool   `json:"force,omitempty" jsonschema:"Run on the current container even if its template doesn't match the suite's required template. Use after the user declines a template switch."`
@@ -147,6 +148,19 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 				Report:  fmt.Sprintf("Suite: %s\nNo tests matched tags: %s\n", suiteName, args.Tag),
 			}, nil
 		}
+	}
+
+	// Filter to a single test by name if requested
+	if args.TestName != "" {
+		testName := strings.TrimSuffix(strings.TrimSuffix(args.TestName, ".yaml"), ".yml")
+		match := adrill.FilterTestByName(tests, testName)
+		if match == nil {
+			return RunDrillResult{
+				Status:  "error",
+				Summary: fmt.Sprintf("Test %q not found in suite %q", testName, suiteName),
+			}, nil
+		}
+		tests = []adrill.LoadedTest{*match}
 	}
 
 	if len(tests) == 0 {

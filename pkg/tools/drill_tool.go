@@ -613,7 +613,163 @@ func deleteDrill(_ tool.Context, args DeleteDrillArgs) (DeleteDrillResult, error
 	}, nil
 }
 
-// GetDrillTools returns the save_drill, validate_drill, and delete_drill tools.
+// ListDrillsArgs are the arguments for the list_drills tool.
+type ListDrillsArgs struct {
+	SuiteName string `json:"suite_name,omitempty" jsonschema:"Optional: list drills in a specific suite. If omitted, lists all suites and their drills."`
+}
+
+// ListDrillsResult is the result of the list_drills tool.
+type ListDrillsResult struct {
+	Status  string           `json:"status"` // "ok" or "error"
+	Suites  []DrillSuiteInfo `json:"suites,omitempty"`
+	Message string           `json:"message,omitempty"`
+}
+
+// DrillSuiteInfo describes a suite and its drills for listing.
+type DrillSuiteInfo struct {
+	Name        string      `json:"name"`
+	Description string      `json:"description,omitempty"`
+	Template    string      `json:"template,omitempty"`
+	DrillCount  int         `json:"drill_count"`
+	Drills      []DrillInfo `json:"drills,omitempty"`
+}
+
+// DrillInfo describes a single drill for listing.
+type DrillInfo struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	StepCount   int      `json:"step_count"`
+}
+
+func listDrills(_ tool.Context, args ListDrillsArgs) (ListDrillsResult, error) {
+	dirs := adrill.DefaultDrillDirs()
+
+	if args.SuiteName != "" {
+		// List drills in a specific suite
+		suite, err := adrill.FindSuite(dirs, args.SuiteName)
+		if err != nil {
+			return ListDrillsResult{
+				Status:  "error",
+				Message: fmt.Sprintf("Suite %q not found: %v", args.SuiteName, err),
+			}, nil
+		}
+		return ListDrillsResult{
+			Status: "ok",
+			Suites: []DrillSuiteInfo{buildSuiteInfo(suite)},
+		}, nil
+	}
+
+	// List all suites
+	suites, err := adrill.DiscoverSuites(dirs)
+	if err != nil {
+		return ListDrillsResult{
+			Status:  "error",
+			Message: fmt.Sprintf("Failed to discover suites: %v", err),
+		}, nil
+	}
+
+	if len(suites) == 0 {
+		return ListDrillsResult{
+			Status:  "ok",
+			Message: "No drill suites found",
+		}, nil
+	}
+
+	var infos []DrillSuiteInfo
+	for _, s := range suites {
+		infos = append(infos, buildSuiteInfo(&s))
+	}
+
+	return ListDrillsResult{
+		Status: "ok",
+		Suites: infos,
+	}, nil
+}
+
+func buildSuiteInfo(suite *adrill.LoadedSuite) DrillSuiteInfo {
+	info := DrillSuiteInfo{
+		Name:        suite.Name,
+		Description: suite.Config.Description,
+		DrillCount:  len(suite.Tests),
+	}
+	if suite.Config.SuiteConfig != nil {
+		info.Template = suite.Config.SuiteConfig.Template
+	}
+	for _, test := range suite.Tests {
+		di := DrillInfo{
+			Name:        test.Name,
+			Description: test.Config.Description,
+			StepCount:   len(test.Config.Nodes),
+		}
+		if test.Config.DrillConfig != nil {
+			di.Tags = test.Config.DrillConfig.Tags
+		}
+		info.Drills = append(info.Drills, di)
+	}
+	return info
+}
+
+// ReadDrillArgs are the arguments for the read_drill tool.
+type ReadDrillArgs struct {
+	Name string `json:"name" jsonschema:"Name of the drill or suite to read (without .yaml extension). For a drill, returns the raw YAML content. For a suite, returns a formatted overview of the suite and all its drills."`
+}
+
+// ReadDrillResult is the result of the read_drill tool.
+type ReadDrillResult struct {
+	Status  string `json:"status"`  // "ok" or "error"
+	Type    string `json:"type"`    // "drill_yaml", "suite_overview"
+	Content string `json:"content"` // The YAML content or formatted overview
+	Message string `json:"message,omitempty"`
+}
+
+func readDrill(_ tool.Context, args ReadDrillArgs) (ReadDrillResult, error) {
+	name := strings.TrimSpace(args.Name)
+	if name == "" {
+		return ReadDrillResult{
+			Status:  "error",
+			Message: "name is required",
+		}, nil
+	}
+	name = strings.TrimSuffix(strings.TrimSuffix(name, ".yaml"), ".yml")
+
+	dirs := adrill.DefaultDrillDirs()
+
+	// First try to find as a drill (test)
+	test, _, err := adrill.FindTestAndSuite(dirs, name)
+	if err == nil {
+		content, readErr := os.ReadFile(test.File)
+		if readErr != nil {
+			return ReadDrillResult{
+				Status:  "error",
+				Message: fmt.Sprintf("Found drill %q but failed to read file: %v", name, readErr),
+			}, nil
+		}
+		return ReadDrillResult{
+			Status:  "ok",
+			Type:    "drill_yaml",
+			Content: string(content),
+		}, nil
+	}
+
+	// Try as a suite
+	suite, err := adrill.FindSuite(dirs, name)
+	if err == nil {
+		overview := adrill.BuildSuiteContext(suite)
+		return ReadDrillResult{
+			Status:  "ok",
+			Type:    "suite_overview",
+			Content: overview,
+		}, nil
+	}
+
+	return ReadDrillResult{
+		Status:  "error",
+		Message: fmt.Sprintf("No drill or suite named %q found", name),
+	}, nil
+}
+
+// GetDrillTools returns the drill management tools: save, validate, delete, list, and read.
 func GetDrillTools() ([]tool.Tool, error) {
 	saveTool, err := functiontool.New(functiontool.Config{
 		Name: "save_drill",
@@ -645,5 +801,26 @@ func GetDrillTools() ([]tool.Tool, error) {
 		return nil, fmt.Errorf("create delete_drill tool: %w", err)
 	}
 
-	return []tool.Tool{saveTool, validateTool, deleteTool}, nil
+	listTool, err := functiontool.New(functiontool.Config{
+		Name: "list_drills",
+		Description: "List drill suites and their drills. Shows names, descriptions, tags, and step counts. " +
+			"Use without arguments to list all suites, or pass suite_name to list drills in a specific suite. " +
+			"Drill files are managed by Astonish on the host — they are NOT accessible via read_file or shell_command in sandboxes.",
+	}, listDrills)
+	if err != nil {
+		return nil, fmt.Errorf("create list_drills tool: %w", err)
+	}
+
+	readTool, err := functiontool.New(functiontool.Config{
+		Name: "read_drill",
+		Description: "Read a drill's YAML content or a suite's overview. Pass a drill name to get its raw YAML " +
+			"(useful for copying patterns into new drills). Pass a suite name to get a formatted overview of the " +
+			"suite config, services, and all drill summaries. " +
+			"Drill files are managed by Astonish on the host — use this tool instead of read_file to access drill content.",
+	}, readDrill)
+	if err != nil {
+		return nil, fmt.Errorf("create read_drill tool: %w", err)
+	}
+
+	return []tool.Tool{saveTool, validateTool, deleteTool, listTool, readTool}, nil
 }

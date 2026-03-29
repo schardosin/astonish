@@ -362,15 +362,6 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		"isNew":     isNew,
 	})
 
-	// Send startup notices for new sessions (sandbox status, MCP warnings, etc.)
-	if isNew && len(comp.StartupNotices) > 0 {
-		content := "**Startup**\n"
-		for _, notice := range comp.StartupNotices {
-			content += "- " + notice + "\n"
-		}
-		SendSSE(w, flusher, "system", map[string]interface{}{"content": content})
-	}
-
 	// Prepare the ADK runner
 	adkAgent, err := adkagent.New(adkagent.Config{
 		Name:        "astonish_chat",

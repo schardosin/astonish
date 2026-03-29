@@ -960,10 +960,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             }
             break
 
-          case 'system':
-            setMessages(prev => [...prev, { type: 'system', content: data.content }])
-            break
-
           case 'new_session':
             if (data.sessionId) {
               changeSession(data.sessionId)
@@ -1651,24 +1647,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                         border: '1px solid var(--border-color)',
                       }}
                     />
-                  </div>
-                )
-              }
-
-              if (msg.type === 'system') {
-                return (
-                  <div key={index} className="my-2">
-                    <div
-                      className="p-3 rounded-lg text-sm"
-                      style={{
-                        background: theme === 'dark' ? 'rgba(168, 85, 247, 0.08)' : 'rgba(168, 85, 247, 0.05)',
-                        border: '1px solid rgba(168, 85, 247, 0.2)',
-                      }}
-                    >
-                      <div className="markdown-body text-sm" style={{ color: 'var(--text-primary)' }}>
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                      </div>
-                    </div>
                   </div>
                 )
               }

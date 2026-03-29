@@ -1486,9 +1486,14 @@ agents:
          - `git diff HEAD~1` on key files to understand the changes
       2. Read the requirements and acceptance criteria from the conversation
          thread or docs/<task>/ folder.
-      3. Read the existing drill files to understand current coverage. Use
-         `list_drills` to see all suites and drills, and `read_drill` to
-         read individual drill YAML files for patterns and assertions.
+      3. **Read existing drill files (MANDATORY).** Call `list_drills` to
+          see all suites and drills, then call `read_drill` on at least the
+          suite overview AND 2-3 individual drills to understand the patterns,
+          assertion styles, and interaction approaches already in use. This
+          is NOT optional — if you skip this step, you will reinvent patterns
+          poorly. Do NOT use `find`, `ls`, or `read_file` to locate drill
+          files — they live on the host, not in the container. Only
+          `list_drills` and `read_drill` can access them.
       4. **Explore the running application.** Read the suite YAML's `setup`
          commands — these are the exact commands that start the services. Run
          them yourself when you need to explore interactively. Do NOT invent
@@ -1518,6 +1523,17 @@ agents:
       shortcuts that bypass the user's interface — if the product has a
       UI, test through the UI, not by calling the backend API directly.
 
+      **What "test through the user's interface" means concretely:**
+      If a user interacts with a feature by navigating to a page, clicking
+      buttons, selecting items, and viewing results — the drill must do the
+      SAME sequence: `browser_navigate` → `browser_snapshot` → interact
+      (click/type via `browser_run_code` with CSS selectors) → verify (
+      `browser_snapshot` + `element_exists`). If the feature involves a
+      chart that appears when the user selects options, the drill must
+      select those options in the UI — not call the chart's internal
+      JavaScript function directly. The entire point of E2E testing is to
+      verify the full stack from UI to backend, not individual functions.
+
       **Rules for creating drills:**
       - Each drill tests ONE specific behavior (e.g., "login page loads",
         "create user via API", "export data to CSV").
@@ -1526,10 +1542,14 @@ agents:
           - **Verification** (what does the user see?): `browser_snapshot`
             with assert `type: element_exists` to check visible text/elements
           - **Interaction** (clicking, typing): `browser_run_code` with CSS
-            selectors (e.g., `document.querySelector('.btn')`) — more stable
-            than `browser_click` with snapshot refs, which are positional and
-            can shift between runs. Keep JS minimal: one action, return a
-            status string.
+             selectors (e.g., `document.querySelector('.btn').click()`) — more
+             stable than `browser_click` with snapshot refs, which are positional
+             and can shift between runs. Keep JS minimal: one DOM action, return
+             a status string. `browser_run_code` is ONLY for DOM manipulation
+             (clicking, typing, scrolling, reading visible text). Do NOT use it
+             to `import()` application modules, call internal functions, or
+             execute application logic with test data — that is a unit test
+             in disguise, not an E2E test.
           - **Navigation**: `browser_navigate` with the app URL
           - **Waiting**: `browser_wait_for` instead of `shell_command: sleep`
           - Assert on **user-visible text**, not CSS class names or internal state
@@ -1642,13 +1662,24 @@ agents:
       - For browser snapshot checks: `type: element_exists`, `source: snapshot`, `expected: "visible text"`
       - For browser interaction: `tool: browser_run_code`, `code: "<JS>"`, assert `type: contains`, `expected: "clicked"` (or similar success string)
       - Do NOT use `shell_command` with `sleep` for timing — use `browser_wait_for` with `text`, `selector`, or `timeout`
-      - Keep `browser_run_code` scripts minimal: one action per step, return a clear pass/fail string
+      - Keep `browser_run_code` scripts minimal: one DOM action per step, return a clear pass/fail string.
+        NEVER use `browser_run_code` to `import()` or `require()` application source modules — that
+        turns the drill into a unit test. `browser_run_code` is for DOM interaction only.
 
       **Workflow for each new drill:**
       1. Determine how the end user interacts with this feature:
          - Web app with UI → use browser tools to explore
          - API service → use curl to probe endpoints
          - CLI tool → use shell_command to run commands
+         **If the feature requires live data or specific state:** The drill
+         must still go through the user's interface. Navigate the UI, use
+         whatever data the app already has (search for a symbol, pick an
+         existing item, use default settings). If the app truly cannot
+         function without external data that is unavailable, report to @po:
+         "@po, I cannot create an E2E drill for <feature> because it
+         requires <data/state> that is not available in the test environment.
+         Please advise." Do NOT fall back to importing internal modules or
+         calling functions directly — that produces unit tests, not E2E tests.
       2. Explore the running application using the appropriate tool:
          - For UI: `browser_navigate` to the page, then `browser_snapshot`
            to see the page structure, content, and interactive elements
@@ -1715,6 +1746,17 @@ agents:
         and test them with curl. For APIs, do NOT grep source code instead
         of calling endpoints. Source code tells you what the code says, not
         what the running app does.
+      - Do NOT use `browser_run_code` to import application modules (e.g.,
+        `import('/src/utils/myModule.js')`) and call internal functions with
+        test data. This produces a unit test running in a browser tab, not an
+        E2E test. `browser_run_code` is strictly for DOM interaction: clicking
+        elements, typing into inputs, reading visible text. If you find
+        yourself writing `import()` or `require()` in a `browser_run_code`
+        step, you have left the E2E testing path.
+      - Do NOT rationalize function-level testing as "E2E because it runs in
+        the browser." Running `myFunction(testData)` via `browser_run_code`
+        tests the function, not the user experience. The user never calls
+        JavaScript functions — they click buttons and see results.
       - Do NOT use `shell_command: sleep` for timing in drills — use
         `browser_wait_for` with `text`, `selector`, or `timeout`.
       - Do NOT assert on CSS class names, internal state, or implementation

@@ -295,7 +295,12 @@ Tell the user:
 - Main endpoints/commands/features you discovered
 - How the project is built, run, and verified
 
-**2b. Ask what to test.**
+**2b. Check for existing drills (if adding to an existing suite).**
+If there is already a drill suite for this project, use list_drills and
+read_drill to inspect existing drill files. Understanding existing patterns
+helps you write consistent new drills and avoid duplication.
+
+**2c. Ask what to test.**
 "What aspects of the project would you like to test? For example:
 - API endpoint responses (status codes, response content)
 - CLI command outputs
@@ -548,6 +553,13 @@ For each test scenario from Step 2, generate a test YAML.
 - exit_code: Assert against the exit code (use with type: exit_code)
 - snapshot: Assert against browser accessibility snapshot (for element_exists)
 
+### CRITICAL format rules:
+- Node type MUST be "tool" — there is no "shell" type
+- Tool name goes in args.tool, NOT as a top-level tool: field
+- Assertion key is assert: (singular) — assertions: (plural) is SILENTLY IGNORED
+- Assertion value key is expected: — value: is SILENTLY IGNORED
+- For exit code checks, include source: exit_code in the assert block
+
 ### Exit Code Assertion Example:
 
     - name: verify_build
@@ -634,6 +646,52 @@ Note: Browser tests need a ref from browser_snapshot before they can
 click/type/interact with elements. The typical flow is:
 navigate → snapshot → interact (using refs) → snapshot/screenshot to verify.
 
+### Browser interaction best practices:
+
+For DETERMINISTIC drills, prefer browser_run_code with CSS selectors over
+browser_click with snapshot refs. Snapshot refs are positional (e.g., ref5)
+and can shift between runs if the page structure changes. CSS selectors are
+stable:
+
+    - name: click-submit
+      type: tool
+      args:
+        tool: browser_run_code
+        code: |
+          const btn = document.querySelector('button[type="submit"]');
+          if (btn) { btn.click(); return 'clicked'; }
+          return 'ERROR: button not found';
+      assert:
+        type: contains
+        expected: "clicked"
+
+browser_run_code is ONLY for DOM interaction — clicking elements, typing into
+inputs, scrolling, reading visible text. Keep scripts minimal: one DOM action,
+return a status string.
+
+Do NOT use browser_run_code to import() or require() application source modules
+(e.g., import('/src/utils/myModule.js')) and call internal functions with test
+data. That produces a unit test running in a browser tab, not an E2E test.
+
+### Assertion guidance for browser tests:
+
+- Use browser_snapshot + assert type: element_exists to verify what the user
+  SEES — visible text, headings, button labels, data content.
+- Assert on user-visible text, NOT CSS class names, internal state, or
+  implementation details. If .active is added to a button, the user does not
+  see that — they see the button text or the resulting content change.
+- Use browser_wait_for instead of shell_command with sleep for timing. Example:
+      - name: wait-for-data
+        type: tool
+        args:
+          tool: browser_wait_for
+          text: "Results loaded"
+          timeout: 5000
+        assert:
+          type: exit_code
+          source: exit_code
+          expected: "0"
+
 ### Important:
 - Every test MUST have "suite: <suite-name>" matching the suite filename.
 - The flow section defines step execution order. If omitted, nodes run in
@@ -677,6 +735,8 @@ Report the saved file paths.
 After saving, ask: "Would you like me to run the tests now?"
 
 If yes, call the run_drill tool with suite_name set to the suite name.
+run_drill automatically handles setup, ready_check, and teardown from the
+suite config — do NOT manually start services before calling it.
 This tool runs the tests on the host and automatically routes shell/file
 tool steps into the current sandbox container (if sandbox is active).
 Browser tool steps run on the host where Chrome is available.
@@ -867,13 +927,30 @@ or modify existing drills. Only create new drill YAML files.
 3. Use the same infrastructure (setup, ready_check, services) — it is
    already defined in the suite. Do NOT regenerate the suite YAML.
 4. Follow the same patterns as existing drills (assertion types, step naming
-   conventions, tag styles).
+   conventions, tag styles). Use read_drill to inspect individual drill
+   YAML files and learn the interaction patterns already in use.
 5. Show each new drill YAML to the user and get confirmation before saving.
 6. Use validate_drill to check the new drills, then save_drill with ONLY
    the new drill files (pass an empty suite_yaml and the existing suite_name
    so save_drill appends the new drills without overwriting the suite).
 7. After saving, offer to run the full suite with run_drill to verify
-   everything works together.
+   everything works together. run_drill handles setup/ready_check/teardown
+   automatically — do NOT start services manually before calling it.
+
+## BROWSER DRILL RULES (for web app suites)
+
+If the suite tests a web application:
+- For interaction (clicking, typing): use browser_run_code with CSS selectors
+  for deterministic DOM manipulation. Keep JS minimal: one DOM action, return
+  a status string.
+- For verification: use browser_snapshot + assert type: element_exists to
+  check user-visible text and elements.
+- For timing: use browser_wait_for, NOT shell_command with sleep.
+- Assert on what the USER sees (visible text, headings, content), NOT CSS
+  class names or internal state.
+- Do NOT use browser_run_code to import() application modules or call internal
+  functions with test data. That is a unit test, not an E2E test.
+  browser_run_code is strictly for DOM interaction.
 
 ## DRILL YAML FORMAT
 
@@ -897,6 +974,12 @@ or modify existing drills. Only create new drill YAML files.
     flow:
       - from: step_name
         to: next_step
+
+CRITICAL format rules:
+- Node type MUST be "tool" — there is no "shell" type
+- Tool name goes in args.tool, NOT as a top-level tool: field
+- Assertion key is assert: (singular) — assertions: (plural) is SILENTLY IGNORED
+- Assertion value key is expected: — value: is SILENTLY IGNORED
 
 ## SAVING NEW DRILLS
 

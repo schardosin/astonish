@@ -948,7 +948,7 @@ function StepCard({ node, index }) {
 function ReportStepCard({ step, index }) {
   const [expanded, setExpanded] = useState(false)
   const sc = statusColor(step.status)
-  const assertions = step.assertions || []
+  const assertions = step.assertion ? [step.assertion] : []
 
   return (
     <div

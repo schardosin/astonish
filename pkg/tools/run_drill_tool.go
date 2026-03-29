@@ -702,6 +702,7 @@ func enrichReportWithFailureContext(buf *bytes.Buffer, report *adrill.SuiteRepor
 		if test.Status == "passed" {
 			continue
 		}
+		buf.WriteString(fmt.Sprintf("\nTest: %s (%s)\n", test.Name, test.Status))
 		for _, step := range test.Steps {
 			if step.Status != "failed" && step.Status != "error" {
 				continue

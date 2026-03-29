@@ -99,7 +99,7 @@ func printUsage() {
 	fmt.Println("    credential          Manage the encrypted credential store")
 	fmt.Println("    skills              Manage CLI tool skill guides")
 	fmt.Println("    sandbox             Manage session container isolation")
-	fmt.Println("    test                Run deterministic test suites")
+	fmt.Println("    drill               Run deterministic drill suites")
 	fmt.Println("    config              Manage configuration")
 	fmt.Println("    setup               Run interactive setup")
 	fmt.Println("    tools               Manage MCP tools")

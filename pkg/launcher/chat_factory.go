@@ -1166,7 +1166,6 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					fmt.Printf("Warning: Failed to create opencode tool for wizard: %v\n", ocErr)
 				}
 			} else {
-				coreTools = append(coreTools, ocTool)
 				mainThreadTools = append(mainThreadTools, ocTool)
 				// Also add to core group for sub-agents
 				if g, ok := toolGroups["core"]; ok {

@@ -973,7 +973,7 @@ func handleToolsSearchCommand(args []string) error {
 		for _, gName := range groupNames {
 			tools := groups[gName]
 			total += len(tools)
-			label := gName
+			var label string
 			if gName == "_main" {
 				label = "main thread (call directly)"
 			} else {

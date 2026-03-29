@@ -977,7 +977,7 @@ func handleToolsSearchCommand(args []string) error {
 			if gName == "_main" {
 				label = "main thread (call directly)"
 			} else {
-				label = fmt.Sprintf("%s (delegate_tasks with tools: [\"%s\"])", gName, gName)
+				label = fmt.Sprintf("%s (call directly)", gName)
 			}
 			fmt.Printf("  %s (%d tools)\n", label, len(tools))
 			for _, m := range tools {
@@ -1018,7 +1018,7 @@ func handleToolsSearchCommand(args []string) error {
 	fmt.Printf("Found %d result(s):\n\n", len(matches))
 
 	for i, m := range matches {
-		access := fmt.Sprintf("delegate_tasks with tools: [\"%s\"]", m.GroupName)
+		access := fmt.Sprintf("call directly (%s group)", m.GroupName)
 		if m.IsMainTool {
 			access = "call directly (main thread)"
 		}

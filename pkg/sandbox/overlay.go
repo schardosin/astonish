@@ -361,8 +361,12 @@ func CreateOverlayContainer(client *IncusClient, containerName, templateName str
 		"security.privileged": "true",
 		"security.nesting":    fmt.Sprintf("%t", nesting),
 	}
-	// Apply resource limits if provided (session containers only, not templates)
-	if limits != nil {
+	// Apply resource limits if provided (session containers only, not templates).
+	// Skip on Docker+Incus — cgroup controller delegation inside Docker Desktop's
+	// VM is unreliable. Setting limits.memory/cpu/processes requires cgroup
+	// controllers that may not be delegatable, causing forkstart to fail with
+	// "Device or resource busy" when LXC tries to enable them.
+	if limits != nil && activePlatform != PlatformDockerIncus {
 		if limits.Memory != "" {
 			containerConfig["limits.memory"] = limits.Memory
 		}

@@ -32,6 +32,22 @@ if ! mountpoint -q /sys/fs/cgroup 2>/dev/null; then
 fi
 mount -o remount,rw /sys/fs/cgroup 2>/dev/null || true
 
+# Delegate cgroup v2 controllers to child cgroups. Without this, LXC cannot
+# enable controllers (cpuset, memory, pids, etc.) for nested containers and
+# forkstart fails with "Device or resource busy" / "No such file or directory".
+# This writes all available controllers to cgroup.subtree_control at the root.
+if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
+    CONTROLLERS=$(cat /sys/fs/cgroup/cgroup.controllers)
+    ENABLE=""
+    for c in $CONTROLLERS; do
+        ENABLE="$ENABLE +$c"
+    done
+    if [ -n "$ENABLE" ]; then
+        echo "$ENABLE" > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || true
+        echo "[astonish-incus] Delegated cgroup controllers:$ENABLE"
+    fi
+fi
+
 echo "[astonish-incus] Starting Incus daemon..."
 
 # Start incusd in the background

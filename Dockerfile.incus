@@ -4,11 +4,16 @@
 # Linux container isolation on non-Linux hosts. Astonish on the host
 # connects to this container's Incus API via TCP (localhost:8443).
 #
-# Build:
-#   GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o astonish-linux .
-#   docker build -f Dockerfile.incus -t astonish/incus:v1.2.3 .
+# Build (single-arch, local dev):
+#   GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o astonish-linux-amd64 .
+#   docker build -f Dockerfile.incus -t schardosin/astonish-incus:dev .
 #
-# The image is published to Docker Hub as part of the release process.
+# Build (multi-arch, CI):
+#   # Pre-build both binaries, then:
+#   docker buildx build --platform linux/amd64,linux/arm64 \
+#     -f Dockerfile.incus -t schardosin/astonish-incus:v1.2.3 --push .
+#
+# The image is published to Docker Hub by the docker-incus GitHub Action.
 # Users never build this image — astonish pulls it automatically.
 
 FROM ubuntu:24.04
@@ -44,10 +49,11 @@ RUN apt-get update && \
 # Verify incusd was installed correctly
 RUN test -x /opt/incus/bin/incusd || { echo "ERROR: incusd not found"; exit 1; }
 
-# Copy the pre-built Linux astonish binary.
-# This is the binary that gets pushed into Incus template containers
-# for running `astonish node` (headless tool execution server).
-COPY astonish-linux /usr/local/bin/astonish
+# Copy the pre-built Linux astonish binary for the target architecture.
+# TARGETARCH is set automatically by docker buildx (amd64 or arm64).
+# For local single-arch builds, default to amd64.
+ARG TARGETARCH=amd64
+COPY astonish-linux-${TARGETARCH} /usr/local/bin/astonish
 RUN chmod +x /usr/local/bin/astonish
 
 # Copy the entrypoint script

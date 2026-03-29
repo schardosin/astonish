@@ -19,6 +19,7 @@ go.work
 ./astonish
 ./astonish_bin
 ./test_bin
+astonish-linux-*
 
 # macOS specific files
 .DS_Store

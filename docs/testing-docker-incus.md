@@ -53,18 +53,18 @@ including Linux (useful for development before testing on a real Mac).
 make build-linux
 ```
 
-This creates `astonish-linux` in the project root.
+This creates `astonish-linux-amd64` in the project root.
 
 ### Step 2: Build the Docker image locally
 
 ```bash
 # Build the Incus Docker image (uses Dockerfile.incus)
-docker build -f Dockerfile.incus -t astonish/incus:latest .
+docker build -f Dockerfile.incus -t schardosin/astonish-incus:latest .
 ```
 
 This builds the image with:
 - Ubuntu 24.04 + Incus daemon
-- The cross-compiled `astonish-linux` binary at `/usr/local/bin/astonish`
+- The cross-compiled `astonish-linux-{arch}` binary at `/usr/local/bin/astonish`
 - The entrypoint script that initializes Incus on first boot
 
 ### Step 3: Build astonish for your host platform
@@ -84,7 +84,7 @@ go build -o astonish .
 ```bash
 # This will:
 # 1. Detect Docker (PlatformDockerIncus)
-# 2. Use the locally-built astonish/incus:latest image (no pull needed)
+# 2. Use the locally-built schardosin/astonish-incus:latest image (no pull needed)
 # 3. Create the astonish-incus container with privileged mode
 # 4. Wait for Incus API on localhost:8443
 # 5. Initialize the @base template inside Incus
@@ -94,7 +94,7 @@ go build -o astonish .
 Expected output:
 ```
 Setting up Docker+Incus runtime...
-[sandbox] Pulling Docker image astonish/incus:latest...
+[sandbox] Pulling Docker image schardosin/astonish-incus:latest...
 [sandbox] Creating Docker container astonish-incus...
 [sandbox] Docker container astonish-incus created, waiting for Incus API...
 Docker+Incus runtime ready.
@@ -200,7 +200,7 @@ apt-get update && apt-get install -y docker.io
 
 # Build and test
 make build-linux
-docker build -f Dockerfile.incus -t astonish/incus:latest .
+docker build -f Dockerfile.incus -t schardosin/astonish-incus:latest .
 go build -o astonish .
 ./astonish sandbox status
 ```
@@ -221,13 +221,13 @@ To inspect what's inside the built image:
 
 ```bash
 # Check the astonish binary is present and executable
-docker run --rm astonish/incus:latest /usr/local/bin/astonish --version
+docker run --rm schardosin/astonish-incus:latest /usr/local/bin/astonish --version
 
 # Check Incus is installed
-docker run --rm astonish/incus:latest incus --version
+docker run --rm schardosin/astonish-incus:latest incus --version
 
 # Check the entrypoint script
-docker run --rm astonish/incus:latest cat /usr/local/bin/entrypoint-incus.sh
+docker run --rm schardosin/astonish-incus:latest cat /usr/local/bin/entrypoint-incus.sh
 ```
 
 ## 5. Troubleshooting
@@ -237,7 +237,7 @@ docker run --rm astonish/incus:latest cat /usr/local/bin/entrypoint-incus.sh
 The image needs to exist locally. Build it with:
 ```bash
 make build-linux
-docker build -f Dockerfile.incus -t astonish/incus:latest .
+docker build -f Dockerfile.incus -t schardosin/astonish-incus:latest .
 ```
 
 ### "Incus API not reachable" timeout
@@ -274,7 +274,7 @@ docker exec astonish-incus ls /var/lib/incus/storage-pools/default/containers-sn
 docker stop astonish-incus
 docker rm astonish-incus
 docker volume rm astonish-incus-data
-docker rmi astonish/incus:latest
+docker rmi schardosin/astonish-incus:latest
 ```
 
 Then re-run `./astonish sandbox init` to start fresh.

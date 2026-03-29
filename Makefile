@@ -30,8 +30,9 @@ help:
 	@echo "  make docker-rebuild  - Rebuild and restart persistent container"
 	@echo ""
 	@echo "Sandbox (Docker+Incus for macOS/Windows):"
-	@echo "  make build-linux     - Cross-compile Linux binary (for dev sandbox push)"
-	@echo "  make docker-incus    - Build the Incus Docker image (for CI release)"
+	@echo "  make build-linux       - Cross-compile Linux amd64 binary"
+	@echo "  make build-linux-arm64 - Cross-compile Linux arm64 binary"
+	@echo "  make docker-incus      - Build the Incus Docker image (for CI release)"
 
 # Build the Go binary only
 build:
@@ -105,7 +106,7 @@ update-mcp-stars:
 	GITHUB_TOKEN=$$(gh auth token) python3 scripts/update-mcp-stars.py
 	@echo "Star counts updated!"
 
-.PHONY: all help build build-ui build-all run studio studio-dev test install clean update-mcp-stars setup-hooks e2e-up e2e-down e2e-rebuild docker-up docker-down docker-rebuild build-linux docker-incus
+.PHONY: all help build build-ui build-all run studio studio-dev test install clean update-mcp-stars setup-hooks e2e-up e2e-down e2e-rebuild docker-up docker-down docker-rebuild build-linux build-linux-arm64 docker-incus
 
 # E2E Testing - Docker-based isolated environment
 e2e-up:
@@ -145,16 +146,21 @@ docker-rebuild:
 
 # Cross-compile Linux binary (for macOS/Windows dev pushing into sandbox containers)
 build-linux:
-	@echo "Cross-compiling Linux binary..."
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o astonish-linux .
-	@echo "Linux binary built: astonish-linux"
+	@echo "Cross-compiling Linux amd64 binary..."
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o astonish-linux-amd64 .
+	@echo "Linux binary built: astonish-linux-amd64"
+
+build-linux-arm64:
+	@echo "Cross-compiling Linux arm64 binary..."
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o astonish-linux-arm64 .
+	@echo "Linux binary built: astonish-linux-arm64"
 
 # Build the Incus Docker image (for CI release pipeline)
-# Requires: astonish-linux binary to exist (run build-linux first)
+# Requires: astonish-linux-amd64 binary to exist (run build-linux first)
 VERSION ?= dev
 docker-incus: build-linux
 	@echo "Building Incus Docker image..."
-	docker build -f Dockerfile.incus -t astonish/incus:$(VERSION) .
-	@echo "Image built: astonish/incus:$(VERSION)"
+	docker build -f Dockerfile.incus -t schardosin/astonish-incus:$(VERSION) .
+	@echo "Image built: schardosin/astonish-incus:$(VERSION)"
 
 

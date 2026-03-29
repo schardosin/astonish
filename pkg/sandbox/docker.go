@@ -21,7 +21,7 @@ const (
 	DockerVolumeName = "astonish-incus-data"
 
 	// DockerImageRepo is the Docker Hub repository for the Incus runtime image.
-	DockerImageRepo = "astonish/incus"
+	DockerImageRepo = "schardosin/astonish-incus"
 
 	// DockerVersionLabel is the container label storing the astonish version
 	// that created/upgraded the container. Used for auto-upgrade detection.
@@ -80,7 +80,7 @@ func pullOrFallback(imageTag string) error {
 		return fmt.Errorf("Docker image %s not found (pull failed: %s).\n"+
 			"For dev testing, build it locally:\n"+
 			"  make docker-incus\n"+
-			"  docker tag astonish/incus:dev astonish/incus:latest",
+			"  docker tag schardosin/astonish-incus:dev schardosin/astonish-incus:latest",
 			imageTag, firstLine(output))
 	}
 	return nil

@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -110,11 +111,18 @@ func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, 
 
 	// Start
 	if err := client.StartInstance(containerName); err != nil {
+		// Read the LXC log for the actual forkstart error — the Incus API
+		// error only says "exit status 1" without the underlying cause.
+		lxcLog := readLXCLog(containerName)
+
 		// destroyOverlayContainer unmounts the overlay, removes overlay dirs,
 		// and deletes the Incus instance. If it fails (e.g., container in
 		// ABORTING state), fall back to a direct delete to avoid zombies.
 		if destroyErr := destroyOverlayContainer(client, containerName); destroyErr != nil {
 			_ = client.DeleteInstance(containerName)
+		}
+		if lxcLog != "" {
+			return "", fmt.Errorf("failed to start session container: %w\n\nLXC log:\n%s", err, lxcLog)
 		}
 		return "", fmt.Errorf("failed to start session container: %w", err)
 	}
@@ -428,4 +436,23 @@ func matchContainerToSession(containerName string, existingSessionIDs map[string
 	}
 
 	return ""
+}
+
+// readLXCLog reads the LXC log file for a container after a forkstart failure.
+// The log contains the actual error (e.g., missing rootfs, cgroup issue, etc.)
+// that the Incus API error message doesn't include. Returns empty string on
+// any read failure — this is best-effort diagnostics.
+func readLXCLog(containerName string) string {
+	logPath := fmt.Sprintf("/var/log/incus/%s/lxc.log", containerName)
+	data, err := readFileOnSandboxHost(logPath)
+	if err != nil {
+		log.Printf("[sandbox] Could not read LXC log at %s: %v", logPath, err)
+		return ""
+	}
+	content := strings.TrimSpace(string(data))
+	// Truncate if excessively large — only the tail matters for diagnostics
+	if len(content) > 4096 {
+		content = "... (truncated)\n" + content[len(content)-4096:]
+	}
+	return content
 }

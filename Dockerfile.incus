@@ -36,6 +36,7 @@ RUN apt-get update && \
         systemd \
         apparmor \
         dnsmasq-base \
+        iptables \
     && mkdir -p /etc/apt/keyrings \
     && curl -fsSL https://pkgs.zabbly.com/key.asc -o /etc/apt/keyrings/zabbly.asc \
     && printf 'Enabled: yes\nTypes: deb\nURIs: https://pkgs.zabbly.com/incus/stable\nSuites: noble\nComponents: main\nArchitectures: %s\nSigned-By: /etc/apt/keyrings/zabbly.asc\n' \

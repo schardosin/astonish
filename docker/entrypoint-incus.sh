@@ -12,6 +12,26 @@ set -e
 export PATH="/opt/incus/bin:$PATH"
 export LD_LIBRARY_PATH="/opt/incus/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+# --- Environment preparation for nested LXC containers ---
+# These fixes are required when running inside Docker Desktop (macOS/Windows)
+# where the Linux VM may not expose everything LXC expects.
+
+# /dev/kmsg is required by LXC container init but doesn't exist in Docker
+# containers. Symlink to /dev/console as a safe substitute.
+if [ ! -e /dev/kmsg ]; then
+    ln -s /dev/console /dev/kmsg
+    echo "[astonish-incus] Created /dev/kmsg symlink"
+fi
+
+# Ensure cgroup2 filesystem is mounted and writable. Docker Desktop for Mac
+# may mount it read-only or in a way that prevents Incus from creating child
+# cgroups for LXC containers (causes forkstart failures).
+if ! mountpoint -q /sys/fs/cgroup 2>/dev/null; then
+    mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || true
+    echo "[astonish-incus] Mounted cgroup2 filesystem"
+fi
+mount -o remount,rw /sys/fs/cgroup 2>/dev/null || true
+
 echo "[astonish-incus] Starting Incus daemon..."
 
 # Start incusd in the background

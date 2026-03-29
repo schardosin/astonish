@@ -203,6 +203,12 @@ func EnsureIncusDockerContainer() error {
 		"run", "-d",
 		"--name", DockerContainerName,
 		"--privileged",
+		// Share host cgroup namespace so Incus/LXC can create child cgroups
+		// for containers. Without this, forkstart fails on Docker Desktop.
+		"--cgroupns=host",
+		// Writable tmpfs for LXC runtime state and temporary files
+		"--tmpfs", "/run",
+		"--tmpfs", "/tmp",
 		"--restart", "unless-stopped",
 		// Persist all Incus data (containers, images, storage pools)
 		"-v", DockerVolumeName + ":/var/lib/incus",
@@ -259,6 +265,9 @@ func UpgradeIncusDockerContainer() error {
 		"run", "-d",
 		"--name", DockerContainerName,
 		"--privileged",
+		"--cgroupns=host",
+		"--tmpfs", "/run",
+		"--tmpfs", "/tmp",
 		"--restart", "unless-stopped",
 		"-v", DockerVolumeName + ":/var/lib/incus",
 		"-p", "127.0.0.1:" + DockerIncusPort + ":" + DockerIncusPort,

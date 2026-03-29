@@ -30,7 +30,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 
 	navigateTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_navigate",
-		Description: "Navigate the browser to a URL. The browser launches automatically on first use.",
+		Description: "Navigate the browser to a URL. The browser is managed by Astonish — it launches automatically, no installation needed in the container. In sandbox mode, use the container bridge IP (not localhost) to reach services.",
 	}, BrowserNavigate(mgr, guard))
 	if err != nil {
 		return nil, err

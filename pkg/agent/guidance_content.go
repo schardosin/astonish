@@ -16,6 +16,9 @@ The browser uses a persistent profile — login sessions, cookies, and site data
 3. Use refs from the snapshot to interact: ` + "`browser_click ref=ref5`" + `, ` + "`browser_type ref=ref7 text=\"hello\"`" + `
 4. ` + "`browser_snapshot`" + ` again to see the result
 
+**Sandbox mode:**
+Browser tools work automatically in sandboxes — no browser installation needed in the container. Use the container bridge IP (not localhost) in ` + "`browser_navigate`" + ` URLs to reach services running inside the container.
+
 **Authorization and login screens:**
 When a page requires login, check the credential store (` + "`list_credentials`" + ` / ` + "`resolve_credential`" + `) and fill the form. If the page shows a device authorization flow, OAuth consent, SSO redirect, MFA/TOTP, or any auth that CANNOT be solved by filling credentials — STOP immediately. Do NOT try to reverse-engineer auth APIs, run CLI commands, or programmatically bypass it. Instead: take a ` + "`browser_snapshot`" + `, relay the exact instructions to the user (code, steps, URL), and wait for them to confirm before continuing.
 

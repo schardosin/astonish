@@ -70,6 +70,11 @@ func (idx *Indexer) IndexAll(ctx context.Context) error {
 		if d.IsDir() && filepath.Base(path) == "vectors" {
 			return filepath.SkipDir
 		}
+		// Skip legacy tools-ref directory (tool discovery now uses
+		// the dedicated "tools" vector collection in tool_index.go)
+		if d.IsDir() && filepath.Base(path) == "tools-ref" {
+			return filepath.SkipDir
+		}
 		if !d.IsDir() && strings.HasSuffix(d.Name(), ".md") {
 			files = append(files, path)
 		}

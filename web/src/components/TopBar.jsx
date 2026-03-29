@@ -1,4 +1,4 @@
-import { Moon, Sun, Settings, Cpu, Grid, MessageSquare, Rocket, ShieldCheck, ShieldAlert } from 'lucide-react'
+import { Moon, Sun, Settings, Cpu, Grid, MessageSquare, Rocket, ShieldCheck, ShieldAlert, Crosshair } from 'lucide-react'
 
 export default function TopBar({ theme, onToggleTheme, onOpenSettings, onOpenSandbox, defaultProvider, defaultModel, currentView, onNavigate, sandboxStatus }) {
   const navBackground = theme === 'dark' ? 'rgba(15, 23, 42, 0.92)' : 'rgba(255,255,255,0.86)'
@@ -66,6 +66,22 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, onOpenSan
         >
           <Rocket size={14} />
           <span className="text-xs font-medium">Fleet</span>
+        </button>
+
+        <button 
+          onClick={() => onNavigate && onNavigate('drill')}
+          className={`hidden md:flex items-center gap-2 px-3 py-2 rounded-xl transition-all ${
+            currentView === 'drill' 
+              ? 'shadow-md' 
+              : 'hover:bg-purple-500/10'
+          }`}
+          style={{ 
+            background: currentView === 'drill' ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' : (theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'var(--bg-tertiary)'), 
+            color: currentView === 'drill' ? '#fff' : 'var(--text-secondary)' 
+          }}
+        >
+          <Crosshair size={14} />
+          <span className="text-xs font-medium">Drill</span>
         </button>
       </div>
 

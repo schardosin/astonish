@@ -239,7 +239,9 @@ func splitFrontmatter(data []byte) ([]byte, string, error) {
 
 // LoadSkills loads skills from all configured sources.
 // Later sources override earlier ones by skill name.
-func LoadSkills(userDir string, extraDirs []string, workspaceDir string, allowlist []string) ([]Skill, error) {
+// The workspaceDir parameter is kept for API compatibility but is no longer used
+// (project-local skills were removed — all skills live in the config directory).
+func LoadSkills(userDir string, extraDirs []string, _ string, allowlist []string) ([]Skill, error) {
 	byName := make(map[string]*Skill)
 
 	// 1. Bundled skills (embedded in binary)
@@ -255,12 +257,6 @@ func LoadSkills(userDir string, extraDirs []string, workspaceDir string, allowli
 	// 3. Extra directories
 	for _, dir := range extraDirs {
 		loadSkillsFromDir(dir, "extra", byName)
-	}
-
-	// 4. Project skills
-	if workspaceDir != "" {
-		projectDir := filepath.Join(workspaceDir, ".astonish", "skills")
-		loadSkillsFromDir(projectDir, "project", byName)
 	}
 
 	// Apply allowlist filter

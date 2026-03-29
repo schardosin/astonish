@@ -47,8 +47,8 @@ func NewFromResponse(provider string, resp *http.Response, body []byte) *LLMErro
 }
 
 // IsRetryable returns true if the error is an LLMError that should be retried.
-// This includes 429 (rate limit), 502/503 (server overload), 504 (timeout),
-// and 408 (request timeout).
+// This includes 429 (rate limit), 500 (server error / proxy failure),
+// 502/503 (server overload), 504 (timeout), and 408 (request timeout).
 func IsRetryable(err error) bool {
 	var llmErr *LLMError
 	if errors.As(err, &llmErr) {
@@ -104,13 +104,18 @@ func StatusCode(err error) int {
 }
 
 // isRetryableStatus classifies HTTP status codes as retryable or not.
+// 500 is included because LLM provider proxies (e.g., Bifrost) commonly
+// return 500 for transient upstream failures (timeouts, connection resets)
+// that succeed on retry. The retry budget (3 attempts with backoff) limits
+// the cost of retrying genuine server bugs.
 func isRetryableStatus(code int) bool {
 	switch code {
 	case http.StatusTooManyRequests, // 429
-		http.StatusBadGateway,         // 502
-		http.StatusServiceUnavailable, // 503
-		http.StatusGatewayTimeout,     // 504
-		http.StatusRequestTimeout:     // 408
+		http.StatusInternalServerError, // 500
+		http.StatusBadGateway,          // 502
+		http.StatusServiceUnavailable,  // 503
+		http.StatusGatewayTimeout,      // 504
+		http.StatusRequestTimeout:      // 408
 		return true
 	default:
 		return false

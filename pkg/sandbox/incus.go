@@ -5,6 +5,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	incus "github.com/lxc/incus/v6/client"
 	"github.com/lxc/incus/v6/shared/api"
@@ -396,6 +397,38 @@ func (c *IncusClient) GetInstance(name string) (*api.Instance, error) {
 func (c *IncusClient) InstanceExists(name string) bool {
 	_, _, err := c.server.GetInstance(name)
 	return err == nil
+}
+
+// GetContainerIPv4 returns the first global-scope IPv4 address assigned to the
+// container. This is the bridge IP that the host can use to reach services
+// running inside the container (e.g., for browser_navigate in sandbox mode).
+//
+// The function retries for up to 10 seconds because the network interface may
+// not have a DHCP-assigned IP immediately after the container starts.
+func (c *IncusClient) GetContainerIPv4(name string) (string, error) {
+	const maxWait = 10 * time.Second
+	const pollInterval = 500 * time.Millisecond
+	deadline := time.Now().Add(maxWait)
+
+	for {
+		state, err := c.GetInstanceState(name)
+		if err != nil {
+			return "", err
+		}
+
+		for _, net := range state.Network {
+			for _, addr := range net.Addresses {
+				if addr.Family == "inet" && addr.Scope == "global" {
+					return addr.Address, nil
+				}
+			}
+		}
+
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("no global IPv4 address found for container %q after %s", name, maxWait)
+		}
+		time.Sleep(pollInterval)
+	}
 }
 
 // IsRunning checks if a container is currently running.

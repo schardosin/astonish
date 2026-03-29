@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +30,41 @@ func handleSandboxCommand(args []string) error {
 		return handleSandboxInit()
 	case "list", "ls":
 		return handleSandboxList()
+	case "create":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: astonish sandbox create <template> [--name <label>]")
+		}
+		name := ""
+		for i, a := range args[2:] {
+			if (a == "--name" || a == "-n") && i+1 < len(args[2:]) {
+				name = args[2:][i+1]
+			}
+		}
+		return handleSandboxCreate(args[1], name)
+	case "expose":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: astonish sandbox expose <container> <port> [<port>...]\n       astonish sandbox expose <container> --list")
+		}
+		// Check for --list flag
+		for _, a := range args[2:] {
+			if a == "--list" || a == "-l" {
+				return handleSandboxExposeList(args[1])
+			}
+		}
+		if len(args) < 3 {
+			return fmt.Errorf("usage: astonish sandbox expose <container> <port> [<port>...]")
+		}
+		return handleSandboxExpose(args[1], args[2:])
+	case "unexpose":
+		if len(args) < 3 {
+			return fmt.Errorf("usage: astonish sandbox unexpose <container> <port> [<port>...]")
+		}
+		return handleSandboxUnexpose(args[1], args[2:])
+	case "url":
+		if len(args) < 3 {
+			return fmt.Errorf("usage: astonish sandbox url <container> <port>")
+		}
+		return handleSandboxURL(args[1], args[2])
 	case "refresh":
 		return handleSandboxRefresh()
 	case "destroy", "rm":
@@ -114,7 +150,7 @@ func handleSandboxTemplateCommand(args []string) error {
 }
 
 func printSandboxUsage() {
-	fmt.Println("usage: astonish sandbox {status,init,list,shell,cp,refresh,destroy,prune,template} ...")
+	fmt.Println("usage: astonish sandbox {status,init,list,create,shell,expose,unexpose,url,cp,refresh,destroy,prune,template} ...")
 	fmt.Println("")
 	fmt.Println("Manage session container isolation.")
 	fmt.Println("")
@@ -122,7 +158,11 @@ func printSandboxUsage() {
 	fmt.Println("  status              Show sandbox environment info")
 	fmt.Println("  init                One-time setup: create base template with core tools")
 	fmt.Println("  list (ls)           List active session containers")
+	fmt.Println("  create <template>   Create a sandbox container from a template and open a shell")
 	fmt.Println("  shell <session-id>  Open interactive shell in a session container")
+	fmt.Println("  expose <id> <port>  Expose a container port through the Studio reverse proxy")
+	fmt.Println("  unexpose <id> <port> Remove a port from the reverse proxy")
+	fmt.Println("  url <id> <port>     Print the proxy URL for an exposed port")
 	fmt.Println("  cp <id>:<path> [.]  Copy files from a session container to local machine")
 	fmt.Println("  refresh             Re-snapshot templates with updated binary (--force for all)")
 	fmt.Println("  destroy (rm) <id>   Destroy a session container")
@@ -352,6 +392,9 @@ func handleSandboxList() error {
 			status,
 			entry.CreatedAt.Format("2006-01-02 15:04:05"),
 		)
+		if entry.Pinned {
+			fmt.Printf("  (pinned — exempt from automatic cleanup)\n")
+		}
 	}
 
 	// Check for unregistered session containers (containers that exist in
@@ -375,6 +418,234 @@ func handleSandboxList() error {
 	}
 
 	return nil
+}
+
+// --- Create ---
+
+func handleSandboxCreate(templateName, label string) error {
+	client, err := connectOrFail()
+	if err != nil {
+		return err
+	}
+
+	sessRegistry, err := sandbox.NewSessionRegistry()
+	if err != nil {
+		return err
+	}
+
+	tplRegistry, err := sandbox.NewTemplateRegistry()
+	if err != nil {
+		return err
+	}
+
+	// Verify template exists
+	if !tplRegistry.Exists(templateName) {
+		return fmt.Errorf("template %q not found\nUse 'astonish sandbox template list' to see available templates", templateName)
+	}
+
+	// Generate a session ID. If --name is provided, use it directly so
+	// it is easy to identify in `sandbox list`. Otherwise generate one
+	// from the template name and a timestamp.
+	// The session ID must produce valid Incus container names (alphanumeric
+	// and hyphens only) since SessionContainerName uses the first 8 chars.
+	var sessionID string
+	if label != "" {
+		sessionID = label
+		// Check for duplicate
+		if entry := sessRegistry.Get(sessionID); entry != nil {
+			return fmt.Errorf("a container with name %q already exists\nUse 'astonish sandbox shell %s' to open a shell, or 'astonish sandbox destroy %s' to remove it",
+				label, entry.ContainerName, entry.ContainerName)
+		}
+	} else {
+		sessionID = fmt.Sprintf("%s-%d", templateName, time.Now().UnixNano())
+	}
+
+	// Use default limits
+	defaultCfg := sandbox.DefaultSandboxConfig()
+	limits := sandbox.EffectiveLimits(&defaultCfg)
+
+	fmt.Printf("Creating sandbox from template %q...\n", templateName)
+	containerName, err := sandbox.EnsureSessionContainer(client, sessRegistry, tplRegistry, sessionID, templateName, &limits)
+	if err != nil {
+		return fmt.Errorf("failed to create container: %w", err)
+	}
+
+	// Pin the container so automatic orphan cleanup doesn't destroy it.
+	// Manually created containers have no corresponding session in the
+	// persistent session store, so without pinning they'd be pruned as
+	// orphans on the next cleanup cycle or daemon restart.
+	if err := sessRegistry.SetPinned(containerName, true); err != nil {
+		fmt.Printf("Warning: failed to pin container: %v\n", err)
+	}
+
+	fmt.Printf("Container %q ready (session: %s)\n", containerName, sessionID)
+
+	// Open interactive shell
+	var cmd *exec.Cmd
+	if sandbox.GetActivePlatform() == sandbox.PlatformDockerIncus {
+		cmd = sandbox.ExecInDockerHostInteractive([]string{
+			"incus", "exec", containerName, "--", "bash", "-l",
+		})
+	} else {
+		cmd = exec.Command("incus", "exec", containerName, "--", "bash", "-l")
+	}
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	fmt.Printf("Entering container. Type 'exit' to leave.\n")
+	fmt.Printf("To re-enter later:  astonish sandbox shell %s\n", containerName)
+	fmt.Printf("To destroy:         astonish sandbox destroy %s\n", containerName)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("shell session ended with error: %w", err)
+	}
+
+	return nil
+}
+
+// --- Expose / Unexpose / URL ---
+
+func handleSandboxExpose(containerID string, portArgs []string) error {
+	registry, err := sandbox.NewSessionRegistry()
+	if err != nil {
+		return err
+	}
+
+	// Resolve container name
+	containerName := resolveContainerNameCLI(registry, containerID)
+	if containerName == "" {
+		return fmt.Errorf("container %q not found\nUse 'astonish sandbox list' to see active containers", containerID)
+	}
+
+	for _, portStr := range portArgs {
+		port, err := strconv.Atoi(portStr)
+		if err != nil || port < 1 || port > 65535 {
+			return fmt.Errorf("invalid port: %s (must be 1-65535)", portStr)
+		}
+
+		added, err := registry.ExposePort(containerName, port)
+		if err != nil {
+			return fmt.Errorf("failed to expose port %d: %w", port, err)
+		}
+
+		if added {
+			fmt.Printf("Exposed port %d on %s\n", port, containerName)
+		} else {
+			fmt.Printf("Port %d already exposed on %s\n", port, containerName)
+		}
+		fmt.Printf("  Access via Studio UI for the direct proxy URL\n")
+	}
+
+	return nil
+}
+
+func handleSandboxExposeList(containerID string) error {
+	registry, err := sandbox.NewSessionRegistry()
+	if err != nil {
+		return err
+	}
+
+	containerName := resolveContainerNameCLI(registry, containerID)
+	if containerName == "" {
+		return fmt.Errorf("container %q not found", containerID)
+	}
+
+	entry := registry.GetByContainerName(containerName)
+	if entry == nil {
+		return fmt.Errorf("container %q not found", containerID)
+	}
+
+	if len(entry.ExposedPorts) == 0 {
+		fmt.Printf("No ports exposed on %s\n", containerName)
+		return nil
+	}
+
+	fmt.Printf("Exposed ports on %s:\n", containerName)
+	for _, port := range entry.ExposedPorts {
+		fmt.Printf("  %d (access via Studio UI for direct proxy URL)\n", port)
+	}
+
+	return nil
+}
+
+func handleSandboxUnexpose(containerID string, portArgs []string) error {
+	registry, err := sandbox.NewSessionRegistry()
+	if err != nil {
+		return err
+	}
+
+	containerName := resolveContainerNameCLI(registry, containerID)
+	if containerName == "" {
+		return fmt.Errorf("container %q not found\nUse 'astonish sandbox list' to see active containers", containerID)
+	}
+
+	for _, portStr := range portArgs {
+		port, err := strconv.Atoi(portStr)
+		if err != nil || port < 1 || port > 65535 {
+			return fmt.Errorf("invalid port: %s (must be 1-65535)", portStr)
+		}
+
+		removed, err := registry.UnexposePort(containerName, port)
+		if err != nil {
+			return fmt.Errorf("failed to unexpose port %d: %w", port, err)
+		}
+
+		if removed {
+			fmt.Printf("Unexposed port %d on %s\n", port, containerName)
+		} else {
+			fmt.Printf("Port %d was not exposed on %s\n", port, containerName)
+		}
+	}
+
+	return nil
+}
+
+func handleSandboxURL(containerID string, portStr string) error {
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("invalid port: %s (must be 1-65535)", portStr)
+	}
+
+	registry, err := sandbox.NewSessionRegistry()
+	if err != nil {
+		return err
+	}
+
+	containerName := resolveContainerNameCLI(registry, containerID)
+	if containerName == "" {
+		return fmt.Errorf("container %q not found", containerID)
+	}
+
+	if !registry.IsPortExposed(containerName, port) {
+		return fmt.Errorf("port %d is not exposed on %s\nRun 'astonish sandbox expose %s %d' first", port, containerName, containerName, port)
+	}
+
+	// The per-port proxy listener runs in the Studio daemon process.
+	// The CLI cannot resolve the allocated host port directly.
+	fmt.Printf("Port %d is exposed on %s.\n", port, containerName)
+	fmt.Printf("The proxy URL is shown in Studio > Settings > Sandbox.\n")
+	fmt.Printf("Studio allocates a dedicated host port (19000+) for each exposed service.\n")
+	return nil
+}
+
+// resolveContainerNameCLI resolves a user-provided identifier to a container name.
+// Accepts: session ID, container name, session ID prefix, or container name prefix.
+func resolveContainerNameCLI(registry *sandbox.SessionRegistry, input string) string {
+	if entry := registry.Get(input); entry != nil {
+		return entry.ContainerName
+	}
+	for _, entry := range registry.List() {
+		if entry.ContainerName == input {
+			return entry.ContainerName
+		}
+		if strings.HasPrefix(entry.SessionID, input) {
+			return entry.ContainerName
+		}
+		if strings.HasPrefix(entry.ContainerName, input) {
+			return entry.ContainerName
+		}
+	}
+	return ""
 }
 
 // --- Refresh ---

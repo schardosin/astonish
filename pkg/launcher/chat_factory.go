@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
+	chromem "github.com/philippgille/chromem-go"
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/api"
 	"github.com/schardosin/astonish/pkg/browser"
@@ -160,19 +162,23 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	}
 
 	// --- 2. Initialize internal tools ---
-	internalTools, err := tools.GetInternalTools()
+	// Tools are organized into groups. The main thread gets only essential tools
+	// (read, write, edit, shell, search, memory, delegate). All other tools are
+	// available to sub-agents via named groups in delegate_tasks.
+	coreTools, err := tools.GetInternalTools()
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize internal tools: %w", err)
 	}
 
-	// Register credential tools (gracefully handle "store not available" like scheduler)
+	// Credential tools → deferred category
+	var credToolsSlice []tool.Tool
 	credTools, credErr := tools.GetCredentialTools()
 	if credErr != nil {
 		if cfg.DebugMode {
 			fmt.Printf("Warning: Failed to create credential tools: %v\n", credErr)
 		}
 	} else {
-		internalTools = append(internalTools, credTools...)
+		credToolsSlice = credTools
 	}
 
 	// --- 2b. Initialize memory manager ---
@@ -186,6 +192,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// --- 2c. Initialize semantic memory (vector store, indexer) ---
 	var memStore *memory.Store
 	var memIndexer *memory.Indexer
+	var memEmbeddingFunc chromem.EmbeddingFunc // saved for ToolIndex creation
 	memorySearchAvailable := false
 	indexingDone := make(chan struct{})
 	var indexingErr error
@@ -236,6 +243,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					if embResult.Cleanup != nil {
 						cleanups = append(cleanups, func() { _ = embResult.Cleanup() })
 					}
+					memEmbeddingFunc = embResult.EmbeddingFunc
 
 					storeCfg := memory.DefaultStoreConfig()
 					storeCfg.MemoryDir = memDir
@@ -342,7 +350,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		close(indexingDone)
 	}
 
-	// Create memory tools
+	// Create memory tools → core category (always available)
 	if memMgr != nil {
 		var saveStore tools.MemorySaveStore
 		if memStore != nil {
@@ -354,7 +362,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				fmt.Printf("Warning: Failed to create memory_save tool: %v\n", msErr)
 			}
 		} else {
-			internalTools = append(internalTools, memorySaveTool)
+			coreTools = append(coreTools, memorySaveTool)
 		}
 	}
 
@@ -365,7 +373,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				fmt.Printf("Warning: Failed to create memory_search tool: %v\n", searchErr)
 			}
 		} else {
-			internalTools = append(internalTools, searchTool)
+			coreTools = append(coreTools, searchTool)
 		}
 
 		memDir, _ := config.GetMemoryDir(&cfg.AppConfig.Memory)
@@ -375,59 +383,62 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				fmt.Printf("Warning: Failed to create memory_get tool: %v\n", getErr)
 			}
 		} else {
-			internalTools = append(internalTools, getTool)
+			coreTools = append(coreTools, getTool)
 		}
 	}
 
-	// --- 2d. Initialize scheduler tools ---
-	// These are always registered — they gracefully handle "scheduler not available"
-	// when the daemon isn't running or scheduler isn't enabled.
+	// --- 2d. Initialize scheduler tools → deferred category ---
+	var schedToolsSlice []tool.Tool
 	schedTools, schedErr := tools.GetSchedulerTools()
 	if schedErr != nil {
 		if cfg.DebugMode {
 			fmt.Printf("Warning: Failed to create scheduler tools: %v\n", schedErr)
 		}
 	} else {
-		internalTools = append(internalTools, schedTools...)
+		schedToolsSlice = schedTools
 	}
 
-	// --- 2d-ii. Initialize distill_flow tool ---
-	// Registered alongside scheduler tools — enables auto-distillation when
-	// the user wants to schedule a task as "routine" but no flow exists yet.
+	// --- 2d-ii. Initialize distill_flow tool → deferred category ---
+	var distillToolsSlice []tool.Tool
 	distillTools, distillErr := tools.GetDistillTools()
 	if distillErr != nil {
 		if cfg.DebugMode {
 			fmt.Printf("Warning: Failed to create distill tools: %v\n", distillErr)
 		}
 	} else {
-		internalTools = append(internalTools, distillTools...)
+		distillToolsSlice = distillTools
 	}
 
-	// --- 2e. Initialize process management tools ---
+	// --- 2e. Initialize process management tools → core category ---
 	processTools, procErr := tools.GetProcessTools()
 	if procErr != nil {
 		if cfg.DebugMode {
 			fmt.Printf("Warning: Failed to create process tools: %v\n", procErr)
 		}
 	} else {
-		internalTools = append(internalTools, processTools...)
+		coreTools = append(coreTools, processTools...)
 	}
 	cleanups = append(cleanups, tools.CleanupProcessManager)
 
-	// --- 2f. Initialize browser automation tools ---
+	// --- 2f. Initialize browser automation tools → deferred category ---
 	browserCfg := browserConfigFromApp(cfg.AppConfig)
 	browserMgr := browser.NewManager(browserCfg)
-	browserTools, browserErr := tools.GetBrowserTools(browserMgr)
+	var browserToolsSlice []tool.Tool
+	var browserErr error
+	if cfg.AppConfig != nil && sandbox.IsSandboxEnabled(&cfg.AppConfig.Sandbox) {
+		browserToolsSlice, browserErr = tools.GetBrowserToolsForSandbox(browserMgr)
+	} else {
+		browserToolsSlice, browserErr = tools.GetBrowserTools(browserMgr)
+	}
 	if browserErr != nil {
 		if cfg.DebugMode {
 			fmt.Printf("Warning: Failed to create browser tools: %v\n", browserErr)
 		}
-	} else {
-		internalTools = append(internalTools, browserTools...)
+		browserToolsSlice = nil
 	}
 	cleanups = append(cleanups, browserMgr.Cleanup)
 
-	// --- 2f-ii. Initialize email tools ---
+	// --- 2f-ii. Initialize email tools → deferred category ---
 	// Create the email client here (before GetEmailTools) so tools are available
 	// in both console and daemon modes. The daemon's initEmailTools becomes a
 	// no-op when the factory has already set the client.
@@ -458,16 +469,17 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			}
 		}
 	}
+	var emailToolsSlice []tool.Tool
 	emailTools, emailErr := tools.GetEmailTools()
 	if emailErr != nil {
 		if cfg.DebugMode {
 			fmt.Printf("Warning: Failed to create email tools: %v\n", emailErr)
 		}
 	} else if len(emailTools) > 0 {
-		internalTools = append(internalTools, emailTools...)
+		emailToolsSlice = emailTools
 	}
 
-	// --- 2g. Sub-agent delegation tool ---
+	// --- 2g. Sub-agent delegation tool → core category ---
 	var subAgentMgr *agent.SubAgentManager
 	var fleetOnlyTools []tool.Tool // fleet-only tools (run_fleet_phase), assigned to SubAgentManager.FleetTools
 	if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
@@ -477,7 +489,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				fmt.Printf("Warning: Failed to create delegate_tasks tool: %v\n", delegateErr)
 			}
 		} else {
-			internalTools = append(internalTools, delegateTool)
+			coreTools = append(coreTools, delegateTool)
 
 			subAgentCfg := agent.SubAgentConfig{
 				MaxDepth:      cfg.AppConfig.SubAgents.MaxDepth,
@@ -488,9 +500,10 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 	}
 
-	// --- 2h. Initialize skills system ---
+	// --- 2h. Initialize skills system → deferred category ---
 	var loadedSkills []skills.Skill
 	var skillIndex string
+	var skillToolSlice []tool.Tool
 	if cfg.AppConfig != nil && cfg.AppConfig.Skills.IsSkillsEnabled() {
 		skillsCfg := &cfg.AppConfig.Skills
 		workDir := cfg.WorkspaceDir
@@ -522,7 +535,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 						fmt.Printf("Warning: Failed to create skill_lookup tool: %v\n", stErr)
 					}
 				} else {
-					internalTools = append(internalTools, skillTool)
+					skillToolSlice = append(skillToolSlice, skillTool)
 				}
 			}
 			if cfg.DebugMode {
@@ -534,7 +547,6 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// --- 3. Load MCP tools from cache (lazy) ---
 	mcpCfg, _ := config.LoadMCPConfig()
 	var lazyToolsets []*agent.LazyMCPToolset
-	var mcpToolsets []tool.Toolset
 
 	if mcpCfg != nil && len(mcpCfg.MCPServers) > 0 {
 		if _, loadErr := cache.LoadCache(); loadErr != nil {
@@ -558,9 +570,9 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			lazyToolsets = append(lazyToolsets, lt)
 		}
 
-		for _, lt := range lazyToolsets {
-			mcpToolsets = append(mcpToolsets, agent.NewSanitizedToolset(lt, cfg.DebugMode))
-		}
+		// Note: MCP toolsets are NOT collected into a separate slice anymore.
+		// Each server is registered as its own tool group (mcp:<name>)
+		// in section 4b below, wrapped in SanitizedToolset at that point.
 	}
 	cleanups = append(cleanups, func() {
 		for _, lt := range lazyToolsets {
@@ -585,6 +597,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	var sandboxNodePool *sandbox.NodeClientPool      // hoisted for save_sandbox_template tool
 	var sandboxIncusClient *sandbox.IncusClient      // hoisted for save_sandbox_template tool
 	var sandboxTplRegistry *sandbox.TemplateRegistry // hoisted for save_sandbox_template tool
+	var sandboxSessRegistry *sandbox.SessionRegistry // hoisted for save_sandbox_template tool
 	if cfg.AppConfig != nil && sandbox.IsSandboxEnabled(&cfg.AppConfig.Sandbox) {
 		sandboxClient, sandboxErr := sandbox.SetupSandboxRuntime()
 		if sandboxErr != nil {
@@ -609,13 +622,33 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		limits := sandbox.EffectiveLimits(&cfg.AppConfig.Sandbox)
 		nodePool := sandbox.NewNodeClientPool(sandboxClient, sessRegistry, tplRegistry, "", &limits)
 
-		// Wrap all internal tools with NodeTool proxies (pool-backed)
-		internalTools = sandbox.WrapToolsWithNode(internalTools, nodePool)
+		// Wrap all tool category slices with NodeTool proxies (pool-backed).
+		// Browser tools are NOT wrapped — they run on the host and need direct
+		// access to Chrome. Each category slice is wrapped independently so
+		// deferred tools are already sandbox-ready when activated later.
+		coreTools = sandbox.WrapToolsWithNode(coreTools, nodePool)
+		if len(credToolsSlice) > 0 {
+			credToolsSlice = sandbox.WrapToolsWithNode(credToolsSlice, nodePool)
+		}
+		if len(schedToolsSlice) > 0 {
+			schedToolsSlice = sandbox.WrapToolsWithNode(schedToolsSlice, nodePool)
+		}
+		if len(distillToolsSlice) > 0 {
+			distillToolsSlice = sandbox.WrapToolsWithNode(distillToolsSlice, nodePool)
+		}
+		if len(emailToolsSlice) > 0 {
+			emailToolsSlice = sandbox.WrapToolsWithNode(emailToolsSlice, nodePool)
+		}
+		if len(skillToolSlice) > 0 {
+			skillToolSlice = sandbox.WrapToolsWithNode(skillToolSlice, nodePool)
+		}
+		// Note: browserToolsSlice is intentionally NOT wrapped — browser runs on host
 
 		// Hoist references for template tool registration
 		sandboxNodePool = nodePool
 		sandboxIncusClient = sandboxClient
 		sandboxTplRegistry = tplRegistry
+		sandboxSessRegistry = sessRegistry
 
 		// Wire sandbox pool to all lazy MCP toolsets so stdio MCP servers
 		// start inside the session's container instead of on the host.
@@ -660,6 +693,18 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				fmt.Sprintf("Cleaned up %d stale session container(s) from previous run", pruned))
 		}
 
+		// Start idle watchdog: stops containers that have been inactive for the
+		// configured timeout (default 10 min), preserving them for fast restart.
+		idleTimeout := sandbox.EffectiveIdleTimeout(&cfg.AppConfig.Sandbox)
+		if idleTimeout > 0 {
+			idleCtx, idleCancel := context.WithCancel(context.Background())
+			nodePool.StartIdleWatchdog(idleCtx, idleTimeout)
+			cleanups = append(cleanups, idleCancel)
+			if cfg.DebugMode {
+				fmt.Printf("Sandbox idle watchdog: enabled (timeout: %s)\n", idleTimeout)
+			}
+		}
+
 		cleanups = append(cleanups, func() {
 			// Cleanup destroys all per-session containers
 			nodePool.Cleanup()
@@ -700,92 +745,146 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 	}
 
-	// --- 4b. Enforce tool count limit ---
-	maxTools := 128
-	if cfg.AppConfig != nil && cfg.AppConfig.Chat.MaxTools > 0 {
-		maxTools = cfg.AppConfig.Chat.MaxTools
+	// --- 4b. Build tool groups for sub-agent delegation ---
+	// Tools are organized into named groups. The main thread gets only essential
+	// tools (file ops, shell, search, memory, delegate). All other tools are
+	// available to sub-agents via named groups in the delegate_tasks tool.
+
+	// Split coreTools into main-thread essentials and the full "core" group
+	// for sub-agents. Main thread tools: read_file, write_file, edit_file,
+	// shell_command, grep_search, find_files, memory_save, memory_search,
+	// delegate_tasks, opencode.
+	mainThreadToolNames := map[string]bool{
+		"read_file":      true,
+		"write_file":     true,
+		"edit_file":      true,
+		"shell_command":  true,
+		"grep_search":    true,
+		"find_files":     true,
+		"memory_save":    true,
+		"memory_search":  true,
+		"delegate_tasks": true,
+		"opencode":       true,
 	}
 
-	totalMCPTools := 0
-	if len(mcpToolsets) > 0 {
-		minCtx := &minimalReadonlyContext{Context: ctx}
-		for _, ts := range mcpToolsets {
-			if t, err := ts.Tools(minCtx); err == nil {
-				totalMCPTools += len(t)
-			}
+	var mainThreadTools []tool.Tool
+	for _, t := range coreTools {
+		if mainThreadToolNames[t.Name()] {
+			mainThreadTools = append(mainThreadTools, t)
 		}
 	}
 
-	totalTools := len(internalTools) + totalMCPTools
-	if totalTools > maxTools {
-		mcpBudget := maxTools - len(internalTools)
-		if mcpBudget < 0 {
-			mcpBudget = 0
-		}
+	// Separate web-oriented tools from core into their own group
+	webToolNames := map[string]bool{
+		"web_fetch":    true,
+		"read_pdf":     true,
+		"http_request": true,
+	}
+	processToolNames := map[string]bool{
+		"process_read":  true,
+		"process_write": true,
+		"process_list":  true,
+		"process_kill":  true,
+	}
 
-		priorityServers := map[string]bool{}
-		if _, serverName, _ := api.IsWebSearchConfigured(); serverName != "" {
-			priorityServers[serverName] = true
+	var coreGroupTools []tool.Tool
+	var webGroupTools []tool.Tool
+	var processGroupTools []tool.Tool
+	for _, t := range coreTools {
+		name := t.Name()
+		if webToolNames[name] {
+			webGroupTools = append(webGroupTools, t)
+		} else if processToolNames[name] {
+			processGroupTools = append(processGroupTools, t)
+		} else {
+			coreGroupTools = append(coreGroupTools, t)
 		}
-		if _, serverName, _ := api.IsWebExtractConfigured(); serverName != "" {
-			priorityServers[serverName] = true
-		}
-		for _, srv := range config.GetStandardServers() {
-			if len(srv.EnvVars) == 0 {
-				priorityServers[srv.ID] = true
-			}
-		}
+	}
 
-		var trimmedToolsets []tool.Toolset
-		remaining := mcpBudget
-		minCtx := &minimalReadonlyContext{Context: ctx}
+	// Build tool groups map
+	toolGroups := map[string]*agent.ToolGroup{}
 
-		// First pass: priority toolsets
-		for _, ts := range mcpToolsets {
-			if !priorityServers[ts.Name()] {
-				continue
-			}
-			tsTools, err := ts.Tools(minCtx)
-			if err != nil {
-				continue
-			}
-			if len(tsTools) <= remaining {
-				trimmedToolsets = append(trimmedToolsets, ts)
-				remaining -= len(tsTools)
-			}
+	toolGroups["core"] = &agent.ToolGroup{
+		Name:        "core",
+		Description: "File operations, shell commands, search, memory, git diff, file tree",
+		Tools:       coreGroupTools,
+	}
+	if len(webGroupTools) > 0 {
+		toolGroups["web"] = &agent.ToolGroup{
+			Name:        "web",
+			Description: "Fetch web pages, read PDFs, make HTTP API requests",
+			Tools:       webGroupTools,
 		}
+	}
+	if len(processGroupTools) > 0 {
+		toolGroups["process"] = &agent.ToolGroup{
+			Name:        "process",
+			Description: "Read, write, list, and kill background processes",
+			Tools:       processGroupTools,
+		}
+	}
+	if len(browserToolsSlice) > 0 {
+		toolGroups["browser"] = &agent.ToolGroup{
+			Name:        "browser",
+			Description: "Web automation, screenshots, form filling, page interaction",
+			Tools:       browserToolsSlice,
+		}
+	}
+	if len(credToolsSlice) > 0 {
+		toolGroups["credentials"] = &agent.ToolGroup{
+			Name:        "credentials",
+			Description: "Save, retrieve, list, test, and resolve credentials",
+			Tools:       credToolsSlice,
+		}
+	}
+	if len(schedToolsSlice) > 0 {
+		toolGroups["scheduler"] = &agent.ToolGroup{
+			Name:        "scheduler",
+			Description: "Schedule and manage recurring jobs",
+			Tools:       schedToolsSlice,
+		}
+	}
+	if len(emailToolsSlice) > 0 {
+		toolGroups["email"] = &agent.ToolGroup{
+			Name:        "email",
+			Description: "Read, send, search, and wait for email",
+			Tools:       emailToolsSlice,
+		}
+	}
+	if len(distillToolsSlice) > 0 {
+		toolGroups["distill"] = &agent.ToolGroup{
+			Name:        "distill",
+			Description: "Distill conversation flows into reusable YAML",
+			Tools:       distillToolsSlice,
+		}
+	}
+	if len(skillToolSlice) > 0 {
+		toolGroups["skill"] = &agent.ToolGroup{
+			Name:        "skill",
+			Description: "Look up available CLI tool skills",
+			Tools:       skillToolSlice,
+		}
+	}
 
-		// Second pass: fill remaining budget
-		for _, ts := range mcpToolsets {
-			if remaining <= 0 {
-				break
-			}
-			if priorityServers[ts.Name()] {
-				continue
-			}
-			tsTools, err := ts.Tools(minCtx)
-			if err != nil {
-				continue
-			}
-			if len(tsTools) <= remaining {
-				trimmedToolsets = append(trimmedToolsets, ts)
-				remaining -= len(tsTools)
-			}
+	// MCP servers — each is its own group
+	for _, lt := range lazyToolsets {
+		sanitized := agent.NewSanitizedToolset(lt, cfg.DebugMode)
+		groupName := "mcp:" + lt.Name()
+		serverDesc := fmt.Sprintf("MCP server: %s (%d tools)", lt.Name(), lt.ToolCount())
+		toolGroups[groupName] = &agent.ToolGroup{
+			Name:        groupName,
+			Description: serverDesc,
+			Toolsets:    []tool.Toolset{sanitized},
 		}
+	}
 
-		droppedTools := totalMCPTools - (mcpBudget - remaining)
-		if droppedTools > 0 {
-			startupNotices = append(startupNotices,
-				fmt.Sprintf("I trimmed %d MCP tools to fit your provider's limit of %d — type /status for details.", droppedTools, maxTools))
-			if cfg.DebugMode {
-				fmt.Printf("  Internal tools: %d (always included)\n", len(internalTools))
-				fmt.Printf("  MCP tools included: %d, dropped: %d\n", mcpBudget-remaining, droppedTools)
-				if len(priorityServers) > 0 {
-					fmt.Printf("  Priority servers (web tools): %v\n", priorityServers)
-				}
-			}
+	if cfg.DebugMode {
+		totalTools := 0
+		for _, g := range toolGroups {
+			totalTools += len(g.Tools)
 		}
-		mcpToolsets = trimmedToolsets
+		fmt.Printf("Tool groups: %d groups, %d total tools, %d main thread tools\n",
+			len(toolGroups), totalTools, len(mainThreadTools))
 	}
 
 	// --- 5. Build system prompt ---
@@ -794,16 +893,31 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		workspaceDir, _ = os.Getwd()
 	}
 
+	// The prompt builder uses all tools for capability detection.
+	// It receives sorted tool groups for the delegation guidance section.
+	var allToolsForPrompt []tool.Tool
+	var allToolsetsForPrompt []tool.Toolset
+	sortedGroups := make([]*agent.ToolGroup, 0, len(toolGroups))
+	for _, g := range toolGroups {
+		allToolsForPrompt = append(allToolsForPrompt, g.Tools...)
+		allToolsetsForPrompt = append(allToolsetsForPrompt, g.Toolsets...)
+		sortedGroups = append(sortedGroups, g)
+	}
+	sort.Slice(sortedGroups, func(i, j int) bool {
+		return sortedGroups[i].Name < sortedGroups[j].Name
+	})
+
 	promptBuilder := &agent.SystemPromptBuilder{
-		Tools:        internalTools,
-		Toolsets:     mcpToolsets,
+		Tools:        allToolsForPrompt,
+		Toolsets:     allToolsetsForPrompt,
 		WorkspaceDir: workspaceDir,
+		Catalog:      sortedGroups,
 	}
 
-	// Check web tool availability
+	// Check web tool availability (across all MCP toolsets, not just active)
 	if webSearchConfigured, serverName, toolName := api.IsWebSearchConfigured(); webSearchConfigured {
-		for _, ts := range mcpToolsets {
-			if ts.Name() == serverName {
+		for _, lt := range lazyToolsets {
+			if lt.Name() == serverName {
 				promptBuilder.WebSearchAvailable = true
 				promptBuilder.WebSearchToolName = toolName
 				break
@@ -811,8 +925,8 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 	}
 	if webExtractConfigured, serverName, toolName := api.IsWebExtractConfigured(); webExtractConfigured {
-		for _, ts := range mcpToolsets {
-			if ts.Name() == serverName {
+		for _, lt := range lazyToolsets {
+			if lt.Name() == serverName {
 				promptBuilder.WebExtractAvailable = true
 				promptBuilder.WebExtractToolName = toolName
 				break
@@ -821,7 +935,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	}
 
 	// Check browser availability (native browser tools)
-	if browserErr == nil && len(browserTools) > 0 {
+	if browserErr == nil && len(browserToolsSlice) > 0 {
 		promptBuilder.BrowserAvailable = true
 	}
 
@@ -897,7 +1011,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	if memDir != "" {
 		selfMDMemDir = memDir
 
-		selfCfg := factoryBuildSelfMDConfig(cfg, memDir, internalTools, mcpToolsets, mcpCfg, memStore, memorySearchAvailable, loadedSkills)
+		selfCfg := factoryBuildSelfMDConfig(cfg, memDir, allToolsForPrompt, allToolsetsForPrompt, mcpCfg, memStore, memorySearchAvailable, loadedSkills)
 		selfContent := memory.GenerateSelfMD(selfCfg)
 		if writeErr := memory.WriteSelfMD(memDir, selfContent); writeErr != nil {
 			if cfg.DebugMode {
@@ -1016,30 +1130,35 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			}
 		}
 
-		// Register save_fleet_plan tool (available to main chat agent)
+		// Fleet plan tools → deferred category
+		var fleetToolsSlice []tool.Tool
 		fleetPlanTools, fptErr := tools.GetFleetPlanTools()
 		if fptErr != nil {
 			if cfg.DebugMode {
 				fmt.Printf("Warning: Failed to create fleet plan tools: %v\n", fptErr)
 			}
 		} else {
-			internalTools = append(internalTools, fleetPlanTools...)
+			fleetToolsSlice = append(fleetToolsSlice, fleetPlanTools...)
 		}
 
-		// Register validate_fleet_plan tool (available to main chat agent)
 		fleetPlanValidateTools, fpvErr := tools.GetFleetPlanValidateTools()
 		if fpvErr != nil {
 			if cfg.DebugMode {
 				fmt.Printf("Warning: Failed to create fleet plan validate tools: %v\n", fpvErr)
 			}
 		} else {
-			internalTools = append(internalTools, fleetPlanValidateTools...)
+			fleetToolsSlice = append(fleetToolsSlice, fleetPlanValidateTools...)
 		}
 
-		// Register opencode tool for the main chat agent (used by the plan wizard
-		// to analyze project workspaces via /init). Fleet worker agents also get
-		// access via fleetOnlyTools, but the main agent needs it for wizard-phase
-		// project analysis.
+		if len(fleetToolsSlice) > 0 {
+			toolGroups["fleet"] = &agent.ToolGroup{
+				Name:        "fleet",
+				Description: "Create and validate fleet plans",
+				Tools:       fleetToolsSlice,
+			}
+		}
+
+		// opencode tool → add to main thread tools
 		if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
 			ocTool, ocErr := tools.NewOpenCodeTool()
 			if ocErr != nil {
@@ -1047,29 +1166,140 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					fmt.Printf("Warning: Failed to create opencode tool for wizard: %v\n", ocErr)
 				}
 			} else {
-				internalTools = append(internalTools, ocTool)
+				coreTools = append(coreTools, ocTool)
+				mainThreadTools = append(mainThreadTools, ocTool)
+				// Also add to core group for sub-agents
+				if g, ok := toolGroups["core"]; ok {
+					g.Tools = append(g.Tools, ocTool)
+				}
 			}
 		}
 
-		// Register save_sandbox_template tool (available to wizard in chat sessions)
-		// Only when sandbox is enabled and we have all required dependencies.
+		// Sandbox template tools → deferred category
 		if sandboxNodePool != nil && sandboxIncusClient != nil && sandboxTplRegistry != nil {
-			tplTool, tplErr := tools.NewSaveSandboxTemplateTool(sandboxNodePool, sandboxIncusClient, sandboxTplRegistry)
+			var sandboxTplTools []tool.Tool
+			tplTool, tplErr := tools.NewSaveSandboxTemplateTool(sandboxNodePool, sandboxIncusClient, sandboxTplRegistry, sandboxSessRegistry)
 			if tplErr != nil {
 				if cfg.DebugMode {
 					fmt.Printf("Warning: Failed to create save_sandbox_template tool: %v\n", tplErr)
 				}
 			} else {
-				internalTools = append(internalTools, tplTool)
+				sandboxTplTools = append(sandboxTplTools, tplTool)
+			}
+
+			listTplTool, listErr := tools.NewListSandboxTemplatesTool(sandboxTplRegistry)
+			if listErr != nil {
+				if cfg.DebugMode {
+					fmt.Printf("Warning: Failed to create list_sandbox_templates tool: %v\n", listErr)
+				}
+			} else {
+				sandboxTplTools = append(sandboxTplTools, listTplTool)
+			}
+
+			useTplTool, useErr := tools.NewUseSandboxTemplateTool(sandboxNodePool, sandboxTplRegistry)
+			if useErr != nil {
+				if cfg.DebugMode {
+					fmt.Printf("Warning: Failed to create use_sandbox_template tool: %v\n", useErr)
+				}
+			} else {
+				sandboxTplTools = append(sandboxTplTools, useTplTool)
+			}
+
+			if len(sandboxTplTools) > 0 {
+				toolGroups["sandbox_templates"] = &agent.ToolGroup{
+					Name:        "sandbox_templates",
+					Description: "Save, list, and use sandbox container templates",
+					Tools:       sandboxTplTools,
+				}
 			}
 		}
 	}
 
+	// Drill tools → deferred category
+	var drillToolsSlice []tool.Tool
+	drillTools, drillErr := tools.GetDrillTools()
+	if drillErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("Warning: Failed to create drill tools: %v\n", drillErr)
+		}
+	} else {
+		drillToolsSlice = append(drillToolsSlice, drillTools...)
+	}
+
+	runDrillTool, runDrillErr := tools.NewRunDrillTool(sandboxNodePool)
+	if runDrillErr != nil {
+		if cfg.DebugMode {
+			fmt.Printf("Warning: Failed to create run_drill tool: %v\n", runDrillErr)
+		}
+	} else {
+		drillToolsSlice = append(drillToolsSlice, runDrillTool)
+	}
+
+	if len(drillToolsSlice) > 0 {
+		toolGroups["drill"] = &agent.ToolGroup{
+			Name:        "drill",
+			Description: "Create, validate, and run test drills",
+			Tools:       drillToolsSlice,
+		}
+	}
+
+	// Create the dedicated tool index for retrieval-based tool discovery.
+	// One document per tool (name + description) enables accurate semantic
+	// search without the chunking problems of the general memory store.
+	var toolIndex *agent.ToolIndex
+	if memStore != nil && memEmbeddingFunc != nil {
+		var tiErr error
+		toolIndex, tiErr = agent.NewToolIndex(memStore.DB(), memEmbeddingFunc)
+		if tiErr != nil {
+			if cfg.DebugMode {
+				fmt.Printf("Warning: Failed to create tool index: %v\n", tiErr)
+			}
+		} else {
+			sortedGroups := agent.SortedGroups(toolGroups)
+			if syncErr := toolIndex.SyncTools(context.Background(), mainThreadTools, sortedGroups); syncErr != nil {
+				if cfg.DebugMode {
+					fmt.Printf("Warning: Failed to sync tool index: %v\n", syncErr)
+				}
+			} else if cfg.DebugMode {
+				fmt.Printf("Tool index: %d tools indexed for semantic discovery\n", toolIndex.Count())
+			}
+		}
+	}
+
+	// Create search_tools and add to main thread tools if tool index is available.
+	// The onResults callback uses a forward reference to chatAgent (set after
+	// ChatAgent creation) so that search_tools discoveries feed into the
+	// dynamic tool injection system.
+	var chatAgentRef *agent.ChatAgent
+	var searchToolsTool tool.Tool
+	if toolIndex != nil {
+		var stErr error
+		searchToolsTool, stErr = tools.NewSearchToolsTool(toolIndex, func(names []string) {
+			if chatAgentRef != nil {
+				chatAgentRef.RegisterSearchToolsResults(names)
+			}
+		})
+		if stErr == nil {
+			mainThreadTools = append(mainThreadTools, searchToolsTool)
+		} else if cfg.DebugMode {
+			fmt.Printf("Warning: Failed to create search_tools: %v\n", stErr)
+		}
+	}
+
 	// --- 6. Create ChatAgent ---
+	// Main thread gets essential tools (file ops, shell, search, memory,
+	// delegate). Additional tools are dynamically injected per-turn based
+	// on hybrid search relevance and search_tools discoveries.
 	chatAgent := agent.NewChatAgent(
-		llm, internalTools, mcpToolsets, sessionService,
+		llm, mainThreadTools, nil, sessionService,
 		promptBuilder, cfg.DebugMode, cfg.AutoApprove,
 	)
+	chatAgentRef = chatAgent // wire the forward reference for search_tools callback
+
+	// Wire tool index to ChatAgent for per-turn auto-discovery
+	if toolIndex != nil {
+		chatAgent.ToolIndex = toolIndex
+	}
 
 	// Wire credential redactor to ChatAgent, session service, and sub-agents
 	if credStore != nil {
@@ -1078,20 +1308,40 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		// Also wire to file-based session store for transcript redaction
 		if fs, ok := sessionService.(*persistentsession.FileStore); ok {
 			fs.RedactFunc = redactor.Redact
+			// Wire retroactive redaction callback so that after save_credential
+			// completes, the current session's transcript is scrubbed of any
+			// secrets that were persisted before the credential was registered.
+			chatAgent.RedactSessionFunc = fs.RedactSession
 		}
 	}
 
-	// Wire SubAgentManager — deferred until all tools and LLM are known
+	// Wire SubAgentManager — deferred until all tools and LLM are known.
+	// Sub-agents get tool groups for group-based tool resolution.
 	if subAgentMgr != nil {
 		subAgentMgr.LLM = llm
-		subAgentMgr.Tools = internalTools
+		subAgentMgr.ToolGroups = toolGroups
 		subAgentMgr.FleetTools = fleetOnlyTools
-		subAgentMgr.Toolsets = mcpToolsets
 		subAgentMgr.SessionService = sessionService
 		subAgentMgr.MemoryManager = memMgr
 		subAgentMgr.Redactor = chatAgent.Redactor
+		subAgentMgr.EventForwarder = chatAgent.ForwardSubTaskEvent
 		subAgentMgr.AppName = "astonish"
 		subAgentMgr.UserID = "console_user"
+		// Wire tool discovery so sub-agents can auto-discover their tools
+		if toolIndex != nil {
+			subAgentMgr.ToolIndex = toolIndex
+		}
+		if searchToolsTool != nil {
+			subAgentMgr.SearchToolsTool = searchToolsTool
+		}
+		// Alias sub-agent sessions to the parent's sandbox container so they
+		// share the same container instead of each creating a new one.
+		if sandboxNodePool != nil {
+			pool := sandboxNodePool
+			subAgentMgr.OnChildSession = func(parentSessionID, childSessionID string) {
+				pool.Alias(childSessionID, parentSessionID)
+			}
+		}
 		tools.SetSubAgentManager(subAgentMgr)
 	}
 
@@ -1176,7 +1426,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// --- 6b3. Wire SELF.md refresher ---
 	if selfMDMemDir != "" {
 		chatAgent.SelfMDRefresher = func() {
-			selfCfg := factoryBuildSelfMDConfig(cfg, selfMDMemDir, internalTools, mcpToolsets, mcpCfg, memStore, memorySearchAvailable, loadedSkills)
+			selfCfg := factoryBuildSelfMDConfig(cfg, selfMDMemDir, allToolsForPrompt, allToolsetsForPrompt, mcpCfg, memStore, memorySearchAvailable, loadedSkills)
 			if chatAgent.FlowRegistry != nil {
 				for _, e := range chatAgent.FlowRegistry.Entries() {
 					selfCfg.FlowEntries = append(selfCfg.FlowEntries, memory.FlowInfo{
@@ -1206,7 +1456,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	}
 
 	chatAgent.FlowDistiller = agent.NewFlowDistiller(
-		llm, internalTools, mcpToolsets,
+		llm, allToolsForPrompt, allToolsetsForPrompt,
 		api.GetFlowSchema, validateYAML,
 	)
 
@@ -1249,6 +1499,18 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// --- 6d. Wire memory and flow context ---
 	if memMgr != nil {
 		chatAgent.MemoryManager = memMgr
+
+		// Post-task memory reflection: silent LLM call after non-trivial
+		// tasks to save any discovered knowledge the model forgot to persist.
+		reflector := &agent.MemoryReflector{
+			LLM:           llm,
+			MemoryManager: memMgr,
+			DebugMode:     cfg.DebugMode,
+		}
+		if memStore != nil {
+			reflector.MemoryStore = memStore
+		}
+		chatAgent.MemoryReflector = reflector
 	}
 	chatAgent.FlowContextBuilder = &agent.FlowContextBuilder{DebugMode: cfg.DebugMode}
 
@@ -1267,8 +1529,8 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		ProviderName:          cfg.ProviderName,
 		ModelName:             cfg.ModelName,
 		Compactor:             compactor,
-		InternalTools:         internalTools,
-		MCPToolsets:           mcpToolsets,
+		InternalTools:         allToolsForPrompt,
+		MCPToolsets:           allToolsetsForPrompt,
 		MemoryManager:         memMgr,
 		MemoryStore:           memStore,
 		MemorySearchAvailable: memorySearchAvailable,

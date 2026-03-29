@@ -25,7 +25,7 @@ func TestNewLLMError(t *testing.T) {
 		{"unauthorized", 401, false, 401},
 		{"forbidden", 403, false, 403},
 		{"not_found", 404, false, 404},
-		{"internal_server_error", 500, false, 500},
+		{"internal_server_error", 500, true, 500},
 	}
 
 	for _, tt := range tests {
@@ -93,7 +93,7 @@ func TestClassificationHelpers(t *testing.T) {
 		{"504", 504, true, false, false, true},
 		{"401", 401, false, false, true, false},
 		{"403", 403, false, false, true, false},
-		{"500", 500, false, false, false, true},
+		{"500", 500, true, false, false, true},
 		{"400", 400, false, false, false, false},
 	}
 

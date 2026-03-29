@@ -3,7 +3,9 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -57,11 +59,15 @@ type SandboxDetailResponse struct {
 
 // ContainerInfo represents a session container in the list.
 type ContainerInfo struct {
-	Name      string `json:"name"`
-	SessionID string `json:"session_id"`
-	Template  string `json:"template"`
-	Status    string `json:"status"`
-	Created   string `json:"created"`
+	Name         string            `json:"name"`
+	SessionID    string            `json:"session_id"`
+	Template     string            `json:"template"`
+	Status       string            `json:"status"`
+	Created      string            `json:"created"`
+	Pinned       bool              `json:"pinned,omitempty"`
+	ExposedPorts []int             `json:"exposed_ports,omitempty"`
+	HostPorts    map[string]int    `json:"host_ports,omitempty"`
+	ProxyHosts   map[string]string `json:"proxy_hosts,omitempty"`
 }
 
 // ContainerListResponse is the JSON response for GET /api/sandbox/containers.
@@ -317,13 +323,48 @@ func SandboxContainerListHandler(w http.ResponseWriter, r *http.Request) {
 		} else if client.IsRunning(e.ContainerName) {
 			status = "running"
 		}
-		containers = append(containers, ContainerInfo{
+		info := ContainerInfo{
 			Name:      e.ContainerName,
 			SessionID: e.SessionID,
 			Template:  e.TemplateName,
 			Status:    status,
 			Created:   e.CreatedAt.Format("2006-01-02 15:04:05"),
-		})
+			Pinned:    e.Pinned,
+		}
+		if len(e.ExposedPorts) > 0 {
+			info.ExposedPorts = e.ExposedPorts
+			mgr := GetPortProxyManager()
+			sr := GetSubdomainRouter()
+			hostPorts := make(map[string]int, len(e.ExposedPorts))
+			proxyHosts := make(map[string]string, len(e.ExposedPorts))
+			for _, port := range e.ExposedPorts {
+				portStr := strconv.Itoa(port)
+				hp := mgr.GetHostPort(e.ContainerName, port)
+				if hp == 0 && status == "running" {
+					// Auto-start: listener lost after daemon restart
+					hp, _ = mgr.StartProxy(e.ContainerName, port)
+				}
+				if hp > 0 {
+					hostPorts[portStr] = hp
+				}
+
+				// Auto-recover subdomain routes from persisted base domain
+				if e.BaseDomain != "" {
+					hostname := SubdomainHostname(e.ContainerName, port, e.BaseDomain)
+					if _, _, ok := sr.Lookup(hostname); !ok && status == "running" {
+						sr.RegisterHost(hostname, e.ContainerName, port)
+					}
+					proxyHosts[portStr] = hostname
+				}
+			}
+			if len(hostPorts) > 0 {
+				info.HostPorts = hostPorts
+			}
+			if len(proxyHosts) > 0 {
+				info.ProxyHosts = proxyHosts
+			}
+		}
+		containers = append(containers, info)
 	}
 
 	// Find orphans (containers in Incus not in registry)
@@ -668,6 +709,261 @@ func SandboxRefreshHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+}
+
+// --- Port Exposure ---
+
+// ExposePortRequest is the JSON body for POST /api/sandbox/containers/{id}/expose.
+type ExposePortRequest struct {
+	Port       int    `json:"port"`
+	BaseDomain string `json:"base_domain,omitempty"`
+}
+
+// SandboxExposePortHandler handles POST /api/sandbox/containers/{id}/expose.
+// Registers a port as accessible through the reverse proxy.
+func SandboxExposePortHandler(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	if id == "" {
+		http.Error(w, "missing container id", http.StatusBadRequest)
+		return
+	}
+
+	var req ExposePortRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Port < 1 || req.Port > 65535 {
+		http.Error(w, "port must be between 1 and 65535", http.StatusBadRequest)
+		return
+	}
+
+	sessRegistry, err := sandbox.NewSessionRegistry()
+	if err != nil {
+		http.Error(w, "failed to load session registry: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Resolve container name — accept session ID, container name, or prefix
+	containerName := resolveContainerName(sessRegistry, id)
+	if containerName == "" {
+		http.Error(w, fmt.Sprintf("container %q not found", id), http.StatusNotFound)
+		return
+	}
+
+	added, err := sessRegistry.ExposePort(containerName, req.Port)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Start per-port proxy listener
+	mgr := GetPortProxyManager()
+	hostPort, proxyErr := mgr.StartProxy(containerName, req.Port)
+
+	var proxyErrMsg string
+	if proxyErr != nil {
+		proxyErrMsg = proxyErr.Error()
+		log.Printf("[sandbox-proxy] Failed to start port listener for %s:%d: %v", containerName, req.Port, proxyErr)
+	}
+
+	// Register subdomain proxy route if base_domain was provided
+	var proxyHost string
+	if req.BaseDomain != "" {
+		// Persist the base domain so it can be recovered after daemon restart
+		_ = sessRegistry.SetBaseDomain(containerName, req.BaseDomain)
+
+		proxyHost = SubdomainHostname(containerName, req.Port, req.BaseDomain)
+		GetSubdomainRouter().RegisterHost(proxyHost, containerName, req.Port)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":      "ok",
+		"added":       added,
+		"port":        req.Port,
+		"host_port":   hostPort,
+		"proxy_host":  proxyHost,
+		"proxy_error": proxyErrMsg,
+	})
+}
+
+// SandboxUnexposePortHandler handles DELETE /api/sandbox/containers/{id}/expose/{port}.
+// Removes a port from the reverse proxy access list.
+func SandboxUnexposePortHandler(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	portStr := mux.Vars(r)["port"]
+
+	if id == "" || portStr == "" {
+		http.Error(w, "missing container id or port", http.StatusBadRequest)
+		return
+	}
+
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 1 || port > 65535 {
+		http.Error(w, "invalid port number", http.StatusBadRequest)
+		return
+	}
+
+	sessRegistry, err := sandbox.NewSessionRegistry()
+	if err != nil {
+		http.Error(w, "failed to load session registry: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	containerName := resolveContainerName(sessRegistry, id)
+	if containerName == "" {
+		http.Error(w, fmt.Sprintf("container %q not found", id), http.StatusNotFound)
+		return
+	}
+
+	removed, err := sessRegistry.UnexposePort(containerName, port)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Stop per-port proxy listener
+	if removed {
+		GetPortProxyManager().StopProxy(containerName, port)
+
+		// Unregister any subdomain proxy route for this container+port
+		sr := GetSubdomainRouter()
+		for portNum, hostname := range sr.ListForContainer(containerName) {
+			if portNum == port {
+				sr.UnregisterHost(hostname)
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":  "ok",
+		"removed": removed,
+		"port":    port,
+	})
+}
+
+// SandboxPinContainerHandler handles POST /api/sandbox/containers/{id}/pin.
+// Toggles the pinned state of a container.
+func SandboxPinContainerHandler(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	if id == "" {
+		http.Error(w, "missing container id", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Pinned bool `json:"pinned"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	sessRegistry, err := sandbox.NewSessionRegistry()
+	if err != nil {
+		http.Error(w, "failed to load session registry: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	containerName := resolveContainerName(sessRegistry, id)
+	if containerName == "" {
+		http.Error(w, fmt.Sprintf("container %q not found", id), http.StatusNotFound)
+		return
+	}
+
+	if err := sessRegistry.SetPinned(containerName, req.Pinned); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"status": "ok",
+		"pinned": req.Pinned,
+	})
+}
+
+// SandboxListExposedPortsHandler handles GET /api/sandbox/containers/{id}/expose.
+// Returns the list of exposed ports for a container.
+func SandboxListExposedPortsHandler(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	if id == "" {
+		http.Error(w, "missing container id", http.StatusBadRequest)
+		return
+	}
+
+	sessRegistry, err := sandbox.NewSessionRegistry()
+	if err != nil {
+		http.Error(w, "failed to load session registry: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	containerName := resolveContainerName(sessRegistry, id)
+	if containerName == "" {
+		http.Error(w, fmt.Sprintf("container %q not found", id), http.StatusNotFound)
+		return
+	}
+
+	entry := sessRegistry.GetByContainerName(containerName)
+	if entry == nil {
+		http.Error(w, fmt.Sprintf("container %q not found", id), http.StatusNotFound)
+		return
+	}
+
+	ports := entry.ExposedPorts
+	if ports == nil {
+		ports = []int{}
+	}
+
+	mgr := GetPortProxyManager()
+	sr := GetSubdomainRouter()
+	hostPorts := make(map[string]int, len(ports))
+	proxyHosts := make(map[string]string, len(ports))
+	for _, p := range ports {
+		portStr := strconv.Itoa(p)
+		hp := mgr.GetHostPort(containerName, p)
+		if hp > 0 {
+			hostPorts[portStr] = hp
+		}
+		// Look up subdomain route
+		subdomainHosts := sr.ListForContainer(containerName)
+		if hostname, ok := subdomainHosts[p]; ok {
+			proxyHosts[portStr] = hostname
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"container":     containerName,
+		"exposed_ports": ports,
+		"host_ports":    hostPorts,
+		"proxy_hosts":   proxyHosts,
+	})
+}
+
+// resolveContainerName resolves a user-provided identifier to a container name.
+// Accepts: session ID, container name, session ID prefix, or container name prefix.
+func resolveContainerName(registry *sandbox.SessionRegistry, input string) string {
+	// Try exact session ID
+	if entry := registry.Get(input); entry != nil {
+		return entry.ContainerName
+	}
+	// Try container name or prefix
+	for _, entry := range registry.List() {
+		if entry.ContainerName == input {
+			return entry.ContainerName
+		}
+		if strings.HasPrefix(entry.SessionID, input) {
+			return entry.ContainerName
+		}
+		if strings.HasPrefix(entry.ContainerName, input) {
+			return entry.ContainerName
+		}
+	}
+	return ""
 }
 
 // --- Helpers ---

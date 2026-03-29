@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,51 +41,115 @@ func TestNewSubAgentManager_CustomConfig(t *testing.T) {
 	}
 }
 
-func TestSubAgentManager_FilterTools(t *testing.T) {
+func TestSubAgentManager_ResolveTools(t *testing.T) {
 	mgr := NewSubAgentManager(SubAgentConfig{})
-	mgr.Tools = mockTools(
-		"read_file", "write_file", "shell_command",
-		"memory_save",       // should be excluded
-		"delegate_tasks",    // should be excluded
-		"schedule_job",      // should be excluded
-		"save_credential",   // should be excluded
-		"remove_credential", // should be excluded
-		"grep_search",
-	)
+	mgr.ToolGroups = map[string]*ToolGroup{
+		"core": {
+			Name: "core",
+			Tools: mockTools(
+				"read_file", "write_file", "shell_command",
+				"memory_save",       // should be excluded
+				"delegate_tasks",    // should be excluded
+				"schedule_job",      // should be excluded
+				"save_credential",   // should be excluded
+				"remove_credential", // should be excluded
+				"grep_search",
+			),
+		},
+		"browser": {
+			Name:  "browser",
+			Tools: mockTools("browser_navigate", "browser_click"),
+		},
+	}
 
-	// Filter with empty allow list (all non-excluded)
-	filtered := mgr.filterTools(nil)
-	if len(filtered) != 4 {
-		t.Errorf("filterTools(nil) returned %d tools, want 4", len(filtered))
+	// Resolve with a group name — excluded tools are removed
+	tools, toolsets, warnings := mgr.resolveTools([]string{"core"})
+	if len(tools) != 4 {
+		t.Errorf("resolveTools([core]) returned %d tools, want 4 (excluding 5 excluded tools)", len(tools))
+	}
+	if len(toolsets) != 0 {
+		t.Errorf("resolveTools([core]) returned %d toolsets, want 0", len(toolsets))
+	}
+	if len(warnings) != 0 {
+		t.Errorf("resolveTools([core]) returned warnings: %v", warnings)
 	}
 
 	// Verify excluded tools are not present
-	for _, ft := range filtered {
+	for _, ft := range tools {
 		if excludedChildTools[ft.Name()] {
-			t.Errorf("filterTools returned excluded tool %q", ft.Name())
+			t.Errorf("resolveTools returned excluded tool %q", ft.Name())
 		}
 	}
 
-	// Filter with specific allow list
-	filtered = mgr.filterTools([]string{"read_file", "grep_search"})
-	if len(filtered) != 2 {
-		t.Errorf("filterTools([read_file, grep_search]) returned %d tools, want 2", len(filtered))
+	// Resolve with individual tool names
+	tools, _, _ = mgr.resolveTools([]string{"read_file", "grep_search"})
+	if len(tools) != 2 {
+		t.Errorf("resolveTools([read_file, grep_search]) returned %d tools, want 2", len(tools))
 	}
 
-	// Allow list that includes an excluded tool — should still be excluded
-	filtered = mgr.filterTools([]string{"read_file", "memory_save"})
-	if len(filtered) != 1 {
-		t.Errorf("filterTools([read_file, memory_save]) returned %d tools, want 1", len(filtered))
+	// Individual tool name that is excluded — should not be returned
+	tools, _, _ = mgr.resolveTools([]string{"read_file", "memory_save"})
+	if len(tools) != 1 {
+		t.Errorf("resolveTools([read_file, memory_save]) returned %d tools, want 1", len(tools))
+	}
+
+	// Resolve multiple groups
+	tools, _, _ = mgr.resolveTools([]string{"core", "browser"})
+	if len(tools) != 6 { // 4 non-excluded from core + 2 from browser
+		t.Errorf("resolveTools([core, browser]) returned %d tools, want 6", len(tools))
+	}
+
+	// Mixed: group name + individual tool name
+	tools, _, _ = mgr.resolveTools([]string{"browser", "grep_search"})
+	if len(tools) != 3 { // 2 browser + 1 grep_search
+		t.Errorf("resolveTools([browser, grep_search]) returned %d tools, want 3", len(tools))
+	}
+
+	// Unknown group name — should produce a warning
+	tools, _, warnings = mgr.resolveTools([]string{"drills"})
+	if len(tools) != 0 {
+		t.Errorf("resolveTools([drills]) returned %d tools, want 0", len(tools))
+	}
+	if len(warnings) != 1 {
+		t.Errorf("resolveTools([drills]) returned %d warnings, want 1", len(warnings))
+	} else if !strings.Contains(warnings[0], "drills") {
+		t.Errorf("warning should mention 'drills', got: %s", warnings[0])
+	}
+
+	// Mixed known group + unknown name — should resolve known group and warn about unknown
+	tools, _, warnings = mgr.resolveTools([]string{"browser", "nonexistent"})
+	if len(tools) != 2 {
+		t.Errorf("resolveTools([browser, nonexistent]) returned %d tools, want 2", len(tools))
+	}
+	if len(warnings) != 1 {
+		t.Errorf("resolveTools([browser, nonexistent]) returned %d warnings, want 1", len(warnings))
 	}
 }
 
-func TestSubAgentManager_FilterToolsEmptyInput(t *testing.T) {
+func TestSubAgentManager_ResolveToolsEmpty(t *testing.T) {
 	mgr := NewSubAgentManager(SubAgentConfig{})
-	mgr.Tools = nil
+	mgr.ToolGroups = map[string]*ToolGroup{
+		"core": {
+			Name:  "core",
+			Tools: mockTools("read_file", "grep_search"),
+		},
+	}
 
-	filtered := mgr.filterTools(nil)
-	if len(filtered) != 0 {
-		t.Errorf("filterTools with nil tools len = %d, want 0", len(filtered))
+	// Empty request → zero tools
+	tools, toolsets, warnings := mgr.resolveTools(nil)
+	if len(tools) != 0 {
+		t.Errorf("resolveTools(nil) returned %d tools, want 0", len(tools))
+	}
+	if len(toolsets) != 0 {
+		t.Errorf("resolveTools(nil) returned %d toolsets, want 0", len(toolsets))
+	}
+	if len(warnings) != 0 {
+		t.Errorf("resolveTools(nil) returned warnings: %v", warnings)
+	}
+
+	tools, _, _ = mgr.resolveTools([]string{})
+	if len(tools) != 0 {
+		t.Errorf("resolveTools([]) returned %d tools, want 0", len(tools))
 	}
 }
 
@@ -131,11 +196,17 @@ func TestSubAgentManager_BuildChildPromptNoInstructions(t *testing.T) {
 
 func TestSubAgentManager_BuildChildPromptWithHTTPTools(t *testing.T) {
 	mgr := NewSubAgentManager(SubAgentConfig{})
-	mgr.Tools = mockTools("http_request", "list_credentials", "resolve_credential", "read_file")
+	mgr.ToolGroups = map[string]*ToolGroup{
+		"core": {
+			Name:  "core",
+			Tools: mockTools("http_request", "list_credentials", "resolve_credential", "read_file"),
+		},
+	}
 
 	task := SubAgentTask{
 		Name:        "api-caller",
 		Description: "Call an API",
+		ToolFilter:  []string{"core"},
 	}
 
 	prompt := mgr.buildChildPrompt(task)
@@ -153,11 +224,17 @@ func TestSubAgentManager_BuildChildPromptWithHTTPTools(t *testing.T) {
 
 func TestSubAgentManager_BuildChildPromptWithoutHTTPTools(t *testing.T) {
 	mgr := NewSubAgentManager(SubAgentConfig{})
-	mgr.Tools = mockTools("read_file", "grep_search")
+	mgr.ToolGroups = map[string]*ToolGroup{
+		"core": {
+			Name:  "core",
+			Tools: mockTools("read_file", "grep_search"),
+		},
+	}
 
 	task := SubAgentTask{
 		Name:        "searcher",
 		Description: "Search files",
+		ToolFilter:  []string{"core"},
 	}
 
 	prompt := mgr.buildChildPrompt(task)

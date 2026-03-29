@@ -516,6 +516,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   const [fleetDialogMessage, setFleetDialogMessage] = useState('') // pre-populated from /fleet command
   const [showTemplatePicker, setShowTemplatePicker] = useState(false) // /fleet-plan without template key
   const [pendingFleetPlanPrompt, setPendingFleetPlanPrompt] = useState(null) // deferred plan creation message
+  const [pendingDrillPrompt, setPendingDrillPrompt] = useState(null) // deferred drill creation message
   const [activeWizardContext, setActiveWizardContext] = useState(null) // persisted wizard system prompt for multi-turn sessions
 
   // Slash command popup
@@ -543,6 +544,8 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     { cmd: '/distill', desc: 'Distill last task into a flow' },
     { cmd: '/fleet', desc: 'Start a fleet-based task with specialized agents' },
     { cmd: '/fleet-plan', desc: 'Create a reusable fleet plan' },
+    { cmd: '/drill', desc: 'Create a drill suite with guided wizard' },
+    { cmd: '/drill-add', desc: 'Add new drills to an existing suite' },
   ], [])
 
   // Wrapper to keep URL in sync with active session
@@ -945,8 +948,8 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
           case 'tool_result':
             setMessages(prev => [...prev, { type: 'tool_result', toolName: data.name, toolResult: data.result }])
-            // Clear wizard context once the fleet plan has been saved
-            if (data.name === 'save_fleet_plan') {
+            // Clear wizard context once the fleet plan or drill suite has been saved
+            if (data.name === 'save_fleet_plan' || data.name === 'save_drill') {
               setActiveWizardContext(null)
             }
             break
@@ -1037,6 +1040,38 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               } else {
                 // No hint: show template picker so user selects one, then re-issue /fleet-plan <key>
                 setShowTemplatePicker(true)
+              }
+            }
+            break
+
+          case 'drill_redirect':
+            // /drill [hint] command: start drill suite creation wizard
+            setIsStreaming(false)
+            {
+              const hint = data.hint || ''
+              const wizardSystemPrompt = data.wizard_system_prompt || ''
+
+              if (wizardSystemPrompt) {
+                setActiveWizardContext(wizardSystemPrompt)
+                const kickoff = hint
+                  ? `I'd like to create a drill suite. Here's what I want to test: ${hint}`
+                  : 'I\'d like to create a drill suite for my project.'
+                setPendingDrillPrompt({ message: kickoff, systemContext: wizardSystemPrompt })
+              }
+            }
+            break
+
+          case 'drill_add_redirect':
+            // /drill-add <suite> command: start drill-add wizard for existing suite
+            setIsStreaming(false)
+            {
+              const suiteName = data.suite_name || ''
+              const wizardSystemPrompt = data.wizard_system_prompt || ''
+
+              if (wizardSystemPrompt) {
+                setActiveWizardContext(wizardSystemPrompt)
+                const kickoff = `I'd like to add new drills to the "${suiteName}" suite.`
+                setPendingDrillPrompt({ message: kickoff, systemContext: wizardSystemPrompt })
               }
             }
             break
@@ -1146,6 +1181,15 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
       sendMessage(message, { systemContext })
     }
   }, [pendingFleetPlanPrompt, isStreaming, sendMessage])
+
+  // Process deferred drill prompt (set by drill_redirect SSE event)
+  useEffect(() => {
+    if (pendingDrillPrompt && !isStreaming) {
+      const { message, systemContext } = pendingDrillPrompt
+      setPendingDrillPrompt(null)
+      sendMessage(message, { systemContext })
+    }
+  }, [pendingDrillPrompt, isStreaming, sendMessage])
 
   // Process pending chat message passed from another view (e.g., Fleet UI "Create Plan with AI Guide")
   useEffect(() => {

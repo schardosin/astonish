@@ -37,13 +37,24 @@ func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, 
 
 		// Exists but not running — try to re-mount overlay and start it
 		if client.InstanceExists(containerName) {
+			// Acquire read lock to prevent racing with RemountDependentOverlays.
+			// During a template refresh, RemountDependentOverlays holds the write
+			// lock while it stops containers, unmounts stale overlays, remounts
+			// with fresh inodes, and restarts. Without this read lock, we can
+			// start the container mid-remount with a broken/stale rootfs, causing
+			// the node process to crash with EOF on startup.
+			templateSnapshotMu.RLock()
+
 			// Re-mount overlay if needed (might have been lost on reboot).
 			// This MUST succeed — without it the container starts with empty rootfs.
 			if err := ensureOverlayMounted(client, containerName, entry.TemplateName, tplRegistry); err != nil {
+				templateSnapshotMu.RUnlock()
 				return "", fmt.Errorf("failed to re-mount overlay for %q: %w (try 'astonish sandbox prune' and retry)", containerName, err)
 			}
 
-			if err := client.StartInstance(containerName); err != nil {
+			err := client.StartInstance(containerName)
+			templateSnapshotMu.RUnlock()
+			if err != nil {
 				return "", fmt.Errorf("failed to start existing session container %q: %w", containerName, err)
 			}
 			return containerName, nil
@@ -277,6 +288,10 @@ func PruneOrphans(client *IncusClient, registry *SessionRegistry, existingSessio
 			continue // session still exists
 		}
 
+		if entry.Pinned {
+			continue // manually created, exempt from cleanup
+		}
+
 		// Orphaned — destroy
 		fmt.Printf("Pruning orphaned container %q (session %s)...\n", entry.ContainerName, entry.SessionID[:8])
 
@@ -341,10 +356,10 @@ func PruneStaleOnStartup(client *IncusClient, registry *SessionRegistry, existin
 	// 1. Clean registry entries pointing to non-existent containers
 	pruned := registry.Reap(client)
 
-	// 2. Build a set of container names that belong to live sessions
+	// 2. Build a set of container names that belong to live sessions or are pinned
 	liveContainers := make(map[string]bool)
 	for _, entry := range registry.List() {
-		if existingSessionIDs[entry.SessionID] {
+		if existingSessionIDs[entry.SessionID] || entry.Pinned {
 			liveContainers[entry.ContainerName] = true
 		}
 	}

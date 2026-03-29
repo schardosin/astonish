@@ -16,6 +16,7 @@ import SettingsPage from './components/SettingsPage'
 import SetupWizard from './components/SetupWizard'
 import StudioChat from './components/StudioChat'
 import FleetView from './components/FleetView'
+import DrillView from './components/DrillView'
 import MCPDependenciesPanel from './components/MCPDependenciesPanel'
 import InstallMcpModal from './components/InstallMcpModal'
 import { useTheme } from './hooks/useTheme'
@@ -480,6 +481,8 @@ function App() {
       setView('canvas')
     } else if (path.view === 'fleet') {
       setView('fleet')
+    } else if (path.view === 'drill') {
+      setView('drill')
     }
   }, [path, agents]) // Re-run when path or agents list changes
 
@@ -1362,6 +1365,24 @@ layout:
               onNavigate={(hashPath) => navigate(hashPath)}
               onCreatePlan={(templateKey) => {
                 setPendingChatMessage(`/fleet-plan ${templateKey}`)
+                navigate(buildPath('chat'))
+              }}
+            />
+          ) : view === 'drill' ? (
+            <DrillView
+              theme={theme}
+              path={path}
+              onNavigate={(hashPath) => navigate(hashPath)}
+              onRunSuite={(suiteName, template) => {
+                if (template) {
+                  setPendingChatMessage(`Switch the sandbox to template "${template}" and then run the drill suite "${suiteName}"`)
+                } else {
+                  setPendingChatMessage(`Run the drill suite "${suiteName}"`)
+                }
+                navigate(buildPath('chat'))
+              }}
+              onAddDrills={(suiteName) => {
+                setPendingChatMessage(`/drill-add ${suiteName}`)
                 navigate(buildPath('chat'))
               }}
             />

@@ -16,6 +16,9 @@ type SessionEntry struct {
 	ContainerName string    `json:"container_name"`
 	TemplateName  string    `json:"template_name"`
 	CreatedAt     time.Time `json:"created_at"`
+	ExposedPorts  []int     `json:"exposed_ports,omitempty"`
+	BaseDomain    string    `json:"base_domain,omitempty"`
+	Pinned        bool      `json:"pinned,omitempty"`
 }
 
 // SessionRegistry maps session IDs to container names with JSON persistence.
@@ -212,4 +215,133 @@ func (r *SessionRegistry) Reap(client *IncusClient) int {
 
 	_ = r.saveLocked()
 	return len(stale)
+}
+
+// GetByContainerName returns the session entry for a given container name, or nil.
+func (r *SessionRegistry) GetByContainerName(containerName string) *SessionEntry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, e := range r.entries {
+		if e.ContainerName == containerName {
+			return e
+		}
+	}
+	return nil
+}
+
+// ExposePort adds a port to the exposed ports list for a container.
+// Returns true if the port was newly added, false if already exposed.
+func (r *SessionRegistry) ExposePort(containerName string, port int) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var entry *SessionEntry
+	for _, e := range r.entries {
+		if e.ContainerName == containerName {
+			entry = e
+			break
+		}
+	}
+	if entry == nil {
+		return false, fmt.Errorf("container %q not found in registry", containerName)
+	}
+
+	// Check for duplicate
+	for _, p := range entry.ExposedPorts {
+		if p == port {
+			return false, nil
+		}
+	}
+
+	entry.ExposedPorts = append(entry.ExposedPorts, port)
+	return true, r.saveLocked()
+}
+
+// UnexposePort removes a port from the exposed ports list for a container.
+// Returns true if the port was found and removed, false if it was not exposed.
+func (r *SessionRegistry) UnexposePort(containerName string, port int) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var entry *SessionEntry
+	for _, e := range r.entries {
+		if e.ContainerName == containerName {
+			entry = e
+			break
+		}
+	}
+	if entry == nil {
+		return false, fmt.Errorf("container %q not found in registry", containerName)
+	}
+
+	for i, p := range entry.ExposedPorts {
+		if p == port {
+			entry.ExposedPorts = append(entry.ExposedPorts[:i], entry.ExposedPorts[i+1:]...)
+			return true, r.saveLocked()
+		}
+	}
+
+	return false, nil
+}
+
+// IsPortExposed checks if a specific port is exposed on a container.
+func (r *SessionRegistry) IsPortExposed(containerName string, port int) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, e := range r.entries {
+		if e.ContainerName == containerName {
+			for _, p := range e.ExposedPorts {
+				if p == port {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	return false
+}
+
+// SetBaseDomain sets the base domain for a container's session entry and saves.
+// The base domain is used to construct subdomain proxy hostnames.
+func (r *SessionRegistry) SetBaseDomain(containerName, baseDomain string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, e := range r.entries {
+		if e.ContainerName == containerName {
+			e.BaseDomain = baseDomain
+			return r.saveLocked()
+		}
+	}
+	return fmt.Errorf("container %q not found in registry", containerName)
+}
+
+// GetBaseDomain returns the stored base domain for a container, or empty string.
+func (r *SessionRegistry) GetBaseDomain(containerName string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, e := range r.entries {
+		if e.ContainerName == containerName {
+			return e.BaseDomain
+		}
+	}
+	return ""
+}
+
+// SetPinned marks a container as pinned (exempt from orphan cleanup) and saves.
+// Pinned containers are manually created via `sandbox create` and should not be
+// destroyed by automatic cleanup cycles.
+func (r *SessionRegistry) SetPinned(containerName string, pinned bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, e := range r.entries {
+		if e.ContainerName == containerName {
+			e.Pinned = pinned
+			return r.saveLocked()
+		}
+	}
+	return fmt.Errorf("container %q not found in registry", containerName)
 }

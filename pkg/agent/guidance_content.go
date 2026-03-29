@@ -8,13 +8,22 @@ package agent
 const guidanceBrowserAutomation = `# Guidance: Browser Automation
 
 You have a built-in browser with tools for navigating, interacting, and observing web pages.
-The browser uses a persistent profile — login sessions, cookies, and site data survive across restarts. Once the user logs into a site, they stay logged in.
+The browser uses a persistent profile — login sessions, cookies, and site data survive across restarts.
 
 **Core workflow:**
 1. ` + "`browser_navigate`" + ` to load a page
 2. ` + "`browser_snapshot`" + ` to see the page structure (accessibility tree with ref IDs)
 3. Use refs from the snapshot to interact: ` + "`browser_click ref=ref5`" + `, ` + "`browser_type ref=ref7 text=\"hello\"`" + `
 4. ` + "`browser_snapshot`" + ` again to see the result
+
+**Sandbox mode:**
+Browser tools work automatically in sandboxes — no browser installation needed in the container. Use the container bridge IP (not localhost) in ` + "`browser_navigate`" + ` URLs to reach services running inside the container.
+
+**Authorization and login screens:**
+When a page requires login, check the credential store (` + "`list_credentials`" + ` / ` + "`resolve_credential`" + `) and fill the form. If the page shows a device authorization flow, OAuth consent, SSO redirect, MFA/TOTP, or any auth that CANNOT be solved by filling credentials — STOP immediately. Do NOT try to reverse-engineer auth APIs, run CLI commands, or programmatically bypass it. Instead: take a ` + "`browser_snapshot`" + `, relay the exact instructions to the user (code, steps, URL), and wait for them to confirm before continuing.
+
+**Browser is an isolated client:**
+The browser does NOT share cookies or sessions with ` + "`shell_command`" + ` (curl), ` + "`http_request`" + `, or ` + "`web_fetch`" + `. To check browser state, use ` + "`browser_snapshot`" + `. Never use curl to verify what the browser sees.
 
 **When to use the browser:**
 - After ` + "`web_fetch`" + ` fails for content extraction (JS-heavy pages)
@@ -27,30 +36,17 @@ The browser uses a persistent profile — login sessions, cookies, and site data
 - Use ` + "`browser_snapshot`" + ` over ` + "`browser_take_screenshot`" + ` for decision-making — text is cheaper than images
 - Use ` + "`mode=\"efficient\"`" + ` on snapshots for large pages — shows only interactive elements
 - Refs are valid until the next snapshot. If a ref fails, take a new snapshot.
-- Use ` + "`browser_tabs`" + ` with ` + "`action=\"new\"`" + ` and ` + "`incognito=true`" + ` to open a tab with isolated cookies/storage (for testing login flows or browsing without personal session data)
-
-**Authenticated websites:**
-When a page requires login, check the credential store FIRST — don't ask the user for passwords.
-1. ` + "`list_credentials`" + ` — look for a credential matching the site's domain or name
-2. If found: ` + "`resolve_credential(name=\"...\")`" + ` to get username + password
-3. ` + "`browser_type`" + ` to fill the login form fields, ` + "`browser_click`" + ` to submit
-4. If no matching credential exists: ask the user for the credentials, then ` + "`save_credential`" + ` to store them securely BEFORE typing them into the form
-NEVER ask the user to type passwords in chat if a credential already exists in the store.
+- Use ` + "`browser_tabs`" + ` with ` + "`action=\"new\"`" + ` and ` + "`incognito=true`" + ` for isolated sessions
+- Before clearing cookies (` + "`browser_cookies action=clear`" + `), take a ` + "`browser_snapshot`" + ` first — clearing destroys login sessions.
+- If the browser is in an unexpected state, navigate directly to the target URL. Do not use repeated ` + "`browser_navigate_back`" + ` calls — go forward, not backward.
 
 **Human-in-the-loop (browser handoff):**
-Use ` + "`browser_request_human`" + ` when you encounter something that requires human intervention:
-- CAPTCHAs (reCAPTCHA, hCaptcha, Cloudflare Turnstile)
-- Complex multi-factor authentication flows
-- Payment forms requiring real card details
-- Any visual challenge you cannot solve programmatically
-
-**Two-step handoff flow (CRITICAL):**
-1. Call ` + "`browser_request_human`" + ` with a specific reason. It returns IMMEDIATELY with CDP connection instructions.
-2. **RELAY the connection instructions to the user in your response.** Include the listen address and steps.
+Use ` + "`browser_request_human`" + ` for CAPTCHAs, complex MFA, payment forms, or any visual challenge you cannot solve.
+1. Call ` + "`browser_request_human`" + ` — returns immediately with CDP connection instructions.
+2. **Relay the connection instructions to the user.**
 3. Call ` + "`browser_handoff_complete`" + ` to wait for the user to finish.
-4. After completion, take a fresh ` + "`browser_snapshot`" + ` to see what changed.
-
-You MUST show the user the connection details before calling browser_handoff_complete, otherwise they won't know how to connect.
+4. Take a fresh ` + "`browser_snapshot`" + ` afterward.
+You MUST show the user the connection details before calling browser_handoff_complete.
 `
 
 const guidanceCredentialManagement = `# Guidance: Credential Management
@@ -141,29 +137,51 @@ NEVER execute the test without the user's explicit approval. Some tasks may be s
 
 const guidanceTaskDelegation = `# Guidance: Task Delegation
 
-Use ` + "`delegate_tasks`" + ` to run multiple independent tasks in parallel via sub-agents.
+Use ` + "`delegate_tasks`" + ` to run tasks via sub-agents. Sub-agent execution is **transparent** — the user sees every tool call, result, and image in real-time, exactly as if you were doing the work yourself. Only a compact summary enters your context, keeping it lean.
 
-**IMPORTANT — Delegation has significant overhead.** Each sub-agent creates a new session, loads context, and runs its own LLM loop. The user sees NO output until ALL sub-agents finish. For most requests, calling tools directly is faster and provides a better experience.
+## When to delegate
 
-**When to delegate (3+ heavy independent tasks):**
-- 3 or more independent research/analysis tasks that each require multiple tool calls
-- Large-scale parallel operations (e.g., analyze 5+ files, test 4+ APIs)
-- Tasks where the combined sequential time would exceed 2-3 minutes
+**Delegation is the standard way to access specialized tool groups.** Most tools are not on the main thread — they live in tool groups accessible only through ` + "`delegate_tasks`" + `. If a task requires tools from a specific group (browser, web, credentials, sandbox_templates, etc.), you MUST delegate.
 
-**When NOT to delegate (do it yourself instead):**
-- 1-2 tasks, even if independent — just call the tools directly in sequence
-- Quick lookups (API calls, file reads, calendar checks, status queries)
-- Any request where the user expects a fast, conversational response
-- Tasks requiring user interaction, clarification, or streaming output
-- When the user's request can be answered with fewer than 6 total tool calls
+**Always delegate when:**
+- The task requires tools not on the main thread (browser, web, email, credentials, sandbox_templates, fleet_plans, drills, etc.)
+- You have 2+ independent tasks that can run in parallel
+- A task involves many sequential tool calls (file analysis, API testing, container setup)
 
-**Guidelines (when you do delegate):**
+**Do it yourself (no delegation) when:**
+- Your main-thread tools (read_file, write_file, edit_file, shell_command, grep_search, find_files, memory_save, memory_search) are sufficient
+- The task is a single quick lookup or file operation
+
+## How to delegate
+
+` + "```" + `
+delegate_tasks(tasks: [{
+  name: "descriptive-name",
+  task: "Clear description of what to accomplish",
+  instructions: "Additional context, file paths, constraints",
+  tools: ["group_name"]
+}])
+` + "```" + `
+
+**Tool groups** are listed in your system prompt under "Task Delegation". Common groups:
+- ` + "`core`" + ` — shell, file I/O, grep, find (for sub-agent file work)
+- ` + "`browser`" + ` — browser automation (navigate, click, type, screenshot)
+- ` + "`web`" + ` — web fetching and HTTP requests
+- ` + "`credentials`" + ` — credential store access (list, resolve, test)
+- ` + "`sandbox_templates`" + ` — save, list, and use sandbox container templates
+- ` + "`fleet_plans`" + ` — create and validate fleet plans
+- ` + "`process`" + ` — background processes, interactive commands
+
+You can combine groups: ` + "`tools: [\"core\", \"web\"]`" + ` or request individual tools by name.
+
+## Guidelines
+
 - ALWAYS send a brief acknowledgment message BEFORE calling delegate_tasks
-- Be specific in task descriptions — sub-agents work autonomously
-- Name sub-agents descriptively (e.g., 'api-researcher', 'test-writer')
-- Filter tools when a sub-agent only needs specific capabilities
+- Be specific in task descriptions — sub-agents work autonomously without your conversation context
+- Name sub-agents descriptively (e.g., 'api-researcher', 'template-saver', 'drill-runner')
 - Sub-agents can read memory but cannot write to it
 - Max 10 tasks per delegation call, each with a 5-minute timeout
+- For multi-step workflows, delegate each phase as a separate task with clear inputs/outputs
 `
 
 const guidanceProcessManagement = `# Guidance: Process Management & Interactive Commands
@@ -258,4 +276,40 @@ Examples of when to search:
 - Before running yt-dlp → search "yt-dlp"
 - Before deploying an app → search "deploy" or the app name
 - Before configuring a server → search the server name or technology
+`
+
+const guidanceSandboxTemplates = `# Guidance: Sandbox Templates
+
+Sandbox templates are frozen container snapshots with a project's code, toolchains, and dependencies pre-installed. Fleet sessions clone from templates so each agent starts with a ready-to-use development environment instead of building from scratch.
+
+**These tools run on the HOST, not inside the container.** You cannot manage templates from inside the sandbox — CLI commands like ` + "`astonish sandbox init`" + ` or API calls to ` + "`localhost`" + ` from within the container will not work. Always use ` + "`delegate_tasks`" + ` with ` + "`tools: [\"sandbox_templates\"]`" + `.
+
+## Available tools (via delegate_tasks)
+
+Access these tools by delegating with ` + "`tools: [\"sandbox_templates\"]`" + `:
+
+- ` + "`save_sandbox_template`" + ` — Freeze the current sandbox container as a reusable template. Call this after cloning the repo, installing dependencies, and verifying the build works inside the container. The tool stops the container, snapshots it, and restarts. Returns a ` + "`template_name`" + ` to pass to ` + "`save_fleet_plan`" + `'s template field.
+- ` + "`list_sandbox_templates`" + ` — List all saved templates with name, description, creation date, and associated fleet plans. Use this to check what templates exist before creating new ones or to verify a template was saved.
+- ` + "`use_sandbox_template`" + ` — Switch the current sandbox session to a different template. Tears down the current container and creates a new one cloned from the specified template. All file and shell tools then operate inside the new container.
+
+## Creating a template (typical workflow)
+
+1. Set up the container: clone the repo, install toolchains (Go, Node, etc.), install dependencies, verify the build passes
+2. Stop any background services (servers, watchers) — the template must be saved in a quiescent state
+3. Delegate the save:
+` + "```" + `
+delegate_tasks(tasks: [{
+  name: "save-template",
+  task: "Save the current sandbox container as a template named '<repo-name>' with description '<stack summary>'",
+  tools: ["sandbox_templates"]
+}])
+` + "```" + `
+4. Use the returned ` + "`template_name`" + ` when calling ` + "`save_fleet_plan`" + `
+
+## Key rules
+
+- **NEVER try to save templates from inside the container.** The ` + "`save_sandbox_template`" + ` tool operates on the host's Incus runtime — it cannot be called via shell commands or API requests from within the sandbox.
+- **Stop background processes first.** Running services (dev servers, file watchers) can cause snapshot corruption. Use ` + "`process_kill`" + ` to stop them before saving.
+- **Use the repo name as the template name.** For ` + "`acme/billing-api`" + `, use ` + "`billing-api`" + `. This keeps naming consistent and predictable.
+- **Verify before saving.** Run the build, run tests (or a drill suite), and confirm everything works before freezing the template. A broken template means every fleet session starts broken.
 `

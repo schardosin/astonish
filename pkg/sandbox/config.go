@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/schardosin/astonish/pkg/config"
 )
@@ -20,7 +21,8 @@ func DefaultSandboxConfig() config.SandboxConfig {
 		},
 		Network: "bridged",
 		Prune: config.SandboxPruneConfig{
-			OrphanCheckHours: 6,
+			OrphanCheckHours:   6,
+			IdleTimeoutMinutes: 10,
 		},
 	}
 }
@@ -53,6 +55,9 @@ func ValidateSandboxConfig(c *config.SandboxConfig) error {
 	if c.Prune.OrphanCheckHours < 0 {
 		return fmt.Errorf("sandbox.prune.orphan_check_hours must be >= 0, got %d", c.Prune.OrphanCheckHours)
 	}
+	if c.Prune.IdleTimeoutMinutes < 0 {
+		return fmt.Errorf("sandbox.prune.idle_timeout_minutes must be >= 0, got %d", c.Prune.IdleTimeoutMinutes)
+	}
 	return nil
 }
 
@@ -78,4 +83,14 @@ func EffectiveNetwork(c *config.SandboxConfig) string {
 		return "bridged"
 	}
 	return c.Network
+}
+
+// EffectiveIdleTimeout returns the idle timeout duration for sandbox containers.
+// Uses the configured value if > 0, otherwise falls back to the default (10 min).
+func EffectiveIdleTimeout(c *config.SandboxConfig) time.Duration {
+	if c.Prune.IdleTimeoutMinutes > 0 {
+		return time.Duration(c.Prune.IdleTimeoutMinutes) * time.Minute
+	}
+	defaults := DefaultSandboxConfig()
+	return time.Duration(defaults.Prune.IdleTimeoutMinutes) * time.Minute
 }

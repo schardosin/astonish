@@ -58,6 +58,8 @@ type SystemPromptBuilder struct {
 	Timezone              string         // IANA timezone (e.g. "America/New_York")
 	ExecutionPlan         string         // Per-turn execution plan from matched flow (empty = no plan)
 	RelevantKnowledge     string         // Per-turn auto-retrieved knowledge from vector store (empty = none)
+	RelevantTools         string         // Per-turn auto-retrieved tool matches from tool index (empty = none)
+	Catalog               []*ToolGroup   // Tool groups available for delegation via delegate_tasks (nil = no delegation)
 }
 
 // Build constructs the full system prompt.
@@ -117,7 +119,12 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString("- Prefer read_file/edit_file/write_file over shell sed/awk/echo/cat for file operations.\n")
 	sb.WriteString("- http_request CANNOT reach private/RFC1918 IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x) or localhost. Use curl via shell_command for private network endpoints.\n")
 	sb.WriteString("- For multi-step tasks, execute sequentially, report progress, and search memory first for prior solutions.\n")
+	sb.WriteString("- After completing a task where you overcame obstacles or discovered non-obvious solutions, save the knowledge using memory_save. Search memory_search(\"memory usage\") first to retrieve the full saving guidelines.\n")
 	sb.WriteString("- When the user asks you to do something, briefly acknowledge before starting work.\n")
+	if b.hasSearchToolsTool() {
+		sb.WriteString("- When you're unsure which tool or tool group to use for a task, call `search_tools` with a description of what you need. Do NOT guess tool availability — verify via `search_tools`.\n")
+		sb.WriteString("- When asked to list available tools, call `search_tools(query=\"*\")` to get the verified complete inventory. Do not reconstruct the list from memory.\n")
+	}
 
 	// 3b. Knowledge Context — teaches the model about injected knowledge
 	sb.WriteString("\n## Knowledge Context\n\n")
@@ -181,6 +188,26 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString("Use `memory_search` with the capability name (e.g., \"browser automation\", \"credential management\", ")
 	sb.WriteString("\"job scheduling\") to retrieve instructions before using a complex feature for the first time in a conversation.\n")
 
+	// 6b. Task delegation — list available tool groups for delegate_tasks
+	if len(b.Catalog) > 0 {
+		sb.WriteString("\n## Task Delegation\n\n")
+		sb.WriteString("`delegate_tasks` runs tasks in isolated sub-agents with their own sessions. ")
+		sb.WriteString("Use it for: parallel execution of independent tasks, long-running operations, or tasks requiring isolation. ")
+		sb.WriteString("Do NOT use it just to access tools — relevant tools are injected automatically and can be called directly.\n\n")
+		sb.WriteString("**Available tool groups (for delegation):**\n")
+		ctx := &minimalReadonlyContext{Context: context.Background()}
+		for _, g := range b.Catalog {
+			toolCount := len(g.Tools)
+			for _, ts := range g.Toolsets {
+				if mcpTools, err := ts.Tools(ctx); err == nil {
+					toolCount += len(mcpTools)
+				}
+			}
+			sb.WriteString(fmt.Sprintf("- **%s** (%d tools) — %s\n", g.Name, toolCount, g.Description))
+		}
+		sb.WriteString("\nExamples: `tools: [\"browser\"]`, `tools: [\"core\", \"web\"]`, `tools: [\"core\", \"mcp:github\"]`\n")
+	}
+
 	// 6c2. Skill index (lightweight listing of available CLI tool skills)
 	if b.SkillIndex != "" {
 		sb.WriteString("\n")
@@ -197,6 +224,15 @@ func (b *SystemPromptBuilder) Build() string {
 	// the end of the system prompt. Placing them last means the static
 	// prefix (Tier 1 + Tier 2) remains stable for provider KV-cache
 	// prefix matching, while the dynamic tail changes per turn.
+
+	// Per-turn relevant tools from the tool index — these tools are
+	// dynamically injected and available for direct invocation.
+	if b.RelevantTools != "" {
+		sb.WriteString("\n## Relevant Tools For This Request\n\n")
+		sb.WriteString("These tools are available for this request — call them directly. ")
+		sb.WriteString("Use `search_tools` if you need additional tools not listed here.\n\n")
+		sb.WriteString(b.RelevantTools)
+	}
 
 	if b.ExecutionPlan != "" {
 		sb.WriteString("\n## Execution Plan\n\n")
@@ -350,6 +386,16 @@ func (b *SystemPromptBuilder) hasHandoffTool() bool {
 func (b *SystemPromptBuilder) hasEmailTools() bool {
 	for _, t := range b.Tools {
 		if t.Name() == "email_list" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasSearchToolsTool returns true if search_tools is among the available tools.
+func (b *SystemPromptBuilder) hasSearchToolsTool() bool {
+	for _, t := range b.Tools {
+		if t.Name() == "search_tools" {
 			return true
 		}
 	}

@@ -22,8 +22,15 @@ type TemplateMeta struct {
 }
 
 // TemplateRegistry manages template metadata with JSON file persistence.
+//
+// IMPORTANT: Every mutation (Add, Remove, Update, AddFleetPlan) reloads the
+// registry from disk before modifying and saving. This prevents a long-lived
+// in-memory instance (e.g., in the daemon) from overwriting changes made by
+// another process (e.g., CLI `sandbox template delete`). Without this, the
+// daemon's stale in-memory map would resurrect deleted templates on the next
+// Save() call.
 type TemplateRegistry struct {
-	mu        sync.RWMutex
+	mu        sync.Mutex
 	templates map[string]*TemplateMeta
 	filePath  string
 }
@@ -40,18 +47,15 @@ func NewTemplateRegistry() (*TemplateRegistry, error) {
 		filePath:  filepath.Join(dataDir, "templates.json"),
 	}
 
-	if err := r.Load(); err != nil && !os.IsNotExist(err) {
+	if err := r.loadLocked(); err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("failed to load template registry: %w", err)
 	}
 
 	return r, nil
 }
 
-// Load reads the template registry from disk.
-func (r *TemplateRegistry) Load() error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
+// loadLocked reads the template registry from disk. Caller must hold mu.
+func (r *TemplateRegistry) loadLocked() error {
 	data, err := os.ReadFile(r.filePath)
 	if err != nil {
 		return err
@@ -70,11 +74,8 @@ func (r *TemplateRegistry) Load() error {
 	return nil
 }
 
-// Save writes the template registry to disk.
-func (r *TemplateRegistry) Save() error {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
+// saveLocked writes the template registry to disk. Caller must hold mu.
+func (r *TemplateRegistry) saveLocked() error {
 	templates := make([]*TemplateMeta, 0, len(r.templates))
 	for _, t := range r.templates {
 		templates = append(templates, t)
@@ -92,19 +93,41 @@ func (r *TemplateRegistry) Save() error {
 	return os.WriteFile(r.filePath, data, 0644)
 }
 
+// Load reads the template registry from disk, replacing in-memory state.
+func (r *TemplateRegistry) Load() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.loadLocked()
+}
+
+// Save writes the template registry to disk.
+func (r *TemplateRegistry) Save() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.saveLocked()
+}
+
 // Get returns the metadata for a template, or nil if not found.
 func (r *TemplateRegistry) Get(name string) *TemplateMeta {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.templates[name]
 }
 
-// Add adds a new template to the registry and saves.
+// Add adds or replaces a template in the registry and saves.
+// It reloads from disk first to avoid overwriting changes from other processes.
 func (r *TemplateRegistry) Add(meta *TemplateMeta) error {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Reload from disk so we don't clobber changes made by other processes
+	// (e.g., CLI deleting a template while the daemon is running).
+	if err := r.loadLocked(); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to reload registry before add: %w", err)
+	}
+
 	r.templates[meta.Name] = meta
-	r.mu.Unlock()
-	return r.Save()
+	return r.saveLocked()
 }
 
 // Update updates an existing template in the registry and saves.
@@ -113,17 +136,23 @@ func (r *TemplateRegistry) Update(meta *TemplateMeta) error {
 }
 
 // Remove deletes a template from the registry and saves.
+// It reloads from disk first to avoid overwriting changes from other processes.
 func (r *TemplateRegistry) Remove(name string) error {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if err := r.loadLocked(); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to reload registry before remove: %w", err)
+	}
+
 	delete(r.templates, name)
-	r.mu.Unlock()
-	return r.Save()
+	return r.saveLocked()
 }
 
 // List returns all templates in the registry.
 func (r *TemplateRegistry) List() []*TemplateMeta {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	result := make([]*TemplateMeta, 0, len(r.templates))
 	for _, t := range r.templates {
@@ -135,32 +164,36 @@ func (r *TemplateRegistry) List() []*TemplateMeta {
 
 // Exists checks if a template exists in the registry.
 func (r *TemplateRegistry) Exists(name string) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	_, ok := r.templates[name]
 	return ok
 }
 
 // AddFleetPlan associates a fleet plan with a template.
+// It reloads from disk first to avoid overwriting changes from other processes.
 func (r *TemplateRegistry) AddFleetPlan(templateName, planKey string) error {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if err := r.loadLocked(); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to reload registry before AddFleetPlan: %w", err)
+	}
+
 	meta, ok := r.templates[templateName]
 	if !ok {
-		r.mu.Unlock()
 		return fmt.Errorf("template %q not found", templateName)
 	}
 
 	// Avoid duplicates
 	for _, p := range meta.FleetPlans {
 		if p == planKey {
-			r.mu.Unlock()
 			return nil
 		}
 	}
 
 	meta.FleetPlans = append(meta.FleetPlans, planKey)
-	r.mu.Unlock()
-	return r.Save()
+	return r.saveLocked()
 }
 
 // sandboxDataDir returns the directory for sandbox data files.

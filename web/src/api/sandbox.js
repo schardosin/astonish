@@ -186,3 +186,45 @@ export async function refreshTemplates() {
   }
   return res.json()
 }
+
+// --- Port Exposure ---
+
+/** Expose a port on a container through the reverse proxy. */
+export async function exposePort(containerId, port) {
+  const res = await fetch(`/api/sandbox/containers/${encodeURIComponent(containerId)}/expose`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ port, base_domain: window.location.hostname }),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+  return res.json()
+}
+
+/** Remove a port from the reverse proxy. */
+export async function unexposePort(containerId, port) {
+  const res = await fetch(`/api/sandbox/containers/${encodeURIComponent(containerId)}/expose/${port}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+  return res.json()
+}
+
+/** Toggle the pinned state of a container. */
+export async function pinContainer(containerId, pinned) {
+  const res = await fetch(`/api/sandbox/containers/${encodeURIComponent(containerId)}/pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pinned }),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+  return res.json()
+}

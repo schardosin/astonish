@@ -287,3 +287,54 @@ func TestSystemPromptBuilder_ExecutionPlanWithKnowledge(t *testing.T) {
 		t.Error("expected plan steps")
 	}
 }
+
+func TestSystemPromptBuilder_RelevantTools(t *testing.T) {
+	builder := &SystemPromptBuilder{
+		RelevantTools: "**browser** group (access via `delegate_tasks` with `tools: [\"browser\"]`):\n  - `browser_take_screenshot` — Capture a screenshot\n",
+	}
+	prompt := builder.Build()
+
+	if !strings.Contains(prompt, "## Relevant Tools For This Request") {
+		t.Error("expected Relevant Tools section when RelevantTools is set")
+	}
+	if !strings.Contains(prompt, "browser_take_screenshot") {
+		t.Error("expected tool content in prompt")
+	}
+	if !strings.Contains(prompt, "search_tools") {
+		t.Error("expected search_tools mention in prompt")
+	}
+}
+
+func TestSystemPromptBuilder_RelevantToolsEmpty(t *testing.T) {
+	builder := &SystemPromptBuilder{}
+	prompt := builder.Build()
+
+	if strings.Contains(prompt, "## Relevant Tools For This Request") {
+		t.Error("Build() should NOT contain Relevant Tools section when empty")
+	}
+}
+
+func TestSystemPromptBuilder_SearchToolsGuidance(t *testing.T) {
+	// With search_tools available, prompt should include guidance
+	builder := &SystemPromptBuilder{
+		Tools: mockTools("read_file", "search_tools"),
+	}
+	prompt := builder.Build()
+
+	if !strings.Contains(prompt, "search_tools") {
+		t.Error("expected search_tools guidance when tool is available")
+	}
+	if !strings.Contains(prompt, `search_tools(query="*")`) {
+		t.Error("expected list-all guidance with query=\"*\"")
+	}
+
+	// Without search_tools, no guidance
+	builder2 := &SystemPromptBuilder{
+		Tools: mockTools("read_file"),
+	}
+	prompt2 := builder2.Build()
+
+	if strings.Contains(prompt2, `search_tools(query="*")`) {
+		t.Error("should not contain search_tools guidance when tool is unavailable")
+	}
+}

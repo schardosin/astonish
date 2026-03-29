@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Save, AlertCircle, Check, Shield, ShieldOff, Loader2, Trash2, RefreshCw, Plus, Camera, ArrowUpCircle, Eye, ChevronDown, ChevronRight, Server, Box } from 'lucide-react'
+import { Save, AlertCircle, Check, Shield, ShieldOff, Loader2, Trash2, RefreshCw, Plus, Camera, ArrowUpCircle, Eye, ChevronDown, ChevronRight, Server, Box, Globe, X, ExternalLink, Pin } from 'lucide-react'
 import { saveFullConfigSection, inputClass, inputStyle, labelStyle, hintStyle, sectionBorderStyle, saveButtonStyle } from './settingsApi'
 import {
   fetchSandboxDetails, fetchContainers, deleteContainer, pruneOrphans,
   fetchTemplates, fetchTemplateInfo, createTemplate, deleteTemplate,
-  snapshotTemplate, promoteTemplate, refreshTemplates
+  snapshotTemplate, promoteTemplate, refreshTemplates,
+  exposePort, unexposePort, pinContainer
 } from '../../api/sandbox'
 
 // --- Badge components ---
@@ -58,6 +59,11 @@ export default function SandboxSettings({ config, onSaved }) {
   const [pruneConfirm, setPruneConfirm] = useState(false)
   const [actionLoading, setActionLoading] = useState(null)
   const [actionError, setActionError] = useState(null)
+
+  // Port exposure
+  const [exposeContainer, setExposeContainer] = useState(null)
+  const [exposePortInput, setExposePortInput] = useState('')
+  const [exposeLoading, setExposeLoading] = useState(false)
 
   // Templates
   const [templateData, setTemplateData] = useState(null)
@@ -167,6 +173,49 @@ export default function SandboxSettings({ config, onSaved }) {
       setActionError(err.message)
     } finally {
       setActionLoading(null)
+    }
+  }
+
+  // Port exposure actions
+  const handleExposePort = async (containerId) => {
+    const port = parseInt(exposePortInput, 10)
+    if (!port || port < 1 || port > 65535) return
+    setExposeLoading(true)
+    setActionError(null)
+    try {
+      const result = await exposePort(containerId, port)
+      if (result.proxy_error) {
+        setActionError(`Port exposed but proxy listener failed: ${result.proxy_error}`)
+      }
+      setExposePortInput('')
+      loadContainers()
+    } catch (err) {
+      setActionError(err.message)
+    } finally {
+      setExposeLoading(false)
+    }
+  }
+
+  const handleUnexposePort = async (containerId, port) => {
+    setExposeLoading(true)
+    setActionError(null)
+    try {
+      await unexposePort(containerId, port)
+      loadContainers()
+    } catch (err) {
+      setActionError(err.message)
+    } finally {
+      setExposeLoading(false)
+    }
+  }
+
+  const handleTogglePin = async (containerId, currentPinned) => {
+    setActionError(null)
+    try {
+      await pinContainer(containerId, !currentPinned)
+      loadContainers()
+    } catch (err) {
+      setActionError(err.message)
     }
   }
 
@@ -417,48 +466,164 @@ export default function SandboxSettings({ config, onSaved }) {
           </div>
         ) : (
           <div className="space-y-1">
-            {containers.map(c => (
-              <div key={c.session_id}
-                className="flex items-center justify-between px-3 py-2 rounded-lg group"
-                style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
-                <div className="flex-1 min-w-0 mr-3">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs truncate" style={{ color: 'var(--text-primary)' }}>
-                      {c.name}
-                    </span>
-                    <StatusBadge status={c.status} />
-                    <TemplateBadge name={c.template || 'base'} />
+            {containers.map(c => {
+              const isExposePanelOpen = exposeContainer === c.session_id
+              const exposedPorts = c.exposed_ports || []
+              const isRunning = c.status === 'running'
+              return (
+                <div key={c.session_id} className="rounded-lg overflow-hidden"
+                  style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+                  {/* Main row */}
+                  <div className="flex items-center justify-between px-3 py-2 group">
+                    <div className="flex-1 min-w-0 mr-3">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-xs truncate" style={{ color: 'var(--text-primary)' }}>
+                          {c.name}
+                        </span>
+                        <StatusBadge status={c.status} />
+                        <TemplateBadge name={c.template || 'base'} />
+                        {exposedPorts.length > 0 && (
+                          <span className="text-xs px-1.5 py-0.5 rounded inline-flex items-center gap-1"
+                            style={{ background: 'rgba(34, 197, 94, 0.15)', color: '#22c55e' }}>
+                            <Globe size={10} />
+                            {exposedPorts.length} port{exposedPorts.length !== 1 ? 's' : ''}
+                          </span>
+                        )}
+                        {c.pinned && (
+                          <span className="text-xs px-1.5 py-0.5 rounded inline-flex items-center gap-1"
+                            style={{ background: 'rgba(234, 179, 8, 0.15)', color: '#eab308' }}
+                            title="Pinned — exempt from automatic cleanup">
+                            <Pin size={10} />
+                            pinned
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-xs font-mono truncate" style={{ color: 'var(--text-muted)' }}>
+                          {c.session_id.length > 12 ? c.session_id.slice(0, 12) + '...' : c.session_id}
+                        </span>
+                        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{c.created}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      {/* Pin toggle */}
+                      <button
+                        onClick={() => handleTogglePin(c.session_id, c.pinned)}
+                        className="p-1.5 rounded transition-colors hover:bg-white/10"
+                        title={c.pinned ? 'Unpin (allow automatic cleanup)' : 'Pin (prevent automatic cleanup)'}>
+                        <Pin size={14} style={{ color: c.pinned ? '#eab308' : 'var(--text-muted)' }} />
+                      </button>
+                      {/* Port expose toggle (only for running containers) */}
+                      {isRunning && (
+                        <button
+                          onClick={() => setExposeContainer(isExposePanelOpen ? null : c.session_id)}
+                          className="p-1.5 rounded transition-colors hover:bg-white/10"
+                          title="Expose ports">
+                          <Globe size={14} style={{ color: isExposePanelOpen ? '#22c55e' : 'var(--text-muted)' }} />
+                        </button>
+                      )}
+                      {deleteConfirm === c.session_id ? (
+                        <>
+                          <button onClick={() => handleDeleteContainer(c.session_id)}
+                            disabled={actionLoading === c.session_id}
+                            className="px-2 py-1 rounded text-xs font-medium text-white"
+                            style={{ background: '#ef4444' }}>
+                            {actionLoading === c.session_id ? <Loader2 size={12} className="animate-spin" /> : 'Delete'}
+                          </button>
+                          <button onClick={() => setDeleteConfirm(null)}
+                            className="px-2 py-1 rounded text-xs"
+                            style={{ color: 'var(--text-muted)' }}>
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button onClick={() => setDeleteConfirm(c.session_id)}
+                          className="p-1.5 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/20 transition-all"
+                          title="Delete container">
+                          <Trash2 size={14} className="text-red-400" />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <span className="text-xs font-mono truncate" style={{ color: 'var(--text-muted)' }}>
-                      {c.session_id.length > 12 ? c.session_id.slice(0, 12) + '...' : c.session_id}
-                    </span>
-                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{c.created}</span>
-                  </div>
+                  {/* Port exposure panel */}
+                  {isExposePanelOpen && isRunning && (
+                    <div className="px-3 pb-3 pt-1 border-t space-y-2"
+                      style={{ borderColor: 'var(--border-color)' }}>
+                      {/* Expose new port input */}
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          value={exposePortInput}
+                          onChange={e => setExposePortInput(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') handleExposePort(c.session_id) }}
+                          placeholder="Port (e.g. 3000)"
+                          min="1"
+                          max="65535"
+                          className="w-36 px-2 py-1 rounded text-xs font-mono"
+                          style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}
+                        />
+                        <button
+                          onClick={() => handleExposePort(c.session_id)}
+                          disabled={exposeLoading || !exposePortInput}
+                          className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium text-white disabled:opacity-50"
+                          style={saveButtonStyle}>
+                          {exposeLoading ? <Loader2 size={10} className="animate-spin" /> : <Globe size={10} />}
+                          Expose
+                        </button>
+                      </div>
+                      {/* List of exposed ports */}
+                      {exposedPorts.length > 0 ? (
+                        <div className="space-y-1">
+                          {exposedPorts.map(port => {
+                            const hostPorts = c.host_ports || {}
+                            const proxyHosts = c.proxy_hosts || {}
+                            const hp = hostPorts[String(port)]
+                            const ph = proxyHosts[String(port)]
+                            // Prefer subdomain URL (works with HTTPS via reverse proxy),
+                            // fall back to per-port direct URL, then "Proxy not running"
+                            const proxyUrl = ph
+                              ? `${window.location.protocol}//${ph}/`
+                              : hp
+                                ? `http://${window.location.hostname}:${hp}/`
+                                : null
+                            const proxyLabel = ph || (hp ? `${window.location.hostname}:${hp}` : null)
+                            return (
+                              <div key={port} className="flex items-center justify-between px-2 py-1 rounded text-xs"
+                                style={{ background: 'var(--bg-tertiary)' }}>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono" style={{ color: '#22c55e' }}>:{port}</span>
+                                  {proxyUrl ? (
+                                    <a href={proxyUrl} target="_blank" rel="noopener noreferrer"
+                                      className="flex items-center gap-1 transition-colors hover:underline"
+                                      style={{ color: 'var(--text-secondary)' }}>
+                                      <ExternalLink size={10} />
+                                      {proxyLabel}
+                                    </a>
+                                  ) : (
+                                    <span style={{ color: 'var(--text-muted)' }}>Proxy not running</span>
+                                  )}
+                                </div>
+                                <button
+                                  onClick={() => handleUnexposePort(c.session_id, port)}
+                                  disabled={exposeLoading}
+                                  className="p-1 rounded hover:bg-red-500/20 transition-colors"
+                                  title="Unexpose port">
+                                  <X size={12} className="text-red-400" />
+                                </button>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      ) : (
+                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                          No ports exposed. Enter a port number to make a container service accessible via the Studio proxy.
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
-                {deleteConfirm === c.session_id ? (
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    <button onClick={() => handleDeleteContainer(c.session_id)}
-                      disabled={actionLoading === c.session_id}
-                      className="px-2 py-1 rounded text-xs font-medium text-white"
-                      style={{ background: '#ef4444' }}>
-                      {actionLoading === c.session_id ? <Loader2 size={12} className="animate-spin" /> : 'Delete'}
-                    </button>
-                    <button onClick={() => setDeleteConfirm(null)}
-                      className="px-2 py-1 rounded text-xs"
-                      style={{ color: 'var(--text-muted)' }}>
-                      Cancel
-                    </button>
-                  </div>
-                ) : (
-                  <button onClick={() => setDeleteConfirm(c.session_id)}
-                    className="p-1.5 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/20 transition-all flex-shrink-0"
-                    title="Delete container">
-                    <Trash2 size={14} className="text-red-400" />
-                  </button>
-                )}
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>

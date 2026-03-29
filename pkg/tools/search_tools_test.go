@@ -1,9 +1,17 @@
 package tools
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
+
+	chromem "github.com/philippgille/chromem-go"
+	"github.com/schardosin/astonish/pkg/agent"
+	"google.golang.org/adk/tool"
 )
 
 func TestFileTree(t *testing.T) {
@@ -64,7 +72,6 @@ func TestFileTree(t *testing.T) {
 		}
 	})
 }
-
 
 func TestGrepSearch(t *testing.T) {
 	// Create temp directory with test files
@@ -225,4 +232,241 @@ func TestFindFiles(t *testing.T) {
 			t.Errorf("MaxResults not respected: got %d", result.Total)
 		}
 	})
+}
+
+// --- search_tools tests ---
+
+// testToolEmbeddingFunc creates a bag-of-words embedding function for tests.
+func testToolEmbeddingFunc() chromem.EmbeddingFunc {
+	return func(_ context.Context, text string) ([]float32, error) {
+		vec := make([]float32, 384)
+		words := testToolSplitWords(text)
+		for _, word := range words {
+			h := sha256.Sum256([]byte(word))
+			for i := 0; i < 8; i++ {
+				dim := int(binary.LittleEndian.Uint16(h[i*2:])) % 384
+				vec[dim] += 1.0
+			}
+		}
+		var norm float64
+		for _, v := range vec {
+			norm += float64(v) * float64(v)
+		}
+		norm = math.Sqrt(norm)
+		if norm > 0 {
+			for i := range vec {
+				vec[i] = float32(float64(vec[i]) / norm)
+			}
+		}
+		return vec, nil
+	}
+}
+
+func testToolSplitWords(s string) []string {
+	var words []string
+	current := ""
+	for _, r := range s {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' {
+			current += string(r)
+		} else {
+			if current != "" {
+				words = append(words, current)
+				current = ""
+			}
+		}
+	}
+	if current != "" {
+		words = append(words, current)
+	}
+	return words
+}
+
+type searchToolsMockTool struct {
+	name string
+	desc string
+}
+
+func (m searchToolsMockTool) Name() string        { return m.name }
+func (m searchToolsMockTool) Description() string { return m.desc }
+func (m searchToolsMockTool) IsLongRunning() bool { return false }
+
+func testToolIndex(t *testing.T) *agent.ToolIndex {
+	t.Helper()
+	db := chromem.NewDB()
+	idx, err := agent.NewToolIndex(db, testToolEmbeddingFunc())
+	if err != nil {
+		t.Fatalf("NewToolIndex: %v", err)
+	}
+
+	mainTools := []tool.Tool{
+		searchToolsMockTool{name: "read_file", desc: "Read contents of a file from disk"},
+		searchToolsMockTool{name: "write_file", desc: "Write content to a file on disk"},
+	}
+
+	groups := []*agent.ToolGroup{
+		{
+			Name:        "browser",
+			Description: "Web automation, screenshots, form filling",
+			Tools: []tool.Tool{
+				searchToolsMockTool{name: "browser_navigate", desc: "Navigate the browser to a URL"},
+				searchToolsMockTool{name: "browser_take_screenshot", desc: "Capture a screenshot of the current browser page"},
+			},
+		},
+		{
+			Name:        "web",
+			Description: "HTTP requests and web fetching",
+			Tools: []tool.Tool{
+				searchToolsMockTool{name: "http_request", desc: "Make an HTTP request to an API endpoint"},
+			},
+		},
+	}
+
+	if err := idx.SyncTools(context.Background(), mainTools, groups); err != nil {
+		t.Fatalf("SyncTools: %v", err)
+	}
+	return idx
+}
+
+func TestSearchTools_EmptyQuery(t *testing.T) {
+	idx := testToolIndex(t)
+	fn := SearchTools(idx, nil)
+
+	_, err := fn(nil, SearchToolsArgs{Query: ""})
+	if err == nil {
+		t.Error("expected error for empty query")
+	}
+}
+
+func TestSearchTools_ReturnsResults(t *testing.T) {
+	idx := testToolIndex(t)
+	fn := SearchTools(idx, nil)
+
+	result, err := fn(nil, SearchToolsArgs{Query: "screenshot browser page", MaxResults: 5})
+	if err != nil {
+		t.Fatalf("SearchTools: %v", err)
+	}
+
+	if result.Count == 0 {
+		t.Fatal("expected at least one match")
+	}
+
+	for _, m := range result.Matches {
+		if m.ToolName == "" {
+			t.Error("match has empty tool name")
+		}
+		if m.GroupName == "" {
+			t.Error("match has empty group name")
+		}
+		if m.Access == "" {
+			t.Error("match has empty access instructions")
+		}
+		if m.Score <= 0 {
+			t.Errorf("match %s has non-positive score", m.ToolName)
+		}
+	}
+}
+
+func TestSearchTools_AccessField(t *testing.T) {
+	idx := testToolIndex(t)
+	fn := SearchTools(idx, nil)
+
+	result, err := fn(nil, SearchToolsArgs{Query: "file read write", MaxResults: 10})
+	if err != nil {
+		t.Fatalf("SearchTools: %v", err)
+	}
+
+	for _, m := range result.Matches {
+		if m.IsMainTool {
+			if m.Access != "always available (main thread tool)" {
+				t.Errorf("main tool %s should have always available access, got: %s", m.ToolName, m.Access)
+			}
+		} else {
+			if m.Access == "" || m.Access == "always available (main thread tool)" {
+				t.Errorf("injected tool %s should have 'available (call directly)' access, got: %s", m.ToolName, m.Access)
+			}
+		}
+	}
+}
+
+func TestSearchTools_NoResults(t *testing.T) {
+	db := chromem.NewDB()
+	idx, err := agent.NewToolIndex(db, testToolEmbeddingFunc())
+	if err != nil {
+		t.Fatalf("NewToolIndex: %v", err)
+	}
+
+	fn := SearchTools(idx, nil)
+	result, err := fn(nil, SearchToolsArgs{Query: "anything"})
+	if err != nil {
+		t.Fatalf("SearchTools: %v", err)
+	}
+	if result.Count != 0 {
+		t.Errorf("expected 0 results, got %d", result.Count)
+	}
+	if result.Message == "" {
+		t.Error("expected a message for no results")
+	}
+}
+
+func TestNewSearchToolsTool(t *testing.T) {
+	idx := testToolIndex(t)
+	st, err := NewSearchToolsTool(idx, nil)
+	if err != nil {
+		t.Fatalf("NewSearchToolsTool: %v", err)
+	}
+	if st.Name() != "search_tools" {
+		t.Errorf("expected name 'search_tools', got %q", st.Name())
+	}
+}
+
+func TestSearchTools_ListAll(t *testing.T) {
+	idx := testToolIndex(t)
+	fn := SearchTools(idx, nil)
+
+	result, err := fn(nil, SearchToolsArgs{Query: "*"})
+	if err != nil {
+		t.Fatalf("SearchTools list all: %v", err)
+	}
+
+	// testToolIndex has 5 tools: 2 main + 2 browser + 1 web
+	if result.Count != 5 {
+		t.Errorf("expected 5 tools in full inventory, got %d", result.Count)
+	}
+
+	if result.Message == "" {
+		t.Error("expected a summary message for list-all")
+	}
+
+	// Verify all tools have score 1.0 (inventory mode, not search)
+	for _, m := range result.Matches {
+		if m.Score != 1.0 {
+			t.Errorf("list-all tool %s should have score 1.0, got %f", m.ToolName, m.Score)
+		}
+	}
+
+	// Verify access instructions are correct
+	for _, m := range result.Matches {
+		if m.IsMainTool && m.Access != "always available (main thread tool)" {
+			t.Errorf("main tool %s should have always available access, got: %s", m.ToolName, m.Access)
+		}
+		if !m.IsMainTool && m.Access == "always available (main thread tool)" {
+			t.Errorf("injected tool %s should not have always available access", m.ToolName)
+		}
+	}
+}
+
+func TestSearchTools_ListAllVariants(t *testing.T) {
+	idx := testToolIndex(t)
+	fn := SearchTools(idx, nil)
+
+	queries := []string{"*", "list all", "list all tools", "all", "all tools"}
+	for _, q := range queries {
+		result, err := fn(nil, SearchToolsArgs{Query: q})
+		if err != nil {
+			t.Fatalf("SearchTools(%q): %v", q, err)
+		}
+		if result.Count != 5 {
+			t.Errorf("SearchTools(%q): expected 5 tools, got %d", q, result.Count)
+		}
+	}
 }

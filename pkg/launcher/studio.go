@@ -139,6 +139,19 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 		handler = api.AuthMiddleware(s.Auth, handler)
 	}
 
+	// Wrap with subdomain proxy check OUTSIDE auth — subdomain-proxied
+	// requests serve the container's app, not Studio, so they bypass
+	// Studio authentication. The auth cookie is scoped to the Studio
+	// domain and won't be sent on subdomain requests anyway.
+	studioHandler := handler
+	handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if containerName, port, ok := api.GetSubdomainRouter().Lookup(r.Host); ok {
+			api.ServeSubdomainProxy(w, r, containerName, port)
+			return
+		}
+		studioHandler.ServeHTTP(w, r)
+	})
+
 	addr := fmt.Sprintf(":%d", port)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {

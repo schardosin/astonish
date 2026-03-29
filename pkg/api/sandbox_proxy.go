@@ -1,0 +1,761 @@
+package api
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/gorilla/mux"
+	"github.com/schardosin/astonish/pkg/sandbox"
+)
+
+// ipCacheEntry holds a cached container IP with an expiry time.
+type ipCacheEntry struct {
+	ip     string
+	expiry time.Time
+}
+
+// ipCache maps container names to their bridge IPs with a TTL.
+var ipCache sync.Map
+
+const ipCacheTTL = 30 * time.Second
+
+// getCachedIP returns the cached IP for a container, or resolves and caches it.
+func getCachedIP(client *sandbox.IncusClient, containerName string) (string, error) {
+	if entry, ok := ipCache.Load(containerName); ok {
+		cached := entry.(*ipCacheEntry)
+		if time.Now().Before(cached.expiry) {
+			return cached.ip, nil
+		}
+		ipCache.Delete(containerName)
+	}
+
+	// Use a single-attempt IP resolution for the proxy path.
+	// GetContainerIPv4 polls for up to 10s, but if the container is running
+	// and healthy, the IP should be available immediately.
+	ip, err := client.GetContainerIPv4(containerName)
+	if err != nil {
+		return "", err
+	}
+
+	ipCache.Store(containerName, &ipCacheEntry{
+		ip:     ip,
+		expiry: time.Now().Add(ipCacheTTL),
+	})
+
+	return ip, nil
+}
+
+// InvalidateIPCache removes a container's IP from the cache.
+// Called when a container is destroyed.
+func InvalidateIPCache(containerName string) {
+	ipCache.Delete(containerName)
+}
+
+// SandboxProxyHandler handles /api/sandbox/proxy/{container}/{port}/{path...}
+// It reverse-proxies HTTP (and WebSocket) requests to a service running inside
+// a sandbox container. The port must be explicitly exposed via the session
+// registry before the proxy will forward traffic.
+//
+// NOTE: This path-based proxy works well for API-only services but breaks SPAs
+// that use absolute asset paths (e.g., /assets/main.js). For SPAs, use the
+// per-port proxy managed by PortProxyManager instead.
+func SandboxProxyHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	containerName := vars["container"]
+	portStr := vars["port"]
+
+	if containerName == "" || portStr == "" {
+		http.Error(w, `{"error":"missing container or port"}`, http.StatusBadRequest)
+		return
+	}
+
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 1 || port > 65535 {
+		http.Error(w, `{"error":"invalid port number"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Check that the port is explicitly exposed
+	sessRegistry, err := sandbox.NewSessionRegistry()
+	if err != nil {
+		http.Error(w, `{"error":"failed to load session registry"}`, http.StatusInternalServerError)
+		return
+	}
+
+	if !sessRegistry.IsPortExposed(containerName, port) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprintf(w, `{"error":"port %d is not exposed on container %q. Use 'astonish sandbox expose %s %d' first."}`,
+			port, containerName, containerName, port)
+		return
+	}
+
+	// Verify container exists and is running
+	client, err := sandboxConnect()
+	if err != nil {
+		http.Error(w, `{"error":"sandbox unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	if !client.IsRunning(containerName) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprintf(w, `{"error":"container %q is not running"}`, containerName)
+		return
+	}
+
+	// Resolve container IP
+	ip, err := getCachedIP(client, containerName)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprintf(w, `{"error":"cannot resolve container IP: %s"}`, err.Error())
+		return
+	}
+
+	targetBase := fmt.Sprintf("http://%s:%d", ip, port)
+
+	// Extract the downstream path (everything after /api/sandbox/proxy/{container}/{port})
+	prefix := fmt.Sprintf("/api/sandbox/proxy/%s/%s", containerName, portStr)
+	downstreamPath := strings.TrimPrefix(r.URL.Path, prefix)
+	if downstreamPath == "" {
+		downstreamPath = "/"
+	}
+
+	// WebSocket upgrade
+	if isWebSocketUpgrade(r) {
+		proxyWebSocket(w, r, ip, port, downstreamPath)
+		return
+	}
+
+	// HTTP reverse proxy
+	target, _ := url.Parse(targetBase)
+	proxy := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			req.URL.Scheme = target.Scheme
+			req.URL.Host = target.Host
+			req.URL.Path = downstreamPath
+			req.URL.RawQuery = r.URL.RawQuery
+			req.Host = target.Host
+
+			// Forward headers
+			if clientIP, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+				if existing := req.Header.Get("X-Forwarded-For"); existing != "" {
+					req.Header.Set("X-Forwarded-For", existing+", "+clientIP)
+				} else {
+					req.Header.Set("X-Forwarded-For", clientIP)
+				}
+			}
+			req.Header.Set("X-Forwarded-Host", r.Host)
+			req.Header.Set("X-Forwarded-Proto", "http")
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			fmt.Fprintf(w, `{"error":"proxy error: %s"}`, err.Error())
+		},
+	}
+
+	proxy.ServeHTTP(w, r)
+}
+
+// ---------------------------------------------------------------------------
+// Per-port proxy manager
+// ---------------------------------------------------------------------------
+// Instead of proxying through a path prefix (which breaks SPAs), we allocate
+// a dedicated host port for each exposed container port. The browser connects
+// directly to http://{host}:{hostPort}/ and all requests are reverse-proxied
+// to http://{containerIP}:{containerPort}/. Since there is no path prefix,
+// absolute asset paths like /assets/main.js resolve correctly.
+
+const (
+	// portRangeStart is the first host port we try to allocate.
+	portRangeStart = 19000
+	// portRangeEnd is one past the last host port we try.
+	portRangeEnd = 19200
+)
+
+// portProxyEntry tracks one per-port listener.
+type portProxyEntry struct {
+	containerName string
+	containerPort int
+	hostPort      int
+	server        *http.Server
+	cancel        context.CancelFunc
+}
+
+// PortProxyManager manages per-port reverse proxy listeners.
+type PortProxyManager struct {
+	mu      sync.Mutex
+	entries map[string]*portProxyEntry // key: "containerName:containerPort"
+	used    map[int]bool               // host ports currently in use
+}
+
+// portProxyMgr is the singleton manager. Initialized lazily.
+var (
+	portProxyMgr     *PortProxyManager
+	portProxyMgrOnce sync.Once
+)
+
+// GetPortProxyManager returns the singleton PortProxyManager.
+func GetPortProxyManager() *PortProxyManager {
+	portProxyMgrOnce.Do(func() {
+		portProxyMgr = &PortProxyManager{
+			entries: make(map[string]*portProxyEntry),
+			used:    make(map[int]bool),
+		}
+	})
+	return portProxyMgr
+}
+
+// proxyKey builds the map key for a container+port combo.
+func proxyKey(containerName string, containerPort int) string {
+	return fmt.Sprintf("%s:%d", containerName, containerPort)
+}
+
+// allocatePort finds the next free host port in the range.
+func (m *PortProxyManager) allocatePort() (int, error) {
+	for p := portRangeStart; p < portRangeEnd; p++ {
+		if m.used[p] {
+			continue
+		}
+		// Try to bind to verify it's actually free
+		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", p))
+		if err != nil {
+			continue // port in use by something else
+		}
+		ln.Close()
+		return p, nil
+	}
+	return 0, fmt.Errorf("no free host ports in range %d-%d", portRangeStart, portRangeEnd-1)
+}
+
+// StartProxy starts a per-port reverse proxy listener for a container port.
+// Returns the allocated host port. If already running, returns the existing port.
+func (m *PortProxyManager) StartProxy(containerName string, containerPort int) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := proxyKey(containerName, containerPort)
+
+	// Already running?
+	if entry, ok := m.entries[key]; ok {
+		return entry.hostPort, nil
+	}
+
+	// Allocate a host port
+	hostPort, err := m.allocatePort()
+	if err != nil {
+		return 0, err
+	}
+
+	// Resolve container IP
+	client, err := sandboxConnect()
+	if err != nil {
+		return 0, fmt.Errorf("sandbox unavailable: %w", err)
+	}
+	ip, err := getCachedIP(client, containerName)
+	if err != nil {
+		return 0, fmt.Errorf("cannot resolve container IP: %w", err)
+	}
+
+	targetBase := fmt.Sprintf("http://%s:%d", ip, containerPort)
+	target, _ := url.Parse(targetBase)
+
+	// Build the handler: reverse proxy + WebSocket support
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Re-resolve IP on each request (uses cache with TTL)
+		currentIP, err := getCachedIP(client, containerName)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("cannot resolve container IP: %s", err), http.StatusBadGateway)
+			return
+		}
+
+		if isWebSocketUpgrade(r) {
+			proxyWebSocket(w, r, currentIP, containerPort, r.URL.Path)
+			return
+		}
+
+		currentTarget, _ := url.Parse(fmt.Sprintf("http://%s:%d", currentIP, containerPort))
+		proxy := &httputil.ReverseProxy{
+			Director: func(req *http.Request) {
+				req.URL.Scheme = currentTarget.Scheme
+				req.URL.Host = currentTarget.Host
+				// Pass path and query through unchanged — no prefix stripping needed
+				req.URL.Path = r.URL.Path
+				req.URL.RawQuery = r.URL.RawQuery
+				req.Host = currentTarget.Host
+
+				if clientIP, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+					if existing := req.Header.Get("X-Forwarded-For"); existing != "" {
+						req.Header.Set("X-Forwarded-For", existing+", "+clientIP)
+					} else {
+						req.Header.Set("X-Forwarded-For", clientIP)
+					}
+				}
+				req.Header.Set("X-Forwarded-Host", r.Host)
+				req.Header.Set("X-Forwarded-Proto", "http")
+			},
+			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+				http.Error(w, fmt.Sprintf("proxy error: %s", err), http.StatusBadGateway)
+			},
+		}
+		proxy.ServeHTTP(w, r)
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	srv := &http.Server{
+		Addr:    fmt.Sprintf("0.0.0.0:%d", hostPort),
+		Handler: handler,
+	}
+
+	log.Printf("[sandbox-proxy] Starting listener :%d → %s:%d (%s)", hostPort, ip, containerPort, containerName)
+
+	// Start listener in background
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("[sandbox-proxy] Listener :%d error: %v", hostPort, err)
+		}
+	}()
+
+	// Shutdown goroutine
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		srv.Shutdown(shutdownCtx)
+	}()
+
+	_ = target // suppress unused warning from initial parse
+
+	entry := &portProxyEntry{
+		containerName: containerName,
+		containerPort: containerPort,
+		hostPort:      hostPort,
+		server:        srv,
+		cancel:        cancel,
+	}
+
+	m.entries[key] = entry
+	m.used[hostPort] = true
+
+	return hostPort, nil
+}
+
+// StopProxy stops the per-port proxy listener for a container port.
+// Returns true if a listener was stopped.
+func (m *PortProxyManager) StopProxy(containerName string, containerPort int) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := proxyKey(containerName, containerPort)
+	entry, ok := m.entries[key]
+	if !ok {
+		return false
+	}
+
+	entry.cancel()
+	delete(m.entries, key)
+	delete(m.used, entry.hostPort)
+
+	log.Printf("[sandbox-proxy] Stopped listener :%d for %s:%d", entry.hostPort, containerName, containerPort)
+	return true
+}
+
+// StopAllForContainer stops all per-port proxy listeners for a container.
+func (m *PortProxyManager) StopAllForContainer(containerName string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var toDelete []string
+	for key, entry := range m.entries {
+		if entry.containerName == containerName {
+			entry.cancel()
+			delete(m.used, entry.hostPort)
+			toDelete = append(toDelete, key)
+			log.Printf("[sandbox-proxy] Stopped listener :%d for %s:%d", entry.hostPort, containerName, entry.containerPort)
+		}
+	}
+
+	for _, key := range toDelete {
+		delete(m.entries, key)
+	}
+
+	return len(toDelete)
+}
+
+// GetHostPort returns the allocated host port for a container port, or 0 if not running.
+func (m *PortProxyManager) GetHostPort(containerName string, containerPort int) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := proxyKey(containerName, containerPort)
+	if entry, ok := m.entries[key]; ok {
+		return entry.hostPort
+	}
+	return 0
+}
+
+// ListForContainer returns a map of containerPort → hostPort for all active
+// proxies for the given container.
+func (m *PortProxyManager) ListForContainer(containerName string) map[int]int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	result := make(map[int]int)
+	for _, entry := range m.entries {
+		if entry.containerName == containerName {
+			result[entry.containerPort] = entry.hostPort
+		}
+	}
+	return result
+}
+
+// ---------------------------------------------------------------------------
+// Subdomain-based proxy router
+// ---------------------------------------------------------------------------
+// Maps full hostnames (e.g., "astn-sess-abc-3000.example.com") to container
+// targets. When Studio receives a request whose Host header matches a
+// registered hostname, it reverse-proxies the request to the container
+// instead of serving the Studio UI or API.
+
+// subdomainTarget describes where to proxy a matched subdomain request.
+type subdomainTarget struct {
+	containerName string
+	containerPort int
+}
+
+// SubdomainRouter maps hostnames to container proxy targets.
+type SubdomainRouter struct {
+	mu      sync.RWMutex
+	hostMap map[string]*subdomainTarget // hostname → target
+
+	clientMu   sync.Mutex
+	client     *sandbox.IncusClient
+	clientInit bool
+}
+
+var (
+	subdomainRouter     *SubdomainRouter
+	subdomainRouterOnce sync.Once
+)
+
+// GetSubdomainRouter returns the singleton SubdomainRouter.
+func GetSubdomainRouter() *SubdomainRouter {
+	subdomainRouterOnce.Do(func() {
+		subdomainRouter = &SubdomainRouter{
+			hostMap: make(map[string]*subdomainTarget),
+		}
+	})
+	return subdomainRouter
+}
+
+// SubdomainHostname constructs the subdomain hostname for a container+port.
+// Format: {containerName}-{port}.{baseDomain}
+func SubdomainHostname(containerName string, port int, baseDomain string) string {
+	return fmt.Sprintf("%s-%d.%s", containerName, port, baseDomain)
+}
+
+// RegisterHost adds a hostname → container mapping.
+func (sr *SubdomainRouter) RegisterHost(hostname, containerName string, port int) {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	sr.hostMap[hostname] = &subdomainTarget{
+		containerName: containerName,
+		containerPort: port,
+	}
+	log.Printf("[sandbox-proxy] Registered subdomain route: %s → %s:%d", hostname, containerName, port)
+}
+
+// UnregisterHost removes a hostname mapping.
+func (sr *SubdomainRouter) UnregisterHost(hostname string) {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	if _, ok := sr.hostMap[hostname]; ok {
+		delete(sr.hostMap, hostname)
+		log.Printf("[sandbox-proxy] Unregistered subdomain route: %s", hostname)
+	}
+}
+
+// UnregisterAllForContainer removes all hostname mappings for a container.
+func (sr *SubdomainRouter) UnregisterAllForContainer(containerName string) int {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	var toDelete []string
+	for host, target := range sr.hostMap {
+		if target.containerName == containerName {
+			toDelete = append(toDelete, host)
+		}
+	}
+	for _, host := range toDelete {
+		delete(sr.hostMap, host)
+		log.Printf("[sandbox-proxy] Unregistered subdomain route: %s", host)
+	}
+	return len(toDelete)
+}
+
+// Lookup checks if a host matches a registered subdomain proxy.
+// The host may include a port (e.g., "foo.example.com:9393"), which is stripped.
+func (sr *SubdomainRouter) Lookup(host string) (containerName string, port int, ok bool) {
+	// Strip port from host if present
+	hostname := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		hostname = h
+	}
+
+	sr.mu.RLock()
+	defer sr.mu.RUnlock()
+	target, found := sr.hostMap[hostname]
+	if !found {
+		return "", 0, false
+	}
+	return target.containerName, target.containerPort, true
+}
+
+// ListForContainer returns a map of containerPort → hostname for all active
+// subdomain routes for the given container.
+func (sr *SubdomainRouter) ListForContainer(containerName string) map[int]string {
+	sr.mu.RLock()
+	defer sr.mu.RUnlock()
+	result := make(map[int]string)
+	for host, target := range sr.hostMap {
+		if target.containerName == containerName {
+			result[target.containerPort] = host
+		}
+	}
+	return result
+}
+
+// getClient returns a cached Incus client, creating one on first call.
+// The client is reused across all subdomain proxy requests to avoid
+// the overhead of sandboxConnect() (platform detection + Incus dial)
+// on every request.
+func (sr *SubdomainRouter) getClient() (*sandbox.IncusClient, error) {
+	sr.clientMu.Lock()
+	defer sr.clientMu.Unlock()
+
+	if sr.clientInit && sr.client != nil {
+		return sr.client, nil
+	}
+
+	client, err := sandboxConnect()
+	if err != nil {
+		return nil, err
+	}
+	sr.client = client
+	sr.clientInit = true
+	return client, nil
+}
+
+// ServeSubdomainProxy handles an HTTP request by proxying it to the matched
+// container. Called from the Studio main handler when a subdomain match is found.
+func ServeSubdomainProxy(w http.ResponseWriter, r *http.Request, containerName string, containerPort int) {
+	sr := GetSubdomainRouter()
+	client, err := sr.getClient()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("sandbox unavailable: %s", err), http.StatusServiceUnavailable)
+		return
+	}
+
+	currentIP, err := getCachedIP(client, containerName)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("cannot resolve container IP: %s", err), http.StatusBadGateway)
+		return
+	}
+
+	if isWebSocketUpgrade(r) {
+		proxyWebSocket(w, r, currentIP, containerPort, r.URL.Path)
+		return
+	}
+
+	currentTarget, _ := url.Parse(fmt.Sprintf("http://%s:%d", currentIP, containerPort))
+	proxy := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			req.URL.Scheme = currentTarget.Scheme
+			req.URL.Host = currentTarget.Host
+			req.URL.Path = r.URL.Path
+			req.URL.RawQuery = r.URL.RawQuery
+			req.Host = currentTarget.Host
+
+			if clientIP, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+				if existing := req.Header.Get("X-Forwarded-For"); existing != "" {
+					req.Header.Set("X-Forwarded-For", existing+", "+clientIP)
+				} else {
+					req.Header.Set("X-Forwarded-For", clientIP)
+				}
+			}
+			req.Header.Set("X-Forwarded-Host", r.Host)
+			req.Header.Set("X-Forwarded-Proto", "http")
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			http.Error(w, fmt.Sprintf("proxy error: %s", err), http.StatusBadGateway)
+		},
+	}
+	proxy.ServeHTTP(w, r)
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket and utility functions
+// ---------------------------------------------------------------------------
+
+// isWebSocketUpgrade checks if the request is a WebSocket upgrade request.
+func isWebSocketUpgrade(r *http.Request) bool {
+	for _, v := range r.Header["Connection"] {
+		for _, s := range strings.Split(v, ",") {
+			if strings.TrimSpace(strings.ToLower(s)) == "upgrade" {
+				if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// proxyWebSocket forwards a WebSocket connection to the container using raw
+// TCP hijacking. This avoids message-level copying and works transparently
+// with any WebSocket application (including Vite HMR, Socket.IO, etc.).
+//
+// The approach:
+//  1. Dial a raw TCP connection to the backend container
+//  2. Write the original HTTP upgrade request to the backend
+//  3. Read the backend's 101 Switching Protocols response
+//  4. Hijack the client connection from the HTTP server
+//  5. Forward the 101 response to the client
+//  6. Bidirectionally pipe raw bytes between the two TCP connections
+func proxyWebSocket(w http.ResponseWriter, r *http.Request, ip string, port int, path string) {
+	// Build the backend address
+	backendAddr := net.JoinHostPort(ip, strconv.Itoa(port))
+
+	// Dial the backend
+	backendConn, err := net.DialTimeout("tcp", backendAddr, 10*time.Second)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("WebSocket backend dial failed: %s", err), http.StatusBadGateway)
+		return
+	}
+
+	// Build the request URI
+	reqURI := path
+	if reqURI == "" {
+		reqURI = "/"
+	}
+	if r.URL.RawQuery != "" {
+		reqURI += "?" + r.URL.RawQuery
+	}
+
+	// Write the HTTP upgrade request to the backend.
+	// Set Host to the backend address so the upstream server (e.g. Vite)
+	// doesn't reject based on host mismatch.
+	var reqBuf strings.Builder
+	fmt.Fprintf(&reqBuf, "%s %s HTTP/1.1\r\n", r.Method, reqURI)
+	fmt.Fprintf(&reqBuf, "Host: %s\r\n", backendAddr)
+
+	// Forward all headers except Host (already set above)
+	for key, vals := range r.Header {
+		if strings.EqualFold(key, "Host") {
+			continue
+		}
+		for _, v := range vals {
+			fmt.Fprintf(&reqBuf, "%s: %s\r\n", key, v)
+		}
+	}
+	reqBuf.WriteString("\r\n")
+
+	if _, err := backendConn.Write([]byte(reqBuf.String())); err != nil {
+		backendConn.Close()
+		http.Error(w, fmt.Sprintf("WebSocket backend write failed: %s", err), http.StatusBadGateway)
+		return
+	}
+
+	// Read the backend's response
+	backendBuf := bufio.NewReader(backendConn)
+	resp, err := http.ReadResponse(backendBuf, r)
+	if err != nil {
+		backendConn.Close()
+		http.Error(w, fmt.Sprintf("WebSocket backend response read failed: %s", err), http.StatusBadGateway)
+		return
+	}
+
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		backendConn.Close()
+		http.Error(w, fmt.Sprintf("WebSocket backend returned %d, expected 101", resp.StatusCode), http.StatusBadGateway)
+		return
+	}
+
+	// Hijack the client connection
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		backendConn.Close()
+		http.Error(w, "WebSocket hijack not supported", http.StatusInternalServerError)
+		return
+	}
+
+	clientConn, clientBuf, err := hijacker.Hijack()
+	if err != nil {
+		backendConn.Close()
+		log.Printf("[sandbox-proxy] WebSocket hijack failed: %v", err)
+		return
+	}
+
+	// Write the 101 response to the client.
+	// resp.Status is the full status text (e.g., "101 Switching Protocols"),
+	// so we only prepend the HTTP version, not the status code again.
+	var respBuf strings.Builder
+	fmt.Fprintf(&respBuf, "HTTP/%d.%d %s\r\n", resp.ProtoMajor, resp.ProtoMinor, resp.Status)
+	for key, vals := range resp.Header {
+		for _, v := range vals {
+			fmt.Fprintf(&respBuf, "%s: %s\r\n", key, v)
+		}
+	}
+	respBuf.WriteString("\r\n")
+
+	if _, err := clientConn.Write([]byte(respBuf.String())); err != nil {
+		clientConn.Close()
+		backendConn.Close()
+		log.Printf("[sandbox-proxy] WebSocket client write failed: %v", err)
+		return
+	}
+
+	// If there's buffered data from the backend (read past the HTTP response),
+	// flush it to the client first.
+	if backendBuf.Buffered() > 0 {
+		buffered := make([]byte, backendBuf.Buffered())
+		n, _ := backendBuf.Read(buffered)
+		if n > 0 {
+			clientConn.Write(buffered[:n])
+		}
+	}
+
+	// If there's buffered data from the client, flush it to the backend.
+	if clientBuf.Reader.Buffered() > 0 {
+		buffered := make([]byte, clientBuf.Reader.Buffered())
+		n, _ := clientBuf.Reader.Read(buffered)
+		if n > 0 {
+			backendConn.Write(buffered[:n])
+		}
+	}
+
+	log.Printf("[sandbox-proxy] WebSocket connected: %s → %s%s", r.RemoteAddr, backendAddr, path)
+
+	// Bidirectional raw byte forwarding
+	done := make(chan struct{})
+	go func() {
+		io.Copy(backendConn, clientConn)
+		backendConn.Close()
+		close(done)
+	}()
+	io.Copy(clientConn, backendConn)
+	clientConn.Close()
+	<-done
+}

@@ -871,3 +871,42 @@ func (s *FileStore) CleanupExpiredSessions(maxAgeDays int) []string {
 
 	return deletedIDs
 }
+
+// RedactSession retroactively applies the current RedactFunc to an existing
+// session's transcript file. This is used after new credential values are
+// registered (e.g. after save_credential) to scrub secrets from user messages
+// that were persisted before the credential was known to the redactor.
+//
+// The method also redacts user-role text Parts in the in-memory session cache
+// so that subsequent reads (e.g. session reload in the UI) return redacted text.
+func (s *FileStore) RedactSession(appName, userID, sessionID string) error {
+	if s.RedactFunc == nil {
+		return nil
+	}
+
+	// Retroactively redact the on-disk transcript
+	transcriptPath := filepath.Join(s.baseDir, appName, userID, sessionID+".jsonl")
+	transcript := NewTranscript(transcriptPath)
+	if err := transcript.RedactTranscript(s.RedactFunc); err != nil {
+		return fmt.Errorf("failed to redact transcript for session %s: %w", sessionID, err)
+	}
+
+	// Redact in-memory user event text so the cached session matches disk
+	s.mu.RLock()
+	sess, ok := s.sessions[sessionID]
+	s.mu.RUnlock()
+	if ok {
+		for _, event := range sess.events {
+			if event == nil || event.Content == nil || event.Content.Role != "user" {
+				continue
+			}
+			for i, part := range event.Content.Parts {
+				if part != nil && part.Text != "" {
+					event.Content.Parts[i].Text = s.RedactFunc(part.Text)
+				}
+			}
+		}
+	}
+
+	return nil
+}

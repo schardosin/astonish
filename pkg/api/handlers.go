@@ -77,6 +77,11 @@ func scanAgentsDir(dir string, source string, agents map[string]AgentListItem) {
 			continue
 		}
 
+		// Skip drill suites and drills — they are not regular flows
+		if cfg.Type == "drill" || cfg.Type == "drill_suite" || cfg.Type == "test" || cfg.Type == "test_suite" {
+			continue
+		}
+
 		agents[name] = AgentListItem{
 			ID:          name,
 			Name:        name,
@@ -762,6 +767,11 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/sandbox/init", SandboxInitHandler).Methods("POST")
 	router.HandleFunc("/api/sandbox/containers", SandboxContainerListHandler).Methods("GET")
 	router.HandleFunc("/api/sandbox/containers/{id}", SandboxContainerDeleteHandler).Methods("DELETE")
+	router.HandleFunc("/api/sandbox/containers/{id}/expose", SandboxListExposedPortsHandler).Methods("GET")
+	router.HandleFunc("/api/sandbox/containers/{id}/expose", SandboxExposePortHandler).Methods("POST")
+	router.HandleFunc("/api/sandbox/containers/{id}/expose/{port}", SandboxUnexposePortHandler).Methods("DELETE")
+	router.HandleFunc("/api/sandbox/containers/{id}/pin", SandboxPinContainerHandler).Methods("POST")
+	router.PathPrefix("/api/sandbox/proxy/{container}/{port}").HandlerFunc(SandboxProxyHandler)
 	router.HandleFunc("/api/sandbox/prune", SandboxPruneHandler).Methods("POST")
 	router.HandleFunc("/api/sandbox/templates", SandboxTemplateListHandler).Methods("GET")
 	router.HandleFunc("/api/sandbox/templates", SandboxTemplateCreateHandler).Methods("POST")
@@ -868,4 +878,17 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/studio/fleet/sessions/{id}/trace", FleetSessionTraceHandler).Methods("GET")
 	router.HandleFunc("/api/studio/fleet/sessions/{id}/threads", FleetSessionThreadsHandler).Methods("GET")
 	router.HandleFunc("/api/studio/fleet/sessions/{id}/messages", FleetSessionMessagesHandler).Methods("GET")
+
+	// Drill endpoints
+	router.HandleFunc("/api/drills", ListDrillSuitesHandler).Methods("GET")
+	router.HandleFunc("/api/drills/{suite}", GetDrillSuiteHandler).Methods("GET")
+	router.HandleFunc("/api/drills/{suite}", DeleteDrillSuiteHandler).Methods("DELETE")
+	router.HandleFunc("/api/drills/{suite}/yaml", GetSuiteYAMLHandler).Methods("GET")
+	router.HandleFunc("/api/drills/{suite}/yaml", SaveSuiteYAMLHandler).Methods("PUT")
+	router.HandleFunc("/api/drills/{suite}/drills/{name}", GetDrillHandler).Methods("GET")
+	router.HandleFunc("/api/drills/{suite}/drills/{name}", DeleteDrillHandler).Methods("DELETE")
+	router.HandleFunc("/api/drills/{suite}/drills/{name}/yaml", GetDrillYAMLHandler).Methods("GET")
+	router.HandleFunc("/api/drills/{suite}/drills/{name}/yaml", SaveDrillYAMLHandler).Methods("PUT")
+	router.HandleFunc("/api/drill-reports", ListDrillReportsHandler).Methods("GET")
+	router.HandleFunc("/api/drill-reports/{suite}", GetDrillReportHandler).Methods("GET")
 }

@@ -363,6 +363,16 @@ func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig
 		return
 	}
 
+	// When sandbox is enabled, WorkspaceDir is a container-internal path
+	// (e.g., "/root/astonish"). Do NOT persist it — CleanupSessionWorkspace
+	// would run os.RemoveAll on that path ON THE HOST, potentially destroying
+	// the host project directory. Sandbox sessions have no host-side workspace;
+	// container cleanup handles everything.
+	workspaceDir := fs.WorkspaceDir
+	if fs.SandboxTools != nil {
+		workspaceDir = ""
+	}
+
 	now := time.Now()
 	meta := session.SessionMeta{
 		ID:           fs.ID,
@@ -375,7 +385,7 @@ func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig
 		FleetName:    fleetCfg.Name,
 		IssueNumber:  issueNumber,
 		Repo:         repo,
-		WorkspaceDir: fs.WorkspaceDir,
+		WorkspaceDir: workspaceDir,
 	}
 
 	if err := fileStore.AddSessionMeta(meta); err != nil {
@@ -924,11 +934,11 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 	}
 
 	// Wrap tools with sandbox node proxies. Replicate the excludedChildTools
-	// filter from SubAgentManager.filterTools() — tools in that set (opencode,
+	// filter from SubAgentManager.resolveTools() — tools in that set (opencode,
 	// delegate_tasks, etc.) come exclusively from FleetTools so they must be
-	// excluded from the base Tools slice to avoid duplicates.
+	// excluded from the base tools to avoid duplicates.
 	var baseTools []tool.Tool
-	for _, t := range subAgentMgr.Tools {
+	for _, t := range subAgentMgr.AllTools() {
 		if !agent.IsExcludedChildTool(t.Name()) {
 			baseTools = append(baseTools, t)
 		}
@@ -937,6 +947,25 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 	if subAgentMgr.FleetTools != nil {
 		wrappedFleetTools := sandbox.WrapToolsWithNodeClient(subAgentMgr.FleetTools, lazyNode)
 		wrappedTools = append(wrappedTools, wrappedFleetTools...)
+	}
+
+	// Replace the chat-mode run_drill with a fleet-aware version that routes
+	// shell/file steps into the fleet's dedicated container. The chat-mode
+	// run_drill is already in wrappedTools via AllTools() — we must replace it,
+	// not append a second copy (duplicate tools crash the agent on startup).
+	runDrillTool, runDrillErr := tools.NewRunDrillToolWithClient(lazyNode, fleetSession.ID)
+	if runDrillErr == nil {
+		replaced := false
+		for i, t := range wrappedTools {
+			if t.Name() == "run_drill" {
+				wrappedTools[i] = runDrillTool
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			wrappedTools = append(wrappedTools, runDrillTool)
+		}
 	}
 
 	fleetSession.SandboxTools = wrappedTools
@@ -951,6 +980,9 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 	}
 
 	// Set workspace to the project directory inside the container.
+	// This is used at runtime for prompt building (telling agents where files are).
+	// NOTE: This path is container-internal and must NOT be persisted in session
+	// metadata for host-side cleanup. See persistFleetSessionMeta.
 	if plan != nil && plan.ContainerWorkspaceDir != "" {
 		fleetSession.WorkspaceDir = plan.ContainerWorkspaceDir
 	} else {

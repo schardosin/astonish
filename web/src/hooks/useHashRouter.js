@@ -77,6 +77,14 @@ function parseHash(hash) {
     return { view: 'fleet', params: { subView, subKey } }
   }
 
+  if (view === 'drill') {
+    // #/drill, #/drill/suite/{name}, #/drill/drill/{suite}/{drill}, #/drill/report/{name}
+    const subView = parts[1] || ''
+    const subKey = parts[2] ? decodeURIComponent(parts[2]) : ''
+    const subKey2 = parts[3] ? decodeURIComponent(parts[3]) : ''
+    return { view: 'drill', params: { subView, subKey, subKey2 } }
+  }
+
   // Legacy: #/home redirects to chat
   if (view === 'home') {
     return { view: 'chat', params: {} }
@@ -106,6 +114,14 @@ export function buildPath(view, params = {}) {
         return `/fleet/${params.subView}/${encodeURIComponent(params.subKey)}`
       }
       return '/fleet'
+    case 'drill':
+      if (params.subView === 'drill' && params.subKey && params.subKey2) {
+        return `/drill/drill/${encodeURIComponent(params.subKey)}/${encodeURIComponent(params.subKey2)}`
+      }
+      if (params.subView && params.subKey) {
+        return `/drill/${params.subView}/${encodeURIComponent(params.subKey)}`
+      }
+      return '/drill'
     default:
       return '/chat'
   }

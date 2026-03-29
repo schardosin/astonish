@@ -2348,7 +2348,7 @@ func TestSetupSessionWorkspace_LocalGitSource(t *testing.T) {
 
 func TestCleanupSessionWorkspace(t *testing.T) {
 	tmpDir := t.TempDir()
-	wsDir := filepath.Join(tmpDir, "workspace-to-delete")
+	wsDir := filepath.Join(tmpDir, "workspaces", "workspace-to-delete")
 	if err := os.MkdirAll(filepath.Join(wsDir, "subdir"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -2378,6 +2378,28 @@ func TestCleanupSessionWorkspace_NonExistent(t *testing.T) {
 	err := CleanupSessionWorkspace("/nonexistent/path/that/doesnt/exist")
 	if err != nil {
 		t.Fatalf("CleanupSessionWorkspace with nonexistent path: %v", err)
+	}
+}
+
+func TestCleanupSessionWorkspace_SafetyGuard(t *testing.T) {
+	// Paths that look like container-internal paths (not under workspaces/)
+	// should be refused even if they exist on the host.
+	tmpDir := t.TempDir()
+	dangerousDir := filepath.Join(tmpDir, "astonish")
+	if err := os.MkdirAll(dangerousDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dangerousDir, "main.go"), []byte("package main"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := CleanupSessionWorkspace(dangerousDir)
+	if err != nil {
+		t.Fatalf("CleanupSessionWorkspace should not error on blocked path: %v", err)
+	}
+	// The directory should still exist — safety guard blocked deletion
+	if _, err := os.Stat(dangerousDir); os.IsNotExist(err) {
+		t.Error("safety guard should have prevented deletion of non-workspace path")
 	}
 }
 

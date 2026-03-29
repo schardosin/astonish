@@ -58,6 +58,12 @@ func SetupSessionWorkspace(workspaceDir string, source *ProjectSourceConfig, bas
 // CleanupSessionWorkspace removes the per-session workspace directory.
 // It is a no-op if the path is empty or does not exist.
 // The base workspace (~/astonish_projects/<repo-name>/) is never touched.
+//
+// Safety: refuses to delete paths that don't look like session workspaces.
+// Legitimate workspace paths are always under a "workspaces/" subdirectory
+// (created by ResolveSessionWorkspaceDir). This guards against accidentally
+// deleting host project directories if a container-internal path leaks
+// into WorkspaceDir metadata.
 func CleanupSessionWorkspace(workspaceDir string) error {
 	if workspaceDir == "" {
 		return nil
@@ -65,8 +71,40 @@ func CleanupSessionWorkspace(workspaceDir string) error {
 	if _, err := os.Stat(workspaceDir); os.IsNotExist(err) {
 		return nil
 	}
+
+	// Safety guard: only allow deletion of paths under a "workspaces/" directory.
+	// ResolveSessionWorkspaceDir always produces paths like:
+	//   <baseDir>/workspaces/<sessionID>
+	// Container-internal paths (e.g., "/root/astonish", "/root") never contain
+	// this component and must NOT be deleted on the host.
+	absPath, err := filepath.Abs(workspaceDir)
+	if err != nil {
+		return fmt.Errorf("cannot resolve workspace path %q: %w", workspaceDir, err)
+	}
+	if !isUnderWorkspacesDir(absPath) {
+		log.Printf("[fleet-workspace] SAFETY: refusing to delete %q — not under a workspaces/ directory", absPath)
+		return nil
+	}
+
 	log.Printf("[fleet-workspace] Removing workspace %s", workspaceDir)
 	return os.RemoveAll(workspaceDir)
+}
+
+// isUnderWorkspacesDir checks whether the given absolute path is a child of a
+// directory named "workspaces". This ensures we only delete paths created by
+// ResolveSessionWorkspaceDir (which places them under .../workspaces/<id>).
+func isUnderWorkspacesDir(absPath string) bool {
+	// Walk up the path looking for a "workspaces" component that is a proper ancestor.
+	// E.g., "/root/.config/astonish/sessions/workspaces/abc123" → true
+	//        "/root/astonish" → false
+	//        "/root/workspaces" → false (is the workspaces dir itself, not a child)
+	parts := strings.Split(filepath.Clean(absPath), string(filepath.Separator))
+	for i, part := range parts {
+		if part == "workspaces" && i < len(parts)-1 {
+			return true
+		}
+	}
+	return false
 }
 
 // setupGitRepo creates a per-session workspace for a git_repo source.

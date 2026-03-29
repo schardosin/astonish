@@ -363,6 +363,16 @@ func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig
 		return
 	}
 
+	// When sandbox is enabled, WorkspaceDir is a container-internal path
+	// (e.g., "/root/astonish"). Do NOT persist it — CleanupSessionWorkspace
+	// would run os.RemoveAll on that path ON THE HOST, potentially destroying
+	// the host project directory. Sandbox sessions have no host-side workspace;
+	// container cleanup handles everything.
+	workspaceDir := fs.WorkspaceDir
+	if fs.SandboxTools != nil {
+		workspaceDir = ""
+	}
+
 	now := time.Now()
 	meta := session.SessionMeta{
 		ID:           fs.ID,
@@ -375,7 +385,7 @@ func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig
 		FleetName:    fleetCfg.Name,
 		IssueNumber:  issueNumber,
 		Repo:         repo,
-		WorkspaceDir: fs.WorkspaceDir,
+		WorkspaceDir: workspaceDir,
 	}
 
 	if err := fileStore.AddSessionMeta(meta); err != nil {
@@ -959,6 +969,9 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 	}
 
 	// Set workspace to the project directory inside the container.
+	// This is used at runtime for prompt building (telling agents where files are).
+	// NOTE: This path is container-internal and must NOT be persisted in session
+	// metadata for host-side cleanup. See persistFleetSessionMeta.
 	if plan != nil && plan.ContainerWorkspaceDir != "" {
 		fleetSession.WorkspaceDir = plan.ContainerWorkspaceDir
 	} else {

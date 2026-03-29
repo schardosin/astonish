@@ -949,12 +949,23 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 		wrappedTools = append(wrappedTools, wrappedFleetTools...)
 	}
 
-	// Add run_drill tool (runs on host, proxies shell/file steps into
-	// the fleet's container). This tool is NOT in containerTools so it won't
-	// be double-wrapped — it orchestrates on the host.
+	// Replace the chat-mode run_drill with a fleet-aware version that routes
+	// shell/file steps into the fleet's dedicated container. The chat-mode
+	// run_drill is already in wrappedTools via AllTools() — we must replace it,
+	// not append a second copy (duplicate tools crash the agent on startup).
 	runDrillTool, runDrillErr := tools.NewRunDrillToolWithClient(lazyNode, fleetSession.ID)
 	if runDrillErr == nil {
-		wrappedTools = append(wrappedTools, runDrillTool)
+		replaced := false
+		for i, t := range wrappedTools {
+			if t.Name() == "run_drill" {
+				wrappedTools[i] = runDrillTool
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			wrappedTools = append(wrappedTools, runDrillTool)
+		}
 	}
 
 	fleetSession.SandboxTools = wrappedTools

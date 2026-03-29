@@ -22,6 +22,7 @@ type RunDrillArgs struct {
 	SuiteName string `json:"suite_name" jsonschema:"Name of the drill suite to run (without .yaml extension)"`
 	Tag       string `json:"tag,omitempty" jsonschema:"Filter drills by tag (comma-separated)"`
 	Verbose   bool   `json:"verbose,omitempty" jsonschema:"Show verbose output including setup logs"`
+	Force     bool   `json:"force,omitempty" jsonschema:"Run on the current container even if its template doesn't match the suite's required template. Use after the user declines a template switch."`
 }
 
 // RunDrillResult is the result of the run_drill tool.
@@ -105,6 +106,30 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 			Status:  "error",
 			Summary: fmt.Sprintf("Invalid suite: %v", err),
 		}, nil
+	}
+
+	// Template mismatch check (chat mode with sandbox only).
+	// Fleet sessions skip this — the container is already provisioned for the fleet.
+	// No-sandbox sessions skip this — template is irrelevant for local execution.
+	suiteTemplate := ""
+	if suite.Config != nil && suite.Config.SuiteConfig != nil {
+		suiteTemplate = suite.Config.SuiteConfig.Template
+	}
+	if deps.lazyClient == nil && deps.nodePool != nil && ctx != nil && ctx.SessionID() != "" && suiteTemplate != "" {
+		lazyClient := deps.nodePool.GetOrCreate(ctx.SessionID())
+		if lazyClient != nil {
+			currentTemplate := lazyClient.Template()
+			if currentTemplate != suiteTemplate && !args.Force {
+				return RunDrillResult{
+					Status: "template_mismatch",
+					Summary: fmt.Sprintf(
+						"Suite %q requires template %s but the current sandbox is %s. "+
+							"Ask the user whether to switch templates (use use_sandbox_template tool) or "+
+							"re-run with force=true to run on the current container anyway.",
+						suiteName, templateDisplay(suiteTemplate), templateDisplay(currentTemplate)),
+				}, nil
+			}
+		}
 	}
 
 	// Filter tests by tag if requested
@@ -706,4 +731,13 @@ func enrichReportWithFailureContext(buf *bytes.Buffer, report *adrill.SuiteRepor
 		}
 		buf.WriteString(fmt.Sprintf("\nSetup log:\n%s\n", logSnippet))
 	}
+}
+
+// templateDisplay returns a user-friendly display name for a sandbox template.
+// Empty string (the default base container) is rendered as "@base".
+func templateDisplay(t string) string {
+	if t == "" {
+		return "@base"
+	}
+	return t
 }

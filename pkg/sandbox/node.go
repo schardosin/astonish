@@ -626,6 +626,12 @@ func (lnc *LazyNodeClient) IsClosed() bool {
 	return lnc.closed
 }
 
+// Template returns the sandbox template this client was created with.
+// Empty string means "@base" (the default base container).
+func (lnc *LazyNodeClient) Template() string {
+	return lnc.template
+}
+
 // GetContainerName returns the container name (empty if not yet initialized).
 func (lnc *LazyNodeClient) GetContainerName() string {
 	lnc.mu.Lock()

@@ -10,6 +10,7 @@ import (
 type AgentConfig struct {
 	Description     string            `yaml:"description"`
 	Type            string            `yaml:"type,omitempty"`         // "drill", "drill_suite" (legacy: "test", "test_suite"), or empty for regular flows
+	Template        string            `yaml:"template,omitempty"`     // Sandbox template (also accepted inside suite_config; top-level is reconciled down)
 	Suite           string            `yaml:"suite,omitempty"`        // For type: drill — which suite this belongs to
 	SuiteConfig     *DrillSuiteConfig `yaml:"suite_config,omitempty"` // For type: drill_suite — infrastructure config
 	DrillConfig     *DrillConfig      `yaml:"drill_config,omitempty"` // For type: drill — drill-specific config
@@ -23,6 +24,7 @@ type AgentConfig struct {
 type agentConfigRaw struct {
 	Description     string            `yaml:"description"`
 	Type            string            `yaml:"type,omitempty"`
+	Template        string            `yaml:"template,omitempty"`
 	Suite           string            `yaml:"suite,omitempty"`
 	SuiteConfig     *DrillSuiteConfig `yaml:"suite_config,omitempty"`
 	DrillConfig     *DrillConfig      `yaml:"drill_config,omitempty"`
@@ -44,6 +46,7 @@ func (c *AgentConfig) UnmarshalYAML(value *yaml.Node) error {
 
 	c.Description = raw.Description
 	c.Type = raw.Type
+	c.Template = raw.Template
 	c.Suite = raw.Suite
 	c.SuiteConfig = raw.SuiteConfig
 	c.Nodes = raw.Nodes
@@ -65,40 +68,46 @@ func (c *AgentConfig) UnmarshalYAML(value *yaml.Node) error {
 		c.Type = "drill_suite"
 	}
 
+	// Reconcile template: top-level template is accepted as a convenience.
+	// If suite_config exists but has no template, and top-level has one, copy it down.
+	if c.Template != "" && c.SuiteConfig != nil && c.SuiteConfig.Template == "" {
+		c.SuiteConfig.Template = c.Template
+	}
+
 	return nil
 }
 
 // DrillSuiteConfig defines infrastructure for running drills.
 // Used by type: drill_suite flows.
 type DrillSuiteConfig struct {
-	Template    string            `yaml:"template,omitempty"`    // Container template name (e.g., "@myapp")
-	Services    []ServiceConfig   `yaml:"services,omitempty"`    // Multi-service definitions (started in order, stopped in reverse)
-	Setup       []string          `yaml:"setup,omitempty"`       // Shell commands to run before tests (legacy single-service)
-	ReadyCheck  *ReadyCheck       `yaml:"ready_check,omitempty"` // Wait for application readiness (legacy single-service)
-	Teardown    []string          `yaml:"teardown,omitempty"`    // Shell commands after all tests (legacy single-service)
-	Environment map[string]string `yaml:"environment,omitempty"` // Shared environment variables
-	BaseURL     string            `yaml:"base_url,omitempty"`    // Base URL for browser tests (e.g., "http://localhost:3000")
+	Template    string            `yaml:"template,omitempty" json:"template,omitempty"`       // Container template name (e.g., "@myapp")
+	Services    []ServiceConfig   `yaml:"services,omitempty" json:"services,omitempty"`       // Multi-service definitions (started in order, stopped in reverse)
+	Setup       []string          `yaml:"setup,omitempty" json:"setup,omitempty"`             // Shell commands to run before tests (legacy single-service)
+	ReadyCheck  *ReadyCheck       `yaml:"ready_check,omitempty" json:"ready_check,omitempty"` // Wait for application readiness (legacy single-service)
+	Teardown    []string          `yaml:"teardown,omitempty" json:"teardown,omitempty"`       // Shell commands after all tests (legacy single-service)
+	Environment map[string]string `yaml:"environment,omitempty" json:"environment,omitempty"` // Shared environment variables
+	BaseURL     string            `yaml:"base_url,omitempty" json:"base_url,omitempty"`       // Base URL for browser tests (e.g., "http://localhost:3000")
 }
 
 // ServiceConfig defines a single service in a multi-service drill suite.
 // Services are started in declaration order and stopped in reverse order.
 type ServiceConfig struct {
-	Name        string            `yaml:"name"`                  // Service identifier (e.g., "database", "backend", "frontend")
-	Setup       string            `yaml:"setup"`                 // Shell command to start this service
-	ReadyCheck  *ReadyCheck       `yaml:"ready_check,omitempty"` // Per-service readiness check
-	Teardown    string            `yaml:"teardown,omitempty"`    // Shell command to stop this service
-	Environment map[string]string `yaml:"environment,omitempty"` // Per-service environment variables
+	Name        string            `yaml:"name" json:"name"`                                   // Service identifier (e.g., "database", "backend", "frontend")
+	Setup       string            `yaml:"setup" json:"setup"`                                 // Shell command to start this service
+	ReadyCheck  *ReadyCheck       `yaml:"ready_check,omitempty" json:"ready_check,omitempty"` // Per-service readiness check
+	Teardown    string            `yaml:"teardown,omitempty" json:"teardown,omitempty"`       // Shell command to stop this service
+	Environment map[string]string `yaml:"environment,omitempty" json:"environment,omitempty"` // Per-service environment variables
 }
 
 // ReadyCheck defines how to verify the application under test is ready.
 type ReadyCheck struct {
-	Type     string `yaml:"type"`               // "http", "port", "output_contains"
-	URL      string `yaml:"url,omitempty"`      // For http type: URL to poll
-	Host     string `yaml:"host,omitempty"`     // For port type (default: "localhost")
-	Port     int    `yaml:"port,omitempty"`     // For port type: TCP port number
-	Pattern  string `yaml:"pattern,omitempty"`  // For output_contains type: string to match
-	Timeout  int    `yaml:"timeout,omitempty"`  // Max wait in seconds (default: 30)
-	Interval int    `yaml:"interval,omitempty"` // Poll interval in seconds (default: 2)
+	Type     string `yaml:"type" json:"type"`                             // "http", "port", "output_contains"
+	URL      string `yaml:"url,omitempty" json:"url,omitempty"`           // For http type: URL to poll
+	Host     string `yaml:"host,omitempty" json:"host,omitempty"`         // For port type (default: "localhost")
+	Port     int    `yaml:"port,omitempty" json:"port,omitempty"`         // For port type: TCP port number
+	Pattern  string `yaml:"pattern,omitempty" json:"pattern,omitempty"`   // For output_contains type: string to match
+	Timeout  int    `yaml:"timeout,omitempty" json:"timeout,omitempty"`   // Max wait in seconds (default: 30)
+	Interval int    `yaml:"interval,omitempty" json:"interval,omitempty"` // Poll interval in seconds (default: 2)
 }
 
 // DrillConfig holds per-drill configuration (lightweight — infrastructure is in the suite).

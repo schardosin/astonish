@@ -306,7 +306,7 @@ function SuiteDetail({ suiteKey, onNavigate, onRunSuite, onAddDrills, onRefresh,
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => onRunSuite(suiteKey)}
+              onClick={() => onRunSuite(suiteKey, suite?.suite_config?.template)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white transition-colors hover:opacity-90"
               style={{ background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' }}
             >
@@ -411,7 +411,7 @@ function SuiteDetail({ suiteKey, onNavigate, onRunSuite, onAddDrills, onRefresh,
                     <div className="flex items-center gap-2 col-span-2">
                       <Terminal size={12} style={{ color: '#f59e0b' }} />
                       <span style={{ color: 'var(--text-secondary)' }}>Services:</span>
-                      <span className="font-mono" style={{ color: 'var(--text-primary)' }}>{suite.suite_config.services.join(', ')}</span>
+                      <span className="font-mono" style={{ color: 'var(--text-primary)' }}>{suite.suite_config.services.map(s => s.name || s).join(', ')}</span>
                     </div>
                   )}
                   {suite.suite_config.setup && (
@@ -425,7 +425,7 @@ function SuiteDetail({ suiteKey, onNavigate, onRunSuite, onAddDrills, onRefresh,
                     <div className="flex items-start gap-2 col-span-2">
                       <Shield size={12} className="mt-0.5" style={{ color: '#f59e0b' }} />
                       <span style={{ color: 'var(--text-secondary)' }}>Ready Check:</span>
-                      <code className="font-mono text-[11px] bg-black/20 px-1.5 py-0.5 rounded" style={{ color: 'var(--text-primary)' }}>{suite.suite_config.ready_check}</code>
+                      <code className="font-mono text-[11px] bg-black/20 px-1.5 py-0.5 rounded" style={{ color: 'var(--text-primary)' }}>{suite.suite_config.ready_check.type}{suite.suite_config.ready_check.url ? ` ${suite.suite_config.ready_check.url}` : suite.suite_config.ready_check.port ? ` :${suite.suite_config.ready_check.port}` : ''}{suite.suite_config.ready_check.timeout ? ` (${suite.suite_config.ready_check.timeout}s)` : ''}</code>
                     </div>
                   )}
                 </div>

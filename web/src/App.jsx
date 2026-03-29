@@ -1373,8 +1373,12 @@ layout:
               theme={theme}
               path={path}
               onNavigate={(hashPath) => navigate(hashPath)}
-              onRunSuite={(suiteName) => {
-                setPendingChatMessage(`Run the drill suite "${suiteName}"`)
+              onRunSuite={(suiteName, template) => {
+                if (template) {
+                  setPendingChatMessage(`Switch the sandbox to template "${template}" and then run the drill suite "${suiteName}"`)
+                } else {
+                  setPendingChatMessage(`Run the drill suite "${suiteName}"`)
+                }
                 navigate(buildPath('chat'))
               }}
               onAddDrills={(suiteName) => {

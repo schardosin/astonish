@@ -1,16 +1,25 @@
 import { useState } from 'react'
 import { AlertTriangle, Check, Download, Server, X, Loader2, ChevronDown, ChevronUp } from 'lucide-react'
+import type { McpDependency, McpDependencyCheckResult } from '../api/agents'
 
 /**
  * MCPDependenciesPanel - Shows MCP server dependencies status for a flow
  * Displays which servers are installed vs missing, with install buttons
  */
+
+interface MCPDependenciesPanelProps {
+  dependencies: McpDependencyCheckResult
+  onInstall: (dep: McpDependency) => void
+  onDismiss: () => void
+  isInstalling?: string | null
+}
+
 export default function MCPDependenciesPanel({ 
   dependencies, 
   onInstall,
   onDismiss,
-  isInstalling = null // server name being installed, or null
-}) {
+  isInstalling = null
+}: MCPDependenciesPanelProps) {
   const [expanded, setExpanded] = useState(true)
   
   if (!dependencies || dependencies.dependencies.length === 0) {

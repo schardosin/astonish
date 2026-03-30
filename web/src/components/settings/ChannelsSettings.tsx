@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Save, AlertCircle, Check, ChevronDown, ChevronRight } from 'lucide-react'
 import { saveFullConfigSection, inputClass, inputStyle, labelStyle, hintStyle, sectionBorderStyle, saveButtonStyle } from './settingsApi'
 
-function ToggleSwitch({ value, onChange }) {
+function ToggleSwitch({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
   return (
     <button
       onClick={() => onChange(!value)}
@@ -20,7 +20,7 @@ function ToggleSwitch({ value, onChange }) {
   )
 }
 
-function CollapsibleSection({ title, description, enabled, onToggle, expanded, onExpand, children }) {
+function CollapsibleSection({ title, description, enabled, onToggle, expanded, onExpand, children }: { title: string; description: string; enabled: boolean; onToggle: (v: boolean) => void; expanded: boolean; onExpand: () => void; children: React.ReactNode }) {
   return (
     <div className="rounded-lg border" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
       <div
@@ -49,7 +49,7 @@ function CollapsibleSection({ title, description, enabled, onToggle, expanded, o
   )
 }
 
-export default function ChannelsSettings({ config, onSaved }) {
+export default function ChannelsSettings({ config, onSaved }: { config: Record<string, any>; onSaved?: () => void }) {
   const [form, setForm] = useState({
     enabled: false,
     telegram: {
@@ -78,7 +78,7 @@ export default function ChannelsSettings({ config, onSaved }) {
   const [emailAllowFromText, setEmailAllowFromText] = useState('')
   const [saving, setSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
-  const [error, setError] = useState(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (config) {
@@ -135,18 +135,18 @@ export default function ChannelsSettings({ config, onSaved }) {
       setSaveSuccess(true)
       if (onSaved) onSaved()
       setTimeout(() => setSaveSuccess(false), 2000)
-    } catch (err) {
-      setError(err.message)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err))
     } finally {
       setSaving(false)
     }
   }
 
-  const updateTelegram = (updates) => {
+  const updateTelegram = (updates: Record<string, any>) => {
     setForm(f => ({ ...f, telegram: { ...f.telegram, ...updates } }))
   }
 
-  const updateEmail = (updates) => {
+  const updateEmail = (updates: Record<string, any>) => {
     setForm(f => ({ ...f, email: { ...f.email, ...updates } }))
   }
 

@@ -14,7 +14,7 @@ export function InputNodeForm({ data, onChange, theme }: InputNodeFormProps) {
   useEffect(() => {
     const newText = data.options ? data.options.join(', ') : ''
     // Only update if the parsed values are different (to avoid cursor jumping)
-    const currentParsed = optionsText.split(',').map(s => s.trim()).filter(Boolean)
+    const currentParsed = optionsText.split(',').map((s: string) => s.trim()).filter(Boolean)
     const newParsed = data.options || []
     if (JSON.stringify(currentParsed) !== JSON.stringify(newParsed)) {
       setOptionsText(newText)
@@ -22,7 +22,7 @@ export function InputNodeForm({ data, onChange, theme }: InputNodeFormProps) {
   }, [data.options])
   
   const handleOptionsBlur = () => {
-    const val = optionsText.split(',').map(s => s.trim()).filter(Boolean)
+    const val = optionsText.split(',').map((s: string) => s.trim()).filter(Boolean)
     onChange({ ...data, options: val.length > 0 ? val : undefined })
   }
   

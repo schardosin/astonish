@@ -30,6 +30,7 @@ export interface McpDependency {
   server: string
   tools: string[]
   source: string
+  installed?: boolean
   store_id?: string
   config?: Record<string, unknown>
 }

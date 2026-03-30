@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Save, AlertCircle, Check, AlertTriangle } from 'lucide-react'
 import { saveFullConfigSection, inputClass, inputStyle, labelStyle, hintStyle, sectionBorderStyle, saveButtonStyle } from './settingsApi'
 
-export default function DaemonSettings({ config, onSaved }) {
+export default function DaemonSettings({ config, onSaved }: { config: Record<string, any>; onSaved?: () => void }) {
   const [form, setForm] = useState({
     port: 9393,
     log_dir: '',
@@ -14,7 +14,7 @@ export default function DaemonSettings({ config, onSaved }) {
   const [saving, setSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [restartRequired, setRestartRequired] = useState(false)
-  const [error, setError] = useState(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (config) {
@@ -42,8 +42,8 @@ export default function DaemonSettings({ config, onSaved }) {
       }
       if (onSaved) onSaved()
       setTimeout(() => setSaveSuccess(false), 2000)
-    } catch (err) {
-      setError(err.message)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err))
     } finally {
       setSaving(false)
     }

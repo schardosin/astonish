@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/schardosin/astonish/pkg/provider/httpool"
 )
 
 const modelsURL = "https://openrouter.ai/api/v1/models"
@@ -44,10 +46,10 @@ type DisplayModel struct {
 
 // modelCache caches the model metadata to avoid repeated API calls
 var (
-	modelCacheMu    sync.RWMutex
-	modelCache      map[string]ModelMetadata
-	modelCacheTime  time.Time
-	modelCacheTTL   = 1 * time.Hour // Cache TTL
+	modelCacheMu   sync.RWMutex
+	modelCache     map[string]ModelMetadata
+	modelCacheTime time.Time
+	modelCacheTTL  = 1 * time.Hour // Cache TTL
 )
 
 // FetchModelsMetadata fetches all model metadata from OpenRouter API.
@@ -79,7 +81,7 @@ func FetchModelsMetadata(ctx context.Context, apiKey string) (map[string]ModelMe
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := httpool.Client(30 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch models: %w", err)

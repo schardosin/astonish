@@ -547,7 +547,9 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 			return fmt.Errorf("failed to mount merged overlay: %w", err)
 		}
 		defer func() {
-			_ = umountOnSandboxHost(mergedDir)
+			if err := umountOnSandboxHost(mergedDir); err != nil {
+				slog.Warn("failed to unmount merged overlay", "component", "sandbox", "path", mergedDir, "error", err)
+			}
 		}()
 
 		// Stop and unmount old @base overlay (if any)
@@ -557,7 +559,9 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 			}
 		}
 		if IsOverlayMounted(poolPath, baseName) {
-			_ = UnmountSessionOverlay(poolPath, baseName)
+			if err := UnmountSessionOverlay(poolPath, baseName); err != nil {
+				slog.Warn("failed to unmount old @base overlay", "component", "sandbox", "container", baseName, "error", err)
+			}
 		}
 
 		// Delete old @base snapshot and container
@@ -700,7 +704,11 @@ func DeleteTemplate(client *IncusClient, registry *TemplateRegistry, name string
 	poolName, poolErr := GetPoolForProfile(client)
 	var poolPath string
 	if poolErr == nil {
-		poolPath, _ = GetPoolSourcePath(client, poolName)
+		var pathErr error
+		poolPath, pathErr = GetPoolSourcePath(client, poolName)
+		if pathErr != nil {
+			slog.Warn("failed to get pool source path", "component", "sandbox", "pool", poolName, "error", pathErr)
+		}
 	}
 
 	// Unmount any active overlay before deleting
@@ -937,14 +945,18 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 	tplUpperDir := OverlayUpperDir(tplContainerName)
 
 	if err := mkdirAllOnSandboxHost(filepath.Dir(tplUpperDir), 0755); err != nil {
-		_ = client.DeleteInstance(tplContainerName)
+		if delErr := client.DeleteInstance(tplContainerName); delErr != nil {
+			slog.Warn("failed to delete template instance during rollback", "component", "sandbox", "container", tplContainerName, "error", delErr)
+		}
 		restartSession()
 		return fmt.Errorf("failed to create template overlay dir: %w", err)
 	}
 
 	slog.Info("copying session overlay to template", "component", "sandbox", "template", tplContainerName)
 	if err := cpOnSandboxHost(sessionUpperDir, tplUpperDir); err != nil {
-		_ = client.DeleteInstance(tplContainerName)
+		if delErr := client.DeleteInstance(tplContainerName); delErr != nil {
+			slog.Warn("failed to delete template instance during rollback", "component", "sandbox", "container", tplContainerName, "error", delErr)
+		}
 		restartSession()
 		return fmt.Errorf("failed to copy session overlay: %w", err)
 	}
@@ -963,18 +975,25 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 	// from the parent template that the session inherited.
 	lowerDir, err := ResolveLowerLayers(poolPath, sourceTemplate, registry)
 	if err != nil {
-		_ = client.DeleteInstance(tplContainerName)
+		if delErr := client.DeleteInstance(tplContainerName); delErr != nil {
+			slog.Warn("failed to delete template instance during rollback", "component", "sandbox", "container", tplContainerName, "error", delErr)
+		}
 		restartSession()
 		return fmt.Errorf("failed to resolve lower layers for source template %q: %w", sourceTemplate, err)
 	}
 	if err := MountOverlay(poolPath, tplContainerName, lowerDir); err != nil {
-		_ = client.DeleteInstance(tplContainerName)
+		if delErr := client.DeleteInstance(tplContainerName); delErr != nil {
+			slog.Warn("failed to delete template instance during rollback", "component", "sandbox", "container", tplContainerName, "error", delErr)
+		}
 		restartSession()
 		return fmt.Errorf("failed to mount overlay on template: %w", err)
 	}
 
 	// Compute binary hash
-	hash, _ := ComputeBinaryHash()
+	hash, hashErr := ComputeBinaryHash()
+	if hashErr != nil {
+		slog.Warn("failed to compute binary hash for template metadata", "component", "sandbox", "error", hashErr)
+	}
 
 	// Register in the template registry (overlay-based, no Incus snapshot)
 	now := time.Now()

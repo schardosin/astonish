@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"sync"
 
@@ -210,7 +211,9 @@ func ExecInteractive(client *IncusClient, containerName string, command []string
 	// so that readers get EOF. This mirrors how local PTY gives EIO when
 	// the slave side closes.
 	go func() {
-		_ = op.Wait()
+		if err := op.Wait(); err != nil {
+			slog.Debug("interactive exec operation completed with error", "component", "sandbox", "error", err)
+		}
 		stdoutWriter.Close()
 		stdinReader.Close()
 	}()
@@ -275,7 +278,9 @@ func ExecNonInteractive(client *IncusClient, containerName string, command []str
 	cp.op = op
 
 	go func() {
-		_ = op.Wait()
+		if err := op.Wait(); err != nil {
+			slog.Debug("non-interactive exec operation completed with error", "component", "sandbox", "error", err)
+		}
 		stdoutWriter.Close()
 		stdinReader.Close()
 	}()

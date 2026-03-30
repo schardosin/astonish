@@ -89,7 +89,9 @@ func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, 
 		// Also clean the registry entry for whatever session owned this container
 		for _, entry := range sessRegistry.List() {
 			if entry.ContainerName == containerName && entry.SessionID != sessionID {
-				_ = sessRegistry.Remove(entry.SessionID)
+				if err := sessRegistry.Remove(entry.SessionID); err != nil {
+					slog.Warn("failed to remove stale registry entry", "component", "sandbox", "session", entry.SessionID, "error", err)
+				}
 				break
 			}
 		}
@@ -119,7 +121,9 @@ func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, 
 		// and deletes the Incus instance. If it fails (e.g., container in
 		// ABORTING state), fall back to a direct delete to avoid zombies.
 		if destroyErr := destroyOverlayContainer(client, containerName); destroyErr != nil {
-			_ = client.DeleteInstance(containerName)
+			if delErr := client.DeleteInstance(containerName); delErr != nil {
+				slog.Warn("fallback delete also failed after start failure", "component", "sandbox", "container", containerName, "error", delErr)
+			}
 		}
 		if lxcLog != "" {
 			return "", fmt.Errorf("failed to start session container: %w\n\nLXC log:\n%s", err, lxcLog)
@@ -132,7 +136,9 @@ func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, 
 	// but has an empty/wrong filesystem (just the tiny shell image).
 	if err := verifyContainerHealth(client, containerName); err != nil {
 		if destroyErr := destroyOverlayContainer(client, containerName); destroyErr != nil {
-			_ = client.DeleteInstance(containerName)
+			if delErr := client.DeleteInstance(containerName); delErr != nil {
+				slog.Warn("fallback delete also failed after health check failure", "component", "sandbox", "container", containerName, "error", delErr)
+			}
 		}
 		return "", fmt.Errorf("session container health check failed: %w", err)
 	}
@@ -142,7 +148,9 @@ func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, 
 		// Registry write failed — the container works but won't be tracked.
 		// Destroy it so we don't leak an untracked container.
 		if destroyErr := destroyOverlayContainer(client, containerName); destroyErr != nil {
-			_ = client.DeleteInstance(containerName)
+			if delErr := client.DeleteInstance(containerName); delErr != nil {
+				slog.Warn("fallback delete also failed after registry write failure", "component", "sandbox", "container", containerName, "error", delErr)
+			}
 		}
 		return "", fmt.Errorf("failed to register session container: %w", err)
 	}
@@ -270,7 +278,9 @@ func TryDestroySessionContainer(sessionID string) {
 
 	// Try the registry-based path first (finds container by session ID lookup)
 	if entry := registry.Get(sessionID); entry != nil {
-		_ = DestroyForSession(client, registry, sessionID)
+		if err := DestroyForSession(client, registry, sessionID); err != nil {
+			slog.Warn("failed to destroy session container via registry", "component", "sandbox", "session", sessionID, "error", err)
+		}
 		return
 	}
 
@@ -280,7 +290,9 @@ func TryDestroySessionContainer(sessionID string) {
 	// Try to destroy by the derived container name directly.
 	containerName := SessionContainerName(sessionID)
 	if client.InstanceExists(containerName) {
-		_ = destroyOverlayContainer(client, containerName)
+		if err := destroyOverlayContainer(client, containerName); err != nil {
+			slog.Warn("failed to destroy orphan container", "component", "sandbox", "container", containerName, "error", err)
+		}
 	}
 }
 
@@ -392,7 +404,9 @@ func PruneStaleOnStartup(client *IncusClient, registry *SessionRegistry, existin
 		// Derive the session ID from the container name and check the store.
 		if matchedID := matchContainerToSession(inst.Name, existingSessionIDs); matchedID != "" {
 			// Self-heal: re-register so future lookups work.
-			_ = registry.Put(matchedID, inst.Name, BaseTemplate)
+			if err := registry.Put(matchedID, inst.Name, BaseTemplate); err != nil {
+				slog.Warn("failed to self-heal registry entry", "component", "sandbox", "session", matchedID, "container", inst.Name, "error", err)
+			}
 			continue
 		}
 
@@ -404,7 +418,9 @@ func PruneStaleOnStartup(client *IncusClient, registry *SessionRegistry, existin
 		// Also clean registry entry if one exists
 		for _, entry := range registry.List() {
 			if entry.ContainerName == inst.Name {
-				_ = registry.Remove(entry.SessionID)
+				if err := registry.Remove(entry.SessionID); err != nil {
+					slog.Warn("failed to remove registry entry for pruned container", "component", "sandbox", "container", inst.Name, "error", err)
+				}
 				break
 			}
 		}

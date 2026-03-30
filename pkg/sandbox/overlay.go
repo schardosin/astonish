@@ -546,20 +546,27 @@ func CleanupAllOverlays() {
 
 		// Try to find and unmount the corresponding container rootfs
 		// We don't know the pool path here, so just try to unmount by reading /proc/mounts
-		data, _ := readMountsOnSandboxHost()
+		data, readErr := readMountsOnSandboxHost()
+		if readErr != nil {
+			slog.Warn("failed to read mounts during overlay cleanup", "component", "sandbox", "error", readErr)
+		}
 		for _, line := range bytes.Split(data, []byte("\n")) {
 			fields := bytes.Fields(line)
 			if len(fields) >= 3 && string(fields[2]) == "overlay" {
 				mountpoint := string(fields[1])
 				// Check if this mount's workdir points to our session dir
 				if bytes.Contains(line, []byte(filepath.Join(overlayBaseDir, name))) {
-					_ = umountOnSandboxHost(mountpoint)
+					if err := umountOnSandboxHost(mountpoint); err != nil {
+						slog.Warn("failed to unmount overlay during cleanup", "component", "sandbox", "mountpoint", mountpoint, "error", err)
+					}
 				}
 			}
 		}
 	}
 
-	_ = removeAllOnSandboxHost(overlayBaseDir)
+	if err := removeAllOnSandboxHost(overlayBaseDir); err != nil {
+		slog.Warn("failed to remove overlay base directory", "component", "sandbox", "path", overlayBaseDir, "error", err)
+	}
 }
 
 // RemountDependentOverlays finds all overlay mounts whose lowerdir includes

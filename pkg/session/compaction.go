@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -156,9 +157,7 @@ func (c *Compactor) CompactContents(ctx context.Context, contents []*genai.Conte
 	// Build summary
 	summary, err := c.summarize(ctx, oldContents)
 	if err != nil {
-		if c.DebugMode {
-			fmt.Printf("[Compactor] Summarization failed, falling back to truncation: %v\n", err)
-		}
+		slog.Debug("compactor summarization failed, falling back to truncation", "component", "compactor", "error", err)
 		// Fallback: just keep recent messages with a note
 		summary = c.truncationSummary(oldContents)
 	}
@@ -189,8 +188,8 @@ func (c *Compactor) CompactContents(ctx context.Context, contents []*genai.Conte
 	c.mu.Unlock()
 
 	if c.DebugMode {
-		fmt.Printf("[Compactor] Compacted %d → %d messages (estimated %d tokens)\n",
-			len(contents), len(result), EstimateTokens(result))
+		slog.Debug("compacted messages", "component", "compactor",
+			"before", len(contents), "after", len(result), "estimatedTokens", EstimateTokens(result))
 	}
 
 	return result, nil
@@ -301,15 +300,14 @@ func (c *Compactor) BeforeModelCallback() llmagent.BeforeModelCallback {
 
 		if c.DebugMode {
 			est := EstimateTokens(req.Contents)
-			fmt.Printf("[Compactor] Threshold exceeded (%d/%d tokens, %.0f%%). Compacting...\n",
-				est, c.ContextWindow, float64(est)/float64(c.ContextWindow)*100)
+			slog.Debug("compactor threshold exceeded, compacting",
+				"component", "compactor", "tokens", est, "window", c.ContextWindow,
+				"usage", fmt.Sprintf("%.0f%%", float64(est)/float64(c.ContextWindow)*100))
 		}
 
 		compacted, err := c.CompactContents(ctx, req.Contents)
 		if err != nil {
-			if c.DebugMode {
-				fmt.Printf("[Compactor] Compaction failed: %v\n", err)
-			}
+			slog.Debug("compaction failed", "component", "compactor", "error", err)
 			return nil, nil // proceed with original contents
 		}
 

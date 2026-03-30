@@ -76,19 +76,15 @@ func (r *MemoryReflector) Reflect(ctx context.Context, trace *ExecutionTrace) {
 	// Check qualification
 	toolCallCount := trace.ToolCallCount()
 	if toolCallCount < minToolCallsForReflection {
-		if r.DebugMode {
-			fmt.Printf("[Memory Reflection] Skipped: only %d tool calls (threshold: %d)\n",
-				toolCallCount, minToolCallsForReflection)
-		}
+		slog.Debug("memory reflection skipped: insufficient tool calls",
+			"component", "memory-reflection", "toolCalls", toolCallCount, "threshold", minToolCallsForReflection)
 		return
 	}
 
 	// Check if memory_save was already called during the turn
 	for _, step := range trace.Steps {
 		if step.ToolName == "memory_save" {
-			if r.DebugMode {
-				fmt.Println("[Memory Reflection] Skipped: memory_save already called during turn")
-			}
+			slog.Debug("memory reflection skipped: memory_save already called during turn", "component", "memory-reflection")
 			return
 		}
 	}
@@ -97,7 +93,7 @@ func (r *MemoryReflector) Reflect(ctx context.Context, trace *ExecutionTrace) {
 	traceSummary := buildTraceSummary(trace)
 
 	if r.DebugMode {
-		fmt.Printf("[Memory Reflection] Running reflection on %d tool calls\n", toolCallCount)
+		slog.Debug("running memory reflection", "component", "memory-reflection", "toolCalls", toolCallCount)
 	}
 
 	// Build the LLM request with memory_save tool
@@ -147,18 +143,14 @@ func (r *MemoryReflector) Reflect(ctx context.Context, trace *ExecutionTrace) {
 	var lastResp *model.LLMResponse
 	for resp, err := range r.LLM.GenerateContent(ctx, req, false) {
 		if err != nil {
-			if r.DebugMode {
-				fmt.Printf("[Memory Reflection] LLM error: %v\n", err)
-			}
+			slog.Debug("memory reflection LLM error", "component", "memory-reflection", "error", err)
 			return
 		}
 		lastResp = resp
 	}
 
 	if lastResp == nil || lastResp.Content == nil {
-		if r.DebugMode {
-			fmt.Println("[Memory Reflection] No response from LLM")
-		}
+		slog.Debug("memory reflection: no response from LLM", "component", "memory-reflection")
 		return
 	}
 
@@ -171,12 +163,10 @@ func (r *MemoryReflector) Reflect(ctx context.Context, trace *ExecutionTrace) {
 		}
 	}
 
-	if r.DebugMode {
-		if saveCount > 0 {
-			fmt.Printf("[Memory Reflection] Saved %d knowledge entries\n", saveCount)
-		} else {
-			fmt.Println("[Memory Reflection] Model decided nothing worth saving")
-		}
+	if saveCount > 0 {
+		slog.Debug("memory reflection saved entries", "component", "memory-reflection", "count", saveCount)
+	} else {
+		slog.Debug("memory reflection: model decided nothing worth saving", "component", "memory-reflection")
 	}
 }
 
@@ -193,9 +183,7 @@ func (r *MemoryReflector) executeSave(ctx context.Context, fc *genai.FunctionCal
 	overwrite, _ := args["overwrite"].(bool)
 
 	if category == "" || content == "" {
-		if r.DebugMode {
-			fmt.Println("[Memory Reflection] Skipped save: missing category or content")
-		}
+		slog.Debug("memory reflection skipped save: missing category or content", "component", "memory-reflection")
 		return
 	}
 
@@ -207,14 +195,10 @@ func (r *MemoryReflector) executeSave(ctx context.Context, fc *genai.FunctionCal
 		// Core tier: append to MEMORY.md
 		err := r.MemoryManager.Append(category, content, overwrite)
 		if err != nil {
-			if r.DebugMode {
-				fmt.Printf("[Memory Reflection] Failed to save to MEMORY.md: %v\n", err)
-			}
+			slog.Debug("memory reflection failed to save to MEMORY.md", "component", "memory-reflection", "error", err)
 			return
 		}
-		if r.DebugMode {
-			fmt.Printf("[Memory Reflection] Saved to MEMORY.md under '%s'\n", category)
-		}
+		slog.Debug("memory reflection saved to MEMORY.md", "component", "memory-reflection", "category", category)
 
 		// Trigger reindex for MEMORY.md
 		if r.MemoryStore != nil {
@@ -227,9 +211,7 @@ func (r *MemoryReflector) executeSave(ctx context.Context, fc *genai.FunctionCal
 	} else {
 		// Knowledge tier: write to specific file
 		if r.MemoryStore == nil || r.MemoryStore.Config() == nil {
-			if r.DebugMode {
-				fmt.Println("[Memory Reflection] Skipped knowledge tier save: no store configured")
-			}
+			slog.Debug("memory reflection skipped knowledge tier save: no store configured", "component", "memory-reflection")
 			return
 		}
 
@@ -239,9 +221,7 @@ func (r *MemoryReflector) executeSave(ctx context.Context, fc *genai.FunctionCal
 		// Ensure parent directory exists
 		dir := filepath.Dir(absPath)
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			if r.DebugMode {
-				fmt.Printf("[Memory Reflection] Failed to create directory %s: %v\n", dir, err)
-			}
+			slog.Debug("memory reflection failed to create directory", "component", "memory-reflection", "dir", dir, "error", err)
 			return
 		}
 
@@ -254,32 +234,24 @@ func (r *MemoryReflector) executeSave(ctx context.Context, fc *genai.FunctionCal
 		// Append or overwrite
 		if overwrite {
 			if err := os.WriteFile(absPath, []byte(sb.String()), 0644); err != nil {
-				if r.DebugMode {
-					fmt.Printf("[Memory Reflection] Failed to write %s: %v\n", targetFile, err)
-				}
+				slog.Debug("memory reflection failed to write file", "component", "memory-reflection", "file", targetFile, "error", err)
 				return
 			}
 		} else {
 			f, err := os.OpenFile(absPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err != nil {
-				if r.DebugMode {
-					fmt.Printf("[Memory Reflection] Failed to append to %s: %v\n", targetFile, err)
-				}
+				slog.Debug("memory reflection failed to open file for append", "component", "memory-reflection", "file", targetFile, "error", err)
 				return
 			}
 			_, err = f.WriteString(sb.String())
 			f.Close()
 			if err != nil {
-				if r.DebugMode {
-					fmt.Printf("[Memory Reflection] Failed to append to %s: %v\n", targetFile, err)
-				}
+				slog.Debug("memory reflection failed to append to file", "component", "memory-reflection", "file", targetFile, "error", err)
 				return
 			}
 		}
 
-		if r.DebugMode {
-			fmt.Printf("[Memory Reflection] Saved to %s under '%s'\n", targetFile, category)
-		}
+		slog.Debug("memory reflection saved to file", "component", "memory-reflection", "file", targetFile, "category", category)
 
 		// Trigger reindex
 		if r.MemoryStore != nil {

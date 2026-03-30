@@ -1198,7 +1198,10 @@ func handleWebToolSetup() error {
 
 	// Save API key to credential store
 	storeKeyInConfig := true // fallback to config if store fails
-	configDir, _ := config.GetConfigDir()
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		slog.Warn("failed to get config directory", "error", err)
+	}
 	if configDir != "" {
 		if store, storeErr := credentials.Open(configDir); storeErr == nil {
 			for _, ev := range srv.EnvVars {

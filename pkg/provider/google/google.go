@@ -103,7 +103,10 @@ func ListModels(ctx context.Context, apiKey string) ([]string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+		}
 		return nil, fmt.Errorf("failed to fetch models: %s - %s", resp.Status, string(body))
 	}
 
@@ -132,18 +135,18 @@ func ListModels(ctx context.Context, apiKey string) ([]string, error) {
 
 // ModelInfo represents enhanced model metadata for Google AI
 type ModelInfo struct {
-	ID                  string `json:"id"`
-	Name                string `json:"name"`
-	DisplayName         string `json:"display_name,omitempty"`
-	Description         string `json:"description,omitempty"`
-	InputTokenLimit     int    `json:"context_length,omitempty"`
-	OutputTokenLimit    int    `json:"max_completion_tokens,omitempty"`
-	CreatedAt           string `json:"created_at,omitempty"`
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	DisplayName      string `json:"display_name,omitempty"`
+	Description      string `json:"description,omitempty"`
+	InputTokenLimit  int    `json:"context_length,omitempty"`
+	OutputTokenLimit int    `json:"max_completion_tokens,omitempty"`
+	CreatedAt        string `json:"created_at,omitempty"`
 }
 
 // nativeModelResponse represents a single model from the native API
 type nativeModelResponse struct {
-	Name                       string   `json:"name"`                       // e.g. "models/gemini-2.0-flash"
+	Name                       string   `json:"name"` // e.g. "models/gemini-2.0-flash"
 	DisplayName                string   `json:"displayName"`
 	Description                string   `json:"description"`
 	InputTokenLimit            int      `json:"inputTokenLimit"`
@@ -190,7 +193,10 @@ func ListModelsWithMetadata(ctx context.Context, apiKey string) ([]ModelInfo, er
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+		}
 		return nil, fmt.Errorf("failed to fetch models: %s - %s", resp.Status, string(body))
 	}
 

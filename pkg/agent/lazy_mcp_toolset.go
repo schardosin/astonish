@@ -166,7 +166,7 @@ func (l *LazyMCPToolset) ensureServerStarted(ctx context.Context, sessionID stri
 	}
 
 	if l.debugMode {
-		fmt.Printf("[Chat Lazy] Starting MCP server '%s' on demand (host)...\n", l.serverName)
+		slog.Debug("starting MCP server on demand (host)", "component", "lazy-mcp", "server", l.serverName)
 	}
 
 	return l.startOnHost(ctx)
@@ -183,7 +183,7 @@ func (l *LazyMCPToolset) ensureServerStartedSandbox(ctx context.Context, session
 	}
 
 	if l.debugMode {
-		fmt.Printf("[Chat Lazy] Starting MCP server '%s' on demand (sandbox, session=%s)...\n", l.serverName, sessionID)
+		slog.Debug("starting MCP server on demand (sandbox)", "component", "lazy-mcp", "server", l.serverName, "session", sessionID)
 	}
 
 	// Choose: fleet direct client vs pool
@@ -230,7 +230,7 @@ func (l *LazyMCPToolset) startOnHost(ctx context.Context) error {
 	l.started = true
 
 	if l.debugMode {
-		fmt.Printf("[Chat Lazy] MCP server '%s' started (host): %d tools available\n", l.serverName, len(l.liveTools))
+		slog.Debug("MCP server started (host)", "component", "lazy-mcp", "server", l.serverName, "tools", len(l.liveTools))
 	}
 
 	return nil
@@ -270,7 +270,7 @@ func (l *LazyMCPToolset) startInContainerDirect(ctx context.Context, sessionID s
 // Caller must hold l.mu.
 func (l *LazyMCPToolset) startInContainerWith(ctx context.Context, sessionID string, incusClient *sandbox.IncusClient, containerName string) error {
 	if l.debugMode {
-		fmt.Printf("[Chat Lazy] Connecting MCP server '%s' in container %s (session=%s)...\n", l.serverName, containerName, sessionID)
+		slog.Debug("connecting MCP server in container", "component", "lazy-mcp", "server", l.serverName, "container", containerName, "session", sessionID)
 	}
 
 	// Create the container transport
@@ -313,7 +313,7 @@ func (l *LazyMCPToolset) startInContainerWith(ctx context.Context, sessionID str
 	}
 
 	if l.debugMode {
-		fmt.Printf("[Chat Lazy] MCP server '%s' started (container=%s, session=%s): %d tools available\n", l.serverName, containerName, sessionID, len(liveTools))
+		slog.Debug("MCP server started (container)", "component", "lazy-mcp", "server", l.serverName, "container", containerName, "session", sessionID, "tools", len(liveTools))
 	}
 
 	return nil

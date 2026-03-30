@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -81,7 +82,7 @@ func NewHugotEmbedder(modelsDir string, debugMode bool) (*HugotEmbedder, error) 
 	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
 		fmt.Printf("Downloading embedding model (one-time, ~23 MB)...\n")
 		if debugMode {
-			fmt.Printf("[Hugot] Model: %s\n", DefaultEmbeddingModel)
+			slog.Debug("hugot downloading embedding model", "model", DefaultEmbeddingModel)
 		}
 		opts := hugot.NewDownloadOptions()
 		opts.Verbose = debugMode
@@ -93,7 +94,7 @@ func NewHugotEmbedder(modelsDir string, debugMode bool) (*HugotEmbedder, error) 
 		modelPath = downloadedPath
 		fmt.Printf("Embedding model ready.\n")
 	} else if debugMode {
-		fmt.Printf("[Hugot] Using cached model at %s\n", modelPath)
+		slog.Debug("hugot using cached model", "path", modelPath)
 	}
 
 	// Create Hugot session with pure Go backend (GoMLX simplego)

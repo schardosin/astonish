@@ -109,7 +109,10 @@ func InstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Setup environment variables for the new MCP server
-	mcpCfg, _ := config.LoadMCPConfig()
+	mcpCfg, err := config.LoadMCPConfig()
+	if err != nil {
+		slog.Warn("failed to load MCP config", "error", err)
+	}
 	if mcpCfg != nil {
 		config.SetupMCPEnv(mcpCfg)
 	}

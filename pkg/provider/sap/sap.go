@@ -140,7 +140,10 @@ func resolveDeploymentIDWithConfig(ctx context.Context, modelName, clientID, cli
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+		}
 		return "", fmt.Errorf("failed to list deployments: %s, body: %s", resp.Status, string(body))
 	}
 
@@ -253,7 +256,10 @@ func (t *sapTransport) getToken() (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+		}
 		return "", fmt.Errorf("failed to get token: %s, body: %s", resp.Status, string(body))
 	}
 
@@ -376,7 +382,10 @@ func ResolveDeploymentID(ctx context.Context, modelName string) (string, error) 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+		}
 		return "", fmt.Errorf("failed to list deployments: %s, body: %s", resp.Status, string(body))
 	}
 
@@ -450,7 +459,10 @@ func ListModels(ctx context.Context, clientID, clientSecret, authURL, baseURL, r
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+		}
 		return nil, fmt.Errorf("%s, body: %s", resp.Status, string(body))
 	}
 
@@ -593,7 +605,10 @@ func (p *Provider) generateBedrockContent(ctx context.Context, req *model.LLMReq
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+			}
 			yield(nil, llmerror.NewFromResponse("sap-bedrock", resp, body))
 			return
 		}
@@ -607,7 +622,10 @@ func (p *Provider) generateBedrockContent(ctx context.Context, req *model.LLMReq
 			}
 		} else {
 			// Non-streaming response
-			body, _ := io.ReadAll(resp.Body)
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+			}
 			llmResp, err := bedrock.ParseResponse(body)
 			if err != nil {
 				yield(nil, err)
@@ -662,7 +680,10 @@ func (p *Provider) generateVertexContent(ctx context.Context, req *model.LLMRequ
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+			}
 			yield(nil, llmerror.NewFromResponse("sap-vertex", resp, body))
 			return
 		}
@@ -676,7 +697,10 @@ func (p *Provider) generateVertexContent(ctx context.Context, req *model.LLMRequ
 			}
 		} else {
 			// Non-streaming response
-			body, _ := io.ReadAll(resp.Body)
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+			}
 			llmResp, err := vertex.ParseResponse(body)
 			if err != nil {
 				yield(nil, err)

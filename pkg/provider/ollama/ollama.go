@@ -75,7 +75,10 @@ func fetchModels(ctx context.Context, baseURL string) ([]ModelInfo, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+		}
 		return nil, fmt.Errorf("failed to fetch models: %s - %s", resp.Status, string(body))
 	}
 

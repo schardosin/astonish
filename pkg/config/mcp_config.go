@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 )
@@ -84,7 +85,10 @@ func LoadMCPConfigRaw() (*MCPConfig, error) {
 // the credential store first, then config.yaml.
 // Keyless servers are always injected — they need no setup.
 func mergeStandardServers(cfg *MCPConfig) {
-	appCfg, _ := LoadAppConfig()
+	appCfg, err := LoadAppConfig()
+	if err != nil {
+		slog.Warn("failed to load app config for MCP server merge", "error", err)
+	}
 	getter := getInstalledSecretGetter()
 
 	// First: inject key-based servers that have credentials

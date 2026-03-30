@@ -208,7 +208,10 @@ func handleFleetShow(keyOrPrefix string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+		}
 		return fmt.Errorf("daemon returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
@@ -362,7 +365,10 @@ func handleFleetActivate(keyOrPrefix string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+		}
 		return fmt.Errorf("activation failed: %s", strings.TrimSpace(string(body)))
 	}
 
@@ -386,7 +392,10 @@ func handleFleetDeactivate(keyOrPrefix string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+		}
 		return fmt.Errorf("deactivation failed: %s", strings.TrimSpace(string(body)))
 	}
 
@@ -413,7 +422,10 @@ func handleFleetStatus(keyOrPrefix string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+		}
 		return fmt.Errorf("failed to get status: %s", strings.TrimSpace(string(body)))
 	}
 
@@ -474,7 +486,10 @@ func handleFleetDelete(keyOrPrefix string) error {
 	}
 
 	baseURL := getDaemonBaseURL()
-	req, _ := http.NewRequest(http.MethodDelete, baseURL+"/api/fleet-plans/"+plan.Key, nil)
+	req, err := http.NewRequest(http.MethodDelete, baseURL+"/api/fleet-plans/"+plan.Key, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to contact daemon: %w", err)
@@ -482,7 +497,10 @@ func handleFleetDelete(keyOrPrefix string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+		}
 		return fmt.Errorf("deletion failed: %s", strings.TrimSpace(string(body)))
 	}
 
@@ -544,7 +562,10 @@ func fetchFleetPlans() ([]fleetPlanListItemAPI, error) {
 		return nil, fmt.Errorf("daemon returned HTTP %d", resp.StatusCode)
 	}
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
 
 	var result struct {
 		Plans []fleetPlanListItemAPI `json:"plans"`

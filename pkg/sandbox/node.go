@@ -578,14 +578,18 @@ func (lnc *LazyNodeClient) Cleanup() {
 		if lnc.containerName != "" && lnc.incusClient != nil {
 			// Use destroyOverlayContainer to properly unmount overlayfs
 			// and clean up overlay dirs before deleting the container.
-			_ = destroyOverlayContainer(lnc.incusClient, lnc.containerName)
+			if err := destroyOverlayContainer(lnc.incusClient, lnc.containerName); err != nil {
+				slog.Warn("failed to destroy overlay container during cleanup", "component", "sandbox", "container", lnc.containerName, "error", err)
+			}
 		}
 
 		if lnc.containerName != "" && lnc.sessRegistry != nil {
 			// Find and remove the session registry entry for this container
 			for _, entry := range lnc.sessRegistry.List() {
 				if entry.ContainerName == lnc.containerName {
-					_ = lnc.sessRegistry.Remove(entry.SessionID)
+					if err := lnc.sessRegistry.Remove(entry.SessionID); err != nil {
+						slog.Warn("failed to remove session registry entry", "component", "sandbox", "session", entry.SessionID, "error", err)
+					}
 					break
 				}
 			}
@@ -621,7 +625,9 @@ func (lnc *LazyNodeClient) CleanupForShutdown() {
 	// EnsureSessionContainer will re-mount and restart it later.
 	if lnc.containerName != "" && lnc.incusClient != nil {
 		if lnc.incusClient.IsRunning(lnc.containerName) {
-			_ = lnc.incusClient.StopInstance(lnc.containerName, true)
+			if err := lnc.incusClient.StopInstance(lnc.containerName, true); err != nil {
+				slog.Warn("failed to stop container for shutdown", "component", "sandbox", "container", lnc.containerName, "error", err)
+			}
 		}
 	}
 
@@ -654,7 +660,9 @@ func (lnc *LazyNodeClient) StopForIdle() {
 	// EnsureSessionContainer will re-mount and restart it on the next tool call.
 	if lnc.containerName != "" && lnc.incusClient != nil {
 		if lnc.incusClient.IsRunning(lnc.containerName) {
-			_ = lnc.incusClient.StopInstance(lnc.containerName, true)
+			if err := lnc.incusClient.StopInstance(lnc.containerName, true); err != nil {
+				slog.Warn("failed to stop container for idle", "component", "sandbox", "container", lnc.containerName, "error", err)
+			}
 		}
 	}
 
@@ -912,7 +920,9 @@ func (p *NodeClientPool) GetOrCreate(sessionID string) *LazyNodeClient {
 		delete(p.clients, sessionID)
 		// Don't call client.Cleanup() here — the container may be reusable.
 		// Close the node client (if any) but leave the container intact.
-		_ = client.Close()
+		if err := client.Close(); err != nil {
+			slog.Warn("failed to close stale client", "component", "sandbox", "session", sessionID[:min(8, len(sessionID))], "error", err)
+		}
 	}
 
 	// Create a new LazyNodeClient for this session
@@ -959,7 +969,9 @@ func (p *NodeClientPool) Remove(sessionID string) {
 	p.mu.Unlock()
 
 	if ok && client != nil {
-		_ = client.Close()
+		if err := client.Close(); err != nil {
+			slog.Warn("failed to close client during pool remove", "component", "sandbox", "session", sessionID[:min(8, len(sessionID))], "error", err)
+		}
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 	"strings"
@@ -199,7 +200,10 @@ func handleToolsEnableCommand(args []string) error {
 	if err := config.SetMCPServerEnabled(serverName, true); err != nil {
 		// If server not found, show available servers
 		if strings.Contains(err.Error(), "not found") {
-			names, _ := config.GetMCPServerNames()
+			names, namesErr := config.GetMCPServerNames()
+			if namesErr != nil {
+				slog.Warn("failed to get MCP server names", "error", namesErr)
+			}
 			if len(names) > 0 {
 				return fmt.Errorf("%w\nAvailable servers: %s", err, strings.Join(names, ", "))
 			}
@@ -226,7 +230,10 @@ func handleToolsDisableCommand(args []string) error {
 	if err := config.SetMCPServerEnabled(serverName, false); err != nil {
 		// If server not found, show available servers
 		if strings.Contains(err.Error(), "not found") {
-			names, _ := config.GetMCPServerNames()
+			names, namesErr := config.GetMCPServerNames()
+			if namesErr != nil {
+				slog.Warn("failed to get MCP server names", "error", namesErr)
+			}
 			if len(names) > 0 {
 				return fmt.Errorf("%w\nAvailable servers: %s", err, strings.Join(names, ", "))
 			}

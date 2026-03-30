@@ -92,7 +92,10 @@ func MemorySave(mgr *memory.Manager, store MemorySaveStore) func(ctx tool.Contex
 		}
 
 		// Read existing content
-		existing, _ := os.ReadFile(absPath)
+		existing, readErr := os.ReadFile(absPath)
+		if readErr != nil && !os.IsNotExist(readErr) {
+			slog.Debug("failed to read existing memory file", "path", absPath, "error", readErr)
+		}
 		existingStr := string(existing)
 
 		// Append content under category heading

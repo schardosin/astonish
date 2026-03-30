@@ -3,6 +3,7 @@ package astonish
 import (
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/schardosin/astonish/pkg/config"
@@ -56,7 +57,10 @@ func handleDaemonInstall(args []string) error {
 	}
 
 	// Load config for defaults
-	appCfg, _ := config.LoadAppConfig()
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		slog.Warn("failed to load app config", "error", err)
+	}
 	installPort := *port
 	if installPort <= 0 && appCfg != nil {
 		installPort = appCfg.Daemon.GetPort()
@@ -88,7 +92,10 @@ func handleDaemonInstall(args []string) error {
 	fleetsDir, flErr := config.GetFleetsDir()
 	if flErr == nil {
 		// Ensure bundled fleets are on disk before loading
-		_, _ = fleet.EnsureBundled(fleetsDir)
+		_, bundleErr := fleet.EnsureBundled(fleetsDir)
+		if bundleErr != nil {
+			slog.Warn("failed to ensure bundled fleets", "error", bundleErr)
+		}
 		if fleets, loadErr := fleet.LoadFleets(fleetsDir); loadErr == nil {
 			for _, name := range fleet.CollectDelegateEnvVars(fleets) {
 				if val := os.Getenv(name); val != "" {

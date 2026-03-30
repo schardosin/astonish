@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/mcpstore"
@@ -706,7 +707,10 @@ func getAvailableTools(ctx context.Context) []ToolInfo {
 
 	// Fallback to internal tools only if cache not ready
 	var allTools []ToolInfo
-	internalTools, _ := tools.GetInternalTools()
+	internalTools, intErr := tools.GetInternalTools()
+	if intErr != nil {
+		slog.Warn("failed to get internal tools", "error", intErr)
+	}
 	for _, t := range internalTools {
 		allTools = append(allTools, ToolInfo{
 			Name:        t.Name(),

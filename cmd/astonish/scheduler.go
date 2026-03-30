@@ -145,10 +145,16 @@ func handleSchedulerToggle(idOrName string, enable bool) error {
 	}
 
 	job.Enabled = enable
-	data, _ := json.Marshal(job)
+	data, marshalErr := json.Marshal(job)
+	if marshalErr != nil {
+		return fmt.Errorf("failed to marshal job: %w", marshalErr)
+	}
 
 	baseURL := getDaemonBaseURL()
-	req, _ := http.NewRequest(http.MethodPut, baseURL+"/api/scheduler/jobs/"+job.ID, strings.NewReader(string(data)))
+	req, err := http.NewRequest(http.MethodPut, baseURL+"/api/scheduler/jobs/"+job.ID, strings.NewReader(string(data)))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -175,7 +181,10 @@ func handleSchedulerRemove(idOrName string) error {
 	}
 
 	baseURL := getDaemonBaseURL()
-	req, _ := http.NewRequest(http.MethodDelete, baseURL+"/api/scheduler/jobs/"+job.ID, nil)
+	req, err := http.NewRequest(http.MethodDelete, baseURL+"/api/scheduler/jobs/"+job.ID, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to contact daemon: %w", err)
@@ -264,7 +273,10 @@ func fetchSchedulerJobs() ([]schedulerJobAPI, error) {
 		return nil, fmt.Errorf("daemon returned HTTP %d — check that the daemon is running and accessible", resp.StatusCode)
 	}
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
 
 	var result struct {
 		Jobs []schedulerJobAPI `json:"jobs"`

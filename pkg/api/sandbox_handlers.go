@@ -276,8 +276,14 @@ func SandboxDetailsHandler(w http.ResponseWriter, r *http.Request) {
 			containerName := sandbox.TemplateName(sandbox.BaseTemplate)
 			resp.BaseTemplateExists = client.InstanceExists(containerName)
 
-			tplRegistry, _ := sandbox.NewTemplateRegistry()
-			sessRegistry, _ := sandbox.NewSessionRegistry()
+			tplRegistry, tplErr := sandbox.NewTemplateRegistry()
+			if tplErr != nil {
+				slog.Warn("failed to create template registry", "error", tplErr)
+			}
+			sessRegistry, sessErr := sandbox.NewSessionRegistry()
+			if sessErr != nil {
+				slog.Warn("failed to create session registry", "error", sessErr)
+			}
 			if tplRegistry != nil && sessRegistry != nil {
 				status, statusErr := sandbox.Status(client, tplRegistry, sessRegistry)
 				if statusErr == nil {
@@ -376,7 +382,10 @@ func SandboxContainerListHandler(w http.ResponseWriter, r *http.Request) {
 	for _, e := range entries {
 		registeredNames[e.ContainerName] = true
 	}
-	incusContainers, _ := client.ListSessionContainers()
+	incusContainers, listErr := client.ListSessionContainers()
+	if listErr != nil {
+		slog.Warn("failed to list session containers from Incus", "error", listErr)
+	}
 	var orphans []string
 	for _, inst := range incusContainers {
 		if !registeredNames[inst.Name] {

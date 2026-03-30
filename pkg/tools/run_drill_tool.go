@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -195,7 +196,10 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 	}
 
 	// Create artifact manager
-	reportsDir, _ := config.GetReportsDir()
+	reportsDir, err := config.GetReportsDir()
+	if err != nil {
+		slog.Warn("failed to get reports directory", "error", err)
+	}
 	reportDir := filepath.Join(reportsDir, suiteName)
 	am, amErr := adrill.NewArtifactManager(reportDir, suiteName)
 	if amErr != nil {

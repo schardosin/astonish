@@ -932,7 +932,10 @@ func handleDrillRemoveCommand(args []string) error {
 
 func handleRemoveSuite(dirs []string, suite *adrill.LoadedSuite, deleteTests bool, force bool) error {
 	// Find all associated tests
-	tests, _ := adrill.FindTestsForSuite(dirs, suite.Name)
+	tests, findErr := adrill.FindTestsForSuite(dirs, suite.Name)
+	if findErr != nil {
+		slog.Warn("failed to find tests for suite", "suite", suite.Name, "error", findErr)
+	}
 
 	// Show what will be deleted
 	fmt.Printf("Suite: %s (%s)\n", suite.Name, suite.File)
@@ -1053,7 +1056,10 @@ func handleRemoveTest(dirs []string, test *adrill.LoadedTest, suite *adrill.Load
 	}
 
 	// Warn about remaining tests in suite
-	remaining, _ := adrill.FindTestsForSuite(dirs, suite.Name)
+	remaining, findErr := adrill.FindTestsForSuite(dirs, suite.Name)
+	if findErr != nil {
+		slog.Warn("failed to find remaining tests for suite", "suite", suite.Name, "error", findErr)
+	}
 	fmt.Printf("\nRemoved test %q. Suite %q has %d remaining test(s).\n", test.Name, suite.Name, len(remaining))
 	return nil
 }

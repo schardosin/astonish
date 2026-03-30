@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -467,7 +467,7 @@ func AIToolSearchInternetHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Check if web search tool is configured
 	configured, serverName, searchToolName := IsWebSearchConfigured()
-	log.Printf("[Internet Search] Configured: %v, Server: %s, Tool: %s", configured, serverName, searchToolName)
+	slog.Debug("web search tool configuration", "component", "internet-search", "configured", configured, "server", serverName, "tool", searchToolName)
 	if !configured {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(InternetSearchResponse{
@@ -528,7 +528,7 @@ func AIToolSearchInternetHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Build a clean search query - ALWAYS include "MCP server" for proper results
 	searchQuery := fmt.Sprintf("%s MCP server github npm", cleanedReq)
-	log.Printf("[Internet Search] Query: %s", searchQuery)
+	slog.Debug("internet search query", "component", "internet-search", "query", searchQuery)
 
 	// Search the internet using the configured MCP tool
 	results, err := searchInternetForMCPServers(ctx, serverName, searchToolName, searchQuery)
@@ -574,7 +574,7 @@ func URLExtractHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[URL Extract] Starting extraction for: %s", req.URL)
+	slog.Debug("starting url extraction", "component", "url-extract", "url", req.URL)
 
 	// Check if web extract tool is configured
 	configured, serverName, extractToolName := IsWebExtractConfigured()
@@ -598,12 +598,12 @@ func URLExtractHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[URL Extract] Using tool: %s (extract tool: %s)", serverName, extractToolName)
+	slog.Debug("using extract tool", "component", "url-extract", "server", serverName, "extractTool", extractToolName)
 
 	// Extract content from URL
 	mcpServer, err := extractMCPServerFromURL(ctx, req.URL, serverName, extractToolName)
 	if err != nil {
-		log.Printf("[URL Extract] Error: %v", err)
+		slog.Error("url extraction failed", "component", "url-extract", "error", err)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(URLExtractResponse{
 			Found:    false,
@@ -625,7 +625,7 @@ func URLExtractHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[URL Extract] Found MCP server: %s", mcpServer.Name)
+	slog.Info("found mcp server from url", "component", "url-extract", "server", mcpServer.Name)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(URLExtractResponse{
 		Found:     true,
@@ -651,7 +651,7 @@ func extractMCPServerFromURL(ctx context.Context, url string, serverName string,
 	}
 	defer mcpManager.Cleanup()
 
-	log.Printf("[URL Extract] Initializing MCP server: %s", serverName)
+	slog.Debug("initializing mcp server", "component", "url-extract", "server", serverName)
 	namedToolset, err := mcpManager.InitializeSingleToolset(ctx, serverName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize MCP server '%s': %w", serverName, err)
@@ -664,12 +664,12 @@ func extractMCPServerFromURL(ctx context.Context, url string, serverName string,
 		return nil, fmt.Errorf("failed to get tools from '%s': %w", serverName, err)
 	}
 
-	log.Printf("[URL Extract] Got %d tools from MCP server", len(mcpTools))
+	slog.Debug("got tools from mcp server", "component", "url-extract", "count", len(mcpTools))
 
 	// Find extract tool - use configured tool name if provided, otherwise search for "extract"
 	var extractTool tool.Tool
 	for _, t := range mcpTools {
-		log.Printf("[URL Extract] Found tool: %s", t.Name())
+		slog.Debug("found tool", "component", "url-extract", "tool", t.Name())
 		if extractToolName != "" {
 			// Use the specifically configured tool
 			if t.Name() == extractToolName {
@@ -692,7 +692,7 @@ func extractMCPServerFromURL(ctx context.Context, url string, serverName string,
 		return nil, fmt.Errorf("no extract tool found in MCP server '%s'", serverName)
 	}
 
-	log.Printf("[URL Extract] Using extract tool: %s", extractTool.Name())
+	slog.Debug("using extract tool", "component", "url-extract", "tool", extractTool.Name())
 
 	// Get the tool's declaration (schema) for LLM
 	type toolWithDeclaration interface {
@@ -709,7 +709,7 @@ func extractMCPServerFromURL(ctx context.Context, url string, serverName string,
 		return nil, fmt.Errorf("extract tool has nil declaration")
 	}
 
-	log.Printf("[URL Extract] Tool schema: %s - %s", declaration.Name, declaration.Description)
+	slog.Debug("tool schema", "component", "url-extract", "name", declaration.Name, "description", declaration.Description)
 
 	// Get LLM provider for tool execution
 	providerName := appCfg.General.DefaultProvider
@@ -751,7 +751,7 @@ Use the available tool to fetch and extract the content from this URL. Call the 
 		},
 	}
 
-	log.Printf("[URL Extract] Asking LLM to call the extract tool...")
+	slog.Debug("asking llm to call extract tool", "component", "url-extract")
 	var functionCall *genai.FunctionCall
 	for resp, err := range llm.GenerateContent(ctx, extractReq, true) {
 		if err != nil {
@@ -774,7 +774,7 @@ Use the available tool to fetch and extract the content from this URL. Call the 
 		return nil, fmt.Errorf("LLM did not call the extract tool")
 	}
 
-	log.Printf("[URL Extract] LLM wants to call: %s with args: %v", functionCall.Name, functionCall.Args)
+	slog.Debug("llm function call", "component", "url-extract", "function", functionCall.Name, "args", functionCall.Args)
 
 	// Step 2: Execute the tool with LLM-provided arguments
 	type runnableTool interface {
@@ -796,7 +796,7 @@ Use the available tool to fetch and extract the content from this URL. Call the 
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal extract results: %w", err)
 	}
-	log.Printf("[URL Extract] Extracted content: %d bytes", len(extractResultJSON))
+	slog.Debug("extracted content", "component", "url-extract", "bytes", len(extractResultJSON))
 
 	// Step 3: Parse the extracted content for MCP server info
 	prompt := fmt.Sprintf(`You are analyzing a web page to find MCP (Model Context Protocol) server configuration information.
@@ -841,7 +841,7 @@ Respond ONLY with the JSON object or null.`, string(extractResultJSON), url)
 		},
 	}
 
-	log.Printf("[URL Extract] Calling AI to parse extracted content...")
+	slog.Debug("calling ai to parse extracted content", "component", "url-extract")
 	var responseText strings.Builder
 	for resp, err := range llm.GenerateContent(ctx, llmReq, false) {
 		if err != nil {
@@ -857,7 +857,7 @@ Respond ONLY with the JSON object or null.`, string(extractResultJSON), url)
 	}
 
 	response := strings.TrimSpace(responseText.String())
-	log.Printf("[URL Extract] AI response: %s", response)
+	slog.Debug("ai response", "component", "url-extract", "response", response)
 
 	if response == "null" || response == "" {
 		return nil, nil
@@ -873,7 +873,7 @@ Respond ONLY with the JSON object or null.`, string(extractResultJSON), url)
 
 	var result InternetMCPResult
 	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
-		log.Printf("[URL Extract] JSON parse error: %v", err)
+		slog.Error("json parse error", "component", "url-extract", "error", err)
 		return nil, nil
 	}
 
@@ -955,7 +955,7 @@ func InternetMCPInstallHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Use incremental refresh logic to avoid full reload deadlocks and timeouts
 	if err := RefreshSingleServer(context.Background(), serverName); err != nil {
-		log.Printf("Warning: failed to refresh server %s: %v", serverName, err)
+		slog.Warn("failed to refresh server", "server", serverName, "error", err)
 	}
 
 	// Reset the Studio chat agent so the next request picks up the new MCP server.
@@ -978,7 +978,7 @@ func InternetMCPInstallHandler(w http.ResponseWriter, r *http.Request) {
 
 // searchInternetForMCPServers uses the configured MCP web search tool to find MCP servers
 func searchInternetForMCPServers(ctx context.Context, serverName string, searchToolName string, searchQuery string) ([]InternetMCPResult, error) {
-	log.Printf("[searchInternetForMCPServers] Starting with server=%s, tool=%s, query=%s", serverName, searchToolName, searchQuery)
+	slog.Debug("starting internet search for mcp servers", "component", "internet-search", "server", serverName, "tool", searchToolName, "query", searchQuery)
 
 	// Load app configuration
 	appCfg, err := config.LoadAppConfig()
@@ -994,7 +994,7 @@ func searchInternetForMCPServers(ctx context.Context, serverName string, searchT
 	}
 	defer mcpManager.Cleanup()
 
-	log.Printf("[searchInternetForMCPServers] Initializing MCP server: %s", serverName)
+	slog.Debug("initializing mcp server", "component", "internet-search", "server", serverName)
 	// Initialize just the web search MCP server
 	namedToolset, err := mcpManager.InitializeSingleToolset(ctx, serverName)
 	if err != nil {
@@ -1007,12 +1007,12 @@ func searchInternetForMCPServers(ctx context.Context, serverName string, searchT
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tools from '%s': %w", serverName, err)
 	}
-	log.Printf("[searchInternetForMCPServers] Got %d tools from MCP server", len(mcpTools))
+	slog.Debug("got tools from mcp server", "component", "internet-search", "count", len(mcpTools))
 
 	// Find search tool - use configured tool name if provided, otherwise search for "search"
 	var searchTool tool.Tool
 	for _, t := range mcpTools {
-		log.Printf("[searchInternetForMCPServers] Found tool: %s", t.Name())
+		slog.Debug("found tool", "component", "internet-search", "tool", t.Name())
 		if searchToolName != "" {
 			// Use the specifically configured tool
 			if t.Name() == searchToolName {
@@ -1034,7 +1034,7 @@ func searchInternetForMCPServers(ctx context.Context, serverName string, searchT
 		}
 		return nil, fmt.Errorf("no search tool found in MCP server '%s'", serverName)
 	}
-	log.Printf("[searchInternetForMCPServers] Using search tool: %s", searchTool.Name())
+	slog.Debug("using search tool", "component", "internet-search", "tool", searchTool.Name())
 
 	// Get the tool's declaration (schema) for LLM
 	type toolWithDeclaration interface {
@@ -1090,7 +1090,7 @@ Use the available tool to search the web. Call the tool with the appropriate par
 		},
 	}
 
-	log.Printf("[searchInternetForMCPServers] Asking LLM to call the search tool...")
+	slog.Debug("asking llm to call search tool", "component", "internet-search")
 	var functionCall *genai.FunctionCall
 	for resp, err := range llm.GenerateContent(ctx, searchReq, true) {
 		if err != nil {
@@ -1113,7 +1113,7 @@ Use the available tool to search the web. Call the tool with the appropriate par
 		return nil, fmt.Errorf("LLM did not call the search tool")
 	}
 
-	log.Printf("[searchInternetForMCPServers] LLM wants to call: %s with args: %v", functionCall.Name, functionCall.Args)
+	slog.Debug("llm function call", "component", "internet-search", "function", functionCall.Name, "args", functionCall.Args)
 
 	// Execute the tool with LLM-provided arguments
 	type runnableTool interface {
@@ -1130,17 +1130,17 @@ Use the available tool to search the web. Call the tool with the appropriate par
 	if err != nil {
 		return nil, fmt.Errorf("web search failed: %w", err)
 	}
-	log.Printf("[searchInternetForMCPServers] Search returned %d result keys", len(searchResult))
+	slog.Debug("search returned results", "component", "internet-search", "resultKeys", len(searchResult))
 
 	// Convert search results to JSON for AI processing
 	searchResultJSON, err := json.Marshal(searchResult)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal search results: %w", err)
 	}
-	log.Printf("[searchInternetForMCPServers] Search result JSON length: %d bytes", len(searchResultJSON))
+	slog.Debug("search result json", "component", "internet-search", "bytes", len(searchResultJSON))
 	// Log first 1000 chars of search results to see what Tavily returns
 	previewLen := min(1000, len(searchResultJSON))
-	log.Printf("[searchInternetForMCPServers] Search result preview: %s", string(searchResultJSON[:previewLen]))
+	slog.Debug("search result preview", "component", "internet-search", "preview", string(searchResultJSON[:previewLen]))
 
 	// Use AI to parse search results into MCP server suggestions
 	// Reuse the existing LLM provider
@@ -1183,7 +1183,7 @@ Example:
 		},
 	}
 
-	log.Printf("[searchInternetForMCPServers] Calling AI to parse search results...")
+	slog.Debug("calling ai to parse search results", "component", "internet-search")
 	var responseText strings.Builder
 	for resp, err := range llm.GenerateContent(ctx, llmReq, false) {
 		if err != nil {
@@ -1199,24 +1199,24 @@ Example:
 	}
 
 	response := strings.TrimSpace(responseText.String())
-	log.Printf("[searchInternetForMCPServers] AI response length: %d chars", len(response))
+	slog.Debug("ai response", "component", "internet-search", "length", len(response))
 
 	jsonStart := strings.Index(response, "[")
 	jsonEnd := strings.LastIndex(response, "]")
 	if jsonStart == -1 || jsonEnd == -1 || jsonEnd <= jsonStart {
-		log.Printf("[searchInternetForMCPServers] No JSON array found in AI response: %s", response[:min(200, len(response))])
+		slog.Warn("no json array found in ai response", "component", "internet-search", "preview", response[:min(200, len(response))])
 		return []InternetMCPResult{}, nil
 	}
 	jsonStr := response[jsonStart : jsonEnd+1]
-	log.Printf("[searchInternetForMCPServers] Extracted JSON length: %d", len(jsonStr))
+	slog.Debug("extracted json", "component", "internet-search", "length", len(jsonStr))
 
 	var results []InternetMCPResult
 	if err := json.Unmarshal([]byte(jsonStr), &results); err != nil {
-		log.Printf("[searchInternetForMCPServers] JSON parse error: %v", err)
+		slog.Error("json parse error", "component", "internet-search", "error", err)
 		return []InternetMCPResult{}, nil
 	}
 
-	log.Printf("[searchInternetForMCPServers] Parsed %d MCP server results", len(results))
+	slog.Debug("parsed mcp server results", "component", "internet-search", "count", len(results))
 	for i := range results {
 		results[i].Source = serverName
 	}

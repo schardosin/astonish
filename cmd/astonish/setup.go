@@ -3,7 +3,8 @@ package astonish
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
+	"os"
 	"sort"
 	"strings"
 
@@ -394,7 +395,8 @@ func runAPIKeyForm(title string, key string, pCfg config.ProviderConfig) {
 		),
 	).Run()
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("form input failed", "error", err)
+		os.Exit(1)
 	}
 	pCfg[key] = strings.TrimSpace(val)
 }
@@ -413,7 +415,8 @@ func runBaseURLForm(title string, defaultVal string, pCfg config.ProviderConfig)
 		),
 	).Run()
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("form input failed", "error", err)
+		os.Exit(1)
 	}
 	pCfg["base_url"] = val
 }
@@ -433,7 +436,8 @@ func runOllamaForm(pCfg config.ProviderConfig) {
 		),
 	).Run()
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("form input failed", "error", err)
+		os.Exit(1)
 	}
 	pCfg["base_url"] = baseURL
 }
@@ -470,7 +474,8 @@ func runSAPAICoreForm(pCfg config.ProviderConfig) {
 		),
 	).Run()
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("form input failed", "error", err)
+		os.Exit(1)
 	}
 
 	pCfg["client_id"] = clientID

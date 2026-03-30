@@ -3,7 +3,7 @@ package launcher
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/config"
@@ -81,8 +81,8 @@ func RunWeb(ctx context.Context, cfg *WebConfig) error {
 		"webui",
 	}
 
-	log.Printf("Starting web server on port %d...", cfg.Port)
-	log.Printf("Open your browser to: http://localhost:%d", cfg.Port)
+	slog.Info("starting web server", "port", cfg.Port)
+	slog.Info("open your browser", "url", fmt.Sprintf("http://localhost:%d", cfg.Port))
 
 	// Execute the web launcher (it's a SubLauncher, so we call Run)
 	_, err = webLauncher.Parse(args)

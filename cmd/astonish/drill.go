@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -572,7 +572,7 @@ func handleDrillRunCommand(args []string) error {
 				fmt.Printf("Container IP: %s\n", ip)
 			}
 		} else {
-			log.Printf("Warning: could not discover container IP: %v", err)
+			slog.Warn("could not discover container IP", "error", err)
 		}
 	}
 
@@ -637,7 +637,7 @@ func initSandboxForTest(template string) (*sandbox.LazyNodeClient, string, bool)
 	// Load app config to check if sandbox is enabled
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
-		log.Printf("Warning: could not load app config for sandbox: %v", err)
+		slog.Warn("could not load app config for sandbox", "error", err)
 		fmt.Println("Warning: Suite requires sandbox template but app config not available. Running locally.")
 		return nil, "", false
 	}
@@ -650,7 +650,7 @@ func initSandboxForTest(template string) (*sandbox.LazyNodeClient, string, bool)
 	// Connect to Incus
 	sandboxClient, err := sandbox.SetupSandboxRuntime()
 	if err != nil {
-		log.Printf("Warning: sandbox setup failed: %v", err)
+		slog.Warn("sandbox setup failed", "error", err)
 		fmt.Printf("Warning: Suite requires sandbox template %q but sandbox setup failed: %v\nRunning locally.\n", template, err)
 		return nil, "", false
 	}
@@ -658,13 +658,13 @@ func initSandboxForTest(template string) (*sandbox.LazyNodeClient, string, bool)
 	// Create registries
 	sessRegistry, err := sandbox.NewSessionRegistry()
 	if err != nil {
-		log.Printf("Warning: session registry failed: %v", err)
+		slog.Warn("session registry failed", "error", err)
 		return nil, "", false
 	}
 
 	tplRegistry, err := sandbox.NewTemplateRegistry()
 	if err != nil {
-		log.Printf("Warning: template registry failed: %v", err)
+		slog.Warn("template registry failed", "error", err)
 		return nil, "", false
 	}
 

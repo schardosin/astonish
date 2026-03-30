@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/mcp"
 	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
@@ -79,20 +80,16 @@ func ListServerToolsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Convert to our response format
 	var tools []ToolSchema
-	
+
 	// Interface for tools that have declarations
-	type ToolWithDeclaration interface {
-		Declaration() *genai.FunctionDeclaration
-	}
-	
 	for _, t := range toolsList {
 		schema := ToolSchema{
 			Name:        t.Name(),
 			Description: t.Description(),
 		}
-		
+
 		// Try to get the parameter schema from Declaration
-		if declTool, ok := t.(ToolWithDeclaration); ok {
+		if declTool, ok := t.(common.ToolWithDeclaration); ok {
 			decl := declTool.Declaration()
 			if decl != nil && decl.ParametersJsonSchema != nil {
 				// Convert genai.Schema to a map for JSON serialization
@@ -106,7 +103,7 @@ func ListServerToolsHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		
+
 		tools = append(tools, schema)
 	}
 
@@ -181,16 +178,16 @@ func RunServerToolHandler(w http.ResponseWriter, r *http.Request) {
 	var result map[string]any
 	var runErr error
 	toolFound := false
-	
+
 	for _, t := range toolsList {
 		if t.Name() == toolName {
 			toolFound = true
-			
+
 			// Try to call Run using the runnableTool interface
 			type runnableTool interface {
 				Run(tool.Context, any) (map[string]any, error)
 			}
-			
+
 			if runnable, ok := t.(runnableTool); ok {
 				// Create a minimal tool context for execution
 				toolCtx := &minimalToolContext{Context: ctx}
@@ -213,7 +210,7 @@ func RunServerToolHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if runErr != nil {
-		log.Printf("Tool execution error for %s/%s: %v", serverName, toolName, runErr)
+		slog.Error("tool execution error", "server", serverName, "tool", toolName, "error", runErr)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(ToolRunResponse{
 			Success:   false,
@@ -236,9 +233,9 @@ func convertGenaiSchemaToMap(schema *genai.Schema) map[string]interface{} {
 	if schema == nil {
 		return nil
 	}
-	
+
 	result := make(map[string]interface{})
-	
+
 	if schema.Type != "" {
 		result["type"] = string(schema.Type)
 	}
@@ -248,7 +245,7 @@ func convertGenaiSchemaToMap(schema *genai.Schema) map[string]interface{} {
 	if len(schema.Required) > 0 {
 		result["required"] = schema.Required
 	}
-	
+
 	// Convert properties
 	if len(schema.Properties) > 0 {
 		props := make(map[string]interface{})
@@ -257,16 +254,16 @@ func convertGenaiSchemaToMap(schema *genai.Schema) map[string]interface{} {
 		}
 		result["properties"] = props
 	}
-	
+
 	// Handle enum values
 	if len(schema.Enum) > 0 {
 		result["enum"] = schema.Enum
 	}
-	
+
 	// Handle items for arrays
 	if schema.Items != nil {
 		result["items"] = convertGenaiSchemaToMap(schema.Items)
 	}
-	
+
 	return result
 }

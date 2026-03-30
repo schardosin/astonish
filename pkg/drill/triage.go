@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -104,13 +104,13 @@ func (ta *TriageAgent) Investigate(ctx context.Context, step StepResult, test Lo
 	start := time.Now()
 
 	if ta.verbose {
-		log.Printf("[Triage] Starting investigation for step %q (tool: %s)", step.Name, step.Tool)
+		slog.Debug("starting triage investigation", "component", "triage", "step", step.Name, "tool", step.Tool)
 	}
 
 	for event, runErr := range r.Run(ctx, userID, sessionID, userMsg, adkagent.RunConfig{}) {
 		if runErr != nil {
 			if ta.verbose {
-				log.Printf("[Triage] Agent error: %v", runErr)
+				slog.Error("triage agent error", "component", "triage", "error", runErr)
 			}
 			// Return a best-effort verdict from whatever we collected
 			break
@@ -129,7 +129,7 @@ func (ta *TriageAgent) Investigate(ctx context.Context, step StepResult, test Lo
 				if part.FunctionCall != nil {
 					toolCallCount++
 					if ta.verbose {
-						log.Printf("[Triage] Tool call %d: %s", toolCallCount, part.FunctionCall.Name)
+						slog.Debug("triage tool call", "component", "triage", "call_num", toolCallCount, "tool", part.FunctionCall.Name)
 					}
 				}
 			}
@@ -138,7 +138,7 @@ func (ta *TriageAgent) Investigate(ctx context.Context, step StepResult, test Lo
 		// Enforce max turns to prevent runaway investigation
 		if toolCallCount >= ta.maxTurns {
 			if ta.verbose {
-				log.Printf("[Triage] Hit max turns (%d), stopping", ta.maxTurns)
+				slog.Debug("triage hit max turns", "component", "triage", "max_turns", ta.maxTurns)
 			}
 			break
 		}
@@ -148,8 +148,7 @@ func (ta *TriageAgent) Investigate(ctx context.Context, step StepResult, test Lo
 	fullAnalysis := strings.Join(outputParts, "")
 
 	if ta.verbose {
-		log.Printf("[Triage] Investigation complete: %d tool calls, %v elapsed, %d chars output",
-			toolCallCount, elapsed, len(fullAnalysis))
+		slog.Debug("triage investigation complete", "component", "triage", "tool_calls", toolCallCount, "elapsed", elapsed, "output_chars", len(fullAnalysis))
 	}
 
 	// Parse the JSON verdict from the agent's output
@@ -285,7 +284,7 @@ func (ta *TriageAgent) parseVerdict(analysis string) *TriageVerdict {
 	if jsonBlock != "" {
 		if err := json.Unmarshal([]byte(jsonBlock), verdict); err != nil {
 			if ta.verbose {
-				log.Printf("[Triage] Failed to parse verdict JSON: %v", err)
+				slog.Warn("failed to parse triage verdict JSON", "component", "triage", "error", err)
 			}
 		} else {
 			verdict.FullAnalysis = analysis

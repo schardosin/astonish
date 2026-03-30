@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -98,14 +99,18 @@ func (s *AuthStore) ValidateToken(token string) bool {
 	}
 	if now.Sub(sess.CreatedAt) > s.ttl {
 		delete(s.sessions, hash)
-		_ = s.saveLocked()
+		if err := s.saveLocked(); err != nil {
+			slog.Error("failed to persist auth session store", "error", err)
+		}
 		return false
 	}
 	sess.LastSeen = now
 	// Persist LastSeen update periodically (every 10 minutes) to avoid
 	// excessive disk writes on every single request.
 	if now.Sub(sess.LastSeen) > 10*time.Minute {
-		_ = s.saveLocked()
+		if err := s.saveLocked(); err != nil {
+			slog.Error("failed to persist auth session store", "error", err)
+		}
 	}
 	return true
 }
@@ -134,7 +139,9 @@ func (s *AuthStore) Cleanup() {
 			delete(s.sessions, hash)
 		}
 	}
-	_ = s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		slog.Error("failed to persist auth session store", "error", err)
+	}
 }
 
 // load reads sessions from disk. Must be called before use.

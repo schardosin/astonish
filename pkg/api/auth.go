@@ -9,7 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -111,7 +111,7 @@ func (am *AuthManager) AuthorizeCode(code string) (string, bool) {
 			// Create session
 			token, err := am.store.CreateSession(pc.UserAgent, pc.IP)
 			if err != nil {
-				log.Printf("auth: failed to create session: %v", err)
+				slog.Error("failed to create session", "component", "auth", "error", err)
 				return "Failed to authorize. Please try again.", false
 			}
 			pc.authorized = true

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"sync"
@@ -304,7 +304,7 @@ func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			if len(secrets) > 0 {
 				if err := store.SetSecretBatch(secrets); err != nil {
-					log.Printf("Warning: Failed to save provider secrets to credential store: %v", err)
+					slog.Warn("failed to save provider secrets to credential store", "error", err)
 				} else {
 					// Scrub secrets from config before saving to YAML
 					credentials.ScrubAppConfig(cfg)
@@ -330,7 +330,7 @@ func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	if freshCfg, loadErr := config.LoadAppConfig(); loadErr == nil {
 		regenerateOpenCodeConfig(freshCfg)
 	} else {
-		log.Printf("Warning: Failed to reload config for OpenCode regeneration: %v", loadErr)
+		slog.Warn("failed to reload config for OpenCode regeneration", "error", loadErr)
 	}
 
 	// Reset the Studio chat agent so the next request picks up fresh config.
@@ -383,7 +383,7 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 				// Server was removed - clear its tools from persistent cache
 				cache.RemoveServer(serverName)
 				RemoveServerToolsFromCache(serverName) // Also update in-memory cache
-				log.Printf("[Cache] Removed server '%s' from persistent cache", serverName)
+				slog.Info("removed server from persistent cache", "component", "cache", "server", serverName)
 			}
 		}
 	}
@@ -419,7 +419,7 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Update persistent cache for added/changed servers
 	if len(addedOrChanged) > 0 {
-		log.Printf("[Cache] Detected %d added/changed servers: %v", len(addedOrChanged), keysOf(addedOrChanged))
+		slog.Info("detected added/changed servers", "component", "cache", "count", len(addedOrChanged), "servers", keysOf(addedOrChanged))
 
 		// Set initial status to "loading" for all added/changed servers
 		now := time.Now().UTC().Format(time.RFC3339)
@@ -438,7 +438,7 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Save persistent cache after removals
 	if err := cache.SaveCache(); err != nil {
-		log.Printf("[Cache] Warning: Failed to save persistent cache: %v", err)
+		slog.Warn("failed to save persistent cache", "component", "cache", "error", err)
 	}
 
 	// Refresh in-memory tools cache
@@ -510,12 +510,12 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 	mcpManager, err := mcp.NewManager()
 	if err != nil {
 		toolError = fmt.Sprintf("Failed to create MCP manager: %v", err)
-		log.Printf("Warning: %s", toolError)
+		slog.Warn(toolError)
 	} else {
 		namedToolset, err := mcpManager.InitializeSingleToolset(r.Context(), req.ServerName)
 		if err != nil {
 			toolError = fmt.Sprintf("Failed to initialize server: %v", err)
-			log.Printf("Warning: %s", toolError)
+			slog.Warn(toolError)
 		} else {
 			// Get tools from this server and add to cache
 			minimalCtx := &minimalReadonlyContext{Context: r.Context()}
@@ -527,7 +527,7 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 				} else {
 					toolError = fmt.Sprintf("Server started but failed to get tools: %v", err)
 				}
-				log.Printf("Warning: %s", toolError)
+				slog.Warn(toolError)
 			} else {
 				var newTools []ToolInfo
 				for _, t := range mcpTools {
@@ -553,15 +553,15 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 				checksum := cache.ComputeServerChecksum(req.Config.Command, req.Config.Args, req.Config.Env)
 				cache.AddServerTools(req.ServerName, persistentTools, checksum)
 				if err := cache.SaveCache(); err != nil {
-					log.Printf("[Cache] Warning: Failed to save persistent cache: %v", err)
+					slog.Warn("failed to save persistent cache", "component", "cache", "error", err)
 				} else {
-					log.Printf("[Cache] Saved %d tools for server '%s' to persistent cache", len(persistentTools), req.ServerName)
+					slog.Info("saved tools to persistent cache", "component", "cache", "count", len(persistentTools), "server", req.ServerName)
 				}
 			}
 		}
 	}
 
-	log.Printf("[MCP Install] Installed inline server: %s", req.ServerName)
+	slog.Info("installed inline mcp server", "component", "mcp-install", "server", req.ServerName)
 
 	// Reset the Studio chat agent so the next request picks up the new MCP server.
 	GetChatManager().Reset()
@@ -582,18 +582,18 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 func updatePersistentCacheForServers(ctx context.Context, servers map[string]config.MCPServerConfig) {
 	mcpManager, err := mcp.NewManager()
 	if err != nil {
-		log.Printf("[Cache] Failed to create MCP manager: %v", err)
+		slog.Error("failed to create mcp manager", "component", "cache", "error", err)
 		return
 	}
 	defer mcpManager.Cleanup()
 
 	for serverName, serverCfg := range servers {
-		log.Printf("[Cache] Updating cache for server: %s", serverName)
+		slog.Info("updating cache for server", "component", "cache", "server", serverName)
 
 		// Initialize just this server
 		namedToolset, err := mcpManager.InitializeSingleToolset(ctx, serverName)
 		if err != nil {
-			log.Printf("[Cache] Failed to initialize server '%s': %v", serverName, err)
+			slog.Error("failed to initialize server", "component", "cache", "server", serverName, "error", err)
 			// Update status to error
 			SetServerStatus(serverName, cache.ServerStatus{
 				Name:      serverName,
@@ -610,7 +610,7 @@ func updatePersistentCacheForServers(ctx context.Context, servers map[string]con
 		mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
 		if err != nil {
 			stderrOutput := mcp.GetStderr(namedToolset.Stderr)
-			log.Printf("[Cache] Failed to get tools from '%s': %v (Stderr: %s)", serverName, err, stderrOutput)
+			slog.Error("failed to get tools from server", "component", "cache", "server", serverName, "error", err, "stderr", stderrOutput)
 			// Update status to error
 			errMsg := fmt.Sprintf("Failed to list tools: %v", err)
 			if stderrOutput != "" && stderrOutput != "no stderr output" {
@@ -640,7 +640,7 @@ func updatePersistentCacheForServers(ctx context.Context, servers map[string]con
 		// Compute checksum and add to cache
 		checksum := cache.ComputeServerChecksum(serverCfg.Command, serverCfg.Args, serverCfg.Env)
 		cache.AddServerTools(serverName, toolEntries, checksum)
-		log.Printf("[Cache] Added %d tools from server '%s' to persistent cache", len(toolEntries), serverName)
+		slog.Info("added tools to persistent cache", "component", "cache", "server", serverName, "count", len(toolEntries))
 
 		// Update status to healthy
 		SetServerStatus(serverName, cache.ServerStatus{
@@ -653,7 +653,7 @@ func updatePersistentCacheForServers(ctx context.Context, servers map[string]con
 
 	// Save the updated cache
 	if err := cache.SaveCache(); err != nil {
-		log.Printf("[Cache] Failed to save persistent cache: %v", err)
+		slog.Error("failed to save persistent cache", "component", "cache", "error", err)
 	}
 }
 

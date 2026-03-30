@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"sync"
 
@@ -93,8 +93,8 @@ func RunSimpleWeb(ctx context.Context, cfg *SimpleWebConfig) error {
 	router.HandleFunc("/", server.handleIndex).Methods("GET")
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	log.Printf("Starting simple web UI on http://localhost:%d", cfg.Port)
-	log.Printf("Open your browser to access the chat interface")
+	slog.Info("starting simple web UI", "url", fmt.Sprintf("http://localhost:%d", cfg.Port))
+	slog.Info("open your browser to access the chat interface")
 
 	return http.ListenAndServe(addr, router)
 }

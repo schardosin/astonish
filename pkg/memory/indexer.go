@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -99,7 +100,7 @@ func (idx *Indexer) IndexAll(ctx context.Context) error {
 		if err := idx.indexFileUnlocked(ctx, relPath); err != nil {
 			indexErrors++
 			if idx.debugMode {
-				fmt.Printf("[Memory Indexer] Error indexing %s: %v\n", relPath, err)
+				slog.Error("error indexing file", "component", "memory-indexer", "file", relPath, "error", err)
 			}
 		}
 	}
@@ -108,11 +109,11 @@ func (idx *Indexer) IndexAll(ctx context.Context) error {
 	for path := range idx.fileIndex {
 		if !existingPaths[path] {
 			if idx.debugMode {
-				fmt.Printf("[Memory Indexer] Removing deleted file: %s\n", path)
+				slog.Info("removing deleted file", "component", "memory-indexer", "file", path)
 			}
 			if err := idx.store.DeleteByPath(ctx, path); err != nil {
 				if idx.debugMode {
-					fmt.Printf("[Memory Indexer] Error removing %s: %v\n", path, err)
+					slog.Error("error removing file", "component", "memory-indexer", "file", path, "error", err)
 				}
 			}
 			delete(idx.fileIndex, path)
@@ -120,7 +121,7 @@ func (idx *Indexer) IndexAll(ctx context.Context) error {
 	}
 
 	if idx.debugMode {
-		fmt.Printf("[Memory Indexer] Indexed %d files (%d errors), %d chunks total\n", len(existingPaths), indexErrors, idx.store.Count())
+		slog.Info("indexing complete", "component", "memory-indexer", "files", len(existingPaths), "errors", indexErrors, "chunks", idx.store.Count())
 	}
 
 	// If every file failed, return an error so callers know indexing was unsuccessful
@@ -172,14 +173,14 @@ func (idx *Indexer) indexFileUnlocked(ctx context.Context, relPath string) error
 	}
 
 	if idx.debugMode {
-		fmt.Printf("[Memory Indexer] Indexing %s (changed)\n", relPath)
+		slog.Info("indexing file", "component", "memory-indexer", "file", relPath, "status", "changed")
 	}
 
 	// Delete old chunks for this file
 	if err := idx.store.DeleteByPath(ctx, relPath); err != nil {
 		// Non-fatal: the path might not exist in the collection yet
 		if idx.debugMode {
-			fmt.Printf("[Memory Indexer] Note: delete for %s: %v\n", relPath, err)
+			slog.Info("delete note for file", "component", "memory-indexer", "file", relPath, "error", err)
 		}
 	}
 
@@ -249,7 +250,7 @@ func (idx *Indexer) WatchAndSync(ctx context.Context, debounceMs int) error {
 		for _, p := range paths {
 			if err := idx.IndexFile(ctx, p); err != nil {
 				if idx.debugMode {
-					fmt.Printf("[Memory Watcher] Error indexing %s: %v\n", p, err)
+					slog.Error("error indexing file from watcher", "component", "memory-indexer", "file", p, "error", err)
 				}
 			}
 		}
@@ -302,7 +303,7 @@ func (idx *Indexer) WatchAndSync(ctx context.Context, debounceMs int) error {
 				return nil
 			}
 			if idx.debugMode {
-				fmt.Printf("[Memory Watcher] Error: %v\n", err)
+				slog.Error("file watcher error", "component", "memory-indexer", "error", err)
 			}
 		}
 	}
@@ -327,8 +328,7 @@ func (idx *Indexer) loadFileIndex() {
 	if err := json.Unmarshal(data, &versioned); err == nil && versioned.Version > 0 {
 		if versioned.Version != fileIndexVersion {
 			if idx.debugMode {
-				fmt.Printf("[Memory Indexer] Schema version changed (%d -> %d), will re-index all files\n",
-					versioned.Version, fileIndexVersion)
+				slog.Info("schema version changed, will re-index", "component", "memory-indexer", "old_version", versioned.Version, "new_version", fileIndexVersion)
 			}
 			return // Version mismatch — start empty to force full re-index
 		}
@@ -337,7 +337,7 @@ func (idx *Indexer) loadFileIndex() {
 			idx.fileIndex = make(map[string]string)
 		}
 		if idx.debugMode {
-			fmt.Printf("[Memory Indexer] Loaded file index v%d (%d entries)\n", versioned.Version, len(idx.fileIndex))
+			slog.Info("loaded file index", "component", "memory-indexer", "version", versioned.Version, "entries", len(idx.fileIndex))
 		}
 		return
 	}
@@ -347,13 +347,13 @@ func (idx *Indexer) loadFileIndex() {
 	legacy := make(map[string]string)
 	if err := json.Unmarshal(data, &legacy); err == nil && len(legacy) > 0 {
 		if idx.debugMode {
-			fmt.Printf("[Memory Indexer] Legacy file index detected (%d entries), will re-index for metadata upgrade\n", len(legacy))
+			slog.Info("legacy file index detected, will re-index", "component", "memory-indexer", "entries", len(legacy))
 		}
 		return // Don't load — force re-index
 	}
 
 	if idx.debugMode {
-		fmt.Printf("[Memory Indexer] Warning: corrupt file index, rebuilding\n")
+		slog.Warn("corrupt file index, rebuilding", "component", "memory-indexer")
 	}
 }
 
@@ -366,13 +366,13 @@ func (idx *Indexer) saveFileIndex() {
 	data, err := json.Marshal(versioned)
 	if err != nil {
 		if idx.debugMode {
-			fmt.Printf("[Memory Indexer] Warning: failed to marshal file index: %v\n", err)
+			slog.Warn("failed to marshal file index", "component", "memory-indexer", "error", err)
 		}
 		return
 	}
 	if err := os.WriteFile(idx.fileIndexPath(), data, 0644); err != nil {
 		if idx.debugMode {
-			fmt.Printf("[Memory Indexer] Warning: failed to save file index: %v\n", err)
+			slog.Warn("failed to save file index", "component", "memory-indexer", "error", err)
 		}
 	}
 }

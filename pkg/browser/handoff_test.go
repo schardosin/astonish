@@ -621,8 +621,8 @@ func TestHandoffServer_ListenAddressReflectsActualPort(t *testing.T) {
 	}
 	defer h.Stop()
 
-	if !strings.HasPrefix(info.ListenAddress, "0.0.0.0:") && !strings.HasPrefix(info.ListenAddress, "[::]:") {
-		t.Errorf("expected default bind 0.0.0.0 or [::], got %s", info.ListenAddress)
+	if !strings.HasPrefix(info.ListenAddress, "127.0.0.1:") {
+		t.Errorf("expected default bind 127.0.0.1, got %s", info.ListenAddress)
 	}
 
 	// ListenAddress should contain the actual port, not 0

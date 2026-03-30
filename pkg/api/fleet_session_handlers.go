@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -145,7 +145,7 @@ func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionRes
 			workspaceDir = fleet.ResolveSessionWorkspaceDir(
 				fileStore.BaseDir(), fleetSession.ID, "" /* chat sessions use short session ID */)
 			if err := fleet.SetupSessionWorkspace(workspaceDir, plan.ResolveProjectSource(), baseDir); err != nil {
-				log.Printf("[fleet] Warning: could not set up workspace %s: %v", workspaceDir, err)
+				slog.Warn("could not set up workspace", "component", "fleet", "workspace", workspaceDir, "error", err)
 				workspaceDir = "" // fall back to legacy behavior
 			}
 		}
@@ -154,7 +154,7 @@ func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionRes
 			workspaceDir = baseDir
 			if workspaceDir != "" {
 				if err := os.MkdirAll(workspaceDir, 0755); err != nil {
-					log.Printf("[fleet] Warning: could not create workspace %s: %v", workspaceDir, err)
+					slog.Warn("could not create workspace", "component", "fleet", "workspace", workspaceDir, "error", err)
 					workspaceDir = ""
 				}
 			}
@@ -196,7 +196,7 @@ func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionRes
 	go func() {
 		defer func() {
 			registry.Unregister(fleetSession.ID)
-			log.Printf("[fleet] Session %s removed from registry", fleetSession.ID)
+			slog.Info("session removed from registry", "component", "fleet", "session_id", fleetSession.ID)
 		}()
 
 		// Load project context (AGENTS.md) from the base workspace.
@@ -205,8 +205,7 @@ func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionRes
 			pc := fleet.LoadProjectContextFile(baseDir, fleetCfg.ProjectContext)
 			if pc != "" {
 				fleetSession.ProjectContext = pc
-				log.Printf("[fleet] Project context loaded from base for session %s (%d bytes)",
-					fleetSession.ID, len(pc))
+				slog.Info("project context loaded from base", "component", "fleet", "session_id", fleetSession.ID, "bytes", len(pc))
 			}
 		}
 
@@ -223,12 +222,12 @@ func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionRes
 				MemoryKeys: []string{entryPoint},
 			}
 			if err := channel.PostMessage(context.Background(), msg); err != nil {
-				log.Printf("[fleet] Error posting initial message: %v", err)
+				slog.Error("failed to post initial message", "component", "fleet", "error", err)
 			}
 		}
 
 		if err := fleetSession.Run(sessionCtx); err != nil {
-			log.Printf("[fleet] Session %s error: %v", fleetSession.ID, err)
+			slog.Error("session error", "component", "fleet", "session_id", fleetSession.ID, "error", err)
 		}
 	}()
 
@@ -326,10 +325,10 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer func() {
 			registry.Unregister(fleetSession.ID)
-			log.Printf("[fleet] Session %s removed from registry", fleetSession.ID)
+			slog.Info("session removed from registry", "component", "fleet", "session_id", fleetSession.ID)
 		}()
 		if err := fleetSession.Run(context.Background()); err != nil {
-			log.Printf("[fleet] Session %s error: %v", fleetSession.ID, err)
+			slog.Error("session error", "component", "fleet", "session_id", fleetSession.ID, "error", err)
 		}
 	}()
 
@@ -341,7 +340,7 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 			MemoryKeys: []string{entryPoint},
 		}
 		if err := channel.PostMessage(context.Background(), initialMsg); err != nil {
-			log.Printf("[fleet] Error posting initial message: %v", err)
+			slog.Error("failed to post initial message", "component", "fleet", "error", err)
 		}
 	}
 
@@ -359,7 +358,7 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig, issueNumber int, repo string) {
 	fileStore := getFleetFileStore()
 	if fileStore == nil {
-		log.Printf("[fleet] Warning: no file store available, cannot persist fleet session meta for %s", fs.ID)
+		slog.Warn("no file store available, cannot persist fleet session meta", "component", "fleet", "session_id", fs.ID)
 		return
 	}
 
@@ -389,7 +388,7 @@ func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig
 	}
 
 	if err := fileStore.AddSessionMeta(meta); err != nil {
-		log.Printf("[fleet] Warning: could not persist fleet session meta: %v", err)
+		slog.Warn("could not persist fleet session meta", "component", "fleet", "error", err)
 	}
 }
 
@@ -400,10 +399,12 @@ func updateFleetSessionMeta(sessionID string, messageCount int) {
 		return
 	}
 
-	_ = fileStore.UpdateSessionMeta(sessionID, func(meta *session.SessionMeta) {
+	if err := fileStore.UpdateSessionMeta(sessionID, func(meta *session.SessionMeta) {
 		meta.MessageCount = messageCount
 		meta.UpdatedAt = time.Now()
-	})
+	}); err != nil {
+		slog.Warn("failed to update fleet session metadata", "session_id", sessionID, "error", err)
+	}
 }
 
 // wireFleetTranscript creates a JSONL transcript file for a fleet session
@@ -412,7 +413,7 @@ func updateFleetSessionMeta(sessionID string, messageCount int) {
 func wireFleetTranscript(fs *fleet.FleetSession) {
 	fileStore := getFleetFileStore()
 	if fileStore == nil {
-		log.Printf("[fleet] Warning: no file store available, cannot create transcript for %s", fs.ID)
+		slog.Warn("no file store available, cannot create transcript", "component", "fleet", "session_id", fs.ID)
 		return
 	}
 
@@ -421,7 +422,7 @@ func wireFleetTranscript(fs *fleet.FleetSession) {
 	transcript := session.NewTranscript(transcriptPath)
 
 	if err := transcript.WriteHeader(fs.ID); err != nil {
-		log.Printf("[fleet] Warning: could not create fleet transcript: %v", err)
+		slog.Warn("could not create fleet transcript", "component", "fleet", "error", err)
 		return
 	}
 
@@ -431,7 +432,7 @@ func wireFleetTranscript(fs *fleet.FleetSession) {
 		invocationCounter++
 		event := fleetMessageToEvent(msg, invocationCounter)
 		if err := transcript.AppendEvent(event); err != nil {
-			log.Printf("[fleet] Warning: could not persist fleet message: %v", err)
+			slog.Warn("could not persist fleet message", "component", "fleet", "error", err)
 		}
 	}
 }
@@ -994,8 +995,7 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 		lazyNode.Cleanup()
 	}
 
-	log.Printf("[fleet-sandbox] Session %s: sandbox enabled (template=%q, env_keys=%d)",
-		fleetSession.ID, template, len(lazyNode.Env))
+	slog.Info("sandbox enabled for fleet session", "component", "fleet-sandbox", "session_id", fleetSession.ID, "template", template, "env_keys", len(lazyNode.Env))
 	return nil
 }
 

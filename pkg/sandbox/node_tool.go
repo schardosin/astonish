@@ -4,16 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/schardosin/astonish/pkg/common"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
 )
 
 // ToolWithDeclaration is the interface for tools that can declare their schema.
-// Matches ADK's internal toolinternal.FunctionTool.Declaration() method.
-type ToolWithDeclaration interface {
-	Declaration() *genai.FunctionDeclaration
-}
+// Canonical definition lives in pkg/common; aliased here for convenience.
+type ToolWithDeclaration = common.ToolWithDeclaration
 
 // NodeTool wraps an existing tool.Tool and proxies its Run() method to a
 // LazyNodeClient (astonish node inside a container). It preserves the original

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -296,7 +296,7 @@ func saveFleetPlan(_ tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult,
 	activated := false
 	if channelType != "chat" && planActivatorFuncVar != nil {
 		if err := planActivatorFuncVar(context.Background(), key); err != nil {
-			log.Printf("[fleet-plan] Warning: auto-activation failed for plan %q: %v", key, err)
+			slog.Warn("auto-activation failed for fleet plan", "component", "fleet-plan", "plan", key, "error", err)
 		} else {
 			activated = true
 		}

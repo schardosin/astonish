@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -103,14 +104,14 @@ type debugHTTPTransport struct {
 }
 
 func (t *debugHTTPTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	fmt.Printf("[DEBUG HTTP] %s %s\n", req.Method, req.URL.String())
+	slog.Debug("http request", "method", req.Method, "url", req.URL.String())
 
 	// Log request headers (redact Authorization)
 	for key, vals := range req.Header {
 		if strings.EqualFold(key, "Authorization") {
-			fmt.Printf("[DEBUG HTTP]   %s: [REDACTED]\n", key)
+			slog.Debug("http request header", "header", key, "value", "[REDACTED]")
 		} else {
-			fmt.Printf("[DEBUG HTTP]   %s: %s\n", key, strings.Join(vals, ", "))
+			slog.Debug("http request header", "header", key, "value", strings.Join(vals, ", "))
 		}
 	}
 
@@ -121,26 +122,26 @@ func (t *debugHTTPTransport) RoundTrip(req *http.Request) (*http.Response, error
 			return nil, fmt.Errorf("debug transport: failed to read request body: %w", err)
 		}
 		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-		fmt.Printf("[DEBUG HTTP] Request body (%d bytes):\n%s\n", len(bodyBytes), string(bodyBytes))
+		slog.Debug("http request body", "bytes", len(bodyBytes), "body", string(bodyBytes))
 	}
 
 	// Perform the actual request
 	resp, err := t.base.RoundTrip(req)
 	if err != nil {
-		fmt.Printf("[DEBUG HTTP] Transport error: %v\n", err)
+		slog.Debug("http transport error", "error", err)
 		return resp, err
 	}
 
-	fmt.Printf("[DEBUG HTTP] Response: %d %s\n", resp.StatusCode, resp.Status)
+	slog.Debug("http response", "statusCode", resp.StatusCode, "status", resp.Status)
 
 	// For non-2xx responses, capture the response body
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		bodyBytes, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
-			fmt.Printf("[DEBUG HTTP] Failed to read error response body: %v\n", readErr)
+			slog.Debug("failed to read error response body", "error", readErr)
 		} else {
 			resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-			fmt.Printf("[DEBUG HTTP] Error response body:\n%s\n", string(bodyBytes))
+			slog.Debug("http error response body", "body", string(bodyBytes))
 		}
 	}
 

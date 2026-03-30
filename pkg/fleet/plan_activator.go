@@ -3,7 +3,7 @@ package fleet
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -162,7 +162,7 @@ func (a *PlanActivator) Activate(ctx context.Context, planKey string) error {
 		monitor := NewGitHubMonitor(planKey, plan.Channel.Config, a.registry().Dir())
 		monitor.GHToken = a.ResolveGHTokenForPlan(plan)
 		if err := monitor.LoadState(); err != nil {
-			log.Printf("[plan-activator] Warning: failed to load monitor state for %q: %v", planKey, err)
+			slog.Warn("failed to load monitor state", "component", "plan-activator", "plan", planKey, "error", err)
 		}
 		if err := monitor.MarkAllCurrentAsSeen(); err != nil {
 			return fmt.Errorf("failed to snapshot current issues (needed to avoid processing backlog): %w", err)
@@ -201,7 +201,7 @@ func (a *PlanActivator) Activate(ctx context.Context, planKey string) error {
 		return fmt.Errorf("failed to save activation state: %w", err)
 	}
 
-	log.Printf("[plan-activator] Plan %q activated with scheduler job %s (cron: %s)", planKey, job.ID, schedule)
+	slog.Info("plan activated", "component", "plan-activator", "plan", planKey, "job_id", job.ID, "cron", schedule)
 	return nil
 }
 
@@ -219,7 +219,7 @@ func (a *PlanActivator) Deactivate(_ context.Context, planKey string) error {
 	// Remove scheduler job
 	if plan.Activation.SchedulerJobID != "" {
 		if err := a.scheduler.RemoveJob(plan.Activation.SchedulerJobID); err != nil {
-			log.Printf("[plan-activator] Warning: failed to remove scheduler job %s: %v", plan.Activation.SchedulerJobID, err)
+			slog.Warn("failed to remove scheduler job", "component", "plan-activator", "job_id", plan.Activation.SchedulerJobID, "error", err)
 		}
 	}
 
@@ -236,7 +236,7 @@ func (a *PlanActivator) Deactivate(_ context.Context, planKey string) error {
 		return fmt.Errorf("failed to save deactivation state: %w", err)
 	}
 
-	log.Printf("[plan-activator] Plan %q deactivated", planKey)
+	slog.Info("plan deactivated", "component", "plan-activator", "plan", planKey)
 	return nil
 }
 
@@ -293,8 +293,7 @@ func (a *PlanActivator) RestoreActivated() error {
 		if plan.Activation.SchedulerJobID != "" {
 			existing := a.scheduler.GetJob(plan.Activation.SchedulerJobID)
 			if existing == nil {
-				log.Printf("[plan-activator] Scheduler job %s for plan %q is missing, re-creating...",
-					plan.Activation.SchedulerJobID, summary.Key)
+				slog.Warn("scheduler job missing, re-creating", "component", "plan-activator", "job_id", plan.Activation.SchedulerJobID, "plan", summary.Key)
 
 				schedule := plan.Channel.GetSchedule()
 
@@ -307,21 +306,24 @@ func (a *PlanActivator) RestoreActivated() error {
 				}
 
 				if err := a.scheduler.AddJob(job); err != nil {
-					log.Printf("[plan-activator] Failed to re-create scheduler job for %q: %v", summary.Key, err)
+					slog.Error("failed to re-create scheduler job", "component", "plan-activator", "plan", summary.Key, "error", err)
 					// Clear activation state since we can't restore the job
 					plan.Activation = PlanActivationState{}
 					plan.UpdatedAt = time.Now()
-					_ = a.registry().Save(plan)
+					if err := a.registry().Save(plan); err != nil {
+						slog.Error("failed to save fleet plan state", "plan", plan.Name, "error", err)
+					}
 					continue
 				}
 
 				// Update the job ID in the plan
 				plan.Activation.SchedulerJobID = job.ID
 				plan.UpdatedAt = time.Now()
-				_ = a.registry().Save(plan)
+				if err := a.registry().Save(plan); err != nil {
+					slog.Error("failed to save fleet plan state", "plan", plan.Name, "error", err)
+				}
 
-				log.Printf("[plan-activator] Re-created scheduler job %s for plan %q (cron: %s)",
-					job.ID, summary.Key, schedule)
+				slog.Info("re-created scheduler job", "component", "plan-activator", "job_id", job.ID, "plan", summary.Key, "cron", schedule)
 			}
 		}
 
@@ -330,7 +332,7 @@ func (a *PlanActivator) RestoreActivated() error {
 			monitor := NewGitHubMonitor(summary.Key, plan.Channel.Config, a.registry().Dir())
 			monitor.GHToken = a.ResolveGHTokenForPlan(plan)
 			if err := monitor.LoadState(); err != nil {
-				log.Printf("[plan-activator] Warning: failed to load monitor state for %q: %v", summary.Key, err)
+				slog.Warn("failed to load monitor state", "component", "plan-activator", "plan", summary.Key, "error", err)
 			}
 
 			a.monitorsMu.Lock()
@@ -339,7 +341,7 @@ func (a *PlanActivator) RestoreActivated() error {
 		}
 
 		restored++
-		log.Printf("[plan-activator] Restored activated plan %q (job: %s)", summary.Key, plan.Activation.SchedulerJobID)
+		slog.Info("restored activated plan", "component", "plan-activator", "plan", summary.Key, "job_id", plan.Activation.SchedulerJobID)
 
 		// NOTE: No explicit recovery of interrupted sessions here.
 		// The first poll cycle (triggered by the scheduler within seconds)
@@ -348,7 +350,7 @@ func (a *PlanActivator) RestoreActivated() error {
 	}
 
 	if restored > 0 {
-		log.Printf("[plan-activator] Restored %d activated plan(s)", restored)
+		slog.Info("restored activated plans", "component", "plan-activator", "count", restored)
 	}
 	return nil
 }
@@ -422,7 +424,9 @@ func (a *PlanActivator) pollGitHubIssues(ctx context.Context, planKey string, pl
 	if err != nil {
 		plan.Activation.LastPollStatus = "failed"
 		plan.Activation.LastPollError = err.Error()
-		_ = a.registry().Save(plan)
+		if saveErr := a.registry().Save(plan); saveErr != nil {
+			slog.Error("failed to save fleet plan state", "plan", plan.Name, "error", saveErr)
+		}
 		return "", fmt.Errorf("polling GitHub issues: %w", err)
 	}
 
@@ -440,7 +444,9 @@ func (a *PlanActivator) pollGitHubIssues(ctx context.Context, planKey string, pl
 
 	plan.Activation.LastPollStatus = "success"
 	plan.Activation.LastPollError = ""
-	_ = a.registry().Save(plan)
+	if err := a.registry().Save(plan); err != nil {
+		slog.Error("failed to save fleet plan state", "plan", plan.Name, "error", err)
+	}
 
 	return strings.Join(results, "; "), nil
 }
@@ -454,7 +460,7 @@ func (a *PlanActivator) startNewSession(ctx context.Context, monitor *GitHubMoni
 	// Fetch the full issue to get the body for FormatIssueContext.
 	issues, err := monitor.fetchOpenLabeledIssues()
 	if err != nil {
-		log.Printf("[plan-activator] Failed to fetch issue details for #%d: %v", item.IssueNumber, err)
+		slog.Error("failed to fetch issue details", "component", "plan-activator", "issue", item.IssueNumber, "error", err)
 		return
 	}
 
@@ -466,7 +472,7 @@ func (a *PlanActivator) startNewSession(ctx context.Context, monitor *GitHubMoni
 		}
 	}
 	if issue == nil {
-		log.Printf("[plan-activator] Issue #%d not found in fetched issues (may have been closed)", item.IssueNumber)
+		slog.Warn("issue not found in fetched issues", "component", "plan-activator", "issue", item.IssueNumber)
 		return
 	}
 
@@ -494,13 +500,13 @@ func (a *PlanActivator) startNewSession(ctx context.Context, monitor *GitHubMoni
 
 	sessionID, startErr := a.fleetStart(ctx, cfg)
 	if startErr != nil {
-		log.Printf("[plan-activator] Failed to start fleet session for issue #%d: %v", issueNum, startErr)
+		slog.Error("failed to start fleet session", "component", "plan-activator", "issue", issueNum, "error", startErr)
 		monitor.IncrementRetryCount(issueNum, fmt.Sprintf("start failed: %v", startErr))
 		return
 	}
 
 	monitor.MarkSeen(issueNum, sessionID, issue.Title)
-	log.Printf("[plan-activator] Started fleet session %s for issue #%d (%s)", sessionID, issueNum, issue.Title)
+	slog.Info("started fleet session", "component", "plan-activator", "session_id", sessionID, "issue", issueNum, "title", issue.Title)
 }
 
 // recoverSession recovers an interrupted fleet session (daemon restart or customer reply).
@@ -513,7 +519,7 @@ func (a *PlanActivator) recoverSession(ctx context.Context, monitor *GitHubMonit
 	sessionID := item.SessionID
 
 	if sessionID == "" {
-		log.Printf("[plan-activator] Cannot recover issue #%d: no session ID in state", issueNum)
+		slog.Error("cannot recover issue without session id", "component", "plan-activator", "issue", issueNum)
 		return
 	}
 
@@ -521,7 +527,7 @@ func (a *PlanActivator) recoverSession(ctx context.Context, monitor *GitHubMonit
 	if item.CustomerReply != "" {
 		logAction = "customer reply"
 	}
-	log.Printf("[plan-activator] Recovering session %s for issue #%d (trigger: %s)", sessionID, issueNum, logAction)
+	slog.Info("recovering session", "component", "plan-activator", "session_id", sessionID, "issue", issueNum, "trigger", logAction)
 
 	recoverCfg := RecoverFleetConfig{
 		Plan:            plan,
@@ -544,7 +550,7 @@ func (a *PlanActivator) recoverSession(ctx context.Context, monitor *GitHubMonit
 	}
 
 	if err := a.fleetRecover(ctx, recoverCfg); err != nil {
-		log.Printf("[plan-activator] Failed to recover session %s for issue #%d: %v", sessionID, issueNum, err)
+		slog.Error("failed to recover session", "component", "plan-activator", "session_id", sessionID, "issue", issueNum, "error", err)
 		monitor.IncrementRetryCount(issueNum, fmt.Sprintf("recovery failed: %v", err))
 	}
 }
@@ -602,7 +608,7 @@ func (a *PlanActivator) ForceCleanup(planKey string) {
 
 	// 1. Remove scheduler job by name (works even if we don't have the job UUID)
 	if err := a.scheduler.RemoveJobByName(jobName); err != nil {
-		log.Printf("[plan-activator] Warning: failed to remove scheduler job %q during cleanup: %v", jobName, err)
+		slog.Warn("failed to remove scheduler job during cleanup", "component", "plan-activator", "job_name", jobName, "error", err)
 	}
 
 	// 2. Remove in-memory monitor and clear its state file
@@ -613,16 +619,16 @@ func (a *PlanActivator) ForceCleanup(planKey string) {
 
 	if monitor != nil {
 		if err := monitor.ClearState(); err != nil {
-			log.Printf("[plan-activator] Warning: failed to clear monitor state for %q: %v", planKey, err)
+			slog.Warn("failed to clear monitor state", "component", "plan-activator", "plan", planKey, "error", err)
 		}
 	} else {
 		// No in-memory monitor, but the state file may still exist on disk.
 		// Remove it directly using the same path convention as GitHubMonitor.
 		statePath := filepath.Join(a.registry().Dir(), ".state", planKey+".json")
 		if err := os.Remove(statePath); err != nil && !os.IsNotExist(err) {
-			log.Printf("[plan-activator] Warning: failed to remove state file %q: %v", statePath, err)
+			slog.Warn("failed to remove state file", "component", "plan-activator", "path", statePath, "error", err)
 		}
 	}
 
-	log.Printf("[plan-activator] Cleaned up resources for plan %q", planKey)
+	slog.Info("cleaned up resources for plan", "component", "plan-activator", "plan", planKey)
 }

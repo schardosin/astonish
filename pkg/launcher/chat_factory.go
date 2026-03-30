@@ -3,6 +3,7 @@ package launcher
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -104,7 +105,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		cs, csErr := credentials.Open(configDir)
 		if csErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to open credential store: %v\n", csErr)
+				slog.Warn("failed to open credential store", "error", csErr)
 			}
 		} else {
 			credStore = cs
@@ -120,13 +121,13 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			migrated, migrateErr := credentials.MigrateFromConfig(cs, cfg.AppConfig, nil)
 			if migrateErr != nil {
 				if cfg.DebugMode {
-					fmt.Printf("Warning: Credential migration error: %v\n", migrateErr)
+					slog.Warn("credential migration error", "error", migrateErr)
 				}
 			} else if migrated > 0 {
 				// Re-save config.yaml with secrets scrubbed
 				if saveErr := config.SaveAppConfig(cfg.AppConfig); saveErr != nil {
 					if cfg.DebugMode {
-						fmt.Printf("Warning: Failed to save scrubbed config: %v\n", saveErr)
+						slog.Warn("failed to save scrubbed config", "error", saveErr)
 					}
 				} else if cfg.DebugMode {
 					fmt.Printf("Migrated %d secrets from config.yaml to encrypted store\n", migrated)
@@ -176,7 +177,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	credTools, credErr := tools.GetCredentialTools()
 	if credErr != nil {
 		if cfg.DebugMode {
-			fmt.Printf("Warning: Failed to create credential tools: %v\n", credErr)
+			slog.Warn("failed to create credential tools", "error", credErr)
 		}
 	} else {
 		credToolsSlice = credTools
@@ -186,7 +187,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	memMgr, memErr := memory.NewManager("", cfg.DebugMode)
 	if memErr != nil {
 		if cfg.DebugMode {
-			fmt.Printf("Warning: Failed to initialize memory manager: %v\n", memErr)
+			slog.Warn("failed to initialize memory manager", "error", memErr)
 		}
 	}
 
@@ -207,7 +208,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		if mdErr == nil && vdErr == nil {
 			if err := os.MkdirAll(memDir, 0755); err != nil {
 				if cfg.DebugMode {
-					fmt.Printf("Warning: Failed to create memory directory: %v\n", err)
+					slog.Warn("failed to create memory directory", "error", err)
 				}
 			} else {
 				// Pre-sync skills to memory directory BEFORE indexing starts,
@@ -227,7 +228,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					if psErr == nil && len(preSkills) > 0 {
 						if syncErr := skills.SyncSkillsToMemory(preSkills, memDir); syncErr != nil {
 							if cfg.DebugMode {
-								fmt.Printf("Warning: Failed to pre-sync skills to memory: %v\n", syncErr)
+								slog.Warn("failed to pre-sync skills to memory", "error", syncErr)
 							}
 						}
 					}
@@ -265,7 +266,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					store, storeErr := memory.NewStore(storeCfg, embResult.EmbeddingFunc)
 					if storeErr != nil {
 						if cfg.DebugMode {
-							fmt.Printf("Warning: Failed to create memory store: %v\n", storeErr)
+							slog.Warn("failed to create memory store", "error", storeErr)
 						}
 					} else {
 						memStore = store
@@ -306,7 +307,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 							go func() {
 								if wErr := memIndexer.WatchAndSync(watchCtx, debounceMs); wErr != nil {
 									if cfg.DebugMode {
-										fmt.Printf("Warning: Memory file watcher error: %v\n", wErr)
+										slog.Warn("memory file watcher error", "error", wErr)
 									}
 								}
 							}()
@@ -333,7 +334,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 										DebugMode:    cfg.DebugMode,
 									}); wErr != nil {
 										if cfg.DebugMode {
-											fmt.Printf("Warning: Skills watcher error: %v\n", wErr)
+											slog.Warn("skills watcher error", "error", wErr)
 										}
 									}
 								}()
@@ -360,7 +361,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		memorySaveTool, msErr := tools.NewMemorySaveTool(memMgr, saveStore)
 		if msErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to create memory_save tool: %v\n", msErr)
+				slog.Warn("failed to create memory_save tool", "error", msErr)
 			}
 		} else {
 			coreTools = append(coreTools, memorySaveTool)
@@ -371,7 +372,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		searchTool, searchErr := tools.NewMemorySearchTool(memStore)
 		if searchErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to create memory_search tool: %v\n", searchErr)
+				slog.Warn("failed to create memory_search tool", "error", searchErr)
 			}
 		} else {
 			coreTools = append(coreTools, searchTool)
@@ -381,7 +382,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		getTool, getErr := tools.NewMemoryGetTool(memDir)
 		if getErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to create memory_get tool: %v\n", getErr)
+				slog.Warn("failed to create memory_get tool", "error", getErr)
 			}
 		} else {
 			coreTools = append(coreTools, getTool)
@@ -393,7 +394,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	schedTools, schedErr := tools.GetSchedulerTools()
 	if schedErr != nil {
 		if cfg.DebugMode {
-			fmt.Printf("Warning: Failed to create scheduler tools: %v\n", schedErr)
+			slog.Warn("failed to create scheduler tools", "error", schedErr)
 		}
 	} else {
 		schedToolsSlice = schedTools
@@ -404,7 +405,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	distillTools, distillErr := tools.GetDistillTools()
 	if distillErr != nil {
 		if cfg.DebugMode {
-			fmt.Printf("Warning: Failed to create distill tools: %v\n", distillErr)
+			slog.Warn("failed to create distill tools", "error", distillErr)
 		}
 	} else {
 		distillToolsSlice = distillTools
@@ -414,7 +415,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	processTools, procErr := tools.GetProcessTools()
 	if procErr != nil {
 		if cfg.DebugMode {
-			fmt.Printf("Warning: Failed to create process tools: %v\n", procErr)
+			slog.Warn("failed to create process tools", "error", procErr)
 		}
 	} else {
 		coreTools = append(coreTools, processTools...)
@@ -433,7 +434,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	}
 	if browserErr != nil {
 		if cfg.DebugMode {
-			fmt.Printf("Warning: Failed to create browser tools: %v\n", browserErr)
+			slog.Warn("failed to create browser tools", "error", browserErr)
 		}
 		browserToolsSlice = nil
 	}
@@ -463,7 +464,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			})
 			if clientErr != nil {
 				if cfg.DebugMode {
-					fmt.Printf("Warning: Failed to create email client: %v\n", clientErr)
+					slog.Warn("failed to create email client", "error", clientErr)
 				}
 			} else {
 				tools.SetEmailClient(client)
@@ -474,7 +475,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	emailTools, emailErr := tools.GetEmailTools()
 	if emailErr != nil {
 		if cfg.DebugMode {
-			fmt.Printf("Warning: Failed to create email tools: %v\n", emailErr)
+			slog.Warn("failed to create email tools", "error", emailErr)
 		}
 	} else if len(emailTools) > 0 {
 		emailToolsSlice = emailTools
@@ -487,7 +488,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		delegateTool, delegateErr := tools.GetDelegateTasksTool()
 		if delegateErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to create delegate_tasks tool: %v\n", delegateErr)
+				slog.Warn("failed to create delegate_tasks tool", "error", delegateErr)
 			}
 		} else {
 			coreTools = append(coreTools, delegateTool)
@@ -521,7 +522,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		)
 		if skillErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to load skills: %v\n", skillErr)
+				slog.Warn("failed to load skills", "error", skillErr)
 			}
 		} else {
 			eligible := skills.FilterEligible(loadedSkills)
@@ -533,7 +534,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				skillTool, stErr := tools.NewSkillLookupTool(loadedSkills)
 				if stErr != nil {
 					if cfg.DebugMode {
-						fmt.Printf("Warning: Failed to create skill_lookup tool: %v\n", stErr)
+						slog.Warn("failed to create skill_lookup tool", "error", stErr)
 					}
 				} else {
 					skillToolSlice = append(skillToolSlice, skillTool)
@@ -552,7 +553,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	if mcpCfg != nil && len(mcpCfg.MCPServers) > 0 {
 		if _, loadErr := cache.LoadCache(); loadErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to load tools cache: %v\n", loadErr)
+				slog.Warn("failed to load tools cache", "error", loadErr)
 			}
 		}
 
@@ -613,7 +614,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		tplRegistry, tplErr := sandbox.NewTemplateRegistry()
 		if tplErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to create template registry: %v\n", tplErr)
+				slog.Warn("failed to create template registry", "error", tplErr)
 			}
 		}
 
@@ -992,7 +993,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		created, ensErr := memory.EnsureInstructions(memDir)
 		if ensErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to ensure INSTRUCTIONS.md: %v\n", ensErr)
+				slog.Warn("failed to ensure INSTRUCTIONS.md", "error", ensErr)
 			}
 		} else if created && cfg.DebugMode {
 			fmt.Printf("Created default INSTRUCTIONS.md in %s\n", memDir)
@@ -1000,7 +1001,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		instrContent, instrErr := memory.LoadInstructions(memDir)
 		if instrErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to load INSTRUCTIONS.md: %v\n", instrErr)
+				slog.Warn("failed to load INSTRUCTIONS.md", "error", instrErr)
 			}
 		} else if instrContent != "" {
 			promptBuilder.InstructionsContent = instrContent
@@ -1016,7 +1017,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		selfContent := memory.GenerateSelfMD(selfCfg)
 		if writeErr := memory.WriteSelfMD(memDir, selfContent); writeErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to write SELF.md: %v\n", writeErr)
+				slog.Warn("failed to write SELF.md", "error", writeErr)
 			}
 		} else if cfg.DebugMode {
 			fmt.Printf("Generated SELF.md (%d bytes)\n", len(selfContent))
@@ -1027,7 +1028,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		// they are retrieved via auto-knowledge search per turn.
 		if syncErr := agent.SyncGuidanceToMemory(memDir); syncErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to sync guidance docs: %v\n", syncErr)
+				slog.Warn("failed to sync guidance docs", "error", syncErr)
 			}
 		} else if cfg.DebugMode {
 			fmt.Printf("Synced guidance docs to memory/guidance/\n")
@@ -1053,7 +1054,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		fWritten, fEnsErr := fleet.EnsureBundled(fleetsDir)
 		if fEnsErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to bootstrap bundled fleets: %v\n", fEnsErr)
+				slog.Warn("failed to bootstrap bundled fleets", "error", fEnsErr)
 			}
 		} else if fWritten > 0 && cfg.DebugMode {
 			fmt.Printf("Bootstrapped %d bundled fleets to %s\n", fWritten, fleetsDir)
@@ -1062,7 +1063,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		fleetReg, fRegErr := fleet.NewRegistry(fleetsDir)
 		if fRegErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to load fleet registry: %v\n", fRegErr)
+				slog.Warn("failed to load fleet registry", "error", fRegErr)
 			}
 		} else {
 			// Wire fleet registry to API handlers
@@ -1092,7 +1093,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				fleetOnlyTools, ftErr = tools.GetFleetTools()
 				if ftErr != nil {
 					if cfg.DebugMode {
-						fmt.Printf("Warning: Failed to create fleet internal tools: %v\n", ftErr)
+						slog.Warn("failed to create fleet internal tools", "error", ftErr)
 					}
 				}
 			}
@@ -1118,7 +1119,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			planReg, prErr := fleet.NewPlanRegistry(fleetPlansDir)
 			if prErr != nil {
 				if cfg.DebugMode {
-					fmt.Printf("Warning: Failed to load fleet plan registry: %v\n", prErr)
+					slog.Warn("failed to load fleet plan registry", "error", prErr)
 				}
 			} else {
 				// Wire plan registry to API handlers
@@ -1136,7 +1137,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		fleetPlanTools, fptErr := tools.GetFleetPlanTools()
 		if fptErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to create fleet plan tools: %v\n", fptErr)
+				slog.Warn("failed to create fleet plan tools", "error", fptErr)
 			}
 		} else {
 			fleetToolsSlice = append(fleetToolsSlice, fleetPlanTools...)
@@ -1145,7 +1146,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		fleetPlanValidateTools, fpvErr := tools.GetFleetPlanValidateTools()
 		if fpvErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to create fleet plan validate tools: %v\n", fpvErr)
+				slog.Warn("failed to create fleet plan validate tools", "error", fpvErr)
 			}
 		} else {
 			fleetToolsSlice = append(fleetToolsSlice, fleetPlanValidateTools...)
@@ -1164,7 +1165,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			ocTool, ocErr := tools.NewOpenCodeTool()
 			if ocErr != nil {
 				if cfg.DebugMode {
-					fmt.Printf("Warning: Failed to create opencode tool for wizard: %v\n", ocErr)
+					slog.Warn("failed to create opencode tool for wizard", "error", ocErr)
 				}
 			} else {
 				mainThreadTools = append(mainThreadTools, ocTool)
@@ -1181,7 +1182,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			tplTool, tplErr := tools.NewSaveSandboxTemplateTool(sandboxNodePool, sandboxIncusClient, sandboxTplRegistry, sandboxSessRegistry)
 			if tplErr != nil {
 				if cfg.DebugMode {
-					fmt.Printf("Warning: Failed to create save_sandbox_template tool: %v\n", tplErr)
+					slog.Warn("failed to create save_sandbox_template tool", "error", tplErr)
 				}
 			} else {
 				sandboxTplTools = append(sandboxTplTools, tplTool)
@@ -1190,7 +1191,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			listTplTool, listErr := tools.NewListSandboxTemplatesTool(sandboxTplRegistry)
 			if listErr != nil {
 				if cfg.DebugMode {
-					fmt.Printf("Warning: Failed to create list_sandbox_templates tool: %v\n", listErr)
+					slog.Warn("failed to create list_sandbox_templates tool", "error", listErr)
 				}
 			} else {
 				sandboxTplTools = append(sandboxTplTools, listTplTool)
@@ -1199,7 +1200,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			useTplTool, useErr := tools.NewUseSandboxTemplateTool(sandboxNodePool, sandboxTplRegistry)
 			if useErr != nil {
 				if cfg.DebugMode {
-					fmt.Printf("Warning: Failed to create use_sandbox_template tool: %v\n", useErr)
+					slog.Warn("failed to create use_sandbox_template tool", "error", useErr)
 				}
 			} else {
 				sandboxTplTools = append(sandboxTplTools, useTplTool)
@@ -1220,7 +1221,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	drillTools, drillErr := tools.GetDrillTools()
 	if drillErr != nil {
 		if cfg.DebugMode {
-			fmt.Printf("Warning: Failed to create drill tools: %v\n", drillErr)
+			slog.Warn("failed to create drill tools", "error", drillErr)
 		}
 	} else {
 		drillToolsSlice = append(drillToolsSlice, drillTools...)
@@ -1229,7 +1230,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	runDrillTool, runDrillErr := tools.NewRunDrillTool(sandboxNodePool, adrill.NewLLMProviderFromModel(llm))
 	if runDrillErr != nil {
 		if cfg.DebugMode {
-			fmt.Printf("Warning: Failed to create run_drill tool: %v\n", runDrillErr)
+			slog.Warn("failed to create run_drill tool", "error", runDrillErr)
 		}
 	} else {
 		drillToolsSlice = append(drillToolsSlice, runDrillTool)
@@ -1252,13 +1253,13 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		toolIndex, tiErr = agent.NewToolIndex(memStore.DB(), memEmbeddingFunc)
 		if tiErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to create tool index: %v\n", tiErr)
+				slog.Warn("failed to create tool index", "error", tiErr)
 			}
 		} else {
 			sortedGroups := agent.SortedGroups(toolGroups)
 			if syncErr := toolIndex.SyncTools(context.Background(), mainThreadTools, sortedGroups); syncErr != nil {
 				if cfg.DebugMode {
-					fmt.Printf("Warning: Failed to sync tool index: %v\n", syncErr)
+					slog.Warn("failed to sync tool index", "error", syncErr)
 				}
 			} else if cfg.DebugMode {
 				fmt.Printf("Tool index: %d tools indexed for semantic discovery\n", toolIndex.Count())
@@ -1282,7 +1283,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		if stErr == nil {
 			mainThreadTools = append(mainThreadTools, searchToolsTool)
 		} else if cfg.DebugMode {
-			fmt.Printf("Warning: Failed to create search_tools: %v\n", stErr)
+			slog.Warn("failed to create search_tools", "error", stErr)
 		}
 	}
 
@@ -1351,7 +1352,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		registry, regLoadErr := agent.NewFlowRegistry(registryPath)
 		if regLoadErr != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to load flow registry: %v\n", regLoadErr)
+				slog.Warn("failed to load flow registry", "error", regLoadErr)
 			}
 		} else {
 			chatAgent.FlowRegistry = registry
@@ -1360,7 +1361,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				added, syncErr := registry.SyncFromDirectory(flowsDir)
 				if syncErr != nil {
 					if cfg.DebugMode {
-						fmt.Printf("Warning: Flow registry sync failed: %v\n", syncErr)
+						slog.Warn("flow registry sync failed", "error", syncErr)
 					}
 				} else if added > 0 && cfg.DebugMode {
 					fmt.Printf("Auto-registered %d new flows from %s\n", added, flowsDir)
@@ -1372,7 +1373,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				if len(entries) > 0 {
 					if reconErr := agent.ReconcileFlowKnowledge(flowsDir, memFlowsDir, entries); reconErr != nil {
 						if cfg.DebugMode {
-							fmt.Printf("Warning: Flow knowledge reconciliation failed: %v\n", reconErr)
+							slog.Warn("flow knowledge reconciliation failed", "error", reconErr)
 						}
 					} else if cfg.DebugMode {
 						fmt.Printf("Reconciled flow knowledge docs in %s\n", memFlowsDir)

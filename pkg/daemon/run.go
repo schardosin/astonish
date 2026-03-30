@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -46,7 +47,7 @@ func Run(cfg RunConfig) error {
 	// Validate sandbox config early so invalid values are caught at startup
 	// rather than producing cryptic Incus errors during container creation.
 	if err := sandbox.ValidateSandboxConfig(&appCfg.Sandbox); err != nil {
-		log.Printf("WARNING: %v — using defaults", err)
+		slog.Warn("invalid sandbox config, using defaults", "error", err)
 	}
 
 	// Resolve port
@@ -856,7 +857,7 @@ func setupEmailTools(cfg *emailToolConfig) {
 	}
 	client, err := emailpkg.NewClient(emailCfg)
 	if err != nil {
-		log.Printf("Warning: Failed to create email client for tools: %v", err)
+		slog.Warn("failed to create email client for tools", "error", err)
 		return
 	}
 	tools.SetEmailClient(client)
@@ -884,14 +885,13 @@ func (b *fleetSchedulerBridge) AddJob(job *fleet.SchedulerJob) error {
 		},
 		Enabled: job.Enabled,
 	}
-	log.Printf("[fleet-sched-bridge] Adding job %q: mode=%s cron=%q flow=%q enabled=%v",
-		job.Name, job.Mode, job.Cron, job.Flow, job.Enabled)
+	slog.Info("adding fleet scheduler job", "component", "fleet-sched-bridge", "name", job.Name, "mode", job.Mode, "cron", job.Cron, "flow", job.Flow, "enabled", job.Enabled)
 	if err := b.sched.Store().Add(sj); err != nil {
 		return err
 	}
 	job.ID = sj.ID
 	b.sched.RefreshNextRun(sj.ID)
-	log.Printf("[fleet-sched-bridge] Job created with ID %s", sj.ID)
+	slog.Info("fleet scheduler job created", "component", "fleet-sched-bridge", "id", sj.ID)
 	return nil
 }
 

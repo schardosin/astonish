@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -253,7 +253,7 @@ func (m *GitHubMonitor) CheckForWork(isSessionActive func(sessionID string) bool
 		// Check for a new human comment past the cursor.
 		customerComment, latestCommentID, fetchErr := m.fetchLatestCustomerComment(issue.Number, seen.LastCommentID)
 		if fetchErr != nil {
-			log.Printf("[github-monitor] Error fetching comments for issue #%d: %v", issue.Number, fetchErr)
+			slog.Error("error fetching comments for issue", "component", "github-monitor", "issue", issue.Number, "error", fetchErr)
 			continue
 		}
 
@@ -267,8 +267,7 @@ func (m *GitHubMonitor) CheckForWork(isSessionActive func(sessionID string) bool
 			continue // no new human comment — nothing to do
 		}
 
-		log.Printf("[github-monitor] New human comment #%d on issue #%d (cursor was %d)",
-			customerComment.ID, issue.Number, seen.LastCommentID)
+		slog.Info("new human comment detected", "component", "github-monitor", "comment_id", customerComment.ID, "issue", issue.Number, "cursor", seen.LastCommentID)
 
 		callback(WorkItem{
 			IssueNumber:   issue.Number,
@@ -280,7 +279,7 @@ func (m *GitHubMonitor) CheckForWork(isSessionActive func(sessionID string) bool
 	}
 
 	if err := m.SaveState(); err != nil {
-		log.Printf("[github-monitor] Warning: failed to save state after poll: %v", err)
+		slog.Warn("failed to save state after poll", "component", "github-monitor", "error", err)
 	}
 
 	return nil
@@ -400,7 +399,7 @@ func (m *GitHubMonitor) MarkSeen(issueNumber int, sessionID string, issueTitle s
 	}
 
 	if err := m.saveStateLocked(); err != nil {
-		log.Printf("[github-monitor] Warning: failed to persist state after marking issue #%d seen: %v", issueNumber, err)
+		slog.Warn("failed to persist state after marking issue seen", "component", "github-monitor", "issue", issueNumber, "error", err)
 	}
 }
 
@@ -419,7 +418,7 @@ func (m *GitHubMonitor) UpdateCursor(issueNumber int, commentID int64) {
 	if commentID > s.LastCommentID {
 		s.LastCommentID = commentID
 		if err := m.saveStateLocked(); err != nil {
-			log.Printf("[github-monitor] Warning: failed to persist cursor for issue #%d: %v", issueNumber, err)
+			slog.Warn("failed to persist cursor", "component", "github-monitor", "issue", issueNumber, "error", err)
 		}
 	}
 }
@@ -441,10 +440,10 @@ func (m *GitHubMonitor) IncrementRetryCount(issueNumber int, errMsg string) {
 	s.LastError = errMsg
 
 	if err := m.saveStateLocked(); err != nil {
-		log.Printf("[github-monitor] Warning: failed to persist retry count for issue #%d: %v", issueNumber, err)
+		slog.Warn("failed to persist retry count", "component", "github-monitor", "issue", issueNumber, "error", err)
 	}
 
-	log.Printf("[github-monitor] Issue #%d failed (retry %d/%d): %s", issueNumber, s.RetryCount, maxRetryCount, errMsg)
+	slog.Error("issue failed", "component", "github-monitor", "issue", issueNumber, "retry", s.RetryCount, "max_retries", maxRetryCount, "error", errMsg)
 }
 
 // ResetRetryCount clears the failure state for an issue, allowing it to be
@@ -467,7 +466,7 @@ func (m *GitHubMonitor) ResetRetryCount(issueNumber int) error {
 		return fmt.Errorf("persisting state: %w", err)
 	}
 
-	log.Printf("[github-monitor] Issue #%d retry count reset", issueNumber)
+	slog.Info("issue retry count reset", "component", "github-monitor", "issue", issueNumber)
 	return nil
 }
 
@@ -487,7 +486,7 @@ func (m *GitHubMonitor) ClearRetryOnSuccess(issueNumber int) {
 		s.LastFailedAt = time.Time{}
 		s.LastError = ""
 		if err := m.saveStateLocked(); err != nil {
-			log.Printf("[github-monitor] Warning: failed to clear retry state for issue #%d: %v", issueNumber, err)
+			slog.Warn("failed to clear retry state", "component", "github-monitor", "issue", issueNumber, "error", err)
 		}
 	}
 }
@@ -573,7 +572,7 @@ func (m *GitHubMonitor) MarkAllCurrentAsSeen() error {
 	}
 
 	m.state.LastPollAt = time.Now()
-	log.Printf("[github-monitor] Marked %d existing issues as seen for plan %q", len(issues), m.PlanKey)
+	slog.Info("marked existing issues as seen", "component", "github-monitor", "count", len(issues), "plan", m.PlanKey)
 
 	return m.saveStateLocked()
 }

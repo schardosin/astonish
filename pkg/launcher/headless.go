@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/agent"
@@ -77,7 +78,7 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 	credTools, credErr := tools.GetCredentialTools()
 	if credErr != nil {
 		if cfg.DebugMode {
-			fmt.Printf("[headless] Warning: Failed to create credential tools: %v\n", credErr)
+			slog.Warn("failed to create credential tools", "component", "headless", "error", credErr)
 		}
 	} else {
 		internalTools = append(internalTools, credTools...)
@@ -87,7 +88,7 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 	processTools, procErr := tools.GetProcessTools()
 	if procErr != nil {
 		if cfg.DebugMode {
-			fmt.Printf("[headless] Warning: Failed to create process tools: %v\n", procErr)
+			slog.Warn("failed to create process tools", "component", "headless", "error", procErr)
 		}
 	} else {
 		internalTools = append(internalTools, processTools...)
@@ -98,7 +99,7 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 	browserTools, browserErr := tools.GetBrowserTools(browserMgr)
 	if browserErr != nil {
 		if cfg.DebugMode {
-			fmt.Printf("[headless] Warning: Failed to create browser tools: %v\n", browserErr)
+			slog.Warn("failed to create browser tools", "component", "headless", "error", browserErr)
 		}
 	} else {
 		internalTools = append(internalTools, browserTools...)
@@ -122,12 +123,12 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 		mcpManager, err = mcp.NewManager()
 		if err != nil {
 			if cfg.DebugMode {
-				fmt.Printf("[headless] Warning: Failed to create MCP manager: %v\n", err)
+				slog.Warn("failed to create mcp manager", "component", "headless", "error", err)
 			}
 		} else {
 			if err := mcpManager.InitializeSelectiveToolsets(ctx, requiredServers); err != nil {
 				if cfg.DebugMode {
-					fmt.Printf("[headless] Warning: Failed to initialize MCP toolsets: %v\n", err)
+					slog.Warn("failed to initialize mcp toolsets", "component", "headless", "error", err)
 				}
 			} else {
 				mcpToolsets = mcpManager.GetToolsets()

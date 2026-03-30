@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -225,7 +226,9 @@ func (s *Scheduler) refreshNextRuns() {
 			stored := s.store.Get(job.ID)
 			if stored != nil {
 				stored.NextRun = nextRun
-				_ = s.store.Update(stored)
+				if err := s.store.Update(stored); err != nil {
+					slog.Warn("failed to update scheduled job next run time", "job_id", stored.ID, "error", err)
+				}
 			}
 		}
 	}
@@ -244,7 +247,9 @@ func (s *Scheduler) RefreshNextRun(jobID string) {
 		stored := s.store.Get(jobID)
 		if stored != nil {
 			stored.NextRun = nextRun
-			_ = s.store.Update(stored)
+			if err := s.store.Update(stored); err != nil {
+				slog.Warn("failed to update scheduled job next run time", "job_id", stored.ID, "error", err)
+			}
 			s.logger.Printf("[scheduler] Refreshed next run for job %q: %s", stored.Name, nextRun.Format(time.RFC3339))
 		}
 	}

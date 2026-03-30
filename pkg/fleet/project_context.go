@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,7 +48,7 @@ func GenerateProjectContext(ctx context.Context, workspaceDir string, cfg *Proje
 	case "load_file":
 		return LoadProjectContextFile(workspaceDir, cfg)
 	default:
-		log.Printf("[fleet-context] Unknown project context generator %q, skipping", cfg.Generator)
+		slog.Warn("unknown project context generator", "component", "fleet-context", "generator", cfg.Generator)
 		return ""
 	}
 }
@@ -66,7 +66,7 @@ func LoadProjectContextFile(workspaceDir string, cfg *ProjectContextConfig) stri
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("[fleet-context] Failed to read project context file %s: %v", path, err)
+			slog.Error("failed to read project context file", "component", "fleet-context", "path", path, "error", err)
 		}
 		return ""
 	}
@@ -83,13 +83,13 @@ func LoadProjectContextFile(workspaceDir string, cfg *ProjectContextConfig) stri
 // analyze the codebase and generate or update the project context file.
 func generateViaOpenCodeInit(ctx context.Context, workspaceDir string, cfg *ProjectContextConfig) string {
 	if OpenCodeBinaryFinder == nil {
-		log.Printf("[fleet-context] OpenCode binary finder not configured, skipping project context generation")
+		slog.Warn("opencode binary finder not configured, skipping project context generation", "component", "fleet-context")
 		return ""
 	}
 
 	binary, err := OpenCodeBinaryFinder()
 	if err != nil {
-		log.Printf("[fleet-context] OpenCode binary not found, skipping project context generation: %v", err)
+		slog.Warn("opencode binary not found, skipping project context generation", "component", "fleet-context", "error", err)
 		return ""
 	}
 
@@ -118,7 +118,7 @@ func generateViaOpenCodeInit(ctx context.Context, workspaceDir string, cfg *Proj
 	}
 	cmdArgs = append(cmdArgs, task)
 
-	log.Printf("[fleet-context] Generating project context via OpenCode /init in %s (timeout: %s)", workspaceDir, projectContextTimeout)
+	slog.Info("generating project context via opencode /init", "component", "fleet-context", "workspace", workspaceDir, "timeout", projectContextTimeout)
 	start := time.Now()
 
 	cmd := exec.CommandContext(genCtx, binary, cmdArgs...)
@@ -141,12 +141,12 @@ func generateViaOpenCodeInit(ctx context.Context, workspaceDir string, cfg *Proj
 	// Drain stdout (NDJSON events) to prevent blocking
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Printf("[fleet-context] Failed to create stdout pipe: %v", err)
+		slog.Error("failed to create stdout pipe", "component", "fleet-context", "error", err)
 		return ""
 	}
 
 	if err := cmd.Start(); err != nil {
-		log.Printf("[fleet-context] Failed to start OpenCode: %v", err)
+		slog.Error("failed to start opencode", "component", "fleet-context", "error", err)
 		return ""
 	}
 
@@ -163,14 +163,13 @@ func generateViaOpenCodeInit(ctx context.Context, workspaceDir string, cfg *Proj
 	elapsed := time.Since(start)
 
 	if genCtx.Err() == context.DeadlineExceeded {
-		log.Printf("[fleet-context] OpenCode /init timed out after %s", elapsed.Round(time.Second))
+		slog.Warn("opencode /init timed out", "component", "fleet-context", "elapsed", elapsed.Round(time.Second))
 		// Still try to read the file; partial generation may have produced something useful
 	} else if err != nil {
-		log.Printf("[fleet-context] OpenCode /init failed after %s: %v (stderr: %s)",
-			elapsed.Round(time.Second), err, stderrBuf.String())
+		slog.Error("opencode /init failed", "component", "fleet-context", "elapsed", elapsed.Round(time.Second), "error", err, "stderr", stderrBuf.String())
 		// Still try to read the file
 	} else {
-		log.Printf("[fleet-context] OpenCode /init completed in %s", elapsed.Round(time.Second))
+		slog.Info("opencode /init completed", "component", "fleet-context", "elapsed", elapsed.Round(time.Second))
 	}
 
 	// Read the generated file

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -292,8 +292,7 @@ func (c *GitHubIssueChannel) postCommentAsync(msg Message) {
 
 	commentID, err := c.postComment(body)
 	if err != nil {
-		log.Printf("[github-channel] Failed to post comment for @%s on issue #%d: %v",
-			msg.Sender, c.issueNumber, err)
+		slog.Error("failed to post comment", "component", "github-channel", "sender", msg.Sender, "issue", c.issueNumber, "error", err)
 		return
 	}
 
@@ -390,13 +389,13 @@ func (c *GitHubIssueChannel) pollComments() {
 	out, err := ghCommand(c.ghToken, "api",
 		fmt.Sprintf("repos/%s/issues/%d/comments?since=%s&per_page=100", c.repo, c.issueNumber, since))
 	if err != nil {
-		log.Printf("[github-channel] Error polling comments on issue #%d: %v", c.issueNumber, err)
+		slog.Error("error polling comments", "component", "github-channel", "issue", c.issueNumber, "error", err)
 		return
 	}
 
 	var comments []ghIssueComment
 	if err := json.Unmarshal([]byte(out), &comments); err != nil {
-		log.Printf("[github-channel] Error parsing comments: %v", err)
+		slog.Error("error parsing comments", "component", "github-channel", "error", err)
 		return
 	}
 
@@ -446,8 +445,7 @@ func (c *GitHubIssueChannel) pollComments() {
 
 		c.notifySubscribers(msg)
 
-		log.Printf("[github-channel] Ingested customer comment #%d from @%s on issue #%d",
-			comment.ID, comment.User.Login, c.issueNumber)
+		slog.Info("ingested customer comment", "component", "github-channel", "comment_id", comment.ID, "author", comment.User.Login, "issue", c.issueNumber)
 	}
 
 	// Advance the poll timestamp.
@@ -464,7 +462,7 @@ func (c *GitHubIssueChannel) SeedLastCommentID() {
 	out, err := ghCommand(c.ghToken, "api",
 		fmt.Sprintf("repos/%s/issues/%d/comments?per_page=100", c.repo, c.issueNumber))
 	if err != nil {
-		log.Printf("[github-channel] Warning: could not seed comment cursor: %v", err)
+		slog.Warn("could not seed comment cursor", "component", "github-channel", "error", err)
 		return
 	}
 

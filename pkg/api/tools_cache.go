@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -45,7 +45,7 @@ func SetServerStatus(name string, status cache.ServerStatus) {
 	cache.UpdateServerStatus(status)
 	// Persist the cache
 	if err := cache.SaveCache(); err != nil {
-		log.Printf("Warning: failed to save tools cache after status update: %v", err)
+		slog.Warn("failed to save tools cache after status update", "error", err)
 	}
 }
 
@@ -77,14 +77,14 @@ func MCPStatusHandler(w http.ResponseWriter, r *http.Request) {
 
 // loadToolsInternal does the actual work of loading tools (must NOT hold the lock)
 func loadToolsInternal(ctx context.Context) []ToolInfo {
-	log.Printf("loadToolsInternal: Starting to load tools...")
+	slog.Info("starting to load tools")
 	var allTools []ToolInfo
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// Get internal tools
 	internalTools, err := tools.GetInternalTools()
 	if err != nil {
-		log.Printf("Warning: failed to get internal tools: %v", err)
+		slog.Warn("failed to get internal tools", "error", err)
 	} else {
 		for _, t := range internalTools {
 			allTools = append(allTools, ToolInfo{
@@ -98,10 +98,10 @@ func loadToolsInternal(ctx context.Context) []ToolInfo {
 	// Get MCP tools
 	mcpManager, err := mcp.NewManager()
 	if err != nil {
-		log.Printf("Warning: failed to create MCP manager: %v", err)
+		slog.Warn("failed to create mcp manager", "error", err)
 	} else {
 		if err := mcpManager.InitializeToolsets(ctx); err != nil {
-			log.Printf("Warning: failed to initialize MCP toolsets: %v", err)
+			slog.Warn("failed to initialize mcp toolsets", "error", err)
 		}
 
 		// Process init results to update server status
@@ -128,7 +128,7 @@ func loadToolsInternal(ctx context.Context) []ToolInfo {
 			mcpToolsList, err := namedToolset.Toolset.Tools(minimalCtx)
 			if err != nil {
 				stderrOutput := mcp.GetStderr(namedToolset.Stderr)
-				log.Printf("Warning: failed to get tools from %s: %v (Stderr: %s)", serverName, err, stderrOutput)
+				slog.Warn("failed to get tools from server", "server", serverName, "error", err, "stderr", stderrOutput)
 				// Don't persist error status for context cancellation (transient timeout errors)
 				// These happen when the refresh times out, not when the server is broken
 				if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "context canceled") {
@@ -189,7 +189,7 @@ func InitToolsCache(ctx context.Context) {
 	// Try to load from persistent cache first (fast path)
 	persistentCache, err := cache.LoadCache()
 	if err == nil && len(persistentCache.Tools) > 0 {
-		log.Printf("Loading tools from persistent cache (%d tools)...", len(persistentCache.Tools))
+		slog.Info("loading tools from persistent cache", "count", len(persistentCache.Tools))
 
 		// Convert cache.ToolEntry to api.ToolInfo
 		var allTools []ToolInfo
@@ -208,7 +208,7 @@ func InitToolsCache(ctx context.Context) {
 		// If persistent cache doesn't have internal tools (old cache format),
 		// add them now and update the cache
 		if !hasInternalTools {
-			log.Printf("Adding internal tools to cache (not found in persistent cache)")
+			slog.Info("adding internal tools to cache")
 			internalTools, err := tools.GetInternalTools()
 			if err == nil {
 				for _, t := range internalTools {
@@ -231,7 +231,7 @@ func InitToolsCache(ctx context.Context) {
 					}
 					cache.AddServerTools("internal", internalEntries, "internal-tools-v1")
 					cache.SaveCache()
-					log.Printf("[Cache] Added %d internal tools to persistent cache", len(internalEntries))
+					slog.Info("added internal tools to persistent cache", "component", "cache", "count", len(internalEntries))
 				}()
 			}
 		}
@@ -242,7 +242,7 @@ func InitToolsCache(ctx context.Context) {
 		globalToolsCache.loading = false
 		globalToolsCache.mu.Unlock()
 
-		log.Printf("Tools cache initialized from persistent cache with %d tools", len(allTools))
+		slog.Info("tools cache initialized from persistent cache", "count", len(allTools))
 
 		// Validate checksums in background - refresh any changed servers
 		go validateAndRefreshChangedServers(ctx, persistentCache)
@@ -250,7 +250,7 @@ func InitToolsCache(ctx context.Context) {
 	}
 
 	// Persistent cache is empty - do full initialization and populate cache
-	log.Printf("Persistent cache empty or missing, doing full initialization...")
+	slog.Info("persistent cache empty or missing, doing full initialization")
 	allTools := loadToolsInternal(ctx)
 
 	// Store results
@@ -263,7 +263,7 @@ func InitToolsCache(ctx context.Context) {
 	// Also populate persistent cache for next time
 	go populatePersistentCache(ctx, allTools)
 
-	log.Printf("Tools cache initialized with %d tools", len(allTools))
+	slog.Info("tools cache initialized", "count", len(allTools))
 }
 
 // populatePersistentCache saves tools to persistent cache grouped by server
@@ -271,7 +271,7 @@ func populatePersistentCache(ctx context.Context, allTools []ToolInfo) {
 	// Load MCP config for checksum computation
 	mcpCfg, err := config.LoadMCPConfig()
 	if err != nil {
-		log.Printf("[Cache] Warning: Could not load MCP config for checksums: %v", err)
+		slog.Warn("could not load mcp config for checksums", "component", "cache", "error", err)
 		mcpCfg = nil
 	}
 
@@ -297,14 +297,14 @@ func populatePersistentCache(ctx context.Context, allTools []ToolInfo) {
 			}
 		}
 		cache.AddServerTools(serverName, tools, checksum)
-		log.Printf("[Cache] Added %d tools for server '%s' (checksum: %s)", len(tools), serverName, checksum[:min(8, len(checksum))])
+		slog.Info("added tools for server to persistent cache", "component", "cache", "count", len(tools), "server", serverName, "checksum", checksum[:min(8, len(checksum))])
 	}
 
 	if err := cache.SaveCache(); err != nil {
-		log.Printf("[Cache] Warning: Failed to save persistent cache: %v", err)
+		slog.Warn("failed to save persistent cache", "component", "cache", "error", err)
 	} else {
 
-		log.Printf("[Cache] Persistent cache populated from full initialization (%d servers)", len(toolsByServer))
+		slog.Info("persistent cache populated from full initialization", "component", "cache", "servers", len(toolsByServer))
 	}
 }
 
@@ -357,7 +357,7 @@ func RefreshMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 func validateAndRefreshChangedServers(ctx context.Context, persistentCache *cache.PersistentToolsCache) {
 	mcpCfg, err := config.LoadMCPConfig()
 	if err != nil {
-		log.Printf("[Cache] Warning: Could not load MCP config for validation: %v", err)
+		slog.Warn("could not load mcp config for validation", "component", "cache", "error", err)
 		return
 	}
 	if mcpCfg.MCPServers == nil {
@@ -372,10 +372,10 @@ func validateAndRefreshChangedServers(ctx context.Context, persistentCache *cach
 		cachedChecksum := persistentCache.ServerChecksums[serverName]
 
 		if cachedChecksum == "" {
-			log.Printf("[Cache] Server '%s' is new (not in cache), will refresh", serverName)
+			slog.Info("server is new, will refresh", "component", "cache", "server", serverName)
 			serversToRefresh = append(serversToRefresh, serverName)
 		} else if cachedChecksum != currentChecksum {
-			log.Printf("[Cache] Server '%s' config changed (checksum mismatch), will refresh", serverName)
+			slog.Info("server config changed, will refresh", "component", "cache", "server", serverName)
 			serversToRefresh = append(serversToRefresh, serverName)
 		}
 	}
@@ -383,36 +383,36 @@ func validateAndRefreshChangedServers(ctx context.Context, persistentCache *cach
 	// Also check for servers in cache that were removed from config
 	for serverName := range persistentCache.ServerChecksums {
 		if _, exists := mcpCfg.MCPServers[serverName]; !exists {
-			log.Printf("[Cache] Server '%s' was removed from config, removing from cache", serverName)
+			slog.Info("server removed from config, removing from cache", "component", "cache", "server", serverName)
 			cache.RemoveServer(serverName)
 		}
 	}
 
 	if len(serversToRefresh) == 0 {
-		log.Printf("[Cache] All servers are up to date, no refresh needed")
+		slog.Info("all servers are up to date, no refresh needed", "component", "cache")
 		return
 	}
 
-	log.Printf("[Cache] Refreshing %d servers: %v", len(serversToRefresh), serversToRefresh)
+	slog.Info("refreshing servers", "component", "cache", "count", len(serversToRefresh), "servers", serversToRefresh)
 
 	// Initialize MCP manager and refresh each changed server
 	mcpManager, err := mcp.NewManager()
 	if err != nil {
-		log.Printf("[Cache] Warning: Failed to create MCP manager for refresh: %v", err)
+		slog.Warn("failed to create mcp manager for refresh", "component", "cache", "error", err)
 		return
 	}
 
 	for _, serverName := range serversToRefresh {
 		namedToolset, err := mcpManager.InitializeSingleToolset(ctx, serverName)
 		if err != nil {
-			log.Printf("[Cache] Warning: Failed to initialize server '%s': %v", serverName, err)
+			slog.Warn("failed to initialize server", "component", "cache", "server", serverName, "error", err)
 			continue
 		}
 
 		minimalCtx := &minimalReadonlyContext{Context: ctx}
 		mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
 		if err != nil {
-			log.Printf("[Cache] Warning: Failed to get tools from server '%s': %v (Stderr: %s)", serverName, err, mcp.GetStderr(namedToolset.Stderr))
+			slog.Warn("failed to get tools from server", "component", "cache", "server", serverName, "error", err, "stderr", mcp.GetStderr(namedToolset.Stderr))
 			continue
 		}
 
@@ -440,13 +440,13 @@ func validateAndRefreshChangedServers(ctx context.Context, persistentCache *cach
 		serverCfg := mcpCfg.MCPServers[serverName]
 		checksum := cache.ComputeServerChecksum(serverCfg.Command, serverCfg.Args, serverCfg.Env)
 		cache.AddServerTools(serverName, persistentTools, checksum)
-		log.Printf("[Cache] Refreshed server '%s': %d tools", serverName, len(newTools))
+		slog.Info("refreshed server", "component", "cache", "server", serverName, "tools", len(newTools))
 	}
 
 	if err := cache.SaveCache(); err != nil {
-		log.Printf("[Cache] Warning: Failed to save persistent cache after refresh: %v", err)
+		slog.Warn("failed to save persistent cache after refresh", "component", "cache", "error", err)
 	} else {
-		log.Printf("[Cache] Persistent cache saved after refreshing %d servers", len(serversToRefresh))
+		slog.Info("persistent cache saved after refresh", "component", "cache", "servers", len(serversToRefresh))
 	}
 }
 
@@ -473,7 +473,7 @@ func AddServerToolsToCache(serverName string, newTools []ToolInfo) {
 
 	// Add the new tools to the existing cache
 	globalToolsCache.tools = append(globalToolsCache.tools, newTools...)
-	log.Printf("Added %d tools from server '%s' to cache (total: %d)", len(newTools), serverName, len(globalToolsCache.tools))
+	slog.Info("added tools to cache", "server", serverName, "added", len(newTools), "total", len(globalToolsCache.tools))
 }
 
 // RemoveServerToolsFromCache removes all tools from a specific server
@@ -493,17 +493,17 @@ func RemoveServerToolsFromCache(serverName string) {
 		}
 	}
 	globalToolsCache.tools = filtered
-	log.Printf("Removed %d tools from server '%s' from cache (total: %d)", removedCount, serverName, len(globalToolsCache.tools))
+	slog.Info("removed tools from cache", "server", serverName, "removed", removedCount, "total", len(globalToolsCache.tools))
 }
 
 // RefreshToolsCache forces a refresh of the tools cache
 func RefreshToolsCache(ctx context.Context) {
-	log.Printf("RefreshToolsCache: Called, attempting to refresh...")
+	slog.Info("refresh tools cache called")
 	globalToolsCache.mu.Lock()
 
 	// If already loading, skip
 	if globalToolsCache.loading {
-		log.Printf("RefreshToolsCache: Already loading, skipping")
+		slog.Debug("tools cache already loading, skipping refresh")
 		globalToolsCache.mu.Unlock()
 		return
 	}
@@ -530,11 +530,11 @@ func RefreshToolsCache(ctx context.Context) {
 		globalToolsCache.loaded = true
 		globalToolsCache.loading = false
 		globalToolsCache.mu.Unlock()
-		log.Printf("Tools cache refreshed with %d tools", len(allTools))
+		slog.Info("tools cache refreshed", "count", len(allTools))
 
 	case <-time.After(35 * time.Second):
 		// Hard timeout - just reset the flag and move on
-		log.Printf("RefreshToolsCache: TIMEOUT after 35s, resetting loading flag")
+		slog.Warn("tools cache refresh timed out after 35s")
 		globalToolsCache.mu.Lock()
 		globalToolsCache.loading = false
 		globalToolsCache.mu.Unlock()
@@ -543,7 +543,7 @@ func RefreshToolsCache(ctx context.Context) {
 
 // RefreshSingleServer refreshes/adds a single server to the cache
 func RefreshSingleServer(ctx context.Context, serverName string) error {
-	log.Printf("RefreshSingleServer: Refreshing %s...", serverName)
+	slog.Info("refreshing single server", "server", serverName)
 
 	mcpManager, err := mcp.NewManager()
 	if err != nil {

@@ -3,7 +3,7 @@ package fleet
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -97,7 +97,7 @@ func RouteWithLLM(ctx context.Context, msg Message, fleetCfg *FleetConfig, llm m
 	var responseText strings.Builder
 	for resp, err := range llm.GenerateContent(routeCtx, req, false) {
 		if err != nil {
-			log.Printf("[fleet-router] LLM error, falling back to regex: %v", err)
+			slog.Error("llm routing error, falling back to regex", "component", "fleet-router", "error", err)
 			return fallbackRoute(msg, fleetCfg)
 		}
 		if resp != nil && resp.Content != nil {
@@ -189,7 +189,7 @@ func parseRoutingResponse(raw, senderKey string, talksTo []string, msg Message, 
 	}
 
 	// LLM returned something unexpected; fall back to regex
-	log.Printf("[fleet-router] LLM returned unexpected value %q, falling back to regex", raw)
+	slog.Warn("llm returned unexpected routing value, falling back to regex", "component", "fleet-router", "value", raw)
 	return fallbackRoute(msg, fleetCfg)
 }
 
@@ -280,8 +280,7 @@ func rerouteViaIntermediary(msg Message, senderKey string, fleetCfg *FleetConfig
 				continue
 			}
 			if fleetCfg.CanTalkTo(intermediary, target) {
-				log.Printf("[fleet-router] Re-route: @%s mentioned @%s (unreachable), routing to @%s (intermediary)",
-					senderKey, target, intermediary)
+				slog.Info("re-routing via intermediary", "component", "fleet-router", "sender", senderKey, "target", target, "intermediary", intermediary)
 				return &RoutingResult{
 					Target: intermediary,
 					Reason: fmt.Sprintf("re-route: @%s mentioned unreachable @%s, routing via @%s",

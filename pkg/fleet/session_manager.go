@@ -3,7 +3,7 @@ package fleet
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"regexp"
 	"strings"
 	"sync"
@@ -244,13 +244,13 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 		fs.cancel = cancel
 	}
 	cancel := fs.cancel
-	log.Printf("[fleet] Session %s started for fleet %q", fs.ID, fs.FleetKey)
+	slog.Info("session started", "component", "fleet", "session_id", fs.ID, "fleet", fs.FleetKey)
 	defer func() {
 		cancel()
 		fs.mu.Lock()
 		fs.lastError = runErr
 		fs.mu.Unlock()
-		log.Printf("[fleet] Session %s stopped", fs.ID)
+		slog.Info("session stopped", "component", "fleet", "session_id", fs.ID)
 		if fs.OnSessionDone != nil {
 			fs.OnSessionDone(fs.ID, runErr)
 		}
@@ -266,7 +266,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 	if fs.ResumeTarget != "" {
 		pendingTarget = fs.ResumeTarget
 		fs.ResumeTarget = "" // consume it
-		log.Printf("[fleet] Resuming session with target agent %s", pendingTarget)
+		slog.Info("resuming session with target agent", "component", "fleet", "agent", pendingTarget)
 	}
 
 	// Track consecutive agent failures to prevent infinite error loops.
@@ -288,7 +288,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 			// We already know who should act next from a previous routing decision.
 			targetAgent = pendingTarget
 			pendingTarget = ""
-			log.Printf("[fleet] Auto-chaining to agent %s", targetAgent)
+			slog.Info("auto-chaining to agent", "component", "fleet", "agent", targetAgent)
 		} else {
 			// Wait for the next message.
 			// For headless sessions, arm the idle watchdog so the session
@@ -322,8 +322,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 				// parent is still alive. Activate the entry point to reassess.
 				if fs.Headless && waitCtx.Err() == context.DeadlineExceeded {
 					entryPoint := fs.FleetConfig.GetEntryPoint()
-					log.Printf("[fleet] Idle watchdog fired for session %s (idle >%v), activating entry point @%s",
-						fs.ID, idleWatchdogTimeout, entryPoint)
+					slog.Warn("idle watchdog fired", "component", "fleet", "session_id", fs.ID, "idle_timeout", idleWatchdogTimeout, "entry_point", entryPoint)
 
 					watchdogMsg := Message{
 						ID:        uuid.New().String(),
@@ -331,7 +330,9 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 						Text:      fmt.Sprintf("Idle watchdog: no activity for %v. Re-activating @%s to reassess.", idleWatchdogTimeout, entryPoint),
 						Timestamp: time.Now(),
 					}
-					_ = fs.Channel.PostMessage(ctx, watchdogMsg)
+					if err := fs.Channel.PostMessage(ctx, watchdogMsg); err != nil {
+						slog.Warn("failed to post fleet session message", "error", err)
+					}
 					fs.postExternal(watchdogMsg)
 					fs.notifyMessagePosted(watchdogMsg)
 
@@ -389,8 +390,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 		response, err := fs.activateAgent(ctx, targetAgent)
 		if err != nil {
 			consecutiveErrors++
-			log.Printf("[fleet] Error activating agent %s (%d/%d): %v",
-				targetAgent, consecutiveErrors, maxConsecutiveErrors, err)
+			slog.Error("error activating agent", "component", "fleet", "agent", targetAgent, "consecutive_errors", consecutiveErrors, "max_errors", maxConsecutiveErrors, "error", err)
 
 			errMsg := Message{
 				ID:         uuid.New().String(),
@@ -400,7 +400,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 				Timestamp:  time.Now(),
 			}
 			if postErr := fs.Channel.PostMessage(ctx, errMsg); postErr != nil {
-				log.Printf("[fleet] Error posting error message: %v", postErr)
+				slog.Error("error posting error message", "component", "fleet", "error", postErr)
 			}
 			fs.postExternal(errMsg)
 			fs.notifyMessagePosted(errMsg)
@@ -409,7 +409,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 			// In headless mode there is no human to fix the problem, so
 			// continuing would just loop forever.
 			if consecutiveErrors >= maxConsecutiveErrors {
-				log.Printf("[fleet] Session %s stopping after %d consecutive errors", fs.ID, consecutiveErrors)
+				slog.Error("session stopping after consecutive errors", "component", "fleet", "session_id", fs.ID, "consecutive_errors", consecutiveErrors)
 				stopMsg := Message{
 					ID:     uuid.New().String(),
 					Sender: "system",
@@ -417,7 +417,9 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 						"Last error from %s: %v", consecutiveErrors, targetAgent, err),
 					Timestamp: time.Now(),
 				}
-				_ = fs.Channel.PostMessage(ctx, stopMsg)
+				if postErr := fs.Channel.PostMessage(ctx, stopMsg); postErr != nil {
+					slog.Warn("failed to post fleet session message", "error", postErr)
+				}
 				fs.postExternal(stopMsg)
 				fs.notifyMessagePosted(stopMsg)
 				fs.setState(StateStopped, "")
@@ -430,7 +432,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 			// send a new message.
 			if isRetriableError(err) {
 				pendingTarget = targetAgent
-				log.Printf("[fleet] Will retry agent %s (retriable error)", targetAgent)
+				slog.Info("will retry agent", "component", "fleet", "agent", targetAgent)
 			}
 
 			continue
@@ -442,8 +444,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 		// Use LLM to determine who should act next. The routing decision
 		// determines who "owns" this message in memory.
 		routing := RouteWithLLM(ctx, response, fs.FleetConfig, fs.LLM)
-		log.Printf("[fleet] Routing decision for @%s's message: target=%s reason=%s",
-			response.Sender, routing.Target, routing.Reason)
+		slog.Info("routing decision", "component", "fleet", "sender", response.Sender, "target", routing.Target, "reason", routing.Reason)
 
 		// Stamp MemoryKeys based on routing decision:
 		//   → customer: agent's own memory only (customer sees it externally)
@@ -461,7 +462,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 		// GitHub posting is deferred until after routing to avoid flooding
 		// the issue with intermediate messages during self-routing chains).
 		if postErr := fs.Channel.PostMessage(ctx, response); postErr != nil {
-			log.Printf("[fleet] Error posting agent response: %v", postErr)
+			slog.Error("error posting agent response", "component", "fleet", "error", postErr)
 			continue
 		}
 		fs.notifyMessagePosted(response)
@@ -492,7 +493,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 			// In headless mode, exit cleanly. The plan scheduler will
 			// detect the customer's reply and recover the session.
 			if fs.Headless {
-				log.Printf("[fleet] Session %s: ball moved to customer, exiting (headless)", fs.ID)
+				slog.Info("ball moved to customer, exiting headless session", "component", "fleet", "session_id", fs.ID)
 				return nil
 			}
 
@@ -514,7 +515,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 			// In headless mode, exit cleanly. The plan scheduler will
 			// detect the customer's reply and recover the session.
 			if fs.Headless {
-				log.Printf("[fleet] Session %s: no agent has pending work, exiting (headless)", fs.ID)
+				slog.Info("no agent has pending work, exiting headless session", "component", "fleet", "session_id", fs.ID)
 				return nil
 			}
 			continue
@@ -528,8 +529,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 			if fs.FleetConfig.CanTalkTo(response.Sender, routing.Target) {
 				pendingTarget = routing.Target
 			} else {
-				log.Printf("[fleet] Warning: LLM routed to %s but %s cannot talk to them, ignoring",
-					routing.Target, response.Sender)
+				slog.Warn("llm routed to unreachable agent, ignoring", "component", "fleet", "target", routing.Target, "sender", response.Sender)
 			}
 		}
 	}
@@ -637,7 +637,7 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 			},
 		}
 		if postErr := fs.Channel.PostMessage(ctx, msg); postErr != nil {
-			log.Printf("[fleet] Error posting intermediate message from %s: %v", agentKey, postErr)
+			slog.Error("error posting intermediate message", "component", "fleet", "agent", agentKey, "error", postErr)
 			return
 		}
 		fs.notifyMessagePosted(msg)
@@ -794,7 +794,7 @@ func (fs *FleetSession) Stop() {
 		fs.cancel()
 	}
 	if err := fs.Channel.Close(); err != nil {
-		log.Printf("[fleet] Error closing channel: %v", err)
+		slog.Error("error closing channel", "component", "fleet", "error", err)
 	}
 }
 

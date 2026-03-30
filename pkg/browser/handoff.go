@@ -102,7 +102,7 @@ func (h *HandoffServer) Start(opts HandoffOpts) (*HandoffInfo, error) {
 		opts.Port = 9222
 	}
 	if opts.BindAddress == "" {
-		opts.BindAddress = "0.0.0.0"
+		opts.BindAddress = "127.0.0.1"
 	}
 
 	// Extract the internal Chrome HTTP host:port from the rod CDP URL.

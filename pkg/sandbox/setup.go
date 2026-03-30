@@ -2,7 +2,7 @@ package sandbox
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 )
 
 // SandboxStatus holds information about the sandbox runtime environment.
@@ -54,7 +54,7 @@ func SetupSandboxRuntime() (*IncusClient, error) {
 			return nil, fmt.Errorf("failed to connect to Incus inside Docker: %w", err)
 		}
 
-		log.Printf("[sandbox] Connected to Incus via Docker+Incus (TCP localhost:8443)")
+		slog.Info("connected to incus via docker+incus", "component", "sandbox", "address", "TCP localhost:8443")
 		return client, nil
 
 	default:
@@ -104,7 +104,7 @@ func ValidateEnvironment() error {
 	// Check storage backend
 	backend, err := client.GetStorageBackend()
 	if err != nil {
-		fmt.Printf("Warning: could not determine storage backend: %v\n", err)
+		slog.Warn("could not determine storage backend", "error", err)
 	} else {
 		fmt.Printf("Storage backend: %s\n", backend)
 	}

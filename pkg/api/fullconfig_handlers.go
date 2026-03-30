@@ -2,7 +2,7 @@ package api
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/schardosin/astonish/pkg/config"
@@ -545,7 +545,7 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			if len(secrets) > 0 {
 				if err := store.SetSecretBatch(secrets); err != nil {
-					log.Printf("Warning: Failed to save channel secrets: %v", err)
+					slog.Warn("failed to save channel secrets", "error", err)
 				} else {
 					cfg.Channels.Telegram.BotToken = ""
 					cfg.Channels.Email.Password = ""
@@ -675,14 +675,14 @@ func regenerateOpenCodeConfig(cfg *config.AppConfig) {
 	}
 	ocResult, err := config.GenerateOpenCodeConfig(cfg, getSecret)
 	if err != nil {
-		log.Printf("Warning: Failed to regenerate OpenCode config: %v", err)
+		slog.Warn("failed to regenerate OpenCode config", "error", err)
 		return
 	}
 	tools.SetOpenCodeConfig(ocResult.ConfigPath, ocResult.ProviderID, ocResult.ModelID, ocResult.ExtraEnv)
 	fleet.OpenCodeConfigPath = ocResult.ConfigPath
 	fleet.OpenCodeExtraEnv = ocResult.ExtraEnv
 	fleet.OpenCodeModelFlag = ocResult.FullModelID()
-	log.Printf("OpenCode config regenerated (provider: %s, model: %s)", ocResult.ProviderID, ocResult.ModelID)
+	slog.Info("OpenCode config regenerated", "provider", ocResult.ProviderID, "model", ocResult.ModelID)
 }
 
 // --- Helper functions ---

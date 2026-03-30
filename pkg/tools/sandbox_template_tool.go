@@ -2,7 +2,7 @@ package tools
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/sandbox"
@@ -118,9 +118,9 @@ func saveSandboxTemplate(ctx tool.Context, args SaveSandboxTemplateArgs) (SaveSa
 	}
 
 	// 1. Stop the node process (must be quiescent for snapshot)
-	log.Printf("[sandbox-template] Stopping node for session %s template creation...", sessionID[:min(8, len(sessionID))])
+	slog.Info("stopping node for template creation", "component", "sandbox-template", "session", sessionID[:min(8, len(sessionID))])
 	if err := deps.nodePool.StopNode(sessionID); err != nil {
-		log.Printf("[sandbox-template] Warning: failed to stop node: %v (continuing anyway)", err)
+		slog.Warn("failed to stop node, continuing anyway", "component", "sandbox-template", "error", err)
 	}
 
 	// Determine the source template this session was based on.
@@ -131,12 +131,12 @@ func saveSandboxTemplate(ctx tool.Context, args SaveSandboxTemplateArgs) (SaveSa
 	if deps.sessionRegistry != nil {
 		if entry := deps.sessionRegistry.Get(sessionID); entry != nil {
 			sourceTemplate = entry.TemplateName
-			log.Printf("[sandbox-template] Session %s is based on template %q", sessionID[:min(8, len(sessionID))], sourceTemplate)
+			slog.Info("session based on template", "component", "sandbox-template", "session", sessionID[:min(8, len(sessionID))], "template", sourceTemplate)
 		}
 	}
 
 	// 2. Create the template from the container
-	log.Printf("[sandbox-template] Creating template %q from container %q...", name, containerName)
+	slog.Info("creating template from container", "component", "sandbox-template", "template", name, "container", containerName)
 	if err := sandbox.CreateTemplateFromContainer(
 		deps.incusClient,
 		deps.templateRegistry,
@@ -147,7 +147,7 @@ func saveSandboxTemplate(ctx tool.Context, args SaveSandboxTemplateArgs) (SaveSa
 	); err != nil {
 		// Try to restart node even on failure
 		if restartErr := deps.nodePool.RestartNode(sessionID); restartErr != nil {
-			log.Printf("[sandbox-template] Warning: failed to restart node after template creation failure: %v", restartErr)
+			slog.Warn("failed to restart node after template creation failure", "component", "sandbox-template", "error", restartErr)
 		}
 		return SaveSandboxTemplateResult{
 			Status:  "error",
@@ -156,7 +156,7 @@ func saveSandboxTemplate(ctx tool.Context, args SaveSandboxTemplateArgs) (SaveSa
 	}
 
 	// 3. Restart the node process so the session can continue
-	log.Printf("[sandbox-template] Restarting node...")
+	slog.Info("restarting node", "component", "sandbox-template")
 	if err := deps.nodePool.RestartNode(sessionID); err != nil {
 		return SaveSandboxTemplateResult{
 			Status:       "warning",

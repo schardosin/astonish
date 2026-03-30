@@ -3,7 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -267,12 +267,12 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 	mcpManager, err := mcp.NewManager()
 	if err != nil {
 		toolError = fmt.Sprintf("Failed to create MCP manager: %v", err)
-		log.Printf("Warning: %s", toolError)
+		slog.Warn(toolError)
 	} else {
 		namedToolset, err := mcpManager.InitializeSingleToolset(r.Context(), serverName)
 		if err != nil {
 			toolError = fmt.Sprintf("Failed to initialize server: %v", err)
-			log.Printf("Warning: %s", toolError)
+			slog.Warn(toolError)
 		} else {
 			// Get tools from this server and add to cache
 			minimalCtx := &minimalReadonlyContext{Context: r.Context()}
@@ -284,7 +284,7 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 				} else {
 					toolError = fmt.Sprintf("Server started but failed to get tools: %v", err)
 				}
-				log.Printf("Warning: %s", toolError)
+				slog.Warn("failed to get tools from server", "error", err)
 			} else {
 				var newTools []ToolInfo
 				for _, t := range mcpTools {
@@ -310,9 +310,9 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 				checksum := cache.ComputeServerChecksum(newConfig.Command, newConfig.Args, newConfig.Env)
 				cache.AddServerTools(serverName, persistentTools, checksum)
 				if err := cache.SaveCache(); err != nil {
-					log.Printf("[Cache] Warning: Failed to save persistent cache: %v", err)
+					slog.Warn("failed to save persistent cache", "component", "cache", "error", err)
 				} else {
-					log.Printf("[Cache] Saved %d tools for server '%s' to persistent cache", len(persistentTools), serverName)
+					slog.Info("saved tools to persistent cache", "component", "cache", "count", len(persistentTools), "server", serverName)
 				}
 			}
 		}

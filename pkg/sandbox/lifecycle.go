@@ -2,7 +2,7 @@ package sandbox
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -305,13 +305,13 @@ func PruneOrphans(client *IncusClient, registry *SessionRegistry, existingSessio
 
 		if client.InstanceExists(entry.ContainerName) {
 			if err := destroyOverlayContainer(client, entry.ContainerName); err != nil {
-				fmt.Printf("  Warning: failed to destroy %q: %v\n", entry.ContainerName, err)
+				slog.Warn("failed to destroy container", "container", entry.ContainerName, "error", err)
 				continue
 			}
 		}
 
 		if err := registry.Remove(entry.SessionID); err != nil {
-			fmt.Printf("  Warning: failed to remove registry entry: %v\n", err)
+			slog.Warn("failed to remove registry entry", "error", err)
 			continue
 		}
 
@@ -341,7 +341,7 @@ func PruneOrphans(client *IncusClient, registry *SessionRegistry, existingSessio
 
 		fmt.Printf("Pruning unregistered container %q (created %s ago)...\n", inst.Name, time.Since(inst.CreatedAt).Round(time.Minute))
 		if err := destroyOverlayContainer(client, inst.Name); err != nil {
-			fmt.Printf("  Warning: failed to destroy %q: %v\n", inst.Name, err)
+			slog.Warn("failed to destroy container", "container", inst.Name, "error", err)
 			continue
 		}
 
@@ -446,7 +446,7 @@ func readLXCLog(containerName string) string {
 	logPath := fmt.Sprintf("/var/log/incus/%s/lxc.log", containerName)
 	data, err := readFileOnSandboxHost(logPath)
 	if err != nil {
-		log.Printf("[sandbox] Could not read LXC log at %s: %v", logPath, err)
+		slog.Error("could not read lxc log", "component", "sandbox", "path", logPath, "error", err)
 		return ""
 	}
 	content := strings.TrimSpace(string(data))

@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -353,7 +353,7 @@ func ShellIntoTemplate(client *IncusClient, registry *TemplateRegistry, name str
 		meta := registry.Get(name)
 		if meta != nil && meta.BasedOn != "" {
 			if err := ensureOverlayMounted(client, containerName, meta.BasedOn, registry); err != nil {
-				log.Printf("[sandbox] Warning: failed to ensure overlay for template %q: %v", name, err)
+				slog.Warn("failed to ensure overlay for template", "component", "sandbox", "template", name, "error", err)
 			}
 		}
 
@@ -471,7 +471,7 @@ func SnapshotTemplate(client *IncusClient, registry *TemplateRegistry, name stri
 		if pathErr == nil {
 			snapPath := SnapshotRootfsPath(poolPath, name)
 			if remountErr := RemountDependentOverlays(client, snapPath); remountErr != nil {
-				log.Printf("[sandbox] Warning: failed to remount dependent overlays: %v", remountErr)
+				slog.Warn("failed to remount dependent overlays", "component", "sandbox", "error", remountErr)
 			}
 		}
 	}
@@ -626,7 +626,7 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 		// Remount any overlays that depended on the old base snapshot
 		snapPath := SnapshotRootfsPath(poolPath, BaseTemplate)
 		if remountErr := RemountDependentOverlays(client, snapPath); remountErr != nil {
-			log.Printf("[sandbox] Warning: failed to remount dependent overlays after promote: %v", remountErr)
+			slog.Warn("failed to remount dependent overlays after promote", "component", "sandbox", "error", remountErr)
 		}
 
 		templateSnapshotMu.Unlock()
@@ -661,7 +661,7 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 		// Remount any overlays that depended on the old base snapshot
 		snapPath := SnapshotRootfsPath(poolPath, BaseTemplate)
 		if remountErr := RemountDependentOverlays(client, snapPath); remountErr != nil {
-			log.Printf("[sandbox] Warning: failed to remount dependent overlays after promote: %v", remountErr)
+			slog.Warn("failed to remount dependent overlays after promote", "component", "sandbox", "error", remountErr)
 		}
 
 		templateSnapshotMu.Unlock()
@@ -706,7 +706,7 @@ func DeleteTemplate(client *IncusClient, registry *TemplateRegistry, name string
 	// Unmount any active overlay before deleting
 	if poolPath != "" && IsOverlayMounted(poolPath, containerName) {
 		if err := UnmountSessionOverlay(poolPath, containerName); err != nil {
-			log.Printf("[sandbox] Warning: failed to unmount overlay for %q: %v", containerName, err)
+			slog.Warn("failed to unmount overlay for template", "component", "sandbox", "container", containerName, "error", err)
 		}
 	}
 
@@ -724,7 +724,7 @@ func DeleteTemplate(client *IncusClient, registry *TemplateRegistry, name string
 	if err := statOnSandboxHost(overlayDir); err == nil {
 		fmt.Printf("Removing overlay storage for %q...\n", name)
 		if err := removeAllOnSandboxHost(overlayDir); err != nil {
-			log.Printf("[sandbox] Warning: failed to remove overlay dir %s: %v", overlayDir, err)
+			slog.Warn("failed to remove overlay dir", "component", "sandbox", "dir", overlayDir, "error", err)
 		}
 	}
 
@@ -758,7 +758,7 @@ func RefreshTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 		meta := registry.Get(name)
 		if meta != nil && meta.BasedOn != "" {
 			if err := ensureOverlayMounted(client, containerName, meta.BasedOn, registry); err != nil {
-				log.Printf("[sandbox] Warning: failed to ensure overlay for template %q: %v", name, err)
+				slog.Warn("failed to ensure overlay for template", "component", "sandbox", "template", name, "error", err)
 			}
 		}
 
@@ -791,7 +791,7 @@ func RefreshTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 		if meta != nil {
 			meta.BinaryHash = hash
 			if updateErr := registry.Update(meta); updateErr != nil {
-				log.Printf("[sandbox] Warning: could not update BinaryHash for template %q: %v", name, updateErr)
+				slog.Warn("could not update binary hash for template", "component", "sandbox", "template", name, "error", updateErr)
 			}
 		}
 	}
@@ -877,7 +877,7 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 	// We track whether we stopped it so we can restart it on ANY exit path.
 	stoppedContainer := false
 	if client.IsRunning(containerName) {
-		log.Printf("[sandbox] Stopping container %q for template creation...", containerName)
+		slog.Info("stopping container for template creation", "component", "sandbox", "container", containerName)
 		if err := client.StopInstance(containerName, false); err != nil {
 			return fmt.Errorf("failed to stop container %q: %w", containerName, err)
 		}
@@ -890,14 +890,14 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 		if !stoppedContainer {
 			return
 		}
-		log.Printf("[sandbox] Restarting session container %q...", containerName)
+		slog.Info("restarting session container", "component", "sandbox", "container", containerName)
 		if startErr := client.StartInstance(containerName); startErr != nil {
-			log.Printf("[sandbox] ERROR: failed to restart session container %q: %v", containerName, startErr)
+			slog.Error("failed to restart session container", "component", "sandbox", "container", containerName, "error", startErr)
 		}
 	}
 
 	// Create the template container from the tiny overlay image
-	log.Printf("[sandbox] Creating template container %q...", tplContainerName)
+	slog.Info("creating template container", "component", "sandbox", "container", tplContainerName)
 	arch, err := client.ServerArchitecture()
 	if err != nil {
 		restartSession()
@@ -942,7 +942,7 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 		return fmt.Errorf("failed to create template overlay dir: %w", err)
 	}
 
-	log.Printf("[sandbox] Copying session overlay to template %q...", tplContainerName)
+	slog.Info("copying session overlay to template", "component", "sandbox", "template", tplContainerName)
 	if err := cpOnSandboxHost(sessionUpperDir, tplUpperDir); err != nil {
 		_ = client.DeleteInstance(tplContainerName)
 		restartSession()
@@ -952,7 +952,7 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 	// Also create the work dir for the template's overlay
 	tplWorkDir := filepath.Join(overlayBaseDir, tplContainerName, "work")
 	if err := mkdirAllOnSandboxHost(tplWorkDir, 0755); err != nil {
-		log.Printf("[sandbox] Warning: failed to create template work dir: %v", err)
+		slog.Warn("failed to create template work dir", "component", "sandbox", "error", err)
 	}
 
 	// Mount overlay on the template container so it can be started/shelled into.
@@ -995,7 +995,7 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 	// Success path — restart session container
 	restartSession()
 
-	log.Printf("[sandbox] Template %q created from container %q", templateName, containerName)
+	slog.Info("template created from container", "component", "sandbox", "template", templateName, "container", containerName)
 	return nil
 }
 
@@ -1010,7 +1010,7 @@ func RefreshAllIfNeeded(client *IncusClient, registry *TemplateRegistry) {
 	refreshAllOnce.Do(func() {
 		currentHash, err := ComputeBinaryHash()
 		if err != nil {
-			log.Printf("[sandbox] Warning: could not compute binary hash for refresh check: %v", err)
+			slog.Warn("could not compute binary hash for refresh check", "component", "sandbox", "error", err)
 			return
 		}
 
@@ -1029,11 +1029,11 @@ func RefreshAllIfNeeded(client *IncusClient, registry *TemplateRegistry) {
 				continue // no snapshot to refresh
 			}
 
-			log.Printf("[sandbox] Template %q has stale binary (hash mismatch), refreshing...", meta.Name)
+			slog.Info("template has stale binary, refreshing", "component", "sandbox", "template", meta.Name)
 			if err := RefreshTemplate(client, registry, meta.Name); err != nil {
-				log.Printf("[sandbox] Warning: failed to refresh template %q: %v", meta.Name, err)
+				slog.Warn("failed to refresh template", "component", "sandbox", "template", meta.Name, "error", err)
 			} else {
-				log.Printf("[sandbox] Template %q refreshed with current binary", meta.Name)
+				slog.Info("template refreshed with current binary", "component", "sandbox", "template", meta.Name)
 			}
 		}
 	})
@@ -1055,7 +1055,7 @@ func RefreshAll(client *IncusClient, registry *TemplateRegistry) error {
 
 		fmt.Printf("Refreshing template %q...\n", meta.Name)
 		if err := RefreshTemplate(client, registry, meta.Name); err != nil {
-			fmt.Printf("  Warning: failed to refresh %q: %v\n", meta.Name, err)
+			slog.Warn("failed to refresh template", "template", meta.Name, "error", err)
 		} else {
 			fmt.Printf("  Done.\n")
 		}

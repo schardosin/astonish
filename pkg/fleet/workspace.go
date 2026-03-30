@@ -2,7 +2,7 @@ package fleet
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,13 +29,13 @@ import (
 func SetupSessionWorkspace(workspaceDir string, source *ProjectSourceConfig, baseDir string) error {
 	// If the workspace already exists, assume it was set up previously.
 	if info, err := os.Stat(workspaceDir); err == nil && info.IsDir() {
-		log.Printf("[fleet-workspace] Workspace %s already exists, reusing", workspaceDir)
+		slog.Info("workspace already exists, reusing", "component", "fleet-workspace", "path", workspaceDir)
 		return nil
 	}
 
 	// No source configured: just create the empty directory.
 	if source == nil {
-		log.Printf("[fleet-workspace] No project source, creating empty workspace %s", workspaceDir)
+		slog.Info("no project source, creating empty workspace", "component", "fleet-workspace", "path", workspaceDir)
 		return os.MkdirAll(workspaceDir, 0755)
 	}
 
@@ -50,7 +50,7 @@ func SetupSessionWorkspace(workspaceDir string, source *ProjectSourceConfig, bas
 	case "local":
 		return setupLocal(workspaceDir, source.Path)
 	default:
-		log.Printf("[fleet-workspace] Unknown project source type %q, creating empty workspace", source.Type)
+		slog.Warn("unknown project source type, creating empty workspace", "component", "fleet-workspace", "type", source.Type)
 		return os.MkdirAll(workspaceDir, 0755)
 	}
 }
@@ -82,11 +82,11 @@ func CleanupSessionWorkspace(workspaceDir string) error {
 		return fmt.Errorf("cannot resolve workspace path %q: %w", workspaceDir, err)
 	}
 	if !isUnderWorkspacesDir(absPath) {
-		log.Printf("[fleet-workspace] SAFETY: refusing to delete %q — not under a workspaces/ directory", absPath)
+		slog.Warn("refusing to delete path not under workspaces directory", "component", "fleet-workspace", "path", absPath)
 		return nil
 	}
 
-	log.Printf("[fleet-workspace] Removing workspace %s", workspaceDir)
+	slog.Info("removing workspace", "component", "fleet-workspace", "path", workspaceDir)
 	return os.RemoveAll(workspaceDir)
 }
 
@@ -114,9 +114,9 @@ func isUnderWorkspacesDir(absPath string) bool {
 func setupGitRepo(workspaceDir, repo, baseDir string) error {
 	// Try --local clone from the base workspace first.
 	if baseDir != "" && isGitRepo(baseDir) {
-		log.Printf("[fleet-workspace] git clone --local %s -> %s", baseDir, workspaceDir)
+		slog.Info("git clone --local from base workspace", "component", "fleet-workspace", "src", baseDir, "dst", workspaceDir)
 		if err := gitCloneLocal(baseDir, workspaceDir); err != nil {
-			log.Printf("[fleet-workspace] --local clone failed, falling back to remote: %v", err)
+			slog.Warn("local clone failed, falling back to remote", "component", "fleet-workspace", "error", err)
 		} else {
 			return nil
 		}
@@ -149,16 +149,16 @@ func setupLocal(workspaceDir, srcPath string) error {
 
 	// If the local source is a git repo, use --local clone for efficiency.
 	if isGitRepo(srcPath) {
-		log.Printf("[fleet-workspace] git clone --local %s -> %s (local git source)", srcPath, workspaceDir)
+		slog.Info("git clone --local from local git source", "component", "fleet-workspace", "src", srcPath, "dst", workspaceDir)
 		if err := gitCloneLocal(srcPath, workspaceDir); err != nil {
-			log.Printf("[fleet-workspace] --local clone failed, falling back to cp -a: %v", err)
+			slog.Warn("local clone failed, falling back to cp", "component", "fleet-workspace", "error", err)
 		} else {
 			return nil
 		}
 	}
 
 	// Non-git local directory or --local failed: full copy.
-	log.Printf("[fleet-workspace] cp -a %s -> %s", srcPath, workspaceDir)
+	slog.Info("copying workspace with cp -a", "component", "fleet-workspace", "src", srcPath, "dst", workspaceDir)
 	cmd := exec.Command("cp", "-a", srcPath, workspaceDir)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -195,7 +195,7 @@ func gitCloneRemote(workspaceDir, repo string) error {
 		repoURL = "https://github.com/" + repo + ".git"
 	}
 
-	log.Printf("[fleet-workspace] git clone %s -> %s (full remote clone)", repoURL, workspaceDir)
+	slog.Info("git clone from remote", "component", "fleet-workspace", "repo", repoURL, "dst", workspaceDir)
 	cmd := exec.Command("git", "clone", repoURL, workspaceDir)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

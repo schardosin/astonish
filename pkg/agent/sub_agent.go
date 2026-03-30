@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -631,7 +632,10 @@ func (m *SubAgentManager) buildChildPrompt(task SubAgentTask) string {
 	sb.WriteString("- If you encounter an error, report it clearly in your response.\n")
 
 	// Tool-specific operational guidance based on what tools the child actually has
-	resolvedTools, _, _ := m.resolveTools(task.ToolFilter)
+	resolvedTools, _, resolveWarnings := m.resolveTools(task.ToolFilter)
+	if len(resolveWarnings) > 0 {
+		slog.Warn("failed to resolve tools for sub-agent", "tool_filter", task.ToolFilter, "warnings", resolveWarnings)
+	}
 	childToolSet := make(map[string]bool, len(resolvedTools))
 	for _, t := range resolvedTools {
 		childToolSet[t.Name()] = true

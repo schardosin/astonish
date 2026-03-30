@@ -1,0 +1,168 @@
+import { Plus, Settings, Plug, ArrowRight, Sparkles, BookMarked, Store } from 'lucide-react'
+import { buildPath, type BuildPathParams } from '../hooks/useHashRouter'
+
+function navigateTo(view: string, params?: BuildPathParams): void {
+  window.location.hash = '#' + buildPath(view, params)
+}
+
+export default function HomePage() {
+  return (
+    <div 
+      className="flex-1 flex flex-col items-center justify-center p-8 overflow-y-auto"
+      style={{ background: 'var(--bg-primary)' }}
+    >
+      {/* Welcome Hero */}
+      <div className="text-center mb-12">
+        <div className="inline-flex items-center justify-center w-28 h-28 mb-6">
+          <img 
+            src="/astonish-logo.svg" 
+            alt="Astonish Logo" 
+            className="w-full h-full"
+          />
+        </div>
+        <h1 className="text-4xl font-bold mb-3" style={{ color: 'var(--text-primary)' }}>
+          Welcome to Astonish Studio
+        </h1>
+        <p className="text-lg max-w-xl mx-auto" style={{ color: 'var(--text-muted)' }}>
+          Build powerful AI agents with a visual flow editor. Create, test, and deploy intelligent automation.
+        </p>
+      </div>
+
+      {/* Quick Actions */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-5xl w-full">
+        {/* Browse Flows */}
+        <button
+          onClick={() => navigateTo('canvas')}
+          className="group p-6 rounded-2xl text-left transition-all hover:scale-[1.02] hover:shadow-xl"
+          style={{ 
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border-color)'
+          }}
+        >
+          <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-indigo-600 to-blue-600 flex items-center justify-center mb-4 shadow-lg group-hover:shadow-indigo-500/20 transition-all">
+            <Sparkles size={28} className="text-white" />
+          </div>
+          <h3 className="text-xl font-semibold mb-2 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+            Browse Flows
+            <ArrowRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity text-indigo-400" />
+          </h3>
+          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+            View and manage your existing library of AI agent flows.
+          </p>
+        </button>
+
+        {/* Create Agent */}
+        <button
+          onClick={() => navigateTo('canvas')}
+          className="group p-6 rounded-2xl text-left transition-all hover:scale-[1.02] hover:shadow-xl"
+          style={{ 
+            background: 'linear-gradient(135deg, rgba(147, 51, 234, 0.15), rgba(59, 130, 246, 0.15))',
+            border: '1px solid rgba(147, 51, 234, 0.3)'
+          }}
+        >
+          <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-purple-600 to-blue-500 flex items-center justify-center mb-4 shadow-lg group-hover:shadow-purple-500/30 transition-all">
+            <Plus size={28} className="text-white" />
+          </div>
+          <h3 className="text-xl font-semibold mb-2 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+            Create Agent
+            <ArrowRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity text-purple-400" />
+          </h3>
+          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+            Build a new AI agent flow from scratch or use the AI assistant.
+          </p>
+        </button>
+
+        {/* Flow Store */}
+        <button
+          onClick={() => navigateTo('settings', { section: 'flows' })}
+          className="group p-6 rounded-2xl text-left transition-all hover:scale-[1.02] hover:shadow-xl"
+          style={{ 
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border-color)'
+          }}
+        >
+          <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-pink-600 to-rose-500 flex items-center justify-center mb-4 shadow-lg group-hover:shadow-pink-500/20 transition-all">
+            <Store size={28} className="text-white" />
+          </div>
+          <h3 className="text-xl font-semibold mb-2 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+            Flow Store
+            <ArrowRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity text-pink-400" />
+          </h3>
+          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+            Browse and install AI agent flows from the official store and community repositories.
+          </p>
+        </button>
+
+        {/* Settings */}
+        <button
+          onClick={() => navigateTo('settings', { section: 'general' })}
+          className="group p-6 rounded-2xl text-left transition-all hover:scale-[1.02] hover:shadow-xl"
+          style={{ 
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border-color)'
+          }}
+        >
+          <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-gray-600 to-gray-700 flex items-center justify-center mb-4 shadow-lg group-hover:shadow-gray-500/20 transition-all">
+            <Settings size={28} className="text-white" />
+          </div>
+          <h3 className="text-xl font-semibold mb-2 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+            Settings
+            <ArrowRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400" />
+          </h3>
+          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+            Configure AI providers, API keys, and default models.
+          </p>
+        </button>
+
+        {/* MCP Servers */}
+        <button
+          onClick={() => navigateTo('settings', { section: 'mcp' })}
+          className="group p-6 rounded-2xl text-left transition-all hover:scale-[1.02] hover:shadow-xl"
+          style={{ 
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border-color)'
+          }}
+        >
+          <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-500 flex items-center justify-center mb-4 shadow-lg group-hover:shadow-teal-500/20 transition-all">
+            <Plug size={28} className="text-white" />
+          </div>
+          <h3 className="text-xl font-semibold mb-2 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+            MCP Servers
+            <ArrowRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity text-teal-400" />
+          </h3>
+          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+            Connect external tools via Model Context Protocol.
+          </p>
+        </button>
+
+        {/* Repositories */}
+        <button
+          onClick={() => navigateTo('settings', { section: 'taps' })}
+          className="group p-6 rounded-2xl text-left transition-all hover:scale-[1.02] hover:shadow-xl"
+          style={{ 
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border-color)'
+          }}
+        >
+          <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-amber-600 to-orange-500 flex items-center justify-center mb-4 shadow-lg group-hover:shadow-amber-500/20 transition-all">
+            <BookMarked size={28} className="text-white" />
+          </div>
+          <h3 className="text-xl font-semibold mb-2 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+            Repositories
+            <ArrowRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity text-amber-400" />
+          </h3>
+          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+            Add community taps and custom repositories to discover more flows.
+          </p>
+        </button>
+      </div>
+
+      {/* Bottom hint */}
+      <div className="mt-12 text-center">
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+          Type a message below to start chatting, or use <code style={{ color: 'var(--accent)' }}>/help</code> for commands
+        </p>
+      </div>
+    </div>
+  )
+}

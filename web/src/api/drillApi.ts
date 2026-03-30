@@ -35,6 +35,7 @@ export interface DrillDetail {
   tags: string[]
   timeout: number
   step_timeout: number
+  step_count: number
   on_fail: string
   nodes: unknown[]
   flow: unknown[]

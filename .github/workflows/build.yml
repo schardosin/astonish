@@ -31,7 +31,7 @@ jobs:
           echo "Built to: $(ls dist/)"
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
           cache: false  # Disable to ensure fresh embed of web/dist

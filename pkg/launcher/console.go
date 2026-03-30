@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"regexp"
 	"strings"
 
@@ -105,7 +106,7 @@ func getRequiredMCPServersFromConfig(ctx context.Context, agentCfg *config.Agent
 	// Refresh changed servers synchronously
 	if len(needsRefresh) > 0 {
 		if verbose {
-			fmt.Printf("[Cache] Refreshing %d servers: %v\n", len(needsRefresh), needsRefresh)
+			slog.Info("refreshing servers", "component", "cache", "count", len(needsRefresh), "servers", needsRefresh)
 		}
 		refreshServers(ctx, mcpCfg, needsRefresh, verbose)
 		// Reload cache after refresh
@@ -137,13 +138,13 @@ func getRequiredMCPServersFromConfig(ctx context.Context, agentCfg *config.Agent
 		// Try 3: Look up bare tool name in persistent cache
 		if serverName := cache.GetServerForTool(toolName); serverName != "" {
 			requiredServers[serverName] = true
-			log.Printf("[Cache] Found tool '%s' → server '%s' from persistent cache", toolName, serverName)
+			slog.Info("tool found in persistent cache", "component", "cache", "tool", toolName, "server", serverName)
 			continue
 		}
 
 		// Tool not found in cache - this shouldn't happen if cache is up to date
 		// Fall back to including all servers
-		log.Printf("[Cache] Tool '%s' not found in persistent cache, will load all servers", toolName)
+		slog.Warn("tool not found in persistent cache, loading all servers", "component", "cache", "tool", toolName)
 		for serverName := range mcpCfg.MCPServers {
 			requiredServers[serverName] = true
 		}
@@ -172,7 +173,7 @@ func refreshServers(ctx context.Context, mcpCfg *config.MCPConfig, servers []str
 	mcpManager, err := mcp.NewManager()
 	if err != nil {
 		if verbose {
-			fmt.Printf("[Cache] Warning: Failed to create MCP manager for refresh: %v\n", err)
+			slog.Warn("failed to create mcp manager for refresh", "component", "cache", "error", err)
 		}
 		return
 	}
@@ -181,7 +182,7 @@ func refreshServers(ctx context.Context, mcpCfg *config.MCPConfig, servers []str
 		namedToolset, err := mcpManager.InitializeSingleToolset(ctx, serverName)
 		if err != nil {
 			if verbose {
-				fmt.Printf("[Cache] Warning: Failed to initialize server '%s': %v\n", serverName, err)
+				slog.Warn("failed to initialize server", "component", "cache", "server", serverName, "error", err)
 			}
 			continue
 		}
@@ -191,7 +192,7 @@ func refreshServers(ctx context.Context, mcpCfg *config.MCPConfig, servers []str
 		mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
 		if err != nil {
 			if verbose {
-				fmt.Printf("[Cache] Warning: Failed to get tools from server '%s': %v\n", serverName, err)
+				slog.Warn("failed to get tools from server", "component", "cache", "server", serverName, "error", err)
 			}
 			continue
 		}
@@ -210,13 +211,13 @@ func refreshServers(ctx context.Context, mcpCfg *config.MCPConfig, servers []str
 		checksum := cache.ComputeServerChecksum(serverCfg.Command, serverCfg.Args, serverCfg.Env)
 		cache.AddServerTools(serverName, persistentTools, checksum)
 		if verbose {
-			fmt.Printf("[Cache] Refreshed server '%s': %d tools\n", serverName, len(persistentTools))
+			slog.Info("refreshed server", "component", "cache", "server", serverName, "tools", len(persistentTools))
 		}
 	}
 
 	if err := cache.SaveCache(); err != nil {
 		if verbose {
-			fmt.Printf("[Cache] Warning: Failed to save persistent cache after refresh: %v\n", err)
+			slog.Warn("failed to save persistent cache after refresh", "component", "cache", "error", err)
 		}
 	}
 }
@@ -257,7 +258,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	credTools, credErr := tools.GetCredentialTools()
 	if credErr != nil {
 		if cfg.DebugMode {
-			fmt.Printf("Warning: Failed to create credential tools: %v\n", credErr)
+			slog.Warn("failed to create credential tools", "error", credErr)
 		}
 	} else {
 		internalTools = append(internalTools, credTools...)
@@ -267,7 +268,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	processTools, procErr := tools.GetProcessTools()
 	if procErr != nil {
 		if cfg.DebugMode {
-			fmt.Printf("Warning: Failed to create process tools: %v\n", procErr)
+			slog.Warn("failed to create process tools", "error", procErr)
 		}
 	} else {
 		internalTools = append(internalTools, processTools...)
@@ -278,7 +279,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	browserTools, browserErr := tools.GetBrowserTools(browserMgr)
 	if browserErr != nil {
 		if cfg.DebugMode {
-			fmt.Printf("Warning: Failed to create browser tools: %v\n", browserErr)
+			slog.Warn("failed to create browser tools", "error", browserErr)
 		}
 	} else {
 		internalTools = append(internalTools, browserTools...)
@@ -312,12 +313,12 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		mcpManager, err = mcp.NewManager()
 		if err != nil {
 			if cfg.DebugMode {
-				fmt.Printf("Warning: Failed to create MCP manager: %v\n", err)
+				slog.Warn("failed to create mcp manager", "error", err)
 			}
 		} else {
 			if err := mcpManager.InitializeSelectiveToolsets(ctx, requiredServers); err != nil {
 				if cfg.DebugMode {
-					fmt.Printf("Warning: Failed to initialize MCP toolsets: %v\n", err)
+					slog.Warn("failed to initialize mcp toolsets", "error", err)
 				}
 			} else {
 				mcpToolsets = mcpManager.GetToolsets()
@@ -532,11 +533,11 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				for _, part := range event.LLMResponse.Content.Parts {
 					if part.FunctionCall != nil {
 						argsJSON, _ := json.MarshalIndent(part.FunctionCall.Args, "", "  ")
-						fmt.Printf("\n%s[DEBUG] Tool Call: %s%s\nArguments:\n%s\n", ColorCyan, part.FunctionCall.Name, ColorReset, string(argsJSON))
+						slog.Debug("tool call", "tool", part.FunctionCall.Name, "args", string(argsJSON))
 					}
 					if part.FunctionResponse != nil {
 						respJSON, _ := json.MarshalIndent(part.FunctionResponse.Response, "", "  ")
-						fmt.Printf("\n%s[DEBUG] Tool Response: %s%s\nResult:\n%s\n", ColorCyan, part.FunctionResponse.Name, ColorReset, string(respJSON))
+						slog.Debug("tool response", "tool", part.FunctionResponse.Name, "result", string(respJSON))
 					}
 				}
 			}
@@ -683,7 +684,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 									}
 								}
 								if cfg.DebugMode {
-									fmt.Printf("[DEBUG] Node changed to '%s'. SuppressStreaming: %v, IsParallel: %v\n", currentNodeName, suppressStreaming, isParallel)
+									slog.Debug("node changed", "node", currentNodeName, "suppressStreaming", suppressStreaming, "isParallel", isParallel)
 								}
 								break
 							}
@@ -1231,7 +1232,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		if currentNodeName == "END" {
 			stopSpinner(true, true)
 			if cfg.DebugMode {
-				fmt.Println("[DEBUG] Reached END node, exiting main loop")
+				slog.Debug("reached END node, exiting main loop")
 			}
 			break
 		}

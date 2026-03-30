@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -121,12 +121,12 @@ func InstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 	mcpManager, err := mcp.NewManager()
 	if err != nil {
 		toolError = fmt.Sprintf("Failed to create MCP manager: %v", err)
-		log.Printf("Warning: %s", toolError)
+		slog.Warn(toolError)
 	} else {
 		namedToolset, err := mcpManager.InitializeSingleToolset(r.Context(), srv.ID)
 		if err != nil {
 			toolError = fmt.Sprintf("Failed to initialize server: %v", err)
-			log.Printf("Warning: %s", toolError)
+			slog.Warn(toolError)
 		} else {
 			minimalCtx := &minimalReadonlyContext{Context: r.Context()}
 			mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
@@ -137,7 +137,7 @@ func InstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 				} else {
 					toolError = fmt.Sprintf("Server started but failed to get tools: %v", err)
 				}
-				log.Printf("Warning: %s", toolError)
+				slog.Warn(toolError)
 			} else {
 				// Update in-memory cache
 				var newTools []ToolInfo
@@ -169,9 +169,9 @@ func InstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 				checksum := cache.ComputeServerChecksum(serverCfg.Command, serverCfg.Args, serverCfg.Env)
 				cache.AddServerTools(srv.ID, persistentTools, checksum)
 				if err := cache.SaveCache(); err != nil {
-					log.Printf("[Cache] Warning: Failed to save persistent cache: %v", err)
+					slog.Warn("failed to save persistent cache", "component", "cache", "error", err)
 				} else {
-					log.Printf("[Cache] Saved %d tools for standard server '%s'", len(persistentTools), srv.ID)
+					slog.Info("saved tools for standard server", "component", "cache", "count", len(persistentTools), "server", srv.ID)
 				}
 
 				// Update server status to healthy
@@ -188,7 +188,7 @@ func InstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 	// Refresh in-memory tools cache
 	RefreshToolsCache(context.Background())
 
-	log.Printf("[Standard Server] Installed '%s' (%s) with %d tools", srv.ID, srv.DisplayName, toolsLoaded)
+	slog.Info("installed standard server", "component", "standard-server", "server", srv.ID, "displayName", srv.DisplayName, "toolsLoaded", toolsLoaded)
 
 	w.Header().Set("Content-Type", "application/json")
 	response := map[string]interface{}{
@@ -238,13 +238,13 @@ func UninstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 	RemoveServerToolsFromCache(serverID)
 	cache.RemoveServer(serverID)
 	if err := cache.SaveCache(); err != nil {
-		log.Printf("[Cache] Warning: Failed to save cache after uninstall: %v", err)
+		slog.Warn("failed to save cache after uninstall", "component", "cache", "error", err)
 	}
 
 	// Clear server status
 	ClearServerStatus(serverID)
 
-	log.Printf("[Standard Server] Uninstalled '%s' (%s)", srv.ID, srv.DisplayName)
+	slog.Info("uninstalled standard server", "component", "standard-server", "server", srv.ID, "displayName", srv.DisplayName)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

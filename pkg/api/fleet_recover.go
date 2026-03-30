@@ -3,7 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,7 +52,7 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 	}
 	if workspaceDir != "" {
 		if mkErr := os.MkdirAll(workspaceDir, 0755); mkErr != nil {
-			log.Printf("[fleet-recover] Warning: could not create workspace %s: %v", workspaceDir, mkErr)
+			slog.Warn("could not create workspace", "component", "fleet-recover", "workspace", workspaceDir, "error", mkErr)
 		}
 	}
 
@@ -90,7 +90,7 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 		return fmt.Errorf("no recoverable messages in transcript for session %s", cfg.SessionID)
 	}
 
-	log.Printf("[fleet-recover] Session %s: recovered %d messages from transcript", cfg.SessionID, len(recoveredMessages))
+	slog.Info("recovered messages from transcript", "component", "fleet-recover", "session_id", cfg.SessionID, "count", len(recoveredMessages))
 
 	// If recovery was triggered by a customer reply, append it to the
 	// recovered messages so the session sees it in the thread context,
@@ -121,8 +121,7 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 			Mentions:   fleet.ParseMentions(cfg.CustomerMessage),
 		}
 		recoveredMessages = append(recoveredMessages, customerMsg)
-		log.Printf("[fleet-recover] Session %s: injected customer reply that triggered recovery (%d chars, memory=[%s])",
-			cfg.SessionID, len(cfg.CustomerMessage), targetAgent)
+		slog.Info("injected customer reply that triggered recovery", "component", "fleet-recover", "session_id", cfg.SessionID, "chars", len(cfg.CustomerMessage), "memory", targetAgent)
 	}
 
 	// Create a GitHubIssueChannel pre-loaded with recovered messages.
@@ -210,21 +209,19 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 			Timestamp: time.Now(),
 		}
 		if postErr := ghChannel.PostMessage(context.Background(), restartMsg); postErr != nil {
-			log.Printf("[fleet-recover] Warning: could not post restart message: %v", postErr)
+			slog.Warn("could not post restart message", "component", "fleet-recover", "error", postErr)
 		}
 		ghChannel.PostExternal(restartMsg)
 	}
 
-	log.Printf("[fleet-recover] Session %s: reconstructed %d milestones from transcript (customer_reply=%v)",
-		cfg.SessionID, milestoneCount, isCustomerReply)
+	slog.Info("reconstructed milestones from transcript", "component", "fleet-recover", "session_id", cfg.SessionID, "milestone_count", milestoneCount, "customer_reply", isCustomerReply)
 
 	// Determine who should act next based on the last message.
 	lastMsg := recoveredMessages[len(recoveredMessages)-1]
 	resumeTarget := determineResumeTarget(lastMsg, fleetCfg, subAgentMgr)
 	fleetSession.ResumeTarget = resumeTarget
 
-	log.Printf("[fleet-recover] Session %s: resume target is %q (last sender: %s)",
-		cfg.SessionID, resumeTarget, lastMsg.Sender)
+	slog.Info("resume target determined", "component", "fleet-recover", "session_id", cfg.SessionID, "resume_target", resumeTarget, "last_sender", lastMsg.Sender)
 
 	// Wire completion callback for issue lifecycle tracking
 	if cfg.CompletionFunc != nil {
@@ -256,16 +253,15 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 	go func() {
 		defer func() {
 			registry.Unregister(fleetSession.ID)
-			log.Printf("[fleet-recover] Session %s removed from registry", fleetSession.ID)
+			slog.Info("session removed from registry", "component", "fleet-recover", "session_id", fleetSession.ID)
 		}()
 
 		if runErr := fleetSession.Run(context.Background()); runErr != nil {
-			log.Printf("[fleet-recover] Session %s error: %v", fleetSession.ID, runErr)
+			slog.Error("session error", "component", "fleet-recover", "session_id", fleetSession.ID, "error", runErr)
 		}
 	}()
 
-	log.Printf("[fleet-recover] Session %s recovered and running (issue #%d, target: %s)",
-		cfg.SessionID, cfg.IssueNumber, resumeTarget)
+	slog.Info("session recovered and running", "component", "fleet-recover", "session_id", cfg.SessionID, "issue", cfg.IssueNumber, "target", resumeTarget)
 	return nil
 }
 
@@ -393,7 +389,7 @@ func wireFleetTranscriptAppend(fs *fleet.FleetSession, transcriptPath string, pr
 		invocationCounter++
 		event := fleetMessageToEvent(msg, invocationCounter)
 		if err := transcript.AppendEvent(event); err != nil {
-			log.Printf("[fleet-recover] Warning: could not persist fleet message: %v", err)
+			slog.Warn("could not persist fleet message", "component", "fleet-recover", "error", err)
 		}
 	}
 }
@@ -482,7 +478,7 @@ Do NOT be vague. The agents reading this have NO other context.`, len(messages),
 	var responseText strings.Builder
 	for resp, err := range llm.GenerateContent(summaryCtx, llmReq, false) {
 		if err != nil {
-			log.Printf("[fleet-recover] LLM summary failed: %v", err)
+			slog.Error("LLM summary failed", "component", "fleet-recover", "error", err)
 			return ""
 		}
 		if resp != nil && resp.Content != nil {
@@ -499,6 +495,6 @@ Do NOT be vague. The agents reading this have NO other context.`, len(messages),
 		return ""
 	}
 
-	log.Printf("[fleet-recover] Generated recovery summary (%d chars)", len(summary))
+	slog.Info("generated recovery summary", "component", "fleet-recover", "chars", len(summary))
 	return "Fleet session resumed after daemon restart.\n\n" + summary
 }

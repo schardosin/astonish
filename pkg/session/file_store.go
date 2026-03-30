@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
-	"log"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -331,10 +331,12 @@ func (s *FileStore) AppendEvent(ctx context.Context, curSession adksession.Sessi
 	}
 
 	// Update index metadata
-	_ = s.index.Update(sess.id, func(meta *SessionMeta) {
+	if err := s.index.Update(sess.id, func(meta *SessionMeta) {
 		meta.UpdatedAt = event.Timestamp
 		meta.MessageCount++
-	})
+	}); err != nil {
+		slog.Warn("failed to update session index metadata", "session_id", sess.id, "error", err)
+	}
 
 	return nil
 }
@@ -546,12 +548,12 @@ func repairOrphanedToolCalls(events []*adksession.Event) []*adksession.Event {
 		return events
 	}
 
-	log.Printf("[session] Repairing %d orphaned tool call(s) from interrupted session", len(orphanParts))
+	slog.Warn("repairing orphaned tool calls from interrupted session", "component", "session", "count", len(orphanParts))
 
 	// Build synthetic FunctionResponse parts for each orphan
 	var responseParts []*genai.Part
 	for _, orphan := range orphanParts {
-		log.Printf("[session]   orphan: %s (id=%s)", orphan.FunctionCall.Name, orphan.FunctionCall.ID)
+		slog.Debug("orphaned tool call", "component", "session", "tool", orphan.FunctionCall.Name, "id", orphan.FunctionCall.ID)
 		responseParts = append(responseParts, &genai.Part{
 			FunctionResponse: &genai.FunctionResponse{
 				ID:   orphan.FunctionCall.ID,
@@ -830,7 +832,7 @@ func (s *FileStore) CleanupExpiredSessions(maxAgeDays int) []string {
 	// Load the index to find expired sessions
 	index, err := s.index.Load()
 	if err != nil {
-		log.Printf("[session-cleanup] Failed to load index: %v", err)
+		slog.Error("failed to load session index", "component", "session-cleanup", "error", err)
 		return nil
 	}
 
@@ -858,15 +860,15 @@ func (s *FileStore) CleanupExpiredSessions(maxAgeDays int) []string {
 			SessionID: meta.ID,
 		})
 		if err != nil {
-			log.Printf("[session-cleanup] Failed to delete session %s: %v", meta.ID, err)
+			slog.Error("failed to delete session", "component", "session-cleanup", "session", meta.ID, "error", err)
 			continue
 		}
 		deletedIDs = append(deletedIDs, meta.ID)
-		log.Printf("[session-cleanup] Deleted expired session %s (last activity: %s)", meta.ID, meta.UpdatedAt.Format(time.RFC3339))
+		slog.Info("deleted expired session", "component", "session-cleanup", "session", meta.ID, "last_activity", meta.UpdatedAt.Format(time.RFC3339))
 	}
 
 	if len(deletedIDs) > 0 {
-		log.Printf("[session-cleanup] Cleaned up %d expired session(s) (older than %d days)", len(deletedIDs), maxAgeDays)
+		slog.Info("cleaned up expired sessions", "component", "session-cleanup", "count", len(deletedIDs), "max_age_days", maxAgeDays)
 	}
 
 	return deletedIDs

@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -494,16 +494,16 @@ OpenCode session ID: %s
 
 	summary, err := openCodeSummarizer(summaryCtx, prompt)
 	if err != nil {
-		log.Printf("[opencode-summarize] LLM summarization failed, using fallback: %v", err)
+		slog.Warn("LLM summarization failed, using fallback", "component", "opencode-summarize", "error", err)
 		return fallbackSummarize(rawOutput)
 	}
 
 	if strings.TrimSpace(summary) == "" {
-		log.Printf("[opencode-summarize] LLM returned empty summary, using fallback")
+		slog.Warn("LLM returned empty summary, using fallback", "component", "opencode-summarize")
 		return fallbackSummarize(rawOutput)
 	}
 
-	log.Printf("[opencode-summarize] Summarized %d bytes to %d bytes", len(rawOutput), len(summary))
+	slog.Info("summarized opencode output", "component", "opencode-summarize", "original_bytes", len(rawOutput), "summary_bytes", len(summary))
 	return summary
 }
 

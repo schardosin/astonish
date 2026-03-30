@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -231,7 +231,7 @@ func (m *PortProxyManager) allocatePort() (int, error) {
 			continue
 		}
 		// Try to bind to verify it's actually free
-		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", p))
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p))
 		if err != nil {
 			continue // port in use by something else
 		}
@@ -316,16 +316,16 @@ func (m *PortProxyManager) StartProxy(containerName string, containerPort int) (
 
 	ctx, cancel := context.WithCancel(context.Background())
 	srv := &http.Server{
-		Addr:    fmt.Sprintf("0.0.0.0:%d", hostPort),
+		Addr:    fmt.Sprintf("127.0.0.1:%d", hostPort),
 		Handler: handler,
 	}
 
-	log.Printf("[sandbox-proxy] Starting listener :%d → %s:%d (%s)", hostPort, ip, containerPort, containerName)
+	slog.Info("starting listener", "component", "sandbox-proxy", "host_port", hostPort, "container_ip", ip, "container_port", containerPort, "container", containerName)
 
 	// Start listener in background
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("[sandbox-proxy] Listener :%d error: %v", hostPort, err)
+			slog.Error("listener error", "component", "sandbox-proxy", "host_port", hostPort, "error", err)
 		}
 	}()
 
@@ -369,7 +369,7 @@ func (m *PortProxyManager) StopProxy(containerName string, containerPort int) bo
 	delete(m.entries, key)
 	delete(m.used, entry.hostPort)
 
-	log.Printf("[sandbox-proxy] Stopped listener :%d for %s:%d", entry.hostPort, containerName, containerPort)
+	slog.Info("stopped listener", "component", "sandbox-proxy", "host_port", entry.hostPort, "container", containerName, "container_port", containerPort)
 	return true
 }
 
@@ -384,7 +384,7 @@ func (m *PortProxyManager) StopAllForContainer(containerName string) int {
 			entry.cancel()
 			delete(m.used, entry.hostPort)
 			toDelete = append(toDelete, key)
-			log.Printf("[sandbox-proxy] Stopped listener :%d for %s:%d", entry.hostPort, containerName, entry.containerPort)
+			slog.Info("stopped listener", "component", "sandbox-proxy", "host_port", entry.hostPort, "container", containerName, "container_port", entry.containerPort)
 		}
 	}
 
@@ -475,7 +475,7 @@ func (sr *SubdomainRouter) RegisterHost(hostname, containerName string, port int
 		containerName: containerName,
 		containerPort: port,
 	}
-	log.Printf("[sandbox-proxy] Registered subdomain route: %s → %s:%d", hostname, containerName, port)
+	slog.Info("registered subdomain route", "component", "sandbox-proxy", "hostname", hostname, "container", containerName, "port", port)
 }
 
 // UnregisterHost removes a hostname mapping.
@@ -484,7 +484,7 @@ func (sr *SubdomainRouter) UnregisterHost(hostname string) {
 	defer sr.mu.Unlock()
 	if _, ok := sr.hostMap[hostname]; ok {
 		delete(sr.hostMap, hostname)
-		log.Printf("[sandbox-proxy] Unregistered subdomain route: %s", hostname)
+		slog.Info("unregistered subdomain route", "component", "sandbox-proxy", "hostname", hostname)
 	}
 }
 
@@ -500,7 +500,7 @@ func (sr *SubdomainRouter) UnregisterAllForContainer(containerName string) int {
 	}
 	for _, host := range toDelete {
 		delete(sr.hostMap, host)
-		log.Printf("[sandbox-proxy] Unregistered subdomain route: %s", host)
+		slog.Info("unregistered subdomain route", "component", "sandbox-proxy", "hostname", host)
 	}
 	return len(toDelete)
 }
@@ -704,7 +704,7 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request, ip string, port int,
 	clientConn, clientBuf, err := hijacker.Hijack()
 	if err != nil {
 		backendConn.Close()
-		log.Printf("[sandbox-proxy] WebSocket hijack failed: %v", err)
+		slog.Error("WebSocket hijack failed", "component", "sandbox-proxy", "error", err)
 		return
 	}
 
@@ -723,7 +723,7 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request, ip string, port int,
 	if _, err := clientConn.Write([]byte(respBuf.String())); err != nil {
 		clientConn.Close()
 		backendConn.Close()
-		log.Printf("[sandbox-proxy] WebSocket client write failed: %v", err)
+		slog.Error("WebSocket client write failed", "component", "sandbox-proxy", "error", err)
 		return
 	}
 
@@ -746,7 +746,7 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request, ip string, port int,
 		}
 	}
 
-	log.Printf("[sandbox-proxy] WebSocket connected: %s → %s%s", r.RemoteAddr, backendAddr, path)
+	slog.Info("WebSocket connected", "component", "sandbox-proxy", "remote_addr", r.RemoteAddr, "backend", backendAddr, "path", path)
 
 	// Bidirectional raw byte forwarding
 	done := make(chan struct{})

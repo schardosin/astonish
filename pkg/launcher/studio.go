@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -123,7 +123,7 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 			spaHandler.ServeHTTP(w, r)
 		})
 	} else {
-		log.Printf("Warning: No web assets found. Run 'npm run build' in the web directory first.")
+		slog.Warn("no web assets found, run 'npm run build' in the web directory first")
 		fallback := noAssetsHandler()
 		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if len(r.URL.Path) >= 4 && r.URL.Path[:4] == "/api" {
@@ -243,13 +243,13 @@ func containsAt(s, substr string) bool {
 func getWebAssets() fs.FS {
 	// First, try filesystem (for development)
 	if dir := findWebDir(); dir != "" {
-		log.Printf("Serving web assets from filesystem: %s", dir)
+		slog.Info("serving web assets from filesystem", "dir", dir)
 		return os.DirFS(dir)
 	}
 
 	// Fall back to embedded assets (for production binary)
 	if embeddedFS := web.GetDistFS(); embeddedFS != nil {
-		log.Printf("Serving web assets from embedded binary")
+		slog.Info("serving web assets from embedded binary")
 		return embeddedFS
 	}
 

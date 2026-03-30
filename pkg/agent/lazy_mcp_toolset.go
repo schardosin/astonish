@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 
 	"github.com/schardosin/astonish/pkg/cache"
@@ -377,7 +377,7 @@ func (l *LazyMCPToolset) Cleanup() {
 	for sid, state := range l.perSession {
 		if state.transport != nil {
 			if err := state.transport.Close(); err != nil {
-				log.Printf("[Chat Lazy] Warning: failed to close container transport for '%s' session '%s': %v", l.serverName, sid, err)
+				slog.Warn("failed to close container transport", "component", "lazy-mcp", "server", l.serverName, "session", sid, "error", err)
 			}
 		}
 	}
@@ -393,7 +393,7 @@ func (l *LazyMCPToolset) CleanupSession(sessionID string) {
 	if state, ok := l.perSession[sessionID]; ok {
 		if state.transport != nil {
 			if err := state.transport.Close(); err != nil {
-				log.Printf("[Chat Lazy] Warning: failed to close container transport for '%s' session '%s': %v", l.serverName, sessionID, err)
+				slog.Warn("failed to close container transport", "component", "lazy-mcp", "server", l.serverName, "session", sessionID, "error", err)
 			}
 		}
 		delete(l.perSession, sessionID)

@@ -1,0 +1,1507 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"iter"
+	"log/slog"
+	"strings"
+
+	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/planner"
+	"google.golang.org/adk/agent"
+	"google.golang.org/adk/agent/llmagent"
+	"google.golang.org/adk/model"
+	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool"
+	"google.golang.org/genai"
+)
+
+// executeLLMNode executes an LLM node with intelligent retry logic
+func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config.Node, nodeName string, state session.State, yield func(*session.Event, error) bool) bool {
+	// Clear any previous error state at the start
+	state.Set("_has_error", false)
+	state.Set("_last_error", "")
+	state.Set("_error_node", "")
+
+	// Determine max retries
+	maxRetries := 3 // default
+	if node.MaxRetries > 0 {
+		maxRetries = node.MaxRetries
+	}
+
+	if a.DebugMode {
+		slog.Warn("starting execute llm node", "component", "retry", "node", nodeName, "max_retries", maxRetries)
+	}
+
+	// Determine retry strategy
+	useIntelligentRetry := true
+	if node.RetryStrategy == "simple" {
+		useIntelligentRetry = false
+	}
+
+	// Error context for intelligent recovery
+	errorHistory := []string{}
+	var lastErr error // Track the last error for use after the loop
+
+	// Retry loop
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if a.DebugMode && attempt > 0 {
+			slog.Warn("retry attempt", "component", "retry", "attempt", attempt+1, "max_retries", maxRetries, "node", nodeName)
+		}
+
+		// Execute the node
+		success, err := a.executeLLMNodeAttempt(ctx, node, nodeName, state, yield)
+		lastErr = err // Track the last error
+
+		if success {
+			// Success! Clear any error state and return
+			state.Set("_error_context", nil)
+			state.Set("_has_error", false)
+			return true
+		}
+
+		// Node failed - decide whether to retry
+		if err == nil {
+			// No error but failed - check if we're pausing for user approval
+			// This is a valid pause state, not a failure!
+			awaitingApproval, _ := state.Get("awaiting_approval")
+			if isAwaiting, ok := awaitingApproval.(bool); ok && isAwaiting {
+				if a.DebugMode {
+					slog.Warn("pausing for user approval", "component", "retry")
+				}
+				// This is a pause, not a failure - ensure _has_error is false
+				// so the main loop will pause (return) instead of going to END
+				state.Set("_has_error", false)
+				return false // Pause - main loop will return when _has_error=false
+			}
+			// Truly failed with no error (shouldn't happen, but handle it)
+			return false
+		}
+
+		// Build error context
+		errCtx := ErrorContext{
+			NodeName:       nodeName,
+			NodeType:       node.Type,
+			ErrorType:      "execution_error",
+			ErrorMessage:   err.Error(),
+			AttemptCount:   attempt + 1,
+			MaxRetries:     maxRetries,
+			PreviousErrors: errorHistory,
+		}
+
+		// Store error context in state
+		state.Set("_error_context", errCtx)
+		state.Set("_has_error", true)
+
+		// Check if this is the last attempt
+		isLastAttempt := (attempt >= maxRetries-1)
+
+		// Decide whether to retry using intelligent recovery or simple retry
+		var shouldRetry bool
+		var errorTitle string
+		var oneLiner string
+		var explanation string
+
+		if useIntelligentRetry && !isLastAttempt {
+			// Use LLM-based error recovery
+			recovery := NewErrorRecoveryNode(a.LLM, a.DebugMode)
+			var recoveryErr error
+			decision, recoveryErr := recovery.Decide(ctx, errCtx)
+
+			if recoveryErr != nil {
+				// Error recovery failed, fall back to simple retry
+				if a.DebugMode {
+					slog.Warn("error recovery failed, using simple retry", "component", "retry", "error", recoveryErr)
+				}
+				shouldRetry = true
+				errorTitle = "Retry Attempt"
+				oneLiner = "Error analysis failed"
+				explanation = "Error analysis failed, retrying automatically"
+			} else {
+				shouldRetry = decision.ShouldRetry
+				errorTitle = decision.Title
+				oneLiner = decision.OneLiner
+				explanation = decision.Reason
+
+				if decision.Suggestion != "" {
+					explanation += "\n\nSuggestion: " + decision.Suggestion
+				}
+			}
+		} else if !isLastAttempt {
+			// Simple retry strategy
+			shouldRetry = true
+			errorTitle = "Retry Attempt"
+			oneLiner = fmt.Sprintf("Attempt %d/%d", attempt+2, maxRetries)
+			explanation = fmt.Sprintf("Retrying automatically (attempt %d/%d)", attempt+2, maxRetries)
+		}
+
+		// Emit retry badge ONLY if we are actually going to retry.
+		// This prevents showing "Retry" on the last attempt (where we show Max Retries Failure)
+		// or when the agent decides to Abort (where we show the Abort Failure).
+		if shouldRetry {
+			if oneLiner == "" {
+				oneLiner = errorTitle
+			}
+
+			if !yield(&session.Event{
+				Actions: session.EventActions{
+					StateDelta: map[string]any{
+						"_retry_info": map[string]any{
+							"attempt":     attempt + 1,
+							"max_retries": maxRetries,
+							"reason":      oneLiner,
+						},
+						"_processing_info": true,
+					},
+				},
+			}, nil) {
+				return false
+			}
+		}
+
+		if isLastAttempt {
+			// Show final error after retry badge
+			if a.DebugMode {
+				slog.Warn("max retries exceeded", "component", "retry", "max_retries", maxRetries, "node", nodeName)
+			}
+
+			// Emit final failure info via StateDelta
+			if !yield(&session.Event{
+				Actions: session.EventActions{
+					StateDelta: map[string]any{
+						"_failure_info": map[string]any{
+							"title":          "Max Retries Exceeded",
+							"reason":         fmt.Sprintf("Failed after %d attempts. The error persisted across all retry attempts.", maxRetries),
+							"original_error": err.Error(),
+						},
+						"_processing_info": true,
+					},
+				},
+			}, nil) {
+				// Yield was cancelled, stop immediately
+				return false
+			}
+
+			// Store error details in state for error handler nodes
+			state.Set("_last_error", err.Error())
+			state.Set("_error_node", nodeName)
+			state.Set("_has_error", true)
+
+			if a.DebugMode {
+				slog.Warn("max retries message yielded, breaking retry loop", "component", "retry")
+			}
+
+			// Break out of retry loop
+			break
+		}
+
+		if !shouldRetry {
+			// Error recovery decided to abort - don't retry
+			if a.DebugMode {
+				slog.Warn("error recovery decided to abort", "component", "retry", "explanation", explanation)
+			}
+
+			// Split explanation into reason and suggestion
+			reason := explanation
+			suggestion := ""
+
+			// Check if explanation contains a "Suggestion:" section
+			if strings.Contains(explanation, "Suggestion: ") {
+				parts := strings.SplitN(explanation, "Suggestion: ", 2)
+				if len(parts) == 2 {
+					reason = strings.TrimSpace(parts[0])
+					suggestion = strings.TrimSpace(parts[1])
+				}
+			} else if strings.Contains(explanation, "\n\nSuggestion: ") {
+				parts := strings.SplitN(explanation, "\n\nSuggestion: ", 2)
+				if len(parts) == 2 {
+					reason = strings.TrimSpace(parts[0])
+					suggestion = strings.TrimSpace(parts[1])
+				}
+			}
+
+			title := errorTitle
+			if title == "" {
+				title = "Error"
+			}
+
+			// Emit abort info via StateDelta (same pattern as _failure_info)
+			if !yield(&session.Event{
+				Actions: session.EventActions{
+					StateDelta: map[string]any{
+						"_failure_info": map[string]any{
+							"title":          title,
+							"reason":         reason,
+							"suggestion":     suggestion,
+							"original_error": err.Error(),
+						},
+						"_processing_info": true, // No "Agent:" prefix for this display
+					},
+				},
+			}, nil) {
+				// Yield was cancelled, stop immediately
+				return false
+			}
+
+			// Store error details in state for error handler nodes
+			state.Set("_last_error", err.Error())
+			state.Set("_error_node", nodeName)
+			state.Set("_has_error", true)
+
+			if a.DebugMode {
+				slog.Warn("abort message yielded, breaking retry loop", "component", "retry")
+			}
+
+			// Break out of retry loop - error recovery decided not to retry
+			break
+		}
+
+		// Continue with retry
+		if a.DebugMode {
+			slog.Warn("proceeding with retry", "component", "retry", "attempt", attempt+2, "max_retries", maxRetries)
+		}
+
+		// Add error to history
+		errorHistory = append(errorHistory, err.Error())
+
+		// Continue to next attempt
+	}
+
+	// If we exit the loop, it means we exhausted retries or error recovery decided to abort
+	// Check if there's an error transition in the flow for this node
+	nextNode, transErr := a.getNextNode(nodeName, state)
+
+	if transErr != nil || nextNode == "" {
+		// No error transition configured - stop execution with error
+		if a.DebugMode {
+			slog.Warn("no error transition found, stopping execution", "component", "retry", "node", nodeName)
+		}
+		yield(nil, fmt.Errorf("node '%s' failed: %w", nodeName, lastErr))
+		return false
+	}
+
+	// There is a transition (possibly to an error handler node)
+	// Return false to indicate failure, let the main loop handle the transition
+	if a.DebugMode {
+		slog.Warn("error transition found", "component", "retry", "from_node", nodeName, "to_node", nextNode)
+	}
+	return false
+}
+
+// executeLLMNodeAttempt executes a single attempt of an LLM node using ADK's llmagent
+func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node *config.Node, nodeName string, state session.State, yield func(*session.Event, error) bool) (bool, error) {
+	// Render prompt and system instruction
+	userPrompt := a.renderString(node.Prompt, state)
+	systemInstruction := a.renderString(node.System, state)
+
+	// Use system instruction as the main instruction for the agent
+	// This ensures it goes to the System Prompt in the LLM request
+	instruction := systemInstruction
+
+	// If no system instruction, use the user prompt as instruction (fallback behavior)
+	// But for Bedrock/Claude, we prefer separation.
+	if instruction == "" {
+		instruction = "You are a helpful AI assistant."
+	}
+
+	if a.DebugMode {
+		slog.Debug("final user prompt", "prompt", userPrompt)
+		slog.Debug("final system instruction", "instruction", instruction)
+	}
+
+	// Manually append the User Message to the session history
+	// This ensures that the LLM sees a User Message even if llmagent doesn't pick it up from context
+	// or if history is empty.
+	userEvent := &session.Event{
+		InvocationID: ctx.InvocationID(),
+		Branch:       ctx.Branch(),
+		Author:       "user",
+		LLMResponse: model.LLMResponse{
+			Content: &genai.Content{
+				Parts: []*genai.Part{{Text: userPrompt}},
+				Role:  "user",
+			},
+		},
+	}
+
+	sess := ctx.Session()
+
+	if a.SessionService != nil {
+
+		// Unwrap ScopedSession if present, as SessionService might expect the underlying session type
+		if scopedSess, ok := sess.(*ScopedSession); ok {
+			sess = scopedSess.Session
+		}
+
+		// Try to append with (potentially unwrapped) session object
+		if err := a.SessionService.AppendEvent(ctx, sess, userEvent); err != nil {
+			// Retry with session fetched via Get (last resort)
+			if sess.ID() != "" {
+				appName := sess.AppName()
+				if appName == "" {
+					appName = "astonish"
+				}
+				userID := sess.UserID()
+				if userID == "" {
+					userID = "console_user"
+				}
+
+				getResp, getErr := a.SessionService.Get(ctx, &session.GetRequest{
+					SessionID: sess.ID(),
+					AppName:   appName,
+					UserID:    userID,
+				})
+				if getErr == nil && getResp != nil && getResp.Session != nil {
+					if err := a.SessionService.AppendEvent(ctx, getResp.Session, userEvent); err != nil {
+						slog.Error("failed to append user event to session", "error", err)
+					}
+				}
+			}
+		}
+	}
+
+	// 2. Initialize LLM Agent
+	// We need to pass tools if the node uses them
+	var nodeTools []tool.Tool
+	if node.Tools {
+		// Validate that all selected tools exist
+		if len(node.ToolsSelection) > 0 {
+			foundTools := make(map[string]bool)
+
+			// Check internal tools
+			for _, t := range a.Tools {
+				foundTools[t.Name()] = true
+			}
+
+			// Check MCP toolsets
+			if len(a.Toolsets) > 0 {
+				minimalCtx := &minimalReadonlyContext{Context: ctx}
+				for _, ts := range a.Toolsets {
+					tools, err := ts.Tools(minimalCtx)
+					if err == nil {
+						for _, t := range tools {
+							foundTools[t.Name()] = true
+						}
+					}
+				}
+			}
+
+			var missingTools []string
+			for _, selected := range node.ToolsSelection {
+				if !foundTools[selected] {
+					missingTools = append(missingTools, selected)
+				}
+			}
+
+			if len(missingTools) > 0 {
+				toolErr := fmt.Errorf("configured tools not found: %s", strings.Join(missingTools, ", "))
+				yield(nil, toolErr)
+				return false, toolErr
+			}
+		}
+
+		// Filter based on ToolsSelection
+		if len(node.ToolsSelection) > 0 {
+
+			for _, t := range a.Tools {
+				for _, selected := range node.ToolsSelection {
+					// Check against the underlying tool name if wrapped?
+					// t.Name() should return the name.
+					if t.Name() == selected {
+						nodeTools = append(nodeTools, t)
+
+					}
+				}
+			}
+
+		} else {
+			// If no selection, add all? Or none?
+			// Python adds all if selection is empty?
+			// For now, assume selection is required
+
+			nodeTools = a.Tools
+		}
+	} else {
+
+	}
+
+	// Inject tool use instruction if tools are enabled
+	// Inject tool use instruction if tools are enabled
+	if node.Tools {
+		instruction += "\n\nIMPORTANT: You have access to tools that you MUST use to complete this task. Do not describe what you would do or say you are waiting for results. Instead, immediately call the appropriate tool with the required parameters. The tools are available and ready to use right now."
+	}
+
+	// Inject instruction for raw_tool_output
+	if len(node.RawToolOutput) > 0 {
+		instruction += "\n\nIMPORTANT: The tool will return the raw content directly to the state. Your final task for this step is to confirm its retrieval."
+	}
+
+	// Build OutputSchema from output_model if defined
+	// This leverages ADK's native structured output support
+	var outputSchema *genai.Schema
+	var outputKey string
+	if len(node.OutputModel) > 0 {
+		// Add explicit instruction about the required output format
+		instruction += "\n\nIMPORTANT: Your response MUST be a valid JSON object with the following structure:\n"
+		instruction += "{\n"
+		for key, typeName := range node.OutputModel {
+			instruction += fmt.Sprintf("  \"%s\": <%s>,\n", key, typeName)
+		}
+		instruction += "}\n"
+		instruction += "Do not include any other text, explanations, or markdown formatting. Return ONLY the JSON object."
+
+		properties := make(map[string]*genai.Schema)
+		required := []string{}
+
+		for key, typeName := range node.OutputModel {
+			var propType genai.Type
+			var items *genai.Schema
+
+			switch typeName {
+			case "str", "string":
+				propType = genai.TypeString
+			case "int", "integer":
+				propType = genai.TypeInteger
+			case "float", "number":
+				propType = genai.TypeNumber
+			case "bool", "boolean":
+				propType = genai.TypeBoolean
+			case "list", "array":
+				propType = genai.TypeArray
+				// Default to string items, can be enhanced later
+				items = &genai.Schema{Type: genai.TypeString}
+			case "dict", "object", "any":
+				propType = genai.TypeObject
+			default:
+				propType = genai.TypeString
+			}
+
+			schema := &genai.Schema{
+				Type: propType,
+			}
+			if items != nil {
+				schema.Items = items
+			}
+
+			properties[key] = schema
+			required = append(required, key)
+		}
+
+		outputSchema = &genai.Schema{
+			Type:       genai.TypeObject,
+			Properties: properties,
+			Required:   required,
+		}
+
+		// If there is only one output key, we might want to map it directly
+		// But for now, we stick to the map/object structure
+	}
+
+	// Create ADK llmagent for this node
+	// Strategy:
+	// - Internal tools go via Tools field
+	// - MCP toolsets go via Toolsets field
+	// - OutputSchema is used for structured output (replaces manual JSON parsing)
+	// Declare l (agent) early so it can be captured by the callback
+	var l agent.Agent
+
+	var llmAgent agent.Agent
+	var err error
+
+	var internalTools []tool.Tool
+	if node.Tools {
+		// Add universal instruction for tool-enabled nodes to prevent repeating completed work
+		// This helps models like GPT that may not correctly interpret conversation history
+		instruction += "\n\nIMPORTANT: When executing tools, check the conversation history first. " +
+			"If a tool has already been called and returned a successful result (not 'pending_approval'), " +
+			"do NOT call that tool again. Proceed only with tools that haven't completed successfully yet."
+
+		// Prepare internal tools (no wrapping needed - callback handles approval)
+		if len(nodeTools) > 0 {
+			internalTools = append(internalTools, nodeTools...)
+		}
+
+		// Prepare MCP toolsets (no wrapping needed - callback handles approval)
+		var mcpToolsets []tool.Toolset
+		if len(a.Toolsets) > 0 {
+			for _, ts := range a.Toolsets {
+				// Skip toolsets that don't contain any of the requested tools (if filtering is enabled)
+				if len(node.ToolsSelection) > 0 {
+					// Check if this toolset has any of the requested tools
+					minimalCtx := &minimalReadonlyContext{Context: ctx}
+					tsTools, err := ts.Tools(minimalCtx)
+					if err != nil {
+
+						continue
+					}
+
+					// Check if any tool in this toolset matches our selection
+					hasMatchingTool := false
+					for _, t := range tsTools {
+						for _, allowed := range node.ToolsSelection {
+							if t.Name() == allowed {
+								hasMatchingTool = true
+								break
+							}
+						}
+						if hasMatchingTool {
+							break
+						}
+					}
+
+					if !hasMatchingTool {
+
+						continue
+					}
+				}
+
+				mcpToolsets = append(mcpToolsets, ts)
+
+			}
+		}
+
+		// Apply tools_selection filter if specified
+		if len(node.ToolsSelection) > 0 {
+
+			// Filter internal tools
+			var filteredInternalTools []tool.Tool
+			for _, t := range internalTools {
+				toolName := t.Name()
+				for _, allowed := range node.ToolsSelection {
+					if toolName == allowed {
+						filteredInternalTools = append(filteredInternalTools, t)
+						break
+					}
+				}
+			}
+			internalTools = filteredInternalTools
+
+			// Wrap MCP toolsets with FilteredToolset to filter tools
+			var filteredMCPToolsets []tool.Toolset
+			for _, ts := range mcpToolsets {
+				filteredMCPToolsets = append(filteredMCPToolsets, &FilteredToolset{
+					underlying:   ts,
+					allowedTools: node.ToolsSelection,
+				})
+			}
+			mcpToolsets = filteredMCPToolsets
+
+		}
+
+		// Create BeforeToolCallback for approval if needed
+		var beforeToolCallbacks []llmagent.BeforeToolCallback
+		var afterToolCallbacks []llmagent.AfterToolCallback
+
+		if !node.ToolsAutoApproval && !a.AutoApprove {
+			beforeToolCallbacks = []llmagent.BeforeToolCallback{
+				a.buildApprovalCallback(node, state, yield),
+			}
+		} else {
+			// Auto-approval enabled: Register callback to emit visual event
+			// and then allow the tool to execute normally
+			beforeToolCallbacks = []llmagent.BeforeToolCallback{
+				func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
+					toolName := t.Name()
+
+					// Emit auto-approval visual event
+					prompt := a.formatToolApprovalRequest(toolName, args)
+					yield(&session.Event{
+						LLMResponse: model.LLMResponse{
+							Content: &genai.Content{
+								Parts: []*genai.Part{{Text: prompt}},
+								Role:  "model",
+							},
+						},
+						Actions: session.EventActions{
+							StateDelta: map[string]any{
+								"auto_approved": true,
+								// Note: Do NOT set approval_tool here - it would clobber
+								// the value set by subsequent tools that need approval
+							},
+						},
+					}, nil)
+
+					// Return nil to allow the actual tool to execute
+					return nil, nil
+				},
+			}
+		}
+
+		// Add AfterToolCallback for debugging and raw_tool_output handling
+		afterToolCallbacks = []llmagent.AfterToolCallback{
+			a.buildAfterToolCallback(node, state, yield),
+		}
+
+		llmAgent, err = llmagent.New(llmagent.Config{
+			Name:                nodeName,
+			Model:               a.LLM,
+			Instruction:         instruction,
+			Tools:               internalTools,
+			Toolsets:            mcpToolsets,
+			OutputSchema:        outputSchema,
+			OutputKey:           outputKey,
+			BeforeToolCallbacks: beforeToolCallbacks,
+			AfterToolCallbacks:  afterToolCallbacks,
+		})
+	} else {
+		// No tools enabled
+		llmAgent, err = llmagent.New(llmagent.Config{
+			Name:         nodeName,
+			Model:        a.LLM,
+			Instruction:  instruction,
+			Tools:        nodeTools,
+			OutputSchema: outputSchema,
+			OutputKey:    outputKey,
+		})
+	}
+	l = llmAgent // Assign to 'l' after creation
+
+	// Wrap session in LiveSession to ensure fresh history with node-scoped filtering
+	liveSess := &LiveSession{
+		service: a.SessionService,
+		ctx:     ctx,
+		base:    sess,
+		agent:   a,
+	}
+
+	// Create a ScopedContext that uses the LiveSession and the correct Agent (l)
+	// This ensures:
+	// 1. llmagent sees fresh history (via LiveSession.Events)
+	// 2. llmagent sees itself as the agent (via ScopedContext.Agent override), fixing ContentsRequestProcessor
+	scopedCtx := &ScopedContext{
+		InvocationContext: ctx,
+		session:           liveSess,
+		state:             state,
+		agent:             l,
+	}
+
+	// Use scopedCtx for Run
+	ctx = scopedCtx
+
+	if err != nil {
+		return false, fmt.Errorf("failed to create llmagent: %w", err)
+	}
+
+	// Reset the pause flag before starting
+	state.Set("force_pause", false)
+
+	// NOTE: Text suppression is now handled by console.go buffering logic.
+	// We allow all text to flow through so greetings before tool calls are visible.
+	// The console.go will buffer and only show relevant text (before tool boxes).
+
+	// Run the agent - ADK handles everything (native function calling)
+	var fullResponse strings.Builder
+	var debugTextBuffer strings.Builder // Buffer for debug output
+	toolCallCount := 0
+	const maxToolCalls = 20 // Maximum tool calls to prevent infinite loops
+
+	// Check if we should use ReAct fallback
+	useReActFallback := false
+	if fallbackVal, err := state.Get("_use_react_fallback"); err == nil {
+		if b, ok := fallbackVal.(bool); ok && b {
+			useReActFallback = true
+		}
+	}
+
+	if useReActFallback {
+		return a.executeReActFallback(ctx, node, nodeName, state, yield, internalTools, instruction, userPrompt)
+	}
+
+	// We'll wrap the iteration in a function to allow retry
+	runAgent := func() iter.Seq2[*session.Event, error] {
+		return l.Run(ctx)
+	}
+
+	// Execute with fallback retry
+	for event, err := range runAgent() {
+		if err != nil {
+			// Check for "Tool calling is not supported" error or OpenRouter 404
+			if strings.Contains(err.Error(), "Tool calling is not supported") ||
+				strings.Contains(err.Error(), "No endpoints found that support tool use") ||
+				strings.Contains(err.Error(), "Function calling is not enabled") ||
+				strings.Contains(err.Error(), "does not support tools") ||
+				strings.Contains(err.Error(), "`tool calling` is not supported") {
+				if a.DebugMode {
+					slog.Debug("caught tool calling error, switching to react fallback", "error", err)
+				}
+
+				// Enable fallback for future runs
+				state.Set("_use_react_fallback", true)
+
+				return a.executeReActFallback(ctx, node, nodeName, state, yield, internalTools, instruction, userPrompt)
+			}
+
+			// Genuine error
+			return false, err
+		}
+
+		// [ERROR HANDLING] Track tool errors but let them flow to the LLM
+		// The LLM needs to see the error response to understand the tool failed
+		// We'll stop after the LLM processes the error
+		hasToolError := false
+		var toolErrorMsg string
+		if event.LLMResponse.Content != nil {
+			for _, part := range event.LLMResponse.Content.Parts {
+				if part.FunctionResponse != nil {
+					resp := part.FunctionResponse.Response
+
+					// Check for the "error" key
+					if errVal, hasError := resp["error"]; hasError && errVal != nil {
+						toolName := part.FunctionResponse.Name
+
+						// Convert error to string if it's an error type
+						var errorStr string
+						if errObj, ok := errVal.(error); ok {
+							errorStr = errObj.Error()
+						} else {
+							errBytes, _ := json.Marshal(errVal)
+							errorStr = string(errBytes)
+						}
+
+						if a.DebugMode {
+							slog.Debug("tool failed with error", "tool", toolName, "error", errorStr)
+						}
+
+						hasToolError = true
+						toolErrorMsg = fmt.Sprintf("tool '%s' failed: %s", toolName, errorStr)
+						// Don't return yet - let the error response flow to the LLM first
+					}
+				}
+			}
+		}
+
+		// Debug logging for event flow
+		if a.DebugMode {
+			if event.LLMResponse.Content != nil {
+				for _, part := range event.LLMResponse.Content.Parts {
+					if part.FunctionCall != nil {
+						slog.Debug("function call", "name", part.FunctionCall.Name)
+						toolCallCount++
+					}
+					if part.FunctionResponse != nil {
+						respJSON, _ := json.MarshalIndent(part.FunctionResponse.Response, "", "  ")
+						slog.Debug("tool execution result", "tool", part.FunctionResponse.Name, "response", string(respJSON))
+					}
+					if part.Text != "" {
+						// Buffer text instead of printing immediately
+						debugTextBuffer.WriteString(part.Text)
+					}
+				}
+			}
+		}
+
+		// Accumulate text response for output_model (Unconditionally at start of loop)
+		if event.LLMResponse.Content != nil {
+			for _, part := range event.LLMResponse.Content.Parts {
+				if part.Text != "" {
+					fullResponse.WriteString(part.Text)
+				}
+			}
+		}
+
+		// Count tool calls to prevent infinite loops
+		if event.LLMResponse.Content != nil {
+			for _, part := range event.LLMResponse.Content.Parts {
+				if part.FunctionCall != nil {
+					if !a.DebugMode {
+						toolCallCount++
+					}
+				}
+			}
+		}
+
+		// Hard limit to prevent infinite loops
+		if toolCallCount > maxToolCalls {
+			if a.DebugMode {
+				slog.Debug("tool call limit exceeded", "max_tool_calls", maxToolCalls, "node", nodeName)
+			}
+			return false, fmt.Errorf("tool call limit exceeded (%d) for node '%s'", maxToolCalls, nodeName)
+		}
+
+		// 1. Determine if this event should be displayed to the user
+		shouldYieldEvent := true
+
+		if event.LLMResponse.Content != nil && len(event.LLMResponse.Content.Parts) > 0 {
+			// Check if this is a text-only event (no tool calls/responses)
+			isTextOnly := true
+			for _, part := range event.LLMResponse.Content.Parts {
+				if part.FunctionCall != nil || part.FunctionResponse != nil {
+					isTextOnly = false
+					break
+				}
+			}
+
+			// Suppress text-only events when node has output_model
+			// This prevents raw JSON from being displayed to the user.
+			// The JSON is parsed and values are distributed to StateDelta.
+			// If user_message is defined, it will handle displaying content from state.
+			if isTextOnly && len(node.OutputModel) > 0 {
+				shouldYieldEvent = false
+			}
+		}
+
+		// 2. FORWARD the event if it should be displayed
+		if shouldYieldEvent {
+			if !yield(event, nil) {
+				return false, nil
+			}
+		}
+
+		// 2a. If we detected a tool error, stop after yielding the error response
+		// This allows the LLM to see the error before we stop
+		if hasToolError {
+			return false, fmt.Errorf("%s", toolErrorMsg)
+		}
+
+		// 2b. CHECK FOR INTERRUPT SIGNAL
+		// If the tool set this flag, we must stop immediately
+		if shouldPause, _ := state.Get("force_pause"); shouldPause == true {
+			// Clear the flag so it doesn't block the next run
+			state.Set("force_pause", false)
+			return false, nil // Stops the loop, effectively pausing the agent
+		}
+
+		// 4. Handle raw_tool_output state updates
+		if event.LLMResponse.Content != nil {
+			for _, part := range event.LLMResponse.Content.Parts {
+				if part.FunctionResponse != nil {
+					// This is a tool response - print it for debugging
+					if a.DebugMode {
+						respJSON, _ := json.MarshalIndent(part.FunctionResponse.Response, "", "  ")
+						slog.Debug("tool response", "tool", part.FunctionResponse.Name, "response", string(respJSON))
+					}
+
+				}
+			}
+		}
+	}
+
+	// Print accumulated debug text
+	if a.DebugMode && debugTextBuffer.Len() > 0 {
+		slog.Debug("full llm response", "response", debugTextBuffer.String())
+	}
+
+	if a.DebugMode {
+		slog.Debug("after llmagent run loop", "output_model_length", len(node.OutputModel), "user_message_length", len(node.UserMessage))
+	}
+
+	// Distribute output_model values by parsing the LLM's text response
+	// ADK's OutputSchema doesn't work reliably with tool-enabled nodes
+	if len(node.OutputModel) > 0 {
+		// Get the accumulated text response
+		responseText := strings.TrimSpace(fullResponse.String())
+
+		if a.DebugMode {
+			slog.Debug("attempting to extract output_model", "response_length", len(responseText))
+		}
+
+		if responseText != "" {
+			// Try to parse as JSON
+			cleaned := a.cleanAndFixJson(responseText)
+
+			if a.DebugMode {
+				slog.Debug("cleaned json", "json", cleaned)
+			}
+
+			var parsedOutput map[string]any
+			if err := json.Unmarshal([]byte(cleaned), &parsedOutput); err == nil {
+				if a.DebugMode {
+					slog.Debug("successfully parsed json", "keys", getKeys(parsedOutput))
+				}
+
+				// Distribute values to individual output_model keys
+				delta := make(map[string]any)
+				for key := range node.OutputModel {
+					if val, ok := parsedOutput[key]; ok {
+						if a.DebugMode {
+							slog.Debug("setting state key", "key", key, "value_type", fmt.Sprintf("%T", val))
+						}
+						state.Set(key, val)
+						delta[key] = val
+					} else {
+						if a.DebugMode {
+							slog.Debug("key not found in parsed output", "key", key)
+						}
+					}
+				}
+
+				// Emit state delta if we updated anything
+				if len(delta) > 0 {
+					if a.DebugMode {
+						slog.Debug("emitting state delta", "keys", getKeys(delta))
+					}
+					yield(&session.Event{
+						Actions: session.EventActions{
+							StateDelta: delta,
+						},
+					}, nil)
+				}
+			} else {
+				// JSON parsing failed - return error to trigger retry
+				if a.DebugMode {
+					slog.Debug("failed to parse json", "error", err)
+				}
+				// Create a descriptive error that will help intelligent retry
+				truncatedPreview := cleaned
+				if len(truncatedPreview) > 200 {
+					truncatedPreview = truncatedPreview[:200] + "..."
+				}
+				return false, fmt.Errorf("failed to parse LLM output as JSON for output_model extraction: %v. Response preview: %s", err, truncatedPreview)
+			}
+		} else {
+			// Empty response when output_model is expected - return error
+			if a.DebugMode {
+				slog.Debug("response text is empty, required for output_model extraction")
+			}
+			return false, fmt.Errorf("LLM returned empty response but output_model requires JSON output with keys: %v", getKeysStr(node.OutputModel))
+		}
+	}
+
+	// Emit raw_tool_output values as StateDelta for persistence across session restarts
+	// The AfterToolCallback stores the data in state, but we must also emit it as StateDelta
+	// so it's preserved in event history when the session pauses for user input
+	if len(node.RawToolOutput) > 0 {
+		delta := make(map[string]any)
+		for stateKey := range node.RawToolOutput {
+			val, err := state.Get(stateKey)
+			if err == nil && val != nil {
+				// Only include non-empty values (empty string means not yet populated)
+				if strVal, ok := val.(string); ok && strVal == "" {
+					continue
+				}
+				delta[stateKey] = val
+				if a.DebugMode {
+					slog.Debug("including raw_tool_output in state delta for persistence", "state_key", stateKey)
+				}
+			}
+		}
+
+		if len(delta) > 0 {
+			if a.DebugMode {
+				slog.Debug("emitting raw_tool_output state delta", "keys", getKeys(delta))
+			}
+			yield(&session.Event{
+				Actions: session.EventActions{
+					StateDelta: delta,
+				},
+			}, nil)
+		}
+	}
+
+	// Handle user_message if defined
+	// IMPORTANT: We need to emit this with BOTH text content AND StateDelta
+	// The text content will be displayed, and we'll add a special marker in StateDelta
+	// to tell console.go to print the "Agent:" prefix
+	if len(node.UserMessage) > 0 {
+		var textParts []string
+
+		for _, msgPart := range node.UserMessage {
+			// Try to resolve as state variable first
+			if val, err := state.Get(msgPart); err == nil {
+				textParts = append(textParts, fmt.Sprintf("%v", val))
+
+				if a.DebugMode {
+					slog.Debug("resolved user message part", "part", msgPart, "value", val)
+				}
+			}
+		}
+
+		if len(textParts) > 0 {
+			if a.DebugMode {
+				slog.Debug("emitting user_message event", "text", strings.Join(textParts, " "))
+			}
+
+			// Emit event with text content AND a special marker in StateDelta
+			// The marker tells console.go this is a user_message that needs the "Agent:" prefix
+			// Note: Field values are NOT included here - they are already in the output_model StateDelta event
+			userMessageEvent := &session.Event{
+				LLMResponse: model.LLMResponse{
+					Content: &genai.Content{
+						Parts: []*genai.Part{{Text: strings.Join(textParts, " ")}},
+						Role:  "model",
+					},
+				},
+				Actions: session.EventActions{
+					StateDelta: map[string]any{
+						"_user_message_display": true, // Special marker for console.go
+					},
+				},
+			}
+
+			if !yield(userMessageEvent, nil) {
+				return false, nil
+			}
+
+			if a.DebugMode {
+				slog.Debug("user_message event yielded successfully")
+			}
+		}
+	}
+
+	return true, nil
+}
+
+// buildApprovalCallback creates the BeforeToolCallback for approval-gated tools
+func (a *AstonishAgent) buildApprovalCallback(node *config.Node, state session.State, yield func(*session.Event, error) bool) llmagent.BeforeToolCallback {
+	return func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
+		toolName := t.Name()
+
+		// DEBUG: Log tool execution attempt
+		if a.DebugMode {
+			argsJSON, _ := json.MarshalIndent(args, "", "  ")
+			slog.Debug("tool execution attempt", "tool", toolName, "arguments", string(argsJSON))
+		}
+
+		// Node-scoped approval key
+		approvalKey := fmt.Sprintf("approval:%s:%s", node.Name, toolName)
+
+		// Check if we already have approval for this tool
+		approvedVal, _ := state.Get(approvalKey)
+
+		approved := false
+		if b, ok := approvedVal.(bool); ok && b {
+			approved = true
+		}
+
+		if a.DebugMode {
+			slog.Debug("approval check", "approved", approved, "approval_key", approvalKey)
+		}
+
+		// Fallback: Check history for explicit user approval if state is missing
+		if !approved && a.SessionService != nil {
+			// Retrieve session from service to get events
+			sessResp, err := a.SessionService.Get(ctx, &session.GetRequest{
+				AppName:   ctx.AppName(),
+				UserID:    ctx.UserID(),
+				SessionID: ctx.SessionID(),
+			})
+
+			if err == nil && sessResp != nil && sessResp.Session != nil {
+				events := sessResp.Session.Events()
+				if events.Len() >= 2 {
+					lastEvent := events.At(events.Len() - 1)
+					prevEvent := events.At(events.Len() - 2)
+
+					// Check if last event is user "Yes"
+					isUserYes := false
+					if lastEvent.Author == "user" && lastEvent.LLMResponse.Content != nil && len(lastEvent.LLMResponse.Content.Parts) > 0 {
+						text := strings.TrimSpace(lastEvent.LLMResponse.Content.Parts[0].Text)
+						if strings.EqualFold(text, "Yes") {
+							isUserYes = true
+						}
+					}
+
+					if isUserYes {
+						// Check if prev event was an approval request
+						if prevEvent.Actions.StateDelta != nil {
+							if val, ok := prevEvent.Actions.StateDelta["awaiting_approval"]; ok {
+								if b, ok := val.(bool); ok && b {
+									// Check if it was for THIS tool
+									if toolVal, ok := prevEvent.Actions.StateDelta["approval_tool"]; ok {
+										if tName, ok := toolVal.(string); ok && tName == toolName {
+											approved = true
+											if a.DebugMode {
+												slog.Debug("approved via history check")
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if approved {
+			// Consume approval - each execution requires new approval
+			state.Set(approvalKey, false)
+			if a.DebugMode {
+				slog.Debug("tool approved, allowing execution to proceed")
+			}
+			// Allow tool to run - returning nil means "proceed with actual execution"
+			// The actual tool result will be captured by the ADK framework
+			return nil, nil
+		}
+
+		if a.DebugMode {
+			slog.Debug("tool not approved, requesting user approval")
+		}
+
+		// Check if we're already awaiting approval for another tool
+		// This handles parallel tool calls - only show first prompt
+		if alreadyAwaitingVal, _ := state.Get("awaiting_approval"); alreadyAwaitingVal != nil {
+			if alreadyAwaiting, ok := alreadyAwaitingVal.(bool); ok && alreadyAwaiting {
+				if a.DebugMode {
+					slog.Debug("already awaiting approval for another tool, skipping", "tool", toolName)
+				}
+				// Return placeholder silently - don't emit another approval request
+				return map[string]any{
+					"status": "pending_approval",
+					"info":   "Waiting for user approval on a previous tool call.",
+				}, nil
+			}
+		}
+
+		// No approval - request it
+		// We set 'force_pause' to tell the outer loop to stop immediately
+		state.Set("force_pause", true)
+		state.Set("awaiting_approval", true)
+		state.Set("approval_tool", toolName)
+		state.Set("approval_args", args)
+
+		// Emit approval request event
+		prompt := a.formatToolApprovalRequest(toolName, args)
+		yield(&session.Event{
+			LLMResponse: model.LLMResponse{
+				Content: &genai.Content{
+					Parts: []*genai.Part{{Text: prompt}},
+					Role:  "model",
+				},
+			},
+			Actions: session.EventActions{
+				StateDelta: map[string]any{
+					"awaiting_approval": true,
+					"approval_tool":     toolName,
+					"approval_options":  []string{"Yes", "No"},
+				},
+			},
+		}, nil)
+
+		// Return a placeholder result
+		// This string enters the LLM context. When we resume, we will overwrite this
+		// context or instruct the LLM to ignore it and retry.
+		placeholderResult := map[string]any{
+			"status": "pending_approval",
+			"info":   "Execution paused for user approval. When you see this message in history, it means the user has APPROVED the execution. You MUST retry the tool call immediately.",
+		}
+
+		if a.DebugMode {
+			placeholderJSON, _ := json.MarshalIndent(placeholderResult, "", "  ")
+			slog.Debug("returning placeholder result", "result", string(placeholderJSON))
+		}
+
+		return placeholderResult, nil
+	}
+}
+
+// buildAfterToolCallback creates the AfterToolCallback for debugging and raw_tool_output handling
+func (a *AstonishAgent) buildAfterToolCallback(node *config.Node, state session.State, yield func(*session.Event, error) bool) llmagent.AfterToolCallback {
+	return func(ctx tool.Context, t tool.Tool, args map[string]any, result map[string]any, err error) (map[string]any, error) {
+		// Redact credential values from tool output before the LLM sees them.
+		// Exception: resolve_credential must return raw values so the LLM can
+		// use them programmatically (e.g., pipe a password to sshpass via process_write).
+		if a.Redactor != nil && result != nil && t.Name() != "resolve_credential" {
+			result = a.Redactor.RedactMap(result)
+		}
+
+		if err != nil {
+			// Tool failed, let the LLM see the error
+			return result, err
+		}
+
+		toolName := t.Name()
+
+		// DEBUG: Log successful tool execution
+		if a.DebugMode {
+			resultJSON, _ := json.MarshalIndent(result, "", "  ")
+			slog.Debug("after tool callback", "tool", toolName, "result", string(resultJSON))
+		}
+
+		// Handle raw_tool_output: Store actual result in state, return sanitized message to LLM
+		// This prevents large tool outputs from polluting the LLM's context window
+		// Handle raw_tool_output: Store actual result in state, return sanitized message to LLM
+		// This prevents large tool outputs from polluting the LLM's context window
+		if len(node.RawToolOutput) == 1 {
+			// IMPORTANT: Skip storing if this is an approval message, not actual tool output
+			// When a tool requires approval, the "result" contains pending_approval status
+			// We should NOT store this as the raw_tool_output - wait for actual tool result
+			if status, hasStatus := result["status"]; hasStatus {
+				if statusStr, ok := status.(string); ok && statusStr == "pending_approval" {
+					// This is an approval message, not the actual tool result
+					// Skip storing and let the approval flow handle things
+					if a.DebugMode {
+						slog.Debug("raw_tool_output: skipping storage, result is pending_approval message")
+					}
+					return result, nil
+				}
+			}
+
+			// Get the state key to store the raw output
+			var stateKey string
+			for k := range node.RawToolOutput {
+				stateKey = k
+				break
+			}
+
+			if a.DebugMode {
+				resultSummary := "empty"
+				if len(result) > 0 {
+					keys := make([]string, 0, len(result))
+					for k := range result {
+						keys = append(keys, k)
+					}
+					resultSummary = fmt.Sprintf("keys=%v", keys)
+				}
+				slog.Debug("raw_tool_output: storing result", "state_key", stateKey, "result_summary", resultSummary)
+			}
+
+			// Store the actual tool result in state (in-memory)
+			if err := state.Set(stateKey, result); err != nil {
+				return result, fmt.Errorf("failed to set raw_tool_output state key %s: %w", stateKey, err)
+			}
+
+			// Create the StateDelta event
+			stateEvent := &session.Event{
+				Actions: session.EventActions{
+					StateDelta: map[string]any{
+						stateKey: result,
+					},
+				},
+			}
+
+			// CRITICAL FIX: Emit StateDelta through yield for event stream
+			yield(stateEvent, nil)
+
+			// ALSO: Directly append event to session service for SYNCHRONOUS persistence
+			// This ensures the state is available in subsequent Run invocations
+			// even if async event processing hasn't completed
+			if a.SessionService != nil {
+				// Get session from context
+				if invCtx, ok := ctx.(agent.InvocationContext); ok {
+					sess := invCtx.Session()
+					// Try to append synchronously
+					if appendErr := a.SessionService.AppendEvent(ctx, sess, stateEvent); appendErr != nil {
+						// Log warning only in DebugMode - this is a fallback, yield should still work
+						if a.DebugMode {
+							slog.Debug("raw_tool_output: failed to directly append event", "error", appendErr)
+						}
+					} else if a.DebugMode {
+						slog.Debug("raw_tool_output: directly appended event to session service", "state_key", stateKey)
+					}
+				}
+			}
+
+			if a.DebugMode {
+				slog.Debug("raw_tool_output: emitted state delta", "state_key", stateKey)
+			}
+
+			// Return sanitized message to LLM instead of raw data
+			// This matches Python's behavior: LLM doesn't see the actual data
+			sanitizedResult := map[string]any{
+				"status":  "success",
+				"message": fmt.Sprintf("Tool '%s' executed successfully. Its output has been directly stored in the agent's state under the key '%s'.", toolName, stateKey),
+			}
+
+			if a.DebugMode {
+				slog.Debug("raw_tool_output: returning sanitized result to llm", "result", sanitizedResult)
+			}
+
+			return sanitizedResult, nil
+		}
+
+		return result, nil
+	}
+}
+
+// executeReActFallback runs the ReAct planner as a fallback when native tool calling is not supported
+func (a *AstonishAgent) executeReActFallback(ctx context.Context, node *config.Node, nodeName string, state session.State, yield func(*session.Event, error) bool, internalTools []tool.Tool, instruction string, userPrompt string) (bool, error) {
+	// Emit a message indicating we're using the fallback via spinner update
+	yield(&session.Event{
+		Actions: session.EventActions{
+			StateDelta: map[string]any{
+				"_spinner_text": fmt.Sprintf("Processing %s (Fallback: internal tool reasoning)...", node.Name),
+			},
+		},
+	}, nil)
+
+	// Collect all tools (internal + MCP) for ReAct planner
+	allTools := make([]tool.Tool, 0, len(internalTools))
+	allTools = append(allTools, internalTools...)
+
+	// Add MCP tools
+	if len(a.Toolsets) > 0 {
+		minimalCtx := &minimalReadonlyContext{Context: ctx}
+		for _, ts := range a.Toolsets {
+			tsTools, err := ts.Tools(minimalCtx)
+			if err != nil {
+				continue
+			}
+			// Filter by tools_selection if specified
+			if len(node.ToolsSelection) > 0 {
+				for _, t := range tsTools {
+					for _, selected := range node.ToolsSelection {
+						if t.Name() == selected {
+							allTools = append(allTools, t)
+							break
+						}
+					}
+				}
+			} else {
+				allTools = append(allTools, tsTools...)
+			}
+		}
+	}
+
+	// Create approval callback if tools_auto_approval is false
+	var approvalCallback planner.ApprovalCallback
+	if !node.ToolsAutoApproval {
+		approvalCallback = func(toolName string, args map[string]any) (bool, error) {
+			// Node-scoped approval key
+			approvalKey := fmt.Sprintf("approval:%s:%s", node.Name, toolName)
+
+			// Check if we already have approval for this tool
+			approvedVal, _ := state.Get(approvalKey)
+			approved := false
+			if b, ok := approvedVal.(bool); ok && b {
+				approved = true
+			}
+
+			if approved {
+				// Consume approval - each execution requires new approval
+				state.Set(approvalKey, false)
+				if a.DebugMode {
+					slog.Debug("tool approved, allowing execution", "component", "react", "tool", toolName)
+				}
+				return true, nil
+			}
+
+			if a.DebugMode {
+				slog.Debug("tool not approved, requesting approval", "component", "react", "tool", toolName)
+			}
+
+			// No approval - request it
+			state.Set("force_pause", true)
+			state.Set("awaiting_approval", true)
+			state.Set("approval_tool", toolName)
+			state.Set("approval_args", args)
+
+			// Emit approval request event
+			prompt := a.formatToolApprovalRequest(toolName, args)
+			yield(&session.Event{
+				LLMResponse: model.LLMResponse{
+					Content: &genai.Content{
+						Parts: []*genai.Part{{Text: prompt}},
+						Role:  "model",
+					},
+				},
+				Actions: session.EventActions{
+					StateDelta: map[string]any{
+						"awaiting_approval": true,
+						"approval_tool":     toolName,
+						"approval_options":  []string{"Yes", "No"},
+					},
+				},
+			}, nil)
+
+			return false, nil
+		}
+	}
+
+	// Use manual ReAct planner with all tools and approval callback
+	var reactPlanner *planner.ReActPlanner
+	if approvalCallback != nil {
+		reactPlanner = planner.NewReActPlannerWithApproval(a.LLM, allTools, approvalCallback, state, a.DebugMode)
+	} else {
+		reactPlanner = planner.NewReActPlanner(a.LLM, allTools)
+	}
+
+	// Strip output_model instructions from system instruction for ReAct
+	// The ReAct loop should focus on tool usage, not output formatting
+	cleanInstruction := instruction
+	if len(node.OutputModel) > 0 {
+		// Remove lines mentioning output_model fields
+		lines := strings.Split(instruction, "\n")
+		var cleanLines []string
+		for _, line := range lines {
+			// Skip lines that mention the output model fields or JSON formatting
+			skipLine := false
+			for key := range node.OutputModel {
+				if strings.Contains(line, key) || strings.Contains(line, "JSON") || strings.Contains(line, "json") {
+					skipLine = true
+					break
+				}
+			}
+			if !skipLine {
+				cleanLines = append(cleanLines, line)
+			}
+		}
+		cleanInstruction = strings.Join(cleanLines, "\n")
+	}
+
+	result, err := reactPlanner.Run(ctx, userPrompt, cleanInstruction) // Pass cleaned instruction
+	if err != nil {
+		// Check if this is an approval required error
+		if strings.HasPrefix(err.Error(), "APPROVAL_REQUIRED:") {
+			// Approval is needed - the callback has already emitted the approval request
+			// Just return false to pause execution
+			if a.DebugMode {
+				slog.Debug("pausing for tool approval", "component", "react")
+			}
+			return false, nil
+		}
+		return false, fmt.Errorf("ReAct planner failed: %w", err)
+	}
+
+	// Format output according to output_model if specified
+	if len(node.OutputModel) > 0 {
+		formattedResult, formatErr := reactPlanner.FormatOutput(ctx, result, node.OutputModel, instruction)
+		if formatErr != nil {
+			return false, fmt.Errorf("failed to format ReAct output: %w", formatErr)
+		}
+		result = formattedResult
+
+		// Parse the formatted result and store in state
+		var resultMap map[string]any
+		if err := json.Unmarshal([]byte(result), &resultMap); err == nil {
+			for key, value := range resultMap {
+				state.Set(key, value)
+			}
+		}
+	}
+
+	// Handle user_message if defined
+	if len(node.UserMessage) > 0 {
+		var textParts []string
+		for _, msgPart := range node.UserMessage {
+			if val, err := state.Get(msgPart); err == nil {
+				textParts = append(textParts, fmt.Sprintf("%v", val))
+				if a.DebugMode {
+					slog.Debug("resolved user message part", "component", "react", "part", msgPart, "value", val)
+				}
+			}
+		}
+
+		if len(textParts) > 0 {
+			// Emit user_message event
+			userMessageEvent := &session.Event{
+				LLMResponse: model.LLMResponse{
+					Content: &genai.Content{
+						Parts: []*genai.Part{{Text: strings.Join(textParts, " ")}},
+						Role:  "model",
+					},
+				},
+				Actions: session.EventActions{
+					StateDelta: map[string]any{
+						"_user_message_display": true,
+					},
+				},
+			}
+			yield(userMessageEvent, nil)
+		}
+	} else {
+		// No user_message - yield the full result
+		yield(&session.Event{
+			LLMResponse: model.LLMResponse{
+				Content: &genai.Content{
+					Parts: []*genai.Part{{Text: result}},
+					Role:  "model",
+				},
+			},
+		}, nil)
+	}
+
+	return true, nil
+}

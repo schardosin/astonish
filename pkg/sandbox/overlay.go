@@ -5,7 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
-	"log"
+	"log/slog"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -485,13 +485,13 @@ func UnmountSessionOverlay(poolSourcePath, containerName string) error {
 	// Unmount overlayfs (ignore error if not mounted)
 	if err := umountOnSandboxHost(containerRootfs); err != nil {
 		// Not fatal — might not be overlay-mounted (old container, or already unmounted)
-		log.Printf("[sandbox] Warning: failed to unmount overlay on %s: %v", containerRootfs, err)
+		slog.Warn("failed to unmount overlay", "component", "sandbox", "mountpoint", containerRootfs, "error", err)
 	}
 
 	// Remove per-session overlay dirs
 	sessionDir := filepath.Join(overlayBaseDir, containerName)
 	if err := removeAllOnSandboxHost(sessionDir); err != nil {
-		log.Printf("[sandbox] Warning: failed to clean up overlay dir %s: %v", sessionDir, err)
+		slog.Warn("failed to clean up overlay dir", "component", "sandbox", "dir", sessionDir, "error", err)
 	}
 
 	return nil
@@ -623,15 +623,15 @@ func RemountDependentOverlays(client *IncusClient, snapshotPath string) error {
 		return nil
 	}
 
-	log.Printf("[sandbox] Remounting %d overlay(s) after snapshot recreation at %s", len(affected), snapshotPath)
+	slog.Info("remounting overlays after snapshot recreation", "component", "sandbox", "count", len(affected), "snapshot_path", snapshotPath)
 
 	// Phase 1: stop running containers so we can unmount their rootfs
 	for i := range affected {
 		m := &affected[i]
 		if m.containerName != "" && client.IsRunning(m.containerName) {
-			log.Printf("[sandbox] Stopping %s for overlay remount...", m.containerName)
+			slog.Info("stopping container for overlay remount", "component", "sandbox", "container", m.containerName)
 			if err := client.StopInstance(m.containerName, true); err != nil {
-				log.Printf("[sandbox] Warning: failed to stop %s: %v", m.containerName, err)
+				slog.Warn("failed to stop container for overlay remount", "component", "sandbox", "container", m.containerName, "error", err)
 				continue
 			}
 			m.wasRunning = true
@@ -646,22 +646,22 @@ func RemountDependentOverlays(client *IncusClient, snapshotPath string) error {
 		workDir := extractMountOpt(m.opts, "workdir")
 
 		if lowerDir == "" || upperDir == "" || workDir == "" {
-			log.Printf("[sandbox] Warning: could not parse overlay opts for %s, skipping remount", m.mountpoint)
+			slog.Warn("could not parse overlay opts, skipping remount", "component", "sandbox", "mountpoint", m.mountpoint)
 			continue
 		}
 
 		// Unmount the stale overlay
 		if err := umountOnSandboxHost(m.mountpoint); err != nil {
-			log.Printf("[sandbox] Warning: failed to unmount stale overlay at %s: %v", m.mountpoint, err)
+			slog.Warn("failed to unmount stale overlay", "component", "sandbox", "mountpoint", m.mountpoint, "error", err)
 			continue
 		}
 
 		// Overlayfs requires a clean workdir after remount — recreate it
 		if err := removeAllOnSandboxHost(workDir); err != nil {
-			log.Printf("[sandbox] Warning: failed to clean workdir %s: %v", workDir, err)
+			slog.Warn("failed to clean workdir", "component", "sandbox", "workdir", workDir, "error", err)
 		}
 		if err := mkdirAllOnSandboxHost(workDir, 0755); err != nil {
-			log.Printf("[sandbox] Warning: failed to recreate workdir %s: %v", workDir, err)
+			slog.Warn("failed to recreate workdir", "component", "sandbox", "workdir", workDir, "error", err)
 			continue
 		}
 
@@ -669,20 +669,20 @@ func RemountDependentOverlays(client *IncusClient, snapshotPath string) error {
 		// but the kernel will resolve them to the new inodes)
 		newOpts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)
 		if err := mountOverlayOnSandboxHost(newOpts, m.mountpoint); err != nil {
-			log.Printf("[sandbox] ERROR: failed to remount overlay at %s: %v", m.mountpoint, err)
+			slog.Error("failed to remount overlay", "component", "sandbox", "mountpoint", m.mountpoint, "error", err)
 			continue
 		}
 
-		log.Printf("[sandbox] Remounted overlay at %s", m.mountpoint)
+		slog.Info("remounted overlay", "component", "sandbox", "mountpoint", m.mountpoint)
 	}
 
 	// Phase 3: restart containers that were running before
 	for i := range affected {
 		m := &affected[i]
 		if m.wasRunning && m.containerName != "" {
-			log.Printf("[sandbox] Restarting %s after overlay remount...", m.containerName)
+			slog.Info("restarting container after overlay remount", "component", "sandbox", "container", m.containerName)
 			if err := client.StartInstance(m.containerName); err != nil {
-				log.Printf("[sandbox] Warning: failed to restart %s: %v", m.containerName, err)
+				slog.Warn("failed to restart container after overlay remount", "component", "sandbox", "container", m.containerName, "error", err)
 			}
 		}
 	}

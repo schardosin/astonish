@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -413,7 +413,7 @@ func (lnc *LazyNodeClient) initBackground(sessionID string) {
 				[]string{"sh", "-c", "command -v gh >/dev/null 2>&1 && gh auth setup-git"},
 				map[string]string{"GH_TOKEN": ghToken})
 			if err != nil {
-				log.Printf("[sandbox] Warning: failed to run gh auth setup-git in %q: %v", containerName, err)
+				slog.Warn("failed to run gh auth setup-git", "component", "sandbox", "container", containerName, "error", err)
 			}
 		}()
 	}
@@ -433,8 +433,8 @@ func (lnc *LazyNodeClient) Call(sessionID, toolName string, args map[string]inte
 
 	result, err := lnc.callOnce(sessionID, toolName, args)
 	if err != nil && lnc.isContainerGone(err) {
-		log.Printf("[sandbox] Container gone for session %s, re-creating and retrying",
-			sessionID[:min(8, len(sessionID))])
+		slog.Info("container gone for session, re-creating and retrying", "component", "sandbox",
+			"session", sessionID[:min(8, len(sessionID))])
 		if resetErr := lnc.resetForRetry(sessionID); resetErr != nil {
 			return nil, fmt.Errorf("container gone and recovery failed: %w (original: %v)", resetErr, err)
 		}
@@ -906,8 +906,9 @@ func (p *NodeClientPool) GetOrCreate(sessionID string) *LazyNodeClient {
 		if !client.HasInitFailed() && !client.IsClosed() {
 			return client
 		}
-		log.Printf("[sandbox] Discarding stale client for session %s (initFailed=%v, closed=%v), will retry",
-			sessionID[:min(8, len(sessionID))], client.HasInitFailed(), client.IsClosed())
+		slog.Info("discarding stale client for session, will retry", "component", "sandbox",
+			"session", sessionID[:min(8, len(sessionID))],
+			"initFailed", client.HasInitFailed(), "closed", client.IsClosed())
 		delete(p.clients, sessionID)
 		// Don't call client.Cleanup() here — the container may be reusable.
 		// Close the node client (if any) but leave the container intact.
@@ -1156,8 +1157,9 @@ func (p *NodeClientPool) stopIdleClients(idleTimeout time.Duration) {
 			continue // still active
 		}
 
-		log.Printf("[sandbox] Stopping idle container for session %s (idle for %s)",
-			sessionID[:min(8, len(sessionID))], now.Sub(lastAct).Round(time.Second))
+		slog.Info("stopping idle container for session", "component", "sandbox",
+			"session", sessionID[:min(8, len(sessionID))],
+			"idle_for", now.Sub(lastAct).Round(time.Second).String())
 
 		// Stop the container and node process (preserves overlay + registry)
 		client.StopForIdle()

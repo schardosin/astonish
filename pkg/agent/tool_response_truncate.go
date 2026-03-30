@@ -3,7 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
@@ -70,8 +70,7 @@ func truncateFunctionResponse(part *genai.Part) {
 	// Truncate the serialized JSON to the limit, then wrap in a new response
 	truncated := string(data[:maxToolResponseBytes])
 
-	log.Printf("[tool-truncate] Truncating %s response from %d to %d bytes",
-		toolName, originalSize, maxToolResponseBytes)
+	slog.Info("truncating tool response", "component", "tool-truncate", "tool", toolName, "original_bytes", originalSize, "truncated_bytes", maxToolResponseBytes)
 
 	fr.Response = map[string]any{
 		"output": truncated,

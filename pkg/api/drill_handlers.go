@@ -3,7 +3,7 @@ package api
 import (
 	"encoding/json"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -228,7 +228,7 @@ func DeleteDrillHandler(w http.ResponseWriter, r *http.Request) {
 func ListDrillReportsHandler(w http.ResponseWriter, _ *http.Request) {
 	reportsDir, err := config.GetReportsDir()
 	if err != nil {
-		log.Printf("[drill] Failed to get reports dir: %v", err)
+		slog.Error("failed to get reports dir", "component", "drill", "error", err)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode([]DrillReportListItem{})
 		return

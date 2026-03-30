@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"os"
 	"regexp"
 	"strings"
@@ -139,7 +140,7 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 		sess = getResp.Session
 		isResumed = true
 		if cfg.DebugMode {
-			fmt.Printf("Resumed session: %s (%d events)\n", sess.ID(), sess.Events().Len())
+			slog.Debug("resumed session", "sessionID", sess.ID(), "events", sess.Events().Len())
 		}
 	} else {
 		// Create new session
@@ -551,13 +552,11 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 								argsJSON, _ := json.MarshalIndent(part.FunctionCall.Args, "", "  ")
 								stopSpinner()
 								spinnerStopped = true
-								fmt.Printf("\n%s[DEBUG] Tool Call: %s%s\nArgs: %s\n",
-									ColorCyan, part.FunctionCall.Name, ColorReset, string(argsJSON))
+								slog.Debug("tool call", "tool", part.FunctionCall.Name, "args", string(argsJSON))
 							}
 							if part.FunctionResponse != nil {
 								respJSON, _ := json.MarshalIndent(part.FunctionResponse.Response, "", "  ")
-								fmt.Printf("%s[DEBUG] Tool Response: %s%s\nResult: %s\n",
-									ColorCyan, part.FunctionResponse.Name, ColorReset, string(respJSON))
+								slog.Debug("tool response", "tool", part.FunctionResponse.Name, "result", string(respJSON))
 							}
 						}
 					}
@@ -757,7 +756,7 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 					}
 					fmt.Printf("\n%s[Provider switched to %s (model: %s)]%s\n", ColorGreen, newProvider, newModel, ColorReset)
 				} else if cfg.DebugMode {
-					fmt.Printf("\nWarning: Failed to switch provider to %s/%s: %v\n", newProvider, newModel, swapErr)
+					slog.Warn("failed to switch provider", "provider", newProvider, "model", newModel, "error", swapErr)
 				}
 			}
 		}

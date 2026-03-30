@@ -2,7 +2,7 @@ package tools
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/sandbox"
@@ -107,7 +107,7 @@ func useSandboxTemplate(ctx tool.Context, args UseSandboxTemplateArgs) (UseSandb
 	}
 
 	// Replace the session container with one cloned from the selected template
-	log.Printf("[sandbox-template] Replacing session %s container with template %q...", sessionID[:min(8, len(sessionID))], name)
+	slog.Info("replacing session container with template", "component", "sandbox-template", "session", sessionID[:min(8, len(sessionID))], "template", name)
 	if err := deps.nodePool.ReplaceSession(sessionID, name); err != nil {
 		return UseSandboxTemplateResult{
 			Status:  "error",
@@ -115,7 +115,7 @@ func useSandboxTemplate(ctx tool.Context, args UseSandboxTemplateArgs) (UseSandb
 		}, nil
 	}
 
-	log.Printf("[sandbox-template] Session %s now using template %q", sessionID[:min(8, len(sessionID))], name)
+	slog.Info("session now using template", "component", "sandbox-template", "session", sessionID[:min(8, len(sessionID))], "template", name)
 
 	// Eagerly bind the new session to trigger container creation, then
 	// discover the container's bridge IP. This lets the AI know the IP
@@ -124,9 +124,9 @@ func useSandboxTemplate(ctx tool.Context, args UseSandboxTemplateArgs) (UseSandb
 	if client := deps.nodePool.GetOrCreate(sessionID); client != nil {
 		if ip, err := client.GetContainerIP(sessionID); err == nil {
 			containerIP = ip
-			log.Printf("[sandbox-template] Session %s container IP: %s", sessionID[:min(8, len(sessionID))], ip)
+			slog.Info("discovered container IP", "component", "sandbox-template", "session", sessionID[:min(8, len(sessionID))], "ip", ip)
 		} else {
-			log.Printf("[sandbox-template] Warning: could not discover container IP for session %s: %v", sessionID[:min(8, len(sessionID))], err)
+			slog.Warn("could not discover container IP", "component", "sandbox-template", "session", sessionID[:min(8, len(sessionID))], "error", err)
 		}
 	}
 

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -359,7 +360,7 @@ func ValidateChecksums(verbose bool) (needsRefresh []string, removed []string) {
 	mcpCfg, err := config.LoadMCPConfig()
 	if err != nil {
 		if verbose {
-			fmt.Printf("[Cache] Warning: Could not load MCP config for validation: %v\n", err)
+			slog.Warn("could not load mcp config for validation", "component", "cache", "error", err)
 		}
 		return nil, nil
 	}
@@ -385,12 +386,12 @@ func ValidateChecksums(verbose bool) (needsRefresh []string, removed []string) {
 
 		if cachedChecksum == "" {
 			if verbose {
-				fmt.Printf("[Cache] Server '%s' is new (not in cache), will refresh\n", serverName)
+				slog.Info("server is new, will refresh", "component", "cache", "server", serverName)
 			}
 			needsRefresh = append(needsRefresh, serverName)
 		} else if cachedChecksum != currentChecksum {
 			if verbose {
-				fmt.Printf("[Cache] Server '%s' config changed (checksum mismatch), will refresh\n", serverName)
+				slog.Info("server config changed, will refresh", "component", "cache", "server", serverName)
 			}
 			needsRefresh = append(needsRefresh, serverName)
 		}
@@ -400,7 +401,7 @@ func ValidateChecksums(verbose bool) (needsRefresh []string, removed []string) {
 	for serverName := range memoryCache.ServerChecksums {
 		if _, exists := mcpCfg.MCPServers[serverName]; !exists {
 			if verbose {
-				fmt.Printf("[Cache] Server '%s' was removed from config\n", serverName)
+				slog.Info("server was removed from config", "component", "cache", "server", serverName)
 			}
 			removed = append(removed, serverName)
 		}

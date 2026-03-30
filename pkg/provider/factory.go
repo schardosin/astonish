@@ -3,7 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -141,7 +141,7 @@ func GetProvider(ctx context.Context, instanceName string, modelName string, cfg
 
 		maxTokens := openrouter.GetMaxCompletionTokens(ctx, apiKey, modelName)
 		if maxTokens > 0 {
-			log.Printf("[OpenRouter] Model %s: setting max_completion_tokens=%d", modelName, maxTokens)
+			slog.Info("setting max_completion_tokens", "component", "openrouter", "model", modelName, "max_tokens", maxTokens)
 			return openai_provider.NewProviderWithMaxTokens(client, modelName, true, maxTokens), nil
 		}
 		return openai_provider.NewProvider(client, modelName, true), nil

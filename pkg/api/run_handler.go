@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -133,7 +134,7 @@ func (sm *SessionManager) cleanupStaleSessions() {
 			delete(sm.sandboxTools, sessionID)
 			delete(sm.sessions, sessionID)
 			delete(sm.lastActivity, sessionID)
-			fmt.Printf("[Session] Cleaned up stale session: %s (inactive for %v)\n", sessionID, now.Sub(lastActive))
+			slog.Info("cleaned up stale session", "session_id", sessionID, "inactive_for", now.Sub(lastActive))
 		}
 	}
 }
@@ -166,12 +167,12 @@ func (sm *SessionManager) GetOrCreateMCPManager(ctx context.Context, sessionID s
 	// Create new MCP manager for this session
 	mgr, err := mcp.NewManager()
 	if err != nil {
-		fmt.Printf("[MCP] Warning: Failed to create manager: %v\n", err)
+		slog.Warn("failed to create mcp manager", "error", err)
 		return nil, nil
 	}
 
 	if err := mgr.InitializeSelectiveToolsets(ctx, requiredServers); err != nil {
-		fmt.Printf("[MCP] Warning: Failed to initialize toolsets: %v\n", err)
+		slog.Warn("failed to initialize mcp toolsets", "error", err)
 		return nil, nil
 	}
 
@@ -273,7 +274,7 @@ func getRequiredMCPServers(cfg *config.AgentConfig) []string {
 func SendSSE(w io.Writer, flusher http.Flusher, eventType string, data interface{}) {
 	payload, err := json.Marshal(data)
 	if err != nil {
-		fmt.Printf("Error marshaling SSE data: %v\n", err)
+		slog.Error("failed to marshal SSE data", "error", err)
 		return
 	}
 	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, payload)
@@ -292,7 +293,7 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	// Parse request (could be POST body)
 	var req ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		fmt.Printf("[Chat API] Error decoding request: %v\n", err)
+		slog.Error("failed to decode chat request", "error", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -343,7 +344,7 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	// 2. Determine Provider/Model
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
-		fmt.Printf("Warning: Failed to load app config: %v\n", err)
+		slog.Warn("failed to load app config", "error", err)
 		appCfg = &config.AppConfig{}
 	}
 	injectProviderSecrets(appCfg)

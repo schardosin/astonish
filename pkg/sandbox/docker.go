@@ -3,7 +3,7 @@ package sandbox
 import (
 	"bytes"
 	"fmt"
-	"log"
+	"log/slog"
 	"os/exec"
 	"strings"
 	"time"
@@ -69,12 +69,12 @@ func dockerImageExistsLocally(imageTag string) bool {
 // it falls back to checking if the image exists locally. Returns an error
 // only if the image is not available anywhere.
 func pullOrFallback(imageTag string) error {
-	log.Printf("[sandbox] Pulling Docker image %s...", imageTag)
+	slog.Info("pulling docker image", "component", "sandbox", "image", imageTag)
 	pullCmd := exec.Command("docker", "pull", imageTag)
 	if output, err := pullCmd.CombinedOutput(); err != nil {
 		// Pull failed — check if image exists locally
 		if dockerImageExistsLocally(imageTag) {
-			log.Printf("[sandbox] Pull failed but image exists locally, using cached image")
+			slog.Warn("pull failed but image exists locally, using cached image", "component", "sandbox")
 			return nil
 		}
 		return fmt.Errorf("Docker image %s not found (pull failed: %s).\n"+
@@ -159,7 +159,7 @@ func EnsureIncusDockerContainer() error {
 	if IsIncusDockerContainerRunning() {
 		// Container is running — check if upgrade needed (skip for dev builds)
 		if !isDevBuild() && NeedsUpgrade() {
-			log.Printf("[sandbox] Docker container version mismatch, upgrading...")
+			slog.Info("docker container version mismatch, upgrading", "component", "sandbox")
 			if err := UpgradeIncusDockerContainer(); err != nil {
 				return fmt.Errorf("failed to upgrade Docker container: %w", err)
 			}
@@ -170,7 +170,7 @@ func EnsureIncusDockerContainer() error {
 	if IsIncusDockerContainerExists() {
 		// Container exists but stopped — check version before starting (skip for dev)
 		if !isDevBuild() && NeedsUpgrade() {
-			log.Printf("[sandbox] Docker container version mismatch, upgrading...")
+			slog.Info("docker container version mismatch, upgrading", "component", "sandbox")
 			if err := UpgradeIncusDockerContainer(); err != nil {
 				return fmt.Errorf("failed to upgrade Docker container: %w", err)
 			}
@@ -178,7 +178,7 @@ func EnsureIncusDockerContainer() error {
 		}
 
 		// Start existing container
-		log.Printf("[sandbox] Starting existing Docker container %s...", DockerContainerName)
+		slog.Info("starting existing docker container", "component", "sandbox", "container", DockerContainerName)
 		cmd := exec.Command("docker", "start", DockerContainerName)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to start Docker container: %w\n%s", err, firstLine(output))
@@ -198,7 +198,7 @@ func EnsureIncusDockerContainer() error {
 	}
 
 	// Create and start the container
-	log.Printf("[sandbox] Creating Docker container %s...", DockerContainerName)
+	slog.Info("creating docker container", "component", "sandbox", "container", DockerContainerName)
 	args := []string{
 		"run", "-d",
 		"--name", DockerContainerName,
@@ -224,7 +224,7 @@ func EnsureIncusDockerContainer() error {
 		return fmt.Errorf("failed to create Docker container: %w\n%s", err, firstLine(output))
 	}
 
-	log.Printf("[sandbox] Docker container %s created, waiting for Incus API...", DockerContainerName)
+	slog.Info("docker container created, waiting for incus API", "component", "sandbox", "container", DockerContainerName)
 	return WaitForIncusAPI(90 * time.Second)
 }
 
@@ -243,7 +243,7 @@ func UpgradeIncusDockerContainer() error {
 
 	// Stop the running container
 	if IsIncusDockerContainerRunning() {
-		log.Printf("[sandbox] Stopping Docker container %s...", DockerContainerName)
+		slog.Info("stopping docker container", "component", "sandbox", "container", DockerContainerName)
 		stopCmd := exec.Command("docker", "stop", DockerContainerName)
 		if output, err := stopCmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to stop Docker container: %w\n%s", err, firstLine(output))
@@ -252,7 +252,7 @@ func UpgradeIncusDockerContainer() error {
 
 	// Remove the old container (volume is preserved)
 	if IsIncusDockerContainerExists() {
-		log.Printf("[sandbox] Removing old Docker container %s...", DockerContainerName)
+		slog.Info("removing old docker container", "component", "sandbox", "container", DockerContainerName)
 		rmCmd := exec.Command("docker", "rm", DockerContainerName)
 		if output, err := rmCmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to remove Docker container: %w\n%s", err, firstLine(output))
@@ -260,7 +260,7 @@ func UpgradeIncusDockerContainer() error {
 	}
 
 	// Create new container with the same volume
-	log.Printf("[sandbox] Creating upgraded Docker container %s...", DockerContainerName)
+	slog.Info("creating upgraded docker container", "component", "sandbox", "container", DockerContainerName)
 	args := []string{
 		"run", "-d",
 		"--name", DockerContainerName,
@@ -280,7 +280,7 @@ func UpgradeIncusDockerContainer() error {
 		return fmt.Errorf("failed to create upgraded Docker container: %w\n%s", err, firstLine(output))
 	}
 
-	log.Printf("[sandbox] Docker container upgraded, waiting for Incus API...")
+	slog.Info("docker container upgraded, waiting for incus API", "component", "sandbox")
 	return WaitForIncusAPI(90 * time.Second)
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -405,11 +406,13 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 		if err != nil {
 			m.logger.Printf("[channels] Agent error for %s: %v", route.SessionKey, err)
 			if messagesSent == 0 {
-				_ = ch.Send(ctx, target, OutboundMessage{
+				if err := ch.Send(ctx, target, OutboundMessage{
 					Text:    friendlyErrorMessage(err),
 					ReplyTo: msg.ID,
 					Format:  FormatText,
-				})
+				}); err != nil {
+					slog.Error("failed to send message to channel", "target", target, "error", err)
+				}
 				messagesSent++
 			}
 			break
@@ -499,11 +502,13 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	// This can happen when context compaction degrades the conversation history
 	// or the LLM responds with only tool calls and no summary text.
 	if messagesSent == 0 {
-		_ = ch.Send(ctx, target, OutboundMessage{
+		if err := ch.Send(ctx, target, OutboundMessage{
 			Text:    "Something went wrong and I couldn't generate a response. Try sending your message again, or use /new to start a fresh session.",
 			ReplyTo: msg.ID,
 			Format:  FormatText,
-		})
+		}); err != nil {
+			slog.Error("failed to send message to channel", "target", target, "error", err)
+		}
 	}
 
 	m.logger.Printf("[channels] Response sent to %s (chat: %s, %d messages)",
@@ -585,11 +590,13 @@ func (m *ChannelManager) handleFleetMessage(ctx context.Context, msg InboundMess
 	// Post the message to the fleet session
 	if m.fleetDeps == nil || m.fleetDeps.GetSessionRegistry == nil {
 		m.logger.Printf("[channels] Fleet session registry not available")
-		_ = ch.Send(ctx, target, OutboundMessage{
+		if err := ch.Send(ctx, target, OutboundMessage{
 			Text:    "Fleet system is not available. Use /fleet_stop to exit fleet mode.",
 			ReplyTo: msg.ID,
 			Format:  FormatText,
-		})
+		}); err != nil {
+			slog.Error("failed to send message to channel", "target", target, "error", err)
+		}
 		return nil
 	}
 
@@ -597,11 +604,13 @@ func (m *ChannelManager) handleFleetMessage(ctx context.Context, msg InboundMess
 	if registry == nil {
 		m.logger.Printf("[channels] Fleet session registry not initialized")
 		m.ClearActiveFleet(route.SessionKey)
-		_ = ch.Send(ctx, target, OutboundMessage{
+		if err := ch.Send(ctx, target, OutboundMessage{
 			Text:    "Fleet session has ended. Returning to normal chat.",
 			ReplyTo: msg.ID,
 			Format:  FormatText,
-		})
+		}); err != nil {
+			slog.Error("failed to send message to channel", "target", target, "error", err)
+		}
 		return nil
 	}
 
@@ -609,11 +618,13 @@ func (m *ChannelManager) handleFleetMessage(ctx context.Context, msg InboundMess
 		m.logger.Printf("[channels] Failed to post fleet message: %v", err)
 		// If the session no longer exists, clear the mapping
 		m.ClearActiveFleet(route.SessionKey)
-		_ = ch.Send(ctx, target, OutboundMessage{
+		if err := ch.Send(ctx, target, OutboundMessage{
 			Text:    "Fleet session has ended. Returning to normal chat.",
 			ReplyTo: msg.ID,
 			Format:  FormatText,
-		})
+		}); err != nil {
+			slog.Error("failed to send message to channel", "target", target, "error", err)
+		}
 		return nil
 	}
 

@@ -2,6 +2,7 @@ package browser
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/go-rod/rod"
@@ -50,19 +51,23 @@ func SetHTTPCredentials(pg *rod.Page, username, password string) error {
 
 	// Listen for auth challenges and respond with credentials
 	go pg.EachEvent(func(e *proto.FetchAuthRequired) {
-		_ = proto.FetchContinueWithAuth{
+		if err := (proto.FetchContinueWithAuth{
 			RequestID: e.RequestID,
 			AuthChallengeResponse: &proto.FetchAuthChallengeResponse{
 				Response: proto.FetchAuthChallengeResponseResponseProvideCredentials,
 				Username: username,
 				Password: password,
 			},
-		}.Call(pg)
+		}).Call(pg); err != nil {
+			slog.Error("failed to inject auth credentials into browser request", "error", err)
+		}
 	}, func(e *proto.FetchRequestPaused) {
 		// Continue non-auth requests normally
-		_ = proto.FetchContinueRequest{
+		if err := (proto.FetchContinueRequest{
 			RequestID: e.RequestID,
-		}.Call(pg)
+		}).Call(pg); err != nil {
+			slog.Error("failed to continue paused browser request", "error", err)
+		}
 	})()
 
 	return nil

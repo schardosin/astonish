@@ -2,16 +2,12 @@ package common
 
 import (
 	"encoding/json"
-
-	"google.golang.org/genai"
 )
 
 // ExtractToolInputSchema extracts the input schema from a tool that implements Declaration().
 // Returns nil if the tool doesn't have a declaration or input schema.
 func ExtractToolInputSchema(t interface{ Name() string }) json.RawMessage {
-	dt, ok := t.(interface {
-		Declaration() *genai.FunctionDeclaration
-	})
+	dt, ok := t.(ToolWithDeclaration)
 	if !ok {
 		return nil
 	}

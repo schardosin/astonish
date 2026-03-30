@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os/exec"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -55,14 +55,14 @@ func NewManager() (*Manager, error) {
 // InitializeToolsets creates ADK mcptoolset instances for all configured servers
 func (m *Manager) InitializeToolsets(ctx context.Context) error {
 	if len(m.config.MCPServers) == 0 {
-		log.Println("No MCP servers configured")
+		slog.Info("no MCP servers configured", "component", "mcp")
 		return nil
 	}
 
 	for serverName, serverConfig := range m.config.MCPServers {
 		// Skip disabled servers
 		if !serverConfig.IsEnabled() {
-			log.Printf("Skipping disabled MCP server: %s", serverName)
+			slog.Info("skipping disabled MCP server", "component", "mcp", "server", serverName)
 			m.initResults = append(m.initResults, InitResult{
 				Name:    serverName,
 				Success: false,
@@ -74,7 +74,7 @@ func (m *Manager) InitializeToolsets(ctx context.Context) error {
 		transport, stderrBuf, err := createTransport(serverConfig)
 		if err != nil {
 			errMsg := fmt.Sprintf("Failed to create transport: %v (Stderr: %s)", err, GetStderr(stderrBuf))
-			log.Printf("Warning: Failed to create transport for MCP server '%s': %v", serverName, err)
+			slog.Warn("failed to create transport for MCP server", "component", "mcp", "server", serverName, "error", err)
 			m.initResults = append(m.initResults, InitResult{
 				Name:    serverName,
 				Success: false,
@@ -90,7 +90,7 @@ func (m *Manager) InitializeToolsets(ctx context.Context) error {
 		})
 		if err != nil {
 			errMsg := fmt.Sprintf("Failed to create toolset: %v (Stderr: %s)", err, GetStderr(stderrBuf))
-			log.Printf("Warning: Failed to create toolset for MCP server '%s': %v", serverName, err)
+			slog.Warn("failed to create toolset for MCP server", "component", "mcp", "server", serverName, "error", err)
 			m.initResults = append(m.initResults, InitResult{
 				Name:    serverName,
 				Success: false,
@@ -110,7 +110,7 @@ func (m *Manager) InitializeToolsets(ctx context.Context) error {
 			Name:    serverName,
 			Success: true,
 		})
-		log.Printf("Successfully initialized MCP server: %s", serverName)
+		slog.Info("initialized MCP server", "component", "mcp", "server", serverName)
 	}
 
 	return nil
@@ -150,7 +150,7 @@ func (m *Manager) InitializeSingleToolset(ctx context.Context, serverName string
 
 	m.toolsets = append(m.toolsets, toolset)
 	m.namedToolsets = append(m.namedToolsets, *namedToolset)
-	log.Printf("Successfully initialized single MCP server: %s", serverName)
+	slog.Info("initialized single MCP server", "component", "mcp", "server", serverName)
 
 	return namedToolset, nil
 }
@@ -170,12 +170,11 @@ func (m *Manager) GetInitResults() []InitResult {
 	return m.initResults
 }
 
-
 // InitializeSelectiveToolsets creates ADK mcptoolset instances only for specified servers
 // This is more efficient when a flow only needs a subset of configured MCP servers
 func (m *Manager) InitializeSelectiveToolsets(ctx context.Context, serverNames []string) error {
 	if len(serverNames) == 0 {
-		log.Println("No MCP servers requested for this flow")
+		slog.Info("no MCP servers requested for this flow", "component", "mcp")
 		return nil
 	}
 
@@ -192,13 +191,13 @@ func (m *Manager) InitializeSelectiveToolsets(ctx context.Context, serverNames [
 
 		// Skip disabled servers
 		if !serverConfig.IsEnabled() {
-			log.Printf("Skipping disabled MCP server: %s", serverName)
+			slog.Info("skipping disabled MCP server", "component", "mcp", "server", serverName)
 			continue
 		}
 
 		transport, stderrBuf, err := createTransport(serverConfig)
 		if err != nil {
-			log.Printf("Warning: Failed to create transport for selective server %s: %v (Stderr: %s)", serverName, err, GetStderr(stderrBuf))
+			slog.Warn("failed to create transport for selective server", "component", "mcp", "server", serverName, "error", err, "stderr", GetStderr(stderrBuf))
 			continue
 		}
 
@@ -206,7 +205,7 @@ func (m *Manager) InitializeSelectiveToolsets(ctx context.Context, serverNames [
 			Transport: transport,
 		})
 		if err != nil {
-			log.Printf("Warning: Failed to create toolset for selective server %s: %v (Stderr: %s)", serverName, err, GetStderr(stderrBuf))
+			slog.Warn("failed to create toolset for selective server", "component", "mcp", "server", serverName, "error", err, "stderr", GetStderr(stderrBuf))
 			continue
 		}
 
@@ -216,10 +215,10 @@ func (m *Manager) InitializeSelectiveToolsets(ctx context.Context, serverNames [
 			Toolset: toolset,
 		})
 		m.transports = append(m.transports, transport)
-		log.Printf("Initialized MCP server for flow: %s", serverName)
+		slog.Info("initialized MCP server for flow", "component", "mcp", "server", serverName)
 	}
 
-	log.Printf("Selectively initialized %d/%d requested MCP servers", len(m.toolsets), len(serverNames))
+	slog.Info("selectively initialized MCP servers", "component", "mcp", "initialized", len(m.toolsets), "requested", len(serverNames))
 	return nil
 }
 
@@ -229,14 +228,14 @@ func (m *Manager) Cleanup() {
 	for i, transport := range m.transports {
 		if closer, ok := transport.(interface{ Close() error }); ok {
 			if err := closer.Close(); err != nil {
-				log.Printf("Warning: Failed to close transport %d: %v", i, err)
+				slog.Warn("failed to close transport", "component", "mcp", "index", i, "error", err)
 			}
 		}
 	}
 	m.transports = nil
 	m.toolsets = nil
 	m.namedToolsets = nil
-	log.Println("MCP manager cleaned up")
+	slog.Info("MCP manager cleaned up", "component", "mcp")
 }
 
 // createTransport creates the appropriate MCP transport based on configuration

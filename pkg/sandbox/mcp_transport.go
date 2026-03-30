@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -105,7 +105,7 @@ func (t *ContainerMCPTransport) Close() error {
 
 	if t.proc != nil {
 		if err := t.proc.Close(); err != nil {
-			log.Printf("[sandbox] Warning: failed to close MCP container process: %v", err)
+			slog.Warn("failed to close MCP container process", "component", "sandbox", "error", err)
 		}
 		t.proc = nil
 	}
@@ -136,7 +136,7 @@ func (c *containerRWC) Close() error {
 		// Close stdin first — this signals the MCP server to shut down
 		// (same as the MCP spec's stdio shutdown procedure).
 		if err := c.stdin.Close(); err != nil {
-			log.Printf("[sandbox] Warning: failed to close MCP server stdin: %v", err)
+			slog.Warn("failed to close MCP server stdin", "component", "sandbox", "error", err)
 		}
 		// Close the container process (waits for exit, then cleans up).
 		if c.proc != nil {

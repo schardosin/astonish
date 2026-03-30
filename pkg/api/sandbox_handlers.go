@@ -3,7 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -765,7 +765,7 @@ func SandboxExposePortHandler(w http.ResponseWriter, r *http.Request) {
 	var proxyErrMsg string
 	if proxyErr != nil {
 		proxyErrMsg = proxyErr.Error()
-		log.Printf("[sandbox-proxy] Failed to start port listener for %s:%d: %v", containerName, req.Port, proxyErr)
+		slog.Error("failed to start port listener", "component", "sandbox-proxy", "container", containerName, "port", req.Port, "error", proxyErr)
 	}
 
 	// Register subdomain proxy route if base_domain was provided

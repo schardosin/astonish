@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 
+	"github.com/schardosin/astonish/pkg/common"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/memory"
 	"google.golang.org/adk/model"
@@ -58,7 +60,7 @@ func (p *ReActPlanner) Run(ctx context.Context, input string, systemInstruction 
 			if h, ok := savedHistory.(string); ok {
 				history = h
 				if p.DebugMode {
-					fmt.Println("[ReAct DEBUG] Resuming from saved state")
+					slog.Debug("resuming from saved state", "component", "react")
 				}
 			}
 		}
@@ -153,7 +155,7 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 			if strings.HasPrefix(history, currentSystemPrompt) {
 				history = strings.Replace(history, currentSystemPrompt, fullSystemPrompt, 1)
 				if p.DebugMode {
-					fmt.Println("[ReAct DEBUG] Switched to Full System Prompt")
+					slog.Debug("switched to full system prompt", "component", "react")
 				}
 			}
 		}
@@ -177,7 +179,7 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 
 					skipLLM = true
 					if p.DebugMode {
-						fmt.Printf("[ReAct] Resuming execution of pending tool: %s\n", action)
+						slog.Debug("resuming execution of pending tool", "component", "react", "tool", action)
 					}
 				}
 			}
@@ -221,7 +223,7 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 				// Keep everything up to and including "STOP HERE"
 				responseText = responseText[:stopIdx+9] // 9 = len("STOP HERE")
 				if p.DebugMode {
-					fmt.Println("[ReAct DEBUG] Truncated output after STOP HERE")
+					slog.Debug("truncated output after STOP HERE", "component", "react")
 				}
 			}
 
@@ -242,7 +244,7 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 			}
 
 			if p.DebugMode {
-				fmt.Printf("[ReAct] Step %d LLM Output: %s\n", i+1, responseText)
+				slog.Debug("llm output", "component", "react", "step", i+1, "output", responseText)
 			}
 
 			// Update history with the LLM's response
@@ -308,7 +310,7 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 
 		// Execute tool
 		if p.DebugMode {
-			fmt.Printf("[ReAct] Executing Tool: %s with Input: %s\n", action, actionInput)
+			slog.Debug("executing tool", "component", "react", "tool", action, "input", actionInput)
 		}
 		observation, err := p.executeTool(ctx, action, actionInput)
 		if err != nil {
@@ -324,7 +326,7 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 					p.State.Set("_react_pending_input", actionInput)
 
 					if p.DebugMode {
-						fmt.Printf("[ReAct DEBUG] Saving state at step %d\n", i)
+						slog.Debug("saving state", "component", "react", "step", i)
 					}
 				}
 				// Return a special result indicating approval is needed
@@ -336,7 +338,7 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 		}
 
 		if p.DebugMode {
-			fmt.Printf("[ReAct] Observation: %s\n", observation)
+			slog.Debug("observation", "component", "react", "result", observation)
 		}
 
 		// Append observation to history
@@ -418,17 +420,12 @@ Return ONLY the JSON object, no other text or markdown.`, systemContext, schemaD
 }
 
 func (p *ReActPlanner) getToolDescriptions() string {
-	// Interface for tools that have declarations
-	type ToolWithDeclaration interface {
-		Declaration() *genai.FunctionDeclaration
-	}
-
 	var sb strings.Builder
 	for _, t := range p.Tools {
 		sb.WriteString(fmt.Sprintf("%s: %s", t.Name(), t.Description()))
 
 		// Try to get parameter information from the tool's declaration
-		if declTool, ok := t.(ToolWithDeclaration); ok {
+		if declTool, ok := t.(common.ToolWithDeclaration); ok {
 			decl := declTool.Declaration()
 			if decl != nil && decl.ParametersJsonSchema != nil {
 				// Try to extract parameter details
@@ -521,13 +518,9 @@ func (p *ReActPlanner) executeTool(ctx context.Context, name string, inputJSON s
 		// If not JSON, try to determine the single argument name from the schema
 		argName := "input" // Default fallback
 
-		type ToolWithDeclaration interface {
-			Declaration() *genai.FunctionDeclaration
-		}
-
-		if declTool, ok := selectedTool.(ToolWithDeclaration); ok {
+		if declTool, ok := selectedTool.(common.ToolWithDeclaration); ok {
 			if p.DebugMode {
-				fmt.Printf("[ReAct DEBUG] Tool '%s' implements ToolWithDeclaration\n", name)
+				slog.Debug("tool implements ToolWithDeclaration", "component", "react", "tool", name)
 			}
 			decl := declTool.Declaration()
 			if decl != nil && decl.ParametersJsonSchema != nil {
@@ -559,12 +552,12 @@ func (p *ReActPlanner) executeTool(ctx context.Context, name string, inputJSON s
 			}
 		} else {
 			if p.DebugMode {
-				fmt.Printf("[ReAct DEBUG] Tool '%s' (type %T) does NOT implement ToolWithDeclaration\n", name, selectedTool)
+				slog.Debug("tool does not implement ToolWithDeclaration", "component", "react", "tool", name, "type", fmt.Sprintf("%T", selectedTool))
 			}
 		}
 		args = map[string]any{argName: inputJSON}
 		if p.DebugMode {
-			fmt.Printf("[ReAct DEBUG] Wrapped input for tool '%s': %v\n", name, args)
+			slog.Debug("wrapped input for tool", "component", "react", "tool", name, "args", args)
 		}
 	}
 

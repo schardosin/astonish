@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -170,7 +170,7 @@ func RetryFleetIssueHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[fleet-retry] Issue #%d (plan %q) recovery started, session %s", issueNum, key, sessionID)
+	slog.Info("issue recovery started", "component", "fleet-retry", "issue", issueNum, "plan", key, "session_id", sessionID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

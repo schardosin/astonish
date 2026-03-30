@@ -3,7 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -46,7 +46,7 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 		workspaceDir = fleet.ResolveSessionWorkspaceDir(
 			fileStore.BaseDir(), "", taskSlug)
 		if err := fleet.SetupSessionWorkspace(workspaceDir, plan.ResolveProjectSource(), baseDir); err != nil {
-			log.Printf("[fleet-headless] Warning: could not set up workspace %s: %v", workspaceDir, err)
+			slog.Warn("could not set up workspace", "component", "fleet-headless", "workspace", workspaceDir, "error", err)
 			workspaceDir = "" // fall back to legacy behavior
 		}
 	}
@@ -55,9 +55,9 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 		workspaceDir = baseDir
 		if workspaceDir != "" {
 			if err := os.MkdirAll(workspaceDir, 0755); err != nil {
-				log.Printf("[fleet-headless] Warning: could not create workspace %s: %v", workspaceDir, err)
+				slog.Warn("could not create workspace", "component", "fleet-headless", "workspace", workspaceDir, "error", err)
 			} else {
-				log.Printf("[fleet-headless] Workspace directory (legacy): %s", workspaceDir)
+				slog.Info("workspace directory (legacy)", "component", "fleet-headless", "workspace", workspaceDir)
 			}
 		}
 	}
@@ -128,11 +128,11 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 	go func() {
 		defer func() {
 			registry.Unregister(fleetSession.ID)
-			log.Printf("[fleet-headless] Session %s removed from registry", fleetSession.ID)
+			slog.Info("session removed from registry", "component", "fleet-headless", "session_id", fleetSession.ID)
 		}()
 
 		if err := fleetSession.Run(context.Background()); err != nil {
-			log.Printf("[fleet-headless] Session %s error: %v", fleetSession.ID, err)
+			slog.Error("session error", "component", "fleet-headless", "session_id", fleetSession.ID, "error", err)
 		}
 	}()
 
@@ -146,7 +146,7 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 			Timestamp: time.Now(),
 		}
 		if err := channel.PostMessage(context.Background(), initialMsg); err != nil {
-			log.Printf("[fleet-headless] Error posting initial message: %v", err)
+			slog.Error("failed to post initial message", "component", "fleet-headless", "error", err)
 			return "", err
 		}
 		if fleetSession.OnMessagePosted != nil {
@@ -161,6 +161,6 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 		ghChannel.StartPoller(context.Background())
 	}
 
-	log.Printf("[fleet-headless] Session %s started for plan %q (issue #%d)", fleetSession.ID, plan.Key, cfg.IssueNumber)
+	slog.Info("session started", "component", "fleet-headless", "session_id", fleetSession.ID, "plan", plan.Key, "issue", cfg.IssueNumber)
 	return fleetSession.ID, nil
 }

@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"regexp"
@@ -871,7 +871,7 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 	if fileStore := getFleetFileStore(); fileStore != nil {
 		if meta, metaErr := fileStore.GetSessionMeta(sessionID); metaErr == nil && meta.WorkspaceDir != "" {
 			if cleanErr := fleet.CleanupSessionWorkspace(meta.WorkspaceDir); cleanErr != nil {
-				log.Printf("[fleet] Warning: could not clean up workspace %s: %v", meta.WorkspaceDir, cleanErr)
+				slog.Warn("could not clean up workspace", "component", "fleet", "workspace", meta.WorkspaceDir, "error", cleanErr)
 			}
 		}
 	}
@@ -1134,7 +1134,7 @@ func persistRunError(ctx context.Context, svc session.Service, sessionID string,
 		SessionID: sessionID,
 	})
 	if err != nil {
-		log.Printf("[persistRunError] failed to get session %s: %v", sessionID, err)
+		slog.Error("failed to get session", "component", "persistRunError", "session_id", sessionID, "error", err)
 		return
 	}
 
@@ -1151,6 +1151,6 @@ func persistRunError(ctx context.Context, svc session.Service, sessionID string,
 	}
 
 	if err := svc.AppendEvent(ctx, resp.Session, errorEvent); err != nil {
-		log.Printf("[persistRunError] failed to append error event to session %s: %v", sessionID, err)
+		slog.Error("failed to append error event to session", "component", "persistRunError", "session_id", sessionID, "error", err)
 	}
 }

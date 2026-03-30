@@ -3,6 +3,7 @@ package sandbox
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -213,7 +214,9 @@ func (r *SessionRegistry) Reap(client *IncusClient) int {
 		delete(r.entries, sessID)
 	}
 
-	_ = r.saveLocked()
+	if err := r.saveLocked(); err != nil {
+		slog.Error("failed to persist registry after pruning stale entries", "error", err)
+	}
 	return len(stale)
 }
 

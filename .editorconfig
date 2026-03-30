@@ -1,0 +1,38 @@
+# EditorConfig — https://editorconfig.org
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Go — tabs, wide lines
+[*.go]
+indent_style = tab
+indent_size = 4
+max_line_length = 120
+
+# JavaScript / JSX — 2-space indent
+[*.{js,jsx}]
+indent_style = space
+indent_size = 2
+max_line_length = 100
+
+# YAML — 2-space indent
+[*.{yml,yaml}]
+indent_style = space
+indent_size = 2
+
+# JSON — 2-space indent
+[*.json]
+indent_style = space
+indent_size = 2
+
+# Markdown — trailing whitespace can be significant
+[*.md]
+trim_trailing_whitespace = false
+
+# Makefile — must use tabs
+[Makefile]
+indent_style = tab

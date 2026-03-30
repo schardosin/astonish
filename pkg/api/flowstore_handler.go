@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -11,7 +12,7 @@ import (
 
 // FlowStoreListResponse is the response for GET /api/flow-store
 type FlowStoreListResponse struct {
-	Taps  []TapInfo `json:"taps"`
+	Taps  []TapInfo  `json:"taps"`
 	Flows []FlowInfo `json:"flows"`
 }
 
@@ -48,7 +49,9 @@ func ListFlowStoreHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update manifests
-	_ = store.UpdateAllManifests()
+	if err := store.UpdateAllManifests(); err != nil {
+		slog.Warn("failed to update flow store manifests", "error", err)
+	}
 
 	// Get taps
 	var taps []TapInfo

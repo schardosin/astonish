@@ -1,7 +1,7 @@
 package agent
 
 import (
-	"fmt"
+	"log/slog"
 	"strings"
 
 	adkagent "google.golang.org/adk/agent"
@@ -25,7 +25,7 @@ import (
 func EphemeralKnowledgeCallback(executionPlan, relevantKnowledge string, debugMode bool) llmagent.BeforeModelCallback {
 	if executionPlan == "" && relevantKnowledge == "" {
 		if debugMode {
-			fmt.Println("[Chat DEBUG] Ephemeral knowledge callback: not created (no knowledge or plan)")
+			slog.Debug("ephemeral knowledge callback not created: no knowledge or plan", "component", "chat")
 		}
 		return nil
 	}
@@ -45,7 +45,7 @@ func EphemeralKnowledgeCallback(executionPlan, relevantKnowledge string, debugMo
 		} else if executionPlan != "" {
 			contentType = "execution plan only"
 		}
-		fmt.Printf("[Chat DEBUG] Ephemeral knowledge callback: created (%s, ~%d tokens)\n", contentType, estimatedTokens)
+		slog.Debug("ephemeral knowledge callback created", "component", "chat", "contentType", contentType, "estimatedTokens", estimatedTokens)
 	}
 
 	return func(_ adkagent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
@@ -63,7 +63,7 @@ func EphemeralKnowledgeCallback(executionPlan, relevantKnowledge string, debugMo
 		}
 		if lastUserIdx < 0 {
 			if debugMode {
-				fmt.Println("[Chat DEBUG] Ephemeral knowledge injection: skipped (no user message in request)")
+				slog.Debug("ephemeral knowledge injection skipped: no user message in request", "component", "chat")
 			}
 			return nil, nil // no user message found
 		}
@@ -77,7 +77,7 @@ func EphemeralKnowledgeCallback(executionPlan, relevantKnowledge string, debugMo
 		userContent.Parts = append([]*genai.Part{knowledgePart}, userContent.Parts...)
 
 		if debugMode {
-			fmt.Printf("[Chat DEBUG] Ephemeral knowledge injection: injected ~%d tokens into user message (content index %d)\n", estimatedTokens, lastUserIdx)
+			slog.Debug("ephemeral knowledge injected into user message", "component", "chat", "estimatedTokens", estimatedTokens, "contentIndex", lastUserIdx)
 		}
 
 		return nil, nil // proceed with the modified request

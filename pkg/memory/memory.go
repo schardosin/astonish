@@ -2,6 +2,7 @@ package memory
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,7 +94,7 @@ func (m *Manager) Append(category, content string, overwrite bool) error {
 		section.lines = cleaned
 
 		if m.DebugMode {
-			fmt.Printf("[Memory DEBUG] Overwrote section '%s' with %d lines\n", category, len(cleaned))
+			slog.Debug("overwrote section", "component", "memory", "category", category, "lines", len(cleaned))
 		}
 	} else {
 		// Add new lines, skipping duplicates
@@ -117,13 +118,13 @@ func (m *Manager) Append(category, content string, overwrite bool) error {
 
 		if added == 0 {
 			if m.DebugMode {
-				fmt.Printf("[Memory DEBUG] No new lines to add to section '%s'\n", category)
+				slog.Debug("no new lines to add to section", "component", "memory", "category", category)
 			}
 			return nil
 		}
 
 		if m.DebugMode {
-			fmt.Printf("[Memory DEBUG] Added %d lines to section '%s'\n", added, category)
+			slog.Debug("added lines to section", "component", "memory", "added", added, "category", category)
 		}
 	}
 

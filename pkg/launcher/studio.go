@@ -139,6 +139,11 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 		handler = api.AuthMiddleware(s.Auth, handler)
 	}
 
+	// Apply rate limiting for remote (non-loopback) requests.
+	// Auth endpoints get stricter limits (brute-force protection);
+	// general API endpoints get a generous budget.
+	handler = api.RateLimitMiddleware(api.NewDefaultRateLimitConfig(), handler)
+
 	// Wrap with subdomain proxy check OUTSIDE auth — subdomain-proxied
 	// requests serve the container's app, not Studio, so they bypass
 	// Studio authentication. The auth cookie is scoped to the Studio

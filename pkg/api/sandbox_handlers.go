@@ -342,7 +342,11 @@ func SandboxContainerListHandler(w http.ResponseWriter, r *http.Request) {
 				hp := mgr.GetHostPort(e.ContainerName, port)
 				if hp == 0 && status == "running" {
 					// Auto-start: listener lost after daemon restart
-					hp, _ = mgr.StartProxy(e.ContainerName, port)
+					var proxyErr error
+					hp, proxyErr = mgr.StartProxy(e.ContainerName, port)
+					if proxyErr != nil {
+						slog.Warn("failed to auto-start proxy", "container", e.ContainerName, "port", port, "error", proxyErr)
+					}
 				}
 				if hp > 0 {
 					hostPorts[portStr] = hp
@@ -772,7 +776,9 @@ func SandboxExposePortHandler(w http.ResponseWriter, r *http.Request) {
 	var proxyHost string
 	if req.BaseDomain != "" {
 		// Persist the base domain so it can be recovered after daemon restart
-		_ = sessRegistry.SetBaseDomain(containerName, req.BaseDomain)
+		if err := sessRegistry.SetBaseDomain(containerName, req.BaseDomain); err != nil {
+			slog.Warn("failed to set base domain", "container", containerName, "domain", req.BaseDomain, "error", err)
+		}
 
 		proxyHost = SubdomainHostname(containerName, req.Port, req.BaseDomain)
 		GetSubdomainRouter().RegisterHost(proxyHost, containerName, req.Port)

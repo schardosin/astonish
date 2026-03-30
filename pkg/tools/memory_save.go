@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,7 +56,9 @@ func MemorySave(mgr *memory.Manager, store MemorySaveStore) func(ctx tool.Contex
 			// Trigger reindex of MEMORY.md if store is available
 			if store != nil {
 				go func() {
-					_ = store.ReindexFile(context.Background(), "MEMORY.md")
+					if err := store.ReindexFile(context.Background(), "MEMORY.md"); err != nil {
+						slog.Warn("failed to reindex memory file after save", "file", "MEMORY.md", "error", err)
+					}
 				}()
 			}
 
@@ -114,7 +117,9 @@ func MemorySave(mgr *memory.Manager, store MemorySaveStore) func(ctx tool.Contex
 		// Trigger reindex
 		if store != nil {
 			go func() {
-				_ = store.ReindexFile(context.Background(), clean)
+				if err := store.ReindexFile(context.Background(), clean); err != nil {
+					slog.Warn("failed to reindex memory file after save", "file", clean, "error", err)
+				}
 			}()
 		}
 

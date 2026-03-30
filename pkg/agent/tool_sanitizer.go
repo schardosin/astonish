@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
@@ -40,7 +41,7 @@ func (s *SanitizedToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error)
 		if st.isValid() {
 			sanitized = append(sanitized, st)
 		} else if s.debugMode {
-			fmt.Printf("[Chat DEBUG] Skipping tool '%s': invalid schema\n", t.Name())
+			slog.Debug("skipping tool with invalid schema", "component", "chat", "tool", t.Name())
 		}
 	}
 	return sanitized, nil
@@ -175,7 +176,7 @@ func sanitizeJSONSchema(schema any, debugMode bool, toolName string) any {
 			if _, hasProp := s["properties"]; !hasProp {
 				s["properties"] = map[string]any{}
 				if debugMode {
-					fmt.Printf("[Chat DEBUG] Fixed schema for '%s': added empty properties to object type\n", toolName)
+					slog.Debug("fixed schema: added empty properties to object type", "component", "chat", "tool", toolName)
 				}
 			}
 		}
@@ -208,7 +209,7 @@ func sanitizeJSONSchema(schema any, debugMode bool, toolName string) any {
 						if len(s) > 0 {
 							s["type"] = "string"
 							if debugMode {
-								fmt.Printf("[Chat DEBUG] Fixed schema for '%s': added default type \"string\" to typeless property\n", toolName)
+								slog.Debug("fixed schema: added default type string to typeless property", "component", "chat", "tool", toolName)
 							}
 						}
 					}

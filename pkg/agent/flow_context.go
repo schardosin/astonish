@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 
@@ -55,7 +56,7 @@ func (b *FlowContextBuilder) BuildExecutionPlan(flowYAML string, flowName string
 	var flow flowForContext
 	if err := yaml.Unmarshal([]byte(flowYAML), &flow); err != nil {
 		if b.DebugMode {
-			fmt.Printf("[FlowContext DEBUG] Failed to parse flow YAML: %v\n", err)
+			slog.Debug("failed to parse flow yaml", "component", "flow-context", "error", err)
 		}
 		return ""
 	}

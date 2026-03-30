@@ -3,6 +3,8 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
+
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/ui"
 	"google.golang.org/adk/agent"
@@ -358,7 +360,7 @@ func (a *AstonishAgent) handleParallelNode(ctx agent.InvocationContext, node *co
 	go func() {
 		defer close(uiDone)
 		if _, err := prog.Run(); err != nil {
-			fmt.Printf("Error running progress UI: %v\n", err)
+			slog.Error("error running progress UI", "error", err)
 		}
 	}()
 

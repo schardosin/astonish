@@ -817,7 +817,9 @@ func generateSessionTitle(ctx context.Context, llm model.LLM, store *persistents
 		title = title[:77] + "..."
 	}
 
-	_ = store.SetSessionTitle(sessionID, title)
+	if err := store.SetSessionTitle(sessionID, title); err != nil {
+		slog.Warn("failed to set session title", "session_id", sessionID, "error", err)
+	}
 }
 
 // printRecentHistory displays the last N user/assistant exchanges from the session.

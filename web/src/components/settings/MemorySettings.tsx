@@ -6,7 +6,7 @@ import { saveFullConfigSection, inputClass, inputStyle, labelStyle, hintStyle, s
 const CLOUD_PROVIDERS = ['openai', 'ollama', 'openai-compat']
 
 // Default models per provider
-const DEFAULT_MODELS = {
+const DEFAULT_MODELS: Record<string, string> = {
   '': 'sentence-transformers/all-MiniLM-L6-v2 (384-dim, ~23 MB)',
   'local': 'sentence-transformers/all-MiniLM-L6-v2 (384-dim, ~23 MB)',
   'openai': 'text-embedding-3-small',
@@ -14,7 +14,7 @@ const DEFAULT_MODELS = {
   'openai-compat': 'text-embedding-3-small',
 }
 
-export default function MemorySettings({ config, onSaved }) {
+export default function MemorySettings({ config, onSaved }: { config: Record<string, any>; onSaved?: () => void }) {
   const [form, setForm] = useState({
     enabled: true,
     memory_dir: '',
@@ -26,7 +26,7 @@ export default function MemorySettings({ config, onSaved }) {
   })
   const [saving, setSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
-  const [error, setError] = useState(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (config) {
@@ -65,8 +65,8 @@ export default function MemorySettings({ config, onSaved }) {
       setSaveSuccess(true)
       if (onSaved) onSaved()
       setTimeout(() => setSaveSuccess(false), 2000)
-    } catch (err) {
-      setError(err.message)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err))
     } finally {
       setSaving(false)
     }

@@ -10,6 +10,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/schardosin/astonish/pkg/provider/httpool"
 )
 
 const modelsURL = "https://api.groq.com/openai/v1/models"
@@ -65,7 +67,7 @@ func fetchModels(ctx context.Context, apiKey string) ([]ModelInfo, error) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{}
+	client := httpool.Client(30 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch models: %w", err)

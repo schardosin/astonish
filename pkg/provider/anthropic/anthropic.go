@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/provider/httpool"
 	"github.com/schardosin/astonish/pkg/provider/llmerror"
 
 	"google.golang.org/adk/model"
@@ -45,7 +46,7 @@ func NewProvider(apiKey, modelName string) *Provider {
 	return &Provider{
 		apiKey: apiKey,
 		model:  modelName,
-		client: &http.Client{},
+		client: httpool.StreamingClient(),
 	}
 }
 
@@ -399,7 +400,7 @@ func fetchModels(ctx context.Context, apiKey string) ([]ModelInfo, error) {
 	var allModels []ModelInfo
 	afterID := ""
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := httpool.Client(30 * time.Second)
 
 	for {
 		url := modelsURL

@@ -17,6 +17,7 @@ import (
 
 	goopenai "github.com/sashabaranov/go-openai"
 	"github.com/schardosin/astonish/pkg/provider/bedrock"
+	"github.com/schardosin/astonish/pkg/provider/httpool"
 	"github.com/schardosin/astonish/pkg/provider/llmerror"
 	"github.com/schardosin/astonish/pkg/provider/openai"
 	"github.com/schardosin/astonish/pkg/provider/vertex"
@@ -65,7 +66,7 @@ func NewProviderWithConfig(ctx context.Context, modelName, clientID, clientSecre
 	}
 
 	transport := &sapTransport{
-		base:          http.DefaultTransport,
+		base:          httpool.Transport(),
 		clientID:      clientID,
 		clientSecret:  clientSecret,
 		authURL:       authURL,
@@ -132,7 +133,7 @@ func resolveDeploymentIDWithConfig(ctx context.Context, modelName, clientID, cli
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("AI-Resource-Group", resourceGroup)
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := httpool.Client(10 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -248,7 +249,7 @@ func (t *sapTransport) getToken() (string, error) {
 	}
 	authReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := httpool.Client(10 * time.Second)
 	resp, err := client.Do(authReq)
 	if err != nil {
 		return "", err
@@ -374,7 +375,7 @@ func ResolveDeploymentID(ctx context.Context, modelName string) (string, error) 
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("AI-Resource-Group", t.resourceGroup)
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := httpool.Client(10 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -451,7 +452,7 @@ func ListModels(ctx context.Context, clientID, clientSecret, authURL, baseURL, r
 	req.Header.Set("AI-Resource-Group", resourceGroup)
 	// Token will be added by the transport
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := httpool.Client(10 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch deployments: %w", err)

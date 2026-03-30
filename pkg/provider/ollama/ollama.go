@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/schardosin/astonish/pkg/provider/httpool"
 )
 
 // Cache for models metadata
@@ -67,7 +69,7 @@ func fetchModels(ctx context.Context, baseURL string) ([]ModelInfo, error) {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	client := &http.Client{}
+	client := httpool.Client(30 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch models: %w", err)

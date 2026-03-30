@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/provider/httpool"
+
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/model/gemini"
 	"google.golang.org/genai"
@@ -95,7 +97,7 @@ func ListModels(ctx context.Context, apiKey string) ([]string, error) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{}
+	client := httpool.Client(30 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch models: %w", err)
@@ -185,7 +187,7 @@ func ListModelsWithMetadata(ctx context.Context, apiKey string) ([]ModelInfo, er
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	client := &http.Client{}
+	client := httpool.Client(30 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch models: %w", err)

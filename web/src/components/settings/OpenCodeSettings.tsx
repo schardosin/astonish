@@ -2,13 +2,13 @@ import { useState, useEffect } from 'react'
 import { Save, AlertCircle, Check, Info } from 'lucide-react'
 import { saveFullConfigSection, inputClass, inputStyle, labelStyle, hintStyle, sectionBorderStyle, saveButtonStyle } from './settingsApi'
 
-export default function OpenCodeSettings({ config, onSaved }) {
+export default function OpenCodeSettings({ config, onSaved }: { config: Record<string, any>; onSaved?: () => void }) {
   const [form, setForm] = useState({
     model: ''
   })
   const [saving, setSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
-  const [error, setError] = useState(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (config) {
@@ -27,8 +27,8 @@ export default function OpenCodeSettings({ config, onSaved }) {
       setSaveSuccess(true)
       if (onSaved) onSaved()
       setTimeout(() => setSaveSuccess(false), 2000)
-    } catch (err) {
-      setError(err.message)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err))
     } finally {
       setSaving(false)
     }

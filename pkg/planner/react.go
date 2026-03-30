@@ -14,6 +14,7 @@ import (
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
+	"google.golang.org/adk/tool/toolconfirmation"
 	"google.golang.org/genai"
 )
 
@@ -671,6 +672,14 @@ func (m *minimalToolContext) SearchMemory(ctx context.Context, query string) (*m
 
 func (m *minimalToolContext) State() session.State {
 	return m.state
+}
+
+func (m *minimalToolContext) RequestConfirmation(hint string, payload any) error {
+	return nil // No HITL during ReAct planning
+}
+
+func (m *minimalToolContext) ToolConfirmation() *toolconfirmation.ToolConfirmation {
+	return nil // No HITL during ReAct planning
 }
 
 func removeThinkTags(input string) string {

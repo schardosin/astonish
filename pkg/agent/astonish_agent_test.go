@@ -14,6 +14,7 @@ import (
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
+	"google.golang.org/adk/tool/toolconfirmation"
 	"google.golang.org/genai"
 )
 
@@ -300,6 +301,11 @@ func (m *MockInvocationContext) RunConfig() *agent.RunConfig {
 	return &agent.RunConfig{}
 }
 func (m *MockInvocationContext) Session() session.Session { return &MockSession{StateVal: m.StateVal} }
+func (m *MockInvocationContext) WithContext(ctx context.Context) agent.InvocationContext {
+	return &MockInvocationContext{Context: ctx, StateVal: m.StateVal}
+}
+func (m *MockInvocationContext) RequestConfirmation(hint string, payload any) error   { return nil }
+func (m *MockInvocationContext) ToolConfirmation() *toolconfirmation.ToolConfirmation { return nil }
 
 func TestReActFallbackTrigger(t *testing.T) {
 	t.Skip("Skip trigger path due to ADK llmagent nil deref in Flow.callLLM; covered by TestReActFallbackDirect")

@@ -7,6 +7,7 @@ import (
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/memory"
 	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool/toolconfirmation"
 	"google.golang.org/genai"
 )
 
@@ -38,6 +39,10 @@ func (m *minimalReadonlyContext) SearchMemory(ctx context.Context, query string)
 func (m *minimalReadonlyContext) FunctionCallID() string     { return "" }
 func (m *minimalReadonlyContext) Artifacts() agent.Artifacts { return nil }
 func (m *minimalReadonlyContext) State() session.State       { return m.state }
+func (m *minimalReadonlyContext) RequestConfirmation(hint string, payload any) error {
+	return nil
+}
+func (m *minimalReadonlyContext) ToolConfirmation() *toolconfirmation.ToolConfirmation { return nil }
 
 // ScopedState wraps a parent state and allows local overrides
 type ScopedState struct {

@@ -18,6 +18,7 @@ import (
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
+	"google.golang.org/adk/tool/toolconfirmation"
 	"google.golang.org/genai"
 )
 
@@ -65,6 +66,8 @@ func (m *minimalToolContext) State() session.State                 { return nil 
 func (m *minimalToolContext) SearchMemory(ctx context.Context, query string) (*memory.SearchResponse, error) {
 	return nil, nil
 }
+func (m *minimalToolContext) RequestConfirmation(hint string, payload any) error   { return nil }
+func (m *minimalToolContext) ToolConfirmation() *toolconfirmation.ToolConfirmation { return nil }
 
 // normalizeToolName normalizes a tool name for fuzzy matching
 // Removes spaces, hyphens, underscores. Converts to lowercase.

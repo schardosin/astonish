@@ -22,7 +22,7 @@
     "@synergycodes/overflow-ui": "^1.0.0-beta.22",
     "@uiw/react-codemirror": "^4.25.3",
     "@xyflow/react": "^12.10.0",
-    "elkjs": "^0.11.0",
+    "elkjs": "^0.11.1",
     "js-yaml": "^4.1.1",
     "lucide-react": "^0.556.0",
     "react": "^19.2.0",

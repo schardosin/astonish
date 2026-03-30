@@ -670,7 +670,10 @@ func notifyDaemonChannelsChanged(appCfg *config.AppConfig) {
 			return
 		}
 		// Read error body for diagnostics
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+		}
 		if len(body) > 0 {
 			var errResp map[string]string
 			if json.Unmarshal(body, &errResp) == nil {

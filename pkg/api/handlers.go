@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -319,7 +320,10 @@ func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 			cachedTools := GetCachedTools()
 
 			// Get MCP store servers (from all taps)
-			storeServers, _ := loadAllServersFromTaps()
+			storeServers, storeErr := loadAllServersFromTaps()
+			if storeErr != nil {
+				slog.Warn("failed to load MCP store servers", "error", storeErr)
+			}
 
 			// Resolve dependencies
 			deps := ResolveMCPDependencies(tools, cachedTools, storeServers, agentConfig.MCPDependencies)

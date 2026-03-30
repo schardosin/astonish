@@ -145,7 +145,10 @@ func handleSchedulerToggle(idOrName string, enable bool) error {
 	}
 
 	job.Enabled = enable
-	data, _ := json.Marshal(job)
+	data, marshalErr := json.Marshal(job)
+	if marshalErr != nil {
+		return fmt.Errorf("failed to marshal job: %w", marshalErr)
+	}
 
 	baseURL := getDaemonBaseURL()
 	req, err := http.NewRequest(http.MethodPut, baseURL+"/api/scheduler/jobs/"+job.ID, strings.NewReader(string(data)))
@@ -270,7 +273,10 @@ func fetchSchedulerJobs() ([]schedulerJobAPI, error) {
 		return nil, fmt.Errorf("daemon returned HTTP %d — check that the daemon is running and accessible", resp.StatusCode)
 	}
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
 
 	var result struct {
 		Jobs []schedulerJobAPI `json:"jobs"`

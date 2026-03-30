@@ -476,7 +476,10 @@ type SchedulerHTTPAccess struct {
 }
 
 func (s *SchedulerHTTPAccess) AddJob(job *SchedulerJob) error {
-	data, _ := json.Marshal(job)
+	data, err := json.Marshal(job)
+	if err != nil {
+		return fmt.Errorf("failed to marshal job: %w", err)
+	}
 	resp, err := http.Post(s.BaseURL+"/api/scheduler/jobs", "application/json", strings.NewReader(string(data)))
 	if err != nil {
 		return fmt.Errorf("failed to contact daemon: %w", err)
@@ -528,7 +531,10 @@ func (s *SchedulerHTTPAccess) RemoveJob(id string) error {
 }
 
 func (s *SchedulerHTTPAccess) UpdateJob(job *SchedulerJob) error {
-	data, _ := json.Marshal(job)
+	data, err := json.Marshal(job)
+	if err != nil {
+		return fmt.Errorf("failed to marshal job: %w", err)
+	}
 	req, err := http.NewRequest(http.MethodPut, s.BaseURL+"/api/scheduler/jobs/"+job.ID, strings.NewReader(string(data)))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)

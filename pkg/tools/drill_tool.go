@@ -2,6 +2,7 @@ package tools
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -585,7 +586,10 @@ func deleteDrill(_ tool.Context, args DeleteDrillArgs) (DeleteDrillResult, error
 	if !args.DeleteTests {
 		// Check if there are actually tests — if so, default to deleting them
 		// This handles the common case where the AI omits delete_tests entirely
-		tests, _ := adrill.FindTestsForSuite(dirs, args.SuiteName)
+		tests, findErr := adrill.FindTestsForSuite(dirs, args.SuiteName)
+		if findErr != nil {
+			slog.Warn("failed to find tests for suite", "suite", args.SuiteName, "error", findErr)
+		}
 		if len(tests) > 0 {
 			deleteTests = true
 		}

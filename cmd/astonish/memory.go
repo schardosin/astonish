@@ -246,8 +246,14 @@ func handleMemoryListCommand(args []string) error {
 			return filepath.SkipDir
 		}
 		if !d.IsDir() && strings.HasSuffix(d.Name(), ".md") {
-			info, _ := d.Info()
-			relPath, _ := filepath.Rel(memDir, path)
+			info, infoErr := d.Info()
+			if infoErr != nil {
+				slog.Warn("failed to get file info", "path", path, "error", infoErr)
+			}
+			relPath, relErr := filepath.Rel(memDir, path)
+			if relErr != nil {
+				slog.Warn("failed to compute relative path", "path", path, "error", relErr)
+			}
 			size := int64(0)
 			if info != nil {
 				size = info.Size()

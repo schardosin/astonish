@@ -88,7 +88,10 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+			}
 			yield(nil, llmerror.NewFromResponse("anthropic", resp, body))
 			return
 		}
@@ -419,7 +422,10 @@ func fetchModels(ctx context.Context, apiKey string) ([]ModelInfo, error) {
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+			}
 			return nil, fmt.Errorf("API error: %s - %s", resp.Status, string(body))
 		}
 

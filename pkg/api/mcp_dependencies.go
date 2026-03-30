@@ -212,7 +212,10 @@ func CheckMCPDependenciesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load store servers for resolving store_id if missing
-	storeServers, _ := loadAllServersFromTaps()
+	storeServers, storeErr := loadAllServersFromTaps()
+	if storeErr != nil {
+		slog.Warn("failed to load MCP store servers", "error", storeErr)
+	}
 
 	// Check each dependency
 	var statuses []MCPDependencyStatus

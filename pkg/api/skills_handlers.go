@@ -302,7 +302,10 @@ func loadAPISkills() ([]skills.Skill, error) {
 		skillsCfg = appCfg.Skills
 	}
 
-	workDir, _ := os.Getwd()
+	workDir, wdErr := os.Getwd()
+	if wdErr != nil {
+		slog.Warn("failed to get working directory", "error", wdErr)
+	}
 	return skills.LoadSkills(
 		skillsCfg.GetUserSkillsDir(),
 		skillsCfg.ExtraDirs,

@@ -1381,3 +1381,531 @@ func TestContainerIPFallbackToLocalhost(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tests for parameterized tests (Feature 1)
+// ---------------------------------------------------------------------------
+
+func TestParameterizedTestRunsMultipleTimes(t *testing.T) {
+	executor := newMockExecutor()
+	executor.SetResult("shell_command", map[string]interface{}{"stdout": "hello world", "exit_code": 0}, nil)
+
+	runner := NewSuiteRunner(executor, nil, false)
+
+	suite := &LoadedSuite{
+		Name: "myapp",
+		Config: &config.AgentConfig{
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
+		},
+	}
+
+	tests := []LoadedTest{
+		{
+			Name: "test_params",
+			Config: &config.AgentConfig{
+				Type:  "drill",
+				Suite: "myapp",
+				Parameters: []map[string]string{
+					{"greeting": "hello", "target": "world"},
+					{"greeting": "hi", "target": "there"},
+					{"greeting": "hey", "target": "you"},
+				},
+				Nodes: []config.Node{
+					{
+						Name: "step1",
+						Type: "tool",
+						Args: map[string]interface{}{"tool": "shell_command", "command": "echo {{greeting}} {{target}}"},
+						Assert: &config.AssertConfig{
+							Type:     "contains",
+							Expected: "hello",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	report, err := runner.RunSuite(context.Background(), suite, tests)
+	if err != nil {
+		t.Fatalf("RunSuite: %v", err)
+	}
+
+	// Should have 3 test reports (one per parameter set)
+	if len(report.Tests) != 3 {
+		t.Fatalf("expected 3 test runs, got %d", len(report.Tests))
+	}
+
+	// Each should have the parameter set attached
+	for i, tr := range report.Tests {
+		if len(tr.ParameterSet) == 0 {
+			t.Errorf("test[%d] missing ParameterSet", i)
+		}
+		if !strings.Contains(tr.Name, "[param") {
+			t.Errorf("test[%d] name %q should contain '[param'", i, tr.Name)
+		}
+	}
+}
+
+func TestParameterizedTestSubstitutesVars(t *testing.T) {
+	executor := newMockExecutor()
+	runner := NewSuiteRunner(executor, nil, false)
+	runner.SetVars(map[string]string{"BASE": "original"})
+
+	suite := &LoadedSuite{
+		Name: "myapp",
+		Config: &config.AgentConfig{
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
+		},
+	}
+
+	tests := []LoadedTest{
+		{
+			Name: "test_subst",
+			Config: &config.AgentConfig{
+				Type:  "drill",
+				Suite: "myapp",
+				Parameters: []map[string]string{
+					{"user": "alice"},
+				},
+				Nodes: []config.Node{
+					{
+						Name: "step1",
+						Type: "tool",
+						Args: map[string]interface{}{"tool": "shell_command", "command": "echo {{user}} {{BASE}}"},
+					},
+				},
+			},
+		},
+	}
+
+	report, _ := runner.RunSuite(context.Background(), suite, tests)
+	if len(report.Tests) != 1 {
+		t.Fatalf("expected 1 test run, got %d", len(report.Tests))
+	}
+
+	// Verify the command was substituted with both param and existing var
+	if len(executor.calls) == 0 {
+		t.Fatal("expected at least 1 call")
+	}
+	cmd := fmt.Sprintf("%v", executor.calls[0].args["command"])
+	if cmd != "echo alice original" {
+		t.Errorf("command = %q, want %q", cmd, "echo alice original")
+	}
+
+	// Verify original vars are restored (not polluted by params)
+	if runner.vars["user"] != "" {
+		t.Error("params should not leak into runner vars")
+	}
+}
+
+func TestNonParameterizedTestUnchanged(t *testing.T) {
+	executor := newMockExecutor()
+	executor.SetResult("shell_command", map[string]interface{}{"stdout": "ok"}, nil)
+
+	runner := NewSuiteRunner(executor, nil, false)
+
+	suite := &LoadedSuite{
+		Name: "myapp",
+		Config: &config.AgentConfig{
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
+		},
+	}
+
+	tests := []LoadedTest{
+		{
+			Name: "test_normal",
+			Config: &config.AgentConfig{
+				Type:  "drill",
+				Suite: "myapp",
+				Nodes: []config.Node{
+					{Name: "s1", Type: "tool", Args: map[string]interface{}{"tool": "shell_command"},
+						Assert: &config.AssertConfig{Type: "contains", Expected: "ok"}},
+				},
+			},
+		},
+	}
+
+	report, _ := runner.RunSuite(context.Background(), suite, tests)
+	if len(report.Tests) != 1 {
+		t.Fatalf("expected 1 test, got %d", len(report.Tests))
+	}
+	if report.Tests[0].ParameterSet != nil {
+		t.Error("non-parameterized test should not have ParameterSet")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests for auto-wait (Feature 4)
+// ---------------------------------------------------------------------------
+
+func TestAutoWaitInjectsBrowserWaitFor(t *testing.T) {
+	executor := newMockExecutor()
+	executor.SetResult("browser_wait_for", map[string]interface{}{"status": "ok"}, nil)
+	executor.SetResult("browser_click", map[string]interface{}{"status": "ok"}, nil)
+
+	runner := NewSuiteRunner(executor, nil, false)
+
+	suite := &LoadedSuite{
+		Name: "myapp",
+		Config: &config.AgentConfig{
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
+		},
+	}
+
+	tests := []LoadedTest{
+		{
+			Name: "test_autowait",
+			Config: &config.AgentConfig{
+				Type:        "drill",
+				Suite:       "myapp",
+				DrillConfig: &config.DrillConfig{AutoWait: true, AutoWaitTimeout: 3000},
+				Nodes: []config.Node{
+					{
+						Name: "click-btn",
+						Type: "tool",
+						Args: map[string]interface{}{
+							"tool":     "browser_click",
+							"selector": "button.submit",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	report, _ := runner.RunSuite(context.Background(), suite, tests)
+	if report.Tests[0].Status != "passed" {
+		t.Errorf("test should pass, got %q", report.Tests[0].Status)
+	}
+
+	// Should have 2 calls: browser_wait_for + browser_click
+	if len(executor.calls) != 2 {
+		t.Fatalf("expected 2 calls, got %d: %v", len(executor.calls), toolNames(executor.calls))
+	}
+	if executor.calls[0].name != "browser_wait_for" {
+		t.Errorf("first call should be browser_wait_for, got %q", executor.calls[0].name)
+	}
+	if executor.calls[0].args["selector"] != "button.submit" {
+		t.Errorf("wait_for selector = %v, want %q", executor.calls[0].args["selector"], "button.submit")
+	}
+	if executor.calls[0].args["timeout"] != 3000 {
+		t.Errorf("wait_for timeout = %v, want 3000", executor.calls[0].args["timeout"])
+	}
+	if executor.calls[1].name != "browser_click" {
+		t.Errorf("second call should be browser_click, got %q", executor.calls[1].name)
+	}
+}
+
+func TestAutoWaitSkipsNonInteractiveTools(t *testing.T) {
+	executor := newMockExecutor()
+	executor.SetResult("browser_snapshot", map[string]interface{}{"snapshot": "page content"}, nil)
+
+	runner := NewSuiteRunner(executor, nil, false)
+
+	suite := &LoadedSuite{
+		Name: "myapp",
+		Config: &config.AgentConfig{
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
+		},
+	}
+
+	tests := []LoadedTest{
+		{
+			Name: "test_no_autowait",
+			Config: &config.AgentConfig{
+				Type:        "drill",
+				Suite:       "myapp",
+				DrillConfig: &config.DrillConfig{AutoWait: true},
+				Nodes: []config.Node{
+					{
+						Name: "snapshot",
+						Type: "tool",
+						Args: map[string]interface{}{"tool": "browser_snapshot"},
+					},
+				},
+			},
+		},
+	}
+
+	runner.RunSuite(context.Background(), suite, tests)
+
+	// Should only have 1 call (no wait_for injected for snapshot)
+	if len(executor.calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(executor.calls))
+	}
+	if executor.calls[0].name != "browser_snapshot" {
+		t.Errorf("call should be browser_snapshot, got %q", executor.calls[0].name)
+	}
+}
+
+func TestAutoWaitDisabledByDefault(t *testing.T) {
+	executor := newMockExecutor()
+	executor.SetResult("browser_click", map[string]interface{}{"status": "ok"}, nil)
+
+	runner := NewSuiteRunner(executor, nil, false)
+
+	suite := &LoadedSuite{
+		Name: "myapp",
+		Config: &config.AgentConfig{
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
+		},
+	}
+
+	tests := []LoadedTest{
+		{
+			Name: "test_no_autowait",
+			Config: &config.AgentConfig{
+				Type:  "drill",
+				Suite: "myapp",
+				// No DrillConfig or AutoWait = false
+				Nodes: []config.Node{
+					{
+						Name: "click",
+						Type: "tool",
+						Args: map[string]interface{}{
+							"tool":     "browser_click",
+							"selector": "button",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	runner.RunSuite(context.Background(), suite, tests)
+
+	// Should only have 1 call (no wait_for when auto_wait is off)
+	if len(executor.calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(executor.calls))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests for isInteractiveBrowserTool and extractWaitTarget
+// ---------------------------------------------------------------------------
+
+func TestIsInteractiveBrowserTool(t *testing.T) {
+	interactive := []string{"browser_click", "browser_type", "browser_hover",
+		"browser_select_option", "browser_fill_form", "browser_drag"}
+	nonInteractive := []string{"browser_navigate", "browser_snapshot",
+		"browser_take_screenshot", "browser_wait_for", "shell_command"}
+
+	for _, name := range interactive {
+		if !isInteractiveBrowserTool(name) {
+			t.Errorf("%q should be interactive", name)
+		}
+	}
+	for _, name := range nonInteractive {
+		if isInteractiveBrowserTool(name) {
+			t.Errorf("%q should NOT be interactive", name)
+		}
+	}
+}
+
+func TestExtractWaitTarget(t *testing.T) {
+	tests := []struct {
+		name     string
+		toolName string
+		args     map[string]interface{}
+		want     string
+	}{
+		{
+			name:     "selector arg",
+			toolName: "browser_click",
+			args:     map[string]interface{}{"selector": "button.submit"},
+			want:     "button.submit",
+		},
+		{
+			name:     "ref arg skipped",
+			toolName: "browser_click",
+			args:     map[string]interface{}{"ref": "ref5"},
+			want:     "",
+		},
+		{
+			name:     "no selector or ref",
+			toolName: "browser_click",
+			args:     map[string]interface{}{},
+			want:     "",
+		},
+		{
+			name:     "fill_form with fields",
+			toolName: "browser_fill_form",
+			args: map[string]interface{}{
+				"fields": []interface{}{
+					map[string]interface{}{"selector": "input#email", "value": "test@test.com"},
+				},
+			},
+			want: "input#email",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractWaitTarget(tt.toolName, tt.args)
+			if got != tt.want {
+				t.Errorf("extractWaitTarget = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests for semantic assertions with mock LLM (Feature 2)
+// ---------------------------------------------------------------------------
+
+type mockLLMProvider struct {
+	response string
+	err      error
+}
+
+func (m *mockLLMProvider) EvaluateText(_ context.Context, _ string) (string, error) {
+	return m.response, m.err
+}
+
+func TestSemanticAssertionWithLLM(t *testing.T) {
+	executor := newMockExecutor()
+	executor.SetResult("shell_command", map[string]interface{}{
+		"stdout":    `{"status": "healthy", "uptime": "24h"}`,
+		"exit_code": 0,
+	}, nil)
+
+	runner := NewSuiteRunner(executor, nil, false)
+	runner.SetLLMProvider(&mockLLMProvider{response: "YES\nThe output contains a healthy status"})
+
+	suite := &LoadedSuite{
+		Name: "myapp",
+		Config: &config.AgentConfig{
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
+		},
+	}
+
+	tests := []LoadedTest{
+		{
+			Name: "test_semantic",
+			Config: &config.AgentConfig{
+				Type:  "drill",
+				Suite: "myapp",
+				Nodes: []config.Node{
+					{
+						Name: "check-health",
+						Type: "tool",
+						Args: map[string]interface{}{"tool": "shell_command", "command": "curl health"},
+						Assert: &config.AssertConfig{
+							Type:     "semantic",
+							Expected: "The response indicates the service is healthy",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	report, _ := runner.RunSuite(context.Background(), suite, tests)
+	if report.Tests[0].Status != "passed" {
+		t.Errorf("semantic assertion should pass, got %q", report.Tests[0].Status)
+	}
+	if report.Tests[0].Steps[0].Assertion == nil || !report.Tests[0].Steps[0].Assertion.Passed {
+		t.Error("assertion should be passed")
+	}
+}
+
+func TestSemanticAssertionFailsWithoutLLM(t *testing.T) {
+	executor := newMockExecutor()
+	executor.SetResult("shell_command", map[string]interface{}{"stdout": "data"}, nil)
+
+	runner := NewSuiteRunner(executor, nil, false)
+	// No LLM provider set
+
+	suite := &LoadedSuite{
+		Name: "myapp",
+		Config: &config.AgentConfig{
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
+		},
+	}
+
+	tests := []LoadedTest{
+		{
+			Name: "test_no_llm",
+			Config: &config.AgentConfig{
+				Type:  "drill",
+				Suite: "myapp",
+				Nodes: []config.Node{
+					{
+						Name: "check",
+						Type: "tool",
+						Args: map[string]interface{}{"tool": "shell_command"},
+						Assert: &config.AssertConfig{
+							Type:     "semantic",
+							Expected: "response is valid",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	report, _ := runner.RunSuite(context.Background(), suite, tests)
+	// Without LLM, falls through to deterministic Evaluate() which returns failure
+	if report.Tests[0].Status != "failed" {
+		t.Errorf("semantic assertion without LLM should fail, got %q", report.Tests[0].Status)
+	}
+}
+
+func TestSemanticAssertionLLMSaysNo(t *testing.T) {
+	executor := newMockExecutor()
+	executor.SetResult("shell_command", map[string]interface{}{"stdout": "error: bad request"}, nil)
+
+	runner := NewSuiteRunner(executor, nil, false)
+	runner.SetLLMProvider(&mockLLMProvider{response: "NO\nThe output indicates an error, not a success"})
+
+	suite := &LoadedSuite{
+		Name: "myapp",
+		Config: &config.AgentConfig{
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
+		},
+	}
+
+	tests := []LoadedTest{
+		{
+			Name: "test_llm_no",
+			Config: &config.AgentConfig{
+				Type:  "drill",
+				Suite: "myapp",
+				Nodes: []config.Node{
+					{
+						Name: "check",
+						Type: "tool",
+						Args: map[string]interface{}{"tool": "shell_command"},
+						Assert: &config.AssertConfig{
+							Type:     "semantic",
+							Expected: "The response indicates success",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	report, _ := runner.RunSuite(context.Background(), suite, tests)
+	if report.Tests[0].Status != "failed" {
+		t.Errorf("semantic assertion with LLM NO should fail, got %q", report.Tests[0].Status)
+	}
+}
+
+// helper
+func toolNames(calls []mockCall) []string {
+	var names []string
+	for _, c := range calls {
+		names = append(names, c.name)
+	}
+	return names
+}

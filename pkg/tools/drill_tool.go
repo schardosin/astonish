@@ -769,7 +769,90 @@ func readDrill(_ tool.Context, args ReadDrillArgs) (ReadDrillResult, error) {
 	}, nil
 }
 
-// GetDrillTools returns the drill management tools: save, validate, delete, list, and read.
+// EditDrillArgs are the arguments for the edit_drill tool.
+type EditDrillArgs struct {
+	Name string `json:"name" jsonschema:"Name of the existing drill to edit (without .yaml extension). The drill must already exist — use save_drill to create new drills."`
+	YAML string `json:"yaml" jsonschema:"Complete updated YAML content for the drill file. Must be a valid drill with type: drill, a suite reference, and at least one node."`
+}
+
+// EditDrillResult is the result of the edit_drill tool.
+type EditDrillResult struct {
+	Status  string `json:"status"`            // "ok" or "error"
+	Path    string `json:"path,omitempty"`    // Path where the drill was saved
+	Message string `json:"message,omitempty"` // Human-readable status
+}
+
+func editDrill(_ tool.Context, args EditDrillArgs) (EditDrillResult, error) {
+	name := strings.TrimSpace(args.Name)
+	if name == "" {
+		return EditDrillResult{
+			Status:  "error",
+			Message: "name is required",
+		}, nil
+	}
+	name = strings.TrimSuffix(strings.TrimSuffix(name, ".yaml"), ".yml")
+
+	if strings.TrimSpace(args.YAML) == "" {
+		return EditDrillResult{
+			Status:  "error",
+			Message: "yaml content is required",
+		}, nil
+	}
+
+	// Find the existing drill file
+	dirs := adrill.DefaultDrillDirs()
+	test, _, err := adrill.FindTestAndSuite(dirs, name)
+	if err != nil {
+		return EditDrillResult{
+			Status:  "error",
+			Message: fmt.Sprintf("drill %q not found — use save_drill to create new drills", name),
+		}, nil
+	}
+
+	// Validate the new YAML
+	var cfg config.AgentConfig
+	if err := yaml.Unmarshal([]byte(args.YAML), &cfg); err != nil {
+		return EditDrillResult{
+			Status:  "error",
+			Message: fmt.Sprintf("invalid YAML: %v", err),
+		}, nil
+	}
+
+	if cfg.Type != "drill" && cfg.Type != "test" {
+		return EditDrillResult{
+			Status:  "error",
+			Message: fmt.Sprintf("type must be 'drill', got %q", cfg.Type),
+		}, nil
+	}
+
+	if len(cfg.Nodes) == 0 {
+		return EditDrillResult{
+			Status:  "error",
+			Message: "drill must have at least one node",
+		}, nil
+	}
+
+	// Write to the existing file path
+	yamlBytes := []byte(args.YAML)
+	if !strings.HasSuffix(args.YAML, "\n") {
+		yamlBytes = append(yamlBytes, '\n')
+	}
+
+	if err := os.WriteFile(test.File, yamlBytes, 0644); err != nil {
+		return EditDrillResult{
+			Status:  "error",
+			Message: fmt.Sprintf("failed to write file: %v", err),
+		}, nil
+	}
+
+	return EditDrillResult{
+		Status:  "ok",
+		Path:    test.File,
+		Message: fmt.Sprintf("Drill %q updated at %s", name, filepath.Base(test.File)),
+	}, nil
+}
+
+// GetDrillTools returns the drill management tools: save, validate, delete, list, read, and edit.
 func GetDrillTools() ([]tool.Tool, error) {
 	saveTool, err := functiontool.New(functiontool.Config{
 		Name: "save_drill",
@@ -814,13 +897,24 @@ func GetDrillTools() ([]tool.Tool, error) {
 	readTool, err := functiontool.New(functiontool.Config{
 		Name: "read_drill",
 		Description: "Read a drill's YAML content or a suite's overview. Pass a drill name to get its raw YAML " +
-			"(useful for copying patterns into new drills). Pass a suite name to get a formatted overview of the " +
-			"suite config, services, and all drill summaries. " +
+			"(useful for understanding existing patterns or preparing edits). Pass a suite name to get a formatted " +
+			"overview of the suite config, services, and all drill summaries. " +
 			"Drill files are managed by Astonish on the host — use this tool instead of read_file to access drill content.",
 	}, readDrill)
 	if err != nil {
 		return nil, fmt.Errorf("create read_drill tool: %w", err)
 	}
 
-	return []tool.Tool{saveTool, validateTool, deleteTool, listTool, readTool}, nil
+	editTool, err := functiontool.New(functiontool.Config{
+		Name: "edit_drill",
+		Description: "Edit an existing drill file. Replaces the drill's YAML content with the provided YAML. " +
+			"The drill must already exist (use save_drill to create new drills). " +
+			"Typical workflow: read_drill to get current YAML → modify assertions/steps → edit_drill to save changes. " +
+			"Drill files are managed by Astonish on the host — use this tool instead of write_file to edit drill content.",
+	}, editDrill)
+	if err != nil {
+		return nil, fmt.Errorf("create edit_drill tool: %w", err)
+	}
+
+	return []tool.Tool{saveTool, validateTool, deleteTool, listTool, readTool, editTool}, nil
 }

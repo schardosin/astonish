@@ -65,3 +65,13 @@ func (am *ArtifactManager) SaveSetupLog(content string) (string, error) {
 	}
 	return path, nil
 }
+
+// SaveDiffImage writes a visual diff image (PNG) as an artifact.
+func (am *ArtifactManager) SaveDiffImage(stepName string, pngData []byte) (string, error) {
+	filename := fmt.Sprintf("%s_visual_diff.png", stepName)
+	path := filepath.Join(am.baseDir, filename)
+	if err := os.WriteFile(path, pngData, 0o644); err != nil {
+		return "", fmt.Errorf("write diff image: %w", err)
+	}
+	return path, nil
+}

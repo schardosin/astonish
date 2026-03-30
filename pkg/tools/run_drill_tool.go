@@ -37,26 +37,31 @@ type RunDrillResult struct {
 // For chat sessions, nodePool is set and lazyClient is resolved at runtime.
 // For fleet sessions, lazyClient and sessionID are set directly.
 type runDrillDeps struct {
-	nodePool   *sandbox.NodeClientPool // Chat/Studio sessions (nil when no sandbox)
-	lazyClient *sandbox.LazyNodeClient // Fleet sessions (nil for chat sessions)
-	sessionID  string                  // Fleet session ID (empty for chat sessions)
+	nodePool    *sandbox.NodeClientPool // Chat/Studio sessions (nil when no sandbox)
+	lazyClient  *sandbox.LazyNodeClient // Fleet sessions (nil for chat sessions)
+	sessionID   string                  // Fleet session ID (empty for chat sessions)
+	llmProvider adrill.LLMProvider      // Optional LLM for semantic assertions
 }
 
 // NewRunDrillTool creates the run_drill tool for chat/Studio sessions.
 // nodePool may be nil when sandbox is not enabled; the tool will use local execution.
-func NewRunDrillTool(nodePool *sandbox.NodeClientPool) (tool.Tool, error) {
+// llmProvider is optional — when set, semantic assertions (assert.type: "semantic")
+// will use it to evaluate whether tool output satisfies the expected condition.
+func NewRunDrillTool(nodePool *sandbox.NodeClientPool, llmProvider adrill.LLMProvider) (tool.Tool, error) {
 	deps := &runDrillDeps{
-		nodePool: nodePool,
+		nodePool:    nodePool,
+		llmProvider: llmProvider,
 	}
 	return newRunDrillToolFromDeps(deps)
 }
 
 // NewRunDrillToolWithClient creates the run_drill tool for fleet sessions
 // with a dedicated LazyNodeClient that routes into the fleet's container.
-func NewRunDrillToolWithClient(lazyClient *sandbox.LazyNodeClient, sessionID string) (tool.Tool, error) {
+func NewRunDrillToolWithClient(lazyClient *sandbox.LazyNodeClient, sessionID string, llmProvider adrill.LLMProvider) (tool.Tool, error) {
 	deps := &runDrillDeps{
-		lazyClient: lazyClient,
-		sessionID:  sessionID,
+		lazyClient:  lazyClient,
+		sessionID:   sessionID,
+		llmProvider: llmProvider,
 	}
 	return newRunDrillToolFromDeps(deps)
 }
@@ -200,6 +205,9 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 	// Run the suite
 	runner := adrill.NewSuiteRunner(executor, am, args.Verbose)
 	runner.SetVars(vars)
+	if deps.llmProvider != nil {
+		runner.SetLLMProvider(deps.llmProvider)
+	}
 	report, err := runner.RunSuite(context.Background(), suite, tests)
 	if err != nil {
 		return RunDrillResult{
@@ -746,6 +754,21 @@ func enrichReportWithFailureContext(buf *bytes.Buffer, report *adrill.SuiteRepor
 			logSnippet = "... (truncated)\n" + logSnippet[len(logSnippet)-2048:]
 		}
 		buf.WriteString(fmt.Sprintf("\nSetup log:\n%s\n", logSnippet))
+	}
+
+	// Add actionable hint for fixing failures
+	hasTestFailures := false
+	for _, test := range report.Tests {
+		if test.Status == "failed" {
+			hasTestFailures = true
+			break
+		}
+	}
+	if hasTestFailures {
+		buf.WriteString("\n--- How to Fix ---\n")
+		buf.WriteString("To fix failing drills: use read_drill to inspect the drill YAML, investigate the app code\n")
+		buf.WriteString("to understand actual behavior, then use edit_drill to update the assertions or test logic.\n")
+		buf.WriteString("Re-run with run_drill to verify the fix.\n")
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -84,7 +85,16 @@ func (nc *NodeClient) startLocked() error {
 	// If the container is stopped (e.g., idle timeout, OOM kill, external stop),
 	// restart it before attempting to exec the node process. Without this check,
 	// ExecNonInteractive fails because you cannot exec in a stopped container.
+	//
+	// We must also handle the case where the container no longer exists — it may
+	// have been destroyed by PruneStaleOnStartup, idle reaping, or a template
+	// refresh. IsRunning() returns false for both "stopped" and "does not exist"
+	// (it swallows errors), so we need an explicit existence check to avoid
+	// calling StartInstance on a non-existent container.
 	if !nc.client.IsRunning(nc.containerName) {
+		if !nc.client.InstanceExists(nc.containerName) {
+			return fmt.Errorf("container %q no longer exists (may have been pruned or destroyed)", nc.containerName)
+		}
 		if err := nc.client.StartInstance(nc.containerName); err != nil {
 			return fmt.Errorf("failed to restart stopped container %q: %w", nc.containerName, err)
 		}
@@ -412,10 +422,30 @@ func (lnc *LazyNodeClient) initBackground(sessionID string) {
 // Call proxies a tool call to the container node. If BindSession was called,
 // it waits for the background init to complete. If not, it does a synchronous
 // init as a fallback (safety net for code paths that skip ProcessRequest).
+//
+// If the call fails because the container no longer exists (pruned, destroyed,
+// or template refresh), Call() automatically re-creates the container and
+// retries once. This handles the race where a container is destroyed between
+// init and the first (or any subsequent) tool call.
 func (lnc *LazyNodeClient) Call(sessionID, toolName string, args map[string]interface{}) (json.RawMessage, error) {
 	// Record activity for idle watchdog
 	lnc.lastActivity.Store(time.Now().Unix())
 
+	result, err := lnc.callOnce(sessionID, toolName, args)
+	if err != nil && lnc.isContainerGone(err) {
+		log.Printf("[sandbox] Container gone for session %s, re-creating and retrying",
+			sessionID[:min(8, len(sessionID))])
+		if resetErr := lnc.resetForRetry(sessionID); resetErr != nil {
+			return nil, fmt.Errorf("container gone and recovery failed: %w (original: %v)", resetErr, err)
+		}
+		return lnc.callOnce(sessionID, toolName, args)
+	}
+	return result, err
+}
+
+// callOnce performs a single tool call attempt — waits for init, then delegates
+// to the underlying NodeClient.
+func (lnc *LazyNodeClient) callOnce(sessionID, toolName string, args map[string]interface{}) (json.RawMessage, error) {
 	// Ensure BindSession was called (idempotent — no-op if already called)
 	lnc.BindSession(sessionID)
 
@@ -445,6 +475,50 @@ func (lnc *LazyNodeClient) Call(sessionID, toolName string, args map[string]inte
 
 	// Delegate to the NodeClient (which handles its own locking)
 	return nc.Call(toolName, args)
+}
+
+// isContainerGone returns true if the error indicates the container was
+// destroyed or no longer exists. This covers errors from both startLocked()
+// (explicit "no longer exists" check) and the Incus API ("Instance not found").
+func (lnc *LazyNodeClient) isContainerGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "no longer exists") ||
+		strings.Contains(msg, "Instance not found")
+}
+
+// resetForRetry tears down the current state and re-initializes the container
+// and node from scratch. This is called when a tool call fails because the
+// container was destroyed externally. The caller must retry the call after this.
+func (lnc *LazyNodeClient) resetForRetry(sessionID string) error {
+	lnc.mu.Lock()
+
+	// Close the old node client if any
+	if lnc.nodeClient != nil {
+		lnc.nodeClient.Close()
+		lnc.nodeClient = nil
+	}
+
+	// Reset init state so initBackground can run again
+	lnc.initialized = false
+	lnc.initErr = nil
+	lnc.containerErr = nil
+	lnc.containerName = ""
+	lnc.containerReady = make(chan struct{})
+	lnc.initDone = make(chan struct{})
+
+	lnc.mu.Unlock()
+
+	// Re-run background init synchronously (we need the container before retry)
+	lnc.initBackground(sessionID)
+
+	// Check if re-init succeeded
+	lnc.mu.Lock()
+	err := lnc.initErr
+	lnc.mu.Unlock()
+	return err
 }
 
 // Close shuts down the node and optionally the container.

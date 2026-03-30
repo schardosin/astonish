@@ -2,6 +2,7 @@ package drill
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -15,6 +16,13 @@ type ToolExecutor interface {
 	Execute(ctx context.Context, name string, args map[string]interface{}) (any, error)
 }
 
+// LLMProvider abstracts an LLM for semantic assertion evaluation.
+// Any provider that can generate a text completion implements this.
+type LLMProvider interface {
+	// EvaluateText sends a prompt to the LLM and returns the response text.
+	EvaluateText(ctx context.Context, prompt string) (string, error)
+}
+
 // SuiteRunner manages the full suite lifecycle: setup → ready check → tests → teardown.
 type SuiteRunner struct {
 	toolExecutor  ToolExecutor
@@ -26,6 +34,7 @@ type SuiteRunner struct {
 	triageAgent   *TriageAgent      // optional AI triage agent for failure analysis
 	triageEnabled bool              // when true, all on_fail defaults become "triage"
 	setupLog      string            // captured setup log for triage context
+	llmProvider   LLMProvider       // optional LLM for semantic assertions
 }
 
 // NewSuiteRunner creates a runner with the given tool executor and artifact manager.
@@ -50,6 +59,13 @@ func (sr *SuiteRunner) SetVars(vars map[string]string) {
 func (sr *SuiteRunner) SetTriageAgent(ta *TriageAgent, enableForAll bool) {
 	sr.triageAgent = ta
 	sr.triageEnabled = enableForAll
+}
+
+// SetLLMProvider sets the LLM used for semantic assertion evaluation.
+// When set, assert.type: "semantic" will call the LLM to evaluate whether
+// actual output satisfies the expected condition.
+func (sr *SuiteRunner) SetLLMProvider(provider LLMProvider) {
+	sr.llmProvider = provider
 }
 
 // RunSuite executes all tests in a suite with shared setup/teardown.
@@ -264,8 +280,16 @@ func (sr *SuiteRunner) executeTests(ctx context.Context, report *SuiteReport, su
 			continue
 		}
 
-		testReport := sr.runTest(ctx, &test, suite)
-		report.Tests = append(report.Tests, testReport)
+		// Parameterized tests: run once per parameter set
+		if len(test.Config.Parameters) > 0 {
+			for i, paramSet := range test.Config.Parameters {
+				testReport := sr.runParameterizedTest(ctx, &test, suite, paramSet, i)
+				report.Tests = append(report.Tests, testReport)
+			}
+		} else {
+			testReport := sr.runTest(ctx, &test, suite)
+			report.Tests = append(report.Tests, testReport)
+		}
 	}
 
 	// Build overall analysis summary from individual triage verdicts
@@ -341,6 +365,34 @@ func (sr *SuiteRunner) runTest(ctx context.Context, test *LoadedTest, suite *Loa
 	return report
 }
 
+// runParameterizedTest runs a single test with a specific parameter set.
+// The parameter values are merged into the runner's vars for placeholder
+// substitution, then restored after the run completes.
+func (sr *SuiteRunner) runParameterizedTest(ctx context.Context, test *LoadedTest, suite *LoadedSuite, paramSet map[string]string, paramIdx int) TestReport {
+	// Save current vars and merge parameter values
+	savedVars := sr.vars
+	mergedVars := make(map[string]string, len(sr.vars)+len(paramSet))
+	for k, v := range sr.vars {
+		mergedVars[k] = v
+	}
+	for k, v := range paramSet {
+		mergedVars[k] = v
+	}
+	sr.vars = mergedVars
+
+	report := sr.runTest(ctx, test, suite)
+
+	// Tag the report with the parameter set
+	report.ParameterSet = paramSet
+	// Append parameter index to the name for clarity
+	report.Name = fmt.Sprintf("%s [param %d]", report.Name, paramIdx+1)
+
+	// Restore original vars
+	sr.vars = savedVars
+
+	return report
+}
+
 // runTestAttempt executes a single attempt of a test.
 func (sr *SuiteRunner) runTestAttempt(ctx context.Context, test *LoadedTest, suite *LoadedSuite, timeout, stepTimeout int, onFail string, _ []string) TestReport {
 	testCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
@@ -352,11 +404,21 @@ func (sr *SuiteRunner) runTestAttempt(ctx context.Context, test *LoadedTest, sui
 		StartedAt: time.Now(),
 	}
 
+	// Resolve auto-wait settings from drill config
+	autoWait := false
+	autoWaitTimeout := 5000 // default 5s in milliseconds
+	if tc := test.Config.DrillConfig; tc != nil {
+		autoWait = tc.AutoWait
+		if tc.AutoWaitTimeout > 0 {
+			autoWaitTimeout = tc.AutoWaitTimeout
+		}
+	}
+
 	nodes := resolveExecutionOrder(test.Config)
 	allPassed := true
 
 	for _, node := range nodes {
-		stepResult := sr.executeStep(testCtx, node, stepTimeout)
+		stepResult := sr.executeStep(testCtx, node, stepTimeout, autoWait, autoWaitTimeout)
 		report.Steps = append(report.Steps, stepResult)
 
 		if stepResult.Status == "failed" || stepResult.Status == "error" {
@@ -436,7 +498,10 @@ func (sr *SuiteRunner) buildAnalysisSummary(report *SuiteReport) {
 }
 
 // executeStep runs a single tool node and evaluates its assertion.
-func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTimeout int) StepResult {
+// When autoWait is true and the tool is an interactive browser tool,
+// a browser_wait_for call is injected before the actual tool execution
+// to wait for the target element to appear.
+func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTimeout int, autoWait bool, autoWaitTimeout int) StepResult {
 	stepCtx, cancel := context.WithTimeout(ctx, time.Duration(stepTimeout)*time.Second)
 	defer cancel()
 
@@ -470,6 +535,17 @@ func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTi
 	if sr.baseURL != "" && toolName == "browser_navigate" {
 		if url, ok := toolArgs["url"].(string); ok && strings.HasPrefix(url, "/") {
 			toolArgs["url"] = strings.TrimRight(sr.baseURL, "/") + url
+		}
+	}
+
+	// Auto-wait: inject a browser_wait_for call before interactive browser tools
+	if autoWait && isInteractiveBrowserTool(toolName) {
+		if waitTarget := extractWaitTarget(toolName, toolArgs); waitTarget != "" {
+			waitArgs := map[string]interface{}{
+				"selector": waitTarget,
+				"timeout":  autoWaitTimeout,
+			}
+			sr.toolExecutor.Execute(stepCtx, "browser_wait_for", waitArgs) // best-effort
 		}
 	}
 
@@ -507,10 +583,21 @@ func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTi
 	// Evaluate assertion
 	if node.Assert != nil {
 		content := getAssertionContent(node.Assert, toolResult, output)
-		assertResult := Evaluate(node.Assert, content)
-		result.Assertion = assertResult
 
-		if assertResult.Passed {
+		// Semantic assertions: use LLM if available
+		if node.Assert.Type == "semantic" && sr.llmProvider != nil {
+			assertResult := EvaluateSemantic(stepCtx, node.Assert, content, sr.llmProvider)
+			result.Assertion = assertResult
+		} else if node.Assert.Type == "visual_match" {
+			// Visual regression: compare screenshot against baseline
+			assertResult := sr.evaluateVisual(node, toolResult)
+			result.Assertion = assertResult
+		} else {
+			assertResult := Evaluate(node.Assert, content)
+			result.Assertion = assertResult
+		}
+
+		if result.Assertion.Passed {
 			result.Status = "passed"
 		} else {
 			result.Status = "failed"
@@ -833,6 +920,153 @@ func isReadyCheckConfigured(rc *config.ReadyCheck) bool {
 // isShellTool returns true if the tool name is a shell/process tool.
 func isShellTool(name string) bool {
 	return name == "shell_command" || strings.HasPrefix(name, "process_")
+}
+
+// isInteractiveBrowserTool returns true if the tool is a browser interaction
+// that targets a specific element and benefits from auto-wait.
+func isInteractiveBrowserTool(name string) bool {
+	switch name {
+	case "browser_click", "browser_type", "browser_hover",
+		"browser_select_option", "browser_fill_form", "browser_drag":
+		return true
+	}
+	return false
+}
+
+// extractWaitTarget derives a CSS selector or ref to wait for from the tool args.
+// Returns empty string if no meaningful wait target can be determined.
+func extractWaitTarget(toolName string, args map[string]interface{}) string {
+	// Check for explicit "selector" argument
+	if sel, ok := args["selector"].(string); ok && sel != "" {
+		return sel
+	}
+	// Check for "ref" argument (snapshot-based ref like "ref5")
+	if ref, ok := args["ref"].(string); ok && ref != "" {
+		// Refs are positional identifiers from browser_snapshot; we can't
+		// translate them to CSS selectors for wait_for. Skip auto-wait.
+		return ""
+	}
+	// For browser_fill_form, check for fields with selectors
+	if toolName == "browser_fill_form" {
+		if fields, ok := args["fields"].([]interface{}); ok && len(fields) > 0 {
+			if field, ok := fields[0].(map[string]interface{}); ok {
+				if sel, ok := field["selector"].(string); ok && sel != "" {
+					return sel
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// evaluateVisual compares a screenshot from the tool result against a stored baseline.
+// On first run (no baseline exists), the screenshot is saved as the baseline and passes.
+func (sr *SuiteRunner) evaluateVisual(node config.Node, toolResult any) *AssertionResult {
+	result := &AssertionResult{
+		Type:     "visual_match",
+		Expected: node.Assert.Expected, // baseline name
+	}
+
+	// Extract screenshot data from tool result
+	screenshotData := extractScreenshotData(toolResult)
+	if screenshotData == nil {
+		result.Passed = false
+		result.Message = "no screenshot data in tool result (use browser_take_screenshot)"
+		return result
+	}
+
+	threshold := node.Assert.Threshold
+	if threshold <= 0 {
+		threshold = 0.01 // default 1%
+	}
+
+	baselineName := node.Assert.Expected
+	if baselineName == "" {
+		baselineName = node.Name
+	}
+
+	// Load or create baseline
+	baselineDir := BaselineDir(sr.artifactMgr)
+	baseline, err := LoadBaseline(baselineDir, baselineName)
+	if err != nil {
+		// No baseline exists — save current as baseline and pass
+		if saveErr := SaveBaseline(baselineDir, baselineName, screenshotData); saveErr != nil {
+			result.Passed = false
+			result.Message = fmt.Sprintf("failed to save baseline: %v", saveErr)
+			return result
+		}
+		result.Passed = true
+		result.Message = "baseline created (first run)"
+		return result
+	}
+
+	// Compare images
+	diffPct, diffImg, err := CompareImages(baseline, screenshotData, threshold)
+	if err != nil {
+		result.Passed = false
+		result.Message = fmt.Sprintf("image comparison failed: %v", err)
+		return result
+	}
+
+	result.Actual = fmt.Sprintf("%.2f%% different", diffPct*100)
+
+	if diffPct <= threshold {
+		result.Passed = true
+		result.Message = fmt.Sprintf("visual match within threshold (%.2f%% diff, %.2f%% allowed)", diffPct*100, threshold*100)
+	} else {
+		result.Passed = false
+		result.Message = fmt.Sprintf("visual regression: %.2f%% pixels differ (threshold: %.2f%%)", diffPct*100, threshold*100)
+
+		// Save diff image as artifact
+		if sr.artifactMgr != nil && diffImg != nil {
+			path, _ := sr.artifactMgr.SaveDiffImage(node.Name, diffImg)
+			if path != "" {
+				result.Message += fmt.Sprintf(" (diff saved: %s)", path)
+			}
+		}
+	}
+
+	return result
+}
+
+// extractScreenshotData extracts raw PNG bytes from a browser_take_screenshot result.
+func extractScreenshotData(result any) []byte {
+	if result == nil {
+		return nil
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		return nil
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil
+	}
+	// browser_take_screenshot returns base64-encoded image data
+	if b64, ok := m["image"].(string); ok && b64 != "" {
+		decoded, err := base64Decode(b64)
+		if err != nil {
+			return nil
+		}
+		return decoded
+	}
+	if b64, ok := m["screenshot"].(string); ok && b64 != "" {
+		decoded, err := base64Decode(b64)
+		if err != nil {
+			return nil
+		}
+		return decoded
+	}
+	return nil
+}
+
+// base64Decode decodes a base64 string, trying standard then URL encoding.
+func base64Decode(s string) ([]byte, error) {
+	data, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		data, err = base64.RawStdEncoding.DecodeString(s)
+	}
+	return data, err
 }
 
 // substituteVarsInString replaces {{KEY}} and {KEY} placeholders in a string

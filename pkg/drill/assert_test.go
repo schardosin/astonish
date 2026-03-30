@@ -1,6 +1,9 @@
 package drill
 
 import (
+	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/schardosin/astonish/pkg/config"
@@ -217,6 +220,66 @@ func TestEvaluateSemantic(t *testing.T) {
 	if result.Message == "" {
 		t.Error("semantic assertions should have an explanatory message")
 	}
+}
+
+func TestEvaluateSemanticWithLLM(t *testing.T) {
+	mockLLM := &testLLMProvider{response: "YES\nThe output matches the condition"}
+	ctx := context.Background()
+
+	result := EvaluateSemantic(ctx, &config.AssertConfig{
+		Type:     "semantic",
+		Expected: "response indicates success",
+	}, "status: ok", mockLLM)
+
+	if !result.Passed {
+		t.Errorf("expected pass, got message: %s", result.Message)
+	}
+	if result.Type != "semantic" {
+		t.Errorf("Type = %q, want %q", result.Type, "semantic")
+	}
+}
+
+func TestEvaluateSemanticWithLLMNo(t *testing.T) {
+	mockLLM := &testLLMProvider{response: "NO\nThe output shows an error"}
+	ctx := context.Background()
+
+	result := EvaluateSemantic(ctx, &config.AssertConfig{
+		Type:     "semantic",
+		Expected: "response indicates success",
+	}, "error: failed", mockLLM)
+
+	if result.Passed {
+		t.Error("expected fail when LLM says NO")
+	}
+	if !strings.Contains(result.Message, "mismatch") {
+		t.Errorf("message should contain 'mismatch', got: %s", result.Message)
+	}
+}
+
+func TestEvaluateSemanticLLMError(t *testing.T) {
+	mockLLM := &testLLMProvider{err: fmt.Errorf("API error")}
+	ctx := context.Background()
+
+	result := EvaluateSemantic(ctx, &config.AssertConfig{
+		Type:     "semantic",
+		Expected: "anything",
+	}, "content", mockLLM)
+
+	if result.Passed {
+		t.Error("expected fail on LLM error")
+	}
+	if !strings.Contains(result.Message, "LLM evaluation failed") {
+		t.Errorf("message should contain 'LLM evaluation failed', got: %s", result.Message)
+	}
+}
+
+type testLLMProvider struct {
+	response string
+	err      error
+}
+
+func (m *testLLMProvider) EvaluateText(_ context.Context, _ string) (string, error) {
+	return m.response, m.err
 }
 
 func TestEvaluateUnknownType(t *testing.T) {

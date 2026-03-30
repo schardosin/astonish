@@ -1106,7 +1106,9 @@ func generateStudioSessionTitle(llm model.LLM, store *persistentsession.FileStor
 		title = title[:77] + "..."
 	}
 
-	_ = store.SetSessionTitle(sessionID, title)
+	if err := store.SetSessionTitle(sessionID, title); err != nil {
+		slog.Warn("failed to set session title", "session_id", sessionID, "error", err)
+	}
 }
 
 // toInt converts an interface{} to int (handles float64 from JSON).

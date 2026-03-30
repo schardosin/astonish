@@ -37,7 +37,9 @@ func loadAllServersFromTaps() ([]mcpstore.Server, error) {
 		return nil, err
 	}
 
-	_ = store.UpdateAllManifests()
+	if err := store.UpdateAllManifests(); err != nil {
+		slog.Warn("failed to update MCP manifests", "error", err)
+	}
 	tappedMCPs := store.ListAllMCPs()
 
 	var inputs []mcpstore.TappedMCPInput

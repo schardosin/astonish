@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"iter"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -216,7 +217,7 @@ func (c *ChatAgent) DynamicToolInjectionCallback() llmagent.BeforeModelCallback 
 		}
 
 		if c.DebugMode && injected > 0 {
-			fmt.Printf("[Chat DEBUG] Dynamic tool injection: %d tools injected\n", injected)
+			slog.Debug("dynamic tool injection", "component", "chat", "injected", injected)
 		}
 
 		return nil, nil
@@ -614,7 +615,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		}
 
 		if c.DebugMode {
-			fmt.Printf("[Chat DEBUG] User message: %s\n", userText)
+			slog.Debug("user message", "component", "chat", "text", userText)
 		}
 
 		// --- Phase A: Dynamic Execution ---
@@ -635,7 +636,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			mc, memErr := c.MemoryManager.Load()
 			if memErr != nil {
 				if c.DebugMode {
-					fmt.Printf("[Chat DEBUG] Failed to load memory: %v\n", memErr)
+					slog.Debug("failed to load memory", "component", "chat", "error", memErr)
 				}
 			} else {
 				memContent = mc
@@ -651,7 +652,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			searchQuery := buildKnowledgeQuery(userText)
 			if len(searchQuery) < 5 {
 				if c.DebugMode {
-					fmt.Printf("[Chat DEBUG] Auto knowledge search: skipped (processed query too short: %q)\n", searchQuery)
+					slog.Debug("auto knowledge search skipped: query too short", "component", "chat", "query", searchQuery)
 				}
 			} else {
 				var allResults []KnowledgeSearchResult
@@ -661,7 +662,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 					guidanceResults, err := c.KnowledgeSearchByCategory(context.Background(), searchQuery, 3, 0.3, "guidance")
 					if err != nil {
 						if c.DebugMode {
-							fmt.Printf("[Chat DEBUG] Guidance search failed: %v\n", err)
+							slog.Debug("guidance search failed", "component", "chat", "error", err)
 						}
 					} else {
 						allResults = append(allResults, guidanceResults...)
@@ -673,7 +674,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 					knowledgeResults, err := c.KnowledgeSearch(context.Background(), searchQuery, 5, 0.3)
 					if err != nil {
 						if c.DebugMode {
-							fmt.Printf("[Chat DEBUG] Knowledge search failed: %v\n", err)
+							slog.Debug("knowledge search failed", "component", "chat", "error", err)
 						}
 					} else {
 						allResults = append(allResults, knowledgeResults...)
@@ -701,14 +702,14 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 					}
 					relevantKnowledge = EscapeCurlyPlaceholders(kb.String())
 					if c.DebugMode {
-						fmt.Printf("[Chat DEBUG] Auto knowledge search: %d results injected for query: %s\n", len(allResults), truncateQuery(searchQuery, 60))
+						slog.Debug("auto knowledge search results injected", "component", "chat", "results", len(allResults), "query", truncateQuery(searchQuery, 60))
 					}
 				} else if c.DebugMode {
-					fmt.Printf("[Chat DEBUG] Auto knowledge search: no results for query: %s\n", truncateQuery(searchQuery, 60))
+					slog.Debug("auto knowledge search: no results", "component", "chat", "query", truncateQuery(searchQuery, 60))
 				}
 			}
 		} else if c.KnowledgeSearch == nil && c.KnowledgeSearchByCategory == nil && c.DebugMode {
-			fmt.Println("[Chat DEBUG] Auto knowledge search: disabled (no search functions wired)")
+			slog.Debug("auto knowledge search disabled: no search functions wired", "component", "chat")
 		}
 
 		// Persist a tracking event recording what knowledge was injected.
@@ -734,7 +735,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 				if tail := lastModelResponseTail(ctx.Session().Events(), 200); tail != "" {
 					toolSearchQuery = tail + " " + toolSearchQuery
 					if c.DebugMode {
-						fmt.Printf("[Chat DEBUG] Short message — augmented tool search query with LLM context\n")
+						slog.Debug("short message — augmented tool search query with LLM context", "component", "chat")
 					}
 				}
 			}
@@ -742,14 +743,14 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 				matches, err := c.ToolIndex.SearchHybrid(context.Background(), toolSearchQuery, 8, 0.005)
 				if err != nil {
 					if c.DebugMode {
-						fmt.Printf("[Chat DEBUG] Tool index search failed: %v\n", err)
+						slog.Debug("tool index search failed", "component", "chat", "error", err)
 					}
 				} else {
 					toolMatches = matches
 					if len(matches) > 0 {
 						relevantTools = FormatToolMatchesForPrompt(matches)
 						if c.DebugMode {
-							fmt.Printf("[Chat DEBUG] Tool index search: %d matches for query: %s\n", len(matches), truncateQuery(toolSearchQuery, 60))
+							slog.Debug("tool index search results", "component", "chat", "matches", len(matches), "query", truncateQuery(toolSearchQuery, 60))
 						}
 					}
 				}
@@ -800,7 +801,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 				if err != nil {
 					status = fmt.Sprintf("ERROR: %v", err)
 				}
-				fmt.Printf("[Chat DEBUG] Tool call recorded: %s -> %s\n", t.Name(), status)
+				slog.Debug("tool call recorded", "component", "chat", "tool", t.Name(), "status", status)
 			}
 
 			// After save_credential succeeds, retroactively redact the current
@@ -810,10 +811,10 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			if t.Name() == "save_credential" && err == nil && c.RedactSessionFunc != nil {
 				if redactErr := c.RedactSessionFunc(sessionAppName, sessionUserID, sessionID); redactErr != nil {
 					if c.DebugMode {
-						fmt.Printf("[Chat DEBUG] Retroactive session redaction failed: %v\n", redactErr)
+						slog.Debug("retroactive session redaction failed", "component", "chat", "error", redactErr)
 					}
 				} else if c.DebugMode {
-					fmt.Println("[Chat DEBUG] Retroactive session redaction completed")
+					slog.Debug("retroactive session redaction completed", "component", "chat")
 				}
 			}
 
@@ -875,8 +876,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 					if llmerror.IsRetryable(err) && attempt < maxRetries-1 {
 						wait := retryBackoff(attempt, err)
 						if c.DebugMode {
-							fmt.Printf("[Chat DEBUG] Retryable error (attempt %d/%d): %v, waiting %v\n",
-								attempt+1, maxRetries, err, wait)
+							slog.Debug("retryable error", "component", "chat", "attempt", attempt+1, "maxRetries", maxRetries, "error", err, "wait", wait)
 						}
 						select {
 						case <-time.After(wait):
@@ -894,8 +894,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 					if isUnknownToolError(err) && unknownToolRetries < maxUnknownToolRetries && len(lastFunctionCalls) > 0 {
 						unknownToolRetries++
 						if c.DebugMode {
-							fmt.Printf("[Chat DEBUG] Unknown tool error (retry %d/%d): %v\n",
-								unknownToolRetries, maxUnknownToolRetries, err)
+							slog.Debug("unknown tool error", "component", "chat", "retry", unknownToolRetries, "maxRetries", maxUnknownToolRetries, "error", err)
 						}
 						syntheticEvent := buildUnknownToolResponse(lastFunctionCalls, c.Tools, c.Toolsets)
 						yield(syntheticEvent, nil) // runner persists this to session
@@ -906,7 +905,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 					// Non-retryable error, or retries exhausted
 					if c.DebugMode && attempt > 0 {
-						fmt.Printf("[Chat DEBUG] Error after %d retries: %v\n", attempt, err)
+						slog.Debug("error after retries", "component", "chat", "attempts", attempt, "error", err)
 					}
 
 					// If we were using an execution plan and it failed, inform the user
@@ -914,7 +913,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 					// the next turn's history is valid.
 					if executionPlan != "" {
 						if c.DebugMode {
-							fmt.Printf("[Chat DEBUG] Flow execution failed: %v, cleared execution plan\n", err)
+							slog.Debug("flow execution failed, cleared execution plan", "component", "chat", "error", err)
 						}
 						yield(&session.Event{
 							LLMResponse: model.LLMResponse{
@@ -1016,10 +1015,9 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		trace.Finalize()
 
 		if c.DebugMode {
-			fmt.Printf("[Chat DEBUG] postLoop reached. Trace tool call count: %d\n",
-				trace.ToolCallCount())
+			slog.Debug("postLoop reached", "component", "chat", "toolCallCount", trace.ToolCallCount())
 			for i, step := range trace.Steps {
-				fmt.Printf("[Chat DEBUG]   Step %d: %s (success: %v)\n", i+1, step.ToolName, step.Success)
+				slog.Debug("trace step", "component", "chat", "step", i+1, "tool", step.ToolName, "success", step.Success)
 			}
 		}
 
@@ -1056,7 +1054,7 @@ func (c *ChatAgent) reconstructTraces(ctx context.Context, ds DistillSession) []
 	})
 	if err != nil || resp.Session == nil {
 		if c.DebugMode {
-			fmt.Printf("[Chat DEBUG] reconstructTraces: failed to load session %s: %v\n", ds.SessionID, err)
+			slog.Debug("reconstructTraces: failed to load session", "component", "chat", "sessionID", ds.SessionID, "error", err)
 		}
 		return nil
 	}
@@ -1160,9 +1158,9 @@ func (c *ChatAgent) reconstructTraces(ctx context.Context, ds DistillSession) []
 	}
 
 	if c.DebugMode {
-		fmt.Printf("[Chat DEBUG] reconstructTraces: rebuilt %d traces from session %s\n", len(traces), ds.SessionID)
+		slog.Debug("reconstructTraces: rebuilt traces", "component", "chat", "traces", len(traces), "sessionID", ds.SessionID)
 		for i, t := range traces {
-			fmt.Printf("[Chat DEBUG]   Trace %d: %q (%d tool calls)\n", i+1, t.UserRequest, t.ToolCallCount())
+			slog.Debug("reconstructed trace", "component", "chat", "trace", i+1, "request", t.UserRequest, "toolCalls", t.ToolCallCount())
 		}
 	}
 
@@ -1388,7 +1386,7 @@ func (c *ChatAgent) ConfirmAndDistill(ctx context.Context, ds DistillSession, pr
 		}
 		if regErr := c.FlowRegistry.Register(entry); regErr != nil {
 			if c.DebugMode {
-				fmt.Printf("[Chat DEBUG] Failed to register flow: %v\n", regErr)
+				slog.Debug("failed to register flow", "component", "chat", "error", regErr)
 			}
 		}
 	}
@@ -1470,7 +1468,7 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 	var flow flowYAML
 	if err := yaml.Unmarshal([]byte(yamlStr), &flow); err != nil {
 		if c.DebugMode {
-			fmt.Printf("[Chat DEBUG] Failed to parse YAML for param extraction: %v\n", err)
+			slog.Debug("failed to parse yaml for param extraction", "component", "chat", "error", err)
 		}
 		return nil
 	}
@@ -1530,13 +1528,13 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 	response, err := c.FlowDistiller.LLM(context.Background(), sb.String())
 	if err != nil {
 		if c.DebugMode {
-			fmt.Printf("[Chat DEBUG] LLM param extraction failed: %v\n", err)
+			slog.Debug("llm param extraction failed", "component", "chat", "error", err)
 		}
 		return nil
 	}
 
 	if c.DebugMode {
-		fmt.Printf("[Chat DEBUG] LLM param extraction response:\n%s\n", response)
+		slog.Debug("llm param extraction response", "component", "chat", "response", response)
 	}
 
 	// Parse response: expect "name=value" lines
@@ -1741,7 +1739,7 @@ func (c *ChatAgent) extractFlowFromResults(
 	flowPath := c.resolveFlowPath(flowFile)
 	if flowPath == "" {
 		if c.DebugMode {
-			fmt.Printf("[Chat DEBUG] Flow doc found but YAML not on disk: %s\n", flowFile)
+			slog.Debug("flow doc found but yaml not on disk", "component", "chat", "flowFile", flowFile)
 		}
 		return results, ""
 	}
@@ -1750,7 +1748,7 @@ func (c *ChatAgent) extractFlowFromResults(
 	flowData, err := os.ReadFile(flowPath)
 	if err != nil {
 		if c.DebugMode {
-			fmt.Printf("[Chat DEBUG] Failed to read flow YAML: %v\n", err)
+			slog.Debug("failed to read flow yaml", "component", "chat", "error", err)
 		}
 		return results, ""
 	}
@@ -1762,8 +1760,7 @@ func (c *ChatAgent) extractFlowFromResults(
 	}
 
 	if c.DebugMode {
-		fmt.Printf("[Chat DEBUG] Flow discovered via knowledge search: %s (score: %.2f), built execution plan (%d bytes)\n",
-			flowFile, bestFlow.Score, len(plan))
+		slog.Debug("flow discovered via knowledge search", "component", "chat", "flowFile", flowFile, "score", bestFlow.Score, "planBytes", len(plan))
 	}
 
 	// Emit conversational notification about the flow match

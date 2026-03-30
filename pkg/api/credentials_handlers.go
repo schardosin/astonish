@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"sort"
 
@@ -98,7 +99,9 @@ func ListCredentialsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Reload to pick up cross-process changes
-	_ = store.Reload()
+	if err := store.Reload(); err != nil {
+		slog.Warn("failed to reload credential store", "error", err)
+	}
 
 	creds := store.List()
 	secrets := store.ListSecrets()
@@ -134,7 +137,9 @@ func GetCredentialHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := mux.Vars(r)["name"]
-	_ = store.Reload()
+	if err := store.Reload(); err != nil {
+		slog.Warn("failed to reload credential store", "error", err)
+	}
 
 	cred := store.Get(name)
 	if cred == nil {
@@ -242,7 +247,9 @@ func GetSecretHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	key := mux.Vars(r)["key"]
-	_ = store.Reload()
+	if err := store.Reload(); err != nil {
+		slog.Warn("failed to reload credential store", "error", err)
+	}
 
 	value := store.GetSecret(key)
 	if value == "" {

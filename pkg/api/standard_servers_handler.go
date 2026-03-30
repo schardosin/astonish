@@ -225,7 +225,9 @@ func UninstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 	// Remove API key from the shared credential store
 	if store := getAPICredentialStore(); store != nil {
 		storeKey := "web_servers." + serverID + ".api_key"
-		_ = store.RemoveSecret(storeKey)
+		if err := store.RemoveSecret(storeKey); err != nil {
+			slog.Warn("failed to remove secret during uninstall", "key", storeKey, "error", err)
+		}
 	}
 
 	// Remove from config.yaml (web_servers entry + web tool references)

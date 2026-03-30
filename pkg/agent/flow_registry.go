@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,7 +122,9 @@ func (r *FlowRegistry) SyncFromDirectory(flowsDir string) (int, error) {
 			r.mu.Lock()
 			if len(r.entries) > 0 {
 				r.entries = nil
-				_ = r.save()
+				if err := r.save(); err != nil {
+					slog.Warn("failed to save flow registry", "error", err)
+				}
 			}
 			r.mu.Unlock()
 			return 0, nil
@@ -151,7 +154,9 @@ func (r *FlowRegistry) SyncFromDirectory(flowsDir string) (int, error) {
 	}
 	if pruned {
 		r.entries = kept
-		_ = r.save()
+		if err := r.save(); err != nil {
+			slog.Warn("failed to save flow registry", "error", err)
+		}
 	}
 	r.mu.Unlock()
 

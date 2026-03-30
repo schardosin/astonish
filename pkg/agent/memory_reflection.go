@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -218,7 +219,9 @@ func (r *MemoryReflector) executeSave(ctx context.Context, fc *genai.FunctionCal
 		// Trigger reindex for MEMORY.md
 		if r.MemoryStore != nil {
 			go func() {
-				_ = r.MemoryStore.ReindexFile(context.Background(), "MEMORY.md")
+				if err := r.MemoryStore.ReindexFile(context.Background(), "MEMORY.md"); err != nil {
+					slog.Warn("failed to reindex memory file", "file", "MEMORY.md", "error", err)
+				}
 			}()
 		}
 	} else {
@@ -281,7 +284,9 @@ func (r *MemoryReflector) executeSave(ctx context.Context, fc *genai.FunctionCal
 		// Trigger reindex
 		if r.MemoryStore != nil {
 			go func() {
-				_ = r.MemoryStore.ReindexFile(context.Background(), targetFile)
+				if err := r.MemoryStore.ReindexFile(context.Background(), targetFile); err != nil {
+					slog.Warn("failed to reindex memory file", "file", targetFile, "error", err)
+				}
 			}()
 		}
 	}

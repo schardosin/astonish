@@ -311,7 +311,9 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	// Persist the task name as the session title so fleet reconstruction
 	// can derive phase/agent info from titles like "fleet-<fleet>-<phase>".
 	if fs, ok := m.SessionService.(*persistentsession.FileStore); ok {
-		_ = fs.SetSessionTitle(childSessionID, task.Name)
+		if err := fs.SetSessionTitle(childSessionID, task.Name); err != nil {
+			slog.Warn("failed to set sub-agent session title", "session_id", childSessionID, "title", task.Name, "error", err)
+		}
 	}
 
 	// Alias the child session to the parent's sandbox container so sub-agents

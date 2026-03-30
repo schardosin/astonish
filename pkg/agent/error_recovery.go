@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"google.golang.org/adk/model"
@@ -54,10 +55,9 @@ func (e *ErrorRecoveryNode) Decide(ctx context.Context, errCtx ErrorContext) (*R
 	userPrompt := e.buildUserPrompt(errCtx)
 
 	if e.DebugMode {
-		fmt.Printf("\n[ERROR RECOVERY] Analyzing error...\n")
-		fmt.Printf("[ERROR RECOVERY] Node: %s (type: %s)\n", errCtx.NodeName, errCtx.NodeType)
-		fmt.Printf("[ERROR RECOVERY] Attempt: %d/%d\n", errCtx.AttemptCount, errCtx.MaxRetries)
-		fmt.Printf("[ERROR RECOVERY] Error: %s\n", errCtx.ErrorMessage)
+		slog.Debug("error recovery analyzing error",
+			"component", "error-recovery", "node", errCtx.NodeName, "nodeType", errCtx.NodeType,
+			"attempt", errCtx.AttemptCount, "maxRetries", errCtx.MaxRetries, "error", errCtx.ErrorMessage)
 	}
 
 	// Create request - combine system prompt and user prompt
@@ -76,9 +76,7 @@ func (e *ErrorRecoveryNode) Decide(ctx context.Context, errCtx ErrorContext) (*R
 	var responseText string
 	for resp, err := range e.LLM.GenerateContent(ctx, req, false) {
 		if err != nil {
-			if e.DebugMode {
-				fmt.Printf("[ERROR RECOVERY] LLM call failed: %v\n", err)
-			}
+			slog.Debug("error recovery LLM call failed", "component", "error-recovery", "error", err)
 			// Fallback to simple heuristic
 			return e.fallbackDecision(errCtx), nil
 		}
@@ -90,24 +88,22 @@ func (e *ErrorRecoveryNode) Decide(ctx context.Context, errCtx ErrorContext) (*R
 	}
 
 	if e.DebugMode {
-		fmt.Printf("[ERROR RECOVERY] LLM Response: %s\n", responseText)
+		slog.Debug("error recovery LLM response", "component", "error-recovery", "response", responseText)
 	}
 
 	// Parse decision
 	decision, err := e.parseDecision(responseText)
 	if err != nil {
-		if e.DebugMode {
-			fmt.Printf("[ERROR RECOVERY] Failed to parse decision: %v\n", err)
-		}
+		slog.Debug("error recovery failed to parse decision", "component", "error-recovery", "error", err)
 		// Fallback to simple heuristic
 		return e.fallbackDecision(errCtx), nil
 	}
 
 	if e.DebugMode {
 		if decision.ShouldRetry {
-			fmt.Printf("[ERROR RECOVERY] Decision: RETRY - %s\n", decision.Reason)
+			slog.Debug("error recovery decision: RETRY", "component", "error-recovery", "reason", decision.Reason)
 		} else {
-			fmt.Printf("[ERROR RECOVERY] Decision: ABORT - %s\n", decision.Reason)
+			slog.Debug("error recovery decision: ABORT", "component", "error-recovery", "reason", decision.Reason)
 		}
 	}
 

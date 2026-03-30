@@ -3,6 +3,7 @@ package skills
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,9 +45,7 @@ func WatchSkillDirs(ctx context.Context, cfg WatcherConfig) error {
 	// Collect all skill source directories to watch
 	dirs := collectSkillDirs(cfg)
 	if len(dirs) == 0 {
-		if cfg.DebugMode {
-			fmt.Println("[Skills Watcher] No skill directories to watch")
-		}
+		slog.Debug("no skill directories to watch", "component", "skills-watcher")
 		// Block until cancelled — nothing to watch
 		<-ctx.Done()
 		return nil
@@ -75,7 +74,7 @@ func WatchSkillDirs(ctx context.Context, cfg WatcherConfig) error {
 	}
 
 	if cfg.DebugMode {
-		fmt.Printf("[Skills Watcher] Watching %d skill directories\n", len(dirs))
+		slog.Debug("watching skill directories", "component", "skills-watcher", "count", len(dirs))
 	}
 
 	// Debounce: wait for changes to settle before re-syncing
@@ -93,24 +92,24 @@ func WatchSkillDirs(ctx context.Context, cfg WatcherConfig) error {
 		mu.Unlock()
 
 		if cfg.DebugMode {
-			fmt.Println("[Skills Watcher] Skill change detected, re-syncing to memory...")
+			slog.Debug("skill change detected, re-syncing to memory", "component", "skills-watcher")
 		}
 
 		allSkills, err := LoadSkills(cfg.UserDir, cfg.ExtraDirs, cfg.WorkspaceDir, cfg.Allowlist)
 		if err != nil {
 			if cfg.DebugMode {
-				fmt.Printf("[Skills Watcher] Error loading skills: %v\n", err)
+				slog.Debug("error loading skills", "component", "skills-watcher", "error", err)
 			}
 			return
 		}
 
 		if err := SyncSkillsToMemory(allSkills, cfg.MemoryDir); err != nil {
 			if cfg.DebugMode {
-				fmt.Printf("[Skills Watcher] Error syncing to memory: %v\n", err)
+				slog.Debug("error syncing skills to memory", "component", "skills-watcher", "error", err)
 			}
 		} else if cfg.DebugMode {
 			eligible := FilterEligible(allSkills)
-			fmt.Printf("[Skills Watcher] Synced %d eligible skills to memory\n", len(eligible))
+			slog.Debug("synced skills to memory", "component", "skills-watcher", "eligible", len(eligible))
 		}
 	}
 
@@ -134,14 +133,10 @@ func WatchSkillDirs(ctx context.Context, cfg WatcherConfig) error {
 					// If a skill root was recreated, re-watch it and its children
 					if skillRoots[event.Name] {
 						watchDirRecursive(watcher, event.Name, cfg.DebugMode)
-						if cfg.DebugMode {
-							fmt.Printf("[Skills Watcher] Re-watching recreated skill root: %s\n", event.Name)
-						}
+						slog.Debug("re-watching recreated skill root", "component", "skills-watcher", "dir", event.Name)
 					} else {
 						_ = watcher.Add(event.Name)
-						if cfg.DebugMode {
-							fmt.Printf("[Skills Watcher] Watching new directory: %s\n", event.Name)
-						}
+						slog.Debug("watching new directory", "component", "skills-watcher", "dir", event.Name)
 					}
 					// New directory likely already contains files (e.g. skills install
 					// creates dir + writes SKILL.md atomically before the watch is set up).
@@ -197,9 +192,7 @@ func WatchSkillDirs(ctx context.Context, cfg WatcherConfig) error {
 			if !ok {
 				return nil
 			}
-			if cfg.DebugMode {
-				fmt.Printf("[Skills Watcher] Error: %v\n", err)
-			}
+			slog.Debug("skills watcher error", "component", "skills-watcher", "error", err)
 		}
 	}
 }
@@ -239,9 +232,7 @@ func collectSkillDirs(cfg WatcherConfig) []string {
 // watchDirRecursive adds a watch on the directory and its immediate subdirectories.
 func watchDirRecursive(watcher *fsnotify.Watcher, dir string, debugMode bool) {
 	if err := watcher.Add(dir); err != nil {
-		if debugMode {
-			fmt.Printf("[Skills Watcher] Cannot watch %s: %v\n", dir, err)
-		}
+		slog.Debug("cannot watch directory", "component", "skills-watcher", "dir", dir, "error", err)
 		return
 	}
 
@@ -252,8 +243,8 @@ func watchDirRecursive(watcher *fsnotify.Watcher, dir string, debugMode bool) {
 	for _, e := range entries {
 		if e.IsDir() {
 			subDir := filepath.Join(dir, e.Name())
-			if err := watcher.Add(subDir); err != nil && debugMode {
-				fmt.Printf("[Skills Watcher] Cannot watch %s: %v\n", subDir, err)
+			if err := watcher.Add(subDir); err != nil {
+				slog.Debug("cannot watch subdirectory", "component", "skills-watcher", "dir", subDir, "error", err)
 			}
 		}
 	}

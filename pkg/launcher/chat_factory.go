@@ -130,7 +130,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 						slog.Warn("failed to save scrubbed config", "error", saveErr)
 					}
 				} else if cfg.DebugMode {
-					fmt.Printf("Migrated %d secrets from config.yaml to encrypted store\n", migrated)
+					slog.Debug("migrated secrets to encrypted store", "component", "chat-factory", "count", migrated)
 				}
 			}
 
@@ -151,8 +151,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 
 	// --- 1. Initialize LLM ---
 	if cfg.DebugMode {
-		fmt.Println("Initializing LLM provider...")
-		provider.SetDebugMode(true)
+		slog.Debug("initializing LLM provider", "component", "chat-factory")
 	}
 	llm, err := provider.GetProvider(ctx, cfg.ProviderName, cfg.ModelName, cfg.AppConfig)
 	if err != nil {
@@ -160,7 +159,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			cfg.ProviderName, cfg.ModelName, err)
 	}
 	if cfg.DebugMode {
-		fmt.Printf("Provider initialized: %s (model: %s)\n", cfg.ProviderName, cfg.ModelName)
+		slog.Debug("provider initialized", "component", "chat-factory", "provider", cfg.ProviderName, "model", cfg.ModelName)
 	}
 
 	// --- 2. Initialize internal tools ---
@@ -281,7 +280,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 						daemonActive := !cfg.IsDaemon && isDaemonRunning()
 						if daemonActive {
 							if cfg.DebugMode {
-								fmt.Println("[Memory] Daemon is running — skipping IndexAll and file watcher")
+								slog.Debug("daemon is running, skipping IndexAll and file watcher", "component", "memory")
 							}
 							close(indexingDone)
 						} else {
@@ -544,7 +543,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				}
 			}
 			if cfg.DebugMode {
-				fmt.Printf("Skills loaded: %d total, %d eligible\n", len(loadedSkills), len(eligible))
+				slog.Debug("skills loaded", "component", "chat-factory", "total", len(loadedSkills), "eligible", len(eligible))
 			}
 		}
 	}
@@ -570,7 +569,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			cachedTools := cache.GetToolsForServer(name)
 			if len(cachedTools) == 0 {
 				if cfg.DebugMode {
-					fmt.Printf("[Chat Lazy] Server '%s' has no cached tools (run Studio or 'astonish tools refresh' first)\n", name)
+					slog.Debug("MCP server has no cached tools", "component", "lazy-mcp", "server", name)
 				}
 				continue
 			}
@@ -709,7 +708,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			nodePool.StartIdleWatchdog(idleCtx, idleTimeout)
 			cleanups = append(cleanups, idleCancel)
 			if cfg.DebugMode {
-				fmt.Printf("Sandbox idle watchdog: enabled (timeout: %s)\n", idleTimeout)
+				slog.Debug("sandbox idle watchdog enabled", "component", "chat-factory", "timeout", idleTimeout)
 			}
 		}
 
@@ -725,12 +724,12 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		// Reuse the pre-created store (shared with fleet sessions in the daemon).
 		sessionService = cfg.SessionStore
 		if cfg.DebugMode {
-			fmt.Println("Session storage: file (shared store)")
+			slog.Debug("session storage: file (shared store)", "component", "chat-factory")
 		}
 	} else if cfg.AppConfig != nil && cfg.AppConfig.Sessions.Storage == "memory" {
 		sessionService = session.InMemoryService()
 		if cfg.DebugMode {
-			fmt.Println("Session storage: memory")
+			slog.Debug("session storage: memory", "component", "chat-factory")
 		}
 	} else {
 		var sessCfg *config.SessionConfig
@@ -749,7 +748,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 		sessionService = fileStore
 		if cfg.DebugMode {
-			fmt.Printf("Session storage: file (%s)\n", sessDir)
+			slog.Debug("session storage: file", "component", "chat-factory", "dir", sessDir)
 		}
 	}
 
@@ -891,8 +890,8 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		for _, g := range toolGroups {
 			totalTools += len(g.Tools)
 		}
-		fmt.Printf("Tool groups: %d groups, %d total tools, %d main thread tools\n",
-			len(toolGroups), totalTools, len(mainThreadTools))
+		slog.Debug("tool groups configured", "component", "chat-factory",
+			"groups", len(toolGroups), "totalTools", totalTools, "mainThreadTools", len(mainThreadTools))
 	}
 
 	// --- 5. Build system prompt ---
@@ -1010,7 +1009,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				slog.Warn("failed to ensure INSTRUCTIONS.md", "error", ensErr)
 			}
 		} else if created && cfg.DebugMode {
-			fmt.Printf("Created default INSTRUCTIONS.md in %s\n", memDir)
+			slog.Debug("created default INSTRUCTIONS.md", "component", "chat-factory", "dir", memDir)
 		}
 		instrContent, instrErr := memory.LoadInstructions(memDir)
 		if instrErr != nil {
@@ -1034,7 +1033,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				slog.Warn("failed to write SELF.md", "error", writeErr)
 			}
 		} else if cfg.DebugMode {
-			fmt.Printf("Generated SELF.md (%d bytes)\n", len(selfContent))
+			slog.Debug("generated SELF.md", "component", "chat-factory", "bytes", len(selfContent))
 		}
 
 		// Sync guidance documents to memory/guidance/ for vector indexing.
@@ -1045,7 +1044,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				slog.Warn("failed to sync guidance docs", "error", syncErr)
 			}
 		} else if cfg.DebugMode {
-			fmt.Printf("Synced guidance docs to memory/guidance/\n")
+			slog.Debug("synced guidance docs to memory/guidance/")
 		}
 	}
 
@@ -1071,7 +1070,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				slog.Warn("failed to bootstrap bundled fleets", "error", fEnsErr)
 			}
 		} else if fWritten > 0 && cfg.DebugMode {
-			fmt.Printf("Bootstrapped %d bundled fleets to %s\n", fWritten, fleetsDir)
+			slog.Debug("bootstrapped bundled fleets", "count", fWritten, "dir", fleetsDir)
 		}
 
 		fleetReg, fRegErr := fleet.NewRegistry(fleetsDir)
@@ -1122,7 +1121,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					},
 				)
 				if cfg.DebugMode {
-					fmt.Printf("Fleet awareness: %d fleet(s)\n", fleetReg.Count())
+					slog.Debug("fleet awareness", "fleets", fleetReg.Count())
 				}
 			}
 		}
@@ -1141,7 +1140,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				// Wire plan registry to the save_fleet_plan tool
 				tools.SetFleetPlanRegistry(planReg)
 				if cfg.DebugMode {
-					fmt.Printf("Fleet plans: %d loaded from %s\n", planReg.Count(), fleetPlansDir)
+					slog.Debug("fleet plans loaded", "count", planReg.Count(), "dir", fleetPlansDir)
 				}
 			}
 		}
@@ -1276,7 +1275,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					slog.Warn("failed to sync tool index", "error", syncErr)
 				}
 			} else if cfg.DebugMode {
-				fmt.Printf("Tool index: %d tools indexed for semantic discovery\n", toolIndex.Count())
+				slog.Debug("tool index ready", "tools_indexed", toolIndex.Count())
 			}
 		}
 	}
@@ -1378,7 +1377,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 						slog.Warn("flow registry sync failed", "error", syncErr)
 					}
 				} else if added > 0 && cfg.DebugMode {
-					fmt.Printf("Auto-registered %d new flows from %s\n", added, flowsDir)
+					slog.Debug("auto-registered new flows", "count", added, "dir", flowsDir)
 				}
 			}
 
@@ -1390,7 +1389,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 							slog.Warn("flow knowledge reconciliation failed", "error", reconErr)
 						}
 					} else if cfg.DebugMode {
-						fmt.Printf("Reconciled flow knowledge docs in %s\n", memFlowsDir)
+						slog.Debug("reconciled flow knowledge docs", "dir", memFlowsDir)
 					}
 				}
 			}
@@ -1434,7 +1433,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 
 		if cfg.DebugMode {
-			fmt.Println("Auto knowledge retrieval: enabled")
+			slog.Debug("auto knowledge retrieval: enabled")
 		}
 	}
 
@@ -1453,7 +1452,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			content := memory.GenerateSelfMD(selfCfg)
 			if writeErr := memory.WriteSelfMD(selfMDMemDir, content); writeErr == nil {
 				if cfg.DebugMode {
-					fmt.Printf("[SELF.md] Refreshed (%d bytes)\n", len(content))
+					slog.Debug("SELF.md refreshed", "bytes", len(content))
 				}
 			}
 		}
@@ -1499,8 +1498,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			subAgentMgr.Compactor = compactor
 		}
 		if cfg.DebugMode {
-			fmt.Printf("Context compaction: enabled (window: %d tokens, threshold: %.0f%%)\n",
-				contextWindow, compactor.Threshold*100)
+			slog.Debug("context compaction enabled", "window_tokens", contextWindow, "threshold_pct", compactor.Threshold*100)
 		}
 	}
 

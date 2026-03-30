@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 
 	"github.com/schardosin/astonish/pkg/api"
 	"github.com/schardosin/astonish/pkg/config"
@@ -22,7 +23,10 @@ func handleStudioCommand(args []string) error {
 
 	// Set up provider environment variables from config
 	// Prefer credential store for secrets, fall back to legacy config
-	appCfg, _ := config.LoadAppConfig()
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		slog.Warn("failed to load app config", "error", err)
+	}
 	if appCfg != nil {
 		if cfgDir, err := config.GetConfigDir(); err == nil {
 			if cs, csErr := credentials.Open(cfgDir); csErr == nil {

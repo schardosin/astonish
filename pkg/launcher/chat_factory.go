@@ -378,7 +378,10 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			coreTools = append(coreTools, searchTool)
 		}
 
-		memDir, _ := config.GetMemoryDir(&cfg.AppConfig.Memory)
+		memDir, err := config.GetMemoryDir(&cfg.AppConfig.Memory)
+		if err != nil {
+			slog.Warn("failed to get memory directory", "error", err)
+		}
 		getTool, getErr := tools.NewMemoryGetTool(memDir)
 		if getErr != nil {
 			if cfg.DebugMode {
@@ -547,7 +550,10 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	}
 
 	// --- 3. Load MCP tools from cache (lazy) ---
-	mcpCfg, _ := config.LoadMCPConfig()
+	mcpCfg, err := config.LoadMCPConfig()
+	if err != nil {
+		slog.Warn("failed to load MCP config", "error", err)
+	}
 	var lazyToolsets []*agent.LazyMCPToolset
 
 	if mcpCfg != nil && len(mcpCfg.MCPServers) > 0 {
@@ -984,10 +990,18 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// Load INSTRUCTIONS.md
 	var memDir string
 	if cfg.AppConfig != nil && cfg.AppConfig.Memory.IsMemoryEnabled() {
-		memDir, _ = config.GetMemoryDir(&cfg.AppConfig.Memory)
+		var err error
+		memDir, err = config.GetMemoryDir(&cfg.AppConfig.Memory)
+		if err != nil {
+			slog.Warn("failed to get memory directory from config", "error", err)
+		}
 	}
 	if memDir == "" {
-		memDir, _ = config.GetMemoryDir(nil)
+		var err error
+		memDir, err = config.GetMemoryDir(nil)
+		if err != nil {
+			slog.Warn("failed to get default memory directory", "error", err)
+		}
 	}
 	if memDir != "" {
 		created, ensErr := memory.EnsureInstructions(memDir)

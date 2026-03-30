@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -229,7 +230,10 @@ func handleTelegramSetup() error {
 
 	// Save bot token to encrypted credential store (keep config.yaml clean)
 	cfg.Channels.Telegram.BotToken = botToken // fallback: stays in config if store fails
-	configDir, _ := config.GetConfigDir()
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		slog.Warn("failed to get config directory", "error", err)
+	}
 	if configDir != "" {
 		if store, storeErr := credentials.Open(configDir); storeErr == nil {
 			if setErr := store.SetSecret("channels.telegram.bot_token", botToken); setErr == nil {

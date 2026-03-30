@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -27,7 +28,7 @@ func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, sto
 
 	// Build a map of tool name -> server source
 	toolToServer := make(map[string]string)
-	
+
 	// 1. First populate from system cache (installed tools)
 	for _, tool := range cachedTools {
 		toolToServer[tool.Name] = tool.Source
@@ -43,7 +44,10 @@ func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, sto
 	}
 
 	// Load user's MCP config
-	mcpConfig, _ := config.LoadMCPConfig()
+	mcpConfig, err := config.LoadMCPConfig()
+	if err != nil {
+		slog.Warn("failed to load MCP config", "error", err)
+	}
 
 	// Group tools by their server source
 	serverToTools := make(map[string][]string)
@@ -88,7 +92,7 @@ func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, sto
 			if serverCfg, found := mcpConfig.MCPServers[serverName]; found {
 				for i := range storeServers {
 					srv := &storeServers[i]
-				if srv.Config != nil && srv.Config.Command != "" && configsMatch(serverCfg, *srv.Config) {
+					if srv.Config != nil && srv.Config.Command != "" && configsMatch(serverCfg, *srv.Config) {
 						matchedServer = srv
 						matchSource = srv.Source
 						break
@@ -140,7 +144,7 @@ func configsMatch(userCfg config.MCPServerConfig, storeCfg mcpstore.ServerConfig
 	if userCfg.Command != storeCfg.Command {
 		return false
 	}
-	
+
 	// Args must match exactly
 	if len(userCfg.Args) != len(storeCfg.Args) {
 		return false
@@ -150,7 +154,7 @@ func configsMatch(userCfg config.MCPServerConfig, storeCfg mcpstore.ServerConfig
 			return false
 		}
 	}
-	
+
 	return true
 }
 
@@ -172,12 +176,12 @@ func CollectToolsFromNodes(nodes []config.Node) []string {
 
 // MCPDependencyStatus represents the status of a single MCP dependency
 type MCPDependencyStatus struct {
-	Server    string                   `json:"server"`
-	Tools     []string                 `json:"tools"`
-	Source    string                   `json:"source"`   // store, tap, inline
-	StoreID   string                   `json:"store_id,omitempty"`
-	Config    *config.MCPServerConfig  `json:"config,omitempty"`
-	Installed bool                     `json:"installed"`
+	Server    string                  `json:"server"`
+	Tools     []string                `json:"tools"`
+	Source    string                  `json:"source"` // store, tap, inline
+	StoreID   string                  `json:"store_id,omitempty"`
+	Config    *config.MCPServerConfig `json:"config,omitempty"`
+	Installed bool                    `json:"installed"`
 }
 
 // CheckMCPDependenciesRequest is the request body for checking dependencies

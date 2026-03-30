@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -300,9 +301,18 @@ func handleMemoryStatusCommand(args []string) error {
 	fmt.Println()
 
 	// Directories
-	memDir, _ := config.GetMemoryDir(memCfg)
-	vecDir, _ := config.GetVectorDir(memCfg)
-	modelsDir, _ := config.GetModelsDir()
+	memDir, err := config.GetMemoryDir(memCfg)
+	if err != nil {
+		slog.Warn("failed to get memory directory", "error", err)
+	}
+	vecDir, err := config.GetVectorDir(memCfg)
+	if err != nil {
+		slog.Warn("failed to get vector directory", "error", err)
+	}
+	modelsDir, err := config.GetModelsDir()
+	if err != nil {
+		slog.Warn("failed to get models directory", "error", err)
+	}
 
 	fmt.Printf("  Memory dir:   %s\n", memDir)
 	fmt.Printf("  Vector dir:   %s\n", vecDir)

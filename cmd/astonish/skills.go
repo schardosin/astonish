@@ -2,6 +2,7 @@ package astonish
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -49,7 +50,10 @@ func handleSkillsCommand(args []string) error {
 }
 
 func loadAllSkills() ([]skills.Skill, error) {
-	appCfg, _ := config.LoadAppConfig()
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		slog.Warn("failed to load app config", "error", err)
+	}
 	var skillsCfg config.SkillsConfig
 	if appCfg != nil {
 		skillsCfg = appCfg.Skills
@@ -153,7 +157,10 @@ func handleSkillsCheck() error {
 }
 
 func handleSkillsCreate(name string) error {
-	appCfg, _ := config.LoadAppConfig()
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		slog.Warn("failed to load app config", "error", err)
+	}
 	var skillsCfg config.SkillsConfig
 	if appCfg != nil {
 		skillsCfg = appCfg.Skills
@@ -213,7 +220,10 @@ func handleSkillsInstall(input string) error {
 		return fmt.Errorf("invalid input: %w", err)
 	}
 
-	appCfg, _ := config.LoadAppConfig()
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		slog.Warn("failed to load app config", "error", err)
+	}
 	var skillsCfg config.SkillsConfig
 	if appCfg != nil {
 		skillsCfg = appCfg.Skills

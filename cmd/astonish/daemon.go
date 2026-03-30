@@ -3,6 +3,7 @@ package astonish
 import (
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/schardosin/astonish/pkg/config"
@@ -56,7 +57,10 @@ func handleDaemonInstall(args []string) error {
 	}
 
 	// Load config for defaults
-	appCfg, _ := config.LoadAppConfig()
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		slog.Warn("failed to load app config", "error", err)
+	}
 	installPort := *port
 	if installPort <= 0 && appCfg != nil {
 		installPort = appCfg.Daemon.GetPort()

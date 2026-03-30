@@ -366,7 +366,10 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load existing config to detect added/removed servers
-	oldCfg, _ := config.LoadMCPConfig()
+	oldCfg, err := config.LoadMCPConfig()
+	if err != nil {
+		slog.Warn("failed to load existing MCP config", "error", err)
+	}
 
 	// Set default transport to "stdio" if not specified
 	for name, server := range newCfg.MCPServers {

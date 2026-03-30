@@ -29,112 +29,23 @@ import type { Agent, Tool, McpDependencyCheckResult } from './api/agents'
 import { fetchSandboxStatus } from './api/sandbox'
 import type { SandboxStatus } from './api/sandbox'
 import { snakeToTitleCase } from './utils/formatters'
-import { Store, Lock, Copy, Loader2, Download, Terminal, ExternalLink } from 'lucide-react'
+import ToastNotification from './components/ToastNotification'
+import UpgradeDialog from './components/UpgradeDialog'
+import {
+  defaultYaml,
+  type FlowNode,
+  type FlowEdge,
+  type ToastData,
+  type UpgradeDialogData,
+  type UpdateInfo,
+  type ChatMessage,
+  type FocusedNodeData,
+  type VariableGroup,
+  type InstallModalServerData,
+  type AppAgent,
+  type YamlData,
+} from './components/AppTypes'
 import './index.css'
-
-// --- Local Types ---
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
-interface FlowNodeData {
-  label?: string
-  nodeType?: string
-  yaml?: Record<string, any>
-  [key: string]: any
-}
-
-interface FlowNode {
-  id: string
-  type: string
-  position: { x: number; y: number }
-  data: FlowNodeData
-}
-
-interface FlowEdge {
-  id: string
-  source: string
-  target: string
-  animated: boolean
-  style: Record<string, unknown>
-  type: string
-  label?: string
-  labelStyle?: Record<string, unknown>
-  labelBgStyle?: Record<string, unknown>
-  labelBgPadding?: number[]
-  data?: Record<string, unknown>
-}
-
-interface ToastData {
-  message: string
-  type: 'success' | 'error' | 'info'
-  action?: { label: string; onClick: () => void }
-  persistent?: boolean
-}
-
-interface UpgradeDialogData {
-  version: string
-  url: string
-}
-
-interface UpdateInfo {
-  version: string
-  url: string
-}
-
-interface ChatMessage {
-  type: string
-  content?: string
-  preserveWhitespace?: boolean
-  nodeName?: string
-  options?: any
-  attempt?: any
-  maxRetries?: any
-  reason?: any
-  title?: string
-  suggestion?: string
-  originalError?: any
-  toolName?: string
-}
-
-interface FocusedNodeData {
-  name: string
-  type: string
-  data: Record<string, any>
-}
-
-interface VariableGroup {
-  nodeName: string
-  nodeType?: string
-  variables: string[]
-}
-
-interface InstallModalServerData {
-  name: string
-  description: string
-  config?: Record<string, any>
-  _depContext?: any
-  _isInline?: boolean
-  [key: string]: any
-}
-
-// Extended Agent type used within App (includes extra fields for newly-created agents)
-interface AppAgent extends Agent {
-  isNew?: boolean
-  tapName?: string
-}
-
-// YamlData parsed from yaml.load
-type YamlData = Record<string, any>
-
-/* eslint-enable @typescript-eslint/no-explicit-any */
-
-// Default YAML for new agents
-const defaultYaml = `description: New Agent
-
-nodes: []
-
-flow: []
-`
 
 function App() {
   const { theme, toggleTheme } = useTheme()
@@ -1837,137 +1748,12 @@ layout:
 
       {/* Toast Notification */}
       {toast && (
-        <div 
-          className="fixed bottom-6 right-6 z-[100] animate-slide-up"
-          style={{ animation: 'slide-up 0.3s ease-out' }}
-        >
-          <div 
-            className={`flex items-center gap-3 px-5 py-3 rounded-xl shadow-2xl backdrop-blur-sm ${
-              toast.type === 'error' 
-                ? 'bg-red-500/90 text-white' 
-                : toast.type === 'info'
-                  ? 'bg-gradient-to-r from-purple-600 to-blue-600 text-white'
-                  : 'bg-gradient-to-r from-emerald-500/90 to-teal-500/90 text-white'
-            } ${toast.persistent ? 'cursor-pointer hover:scale-[1.02] transition-transform' : ''}`}
-            style={{ minWidth: '280px' }}
-            onClick={() => toast.persistent && toast.action ? toast.action.onClick() : undefined}
-          >
-            {toast.type === 'error' ? (
-              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            ) : toast.type === 'info' ? (
-              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            ) : (
-              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            )}
-            <span className="text-sm font-medium flex-1">{toast.message}</span>
-            {toast.action && (
-              <button
-                onClick={(e) => { e.stopPropagation(); toast.action!.onClick() }}
-                className="px-3 py-1 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-medium transition-colors"
-              >
-                {toast.action.label}
-              </button>
-            )}
-            <button 
-              onClick={(e) => { e.stopPropagation(); setToast(null) }}
-              className="ml-1 p-1 hover:bg-white/20 rounded-lg transition-colors"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        </div>
+        <ToastNotification toast={toast} onDismiss={() => setToast(null)} />
       )}
 
       {/* Upgrade Dialog */}
       {showUpgradeDialog && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)' }}>
-          <div 
-            className="rounded-xl w-full max-w-lg p-6 shadow-2xl"
-            style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)', border: '1px solid var(--border-color)' }}
-          >
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-semibold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
-                <Download size={20} className="text-purple-500" />
-                Update Available: {showUpgradeDialog.version}
-              </h2>
-              <button
-                onClick={() => setShowUpgradeDialog(null)}
-                className="p-1.5 rounded-lg hover:bg-gray-600/30 transition-colors"
-                style={{ color: 'var(--text-muted)' }}
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <p style={{ color: 'var(--text-secondary)' }}>
-                A new version of Astonish is available. Choose one of the methods below to update:
-              </p>
-
-              {/* Option 1: Homebrew */}
-              <div className="p-4 rounded-lg" style={{ background: 'var(--bg-tertiary)' }}>
-                <div className="flex items-center gap-2 mb-2">
-                  <Terminal size={18} style={{ color: 'var(--accent)' }} />
-                  <span className="font-medium" style={{ color: 'var(--text-primary)' }}>Homebrew (Recommended)</span>
-                </div>
-                <code className="block px-3 py-2 rounded font-mono text-sm" style={{ background: 'var(--bg-primary)', color: 'var(--text-secondary)' }}>
-                  brew upgrade schardosin/astonish/astonish
-                </code>
-              </div>
-
-              {/* Option 2: Shell Script */}
-              <div className="p-4 rounded-lg" style={{ background: 'var(--bg-tertiary)' }}>
-                <div className="flex items-center gap-2 mb-2">
-                  <Terminal size={18} style={{ color: 'var(--accent)' }} />
-                  <span className="font-medium" style={{ color: 'var(--text-primary)' }}>Install Script</span>
-                </div>
-                <code className="block px-3 py-2 rounded font-mono text-sm" style={{ background: 'var(--bg-primary)', color: 'var(--text-secondary)' }}>
-                  curl -sSL https://schardosin.github.io/astonish/install.sh | bash
-                </code>
-              </div>
-
-              {/* Option 3: Manual Download */}
-              <div className="p-4 rounded-lg" style={{ background: 'var(--bg-tertiary)' }}>
-                <div className="flex items-center gap-2 mb-2">
-                  <Download size={18} style={{ color: 'var(--accent)' }} />
-                  <span className="font-medium" style={{ color: 'var(--text-primary)' }}>Manual Download</span>
-                </div>
-                <button
-                  onClick={() => window.open(showUpgradeDialog.url, '_blank')}
-                  className="flex items-center gap-2 text-sm underline hover:no-underline"
-                  style={{ color: 'var(--text-primary)' }}
-                >
-                  <ExternalLink size={14} />
-                  Download from GitHub Releases
-                </button>
-              </div>
-            </div>
-
-            <div className="flex justify-end mt-6">
-              <button
-                onClick={() => setShowUpgradeDialog(null)}
-                className="px-4 py-2 rounded-lg font-medium transition-colors"
-                style={{ 
-                  background: 'var(--bg-tertiary)', 
-                  color: 'var(--text-secondary)',
-                  border: '1px solid var(--border-color)'
-                }}
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
+        <UpgradeDialog info={showUpgradeDialog} onClose={() => setShowUpgradeDialog(null)} />
       )}
     </ReactFlowProvider>
   )

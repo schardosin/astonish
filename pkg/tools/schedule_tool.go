@@ -512,7 +512,10 @@ func (s *SchedulerHTTPAccess) ListJobs() []*SchedulerJob {
 }
 
 func (s *SchedulerHTTPAccess) RemoveJob(id string) error {
-	req, _ := http.NewRequest(http.MethodDelete, s.BaseURL+"/api/scheduler/jobs/"+id, nil)
+	req, err := http.NewRequest(http.MethodDelete, s.BaseURL+"/api/scheduler/jobs/"+id, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
@@ -526,7 +529,10 @@ func (s *SchedulerHTTPAccess) RemoveJob(id string) error {
 
 func (s *SchedulerHTTPAccess) UpdateJob(job *SchedulerJob) error {
 	data, _ := json.Marshal(job)
-	req, _ := http.NewRequest(http.MethodPut, s.BaseURL+"/api/scheduler/jobs/"+job.ID, strings.NewReader(string(data)))
+	req, err := http.NewRequest(http.MethodPut, s.BaseURL+"/api/scheduler/jobs/"+job.ID, strings.NewReader(string(data)))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

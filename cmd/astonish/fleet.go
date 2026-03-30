@@ -474,7 +474,10 @@ func handleFleetDelete(keyOrPrefix string) error {
 	}
 
 	baseURL := getDaemonBaseURL()
-	req, _ := http.NewRequest(http.MethodDelete, baseURL+"/api/fleet-plans/"+plan.Key, nil)
+	req, err := http.NewRequest(http.MethodDelete, baseURL+"/api/fleet-plans/"+plan.Key, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to contact daemon: %w", err)

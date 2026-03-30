@@ -140,7 +140,11 @@ func SandboxProxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// HTTP reverse proxy
-	target, _ := url.Parse(targetBase)
+	target, err := url.Parse(targetBase)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("invalid proxy target URL: %s", err), http.StatusInternalServerError)
+		return
+	}
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = target.Scheme
@@ -287,7 +291,11 @@ func (m *PortProxyManager) StartProxy(containerName string, containerPort int) (
 			return
 		}
 
-		currentTarget, _ := url.Parse(fmt.Sprintf("http://%s:%d", currentIP, containerPort))
+		currentTarget, err := url.Parse(fmt.Sprintf("http://%s:%d", currentIP, containerPort))
+		if err != nil {
+			http.Error(w, fmt.Sprintf("invalid proxy target URL: %s", err), http.StatusBadGateway)
+			return
+		}
 		proxy := &httputil.ReverseProxy{
 			Director: func(req *http.Request) {
 				req.URL.Scheme = currentTarget.Scheme
@@ -579,7 +587,11 @@ func ServeSubdomainProxy(w http.ResponseWriter, r *http.Request, containerName s
 		return
 	}
 
-	currentTarget, _ := url.Parse(fmt.Sprintf("http://%s:%d", currentIP, containerPort))
+	currentTarget, err := url.Parse(fmt.Sprintf("http://%s:%d", currentIP, containerPort))
+	if err != nil {
+		http.Error(w, fmt.Sprintf("invalid proxy target URL: %s", err), http.StatusBadGateway)
+		return
+	}
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = currentTarget.Scheme

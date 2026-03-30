@@ -148,7 +148,10 @@ func handleSchedulerToggle(idOrName string, enable bool) error {
 	data, _ := json.Marshal(job)
 
 	baseURL := getDaemonBaseURL()
-	req, _ := http.NewRequest(http.MethodPut, baseURL+"/api/scheduler/jobs/"+job.ID, strings.NewReader(string(data)))
+	req, err := http.NewRequest(http.MethodPut, baseURL+"/api/scheduler/jobs/"+job.ID, strings.NewReader(string(data)))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -175,7 +178,10 @@ func handleSchedulerRemove(idOrName string) error {
 	}
 
 	baseURL := getDaemonBaseURL()
-	req, _ := http.NewRequest(http.MethodDelete, baseURL+"/api/scheduler/jobs/"+job.ID, nil)
+	req, err := http.NewRequest(http.MethodDelete, baseURL+"/api/scheduler/jobs/"+job.ID, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to contact daemon: %w", err)

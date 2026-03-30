@@ -25,15 +25,16 @@ type SuiteReport struct {
 
 // TestReport holds results of a single test.
 type TestReport struct {
-	Name       string       `json:"name"`
-	File       string       `json:"file,omitempty"`
-	Status     string       `json:"status"` // "passed", "failed", "error", "skipped"
-	Duration   int64        `json:"duration_ms"`
-	StartedAt  time.Time    `json:"started_at"`
-	FinishedAt time.Time    `json:"finished_at"`
-	Steps      []StepResult `json:"steps"`
-	Tags       []string     `json:"tags,omitempty"`
-	Retries    int          `json:"retries,omitempty"` // number of retries attempted
+	Name         string            `json:"name"`
+	File         string            `json:"file,omitempty"`
+	Status       string            `json:"status"` // "passed", "failed", "error", "skipped"
+	Duration     int64             `json:"duration_ms"`
+	StartedAt    time.Time         `json:"started_at"`
+	FinishedAt   time.Time         `json:"finished_at"`
+	Steps        []StepResult      `json:"steps"`
+	Tags         []string          `json:"tags,omitempty"`
+	Retries      int               `json:"retries,omitempty"`       // number of retries attempted
+	ParameterSet map[string]string `json:"parameter_set,omitempty"` // which parameter set this run used (for parameterized tests)
 }
 
 // StepResult holds the result of a single test step.
@@ -140,7 +141,15 @@ func PrintReport(report *SuiteReport, w io.Writer) {
 		if test.Retries > 0 {
 			retryNote = fmt.Sprintf(" (retried %dx)", test.Retries)
 		}
-		fmt.Fprintf(w, "  %s %s (%dms)%s%s\n", statusIcon(test.Status), test.Name, test.Duration, tags, retryNote)
+		paramNote := ""
+		if len(test.ParameterSet) > 0 {
+			var params []string
+			for k, v := range test.ParameterSet {
+				params = append(params, fmt.Sprintf("%s=%q", k, v))
+			}
+			paramNote = " {" + strings.Join(params, ", ") + "}"
+		}
+		fmt.Fprintf(w, "  %s %s (%dms)%s%s%s\n", statusIcon(test.Status), test.Name, test.Duration, tags, paramNote, retryNote)
 
 		for _, step := range test.Steps {
 			icon := statusIcon(step.Status)

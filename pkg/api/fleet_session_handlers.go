@@ -953,7 +953,7 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 	// shell/file steps into the fleet's dedicated container. The chat-mode
 	// run_drill is already in wrappedTools via AllTools() — we must replace it,
 	// not append a second copy (duplicate tools crash the agent on startup).
-	runDrillTool, runDrillErr := tools.NewRunDrillToolWithClient(lazyNode, fleetSession.ID)
+	runDrillTool, runDrillErr := tools.NewRunDrillToolWithClient(lazyNode, fleetSession.ID, nil)
 	if runDrillErr == nil {
 		replaced := false
 		for i, t := range wrappedTools {

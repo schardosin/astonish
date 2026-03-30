@@ -153,6 +153,7 @@ func validateAssert(nodeName string, assert *config.AssertConfig) error {
 		"exit_code":      true,
 		"element_exists": true,
 		"semantic":       true,
+		"visual_match":   true,
 	}
 	if !validTypes[assert.Type] {
 		return fmt.Errorf("node %q: unknown assertion type %q", nodeName, assert.Type)

@@ -5,6 +5,7 @@
 package drill
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -104,4 +105,47 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// EvaluateSemantic uses an LLM to evaluate whether the actual content satisfies
+// the natural-language expected condition. Returns a deterministic-style result
+// so it can be handled uniformly with other assertion types.
+func EvaluateSemantic(ctx context.Context, assert *config.AssertConfig, content string, llm LLMProvider) *AssertionResult {
+	result := &AssertionResult{
+		Type:     "semantic",
+		Expected: assert.Expected,
+		Actual:   truncateStr(content, 1000),
+	}
+
+	prompt := fmt.Sprintf(
+		"You are evaluating test output. Does the following content satisfy this condition?\n\n"+
+			"Condition: %s\n\n"+
+			"Content:\n%s\n\n"+
+			"Answer with exactly YES or NO on the first line, followed by a one-sentence reason on the second line.",
+		assert.Expected, truncateStr(content, 4000))
+
+	response, err := llm.EvaluateText(ctx, prompt)
+	if err != nil {
+		result.Passed = false
+		result.Message = fmt.Sprintf("LLM evaluation failed: %v", err)
+		return result
+	}
+
+	response = strings.TrimSpace(response)
+	lines := strings.SplitN(response, "\n", 2)
+	verdict := strings.TrimSpace(strings.ToUpper(lines[0]))
+
+	reason := ""
+	if len(lines) > 1 {
+		reason = strings.TrimSpace(lines[1])
+	}
+
+	result.Passed = verdict == "YES"
+	if result.Passed {
+		result.Message = "semantic match: " + reason
+	} else {
+		result.Message = "semantic mismatch: " + reason
+	}
+
+	return result
 }

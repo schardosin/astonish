@@ -546,7 +546,8 @@ For each test scenario from Step 2, generate a test YAML.
 - regex: Output matches the expected regex pattern
 - exit_code: Shell command exit code equals expected value (use source: exit_code)
 - element_exists: DOM element exists in browser snapshot (use source: snapshot)
-- semantic: Natural language comparison (placeholder, Phase 3+)
+- semantic: Natural language assertion evaluated by LLM (requires --analyze flag or LLM provider)
+- visual_match: Screenshot visual regression test against stored baseline
 
 ### Assert Source:
 - output (default): Assert against command stdout
@@ -699,6 +700,94 @@ data. That produces a unit test running in a browser tab, not an E2E test.
 - Use meaningful step names that describe what is being tested.
 - Each test file should be named descriptively (e.g., test_api_health,
   test_build_succeeds, test_cli_help, test_login_flow).
+
+### Advanced Features:
+
+#### Parameterized (Data-Driven) Tests
+Run the same test steps with different input data. Add a parameters section
+to the test YAML with an array of variable maps. Each map is one test run.
+Variables are substituted via {{KEY}} placeholders in step args:
+
+    description: "Test time filters"
+    type: drill
+    suite: myapp
+    parameters:
+      - { filter: "1W", expected_label: "1 Week" }
+      - { filter: "1M", expected_label: "1 Month" }
+      - { filter: "1Y", expected_label: "1 Year" }
+    drill_config:
+      tags: ["regression"]
+    nodes:
+      - name: click-filter
+        type: tool
+        args:
+          tool: browser_run_code
+          code: |
+            const btn = document.querySelector('[data-filter="{{filter}}"]');
+            if (btn) { btn.click(); return 'clicked'; }
+            return 'ERROR: not found';
+        assert:
+          type: contains
+          expected: "clicked"
+      - name: verify-label
+        type: tool
+        args:
+          tool: browser_snapshot
+        assert:
+          type: element_exists
+          expected: "{{expected_label}}"
+    flow:
+      - from: click-filter
+        to: verify-label
+
+This generates 3 test runs, one per parameter set. Each run substitutes
+the parameter values into step args before execution.
+
+#### Semantic Assertions (LLM-Evaluated)
+Use natural language to describe what the output should satisfy. The LLM
+evaluates whether the actual output matches the condition:
+
+      - name: check-error-message
+        type: tool
+        args:
+          tool: shell_command
+          command: "curl -s http://localhost:8080/api/validate -d '{\"email\":\"invalid\"}'"
+        assert:
+          type: semantic
+          expected: "The response indicates the email format is invalid"
+
+Semantic assertions require an LLM provider (enabled via --analyze flag
+on CLI, or automatically in Studio/chat sessions).
+
+#### Visual Regression Testing
+Compare screenshots against stored baselines. On first run, the screenshot
+is saved as the baseline. On subsequent runs, pixel differences are computed:
+
+      - name: take-screenshot
+        type: tool
+        args:
+          tool: browser_take_screenshot
+        assert:
+          type: visual_match
+          expected: "dashboard-main"    # Baseline name
+          threshold: 0.02               # Allow up to 2% pixel difference
+
+Baselines are stored alongside test reports. Threshold defaults to 0.01 (1%).
+The diff image is saved as an artifact when the assertion fails.
+
+#### Auto-Wait for Browser Steps
+Automatically wait for target elements before browser interactions. Enable
+in drill_config to avoid manual browser_wait_for steps:
+
+    drill_config:
+      auto_wait: true               # Enable auto-wait
+      auto_wait_timeout: 5000       # Timeout in ms (default: 5000)
+      tags: ["browser"]
+
+When auto_wait is true, the runner injects a browser_wait_for call before
+each interactive browser tool (click, type, hover, select_option, fill_form,
+drag) if the step uses a CSS selector. This reduces flaky tests caused by
+elements not being ready yet.
 
 Show each test YAML to the user. Get confirmation before proceeding.
 
@@ -980,6 +1069,11 @@ CRITICAL format rules:
 - Tool name goes in args.tool, NOT as a top-level tool: field
 - Assertion key is assert: (singular) — assertions: (plural) is SILENTLY IGNORED
 - Assertion value key is expected: — value: is SILENTLY IGNORED
+
+Available assertion types: contains, not_contains, regex, exit_code,
+element_exists, semantic (LLM-evaluated), visual_match (screenshot regression).
+Use parameters: [...] for data-driven tests with {{KEY}} substitution.
+Use drill_config.auto_wait: true to auto-wait for elements in browser tests.
 
 ## SAVING NEW DRILLS
 

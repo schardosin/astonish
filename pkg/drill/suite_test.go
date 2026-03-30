@@ -251,6 +251,14 @@ func TestValidateTest(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "visual_match assertion is valid",
+			test: LoadedTest{
+				Name:   "visual_assert",
+				Config: configTestVisualMatchAssert(),
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -602,6 +610,24 @@ func configTestBadAssert() *config.AgentConfig {
 				Name:   "step1",
 				Type:   "tool",
 				Assert: &config.AssertConfig{Type: "invalid_type", Expected: "x"},
+			},
+		},
+	}
+}
+
+func configTestVisualMatchAssert() *config.AgentConfig {
+	return &config.AgentConfig{
+		Type:  "drill",
+		Suite: "myapp",
+		Nodes: []config.Node{
+			{
+				Name: "step1",
+				Type: "tool",
+				Assert: &config.AssertConfig{
+					Type:      "visual_match",
+					Expected:  "dashboard-main",
+					Threshold: 0.02,
+				},
 			},
 		},
 	}

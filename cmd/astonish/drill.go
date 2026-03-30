@@ -715,6 +715,11 @@ func setupTriageAgent(runner *adrill.SuiteRunner, executor adrill.ToolExecutor, 
 	ta := adrill.NewTriageAgent(llm, executor, am, verbose)
 	runner.SetTriageAgent(ta, true) // enableForAll=true because --analyze means "triage everything"
 
+	// Also enable semantic assertions using the same LLM
+	if llmProvider := adrill.NewLLMProviderFromModel(llm); llmProvider != nil {
+		runner.SetLLMProvider(llmProvider)
+	}
+
 	return nil
 }
 

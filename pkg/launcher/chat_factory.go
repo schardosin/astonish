@@ -16,6 +16,7 @@ import (
 	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
+	adrill "github.com/schardosin/astonish/pkg/drill"
 	emailpkg "github.com/schardosin/astonish/pkg/email"
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/flowstore"
@@ -1225,7 +1226,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		drillToolsSlice = append(drillToolsSlice, drillTools...)
 	}
 
-	runDrillTool, runDrillErr := tools.NewRunDrillTool(sandboxNodePool)
+	runDrillTool, runDrillErr := tools.NewRunDrillTool(sandboxNodePool, adrill.NewLLMProviderFromModel(llm))
 	if runDrillErr != nil {
 		if cfg.DebugMode {
 			fmt.Printf("Warning: Failed to create run_drill tool: %v\n", runDrillErr)

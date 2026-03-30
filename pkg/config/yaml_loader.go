@@ -8,30 +8,32 @@ import (
 
 // AgentConfig represents the top-level structure of the agent YAML.
 type AgentConfig struct {
-	Description     string            `yaml:"description"`
-	Type            string            `yaml:"type,omitempty"`         // "drill", "drill_suite" (legacy: "test", "test_suite"), or empty for regular flows
-	Template        string            `yaml:"template,omitempty"`     // Sandbox template (also accepted inside suite_config; top-level is reconciled down)
-	Suite           string            `yaml:"suite,omitempty"`        // For type: drill — which suite this belongs to
-	SuiteConfig     *DrillSuiteConfig `yaml:"suite_config,omitempty"` // For type: drill_suite — infrastructure config
-	DrillConfig     *DrillConfig      `yaml:"drill_config,omitempty"` // For type: drill — drill-specific config
-	Nodes           []Node            `yaml:"nodes"`
-	Flow            []FlowItem        `yaml:"flow"`
-	MCPDependencies []MCPDependency   `yaml:"mcp_dependencies,omitempty"`
+	Description     string              `yaml:"description"`
+	Type            string              `yaml:"type,omitempty"`         // "drill", "drill_suite" (legacy: "test", "test_suite"), or empty for regular flows
+	Template        string              `yaml:"template,omitempty"`     // Sandbox template (also accepted inside suite_config; top-level is reconciled down)
+	Suite           string              `yaml:"suite,omitempty"`        // For type: drill — which suite this belongs to
+	SuiteConfig     *DrillSuiteConfig   `yaml:"suite_config,omitempty"` // For type: drill_suite — infrastructure config
+	DrillConfig     *DrillConfig        `yaml:"drill_config,omitempty"` // For type: drill — drill-specific config
+	Parameters      []map[string]string `yaml:"parameters,omitempty"`   // Parameter sets for data-driven tests (each map is one test run)
+	Nodes           []Node              `yaml:"nodes"`
+	Flow            []FlowItem          `yaml:"flow"`
+	MCPDependencies []MCPDependency     `yaml:"mcp_dependencies,omitempty"`
 }
 
 // agentConfigRaw is the intermediate struct used for backward-compatible YAML parsing.
 // It supports both old (test_config) and new (drill_config) YAML tags.
 type agentConfigRaw struct {
-	Description     string            `yaml:"description"`
-	Type            string            `yaml:"type,omitempty"`
-	Template        string            `yaml:"template,omitempty"`
-	Suite           string            `yaml:"suite,omitempty"`
-	SuiteConfig     *DrillSuiteConfig `yaml:"suite_config,omitempty"`
-	DrillConfig     *DrillConfig      `yaml:"drill_config,omitempty"`
-	TestConfig      *DrillConfig      `yaml:"test_config,omitempty"` // backward compat
-	Nodes           []Node            `yaml:"nodes"`
-	Flow            []FlowItem        `yaml:"flow"`
-	MCPDependencies []MCPDependency   `yaml:"mcp_dependencies,omitempty"`
+	Description     string              `yaml:"description"`
+	Type            string              `yaml:"type,omitempty"`
+	Template        string              `yaml:"template,omitempty"`
+	Suite           string              `yaml:"suite,omitempty"`
+	SuiteConfig     *DrillSuiteConfig   `yaml:"suite_config,omitempty"`
+	DrillConfig     *DrillConfig        `yaml:"drill_config,omitempty"`
+	TestConfig      *DrillConfig        `yaml:"test_config,omitempty"` // backward compat
+	Parameters      []map[string]string `yaml:"parameters,omitempty"`
+	Nodes           []Node              `yaml:"nodes"`
+	Flow            []FlowItem          `yaml:"flow"`
+	MCPDependencies []MCPDependency     `yaml:"mcp_dependencies,omitempty"`
 }
 
 // UnmarshalYAML implements custom unmarshaling for AgentConfig to support
@@ -49,6 +51,7 @@ func (c *AgentConfig) UnmarshalYAML(value *yaml.Node) error {
 	c.Template = raw.Template
 	c.Suite = raw.Suite
 	c.SuiteConfig = raw.SuiteConfig
+	c.Parameters = raw.Parameters
 	c.Nodes = raw.Nodes
 	c.Flow = raw.Flow
 	c.MCPDependencies = raw.MCPDependencies
@@ -112,19 +115,22 @@ type ReadyCheck struct {
 
 // DrillConfig holds per-drill configuration (lightweight — infrastructure is in the suite).
 type DrillConfig struct {
-	Tags        []string `yaml:"tags,omitempty"`         // For filtering (e.g., "smoke", "regression")
-	Timeout     int      `yaml:"timeout,omitempty"`      // Per-test timeout in seconds (default: 120)
-	StepTimeout int      `yaml:"step_timeout,omitempty"` // Per-step timeout in seconds (default: 30)
-	OnFail      string   `yaml:"on_fail,omitempty"`      // "stop" (default), "continue", "triage"
-	MaxRetries  int      `yaml:"max_retries,omitempty"`  // Max auto-retries for transient failures (default: 1 when triage is active)
+	Tags            []string `yaml:"tags,omitempty"`              // For filtering (e.g., "smoke", "regression")
+	Timeout         int      `yaml:"timeout,omitempty"`           // Per-test timeout in seconds (default: 120)
+	StepTimeout     int      `yaml:"step_timeout,omitempty"`      // Per-step timeout in seconds (default: 30)
+	OnFail          string   `yaml:"on_fail,omitempty"`           // "stop" (default), "continue", "triage"
+	MaxRetries      int      `yaml:"max_retries,omitempty"`       // Max auto-retries for transient failures (default: 1 when triage is active)
+	AutoWait        bool     `yaml:"auto_wait,omitempty"`         // Auto-wait for elements before browser interaction steps
+	AutoWaitTimeout int      `yaml:"auto_wait_timeout,omitempty"` // Auto-wait timeout in milliseconds (default: 5000)
 }
 
 // AssertConfig defines what to check after a step executes.
 type AssertConfig struct {
-	Type     string `yaml:"type" json:"type"`                           // "contains", "not_contains", "regex", "exit_code", "element_exists", "semantic"
-	Source   string `yaml:"source,omitempty" json:"source,omitempty"`   // "output" (default), "snapshot", "screenshot", "pty_buffer"
-	Expected string `yaml:"expected" json:"expected"`                   // Expected value (string, regex, or natural language for semantic)
-	OnFail   string `yaml:"on_fail,omitempty" json:"on_fail,omitempty"` // Override per-step: "stop", "continue", "triage"
+	Type      string  `yaml:"type" json:"type"`                               // "contains", "not_contains", "regex", "exit_code", "element_exists", "semantic", "visual_match"
+	Source    string  `yaml:"source,omitempty" json:"source,omitempty"`       // "output" (default), "snapshot", "screenshot", "pty_buffer"
+	Expected  string  `yaml:"expected" json:"expected"`                       // Expected value (string, regex, or natural language for semantic)
+	OnFail    string  `yaml:"on_fail,omitempty" json:"on_fail,omitempty"`     // Override per-step: "stop", "continue", "triage"
+	Threshold float64 `yaml:"threshold,omitempty" json:"threshold,omitempty"` // For visual_match: max allowed diff percentage (default: 0.01 = 1%)
 }
 
 // MCPDependency represents a required MCP server for the flow.

@@ -214,7 +214,7 @@ func (am *AuthManager) handleCheckStatus(w http.ResponseWriter, r *http.Request)
 		Path:     "/",
 		MaxAge:   cookieMaxAge,
 		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: http.SameSiteStrictMode,
 	})
 
 	w.Header().Set("Content-Type", "application/json")

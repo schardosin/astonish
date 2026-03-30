@@ -584,9 +584,7 @@ func URLExtractHandler(w http.ResponseWriter, r *http.Request) {
 	if !configured {
 		// Fall back to web search tool
 		var searchConfigured bool
-		var searchToolName string
-		searchConfigured, serverName, searchToolName = IsWebSearchConfigured()
-		_ = searchToolName   // Not used in fallback
+		searchConfigured, serverName, _ = IsWebSearchConfigured()
 		extractToolName = "" // No specific tool name, will fallback to "extract" search
 		configured = searchConfigured
 	}

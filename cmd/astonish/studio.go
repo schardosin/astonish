@@ -38,7 +38,9 @@ func handleStudioCommand(args []string) error {
 				if migrateErr != nil {
 					fmt.Printf("Warning: Credential migration error: %v\n", migrateErr)
 				} else if migrated > 0 {
-					_ = config.SaveAppConfig(appCfg)
+					if err := config.SaveAppConfig(appCfg); err != nil {
+						slog.Warn("failed to save config after credential migration", "error", err)
+					}
 				}
 				config.SetupAllProviderEnvFromStore(appCfg, cs.GetSecret)
 			} else {

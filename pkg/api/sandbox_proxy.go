@@ -275,7 +275,9 @@ func (m *PortProxyManager) StartProxy(containerName string, containerPort int) (
 	}
 
 	targetBase := fmt.Sprintf("http://%s:%d", ip, containerPort)
-	target, _ := url.Parse(targetBase)
+	if _, err := url.Parse(targetBase); err != nil {
+		return 0, fmt.Errorf("invalid proxy target URL %q: %w", targetBase, err)
+	}
 
 	// Build the handler: reverse proxy + WebSocket support
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -344,8 +346,6 @@ func (m *PortProxyManager) StartProxy(containerName string, containerPort int) (
 		defer shutdownCancel()
 		srv.Shutdown(shutdownCtx)
 	}()
-
-	_ = target // suppress unused warning from initial parse
 
 	entry := &portProxyEntry{
 		containerName: containerName,

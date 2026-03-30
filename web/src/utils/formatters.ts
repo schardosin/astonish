@@ -2,7 +2,7 @@
  * Convert snake_case to Title Case
  * e.g., "github_pr_generator" -> "Github Pr Generator"
  */
-export function snakeToTitleCase(str) {
+export function snakeToTitleCase(str: string): string {
   if (!str) return ''
   return str
     .split('_')

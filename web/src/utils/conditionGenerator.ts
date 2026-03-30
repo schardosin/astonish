@@ -3,8 +3,33 @@
  * Converts visual condition rules to Python lambda expressions and vice versa.
  */
 
-// Supported operators
-export const OPERATORS = [
+// --- Types ---
+
+export interface Operator {
+  value: string
+  label: string
+  python: string
+}
+
+export interface LogicOperator {
+  value: string
+  label: string
+}
+
+export interface ConditionRule {
+  variable: string
+  operator: string
+  value: string
+}
+
+export interface ParsedLambda {
+  rules: ConditionRule[]
+  logic: string
+}
+
+// --- Constants ---
+
+export const OPERATORS: Operator[] = [
   { value: '==', label: 'equals', python: '==' },
   { value: '!=', label: 'not equals', python: '!=' },
   { value: '>', label: 'greater than', python: '>' },
@@ -16,19 +41,14 @@ export const OPERATORS = [
   { value: 'ends_with', label: 'ends with', python: 'endswith' },
 ]
 
-// Logic operators for combining rules
-export const LOGIC_OPERATORS = [
+export const LOGIC_OPERATORS: LogicOperator[] = [
   { value: 'and', label: 'AND' },
   { value: 'or', label: 'OR' },
 ]
 
-/**
- * Generate a Python lambda expression from visual rules.
- * @param {Array} rules - Array of rule objects: { variable, operator, value }
- * @param {string} logic - 'and' or 'or' for combining rules
- * @returns {string} Python lambda expression
- */
-export function generateLambda(rules, logic = 'and') {
+// --- Functions ---
+
+export function generateLambda(rules: ConditionRule[], logic: string = 'and'): string {
   if (!rules || rules.length === 0) {
     return ''
   }
@@ -36,9 +56,7 @@ export function generateLambda(rules, logic = 'and') {
   const conditions = rules
     .filter(rule => rule.variable && rule.operator && rule.value !== undefined)
     .map(rule => {
-      // Use x["variable"] format for cleaner Python
       const varAccess = `x["${rule.variable}"]`
-      // Always quote the value as a string
       const quotedValue = `"${rule.value}"`
 
       switch (rule.operator) {
@@ -49,7 +67,6 @@ export function generateLambda(rules, logic = 'and') {
         case 'ends_with':
           return `str(${varAccess}).endswith("${rule.value}")`
         default:
-          // Simple comparison with quoted value
           return `${varAccess} ${rule.operator} ${quotedValue}`
       }
     })
@@ -62,18 +79,11 @@ export function generateLambda(rules, logic = 'and') {
   return `lambda x: ${joined}`
 }
 
-/**
- * Attempt to parse a Python lambda expression back into visual rules.
- * This is best-effort - complex expressions will return null.
- * @param {string} lambdaStr - Python lambda string
- * @returns {Object|null} { rules: [...], logic: 'and'|'or' } or null if unparseable
- */
-export function parseLambda(lambdaStr) {
+export function parseLambda(lambdaStr: string): ParsedLambda | null {
   if (!lambdaStr || typeof lambdaStr !== 'string') {
     return null
   }
 
-  // Remove "lambda x: " prefix
   const match = lambdaStr.match(/^lambda\s+x:\s*(.+)$/)
   if (!match) {
     return null
@@ -81,9 +91,8 @@ export function parseLambda(lambdaStr) {
 
   const body = match[1].trim()
 
-  // Detect logic operator
   let logic = 'and'
-  let parts = []
+  let parts: string[] = []
 
   if (body.includes(' or ')) {
     logic = 'or'
@@ -95,14 +104,13 @@ export function parseLambda(lambdaStr) {
     parts = [body]
   }
 
-  const rules = []
+  const rules: ConditionRule[] = []
 
   for (const part of parts) {
     const rule = parseConditionPart(part)
     if (rule) {
       rules.push(rule)
     } else {
-      // If any part is unparseable, return null (fallback to advanced mode)
       return null
     }
   }
@@ -110,13 +118,7 @@ export function parseLambda(lambdaStr) {
   return { rules, logic }
 }
 
-/**
- * Parse a single condition part.
- * @param {string} part - Single condition like "str(x.get('var')) == 'val'"
- * @returns {Object|null} { variable, operator, value } or null
- */
-function parseConditionPart(part) {
-  // Pattern: str(x.get('variable')) == 'value' (quoted)
+function parseConditionPart(part: string): ConditionRule | null {
   const strEqualityQuotedMatch = part.match(/str\(x\.get\('([^']+)'\)\)\s*(==|!=)\s*'([^']*)'/)
   if (strEqualityQuotedMatch) {
     return {
@@ -126,7 +128,6 @@ function parseConditionPart(part) {
     }
   }
 
-  // Pattern: str(x.get('variable')) == value (unquoted - numeric)
   const strEqualityUnquotedMatch = part.match(/str\(x\.get\('([^']+)'\)\)\s*(==|!=|>|<|>=|<=)\s*(\d+)/)
   if (strEqualityUnquotedMatch) {
     return {
@@ -136,7 +137,6 @@ function parseConditionPart(part) {
     }
   }
 
-  // Pattern: x.get('variable') == 'value' (quoted)
   const simpleQuotedMatch = part.match(/x\.get\('([^']+)'\)\s*(==|!=|>|<|>=|<=)\s*'([^']*)'/)
   if (simpleQuotedMatch) {
     return {
@@ -146,7 +146,6 @@ function parseConditionPart(part) {
     }
   }
 
-  // Pattern: x.get('variable') == value (unquoted - numeric)
   const simpleUnquotedMatch = part.match(/x\.get\('([^']+)'\)\s*(==|!=|>|<|>=|<=)\s*(\d+)/)
   if (simpleUnquotedMatch) {
     return {
@@ -156,7 +155,6 @@ function parseConditionPart(part) {
     }
   }
 
-  // Pattern: 'value' in str(x.get('variable'))
   const containsMatch = part.match(/'([^']+)'\s+in\s+str\(x\.get\('([^']+)'\)\)/)
   if (containsMatch) {
     return {
@@ -166,7 +164,6 @@ function parseConditionPart(part) {
     }
   }
 
-  // Pattern: str(x.get('variable')).startswith('value')
   const startsWithMatch = part.match(/str\(x\.get\('([^']+)'\)\)\.startswith\('([^']+)'\)/)
   if (startsWithMatch) {
     return {
@@ -176,7 +173,6 @@ function parseConditionPart(part) {
     }
   }
 
-  // Pattern: str(x.get('variable')).endswith('value')
   const endsWithMatch = part.match(/str\(x\.get\('([^']+)'\)\)\.endswith\('([^']+)'\)/)
   if (endsWithMatch) {
     return {
@@ -186,7 +182,6 @@ function parseConditionPart(part) {
     }
   }
 
-  // Pattern: x["variable"] == "value" (new format with double quotes)
   const doubleQuoteMatch = part.match(/x\["([^"]+)"\]\s*(==|!=|>|<|>=|<=)\s*"([^"]*)"/)
   if (doubleQuoteMatch) {
     return {
@@ -196,7 +191,6 @@ function parseConditionPart(part) {
     }
   }
 
-  // Legacy pattern: x['variable'] == 'value' (single quotes)
   const legacyMatch = part.match(/x\['([^']+)'\]\s*(==|!=)\s*'([^']*)'/)
   if (legacyMatch) {
     return {
@@ -209,10 +203,7 @@ function parseConditionPart(part) {
   return null
 }
 
-/**
- * Create an empty rule object.
- */
-export function createEmptyRule() {
+export function createEmptyRule(): ConditionRule {
   return {
     variable: '',
     operator: '==',

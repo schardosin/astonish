@@ -1,12 +1,18 @@
 import { useState, useEffect } from 'react'
 
-export function useTheme() {
-  const [theme, setTheme] = useState(() => {
-    // Check localStorage first
+type Theme = 'dark' | 'light'
+
+export interface UseThemeReturn {
+  theme: Theme
+  setTheme: (theme: Theme) => void
+  toggleTheme: () => void
+}
+
+export function useTheme(): UseThemeReturn {
+  const [theme, setTheme] = useState<Theme>(() => {
     const stored = localStorage.getItem('astonish-theme')
-    if (stored) return stored
+    if (stored === 'dark' || stored === 'light') return stored
     
-    // Then check system preference
     if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
       return 'dark'
     }
@@ -25,13 +31,11 @@ export function useTheme() {
     localStorage.setItem('astonish-theme', theme)
   }, [theme])
 
-  // Listen for system preference changes
   useEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
     
-    const handleChange = (e) => {
+    const handleChange = (e: MediaQueryListEvent) => {
       const stored = localStorage.getItem('astonish-theme')
-      // Only auto-switch if user hasn't explicitly set a preference
       if (!stored) {
         setTheme(e.matches ? 'dark' : 'light')
       }

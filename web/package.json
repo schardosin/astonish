@@ -6,8 +6,9 @@
   "license": "AGPL-3.0",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "tsc --noEmit && vite build",
     "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -16,7 +17,6 @@
     "@codemirror/lang-yaml": "^6.1.2",
     "@codemirror/language-data": "^6.5.2",
     "@synergycodes/overflow-ui": "^1.0.0-beta.22",
-    "@types/dagre": "^0.7.53",
     "@uiw/react-codemirror": "^4.25.3",
     "@xyflow/react": "^12.10.0",
     "elkjs": "^0.11.0",
@@ -30,14 +30,18 @@
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@tailwindcss/vite": "^4.1.17",
+    "@types/js-yaml": "^4.0.9",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
+    "@typescript-eslint/eslint-plugin": "^8.57.2",
+    "@typescript-eslint/parser": "^8.57.2",
     "@vitejs/plugin-react": "^5.1.1",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.5.0",
     "tailwindcss": "^4.1.17",
+    "typescript": "^5.9.3",
     "vite": "^7.2.4"
   }
 }

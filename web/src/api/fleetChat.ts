@@ -6,11 +6,121 @@ const API_BASE = '/api/studio/fleet'
 const FLEET_API = '/api/fleets'
 const FLEET_PLANS_API = '/api/fleet-plans'
 
-/**
- * Fetch available fleet definitions
- * @returns {Promise<{fleets: Array<{key: string, name: string, description: string, agent_count: number, agent_names: string[]}>}>}
- */
-export async function fetchFleets() {
+// --- Types ---
+
+export interface FleetDefinition {
+  key: string
+  name: string
+  description: string
+  agent_count: number
+  agent_names: string[]
+}
+
+export interface FleetPlanSummary {
+  key: string
+  name: string
+  description: string
+  created_from: string
+  channel_type: string
+  agent_count: number
+  agent_names: string[]
+}
+
+export interface FleetSession {
+  id: string
+  fleet_key: string
+  fleet_name: string
+  state: string
+  active_agent: string
+}
+
+export interface FleetSessionDetail {
+  session_id: string
+  fleet_key: string
+  fleet_name: string
+  state: string
+  active_agent: string
+  messages: FleetMessage[]
+  agents: FleetAgent[]
+}
+
+export interface FleetMessage {
+  id: string
+  sender: string
+  text: string
+  memory_keys: string[]
+  artifacts: Record<string, unknown>
+  mentions: string[]
+  timestamp: string
+  metadata: Record<string, unknown>
+}
+
+export interface FleetAgent {
+  key: string
+  name: string
+  role: string
+  [key: string]: unknown
+}
+
+export interface FleetPlanStatus {
+  activated: boolean
+  scheduler_job_id: string
+  activated_at: string
+  last_poll_at: string
+  last_poll_status: string
+  sessions_started: number
+}
+
+export interface FleetTrace {
+  session_id: string
+  app: string
+  user: string
+  events: unknown[]
+  summary: {
+    total_events: number
+    tool_calls: number
+    errors: number
+  }
+}
+
+export interface FleetThread {
+  thread_key: string
+  participants: string[]
+  message_count: number
+  first_timestamp: string
+  last_timestamp: string
+}
+
+export type SSEEventCallback = (eventType: string, data: Record<string, unknown>) => void
+export type ErrorCallback = (error: Error) => void
+export type DoneCallback = () => void
+
+export interface ConnectFleetStreamParams {
+  sessionId: string
+  onEvent: SSEEventCallback
+  onError?: ErrorCallback
+  onDone?: DoneCallback
+}
+
+export interface StartFleetSessionParams {
+  fleetKey?: string
+  planKey?: string
+  message?: string
+}
+
+export interface FetchFleetTraceOpts {
+  toolsOnly?: boolean
+  lastN?: number
+  agent?: string
+}
+
+export interface FetchFleetMessagesOpts {
+  agent?: string
+}
+
+// --- API Functions ---
+
+export async function fetchFleets(): Promise<{ fleets: FleetDefinition[] }> {
   const response = await fetch(FLEET_API)
   if (!response.ok) {
     throw new Error(`Failed to fetch fleets: ${response.statusText}`)
@@ -18,12 +128,7 @@ export async function fetchFleets() {
   return response.json()
 }
 
-/**
- * Fetch a single fleet template with full config (agents, communication, settings, etc.)
- * @param {string} key - Fleet template key (e.g., 'software-dev')
- * @returns {Promise<{key: string, fleet: object}>}
- */
-export async function fetchFleet(key) {
+export async function fetchFleet(key: string): Promise<{ key: string; fleet: Record<string, unknown> }> {
   const response = await fetch(`${FLEET_API}/${encodeURIComponent(key)}`)
   if (!response.ok) {
     throw new Error(`Failed to fetch fleet: ${response.statusText}`)
@@ -31,11 +136,7 @@ export async function fetchFleet(key) {
   return response.json()
 }
 
-/**
- * Fetch available fleet plans
- * @returns {Promise<{plans: Array<{key: string, name: string, description: string, created_from: string, channel_type: string, agent_count: number, agent_names: string[]}>}>}
- */
-export async function fetchFleetPlans() {
+export async function fetchFleetPlans(): Promise<{ plans: FleetPlanSummary[] }> {
   const response = await fetch(FLEET_PLANS_API)
   if (!response.ok) {
     throw new Error(`Failed to fetch fleet plans: ${response.statusText}`)
@@ -43,11 +144,7 @@ export async function fetchFleetPlans() {
   return response.json()
 }
 
-/**
- * Fetch active fleet sessions
- * @returns {Promise<{sessions: Array<{id: string, fleet_key: string, fleet_name: string, state: string, active_agent: string}>}>}
- */
-export async function fetchFleetSessions() {
+export async function fetchFleetSessions(): Promise<{ sessions: FleetSession[] }> {
   const response = await fetch(`${API_BASE}/sessions`)
   if (!response.ok) {
     throw new Error(`Failed to fetch fleet sessions: ${response.statusText}`)
@@ -55,12 +152,7 @@ export async function fetchFleetSessions() {
   return response.json()
 }
 
-/**
- * Fetch a fleet session's current state and thread history
- * @param {string} id - Fleet session ID
- * @returns {Promise<{session_id: string, fleet_key: string, fleet_name: string, state: string, active_agent: string, messages: Array, agents: Array}>}
- */
-export async function fetchFleetSession(id) {
+export async function fetchFleetSession(id: string): Promise<FleetSessionDetail> {
   const response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(id)}`)
   if (!response.ok) {
     throw new Error(`Failed to fetch fleet session: ${response.statusText}`)
@@ -68,17 +160,8 @@ export async function fetchFleetSession(id) {
   return response.json()
 }
 
-/**
- * Start a new fleet session. Returns session info as JSON.
- * The caller should then connect to the SSE stream via connectFleetStream().
- * @param {object} params
- * @param {string} [params.fleetKey] - Fleet definition key (e.g., 'software-dev')
- * @param {string} [params.planKey] - Fleet plan key (alternative to fleetKey)
- * @param {string} [params.message] - Optional initial message to the team
- * @returns {Promise<{session_id: string, fleet_key: string, fleet_name: string, agents: Array}>}
- */
-export async function startFleetSession({ fleetKey, planKey, message }) {
-  const body = { message: message || '' }
+export async function startFleetSession({ fleetKey, planKey, message }: StartFleetSessionParams): Promise<{ session_id: string; fleet_key: string; fleet_name: string; agents: FleetAgent[] }> {
+  const body: Record<string, unknown> = { message: message || '' }
   if (planKey) {
     body.plan_key = planKey
   } else {
@@ -99,18 +182,7 @@ export async function startFleetSession({ fleetKey, planKey, message }) {
   return response.json()
 }
 
-/**
- * Connect to a fleet session's SSE stream for real-time events.
- * Works for both newly created sessions and reconnections after page reload.
- * Returns an AbortController so the caller can cancel.
- * @param {object} params
- * @param {string} params.sessionId - Fleet session ID
- * @param {function} params.onEvent - Callback for each SSE event: (eventType, data) => void
- * @param {function} params.onError - Callback for errors: (error) => void
- * @param {function} params.onDone - Callback when stream completes
- * @returns {AbortController}
- */
-export function connectFleetStream({ sessionId, onEvent, onError, onDone }) {
+export function connectFleetStream({ sessionId, onEvent, onError, onDone }: ConnectFleetStreamParams): AbortController {
   const controller = new AbortController()
 
   const run = async () => {
@@ -124,7 +196,7 @@ export function connectFleetStream({ sessionId, onEvent, onError, onDone }) {
         throw new Error(text || `HTTP ${response.status}`)
       }
 
-      const reader = response.body.getReader()
+      const reader = response.body!.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
 
@@ -134,7 +206,7 @@ export function connectFleetStream({ sessionId, onEvent, onError, onDone }) {
 
         buffer += decoder.decode(value, { stream: true })
         const blocks = buffer.split('\n\n')
-        buffer = blocks.pop()
+        buffer = blocks.pop()!
 
         for (const block of blocks) {
           if (!block.trim()) continue
@@ -163,10 +235,10 @@ export function connectFleetStream({ sessionId, onEvent, onError, onDone }) {
 
       if (onDone) onDone()
     } catch (err) {
-      if (err.name === 'AbortError') {
+      if (err instanceof Error && err.name === 'AbortError') {
         if (onDone) onDone()
       } else {
-        if (onError) onError(err)
+        if (onError) onError(err instanceof Error ? err : new Error(String(err)))
       }
     }
   }
@@ -175,12 +247,7 @@ export function connectFleetStream({ sessionId, onEvent, onError, onDone }) {
   return controller
 }
 
-/**
- * Send a customer message to an active fleet session
- * @param {string} sessionId - Fleet session ID
- * @param {string} message - Customer message text
- */
-export async function sendFleetMessage(sessionId, message) {
+export async function sendFleetMessage(sessionId: string, message: string): Promise<Record<string, unknown>> {
   const response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/message`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -193,11 +260,7 @@ export async function sendFleetMessage(sessionId, message) {
   return response.json()
 }
 
-/**
- * Stop an active fleet session
- * @param {string} sessionId - Fleet session ID
- */
-export async function stopFleetSession(sessionId) {
+export async function stopFleetSession(sessionId: string): Promise<void> {
   try {
     await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/stop`, {
       method: 'POST',
@@ -207,12 +270,7 @@ export async function stopFleetSession(sessionId) {
   }
 }
 
-/**
- * Activate a fleet plan (start polling its configured channel)
- * @param {string} planKey - Fleet plan key
- * @returns {Promise<{status: string, key: string}>}
- */
-export async function activateFleetPlan(planKey) {
+export async function activateFleetPlan(planKey: string): Promise<{ status: string; key: string }> {
   const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/activate`, {
     method: 'POST',
   })
@@ -223,12 +281,7 @@ export async function activateFleetPlan(planKey) {
   return response.json()
 }
 
-/**
- * Deactivate a fleet plan (stop polling)
- * @param {string} planKey - Fleet plan key
- * @returns {Promise<{status: string, key: string}>}
- */
-export async function deactivateFleetPlan(planKey) {
+export async function deactivateFleetPlan(planKey: string): Promise<{ status: string; key: string }> {
   const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/deactivate`, {
     method: 'POST',
   })
@@ -239,12 +292,7 @@ export async function deactivateFleetPlan(planKey) {
   return response.json()
 }
 
-/**
- * Get fleet plan activation status
- * @param {string} planKey - Fleet plan key
- * @returns {Promise<{activated: boolean, scheduler_job_id: string, activated_at: string, last_poll_at: string, last_poll_status: string, sessions_started: number}>}
- */
-export async function getFleetPlanStatus(planKey) {
+export async function getFleetPlanStatus(planKey: string): Promise<FleetPlanStatus> {
   const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/status`)
   if (!response.ok) {
     const text = await response.text()
@@ -253,15 +301,7 @@ export async function getFleetPlanStatus(planKey) {
   return response.json()
 }
 
-/**
- * Fetch fleet session execution trace (merged parent + child events)
- * @param {string} sessionId - Fleet session ID
- * @param {object} [opts] - Optional filters
- * @param {boolean} [opts.toolsOnly] - Only return tool events
- * @param {number} [opts.lastN] - Limit to last N events
- * @returns {Promise<{session_id: string, app: string, user: string, events: Array, summary: {total_events: number, tool_calls: number, errors: number}}>}
- */
-export async function fetchFleetTrace(sessionId, opts = {}) {
+export async function fetchFleetTrace(sessionId: string, opts: FetchFleetTraceOpts = {}): Promise<FleetTrace> {
   const params = new URLSearchParams()
   if (opts.toolsOnly) params.set('tools_only', 'true')
   if (opts.lastN) params.set('last_n', String(opts.lastN))
@@ -276,13 +316,7 @@ export async function fetchFleetTrace(sessionId, opts = {}) {
   return response.json()
 }
 
-/**
- * Fetch pairwise thread summaries for a fleet session.
- * Works for both active and completed sessions.
- * @param {string} sessionId - Fleet session ID
- * @returns {Promise<{threads: Array<{thread_key: string, participants: string[], message_count: number, first_timestamp: string, last_timestamp: string}>}>}
- */
-export async function fetchFleetThreads(sessionId) {
+export async function fetchFleetThreads(sessionId: string): Promise<{ threads: FleetThread[] }> {
   const url = `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/threads`
   const response = await fetch(url)
   if (!response.ok) {
@@ -292,15 +326,7 @@ export async function fetchFleetThreads(sessionId) {
   return response.json()
 }
 
-/**
- * Fetch fleet-level conversation messages, optionally filtered by agent memory.
- * Works for both active and completed sessions.
- * @param {string} sessionId - Fleet session ID
- * @param {object} [opts] - Optional filters
- * @param {string} [opts.agent] - Agent key to filter by (e.g., "dev") — returns messages in that agent's memory
- * @returns {Promise<{messages: Array<{id: string, sender: string, text: string, memory_keys: string[], artifacts: object, mentions: string[], timestamp: string, metadata: object}>}>}
- */
-export async function fetchFleetMessages(sessionId, opts = {}) {
+export async function fetchFleetMessages(sessionId: string, opts: FetchFleetMessagesOpts = {}): Promise<{ messages: FleetMessage[] }> {
   const params = new URLSearchParams()
   if (opts.agent) params.set('agent', opts.agent)
   const qs = params.toString()
@@ -313,12 +339,7 @@ export async function fetchFleetMessages(sessionId, opts = {}) {
   return response.json()
 }
 
-/**
- * Duplicate a fleet plan
- * @param {string} planKey - Fleet plan key to duplicate
- * @returns {Promise<{status: string, key: string}>}
- */
-export async function duplicateFleetPlan(planKey) {
+export async function duplicateFleetPlan(planKey: string): Promise<{ status: string; key: string }> {
   const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/duplicate`, {
     method: 'POST',
   })
@@ -329,12 +350,7 @@ export async function duplicateFleetPlan(planKey) {
   return response.json()
 }
 
-/**
- * Fetch raw YAML content of a fleet plan
- * @param {string} planKey - Fleet plan key
- * @returns {Promise<string>}
- */
-export async function fetchFleetPlanYaml(planKey) {
+export async function fetchFleetPlanYaml(planKey: string): Promise<string> {
   const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/yaml`)
   if (!response.ok) {
     const text = await response.text()
@@ -343,13 +359,7 @@ export async function fetchFleetPlanYaml(planKey) {
   return response.text()
 }
 
-/**
- * Save raw YAML content for a fleet plan
- * @param {string} planKey - Fleet plan key
- * @param {string} yamlContent - Raw YAML content
- * @returns {Promise<{status: string, key: string}>}
- */
-export async function saveFleetPlanYaml(planKey, yamlContent) {
+export async function saveFleetPlanYaml(planKey: string, yamlContent: string): Promise<{ status: string; key: string }> {
   const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/yaml`, {
     method: 'PUT',
     headers: { 'Content-Type': 'text/yaml' },
@@ -362,12 +372,7 @@ export async function saveFleetPlanYaml(planKey, yamlContent) {
   return response.json()
 }
 
-/**
- * Delete a fleet plan
- * @param {string} planKey - Fleet plan key
- * @returns {Promise<{status: string, key: string}>}
- */
-export async function deleteFleetPlan(planKey) {
+export async function deleteFleetPlan(planKey: string): Promise<{ status: string; key: string }> {
   const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}`, {
     method: 'DELETE',
   })
@@ -378,12 +383,7 @@ export async function deleteFleetPlan(planKey) {
   return response.json()
 }
 
-/**
- * Get a single fleet plan detail
- * @param {string} planKey - Fleet plan key
- * @returns {Promise<{key: string, plan: object}>}
- */
-export async function fetchFleetPlan(planKey) {
+export async function fetchFleetPlan(planKey: string): Promise<{ key: string; plan: Record<string, unknown> }> {
   const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}`)
   if (!response.ok) {
     const text = await response.text()
@@ -392,13 +392,7 @@ export async function fetchFleetPlan(planKey) {
   return response.json()
 }
 
-/**
- * Retry a failed fleet issue by resuming its interrupted session.
- * @param {string} planKey - Fleet plan key
- * @param {number} issueNumber - GitHub issue number
- * @returns {Promise<{status: string, session_id: string, issue: number}>}
- */
-export async function retryFleetIssue(planKey, issueNumber) {
+export async function retryFleetIssue(planKey: string, issueNumber: number): Promise<{ status: string; session_id: string; issue: number }> {
   const response = await fetch(
     `${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/retry/${issueNumber}`,
     { method: 'POST' }

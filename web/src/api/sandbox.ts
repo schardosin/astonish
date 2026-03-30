@@ -1,26 +1,74 @@
 // Sandbox API client functions for the Studio UI.
 
-// --- Setup Wizard (existing) ---
+// --- Types ---
 
-/** Fetch sandbox platform detection status. */
-export async function fetchSandboxStatus() {
+export interface SandboxStatus {
+  platform: string
+  available: boolean
+  reason?: string
+  [key: string]: unknown
+}
+
+export interface OptionalTool {
+  id: string
+  name: string
+  description: string
+  installed: boolean
+}
+
+export interface InitSandboxParams {
+  installTools: string[]
+  onProgress: (message: string) => void
+  onDone: () => void
+  onError: (error: string) => void
+}
+
+export interface SandboxDetails {
+  incus_version: string
+  storage_pool: string
+  template_count: number
+  container_count: number
+  [key: string]: unknown
+}
+
+export interface Container {
+  id: string
+  name: string
+  status: string
+  session_id: string
+  pinned: boolean
+  exposed_ports: ExposedPort[]
+  [key: string]: unknown
+}
+
+export interface ExposedPort {
+  port: number
+  url: string
+  [key: string]: unknown
+}
+
+export interface Template {
+  name: string
+  description: string
+  status: string
+  [key: string]: unknown
+}
+
+// --- Setup Wizard ---
+
+export async function fetchSandboxStatus(): Promise<SandboxStatus> {
   const res = await fetch('/api/sandbox/status')
   if (!res.ok) throw new Error(`Failed to fetch sandbox status: ${res.statusText}`)
   return res.json()
 }
 
-/** Fetch optional tools available for sandbox base template. */
-export async function fetchOptionalTools() {
+export async function fetchOptionalTools(): Promise<OptionalTool[]> {
   const res = await fetch('/api/sandbox/optional-tools')
   if (!res.ok) throw new Error(`Failed to fetch optional tools: ${res.statusText}`)
   return res.json()
 }
 
-/**
- * Initialize the sandbox base template with selected tools.
- * Returns an SSE stream with progress events.
- */
-export function initSandbox({ installTools, onProgress, onDone, onError }) {
+export function initSandbox({ installTools, onProgress, onDone, onError }: InitSandboxParams): { abort: () => void } {
   const controller = new AbortController()
 
   fetch('/api/sandbox/init', {
@@ -36,7 +84,7 @@ export function initSandbox({ installTools, onProgress, onDone, onError }) {
         return
       }
 
-      const reader = res.body.getReader()
+      const reader = res.body!.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
 
@@ -46,7 +94,7 @@ export function initSandbox({ installTools, onProgress, onDone, onError }) {
 
         buffer += decoder.decode(value, { stream: true })
         const lines = buffer.split('\n')
-        buffer = lines.pop()
+        buffer = lines.pop()!
 
         let currentEvent = ''
         for (const line of lines) {
@@ -71,7 +119,7 @@ export function initSandbox({ installTools, onProgress, onDone, onError }) {
         }
       }
     })
-    .catch((err) => {
+    .catch((err: Error) => {
       if (err.name !== 'AbortError') {
         onError(err.message || 'Connection failed')
       }
@@ -82,22 +130,19 @@ export function initSandbox({ installTools, onProgress, onDone, onError }) {
 
 // --- Settings: Container & Template Management ---
 
-/** Fetch extended sandbox details (Incus version, storage, counts). */
-export async function fetchSandboxDetails() {
+export async function fetchSandboxDetails(): Promise<SandboxDetails> {
   const res = await fetch('/api/sandbox/details')
   if (!res.ok) throw new Error(`Failed to fetch sandbox details: ${res.statusText}`)
   return res.json()
 }
 
-/** Fetch all session containers. */
-export async function fetchContainers() {
+export async function fetchContainers(): Promise<Container[]> {
   const res = await fetch('/api/sandbox/containers')
   if (!res.ok) throw new Error(`Failed to fetch containers: ${res.statusText}`)
   return res.json()
 }
 
-/** Destroy a session container by session ID or container name. */
-export async function deleteContainer(id) {
+export async function deleteContainer(id: string): Promise<Record<string, unknown>> {
   const res = await fetch(`/api/sandbox/containers/${encodeURIComponent(id)}`, { method: 'DELETE' })
   if (!res.ok) {
     const text = await res.text()
@@ -106,8 +151,7 @@ export async function deleteContainer(id) {
   return res.json()
 }
 
-/** Prune orphaned containers. */
-export async function pruneOrphans() {
+export async function pruneOrphans(): Promise<Record<string, unknown>> {
   const res = await fetch('/api/sandbox/prune', { method: 'POST' })
   if (!res.ok) {
     const text = await res.text()
@@ -116,15 +160,13 @@ export async function pruneOrphans() {
   return res.json()
 }
 
-/** Fetch all registered templates. */
-export async function fetchTemplates() {
+export async function fetchTemplates(): Promise<Template[]> {
   const res = await fetch('/api/sandbox/templates')
   if (!res.ok) throw new Error(`Failed to fetch templates: ${res.statusText}`)
   return res.json()
 }
 
-/** Fetch detailed info about a single template. */
-export async function fetchTemplateInfo(name) {
+export async function fetchTemplateInfo(name: string): Promise<Record<string, unknown>> {
   const res = await fetch(`/api/sandbox/templates/${encodeURIComponent(name)}`)
   if (!res.ok) {
     const text = await res.text()
@@ -133,8 +175,7 @@ export async function fetchTemplateInfo(name) {
   return res.json()
 }
 
-/** Create a new template from @base. */
-export async function createTemplate(name, description) {
+export async function createTemplate(name: string, description: string): Promise<Record<string, unknown>> {
   const res = await fetch('/api/sandbox/templates', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -147,8 +188,7 @@ export async function createTemplate(name, description) {
   return res.json()
 }
 
-/** Delete a template. */
-export async function deleteTemplate(name) {
+export async function deleteTemplate(name: string): Promise<Record<string, unknown>> {
   const res = await fetch(`/api/sandbox/templates/${encodeURIComponent(name)}`, { method: 'DELETE' })
   if (!res.ok) {
     const text = await res.text()
@@ -157,8 +197,7 @@ export async function deleteTemplate(name) {
   return res.json()
 }
 
-/** Snapshot a template. */
-export async function snapshotTemplate(name) {
+export async function snapshotTemplate(name: string): Promise<Record<string, unknown>> {
   const res = await fetch(`/api/sandbox/templates/${encodeURIComponent(name)}/snapshot`, { method: 'POST' })
   if (!res.ok) {
     const text = await res.text()
@@ -167,8 +206,7 @@ export async function snapshotTemplate(name) {
   return res.json()
 }
 
-/** Promote a template to replace @base. */
-export async function promoteTemplate(name) {
+export async function promoteTemplate(name: string): Promise<Record<string, unknown>> {
   const res = await fetch(`/api/sandbox/templates/${encodeURIComponent(name)}/promote`, { method: 'POST' })
   if (!res.ok) {
     const text = await res.text()
@@ -177,8 +215,7 @@ export async function promoteTemplate(name) {
   return res.json()
 }
 
-/** Refresh all templates with the current astonish binary. */
-export async function refreshTemplates() {
+export async function refreshTemplates(): Promise<Record<string, unknown>> {
   const res = await fetch('/api/sandbox/refresh', { method: 'POST' })
   if (!res.ok) {
     const text = await res.text()
@@ -189,8 +226,7 @@ export async function refreshTemplates() {
 
 // --- Port Exposure ---
 
-/** Expose a port on a container through the reverse proxy. */
-export async function exposePort(containerId, port) {
+export async function exposePort(containerId: string, port: number): Promise<Record<string, unknown>> {
   const res = await fetch(`/api/sandbox/containers/${encodeURIComponent(containerId)}/expose`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -203,8 +239,7 @@ export async function exposePort(containerId, port) {
   return res.json()
 }
 
-/** Remove a port from the reverse proxy. */
-export async function unexposePort(containerId, port) {
+export async function unexposePort(containerId: string, port: number): Promise<Record<string, unknown>> {
   const res = await fetch(`/api/sandbox/containers/${encodeURIComponent(containerId)}/expose/${port}`, {
     method: 'DELETE',
   })
@@ -215,8 +250,7 @@ export async function unexposePort(containerId, port) {
   return res.json()
 }
 
-/** Toggle the pinned state of a container. */
-export async function pinContainer(containerId, pinned) {
+export async function pinContainer(containerId: string, pinned: boolean): Promise<Record<string, unknown>> {
   const res = await fetch(`/api/sandbox/containers/${encodeURIComponent(containerId)}/pin`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

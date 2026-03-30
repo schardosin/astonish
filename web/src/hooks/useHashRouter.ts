@@ -1,18 +1,31 @@
 import { useState, useEffect, useCallback } from 'react'
 
-/**
- * Custom hook for hash-based routing
- * Supports paths like:
- * - #/chat
- * - #/chat/{sessionId}
- * - #/canvas
- * - #/agent/my-agent
- * - #/settings/general
- * - #/settings/providers
- * - #/settings/mcp
- */
-export function useHashRouter() {
-  const [path, setPath] = useState(() => parseHash(window.location.hash))
+// --- Types ---
+
+export interface RouterPath {
+  view: string
+  params: Record<string, string>
+}
+
+export interface HashRouter {
+  path: RouterPath
+  navigate: (newPath: string) => void
+  replaceHash: (newPath: string) => void
+}
+
+export interface BuildPathParams {
+  agentName?: string
+  section?: string
+  sessionId?: string
+  subView?: string
+  subKey?: string
+  subKey2?: string
+}
+
+// --- Hook ---
+
+export function useHashRouter(): HashRouter {
+  const [path, setPath] = useState<RouterPath>(() => parseHash(window.location.hash))
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -23,14 +36,13 @@ export function useHashRouter() {
     return () => window.removeEventListener('hashchange', handleHashChange)
   }, [])
 
-  const navigate = useCallback((newPath) => {
+  const navigate = useCallback((newPath: string) => {
     const hash = newPath.startsWith('#') ? newPath : `#${newPath}`
     window.location.hash = hash
   }, [])
 
-  const replaceHash = useCallback((newPath) => {
+  const replaceHash = useCallback((newPath: string) => {
     const hash = newPath.startsWith('#') ? newPath : `#${newPath}`
-    // Replace without triggering hashchange
     window.history.replaceState(null, '', hash)
     setPath(parseHash(hash))
   }, [])
@@ -38,10 +50,7 @@ export function useHashRouter() {
   return { path, navigate, replaceHash }
 }
 
-/**
- * Parse hash into structured path object
- */
-function parseHash(hash) {
+function parseHash(hash: string): RouterPath {
   const cleanHash = hash.replace(/^#\/?/, '')
   const parts = cleanHash.split('/').filter(Boolean)
   
@@ -71,21 +80,18 @@ function parseHash(hash) {
   }
 
   if (view === 'fleet') {
-    // #/fleet, #/fleet/plan/{key}, #/fleet/session/{id}, #/fleet/template/{key}
     const subView = parts[1] || ''
     const subKey = parts[2] ? decodeURIComponent(parts[2]) : ''
     return { view: 'fleet', params: { subView, subKey } }
   }
 
   if (view === 'drill') {
-    // #/drill, #/drill/suite/{name}, #/drill/drill/{suite}/{drill}, #/drill/report/{name}
     const subView = parts[1] || ''
     const subKey = parts[2] ? decodeURIComponent(parts[2]) : ''
     const subKey2 = parts[3] ? decodeURIComponent(parts[3]) : ''
     return { view: 'drill', params: { subView, subKey, subKey2 } }
   }
 
-  // Legacy: #/home redirects to chat
   if (view === 'home') {
     return { view: 'chat', params: {} }
   }
@@ -93,10 +99,7 @@ function parseHash(hash) {
   return { view, params: {} }
 }
 
-/**
- * Build a hash path from components
- */
-export function buildPath(view, params = {}) {
+export function buildPath(view: string, params: BuildPathParams = {}): string {
   switch (view) {
     case 'agent':
       return `/agent/${encodeURIComponent(params.agentName || '')}`

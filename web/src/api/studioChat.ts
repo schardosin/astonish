@@ -4,11 +4,58 @@
 
 const API_BASE = '/api/studio'
 
-/**
- * Fetch all chat sessions (sorted by most recent)
- * @returns {Promise<Array<{id: string, title: string, createdAt: string, updatedAt: string, messageCount: number}>>}
- */
-export async function fetchSessions() {
+// --- Types ---
+
+export interface ChatSession {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  messageCount: number
+}
+
+export interface SessionHistory {
+  id: string
+  title: string
+  messages: ChatMessage[]
+}
+
+export interface ChatMessage {
+  role: string
+  content: string
+  tool_calls?: ToolCall[]
+  tool_results?: ToolResult[]
+  [key: string]: unknown
+}
+
+export interface ToolCall {
+  id: string
+  name: string
+  args: Record<string, unknown>
+}
+
+export interface ToolResult {
+  tool_call_id: string
+  content: string
+}
+
+export type SSEEventCallback = (eventType: string, data: Record<string, unknown>) => void
+export type ErrorCallback = (error: Error) => void
+export type DoneCallback = () => void
+
+export interface ConnectChatParams {
+  sessionId?: string
+  message?: string
+  systemContext?: string
+  autoApprove?: boolean
+  onEvent: SSEEventCallback
+  onError?: ErrorCallback
+  onDone?: DoneCallback
+}
+
+// --- API Functions ---
+
+export async function fetchSessions(): Promise<ChatSession[]> {
   const response = await fetch(`${API_BASE}/sessions`)
   if (!response.ok) {
     throw new Error(`Failed to fetch sessions: ${response.statusText}`)
@@ -16,12 +63,7 @@ export async function fetchSessions() {
   return response.json()
 }
 
-/**
- * Fetch a session's history (metadata + messages)
- * @param {string} id - Session ID
- * @returns {Promise<{id: string, title: string, messages: Array}>}
- */
-export async function fetchSessionHistory(id) {
+export async function fetchSessionHistory(id: string): Promise<SessionHistory> {
   const response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(id)}`)
   if (!response.ok) {
     throw new Error(`Failed to fetch session: ${response.statusText}`)
@@ -29,11 +71,7 @@ export async function fetchSessionHistory(id) {
   return response.json()
 }
 
-/**
- * Delete a chat session
- * @param {string} id - Session ID
- */
-export async function deleteSession(id) {
+export async function deleteSession(id: string): Promise<void> {
   const response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   })
@@ -42,23 +80,12 @@ export async function deleteSession(id) {
   }
 }
 
-/**
- * Connect to the chat SSE stream. Returns an AbortController so the caller can cancel.
- * @param {object} params
- * @param {string} params.sessionId - Session ID (empty for new session)
- * @param {string} params.message - User message
- * @param {boolean} params.autoApprove - Auto-approve tool calls
- * @param {function} params.onEvent - Callback for each SSE event: (eventType, data) => void
- * @param {function} params.onError - Callback for errors: (error) => void
- * @param {function} params.onDone - Callback when stream completes
- * @returns {AbortController}
- */
-export function connectChat({ sessionId, message, systemContext, autoApprove, onEvent, onError, onDone }) {
+export function connectChat({ sessionId, message, systemContext, autoApprove, onEvent, onError, onDone }: ConnectChatParams): AbortController {
   const controller = new AbortController()
 
   const run = async () => {
     try {
-      const body = {
+      const body: Record<string, unknown> = {
         sessionId: sessionId || '',
         message: message || '',
         autoApprove: !!autoApprove,
@@ -78,7 +105,7 @@ export function connectChat({ sessionId, message, systemContext, autoApprove, on
         throw new Error(text || `HTTP ${response.status}`)
       }
 
-      const reader = response.body.getReader()
+      const reader = response.body!.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
 
@@ -88,7 +115,7 @@ export function connectChat({ sessionId, message, systemContext, autoApprove, on
 
         buffer += decoder.decode(value, { stream: true })
         const blocks = buffer.split('\n\n')
-        buffer = blocks.pop() // keep incomplete block
+        buffer = blocks.pop()!
 
         for (const block of blocks) {
           if (!block.trim()) continue
@@ -117,10 +144,10 @@ export function connectChat({ sessionId, message, systemContext, autoApprove, on
 
       if (onDone) onDone()
     } catch (err) {
-      if (err.name === 'AbortError') {
+      if (err instanceof Error && err.name === 'AbortError') {
         if (onDone) onDone()
       } else {
-        if (onError) onError(err)
+        if (onError) onError(err instanceof Error ? err : new Error(String(err)))
       }
     }
   }
@@ -129,11 +156,7 @@ export function connectChat({ sessionId, message, systemContext, autoApprove, on
   return controller
 }
 
-/**
- * Stop an active chat stream on the server
- * @param {string} sessionId
- */
-export async function stopChat(sessionId) {
+export async function stopChat(sessionId: string): Promise<void> {
   try {
     await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/stop`, {
       method: 'POST',

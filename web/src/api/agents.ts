@@ -4,11 +4,59 @@
 
 const API_BASE = '/api'
 
-/**
- * Fetch all available agents
- * @returns {Promise<{agents: Array<{id: string, name: string, description: string, source: string}>}>}
- */
-export async function fetchAgents() {
+// --- Types ---
+
+export interface Agent {
+  id: string
+  name: string
+  description: string
+  source: string
+}
+
+export interface AgentDetail {
+  name: string
+  source: string
+  yaml: string
+  config: Record<string, unknown>
+}
+
+export interface Tool {
+  name: string
+  description: string
+  source: string
+}
+
+export interface McpDependency {
+  server: string
+  tools: string[]
+  source: string
+  store_id?: string
+  config?: Record<string, unknown>
+}
+
+export interface McpDependencyCheckResult {
+  dependencies: McpDependency[]
+  all_installed: boolean
+  missing: number
+}
+
+export interface McpInstallResult {
+  status: string
+  serverName: string
+  toolsLoaded: number
+}
+
+export interface StandardServer {
+  id: string
+  name: string
+  description: string
+  installed: boolean
+  env_keys?: string[]
+}
+
+// --- API Functions ---
+
+export async function fetchAgents(): Promise<{ agents: Agent[] }> {
   const response = await fetch(`${API_BASE}/agents`)
   if (!response.ok) {
     throw new Error(`Failed to fetch agents: ${response.statusText}`)
@@ -16,12 +64,7 @@ export async function fetchAgents() {
   return response.json()
 }
 
-/**
- * Fetch a single agent's details and YAML
- * @param {string} name - Agent name
- * @returns {Promise<{name: string, source: string, yaml: string, config: object}>}
- */
-export async function fetchAgent(name) {
+export async function fetchAgent(name: string): Promise<AgentDetail> {
   const response = await fetch(`${API_BASE}/agents/${encodeURIComponent(name)}`)
   if (!response.ok) {
     throw new Error(`Failed to fetch agent: ${response.statusText}`)
@@ -29,13 +72,7 @@ export async function fetchAgent(name) {
   return response.json()
 }
 
-/**
- * Save an agent's YAML content
- * @param {string} name - Agent name
- * @param {string} yaml - YAML content
- * @returns {Promise<{status: string, path: string}>}
- */
-export async function saveAgent(name, yaml) {
+export async function saveAgent(name: string, yaml: string): Promise<{ status: string; path: string }> {
   const response = await fetch(`${API_BASE}/agents/${encodeURIComponent(name)}`, {
     method: 'PUT',
     headers: {
@@ -49,12 +86,7 @@ export async function saveAgent(name, yaml) {
   return response.json()
 }
 
-/**
- * Delete an agent
- * @param {string} name - Agent name
- * @returns {Promise<{status: string, deleted: string}>}
- */
-export async function deleteAgent(name) {
+export async function deleteAgent(name: string): Promise<{ status: string; deleted: string }> {
   const response = await fetch(`${API_BASE}/agents/${encodeURIComponent(name)}`, {
     method: 'DELETE',
   })
@@ -64,11 +96,7 @@ export async function deleteAgent(name) {
   return response.json()
 }
 
-/**
- * Fetch all available tools
- * @returns {Promise<{tools: Array<{name: string, description: string, source: string}>}>}
- */
-export async function fetchTools() {
+export async function fetchTools(): Promise<{ tools: Tool[] }> {
   const response = await fetch(`${API_BASE}/tools`)
   if (!response.ok) {
     throw new Error(`Failed to fetch tools: ${response.statusText}`)
@@ -76,12 +104,7 @@ export async function fetchTools() {
   return response.json()
 }
 
-/**
- * Check MCP dependencies installation status
- * @param {Array<{server: string, tools: string[], source: string, store_id?: string, config?: object}>} dependencies
- * @returns {Promise<{dependencies: Array, all_installed: boolean, missing: number}>}
- */
-export async function checkMcpDependencies(dependencies) {
+export async function checkMcpDependencies(dependencies: McpDependency[]): Promise<McpDependencyCheckResult> {
   const response = await fetch(`${API_BASE}/mcp-dependencies/check`, {
     method: 'POST',
     headers: {
@@ -95,12 +118,7 @@ export async function checkMcpDependencies(dependencies) {
   return response.json()
 }
 
-/**
- * Fetch details for a specific MCP server from the store
- * @param {string} storeId - The MCP store ID
- * @returns {Promise<object>}
- */
-export async function getMcpStoreServer(storeId) {
+export async function getMcpStoreServer(storeId: string): Promise<Record<string, unknown>> {
   const encodedId = encodeURIComponent(storeId).replace(/%2F/g, '/')
   const response = await fetch(`${API_BASE}/mcp-store/${encodedId}`)
   if (!response.ok) {
@@ -109,13 +127,7 @@ export async function getMcpStoreServer(storeId) {
   return response.json()
 }
 
-/**
- * Install an MCP server from the store
- * @param {string} storeId - The MCP store ID (e.g., "github.com/user/repo")
- * @param {object} env - Optional environment variable overrides
- * @returns {Promise<{status: string, serverName: string, toolsLoaded: number}>}
- */
-export async function installMcpServer(storeId, env = {}) {
+export async function installMcpServer(storeId: string, env: Record<string, string> = {}): Promise<McpInstallResult> {
   const encodedId = encodeURIComponent(storeId).replace(/%2F/g, '/')
   const response = await fetch(`${API_BASE}/mcp-store/${encodedId}/install`, {
     method: 'POST',
@@ -131,13 +143,10 @@ export async function installMcpServer(storeId, env = {}) {
   return response.json()
 }
 
-/**
- * Install an inline MCP server (from flow's embedded config)
- * @param {string} serverName - The server name
- * @param {object} config - The server configuration (command, args, env, transport)
- * @returns {Promise<{status: string, serverName: string}>}
- */
-export async function installInlineMcpServer(serverName, config) {
+export async function installInlineMcpServer(
+  serverName: string,
+  config: Record<string, unknown>
+): Promise<{ status: string; serverName: string }> {
   const response = await fetch(`${API_BASE}/mcp/install-inline`, {
     method: 'POST',
     headers: {
@@ -152,11 +161,7 @@ export async function installInlineMcpServer(serverName, config) {
   return response.json()
 }
 
-/**
- * Fetch available standard MCP servers with install status
- * @returns {Promise<{servers: Array}>}
- */
-export async function fetchStandardServers() {
+export async function fetchStandardServers(): Promise<{ servers: StandardServer[] }> {
   const response = await fetch(`${API_BASE}/standard-servers`)
   if (!response.ok) {
     throw new Error(`Failed to fetch standard servers: ${response.statusText}`)
@@ -164,13 +169,7 @@ export async function fetchStandardServers() {
   return response.json()
 }
 
-/**
- * Install a standard MCP server
- * @param {string} id - Standard server ID (e.g., "tavily")
- * @param {object} env - Environment variables (e.g., { TAVILY_API_KEY: "tvly-xxx" })
- * @returns {Promise<{status: string, serverName: string, toolsLoaded: number}>}
- */
-export async function installStandardServer(id, env = {}) {
+export async function installStandardServer(id: string, env: Record<string, string> = {}): Promise<McpInstallResult> {
   const response = await fetch(`${API_BASE}/standard-servers/${encodeURIComponent(id)}/install`, {
     method: 'POST',
     headers: {

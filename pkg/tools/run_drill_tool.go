@@ -755,6 +755,21 @@ func enrichReportWithFailureContext(buf *bytes.Buffer, report *adrill.SuiteRepor
 		}
 		buf.WriteString(fmt.Sprintf("\nSetup log:\n%s\n", logSnippet))
 	}
+
+	// Add actionable hint for fixing failures
+	hasTestFailures := false
+	for _, test := range report.Tests {
+		if test.Status == "failed" {
+			hasTestFailures = true
+			break
+		}
+	}
+	if hasTestFailures {
+		buf.WriteString("\n--- How to Fix ---\n")
+		buf.WriteString("To fix failing drills: use read_drill to inspect the drill YAML, investigate the app code\n")
+		buf.WriteString("to understand actual behavior, then use edit_drill to update the assertions or test logic.\n")
+		buf.WriteString("Re-run with run_drill to verify the fix.\n")
+	}
 }
 
 // templateDisplay returns a user-friendly display name for a sandbox template.

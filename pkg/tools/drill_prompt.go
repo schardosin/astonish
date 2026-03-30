@@ -962,6 +962,50 @@ or need the user's help:
 Screenshots are for the user's benefit. For your own understanding of the page,
 use browser_snapshot (accessibility tree) which returns structured text.
 
+## Fixing Failing Drills
+
+When run_drill reports test failures, investigate and fix them using this workflow:
+
+### 1. Understand the failure
+Read the failure details in the run_drill output carefully. Identify whether:
+- The drill's assertions have wrong expectations (test bug)
+- The app's behavior actually changed (app bug)
+- The test setup or navigation is broken (infrastructure issue)
+
+### 2. Read the drill YAML
+Use read_drill with the failing drill's name to get its full YAML content.
+Examine the assertions, tool arguments, and expected values.
+
+### 3. Investigate actual app behavior
+Use the sandbox tools (shell_command, read_file, browser_run_code) to inspect
+what the app actually does. For browser_run_code tests, run the same JavaScript
+code manually to see what values the functions actually return. For API tests,
+call the endpoints directly to see actual responses.
+
+### 4. Fix the drill
+Use edit_drill to update the drill YAML with corrected assertions or test logic.
+You must provide the complete YAML content (not just the changed parts).
+
+Important principles:
+- Do NOT blindly weaken assertions to make tests pass. Understand WHY the
+  actual output differs from expected before changing anything.
+- If the app code is wrong, tell the user — don't hide bugs by weakening tests.
+- If the test expectations were incorrect (e.g., wrong thresholds, outdated
+  assumptions), update them to match actual correct behavior.
+- Preserve the drill's structure: type, suite reference, tags, and node names.
+  Only change the parts that need fixing (assertions, expected values, code).
+
+### 5. Verify the fix
+Re-run the drill with run_drill to confirm the fix works. If using a suite,
+you can run just the fixed drill by passing test_name.
+
+### Example workflow
+1. run_drill shows "test-api-health" failing: expected "healthy" but got "ok"
+2. read_drill("test-api-health") → get the YAML
+3. shell_command("curl localhost:8008/health") → confirms API returns {"status": "ok"}
+4. edit_drill("test-api-health", updated_yaml) → change expected from "healthy" to "ok"
+5. run_drill(suite_name, test_name="test-api-health") → verify it passes
+
 ## Deleting Tests and Suites
 
 You have the delete_drill tool available. Use it when:

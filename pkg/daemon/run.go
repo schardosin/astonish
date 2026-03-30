@@ -496,7 +496,10 @@ func Run(cfg RunConfig) error {
 			// it can be injected as GH_TOKEN into gh CLI commands.
 			if credStore != nil {
 				activator.SetGHTokenResolver(func(plan *fleet.FleetPlan) string {
-					resolved, _ := fleet.ResolveCredentials(plan, credStore)
+					resolved, err := fleet.ResolveCredentials(plan, credStore)
+					if err != nil {
+						slog.Warn("failed to resolve fleet credentials", "plan", plan.Key, "error", err)
+					}
 					return fleet.GitHubToken(resolved)
 				})
 			}

@@ -165,7 +165,10 @@ func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionRes
 	// Wire sandbox container for this fleet session (fails if sandbox is enabled but unavailable)
 	ghToken := ""
 	if credStore := getAPICredentialStore(); credStore != nil {
-		resolved, _ := fleet.ResolveCredentials(plan, credStore)
+		resolved, err := fleet.ResolveCredentials(plan, credStore)
+		if err != nil {
+			slog.Warn("failed to resolve fleet credentials", "plan", plan.Key, "error", err)
+		}
 		ghToken = fleet.GitHubToken(resolved)
 	}
 	if err := wireFleetSandbox(fleetSession, plan, ghToken); err != nil {
@@ -1044,7 +1047,10 @@ func buildSandboxEnv(plan *fleet.FleetPlan, ghToken string) map[string]string {
 	// Resolve BIFROST_API_KEY from credential store for delegate subprocess auth
 	credStore := getAPICredentialStore()
 	if credStore != nil && plan != nil {
-		resolved, _ := fleet.ResolveCredentials(plan, credStore)
+		resolved, err := fleet.ResolveCredentials(plan, credStore)
+		if err != nil {
+			slog.Warn("failed to resolve fleet credentials", "plan", plan.Key, "error", err)
+		}
 		// If the plan has a github credential but we didn't get ghToken from
 		// the plan activator, try to resolve it here
 		if ghToken == "" {

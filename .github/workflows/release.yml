@@ -121,7 +121,7 @@ jobs:
           chmod +x ./release/astonish-linux-* ./release/astonish-darwin-* || true
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: ./release/*
           generate_release_notes: true

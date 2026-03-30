@@ -24,7 +24,7 @@ require (
 	github.com/knights-analytics/hugot v0.6.2
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/lxc/incus/v6 v6.22.0
-	github.com/modelcontextprotocol/go-sdk v1.1.0
+	github.com/modelcontextprotocol/go-sdk v1.4.1
 	github.com/philippgille/chromem-go v0.7.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/sashabaranov/go-openai v1.41.2
@@ -86,7 +86,7 @@ require (
 	github.com/gomlx/go-xla v0.1.4 // indirect
 	github.com/gomlx/onnx-gomlx v0.3.4 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/jsonschema-go v0.3.0 // indirect
+	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/safehtml v0.1.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.7 // indirect
@@ -120,6 +120,8 @@ require (
 	github.com/rootless-containers/proto/go-proto v0.0.0-20260207013450-f6ee952d53d9 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/schollz/progressbar/v2 v2.15.0 // indirect
+	github.com/segmentio/asm v1.1.3 // indirect
+	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/sugarme/regexpset v0.0.0-20200920021344-4d4ec8eaf93c // indirect
 	github.com/sugarme/tokenizer v0.3.0 // indirect

@@ -101,7 +101,7 @@ func (t *TelegramChannel) Start(ctx context.Context, handler channels.MessageHan
 	t.registerBotCommands(bot)
 
 	// Create cancellable context for polling
-	pollCtx, cancel := context.WithCancel(ctx) //nolint:gosec // G118: cancel is stored in t.cancel and called by Stop()
+	pollCtx, cancel := context.WithCancel(ctx)
 	t.cancel = cancel
 
 	// Configure long polling

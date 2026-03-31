@@ -250,7 +250,7 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 	registry.Register(fleetSession)
 
 	// Start the fleet message loop in a background goroutine
-	go func() { //nolint:gosec // G118: long-lived session loop must outlive the HTTP request
+	go func() {
 		defer func() {
 			registry.Unregister(fleetSession.ID)
 			slog.Info("session removed from registry", "component", "fleet-recover", "session_id", fleetSession.ID)

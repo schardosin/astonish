@@ -69,3 +69,6 @@ linters:
         - G304  # Potential file inclusion via variable
         # Command injection — inherent to an agent that runs user-specified commands/editors
         - G702  # Command injection via taint analysis
+        # Context.Background in goroutines — intentional for fire-and-forget background work
+        # (reindex, long-lived watchers, session loops) that must outlive request scope
+        - G118  # Goroutine uses context.Background/TODO

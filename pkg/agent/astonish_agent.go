@@ -99,7 +99,9 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 								// Found awaiting_approval=true
 								awaiting = true
 								if toolVal, ok := ev.Actions.StateDelta["approval_tool"]; ok {
-									state.Set("approval_tool", toolVal)
+									if err := state.Set("approval_tool", toolVal); err != nil {
+										slog.Warn("failed to set approval_tool state", "error", err)
+									}
 								}
 								break
 							} else {
@@ -150,7 +152,9 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 						}
 					}
 					approvalKey := fmt.Sprintf("approval:%s:%s", currentNode, toolNameStr)
-					state.Set(approvalKey, true)
+					if err := state.Set(approvalKey, true); err != nil {
+						slog.Warn("failed to set approval state", "key", approvalKey, "error", err)
+					}
 					if a.DebugMode {
 						slog.Debug("set approval", "tool", toolNameStr, "key", approvalKey)
 					}
@@ -310,7 +314,9 @@ func (a *AstonishAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Even
 			}
 
 			// Update state
-			state.Set("current_node", currentNodeName)
+			if err := state.Set("current_node", currentNodeName); err != nil {
+				slog.Warn("failed to set current_node state", "error", err)
+			}
 		}
 
 		// Handle resume from input

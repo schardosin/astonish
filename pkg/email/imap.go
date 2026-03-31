@@ -68,7 +68,7 @@ func (c *IMAPSMTPClient) connectLocked() error {
 	}
 
 	if err := client.Login(username, c.cfg.Password).Wait(); err != nil {
-		client.Close()
+		_ = client.Close() // best-effort cleanup
 		return fmt.Errorf("IMAP login failed: %w", err)
 	}
 

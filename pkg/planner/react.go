@@ -175,8 +175,12 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 					}
 
 					// Clear the pending state so we don't loop forever
-					p.State.Set("_react_pending_action", nil)
-					p.State.Set("_react_pending_input", nil)
+					if err := p.State.Set("_react_pending_action", nil); err != nil {
+						slog.Warn("failed to clear pending action", "component", "react", "error", err)
+					}
+					if err := p.State.Set("_react_pending_input", nil); err != nil {
+						slog.Warn("failed to clear pending input", "component", "react", "error", err)
+					}
 
 					skipLLM = true
 					if p.DebugMode {
@@ -259,8 +263,12 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 					answer := strings.TrimSpace(parts[1])
 					// Clear saved state
 					if p.State != nil {
-						p.State.Set("_react_history", nil)
-						p.State.Set("_react_step", nil)
+						if err := p.State.Set("_react_history", nil); err != nil {
+							slog.Warn("failed to clear react history", "component", "react", "error", err)
+						}
+						if err := p.State.Set("_react_step", nil); err != nil {
+							slog.Warn("failed to clear react step", "component", "react", "error", err)
+						}
 					}
 					return answer, nil
 				}
@@ -319,12 +327,20 @@ Thought:`, systemContext, toolDescriptions, toolNames, input)
 			if err.Error() == "tool approval required" {
 				// Save current state before pausing
 				if p.State != nil {
-					p.State.Set("_react_history", history)
-					p.State.Set("_react_step", i)
+					if err := p.State.Set("_react_history", history); err != nil {
+						slog.Warn("failed to save react history", "component", "react", "error", err)
+					}
+					if err := p.State.Set("_react_step", i); err != nil {
+						slog.Warn("failed to save react step", "component", "react", "error", err)
+					}
 
 					// NEW: Save the pending action details
-					p.State.Set("_react_pending_action", action)
-					p.State.Set("_react_pending_input", actionInput)
+					if err := p.State.Set("_react_pending_action", action); err != nil {
+						slog.Warn("failed to save pending action", "component", "react", "error", err)
+					}
+					if err := p.State.Set("_react_pending_input", actionInput); err != nil {
+						slog.Warn("failed to save pending input", "component", "react", "error", err)
+					}
 
 					if p.DebugMode {
 						slog.Debug("saving state", "component", "react", "step", i)

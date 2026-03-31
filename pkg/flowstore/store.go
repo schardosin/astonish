@@ -39,8 +39,8 @@ type FlowMeta struct {
 
 // MCPMeta contains metadata about an MCP server from the manifest
 type MCPMeta struct {
-	ID             string            `yaml:"id" json:"id"`                         // Unique identifier (e.g., "github.com/owner/repo")
-	Name           string            `yaml:"name" json:"name"`                     // Display name (can have spaces)
+	ID             string            `yaml:"id" json:"id"`     // Unique identifier (e.g., "github.com/owner/repo")
+	Name           string            `yaml:"name" json:"name"` // Display name (can have spaces)
 	Description    string            `yaml:"description" json:"description"`
 	Author         string            `yaml:"author" json:"author"`
 	GithubUrl      string            `yaml:"githubUrl" json:"githubUrl"`
@@ -56,10 +56,10 @@ type MCPMeta struct {
 
 // Tap represents a flow store repository
 type Tap struct {
-	Name     string   `yaml:"name" json:"name"`         // e.g., "myuser/my-flows" or "official"
-	URL      string   `yaml:"url" json:"url"`           // Full GitHub URL
-	Branch   string   `yaml:"branch" json:"branch"`     // Git branch (defaults to "main")
-	Manifest *Manifest `yaml:"-" json:"-"`              // Cached manifest (not persisted)
+	Name     string    `yaml:"name" json:"name"`     // e.g., "myuser/my-flows" or "official"
+	URL      string    `yaml:"url" json:"url"`       // Full GitHub URL
+	Branch   string    `yaml:"branch" json:"branch"` // Git branch (defaults to "main")
+	Manifest *Manifest `yaml:"-" json:"-"`           // Cached manifest (not persisted)
 }
 
 // Flow represents a flow available in a store
@@ -67,15 +67,15 @@ type Flow struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
 	Tags        []string `json:"tags"`
-	TapName     string   `json:"tap_name"`     // Which tap this flow belongs to
-	Installed   bool     `json:"installed"`    // Whether it's installed locally
-	LocalPath   string   `json:"local_path"`   // Path if installed
+	TapName     string   `json:"tap_name"`   // Which tap this flow belongs to
+	Installed   bool     `json:"installed"`  // Whether it's installed locally
+	LocalPath   string   `json:"local_path"` // Path if installed
 }
 
 // TappedMCP represents an MCP server available from a tapped repository
 type TappedMCP struct {
-	ID             string            `json:"id"`              // Unique identifier
-	Name           string            `json:"name"`            // Display name
+	ID             string            `json:"id"`   // Unique identifier
+	Name           string            `json:"name"` // Display name
 	Description    string            `json:"description"`
 	Author         string            `json:"author"`
 	GithubUrl      string            `json:"githubUrl"`
@@ -87,7 +87,7 @@ type TappedMCP struct {
 	Tags           []string          `json:"tags"`
 	Transport      string            `json:"transport"` // "stdio" or "sse"
 	URL            string            `json:"url"`       // For SSE transport
-	TapName        string            `json:"tap_name"` // Which tap this MCP belongs to
+	TapName        string            `json:"tap_name"`  // Which tap this MCP belongs to
 }
 
 // StoreConfig is persisted in config.yaml
@@ -147,7 +147,7 @@ func (s *Store) GetTaps() []Tap {
 func (s *Store) GetAllTaps() []*Tap {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	taps := []*Tap{s.official}
 	for i := range s.config.Taps {
 		taps = append(taps, &s.config.Taps[i])
@@ -174,7 +174,7 @@ func validateTapRepository(tap Tap) error {
 	if token != "" {
 		req.Header.Set("Authorization", "token "+token)
 	}
-	
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to connect to repository: %w", err)
@@ -219,10 +219,10 @@ func buildRawGitHubURL(repoURL, branch, filePath string) (rawURL string, token s
 	// Normalize URL - remove https:// prefix if present
 	repoURL = strings.TrimPrefix(repoURL, "https://")
 	repoURL = strings.TrimPrefix(repoURL, "http://")
-	
+
 	// Check if this is public GitHub or enterprise
 	isPublicGitHub := strings.HasPrefix(repoURL, "github.com/")
-	
+
 	if isPublicGitHub {
 		// Public GitHub: use raw.githubusercontent.com
 		path := strings.TrimPrefix(repoURL, "github.com/")
@@ -237,12 +237,12 @@ func buildRawGitHubURL(repoURL, branch, filePath string) (rawURL string, token s
 		}
 		host := parts[0]
 		repoPath := parts[1]
-		
+
 		// Enterprise GitHub raw URL format
 		// https://github.enterprise.com/raw/owner/repo/branch/file
 		rawURL = fmt.Sprintf("https://%s/raw/%s/%s/%s", host, repoPath, branch, filePath)
 		token = os.Getenv("GITHUB_ENTERPRISE_TOKEN")
-		
+
 		// Fallback to GITHUB_TOKEN if enterprise token not set
 		if token == "" {
 			token = os.Getenv("GITHUB_TOKEN")
@@ -250,7 +250,7 @@ func buildRawGitHubURL(repoURL, branch, filePath string) (rawURL string, token s
 	} else {
 		return "", "", fmt.Errorf("invalid GitHub URL format: %s (expected: github.com/owner/repo or github.enterprise.com/owner/repo)", repoURL)
 	}
-	
+
 	return rawURL, token, nil
 }
 
@@ -260,10 +260,10 @@ func buildRawGitHubURLWithRefs(repoURL, branch, filePath string) (rawURL string,
 	// Normalize URL - remove https:// prefix if present
 	repoURL = strings.TrimPrefix(repoURL, "https://")
 	repoURL = strings.TrimPrefix(repoURL, "http://")
-	
+
 	// Check if this is public GitHub or enterprise
 	isPublicGitHub := strings.HasPrefix(repoURL, "github.com/")
-	
+
 	if isPublicGitHub {
 		// Public GitHub: use refs/heads/ format to bypass CDN
 		path := strings.TrimPrefix(repoURL, "github.com/")
@@ -277,11 +277,11 @@ func buildRawGitHubURLWithRefs(repoURL, branch, filePath string) (rawURL string,
 		}
 		host := parts[0]
 		repoPath := parts[1]
-		
+
 		// Enterprise GitHub raw URL with refs format
 		rawURL = fmt.Sprintf("https://%s/raw/%s/refs/heads/%s/%s", host, repoPath, branch, filePath)
 		token = os.Getenv("GITHUB_ENTERPRISE_TOKEN")
-		
+
 		// Fallback to GITHUB_TOKEN if enterprise token not set
 		if token == "" {
 			token = os.Getenv("GITHUB_TOKEN")
@@ -289,7 +289,7 @@ func buildRawGitHubURLWithRefs(repoURL, branch, filePath string) (rawURL string,
 	} else {
 		return "", "", fmt.Errorf("invalid GitHub URL format: %s (expected: github.com/owner/repo or github.enterprise.com/owner/repo)", repoURL)
 	}
-	
+
 	return rawURL, token, nil
 }
 
@@ -304,7 +304,7 @@ func (s *Store) AddTap(urlOrShorthand string, alias string) (string, error) {
 
 	// Parse the URL with smart naming
 	name, url := parseTapURL(urlOrShorthand)
-	
+
 	// Override with alias if provided
 	if alias != "" {
 		name = alias
@@ -347,11 +347,11 @@ func (s *Store) RemoveTap(name string) error {
 	for i, t := range s.config.Taps {
 		if t.Name == name {
 			s.config.Taps = append(s.config.Taps[:i], s.config.Taps[i+1:]...)
-			
+
 			// Also remove installed flows for this tap
 			tapDir := filepath.Join(s.storeDir, sanitizeName(name))
-			os.RemoveAll(tapDir)
-			
+			_ = os.RemoveAll(tapDir) // best-effort cleanup
+
 			return s.saveConfig()
 		}
 	}
@@ -511,8 +511,6 @@ func (s *Store) saveConfig() error {
 		return err
 	}
 
-
-
 	data, err := json.MarshalIndent(s.config, "", "  ")
 	if err != nil {
 		return err
@@ -553,13 +551,13 @@ func parseTapURL(input string) (name, url string) {
 	input = strings.TrimSuffix(input, "/")
 
 	const defaultRepo = "astonish-flows"
-	
+
 	// Check if this is an enterprise URL (contains a host with dots before the path)
 	// e.g., github.enterprise.com/owner or github.mycompany.com/owner/repo
 	isEnterprise := strings.Contains(input, ".") && !strings.HasPrefix(input, "github.com/")
-	
+
 	var host, owner, repo string
-	
+
 	if isEnterprise {
 		// Enterprise: host/owner or host/owner/repo
 		parts := strings.SplitN(input, "/", 3)
@@ -574,21 +572,21 @@ func parseTapURL(input string) (name, url string) {
 		} else {
 			repo = defaultRepo
 		}
-		
+
 		// Build tap name
 		if repo == defaultRepo {
 			name = owner
 		} else {
 			name = owner + "-" + repo
 		}
-		
+
 		url = host + "/" + owner + "/" + repo
 	} else {
 		// Public GitHub: strip github.com/ prefix if present
 		input = strings.TrimPrefix(input, "github.com/")
-		
+
 		parts := strings.Split(input, "/")
-		
+
 		if len(parts) == 1 {
 			// Just owner, assume default repo
 			owner = parts[0]
@@ -597,17 +595,17 @@ func parseTapURL(input string) (name, url string) {
 			owner = parts[0]
 			repo = parts[1]
 		}
-		
+
 		// Determine tap name based on repo
 		if repo == defaultRepo {
 			name = owner
 		} else {
 			name = owner + "-" + repo
 		}
-		
+
 		url = "github.com/" + owner + "/" + repo
 	}
-	
+
 	return name, url
 }
 

@@ -93,7 +93,7 @@ func (s *Store) FetchManifestForceRefresh(tap *Tap) (*Manifest, error) {
 	// Build URL using SHA (bypasses all CDN caching)
 	repoURL := strings.TrimPrefix(tap.URL, "https://")
 	repoURL = strings.TrimPrefix(repoURL, "http://")
-	
+
 	var rawURL string
 	if strings.HasPrefix(repoURL, "github.com/") {
 		path := strings.TrimPrefix(repoURL, "github.com/")
@@ -121,9 +121,9 @@ func (s *Store) FetchManifestForceRefresh(tap *Tap) (*Manifest, error) {
 func (s *Store) getLatestCommitSHA(repoURL, branch string) (sha string, token string, err error) {
 	repoURL = strings.TrimPrefix(repoURL, "https://")
 	repoURL = strings.TrimPrefix(repoURL, "http://")
-	
+
 	var apiURL string
-	
+
 	if strings.HasPrefix(repoURL, "github.com/") {
 		path := strings.TrimPrefix(repoURL, "github.com/")
 		apiURL = fmt.Sprintf("https://api.github.com/repos/%s/commits/%s", path, branch)
@@ -148,7 +148,7 @@ func (s *Store) getLatestCommitSHA(repoURL, branch string) (sha string, token st
 	if err != nil {
 		return "", "", err
 	}
-	
+
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", "application/vnd.github.sha")
 	if token != "" {
@@ -311,7 +311,7 @@ func (s *Store) ForceRefreshAllManifests() error {
 func (s *Store) clearCachedManifest(tap *Tap) {
 	tapCacheDir := filepath.Join(s.storeDir, sanitizeName(tap.Name))
 	manifestPath := filepath.Join(tapCacheDir, "manifest.yaml")
-	os.Remove(manifestPath)
+	_ = os.Remove(manifestPath) // best-effort cleanup
 }
 
 // fetchRawFileContent fetches raw file content from a URL with optional auth
@@ -435,7 +435,7 @@ func (s *Store) cacheManifest(tap *Tap, manifest *Manifest) error {
 	}
 
 	manifestPath := filepath.Join(tapCacheDir, "manifest.yaml")
-	
+
 	data, err := yaml.Marshal(manifest)
 	if err != nil {
 		return err

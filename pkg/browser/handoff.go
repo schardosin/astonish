@@ -152,7 +152,10 @@ func (h *HandoffServer) Start(opts HandoffOpts) (*HandoffInfo, error) {
 	// WebSocket connections that DevTools opens.
 	mux.HandleFunc("/devtools/", h.makeWSProxy(internalHost))
 
-	h.http = &http.Server{Handler: mux}
+	h.http = &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 
 	srv := h.http // capture for goroutine (avoid race with Stop setting h.http = nil)
 	go func() {

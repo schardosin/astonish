@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/agent"
@@ -96,7 +97,12 @@ func RunSimpleWeb(ctx context.Context, cfg *SimpleWebConfig) error {
 	slog.Info("starting simple web UI", "url", fmt.Sprintf("http://localhost:%d", cfg.Port))
 	slog.Info("open your browser to access the chat interface")
 
-	return http.ListenAndServe(addr, router)
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           router,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	return srv.ListenAndServe()
 }
 
 func (s *chatServer) handleIndex(w http.ResponseWriter, r *http.Request) {

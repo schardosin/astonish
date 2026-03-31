@@ -218,30 +218,7 @@ func CreateSkillHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	template := fmt.Sprintf(`---
-name: %s
-description: "TODO: One-line description of what this skill does"
-require_bins: []
----
-
-# %s
-
-## When to Use
-- TODO: Describe when this skill should be used
-
-## When NOT to Use
-- TODO: Describe when other tools are more appropriate
-
-## Common Commands
-`+"```"+`
-# TODO: Add common commands and patterns
-`+"```"+`
-
-## Tips
-- TODO: Add tips and best practices
-`, name, name)
-
-	if err := os.WriteFile(skillFile, []byte(template), 0644); err != nil {
+	if err := os.WriteFile(skillFile, []byte(skills.NewSkillTemplate(name)), 0644); err != nil {
 		http.Error(w, "Failed to write skill file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

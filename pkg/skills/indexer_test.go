@@ -74,7 +74,7 @@ func TestSyncSkillsToMemoryCleanup(t *testing.T) {
 	}
 }
 
-func TestSyncSkillsIneligibleSkipped(t *testing.T) {
+func TestSyncSkillsIneligibleSynced(t *testing.T) {
 	memDir := t.TempDir()
 	allSkills := []Skill{
 		{Name: "missing-bin", Description: "Missing", Content: "# Missing", RequireBins: []string{"nonexistent_xyz123"}},
@@ -83,8 +83,62 @@ func TestSyncSkillsIneligibleSkipped(t *testing.T) {
 	SyncSkillsToMemory(allSkills, memDir)
 
 	outPath := filepath.Join(memDir, "skills", "missing-bin.md")
-	if _, err := os.Stat(outPath); err == nil {
-		t.Error("Ineligible skill should not be synced")
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("Ineligible skill should be synced for discoverability: %v", err)
+	}
+
+	content := string(data)
+	// Should contain the missing-requirements note
+	if !contains(content, "Setup required") {
+		t.Error("Ineligible skill should include setup-required note")
+	}
+	if !contains(content, "nonexistent_xyz123") {
+		t.Error("Missing requirements note should mention the missing binary")
+	}
+	// Should still contain the skill content
+	if !contains(content, "# Missing") {
+		t.Error("Synced file should include skill content")
+	}
+}
+
+func TestSyncSkillsIneligibleEnvSynced(t *testing.T) {
+	memDir := t.TempDir()
+	allSkills := []Skill{
+		{Name: "needs-token", Description: "Needs token", Content: "# Token skill", RequireEnv: []string{"NONEXISTENT_TOKEN_XYZ"}},
+	}
+
+	SyncSkillsToMemory(allSkills, memDir)
+
+	outPath := filepath.Join(memDir, "skills", "needs-token.md")
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("Skill with missing env should be synced: %v", err)
+	}
+
+	content := string(data)
+	if !contains(content, "$NONEXISTENT_TOKEN_XYZ") {
+		t.Error("Missing requirements note should mention the env var")
+	}
+}
+
+func TestSyncSkillsEligibleNoNote(t *testing.T) {
+	memDir := t.TempDir()
+	allSkills := []Skill{
+		{Name: "echo-ok", Description: "Echo skill", Content: "# Echo", RequireBins: []string{"echo"}},
+	}
+
+	SyncSkillsToMemory(allSkills, memDir)
+
+	outPath := filepath.Join(memDir, "skills", "echo-ok.md")
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("Eligible skill should be synced: %v", err)
+	}
+
+	content := string(data)
+	if contains(content, "Setup required") {
+		t.Error("Eligible skill should NOT include setup-required note")
 	}
 }
 

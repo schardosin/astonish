@@ -539,12 +539,11 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				slog.Warn("failed to load skills", "error", skillErr)
 			}
 		} else {
-			eligible := skills.FilterEligible(loadedSkills)
-			if len(eligible) > 0 {
-				// Build lightweight index for system prompt
+			if len(loadedSkills) > 0 {
+				// Build lightweight index for system prompt (includes all skills)
 				skillIndex = skills.BuildSkillIndex(loadedSkills)
 
-				// Create skill_lookup tool
+				// Create skill_lookup tool (serves all installed skills)
 				skillTool, stErr := tools.NewSkillLookupTool(loadedSkills)
 				if stErr != nil {
 					if cfg.DebugMode {
@@ -555,6 +554,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				}
 			}
 			if cfg.DebugMode {
+				eligible := skills.FilterEligible(loadedSkills)
 				slog.Debug("skills loaded", "component", "chat-factory", "total", len(loadedSkills), "eligible", len(eligible))
 			}
 		}
@@ -1708,10 +1708,9 @@ func factoryBuildSelfMDConfig(
 		}
 	}
 
-	// Skills
+	// Skills — list all installed skills so the agent knows about them
 	if len(loadedSkills) > 0 {
-		eligible := skills.FilterEligible(loadedSkills)
-		for _, s := range eligible {
+		for _, s := range loadedSkills {
 			selfCfg.SkillNames = append(selfCfg.SkillNames, s.Name)
 		}
 	}

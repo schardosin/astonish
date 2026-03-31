@@ -56,7 +56,7 @@ func TestSkillLookupEmptyName(t *testing.T) {
 	}
 }
 
-func TestSkillLookupIneligibleSkipped(t *testing.T) {
+func TestSkillLookupIneligibleReturnsWithMissingReqs(t *testing.T) {
 	allSkills := []skills.Skill{
 		{Name: "missing-bin", Description: "Missing", Content: "content", RequireBins: []string{"nonexistent_xyz123"}},
 	}
@@ -66,8 +66,20 @@ func TestSkillLookupIneligibleSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-	if result.Error == "" {
-		t.Error("Expected error for ineligible skill")
+	if result.Error != "" {
+		t.Errorf("Ineligible skill should be found, not return error: %s", result.Error)
+	}
+	if result.Name != "missing-bin" {
+		t.Errorf("Name = %q, want %q", result.Name, "missing-bin")
+	}
+	if result.Content != "content" {
+		t.Errorf("Content = %q, want %q", result.Content, "content")
+	}
+	if len(result.MissingRequirements) == 0 {
+		t.Error("Expected MissingRequirements to be populated for ineligible skill")
+	}
+	if !containsStr(result.MissingRequirements[0], "nonexistent_xyz123") {
+		t.Errorf("MissingRequirements should mention missing binary, got: %v", result.MissingRequirements)
 	}
 }
 

@@ -18,22 +18,23 @@ type SkillLookupArgs struct {
 
 // SkillLookupResult is returned from skill_lookup.
 type SkillLookupResult struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Content     string   `json:"content"`
-	Directory   string   `json:"directory,omitempty"` // Absolute path to skill dir (for supplementary files)
-	Files       []string `json:"files,omitempty"`     // Files in skill directory
-	Error       string   `json:"error,omitempty"`
+	Name                string   `json:"name"`
+	Description         string   `json:"description"`
+	Content             string   `json:"content"`
+	Directory           string   `json:"directory,omitempty"`            // Absolute path to skill dir (for supplementary files)
+	Files               []string `json:"files,omitempty"`                // Files in skill directory
+	MissingRequirements []string `json:"missing_requirements,omitempty"` // Unmet requirements (empty if eligible)
+	Error               string   `json:"error,omitempty"`
 }
 
 // SkillLookup returns full skill content by name.
+// All installed skills are indexed (eligible and ineligible) so the agent can
+// discover skills that need setup and guide the user through configuration.
 func SkillLookup(allSkills []skills.Skill) func(ctx tool.Context, args SkillLookupArgs) (SkillLookupResult, error) {
-	// Build index of eligible skills by name
+	// Build index of all installed skills by name
 	index := make(map[string]*skills.Skill, len(allSkills))
 	for i := range allSkills {
-		if allSkills[i].IsEligible() {
-			index[allSkills[i].Name] = &allSkills[i]
-		}
+		index[allSkills[i].Name] = &allSkills[i]
 	}
 
 	return func(ctx tool.Context, args SkillLookupArgs) (SkillLookupResult, error) {
@@ -61,6 +62,11 @@ func SkillLookup(allSkills []skills.Skill) func(ctx tool.Context, args SkillLook
 			Content:     skill.Content,
 		}
 
+		// Include missing requirements so the agent can guide setup
+		if missing := skill.MissingRequirements(); len(missing) > 0 {
+			result.MissingRequirements = missing
+		}
+
 		// Include directory and file listing for disk-based skills
 		if skill.Directory != "" {
 			result.Directory = skill.Directory
@@ -83,6 +89,7 @@ func NewSkillLookupTool(allSkills []skills.Skill) (tool.Tool, error) {
 		Name: "skill_lookup",
 		Description: "Load full instructions for a CLI tool skill by name. " +
 			"Use this to learn how to use a CLI tool or workflow before executing commands. " +
+			"Skills that need setup will include their missing requirements. " +
 			"Check the Available Skills list in the system prompt for valid skill names.",
 	}, SkillLookup(allSkills))
 }

@@ -30,6 +30,10 @@ jobs:
           npm run build
           echo "Built to: $(ls dist/)"
 
+      - name: Run frontend tests
+        run: npx vitest run
+        working-directory: web
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:

@@ -133,6 +133,9 @@ func (idx *Indexer) IndexAll(ctx context.Context) error {
 	// Persist the file index so the next startup can skip unchanged files.
 	idx.saveFileIndex()
 
+	// Rebuild the BM25 keyword index from all tracked documents.
+	idx.store.RebuildBM25()
+
 	return nil
 }
 
@@ -145,6 +148,8 @@ func (idx *Indexer) IndexFile(ctx context.Context, relPath string) error {
 	}
 	// Persist after individual file changes (e.g. from file watcher).
 	idx.saveFileIndex()
+	// Rebuild BM25 to include the new/changed content.
+	idx.store.RebuildBM25()
 	return nil
 }
 

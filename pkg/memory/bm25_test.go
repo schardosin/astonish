@@ -265,3 +265,66 @@ func TestMaxRRFScore(t *testing.T) {
 		t.Errorf("maxRRFScore = %f, expected %f", maxRRFScore, expected)
 	}
 }
+
+func TestBM25Search_ConversationalContextBoost(t *testing.T) {
+	// Simulates the follow-up query problem: user asks "now provide me the
+	// information itemized" after a conversation about Proxmox. Without
+	// context, BM25 can't find Proxmox docs. With the augmented query
+	// (prior response tail + user message), BM25 finds them via "proxmox",
+	// "server", "memory" keywords from the conversation.
+	t.Parallel()
+	docs := []bm25InputDoc{
+		{
+			ID:       "proxmox-skill",
+			Content:  "Proxmox VE Full Management. Complete control over Proxmox VE hypervisor via REST API. List VMs on node. List LXC containers.",
+			Path:     "skills/proxmox-full.md",
+			Category: "skill",
+		},
+		{
+			ID:       "proxmox-memory",
+			Content:  "Infrastructure. Proxmox server 192.168.1.200 SSH root access 62 GiB RAM credential proxmox-ssh",
+			Path:     "MEMORY.md",
+			Category: "knowledge",
+		},
+		{
+			ID:       "aws-iam",
+			Content:  "IAM. List IAM users. List roles. Get current user info. Manage access keys.",
+			Path:     "skills/aws.md",
+			Category: "skill",
+		},
+		{
+			ID:       "k8s-resources",
+			Content:  "Viewing Resources. kubectl get pods. List pods. List deployments. List services.",
+			Path:     "skills/kubernetes.md",
+			Category: "skill",
+		},
+	}
+	idx := buildBM25(docs)
+
+	// Raw follow-up query — no topic keywords, BM25 shouldn't find Proxmox
+	rawResults := idx.search("now provide me the information itemized I want to see each individual item consumption", 4, "")
+	for _, r := range rawResults {
+		if r.path == "skills/proxmox-full.md" || r.path == "MEMORY.md" {
+			t.Errorf("raw query should NOT find Proxmox docs, but found %q", r.path)
+		}
+	}
+
+	// Augmented query — prior response tail contains Proxmox context
+	augmented := "The Proxmox server is using about 35.5 percent of its 62 GB RAM with approximately 22 GB used. No swap is configured. now provide me the information itemized I want to see each individual item consumption"
+	augResults := idx.search(augmented, 4, "")
+	if len(augResults) == 0 {
+		t.Fatal("augmented query should find results")
+	}
+
+	// Proxmox docs should appear in augmented results
+	foundProxmox := false
+	for _, r := range augResults {
+		if r.path == "skills/proxmox-full.md" || r.path == "MEMORY.md" {
+			foundProxmox = true
+			break
+		}
+	}
+	if !foundProxmox {
+		t.Error("augmented query with conversation context should find Proxmox docs via keyword matching")
+	}
+}

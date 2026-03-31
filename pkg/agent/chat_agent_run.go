@@ -84,11 +84,27 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 					slog.Debug("auto knowledge search skipped: query too short", "component", "chat", "query", searchQuery)
 				}
 			} else {
+				// Build an augmented BM25 query that includes conversational
+				// context from the last model response. This helps follow-up
+				// queries like "show me per VM" find relevant docs by matching
+				// topic keywords (e.g., "proxmox", "server") that the user's
+				// message alone doesn't contain. Vector search stays on the
+				// raw query to avoid semantic dilution.
+				bm25Query := ""
+				if tail := lastModelResponseTail(ctx.Session().Events(), 300); tail != "" {
+					bm25Query = tail + " " + searchQuery
+					if c.DebugMode {
+						slog.Debug("augmented BM25 query with conversation context",
+							"component", "chat",
+							"bm25_query_len", len(bm25Query))
+					}
+				}
+
 				var allResults []KnowledgeSearchResult
 
 				// Partition 1: Guidance docs (how-to instructions for capabilities)
 				if c.KnowledgeSearchByCategory != nil {
-					guidanceResults, err := c.KnowledgeSearchByCategory(context.Background(), searchQuery, 3, 0.3, "guidance")
+					guidanceResults, err := c.KnowledgeSearchByCategory(context.Background(), searchQuery, bm25Query, 3, 0.3, "guidance")
 					if err != nil {
 						if c.DebugMode {
 							slog.Debug("guidance search failed", "component", "chat", "error", err)
@@ -100,7 +116,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 				// Partition 2: Everything else (memory, skills, flows, knowledge)
 				if c.KnowledgeSearch != nil {
-					knowledgeResults, err := c.KnowledgeSearch(context.Background(), searchQuery, 5, 0.3)
+					knowledgeResults, err := c.KnowledgeSearch(context.Background(), searchQuery, bm25Query, 5, 0.3)
 					if err != nil {
 						if c.DebugMode {
 							slog.Debug("knowledge search failed", "component", "chat", "error", err)

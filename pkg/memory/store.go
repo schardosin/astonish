@@ -310,19 +310,43 @@ var maxRRFScore = 2.0 / (rrfK + 1.0)
 func (s *Store) SearchHybrid(ctx context.Context, query string, maxResults int,
 	minScore float64) ([]SearchResult, error) {
 
-	return s.searchHybrid(ctx, query, maxResults, minScore, "")
+	return s.searchHybrid(ctx, query, "", maxResults, minScore, "")
 }
 
 // SearchHybridByCategory performs hybrid search filtered to a specific category.
 func (s *Store) SearchHybridByCategory(ctx context.Context, query string, maxResults int,
 	minScore float64, category string) ([]SearchResult, error) {
 
-	return s.searchHybrid(ctx, query, maxResults, minScore, category)
+	return s.searchHybrid(ctx, query, "", maxResults, minScore, category)
+}
+
+// SearchHybridWithContext performs hybrid search where vector search uses the
+// raw query but BM25 keyword search uses an augmented query that includes
+// conversational context. This helps follow-up queries like "show me per VM"
+// find relevant docs by matching topic keywords from the prior conversation
+// that the user's message alone doesn't contain.
+//
+// If bm25Query is empty, BM25 falls back to the same query as vector search.
+func (s *Store) SearchHybridWithContext(ctx context.Context, query string, bm25Query string,
+	maxResults int, minScore float64) ([]SearchResult, error) {
+
+	return s.searchHybrid(ctx, query, bm25Query, maxResults, minScore, "")
+}
+
+// SearchHybridByCategoryWithContext is like SearchHybridWithContext but filtered
+// to a specific category.
+func (s *Store) SearchHybridByCategoryWithContext(ctx context.Context, query string,
+	bm25Query string, maxResults int, minScore float64, category string) ([]SearchResult, error) {
+
+	return s.searchHybrid(ctx, query, bm25Query, maxResults, minScore, category)
 }
 
 // searchHybrid is the internal implementation of hybrid search.
-func (s *Store) searchHybrid(ctx context.Context, query string, maxResults int,
-	minScore float64, category string) ([]SearchResult, error) {
+// When bm25Query is non-empty, BM25 keyword search uses it instead of query,
+// allowing conversational context to boost keyword matching while keeping
+// vector (semantic) search clean on the raw user query.
+func (s *Store) searchHybrid(ctx context.Context, query string, bm25Query string,
+	maxResults int, minScore float64, category string) ([]SearchResult, error) {
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -359,11 +383,17 @@ func (s *Store) searchHybrid(ctx context.Context, query string, maxResults int,
 	}
 
 	// --- BM25 keyword search ---
+	// When bm25Query is provided (conversational context), use it for keyword
+	// matching to catch topic terms the raw user message doesn't contain.
+	bm25Input := query
+	if bm25Query != "" {
+		bm25Input = bm25Query
+	}
 	candidateK := maxResults * 3
 	if candidateK < 20 {
 		candidateK = 20
 	}
-	bm25Results := s.bm25.search(query, candidateK, category)
+	bm25Results := s.bm25.search(bm25Input, candidateK, category)
 
 	// --- Reciprocal Rank Fusion ---
 	type fusedEntry struct {

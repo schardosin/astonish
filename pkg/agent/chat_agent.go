@@ -26,13 +26,15 @@ type KnowledgeSearchResult struct {
 	Category string // e.g. "guidance", "skill", "flow", "knowledge"
 }
 
-// KnowledgeSearchFunc performs a vector search and returns matching results.
+// KnowledgeSearchFunc performs a hybrid search and returns matching results.
 // Used to auto-retrieve relevant knowledge before LLM execution.
-type KnowledgeSearchFunc func(ctx context.Context, query string, maxResults int, minScore float64) ([]KnowledgeSearchResult, error)
+// The bm25Query parameter provides conversational context for BM25 keyword
+// matching; when empty, BM25 uses the same query as vector search.
+type KnowledgeSearchFunc func(ctx context.Context, query string, bm25Query string, maxResults int, minScore float64) ([]KnowledgeSearchResult, error)
 
-// KnowledgeSearchByCategoryFunc performs a vector search filtered by category.
+// KnowledgeSearchByCategoryFunc performs a hybrid search filtered by category.
 // Categories: "guidance", "skill", "flow", "self", "instructions", "knowledge".
-type KnowledgeSearchByCategoryFunc func(ctx context.Context, query string, maxResults int, minScore float64, category string) ([]KnowledgeSearchResult, error)
+type KnowledgeSearchByCategoryFunc func(ctx context.Context, query string, bm25Query string, maxResults int, minScore float64, category string) ([]KnowledgeSearchResult, error)
 
 // ChatAgent implements a dynamic chat agent without flow definitions.
 // It wraps ADK's llmagent in a persistent chat session where the LLM

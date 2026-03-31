@@ -17,8 +17,15 @@ func TestBuildSkillIndexNoEligible(t *testing.T) {
 		{Name: "missing", Description: "Missing", RequireBins: []string{"nonexistent_xyz123"}},
 	}
 	result := BuildSkillIndex(allSkills)
-	if result != "" {
-		t.Errorf("Expected empty string when no eligible skills, got %q", result)
+	// Ineligible skills should still appear for discoverability
+	if result == "" {
+		t.Error("Expected non-empty index even with only ineligible skills")
+	}
+	if !strings.Contains(result, "missing") {
+		t.Error("Ineligible skill should appear in index")
+	}
+	if !strings.Contains(result, "setup required") {
+		t.Error("Ineligible skill should be marked with setup required")
 	}
 }
 
@@ -56,7 +63,11 @@ func TestBuildSkillIndexMultiple(t *testing.T) {
 	if !strings.Contains(result, "beta") {
 		t.Error("Missing beta skill")
 	}
-	if strings.Contains(result, "missing") {
-		t.Error("Ineligible skill should not appear in index")
+	// Ineligible skills should appear with setup-required marker
+	if !strings.Contains(result, "missing") {
+		t.Error("Ineligible skill should appear in index for discoverability")
+	}
+	if !strings.Contains(result, "setup required") {
+		t.Error("Ineligible skill should be marked with setup required")
 	}
 }

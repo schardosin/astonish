@@ -8,10 +8,12 @@ import (
 	"strings"
 )
 
-// SyncSkillsToMemory writes eligible skill files to the memory/skills/ directory
+// SyncSkillsToMemory writes all installed skill files to the memory/skills/ directory
 // so the existing memory indexer picks them up and indexes them in the vector store.
+// Both eligible and ineligible skills are synced for discoverability — ineligible
+// skills include a note about missing requirements so the agent can inform the user.
 // Files are only written when content changes (hash comparison).
-// Orphaned skill files (from skills that were removed or became ineligible) are cleaned up.
+// Orphaned skill files (from skills that were removed) are cleaned up.
 // For skills with a directory, supplementary .md files are also synced using
 // the naming convention {name}--{filename}.md (e.g., docker--commands.md).
 func SyncSkillsToMemory(skills []Skill, memoryDir string) error {
@@ -23,17 +25,23 @@ func SyncSkillsToMemory(skills []Skill, memoryDir string) error {
 	expected := make(map[string]bool)
 
 	for _, skill := range skills {
-		if !skill.IsEligible() {
-			continue
-		}
-
 		// Sync the main SKILL.md content
 		filename := skill.Name + ".md"
 		expected[filename] = true
 		outPath := filepath.Join(skillsDir, filename)
 
 		// Build indexable content with name/description at top for better embedding
-		content := fmt.Sprintf("# Skill: %s\n\n%s\n\n%s\n", skill.Name, skill.Description, skill.Content)
+		content := fmt.Sprintf("# Skill: %s\n\n%s\n\n", skill.Name, skill.Description)
+
+		// For ineligible skills, add a note about missing requirements
+		if !skill.IsEligible() {
+			missing := skill.MissingRequirements()
+			content += fmt.Sprintf("> **Setup required:** This skill needs: %s. "+
+				"Ask the user to configure these before using this skill.\n\n",
+				strings.Join(missing, ", "))
+		}
+
+		content += skill.Content + "\n"
 
 		// Skip write if content hasn't changed
 		if existing, err := os.ReadFile(outPath); err == nil {
@@ -49,7 +57,7 @@ func SyncSkillsToMemory(skills []Skill, memoryDir string) error {
 
 	// Second pass: sync supplementary .md files from skill directories
 	for _, skill := range skills {
-		if !skill.IsEligible() || skill.Directory == "" {
+		if skill.Directory == "" {
 			continue
 		}
 
@@ -93,7 +101,7 @@ func SyncSkillsToMemory(skills []Skill, memoryDir string) error {
 		}
 	}
 
-	// Clean up skills that no longer exist or are no longer eligible
+	// Clean up skills that no longer exist
 	entries, err := os.ReadDir(skillsDir)
 	if err != nil {
 		return nil // Not critical

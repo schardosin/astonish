@@ -78,11 +78,11 @@ func TestSapTransport_GetToken_Success(t *testing.T) {
 		if err := r.ParseForm(); err != nil {
 			t.Fatal(err)
 		}
-		if r.FormValue("grant_type") != "client_credentials" {
-			t.Errorf("expected grant_type=client_credentials, got %q", r.FormValue("grant_type"))
+		if r.Form.Get("grant_type") != "client_credentials" {
+			t.Errorf("expected grant_type=client_credentials, got %q", r.Form.Get("grant_type"))
 		}
-		if r.FormValue("client_id") != "test-id" {
-			t.Errorf("expected client_id=test-id, got %q", r.FormValue("client_id"))
+		if r.Form.Get("client_id") != "test-id" {
+			t.Errorf("expected client_id=test-id, got %q", r.Form.Get("client_id"))
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{

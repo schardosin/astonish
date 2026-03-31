@@ -1415,7 +1415,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// --- 6b2. Wire knowledge search callbacks ---
 	if memorySearchAvailable && memStore != nil {
 		chatAgent.KnowledgeSearch = func(ctx context.Context, query string, maxResults int, minScore float64) ([]agent.KnowledgeSearchResult, error) {
-			results, err := memStore.Search(ctx, query, maxResults, minScore)
+			results, err := memStore.SearchHybrid(ctx, query, maxResults, minScore)
 			if err != nil {
 				return nil, err
 			}
@@ -1432,7 +1432,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 
 		chatAgent.KnowledgeSearchByCategory = func(ctx context.Context, query string, maxResults int, minScore float64, category string) ([]agent.KnowledgeSearchResult, error) {
-			results, err := memStore.SearchByCategory(ctx, query, maxResults, minScore, category)
+			results, err := memStore.SearchHybridByCategory(ctx, query, maxResults, minScore, category)
 			if err != nil {
 				return nil, err
 			}

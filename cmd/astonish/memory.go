@@ -184,7 +184,7 @@ func handleMemorySearchCommand(args []string) error {
 	fmt.Printf("Indexed %d chunks in %s. Searching...\n\n", chunkCount, indexTime.Round(time.Millisecond))
 
 	// Run search
-	results, err := env.store.Search(context.Background(), query, *maxResults, *minScore)
+	results, err := env.store.SearchHybrid(context.Background(), query, *maxResults, *minScore)
 	if err != nil {
 		return fmt.Errorf("search failed: %w", err)
 	}

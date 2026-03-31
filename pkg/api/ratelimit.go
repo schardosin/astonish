@@ -16,6 +16,7 @@ type RateLimiter struct {
 	windows map[string]*slidingWindow
 	limit   int           // max requests per window
 	window  time.Duration // window size
+	done    chan struct{} // closed by Close() to stop the cleanup goroutine
 }
 
 // slidingWindow tracks request timestamps for a single key.
@@ -30,10 +31,21 @@ func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 		windows: make(map[string]*slidingWindow),
 		limit:   limit,
 		window:  window,
+		done:    make(chan struct{}),
 	}
 	// Periodic cleanup of expired entries
 	go rl.cleanup()
 	return rl
+}
+
+// Close stops the background cleanup goroutine. Safe to call multiple times.
+func (rl *RateLimiter) Close() {
+	select {
+	case <-rl.done:
+		// already closed
+	default:
+		close(rl.done)
+	}
 }
 
 // Allow checks whether a request from the given key should be allowed.
@@ -71,15 +83,20 @@ func (rl *RateLimiter) cleanup() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		rl.mu.Lock()
-		cutoff := time.Now().Add(-2 * rl.window)
-		for key, w := range rl.windows {
-			if w.lastAccess.Before(cutoff) {
-				delete(rl.windows, key)
+	for {
+		select {
+		case <-ticker.C:
+			rl.mu.Lock()
+			cutoff := time.Now().Add(-2 * rl.window)
+			for key, w := range rl.windows {
+				if w.lastAccess.Before(cutoff) {
+					delete(rl.windows, key)
+				}
 			}
+			rl.mu.Unlock()
+		case <-rl.done:
+			return
 		}
-		rl.mu.Unlock()
 	}
 }
 
@@ -89,6 +106,16 @@ type RateLimitConfig struct {
 	Auth *RateLimiter
 	// API protects authenticated API endpoints: 120 req/min per IP.
 	API *RateLimiter
+}
+
+// Close shuts down the background cleanup goroutines for all rate limiters.
+func (c *RateLimitConfig) Close() {
+	if c.Auth != nil {
+		c.Auth.Close()
+	}
+	if c.API != nil {
+		c.API.Close()
+	}
 }
 
 // NewDefaultRateLimitConfig creates rate limiters with sensible defaults.

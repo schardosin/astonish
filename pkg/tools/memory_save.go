@@ -119,7 +119,7 @@ func MemorySave(mgr *memory.Manager, store MemorySaveStore) func(ctx tool.Contex
 
 		// Trigger reindex
 		if store != nil {
-			go func() {
+			go func() { //nolint:gosec // G118: intentionally uses context.Background — reindex must outlive the request
 				if err := store.ReindexFile(context.Background(), clean); err != nil {
 					slog.Warn("failed to reindex memory file after save", "file", clean, "error", err)
 				}

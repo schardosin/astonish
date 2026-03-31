@@ -202,7 +202,7 @@ func (r *MemoryReflector) executeSave(ctx context.Context, fc *genai.FunctionCal
 
 		// Trigger reindex for MEMORY.md
 		if r.MemoryStore != nil {
-			go func() {
+			go func() { //nolint:gosec // G118: intentionally uses context.Background — reindex must outlive the request
 				if err := r.MemoryStore.ReindexFile(context.Background(), "MEMORY.md"); err != nil {
 					slog.Warn("failed to reindex memory file", "file", "MEMORY.md", "error", err)
 				}
@@ -255,7 +255,7 @@ func (r *MemoryReflector) executeSave(ctx context.Context, fc *genai.FunctionCal
 
 		// Trigger reindex
 		if r.MemoryStore != nil {
-			go func() {
+			go func() { //nolint:gosec // G118: intentionally uses context.Background — reindex must outlive the request
 				if err := r.MemoryStore.ReindexFile(context.Background(), targetFile); err != nil {
 					slog.Warn("failed to reindex memory file", "file", targetFile, "error", err)
 				}

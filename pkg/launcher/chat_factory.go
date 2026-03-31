@@ -321,7 +321,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 								if skillWorkDir == "" {
 									skillWorkDir, _ = os.Getwd()
 								}
-								skillWatchCtx, skillWatchCancel := context.WithCancel(context.Background())
+								skillWatchCtx, skillWatchCancel := context.WithCancel(context.Background()) //nolint:gosec // G118: long-lived watcher; cancel stored in cleanups slice
 								go func() {
 									if wErr := skills.WatchSkillDirs(skillWatchCtx, skills.WatcherConfig{
 										UserDir:      skillsCfg.GetUserSkillsDir(),

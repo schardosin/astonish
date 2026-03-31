@@ -191,7 +191,10 @@ export default function SandboxSettings({ config, onSaved }: SandboxSettingsProp
     setContainersLoading(true)
     setActionError(null)
     fetchContainers()
-      .then((containers) => setContainerData({ containers: containers as unknown as ContainerItem[] }))
+      .then((data) => setContainerData({
+        containers: (data.containers || []) as unknown as ContainerItem[],
+        orphans: (data.orphans || []).map((name: string) => ({ name, session_id: name, status: 'orphan' })) as unknown as ContainerItem[],
+      }))
       .catch(() => setContainerData(null))
       .finally(() => setContainersLoading(false))
   }, [])
@@ -201,7 +204,7 @@ export default function SandboxSettings({ config, onSaved }: SandboxSettingsProp
     setTemplatesLoading(true)
     setTemplateError(null)
     fetchTemplates()
-      .then((templates) => setTemplateData({ templates: templates as unknown as TemplateItem[] }))
+      .then((data) => setTemplateData({ templates: (data.templates || []) as unknown as TemplateItem[] }))
       .catch(() => setTemplateData(null))
       .finally(() => setTemplatesLoading(false))
   }, [])

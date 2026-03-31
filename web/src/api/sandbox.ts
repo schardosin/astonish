@@ -136,7 +136,7 @@ export async function fetchSandboxDetails(): Promise<SandboxDetails> {
   return res.json()
 }
 
-export async function fetchContainers(): Promise<Container[]> {
+export async function fetchContainers(): Promise<{ containers: Container[], orphans?: string[] }> {
   const res = await fetch('/api/sandbox/containers')
   if (!res.ok) throw new Error(`Failed to fetch containers: ${res.statusText}`)
   return res.json()
@@ -160,7 +160,7 @@ export async function pruneOrphans(): Promise<Record<string, unknown>> {
   return res.json()
 }
 
-export async function fetchTemplates(): Promise<Template[]> {
+export async function fetchTemplates(): Promise<{ templates: Template[] }> {
   const res = await fetch('/api/sandbox/templates')
   if (!res.ok) throw new Error(`Failed to fetch templates: ${res.statusText}`)
   return res.json()

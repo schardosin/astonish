@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -75,14 +77,19 @@ func TestSapTransport_GetToken_Success(t *testing.T) {
 		if !strings.HasSuffix(r.URL.Path, "/oauth/token") {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
-		if err := r.ParseForm(); err != nil {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
 			t.Fatal(err)
 		}
-		if r.Form.Get("grant_type") != "client_credentials" {
-			t.Errorf("expected grant_type=client_credentials, got %q", r.Form.Get("grant_type"))
+		form, err := url.ParseQuery(string(body))
+		if err != nil {
+			t.Fatal(err)
 		}
-		if r.Form.Get("client_id") != "test-id" {
-			t.Errorf("expected client_id=test-id, got %q", r.Form.Get("client_id"))
+		if form.Get("grant_type") != "client_credentials" {
+			t.Errorf("expected grant_type=client_credentials, got %q", form.Get("grant_type"))
+		}
+		if form.Get("client_id") != "test-id" {
+			t.Errorf("expected client_id=test-id, got %q", form.Get("client_id"))
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{

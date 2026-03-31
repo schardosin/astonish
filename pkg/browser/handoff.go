@@ -68,7 +68,13 @@ type HandoffInfo struct {
 }
 
 var wsUpgrader = websocket.Upgrader{
-	CheckOrigin: func(_ *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool {
+		host, _, err := net.SplitHostPort(r.Host)
+		if err != nil {
+			host = r.Host // no port in Host header
+		}
+		return host == "127.0.0.1" || host == "::1" || host == "localhost"
+	},
 }
 
 // NewHandoffServer creates a new handoff server.

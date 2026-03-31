@@ -214,6 +214,7 @@ func (am *AuthManager) handleCheckStatus(w http.ResponseWriter, r *http.Request)
 		Path:     "/",
 		MaxAge:   cookieMaxAge,
 		HttpOnly: true,
+		Secure:   r.TLS != nil,
 		SameSite: http.SameSiteStrictMode,
 	})
 

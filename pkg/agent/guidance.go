@@ -18,6 +18,7 @@ var GuidanceDocs = map[string]string{
 	"task-delegation":       guidanceTaskDelegation,
 	"process-management":    guidanceProcessManagement,
 	"web-access":            guidanceWebAccess,
+	"web-research":          guidanceWebResearch,
 	"memory-usage":          guidanceMemoryUsage,
 	"sandbox-templates":     guidanceSandboxTemplates,
 }

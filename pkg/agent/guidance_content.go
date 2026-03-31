@@ -313,3 +313,43 @@ delegate_tasks(tasks: [{
 - **Use the repo name as the template name.** For ` + "`acme/billing-api`" + `, use ` + "`billing-api`" + `. This keeps naming consistent and predictable.
 - **Verify before saving.** Run the build, run tests (or a drill suite), and confirm everything works before freezing the template. A broken template means every fleet session starts broken.
 `
+
+const guidanceWebResearch = `# Guidance: Web Research & Information Gathering
+
+When you need to research information from the web — product prices, comparisons, current data, fact-finding — follow this strategy.
+
+## Use web search API as the primary research tool
+
+For ANY task that involves finding information across multiple sources (product prices, stock availability, comparisons, reviews, current events), delegate a SINGLE task with the ` + "`web`" + ` tool group to search via the configured web search tool (e.g., ` + "`tavily-search`" + `).
+
+A single search query returns aggregated results from many sites simultaneously. This is faster, more comprehensive, and more reliable than visiting individual sites with the browser.
+
+**Examples of search-first tasks:**
+- "Find the best price for [product]" → search for the SKU or model number
+- "Compare prices across retailers" → one search covers Amazon, Newegg, B&H, Best Buy, etc. via aggregation sites like PCPartPicker and Google Shopping
+- "What is the current price of [stock/crypto]?" → search returns live quotes
+- "Find reviews for [product]" → search aggregates review sites
+- "What are the specs of [product]?" → search finds spec sheets and comparisons
+
+## Do NOT use browser agents to visit individual retail or data sites
+
+Launching multiple browser agents to individually visit Amazon, Newegg, B&H Photo, etc. is the WRONG approach:
+- **Slow**: Each browser session takes minutes with navigation, rendering, and anti-bot delays. Search API returns in seconds.
+- **Fragile**: Retail sites have anti-bot measures, redirects, CAPTCHAs, and cookie walls that cause browser agents to get stuck in loops.
+- **Redundant**: Price aggregation sites (PCPartPicker, Google Shopping, Pangoly, CamelCamelCamel) already compile multi-retailer data. A single search query finds them.
+- **Wasteful**: Parallel browser agents share browser state, causing redirect cross-contamination between sessions.
+
+## When browser IS appropriate for research
+
+Use the browser only as a targeted follow-up, not as the primary discovery method:
+- Verify a specific price or detail on one retailer page when search data might be stale
+- Access content behind a login (with stored credentials)
+- Interact with a page (add to cart, configure a product, fill forms, complete checkout)
+- Extract data from a JS-heavy page that ` + "`web_fetch`" + ` and search cannot parse
+
+## Recommended strategy: Search → Compile → Verify (optional)
+
+1. **Search**: Delegate ONE ` + "`web`" + ` task to search for the topic, product, or SKU
+2. **Compile**: Format the search results into the user's requested format (table, summary, etc.)
+3. **Verify** (only if needed): If a specific data point seems stale, missing, or suspicious, delegate ONE browser task to check that specific URL — never multiple parallel browser agents for the same research goal
+`

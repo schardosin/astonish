@@ -64,7 +64,6 @@ type ChatAgent struct {
 	FlowContextBuilder        *FlowContextBuilder           // Converts flow YAML to execution plan
 	KnowledgeSearch           KnowledgeSearchFunc           // Auto-retrieve relevant knowledge per turn (nil = disabled)
 	KnowledgeSearchByCategory KnowledgeSearchByCategoryFunc // Auto-retrieve guidance docs per turn (nil = disabled)
-
 	// Tool discovery
 	ToolIndex *ToolIndex // Semantic tool index for auto-discovery (nil = disabled)
 

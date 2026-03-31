@@ -210,33 +210,6 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					slog.Warn("failed to create memory directory", "error", err)
 				}
 			} else {
-				// Pre-sync skills to memory directory BEFORE indexing starts,
-				// so skill files are included in the initial IndexAll() walk.
-				if cfg.AppConfig.Skills.IsSkillsEnabled() {
-					skillsCfg := &cfg.AppConfig.Skills
-					workDir := cfg.WorkspaceDir
-					if workDir == "" {
-						if wd, wdErr := os.Getwd(); wdErr != nil {
-							slog.Warn("failed to get working directory for skills", "error", wdErr)
-						} else {
-							workDir = wd
-						}
-					}
-					preSkills, psErr := skills.LoadSkills(
-						skillsCfg.GetUserSkillsDir(),
-						skillsCfg.ExtraDirs,
-						workDir,
-						skillsCfg.Allowlist,
-					)
-					if psErr == nil && len(preSkills) > 0 {
-						if syncErr := skills.SyncSkillsToMemory(preSkills, memDir); syncErr != nil {
-							if cfg.DebugMode {
-								slog.Warn("failed to pre-sync skills to memory", "error", syncErr)
-							}
-						}
-					}
-				}
-
 				var embGetSecret config.SecretGetter
 				if credStore != nil {
 					embGetSecret = credStore.GetSecret
@@ -316,37 +289,6 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 							}()
 							cleanups = append(cleanups, watchCancel)
 
-							// Start skills directory watcher — watches skill source dirs
-							// and re-syncs to memory/skills/ when SKILL.md files change.
-							// The memory watcher above then picks up those changes.
-							if cfg.AppConfig.Skills.IsSkillsEnabled() {
-								skillsCfg := &cfg.AppConfig.Skills
-								skillWorkDir := cfg.WorkspaceDir
-								if skillWorkDir == "" {
-									if wd, wdErr := os.Getwd(); wdErr != nil {
-										slog.Warn("failed to get working directory for skill watcher", "error", wdErr)
-									} else {
-										skillWorkDir = wd
-									}
-								}
-								skillWatchCtx, skillWatchCancel := context.WithCancel(context.Background())
-								go func() {
-									if wErr := skills.WatchSkillDirs(skillWatchCtx, skills.WatcherConfig{
-										UserDir:      skillsCfg.GetUserSkillsDir(),
-										ExtraDirs:    skillsCfg.ExtraDirs,
-										WorkspaceDir: skillWorkDir,
-										Allowlist:    skillsCfg.Allowlist,
-										MemoryDir:    memDir,
-										DebounceMs:   debounceMs + 500, // Slightly longer than memory watcher
-										DebugMode:    cfg.DebugMode,
-									}); wErr != nil {
-										if cfg.DebugMode {
-											slog.Warn("skills watcher error", "error", wErr)
-										}
-									}
-								}()
-								cleanups = append(cleanups, skillWatchCancel)
-							}
 						}
 					}
 				}

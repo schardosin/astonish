@@ -28,9 +28,9 @@ type Indexer struct {
 const fileIndexName = "file_index.json"
 
 // fileIndexVersion is bumped when the chunking/embedding strategy changes
-// to force a full re-index on the next startup. v3 → v4: heading-aware
-// chunking that splits at ## boundaries for better semantic coherence.
-const fileIndexVersion = 4
+// to force a full re-index on the next startup. v4 → v5: skills removed
+// from vector store (now served on-demand via skill_lookup tool).
+const fileIndexVersion = 5
 
 // fileIndexData is the versioned wrapper for the persisted file index.
 type fileIndexData struct {
@@ -75,6 +75,11 @@ func (idx *Indexer) IndexAll(ctx context.Context) error {
 		// Skip legacy tools-ref directory (tool discovery now uses
 		// the dedicated "tools" vector collection in tool_index.go)
 		if d.IsDir() && filepath.Base(path) == "tools-ref" {
+			return filepath.SkipDir
+		}
+		// Skip skills directory — skills are served on-demand via
+		// the skill_lookup tool, not auto-injected from the vector store.
+		if d.IsDir() && filepath.Base(path) == "skills" {
 			return filepath.SkipDir
 		}
 		if !d.IsDir() && strings.HasSuffix(d.Name(), ".md") {
@@ -229,6 +234,10 @@ func (idx *Indexer) WatchAndSync(ctx context.Context, debounceMs int) error {
 		if d.IsDir() {
 			// Skip vectors directory
 			if filepath.Base(path) == "vectors" {
+				return filepath.SkipDir
+			}
+			// Skip skills directory (served on-demand via skill_lookup)
+			if filepath.Base(path) == "skills" {
 				return filepath.SkipDir
 			}
 			return watcher.Add(path)

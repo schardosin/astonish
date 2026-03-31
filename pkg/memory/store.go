@@ -301,6 +301,17 @@ const rrfK = 60.0
 // and k=60: 2 × 1/(60+1) ≈ 0.03279. Used to normalize scores to 0-1.
 var maxRRFScore = 2.0 / (rrfK + 1.0)
 
+// fusedEntry holds a single result during RRF fusion, accumulating scores
+// from both vector and BM25 search methods.
+type fusedEntry struct {
+	path      string
+	startLine int
+	endLine   int
+	category  string
+	snippet   string
+	rrfScore  float64
+}
+
 // SearchHybrid performs hybrid search: vector (semantic) + BM25 (keyword),
 // fused with Reciprocal Rank Fusion. This solves the "query dilution" problem
 // where specific terms (product specs, model numbers) shift the dense embedding
@@ -396,14 +407,6 @@ func (s *Store) searchHybrid(ctx context.Context, query string, bm25Query string
 	bm25Results := s.bm25.search(bm25Input, candidateK, category)
 
 	// --- Reciprocal Rank Fusion ---
-	type fusedEntry struct {
-		path      string
-		startLine int
-		endLine   int
-		category  string
-		snippet   string
-		rrfScore  float64
-	}
 	fused := make(map[string]*fusedEntry) // keyed by chunkID (path:startLine:endLine)
 
 	// Helper to build a stable key for deduplication
@@ -449,6 +452,17 @@ func (s *Store) searchHybrid(ctx context.Context, query string, bm25Query string
 		e.rrfScore += 1.0 / (rrfK + float64(rank+1))
 	}
 
+	// --- Topic relevance penalty ---
+	// When conversational context was used for BM25 (bm25Query != ""),
+	// penalize results whose content has zero keyword overlap with the
+	// conversation topic. This filters noise like K8s/AWS docs appearing
+	// in a Proxmox follow-up, while keeping results that share at least
+	// one topic keyword. Penalized results typically fall below minScore
+	// and get filtered out naturally.
+	if bm25Query != "" {
+		applyTopicRelevancePenalty(fused, bm25Query)
+	}
+
 	// Collect, normalize, sort, and filter
 	results := make([]SearchResult, 0, len(fused))
 	for _, e := range fused {
@@ -475,4 +489,83 @@ func (s *Store) searchHybrid(ctx context.Context, query string, bm25Query string
 	}
 
 	return results, nil
+}
+
+// topicPenaltyFactor is the score multiplier applied to results with zero
+// topic keyword overlap when conversational context is active. Setting this
+// to 0.5 means zero-overlap results get halved, which typically pushes them
+// below the default minScore (0.30) since most noise scores 0.48-0.50
+// after RRF normalization (0.50 * 0.5 = 0.25 < 0.30).
+const topicPenaltyFactor = 0.5
+
+// topicStopWords are ultra-common words that shouldn't count as topic signal.
+// These appear in nearly every response and would cause false topic overlap.
+var topicStopWords = map[string]bool{
+	"the": true, "a": true, "an": true, "is": true, "are": true,
+	"was": true, "were": true, "be": true, "been": true, "being": true,
+	"have": true, "has": true, "had": true, "do": true, "does": true,
+	"did": true, "will": true, "would": true, "could": true, "should": true,
+	"may": true, "might": true, "shall": true, "can": true, "need": true,
+	"to": true, "of": true, "in": true, "for": true, "on": true,
+	"with": true, "at": true, "by": true, "from": true, "as": true,
+	"into": true, "about": true, "like": true, "through": true, "after": true,
+	"over": true, "between": true, "out": true, "against": true, "during": true,
+	"without": true, "before": true, "under": true, "around": true, "among": true,
+	"and": true, "but": true, "or": true, "nor": true, "not": true,
+	"so": true, "yet": true, "both": true, "either": true, "neither": true,
+	"each": true, "every": true, "all": true, "any": true, "few": true,
+	"more": true, "most": true, "other": true, "some": true, "such": true,
+	"no": true, "only": true, "own": true, "same": true, "than": true,
+	"too": true, "very": true, "just": true, "also": true, "now": true,
+	"it": true, "its": true, "i": true, "me": true, "my": true,
+	"you": true, "your": true, "he": true, "she": true, "we": true,
+	"they": true, "them": true, "their": true, "this": true, "that": true,
+	"these": true, "those": true, "here": true, "there": true, "what": true,
+	"which": true, "who": true, "whom": true, "how": true, "when": true,
+	"where": true, "why": true, "if": true, "then": true, "else": true,
+	"up": true, "down": true, "much": true, "many": true, "well": true,
+	"back": true, "still": true, "even": true, "get": true, "got": true,
+	"make": true, "made": true, "see": true, "know": true, "take": true,
+	"come": true, "go": true, "use": true, "used": true, "using": true,
+	"want": true, "provide": true, "show": true, "give": true, "let": true,
+	"tell": true, "ask": true, "try": true, "keep": true, "put": true,
+	"set": true, "run": true, "say": true, "said": true, "new": true,
+	"one": true, "two": true, "first": true, "last": true, "next": true,
+	"right": true, "left": true, "part": true, "yes": true, "ok": true,
+	"sure": true, "please": true, "thanks": true, "thank": true,
+	"information": true, "item": true, "items": true, "list": true,
+	"result": true, "results": true, "data": true, "value": true,
+}
+
+// applyTopicRelevancePenalty penalizes fused results whose content shares
+// zero meaningful keywords with the conversational context query. This
+// suppresses noise (e.g., K8s/AWS docs appearing in a Proxmox conversation)
+// while preserving results that have at least one topic keyword in common.
+func applyTopicRelevancePenalty(fused map[string]*fusedEntry, bm25Query string) {
+	// Extract topic keywords from the conversation context
+	contextTokens := bm25Tokenize(bm25Query)
+	topicKeywords := make(map[string]bool, len(contextTokens))
+	for _, tok := range contextTokens {
+		if len(tok) >= 3 && !topicStopWords[tok] {
+			topicKeywords[tok] = true
+		}
+	}
+	if len(topicKeywords) == 0 {
+		return // no meaningful topic keywords, skip penalty
+	}
+
+	// Check each result for topic overlap
+	for _, e := range fused {
+		resultTokens := bm25Tokenize(e.snippet)
+		hasOverlap := false
+		for _, tok := range resultTokens {
+			if topicKeywords[tok] {
+				hasOverlap = true
+				break
+			}
+		}
+		if !hasOverlap {
+			e.rrfScore *= topicPenaltyFactor
+		}
+	}
 }

@@ -5,11 +5,10 @@ import (
 	"strings"
 )
 
-// BuildSkillIndex creates the lightweight Tier 1 skill listing for the system prompt.
+// BuildSkillIndex creates the lightweight skill listing for the system prompt.
 // All installed skills are listed (eligible and ineligible) so the agent can discover
 // them. Ineligible skills are marked with their missing requirements.
-// Full skill content is retrieved on-demand via vector search (automatic)
-// or the skill_lookup tool (explicit).
+// Full skill content is loaded on-demand via the skill_lookup tool.
 func BuildSkillIndex(skills []Skill) string {
 	if len(skills) == 0 {
 		return ""
@@ -18,8 +17,8 @@ func BuildSkillIndex(skills []Skill) string {
 	var sb strings.Builder
 	sb.WriteString("## Available Skills\n\n")
 	sb.WriteString("You have skill guides for the following CLI tools and workflows. ")
-	sb.WriteString("Relevant skills are automatically retrieved when needed via knowledge search. ")
-	sb.WriteString("You can also use the `skill_lookup` tool to load a specific skill by name.\n\n")
+	sb.WriteString("When the user's request relates to any of these topics, you MUST use the `skill_lookup` tool to load the relevant skill by name before proceeding. ")
+	sb.WriteString("Skills are NOT automatically injected — you must explicitly look them up.\n\n")
 
 	for _, skill := range skills {
 		if skill.IsEligible() {

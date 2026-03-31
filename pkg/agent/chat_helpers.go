@@ -317,7 +317,6 @@ func deduplicateSearchResults(results []KnowledgeSearchResult) []KnowledgeSearch
 	return deduped
 }
 
-// yieldKnowledgeTrackingEvent emits a content-less session event that records
 // what knowledge was injected (or that none was found) for this turn.
 //
 // Because Content is nil, ADK's ContentsRequestProcessor skips the event when

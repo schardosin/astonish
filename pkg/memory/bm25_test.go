@@ -328,3 +328,112 @@ func TestBM25Search_ConversationalContextBoost(t *testing.T) {
 		t.Error("augmented query with conversation context should find Proxmox docs via keyword matching")
 	}
 }
+
+func TestApplyTopicRelevancePenalty_PenalizesUnrelated(t *testing.T) {
+	t.Parallel()
+	// Simulate fused results from a Proxmox conversation follow-up
+	fused := map[string]*fusedEntry{
+		"proxmox-api:1:10": {
+			path: "tools/proxmox-api.md", startLine: 1, endLine: 10,
+			snippet:  "Proxmox API base URL proxmox server node status memory",
+			rrfScore: 0.016, // roughly 0.49 after normalization
+		},
+		"k8s:1:10": {
+			path: "skills/kubernetes.md", startLine: 1, endLine: 10,
+			snippet:  "kubectl get pods list deployments services",
+			rrfScore: 0.016,
+		},
+		"aws:1:10": {
+			path: "skills/aws.md", startLine: 1, endLine: 10,
+			snippet:  "aws iam list users list roles get user info",
+			rrfScore: 0.016,
+		},
+	}
+
+	// BM25 query contains conversation context about Proxmox
+	bm25Query := "The Proxmox server is using about 35 percent of its 62 GB RAM now provide me the information itemized"
+
+	applyTopicRelevancePenalty(fused, bm25Query)
+
+	// Proxmox doc should NOT be penalized (shares "proxmox", "server", "memory")
+	if fused["proxmox-api:1:10"].rrfScore < 0.015 {
+		t.Errorf("Proxmox doc should not be penalized, score = %f", fused["proxmox-api:1:10"].rrfScore)
+	}
+
+	// K8s doc should be penalized (zero overlap with proxmox context)
+	if fused["k8s:1:10"].rrfScore >= 0.016 {
+		t.Errorf("K8s doc should be penalized, score = %f", fused["k8s:1:10"].rrfScore)
+	}
+	if fused["k8s:1:10"].rrfScore != 0.016*topicPenaltyFactor {
+		t.Errorf("K8s doc should be penalized by factor %f, got score %f (expected %f)",
+			topicPenaltyFactor, fused["k8s:1:10"].rrfScore, 0.016*topicPenaltyFactor)
+	}
+
+	// AWS doc should be penalized (zero overlap)
+	if fused["aws:1:10"].rrfScore >= 0.016 {
+		t.Errorf("AWS doc should be penalized, score = %f", fused["aws:1:10"].rrfScore)
+	}
+}
+
+func TestApplyTopicRelevancePenalty_NoContextNoPenalty(t *testing.T) {
+	t.Parallel()
+	// When bm25Query is empty, no penalty should be applied
+	fused := map[string]*fusedEntry{
+		"k8s:1:10": {
+			path: "skills/kubernetes.md", startLine: 1, endLine: 10,
+			snippet:  "kubectl get pods",
+			rrfScore: 0.016,
+		},
+	}
+
+	// Empty context — function should return immediately
+	applyTopicRelevancePenalty(fused, "")
+
+	if fused["k8s:1:10"].rrfScore != 0.016 {
+		t.Errorf("No penalty should be applied with empty context, score = %f", fused["k8s:1:10"].rrfScore)
+	}
+}
+
+func TestApplyTopicRelevancePenalty_PartialOverlapKept(t *testing.T) {
+	t.Parallel()
+	// A result that shares even one meaningful keyword should NOT be penalized
+	fused := map[string]*fusedEntry{
+		"memory-doc:1:10": {
+			path: "guidance/memory-usage.md", startLine: 1, endLine: 10,
+			snippet:  "How to check memory usage on a server",
+			rrfScore: 0.016,
+		},
+	}
+
+	bm25Query := "The Proxmox server is using 35 percent of its memory"
+
+	applyTopicRelevancePenalty(fused, bm25Query)
+
+	// Should NOT be penalized — shares "memory" and "server" with context
+	if fused["memory-doc:1:10"].rrfScore != 0.016 {
+		t.Errorf("Doc with topic overlap should not be penalized, score = %f", fused["memory-doc:1:10"].rrfScore)
+	}
+}
+
+func TestApplyTopicRelevancePenalty_StopWordsIgnored(t *testing.T) {
+	t.Parallel()
+	// Results that only share stop words should still be penalized
+	fused := map[string]*fusedEntry{
+		"unrelated:1:10": {
+			path: "unrelated.md", startLine: 1, endLine: 10,
+			snippet:  "provide the information about this item",
+			rrfScore: 0.016,
+		},
+	}
+
+	// Context with mostly stop words but "proxmox" as the real topic
+	bm25Query := "now provide me the information about the proxmox server"
+
+	applyTopicRelevancePenalty(fused, bm25Query)
+
+	// "provide", "information", "item" are stop words — should not count as overlap
+	// The doc has no real topic keywords ("proxmox", "server") → penalized
+	if fused["unrelated:1:10"].rrfScore >= 0.016 {
+		t.Errorf("Doc sharing only stop words should be penalized, score = %f", fused["unrelated:1:10"].rrfScore)
+	}
+}

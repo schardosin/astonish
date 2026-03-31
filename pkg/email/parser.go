@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"mime/multipart"
 	"net/mail"
@@ -110,7 +111,9 @@ func parseMultipart(body io.Reader, boundary string, result *ParsedBody, maxChar
 		case strings.HasPrefix(partMediaType, "multipart/"):
 			partBoundary := partParams["boundary"]
 			if partBoundary != "" {
-				_ = parseMultipart(part, partBoundary, result, maxChars)
+				if err := parseMultipart(part, partBoundary, result, maxChars); err != nil {
+					slog.Debug("nested multipart parse error", "boundary", partBoundary, "error", err)
+				}
 			}
 
 		case isAttachment(disposition, part.FileName()):

@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -225,11 +226,13 @@ func newSessionCommand() *Command {
 			}
 
 			// Delete the existing session so the next message creates a fresh one.
-			_ = cc.SessionService.Delete(ctx, &session.DeleteRequest{
+			if err := cc.SessionService.Delete(ctx, &session.DeleteRequest{
 				AppName:   cc.AppName,
 				UserID:    cc.UserID,
 				SessionID: cc.SessionKey,
-			})
+			}); err != nil {
+				slog.Warn("failed to delete session during reset", "session", cc.SessionKey, "error", err)
+			}
 
 			return welcomeMessage(cc.SenderName), nil
 		},

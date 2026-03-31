@@ -3,6 +3,7 @@ package flowstore
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -100,7 +101,11 @@ func (s *Store) FetchManifestForceRefresh(tap *Tap) (*Manifest, error) {
 		rawURL = fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/manifest.yaml", path, sha)
 	} else {
 		// Enterprise: use refs/heads as fallback
-		rawURL, token, _ = buildRawGitHubURLWithRefs(tap.URL, branch, "manifest.yaml")
+		var urlErr error
+		rawURL, token, urlErr = buildRawGitHubURLWithRefs(tap.URL, branch, "manifest.yaml")
+		if urlErr != nil {
+			slog.Debug("failed to build GitHub URL with refs", "url", tap.URL, "error", urlErr)
+		}
 	}
 
 	manifest, err := s.fetchAndParseManifestRawFresh(rawURL, token)

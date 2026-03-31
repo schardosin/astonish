@@ -149,8 +149,7 @@ func SandboxStatusHandler(w http.ResponseWriter, r *http.Request) {
 		BaseTemplateExists: baseTemplateExists,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	respondJSON(w, http.StatusOK, resp)
 }
 
 // SandboxOptionalToolsHandler handles GET /api/sandbox/optional-tools.
@@ -168,15 +167,14 @@ func SandboxOptionalToolsHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"tools": resp})
+	respondJSON(w, http.StatusOK, map[string]any{"tools": resp})
 }
 
 // SandboxInitHandler handles POST /api/sandbox/init.
 func SandboxInitHandler(w http.ResponseWriter, r *http.Request) {
 	var req SandboxInitRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, fmt.Sprintf("invalid request: %v", err))
 		return
 	}
 
@@ -185,25 +183,25 @@ func SandboxInitHandler(w http.ResponseWriter, r *http.Request) {
 		// Ensure the Docker container is running for init
 		if !sandbox.IsIncusDockerContainerRunning() {
 			if err := sandbox.EnsureIncusDockerContainer(); err != nil {
-				http.Error(w, fmt.Sprintf("failed to start Docker+Incus: %v", err), http.StatusServiceUnavailable)
+				respondError(w, http.StatusServiceUnavailable, fmt.Sprintf("failed to start Docker+Incus: %v", err))
 				return
 			}
 		}
 	}
 	if platform == sandbox.PlatformUnsupported {
-		http.Error(w, fmt.Sprintf("sandbox unavailable: %s", reason), http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, fmt.Sprintf("sandbox unavailable: %s", reason))
 		return
 	}
 
 	client, err := sandbox.Connect(platform)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to connect to Incus: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to connect to Incus: %v", err))
 		return
 	}
 
 	containerName := sandbox.TemplateName(sandbox.BaseTemplate)
 	if client.InstanceExists(containerName) {
-		http.Error(w, "base template already exists", http.StatusConflict)
+		respondError(w, http.StatusConflict, "base template already exists")
 		return
 	}
 
@@ -213,7 +211,7 @@ func SandboxInitHandler(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "streaming not supported")
 		return
 	}
 
@@ -298,8 +296,7 @@ func SandboxDetailsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	respondJSON(w, http.StatusOK, resp)
 }
 
 // SandboxContainerListHandler handles GET /api/sandbox/containers.
@@ -307,13 +304,13 @@ func SandboxDetailsHandler(w http.ResponseWriter, r *http.Request) {
 func SandboxContainerListHandler(w http.ResponseWriter, r *http.Request) {
 	client, err := sandboxConnect()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 
 	sessRegistry, err := sandbox.NewSessionRegistry()
 	if err != nil {
-		http.Error(w, "failed to load session registry: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to load session registry: "+err.Error())
 		return
 	}
 
@@ -393,8 +390,7 @@ func SandboxContainerListHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(ContainerListResponse{
+	respondJSON(w, http.StatusOK, ContainerListResponse{
 		Containers: containers,
 		Orphans:    orphans,
 	})
@@ -405,36 +401,35 @@ func SandboxContainerListHandler(w http.ResponseWriter, r *http.Request) {
 func SandboxContainerDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 	if id == "" {
-		http.Error(w, "missing container/session id", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "missing container/session id")
 		return
 	}
 
 	client, err := sandboxConnect()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 
 	sessRegistry, err := sandbox.NewSessionRegistry()
 	if err != nil {
-		http.Error(w, "failed to load session registry: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to load session registry: "+err.Error())
 		return
 	}
 
 	// Resolve to session ID (accepts session ID, container name, or prefix)
 	sessionID, found := sessRegistry.ResolveSessionID(id)
 	if !found {
-		http.Error(w, "container not found: "+id, http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "container not found: "+id)
 		return
 	}
 
 	if err := sandbox.DestroyForSession(client, sessRegistry, sessionID); err != nil {
-		http.Error(w, "failed to destroy container: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to destroy container: "+err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+	respondJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
 // SandboxPruneHandler handles POST /api/sandbox/prune.
@@ -442,13 +437,13 @@ func SandboxContainerDeleteHandler(w http.ResponseWriter, r *http.Request) {
 func SandboxPruneHandler(w http.ResponseWriter, r *http.Request) {
 	client, err := sandboxConnect()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 
 	sessRegistry, err := sandbox.NewSessionRegistry()
 	if err != nil {
-		http.Error(w, "failed to load session registry: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to load session registry: "+err.Error())
 		return
 	}
 
@@ -469,12 +464,11 @@ func SandboxPruneHandler(w http.ResponseWriter, r *http.Request) {
 
 	pruned, err := sandbox.PruneOrphans(client, sessRegistry, existingSessionIDs)
 	if err != nil {
-		http.Error(w, "prune failed: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "prune failed: "+err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"pruned": pruned})
+	respondJSON(w, http.StatusOK, map[string]any{"pruned": pruned})
 }
 
 // SandboxTemplateListHandler handles GET /api/sandbox/templates.
@@ -482,7 +476,7 @@ func SandboxPruneHandler(w http.ResponseWriter, r *http.Request) {
 func SandboxTemplateListHandler(w http.ResponseWriter, r *http.Request) {
 	tplRegistry, err := sandbox.NewTemplateRegistry()
 	if err != nil {
-		http.Error(w, "failed to load template registry: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to load template registry: "+err.Error())
 		return
 	}
 
@@ -501,8 +495,7 @@ func SandboxTemplateListHandler(w http.ResponseWriter, r *http.Request) {
 		templates = append(templates, info)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(TemplateListResponse{Templates: templates})
+	respondJSON(w, http.StatusOK, TemplateListResponse{Templates: templates})
 }
 
 // SandboxTemplateInfoHandler handles GET /api/sandbox/templates/{name}.
@@ -510,19 +503,19 @@ func SandboxTemplateListHandler(w http.ResponseWriter, r *http.Request) {
 func SandboxTemplateInfoHandler(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
 	if name == "" {
-		http.Error(w, "missing template name", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "missing template name")
 		return
 	}
 
 	tplRegistry, err := sandbox.NewTemplateRegistry()
 	if err != nil {
-		http.Error(w, "failed to load template registry: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to load template registry: "+err.Error())
 		return
 	}
 
 	meta := tplRegistry.Get(name)
 	if meta == nil {
-		http.Error(w, "template not found: "+name, http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "template not found: "+name)
 		return
 	}
 
@@ -560,8 +553,7 @@ func SandboxTemplateInfoHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	respondJSON(w, http.StatusOK, resp)
 }
 
 // SandboxTemplateCreateHandler handles POST /api/sandbox/templates.
@@ -569,37 +561,36 @@ func SandboxTemplateInfoHandler(w http.ResponseWriter, r *http.Request) {
 func SandboxTemplateCreateHandler(w http.ResponseWriter, r *http.Request) {
 	var req CreateTemplateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
 	if req.Name == "" {
-		http.Error(w, "template name is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "template name is required")
 		return
 	}
 	if req.Name == "base" {
-		http.Error(w, "cannot create a template named 'base'", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "cannot create a template named 'base'")
 		return
 	}
 
 	client, err := sandboxConnect()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 
 	tplRegistry, err := sandbox.NewTemplateRegistry()
 	if err != nil {
-		http.Error(w, "failed to load template registry: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to load template registry: "+err.Error())
 		return
 	}
 
 	if err := sandbox.CreateTemplate(client, tplRegistry, req.Name, req.Description); err != nil {
-		http.Error(w, "failed to create template: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to create template: "+err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"status": "ok", "name": req.Name})
+	respondJSON(w, http.StatusOK, map[string]any{"status": "ok", "name": req.Name})
 }
 
 // SandboxTemplateDeleteHandler handles DELETE /api/sandbox/templates/{name}.
@@ -607,33 +598,32 @@ func SandboxTemplateCreateHandler(w http.ResponseWriter, r *http.Request) {
 func SandboxTemplateDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
 	if name == "" {
-		http.Error(w, "missing template name", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "missing template name")
 		return
 	}
 	if name == "base" {
-		http.Error(w, "cannot delete the base template", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "cannot delete the base template")
 		return
 	}
 
 	client, err := sandboxConnect()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 
 	tplRegistry, err := sandbox.NewTemplateRegistry()
 	if err != nil {
-		http.Error(w, "failed to load template registry: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to load template registry: "+err.Error())
 		return
 	}
 
 	if err := sandbox.DeleteTemplate(client, tplRegistry, name); err != nil {
-		http.Error(w, "failed to delete template: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to delete template: "+err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+	respondJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
 // SandboxTemplateSnapshotHandler handles POST /api/sandbox/templates/{name}/snapshot.
@@ -641,29 +631,28 @@ func SandboxTemplateDeleteHandler(w http.ResponseWriter, r *http.Request) {
 func SandboxTemplateSnapshotHandler(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
 	if name == "" {
-		http.Error(w, "missing template name", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "missing template name")
 		return
 	}
 
 	client, err := sandboxConnect()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 
 	tplRegistry, err := sandbox.NewTemplateRegistry()
 	if err != nil {
-		http.Error(w, "failed to load template registry: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to load template registry: "+err.Error())
 		return
 	}
 
 	if err := sandbox.SnapshotTemplate(client, tplRegistry, name); err != nil {
-		http.Error(w, "failed to snapshot template: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to snapshot template: "+err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+	respondJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
 // SandboxTemplatePromoteHandler handles POST /api/sandbox/templates/{name}/promote.
@@ -671,33 +660,32 @@ func SandboxTemplateSnapshotHandler(w http.ResponseWriter, r *http.Request) {
 func SandboxTemplatePromoteHandler(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
 	if name == "" {
-		http.Error(w, "missing template name", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "missing template name")
 		return
 	}
 	if name == "base" {
-		http.Error(w, "cannot promote @base to itself", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "cannot promote @base to itself")
 		return
 	}
 
 	client, err := sandboxConnect()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 
 	tplRegistry, err := sandbox.NewTemplateRegistry()
 	if err != nil {
-		http.Error(w, "failed to load template registry: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to load template registry: "+err.Error())
 		return
 	}
 
 	if err := sandbox.PromoteTemplate(client, tplRegistry, name); err != nil {
-		http.Error(w, "failed to promote template: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to promote template: "+err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+	respondJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
 // SandboxRefreshHandler handles POST /api/sandbox/refresh.
@@ -705,23 +693,22 @@ func SandboxTemplatePromoteHandler(w http.ResponseWriter, r *http.Request) {
 func SandboxRefreshHandler(w http.ResponseWriter, r *http.Request) {
 	client, err := sandboxConnect()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 
 	tplRegistry, err := sandbox.NewTemplateRegistry()
 	if err != nil {
-		http.Error(w, "failed to load template registry: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to load template registry: "+err.Error())
 		return
 	}
 
 	if err := sandbox.RefreshAll(client, tplRegistry); err != nil {
-		http.Error(w, "failed to refresh templates: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to refresh templates: "+err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+	respondJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
 // --- Port Exposure ---
@@ -737,37 +724,37 @@ type ExposePortRequest struct {
 func SandboxExposePortHandler(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 	if id == "" {
-		http.Error(w, "missing container id", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "missing container id")
 		return
 	}
 
 	var req ExposePortRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if req.Port < 1 || req.Port > 65535 {
-		http.Error(w, "port must be between 1 and 65535", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "port must be between 1 and 65535")
 		return
 	}
 
 	sessRegistry, err := sandbox.NewSessionRegistry()
 	if err != nil {
-		http.Error(w, "failed to load session registry: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to load session registry: "+err.Error())
 		return
 	}
 
 	// Resolve container name — accept session ID, container name, or prefix
 	containerName := resolveContainerName(sessRegistry, id)
 	if containerName == "" {
-		http.Error(w, fmt.Sprintf("container %q not found", id), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, fmt.Sprintf("container %q not found", id))
 		return
 	}
 
 	added, err := sessRegistry.ExposePort(containerName, req.Port)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -793,8 +780,7 @@ func SandboxExposePortHandler(w http.ResponseWriter, r *http.Request) {
 		GetSubdomainRouter().RegisterHost(proxyHost, containerName, req.Port)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"status":      "ok",
 		"added":       added,
 		"port":        req.Port,
@@ -811,31 +797,31 @@ func SandboxUnexposePortHandler(w http.ResponseWriter, r *http.Request) {
 	portStr := mux.Vars(r)["port"]
 
 	if id == "" || portStr == "" {
-		http.Error(w, "missing container id or port", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "missing container id or port")
 		return
 	}
 
 	port, err := strconv.Atoi(portStr)
 	if err != nil || port < 1 || port > 65535 {
-		http.Error(w, "invalid port number", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid port number")
 		return
 	}
 
 	sessRegistry, err := sandbox.NewSessionRegistry()
 	if err != nil {
-		http.Error(w, "failed to load session registry: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to load session registry: "+err.Error())
 		return
 	}
 
 	containerName := resolveContainerName(sessRegistry, id)
 	if containerName == "" {
-		http.Error(w, fmt.Sprintf("container %q not found", id), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, fmt.Sprintf("container %q not found", id))
 		return
 	}
 
 	removed, err := sessRegistry.UnexposePort(containerName, port)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -852,8 +838,7 @@ func SandboxUnexposePortHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
 		"removed": removed,
 		"port":    port,
@@ -865,7 +850,7 @@ func SandboxUnexposePortHandler(w http.ResponseWriter, r *http.Request) {
 func SandboxPinContainerHandler(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 	if id == "" {
-		http.Error(w, "missing container id", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "missing container id")
 		return
 	}
 
@@ -873,29 +858,28 @@ func SandboxPinContainerHandler(w http.ResponseWriter, r *http.Request) {
 		Pinned bool `json:"pinned"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	sessRegistry, err := sandbox.NewSessionRegistry()
 	if err != nil {
-		http.Error(w, "failed to load session registry: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to load session registry: "+err.Error())
 		return
 	}
 
 	containerName := resolveContainerName(sessRegistry, id)
 	if containerName == "" {
-		http.Error(w, fmt.Sprintf("container %q not found", id), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, fmt.Sprintf("container %q not found", id))
 		return
 	}
 
 	if err := sessRegistry.SetPinned(containerName, req.Pinned); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"status": "ok",
 		"pinned": req.Pinned,
 	})
@@ -906,25 +890,25 @@ func SandboxPinContainerHandler(w http.ResponseWriter, r *http.Request) {
 func SandboxListExposedPortsHandler(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 	if id == "" {
-		http.Error(w, "missing container id", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "missing container id")
 		return
 	}
 
 	sessRegistry, err := sandbox.NewSessionRegistry()
 	if err != nil {
-		http.Error(w, "failed to load session registry: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to load session registry: "+err.Error())
 		return
 	}
 
 	containerName := resolveContainerName(sessRegistry, id)
 	if containerName == "" {
-		http.Error(w, fmt.Sprintf("container %q not found", id), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, fmt.Sprintf("container %q not found", id))
 		return
 	}
 
 	entry := sessRegistry.GetByContainerName(containerName)
 	if entry == nil {
-		http.Error(w, fmt.Sprintf("container %q not found", id), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, fmt.Sprintf("container %q not found", id))
 		return
 	}
 
@@ -950,8 +934,7 @@ func SandboxListExposedPortsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"container":     containerName,
 		"exposed_ports": ports,
 		"host_ports":    hostPorts,

@@ -159,7 +159,7 @@ type UpdateAppSettingsRequest struct {
 func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	cfg, err := config.LoadAppConfig()
 	if err != nil {
-		http.Error(w, "Failed to load config: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to load config: "+err.Error())
 		return
 	}
 
@@ -210,21 +210,20 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		Providers: providers,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	respondJSON(w, http.StatusOK, response)
 }
 
 // UpdateSettingsHandler handles PUT /api/settings/config
 func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	var req UpdateAppSettingsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
 	cfg, err := config.LoadAppConfig()
 	if err != nil {
-		http.Error(w, "Failed to load config: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to load config: "+err.Error())
 		return
 	}
 
@@ -314,7 +313,7 @@ func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := config.SaveAppConfig(cfg); err != nil {
-		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to save config: "+err.Error())
 		return
 	}
 
@@ -336,8 +335,7 @@ func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	// Reset the Studio chat agent so the next request picks up fresh config.
 	GetChatManager().Reset()
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // isMaskedValue checks if a value is a masked placeholder
@@ -349,19 +347,18 @@ func isMaskedValue(val string) bool {
 func GetMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	cfg, err := config.LoadMCPConfigRaw()
 	if err != nil {
-		http.Error(w, "Failed to load MCP config: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to load MCP config: "+err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(cfg)
+	respondJSON(w, http.StatusOK, cfg)
 }
 
 // UpdateMCPSettingsHandler handles PUT /api/settings/mcp
 func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	var newCfg config.MCPConfig
 	if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
@@ -413,7 +410,7 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := config.SaveMCPConfig(&newCfg); err != nil {
-		http.Error(w, "Failed to save MCP config: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to save MCP config: "+err.Error())
 		return
 	}
 
@@ -450,8 +447,7 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	// Reset the Studio chat agent so the next request picks up fresh MCP config.
 	GetChatManager().Reset()
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // InstallInlineMCPServerRequest is the request for POST /api/mcp/install-inline
@@ -465,17 +461,17 @@ type InstallInlineMCPServerRequest struct {
 func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 	var req InstallInlineMCPServerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
 		return
 	}
 
 	if req.ServerName == "" {
-		http.Error(w, "Server name is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Server name is required")
 		return
 	}
 
 	if req.Config.Command == "" && req.Config.URL == "" {
-		http.Error(w, "Server config must have either command or URL", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Server config must have either command or URL")
 		return
 	}
 
@@ -500,7 +496,7 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Save config
 	if err := config.SaveMCPConfig(mcpCfg); err != nil {
-		http.Error(w, "Failed to save MCP config: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to save MCP config: "+err.Error())
 		return
 	}
 
@@ -676,7 +672,7 @@ func ListProviderModelsHandler(w http.ResponseWriter, r *http.Request) {
 
 	cfg, err := config.LoadAppConfig()
 	if err != nil {
-		http.Error(w, "Failed to load config: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to load config: "+err.Error())
 		return
 	}
 
@@ -698,12 +694,11 @@ func ListProviderModelsHandler(w http.ResponseWriter, r *http.Request) {
 
 	models, err := provider.ListModelsForProvider(r.Context(), providerID, cfg)
 	if err != nil {
-		http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"provider": providerID,
 		"models":   models,
 	})
@@ -722,8 +717,7 @@ func GetSetupStatusHandler(w http.ResponseWriter, r *http.Request) {
 	cfg, err := config.LoadAppConfig()
 	if err != nil {
 		// If config doesn't exist, setup is definitely required
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(SetupStatusResponse{
+		respondJSON(w, http.StatusOK, SetupStatusResponse{
 			SetupRequired:       true,
 			HasDefaultProvider:  false,
 			HasDefaultModel:     false,
@@ -759,8 +753,7 @@ func GetSetupStatusHandler(w http.ResponseWriter, r *http.Request) {
 	// Setup is required if no default provider OR no configured providers
 	setupRequired := !hasDefaultProvider || len(configuredProviders) == 0
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(SetupStatusResponse{
+	respondJSON(w, http.StatusOK, SetupStatusResponse{
 		SetupRequired:       setupRequired,
 		HasDefaultProvider:  hasDefaultProvider,
 		HasDefaultModel:     hasDefaultModel,
@@ -776,7 +769,7 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 
 	cfg, err := config.LoadAppConfig()
 	if err != nil {
-		http.Error(w, "Failed to load config: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to load config: "+err.Error())
 		return
 	}
 
@@ -793,66 +786,60 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		apiKey := resolveProviderSecret(providerID, "api_key", "OPENROUTER_API_KEY", pCfg)
 		models, err := openrouter.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
-			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
+		respondJSON(w, http.StatusOK, map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
 		return
 
 	case "anthropic":
 		apiKey := resolveProviderSecret(providerID, "api_key", "ANTHROPIC_API_KEY", pCfg)
 		models, err := anthropic.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
-			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
+		respondJSON(w, http.StatusOK, map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
 		return
 
 	case "gemini":
 		apiKey := resolveProviderSecret(providerID, "api_key", "GOOGLE_API_KEY", pCfg)
 		models, err := google.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
-			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
+		respondJSON(w, http.StatusOK, map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
 		return
 
 	case "groq":
 		apiKey := resolveProviderSecret(providerID, "api_key", "GROQ_API_KEY", pCfg)
 		models, err := groq.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
-			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
+		respondJSON(w, http.StatusOK, map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
 		return
 
 	case "openai":
 		apiKey := resolveProviderSecret(providerID, "api_key", "OPENAI_API_KEY", pCfg)
 		models, err := openai_provider.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
-			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
+		respondJSON(w, http.StatusOK, map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
 		return
 
 	case "poe":
 		apiKey := resolveProviderSecret(providerID, "api_key", "POE_API_KEY", pCfg)
 		models, err := poe.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
-			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
+		respondJSON(w, http.StatusOK, map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
 		return
 
 	case "sap_ai_core":
@@ -869,44 +856,40 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		}
 		models, err := sap.ListModelsWithMetadata(r.Context(), clientID, clientSecret, authURL, baseURL, resourceGroup)
 		if err != nil {
-			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
+		respondJSON(w, http.StatusOK, map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
 		return
 
 	case "xai":
 		apiKey := resolveProviderSecret(providerID, "api_key", "XAI_API_KEY", pCfg)
 		models, err := xai.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
-			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
+		respondJSON(w, http.StatusOK, map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
 		return
 
 	case "lm_studio":
 		baseURL := pCfg["base_url"]
 		models, err := lmstudio.ListModelsWithMetadata(r.Context(), baseURL)
 		if err != nil {
-			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
+		respondJSON(w, http.StatusOK, map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
 		return
 
 	case "ollama":
 		baseURL := pCfg["base_url"]
 		models, err := ollama.ListModelsWithMetadata(r.Context(), baseURL)
 		if err != nil {
-			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
+		respondJSON(w, http.StatusOK, map[string]interface{}{"provider": providerID, "has_metadata": true, "models": models})
 		return
 
 	case "openai_compat":
@@ -917,22 +900,21 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		}
 		models, err := openai_compat.ListModels(r.Context(), apiKey, baseURL)
 		if err != nil {
-			http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
 			return
 		}
 		var modelInfos []map[string]interface{}
 		for _, m := range models {
 			modelInfos = append(modelInfos, map[string]interface{}{"id": m, "name": m})
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"provider": providerID, "has_metadata": false, "models": modelInfos})
+		respondJSON(w, http.StatusOK, map[string]interface{}{"provider": providerID, "has_metadata": false, "models": modelInfos})
 		return
 	}
 
 	// For other providers, return basic model list wrapped as ModelInfo
 	models, err := provider.ListModelsForProvider(r.Context(), providerID, cfg)
 	if err != nil {
-		http.Error(w, "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
 		return
 	}
 
@@ -945,8 +927,7 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		})
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"provider":     providerID,
 		"has_metadata": false,
 		"models":       modelInfos,

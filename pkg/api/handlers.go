@@ -254,8 +254,7 @@ func ListAgentsHandler(w http.ResponseWriter, r *http.Request) {
 		result = append(result, agents[name])
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(AgentListResponse{Agents: result})
+	respondJSON(w, http.StatusOK, AgentListResponse{Agents: result})
 }
 
 // GetAgentHandler handles GET /api/agents/{name}
@@ -265,14 +264,14 @@ func GetAgentHandler(w http.ResponseWriter, r *http.Request) {
 
 	path, source, err := findAgentPath(name)
 	if err != nil {
-		http.Error(w, "Agent not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Agent not found")
 		return
 	}
 
 	// Read raw YAML content
 	yamlData, err := os.ReadFile(path)
 	if err != nil {
-		http.Error(w, "Failed to read agent file", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to read agent file")
 		return
 	}
 
@@ -290,8 +289,7 @@ func GetAgentHandler(w http.ResponseWriter, r *http.Request) {
 		Config: cfg,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	respondJSON(w, http.StatusOK, response)
 }
 
 // SaveAgentHandler handles PUT /api/agents/{name}
@@ -304,7 +302,7 @@ func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
@@ -433,26 +431,25 @@ func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 		// New flow - save to flows directory (~/.config/astonish/flows/)
 		flowsDir, err := flowstore.GetFlowsDir()
 		if err != nil {
-			http.Error(w, "Failed to get flows directory", http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to get flows directory")
 			return
 		}
 		path = filepath.Join(flowsDir, name+".yaml")
 
 		// Ensure directory exists
 		if err := os.MkdirAll(flowsDir, 0755); err != nil {
-			http.Error(w, "Failed to create flows directory", http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to create flows directory")
 			return
 		}
 	}
 
 	// Write file
 	if err := os.WriteFile(path, []byte(finalYAML), 0644); err != nil {
-		http.Error(w, "Failed to save agent file", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to save agent file")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "path": path, "yaml": finalYAML})
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "path": path, "yaml": finalYAML})
 }
 
 // DeleteAgentHandler handles DELETE /api/agents/{name}
@@ -462,13 +459,13 @@ func DeleteAgentHandler(w http.ResponseWriter, r *http.Request) {
 
 	path, _, err := findAgentPath(name)
 	if err != nil {
-		http.Error(w, "Agent not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Agent not found")
 		return
 	}
 
 	// Delete the file
 	if err := os.Remove(path); err != nil {
-		http.Error(w, "Failed to delete agent file", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to delete agent file")
 		return
 	}
 
@@ -479,8 +476,7 @@ func DeleteAgentHandler(w http.ResponseWriter, r *http.Request) {
 		os.Remove(docPath) // best-effort — may not exist
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "deleted": name})
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "deleted": name})
 }
 
 // CopyAgentToLocalHandler handles POST /api/agents/{name}/copy-to-local
@@ -492,19 +488,19 @@ func CopyAgentToLocalHandler(w http.ResponseWriter, r *http.Request) {
 	// Find the source file
 	sourcePath, source, err := findAgentPath(name)
 	if err != nil {
-		http.Error(w, "Agent not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Agent not found")
 		return
 	}
 
 	if source != "store" {
-		http.Error(w, "Agent is not from store, already editable", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Agent is not from store, already editable")
 		return
 	}
 
 	// Read source content
 	content, err := os.ReadFile(sourcePath)
 	if err != nil {
-		http.Error(w, "Failed to read agent file", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to read agent file")
 		return
 	}
 
@@ -528,7 +524,7 @@ func CopyAgentToLocalHandler(w http.ResponseWriter, r *http.Request) {
 	// Save to flows directory (~/.config/astonish/flows/)
 	flowsDir, err := flowstore.GetFlowsDir()
 	if err != nil {
-		http.Error(w, "Failed to get flows directory", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to get flows directory")
 		return
 	}
 
@@ -536,24 +532,23 @@ func CopyAgentToLocalHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Check if already exists
 	if _, err := os.Stat(destPath); err == nil {
-		http.Error(w, "Agent already exists locally: "+destName, http.StatusConflict)
+		respondError(w, http.StatusConflict, "Agent already exists locally: "+destName)
 		return
 	}
 
 	// Ensure directory exists
 	if err := os.MkdirAll(flowsDir, 0755); err != nil {
-		http.Error(w, "Failed to create flows directory", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to create flows directory")
 		return
 	}
 
 	// Write file
 	if err := os.WriteFile(destPath, content, 0644); err != nil {
-		http.Error(w, "Failed to copy agent file", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to copy agent file")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	respondJSON(w, http.StatusOK, map[string]string{
 		"status":  "ok",
 		"newName": destName,
 		"path":    destPath,
@@ -588,8 +583,7 @@ func ListToolsHandler(w http.ResponseWriter, r *http.Request) {
 		return allTools[i].Name < allTools[j].Name
 	})
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(ToolsListResponse{Tools: allTools})
+	respondJSON(w, http.StatusOK, ToolsListResponse{Tools: allTools})
 }
 
 // minimalReadonlyContext implements agent.ReadonlyContext for tool listing
@@ -626,7 +620,7 @@ type MCPServersListResponse struct {
 func GetMCPServersHandler(w http.ResponseWriter, r *http.Request) {
 	mcpConfig, err := config.LoadMCPConfig()
 	if err != nil {
-		http.Error(w, "Failed to load MCP config", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to load MCP config")
 		return
 	}
 
@@ -650,8 +644,7 @@ func GetMCPServersHandler(w http.ResponseWriter, r *http.Request) {
 		return servers[i].Name < servers[j].Name
 	})
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(MCPServersListResponse{Servers: servers})
+	respondJSON(w, http.StatusOK, MCPServersListResponse{Servers: servers})
 }
 
 // UpdateMCPServerRequest is the request body for PATCH /api/mcp/servers/{name}
@@ -671,27 +664,27 @@ func UpdateMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 	serverName := vars["name"]
 
 	if serverName == "" {
-		http.Error(w, "Server name is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Server name is required")
 		return
 	}
 
 	var req UpdateMCPServerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
 	// Load config
 	mcpConfig, err := config.LoadMCPConfig()
 	if err != nil {
-		http.Error(w, "Failed to load MCP config", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to load MCP config")
 		return
 	}
 
 	// Find server
 	serverCfg, exists := mcpConfig.MCPServers[serverName]
 	if !exists {
-		http.Error(w, "Server not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Server not found")
 		return
 	}
 
@@ -702,7 +695,7 @@ func UpdateMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Save config
 		if err := config.SaveMCPConfig(mcpConfig); err != nil {
-			http.Error(w, "Failed to save MCP config", http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to save MCP config")
 			return
 		}
 
@@ -727,8 +720,7 @@ func UpdateMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	respondJSON(w, http.StatusOK, response)
 }
 
 func RegisterRoutes(router *mux.Router) {

@@ -21,7 +21,7 @@ type MemorySearchResult struct {
 	Message string                `json:"message,omitempty"`
 }
 
-// MemorySearch performs semantic search across indexed memory files.
+// MemorySearch performs hybrid search (vector + BM25) across indexed memory files.
 func MemorySearch(store *memory.Store) func(ctx tool.Context, args MemorySearchArgs) (MemorySearchResult, error) {
 	return func(ctx tool.Context, args MemorySearchArgs) (MemorySearchResult, error) {
 		if args.Query == "" {
@@ -33,7 +33,7 @@ func MemorySearch(store *memory.Store) func(ctx tool.Context, args MemorySearchA
 			maxResults = store.Config().MaxResults
 		}
 
-		results, err := store.Search(ctx, args.Query, maxResults, store.Config().MinScore)
+		results, err := store.SearchHybrid(ctx, args.Query, maxResults, store.Config().MinScore)
 		if err != nil {
 			return MemorySearchResult{}, fmt.Errorf("memory search failed: %w", err)
 		}

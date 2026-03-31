@@ -183,7 +183,6 @@ function App() {
       }
       const versionData = await versionRes.json()
       const currentVersion = (versionData.version || 'dev').replace(/^v/, '').trim()
-      console.log('[Update Check] Backend version:', versionData.version, 'Normalized:', currentVersion)
       setAppVersion(currentVersion)
       return currentVersion
     } catch (err: any) {
@@ -383,7 +382,6 @@ function App() {
     
     // Skip saving for store flows (read-only)
     if (selectedAgent.source === 'store') {
-      console.log('[Auto-save] Skipped - store flow is read-only')
       return
     }
     
@@ -398,7 +396,6 @@ function App() {
         // Save the user's YAML as-is (no reformatting)
         // Layout is saved separately via handleLayoutSave when canvas changes
         const result = await saveAgent(selectedAgent.id, newYaml) as any
-        console.log('[Auto-save] Saved')
         
         // If server returned YAML with NEW content (like mcp_dependencies), update local state
         // Compare parsed content to avoid triggering on format-only differences
@@ -413,7 +410,6 @@ function App() {
             
             if (serverDeps !== localDeps) {
               setYamlContent(result.yaml)
-              console.log('[Auto-save] Updated with server-generated mcp_dependencies')
             }
           } catch (parseErr: any) {
             // If parse fails, fall back to not updating
@@ -622,7 +618,6 @@ layout:
     try {
       await saveAgent(id, newYaml)
       await loadAgents()
-      console.log('New agent saved and appears in menu')
     } catch (err: any) {
       console.error('Failed to save new agent:', err)
     }
@@ -1039,7 +1034,6 @@ layout:
     const newYaml = getYamlWithLayout(yamlContent)
     if (newYaml !== yamlContent) {
       updateYaml(newYaml, true)
-      console.log('[Layout] Saved positions on drag stop')
     }
   }, [yamlContent, getYamlWithLayout, updateYaml])
 
@@ -1048,7 +1042,6 @@ layout:
   const handleNodeDelete = useCallback((nodeIds: string | string[]) => {
     // Normalize to array if single ID passed
     const idsToDelete = Array.isArray(nodeIds) ? nodeIds : [nodeIds]
-    console.log(`[NODE DELETE] Removing nodes: ${idsToDelete.join(', ')}`)
     
     // Parse current YAML and remove all nodes at once
     try {
@@ -1102,8 +1095,6 @@ layout:
   const handleDuplicateNodes = useCallback((nodesToDuplicate: any[]) => {
     if (!nodesToDuplicate || nodesToDuplicate.length === 0) return
     
-    console.log(`[DUPLICATE] Duplicating ${nodesToDuplicate.length} node(s)`)
-    
     try {
       const parsed = (yaml.load(yamlContent) || {}) as YamlData
       if (!parsed.nodes) parsed.nodes = []
@@ -1120,7 +1111,7 @@ layout:
         // Find the original node data in YAML
         const originalNode = parsed.nodes.find((n: any) => n.name === sourceNode.id)
         if (!originalNode) {
-          console.log(`[DUPLICATE] Original node not found: ${sourceNode.id}`)
+          console.warn(`[DUPLICATE] Original node not found: ${sourceNode.id}`)
           return
         }
         
@@ -1156,7 +1147,6 @@ layout:
       })
       
       updateYaml(newYaml)
-      console.log(`[DUPLICATE] Created ${newNodeNames.length} new node(s): ${newNodeNames.join(', ')}`)
       
     } catch (err: any) {
       console.error('Failed to duplicate nodes:', err)
@@ -1472,7 +1462,7 @@ layout:
                 // Support both store and tap sources (both use the same install API)
                 if (!dep.store_id || (dep.source !== 'store' && dep.source !== 'tap')) {
                   // For unknown sources
-                  console.log('Unsupported install source:', dep)
+                  console.warn('Unsupported install source:', dep)
                   setToast({ message: `Cannot install ${dep.server}: Unknown source type`, type: 'error' })
                   return
                 }
@@ -1697,7 +1687,6 @@ layout:
           // Auto-save after applying (skip for store flows)
           if (selectedAgent && selectedAgent.source !== 'store') {
             saveAgent(selectedAgent.id, newYaml).then(() => {
-              console.log('Auto-saved after AI changes')
             }).catch(err => {
               console.error('Failed to auto-save:', err)
             })

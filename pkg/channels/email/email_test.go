@@ -7,6 +7,7 @@ import (
 )
 
 func TestExtractEmailAddr(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		input string
@@ -22,6 +23,7 @@ func TestExtractEmailAddr(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := extractEmailAddr(tt.input)
 			if got != tt.want {
 				t.Errorf("extractEmailAddr(%q) = %q, want %q", tt.input, got, tt.want)
@@ -31,6 +33,7 @@ func TestExtractEmailAddr(t *testing.T) {
 }
 
 func TestExtractName(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		input string
@@ -43,6 +46,7 @@ func TestExtractName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := extractName(tt.input)
 			if got != tt.want {
 				t.Errorf("extractName(%q) = %q, want %q", tt.input, got, tt.want)
@@ -52,7 +56,9 @@ func TestExtractName(t *testing.T) {
 }
 
 func TestIsAllowed(t *testing.T) {
+	t.Parallel()
 	t.Run("allowAll permits anyone", func(t *testing.T) {
+		t.Parallel()
 		ch := &EmailChannel{
 			allowAll: true,
 			allowSet: make(map[string]bool),
@@ -63,6 +69,7 @@ func TestIsAllowed(t *testing.T) {
 	})
 
 	t.Run("empty allowSet blocks everyone", func(t *testing.T) {
+		t.Parallel()
 		ch := &EmailChannel{
 			allowAll: false,
 			allowSet: make(map[string]bool),
@@ -73,6 +80,7 @@ func TestIsAllowed(t *testing.T) {
 	})
 
 	t.Run("case insensitive matching", func(t *testing.T) {
+		t.Parallel()
 		ch := &EmailChannel{
 			allowAll: false,
 			allowSet: map[string]bool{
@@ -89,9 +97,11 @@ func TestIsAllowed(t *testing.T) {
 }
 
 func TestNewDefaults(t *testing.T) {
+	t.Parallel()
 	logger := log.Default()
 
 	t.Run("PollInterval defaults to 30s", func(t *testing.T) {
+		t.Parallel()
 		cfg := &Config{Address: "bot@example.com"}
 		ch := New(cfg, logger)
 		if ch.config.PollInterval != 30*time.Second {
@@ -100,6 +110,7 @@ func TestNewDefaults(t *testing.T) {
 	})
 
 	t.Run("Folder defaults to INBOX", func(t *testing.T) {
+		t.Parallel()
 		cfg := &Config{Address: "bot@example.com"}
 		ch := New(cfg, logger)
 		if ch.config.Folder != "INBOX" {
@@ -108,6 +119,7 @@ func TestNewDefaults(t *testing.T) {
 	})
 
 	t.Run("MaxBodyChars defaults to 50000", func(t *testing.T) {
+		t.Parallel()
 		cfg := &Config{Address: "bot@example.com"}
 		ch := New(cfg, logger)
 		if ch.config.MaxBodyChars != 50000 {
@@ -116,6 +128,7 @@ func TestNewDefaults(t *testing.T) {
 	})
 
 	t.Run("custom values preserved", func(t *testing.T) {
+		t.Parallel()
 		cfg := &Config{
 			Address:      "bot@example.com",
 			PollInterval: 60 * time.Second,
@@ -135,6 +148,7 @@ func TestNewDefaults(t *testing.T) {
 	})
 
 	t.Run("AllowFrom with star sets allowAll", func(t *testing.T) {
+		t.Parallel()
 		cfg := &Config{
 			Address:   "bot@example.com",
 			AllowFrom: []string{"*"},
@@ -146,6 +160,7 @@ func TestNewDefaults(t *testing.T) {
 	})
 
 	t.Run("AllowFrom with addresses populates allowSet", func(t *testing.T) {
+		t.Parallel()
 		cfg := &Config{
 			Address:   "bot@example.com",
 			AllowFrom: []string{"Alice@Example.com", "bob@test.org"},
@@ -164,6 +179,7 @@ func TestNewDefaults(t *testing.T) {
 	})
 
 	t.Run("nil logger uses default", func(t *testing.T) {
+		t.Parallel()
 		cfg := &Config{Address: "bot@example.com"}
 		ch := New(cfg, nil)
 		if ch.logger == nil {

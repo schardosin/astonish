@@ -40,6 +40,9 @@ astonish-linux-*
 .env
 .env.*
 
+# MCP config (may contain API tokens)
+.mcp.json
+
 # Node modules (for docs)
 node_modules/
 

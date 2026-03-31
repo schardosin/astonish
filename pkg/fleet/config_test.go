@@ -72,6 +72,7 @@ agents:
 `
 
 func TestLoadFleet_Valid(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.yaml")
 	if err := os.WriteFile(path, []byte(validFleetYAML), 0644); err != nil {
@@ -127,6 +128,7 @@ func TestLoadFleet_Valid(t *testing.T) {
 }
 
 func TestLoadFleet_WithDelegate(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "delegate.yaml")
 	if err := os.WriteFile(path, []byte(delegateFleetYAML), 0644); err != nil {
@@ -154,6 +156,7 @@ func TestLoadFleet_WithDelegate(t *testing.T) {
 }
 
 func TestFleetValidate_MissingName(t *testing.T) {
+	t.Parallel()
 	f := &FleetConfig{
 		Agents: map[string]FleetAgentConfig{
 			"dev": {Name: "Developer", Identity: "You are a developer.", Tools: ToolsConfig{All: true}, Behaviors: "do stuff"},
@@ -165,6 +168,7 @@ func TestFleetValidate_MissingName(t *testing.T) {
 }
 
 func TestFleetValidate_NoAgents(t *testing.T) {
+	t.Parallel()
 	f := &FleetConfig{
 		Name:   "empty",
 		Agents: map[string]FleetAgentConfig{},
@@ -175,6 +179,7 @@ func TestFleetValidate_NoAgents(t *testing.T) {
 }
 
 func TestFleetValidate_MissingAgentName(t *testing.T) {
+	t.Parallel()
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
@@ -187,6 +192,7 @@ func TestFleetValidate_MissingAgentName(t *testing.T) {
 }
 
 func TestFleetValidate_MissingIdentity(t *testing.T) {
+	t.Parallel()
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
@@ -199,6 +205,7 @@ func TestFleetValidate_MissingIdentity(t *testing.T) {
 }
 
 func TestFleetValidate_MissingBehaviors(t *testing.T) {
+	t.Parallel()
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
@@ -211,6 +218,7 @@ func TestFleetValidate_MissingBehaviors(t *testing.T) {
 }
 
 func TestFleetValidate_NoToolsOrDelegate(t *testing.T) {
+	t.Parallel()
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
@@ -223,6 +231,7 @@ func TestFleetValidate_NoToolsOrDelegate(t *testing.T) {
 }
 
 func TestFleetValidate_DelegateMissingTool(t *testing.T) {
+	t.Parallel()
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
@@ -240,6 +249,7 @@ func TestFleetValidate_DelegateMissingTool(t *testing.T) {
 }
 
 func TestFleetValidate_BadMode(t *testing.T) {
+	t.Parallel()
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
@@ -252,6 +262,7 @@ func TestFleetValidate_BadMode(t *testing.T) {
 }
 
 func TestFleetValidate_CommunicationBadRole(t *testing.T) {
+	t.Parallel()
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
@@ -269,6 +280,7 @@ func TestFleetValidate_CommunicationBadRole(t *testing.T) {
 }
 
 func TestFleetValidate_CommunicationBadTarget(t *testing.T) {
+	t.Parallel()
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
@@ -286,6 +298,7 @@ func TestFleetValidate_CommunicationBadTarget(t *testing.T) {
 }
 
 func TestFleetValidate_CommunicationNoEntryPoint(t *testing.T) {
+	t.Parallel()
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
@@ -303,6 +316,7 @@ func TestFleetValidate_CommunicationNoEntryPoint(t *testing.T) {
 }
 
 func TestFleetValidate_CommunicationCustomerAllowed(t *testing.T) {
+	t.Parallel()
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
@@ -320,6 +334,7 @@ func TestFleetValidate_CommunicationCustomerAllowed(t *testing.T) {
 }
 
 func TestCommunicationHelpers(t *testing.T) {
+	t.Parallel()
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
@@ -391,6 +406,7 @@ func TestCommunicationHelpers(t *testing.T) {
 }
 
 func TestAgentConfig_GetMode(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		mode     string
@@ -403,6 +419,7 @@ func TestAgentConfig_GetMode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			a := &FleetAgentConfig{Mode: tt.mode}
 			if got := a.GetMode(); got != tt.expected {
 				t.Errorf("GetMode() = %q, want %q", got, tt.expected)
@@ -412,6 +429,7 @@ func TestAgentConfig_GetMode(t *testing.T) {
 }
 
 func TestLoadFleets_Directory(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	if err := os.WriteFile(filepath.Join(dir, "test.yaml"), []byte(validFleetYAML), 0644); err != nil {
@@ -440,6 +458,7 @@ func TestLoadFleets_Directory(t *testing.T) {
 }
 
 func TestLoadFleets_NonExistentDir(t *testing.T) {
+	t.Parallel()
 	fleets, err := LoadFleets("/tmp/nonexistent-fleet-dir-12345")
 	if err != nil {
 		t.Errorf("expected nil error for non-existent dir, got %v", err)
@@ -450,6 +469,7 @@ func TestLoadFleets_NonExistentDir(t *testing.T) {
 }
 
 func TestFleetSettings_Defaults(t *testing.T) {
+	t.Parallel()
 	s := FleetSettings{}
 	if s.GetMaxTurnsPerAgent() != 20 {
 		t.Errorf("expected default max_turns_per_agent 20, got %d", s.GetMaxTurnsPerAgent())
@@ -457,6 +477,7 @@ func TestFleetSettings_Defaults(t *testing.T) {
 }
 
 func TestRegistry_Basic(t *testing.T) {
+	t.Parallel()
 	fleetDir := t.TempDir()
 
 	// Create fleet file
@@ -486,6 +507,7 @@ func TestRegistry_Basic(t *testing.T) {
 }
 
 func TestRegistry_SaveAndDelete(t *testing.T) {
+	t.Parallel()
 	fleetDir := t.TempDir()
 
 	reg, err := NewRegistry(fleetDir)
@@ -532,6 +554,7 @@ func TestRegistry_SaveAndDelete(t *testing.T) {
 }
 
 func TestBuildAgentPrompt(t *testing.T) {
+	t.Parallel()
 	agentCfg := FleetAgentConfig{
 		Name:      "Developer",
 		Identity:  "You are a developer.",
@@ -594,6 +617,7 @@ func TestBuildAgentPrompt(t *testing.T) {
 }
 
 func TestBuildAgentPrompt_NoDelegate(t *testing.T) {
+	t.Parallel()
 	agentCfg := FleetAgentConfig{
 		Name:      "QA Engineer",
 		Identity:  "You are a QA engineer.",
@@ -629,6 +653,7 @@ func TestBuildAgentPrompt_NoDelegate(t *testing.T) {
 }
 
 func TestBuildSystemPromptSection_Empty(t *testing.T) {
+	t.Parallel()
 	result := BuildSystemPromptSection(nil, nil)
 	if result != "" {
 		t.Errorf("expected empty string for no fleets, got %q", result)
@@ -636,6 +661,7 @@ func TestBuildSystemPromptSection_Empty(t *testing.T) {
 }
 
 func TestBuildSystemPromptSection_WithCommunication(t *testing.T) {
+	t.Parallel()
 	fleets := []FleetSummary{
 		{Key: "dev", Name: "software-dev", Description: "Dev team", AgentCount: 3},
 	}
@@ -679,6 +705,7 @@ func TestBuildSystemPromptSection_WithCommunication(t *testing.T) {
 }
 
 func TestToolsConfig_Marshal(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		config ToolsConfig
@@ -691,6 +718,7 @@ func TestToolsConfig_Marshal(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if tt.config.IsEmpty() != tt.empty {
 				t.Errorf("IsEmpty() = %v, want %v", tt.config.IsEmpty(), tt.empty)
 			}
@@ -699,6 +727,7 @@ func TestToolsConfig_Marshal(t *testing.T) {
 }
 
 func TestCollectDelegateEnvVars(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		fleets   map[string]*FleetConfig
@@ -810,6 +839,7 @@ func TestCollectDelegateEnvVars(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			result := CollectDelegateEnvVars(tt.fleets)
 			if len(result) != len(tt.expected) {
 				t.Errorf("expected %d env vars, got %d: %v", len(tt.expected), len(result), result)
@@ -825,6 +855,7 @@ func TestCollectDelegateEnvVars(t *testing.T) {
 }
 
 func TestTaskSlugFromIssue(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		number   int
 		title    string
@@ -840,6 +871,7 @@ func TestTaskSlugFromIssue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.title, func(t *testing.T) {
+			t.Parallel()
 			result := TaskSlugFromIssue(tt.number, tt.title)
 			if result != tt.expected {
 				t.Errorf("TaskSlugFromIssue(%d, %q) = %q, want %q", tt.number, tt.title, result, tt.expected)
@@ -849,6 +881,7 @@ func TestTaskSlugFromIssue(t *testing.T) {
 }
 
 func TestResolveBranchPattern(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		pattern  string
 		slug     string
@@ -863,6 +896,7 @@ func TestResolveBranchPattern(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.pattern+"_"+tt.slug, func(t *testing.T) {
+			t.Parallel()
 			result := ResolveBranchPattern(tt.pattern, tt.slug)
 			if result != tt.expected {
 				t.Errorf("ResolveBranchPattern(%q, %q) = %q, want %q", tt.pattern, tt.slug, result, tt.expected)
@@ -872,6 +906,7 @@ func TestResolveBranchPattern(t *testing.T) {
 }
 
 func TestBuildAgentPrompt_GitWorkflow(t *testing.T) {
+	t.Parallel()
 	agentCfg := FleetAgentConfig{
 		Name:      "Developer",
 		Identity:  "You are a developer.",
@@ -931,6 +966,7 @@ func TestBuildAgentPrompt_GitWorkflow(t *testing.T) {
 }
 
 func TestBuildAgentPrompt_CommunicationMechanism(t *testing.T) {
+	t.Parallel()
 	agentCfg := FleetAgentConfig{
 		Name:      "Dev",
 		Identity:  "You are a dev.",
@@ -963,6 +999,7 @@ func TestBuildAgentPrompt_CommunicationMechanism(t *testing.T) {
 }
 
 func TestBuildAgentPrompt_DocsPathFromArtifact(t *testing.T) {
+	t.Parallel()
 	agentCfg := FleetAgentConfig{
 		Name:      "PO",
 		Identity:  "You are a PO.",
@@ -1015,6 +1052,7 @@ func TestBuildAgentPrompt_DocsPathFromArtifact(t *testing.T) {
 }
 
 func TestGetConfigStringSlice(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		config   map[string]any
@@ -1061,6 +1099,7 @@ func TestGetConfigStringSlice(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			result := getConfigStringSlice(tt.config, tt.key)
 			if tt.expected == nil {
 				if result != nil {
@@ -1082,6 +1121,7 @@ func TestGetConfigStringSlice(t *testing.T) {
 }
 
 func TestNewGitHubMonitor_LabelFallback(t *testing.T) {
+	t.Parallel()
 	// Test that singular "label" key works as fallback for "labels"
 	stateDir := t.TempDir()
 
@@ -1112,6 +1152,7 @@ func TestNewGitHubMonitor_LabelFallback(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGitHubMonitor_MarkSeenAndGetState(t *testing.T) {
+	t.Parallel()
 	stateDir := t.TempDir()
 	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
 
@@ -1135,6 +1176,7 @@ func TestGitHubMonitor_MarkSeenAndGetState(t *testing.T) {
 }
 
 func TestGitHubMonitor_UpdateCursorOnlyAdvances(t *testing.T) {
+	t.Parallel()
 	stateDir := t.TempDir()
 	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
 
@@ -1162,6 +1204,7 @@ func TestGitHubMonitor_UpdateCursorOnlyAdvances(t *testing.T) {
 }
 
 func TestGitHubMonitor_RetryCountAndBackoff(t *testing.T) {
+	t.Parallel()
 	stateDir := t.TempDir()
 	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
 
@@ -1204,6 +1247,7 @@ func TestGitHubMonitor_RetryCountAndBackoff(t *testing.T) {
 }
 
 func TestGitHubMonitor_ResetRetryCount(t *testing.T) {
+	t.Parallel()
 	stateDir := t.TempDir()
 	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
 
@@ -1242,6 +1286,7 @@ func TestGitHubMonitor_ResetRetryCount(t *testing.T) {
 }
 
 func TestGitHubMonitor_ClearRetryOnSuccess(t *testing.T) {
+	t.Parallel()
 	stateDir := t.TempDir()
 	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
 
@@ -1262,6 +1307,7 @@ func TestGitHubMonitor_ClearRetryOnSuccess(t *testing.T) {
 }
 
 func TestGitHubMonitor_StatePersistence(t *testing.T) {
+	t.Parallel()
 	stateDir := t.TempDir()
 
 	// Create and populate a monitor
@@ -1295,6 +1341,7 @@ func TestGitHubMonitor_StatePersistence(t *testing.T) {
 }
 
 func TestGitHubMonitor_BackoffLogic(t *testing.T) {
+	t.Parallel()
 	stateDir := t.TempDir()
 	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
 
@@ -1318,6 +1365,7 @@ func TestGitHubMonitor_BackoffLogic(t *testing.T) {
 }
 
 func TestStripInlineToolCalls(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		input    string
@@ -1367,6 +1415,7 @@ func TestStripInlineToolCalls(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			result := stripInlineToolCalls(tt.input)
 			if result != tt.expected {
 				t.Errorf("stripInlineToolCalls(%q)\n  got:  %q\n  want: %q", tt.input, result, tt.expected)
@@ -1376,6 +1425,7 @@ func TestStripInlineToolCalls(t *testing.T) {
 }
 
 func TestGitHubIssueChannelImplementsExternalPoster(t *testing.T) {
+	t.Parallel()
 	// Verify GitHubIssueChannel satisfies the ExternalPoster interface.
 	var ch interface{} = &GitHubIssueChannel{}
 	if _, ok := ch.(ExternalPoster); !ok {
@@ -1384,6 +1434,7 @@ func TestGitHubIssueChannelImplementsExternalPoster(t *testing.T) {
 }
 
 func TestChatChannelDoesNotImplementExternalPoster(t *testing.T) {
+	t.Parallel()
 	// ChatChannel should NOT implement ExternalPoster (no external system).
 	var ch interface{} = &ChatChannel{}
 	if _, ok := ch.(ExternalPoster); ok {
@@ -1392,6 +1443,7 @@ func TestChatChannelDoesNotImplementExternalPoster(t *testing.T) {
 }
 
 func TestPostExternalSkipsCustomerMessages(t *testing.T) {
+	t.Parallel()
 	// PostExternal should silently skip customer messages
 	// (they originate FROM GitHub, posting them back would duplicate).
 	ch := &GitHubIssueChannel{
@@ -1412,6 +1464,7 @@ func TestPostExternalSkipsCustomerMessages(t *testing.T) {
 }
 
 func TestPostExternalSkipsIntermediateMessages(t *testing.T) {
+	t.Parallel()
 	ch := &GitHubIssueChannel{
 		repo:        "test/repo",
 		issueNumber: 1,
@@ -1429,6 +1482,7 @@ func TestPostExternalSkipsIntermediateMessages(t *testing.T) {
 }
 
 func TestPostMessageDoesNotPostToGitHub(t *testing.T) {
+	t.Parallel()
 	// After the refactor, PostMessage should only add to internal list
 	// and notify subscribers. It should NOT attempt GitHub posting.
 	// We verify by checking that a message is added to the internal list
@@ -1481,6 +1535,7 @@ func makeMessages(count int, charsPer int) []Message {
 }
 
 func TestBuildThreadWithBudget_LastMessageNeverTruncated(t *testing.T) {
+	t.Parallel()
 	// Create a thread where the last message is very long (10K chars).
 	// It should ALWAYS appear in full, never truncated.
 	msgs := makeMessages(50, 500) // 50 messages × ~510 chars = ~25K
@@ -1504,6 +1559,7 @@ func TestBuildThreadWithBudget_LastMessageNeverTruncated(t *testing.T) {
 }
 
 func TestBuildThreadWithBudget_SmallThread(t *testing.T) {
+	t.Parallel()
 	// Small thread should include everything in full, no summaries.
 	msgs := []Message{
 		{Sender: "customer", Text: "Please implement feature X"},
@@ -1526,6 +1582,7 @@ func TestBuildThreadWithBudget_SmallThread(t *testing.T) {
 }
 
 func TestBuildThreadWithBudget_LargeThreadSummarizesOlder(t *testing.T) {
+	t.Parallel()
 	// Create a thread large enough to trigger summarization.
 	// 100 messages × 1000 chars each = 100K >> 50K budget.
 	msgs := makeMessages(100, 1000)
@@ -1550,6 +1607,7 @@ func TestBuildThreadWithBudget_LargeThreadSummarizesOlder(t *testing.T) {
 }
 
 func TestDeduplicateRecoverySummaries(t *testing.T) {
+	t.Parallel()
 	thread := []Message{
 		{Sender: "customer", Text: "Initial request"},
 		{Sender: "po", Text: "Working on it"},
@@ -1590,6 +1648,7 @@ func TestDeduplicateRecoverySummaries(t *testing.T) {
 }
 
 func TestDeduplicateRecoverySummaries_NoSummaries(t *testing.T) {
+	t.Parallel()
 	thread := []Message{
 		{Sender: "customer", Text: "Hello"},
 		{Sender: "po", Text: "Hi there"},
@@ -1602,6 +1661,7 @@ func TestDeduplicateRecoverySummaries_NoSummaries(t *testing.T) {
 }
 
 func TestDeduplicateRecoverySummaries_OneSummary(t *testing.T) {
+	t.Parallel()
 	thread := []Message{
 		{Sender: "customer", Text: "Hello"},
 		{Sender: "system", Text: "Fleet session resumed after daemon restart. Only one."},
@@ -1615,6 +1675,7 @@ func TestDeduplicateRecoverySummaries_OneSummary(t *testing.T) {
 }
 
 func TestWriteSummarizedMessage_PreservesMentions(t *testing.T) {
+	t.Parallel()
 	var sb strings.Builder
 	msg := Message{
 		Sender: "po",
@@ -1633,6 +1694,7 @@ func TestWriteSummarizedMessage_PreservesMentions(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestMakeThreadKey(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		a, b string
 		want string
@@ -1654,6 +1716,7 @@ func TestMakeThreadKey(t *testing.T) {
 }
 
 func TestMakeThreadKey_Symmetric(t *testing.T) {
+	t.Parallel()
 	// Verify symmetry: MakeThreadKey(a, b) == MakeThreadKey(b, a) for all pairs
 	agents := []string{"po", "dev", "qa", "architect", "customer", "system"}
 	for _, a := range agents {
@@ -1667,6 +1730,7 @@ func TestMakeThreadKey_Symmetric(t *testing.T) {
 }
 
 func TestResolveMemoryKeys(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		msg  Message
@@ -1710,6 +1774,7 @@ func TestResolveMemoryKeys(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := tt.msg.ResolveMemoryKeys()
 			if tt.want == nil {
 				if got != nil {
@@ -1730,6 +1795,7 @@ func TestResolveMemoryKeys(t *testing.T) {
 }
 
 func TestInAgentMemory(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		msg      Message
@@ -1787,6 +1853,7 @@ func TestInAgentMemory(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := tt.msg.InAgentMemory(tt.agentKey)
 			if got != tt.want {
 				t.Errorf("InAgentMemory(%q) = %v, want %v", tt.agentKey, got, tt.want)
@@ -1796,6 +1863,7 @@ func TestInAgentMemory(t *testing.T) {
 }
 
 func TestGetAgentMemory_ChatChannel(t *testing.T) {
+	t.Parallel()
 	ch := NewChatChannel("test-session")
 	ctx := context.Background()
 
@@ -1903,6 +1971,7 @@ func TestGetAgentMemory_ChatChannel(t *testing.T) {
 }
 
 func TestBuildThreadContext_AgentMemory(t *testing.T) {
+	t.Parallel()
 	ch := NewChatChannel("test-session")
 	ctx := context.Background()
 
@@ -1963,6 +2032,7 @@ func TestBuildThreadContext_AgentMemory(t *testing.T) {
 }
 
 func TestBuildThreadContext_BackwardCompatible(t *testing.T) {
+	t.Parallel()
 	// Old messages with ThreadKey (pairwise model) should be correctly resolved
 	// to per-agent memory via ResolveMemoryKeys.
 	ch := NewChatChannel("test-session")
@@ -2021,6 +2091,7 @@ func TestBuildThreadContext_BackwardCompatible(t *testing.T) {
 }
 
 func TestBuildThreadContext_NoKeysMessages(t *testing.T) {
+	t.Parallel()
 	// Messages with no MemoryKeys and no ThreadKey (truly old or system messages)
 	// should be visible to ALL agents.
 	ch := NewChatChannel("test-session")
@@ -2058,6 +2129,7 @@ func TestBuildThreadContext_NoKeysMessages(t *testing.T) {
 // --- Per-Session Workspace Tests ---
 
 func TestResolveSessionWorkspaceDir(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		baseDir    string
@@ -2090,6 +2162,7 @@ func TestResolveSessionWorkspaceDir(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := ResolveSessionWorkspaceDir(tc.baseDir, tc.sessionID, tc.taskSlug)
 			if !strings.HasSuffix(got, tc.wantSuffix) {
 				t.Errorf("got %q, want suffix %q", got, tc.wantSuffix)
@@ -2102,7 +2175,9 @@ func TestResolveSessionWorkspaceDir(t *testing.T) {
 }
 
 func TestResolveProjectSource(t *testing.T) {
+	t.Parallel()
 	t.Run("explicit project source returned as-is", func(t *testing.T) {
+		t.Parallel()
 		plan := &FleetPlan{
 			ProjectSource: &ProjectSourceConfig{
 				Type: "git_repo",
@@ -2122,6 +2197,7 @@ func TestResolveProjectSource(t *testing.T) {
 	})
 
 	t.Run("backward compat: derive from git_repo artifact", func(t *testing.T) {
+		t.Parallel()
 		plan := &FleetPlan{
 			Artifacts: map[string]PlanArtifactConfig{
 				"code": {Type: "git_repo", Repo: "owner/legacy-repo"},
@@ -2137,6 +2213,7 @@ func TestResolveProjectSource(t *testing.T) {
 	})
 
 	t.Run("backward compat: derive from local artifact", func(t *testing.T) {
+		t.Parallel()
 		plan := &FleetPlan{
 			Artifacts: map[string]PlanArtifactConfig{
 				"code": {Type: "local", Path: "/home/user/myproject"},
@@ -2152,6 +2229,7 @@ func TestResolveProjectSource(t *testing.T) {
 	})
 
 	t.Run("no artifacts returns nil", func(t *testing.T) {
+		t.Parallel()
 		plan := &FleetPlan{}
 		src := plan.ResolveProjectSource()
 		if src != nil {
@@ -2161,6 +2239,7 @@ func TestResolveProjectSource(t *testing.T) {
 }
 
 func TestSetupSessionWorkspace_EmptyDir(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	wsDir := filepath.Join(tmpDir, "workspace")
 
@@ -2179,6 +2258,7 @@ func TestSetupSessionWorkspace_EmptyDir(t *testing.T) {
 }
 
 func TestSetupSessionWorkspace_AlreadyExists(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	wsDir := filepath.Join(tmpDir, "existing")
 	if err := os.MkdirAll(wsDir, 0755); err != nil {
@@ -2202,6 +2282,7 @@ func TestSetupSessionWorkspace_AlreadyExists(t *testing.T) {
 }
 
 func TestSetupSessionWorkspace_CopyLocal(t *testing.T) {
+	t.Parallel()
 	// Create a source directory with some files
 	srcDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(srcDir, "hello.txt"), []byte("world"), 0644); err != nil {
@@ -2235,6 +2316,7 @@ func TestSetupSessionWorkspace_CopyLocal(t *testing.T) {
 }
 
 func TestSetupSessionWorkspace_GitCloneLocal(t *testing.T) {
+	t.Parallel()
 	// Create a base git repo with some content
 	baseDir := t.TempDir()
 	cmds := [][]string{
@@ -2281,6 +2363,7 @@ func TestSetupSessionWorkspace_GitCloneLocal(t *testing.T) {
 }
 
 func TestSetupSessionWorkspace_GitCloneLocalFallsBackToRemote(t *testing.T) {
+	t.Parallel()
 	// When baseDir doesn't exist, it should attempt remote clone.
 	// We can't test a real remote clone, but we can verify the error mentions
 	// the remote URL (proving it fell through to the remote path).
@@ -2302,6 +2385,7 @@ func TestSetupSessionWorkspace_GitCloneLocalFallsBackToRemote(t *testing.T) {
 }
 
 func TestSetupSessionWorkspace_LocalGitSource(t *testing.T) {
+	t.Parallel()
 	// Local source that IS a git repo should use --local clone
 	srcDir := t.TempDir()
 	cmds := [][]string{
@@ -2347,6 +2431,7 @@ func TestSetupSessionWorkspace_LocalGitSource(t *testing.T) {
 }
 
 func TestCleanupSessionWorkspace(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	wsDir := filepath.Join(tmpDir, "workspaces", "workspace-to-delete")
 	if err := os.MkdirAll(filepath.Join(wsDir, "subdir"), 0755); err != nil {
@@ -2366,6 +2451,7 @@ func TestCleanupSessionWorkspace(t *testing.T) {
 }
 
 func TestCleanupSessionWorkspace_EmptyPath(t *testing.T) {
+	t.Parallel()
 	// Should be a no-op
 	err := CleanupSessionWorkspace("")
 	if err != nil {
@@ -2374,6 +2460,7 @@ func TestCleanupSessionWorkspace_EmptyPath(t *testing.T) {
 }
 
 func TestCleanupSessionWorkspace_NonExistent(t *testing.T) {
+	t.Parallel()
 	// Should be a no-op
 	err := CleanupSessionWorkspace("/nonexistent/path/that/doesnt/exist")
 	if err != nil {
@@ -2382,6 +2469,7 @@ func TestCleanupSessionWorkspace_NonExistent(t *testing.T) {
 }
 
 func TestCleanupSessionWorkspace_SafetyGuard(t *testing.T) {
+	t.Parallel()
 	// Paths that look like container-internal paths (not under workspaces/)
 	// should be refused even if they exist on the host.
 	tmpDir := t.TempDir()
@@ -2404,6 +2492,7 @@ func TestCleanupSessionWorkspace_SafetyGuard(t *testing.T) {
 }
 
 func TestBuildAgentPromptWithWorkspaceDir(t *testing.T) {
+	t.Parallel()
 	agentCfg := FleetAgentConfig{
 		Name:     "Dev",
 		Identity: "You are a developer.",
@@ -2433,6 +2522,7 @@ func TestBuildAgentPromptWithWorkspaceDir(t *testing.T) {
 }
 
 func TestProjectSourceConfigYAML(t *testing.T) {
+	t.Parallel()
 	plan := &FleetPlan{
 		Name: "Test Plan",
 		Key:  "test",

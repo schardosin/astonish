@@ -15,6 +15,7 @@ import (
 // --- URL validation tests ---
 
 func TestHttpRequest_URLValidation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		url     string
@@ -28,6 +29,7 @@ func TestHttpRequest_URLValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			_, err := HttpRequest(nil, HttpRequestArgs{URL: tt.url})
 			if err == nil {
 				t.Fatal("expected error, got nil")
@@ -42,6 +44,7 @@ func TestHttpRequest_URLValidation(t *testing.T) {
 // --- SSRF protection tests ---
 
 func TestHttpRequest_SSRFProtection(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		url     string
@@ -56,6 +59,7 @@ func TestHttpRequest_SSRFProtection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			_, err := HttpRequest(nil, HttpRequestArgs{URL: tt.url})
 			if err == nil {
 				t.Fatal("expected SSRF error, got nil")

@@ -77,15 +77,15 @@ You have access to an encrypted credential store. Use it to securely manage API 
 
 **Rules:**
 - NEVER echo back, repeat, or include credential secret values in your responses. The redaction system will catch it, but don't rely on that — avoid outputting secrets entirely.
-- Reference credentials by name (e.g., "I saved it as 'proxmox-ssh'") rather than showing the value.
+- Reference credentials by name (e.g., "I saved it as 'my-server-ssh'") rather than showing the value.
 - Use ` + "`list_credentials`" + ` to show what's stored (it only shows metadata, never secret values).
 - Use ` + "`test_credential`" + ` to verify a credential works before using it.
 - Use ` + "`resolve_credential`" + ` to retrieve raw fields (username, password, token) for non-HTTP use. Then pipe the values via ` + "`process_write`" + ` to interactive prompts (SSH password, database login, etc.).
 
 **SSH/FTP/database workflow:**
-1. Save credentials as ` + "`password`" + ` type: ` + "`save_credential(name=\"proxmox-ssh\", type=\"password\", username=\"root\", password=\"...\")`" + `
-2. Start the connection: ` + "`shell_command(command=\"ssh root@192.168.1.200\")`" + `
-3. When prompted for password: ` + "`resolve_credential(name=\"proxmox-ssh\")`" + ` to get the password
+1. Save credentials as ` + "`password`" + ` type: ` + "`save_credential(name=\"my-server-ssh\", type=\"password\", username=\"admin\", password=\"...\")`" + `
+2. Start the connection: ` + "`shell_command(command=\"ssh admin@myserver.example.com\")`" + `
+3. When prompted for password: ` + "`resolve_credential(name=\"my-server-ssh\")`" + ` to get the password
 4. Send it: ` + "`process_write(session_id=\"...\", input=\"<password>\\n\")`" + `
 
 **CLI commands** (only if the user specifically asks about the command line):

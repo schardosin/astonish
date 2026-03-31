@@ -45,7 +45,7 @@ func ChunkFile(path string, content string, maxChars int, overlapChars int) []Ch
 		return nil
 	}
 	if maxChars <= 0 {
-		maxChars = 1600
+		maxChars = 1200
 	}
 	if overlapChars < 0 {
 		overlapChars = 0

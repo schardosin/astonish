@@ -125,12 +125,30 @@ func NewHugotEmbedder(modelsDir string, debugMode bool) (*HugotEmbedder, error) 
 	}, nil
 }
 
+// embeddingMaxChars is the maximum input text length (in characters) passed to
+// the embedding model. The all-MiniLM-L6-v2 model has a 512-token positional
+// embedding limit. With dense technical text (numbers, URLs, special chars),
+// the token-to-character ratio can be as low as ~3 chars/token. 1400 chars
+// yields ~467 tokens in the worst case, staying safely under 512.
+//
+// This is a defensive fallback — the primary defense is the chunk size limit
+// (ChunkMaxChars = 1200). This constant only fires for unusually dense text
+// or search queries that bypass the chunker.
+const embeddingMaxChars = 1400
+
 // EmbeddingFunc returns a chromem.EmbeddingFunc that uses the local Hugot pipeline.
 // This satisfies the chromem-go interface: func(ctx, text) ([]float32, error).
 func (h *HugotEmbedder) EmbeddingFunc() chromem.EmbeddingFunc {
 	return func(ctx context.Context, text string) ([]float32, error) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
+
+		// Truncate to avoid exceeding the model's max_position_embeddings (512
+		// tokens). Hugot's Go tokenizer (v0.7.0) does not truncate automatically
+		// unlike the Rust tokenizer, causing a panic when token count exceeds 512.
+		if len(text) > embeddingMaxChars {
+			text = text[:embeddingMaxChars]
+		}
 
 		output, err := h.pipeline.RunPipeline([]string{text})
 		if err != nil {

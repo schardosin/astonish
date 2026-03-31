@@ -27,9 +27,10 @@ type Indexer struct {
 // fileIndexName is the filename used to persist the file index to disk.
 const fileIndexName = "file_index.json"
 
-// fileIndexVersion is bumped when the metadata schema changes (e.g. adding
-// the "category" field) to force a full re-index on the next startup.
-const fileIndexVersion = 2
+// fileIndexVersion is bumped when the chunking/embedding strategy changes
+// to force a full re-index on the next startup. v2 → v3: reduced chunk size
+// from 1600 to 1200 chars to stay under the 512-token embedding model limit.
+const fileIndexVersion = 3
 
 // fileIndexData is the versioned wrapper for the persisted file index.
 type fileIndexData struct {

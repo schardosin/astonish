@@ -93,7 +93,10 @@ func getRequiredMCPServersFromConfig(ctx context.Context, agentCfg *config.Agent
 	}
 
 	// Load persistent cache for tool→server lookup
-	persistentCache, _ := cache.LoadCache()
+	persistentCache, cacheLoadErr := cache.LoadCache()
+	if cacheLoadErr != nil {
+		slog.Warn("failed to load persistent cache", "error", cacheLoadErr)
+	}
 
 	// Validate checksums and refresh any changed servers (synchronously for CLI)
 	needsRefresh, removed := cache.ValidateChecksums(verbose)
@@ -110,7 +113,11 @@ func getRequiredMCPServersFromConfig(ctx context.Context, agentCfg *config.Agent
 		}
 		refreshServers(ctx, mcpCfg, needsRefresh, verbose)
 		// Reload cache after refresh
-		persistentCache, _ = cache.LoadCache()
+		var cacheErr error
+		persistentCache, cacheErr = cache.LoadCache()
+		if cacheErr != nil {
+			slog.Warn("failed to reload persistent cache", "error", cacheErr)
+		}
 	}
 
 	requiredServers := make(map[string]bool)

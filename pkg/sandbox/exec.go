@@ -301,7 +301,9 @@ func ExecSimpleWithEnv(client *IncusClient, containerName string, command []stri
 
 	var buf bytes.Buffer
 	go func() {
-		_, _ = io.Copy(&buf, proc.Stdout)
+		if _, copyErr := io.Copy(&buf, proc.Stdout); copyErr != nil {
+			slog.Debug("failed to copy process stdout", "error", copyErr)
+		}
 	}()
 
 	exitCode, err := proc.Wait()

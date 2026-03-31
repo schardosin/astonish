@@ -399,11 +399,13 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				}
 			case input == "/new":
 				// Delete current session and create a fresh one
-				_ = sessionService.Delete(ctx, &session.DeleteRequest{
+				if delErr := sessionService.Delete(ctx, &session.DeleteRequest{
 					AppName:   appName,
 					UserID:    userID,
 					SessionID: sess.ID(),
-				})
+				}); delErr != nil {
+					slog.Warn("failed to delete session during /new", "session", sess.ID(), "error", delErr)
+				}
 				newResp, newErr := sessionService.Create(ctx, &session.CreateRequest{
 					AppName: appName,
 					UserID:  userID,

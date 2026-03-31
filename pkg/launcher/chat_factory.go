@@ -216,7 +216,11 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					skillsCfg := &cfg.AppConfig.Skills
 					workDir := cfg.WorkspaceDir
 					if workDir == "" {
-						workDir, _ = os.Getwd()
+						if wd, wdErr := os.Getwd(); wdErr != nil {
+							slog.Warn("failed to get working directory for skills", "error", wdErr)
+						} else {
+							workDir = wd
+						}
 					}
 					preSkills, psErr := skills.LoadSkills(
 						skillsCfg.GetUserSkillsDir(),
@@ -319,7 +323,11 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 								skillsCfg := &cfg.AppConfig.Skills
 								skillWorkDir := cfg.WorkspaceDir
 								if skillWorkDir == "" {
-									skillWorkDir, _ = os.Getwd()
+									if wd, wdErr := os.Getwd(); wdErr != nil {
+										slog.Warn("failed to get working directory for skill watcher", "error", wdErr)
+									} else {
+										skillWorkDir = wd
+									}
 								}
 								skillWatchCtx, skillWatchCancel := context.WithCancel(context.Background())
 								go func() {
@@ -512,7 +520,11 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		skillsCfg := &cfg.AppConfig.Skills
 		workDir := cfg.WorkspaceDir
 		if workDir == "" {
-			workDir, _ = os.Getwd()
+			if wd, wdErr := os.Getwd(); wdErr != nil {
+				slog.Warn("failed to get working directory for deferred skills", "error", wdErr)
+			} else {
+				workDir = wd
+			}
 		}
 
 		var skillErr error
@@ -897,7 +909,11 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// --- 5. Build system prompt ---
 	workspaceDir := cfg.WorkspaceDir
 	if workspaceDir == "" {
-		workspaceDir, _ = os.Getwd()
+		if wd, wdErr := os.Getwd(); wdErr != nil {
+			slog.Warn("failed to get working directory for system prompt", "error", wdErr)
+		} else {
+			workspaceDir = wd
+		}
 	}
 
 	// The prompt builder uses all tools for capability detection.

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -77,7 +76,7 @@ func ListDrillSuitesHandler(w http.ResponseWriter, _ *http.Request) {
 	dirs := adrill.DefaultDrillDirs()
 	suites, err := adrill.DiscoverSuites(dirs)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -106,8 +105,7 @@ func ListDrillSuitesHandler(w http.ResponseWriter, _ *http.Request) {
 		items = append(items, item)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(items)
+	respondJSON(w, http.StatusOK, items)
 }
 
 // GetDrillSuiteHandler handles GET /api/drills/{suite}
@@ -117,7 +115,7 @@ func GetDrillSuiteHandler(w http.ResponseWriter, r *http.Request) {
 
 	suite, err := adrill.FindSuite(dirs, suiteName)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
@@ -145,8 +143,7 @@ func GetDrillSuiteHandler(w http.ResponseWriter, r *http.Request) {
 		LastReport:  loadLatestReport(suiteName),
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(detail)
+	respondJSON(w, http.StatusOK, detail)
 }
 
 // GetDrillHandler handles GET /api/drills/{suite}/drills/{name}
@@ -158,7 +155,7 @@ func GetDrillHandler(w http.ResponseWriter, r *http.Request) {
 	dirs := adrill.DefaultDrillDirs()
 	suite, err := adrill.FindSuite(dirs, suiteName)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
@@ -178,13 +175,12 @@ func GetDrillHandler(w http.ResponseWriter, r *http.Request) {
 				resp.StepTimeout = t.Config.DrillConfig.StepTimeout
 				resp.OnFail = t.Config.DrillConfig.OnFail
 			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			respondJSON(w, http.StatusOK, resp)
 			return
 		}
 	}
 
-	http.Error(w, "drill not found", http.StatusNotFound)
+	respondError(w, http.StatusNotFound, "drill not found")
 }
 
 // DeleteDrillSuiteHandler handles DELETE /api/drills/{suite}
@@ -194,12 +190,11 @@ func DeleteDrillSuiteHandler(w http.ResponseWriter, r *http.Request) {
 
 	deleted, err := adrill.DeleteSuite(dirs, suiteName, true)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"status":  "deleted",
 		"deleted": deleted,
 	})
@@ -212,12 +207,11 @@ func DeleteDrillHandler(w http.ResponseWriter, r *http.Request) {
 
 	deletedPath, suiteName, err := adrill.DeleteTest(dirs, drillName)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"status":  "deleted",
 		"deleted": []string{deletedPath},
 		"suite":   suiteName,
@@ -229,15 +223,13 @@ func ListDrillReportsHandler(w http.ResponseWriter, _ *http.Request) {
 	reportsDir, err := config.GetReportsDir()
 	if err != nil {
 		slog.Error("failed to get reports dir", "component", "drill", "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]DrillReportListItem{})
+		respondJSON(w, http.StatusOK, []DrillReportListItem{})
 		return
 	}
 	entries, err := os.ReadDir(reportsDir)
 	if err != nil {
 		// No reports directory yet — return empty list
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]DrillReportListItem{})
+		respondJSON(w, http.StatusOK, []DrillReportListItem{})
 		return
 	}
 
@@ -262,8 +254,7 @@ func ListDrillReportsHandler(w http.ResponseWriter, _ *http.Request) {
 		})
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(items)
+	respondJSON(w, http.StatusOK, items)
 }
 
 // GetDrillReportHandler handles GET /api/drill-reports/{suite}
@@ -271,12 +262,11 @@ func GetDrillReportHandler(w http.ResponseWriter, r *http.Request) {
 	suiteName := mux.Vars(r)["suite"]
 	report := loadLatestReport(suiteName)
 	if report == nil {
-		http.Error(w, "no report found for suite", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "no report found for suite")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(report)
+	respondJSON(w, http.StatusOK, report)
 }
 
 // loadLatestReport loads the most recent report for a suite from disk.
@@ -354,13 +344,13 @@ func GetDrillYAMLHandler(w http.ResponseWriter, r *http.Request) {
 
 	filePath, err := findDrillFile(suiteName, drillName)
 	if err != nil {
-		http.Error(w, "drill not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "drill not found")
 		return
 	}
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		http.Error(w, "failed to read drill file: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to read drill file: "+err.Error())
 		return
 	}
 
@@ -376,13 +366,13 @@ func SaveDrillYAMLHandler(w http.ResponseWriter, r *http.Request) {
 
 	filePath, err := findDrillFile(suiteName, drillName)
 	if err != nil {
-		http.Error(w, "drill not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "drill not found")
 		return
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "failed to read request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "failed to read request body")
 		return
 	}
 	defer r.Body.Close()
@@ -390,18 +380,17 @@ func SaveDrillYAMLHandler(w http.ResponseWriter, r *http.Request) {
 	// Validate that the YAML parses
 	var check map[string]interface{}
 	if err := yaml.Unmarshal(body, &check); err != nil {
-		http.Error(w, "Invalid YAML: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid YAML: "+err.Error())
 		return
 	}
 
 	// Write the raw bytes to preserve user formatting/comments
 	if err := os.WriteFile(filePath, body, 0644); err != nil {
-		http.Error(w, "failed to write drill file: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to write drill file: "+err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"status": "saved",
 		"suite":  suiteName,
 		"drill":  drillName,
@@ -415,13 +404,13 @@ func GetSuiteYAMLHandler(w http.ResponseWriter, r *http.Request) {
 
 	filePath, err := findSuiteFile(suiteName)
 	if err != nil {
-		http.Error(w, "suite not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "suite not found")
 		return
 	}
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		http.Error(w, "failed to read suite file: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to read suite file: "+err.Error())
 		return
 	}
 
@@ -436,13 +425,13 @@ func SaveSuiteYAMLHandler(w http.ResponseWriter, r *http.Request) {
 
 	filePath, err := findSuiteFile(suiteName)
 	if err != nil {
-		http.Error(w, "suite not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "suite not found")
 		return
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "failed to read request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "failed to read request body")
 		return
 	}
 	defer r.Body.Close()
@@ -450,18 +439,17 @@ func SaveSuiteYAMLHandler(w http.ResponseWriter, r *http.Request) {
 	// Validate that the YAML parses
 	var check map[string]interface{}
 	if err := yaml.Unmarshal(body, &check); err != nil {
-		http.Error(w, "Invalid YAML: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid YAML: "+err.Error())
 		return
 	}
 
 	// Write the raw bytes to preserve user formatting/comments
 	if err := os.WriteFile(filePath, body, 0644); err != nil {
-		http.Error(w, "failed to write suite file: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to write suite file: "+err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"status": "saved",
 		"suite":  suiteName,
 	})

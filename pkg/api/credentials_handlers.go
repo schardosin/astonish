@@ -77,11 +77,11 @@ func requireMasterKey(w http.ResponseWriter, r *http.Request, store *credentials
 	}
 	masterKey := r.Header.Get("X-Master-Key")
 	if masterKey == "" {
-		http.Error(w, `{"error":"master_key_required"}`, http.StatusForbidden)
+		respondError(w, http.StatusForbidden, `{"error":"master_key_required"}`)
 		return false
 	}
 	if !store.VerifyMasterKey(masterKey) {
-		http.Error(w, `{"error":"invalid_master_key"}`, http.StatusForbidden)
+		respondError(w, http.StatusForbidden, `{"error":"invalid_master_key"}`)
 		return false
 	}
 	return true
@@ -94,7 +94,7 @@ func requireMasterKey(w http.ResponseWriter, r *http.Request, store *credentials
 func ListCredentialsHandler(w http.ResponseWriter, r *http.Request) {
 	store := getAPICredentialStore()
 	if store == nil {
-		http.Error(w, "Credential store not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
 	}
 
@@ -119,8 +119,7 @@ func ListCredentialsHandler(w http.ResponseWriter, r *http.Request) {
 		HasMasterKey: store.HasMasterKey(),
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	respondJSON(w, http.StatusOK, resp)
 }
 
 // GetCredentialHandler reveals a credential's full values.
@@ -128,7 +127,7 @@ func ListCredentialsHandler(w http.ResponseWriter, r *http.Request) {
 func GetCredentialHandler(w http.ResponseWriter, r *http.Request) {
 	store := getAPICredentialStore()
 	if store == nil {
-		http.Error(w, "Credential store not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
 	}
 
@@ -143,7 +142,7 @@ func GetCredentialHandler(w http.ResponseWriter, r *http.Request) {
 
 	cred := store.Get(name)
 	if cred == nil {
-		http.Error(w, "Credential not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Credential not found")
 		return
 	}
 
@@ -165,8 +164,7 @@ func GetCredentialHandler(w http.ResponseWriter, r *http.Request) {
 		TokenExpiry:  cred.TokenExpiry,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	respondJSON(w, http.StatusOK, resp)
 }
 
 // SaveCredentialHandler creates or updates a named credential.
@@ -174,27 +172,26 @@ func GetCredentialHandler(w http.ResponseWriter, r *http.Request) {
 func SaveCredentialHandler(w http.ResponseWriter, r *http.Request) {
 	store := getAPICredentialStore()
 	if store == nil {
-		http.Error(w, "Credential store not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
 	}
 
 	var req credentialSaveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
 		return
 	}
 	if req.Name == "" {
-		http.Error(w, "Credential name is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Credential name is required")
 		return
 	}
 
 	if err := store.Set(req.Name, &req.Credential); err != nil {
-		http.Error(w, "Failed to save credential: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to save credential: "+err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "name": req.Name})
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "name": req.Name})
 }
 
 // DeleteCredentialHandler removes a credential or flat secret.
@@ -202,7 +199,7 @@ func SaveCredentialHandler(w http.ResponseWriter, r *http.Request) {
 func DeleteCredentialHandler(w http.ResponseWriter, r *http.Request) {
 	store := getAPICredentialStore()
 	if store == nil {
-		http.Error(w, "Credential store not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
 	}
 
@@ -211,26 +208,24 @@ func DeleteCredentialHandler(w http.ResponseWriter, r *http.Request) {
 	// Try HTTP credential first
 	if store.Get(name) != nil {
 		if err := store.Remove(name); err != nil {
-			http.Error(w, "Failed to remove credential: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to remove credential: "+err.Error())
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "removed": name})
+		respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "removed": name})
 		return
 	}
 
 	// Try flat secret
 	if store.GetSecret(name) != "" {
 		if err := store.RemoveSecret(name); err != nil {
-			http.Error(w, "Failed to remove secret: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to remove secret: "+err.Error())
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "removed": name})
+		respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "removed": name})
 		return
 	}
 
-	http.Error(w, "Credential or secret not found", http.StatusNotFound)
+	respondError(w, http.StatusNotFound, "Credential or secret not found")
 }
 
 // GetSecretHandler reveals a flat secret value.
@@ -238,7 +233,7 @@ func DeleteCredentialHandler(w http.ResponseWriter, r *http.Request) {
 func GetSecretHandler(w http.ResponseWriter, r *http.Request) {
 	store := getAPICredentialStore()
 	if store == nil {
-		http.Error(w, "Credential store not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
 	}
 
@@ -253,12 +248,11 @@ func GetSecretHandler(w http.ResponseWriter, r *http.Request) {
 
 	value := store.GetSecret(key)
 	if value == "" {
-		http.Error(w, "Secret not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Secret not found")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"key": key, "value": value})
+	respondJSON(w, http.StatusOK, map[string]string{"key": key, "value": value})
 }
 
 // SaveSecretHandler creates or updates a flat secret.
@@ -266,7 +260,7 @@ func GetSecretHandler(w http.ResponseWriter, r *http.Request) {
 func SaveSecretHandler(w http.ResponseWriter, r *http.Request) {
 	store := getAPICredentialStore()
 	if store == nil {
-		http.Error(w, "Credential store not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
 	}
 
@@ -274,21 +268,20 @@ func SaveSecretHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req secretSaveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
 		return
 	}
 	if req.Value == "" {
-		http.Error(w, "Secret value is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Secret value is required")
 		return
 	}
 
 	if err := store.SetSecret(key, req.Value); err != nil {
-		http.Error(w, "Failed to save secret: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to save secret: "+err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "key": key})
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "key": key})
 }
 
 // SetMasterKeyHandler sets, changes, or removes the master key.
@@ -296,26 +289,26 @@ func SaveSecretHandler(w http.ResponseWriter, r *http.Request) {
 func SetMasterKeyHandler(w http.ResponseWriter, r *http.Request) {
 	store := getAPICredentialStore()
 	if store == nil {
-		http.Error(w, "Credential store not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
 	}
 
 	var req masterKeyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
 		return
 	}
 
 	// If a master key already exists, verify the current password
 	if store.HasMasterKey() {
 		if !store.VerifyMasterKey(req.Current) {
-			http.Error(w, `{"error":"invalid_current_key"}`, http.StatusForbidden)
+			respondError(w, http.StatusForbidden, `{"error":"invalid_current_key"}`)
 			return
 		}
 	}
 
 	if err := store.SetMasterKey(req.New); err != nil {
-		http.Error(w, "Failed to set master key: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to set master key: "+err.Error())
 		return
 	}
 
@@ -324,8 +317,7 @@ func SetMasterKeyHandler(w http.ResponseWriter, r *http.Request) {
 		action = "removed"
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "action": action})
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "action": action})
 }
 
 // VerifyMasterKeyHandler checks if a password matches the master key.
@@ -333,18 +325,17 @@ func SetMasterKeyHandler(w http.ResponseWriter, r *http.Request) {
 func VerifyMasterKeyHandler(w http.ResponseWriter, r *http.Request) {
 	store := getAPICredentialStore()
 	if store == nil {
-		http.Error(w, "Credential store not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
 	}
 
 	var req verifyMasterKeyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
 		return
 	}
 
 	valid := store.VerifyMasterKey(req.Password)
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"valid": valid})
+	respondJSON(w, http.StatusOK, map[string]bool{"valid": valid})
 }

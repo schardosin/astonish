@@ -862,14 +862,6 @@ func TestExecuteTool_NotRunnable(t *testing.T) {
 		Tool: &mockTool{name: "no_run"},
 	}
 
-	// We need a wrapper that satisfies tool.Tool but NOT Run(tool.Context, any)
-	// The nonRunnableTool embeds mockTool which has Run, so we need a different approach
-	type bareMinTool struct {
-		nameVal string
-	}
-	// Implement only the tool.Tool interface methods via a struct that doesn't have Run
-	// Actually, tool.Tool is an interface — let's just make a struct with Name()/Description() etc.
-
 	p := &ReActPlanner{
 		Tools: []tool.Tool{nrt.Tool},
 	}

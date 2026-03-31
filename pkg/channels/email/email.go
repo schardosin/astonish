@@ -138,7 +138,7 @@ func (e *EmailChannel) Start(ctx context.Context, handler channels.MessageHandle
 	e.logger.Printf("[email] Connected as %s (IMAP: %s)", e.config.Address, e.config.IMAPServer)
 
 	// Create cancellable context for polling
-	pollCtx, cancel := context.WithCancel(ctx)
+	pollCtx, cancel := context.WithCancel(ctx) //nolint:gosec // G118: cancel is stored in e.cancel and called by Stop()
 	e.cancel = cancel
 
 	// Initial check

@@ -505,7 +505,7 @@ func (s *Store) save() error {
 		return fmt.Errorf("write temp credential store: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp) // best-effort cleanup
 		return fmt.Errorf("rename credential store: %w", err)
 	}
 

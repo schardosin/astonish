@@ -86,7 +86,7 @@ func checkHTTP(ctx context.Context, url string) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
@@ -107,7 +107,7 @@ func checkPort(host string, port int) error {
 	if err != nil {
 		return err
 	}
-	conn.Close()
+	_ = conn.Close()
 	return nil
 }
 

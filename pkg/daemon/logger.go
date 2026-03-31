@@ -37,7 +37,7 @@ func NewLogger(logPath string) (*Logger, error) {
 
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
+		_ = f.Close() // best-effort cleanup; original error takes priority
 		return nil, err
 	}
 
@@ -82,14 +82,14 @@ func (l *Logger) Close() error {
 // rotate renames the current log file and opens a new one.
 // Must be called with l.mu held.
 func (l *Logger) rotate() {
-	l.file.Close()
+	_ = l.file.Close() // best-effort; file may already be in a bad state
 
 	// Shift existing backups: .3 -> delete, .2 -> .3, .1 -> .2, current -> .1
 	for i := maxLogBackups; i >= 1; i-- {
 		src := fmt.Sprintf("%s.%d", l.filePath, i)
 		dst := fmt.Sprintf("%s.%d", l.filePath, i+1)
 		if i == maxLogBackups {
-			os.Remove(src)
+			_ = os.Remove(src) // best-effort cleanup of oldest backup
 		} else {
 			os.Rename(src, dst)
 		}

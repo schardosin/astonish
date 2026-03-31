@@ -326,8 +326,9 @@ func (m *PortProxyManager) StartProxy(containerName string, containerPort int) (
 
 	ctx, cancel := context.WithCancel(context.Background())
 	srv := &http.Server{
-		Addr:    fmt.Sprintf("127.0.0.1:%d", hostPort),
-		Handler: handler,
+		Addr:              fmt.Sprintf("127.0.0.1:%d", hostPort),
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	slog.Info("starting listener", "component", "sandbox-proxy", "host_port", hostPort, "container_ip", ip, "container_port", containerPort, "container", containerName)

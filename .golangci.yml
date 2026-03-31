@@ -17,6 +17,9 @@ linters:
     # Staticcheck for real bugs (not style)
     - staticcheck
 
+    # Security scanner
+    - gosec
+
   settings:
     # Disable unreachable code check in govet (often false positives in complex flows)
     govet:
@@ -36,3 +39,33 @@ linters:
         - "-SA9003"
         # Disable deprecation warnings (will fix gradually)
         - "-SA1019"
+
+    gosec:
+      excludes:
+        # Struct fields named "APIKey", "Password", etc. are expected in config types
+        - G101  # Hardcoded credentials (false positives on constants/env var maps)
+        - G104  # Errors unhandled — most are best-effort Close/Remove calls; real cases fixed manually
+        - G117  # Exported field matches secret pattern (unavoidable in config structs)
+        # File permissions: 0644/0755 are standard for non-secret config and cache files
+        - G301  # Directory permissions > 0750
+        - G302  # File permissions > 0600
+        - G306  # WriteFile permissions > 0600
+        # Safe to use math/rand for jitter/humanization (not cryptographic)
+        - G404  # Weak random number generator
+        # Variable URLs are expected in an HTTP client/proxy codebase
+        - G107  # HTTP request with variable URL
+        # Integer conversions are verified safe in context (e.g. uint32>>9 to uint8)
+        - G115  # Integer overflow conversion
+        # Log injection and SSRF taint analysis produce too many false positives
+        - G704  # SSRF via taint analysis
+        - G706  # Log injection via taint analysis
+        # Path traversal taint analysis flags safe internal paths
+        - G703  # Path traversal via taint analysis
+        # XSS taint analysis — output is to terminal, not browsers
+        - G705  # XSS via taint analysis
+        # Subprocess launched with variable — inherent to an agent framework
+        - G204  # Subprocess launched with variable
+        # File inclusion via variable — config/demo files are loaded by path
+        - G304  # Potential file inclusion via variable
+        # Command injection — inherent to an agent that runs user-specified commands/editors
+        - G702  # Command injection via taint analysis

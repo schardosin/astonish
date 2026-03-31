@@ -24,16 +24,16 @@ func atomicWrite(path string, data []byte, perm os.FileMode) error {
 	success := false
 	defer func() {
 		if !success {
-			os.Remove(tmpPath)
+			_ = os.Remove(tmpPath) // best-effort cleanup
 		}
 	}()
 
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close() // best-effort cleanup; write error takes priority
 		return fmt.Errorf("failed to write temp file: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close() // best-effort cleanup; sync error takes priority
 		return fmt.Errorf("failed to sync temp file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {

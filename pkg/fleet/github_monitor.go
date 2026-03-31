@@ -187,7 +187,7 @@ func (m *GitHubMonitor) saveStateLocked() error {
 		return fmt.Errorf("writing monitor state: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath) // best-effort cleanup
 		return fmt.Errorf("renaming monitor state: %w", err)
 	}
 

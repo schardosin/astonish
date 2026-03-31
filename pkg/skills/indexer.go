@@ -100,7 +100,7 @@ func SyncSkillsToMemory(skills []Skill, memoryDir string) error {
 	}
 	for _, e := range entries {
 		if !e.IsDir() && !expected[e.Name()] {
-			os.Remove(filepath.Join(skillsDir, e.Name()))
+			_ = os.Remove(filepath.Join(skillsDir, e.Name())) // best-effort cleanup
 		}
 	}
 

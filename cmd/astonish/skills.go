@@ -185,30 +185,7 @@ func handleSkillsCreate(name string) error {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	template := fmt.Sprintf(`---
-name: %s
-description: "TODO: One-line description of what this skill does"
-require_bins: []
----
-
-# %s
-
-## When to Use
-- TODO: Describe when this skill should be used
-
-## When NOT to Use
-- TODO: Describe when other tools are more appropriate
-
-## Common Commands
-`+"```"+`
-# TODO: Add common commands and patterns
-`+"```"+`
-
-## Tips
-- TODO: Add tips and best practices
-`, name, name)
-
-	if err := os.WriteFile(skillFile, []byte(template), 0644); err != nil {
+	if err := os.WriteFile(skillFile, []byte(skills.NewSkillTemplate(name)), 0644); err != nil {
 		return fmt.Errorf("failed to write skill file: %w", err)
 	}
 

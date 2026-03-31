@@ -254,7 +254,7 @@ func (s *Store) save() error {
 		return fmt.Errorf("write temp store: %w", err)
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
-		os.Remove(tmp) // Cleanup on failure
+		_ = os.Remove(tmp) // best-effort cleanup
 		return fmt.Errorf("rename store: %w", err)
 	}
 	return nil

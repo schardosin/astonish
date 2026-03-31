@@ -65,7 +65,9 @@ func (x *Xvfb) Start(width, height int) error {
 	x.display = display
 
 	// Set DISPLAY so Chrome (and any other child process) uses our virtual display.
-	os.Setenv("DISPLAY", display)
+	if err := os.Setenv("DISPLAY", display); err != nil {
+		return fmt.Errorf("failed to set DISPLAY env: %w", err)
+	}
 
 	// Give Xvfb a moment to initialize the display before Chrome tries to connect.
 	time.Sleep(500 * time.Millisecond)

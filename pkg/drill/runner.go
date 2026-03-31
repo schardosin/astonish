@@ -110,7 +110,7 @@ func (sr *SuiteRunner) runLegacySuite(ctx context.Context, report *SuiteReport, 
 				report.FinishedAt = time.Now()
 				report.Duration = report.FinishedAt.Sub(report.StartedAt).Milliseconds()
 				if sr.artifactMgr != nil {
-					sr.artifactMgr.SaveSetupLog(setupLog.String())
+					_, _ = sr.artifactMgr.SaveSetupLog(setupLog.String()) // best-effort
 				}
 				sr.killBackgroundSessions(ctx)
 				return report, nil
@@ -120,7 +120,7 @@ func (sr *SuiteRunner) runLegacySuite(ctx context.Context, report *SuiteReport, 
 	report.SetupLog = setupLog.String()
 	sr.setupLog = setupLog.String()
 	if sr.artifactMgr != nil && setupLog.Len() > 0 {
-		sr.artifactMgr.SaveSetupLog(setupLog.String())
+		_, _ = sr.artifactMgr.SaveSetupLog(setupLog.String()) // best-effort
 	}
 
 	// 3. Run ready check (skip if not configured or empty)
@@ -153,7 +153,7 @@ func (sr *SuiteRunner) runLegacySuite(ctx context.Context, report *SuiteReport, 
 	// 5. Run teardown commands (always, even on failure)
 	if sc != nil {
 		for _, cmd := range sc.Teardown {
-			sr.runShellCommand(ctx, cmd, 30) // best-effort
+			_, _ = sr.runShellCommand(ctx, cmd, 30) // best-effort teardown
 		}
 	}
 
@@ -198,7 +198,7 @@ func (sr *SuiteRunner) runMultiServiceSuite(ctx context.Context, report *SuiteRe
 			report.FinishedAt = time.Now()
 			report.Duration = report.FinishedAt.Sub(report.StartedAt).Milliseconds()
 			if sr.artifactMgr != nil {
-				sr.artifactMgr.SaveSetupLog(setupLog.String())
+				_, _ = sr.artifactMgr.SaveSetupLog(setupLog.String()) // best-effort
 			}
 			return report, nil
 		}

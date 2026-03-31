@@ -1,6 +1,9 @@
 package config
 
-import "os"
+import (
+	"log/slog"
+	"os"
+)
 
 // ProviderEnvMapping maps provider config keys to environment variable names
 // This is the single source of truth for how config keys map to env vars
@@ -58,7 +61,9 @@ func SetupProviderEnv(providerName string, providerCfg ProviderConfig) {
 	if mapping, ok := ProviderEnvMapping[providerName]; ok {
 		for cfgKey, envKey := range mapping {
 			if val, ok := providerCfg[cfgKey]; ok && val != "" {
-				os.Setenv(envKey, val)
+				if err := os.Setenv(envKey, val); err != nil {
+					slog.Warn("failed to set env var", "key", envKey, "error", err)
+				}
 			}
 		}
 	}
@@ -104,13 +109,17 @@ func SetupAllProviderEnvFromStore(appCfg *AppConfig, getSecret SecretGetter) {
 			// 1. Try credential store
 			storeKey := "provider." + instanceName + "." + cfgKey
 			if val := getSecret(storeKey); val != "" {
-				os.Setenv(envVar, val)
+				if err := os.Setenv(envVar, val); err != nil {
+					slog.Warn("failed to set env var from store", "key", envVar, "error", err)
+				}
 				continue
 			}
 
 			// 2. Try config map (non-secret fields like base_url stay here)
 			if val, has := providerCfg[cfgKey]; has && val != "" {
-				os.Setenv(envVar, val)
+				if err := os.Setenv(envVar, val); err != nil {
+					slog.Warn("failed to set env var from config", "key", envVar, "error", err)
+				}
 				continue
 			}
 
@@ -128,12 +137,16 @@ func SetupAllProviderEnvFromStore(appCfg *AppConfig, getSecret SecretGetter) {
 		for serverID, envVar := range webServerEnvMapping {
 			storeKey := "web_servers." + serverID + ".api_key"
 			if val := getSecret(storeKey); val != "" {
-				os.Setenv(envVar, val)
+				if err := os.Setenv(envVar, val); err != nil {
+					slog.Warn("failed to set web server env var", "key", envVar, "error", err)
+				}
 				continue
 			}
 			// Fallback to config
 			if wsCfg, ok := appCfg.WebServers[serverID]; ok && wsCfg.APIKey != "" {
-				os.Setenv(envVar, wsCfg.APIKey)
+				if err := os.Setenv(envVar, wsCfg.APIKey); err != nil {
+					slog.Warn("failed to set web server env var from config", "key", envVar, "error", err)
+				}
 			}
 		}
 	}
@@ -149,7 +162,9 @@ func SetupDelegateEnv(envNames []string, getSecret SecretGetter) {
 		if getSecret != nil {
 			storeKey := "delegate.env." + name
 			if val := getSecret(storeKey); val != "" {
-				os.Setenv(name, val)
+				if err := os.Setenv(name, val); err != nil {
+					slog.Warn("failed to set delegate env var", "key", name, "error", err)
+				}
 				continue
 			}
 		}
@@ -165,7 +180,9 @@ func SetupMCPEnv(mcpCfg *MCPConfig) {
 	for _, server := range mcpCfg.MCPServers {
 		for k, v := range server.Env {
 			if v != "" {
-				os.Setenv(k, v)
+				if err := os.Setenv(k, v); err != nil {
+					slog.Warn("failed to set MCP env var", "key", k, "error", err)
+				}
 			}
 		}
 	}

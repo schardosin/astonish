@@ -257,7 +257,7 @@ func (s *FileStore) Delete(ctx context.Context, req *adksession.DeleteRequest) e
 	for _, child := range children {
 		delete(s.sessions, child.ID)
 		transcriptPath := filepath.Join(s.baseDir, child.AppName, child.UserID, child.ID+".jsonl")
-		os.Remove(transcriptPath)
+		_ = os.Remove(transcriptPath) // best-effort cleanup
 	}
 
 	// Remove the parent session from in-memory cache

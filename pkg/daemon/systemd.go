@@ -4,6 +4,7 @@ package daemon
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -119,7 +120,9 @@ WantedBy=default.target
 func (s *systemdService) Uninstall() error {
 	// Stop and disable
 	if running, _ := s.IsRunning(); running {
-		_ = s.Stop()
+		if err := s.Stop(); err != nil {
+			slog.Warn("failed to stop daemon before uninstall", "error", err)
+		}
 	}
 
 	cmd := exec.Command("systemctl", "--user", "disable", systemdLabel)

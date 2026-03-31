@@ -480,7 +480,9 @@ func handleToolsStoreList() error {
 	if err != nil {
 		return fmt.Errorf("failed to load flow store: %w", err)
 	}
-	_ = store.UpdateAllManifests()
+	if err := store.UpdateAllManifests(); err != nil {
+		slog.Warn("failed to update manifests", "error", err)
+	}
 	tappedMCPs := store.ListAllMCPs()
 
 	// Convert to mcpstore inputs
@@ -564,7 +566,9 @@ func handleToolsStoreInstall() error {
 	if err != nil {
 		return fmt.Errorf("failed to load flow store: %w", err)
 	}
-	_ = store.UpdateAllManifests()
+	if err := store.UpdateAllManifests(); err != nil {
+		slog.Warn("failed to update manifests", "error", err)
+	}
 	tappedMCPs := store.ListAllMCPs()
 
 	// Convert to mcpstore inputs

@@ -197,7 +197,9 @@ func (a *PlanActivator) Activate(ctx context.Context, planKey string) error {
 
 	if err := a.registry().Save(plan); err != nil {
 		// Rollback: remove the scheduler job
-		_ = a.scheduler.RemoveJob(job.ID)
+		if rollbackErr := a.scheduler.RemoveJob(job.ID); rollbackErr != nil {
+			slog.Error("failed to rollback scheduler job", "jobID", job.ID, "error", rollbackErr)
+		}
 		return fmt.Errorf("failed to save activation state: %w", err)
 	}
 

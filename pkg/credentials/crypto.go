@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,7 +105,7 @@ func loadOrCreateKey(configDir string) ([]byte, error) {
 			hexKey := hex.EncodeToString(key) + "\n"
 			if writeErr := os.WriteFile(keyPath, []byte(hexKey), 0600); writeErr != nil {
 				// Non-fatal: key works fine, just can't upgrade the file format
-				_ = writeErr
+				slog.Debug("failed to upgrade key format to hex", "error", writeErr)
 			}
 		}
 		return key, nil

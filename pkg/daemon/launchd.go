@@ -4,6 +4,7 @@ package daemon
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"os/user"
@@ -117,7 +118,9 @@ func (s *launchdService) Install(cfg InstallConfig) error {
 func (s *launchdService) Uninstall() error {
 	// Stop first if running
 	if running, _ := s.IsRunning(); running {
-		_ = s.Stop()
+		if err := s.Stop(); err != nil {
+			slog.Warn("failed to stop daemon before uninstall", "error", err)
+		}
 	}
 
 	if err := os.Remove(s.plistPath); err != nil && !os.IsNotExist(err) {

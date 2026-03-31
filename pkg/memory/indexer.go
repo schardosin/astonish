@@ -275,7 +275,9 @@ func (idx *Indexer) WatchAndSync(ctx context.Context, debounceMs int) error {
 				if event.Has(fsnotify.Create) {
 					info, err := os.Stat(event.Name)
 					if err == nil && info.IsDir() && filepath.Base(event.Name) != "vectors" {
-						_ = watcher.Add(event.Name)
+						if watchErr := watcher.Add(event.Name); watchErr != nil {
+							slog.Warn("failed to watch new memory directory", "path", event.Name, "error", watchErr)
+						}
 					}
 				}
 				continue

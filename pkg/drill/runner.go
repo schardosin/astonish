@@ -77,11 +77,7 @@ func (sr *SuiteRunner) RunSuite(ctx context.Context, suite *LoadedSuite, tests [
 
 	sc := suite.Config.SuiteConfig
 
-	// 1. Set environment variables
-	// (In Phase 2, these are set inside the container. For now, they're noted in the report.)
-	if sc != nil {
-		_ = sc.Environment
-	}
+	// TODO: apply sc.Environment to container in Phase 2
 
 	// Resolve base_url from suite config (apply placeholder substitution)
 	if sc != nil && sc.BaseURL != "" {

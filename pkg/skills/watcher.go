@@ -60,7 +60,9 @@ func WatchSkillDirs(ctx context.Context, cfg WatcherConfig) error {
 		parent := filepath.Dir(dir)
 		if parent != "" && parent != dir && !parentDirs[parent] {
 			parentDirs[parent] = true
-			_ = watcher.Add(parent)
+			if err := watcher.Add(parent); err != nil {
+				slog.Warn("failed to watch parent directory", "path", parent, "error", err)
+			}
 		}
 	}
 
@@ -135,7 +137,9 @@ func WatchSkillDirs(ctx context.Context, cfg WatcherConfig) error {
 						watchDirRecursive(watcher, event.Name, cfg.DebugMode)
 						slog.Debug("re-watching recreated skill root", "component", "skills-watcher", "dir", event.Name)
 					} else {
-						_ = watcher.Add(event.Name)
+						if err := watcher.Add(event.Name); err != nil {
+							slog.Warn("failed to watch new directory", "path", event.Name, "error", err)
+						}
 						slog.Debug("watching new directory", "component", "skills-watcher", "dir", event.Name)
 					}
 					// New directory likely already contains files (e.g. skills install

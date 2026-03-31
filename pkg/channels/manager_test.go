@@ -11,6 +11,7 @@ import (
 )
 
 func TestTruncate(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		s      string
@@ -26,6 +27,7 @@ func TestTruncate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := truncate(tt.s, tt.maxLen)
 			if got != tt.want {
 				t.Errorf("truncate(%q, %d) = %q, want %q", tt.s, tt.maxLen, got, tt.want)
@@ -35,7 +37,9 @@ func TestTruncate(t *testing.T) {
 }
 
 func TestChannelHints(t *testing.T) {
+	t.Parallel()
 	t.Run("telegram returns non-empty", func(t *testing.T) {
+		t.Parallel()
 		hints := channelHints("telegram")
 		if hints == "" {
 			t.Error("channelHints(\"telegram\") should return non-empty string")
@@ -46,6 +50,7 @@ func TestChannelHints(t *testing.T) {
 	})
 
 	t.Run("email returns non-empty", func(t *testing.T) {
+		t.Parallel()
 		hints := channelHints("email")
 		if hints == "" {
 			t.Error("channelHints(\"email\") should return non-empty string")
@@ -56,6 +61,7 @@ func TestChannelHints(t *testing.T) {
 	})
 
 	t.Run("unknown returns empty", func(t *testing.T) {
+		t.Parallel()
 		hints := channelHints("unknown_channel")
 		if hints != "" {
 			t.Errorf("channelHints(\"unknown_channel\") = %q, want empty", hints)
@@ -63,6 +69,7 @@ func TestChannelHints(t *testing.T) {
 	})
 
 	t.Run("empty returns empty", func(t *testing.T) {
+		t.Parallel()
 		hints := channelHints("")
 		if hints != "" {
 			t.Errorf("channelHints(\"\") = %q, want empty", hints)
@@ -71,7 +78,9 @@ func TestChannelHints(t *testing.T) {
 }
 
 func TestFriendlyErrorMessage(t *testing.T) {
+	t.Parallel()
 	t.Run("rate limited error", func(t *testing.T) {
+		t.Parallel()
 		err := llmerror.NewLLMError("openai", 429, "rate limited", "")
 		msg := friendlyErrorMessage(err)
 		if !strings.Contains(msg, "rate limited") {
@@ -80,6 +89,7 @@ func TestFriendlyErrorMessage(t *testing.T) {
 	})
 
 	t.Run("auth error", func(t *testing.T) {
+		t.Parallel()
 		err := llmerror.NewLLMError("openai", 401, "unauthorized", "")
 		msg := friendlyErrorMessage(err)
 		if !strings.Contains(msg, "Authentication") {
@@ -88,6 +98,7 @@ func TestFriendlyErrorMessage(t *testing.T) {
 	})
 
 	t.Run("server error", func(t *testing.T) {
+		t.Parallel()
 		err := llmerror.NewLLMError("openai", 500, "server error", "")
 		msg := friendlyErrorMessage(err)
 		if !strings.Contains(msg, "provider is experiencing issues") {
@@ -96,6 +107,7 @@ func TestFriendlyErrorMessage(t *testing.T) {
 	})
 
 	t.Run("other status code", func(t *testing.T) {
+		t.Parallel()
 		err := llmerror.NewLLMError("openai", 400, "bad request", "")
 		msg := friendlyErrorMessage(err)
 		if !strings.Contains(msg, "HTTP 400") {
@@ -104,6 +116,7 @@ func TestFriendlyErrorMessage(t *testing.T) {
 	})
 
 	t.Run("plain error", func(t *testing.T) {
+		t.Parallel()
 		err := errors.New("something broke")
 		msg := friendlyErrorMessage(err)
 		if !strings.Contains(msg, "something broke") {
@@ -115,6 +128,7 @@ func TestFriendlyErrorMessage(t *testing.T) {
 	})
 
 	t.Run("long error message is truncated", func(t *testing.T) {
+		t.Parallel()
 		longMsg := strings.Repeat("x", 300)
 		err := fmt.Errorf("%s", longMsg)
 		msg := friendlyErrorMessage(err)
@@ -128,6 +142,7 @@ func TestFriendlyErrorMessage(t *testing.T) {
 }
 
 func TestFleetSessionTracking(t *testing.T) {
+	t.Parallel()
 	logger := log.Default()
 	m := &ChannelManager{
 		channels:        make(map[string]Channel),
@@ -176,6 +191,7 @@ func TestFleetSessionTracking(t *testing.T) {
 }
 
 func TestSessionContext(t *testing.T) {
+	t.Parallel()
 	logger := log.Default()
 	m := &ChannelManager{
 		channels:        make(map[string]Channel),

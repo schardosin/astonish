@@ -144,6 +144,11 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 	// general API endpoints get a generous budget.
 	handler = api.RateLimitMiddleware(api.NewDefaultRateLimitConfig(), handler)
 
+	// Apply security headers (CSP, X-Frame-Options, etc.) for Studio responses.
+	// Placed inside auth/rate-limit but outside the subdomain proxy so that
+	// proxied container apps are not affected.
+	handler = api.CSPMiddleware(handler)
+
 	// Wrap with subdomain proxy check OUTSIDE auth — subdomain-proxied
 	// requests serve the container's app, not Studio, so they bypass
 	// Studio authentication. The auth cookie is scoped to the Studio

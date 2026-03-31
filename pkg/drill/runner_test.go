@@ -45,6 +45,7 @@ func (m *mockExecutor) Execute(_ context.Context, name string, args map[string]i
 }
 
 func TestRunSuiteBasicPass(t *testing.T) {
+	t.Parallel()
 	tmpDir, err := os.MkdirTemp("", "runner-test-*")
 	if err != nil {
 		t.Fatalf("create temp dir: %v", err)
@@ -109,6 +110,7 @@ func TestRunSuiteBasicPass(t *testing.T) {
 }
 
 func TestRunSuiteAssertionFail(t *testing.T) {
+	t.Parallel()
 	executor := newMockExecutor()
 	executor.SetResult("shell_command", map[string]interface{}{"stdout": "error occurred"}, nil)
 
@@ -157,6 +159,7 @@ func TestRunSuiteAssertionFail(t *testing.T) {
 }
 
 func TestRunSuiteToolError(t *testing.T) {
+	t.Parallel()
 	executor := newMockExecutor()
 	executor.SetResult("shell_command", nil, fmt.Errorf("command not found"))
 
@@ -197,6 +200,7 @@ func TestRunSuiteToolError(t *testing.T) {
 }
 
 func TestRunSuiteSetupFailure(t *testing.T) {
+	t.Parallel()
 	executor := newMockExecutor()
 	executor.SetResult("shell_command", nil, fmt.Errorf("setup failed"))
 
@@ -222,6 +226,7 @@ func TestRunSuiteSetupFailure(t *testing.T) {
 }
 
 func TestRunSuiteMultipleTests(t *testing.T) {
+	t.Parallel()
 	executor := newMockExecutor()
 	executor.SetResult("shell_command", map[string]interface{}{"stdout": "ok"}, nil)
 
@@ -273,6 +278,7 @@ func TestRunSuiteMultipleTests(t *testing.T) {
 }
 
 func TestRunSuiteOnFailStop(t *testing.T) {
+	t.Parallel()
 	executor := newMockExecutor()
 	executor.SetResult("shell_command", map[string]interface{}{"stdout": "bad output"}, nil)
 
@@ -312,6 +318,7 @@ func TestRunSuiteOnFailStop(t *testing.T) {
 }
 
 func TestRunSuiteOnFailContinue(t *testing.T) {
+	t.Parallel()
 	executor := newMockExecutor()
 	executor.SetResult("shell_command", map[string]interface{}{"stdout": "bad output"}, nil)
 
@@ -350,6 +357,7 @@ func TestRunSuiteOnFailContinue(t *testing.T) {
 }
 
 func TestRunSuiteNoAssertionPass(t *testing.T) {
+	t.Parallel()
 	executor := newMockExecutor()
 	executor.SetResult("shell_command", map[string]interface{}{"stdout": "whatever"}, nil)
 
@@ -383,6 +391,7 @@ func TestRunSuiteNoAssertionPass(t *testing.T) {
 }
 
 func TestRunSuiteTeardownAlwaysRuns(t *testing.T) {
+	t.Parallel()
 	// First call (setup) succeeds, test tool fails
 	customExec := &countingExecutor{
 		results: []mockResult{
@@ -468,6 +477,7 @@ func (ct *commandTrackingExecutor) Execute(_ context.Context, name string, args 
 }
 
 func TestRunSuiteMultiServiceBasic(t *testing.T) {
+	t.Parallel()
 	exec := newCommandTrackingExecutor()
 	runner := NewSuiteRunner(exec, nil, false)
 
@@ -520,6 +530,7 @@ func TestRunSuiteMultiServiceBasic(t *testing.T) {
 }
 
 func TestRunSuiteMultiServiceSetupFailure(t *testing.T) {
+	t.Parallel()
 	exec := newCommandTrackingExecutor()
 	exec.SetCommandResult("start_api", nil, fmt.Errorf("api failed to start"))
 
@@ -563,6 +574,7 @@ func TestRunSuiteMultiServiceSetupFailure(t *testing.T) {
 }
 
 func TestRunSuiteMultiServiceTeardownReverse(t *testing.T) {
+	t.Parallel()
 	exec := newCommandTrackingExecutor()
 	runner := NewSuiteRunner(exec, nil, false)
 
@@ -598,6 +610,7 @@ func TestRunSuiteMultiServiceTeardownReverse(t *testing.T) {
 }
 
 func TestRunSuiteMultiServiceAlwaysTeardownOnTestFailure(t *testing.T) {
+	t.Parallel()
 	exec := newCommandTrackingExecutor()
 	exec.SetCommandResult("echo failing", map[string]interface{}{"stdout": "wrong output"}, nil)
 
@@ -649,6 +662,7 @@ func TestRunSuiteMultiServiceAlwaysTeardownOnTestFailure(t *testing.T) {
 }
 
 func TestResolveExecutionOrder(t *testing.T) {
+	t.Parallel()
 	cfg := &config.AgentConfig{
 		Nodes: []config.Node{
 			{Name: "c"},
@@ -677,6 +691,7 @@ func TestResolveExecutionOrder(t *testing.T) {
 }
 
 func TestResolveExecutionOrderNoFlow(t *testing.T) {
+	t.Parallel()
 	cfg := &config.AgentConfig{
 		Nodes: []config.Node{
 			{Name: "first"},
@@ -691,6 +706,7 @@ func TestResolveExecutionOrderNoFlow(t *testing.T) {
 }
 
 func TestExtractOutput(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		result any
@@ -715,6 +731,7 @@ func TestExtractOutput(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := ExtractOutput(tt.result)
 			if got != tt.want {
 				t.Errorf("ExtractOutput = %q, want %q", got, tt.want)
@@ -724,6 +741,7 @@ func TestExtractOutput(t *testing.T) {
 }
 
 func TestIsBackgroundCommand(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		cmd  string
 		want bool
@@ -740,6 +758,7 @@ func TestIsBackgroundCommand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.cmd, func(t *testing.T) {
+			t.Parallel()
 			got := isBackgroundCommand(tt.cmd)
 			if got != tt.want {
 				t.Errorf("isBackgroundCommand(%q) = %v, want %v", tt.cmd, got, tt.want)
@@ -749,6 +768,7 @@ func TestIsBackgroundCommand(t *testing.T) {
 }
 
 func TestStripBackgroundSuffix(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		cmd  string
 		want string
@@ -760,6 +780,7 @@ func TestStripBackgroundSuffix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.cmd, func(t *testing.T) {
+			t.Parallel()
 			got := stripBackgroundSuffix(tt.cmd)
 			if got != tt.want {
 				t.Errorf("stripBackgroundSuffix(%q) = %q, want %q", tt.cmd, got, tt.want)
@@ -769,6 +790,7 @@ func TestStripBackgroundSuffix(t *testing.T) {
 }
 
 func TestExtractSessionID(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		result any
@@ -793,6 +815,7 @@ func TestExtractSessionID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := extractSessionID(tt.result)
 			if got != tt.want {
 				t.Errorf("extractSessionID = %q, want %q", got, tt.want)
@@ -802,6 +825,7 @@ func TestExtractSessionID(t *testing.T) {
 }
 
 func TestRunShellCommandBackground(t *testing.T) {
+	t.Parallel()
 	// When setup command ends with &, the runner should strip the & and
 	// pass background=true to shell_command.
 	mock := newMockExecutor()
@@ -842,6 +866,7 @@ func TestRunShellCommandBackground(t *testing.T) {
 }
 
 func TestRunShellCommandForeground(t *testing.T) {
+	t.Parallel()
 	// When setup command does NOT end with &, it should run in normal mode.
 	mock := newMockExecutor()
 	mock.SetResult("shell_command", map[string]interface{}{
@@ -873,6 +898,7 @@ func TestRunShellCommandForeground(t *testing.T) {
 }
 
 func TestKillBackgroundSessions(t *testing.T) {
+	t.Parallel()
 	mock := newMockExecutor()
 	mock.SetResult("process_kill", map[string]interface{}{"status": "killed"}, nil)
 
@@ -927,6 +953,7 @@ func (m *sequenceMockExecutor) Execute(_ context.Context, name string, args map[
 }
 
 func TestRunReadyCheckViaExecutorHTTPSuccess(t *testing.T) {
+	t.Parallel()
 	mock := newMockExecutor()
 	mock.SetResult("shell_command", map[string]interface{}{
 		"stdout":    "200",
@@ -956,6 +983,7 @@ func TestRunReadyCheckViaExecutorHTTPSuccess(t *testing.T) {
 }
 
 func TestRunReadyCheckViaExecutorHTTPRetry(t *testing.T) {
+	t.Parallel()
 	// First call returns 503, second returns 200
 	mock := newSequenceMockExecutor(
 		[]mockResult{
@@ -984,6 +1012,7 @@ func TestRunReadyCheckViaExecutorHTTPRetry(t *testing.T) {
 }
 
 func TestRunReadyCheckViaExecutorPortSuccess(t *testing.T) {
+	t.Parallel()
 	mock := newMockExecutor()
 	mock.SetResult("shell_command", map[string]interface{}{
 		"stdout":    "",
@@ -1009,6 +1038,7 @@ func TestRunReadyCheckViaExecutorPortSuccess(t *testing.T) {
 }
 
 func TestRunReadyCheckViaExecutorTimeout(t *testing.T) {
+	t.Parallel()
 	// Always return 503 — should timeout
 	mock := newMockExecutor()
 	mock.SetResult("shell_command", map[string]interface{}{
@@ -1034,6 +1064,7 @@ func TestRunReadyCheckViaExecutorTimeout(t *testing.T) {
 }
 
 func TestRunReadyCheckViaExecutorNilConfig(t *testing.T) {
+	t.Parallel()
 	runner := NewSuiteRunner(newMockExecutor(), nil, false)
 	err := runner.runReadyCheckViaExecutor(context.Background(), nil)
 	if err != nil {
@@ -1042,6 +1073,7 @@ func TestRunReadyCheckViaExecutorNilConfig(t *testing.T) {
 }
 
 func TestRunReadyCheckViaExecutorMissingURL(t *testing.T) {
+	t.Parallel()
 	runner := NewSuiteRunner(newMockExecutor(), nil, false)
 	rc := &config.ReadyCheck{Type: "http", URL: ""}
 	err := runner.runReadyCheckViaExecutor(context.Background(), rc)
@@ -1051,6 +1083,7 @@ func TestRunReadyCheckViaExecutorMissingURL(t *testing.T) {
 }
 
 func TestRunReadyCheckViaExecutorMissingPort(t *testing.T) {
+	t.Parallel()
 	runner := NewSuiteRunner(newMockExecutor(), nil, false)
 	rc := &config.ReadyCheck{Type: "port", Port: 0}
 	err := runner.runReadyCheckViaExecutor(context.Background(), rc)
@@ -1064,6 +1097,7 @@ func TestRunReadyCheckViaExecutorMissingPort(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSubstituteVarsInString(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		input    string
@@ -1134,6 +1168,7 @@ func TestSubstituteVarsInString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			result := substituteVarsInString(tt.input, tt.vars)
 			if result != tt.expected {
 				t.Errorf("got %q, want %q", result, tt.expected)
@@ -1143,9 +1178,11 @@ func TestSubstituteVarsInString(t *testing.T) {
 }
 
 func TestSubstituteVarsInArgs(t *testing.T) {
+	t.Parallel()
 	vars := map[string]string{"CONTAINER_IP": "10.99.0.5"}
 
 	t.Run("string values", func(t *testing.T) {
+		t.Parallel()
 		args := map[string]interface{}{
 			"url":     "http://{{CONTAINER_IP}}:3000",
 			"timeout": 30,
@@ -1160,6 +1197,7 @@ func TestSubstituteVarsInArgs(t *testing.T) {
 	})
 
 	t.Run("nested map", func(t *testing.T) {
+		t.Parallel()
 		args := map[string]interface{}{
 			"headers": map[string]interface{}{
 				"Origin": "http://{{CONTAINER_IP}}:3000",
@@ -1173,6 +1211,7 @@ func TestSubstituteVarsInArgs(t *testing.T) {
 	})
 
 	t.Run("array values", func(t *testing.T) {
+		t.Parallel()
 		args := map[string]interface{}{
 			"urls": []interface{}{
 				"http://{{CONTAINER_IP}}:3000",
@@ -1190,6 +1229,7 @@ func TestSubstituteVarsInArgs(t *testing.T) {
 	})
 
 	t.Run("nil vars", func(t *testing.T) {
+		t.Parallel()
 		args := map[string]interface{}{
 			"url": "http://{{CONTAINER_IP}}:3000",
 		}
@@ -1200,6 +1240,7 @@ func TestSubstituteVarsInArgs(t *testing.T) {
 	})
 
 	t.Run("does not modify original", func(t *testing.T) {
+		t.Parallel()
 		args := map[string]interface{}{
 			"url": "http://{{CONTAINER_IP}}:3000",
 		}
@@ -1211,6 +1252,7 @@ func TestSubstituteVarsInArgs(t *testing.T) {
 }
 
 func TestBaseURLResolution(t *testing.T) {
+	t.Parallel()
 	// Create a mock executor that records what args it receives
 	executor := newMockExecutor()
 	executor.SetResult("browser_navigate", map[string]interface{}{"status": "ok"}, nil)
@@ -1283,6 +1325,7 @@ func TestBaseURLResolution(t *testing.T) {
 }
 
 func TestBaseURLNotAppliedToNonBrowserTools(t *testing.T) {
+	t.Parallel()
 	executor := newMockExecutor()
 	executor.SetResult("shell_command", map[string]interface{}{"stdout": "ok", "exit_code": 0}, nil)
 
@@ -1333,6 +1376,7 @@ func TestBaseURLNotAppliedToNonBrowserTools(t *testing.T) {
 }
 
 func TestContainerIPFallbackToLocalhost(t *testing.T) {
+	t.Parallel()
 	executor := newMockExecutor()
 	executor.SetResult("browser_navigate", map[string]interface{}{"status": "ok"}, nil)
 
@@ -1387,6 +1431,7 @@ func TestContainerIPFallbackToLocalhost(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestParameterizedTestRunsMultipleTimes(t *testing.T) {
+	t.Parallel()
 	executor := newMockExecutor()
 	executor.SetResult("shell_command", map[string]interface{}{"stdout": "hello world", "exit_code": 0}, nil)
 
@@ -1448,6 +1493,7 @@ func TestParameterizedTestRunsMultipleTimes(t *testing.T) {
 }
 
 func TestParameterizedTestSubstitutesVars(t *testing.T) {
+	t.Parallel()
 	executor := newMockExecutor()
 	runner := NewSuiteRunner(executor, nil, false)
 	runner.SetVars(map[string]string{"BASE": "original"})
@@ -1501,6 +1547,7 @@ func TestParameterizedTestSubstitutesVars(t *testing.T) {
 }
 
 func TestNonParameterizedTestUnchanged(t *testing.T) {
+	t.Parallel()
 	executor := newMockExecutor()
 	executor.SetResult("shell_command", map[string]interface{}{"stdout": "ok"}, nil)
 
@@ -1542,6 +1589,7 @@ func TestNonParameterizedTestUnchanged(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAutoWaitInjectsBrowserWaitFor(t *testing.T) {
+	t.Parallel()
 	executor := newMockExecutor()
 	executor.SetResult("browser_wait_for", map[string]interface{}{"status": "ok"}, nil)
 	executor.SetResult("browser_click", map[string]interface{}{"status": "ok"}, nil)
@@ -1601,6 +1649,7 @@ func TestAutoWaitInjectsBrowserWaitFor(t *testing.T) {
 }
 
 func TestAutoWaitSkipsNonInteractiveTools(t *testing.T) {
+	t.Parallel()
 	executor := newMockExecutor()
 	executor.SetResult("browser_snapshot", map[string]interface{}{"snapshot": "page content"}, nil)
 
@@ -1644,6 +1693,7 @@ func TestAutoWaitSkipsNonInteractiveTools(t *testing.T) {
 }
 
 func TestAutoWaitDisabledByDefault(t *testing.T) {
+	t.Parallel()
 	executor := newMockExecutor()
 	executor.SetResult("browser_click", map[string]interface{}{"status": "ok"}, nil)
 
@@ -1691,6 +1741,7 @@ func TestAutoWaitDisabledByDefault(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestIsInteractiveBrowserTool(t *testing.T) {
+	t.Parallel()
 	interactive := []string{"browser_click", "browser_type", "browser_hover",
 		"browser_select_option", "browser_fill_form", "browser_drag"}
 	nonInteractive := []string{"browser_navigate", "browser_snapshot",
@@ -1709,6 +1760,7 @@ func TestIsInteractiveBrowserTool(t *testing.T) {
 }
 
 func TestExtractWaitTarget(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		toolName string
@@ -1747,6 +1799,7 @@ func TestExtractWaitTarget(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := extractWaitTarget(tt.toolName, tt.args)
 			if got != tt.want {
 				t.Errorf("extractWaitTarget = %q, want %q", got, tt.want)
@@ -1769,6 +1822,7 @@ func (m *mockLLMProvider) EvaluateText(_ context.Context, _ string) (string, err
 }
 
 func TestSemanticAssertionWithLLM(t *testing.T) {
+	t.Parallel()
 	executor := newMockExecutor()
 	executor.SetResult("shell_command", map[string]interface{}{
 		"stdout":    `{"status": "healthy", "uptime": "24h"}`,
@@ -1817,6 +1871,7 @@ func TestSemanticAssertionWithLLM(t *testing.T) {
 }
 
 func TestSemanticAssertionFailsWithoutLLM(t *testing.T) {
+	t.Parallel()
 	executor := newMockExecutor()
 	executor.SetResult("shell_command", map[string]interface{}{"stdout": "data"}, nil)
 
@@ -1860,6 +1915,7 @@ func TestSemanticAssertionFailsWithoutLLM(t *testing.T) {
 }
 
 func TestSemanticAssertionLLMSaysNo(t *testing.T) {
+	t.Parallel()
 	executor := newMockExecutor()
 	executor.SetResult("shell_command", map[string]interface{}{"stdout": "error: bad request"}, nil)
 

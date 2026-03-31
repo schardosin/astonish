@@ -324,7 +324,6 @@ export default function AIChatPanel({
       const intentResult = await classifyIntent(userMessage, tools)
       
       if (!intentResult.error && intentResult.intent) {
-        console.log('[Intent Classification]', intentResult)
         
         // Handle extract_mcp_url intent
         if (intentResult.intent === 'extract_mcp_url' && intentResult.requirement) {

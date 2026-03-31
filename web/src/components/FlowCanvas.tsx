@@ -276,7 +276,6 @@ function FlowCanvasInner({
             data: { ...n.data },
             position: { ...n.position }
           }))
-          console.log(`[Copy] Copied ${selectedNodes.length} node(s) to clipboard`)
         }
       }
       
@@ -286,7 +285,6 @@ function FlowCanvasInner({
           e.preventDefault()
           // Call parent handler with clipboard contents
           onDuplicateNodes(clipboardRef.current)
-          console.log(`[Paste] Pasting ${clipboardRef.current.length} node(s)`)
         }
       }
     }

@@ -46,7 +46,7 @@ func TestIndexerIndexAll(t *testing.T) {
 		VectorDir:     vecDir,
 		MaxResults:    6,
 		MinScore:      0.0, // Accept all scores for testing
-		ChunkMaxChars: 1600,
+		ChunkMaxChars: 1200,
 		ChunkOverlap:  320,
 	}
 
@@ -106,7 +106,7 @@ func TestIndexerIncrementalSync(t *testing.T) {
 		VectorDir:     vecDir,
 		MaxResults:    6,
 		MinScore:      0.0,
-		ChunkMaxChars: 1600,
+		ChunkMaxChars: 1200,
 		ChunkOverlap:  320,
 	}
 
@@ -179,7 +179,7 @@ func TestIndexerDeletedFile(t *testing.T) {
 		VectorDir:     vecDir,
 		MaxResults:    6,
 		MinScore:      0.0,
-		ChunkMaxChars: 1600,
+		ChunkMaxChars: 1200,
 		ChunkOverlap:  320,
 	}
 
@@ -247,7 +247,7 @@ func TestIndexerFileIndexPersistence(t *testing.T) {
 		VectorDir:     vecDir,
 		MaxResults:    6,
 		MinScore:      0.0,
-		ChunkMaxChars: 1600,
+		ChunkMaxChars: 1200,
 		ChunkOverlap:  320,
 	}
 

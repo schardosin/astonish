@@ -33,8 +33,8 @@ type StoreConfig struct {
 func DefaultStoreConfig() *StoreConfig {
 	return &StoreConfig{
 		MaxResults:    6,
-		MinScore:      0.35,
-		ChunkMaxChars: 1600,
+		MinScore:      0.30,
+		ChunkMaxChars: 1200,
 		ChunkOverlap:  320,
 	}
 }

@@ -324,7 +324,7 @@ func (m *PortProxyManager) StartProxy(containerName string, containerPort int) (
 		proxy.ServeHTTP(w, r)
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: cancel stored in portProxyEntry.cancel, called on cleanup
 	srv := &http.Server{
 		Addr:              fmt.Sprintf("127.0.0.1:%d", hostPort),
 		Handler:           handler,

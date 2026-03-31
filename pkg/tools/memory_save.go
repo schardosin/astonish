@@ -55,7 +55,7 @@ func MemorySave(mgr *memory.Manager, store MemorySaveStore) func(ctx tool.Contex
 
 			// Trigger reindex of MEMORY.md if store is available
 			if store != nil {
-				go func() {
+				go func() { //nolint:gosec // G118: intentionally uses context.Background — reindex must outlive the request
 					if err := store.ReindexFile(context.Background(), "MEMORY.md"); err != nil {
 						slog.Warn("failed to reindex memory file after save", "file", "MEMORY.md", "error", err)
 					}

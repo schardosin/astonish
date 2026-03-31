@@ -325,7 +325,7 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 	persistFleetSessionMeta(fleetSession, cfg, 0, "")
 	wireFleetTranscript(fleetSession)
 
-	go func() {
+	go func() { //nolint:gosec // G118: long-lived session loop must outlive the HTTP request
 		defer func() {
 			registry.Unregister(fleetSession.ID)
 			slog.Info("session removed from registry", "component", "fleet", "session_id", fleetSession.ID)

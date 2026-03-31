@@ -285,7 +285,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 							close(indexingDone)
 						} else {
 							// Perform initial indexing in background
-							go func() {
+							go func() { //nolint:gosec // G118: intentionally uses context.Background — indexing must outlive request scope
 								defer close(indexingDone)
 								defer func() {
 									if r := recover(); r != nil {
@@ -302,7 +302,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 							if debounceMs <= 0 {
 								debounceMs = 1500
 							}
-							watchCtx, watchCancel := context.WithCancel(context.Background())
+							watchCtx, watchCancel := context.WithCancel(context.Background()) //nolint:gosec // G118: long-lived watcher; cancel stored in cleanups slice
 							go func() {
 								if wErr := memIndexer.WatchAndSync(watchCtx, debounceMs); wErr != nil {
 									if cfg.DebugMode {
@@ -704,7 +704,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		// configured timeout (default 10 min), preserving them for fast restart.
 		idleTimeout := sandbox.EffectiveIdleTimeout(&cfg.AppConfig.Sandbox)
 		if idleTimeout > 0 {
-			idleCtx, idleCancel := context.WithCancel(context.Background())
+			idleCtx, idleCancel := context.WithCancel(context.Background()) //nolint:gosec // G118: long-lived watchdog; cancel stored in cleanups slice
 			nodePool.StartIdleWatchdog(idleCtx, idleTimeout)
 			cleanups = append(cleanups, idleCancel)
 			if cfg.DebugMode {

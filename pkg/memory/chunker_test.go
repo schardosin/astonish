@@ -176,3 +176,211 @@ func TestSha256Hex(t *testing.T) {
 		t.Error("different inputs should give different hashes")
 	}
 }
+
+func TestChunkFile_HeadingAwareSections(t *testing.T) {
+	// Each section must be > 100 chars to avoid merging
+	content := `## Section A
+Content for section A line 1 with enough text to exceed the minimum threshold for chunk creation.
+Content for section A line 2 with more padding to be safe.
+
+## Section B
+Content for section B line 1 with enough text to exceed the minimum threshold for chunk creation.
+Content for section B line 2 with more padding to be safe.
+
+## Section C
+Content for section C line 1 with enough text to exceed the minimum threshold for chunk creation.
+Content for section C line 2 with more padding to be safe.
+Content for section C line 3 with more padding to be safe.`
+
+	chunks := ChunkFile("test.md", content, 1200, 320)
+
+	// Should produce 3 chunks (one per section)
+	if len(chunks) != 3 {
+		t.Fatalf("expected 3 chunks, got %d", len(chunks))
+	}
+
+	// First chunk should contain Section A
+	if !strings.Contains(chunks[0].Text, "## Section A") {
+		t.Errorf("chunk 0 should contain Section A heading")
+	}
+
+	// Second chunk should contain Section B
+	if !strings.Contains(chunks[1].Text, "## Section B") {
+		t.Errorf("chunk 1 should contain Section B heading")
+	}
+
+	// Third chunk should contain Section C
+	if !strings.Contains(chunks[2].Text, "## Section C") {
+		t.Errorf("chunk 2 should contain Section C heading")
+	}
+
+	// Sections should NOT contain content from other sections
+	if strings.Contains(chunks[0].Text, "Section B") {
+		t.Error("chunk 0 should not contain Section B content")
+	}
+	if strings.Contains(chunks[1].Text, "Section C") {
+		t.Error("chunk 1 should not contain Section C content")
+	}
+}
+
+func TestChunkFile_HeadingAwareLargeSection(t *testing.T) {
+	// Create a section that exceeds maxChars
+	var lines []string
+	lines = append(lines, "## Big Section")
+	for i := 0; i < 30; i++ {
+		lines = append(lines, strings.Repeat("x", 40))
+	}
+	lines = append(lines, "## Small Section")
+	lines = append(lines, "Small content here")
+
+	content := strings.Join(lines, "\n")
+	chunks := ChunkFile("test.md", content, 500, 100)
+
+	// Should have at least 2 chunks for the big section + 1 for small
+	if len(chunks) < 3 {
+		t.Fatalf("expected at least 3 chunks, got %d", len(chunks))
+	}
+
+	// Last chunk should contain the small section
+	lastChunk := chunks[len(chunks)-1]
+	if !strings.Contains(lastChunk.Text, "## Small Section") {
+		t.Errorf("last chunk should contain Small Section, got: %q", lastChunk.Text)
+	}
+	if !strings.Contains(lastChunk.Text, "Small content here") {
+		t.Error("last chunk should contain small section content")
+	}
+}
+
+func TestChunkFile_SmallSectionsMerged(t *testing.T) {
+	// Small sections below 100 chars get merged with the next section.
+	// When a small section is followed by a large section, the small one
+	// is absorbed into the large one (they share a chunk).
+	normalContent := strings.Repeat("This section has enough content. ", 5)
+	content := "## Tiny\nx\n\n## Also Tiny\ny\n\n## Normal Section\n" + normalContent
+
+	chunks := ChunkFile("test.md", content, 1200, 320)
+
+	// All sections fit within maxChars, and the two tiny ones are absorbed
+	// into the Normal section, resulting in a single chunk.
+	if len(chunks) != 1 {
+		for i, c := range chunks {
+			t.Logf("  chunk %d: lines %d-%d (%d chars)", i, c.StartLine, c.EndLine, len(c.Text))
+		}
+		t.Fatalf("expected 1 chunk (tiny sections absorbed into normal), got %d", len(chunks))
+	}
+
+	// The single chunk should contain all three sections
+	if !strings.Contains(chunks[0].Text, "## Tiny") {
+		t.Error("chunk should contain Tiny heading")
+	}
+	if !strings.Contains(chunks[0].Text, "## Also Tiny") {
+		t.Error("chunk should contain Also Tiny heading")
+	}
+	if !strings.Contains(chunks[0].Text, "## Normal Section") {
+		t.Error("chunk should contain Normal Section heading")
+	}
+}
+
+func TestChunkFile_SmallThenLargeSections(t *testing.T) {
+	// A medium section (> 100 chars) followed by another medium section
+	// should produce separate chunks.
+	sec1 := "## Section One\n" + strings.Repeat("Section one has meaningful content here. ", 4)
+	sec2 := "## Section Two\n" + strings.Repeat("Section two also has meaningful content. ", 4)
+	content := sec1 + "\n\n" + sec2
+
+	chunks := ChunkFile("test.md", content, 1200, 320)
+
+	if len(chunks) != 2 {
+		for i, c := range chunks {
+			t.Logf("  chunk %d: lines %d-%d (%d chars)", i, c.StartLine, c.EndLine, len(c.Text))
+		}
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+
+	if !strings.Contains(chunks[0].Text, "## Section One") {
+		t.Error("chunk 0 should contain Section One")
+	}
+	if !strings.Contains(chunks[1].Text, "## Section Two") {
+		t.Error("chunk 1 should contain Section Two")
+	}
+	if strings.Contains(chunks[0].Text, "Section Two") {
+		t.Error("chunk 0 should not contain Section Two content")
+	}
+}
+
+func TestChunkFile_PreambleHandled(t *testing.T) {
+	content := `# Title
+Some preamble text before any ## heading.
+
+## First Section
+Section content here.`
+
+	chunks := ChunkFile("test.md", content, 1200, 320)
+
+	if len(chunks) < 1 {
+		t.Fatal("expected at least 1 chunk")
+	}
+
+	// First chunk should contain the preamble
+	if !strings.Contains(chunks[0].Text, "# Title") {
+		t.Error("first chunk should contain the preamble title")
+	}
+
+	// Should have a chunk with the section
+	found := false
+	for _, c := range chunks {
+		if strings.Contains(c.Text, "## First Section") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("should have a chunk containing ## First Section")
+	}
+}
+
+func TestChunkFile_NoHeadings(t *testing.T) {
+	// Content without any ## headings should work like the old chunker
+	var lines []string
+	for i := 0; i < 50; i++ {
+		lines = append(lines, strings.Repeat("y", 40))
+	}
+	content := strings.Join(lines, "\n")
+
+	chunks := ChunkFile("test.md", content, 500, 100)
+
+	if len(chunks) < 2 {
+		t.Fatalf("expected at least 2 chunks for large content without headings, got %d", len(chunks))
+	}
+
+	// Should cover all content
+	if chunks[0].StartLine != 1 {
+		t.Errorf("first chunk should start at line 1, got %d", chunks[0].StartLine)
+	}
+	lastChunk := chunks[len(chunks)-1]
+	if lastChunk.EndLine != 50 {
+		t.Errorf("last chunk should end at line 50, got %d", lastChunk.EndLine)
+	}
+}
+
+func TestSplitSections(t *testing.T) {
+	lines := strings.Split("## A\nline 1\nline 2\n## B\nline 3", "\n")
+	sections := splitSections(lines)
+
+	if len(sections) != 2 {
+		t.Fatalf("expected 2 sections, got %d", len(sections))
+	}
+
+	if sections[0].startLine != 1 {
+		t.Errorf("section 0 should start at line 1, got %d", sections[0].startLine)
+	}
+	if sections[0].endLine != 3 {
+		t.Errorf("section 0 should end at line 3, got %d", sections[0].endLine)
+	}
+	if sections[1].startLine != 4 {
+		t.Errorf("section 1 should start at line 4, got %d", sections[1].startLine)
+	}
+	if sections[1].endLine != 5 {
+		t.Errorf("section 1 should end at line 5, got %d", sections[1].endLine)
+	}
+}

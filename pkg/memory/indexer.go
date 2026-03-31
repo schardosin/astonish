@@ -28,9 +28,9 @@ type Indexer struct {
 const fileIndexName = "file_index.json"
 
 // fileIndexVersion is bumped when the chunking/embedding strategy changes
-// to force a full re-index on the next startup. v2 → v3: reduced chunk size
-// from 1600 to 1200 chars to stay under the 512-token embedding model limit.
-const fileIndexVersion = 3
+// to force a full re-index on the next startup. v3 → v4: heading-aware
+// chunking that splits at ## boundaries for better semantic coherence.
+const fileIndexVersion = 4
 
 // fileIndexData is the versioned wrapper for the persisted file index.
 type fileIndexData struct {

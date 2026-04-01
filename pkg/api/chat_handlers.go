@@ -443,6 +443,13 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 						"mimeType": mimeType,
 					})
 				}
+				// Drain flow output stashed by extractAndStripFlowOutput.
+				// Delivered directly to the user as markdown, bypassing LLM.
+				if flowOut := chatAgent.DrainFlowOutput(); flowOut != "" {
+					safeSendSSE("flow_output", map[string]interface{}{
+						"content": flowOut,
+					})
+				}
 			}
 		}
 	}
@@ -452,6 +459,13 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	for event, runErr := range rnr.Run(ctx, studioChatUserID, sessionID, userMsg, adkagent.RunConfig{
 		StreamingMode: adkagent.StreamingModeSSE,
 	}) {
+		// Break early if the SSE client disconnected. Without this check the
+		// loop continues consuming events (and writing to a dead ResponseWriter)
+		// even after the HTTP request context is cancelled.
+		if ctx.Err() != nil {
+			break
+		}
+
 		if runErr != nil {
 			safeSendSSE("error", map[string]string{"error": runErr.Error()})
 
@@ -573,6 +587,13 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 						safeSendSSE("image", map[string]interface{}{
 							"data":     base64.StdEncoding.EncodeToString(img.Data),
 							"mimeType": mimeType,
+						})
+					}
+					// Drain flow output stashed by extractAndStripFlowOutput.
+					// Delivered directly to the user as markdown, bypassing LLM.
+					if flowOut := chatAgent.DrainFlowOutput(); flowOut != "" {
+						safeSendSSE("flow_output", map[string]interface{}{
+							"content": flowOut,
 						})
 					}
 				}

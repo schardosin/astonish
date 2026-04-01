@@ -125,39 +125,24 @@ func TestGenerateSelfMD_WithMCPServers(t *testing.T) {
 	}
 }
 
-func TestGenerateSelfMD_WithFlows(t *testing.T) {
+func TestGenerateSelfMD_FlowsSectionRemoved(t *testing.T) {
+	// FlowEntries still exist in the config struct for backward compatibility
+	// but they are no longer rendered in SELF.md.
 	cfg := &SelfMDConfig{
 		ProviderName: "test",
 		ModelName:    "test-model",
 		FlowEntries: []FlowInfo{
 			{Name: "check_server", Description: "Check server status via SSH"},
-			{Name: "deploy_app", Description: "Deploy application to production"},
 		},
 	}
 
 	content := GenerateSelfMD(cfg)
 
-	if !strings.Contains(content, "## Saved Flows") {
-		t.Error("expected flows section")
+	if strings.Contains(content, "## Saved Flows") {
+		t.Error("flows section should not be in SELF.md — flow discovery is via search_flows tool")
 	}
-	if !strings.Contains(content, "check_server") {
-		t.Error("expected check_server flow listed")
-	}
-	if !strings.Contains(content, "deploy_app") {
-		t.Error("expected deploy_app flow listed")
-	}
-}
-
-func TestGenerateSelfMD_NoFlows(t *testing.T) {
-	cfg := &SelfMDConfig{
-		ProviderName: "test",
-		ModelName:    "test-model",
-	}
-
-	content := GenerateSelfMD(cfg)
-
-	if !strings.Contains(content, "No flows saved yet") {
-		t.Error("expected 'no flows' message")
+	if strings.Contains(content, "check_server") {
+		t.Error("individual flows should not be listed in SELF.md")
 	}
 }
 

@@ -203,6 +203,75 @@ func TestProviderDisplayNames_AllHaveDisplayNames(t *testing.T) {
 	}
 }
 
+func TestResolveProviderInstance(t *testing.T) {
+	cfg := &config.AppConfig{
+		Providers: map[string]config.ProviderConfig{
+			"SAP AI Core":  {"type": "sap_ai_core", "client_id": "xxx"},
+			"openai":       {"api_key": "sk-123"},
+			"My Anthropic": {"type": "anthropic", "api_key": "sk-ant"},
+		},
+	}
+
+	tests := []struct {
+		name      string
+		instance  string
+		wantKey   string
+		wantFound bool
+	}{
+		{"exact match", "openai", "openai", true},
+		{"exact match display name key", "SAP AI Core", "SAP AI Core", true},
+		{"ID resolves to display name key", "sap_ai_core", "SAP AI Core", true},
+		{"case insensitive match", "sap ai core", "SAP AI Core", true},
+		{"case insensitive match caps", "OPENAI", "openai", true},
+		{"normalized custom name", "my_anthropic", "My Anthropic", true},
+		{"nonexistent", "nonexistent", "", false},
+		{"empty string", "", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key, inst, found := resolveProviderInstance(tt.instance, cfg)
+			if found != tt.wantFound {
+				t.Errorf("resolveProviderInstance(%q) found=%v, want %v", tt.instance, found, tt.wantFound)
+			}
+			if found && key != tt.wantKey {
+				t.Errorf("resolveProviderInstance(%q) key=%q, want %q", tt.instance, key, tt.wantKey)
+			}
+			if found && inst == nil {
+				t.Errorf("resolveProviderInstance(%q) returned nil instance", tt.instance)
+			}
+			if !found && inst != nil {
+				t.Errorf("resolveProviderInstance(%q) returned non-nil instance when not found", tt.instance)
+			}
+		})
+	}
+}
+
+func TestGetProvider_DisplayNameKey(t *testing.T) {
+	// Regression test: config uses display name as key (e.g. "SAP AI Core"),
+	// but caller passes the normalized ID (e.g. "sap_ai_core").
+	cfg := &config.AppConfig{
+		Providers: map[string]config.ProviderConfig{
+			"SAP AI Core": {
+				"type":          "sap_ai_core",
+				"client_id":     "test-id",
+				"client_secret": "test-secret",
+				"auth_url":      "https://auth.example.com",
+				"base_url":      "https://api.example.com",
+			},
+		},
+	}
+
+	// Should resolve "sap_ai_core" → "SAP AI Core" and reach the sap_ai_core case
+	_, err := GetProvider(context.Background(), "sap_ai_core", "gpt-4", cfg)
+	// We expect it to get past the "not found" error and into the provider-specific
+	// logic. The SAP provider will likely fail on auth, but it should NOT fail with
+	// "provider instance 'sap_ai_core' not found".
+	if err != nil && err.Error() == "provider instance 'sap_ai_core' not found" {
+		t.Errorf("resolveProviderInstance failed to find 'SAP AI Core' via ID 'sap_ai_core': %v", err)
+	}
+}
+
 func TestGetProvider_MultipleInstances(t *testing.T) {
 	cfg := &config.AppConfig{
 		Providers: map[string]config.ProviderConfig{

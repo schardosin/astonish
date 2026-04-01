@@ -252,39 +252,16 @@ func TestSystemPromptBuilder_KnowledgeInBuild(t *testing.T) {
 }
 
 func TestSystemPromptBuilder_KnowledgeNotInBuildWhenEmpty(t *testing.T) {
-	// When no knowledge/plan is set, Build() should not include those sections.
+	// When no knowledge is set, Build() should not include those sections.
 	builder := &SystemPromptBuilder{}
 	prompt := builder.Build()
 
 	for _, section := range []string{
-		"## Execution Plan",
 		"## Knowledge For This Task",
-		"### Knowledge From Previous Experience",
 	} {
 		if strings.Contains(prompt, section) {
 			t.Errorf("Build() should NOT contain %q when fields are empty", section)
 		}
-	}
-}
-
-func TestSystemPromptBuilder_ExecutionPlanWithKnowledge(t *testing.T) {
-	builder := &SystemPromptBuilder{
-		ExecutionPlan:     "Step 1: SSH into server\nStep 2: Run pct list",
-		RelevantKnowledge: "Use --verbose flag",
-	}
-	prompt := builder.Build()
-
-	if !strings.Contains(prompt, "## Execution Plan") {
-		t.Error("expected Execution Plan section")
-	}
-	if !strings.Contains(prompt, "### Knowledge From Previous Experience") {
-		t.Error("expected Knowledge From Previous Experience sub-section")
-	}
-	if !strings.Contains(prompt, "Use --verbose flag") {
-		t.Error("expected knowledge content")
-	}
-	if !strings.Contains(prompt, "Step 1: SSH into server") {
-		t.Error("expected plan steps")
 	}
 }
 

@@ -9,16 +9,16 @@ import (
 )
 
 func TestEphemeralKnowledgeCallback_NilWhenEmpty(t *testing.T) {
-	// No knowledge, no plan → nil callback (not registered)
-	cb := EphemeralKnowledgeCallback("", "", false)
+	// No knowledge → nil callback (not registered)
+	cb := EphemeralKnowledgeCallback("", false)
 	if cb != nil {
-		t.Error("expected nil callback when both plan and knowledge are empty")
+		t.Error("expected nil callback when knowledge is empty")
 	}
 }
 
 func TestEphemeralKnowledgeCallback_InjectsKnowledge(t *testing.T) {
 	knowledge := "**MEMORY.md** (63%)\nProxmox at 192.168.1.200"
-	cb := EphemeralKnowledgeCallback("", knowledge, false)
+	cb := EphemeralKnowledgeCallback(knowledge, false)
 	if cb == nil {
 		t.Fatal("expected non-nil callback")
 	}
@@ -64,73 +64,8 @@ func TestEphemeralKnowledgeCallback_InjectsKnowledge(t *testing.T) {
 	}
 }
 
-func TestEphemeralKnowledgeCallback_InjectsExecutionPlan(t *testing.T) {
-	plan := "Step 1: SSH into proxmox\nStep 2: Run pct list"
-	cb := EphemeralKnowledgeCallback(plan, "", false)
-	if cb == nil {
-		t.Fatal("expected non-nil callback")
-	}
-
-	req := &model.LLMRequest{
-		Contents: []*genai.Content{
-			{Role: "user", Parts: []*genai.Part{{Text: "list containers"}}},
-		},
-	}
-
-	_, err := cb(nil, req)
-	if err != nil {
-		t.Fatalf("callback error: %v", err)
-	}
-
-	lastUser := req.Contents[0]
-	if len(lastUser.Parts) != 2 {
-		t.Fatalf("expected 2 parts, got %d", len(lastUser.Parts))
-	}
-
-	if !strings.Contains(lastUser.Parts[0].Text, "[Execution Plan]") {
-		t.Errorf("expected execution plan header, got: %s", lastUser.Parts[0].Text[:50])
-	}
-	if !strings.Contains(lastUser.Parts[0].Text, "Step 1: SSH") {
-		t.Error("expected plan steps in injection")
-	}
-}
-
-func TestEphemeralKnowledgeCallback_PlanWithKnowledge(t *testing.T) {
-	plan := "Step 1: Do something"
-	knowledge := "Use --verbose flag"
-	cb := EphemeralKnowledgeCallback(plan, knowledge, false)
-	if cb == nil {
-		t.Fatal("expected non-nil callback")
-	}
-
-	req := &model.LLMRequest{
-		Contents: []*genai.Content{
-			{Role: "user", Parts: []*genai.Part{{Text: "go"}}},
-		},
-	}
-
-	_, err := cb(nil, req)
-	if err != nil {
-		t.Fatalf("callback error: %v", err)
-	}
-
-	injected := req.Contents[0].Parts[0].Text
-	if !strings.Contains(injected, "[Execution Plan]") {
-		t.Error("expected plan header")
-	}
-	if !strings.Contains(injected, "### Knowledge From Previous Experience") {
-		t.Error("expected knowledge sub-section within plan")
-	}
-	if !strings.Contains(injected, "Use --verbose flag") {
-		t.Error("expected knowledge content")
-	}
-	if !strings.Contains(injected, "Step 1: Do something") {
-		t.Error("expected plan steps")
-	}
-}
-
 func TestEphemeralKnowledgeCallback_NoUserMessage(t *testing.T) {
-	cb := EphemeralKnowledgeCallback("", "some knowledge", false)
+	cb := EphemeralKnowledgeCallback("some knowledge", false)
 	if cb == nil {
 		t.Fatal("expected non-nil callback")
 	}
@@ -157,7 +92,7 @@ func TestEphemeralKnowledgeCallback_NoUserMessage(t *testing.T) {
 }
 
 func TestEphemeralKnowledgeCallback_EmptyContents(t *testing.T) {
-	cb := EphemeralKnowledgeCallback("plan", "", false)
+	cb := EphemeralKnowledgeCallback("some knowledge", false)
 	if cb == nil {
 		t.Fatal("expected non-nil callback")
 	}
@@ -173,7 +108,7 @@ func TestEphemeralKnowledgeCallback_EmptyContents(t *testing.T) {
 }
 
 func TestEphemeralKnowledgeCallback_NilRequest(t *testing.T) {
-	cb := EphemeralKnowledgeCallback("plan", "knowledge", false)
+	cb := EphemeralKnowledgeCallback("knowledge", false)
 	if cb == nil {
 		t.Fatal("expected non-nil callback")
 	}
@@ -188,7 +123,7 @@ func TestEphemeralKnowledgeCallback_NilRequest(t *testing.T) {
 }
 
 func TestBuildKnowledgeInjectionText_KnowledgeOnly(t *testing.T) {
-	text := buildKnowledgeInjectionText("", "Some knowledge")
+	text := buildKnowledgeInjectionText("Some knowledge")
 	if !strings.HasPrefix(text, "[Knowledge For This Task]") {
 		t.Errorf("expected knowledge header prefix, got: %s", text[:40])
 	}
@@ -200,21 +135,8 @@ func TestBuildKnowledgeInjectionText_KnowledgeOnly(t *testing.T) {
 	}
 }
 
-func TestBuildKnowledgeInjectionText_PlanOnly(t *testing.T) {
-	text := buildKnowledgeInjectionText("Step 1: Do it", "")
-	if !strings.HasPrefix(text, "[Execution Plan]") {
-		t.Errorf("expected plan header prefix, got: %s", text[:30])
-	}
-	if !strings.Contains(text, "Step 1: Do it") {
-		t.Error("expected plan content")
-	}
-	if strings.Contains(text, "Knowledge") {
-		t.Error("should not contain knowledge section when knowledge is empty")
-	}
-}
-
-func TestBuildKnowledgeInjectionText_BothEmpty(t *testing.T) {
-	text := buildKnowledgeInjectionText("", "")
+func TestBuildKnowledgeInjectionText_Empty(t *testing.T) {
+	text := buildKnowledgeInjectionText("")
 	if text != "" {
 		t.Errorf("expected empty string, got: %q", text)
 	}

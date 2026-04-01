@@ -15,8 +15,10 @@ import (
 	"google.golang.org/genai"
 )
 
-// buildApprovalCallback creates the BeforeToolCallback for approval-gated tools
-func (a *AstonishAgent) buildApprovalCallback(node *config.Node, state session.State, yield func(*session.Event, error) bool) llmagent.BeforeToolCallback {
+// buildApprovalCallback creates the BeforeToolCallback for approval-gated tools.
+// Events are buffered in cbBuf (not yielded directly) because ADK may invoke
+// this callback from a goroutine, and yield is not goroutine-safe.
+func (a *AstonishAgent) buildApprovalCallback(node *config.Node, state session.State, cbBuf *callbackEventBuffer) llmagent.BeforeToolCallback {
 	return func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 		toolName := t.Name()
 
@@ -124,9 +126,9 @@ func (a *AstonishAgent) buildApprovalCallback(node *config.Node, state session.S
 		state.Set("approval_tool", toolName)
 		state.Set("approval_args", args)
 
-		// Emit approval request event
+		// Buffer approval request event (NOT yield — runs in ADK goroutine)
 		prompt := a.formatToolApprovalRequest(toolName, args)
-		yield(&session.Event{
+		cbBuf.append(&session.Event{
 			LLMResponse: model.LLMResponse{
 				Content: &genai.Content{
 					Parts: []*genai.Part{{Text: prompt}},
@@ -140,7 +142,7 @@ func (a *AstonishAgent) buildApprovalCallback(node *config.Node, state session.S
 					"approval_options":  []string{"Yes", "No"},
 				},
 			},
-		}, nil)
+		})
 
 		// Return a placeholder result
 		// This string enters the LLM context. When we resume, we will overwrite this
@@ -159,8 +161,10 @@ func (a *AstonishAgent) buildApprovalCallback(node *config.Node, state session.S
 	}
 }
 
-// buildAfterToolCallback creates the AfterToolCallback for debugging and raw_tool_output handling
-func (a *AstonishAgent) buildAfterToolCallback(node *config.Node, state session.State, yield func(*session.Event, error) bool) llmagent.AfterToolCallback {
+// buildAfterToolCallback creates the AfterToolCallback for debugging and raw_tool_output handling.
+// Events are buffered in cbBuf (not yielded directly) because ADK may invoke
+// this callback from a goroutine, and yield is not goroutine-safe.
+func (a *AstonishAgent) buildAfterToolCallback(node *config.Node, state session.State, cbBuf *callbackEventBuffer) llmagent.AfterToolCallback {
 	return func(ctx tool.Context, t tool.Tool, args map[string]any, result map[string]any, err error) (map[string]any, error) {
 		// Redact credential values from tool output before the LLM sees them.
 		// Exception: resolve_credential must return raw values so the LLM can
@@ -234,8 +238,8 @@ func (a *AstonishAgent) buildAfterToolCallback(node *config.Node, state session.
 				},
 			}
 
-			// CRITICAL FIX: Emit StateDelta through yield for event stream
-			yield(stateEvent, nil)
+			// Buffer StateDelta event (NOT yield — runs in ADK goroutine)
+			cbBuf.append(stateEvent)
 
 			// ALSO: Directly append event to session service for SYNCHRONOUS persistence
 			// This ensures the state is available in subsequent Run invocations

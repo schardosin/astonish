@@ -50,27 +50,12 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		// --- Phase A: Dynamic Execution ---
 		trace := NewExecutionTrace(userText)
 
-		// Per-turn dynamic content: execution plan and knowledge.
-		// These are appended to the end of the system prompt via
-		// SystemPromptBuilder.ExecutionPlan / RelevantKnowledge fields,
-		// so they carry system-level authority for instruction following.
-		var executionPlan string
+		// Per-turn dynamic content: auto-retrieved knowledge.
+		// Appended to the end of the system prompt via
+		// SystemPromptBuilder.RelevantKnowledge field,
+		// so it carries system-level authority for instruction following.
 		var relevantKnowledge string
 		var knowledgeTrackingResults []KnowledgeSearchResult // for session tracking event
-
-		var memContent string
-
-		if c.MemoryManager != nil {
-			// Load memory content for flow plan building (parameter resolution)
-			mc, memErr := c.MemoryManager.Load()
-			if memErr != nil {
-				if c.DebugMode {
-					slog.Debug("failed to load memory", "component", "chat", "error", memErr)
-				}
-			} else {
-				memContent = mc
-			}
-		}
 
 		// Auto-retrieve relevant knowledge from vector store.
 		// Three partitioned searches: guidance (max 3) + general knowledge (max 5).
@@ -129,13 +114,6 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 				// Deduplicate
 				allResults = deduplicateSearchResults(allResults)
 
-				// Check for flow matches among the results.
-				// If a single high-confidence flow is found, load the full flow
-				// YAML and build an execution plan. If multiple flows match above
-				// threshold, leave them as knowledge so the LLM can ask the user.
-				const flowScoreThreshold = 0.6
-				allResults, executionPlan = c.extractFlowFromResults(allResults, flowScoreThreshold, memContent, yield)
-
 				// Format remaining results as knowledge text
 				if len(allResults) > 0 {
 					knowledgeTrackingResults = allResults
@@ -161,7 +139,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		// Content is nil so ADK's ContentsRequestProcessor skips it (never
 		// sent to the LLM) and eventsToMessages() skips it (never shown in UI).
 		// The event is still written to the session .jsonl file for diagnostics.
-		yieldKnowledgeTrackingEvent(yield, relevantKnowledge, executionPlan, knowledgeTrackingResults)
+		yieldKnowledgeTrackingEvent(yield, relevantKnowledge, "", knowledgeTrackingResults)
 
 		// Auto-retrieve relevant tools from the tool index.
 		// Matches drive two things: (1) prompt text listing relevant tools,
@@ -213,7 +191,6 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		// Set per-turn dynamic fields on the system prompt builder, then build.
 		// These are appended at the end of the system prompt so the static prefix
 		// remains cacheable by providers.
-		c.SystemPrompt.ExecutionPlan = executionPlan
 		c.SystemPrompt.RelevantKnowledge = relevantKnowledge
 		c.SystemPrompt.RelevantTools = relevantTools
 		instruction := c.SystemPrompt.Build()
@@ -239,6 +216,15 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			// blobs from entering session history. The raw image bytes are
 			// stashed in the ChatAgent's image queue for channel delivery.
 			redactedOutput = c.extractAndStripImages(redactedOutput)
+
+			// Strip large flow output from run_flow results. The full output
+			// is stashed for direct delivery to the user (via SSE or channel),
+			// and replaced with a short pointer so the LLM doesn't try to
+			// summarize or reproduce it. The output is already AI-generated
+			// content that should not be re-processed by another LLM.
+			if t.Name() == "run_flow" && redactedOutput != nil {
+				redactedOutput = c.extractAndStripFlowOutput(redactedOutput)
+			}
 
 			trace.RecordStep(t.Name(), input, redactedOutput, err)
 			if c.DebugMode {
@@ -353,23 +339,6 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 						slog.Debug("error after retries", "component", "chat", "attempts", attempt, "error", err)
 					}
 
-					// If we were using an execution plan and it failed, inform the user
-					// conversationally. The orphan cleanup in the provider layer ensures
-					// the next turn's history is valid.
-					if executionPlan != "" {
-						if c.DebugMode {
-							slog.Debug("flow execution failed, cleared execution plan", "component", "chat", "error", err)
-						}
-						yield(&session.Event{
-							LLMResponse: model.LLMResponse{
-								Content: &genai.Content{
-									Parts: []*genai.Part{{Text: "The saved workflow ran into an issue, so I'll try a different approach. Could you repeat your request?"}},
-									Role:  "model",
-								},
-							},
-						}, nil)
-						return
-					}
 					yield(nil, err)
 					return
 				}

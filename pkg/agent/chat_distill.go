@@ -546,26 +546,3 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 
 	return params
 }
-
-// resolveFlowPath finds the full path for a flow file.
-// Checks FlowSaveDir, then the default agents directory.
-func (c *ChatAgent) resolveFlowPath(filename string) string {
-	// Check FlowSaveDir first
-	if c.FlowSaveDir != "" {
-		p := filepath.Join(c.FlowSaveDir, filename)
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
-	}
-
-	// Check default flows directory
-	configDir, err := os.UserConfigDir()
-	if err == nil {
-		p := filepath.Join(configDir, "astonish", "flows", filename)
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
-	}
-
-	return ""
-}

@@ -11,10 +11,9 @@ import (
 )
 
 // EphemeralKnowledgeCallback returns a BeforeModelCallback that injects
-// execution plans and auto-retrieved knowledge as an ephemeral Part in the
-// last user message. This content is visible to the LLM but never persisted
-// to session history, keeping the conversation history stable for provider
-// KV-cache prefix matching.
+// auto-retrieved knowledge as an ephemeral Part in the last user message.
+// This content is visible to the LLM but never persisted to session history,
+// keeping the conversation history stable for provider KV-cache prefix matching.
 //
 // The injected Part is prepended to the last user Content's Parts array,
 // placing it immediately before the user's actual message text.
@@ -22,15 +21,15 @@ import (
 // When debugMode is true, the callback logs injection details (token estimate,
 // content type) to stdout. This output goes to server logs only — it is NOT
 // persisted to the session.
-func EphemeralKnowledgeCallback(executionPlan, relevantKnowledge string, debugMode bool) llmagent.BeforeModelCallback {
-	if executionPlan == "" && relevantKnowledge == "" {
+func EphemeralKnowledgeCallback(relevantKnowledge string, debugMode bool) llmagent.BeforeModelCallback {
+	if relevantKnowledge == "" {
 		if debugMode {
-			slog.Debug("ephemeral knowledge callback not created: no knowledge or plan", "component", "chat")
+			slog.Debug("ephemeral knowledge callback not created: no knowledge", "component", "chat")
 		}
 		return nil
 	}
 
-	injectionText := buildKnowledgeInjectionText(executionPlan, relevantKnowledge)
+	injectionText := buildKnowledgeInjectionText(relevantKnowledge)
 	if injectionText == "" {
 		return nil
 	}
@@ -39,13 +38,7 @@ func EphemeralKnowledgeCallback(executionPlan, relevantKnowledge string, debugMo
 	estimatedTokens := len(injectionText) / 4
 
 	if debugMode {
-		contentType := "knowledge only"
-		if executionPlan != "" && relevantKnowledge != "" {
-			contentType = "execution plan + knowledge"
-		} else if executionPlan != "" {
-			contentType = "execution plan only"
-		}
-		slog.Debug("ephemeral knowledge callback created", "component", "chat", "contentType", contentType, "estimatedTokens", estimatedTokens)
+		slog.Debug("ephemeral knowledge callback created", "component", "chat", "contentType", "knowledge", "estimatedTokens", estimatedTokens)
 	}
 
 	return func(_ adkagent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
@@ -84,31 +77,19 @@ func EphemeralKnowledgeCallback(executionPlan, relevantKnowledge string, debugMo
 	}
 }
 
-// buildKnowledgeInjectionText formats the execution plan and/or knowledge
-// into the text that will be injected into the user message. This produces
-// the same format previously used in SystemPromptBuilder.Build().
-func buildKnowledgeInjectionText(executionPlan, relevantKnowledge string) string {
-	var sb strings.Builder
-
-	if executionPlan != "" {
-		sb.WriteString("[Execution Plan]\n\n")
-		if relevantKnowledge != "" {
-			sb.WriteString("### Knowledge From Previous Experience\n\n")
-			sb.WriteString("CRITICAL — The following knowledge was learned from previous executions of this exact task. ")
-			sb.WriteString("It contains proven commands, specific flags, and workarounds that are KNOWN TO WORK. ")
-			sb.WriteString("If any step below conflicts with this knowledge, ALWAYS prefer the knowledge — ")
-			sb.WriteString("it reflects what actually succeeded in practice:\n\n")
-			sb.WriteString(relevantKnowledge)
-			sb.WriteString("\n### Steps\n\n")
-		}
-		sb.WriteString(executionPlan)
-	} else if relevantKnowledge != "" {
-		sb.WriteString("[Knowledge For This Task]\n\n")
-		sb.WriteString("CRITICAL — You MUST apply the following knowledge when executing this task. ")
-		sb.WriteString("It contains proven commands, specific flags, and workarounds that are KNOWN TO WORK ")
-		sb.WriteString("from previous sessions. Use the exact commands and approaches described here:\n\n")
-		sb.WriteString(relevantKnowledge)
+// buildKnowledgeInjectionText formats the knowledge into the text that will
+// be injected into the user message.
+func buildKnowledgeInjectionText(relevantKnowledge string) string {
+	if relevantKnowledge == "" {
+		return ""
 	}
+
+	var sb strings.Builder
+	sb.WriteString("[Knowledge For This Task]\n\n")
+	sb.WriteString("CRITICAL — You MUST apply the following knowledge when executing this task. ")
+	sb.WriteString("It contains proven commands, specific flags, and workarounds that are KNOWN TO WORK ")
+	sb.WriteString("from previous sessions. Use the exact commands and approaches described here:\n\n")
+	sb.WriteString(relevantKnowledge)
 
 	return sb.String()
 }

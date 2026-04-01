@@ -125,6 +125,19 @@ func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, err
 		}
 	}
 
+	// Reject duplicate names — if a job with this name already exists,
+	// the LLM should use update_scheduled_job to modify it instead of
+	// creating a new one. This prevents the test_first → enable flow
+	// from accidentally creating a second job.
+	if args.Name != "" {
+		if existing := schedulerAccessVar.GetJobByName(args.Name); existing != nil {
+			return ScheduleJobResult{
+				Status:  "error",
+				Message: fmt.Sprintf("A job named %q already exists (ID: %s). Use update_scheduled_job to modify or enable it instead of creating a duplicate.", args.Name, existing.ID),
+			}, nil
+		}
+	}
+
 	// Create job
 	// Note: channel and target are stored but delivery is broadcast-based —
 	// results go to all active channel targets regardless of these values.
@@ -331,6 +344,16 @@ func updateScheduledJob(ctx tool.Context, args UpdateScheduledJobArgs) (UpdateSc
 		if j.ID == args.JobID {
 			job = j
 			break
+		}
+	}
+	// Fallback: try matching by name if ID lookup failed.
+	// The LLM sometimes passes the job name instead of the UUID.
+	if job == nil {
+		for _, j := range jobs {
+			if j.Name == args.JobID {
+				job = j
+				break
+			}
 		}
 	}
 	if job == nil {

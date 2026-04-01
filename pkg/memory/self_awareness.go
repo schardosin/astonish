@@ -124,19 +124,8 @@ func GenerateSelfMD(cfg *SelfMDConfig) string {
 		sb.WriteString("To add/remove: edit mcp_config.json or use `astonish setup`.\n\n")
 	}
 
-	// Saved flows
-	if len(cfg.FlowEntries) > 0 {
-		sb.WriteString("## Saved Flows\n")
-		if cfg.FlowDir != "" {
-			sb.WriteString(fmt.Sprintf("Directory: `%s`\n", cfg.FlowDir))
-		}
-		for _, f := range cfg.FlowEntries {
-			sb.WriteString(fmt.Sprintf("- %s: %s\n", f.Name, f.Description))
-		}
-		sb.WriteString("\n")
-	} else {
-		sb.WriteString("## Saved Flows\nNo flows saved yet. Flows are auto-saved after reusable multi-step tasks.\n\n")
-	}
+	// Saved flows — removed from SELF.md; flow discovery is now handled
+	// via the search_flows tool rather than static listing.
 
 	// Tools summary
 	sb.WriteString("## Tools\n")

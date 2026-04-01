@@ -1006,12 +1006,9 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 	}
 
-	// Reconcile flow knowledge docs
-	var memFlowsDir string
+	// Reconcile flow knowledge docs — disabled: flows are now executed
+	// on-demand via run_flow tool, not injected as knowledge.
 	flowsDir, _ := flowstore.GetFlowsDir()
-	if memDir != "" && flowsDir != "" {
-		memFlowsDir = filepath.Join(memDir, "flows")
-	}
 
 	// Load custom prompt from app config
 	if cfg.AppConfig != nil && cfg.AppConfig.Chat.SystemPrompt != "" {
@@ -1238,6 +1235,20 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 	}
 
+	// --- 5d. Create flow tools (search_flows, run_flow) ---
+	// Flow discovery and execution via dedicated tools rather than
+	// knowledge injection.
+	if searchFlowsTool, sfErr := tools.NewSearchFlowsTool(); sfErr == nil {
+		mainThreadTools = append(mainThreadTools, searchFlowsTool)
+	} else if cfg.DebugMode {
+		slog.Warn("failed to create search_flows tool", "error", sfErr)
+	}
+	if runFlowTool, rfErr := tools.NewRunFlowTool(); rfErr == nil {
+		mainThreadTools = append(mainThreadTools, runFlowTool)
+	} else if cfg.DebugMode {
+		slog.Warn("failed to create run_flow tool", "error", rfErr)
+	}
+
 	// Create search_tools and add to main thread tools if tool index is available.
 	// The onResults callback uses a forward reference to chatAgent (set after
 	// ChatAgent creation) so that search_tools discoveries feed into the
@@ -1328,6 +1339,9 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		} else {
 			chatAgent.FlowRegistry = registry
 
+			// Wire flow registry into search_flows / run_flow tools
+			tools.SetFlowRegistry(registry)
+
 			if flowsDir != "" {
 				added, syncErr := registry.SyncFromDirectory(flowsDir)
 				if syncErr != nil {
@@ -1338,21 +1352,12 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					slog.Debug("auto-registered new flows", "count", added, "dir", flowsDir)
 				}
 			}
-
-			if memFlowsDir != "" && flowsDir != "" {
-				entries := registry.Entries()
-				if len(entries) > 0 {
-					if reconErr := agent.ReconcileFlowKnowledge(flowsDir, memFlowsDir, entries); reconErr != nil {
-						if cfg.DebugMode {
-							slog.Warn("flow knowledge reconciliation failed", "error", reconErr)
-						}
-					} else if cfg.DebugMode {
-						slog.Debug("reconciled flow knowledge docs", "dir", memFlowsDir)
-					}
-				}
-			}
 		}
 	}
+
+	// Wire interactive flow runner for the run_flow tool
+	flowRunner := NewInteractiveFlowRunner(cfg.AppConfig, cfg.ProviderName, cfg.ModelName, cfg.DebugMode)
+	tools.SetFlowRunnerAccess(flowRunner)
 
 	// --- 6b2. Wire knowledge search callbacks ---
 	if memorySearchAvailable && memStore != nil {
@@ -1399,14 +1404,6 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	if selfMDMemDir != "" {
 		chatAgent.SelfMDRefresher = func() {
 			selfCfg := factoryBuildSelfMDConfig(cfg, selfMDMemDir, allToolsForPrompt, allToolsetsForPrompt, mcpCfg, memStore, memorySearchAvailable, loadedSkills)
-			if chatAgent.FlowRegistry != nil {
-				for _, e := range chatAgent.FlowRegistry.Entries() {
-					selfCfg.FlowEntries = append(selfCfg.FlowEntries, memory.FlowInfo{
-						Name:        strings.TrimSuffix(e.FlowFile, ".yaml"),
-						Description: e.Description,
-					})
-				}
-			}
 			content := memory.GenerateSelfMD(selfCfg)
 			if writeErr := memory.WriteSelfMD(selfMDMemDir, content); writeErr == nil {
 				if cfg.DebugMode {
@@ -1483,7 +1480,6 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 		chatAgent.MemoryReflector = reflector
 	}
-	chatAgent.FlowContextBuilder = &agent.FlowContextBuilder{DebugMode: cfg.DebugMode}
 
 	// Build ShutdownSandbox callback (nil when sandbox is not enabled)
 	var shutdownSandbox func()

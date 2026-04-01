@@ -30,10 +30,11 @@ type AppConfig struct {
 // Types are defined here (not in pkg/sandbox) because this package owns
 // YAML deserialization. pkg/sandbox imports these types for runtime use.
 type SandboxConfig struct {
-	Enabled *bool              `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-	Limits  SandboxLimits      `yaml:"limits,omitempty" json:"limits,omitempty"`
-	Network string             `yaml:"network,omitempty" json:"network,omitempty"`
-	Prune   SandboxPruneConfig `yaml:"prune,omitempty" json:"prune,omitempty"`
+	Enabled    *bool              `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Privileged *bool              `yaml:"privileged,omitempty" json:"privileged,omitempty"` // nil = platform default (false on Linux native, true on nested LXC)
+	Limits     SandboxLimits      `yaml:"limits,omitempty" json:"limits,omitempty"`
+	Network    string             `yaml:"network,omitempty" json:"network,omitempty"`
+	Prune      SandboxPruneConfig `yaml:"prune,omitempty" json:"prune,omitempty"`
 }
 
 // SandboxLimits defines resource limits for session containers.

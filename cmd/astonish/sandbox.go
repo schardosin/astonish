@@ -269,6 +269,12 @@ func handleSandboxInit() error {
 		return fmt.Errorf("no container runtime available.\nLinux: install Incus (apt install incus && incus admin init)\nmacOS/Windows: install Docker (any Docker-compatible runtime)")
 	}
 
+	// Store sandbox config for privilege mode detection in container creation.
+	appCfg, cfgErr := config.LoadAppConfig()
+	if cfgErr == nil && appCfg != nil {
+		sandbox.SetSandboxConfig(&appCfg.Sandbox)
+	}
+
 	// On Docker+Incus, ensure the Docker container is set up first
 	if platform == sandbox.PlatformDockerIncus {
 		fmt.Println("Setting up Docker+Incus runtime...")

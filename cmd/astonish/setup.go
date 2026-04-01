@@ -1317,6 +1317,9 @@ func handleSandboxSetup() error {
 		}
 
 		sandbox.SetActivePlatform(platform)
+		if appCfg, cfgErr := config.LoadAppConfig(); cfgErr == nil && appCfg != nil {
+			sandbox.SetSandboxConfig(&appCfg.Sandbox)
+		}
 		client, err := sandbox.Connect(platform)
 		if err != nil {
 			return fmt.Errorf("failed to connect to Incus: %w", err)

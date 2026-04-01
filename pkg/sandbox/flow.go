@@ -26,6 +26,7 @@ func SetupFlowSandbox(appCfg *config.AppConfig, internalTools []tool.Tool) (*Flo
 		return noop, nil
 	}
 
+	SetSandboxConfig(&appCfg.Sandbox)
 	client, err := SetupSandboxRuntime()
 	if err != nil {
 		return nil, fmt.Errorf("sandbox runtime not available: %w", err)

@@ -560,6 +560,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	var sandboxTplRegistry *sandbox.TemplateRegistry // hoisted for save_sandbox_template tool
 	var sandboxSessRegistry *sandbox.SessionRegistry // hoisted for save_sandbox_template tool
 	if cfg.AppConfig != nil && sandbox.IsSandboxEnabled(&cfg.AppConfig.Sandbox) {
+		sandbox.SetSandboxConfig(&cfg.AppConfig.Sandbox)
 		sandboxClient, sandboxErr := sandbox.SetupSandboxRuntime()
 		if sandboxErr != nil {
 			return nil, fmt.Errorf("sandbox is enabled but the runtime is not available: %w\n\nTo disable sandbox, set 'sandbox.enabled: false' in ~/.config/astonish/config.yaml", sandboxErr)

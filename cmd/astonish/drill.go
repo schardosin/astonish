@@ -648,6 +648,7 @@ func initSandboxForTest(template string) (*sandbox.LazyNodeClient, string, bool)
 	}
 
 	// Connect to Incus
+	sandbox.SetSandboxConfig(&appCfg.Sandbox)
 	sandboxClient, err := sandbox.SetupSandboxRuntime()
 	if err != nil {
 		slog.Warn("sandbox setup failed", "error", err)

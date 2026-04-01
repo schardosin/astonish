@@ -32,6 +32,11 @@ func SetupSandboxRuntime() (*IncusClient, error) {
 	switch platform {
 	case PlatformLinuxNative:
 		SetActivePlatform(platform)
+		mode := "unprivileged"
+		if IsPrivileged() {
+			mode = "privileged"
+		}
+		slog.Info("sandbox container mode", "component", "sandbox", "mode", mode)
 		client, err := Connect(platform)
 		if err != nil {
 			return nil, fmt.Errorf("Incus is installed but not reachable: %w\nMake sure the Incus daemon is running: sudo systemctl start incus", err)

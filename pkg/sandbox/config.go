@@ -61,6 +61,63 @@ func ValidateSandboxConfig(c *config.SandboxConfig) error {
 	return nil
 }
 
+// sandboxCfg stores the active sandbox configuration at package level.
+// Set via SetSandboxConfig during sandbox initialization. Used by
+// IsPrivileged and container creation functions. Follows the same pattern
+// as activePlatform in remote_ops.go.
+var sandboxCfg *config.SandboxConfig
+
+// SetSandboxConfig stores the sandbox configuration at package level for
+// use by container creation functions (defaultContainerConfig, etc.).
+func SetSandboxConfig(c *config.SandboxConfig) {
+	sandboxCfg = c
+}
+
+// GetSandboxConfig returns the stored sandbox configuration.
+// Returns nil if not yet initialized.
+func GetSandboxConfig() *config.SandboxConfig {
+	return sandboxCfg
+}
+
+// IsPrivileged determines whether containers should run in privileged mode.
+// Resolution order:
+//  1. Explicit user config (sandbox.privileged: true/false) — always honored
+//  2. Platform default: PlatformLinuxNative defaults to false (unprivileged),
+//     all other platforms default to true (privileged) until tested and validated.
+//
+// Unprivileged mode uses security.syscalls.intercept.mknod and setxattr to
+// allow Docker and other tools to function without root UID mapping on the host.
+func IsPrivileged() bool {
+	// Explicit user override takes priority
+	if sandboxCfg != nil && sandboxCfg.Privileged != nil {
+		return *sandboxCfg.Privileged
+	}
+	// Platform defaults
+	switch activePlatform {
+	case PlatformLinuxNative:
+		return false // unprivileged by default on native Linux
+	default:
+		return true // privileged on Docker+Incus and unknown platforms (until Phase 2)
+	}
+}
+
+// containerSecurityConfig returns the security-related config keys for a container
+// based on the current privilege mode. Unprivileged containers get syscall
+// intercepts that allow Docker images to create device nodes and set extended
+// attributes without requiring real root on the host.
+func containerSecurityConfig() map[string]string {
+	if IsPrivileged() {
+		return map[string]string{
+			"security.privileged": "true",
+		}
+	}
+	return map[string]string{
+		"security.privileged":                  "false",
+		"security.syscalls.intercept.mknod":    "true",
+		"security.syscalls.intercept.setxattr": "true",
+	}
+}
+
 // EffectiveLimits returns the limits with defaults filled in for any zero values.
 func EffectiveLimits(c *config.SandboxConfig) config.SandboxLimits {
 	defaults := DefaultSandboxConfig().Limits

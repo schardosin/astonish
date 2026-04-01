@@ -493,6 +493,11 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	var toolCallCount int      // Track tool calls for text suppression
 
 	for event, err := range rnr.Run(ctx, req.SessionID, sess.ID(), userMsg, adkagent.RunConfig{}) {
+		// Break early if the SSE client disconnected.
+		if ctx.Err() != nil {
+			return
+		}
+
 		if err != nil {
 			SendErrorSSE(w, flusher, err.Error())
 			return

@@ -48,7 +48,12 @@ func resolveFromProviderAPI(ctx context.Context, providerName, modelName string,
 		return 0
 	}
 
-	providerType := config.GetProviderType(providerName, cfg.Providers[providerName])
+	_, instance, ok := resolveProviderInstance(providerName, cfg)
+	if !ok {
+		return 0
+	}
+
+	providerType := config.GetProviderType(providerName, instance)
 	if providerType == "" {
 		return 0
 	}
@@ -108,7 +113,7 @@ func resolveFromProviderAPI(ctx context.Context, providerName, modelName string,
 // getProviderKey reads a key from config or falls back to an env var.
 func getProviderKey(cfg *config.AppConfig, providerName, keyField, envVar string) string {
 	if cfg != nil {
-		if inst, ok := cfg.Providers[providerName]; ok {
+		if _, inst, ok := resolveProviderInstance(providerName, cfg); ok {
 			if v := inst[keyField]; v != "" {
 				return v
 			}

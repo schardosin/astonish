@@ -486,6 +486,25 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             }
             break
 
+          case 'flow_output':
+            // Flow output delivered directly — bypass LLM, render as markdown.
+            // Finalize any pending streaming text first.
+            if (streamingTextRef.current) {
+              const finalText = streamingTextRef.current
+              streamingTextRef.current = ''
+              setMessages((prev: ChatMsg[]) => {
+                const last = prev[prev.length - 1]
+                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
+                  return [...prev.slice(0, -1), { type: 'agent', content: finalText }]
+                }
+                return prev
+              })
+            }
+            if (data.content) {
+              setMessages((prev: ChatMsg[]) => [...prev, { type: 'agent', content: data.content as string }])
+            }
+            break
+
           case 'new_session':
             if (data.sessionId) {
               changeSession(data.sessionId as string)

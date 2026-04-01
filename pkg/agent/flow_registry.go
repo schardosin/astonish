@@ -26,6 +26,7 @@ type FlowRegistry struct {
 type FlowRegistryEntry struct {
 	FlowFile    string     `json:"flowFile"`
 	Description string     `json:"description"`
+	Type        string     `json:"type,omitempty"` // "drill", "drill_suite", or empty for regular flows
 	Tags        []string   `json:"tags"`
 	CreatedAt   time.Time  `json:"createdAt"`
 	UsedCount   int        `json:"usedCount"`
@@ -141,18 +142,28 @@ func (r *FlowRegistry) SyncFromDirectory(flowsDir string) (int, error) {
 		onDisk[de.Name()] = true
 	}
 
-	// Prune entries whose YAML no longer exists
+	// Prune entries whose YAML no longer exists, and backfill Type for
+	// entries that were created before the Type field was added.
 	r.mu.Lock()
 	pruned := false
+	backfilled := false
 	var kept []FlowRegistryEntry
 	for _, e := range r.entries {
 		if onDisk[e.FlowFile] {
+			// Backfill Type if missing (pre-existing registry entries)
+			if e.Type == "" {
+				parsed := parseFlowYAMLForRegistry(filepath.Join(flowsDir, e.FlowFile), e.FlowFile)
+				if parsed.Type != "" {
+					e.Type = parsed.Type
+					backfilled = true
+				}
+			}
 			kept = append(kept, e)
 		} else {
 			pruned = true
 		}
 	}
-	if pruned {
+	if pruned || backfilled {
 		r.entries = kept
 		if err := r.save(); err != nil {
 			slog.Warn("failed to save flow registry", "error", err)
@@ -196,6 +207,8 @@ func parseFlowYAMLForRegistry(path, filename string) FlowRegistryEntry {
 		entry.Description = strings.TrimSuffix(filename, ".yaml")
 		return entry
 	}
+
+	entry.Type = agentCfg.Type
 
 	if agentCfg.Description != "" {
 		entry.Description = agentCfg.Description

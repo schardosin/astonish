@@ -1,11 +1,14 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"iter"
 	"log/slog"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/schardosin/astonish/pkg/config"
 	"google.golang.org/adk/agent"
@@ -15,6 +18,42 @@ import (
 	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
 )
+
+// callbackEventBuffer collects events produced by BeforeToolCallback and
+// AfterToolCallback so they can be yielded later on the goroutine that
+// owns the range-over-func iterator.
+//
+// ADK's handleFunctionCalls spawns goroutines for concurrent tool calls.
+// Calling yield directly from those goroutines violates Go's range-over-func
+// contract and causes a fatal panic:
+//
+//	"runtime error: range function continued iteration after loop body panic"
+//
+// Instead, callbacks append events here, and the main event loop drains them
+// after each ADK event.
+type callbackEventBuffer struct {
+	mu     sync.Mutex
+	events []*session.Event
+}
+
+func (b *callbackEventBuffer) append(event *session.Event) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.events = append(b.events, event)
+}
+
+// drain returns all buffered events and resets the buffer.
+// Must be called from the goroutine that owns yield.
+func (b *callbackEventBuffer) drain() []*session.Event {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.events) == 0 {
+		return nil
+	}
+	out := b.events
+	b.events = nil
+	return out
+}
 
 // executeLLMNode executes an LLM node with intelligent retry logic
 func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config.Node, nodeName string, state session.State, yield func(*session.Event, error) bool) bool {
@@ -264,6 +303,29 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 		// Add error to history
 		errorHistory = append(errorHistory, err.Error())
 
+		// Exponential backoff before retry: 2s, 4s, 8s, ...
+		// Prevents hammering the provider on rate limits (429) and transient errors.
+		backoff := time.Duration(1<<uint(attempt+1)) * time.Second
+		if backoff > 30*time.Second {
+			backoff = 30 * time.Second
+		}
+		if a.DebugMode {
+			slog.Warn("retry backoff", "component", "retry", "delay", backoff, "node", nodeName)
+		}
+		select {
+		case <-time.After(backoff):
+			// Backoff complete, proceed with retry
+		case <-ctx.Done():
+			// Context cancelled during backoff — stop retrying
+			if a.DebugMode {
+				slog.Warn("context cancelled during retry backoff", "component", "retry", "node", nodeName)
+			}
+			state.Set("_last_error", ctx.Err().Error())
+			state.Set("_error_node", nodeName)
+			state.Set("_has_error", true)
+			return false
+		}
+
 		// Continue to next attempt
 	}
 
@@ -290,6 +352,13 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 
 // executeLLMNodeAttempt executes a single attempt of an LLM node using ADK's llmagent
 func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node *config.Node, nodeName string, state session.State, yield func(*session.Event, error) bool) (bool, error) {
+	// Apply per-node timeout to prevent indefinite hangs on stalled LLM calls.
+	// The timeout covers the entire attempt (LLM call + tool calls + processing).
+	const nodeTimeout = 5 * time.Minute
+	timeoutCtx, cancel := context.WithTimeout(ctx, nodeTimeout)
+	defer cancel()
+	ctx = ctx.WithContext(timeoutCtx)
+
 	// Render prompt and system instruction
 	userPrompt := a.renderString(node.Prompt, state)
 	systemInstruction := a.renderString(node.System, state)
@@ -508,6 +577,12 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 	var llmAgent agent.Agent
 	var err error
 
+	// Buffer for events produced by callbacks running in ADK goroutines.
+	// ADK's handleFunctionCalls spawns goroutines for concurrent tool calls,
+	// and calling yield from those goroutines causes a fatal panic. Callbacks
+	// append events here; the main event loop drains them on the owning goroutine.
+	cbBuf := &callbackEventBuffer{}
+
 	var internalTools []tool.Tool
 	if node.Tools {
 		// Add universal instruction for tool-enabled nodes to prevent repeating completed work
@@ -594,18 +669,18 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 
 		if !node.ToolsAutoApproval && !a.AutoApprove {
 			beforeToolCallbacks = []llmagent.BeforeToolCallback{
-				a.buildApprovalCallback(node, state, yield),
+				a.buildApprovalCallback(node, state, cbBuf),
 			}
 		} else {
-			// Auto-approval enabled: Register callback to emit visual event
+			// Auto-approval enabled: Register callback to buffer visual event
 			// and then allow the tool to execute normally
 			beforeToolCallbacks = []llmagent.BeforeToolCallback{
 				func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 					toolName := t.Name()
 
-					// Emit auto-approval visual event
+					// Buffer auto-approval visual event (NOT yield — runs in ADK goroutine)
 					prompt := a.formatToolApprovalRequest(toolName, args)
-					yield(&session.Event{
+					cbBuf.append(&session.Event{
 						LLMResponse: model.LLMResponse{
 							Content: &genai.Content{
 								Parts: []*genai.Part{{Text: prompt}},
@@ -615,11 +690,9 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 						Actions: session.EventActions{
 							StateDelta: map[string]any{
 								"auto_approved": true,
-								// Note: Do NOT set approval_tool here - it would clobber
-								// the value set by subsequent tools that need approval
 							},
 						},
-					}, nil)
+					})
 
 					// Return nil to allow the actual tool to execute
 					return nil, nil
@@ -629,7 +702,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 
 		// Add AfterToolCallback for debugging and raw_tool_output handling
 		afterToolCallbacks = []llmagent.AfterToolCallback{
-			a.buildAfterToolCallback(node, state, yield),
+			a.buildAfterToolCallback(node, state, cbBuf),
 		}
 
 		llmAgent, err = llmagent.New(llmagent.Config{
@@ -843,6 +916,16 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		// 2. FORWARD the event if it should be displayed
 		if shouldYieldEvent {
 			if !yield(event, nil) {
+				return false, nil
+			}
+		}
+
+		// 2.1 Drain events buffered by callbacks (BeforeToolCallback /
+		// AfterToolCallback). These callbacks run in ADK goroutines where
+		// calling yield directly would panic, so they buffer events instead.
+		// We drain here on the yield-owning goroutine.
+		for _, buffered := range cbBuf.drain() {
+			if !yield(buffered, nil) {
 				return false, nil
 			}
 		}

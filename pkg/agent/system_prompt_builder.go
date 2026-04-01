@@ -56,7 +56,6 @@ type SystemPromptBuilder struct {
 	FleetSection          string         // Pre-built "Available Fleets" section (empty = no fleets loaded)
 	SessionContext        string         // Per-turn context injected by the caller (e.g., fleet plan wizard instructions)
 	Timezone              string         // IANA timezone (e.g. "America/New_York")
-	ExecutionPlan         string         // Per-turn execution plan from matched flow (empty = no plan)
 	RelevantKnowledge     string         // Per-turn auto-retrieved knowledge from vector store (empty = none)
 	RelevantTools         string         // Per-turn auto-retrieved tool matches from tool index (empty = none)
 	Catalog               []*ToolGroup   // Tool groups available for delegation via delegate_tasks (nil = no delegation)
@@ -128,7 +127,7 @@ func (b *SystemPromptBuilder) Build() string {
 
 	// 3b. Knowledge Context — teaches the model about injected knowledge
 	sb.WriteString("\n## Knowledge Context\n\n")
-	sb.WriteString("Your system prompt may include a `[Knowledge For This Task]` or `[Execution Plan]` section at the end. ")
+	sb.WriteString("Your system prompt may include a `[Knowledge For This Task]` section at the end. ")
 	sb.WriteString("This contains VERIFIED information retrieved from memory — real IPs, working commands, credentials, and workarounds proven in previous sessions.\n\n")
 	sb.WriteString("ALWAYS use the specific details from knowledge sections (IPs, ports, URLs, tool choices, commands) instead of defaults or assumptions. ")
 	sb.WriteString("If knowledge says to use a specific IP, use that IP — not localhost or a standard default. ")
@@ -234,19 +233,7 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString(b.RelevantTools)
 	}
 
-	if b.ExecutionPlan != "" {
-		sb.WriteString("\n## Execution Plan\n\n")
-		if b.RelevantKnowledge != "" {
-			sb.WriteString("### Knowledge From Previous Experience\n\n")
-			sb.WriteString("CRITICAL — The following knowledge was learned from previous executions of this exact task. ")
-			sb.WriteString("It contains proven commands, specific flags, and workarounds that are KNOWN TO WORK. ")
-			sb.WriteString("If any step below conflicts with this knowledge, ALWAYS prefer the knowledge — ")
-			sb.WriteString("it reflects what actually succeeded in practice:\n\n")
-			sb.WriteString(b.RelevantKnowledge)
-			sb.WriteString("\n### Steps\n\n")
-		}
-		sb.WriteString(b.ExecutionPlan)
-	} else if b.RelevantKnowledge != "" {
+	if b.RelevantKnowledge != "" {
 		sb.WriteString("\n## Knowledge For This Task\n\n")
 		sb.WriteString("CRITICAL — You MUST apply the following knowledge when executing the user's current request. ")
 		sb.WriteString("It contains proven commands, specific flags, and workarounds that are KNOWN TO WORK ")
@@ -286,6 +273,9 @@ func (b *SystemPromptBuilder) buildCapabilitiesLine() string {
 	}
 	if b.hasDelegateTasksTool() {
 		caps = append(caps, "task delegation")
+	}
+	if b.hasFlowTools() {
+		caps = append(caps, "flow execution")
 	}
 	if b.MemorySearchAvailable {
 		caps = append(caps, "persistent memory")
@@ -396,6 +386,16 @@ func (b *SystemPromptBuilder) hasEmailTools() bool {
 func (b *SystemPromptBuilder) hasSearchToolsTool() bool {
 	for _, t := range b.Tools {
 		if t.Name() == "search_tools" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasFlowTools returns true if search_flows is among the available tools.
+func (b *SystemPromptBuilder) hasFlowTools() bool {
+	for _, t := range b.Tools {
+		if t.Name() == "search_flows" {
 			return true
 		}
 	}

@@ -28,9 +28,9 @@ type Indexer struct {
 const fileIndexName = "file_index.json"
 
 // fileIndexVersion is bumped when the chunking/embedding strategy changes
-// to force a full re-index on the next startup. v4 → v5: skills removed
-// from vector store (now served on-demand via skill_lookup tool).
-const fileIndexVersion = 5
+// to force a full re-index on the next startup. v5 → v6: flows removed
+// from vector store (now executed on-demand via run_flow tool).
+const fileIndexVersion = 6
 
 // fileIndexData is the versioned wrapper for the persisted file index.
 type fileIndexData struct {
@@ -80,6 +80,11 @@ func (idx *Indexer) IndexAll(ctx context.Context) error {
 		// Skip skills directory — skills are served on-demand via
 		// the skill_lookup tool, not auto-injected from the vector store.
 		if d.IsDir() && filepath.Base(path) == "skills" {
+			return filepath.SkipDir
+		}
+		// Skip flows directory — flows are executed on-demand via
+		// the run_flow tool, not injected as knowledge.
+		if d.IsDir() && filepath.Base(path) == "flows" {
 			return filepath.SkipDir
 		}
 		if !d.IsDir() && strings.HasSuffix(d.Name(), ".md") {
@@ -238,6 +243,10 @@ func (idx *Indexer) WatchAndSync(ctx context.Context, debounceMs int) error {
 			}
 			// Skip skills directory (served on-demand via skill_lookup)
 			if filepath.Base(path) == "skills" {
+				return filepath.SkipDir
+			}
+			// Skip flows directory (executed on-demand via run_flow)
+			if filepath.Base(path) == "flows" {
 				return filepath.SkipDir
 			}
 			return watcher.Add(path)

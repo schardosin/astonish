@@ -58,10 +58,9 @@ type ChatAgent struct {
 	FlowRegistry  *FlowRegistry  // Registry for saved flows
 	FlowDistiller *FlowDistiller // Distiller for trace-to-YAML conversion
 
-	// Memory and flow reuse
+	// Memory and knowledge
 	MemoryManager             *memory.Manager               // Persistent memory manager
 	MemoryReflector           *MemoryReflector              // Post-task memory reflection (nil = disabled)
-	FlowContextBuilder        *FlowContextBuilder           // Converts flow YAML to execution plan
 	KnowledgeSearch           KnowledgeSearchFunc           // Auto-retrieve relevant knowledge per turn (nil = disabled)
 	KnowledgeSearchByCategory KnowledgeSearchByCategoryFunc // Auto-retrieve guidance docs per turn (nil = disabled)
 	// Tool discovery
@@ -102,6 +101,12 @@ type ChatAgent struct {
 	// enter session history, available for channels to deliver to users.
 	pendingImages []ImageFromTool
 	imageMu       sync.Mutex
+
+	// Flow output side-channel: large flow outputs are stripped from the
+	// tool result (so the LLM doesn't try to summarize them) and stashed
+	// here for direct delivery to the user via SSE or channel output.
+	pendingFlowOutput string
+	flowOutputMu      sync.Mutex
 }
 
 // ImageFromTool holds image data extracted from a tool result before the
@@ -303,6 +308,49 @@ func (c *ChatAgent) DrainImages() []ImageFromTool {
 	imgs := c.pendingImages
 	c.pendingImages = nil
 	return imgs
+}
+
+// DrainFlowOutput returns and clears any pending flow output that was
+// extracted from a run_flow tool result during the current agent run.
+// Thread-safe. The SSE handler calls this to deliver the full flow output
+// directly to the user without it being re-processed by the chat LLM.
+func (c *ChatAgent) DrainFlowOutput() string {
+	c.flowOutputMu.Lock()
+	defer c.flowOutputMu.Unlock()
+	out := c.pendingFlowOutput
+	c.pendingFlowOutput = ""
+	return out
+}
+
+// extractAndStripFlowOutput checks a run_flow tool result for a large "output"
+// field. If found, the full output is stashed for direct delivery to the user,
+// and replaced with a short pointer so the LLM does not try to summarize it.
+// Returns a new map (does not mutate the original).
+func (c *ChatAgent) extractAndStripFlowOutput(output map[string]any) map[string]any {
+	const minStripLen = 500 // only strip outputs larger than this
+
+	rawOutput, ok := output["output"].(string)
+	if !ok || len(rawOutput) <= minStripLen {
+		return output
+	}
+
+	// Stash the full output for direct delivery
+	c.flowOutputMu.Lock()
+	c.pendingFlowOutput = rawOutput
+	c.flowOutputMu.Unlock()
+
+	// Replace with a pointer — copy the map to avoid mutating the original
+	stripped := make(map[string]any, len(output))
+	for k, v := range output {
+		stripped[k] = v
+	}
+	stripped["output"] = fmt.Sprintf(
+		"[Flow output (%d characters) has been delivered directly to the user's screen. "+
+			"Do NOT reproduce, summarize, or paraphrase it — the user already sees the full content. "+
+			"Just present the input_options/input_prompt if any, or confirm the flow completed successfully.]",
+		len(rawOutput),
+	)
+	return stripped
 }
 
 // extractAndStripImages checks a tool result map for an "image_base64" key.

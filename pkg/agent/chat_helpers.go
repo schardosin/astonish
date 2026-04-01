@@ -2,8 +2,6 @@ package agent
 
 import (
 	"fmt"
-	"log/slog"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -160,90 +158,6 @@ func lastModelResponseTail(events session.Events, maxLen int) string {
 // and returns the remaining (non-flow) results plus the plan text.
 // If multiple flows score above threshold, all are kept as regular knowledge
 // so the LLM can present the options and ask the user which to use.
-func (c *ChatAgent) extractFlowFromResults(
-	results []KnowledgeSearchResult,
-	threshold float64,
-	memContent string,
-	yield func(*session.Event, error) bool,
-) ([]KnowledgeSearchResult, string) {
-	if c.FlowContextBuilder == nil {
-		return results, ""
-	}
-
-	// Find flow results above threshold
-	var flowHits []KnowledgeSearchResult
-	for _, r := range results {
-		if r.Category == "flow" && r.Score >= threshold {
-			flowHits = append(flowHits, r)
-		}
-	}
-
-	// Multiple high-confidence flows: ambiguous — let the LLM ask the user.
-	// Keep all results as-is so the LLM sees both flow descriptions.
-	if len(flowHits) != 1 {
-		return results, ""
-	}
-
-	bestFlow := flowHits[0]
-
-	// Derive the YAML filename from the knowledge doc path:
-	// "flows/youtube_knowledge_extractor.md" -> "youtube_knowledge_extractor.yaml"
-	baseName := strings.TrimPrefix(bestFlow.Path, "flows/")
-	baseName = strings.TrimSuffix(baseName, ".md")
-	flowFile := baseName + ".yaml"
-
-	// Resolve the flow YAML path on disk
-	flowPath := c.resolveFlowPath(flowFile)
-	if flowPath == "" {
-		if c.DebugMode {
-			slog.Debug("flow doc found but yaml not on disk", "component", "chat", "flowFile", flowFile)
-		}
-		return results, ""
-	}
-
-	// Read the flow YAML
-	flowData, err := os.ReadFile(flowPath)
-	if err != nil {
-		if c.DebugMode {
-			slog.Debug("failed to read flow yaml", "component", "chat", "error", err)
-		}
-		return results, ""
-	}
-
-	// Build the execution plan
-	plan := c.FlowContextBuilder.BuildExecutionPlan(string(flowData), flowFile, memContent)
-	if plan == "" {
-		return results, ""
-	}
-
-	if c.DebugMode {
-		slog.Debug("flow discovered via knowledge search", "component", "chat", "flowFile", flowFile, "score", bestFlow.Score, "planBytes", len(plan))
-	}
-
-	// Emit conversational notification about the flow match
-	flowDisplayName := strings.TrimSuffix(flowFile, ".yaml")
-	flowDisplayName = strings.ReplaceAll(flowDisplayName, "_", " ")
-	yield(&session.Event{
-		LLMResponse: model.LLMResponse{
-			Content: &genai.Content{
-				Parts: []*genai.Part{{Text: fmt.Sprintf("I found a saved workflow for this (%s), let me use it.\n", flowDisplayName)}},
-				Role:  "model",
-			},
-		},
-	}, nil)
-
-	// Remove the flow doc from knowledge results to avoid duplication
-	// (the execution plan already contains all the flow information).
-	var remaining []KnowledgeSearchResult
-	for _, r := range results {
-		if r.Path != bestFlow.Path {
-			remaining = append(remaining, r)
-		}
-	}
-
-	return remaining, plan
-}
-
 // isUnknownToolError checks whether an error from ADK is caused by the LLM
 // calling a tool name that doesn't exist. ADK returns this as a hard error
 // (fmt.Errorf("unknown tool: %q")) rather than a tool error response, which

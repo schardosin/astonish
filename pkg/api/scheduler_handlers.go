@@ -211,19 +211,57 @@ func handleListJobs(w http.ResponseWriter, s *scheduler.Scheduler) {
 }
 
 // handleCreateJob creates a new scheduled job.
+// The request body uses the flat tools.SchedulerJob JSON format
+// (with top-level "cron", "timezone", "flow", "instructions" fields),
+// not the nested scheduler.Job format, because the HTTP client
+// (SchedulerHTTPAccess) serializes tools.SchedulerJob directly.
 func handleCreateJob(w http.ResponseWriter, r *http.Request, s *scheduler.Scheduler) {
 	if s == nil {
 		http.Error(w, "scheduler not enabled", http.StatusServiceUnavailable)
 		return
 	}
 
-	var job scheduler.Job
-	if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
+	// Decode the flat format that SchedulerHTTPAccess sends.
+	var flat struct {
+		ID           string            `json:"id"`
+		Name         string            `json:"name"`
+		Mode         string            `json:"mode"`
+		Cron         string            `json:"cron"`
+		Timezone     string            `json:"timezone"`
+		Flow         string            `json:"flow"`
+		Params       map[string]string `json:"params"`
+		Instructions string            `json:"instructions"`
+		Channel      string            `json:"channel"`
+		Target       string            `json:"target"`
+		Enabled      bool              `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&flat); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	if err := s.Store().Add(&job); err != nil {
+	// Convert flat fields to the nested scheduler.Job structure.
+	job := &scheduler.Job{
+		ID:   flat.ID,
+		Name: flat.Name,
+		Mode: scheduler.JobMode(flat.Mode),
+		Schedule: scheduler.JobSchedule{
+			Cron:     flat.Cron,
+			Timezone: flat.Timezone,
+		},
+		Payload: scheduler.JobPayload{
+			Flow:         flat.Flow,
+			Params:       flat.Params,
+			Instructions: flat.Instructions,
+		},
+		Delivery: scheduler.JobDelivery{
+			Channel: flat.Channel,
+			Target:  flat.Target,
+		},
+		Enabled: flat.Enabled,
+	}
+
+	if err := s.Store().Add(job); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

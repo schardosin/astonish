@@ -70,12 +70,53 @@ func GetProviderIDs() []string {
 	return ids
 }
 
+// resolveProviderInstance looks up a provider in cfg.Providers with fallback
+// matching. It first tries an exact key match, then falls back to:
+//   - case-insensitive key match
+//   - display-name-to-ID: requested ID matches the normalized form of a key
+//     (e.g. "sap_ai_core" matches key "SAP AI Core")
+//   - ID-to-display-name: requested display name matches the ID for a key
+//
+// Returns the resolved key, the provider config, and whether it was found.
+func resolveProviderInstance(instanceName string, cfg *config.AppConfig) (string, config.ProviderConfig, bool) {
+	// Exact match (fast path)
+	if instance, ok := cfg.Providers[instanceName]; ok {
+		return instanceName, instance, true
+	}
+
+	// Build the normalized form of the requested name for comparison:
+	// lowercase, spaces replaced with underscores.
+	normalizedReq := strings.ToLower(strings.ReplaceAll(instanceName, " ", "_"))
+
+	for key, instance := range cfg.Providers {
+		// Case-insensitive match
+		if strings.EqualFold(key, instanceName) {
+			return key, instance, true
+		}
+		// Normalized match: "SAP AI Core" -> "sap_ai_core" == "sap_ai_core"
+		normalizedKey := strings.ToLower(strings.ReplaceAll(key, " ", "_"))
+		if normalizedKey == normalizedReq {
+			return key, instance, true
+		}
+		// Display name reverse lookup: requested "sap_ai_core" has display name
+		// "SAP AI Core" which equals the key "SAP AI Core"
+		if displayName, ok := ProviderDisplayNames[instanceName]; ok {
+			if strings.EqualFold(key, displayName) {
+				return key, instance, true
+			}
+		}
+	}
+
+	return "", nil, false
+}
+
 // GetProvider returns an LLM model based on a provider instance name.
 func GetProvider(ctx context.Context, instanceName string, modelName string, cfg *config.AppConfig) (model.LLM, error) {
-	instance, exists := cfg.Providers[instanceName]
+	resolvedName, instance, exists := resolveProviderInstance(instanceName, cfg)
 	if !exists {
 		return nil, fmt.Errorf("provider instance '%s' not found", instanceName)
 	}
+	instanceName = resolvedName
 
 	providerType := config.GetProviderType(instanceName, instance)
 	if providerType == "" {
@@ -293,10 +334,11 @@ func GetProvider(ctx context.Context, instanceName string, modelName string, cfg
 // ListModelsForProvider fetches available models for a given provider instance.
 // This is used by the API to provide model lists to the UI.
 func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.AppConfig) ([]string, error) {
-	instance, exists := cfg.Providers[providerID]
+	resolvedID, instance, exists := resolveProviderInstance(providerID, cfg)
 	if !exists {
 		return nil, fmt.Errorf("provider instance '%s' not found", providerID)
 	}
+	providerID = resolvedID
 
 	providerType := config.GetProviderType(providerID, instance)
 	if providerType == "" {

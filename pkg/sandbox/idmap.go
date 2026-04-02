@@ -1,13 +1,9 @@
-//go:build linux
-
 package sandbox
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -139,42 +135,39 @@ func ShiftTemplateRootfs(client *IncusClient, templateName string) error {
 
 // chownShift recursively chowns a directory tree from UID/GID 0 to the
 // specified shifted values. Uses --from=0:0 to skip already-shifted files.
+// Dispatches through execOnSandboxHost so it works on both native Linux
+// and Docker+Incus (where the chown runs inside the Docker container).
 func chownShift(rootfs string, uidShift, gidShift int64) error {
-	cmd := exec.Command("chown", "-Rh", "--from=0:0",
+	output, err := execOnSandboxHost([]string{
+		"chown", "-Rh", "--from=0:0",
 		fmt.Sprintf("%d:%d", uidShift, gidShift),
 		rootfs,
-	)
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
+	})
+	if err != nil {
 		// chown -R returns exit code 1 if any individual file fails,
 		// even if the vast majority succeeded. Check if it's just
 		// harmless "No such file" errors.
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			errMsg := stderr.String()
-			hasRealError := false
-			for _, line := range strings.Split(errMsg, "\n") {
-				line = strings.TrimSpace(line)
-				if line == "" {
-					continue
-				}
-				if !strings.Contains(line, "No such file or directory") {
-					hasRealError = true
-					break
-				}
+		errMsg := string(output)
+		hasRealError := false
+		for _, line := range strings.Split(errMsg, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
 			}
-			if !hasRealError {
-				slog.Debug("chown shift completed with harmless warnings",
-					"component", "sandbox",
-					"rootfs", rootfs,
-					"warning_count", strings.Count(errMsg, "\n"),
-				)
-				return nil
+			if !strings.Contains(line, "No such file or directory") {
+				hasRealError = true
+				break
 			}
 		}
-		return fmt.Errorf("chown shift failed: %w\nstderr: %s", err, stderr.String())
+		if !hasRealError {
+			slog.Debug("chown shift completed with harmless warnings",
+				"component", "sandbox",
+				"rootfs", rootfs,
+				"warning_count", strings.Count(errMsg, "\n"),
+			)
+			return nil
+		}
+		return fmt.Errorf("chown shift failed: %w\nstderr: %s", err, errMsg)
 	}
 
 	return nil
@@ -191,7 +184,6 @@ func parseIdmapShifts(idmapJSON string) (int64, int64, error) {
 		Maprange int64 `json:"Maprange"`
 	}
 
-	// Use json.Decoder for parsing
 	var entries []idmapEntry
 	if err := json.Unmarshal([]byte(idmapJSON), &entries); err != nil {
 		return 0, 0, err

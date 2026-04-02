@@ -989,6 +989,16 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 		return fmt.Errorf("failed to mount overlay on template: %w", err)
 	}
 
+	// For unprivileged containers, apply an idmapped mount on the template's
+	// overlay so that Incus doesn't try (and fail) to shift UIDs on start.
+	if err := setupIdmappedOverlay(client, tplContainerName, poolPath); err != nil {
+		if delErr := client.DeleteInstance(tplContainerName); delErr != nil {
+			slog.Warn("failed to delete template instance during rollback", "component", "sandbox", "container", tplContainerName, "error", delErr)
+		}
+		restartSession()
+		return fmt.Errorf("failed to setup idmapped overlay on template: %w", err)
+	}
+
 	// Compute binary hash
 	hash, hashErr := ComputeBinaryHash()
 	if hashErr != nil {

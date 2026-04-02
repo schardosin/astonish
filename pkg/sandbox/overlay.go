@@ -414,6 +414,14 @@ func CreateOverlayContainer(client *IncusClient, containerName, templateName str
 		return fmt.Errorf("failed to mount overlay for %q: %w", containerName, err)
 	}
 
+	// For unprivileged containers, apply an idmapped mount so that
+	// files at UID 0 on the overlay appear at the correct shifted UID
+	// expected by the container's user namespace.
+	if err := setupIdmappedOverlay(client, containerName, poolPath); err != nil {
+		client.DeleteInstance(containerName)
+		return fmt.Errorf("failed to setup idmapped overlay for %q: %w", containerName, err)
+	}
+
 	return nil
 }
 
@@ -685,6 +693,16 @@ func RemountDependentOverlays(client *IncusClient, snapshotPath string) error {
 		if err := mountOverlayOnSandboxHost(newOpts, m.mountpoint); err != nil {
 			slog.Error("failed to remount overlay", "component", "sandbox", "mountpoint", m.mountpoint, "error", err)
 			continue
+		}
+
+		// Re-apply idmapped mount for unprivileged containers.
+		// The remounted overlay loses its idmap, so we must reapply it
+		// before the container can be started.
+		if m.containerName != "" {
+			if err := reapplyIdmappedMount(client, m.containerName, m.mountpoint); err != nil {
+				slog.Error("failed to reapply idmapped mount after overlay remount",
+					"component", "sandbox", "container", m.containerName, "error", err)
+			}
 		}
 
 		slog.Info("remounted overlay", "component", "sandbox", "mountpoint", m.mountpoint)

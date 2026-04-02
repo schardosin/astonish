@@ -502,10 +502,16 @@ func UnmountSessionOverlay(poolSourcePath, containerName string) error {
 	// Tear down idmapped bind mounts (no-op if privileged or none exist)
 	teardownIdmappedLayers(containerName)
 
-	// Remove per-session overlay dirs (includes idmap/ subdirectory)
+	// Remove per-session overlay dirs
 	sessionDir := filepath.Join(overlayBaseDir, containerName)
 	if err := removeAllOnSandboxHost(sessionDir); err != nil {
 		slog.Warn("failed to clean up overlay dir", "component", "sandbox", "dir", sessionDir, "error", err)
+	}
+
+	// Remove idmap sibling dir (e.g., <containerName>-idmap/)
+	idmapDir := idmapMountsDir(containerName)
+	if err := removeAllOnSandboxHost(idmapDir); err != nil {
+		slog.Warn("failed to clean up idmap dir", "component", "sandbox", "dir", idmapDir, "error", err)
 	}
 
 	return nil
@@ -646,22 +652,22 @@ func RemountDependentOverlays(client *IncusClient, snapshotPath string) error {
 					opts:          opts,
 				}
 			}
-		} else if strings.Contains(mountpoint, "/idmap/lower-") {
+		} else if strings.Contains(mountpoint, "-idmap/lower-") {
 			// Idmapped bind mount of a lower layer (unprivileged).
-			// Path pattern: .../astonish-overlays/<containerName>/idmap/lower-N
-			// Extract container name from the path.
+			// Path pattern: .../astonish-overlays/<containerName>-idmap/lower-N
+			// Extract container name from the path (strip -idmap suffix).
 			parts := strings.Split(mountpoint, "/")
 			for i, p := range parts {
 				if p == "astonish-overlays" && i+1 < len(parts) {
-					containerName := parts[i+1]
-					if containerName == "" {
-						continue
+					dirName := parts[i+1]
+					containerName := strings.TrimSuffix(dirName, "-idmap")
+					if containerName == "" || containerName == dirName {
+						continue // not an idmap dir
 					}
 					if existing, ok := affectedMap[containerName]; ok {
 						existing.hasIdmap = true
 					} else {
 						// We found the idmap mount but not the overlay yet.
-						// We need the overlay mountpoint — derive it from the container name.
 						affectedMap[containerName] = &overlayMount{
 							containerName: containerName,
 							hasIdmap:      true,

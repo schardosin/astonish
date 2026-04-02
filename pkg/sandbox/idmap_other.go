@@ -10,3 +10,15 @@ func setupIdmappedOverlay(_ *IncusClient, _, _, _ string) error {
 
 // teardownIdmappedLayers is a no-op on non-Linux platforms.
 func teardownIdmappedLayers(_ string) {}
+
+// idmapMountsDir returns the idmap mounts directory path for a container.
+// On non-Linux platforms this is never used for actual mounts but is needed
+// for compilation of shared code in overlay.go.
+func idmapMountsDir(containerName string) string {
+	return ""
+}
+
+// mountIdmappedOverlay is a no-op on non-Linux platforms.
+func mountIdmappedOverlay(_ *IncusClient, _, _, _ string) error {
+	return nil
+}

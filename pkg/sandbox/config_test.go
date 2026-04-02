@@ -218,39 +218,26 @@ func TestDefaultSandboxConfig(t *testing.T) {
 
 func TestIsPrivileged(t *testing.T) {
 	// Save and restore package-level state
-	origPlatform := activePlatform
 	origCfg := sandboxCfg
 	t.Cleanup(func() {
-		activePlatform = origPlatform
 		sandboxCfg = origCfg
 	})
 
-	t.Run("nil config on Linux native defaults to privileged", func(t *testing.T) {
-		activePlatform = PlatformLinuxNative
+	t.Run("nil config defaults to unprivileged", func(t *testing.T) {
 		sandboxCfg = nil
-		if !IsPrivileged() {
-			t.Error("expected true (privileged) on Linux native with nil config — overlay system requires it")
+		if IsPrivileged() {
+			t.Error("expected false (unprivileged) with nil config")
 		}
 	})
 
-	t.Run("nil config on Docker defaults to privileged", func(t *testing.T) {
-		activePlatform = PlatformDockerIncus
-		sandboxCfg = nil
-		if !IsPrivileged() {
-			t.Error("expected true (privileged) on Docker+Incus with nil config")
-		}
-	})
-
-	t.Run("nil config on unsupported defaults to privileged", func(t *testing.T) {
-		activePlatform = PlatformUnsupported
-		sandboxCfg = nil
-		if !IsPrivileged() {
-			t.Error("expected true (privileged) on unsupported platform")
+	t.Run("empty config defaults to unprivileged", func(t *testing.T) {
+		sandboxCfg = &config.SandboxConfig{} // Privileged is nil
+		if IsPrivileged() {
+			t.Error("expected false (unprivileged) with nil Privileged field")
 		}
 	})
 
 	t.Run("explicit true is honored", func(t *testing.T) {
-		activePlatform = PlatformLinuxNative
 		priv := true
 		sandboxCfg = &config.SandboxConfig{Privileged: &priv}
 		if !IsPrivileged() {
@@ -258,46 +245,23 @@ func TestIsPrivileged(t *testing.T) {
 		}
 	})
 
-	t.Run("explicit false overrides default", func(t *testing.T) {
-		activePlatform = PlatformLinuxNative
+	t.Run("explicit false is honored", func(t *testing.T) {
 		priv := false
 		sandboxCfg = &config.SandboxConfig{Privileged: &priv}
 		if IsPrivileged() {
 			t.Error("expected false when explicitly set to unprivileged")
 		}
 	})
-
-	t.Run("nil Privileged field uses default (privileged)", func(t *testing.T) {
-		activePlatform = PlatformLinuxNative
-		sandboxCfg = &config.SandboxConfig{} // Privileged is nil
-		if !IsPrivileged() {
-			t.Error("expected true on Linux native with nil Privileged field — overlay requires privileged")
-		}
-	})
 }
 
 func TestContainerSecurityConfig(t *testing.T) {
-	origPlatform := activePlatform
 	origCfg := sandboxCfg
 	t.Cleanup(func() {
-		activePlatform = origPlatform
 		sandboxCfg = origCfg
 	})
 
-	t.Run("privileged mode returns privileged config", func(t *testing.T) {
-		sandboxCfg = nil // defaults to privileged
-		cfg := containerSecurityConfig()
-		if cfg["security.privileged"] != "true" {
-			t.Errorf("expected security.privileged=true, got %q", cfg["security.privileged"])
-		}
-		if _, ok := cfg["security.syscalls.intercept.mknod"]; ok {
-			t.Error("privileged mode should not set syscall intercepts")
-		}
-	})
-
-	t.Run("unprivileged mode returns syscall intercepts", func(t *testing.T) {
-		priv := false
-		sandboxCfg = &config.SandboxConfig{Privileged: &priv}
+	t.Run("default returns unprivileged with hardening", func(t *testing.T) {
+		sandboxCfg = nil // defaults to unprivileged
 		cfg := containerSecurityConfig()
 		if cfg["security.privileged"] != "false" {
 			t.Errorf("expected security.privileged=false, got %q", cfg["security.privileged"])
@@ -307,6 +271,31 @@ func TestContainerSecurityConfig(t *testing.T) {
 		}
 		if cfg["security.syscalls.intercept.setxattr"] != "true" {
 			t.Error("expected security.syscalls.intercept.setxattr=true")
+		}
+		if cfg["security.syscalls.deny_default"] != "true" {
+			t.Error("expected security.syscalls.deny_default=true")
+		}
+		if cfg["security.syscalls.deny_compat"] != "true" {
+			t.Error("expected security.syscalls.deny_compat=true")
+		}
+		if cfg["security.guestapi"] != "false" {
+			t.Error("expected security.guestapi=false")
+		}
+		// Must NOT set security.idmap.isolated (breaks overlay sharing)
+		if _, ok := cfg["security.idmap.isolated"]; ok {
+			t.Error("security.idmap.isolated must NOT be set — breaks shared overlay layers")
+		}
+	})
+
+	t.Run("explicit privileged returns minimal config", func(t *testing.T) {
+		priv := true
+		sandboxCfg = &config.SandboxConfig{Privileged: &priv}
+		cfg := containerSecurityConfig()
+		if cfg["security.privileged"] != "true" {
+			t.Errorf("expected security.privileged=true, got %q", cfg["security.privileged"])
+		}
+		if _, ok := cfg["security.syscalls.intercept.mknod"]; ok {
+			t.Error("privileged mode should not set syscall intercepts")
 		}
 	})
 }

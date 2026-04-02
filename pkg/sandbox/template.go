@@ -989,6 +989,17 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 		return fmt.Errorf("failed to mount overlay on template: %w", err)
 	}
 
+	// Pre-seed idmap for unprivileged containers (same as CreateOverlayContainer)
+	if !IsPrivileged() {
+		if err := preseedIdmap(client, tplContainerName); err != nil {
+			if delErr := client.DeleteInstance(tplContainerName); delErr != nil {
+				slog.Warn("failed to delete template instance during rollback", "component", "sandbox", "container", tplContainerName, "error", delErr)
+			}
+			restartSession()
+			return fmt.Errorf("failed to pre-seed idmap for template %q: %w", tplContainerName, err)
+		}
+	}
+
 	// Compute binary hash
 	hash, hashErr := ComputeBinaryHash()
 	if hashErr != nil {

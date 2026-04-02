@@ -82,30 +82,36 @@ func GetSandboxConfig() *config.SandboxConfig {
 // IsPrivileged determines whether containers should run in privileged mode.
 // Resolution order:
 //  1. Explicit user config (sandbox.privileged: true/false) — always honored
-//  2. Default: true (privileged) on all platforms.
+//  2. Default: false (unprivileged) on all platforms.
 //
-// Privileged mode is currently required because the overlay system mounts
-// overlayfs on the host side as root. When Incus starts an unprivileged
-// container, it tries to idmap (UID-shift) the entire rootfs, which fails
-// on overlayfs-backed rootfs directories. Until idmapped overlayfs is
-// reliably supported by the kernel, containers must run privileged.
+// Unprivileged containers use user namespaces to map container root (UID 0) to
+// an unprivileged host UID (e.g., 100000+), preventing container-to-host escapes.
+// The overlay system pre-seeds the Incus idmap state so that UID shifting is
+// skipped at container start time (the template snapshot already has shifted UIDs).
 //
-// Users can set sandbox.privileged: false to experiment with unprivileged
-// mode on kernels that support idmapped overlayfs (Linux 5.19+ with
-// CONFIG_OVERLAY_FS_METACOPY).
+// Users can set sandbox.privileged: true for environments that require it
+// (e.g., nested LXC on Proxmox where /proc can't mount in double-nested
+// user namespaces).
 func IsPrivileged() bool {
 	// Explicit user override takes priority
 	if sandboxCfg != nil && sandboxCfg.Privileged != nil {
 		return *sandboxCfg.Privileged
 	}
-	// Default to privileged on all platforms (overlay system requires it)
-	return true
+	return false
 }
 
 // containerSecurityConfig returns the security-related config keys for a container
-// based on the current privilege mode. Unprivileged containers get syscall
-// intercepts that allow Docker images to create device nodes and set extended
-// attributes without requiring real root on the host.
+// based on the current privilege mode.
+//
+// Unprivileged containers get:
+//   - Syscall intercepts for mknod/setxattr (needed for Docker images)
+//   - Default syscall deny list (blocks dangerous syscalls like kexec, module loading)
+//   - Compat syscall deny (blocks 32-bit syscall attacks on x86_64)
+//   - Guest API disabled (removes /dev/incus from container)
+//
+// Note: security.idmap.isolated is intentionally NOT set. All containers must
+// share the same idmap range so that overlay lower layers (shared template
+// snapshots with pre-shifted UIDs) have correct ownership for all containers.
 func containerSecurityConfig() map[string]string {
 	if IsPrivileged() {
 		return map[string]string{
@@ -116,6 +122,9 @@ func containerSecurityConfig() map[string]string {
 		"security.privileged":                  "false",
 		"security.syscalls.intercept.mknod":    "true",
 		"security.syscalls.intercept.setxattr": "true",
+		"security.syscalls.deny_default":       "true",
+		"security.syscalls.deny_compat":        "true",
+		"security.guestapi":                    "false",
 	}
 }
 

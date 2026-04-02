@@ -18,7 +18,7 @@ func reshiftOverlayUIDs(_ *IncusClient, _, _ string) error {
 	return nil
 }
 
-// ShiftSnapshotUIDs is a no-op on non-Linux platforms.
-func ShiftSnapshotUIDs(_ *IncusClient, _ string) error {
+// ShiftTemplateRootfs is a no-op on non-Linux platforms.
+func ShiftTemplateRootfs(_ *IncusClient, _ string) error {
 	return nil
 }

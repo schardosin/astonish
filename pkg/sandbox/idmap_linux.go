@@ -65,24 +65,26 @@ func preseedIdmap(client *IncusClient, containerName string) error {
 	})
 }
 
-// ShiftSnapshotUIDs recursively chowns a template snapshot's rootfs to shifted
-// UIDs matching the container's idmap. This is a ONE-TIME cost per template
-// snapshot creation (during sandbox init, template snapshot, or promote).
+// ShiftTemplateRootfs recursively chowns a template container's rootfs to
+// shifted UIDs matching the container's idmap. This MUST be called BEFORE
+// CreateSnapshot, while the container's rootfs is still writable (btrfs
+// snapshots are read-only).
 //
-// After shifting, all session containers that use this snapshot as their overlay
-// lower layer will see pre-shifted files, allowing instant container start
-// without any per-session UID shifting.
+// This is a ONE-TIME cost per template creation (sandbox init, template
+// snapshot, promote). The snapshot captures the shifted state, so all session
+// containers that use it as their overlay lower layer see pre-shifted files,
+// enabling instant container start without per-session UID shifting.
 //
-// The shift uses chown --from=0:0 to only shift files at UID/GID 0 (the default
-// for freshly created containers), preventing double-shifting if called again.
+// The shift uses chown --from=0:0 to only shift files at UID/GID 0 (the
+// default for freshly created containers), preventing double-shifting.
 //
 // For privileged containers, this is a no-op.
-func ShiftSnapshotUIDs(client *IncusClient, templateName string) error {
+func ShiftTemplateRootfs(client *IncusClient, templateName string) error {
 	if IsPrivileged() {
 		return nil
 	}
 
-	// Get the snapshot rootfs path
+	// Get the container rootfs path (writable, unlike the snapshot)
 	poolName, err := GetPoolForProfile(client)
 	if err != nil {
 		return fmt.Errorf("failed to get pool name: %w", err)
@@ -93,10 +95,10 @@ func ShiftSnapshotUIDs(client *IncusClient, templateName string) error {
 		return fmt.Errorf("failed to get pool path: %w", err)
 	}
 
-	snapRootfs := SnapshotRootfsPath(poolPath, templateName)
+	containerName := TemplateName(templateName)
+	containerRootfs := ContainerRootfsPath(poolPath, containerName)
 
 	// Get the idmap from the template container
-	containerName := TemplateName(templateName)
 	inst, err := client.GetInstance(containerName)
 	if err != nil {
 		return fmt.Errorf("failed to read template instance: %w", err)
@@ -108,7 +110,6 @@ func ShiftSnapshotUIDs(client *IncusClient, templateName string) error {
 	}
 
 	// Parse the idmap to get the UID/GID shift values
-	// Format: [{"Isuid":true,"Isgid":false,"Hostid":1000000,"Nsid":0,"Maprange":1000000000},...]
 	uidShift, gidShift, err := parseIdmapShifts(nextIdmap)
 	if err != nil {
 		return fmt.Errorf("failed to parse idmap: %w", err)
@@ -118,15 +119,22 @@ func ShiftSnapshotUIDs(client *IncusClient, templateName string) error {
 		return nil
 	}
 
-	slog.Info("shifting template snapshot UIDs (one-time)",
+	slog.Info("shifting template rootfs UIDs (one-time)",
 		"component", "sandbox",
 		"template", templateName,
-		"rootfs", snapRootfs,
+		"rootfs", containerRootfs,
 		"uid_shift", uidShift,
 		"gid_shift", gidShift,
 	)
 
-	return chownShift(snapRootfs, uidShift, gidShift)
+	if err := chownShift(containerRootfs, uidShift, gidShift); err != nil {
+		return err
+	}
+
+	// Also pre-seed the idmap on the template container so Incus knows the
+	// rootfs is already shifted. This prevents Incus from trying to shift
+	// again if the template container is ever started directly.
+	return preseedIdmap(client, containerName)
 }
 
 // chownShift recursively chowns a directory tree from UID/GID 0 to the

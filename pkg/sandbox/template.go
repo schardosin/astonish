@@ -248,19 +248,18 @@ func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry, opts Base
 		return fmt.Errorf("failed to stop base template: %w", err)
 	}
 
-	// Create snapshot
+	// Shift rootfs UIDs for unprivileged containers (one-time cost).
+	// Must happen BEFORE snapshot — btrfs snapshots are read-only.
+	progress("Preparing template for unprivileged containers...\n")
+	if err := ShiftTemplateRootfs(client, BaseTemplate); err != nil {
+		slog.Warn("failed to shift template rootfs UIDs", "component", "sandbox", "error", err)
+	}
+
+	// Create snapshot (captures the shifted UIDs)
 	progress("Creating snapshot...\n")
 	if err := client.CreateSnapshot(containerName, SnapshotName); err != nil {
 		client.DeleteInstance(containerName)
 		return fmt.Errorf("failed to snapshot base template: %w", err)
-	}
-
-	// Shift snapshot UIDs for unprivileged containers (one-time cost).
-	// This makes all session overlays that use this snapshot as a lower layer
-	// see pre-shifted files, enabling instant container start.
-	progress("Preparing snapshot for unprivileged containers...\n")
-	if err := ShiftSnapshotUIDs(client, BaseTemplate); err != nil {
-		slog.Warn("failed to shift snapshot UIDs", "component", "sandbox", "error", err)
 	}
 
 	// Register in metadata
@@ -459,16 +458,17 @@ func SnapshotTemplate(client *IncusClient, registry *TemplateRegistry, name stri
 		}
 	}
 
-	// Create new snapshot
+	// Shift rootfs UIDs for unprivileged containers (one-time cost).
+	// Must happen BEFORE snapshot — btrfs snapshots are read-only.
+	if err := ShiftTemplateRootfs(client, name); err != nil {
+		slog.Warn("failed to shift template rootfs UIDs", "component", "sandbox", "error", err)
+	}
+
+	// Create new snapshot (captures the shifted UIDs)
 	fmt.Println("Creating snapshot...")
 	if err := client.CreateSnapshot(containerName, SnapshotName); err != nil {
 		templateSnapshotMu.Unlock()
 		return fmt.Errorf("failed to create snapshot: %w", err)
-	}
-
-	// Shift snapshot UIDs for unprivileged containers (one-time cost)
-	if err := ShiftSnapshotUIDs(client, name); err != nil {
-		slog.Warn("failed to shift snapshot UIDs", "component", "sandbox", "error", err)
 	}
 
 	// Remount all overlay mounts that depend on the base snapshot.
@@ -633,16 +633,16 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 			return fmt.Errorf("failed to materialize into @base: %w", err)
 		}
 
-		// Snapshot the new @base
+		// Shift rootfs UIDs for unprivileged containers (one-time cost)
+		if err := ShiftTemplateRootfs(client, BaseTemplate); err != nil {
+			slog.Warn("failed to shift template rootfs UIDs", "component", "sandbox", "error", err)
+		}
+
+		// Snapshot the new @base (captures the shifted UIDs)
 		fmt.Println("Snapshotting new @base...")
 		if err := client.CreateSnapshot(baseName, SnapshotName); err != nil {
 			templateSnapshotMu.Unlock()
 			return fmt.Errorf("failed to snapshot new @base: %w", err)
-		}
-
-		// Shift snapshot UIDs for unprivileged containers (one-time cost)
-		if err := ShiftSnapshotUIDs(client, BaseTemplate); err != nil {
-			slog.Warn("failed to shift snapshot UIDs", "component", "sandbox", "error", err)
 		}
 
 		// Remount any overlays that depended on the old base snapshot
@@ -674,15 +674,15 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 			return fmt.Errorf("failed to clone promoted template to @base: %w", err)
 		}
 
-		// Snapshot the new @base
+		// Shift rootfs UIDs for unprivileged containers (one-time cost)
+		if err := ShiftTemplateRootfs(client, BaseTemplate); err != nil {
+			slog.Warn("failed to shift template rootfs UIDs", "component", "sandbox", "error", err)
+		}
+
+		// Snapshot the new @base (captures the shifted UIDs)
 		if err := client.CreateSnapshot(baseName, SnapshotName); err != nil {
 			templateSnapshotMu.Unlock()
 			return fmt.Errorf("failed to snapshot new @base: %w", err)
-		}
-
-		// Shift snapshot UIDs for unprivileged containers (one-time cost)
-		if err := ShiftSnapshotUIDs(client, BaseTemplate); err != nil {
-			slog.Warn("failed to shift snapshot UIDs", "component", "sandbox", "error", err)
 		}
 
 		// Remount any overlays that depended on the old base snapshot

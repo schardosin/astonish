@@ -101,13 +101,20 @@ func IsPrivileged() bool {
 }
 
 // containerSecurityConfig returns the security-related config keys for a container
-// based on the current privilege mode.
+// based on the current privilege mode and platform.
 //
-// Unprivileged containers get:
+// On native Linux (unprivileged), containers get full hardening:
 //   - Syscall intercepts for mknod/setxattr (needed for Docker images)
 //   - Default syscall deny list (blocks dangerous syscalls like kexec, module loading)
 //   - Compat syscall deny (blocks 32-bit syscall attacks on x86_64)
 //   - Guest API disabled (removes /dev/incus from container)
+//
+// On Docker+Incus (macOS/Windows), syscall hardening is skipped because:
+//   - The Docker Desktop VM is the security boundary, not LXC
+//   - Seccomp intercepts may not work in nested/emulated environments
+//     (e.g., deny_compat fails on aarch64 with "Unsupported architecture")
+//   - Containers are still unprivileged (user namespaces active) unless
+//     the user explicitly sets sandbox.privileged: true
 //
 // Note: security.idmap.isolated is intentionally NOT set. All containers must
 // share the same idmap range so that overlay lower layers (shared template
@@ -118,6 +125,16 @@ func containerSecurityConfig() map[string]string {
 			"security.privileged": "true",
 		}
 	}
+
+	// On Docker+Incus, skip syscall hardening — the Docker VM provides
+	// isolation and seccomp features may not work in nested environments.
+	if activePlatform == PlatformDockerIncus {
+		return map[string]string{
+			"security.privileged": "false",
+		}
+	}
+
+	// Native Linux: full hardening
 	return map[string]string{
 		"security.privileged":                  "false",
 		"security.syscalls.intercept.mknod":    "true",

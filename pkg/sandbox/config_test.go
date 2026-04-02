@@ -256,12 +256,15 @@ func TestIsPrivileged(t *testing.T) {
 
 func TestContainerSecurityConfig(t *testing.T) {
 	origCfg := sandboxCfg
+	origPlatform := activePlatform
 	t.Cleanup(func() {
 		sandboxCfg = origCfg
+		activePlatform = origPlatform
 	})
 
-	t.Run("default returns unprivileged with hardening", func(t *testing.T) {
+	t.Run("native linux unprivileged returns full hardening", func(t *testing.T) {
 		sandboxCfg = nil // defaults to unprivileged
+		activePlatform = PlatformLinuxNative
 		cfg := containerSecurityConfig()
 		if cfg["security.privileged"] != "false" {
 			t.Errorf("expected security.privileged=false, got %q", cfg["security.privileged"])
@@ -287,15 +290,50 @@ func TestContainerSecurityConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("docker+incus unprivileged skips syscall hardening", func(t *testing.T) {
+		sandboxCfg = nil // defaults to unprivileged
+		activePlatform = PlatformDockerIncus
+		cfg := containerSecurityConfig()
+		if cfg["security.privileged"] != "false" {
+			t.Errorf("expected security.privileged=false, got %q", cfg["security.privileged"])
+		}
+		// Syscall hardening must NOT be set on Docker+Incus
+		for _, key := range []string{
+			"security.syscalls.intercept.mknod",
+			"security.syscalls.intercept.setxattr",
+			"security.syscalls.deny_default",
+			"security.syscalls.deny_compat",
+			"security.guestapi",
+		} {
+			if _, ok := cfg[key]; ok {
+				t.Errorf("Docker+Incus should not set %s", key)
+			}
+		}
+	})
+
 	t.Run("explicit privileged returns minimal config", func(t *testing.T) {
 		priv := true
 		sandboxCfg = &config.SandboxConfig{Privileged: &priv}
+		activePlatform = PlatformLinuxNative
 		cfg := containerSecurityConfig()
 		if cfg["security.privileged"] != "true" {
 			t.Errorf("expected security.privileged=true, got %q", cfg["security.privileged"])
 		}
 		if _, ok := cfg["security.syscalls.intercept.mknod"]; ok {
 			t.Error("privileged mode should not set syscall intercepts")
+		}
+	})
+
+	t.Run("explicit privileged on docker+incus", func(t *testing.T) {
+		priv := true
+		sandboxCfg = &config.SandboxConfig{Privileged: &priv}
+		activePlatform = PlatformDockerIncus
+		cfg := containerSecurityConfig()
+		if cfg["security.privileged"] != "true" {
+			t.Errorf("expected security.privileged=true, got %q", cfg["security.privileged"])
+		}
+		if len(cfg) != 1 {
+			t.Errorf("expected only 1 config key for privileged, got %d: %v", len(cfg), cfg)
 		}
 	})
 }

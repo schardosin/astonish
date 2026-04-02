@@ -45,6 +45,10 @@ func (s *launchdService) Label() string {
 	return launchdLabel
 }
 
+func (s *launchdService) IsSystem() bool {
+	return false
+}
+
 func (s *launchdService) LogPath() string {
 	return filepath.Join(s.logDir, "daemon.log")
 }

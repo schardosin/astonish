@@ -15,14 +15,29 @@ import (
 const (
 	systemdServiceName = "astonish-daemon"
 	systemdLabel       = "astonish-daemon.service"
+
+	// System-level paths (used when installed via sudo / root)
+	systemUnitDir = "/etc/systemd/system"
+	systemLogDir  = "/var/log/astonish"
 )
 
 type systemdService struct {
 	unitPath string
 	logDir   string
+	isSystem bool // true when running as root (system-level systemd)
 }
 
+// newPlatformService creates a systemdService configured for either system-level
+// (when running as root / UID 0) or user-level (normal user) operation.
 func newPlatformService() (Service, error) {
+	if os.Getuid() == 0 {
+		return &systemdService{
+			unitPath: filepath.Join(systemUnitDir, systemdLabel),
+			logDir:   systemLogDir,
+			isSystem: true,
+		}, nil
+	}
+
 	configDir, err := os.UserConfigDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get config directory: %w", err)
@@ -37,6 +52,7 @@ func newPlatformService() (Service, error) {
 	return &systemdService{
 		unitPath: unitPath,
 		logDir:   logDir,
+		isSystem: false,
 	}, nil
 }
 
@@ -44,8 +60,22 @@ func (s *systemdService) Label() string {
 	return systemdServiceName
 }
 
+func (s *systemdService) IsSystem() bool {
+	return s.isSystem
+}
+
 func (s *systemdService) LogPath() string {
 	return filepath.Join(s.logDir, "daemon.log")
+}
+
+// systemctl builds an exec.Cmd for systemctl, automatically including --user
+// for user-level services.
+func (s *systemdService) systemctl(args ...string) *exec.Cmd {
+	if s.isSystem {
+		return exec.Command("systemctl", args...)
+	}
+	// Prepend --user for user-level service management
+	return exec.Command("systemctl", append([]string{"--user"}, args...)...)
 }
 
 func (s *systemdService) Install(cfg InstallConfig) error {
@@ -74,6 +104,12 @@ func (s *systemdService) Install(cfg InstallConfig) error {
 
 	stdoutLog := filepath.Join(logDir, "daemon.log")
 
+	// System-level services use multi-user.target; user-level use default.target
+	wantedBy := "default.target"
+	if s.isSystem {
+		wantedBy = "multi-user.target"
+	}
+
 	unit := fmt.Sprintf(`[Unit]
 Description=Astonish AI Agent Daemon
 After=network.target
@@ -87,29 +123,31 @@ StandardOutput=append:%s
 StandardError=append:%s
 %s
 [Install]
-WantedBy=default.target
-`, cfg.BinaryPath, port, stdoutLog, stdoutLog, envLines)
+WantedBy=%s
+`, cfg.BinaryPath, port, stdoutLog, stdoutLog, envLines, wantedBy)
 
 	if err := EnsureDir(filepath.Dir(s.unitPath)); err != nil {
-		return fmt.Errorf("failed to create systemd user directory: %w", err)
+		return fmt.Errorf("failed to create systemd directory: %w", err)
 	}
 
 	if err := os.WriteFile(s.unitPath, []byte(unit), 0644); err != nil {
 		return fmt.Errorf("failed to write unit file: %w", err)
 	}
 
-	// Enable linger so the service runs without an active login session
-	cmd := exec.Command("loginctl", "enable-linger")
-	cmd.Run() // Best-effort; may fail without root but that's OK for user-session use
+	// User-level only: enable linger so the service runs without an active login session
+	if !s.isSystem {
+		cmd := exec.Command("loginctl", "enable-linger")
+		cmd.Run() // Best-effort; may fail without root but that's OK for user-session use
+	}
 
 	// Reload systemd
-	cmd = exec.Command("systemctl", "--user", "daemon-reload")
+	cmd := s.systemctl("daemon-reload")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("systemctl daemon-reload failed: %s (%w)", strings.TrimSpace(string(output)), err)
 	}
 
-	// Enable the service (auto-start on login)
-	cmd = exec.Command("systemctl", "--user", "enable", systemdLabel)
+	// Enable the service (auto-start on boot/login)
+	cmd = s.systemctl("enable", systemdLabel)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("systemctl enable failed: %s (%w)", strings.TrimSpace(string(output)), err)
 	}
@@ -125,7 +163,7 @@ func (s *systemdService) Uninstall() error {
 		}
 	}
 
-	cmd := exec.Command("systemctl", "--user", "disable", systemdLabel)
+	cmd := s.systemctl("disable", systemdLabel)
 	cmd.Run() // Best-effort
 
 	if err := os.Remove(s.unitPath); err != nil && !os.IsNotExist(err) {
@@ -133,7 +171,7 @@ func (s *systemdService) Uninstall() error {
 	}
 
 	// Reload
-	cmd = exec.Command("systemctl", "--user", "daemon-reload")
+	cmd = s.systemctl("daemon-reload")
 	cmd.Run()
 
 	return nil
@@ -144,7 +182,7 @@ func (s *systemdService) Start() error {
 		return fmt.Errorf("service not installed (unit file not found at %s)", s.unitPath)
 	}
 
-	cmd := exec.Command("systemctl", "--user", "start", systemdLabel)
+	cmd := s.systemctl("start", systemdLabel)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("systemctl start failed: %s (%w)", strings.TrimSpace(string(output)), err)
 	}
@@ -152,7 +190,7 @@ func (s *systemdService) Start() error {
 }
 
 func (s *systemdService) Stop() error {
-	cmd := exec.Command("systemctl", "--user", "stop", systemdLabel)
+	cmd := s.systemctl("stop", systemdLabel)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		out := strings.TrimSpace(string(output))
 		// Not loaded/not running is fine for stop
@@ -164,7 +202,7 @@ func (s *systemdService) Stop() error {
 }
 
 func (s *systemdService) Restart() error {
-	cmd := exec.Command("systemctl", "--user", "restart", systemdLabel)
+	cmd := s.systemctl("restart", systemdLabel)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("systemctl restart failed: %s (%w)", strings.TrimSpace(string(output)), err)
 	}
@@ -172,7 +210,7 @@ func (s *systemdService) Restart() error {
 }
 
 func (s *systemdService) IsRunning() (bool, error) {
-	cmd := exec.Command("systemctl", "--user", "is-active", "--quiet", systemdLabel)
+	cmd := s.systemctl("is-active", "--quiet", systemdLabel)
 	err := cmd.Run()
 	return err == nil, nil
 }
@@ -187,7 +225,7 @@ func (s *systemdService) Status() (*ServiceStatus, error) {
 
 	if running {
 		// Get PID
-		cmd := exec.Command("systemctl", "--user", "show", "--property=MainPID", "--value", systemdLabel)
+		cmd := s.systemctl("show", "--property=MainPID", "--value", systemdLabel)
 		if output, err := cmd.CombinedOutput(); err == nil {
 			if pid, err := strconv.Atoi(strings.TrimSpace(string(output))); err == nil && pid > 0 {
 				status.PID = pid

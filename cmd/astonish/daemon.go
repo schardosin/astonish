@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/user"
 
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/daemon"
@@ -76,14 +77,25 @@ func handleDaemonInstall(args []string) error {
 
 	// Build env vars from provider config
 	envVars := make(map[string]string)
-	if appCfg != nil {
-		// Inherit HOME and PATH so the daemon process can find tools
-		if home := os.Getenv("HOME"); home != "" {
-			envVars["HOME"] = home
+
+	// Inherit HOME and PATH so the daemon process can find tools and config.
+	// When running via sudo, SUDO_USER tells us the real user; we resolve
+	// their home directory so the daemon reads the correct config files.
+	homeDir := os.Getenv("HOME")
+	if os.Getuid() == 0 {
+		if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
+			if u, err := user.Lookup(sudoUser); err == nil {
+				homeDir = u.HomeDir
+				slog.Info("system-level install: resolved HOME from SUDO_USER",
+					"sudo_user", sudoUser, "home", homeDir)
+			}
 		}
-		if path := os.Getenv("PATH"); path != "" {
-			envVars["PATH"] = path
-		}
+	}
+	if homeDir != "" {
+		envVars["HOME"] = homeDir
+	}
+	if path := os.Getenv("PATH"); path != "" {
+		envVars["PATH"] = path
 	}
 
 	// Capture delegate env vars from the current shell (e.g. BIFROST_API_KEY).
@@ -119,14 +131,26 @@ func handleDaemonInstall(args []string) error {
 		return fmt.Errorf("failed to install service: %w", err)
 	}
 
-	fmt.Printf("Service installed: %s\n", svc.Label())
+	mode := "user"
+	if svc.IsSystem() {
+		mode = "system"
+	}
+	fmt.Printf("Service installed (%s-level): %s\n", mode, svc.Label())
 	fmt.Printf("  Port: %d\n", installPort)
 	fmt.Printf("  Logs: %s\n", svc.LogPath())
-	fmt.Printf("\nRun 'astonish daemon start' to start the service.\n")
+	if svc.IsSystem() {
+		fmt.Printf("\nRun 'sudo astonish daemon start' to start the service.\n")
+	} else {
+		fmt.Printf("\nRun 'astonish daemon start' to start the service.\n")
+	}
 	return nil
 }
 
 func handleDaemonUninstall() error {
+	if err := requireSystemPrivileges("uninstall"); err != nil {
+		return err
+	}
+
 	svc, err := daemon.NewService()
 	if err != nil {
 		return err
@@ -141,6 +165,10 @@ func handleDaemonUninstall() error {
 }
 
 func handleDaemonStart() error {
+	if err := requireSystemPrivileges("start"); err != nil {
+		return err
+	}
+
 	svc, err := daemon.NewService()
 	if err != nil {
 		return err
@@ -160,6 +188,10 @@ func handleDaemonStart() error {
 }
 
 func handleDaemonStop() error {
+	if err := requireSystemPrivileges("stop"); err != nil {
+		return err
+	}
+
 	svc, err := daemon.NewService()
 	if err != nil {
 		return err
@@ -179,6 +211,10 @@ func handleDaemonStop() error {
 }
 
 func handleDaemonRestart() error {
+	if err := requireSystemPrivileges("restart"); err != nil {
+		return err
+	}
+
 	svc, err := daemon.NewService()
 	if err != nil {
 		return err
@@ -193,6 +229,10 @@ func handleDaemonRestart() error {
 }
 
 func handleDaemonStatus() error {
+	if err := requireSystemPrivileges("status"); err != nil {
+		return err
+	}
+
 	svc, err := daemon.NewService()
 	if err != nil {
 		return err
@@ -203,7 +243,11 @@ func handleDaemonStatus() error {
 		return fmt.Errorf("failed to get status: %w", err)
 	}
 
-	fmt.Printf("Service: %s\n", svc.Label())
+	mode := "user"
+	if svc.IsSystem() {
+		mode = "system"
+	}
+	fmt.Printf("Service: %s (%s-level)\n", svc.Label(), mode)
 	if status.Running {
 		fmt.Printf("Status:  running\n")
 		if status.PID > 0 {
@@ -253,6 +297,19 @@ func handleDaemonLogs(args []string) error {
 	return daemon.TailLog(logPath, *lines, *follow, os.Stdout)
 }
 
+// requireSystemPrivileges checks whether a system-level systemd unit exists
+// but the current user is not root. If so, it prints a helpful message and
+// returns an error to abort the command. For user-level installs or when
+// already running as root, it returns nil.
+func requireSystemPrivileges(action string) error {
+	if os.Getuid() != 0 && daemon.SystemUnitExists() {
+		return fmt.Errorf(
+			"system-level service detected at /etc/systemd/system/.\n"+
+				"Run with sudo: sudo astonish daemon %s", action)
+	}
+	return nil
+}
+
 func printDaemonUsage() {
 	fmt.Println("usage: astonish daemon <command> [options]")
 	fmt.Println("")
@@ -273,9 +330,13 @@ func printDaemonUsage() {
 	fmt.Println("  -f          Follow log output (for 'logs' command)")
 	fmt.Println("  -n          Number of log lines to show (default: 50)")
 	fmt.Println("")
+	fmt.Println("On Linux, use 'sudo' for system-level install (runs as root with overlay")
+	fmt.Println("mount capabilities). Without sudo, installs as a user-level service.")
+	fmt.Println("")
 	fmt.Println("examples:")
-	fmt.Println("  astonish daemon install")
-	fmt.Println("  astonish daemon start")
+	fmt.Println("  sudo astonish daemon install    # System-level (recommended on Linux)")
+	fmt.Println("  astonish daemon install          # User-level")
+	fmt.Println("  sudo astonish daemon start")
 	fmt.Println("  astonish daemon status")
 	fmt.Println("  astonish daemon logs -f")
 	fmt.Println("  astonish daemon run --port 9394")

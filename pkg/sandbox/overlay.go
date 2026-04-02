@@ -414,17 +414,6 @@ func CreateOverlayContainer(client *IncusClient, containerName, templateName str
 		return fmt.Errorf("failed to mount overlay for %q: %w", containerName, err)
 	}
 
-	// For unprivileged containers, pre-seed the idmap state so Incus skips
-	// UID-shifting the overlay-mounted rootfs on first start. The overlay
-	// lower layer (template snapshot) already has shifted UIDs from when
-	// the template was created as an unprivileged container.
-	if !IsPrivileged() {
-		if err := preseedIdmap(client, containerName); err != nil {
-			client.DeleteInstance(containerName)
-			return fmt.Errorf("failed to pre-seed idmap for %q: %w", containerName, err)
-		}
-	}
-
 	return nil
 }
 
@@ -492,33 +481,6 @@ func MountOverlay(poolSourcePath, containerName, lowerDir string) error {
 func MountSessionOverlay(poolSourcePath, containerName, templateName string) error {
 	lowerDir := SnapshotRootfsPath(poolSourcePath, templateName)
 	return MountOverlay(poolSourcePath, containerName, lowerDir)
-}
-
-// preseedIdmap copies volatile.idmap.next into volatile.last_state.idmap so
-// that Incus believes the container's rootfs is already UID-shifted to the
-// correct idmap. This prevents Incus from walking and chown-ing every file
-// in the overlay-mounted rootfs on first start.
-//
-// Background: for unprivileged containers, Incus compares these two volatile
-// keys at start time. If they differ, it recursively shifts every file's
-// UID/GID — which fails on overlayfs. By pre-seeding the state key to match,
-// we tell Incus "the rootfs is already shifted" (which it is, because the
-// overlay lower layer comes from an unprivileged template snapshot).
-func preseedIdmap(client *IncusClient, containerName string) error {
-	inst, err := client.GetInstance(containerName)
-	if err != nil {
-		return fmt.Errorf("failed to read instance config: %w", err)
-	}
-
-	nextIdmap, ok := inst.Config["volatile.idmap.next"]
-	if !ok || nextIdmap == "" {
-		// No idmap configured — nothing to pre-seed (privileged container or no user namespace)
-		return nil
-	}
-
-	return client.SetInstanceConfig(containerName, map[string]string{
-		"volatile.last_state.idmap": nextIdmap,
-	})
 }
 
 // UnmountSessionOverlay unmounts the overlayfs from a container's rootfs

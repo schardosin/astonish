@@ -180,6 +180,7 @@ func randomCode() string {
 func RegisterAuthRoutes(router *mux.Router, am *AuthManager) {
 	router.HandleFunc("/api/auth/code", am.handleGetCode).Methods("GET")
 	router.HandleFunc("/api/auth/status", am.handleCheckStatus).Methods("GET")
+	router.HandleFunc("/api/auth/authorize", am.handleAuthorize).Methods("POST")
 }
 
 // handleGetCode generates a new authorization code and returns it.
@@ -220,6 +221,21 @@ func (am *AuthManager) handleCheckStatus(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"authorized": true})
+}
+
+// handleAuthorize validates an authorization code submitted from CLI or channel.
+// POST /api/auth/authorize  {"code": "XXXXXX"}
+func (am *AuthManager) handleAuthorize(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	msg, ok := am.AuthorizeCode(req.Code)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"message": msg, "authorized": ok})
 }
 
 // AuthMiddleware returns HTTP middleware that enforces device authorization.

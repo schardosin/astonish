@@ -981,22 +981,16 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 		restartSession()
 		return fmt.Errorf("failed to resolve lower layers for source template %q: %w", sourceTemplate, err)
 	}
-	if err := MountOverlay(poolPath, tplContainerName, lowerDir); err != nil {
+	// Mount overlay on the template container's rootfs.
+	// For unprivileged containers, this creates idmapped bind mounts of the
+	// underlying layers and mounts the overlay on top, then pre-seeds idmap.
+	tplRootfs := ContainerRootfsPath(poolPath, tplContainerName)
+	if err := setupIdmappedOverlay(client, tplContainerName, tplRootfs, lowerDir); err != nil {
 		if delErr := client.DeleteInstance(tplContainerName); delErr != nil {
 			slog.Warn("failed to delete template instance during rollback", "component", "sandbox", "container", tplContainerName, "error", delErr)
 		}
 		restartSession()
 		return fmt.Errorf("failed to mount overlay on template: %w", err)
-	}
-
-	// For unprivileged containers, apply an idmapped mount on the template's
-	// overlay so that Incus doesn't try (and fail) to shift UIDs on start.
-	if err := setupIdmappedOverlay(client, tplContainerName, poolPath); err != nil {
-		if delErr := client.DeleteInstance(tplContainerName); delErr != nil {
-			slog.Warn("failed to delete template instance during rollback", "component", "sandbox", "container", tplContainerName, "error", delErr)
-		}
-		restartSession()
-		return fmt.Errorf("failed to setup idmapped overlay on template: %w", err)
 	}
 
 	// Compute binary hash

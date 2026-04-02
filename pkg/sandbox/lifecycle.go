@@ -251,14 +251,8 @@ func ensureOverlayMounted(client *IncusClient, containerName, templateName strin
 		return err
 	}
 
-	if err := MountOverlay(poolPath, containerName, lowerDir); err != nil {
-		return err
-	}
-
-	// Re-apply idmapped mount after remounting the overlay.
-	// The idmap config is already pre-seeded in Incus from the initial setup,
-	// so we only need to reapply the VFS-level idmap.
-	return reapplyIdmappedMount(client, containerName, ContainerRootfsPath(poolPath, containerName))
+	containerRootfs := ContainerRootfsPath(poolPath, containerName)
+	return setupIdmappedOverlay(client, containerName, containerRootfs, lowerDir)
 }
 
 // TryDestroySessionContainer is a best-effort helper that destroys the sandbox

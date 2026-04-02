@@ -2,23 +2,19 @@
 
 package sandbox
 
-// setupIdmappedOverlay is a no-op on non-Linux platforms.
-// Idmapped mounts are a Linux-specific feature.
-func setupIdmappedOverlay(_ *IncusClient, _, _, _ string) error {
+// setupUnprivilegedOverlay is a no-op on non-Linux platforms.
+// UID shifting and idmap pre-seeding are Linux-specific features.
+func setupUnprivilegedOverlay(_ *IncusClient, _, _, _ string) error {
 	return nil
 }
 
-// teardownIdmappedLayers is a no-op on non-Linux platforms.
-func teardownIdmappedLayers(_ string) {}
-
-// idmapMountsDir returns the idmap mounts directory path for a container.
-// On non-Linux platforms this is never used for actual mounts but is needed
-// for compilation of shared code in overlay.go.
-func idmapMountsDir(containerName string) string {
-	return ""
+// mountPlainOverlay is a no-op stub on non-Linux platforms.
+// The real implementation lives in idmap_linux.go.
+func mountPlainOverlay(_, _, _ string) error {
+	return nil
 }
 
-// mountIdmappedOverlay is a no-op on non-Linux platforms.
-func mountIdmappedOverlay(_ *IncusClient, _, _, _ string) error {
+// reshiftOverlayUIDs is a no-op on non-Linux platforms.
+func reshiftOverlayUIDs(_ *IncusClient, _, _ string) error {
 	return nil
 }

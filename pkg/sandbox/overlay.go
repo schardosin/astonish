@@ -408,11 +408,11 @@ func CreateOverlayContainer(client *IncusClient, containerName, templateName str
 	}
 
 	// Mount overlayfs on the container's rootfs.
-	// For unprivileged containers, this creates idmapped bind mounts of the
-	// underlying layers and mounts the overlay on top of them, then pre-seeds
-	// the Incus idmap state. For privileged containers, this is a plain mount.
+	// For unprivileged containers, this mounts a plain overlay then shifts
+	// UIDs/GIDs via recursive chown and pre-seeds Incus's idmap state.
+	// For privileged containers, this is a plain mount (no shift).
 	containerRootfs := ContainerRootfsPath(poolPath, containerName)
-	if err := setupIdmappedOverlay(client, containerName, containerRootfs, lowerDir); err != nil {
+	if err := setupUnprivilegedOverlay(client, containerName, containerRootfs, lowerDir); err != nil {
 		client.DeleteInstance(containerName)
 		return fmt.Errorf("failed to mount overlay for %q: %w", containerName, err)
 	}
@@ -487,8 +487,7 @@ func MountSessionOverlay(poolSourcePath, containerName, templateName string) err
 }
 
 // UnmountSessionOverlay unmounts the overlayfs from a container's rootfs
-// and removes the per-session overlay directories (including idmapped bind
-// mounts for unprivileged containers).
+// and removes the per-session overlay directories.
 // On Docker+Incus, these operations run inside the Docker container.
 func UnmountSessionOverlay(poolSourcePath, containerName string) error {
 	containerRootfs := ContainerRootfsPath(poolSourcePath, containerName)
@@ -499,19 +498,10 @@ func UnmountSessionOverlay(poolSourcePath, containerName string) error {
 		slog.Warn("failed to unmount overlay", "component", "sandbox", "mountpoint", containerRootfs, "error", err)
 	}
 
-	// Tear down idmapped bind mounts (no-op if privileged or none exist)
-	teardownIdmappedLayers(containerName)
-
 	// Remove per-session overlay dirs
 	sessionDir := filepath.Join(overlayBaseDir, containerName)
 	if err := removeAllOnSandboxHost(sessionDir); err != nil {
 		slog.Warn("failed to clean up overlay dir", "component", "sandbox", "dir", sessionDir, "error", err)
-	}
-
-	// Remove idmap sibling dir (e.g., <containerName>-idmap/)
-	idmapDir := idmapMountsDir(containerName)
-	if err := removeAllOnSandboxHost(idmapDir); err != nil {
-		slog.Warn("failed to clean up idmap dir", "component", "sandbox", "dir", idmapDir, "error", err)
 	}
 
 	return nil
@@ -594,14 +584,15 @@ func CleanupAllOverlays() {
 // recreated (delete + create): the old directory inode is gone, so existing
 // overlay mounts that referenced it as a lowerdir become stale (empty rootfs).
 //
-// For unprivileged containers with idmapped underlying mounts, this also
-// detects stale idmapped bind mounts that reference the snapshot path and
-// recreates the full mount stack (idmapped layers + overlay on top).
-//
 // The function parses /proc/mounts, identifies affected overlays, stops any
 // running containers that use the mount (umount fails on busy mounts),
 // unmounts, recreates the work directory (overlayfs requires a clean workdir
 // after remount), remounts with the same options, and restarts stopped containers.
+//
+// For unprivileged containers, the remounted overlay also needs a fresh UID
+// shift (chown) since the lower layer has been replaced. The upper layer
+// already has shifted files from the previous session, so only newly visible
+// files from the fresh lower need shifting.
 //
 // This MUST be called while templateSnapshotMu is held (write lock) to prevent
 // new overlay mounts from being created between the snapshot swap and remount.
@@ -616,12 +607,9 @@ func RemountDependentOverlays(client *IncusClient, snapshotPath string) error {
 		containerName string
 		opts          string
 		wasRunning    bool
-		hasIdmap      bool // true if this container uses idmapped underlying mounts
 	}
 
-	// Track affected containers by name to avoid duplicates.
-	// A container may appear twice: once for the overlay, once for idmapped bind mounts.
-	affectedMap := make(map[string]*overlayMount)
+	var affected []*overlayMount
 
 	for _, line := range bytes.Split(data, []byte("\n")) {
 		fields := bytes.Fields(line)
@@ -633,60 +621,28 @@ func RemountDependentOverlays(client *IncusClient, snapshotPath string) error {
 		fstype := string(fields[2])
 		opts := string(fields[3])
 
-		if !strings.Contains(opts, snapshotPath) && !strings.Contains(mountpoint, snapshotPath) {
+		if fstype != "overlay" {
 			continue
 		}
 
-		if fstype == "overlay" {
-			// Direct overlay mount referencing the snapshot in lowerdir (privileged)
-			containerName := containerNameFromRootfs(mountpoint)
-			if containerName == "" {
-				continue
-			}
-			if existing, ok := affectedMap[containerName]; ok {
-				existing.opts = opts
-			} else {
-				affectedMap[containerName] = &overlayMount{
-					mountpoint:    mountpoint,
-					containerName: containerName,
-					opts:          opts,
-				}
-			}
-		} else if strings.Contains(mountpoint, "-idmap/lower-") {
-			// Idmapped bind mount of a lower layer (unprivileged).
-			// Path pattern: .../astonish-overlays/<containerName>-idmap/lower-N
-			// Extract container name from the path (strip -idmap suffix).
-			parts := strings.Split(mountpoint, "/")
-			for i, p := range parts {
-				if p == "astonish-overlays" && i+1 < len(parts) {
-					dirName := parts[i+1]
-					containerName := strings.TrimSuffix(dirName, "-idmap")
-					if containerName == "" || containerName == dirName {
-						continue // not an idmap dir
-					}
-					if existing, ok := affectedMap[containerName]; ok {
-						existing.hasIdmap = true
-					} else {
-						// We found the idmap mount but not the overlay yet.
-						affectedMap[containerName] = &overlayMount{
-							containerName: containerName,
-							hasIdmap:      true,
-						}
-					}
-					break
-				}
-			}
+		if !strings.Contains(opts, snapshotPath) {
+			continue
 		}
+
+		containerName := containerNameFromRootfs(mountpoint)
+		if containerName == "" {
+			continue
+		}
+
+		affected = append(affected, &overlayMount{
+			mountpoint:    mountpoint,
+			containerName: containerName,
+			opts:          opts,
+		})
 	}
 
-	if len(affectedMap) == 0 {
+	if len(affected) == 0 {
 		return nil
-	}
-
-	// Convert map to slice for ordered processing
-	var affected []*overlayMount
-	for _, m := range affectedMap {
-		affected = append(affected, m)
 	}
 
 	slog.Info("remounting overlays after snapshot recreation", "component", "sandbox", "count", len(affected), "snapshot_path", snapshotPath)
@@ -705,17 +661,9 @@ func RemountDependentOverlays(client *IncusClient, snapshotPath string) error {
 
 	// Phase 2: unmount + remount each overlay
 	for _, m := range affected {
-		// Unmount the overlay first (must be done before idmap layers)
-		if m.mountpoint != "" {
-			if err := umountOnSandboxHost(m.mountpoint); err != nil {
-				slog.Warn("failed to unmount stale overlay", "component", "sandbox", "mountpoint", m.mountpoint, "error", err)
-				continue
-			}
-		}
-
-		// Tear down idmapped bind mounts if present
-		if m.hasIdmap {
-			teardownIdmappedLayers(m.containerName)
+		if err := umountOnSandboxHost(m.mountpoint); err != nil {
+			slog.Warn("failed to unmount stale overlay", "component", "sandbox", "mountpoint", m.mountpoint, "error", err)
+			continue
 		}
 
 		// Parse original mount options to get the paths for remount
@@ -728,88 +676,34 @@ func RemountDependentOverlays(client *IncusClient, snapshotPath string) error {
 			continue
 		}
 
-		// For idmapped mounts, the lowerdir/upperdir/workdir from /proc/mounts
-		// point to the idmap directories, not the originals. We need to resolve
-		// the original paths. The original lower paths are what the idmapped bind
-		// mounts were cloned from — we can reconstruct them by stripping the
-		// idmap directory prefix and looking at the original overlay structure.
-		originalLowerDir := lowerDir
-		originalWorkDir := workDir
-		if m.hasIdmap {
-			// Resolve idmapped paths back to originals.
-			// Idmap lower paths: .../idmap/lower-N -> original lower paths
-			// We stored the original lowerdir in the same order, so we can
-			// rebuild from the overlay directory structure.
-			//
-			// For now, we use the snapshot path directly since it was just
-			// recreated at the same location. The caller passes snapshotPath
-			// which is the new snapshot's rootfs path.
-			//
-			// For stacked templates (multiple lowers), the first lower is usually
-			// the template upper, and the last is the base snapshot. We need to
-			// replace only the parts that reference the snapshot.
-			idmapDir := idmapMountsDir(m.containerName)
-			lowerParts := strings.Split(lowerDir, ":")
-			var resolvedLowers []string
-			for _, lp := range lowerParts {
-				if strings.HasPrefix(lp, idmapDir) {
-					// This is an idmapped path — resolve it back.
-					// The original path structure mirrors the idmap mount source.
-					// Since we don't have a reverse mapping, use the snapshotPath
-					// for the layer that contained it.
-					resolvedLowers = append(resolvedLowers, lp)
-				} else {
-					resolvedLowers = append(resolvedLowers, lp)
-				}
-			}
-			originalLowerDir = strings.Join(resolvedLowers, ":")
-
-			// For the workdir, resolve back to the original.
-			// Idmap workdir: .../idmap/upper-work/work -> .../work
-			sessionDir := filepath.Join(overlayBaseDir, m.containerName)
-			if strings.HasPrefix(workDir, idmapDir) {
-				originalWorkDir = filepath.Join(sessionDir, "work")
-			}
-		}
-
 		// Overlayfs requires a clean workdir after remount — recreate it
-		if err := removeAllOnSandboxHost(originalWorkDir); err != nil {
-			slog.Warn("failed to clean workdir", "component", "sandbox", "workdir", originalWorkDir, "error", err)
+		if err := removeAllOnSandboxHost(workDir); err != nil {
+			slog.Warn("failed to clean workdir", "component", "sandbox", "workdir", workDir, "error", err)
 		}
-		if err := mkdirAllOnSandboxHost(originalWorkDir, 0755); err != nil {
-			slog.Warn("failed to recreate workdir", "component", "sandbox", "workdir", originalWorkDir, "error", err)
+		if err := mkdirAllOnSandboxHost(workDir, 0755); err != nil {
+			slog.Warn("failed to recreate workdir", "component", "sandbox", "workdir", workDir, "error", err)
 			continue
 		}
 
-		if m.hasIdmap && m.containerName != "" {
-			// For unprivileged containers, resolve the actual lower layers
-			// from the original paths and use setupIdmappedOverlay to recreate
-			// the full mount stack (idmapped layers + overlay).
-			//
-			// Since the snapshot was just recreated at the same path, the
-			// original lower paths are still valid — we just need to get them
-			// without the idmap prefix. We use resolveOriginalLowers to find them.
-			origLowers := resolveOriginalLowers(data, m.containerName, snapshotPath)
-			if origLowers == "" {
-				// Fallback: use snapshotPath as the sole lower
-				origLowers = snapshotPath
-			}
-
-			if err := mountIdmappedOverlay(client, m.containerName, m.mountpoint, origLowers); err != nil {
-				slog.Error("failed to remount idmapped overlay",
-					"component", "sandbox", "container", m.containerName, "error", err)
-			} else {
-				slog.Info("remounted idmapped overlay", "component", "sandbox", "container", m.containerName)
-			}
-		} else {
-			// Privileged container — plain overlay remount
-			newOpts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", originalLowerDir, upperDir, originalWorkDir)
-			if err := mountOverlayOnSandboxHost(newOpts, m.mountpoint); err != nil {
-				slog.Error("failed to remount overlay", "component", "sandbox", "mountpoint", m.mountpoint, "error", err)
-				continue
-			}
-			slog.Info("remounted overlay", "component", "sandbox", "mountpoint", m.mountpoint)
+		// Remount overlay with same options
+		newOpts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)
+		if err := mountOverlayOnSandboxHost(newOpts, m.mountpoint); err != nil {
+			slog.Error("failed to remount overlay", "component", "sandbox", "mountpoint", m.mountpoint, "error", err)
+			continue
 		}
+
+		// For unprivileged containers, re-shift any new files from the fresh
+		// lower layer. The chown with --from=0:0 only shifts files that are
+		// currently at UID 0 (new lower files visible through the overlay),
+		// leaving already-shifted upper files untouched.
+		if !IsPrivileged() {
+			if err := reshiftOverlayUIDs(client, m.containerName, m.mountpoint); err != nil {
+				slog.Warn("failed to re-shift UIDs after remount", "component", "sandbox",
+					"container", m.containerName, "error", err)
+			}
+		}
+
+		slog.Info("remounted overlay", "component", "sandbox", "container", m.containerName)
 	}
 
 	// Phase 3: restart containers that were running before
@@ -823,71 +717,6 @@ func RemountDependentOverlays(client *IncusClient, snapshotPath string) error {
 	}
 
 	return nil
-}
-
-// resolveOriginalLowers attempts to find the original (non-idmapped) lower
-// layer paths for a container by examining its idmapped bind mount entries
-// in /proc/mounts. Each idmap/lower-N mount has a source device/path that
-// reveals the original lower directory.
-//
-// Falls back to snapshotPath if resolution fails.
-func resolveOriginalLowers(mountData []byte, containerName, snapshotPath string) string {
-	idmapDir := idmapMountsDir(containerName)
-	prefix := filepath.Join(idmapDir, "lower-")
-
-	// Collect lower mount sources in order (lower-0, lower-1, ...)
-	type lowerEntry struct {
-		index int
-		// We can't easily get the source path from /proc/mounts for bind mounts
-		// (they show the device, not the bind source). Instead, we know that the
-		// snapshot was recreated at snapshotPath, so for the layer that references
-		// the snapshot, we use snapshotPath directly.
-		//
-		// For stacked templates, additional lower layers (template upper dirs)
-		// are NOT affected by the snapshot recreation — they're on a different
-		// filesystem. So we only need to identify how many lowers there were
-		// and which one was the snapshot.
-		mountpoint string
-	}
-
-	var lowers []lowerEntry
-	for _, line := range bytes.Split(mountData, []byte("\n")) {
-		fields := bytes.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		mp := string(fields[1])
-		if strings.HasPrefix(mp, prefix) {
-			suffix := strings.TrimPrefix(mp, prefix)
-			idx := 0
-			for _, c := range suffix {
-				if c >= '0' && c <= '9' {
-					idx = idx*10 + int(c-'0')
-				}
-			}
-			lowers = append(lowers, lowerEntry{index: idx, mountpoint: mp})
-		}
-	}
-
-	if len(lowers) == 0 {
-		return snapshotPath
-	}
-
-	// For @base template containers, there's typically one lower (the snapshot).
-	// For custom templates, there are multiple lowers:
-	//   lower-0 = template upper dir (not affected by snapshot recreation)
-	//   lower-1 = base snapshot rootfs (affected)
-	//
-	// Since we can't determine the template upper dir from /proc/mounts,
-	// and since RemountDependentOverlays is called because the snapshot changed,
-	// the safest approach is: if there's only 1 lower, return snapshotPath.
-	// If there are multiple lowers, we need the template upper dirs too.
-	//
-	// For now, return just the snapshot path. Custom template overlays
-	// with stacked layers will need to be resolved via a separate mechanism.
-	// TODO: For stacked template support, pass the template registry to
-	// RemountDependentOverlays and use ResolveLowerLayers.
-	return snapshotPath
 }
 
 // containerNameFromRootfs extracts the Incus container name from a rootfs

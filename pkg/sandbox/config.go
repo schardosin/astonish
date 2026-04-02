@@ -73,12 +73,6 @@ func SetSandboxConfig(c *config.SandboxConfig) {
 	sandboxCfg = c
 }
 
-// GetSandboxConfig returns the stored sandbox configuration.
-// Returns nil if not yet initialized.
-func GetSandboxConfig() *config.SandboxConfig {
-	return sandboxCfg
-}
-
 // IsPrivileged determines whether containers should run in privileged mode.
 // Resolution order:
 //  1. Explicit user config (sandbox.privileged: true/false) — always honored

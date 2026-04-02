@@ -1005,8 +1005,8 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 		return fmt.Errorf("failed to resolve lower layers for source template %q: %w", sourceTemplate, err)
 	}
 	// Mount overlay on the template container's rootfs.
-	// For unprivileged containers, this mounts a plain overlay then shifts
-	// UIDs/GIDs via recursive chown and pre-seeds Incus's idmap state.
+	// For unprivileged containers, this mounts a plain overlay and pre-seeds
+	// Incus's idmap state (template rootfs is already shifted at snapshot time).
 	tplRootfs := ContainerRootfsPath(poolPath, tplContainerName)
 	if err := setupUnprivilegedOverlay(client, tplContainerName, tplRootfs, lowerDir); err != nil {
 		if delErr := client.DeleteInstance(tplContainerName); delErr != nil {

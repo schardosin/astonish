@@ -31,7 +31,7 @@ type AppConfig struct {
 // YAML deserialization. pkg/sandbox imports these types for runtime use.
 type SandboxConfig struct {
 	Enabled    *bool              `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-	Privileged *bool              `yaml:"privileged,omitempty" json:"privileged,omitempty"` // nil = platform default (false on Linux native, true on nested LXC)
+	Privileged *bool              `yaml:"privileged,omitempty" json:"privileged,omitempty"` // nil = default (unprivileged); set true for nested LXC
 	Limits     SandboxLimits      `yaml:"limits,omitempty" json:"limits,omitempty"`
 	Network    string             `yaml:"network,omitempty" json:"network,omitempty"`
 	Prune      SandboxPruneConfig `yaml:"prune,omitempty" json:"prune,omitempty"`

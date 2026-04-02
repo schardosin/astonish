@@ -220,7 +220,7 @@ func mountPlainOverlay(containerName, containerRootfs, lowerDir string) error {
 // reshiftOverlayUIDs handles overlay UID consistency after a remount.
 // Since we pre-seed the idmap (no actual shifting), after a remount we just
 // need to ensure the pre-seed is still in place for the next start.
-func reshiftOverlayUIDs(client *IncusClient, containerName, _ string) error {
+func reshiftOverlayUIDs(client *IncusClient, containerName string) error {
 	if IsPrivileged() {
 		return nil
 	}

@@ -91,8 +91,8 @@ func (c *IncusClient) ServerArchitecture() (string, error) {
 
 // defaultContainerConfig returns the base config for all containers.
 // Privilege mode is determined by IsPrivileged(), which defaults to
-// unprivileged on Linux native and privileged elsewhere. Users can
-// override via sandbox.privileged in config.yaml.
+// unprivileged on all platforms. Users can override via sandbox.privileged
+// in config.yaml.
 //
 // Note: in nested LXC environments (e.g., Proxmox), unprivileged
 // containers may fail because /proc cannot be mounted inside a user

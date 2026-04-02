@@ -408,9 +408,9 @@ func CreateOverlayContainer(client *IncusClient, containerName, templateName str
 	}
 
 	// Mount overlayfs on the container's rootfs.
-	// For unprivileged containers, this mounts a plain overlay then shifts
-	// UIDs/GIDs via recursive chown and pre-seeds Incus's idmap state.
-	// For privileged containers, this is a plain mount (no shift).
+	// For unprivileged containers, this mounts a plain overlay and pre-seeds
+	// Incus's idmap state (template rootfs is already shifted at snapshot time).
+	// For privileged containers, this is a plain mount (no shift needed).
 	containerRootfs := ContainerRootfsPath(poolPath, containerName)
 	if err := setupUnprivilegedOverlay(client, containerName, containerRootfs, lowerDir); err != nil {
 		client.DeleteInstance(containerName)
@@ -451,39 +451,6 @@ func resolveNesting(templateName string, registry *TemplateRegistry) bool {
 	}
 
 	return false
-}
-
-// MountOverlay mounts an overlayfs on a container's rootfs directory with
-// pre-resolved lower layers. The lowerDir can be a single path or a
-// colon-separated list of paths for stacked overlays.
-// On Docker+Incus, the mount command runs inside the Docker container.
-func MountOverlay(poolSourcePath, containerName, lowerDir string) error {
-	containerRootfs := ContainerRootfsPath(poolSourcePath, containerName)
-
-	// Create per-container overlay dirs
-	sessionDir := filepath.Join(overlayBaseDir, containerName)
-	upperDir := filepath.Join(sessionDir, "upper")
-	workDir := filepath.Join(sessionDir, "work")
-
-	if err := mkdirAllOnSandboxHost(upperDir, 0755); err != nil {
-		return fmt.Errorf("failed to create overlay upper dir: %w", err)
-	}
-	if err := mkdirAllOnSandboxHost(workDir, 0755); err != nil {
-		return fmt.Errorf("failed to create overlay work dir: %w", err)
-	}
-
-	// Mount overlayfs
-	opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)
-	return mountOverlayOnSandboxHost(opts, containerRootfs)
-}
-
-// MountSessionOverlay mounts an overlayfs on a container's rootfs directory.
-// This is a convenience wrapper that resolves a single template snapshot as the
-// lower layer. For stacked overlays (custom templates), use MountOverlay with
-// ResolveLowerLayers instead.
-func MountSessionOverlay(poolSourcePath, containerName, templateName string) error {
-	lowerDir := SnapshotRootfsPath(poolSourcePath, templateName)
-	return MountOverlay(poolSourcePath, containerName, lowerDir)
 }
 
 // UnmountSessionOverlay unmounts the overlayfs from a container's rootfs
@@ -589,10 +556,8 @@ func CleanupAllOverlays() {
 // unmounts, recreates the work directory (overlayfs requires a clean workdir
 // after remount), remounts with the same options, and restarts stopped containers.
 //
-// For unprivileged containers, the remounted overlay also needs a fresh UID
-// shift (chown) since the lower layer has been replaced. The upper layer
-// already has shifted files from the previous session, so only newly visible
-// files from the fresh lower need shifting.
+// For unprivileged containers, the remounted overlay also needs the Incus
+// idmap state re-seeded so the container can start without a slow shift pass.
 //
 // This MUST be called while templateSnapshotMu is held (write lock) to prevent
 // new overlay mounts from being created between the snapshot swap and remount.
@@ -692,12 +657,10 @@ func RemountDependentOverlays(client *IncusClient, snapshotPath string) error {
 			continue
 		}
 
-		// For unprivileged containers, re-shift any new files from the fresh
-		// lower layer. The chown with --from=0:0 only shifts files that are
-		// currently at UID 0 (new lower files visible through the overlay),
-		// leaving already-shifted upper files untouched.
+		// For unprivileged containers, re-seed the idmap state so the
+		// container can start without a slow shift pass.
 		if !IsPrivileged() {
-			if err := reshiftOverlayUIDs(client, m.containerName, m.mountpoint); err != nil {
+			if err := reshiftOverlayUIDs(client, m.containerName); err != nil {
 				slog.Warn("failed to re-shift UIDs after remount", "component", "sandbox",
 					"container", m.containerName, "error", err)
 			}

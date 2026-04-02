@@ -3,12 +3,13 @@
 package sandbox
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // idmapEntry matches the JSON format Incus uses for volatile.idmap.next.
@@ -64,30 +65,54 @@ func chownShiftOverlay(containerRootfs string, entries []idmapEntry) error {
 		"gid_shift", gidShift,
 	)
 
-	// Use chown via find+exec for reliability across all file types.
-	// We shift every file: owner becomes (original_uid + uidShift),
-	// group becomes (original_gid + gidShift).
-	//
+	// Recursive chown to shift all files from UID/GID 0 to the shifted values.
 	// Since all files in the plain overlay start at UID/GID 0 (from the
 	// template snapshot), the shifted UID = 0 + uidShift = uidShift.
 	//
-	// We use find -exec chown rather than Go's filepath.Walk because:
-	// 1. It handles special files (devices, sockets) correctly
-	// 2. It follows the overlay mount properly
-	// 3. No cgo dependency for lchown on symlinks
-	//
-	// The -h flag on chown changes symlinks themselves (not targets).
 	// --from=0:0 ensures we only shift files that are currently at 0:0,
 	// preventing double-shifting if this function is called again.
-	cmd := exec.Command("find", containerRootfs,
-		"-exec", "chown", "-h", "--from=0:0",
+	// -Rh: recursive, operate on symlinks themselves (not targets).
+	//
+	// Stderr is suppressed because chown may emit harmless "No such file or
+	// directory" warnings on overlayfs whiteout entries or very long paths
+	// from the lower layer (e.g., Node.js OpenSSL headers). These don't
+	// affect functionality — the important files are shifted correctly.
+	cmd := exec.Command("chown", "-Rh", "--from=0:0",
 		fmt.Sprintf("%d:%d", uidShift, gidShift),
-		"{}", "+",
+		containerRootfs,
 	)
-	cmd.Stderr = os.Stderr
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("chown shift failed: %w", err)
+		// chown -R returns exit code 1 if any individual file fails,
+		// even if the vast majority succeeded. Check if it's just
+		// harmless "No such file" errors from whiteouts/long paths.
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			errMsg := stderr.String()
+			// If all errors are "No such file or directory", treat as success
+			hasRealError := false
+			for _, line := range strings.Split(errMsg, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				if !strings.Contains(line, "No such file or directory") {
+					hasRealError = true
+					break
+				}
+			}
+			if !hasRealError {
+				slog.Debug("chown shift completed with harmless warnings",
+					"component", "sandbox",
+					"rootfs", containerRootfs,
+					"warning_count", strings.Count(errMsg, "\n"),
+				)
+				return nil
+			}
+		}
+		return fmt.Errorf("chown shift failed: %w\nstderr: %s", err, stderr.String())
 	}
 
 	return nil

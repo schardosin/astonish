@@ -255,6 +255,14 @@ func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry, opts Base
 		return fmt.Errorf("failed to snapshot base template: %w", err)
 	}
 
+	// Shift snapshot UIDs for unprivileged containers (one-time cost).
+	// This makes all session overlays that use this snapshot as a lower layer
+	// see pre-shifted files, enabling instant container start.
+	progress("Preparing snapshot for unprivileged containers...\n")
+	if err := ShiftSnapshotUIDs(client, BaseTemplate); err != nil {
+		slog.Warn("failed to shift snapshot UIDs", "component", "sandbox", "error", err)
+	}
+
 	// Register in metadata
 	now := time.Now()
 	meta := &TemplateMeta{
@@ -458,6 +466,11 @@ func SnapshotTemplate(client *IncusClient, registry *TemplateRegistry, name stri
 		return fmt.Errorf("failed to create snapshot: %w", err)
 	}
 
+	// Shift snapshot UIDs for unprivileged containers (one-time cost)
+	if err := ShiftSnapshotUIDs(client, name); err != nil {
+		slog.Warn("failed to shift snapshot UIDs", "component", "sandbox", "error", err)
+	}
+
 	// Remount all overlay mounts that depend on the base snapshot.
 	// The old snapshot directory was deleted (old inode gone) and a new one
 	// created (new inode). Existing overlay mounts still reference the old
@@ -627,6 +640,11 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 			return fmt.Errorf("failed to snapshot new @base: %w", err)
 		}
 
+		// Shift snapshot UIDs for unprivileged containers (one-time cost)
+		if err := ShiftSnapshotUIDs(client, BaseTemplate); err != nil {
+			slog.Warn("failed to shift snapshot UIDs", "component", "sandbox", "error", err)
+		}
+
 		// Remount any overlays that depended on the old base snapshot
 		snapPath := SnapshotRootfsPath(poolPath, BaseTemplate)
 		if remountErr := RemountDependentOverlays(client, snapPath); remountErr != nil {
@@ -660,6 +678,11 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 		if err := client.CreateSnapshot(baseName, SnapshotName); err != nil {
 			templateSnapshotMu.Unlock()
 			return fmt.Errorf("failed to snapshot new @base: %w", err)
+		}
+
+		// Shift snapshot UIDs for unprivileged containers (one-time cost)
+		if err := ShiftSnapshotUIDs(client, BaseTemplate); err != nil {
+			slog.Warn("failed to shift snapshot UIDs", "component", "sandbox", "error", err)
 		}
 
 		// Remount any overlays that depended on the old base snapshot

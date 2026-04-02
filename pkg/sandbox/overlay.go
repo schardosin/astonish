@@ -92,20 +92,29 @@ func ResolveLowerLayers(poolPath, templateName string, registry *TemplateRegistr
 	return tplUpperDir + ":" + baseLower, nil
 }
 
-// GetPoolSourcePath returns the filesystem path of a storage pool's root.
-// For a dir-backend pool, this is the "source" config key. For CoW backends
-// (btrfs, ZFS) it falls back to the default Incus path.
+// GetPoolSourcePath returns the filesystem path of a storage pool's root
+// where container rootfs directories actually reside.
+//
+// For "dir" backend pools the source config value is the directory itself.
+// For CoW backends (btrfs, zfs) the source is typically a loop-device image
+// file (e.g. /var/lib/incus/disks/default.img) which is NOT a directory —
+// the actual mount point is /var/lib/incus/storage-pools/<poolName>.
 func GetPoolSourcePath(client *IncusClient, poolName string) (string, error) {
 	pool, _, err := client.server.GetStoragePool(poolName)
 	if err != nil {
 		return "", fmt.Errorf("failed to get storage pool %q: %w", poolName, err)
 	}
 
-	if src, ok := pool.Config["source"]; ok && src != "" {
-		return src, nil
+	// For dir-backend pools, the source config key IS the directory.
+	if pool.Driver == "dir" {
+		if src, ok := pool.Config["source"]; ok && src != "" {
+			return src, nil
+		}
 	}
 
-	// Default Incus path
+	// For all other backends (btrfs, zfs, lvm, ceph, etc.) the source is
+	// a block device or image file, not the directory tree. Incus mounts
+	// the pool's filesystem at the canonical path below.
 	return filepath.Join("/var/lib/incus/storage-pools", poolName), nil
 }
 

@@ -82,23 +82,24 @@ func GetSandboxConfig() *config.SandboxConfig {
 // IsPrivileged determines whether containers should run in privileged mode.
 // Resolution order:
 //  1. Explicit user config (sandbox.privileged: true/false) — always honored
-//  2. Platform default: PlatformLinuxNative defaults to false (unprivileged),
-//     all other platforms default to true (privileged) until tested and validated.
+//  2. Default: true (privileged) on all platforms.
 //
-// Unprivileged mode uses security.syscalls.intercept.mknod and setxattr to
-// allow Docker and other tools to function without root UID mapping on the host.
+// Privileged mode is currently required because the overlay system mounts
+// overlayfs on the host side as root. When Incus starts an unprivileged
+// container, it tries to idmap (UID-shift) the entire rootfs, which fails
+// on overlayfs-backed rootfs directories. Until idmapped overlayfs is
+// reliably supported by the kernel, containers must run privileged.
+//
+// Users can set sandbox.privileged: false to experiment with unprivileged
+// mode on kernels that support idmapped overlayfs (Linux 5.19+ with
+// CONFIG_OVERLAY_FS_METACOPY).
 func IsPrivileged() bool {
 	// Explicit user override takes priority
 	if sandboxCfg != nil && sandboxCfg.Privileged != nil {
 		return *sandboxCfg.Privileged
 	}
-	// Platform defaults
-	switch activePlatform {
-	case PlatformLinuxNative:
-		return false // unprivileged by default on native Linux
-	default:
-		return true // privileged on Docker+Incus and unknown platforms (until Phase 2)
-	}
+	// Default to privileged on all platforms (overlay system requires it)
+	return true
 }
 
 // containerSecurityConfig returns the security-related config keys for a container

@@ -225,11 +225,11 @@ func TestIsPrivileged(t *testing.T) {
 		sandboxCfg = origCfg
 	})
 
-	t.Run("nil config on Linux native defaults to unprivileged", func(t *testing.T) {
+	t.Run("nil config on Linux native defaults to privileged", func(t *testing.T) {
 		activePlatform = PlatformLinuxNative
 		sandboxCfg = nil
-		if IsPrivileged() {
-			t.Error("expected false (unprivileged) on Linux native with nil config")
+		if !IsPrivileged() {
+			t.Error("expected true (privileged) on Linux native with nil config — overlay system requires it")
 		}
 	})
 
@@ -249,29 +249,29 @@ func TestIsPrivileged(t *testing.T) {
 		}
 	})
 
-	t.Run("explicit true overrides Linux native default", func(t *testing.T) {
+	t.Run("explicit true is honored", func(t *testing.T) {
 		activePlatform = PlatformLinuxNative
 		priv := true
 		sandboxCfg = &config.SandboxConfig{Privileged: &priv}
 		if !IsPrivileged() {
-			t.Error("expected true when explicitly set to privileged on Linux native")
+			t.Error("expected true when explicitly set to privileged")
 		}
 	})
 
-	t.Run("explicit false overrides Docker default", func(t *testing.T) {
-		activePlatform = PlatformDockerIncus
+	t.Run("explicit false overrides default", func(t *testing.T) {
+		activePlatform = PlatformLinuxNative
 		priv := false
 		sandboxCfg = &config.SandboxConfig{Privileged: &priv}
 		if IsPrivileged() {
-			t.Error("expected false when explicitly set to unprivileged on Docker+Incus")
+			t.Error("expected false when explicitly set to unprivileged")
 		}
 	})
 
-	t.Run("nil Privileged field uses platform default", func(t *testing.T) {
+	t.Run("nil Privileged field uses default (privileged)", func(t *testing.T) {
 		activePlatform = PlatformLinuxNative
 		sandboxCfg = &config.SandboxConfig{} // Privileged is nil
-		if IsPrivileged() {
-			t.Error("expected false on Linux native with nil Privileged field")
+		if !IsPrivileged() {
+			t.Error("expected true on Linux native with nil Privileged field — overlay requires privileged")
 		}
 	})
 }
@@ -285,8 +285,7 @@ func TestContainerSecurityConfig(t *testing.T) {
 	})
 
 	t.Run("privileged mode returns privileged config", func(t *testing.T) {
-		activePlatform = PlatformDockerIncus
-		sandboxCfg = nil
+		sandboxCfg = nil // defaults to privileged
 		cfg := containerSecurityConfig()
 		if cfg["security.privileged"] != "true" {
 			t.Errorf("expected security.privileged=true, got %q", cfg["security.privileged"])
@@ -297,8 +296,8 @@ func TestContainerSecurityConfig(t *testing.T) {
 	})
 
 	t.Run("unprivileged mode returns syscall intercepts", func(t *testing.T) {
-		activePlatform = PlatformLinuxNative
-		sandboxCfg = nil
+		priv := false
+		sandboxCfg = &config.SandboxConfig{Privileged: &priv}
 		cfg := containerSecurityConfig()
 		if cfg["security.privileged"] != "false" {
 			t.Errorf("expected security.privileged=false, got %q", cfg["security.privileged"])

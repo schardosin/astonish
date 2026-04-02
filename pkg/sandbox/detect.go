@@ -2,8 +2,10 @@ package sandbox
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 )
 
 // Platform represents the detected host platform for sandbox operation.
@@ -111,4 +113,44 @@ func firstLine(output []byte) string {
 		s = s[:200] + "..."
 	}
 	return s
+}
+
+// IsInsideLXC detects whether the current process is running inside an LXC
+// container (e.g., on Proxmox or other LXC hosts). This matters because
+// unprivileged Incus containers cannot run inside nested LXC environments —
+// mounting /proc in a double-nested user namespace is not permitted.
+//
+// Detection uses two methods:
+//  1. Check /proc/1/environ for "container=lxc" (set by LXC/Incus on the
+//     init process of every container)
+//  2. Fallback: run systemd-detect-virt and check for "lxc"
+//
+// Returns false on non-Linux platforms (Docker+Incus on macOS handles this
+// differently via the Docker VM boundary).
+func IsInsideLXC() bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+
+	// Primary: check /proc/1/environ for container=lxc
+	// This is the most reliable method — LXC/Incus always sets this.
+	data, err := os.ReadFile("/proc/1/environ")
+	if err == nil {
+		// environ is null-byte separated
+		for _, entry := range strings.Split(string(data), "\x00") {
+			if entry == "container=lxc" {
+				return true
+			}
+		}
+	}
+
+	// Fallback: systemd-detect-virt
+	output, err := exec.Command("systemd-detect-virt").Output()
+	if err == nil {
+		if strings.TrimSpace(string(output)) == "lxc" {
+			return true
+		}
+	}
+
+	return false
 }

@@ -187,18 +187,40 @@ func mountIdmappedOverlay(client *IncusClient, containerName, containerRootfs, l
 		return mountOverlayOnSandboxHost(opts, containerRootfs)
 	}
 
+	sessionDir := filepath.Join(overlayBaseDir, containerName)
+	idmapDir := idmapMountsDir(containerName)
+
+	// Clean up any stale idmapped mounts from a previous failed attempt.
+	// If we don't do this, open_tree on already-idmapped mounts returns EPERM
+	// because you can't idmap a mount that's already idmapped.
+	unmountIdmappedLayers(containerName)
+
+	// Create upper/ and work/ directories in the session dir BEFORE creating
+	// the idmapped clone. open_tree(OPEN_TREE_CLONE) captures a snapshot of
+	// the mount's directory tree, so these dirs must exist at clone time to
+	// appear inside the idmapped bind mount at idmap/upper-work/upper and
+	// idmap/upper-work/work.
+	upperDir := filepath.Join(sessionDir, "upper")
+	workDir := filepath.Join(sessionDir, "work")
+	if err := mkdirAllOnSandboxHost(upperDir, 0755); err != nil {
+		return fmt.Errorf("failed to create overlay upper dir: %w", err)
+	}
+	if err := mkdirAllOnSandboxHost(workDir, 0755); err != nil {
+		return fmt.Errorf("failed to create overlay work dir: %w", err)
+	}
+
+	// Create the idmap mountpoint directories. These are plain dirs on the
+	// real filesystem that serve as mount targets for move_mount().
+	if err := mkdirAllOnSandboxHost(idmapDir, 0755); err != nil {
+		return fmt.Errorf("failed to create idmap mounts dir: %w", err)
+	}
+
 	// Create user namespace with the idmap
 	usernsFd, cleanup, err := createUserNamespace(entries)
 	if err != nil {
 		return fmt.Errorf("failed to create user namespace for idmap: %w", err)
 	}
 	defer cleanup()
-
-	// Create the idmap mounts directory
-	idmapDir := idmapMountsDir(containerName)
-	if err := mkdirAllOnSandboxHost(idmapDir, 0755); err != nil {
-		return fmt.Errorf("failed to create idmap mounts dir: %w", err)
-	}
 
 	// Track created mounts for cleanup on error
 	var createdMounts []string
@@ -228,10 +250,10 @@ func mountIdmappedOverlay(client *IncusClient, containerName, containerRootfs, l
 	}
 
 	// Idmap the upper/work parent directory.
-	// The session dir contains both upper/ and work/ subdirectories.
-	// Overlayfs requires upperdir and workdir on the same mount, so we
-	// idmap the parent and reference subdirectories within it.
-	sessionDir := filepath.Join(overlayBaseDir, containerName)
+	// The session dir contains upper/, work/, and idmap/ subdirectories.
+	// We clone the session dir so that upper/ and work/ appear inside the
+	// idmapped mount. Overlayfs requires upperdir and workdir on the same
+	// mount, so we must idmap their common parent.
 	upperWorkTarget := filepath.Join(idmapDir, "upper-work")
 	if err := mkdirAllOnSandboxHost(upperWorkTarget, 0755); err != nil {
 		cleanupMounts()
@@ -330,11 +352,18 @@ func preseedIdmap(client *IncusClient, containerName string) error {
 // On privileged containers, this falls back to a plain overlay mount.
 func setupIdmappedOverlay(client *IncusClient, containerName, containerRootfs, lowerDir string) error {
 	if IsPrivileged() {
-		// Plain overlay mount — no idmapping needed
+		// Plain overlay mount — no idmapping needed.
+		// Create upper/work dirs and mount directly.
+		upperDir := filepath.Join(overlayBaseDir, containerName, "upper")
+		workDir := filepath.Join(overlayBaseDir, containerName, "work")
+		if err := mkdirAllOnSandboxHost(upperDir, 0755); err != nil {
+			return fmt.Errorf("failed to create overlay upper dir: %w", err)
+		}
+		if err := mkdirAllOnSandboxHost(workDir, 0755); err != nil {
+			return fmt.Errorf("failed to create overlay work dir: %w", err)
+		}
 		opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s",
-			lowerDir,
-			filepath.Join(overlayBaseDir, containerName, "upper"),
-			filepath.Join(overlayBaseDir, containerName, "work"))
+			lowerDir, upperDir, workDir)
 		return mountOverlayOnSandboxHost(opts, containerRootfs)
 	}
 

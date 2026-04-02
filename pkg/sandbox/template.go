@@ -248,7 +248,14 @@ func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry, opts Base
 		return fmt.Errorf("failed to stop base template: %w", err)
 	}
 
-	// Create snapshot
+	// Shift rootfs UIDs for unprivileged containers (one-time cost).
+	// Must happen BEFORE snapshot — btrfs snapshots are read-only.
+	progress("Preparing template for unprivileged containers...\n")
+	if err := ShiftTemplateRootfs(client, BaseTemplate); err != nil {
+		slog.Warn("failed to shift template rootfs UIDs", "component", "sandbox", "error", err)
+	}
+
+	// Create snapshot (captures the shifted UIDs)
 	progress("Creating snapshot...\n")
 	if err := client.CreateSnapshot(containerName, SnapshotName); err != nil {
 		client.DeleteInstance(containerName)
@@ -451,7 +458,13 @@ func SnapshotTemplate(client *IncusClient, registry *TemplateRegistry, name stri
 		}
 	}
 
-	// Create new snapshot
+	// Shift rootfs UIDs for unprivileged containers (one-time cost).
+	// Must happen BEFORE snapshot — btrfs snapshots are read-only.
+	if err := ShiftTemplateRootfs(client, name); err != nil {
+		slog.Warn("failed to shift template rootfs UIDs", "component", "sandbox", "error", err)
+	}
+
+	// Create new snapshot (captures the shifted UIDs)
 	fmt.Println("Creating snapshot...")
 	if err := client.CreateSnapshot(containerName, SnapshotName); err != nil {
 		templateSnapshotMu.Unlock()
@@ -587,15 +600,15 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 			return fmt.Errorf("failed to detect server architecture: %w", err)
 		}
 
+		refreshCfg := containerSecurityConfig()
+		refreshCfg["security.nesting"] = "false"
+
 		req := api.InstancesPost{
 			Name: baseName,
 			Type: api.InstanceTypeContainer,
 			InstancePut: api.InstancePut{
 				Architecture: arch,
-				Config: map[string]string{
-					"security.privileged": "true",
-					"security.nesting":    "false",
-				},
+				Config:       refreshCfg,
 			},
 			Source: api.InstanceSource{
 				Type:  "image",
@@ -620,7 +633,12 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 			return fmt.Errorf("failed to materialize into @base: %w", err)
 		}
 
-		// Snapshot the new @base
+		// Shift rootfs UIDs for unprivileged containers (one-time cost)
+		if err := ShiftTemplateRootfs(client, BaseTemplate); err != nil {
+			slog.Warn("failed to shift template rootfs UIDs", "component", "sandbox", "error", err)
+		}
+
+		// Snapshot the new @base (captures the shifted UIDs)
 		fmt.Println("Snapshotting new @base...")
 		if err := client.CreateSnapshot(baseName, SnapshotName); err != nil {
 			templateSnapshotMu.Unlock()
@@ -656,7 +674,12 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 			return fmt.Errorf("failed to clone promoted template to @base: %w", err)
 		}
 
-		// Snapshot the new @base
+		// Shift rootfs UIDs for unprivileged containers (one-time cost)
+		if err := ShiftTemplateRootfs(client, BaseTemplate); err != nil {
+			slog.Warn("failed to shift template rootfs UIDs", "component", "sandbox", "error", err)
+		}
+
+		// Snapshot the new @base (captures the shifted UIDs)
 		if err := client.CreateSnapshot(baseName, SnapshotName); err != nil {
 			templateSnapshotMu.Unlock()
 			return fmt.Errorf("failed to snapshot new @base: %w", err)
@@ -912,15 +935,15 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 		return fmt.Errorf("failed to detect server architecture: %w", err)
 	}
 
+	tplCfg := containerSecurityConfig()
+	tplCfg["security.nesting"] = "false"
+
 	req := api.InstancesPost{
 		Name: tplContainerName,
 		Type: api.InstanceTypeContainer,
 		InstancePut: api.InstancePut{
 			Architecture: arch,
-			Config: map[string]string{
-				"security.privileged": "true",
-				"security.nesting":    "false",
-			},
+			Config:       tplCfg,
 		},
 		Source: api.InstanceSource{
 			Type:  "image",
@@ -981,7 +1004,11 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 		restartSession()
 		return fmt.Errorf("failed to resolve lower layers for source template %q: %w", sourceTemplate, err)
 	}
-	if err := MountOverlay(poolPath, tplContainerName, lowerDir); err != nil {
+	// Mount overlay on the template container's rootfs.
+	// For unprivileged containers, this mounts a plain overlay and pre-seeds
+	// Incus's idmap state (template rootfs is already shifted at snapshot time).
+	tplRootfs := ContainerRootfsPath(poolPath, tplContainerName)
+	if err := setupUnprivilegedOverlay(client, tplContainerName, tplRootfs, lowerDir); err != nil {
 		if delErr := client.DeleteInstance(tplContainerName); delErr != nil {
 			slog.Warn("failed to delete template instance during rollback", "component", "sandbox", "container", tplContainerName, "error", delErr)
 		}

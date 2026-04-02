@@ -215,3 +215,125 @@ func TestDefaultSandboxConfig(t *testing.T) {
 		t.Errorf("OrphanCheckHours = %d, want 6", d.Prune.OrphanCheckHours)
 	}
 }
+
+func TestIsPrivileged(t *testing.T) {
+	// Save and restore package-level state
+	origCfg := sandboxCfg
+	t.Cleanup(func() {
+		sandboxCfg = origCfg
+	})
+
+	t.Run("nil config defaults to unprivileged", func(t *testing.T) {
+		sandboxCfg = nil
+		if IsPrivileged() {
+			t.Error("expected false (unprivileged) with nil config")
+		}
+	})
+
+	t.Run("empty config defaults to unprivileged", func(t *testing.T) {
+		sandboxCfg = &config.SandboxConfig{} // Privileged is nil
+		if IsPrivileged() {
+			t.Error("expected false (unprivileged) with nil Privileged field")
+		}
+	})
+
+	t.Run("explicit true is honored", func(t *testing.T) {
+		priv := true
+		sandboxCfg = &config.SandboxConfig{Privileged: &priv}
+		if !IsPrivileged() {
+			t.Error("expected true when explicitly set to privileged")
+		}
+	})
+
+	t.Run("explicit false is honored", func(t *testing.T) {
+		priv := false
+		sandboxCfg = &config.SandboxConfig{Privileged: &priv}
+		if IsPrivileged() {
+			t.Error("expected false when explicitly set to unprivileged")
+		}
+	})
+}
+
+func TestContainerSecurityConfig(t *testing.T) {
+	origCfg := sandboxCfg
+	origPlatform := activePlatform
+	t.Cleanup(func() {
+		sandboxCfg = origCfg
+		activePlatform = origPlatform
+	})
+
+	t.Run("native linux unprivileged returns full hardening", func(t *testing.T) {
+		sandboxCfg = nil // defaults to unprivileged
+		activePlatform = PlatformLinuxNative
+		cfg := containerSecurityConfig()
+		if cfg["security.privileged"] != "false" {
+			t.Errorf("expected security.privileged=false, got %q", cfg["security.privileged"])
+		}
+		if cfg["security.syscalls.intercept.mknod"] != "true" {
+			t.Error("expected security.syscalls.intercept.mknod=true")
+		}
+		if cfg["security.syscalls.intercept.setxattr"] != "true" {
+			t.Error("expected security.syscalls.intercept.setxattr=true")
+		}
+		if cfg["security.syscalls.deny_default"] != "true" {
+			t.Error("expected security.syscalls.deny_default=true")
+		}
+		if cfg["security.syscalls.deny_compat"] != "true" {
+			t.Error("expected security.syscalls.deny_compat=true")
+		}
+		if cfg["security.guestapi"] != "false" {
+			t.Error("expected security.guestapi=false")
+		}
+		// Must NOT set security.idmap.isolated (breaks overlay sharing)
+		if _, ok := cfg["security.idmap.isolated"]; ok {
+			t.Error("security.idmap.isolated must NOT be set — breaks shared overlay layers")
+		}
+	})
+
+	t.Run("docker+incus unprivileged skips syscall hardening", func(t *testing.T) {
+		sandboxCfg = nil // defaults to unprivileged
+		activePlatform = PlatformDockerIncus
+		cfg := containerSecurityConfig()
+		if cfg["security.privileged"] != "false" {
+			t.Errorf("expected security.privileged=false, got %q", cfg["security.privileged"])
+		}
+		// Syscall hardening must NOT be set on Docker+Incus
+		for _, key := range []string{
+			"security.syscalls.intercept.mknod",
+			"security.syscalls.intercept.setxattr",
+			"security.syscalls.deny_default",
+			"security.syscalls.deny_compat",
+			"security.guestapi",
+		} {
+			if _, ok := cfg[key]; ok {
+				t.Errorf("Docker+Incus should not set %s", key)
+			}
+		}
+	})
+
+	t.Run("explicit privileged returns minimal config", func(t *testing.T) {
+		priv := true
+		sandboxCfg = &config.SandboxConfig{Privileged: &priv}
+		activePlatform = PlatformLinuxNative
+		cfg := containerSecurityConfig()
+		if cfg["security.privileged"] != "true" {
+			t.Errorf("expected security.privileged=true, got %q", cfg["security.privileged"])
+		}
+		if _, ok := cfg["security.syscalls.intercept.mknod"]; ok {
+			t.Error("privileged mode should not set syscall intercepts")
+		}
+	})
+
+	t.Run("explicit privileged on docker+incus", func(t *testing.T) {
+		priv := true
+		sandboxCfg = &config.SandboxConfig{Privileged: &priv}
+		activePlatform = PlatformDockerIncus
+		cfg := containerSecurityConfig()
+		if cfg["security.privileged"] != "true" {
+			t.Errorf("expected security.privileged=true, got %q", cfg["security.privileged"])
+		}
+		if len(cfg) != 1 {
+			t.Errorf("expected only 1 config key for privileged, got %d: %v", len(cfg), cfg)
+		}
+	})
+}

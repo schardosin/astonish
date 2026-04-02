@@ -1317,6 +1317,61 @@ func handleSandboxSetup() error {
 		}
 
 		sandbox.SetActivePlatform(platform)
+		if appCfg, cfgErr := config.LoadAppConfig(); cfgErr == nil && appCfg != nil {
+			sandbox.SetSandboxConfig(&appCfg.Sandbox)
+		}
+
+		// Detect nested LXC: unprivileged containers cannot run inside
+		// another LXC container (mounting /proc in double-nested user
+		// namespaces is blocked by the outer host). Ask the user whether
+		// to enable privileged mode, which the outer LXC still isolates.
+		if sandbox.IsInsideLXC() && !sandbox.IsPrivileged() {
+			var action string
+			clearScreen()
+			err := huh.NewForm(
+				huh.NewGroup(
+					huh.NewSelect[string]().
+						Title("Sandbox — Nested LXC environment detected").
+						Description(
+							"This host is itself an LXC container. Unprivileged sandbox\n"+
+								"containers cannot run here because mounting /proc in a\n"+
+								"double-nested user namespace is not permitted by the outer host.\n\n"+
+								"Privileged mode runs containers as root inside the sandbox.\n"+
+								"The outer LXC container still provides the isolation boundary,\n"+
+								"but a container escape would give access to this LXC host.\n\n"+
+								"You can change this later in your config:\n"+
+								"  sandbox:\n"+
+								"    privileged: true",
+						).
+						Options(
+							huh.NewOption("Enable privileged mode", "enable"),
+							huh.NewOption("Skip sandbox setup", "skip"),
+						).
+						Value(&action),
+				),
+			).Run()
+			if err != nil {
+				return err
+			}
+
+			if action == "skip" {
+				return nil
+			}
+
+			// User accepted — persist privileged: true in config
+			cfg, cfgErr := config.LoadAppConfig()
+			if cfgErr != nil {
+				return fmt.Errorf("failed to load config: %w", cfgErr)
+			}
+			priv := true
+			cfg.Sandbox.Privileged = &priv
+			if err := config.SaveAppConfig(cfg); err != nil {
+				return fmt.Errorf("failed to save config: %w", err)
+			}
+			sandbox.SetSandboxConfig(&cfg.Sandbox)
+			fmt.Println("Privileged mode enabled in config.")
+		}
+
 		client, err := sandbox.Connect(platform)
 		if err != nil {
 			return fmt.Errorf("failed to connect to Incus: %w", err)

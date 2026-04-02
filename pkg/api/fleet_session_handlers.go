@@ -897,6 +897,7 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 		return nil // sandbox explicitly disabled — ok
 	}
 
+	sandbox.SetSandboxConfig(&appCfg.Sandbox)
 	sandboxClient, sandboxErr := sandbox.SetupSandboxRuntime()
 	if sandboxErr != nil {
 		return fmt.Errorf("sandbox is enabled but the runtime is not available: %w", sandboxErr)

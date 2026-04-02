@@ -193,6 +193,13 @@ func SandboxInitHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Store sandbox config for privilege mode detection in container creation.
+	appCfg, cfgErr := config.LoadAppConfig()
+	if cfgErr == nil && appCfg != nil {
+		sandbox.SetSandboxConfig(&appCfg.Sandbox)
+	}
+	sandbox.SetActivePlatform(platform)
+
 	client, err := sandbox.Connect(platform)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to connect to Incus: %v", err))

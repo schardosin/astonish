@@ -269,6 +269,26 @@ func handleSandboxInit() error {
 		return fmt.Errorf("no container runtime available.\nLinux: install Incus (apt install incus && incus admin init)\nmacOS/Windows: install Docker (any Docker-compatible runtime)")
 	}
 
+	// Store sandbox config for privilege mode detection in container creation.
+	appCfg, cfgErr := config.LoadAppConfig()
+	if cfgErr == nil && appCfg != nil {
+		sandbox.SetSandboxConfig(&appCfg.Sandbox)
+	}
+
+	// Nested LXC hosts cannot run unprivileged containers (mounting /proc
+	// in double-nested user namespaces is blocked). Require the user to
+	// explicitly set sandbox.privileged: true in their config.
+	if sandbox.IsInsideLXC() && !sandbox.IsPrivileged() {
+		return fmt.Errorf("this host is an LXC container and sandbox.privileged is not enabled.\n" +
+			"Unprivileged containers cannot run inside nested LXC environments\n" +
+			"(mounting /proc in double-nested user namespaces is not permitted).\n\n" +
+			"To enable sandbox on this host, set privileged mode in your config:\n\n" +
+			"  sandbox:\n" +
+			"    privileged: true\n\n" +
+			"Note: privileged containers run as root inside the sandbox.\n" +
+			"The outer LXC container provides the isolation boundary.")
+	}
+
 	// On Docker+Incus, ensure the Docker container is set up first
 	if platform == sandbox.PlatformDockerIncus {
 		fmt.Println("Setting up Docker+Incus runtime...")
@@ -1245,6 +1265,13 @@ func connectOrFail() (*sandbox.IncusClient, error) {
 	platform := sandbox.DetectPlatform()
 	if platform == sandbox.PlatformUnsupported {
 		return nil, fmt.Errorf("no container runtime available")
+	}
+
+	// Load sandbox config so IsPrivileged() and containerSecurityConfig()
+	// reflect user settings. Without this, containers created via
+	// "sandbox create" would ignore sandbox.privileged in the config.
+	if appCfg, err := config.LoadAppConfig(); err == nil && appCfg != nil {
+		sandbox.SetSandboxConfig(&appCfg.Sandbox)
 	}
 
 	// On Docker+Incus, ensure the Docker container is running

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"net/http"
 	"os"
 	"regexp"
 	"strings"
@@ -430,6 +431,7 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				fmt.Println("  /drill-add   - Add new drills to an existing suite")
 				fmt.Println("  /fleet       - Show available fleets and CLI commands")
 				fmt.Println("  /fleet-plan  - Create a fleet plan (use Studio UI for guided conversation)")
+				fmt.Println("  /authorize   - Authorize a device to access Studio (usage: /authorize CODE)")
 				fmt.Println("  /help        - Show this help message")
 				fmt.Println("  exit         - Exit the chat")
 				fmt.Println()
@@ -448,6 +450,17 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				fmt.Printf("  astonish fleet deactivate <key>   Stop polling\n")
 				fmt.Printf("  astonish fleet status <key>       Check status\n")
 				fmt.Printf("  astonish fleet templates          List templates\n\n")
+			case strings.HasPrefix(input, "/authorize"):
+				code := strings.TrimSpace(strings.TrimPrefix(input, "/authorize"))
+				if code == "" {
+					fmt.Printf("Usage: /authorize CODE\n\nEnter the 6-character code shown on the Studio authorization page.\n\n")
+				} else if cfg.AppConfig != nil {
+					daemonPort := cfg.AppConfig.Daemon.GetPort()
+					msg := authorizeViaDaemon(daemonPort, code)
+					fmt.Printf("%s\n\n", msg)
+				} else {
+					fmt.Printf("Device authorization requires the daemon to be running.\nStart the daemon with: astonish daemon start\n\n")
+				}
 			default:
 				fmt.Printf("Unknown command: %s. Type /help for available commands.\n\n", input)
 			}
@@ -962,4 +975,24 @@ func (b *distillBridgeConsole) ConfirmAndDistill(ctx context.Context, ds tools.D
 		AppName:   ds.AppName,
 		UserID:    ds.UserID,
 	}, print)
+}
+
+// authorizeViaDaemon sends an authorization code to the daemon's HTTP API.
+func authorizeViaDaemon(daemonPort int, code string) string {
+	body := fmt.Sprintf(`{"code":"%s"}`, code)
+	url := fmt.Sprintf("http://localhost:%d/api/auth/authorize", daemonPort)
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Post(url, "application/json", strings.NewReader(body))
+	if err != nil {
+		return fmt.Sprintf("Failed to reach daemon: %v\nMake sure the daemon is running: astonish daemon start", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Message    string `json:"message"`
+		Authorized bool   `json:"authorized"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "Failed to parse response from daemon."
+	}
+	return result.Message
 }

@@ -251,7 +251,8 @@ func ensureOverlayMounted(client *IncusClient, containerName, templateName strin
 		return err
 	}
 
-	return MountOverlay(poolPath, containerName, lowerDir)
+	containerRootfs := ContainerRootfsPath(poolPath, containerName)
+	return setupUnprivilegedOverlay(client, containerName, containerRootfs, lowerDir)
 }
 
 // TryDestroySessionContainer is a best-effort helper that destroys the sandbox

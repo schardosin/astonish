@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"sync"
 	"time"
@@ -197,10 +198,12 @@ func (r *TemplateRegistry) AddFleetPlan(templateName, planKey string) error {
 }
 
 // sandboxDataDir returns the directory for sandbox data files.
+// When running under sudo, resolves the real user's home via SUDO_USER
+// so that data files are consistent regardless of whether sudo is used.
 func sandboxDataDir() (string, error) {
 	dataHome := os.Getenv("XDG_DATA_HOME")
 	if dataHome == "" {
-		home, err := os.UserHomeDir()
+		home, err := realUserHomeDir()
 		if err != nil {
 			return "", fmt.Errorf("failed to determine home directory: %w", err)
 		}
@@ -208,4 +211,20 @@ func sandboxDataDir() (string, error) {
 	}
 
 	return filepath.Join(dataHome, "astonish", "sandbox"), nil
+}
+
+// realUserHomeDir returns the home directory of the real (non-root) user.
+// When running under sudo, SUDO_USER identifies the original user and we
+// resolve their home directory. This ensures sandbox data files (sessions.json,
+// templates.json) are stored in the same location whether the command is run
+// with or without sudo.
+func realUserHomeDir() (string, error) {
+	if os.Getuid() == 0 {
+		if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
+			if u, err := user.Lookup(sudoUser); err == nil {
+				return u.HomeDir, nil
+			}
+		}
+	}
+	return os.UserHomeDir()
 }

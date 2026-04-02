@@ -29,6 +29,9 @@ type Service interface {
 	Label() string
 	// LogPath returns the path to the daemon log file.
 	LogPath() string
+	// IsSystem reports whether the service is installed at the system level
+	// (e.g., /etc/systemd/system/) rather than the user level.
+	IsSystem() bool
 }
 
 // InstallConfig holds the parameters needed to install the daemon as a service.
@@ -106,3 +109,12 @@ func ReadPID(path string) (int, error) {
 
 // IsProcessRunning checks if a process with the given PID exists.
 // Platform-specific implementations are in process_unix.go and process_windows.go.
+
+// SystemUnitExists reports whether a system-level systemd unit file exists
+// at /etc/systemd/system/astonish-daemon.service. On non-Linux platforms
+// this always returns false.
+func SystemUnitExists() bool {
+	const systemUnitPath = "/etc/systemd/system/astonish-daemon.service"
+	_, err := os.Stat(systemUnitPath)
+	return err == nil
+}

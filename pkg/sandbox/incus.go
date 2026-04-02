@@ -90,16 +90,18 @@ func (c *IncusClient) ServerArchitecture() (string, error) {
 }
 
 // defaultContainerConfig returns the base config for all containers.
-// In nested LXC environments (e.g., Proxmox), containers must run as
-// privileged because unprivileged containers cannot mount /proc inside
-// a user namespace that is itself inside an outer LXC container.
+// Privilege mode is determined by IsPrivileged(), which defaults to
+// unprivileged on all platforms. Users can override via sandbox.privileged
+// in config.yaml.
+//
+// Note: in nested LXC environments (e.g., Proxmox), unprivileged
+// containers may fail because /proc cannot be mounted inside a user
+// namespace nested within an outer LXC user namespace. Those deployments
+// should set sandbox.privileged: true in their config.
 func (c *IncusClient) defaultContainerConfig() map[string]string {
-	config := map[string]string{
-		"security.privileged": "true",
-		"security.nesting":    "false",
-	}
-
-	return config
+	cfg := containerSecurityConfig()
+	cfg["security.nesting"] = "false"
+	return cfg
 }
 
 // SetInstanceConfig updates specific config keys on an existing instance.

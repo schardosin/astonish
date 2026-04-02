@@ -5,8 +5,14 @@ import "net/http"
 // cspPolicy defines the Content-Security-Policy header for the Studio UI.
 // The policy restricts resource loading to the same origin with targeted
 // exceptions for Tailwind CSS inline styles and WebSocket connections.
+//
+// The sha256 hash in script-src allows the inline <script> in the device
+// authorization page (auth.go authPageHTML). If that script changes, the
+// hash must be recomputed:
+//
+//	printf '%s' '<script content>' | openssl dgst -sha256 -binary | base64
 const cspPolicy = "default-src 'self'; " +
-	"script-src 'self'; " +
+	"script-src 'self' 'sha256-QPIelXUbpkDESZsTgggSaMGNOA/Le9qMm+4Wa+lXIvs='; " +
 	"style-src 'self' 'unsafe-inline'; " +
 	"img-src 'self' data: blob:; " +
 	"font-src 'self'; " +

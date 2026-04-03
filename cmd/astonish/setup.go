@@ -30,6 +30,20 @@ import (
 )
 
 func handleSetupCommand() error {
+	// Escalate to root on Linux upfront — the sandbox setup step at the end
+	// of the wizard needs overlay mounts, UID shifting, and Incus socket
+	// access. Asking for the sudo password at the start avoids a disruptive
+	// process restart mid-wizard that would lose all prior wizard state.
+	if sandbox.NeedsEscalation() {
+		cfg, err := config.LoadAppConfig()
+		if err != nil || cfg == nil {
+			cfg = &config.AppConfig{}
+		}
+		if sandbox.IsSandboxEnabled(&cfg.Sandbox) {
+			return sandbox.Escalate()
+		}
+	}
+
 	// Load config
 	cfg, err := config.LoadAppConfig()
 	if err != nil {
@@ -1241,13 +1255,6 @@ func handleSandboxSetup() error {
 		platform, reason := sandbox.DetectPlatformReason()
 
 		if platform == sandbox.PlatformUnsupported {
-			// If Incus is installed but we lack socket permissions, auto-escalate
-			// via sudo rather than showing the "not available" screen.
-			lowReason := strings.ToLower(reason)
-			if sandbox.NeedsEscalation() && (strings.Contains(lowReason, "permission denied") || strings.Contains(lowReason, "not accessible")) {
-				return sandbox.Escalate()
-			}
-
 			// Build description with install instructions and reason
 			desc := "Sandbox runs AI tools inside isolated Linux containers,\n" +
 				"preventing them from accessing your host system directly.\n\n"
@@ -1308,12 +1315,6 @@ func handleSandboxSetup() error {
 		}
 
 		// Container runtime is available — set up the sandbox
-
-		// On Linux, sandbox operations (overlay mounts, UID shifting, Incus
-		// socket access) require root. Re-exec via sudo if needed.
-		if sandbox.NeedsEscalation() {
-			return sandbox.Escalate()
-		}
 
 		// On Docker+Incus (macOS/Windows), ensure the Docker container is running first
 		if platform == sandbox.PlatformDockerIncus {

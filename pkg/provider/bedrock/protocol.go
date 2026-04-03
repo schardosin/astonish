@@ -271,11 +271,15 @@ func ParseResponse(body []byte) (*model.LLMResponse, error) {
 }
 
 // ParseStream parses a Bedrock SSE stream and yields ADK LLMResponses.
+// Streaming text chunks are yielded with Partial=true for live display.
+// At stream end, one aggregated non-partial text response is emitted for
+// session persistence.
 func ParseStream(reader io.Reader) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
 		bufReader := bufio.NewReader(reader)
 		var currentToolUse *ContentBlock
 		var jsonBuffer strings.Builder
+		var textAccum strings.Builder
 
 		for {
 			line, err := bufReader.ReadBytes('\n')
@@ -324,6 +328,19 @@ func ParseStream(reader io.Reader) iter.Seq2[*model.LLMResponse, error] {
 				case "content_block_start":
 					// Start of a new content block (text or tool_use)
 					if chunk.ContentBlock != nil && chunk.ContentBlock.Type == "tool_use" {
+						// Emit aggregated text before tool calls
+						if textAccum.Len() > 0 {
+							if !yield(&model.LLMResponse{
+								Content: &genai.Content{
+									Role:  "model",
+									Parts: []*genai.Part{{Text: textAccum.String()}},
+								},
+							}, nil) {
+								return
+							}
+							textAccum.Reset()
+						}
+
 						inputMap := make(map[string]interface{})
 						currentToolUse = &ContentBlock{
 							Type:  "tool_use",
@@ -337,12 +354,14 @@ func ParseStream(reader io.Reader) iter.Seq2[*model.LLMResponse, error] {
 				case "content_block_delta":
 					if chunk.Delta != nil {
 						if chunk.Delta.Text != "" {
-							// Text delta
+							// Text delta — accumulate and yield as partial
+							textAccum.WriteString(chunk.Delta.Text)
 							if !yield(&model.LLMResponse{
 								Content: &genai.Content{
 									Role:  "model",
 									Parts: []*genai.Part{{Text: chunk.Delta.Text}},
 								},
+								Partial: true,
 							}, nil) {
 								return
 							}
@@ -391,6 +410,16 @@ func ParseStream(reader io.Reader) iter.Seq2[*model.LLMResponse, error] {
 					}
 				}
 			}
+		}
+
+		// Emit aggregated text response at stream end
+		if textAccum.Len() > 0 {
+			yield(&model.LLMResponse{
+				Content: &genai.Content{
+					Role:  "model",
+					Parts: []*genai.Part{{Text: textAccum.String()}},
+				},
+			}, nil)
 		}
 	}
 }

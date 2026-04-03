@@ -445,11 +445,18 @@ func TestParseStream_SingleChunk(t *testing.T) {
 		responses = append(responses, resp)
 	}
 
-	if len(responses) != 1 {
-		t.Fatalf("expected 1 response, got %d", len(responses))
+	// 1 partial chunk + 1 aggregated final
+	if len(responses) != 2 {
+		t.Fatalf("expected 2 responses (partial + aggregated), got %d", len(responses))
 	}
-	if responses[0].Content.Parts[0].Text != "Hello" {
-		t.Errorf("expected 'Hello', got %q", responses[0].Content.Parts[0].Text)
+	if !responses[0].Partial {
+		t.Error("expected first response to be Partial")
+	}
+	if responses[1].Partial {
+		t.Error("expected final response to not be Partial")
+	}
+	if responses[1].Content.Parts[0].Text != "Hello" {
+		t.Errorf("expected 'Hello', got %q", responses[1].Content.Parts[0].Text)
 	}
 }
 
@@ -464,20 +471,30 @@ data: {"candidates":[{"content":{"role":"model","parts":[{"text":"!"}]}}]}
 `
 	reader := strings.NewReader(input)
 
-	var texts []string
+	var responses []*model.LLMResponse
 	for resp, err := range ParseStream(reader) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		texts = append(texts, resp.Content.Parts[0].Text)
+		responses = append(responses, resp)
 	}
 
-	if len(texts) != 3 {
-		t.Fatalf("expected 3 chunks, got %d", len(texts))
+	// 3 partial chunks + 1 aggregated final
+	if len(responses) != 4 {
+		t.Fatalf("expected 4 responses (3 partial + 1 aggregated), got %d", len(responses))
 	}
-	joined := strings.Join(texts, "")
-	if joined != "Hello World!" {
-		t.Errorf("expected 'Hello World!', got %q", joined)
+	// Check partials
+	for i := 0; i < 3; i++ {
+		if !responses[i].Partial {
+			t.Errorf("expected response[%d] to be Partial", i)
+		}
+	}
+	// Check final aggregated
+	if responses[3].Partial {
+		t.Error("expected final response to not be Partial")
+	}
+	if responses[3].Content.Parts[0].Text != "Hello World!" {
+		t.Errorf("expected 'Hello World!', got %q", responses[3].Content.Parts[0].Text)
 	}
 }
 
@@ -517,11 +534,12 @@ data: {"candidates":[{"content":{"role":"model","parts":[{"text":"OK"}]}}]}
 		responses = append(responses, resp)
 	}
 
-	if len(responses) != 1 {
-		t.Fatalf("expected 1 response (malformed skipped), got %d", len(responses))
+	// 1 partial + 1 aggregated final (malformed chunk skipped)
+	if len(responses) != 2 {
+		t.Fatalf("expected 2 responses (malformed skipped, partial + aggregated), got %d", len(responses))
 	}
-	if responses[0].Content.Parts[0].Text != "OK" {
-		t.Errorf("expected 'OK', got %q", responses[0].Content.Parts[0].Text)
+	if responses[1].Content.Parts[0].Text != "OK" {
+		t.Errorf("expected 'OK', got %q", responses[1].Content.Parts[0].Text)
 	}
 }
 
@@ -542,8 +560,9 @@ data: {"candidates":[{"content":{"role":"model","parts":[{"text":"data"}]}}]}
 		responses = append(responses, resp)
 	}
 
-	if len(responses) != 1 {
-		t.Fatalf("expected 1 response, got %d", len(responses))
+	// 1 partial + 1 aggregated final
+	if len(responses) != 2 {
+		t.Fatalf("expected 2 responses (partial + aggregated), got %d", len(responses))
 	}
 }
 

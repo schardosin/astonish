@@ -103,9 +103,23 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 			// Accumulate tool calls for streaming
 			toolCallAccumulator := make(map[int]*openai.ToolCall)
 
+			// Accumulate text for streaming — each chunk is yielded with
+			// Partial=true for live display, and at stream end we emit one
+			// aggregated non-partial response for session persistence.
+			var textAccum strings.Builder
+
 			for {
 				resp, err := stream.Recv()
 				if errors.Is(err, io.EOF) {
+					// Emit aggregated text response at stream end
+					if textAccum.Len() > 0 {
+						yield(&model.LLMResponse{
+							Content: &genai.Content{
+								Role:  "model",
+								Parts: []*genai.Part{{Text: textAccum.String()}},
+							},
+						}, nil)
+					}
 					return
 				}
 				if err != nil {
@@ -150,6 +164,21 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 					if choice.FinishReason == openai.FinishReasonToolCalls ||
 						(choice.FinishReason == openai.FinishReasonStop && len(toolCallAccumulator) > 0) {
 
+						// Emit aggregated text before tool calls (model may
+						// produce a preamble like "Let me check that for you"
+						// before invoking tools).
+						if textAccum.Len() > 0 {
+							if !yield(&model.LLMResponse{
+								Content: &genai.Content{
+									Role:  "model",
+									Parts: []*genai.Part{{Text: textAccum.String()}},
+								},
+							}, nil) {
+								return
+							}
+							textAccum.Reset()
+						}
+
 						// Emit all accumulated tool calls
 						var parts []*genai.Part
 
@@ -192,6 +221,12 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 				llmResp := p.toLLMResponseStream(resp)
 				// Only yield if there's content (ignore empty tool call deltas from toLLMResponseStream)
 				if llmResp.Content != nil && len(llmResp.Content.Parts) > 0 {
+					// Accumulate text and mark as partial for live display;
+					// the aggregated non-partial response is emitted at stream end.
+					if text := llmResp.Content.Parts[0].Text; text != "" {
+						textAccum.WriteString(text)
+						llmResp.Partial = true
+					}
 					if !yield(llmResp, nil) {
 						return
 					}

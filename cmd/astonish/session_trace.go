@@ -56,10 +56,11 @@ func renderSessionTrace(events []*adksession.Event, opts TraceOpts) {
 	callTimestamps := make(map[string]time.Time) // keyed by FunctionCall.ID
 
 	var (
-		toolCalls  int
-		toolErrors int
-		lastTurn   string
-		turnCount  int
+		toolCalls    int
+		toolErrors   int
+		lastTurn     string
+		turnCount    int
+		modelTextBuf strings.Builder // coalesces consecutive model text events
 	)
 
 	argsMax := defaultArgsMaxLen
@@ -76,6 +77,11 @@ func renderSessionTrace(events []*adksession.Event, opts TraceOpts) {
 
 		// Turn separator based on InvocationID
 		if ev.InvocationID != "" && ev.InvocationID != lastTurn {
+			// Flush any accumulated model text from the previous turn
+			if modelTextBuf.Len() > 0 {
+				fmt.Printf("%s[model] %s\n\n", indent, persistentsession.TruncateStr(modelTextBuf.String(), textMax))
+				modelTextBuf.Reset()
+			}
 			lastTurn = ev.InvocationID
 			turnCount++
 			if !opts.ToolsOnly {
@@ -92,16 +98,32 @@ func renderSessionTrace(events []*adksession.Event, opts TraceOpts) {
 			// User or model text
 			if part.Text != "" && !opts.ToolsOnly {
 				if part.Thought {
+					// Flush model text before thinking block
+					if modelTextBuf.Len() > 0 {
+						fmt.Printf("%s[model] %s\n\n", indent, persistentsession.TruncateStr(modelTextBuf.String(), textMax))
+						modelTextBuf.Reset()
+					}
 					fmt.Printf("%s[thinking] %s\n\n", indent, persistentsession.TruncateStr(part.Text, textMax))
 				} else if ev.Author == "user" || ev.Content.Role == "user" {
+					// Flush model text before user message
+					if modelTextBuf.Len() > 0 {
+						fmt.Printf("%s[model] %s\n\n", indent, persistentsession.TruncateStr(modelTextBuf.String(), textMax))
+						modelTextBuf.Reset()
+					}
 					fmt.Printf("%s[user] %s\n\n", indent, persistentsession.TruncateStr(part.Text, textMax))
 				} else {
-					fmt.Printf("%s[model] %s\n\n", indent, persistentsession.TruncateStr(part.Text, textMax))
+					// Accumulate consecutive model text into one block
+					modelTextBuf.WriteString(part.Text)
 				}
 			}
 
-			// FunctionCall
+			// FunctionCall — flush model text first
 			if part.FunctionCall != nil {
+				if modelTextBuf.Len() > 0 {
+					fmt.Printf("%s[model] %s\n\n", indent, persistentsession.TruncateStr(modelTextBuf.String(), textMax))
+					modelTextBuf.Reset()
+				}
+
 				fc := part.FunctionCall
 				callTimestamps[fc.ID] = ev.Timestamp
 				toolCalls++
@@ -151,6 +173,11 @@ func renderSessionTrace(events []*adksession.Event, opts TraceOpts) {
 				}
 			}
 		}
+	}
+
+	// Flush any remaining model text
+	if modelTextBuf.Len() > 0 {
+		fmt.Printf("%s[model] %s\n\n", indent, persistentsession.TruncateStr(modelTextBuf.String(), textMax))
 	}
 
 	// Summary

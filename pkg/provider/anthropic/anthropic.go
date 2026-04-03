@@ -152,6 +152,11 @@ func (p *Provider) handleStream(body io.Reader, yield func(*model.LLMResponse, e
 	var isCollectingTool bool
 	var currentBlockIndex int
 
+	// Accumulate text for streaming — each chunk is yielded with
+	// Partial=true for live display, and at stream end we emit one
+	// aggregated non-partial response for session persistence.
+	var textAccum strings.Builder
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
@@ -159,7 +164,7 @@ func (p *Provider) handleStream(body io.Reader, yield func(*model.LLMResponse, e
 		}
 		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
-			return
+			break
 		}
 
 		var event StreamEvent
@@ -170,6 +175,20 @@ func (p *Provider) handleStream(body io.Reader, yield func(*model.LLMResponse, e
 		switch event.Type {
 		case "content_block_start":
 			if event.ContentBlock != nil && event.ContentBlock.Type == "tool_use" {
+				// Emit aggregated text before tool calls (model may produce
+				// a preamble like "Let me check that" before invoking tools).
+				if textAccum.Len() > 0 {
+					if !yield(&model.LLMResponse{
+						Content: &genai.Content{
+							Role:  "model",
+							Parts: []*genai.Part{{Text: textAccum.String()}},
+						},
+					}, nil) {
+						return
+					}
+					textAccum.Reset()
+				}
+
 				isCollectingTool = true
 				currentToolID = event.ContentBlock.ID
 				currentToolName = event.ContentBlock.Name
@@ -180,14 +199,18 @@ func (p *Provider) handleStream(body io.Reader, yield func(*model.LLMResponse, e
 		case "content_block_delta":
 			if event.Delta != nil {
 				if event.Delta.Type == "text_delta" {
-					yield(&model.LLMResponse{
+					textAccum.WriteString(event.Delta.Text)
+					if !yield(&model.LLMResponse{
 						Content: &genai.Content{
 							Role: "model",
 							Parts: []*genai.Part{
 								{Text: event.Delta.Text},
 							},
 						},
-					}, nil)
+						Partial: true,
+					}, nil) {
+						return
+					}
 				} else if event.Delta.Type == "input_json_delta" && isCollectingTool {
 					currentToolInput.WriteString(event.Delta.PartialJson)
 				}
@@ -221,6 +244,16 @@ func (p *Provider) handleStream(body io.Reader, yield func(*model.LLMResponse, e
 				currentToolInput.Reset()
 			}
 		}
+	}
+
+	// Emit aggregated text response at stream end
+	if textAccum.Len() > 0 {
+		yield(&model.LLMResponse{
+			Content: &genai.Content{
+				Role:  "model",
+				Parts: []*genai.Part{{Text: textAccum.String()}},
+			},
+		}, nil)
 	}
 }
 

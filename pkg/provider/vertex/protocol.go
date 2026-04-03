@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"strings"
 
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
@@ -138,7 +139,7 @@ func ConvertRequest(req *model.LLMRequest, maxOutputTokens int) (*Request, error
 			for _, fd := range t.FunctionDeclarations {
 				// Sanitize parameters schema - Vertex AI rejects $schema
 				params := fd.ParametersJsonSchema
-				
+
 				// Ensure params is a map so we can sanitize it
 				// The schema can be various types (struct, map, etc.) from ADK
 				schemaBytes, err := json.Marshal(params)
@@ -225,9 +226,13 @@ func ParseResponse(body []byte) (*model.LLMResponse, error) {
 }
 
 // ParseStream parses a Vertex AI SSE stream and yields ADK LLMResponses.
+// Streaming text chunks are yielded with Partial=true for live display.
+// At stream end, one aggregated non-partial text response is emitted for
+// session persistence.
 func ParseStream(reader io.Reader) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
 		bufReader := bufio.NewReader(reader)
+		var textAccum strings.Builder
 
 		for {
 			line, err := bufReader.ReadBytes('\n')
@@ -260,33 +265,70 @@ func ParseStream(reader io.Reader) iter.Seq2[*model.LLMResponse, error] {
 					candidate := vertexResp.Candidates[0]
 					if candidate.Content != nil {
 						var parts []*genai.Part
+						hasText := false
+						hasFunctionCall := false
 						for _, p := range candidate.Content.Parts {
 							part := &genai.Part{}
 							if p.Text != "" {
 								part.Text = p.Text
+								hasText = true
 							}
 							if p.FunctionCall != nil {
 								part.FunctionCall = &genai.FunctionCall{
 									Name: p.FunctionCall.Name,
 									Args: p.FunctionCall.Args,
 								}
+								hasFunctionCall = true
 							}
 							parts = append(parts, part)
 						}
 
 						if len(parts) > 0 {
-							if !yield(&model.LLMResponse{
+							resp := &model.LLMResponse{
 								Content: &genai.Content{
 									Role:  candidate.Content.Role,
 									Parts: parts,
 								},
-							}, nil) {
+							}
+
+							if hasText && !hasFunctionCall {
+								// Pure text chunk — accumulate and mark partial
+								for _, p := range parts {
+									if p.Text != "" {
+										textAccum.WriteString(p.Text)
+									}
+								}
+								resp.Partial = true
+							} else if hasFunctionCall && textAccum.Len() > 0 {
+								// Function call after text — emit aggregated text first
+								if !yield(&model.LLMResponse{
+									Content: &genai.Content{
+										Role:  candidate.Content.Role,
+										Parts: []*genai.Part{{Text: textAccum.String()}},
+									},
+								}, nil) {
+									return
+								}
+								textAccum.Reset()
+							}
+
+							if !yield(resp, nil) {
 								return
 							}
 						}
 					}
 				}
 			}
+		}
+
+		// Emit aggregated text response at stream end
+		if textAccum.Len() > 0 {
+			yield(&model.LLMResponse{
+				Content: &genai.Content{
+					Role:  "model",
+					Parts: []*genai.Part{{Text: textAccum.String()}},
+				},
+			}, nil)
 		}
 	}
 }

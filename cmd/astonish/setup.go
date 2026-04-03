@@ -1302,6 +1302,12 @@ func handleSandboxSetup() error {
 
 		// Container runtime is available — set up the sandbox
 
+		// On Linux, sandbox operations (overlay mounts, UID shifting, Incus
+		// socket access) require root. Re-exec via sudo if needed.
+		if sandbox.NeedsEscalation() {
+			return sandbox.Escalate()
+		}
+
 		// On Docker+Incus (macOS/Windows), ensure the Docker container is running first
 		if platform == sandbox.PlatformDockerIncus {
 			clearScreen()

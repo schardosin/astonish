@@ -1241,6 +1241,12 @@ func handleSandboxSetup() error {
 		platform, reason := sandbox.DetectPlatformReason()
 
 		if platform == sandbox.PlatformUnsupported {
+			// If Incus is installed but we lack socket permissions, auto-escalate
+			// via sudo rather than showing the "not available" screen.
+			if sandbox.NeedsEscalation() && strings.Contains(strings.ToLower(reason), "permission denied") {
+				return sandbox.Escalate()
+			}
+
 			// Build description with install instructions and reason
 			desc := "Sandbox runs AI tools inside isolated Linux containers,\n" +
 				"preventing them from accessing your host system directly.\n\n"

@@ -22,15 +22,16 @@ var ErrWaitingForApproval = fmt.Errorf("interrupt: waiting for user approval")
 
 // AstonishAgent implements the logic for running Astonish agents.
 type AstonishAgent struct {
-	Config         *config.AgentConfig
-	LLM            model.LLM
-	Tools          []tool.Tool
-	Toolsets       []tool.Toolset
-	DebugMode      bool
-	IsWebMode      bool // If true, avoids ANSI codes in output
-	AutoApprove    bool // If true, automatically approves all tool executions
-	SessionService session.Service
-	Redactor       *credentials.Redactor // Redacts credential values from tool/LLM outputs (nil = disabled)
+	Config          *config.AgentConfig
+	LLM             model.LLM
+	Tools           []tool.Tool
+	Toolsets        []tool.Toolset
+	DebugMode       bool
+	IsWebMode       bool // If true, avoids ANSI codes in output
+	AutoApprove     bool // If true, automatically approves all tool executions
+	SessionService  session.Service
+	Redactor        *credentials.Redactor // Redacts credential values from tool/LLM outputs (nil = disabled)
+	CredentialStore *credentials.Store    // Credential store for placeholder substitution (nil = disabled)
 }
 
 // NewAstonishAgent creates a new AstonishAgent.

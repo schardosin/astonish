@@ -1289,6 +1289,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	if credStore != nil {
 		redactor := credStore.Redactor()
 		chatAgent.Redactor = redactor
+		chatAgent.CredentialStore = credStore
 		// Also wire to file-based session store for transcript redaction
 		if fs, ok := sessionService.(*persistentsession.FileStore); ok {
 			fs.RedactFunc = redactor.Redact
@@ -1308,6 +1309,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		subAgentMgr.SessionService = sessionService
 		subAgentMgr.MemoryManager = memMgr
 		subAgentMgr.Redactor = chatAgent.Redactor
+		subAgentMgr.CredentialStore = credStore
 		subAgentMgr.EventForwarder = chatAgent.ForwardSubTaskEvent
 		subAgentMgr.AppName = "astonish"
 		subAgentMgr.UserID = "console_user"

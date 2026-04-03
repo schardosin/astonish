@@ -91,11 +91,14 @@ func TestResolveCredential_Password(t *testing.T) {
 	if result.Type != "password" {
 		t.Errorf("type = %q, want %q", result.Type, "password")
 	}
+	// Username is non-secret, returned as plaintext
 	if result.Username != "admin" {
 		t.Errorf("username = %q, want %q", result.Username, "admin")
 	}
-	if result.Password != "secret123" {
-		t.Errorf("password = %q, want %q", result.Password, "secret123")
+	// Password is a secret, returned as placeholder
+	wantPass := credentials.FormatPlaceholder("ssh-test", "password")
+	if result.Password != wantPass {
+		t.Errorf("password = %q, want placeholder %q", result.Password, wantPass)
 	}
 }
 
@@ -116,8 +119,13 @@ func TestResolveCredential_Basic(t *testing.T) {
 	if result.Status != "ok" {
 		t.Errorf("status = %q, want %q", result.Status, "ok")
 	}
-	if result.Username != "user" || result.Password != "pass" {
-		t.Errorf("fields = user=%q pass=%q, want user=user pass=pass", result.Username, result.Password)
+	// Username is non-secret, password is a placeholder
+	if result.Username != "user" {
+		t.Errorf("username = %q, want %q", result.Username, "user")
+	}
+	wantPass := credentials.FormatPlaceholder("http-basic", "password")
+	if result.Password != wantPass {
+		t.Errorf("password = %q, want placeholder %q", result.Password, wantPass)
 	}
 }
 
@@ -134,8 +142,10 @@ func TestResolveCredential_Bearer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveCredential: %v", err)
 	}
-	if result.Token != "tok-123" {
-		t.Errorf("token = %q, want %q", result.Token, "tok-123")
+	// Token is a secret, returned as placeholder
+	wantToken := credentials.FormatPlaceholder("my-bearer", "token")
+	if result.Token != wantToken {
+		t.Errorf("token = %q, want placeholder %q", result.Token, wantToken)
 	}
 }
 
@@ -153,8 +163,13 @@ func TestResolveCredential_APIKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveCredential: %v", err)
 	}
-	if result.Header != "X-Key" || result.Value != "sk-abc" {
-		t.Errorf("fields = header=%q value=%q, want X-Key/sk-abc", result.Header, result.Value)
+	// Header is non-secret, value is a placeholder
+	if result.Header != "X-Key" {
+		t.Errorf("header = %q, want %q", result.Header, "X-Key")
+	}
+	wantValue := credentials.FormatPlaceholder("my-api", "value")
+	if result.Value != wantValue {
+		t.Errorf("value = %q, want placeholder %q", result.Value, wantValue)
 	}
 }
 

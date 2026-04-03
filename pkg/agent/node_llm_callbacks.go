@@ -166,10 +166,10 @@ func (a *AstonishAgent) buildApprovalCallback(node *config.Node, state session.S
 // this callback from a goroutine, and yield is not goroutine-safe.
 func (a *AstonishAgent) buildAfterToolCallback(node *config.Node, state session.State, cbBuf *callbackEventBuffer) llmagent.AfterToolCallback {
 	return func(ctx tool.Context, t tool.Tool, args map[string]any, result map[string]any, err error) (map[string]any, error) {
-		// Redact credential values from tool output before the LLM sees them.
-		// Exception: resolve_credential must return raw values so the LLM can
-		// use them programmatically (e.g., pipe a password to sshpass via process_write).
-		if a.Redactor != nil && result != nil && t.Name() != "resolve_credential" {
+		// Redact credential values from all tool outputs before the LLM sees them.
+		// resolve_credential now returns {{CREDENTIAL:...}} placeholders instead
+		// of raw values, so no exemption is needed.
+		if a.Redactor != nil && result != nil {
 			result = a.Redactor.RedactMap(result)
 		}
 

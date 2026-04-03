@@ -151,9 +151,10 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 	astonishAgent.AutoApprove = true
 	astonishAgent.SessionService = sessionService
 
-	// Wire credential redactor if credential store is available
+	// Wire credential redactor and store for placeholder substitution
 	if cs := tools.GetCredentialStore(); cs != nil {
 		astonishAgent.Redactor = cs.Redactor()
+		astonishAgent.CredentialStore = cs
 	}
 
 	// Create ADK agent wrapper

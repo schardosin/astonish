@@ -102,15 +102,16 @@ type ToolGroup struct {
 // SubAgentManager orchestrates the execution of sub-agent tasks.
 type SubAgentManager struct {
 	// Parent context
-	LLM            model.LLM                    // Parent's LLM (used for children unless overridden)
-	ToolGroups     map[string]*ToolGroup        // Named tool groups for sub-agent tool resolution
-	FleetTools     []tool.Tool                  // Fleet-only tools (e.g., run_fleet_phase) not in main agent's tool list
-	SessionService adksession.Service           // Session persistence
-	MemoryManager  *memory.Manager              // Memory manager for context injection (nil = disabled)
-	Compactor      *persistentsession.Compactor // Context window compactor for sub-agents (nil = disabled)
-	Redactor       *credentials.Redactor        // Redacts credential values from tool outputs (nil = disabled)
-	AppName        string                       // Application name for sessions
-	UserID         string                       // User ID for sessions
+	LLM             model.LLM                    // Parent's LLM (used for children unless overridden)
+	ToolGroups      map[string]*ToolGroup        // Named tool groups for sub-agent tool resolution
+	FleetTools      []tool.Tool                  // Fleet-only tools (e.g., run_fleet_phase) not in main agent's tool list
+	SessionService  adksession.Service           // Session persistence
+	MemoryManager   *memory.Manager              // Memory manager for context injection (nil = disabled)
+	Compactor       *persistentsession.Compactor // Context window compactor for sub-agents (nil = disabled)
+	Redactor        *credentials.Redactor        // Redacts credential values from tool outputs (nil = disabled)
+	CredentialStore *credentials.Store           // Credential store for placeholder substitution (nil = disabled)
+	AppName         string                       // Application name for sessions
+	UserID          string                       // User ID for sessions
 
 	// Configuration
 	Config SubAgentConfig
@@ -335,17 +336,46 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		beforeModelCallbacks = append(beforeModelCallbacks, m.Compactor.BeforeModelCallback())
 	}
 
+	// Shared variable for credential placeholder restore between Before and
+	// After tool callbacks. Safe because ADK processes calls sequentially.
+	var credentialRestore func()
+
 	// Wire credential redaction so sub-agent tool outputs don't leak secrets
-	// into the session transcript. The resolve_credential exemption is kept so
-	// the sub-agent LLM can still use raw values programmatically.
+	// into the session transcript. resolve_credential now returns placeholders,
+	// so no exemption is needed. Also restores credential placeholders in the
+	// args map after tool execution.
 	var afterToolCallbacks []llmagent.AfterToolCallback
 	if m.Redactor != nil {
 		redactor := m.Redactor
 		afterToolCallbacks = append(afterToolCallbacks, func(ctx tool.Context, t tool.Tool, input, output map[string]any, err error) (map[string]any, error) {
-			if output != nil && t.Name() != "resolve_credential" {
+			if credentialRestore != nil {
+				credentialRestore()
+				credentialRestore = nil
+			}
+			if output != nil {
 				return redactor.RedactMap(output), err
 			}
 			return output, err
+		})
+	} else {
+		// Even without a redactor, we need to restore credential placeholders.
+		afterToolCallbacks = append(afterToolCallbacks, func(ctx tool.Context, t tool.Tool, input, output map[string]any, err error) (map[string]any, error) {
+			if credentialRestore != nil {
+				credentialRestore()
+				credentialRestore = nil
+			}
+			return output, err
+		})
+	}
+
+	// Wire credential placeholder substitution so sub-agents can use
+	// {{CREDENTIAL:...}} tokens in tool args.
+	var beforeToolCallbacks []llmagent.BeforeToolCallback
+	if m.CredentialStore != nil {
+		store := m.CredentialStore
+		beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
+			credentialRestore = credentials.SubstituteAndRestore(args, store)
+			return nil, nil
 		})
 	}
 
@@ -356,6 +386,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		Instruction:          childPrompt,
 		Tools:                childTools,
 		Toolsets:             childToolsets,
+		BeforeToolCallbacks:  beforeToolCallbacks,
 		BeforeModelCallbacks: beforeModelCallbacks,
 		AfterToolCallbacks:   afterToolCallbacks,
 	})

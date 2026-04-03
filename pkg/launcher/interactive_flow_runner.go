@@ -217,9 +217,10 @@ func (ifr *InteractiveFlowRunner) startFlow(
 	astonishAgent.AutoApprove = true
 	astonishAgent.SessionService = sessionService
 
-	// Wire credential redactor
+	// Wire credential redactor and store for placeholder substitution
 	if cs := tools.GetCredentialStore(); cs != nil {
 		astonishAgent.Redactor = cs.Redactor()
+		astonishAgent.CredentialStore = cs
 	}
 
 	// Create ADK agent

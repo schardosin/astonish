@@ -77,6 +77,7 @@ type ChatAgent struct {
 
 	// Credential redaction
 	Redactor          *credentials.Redactor                         // Redacts credential values from tool outputs (nil = disabled)
+	CredentialStore   *credentials.Store                            // Credential store for placeholder substitution (nil = disabled)
 	RedactSessionFunc func(appName, userID, sessionID string) error // Called after save_credential to retroactively redact the session transcript (nil = disabled)
 
 	// Context compaction

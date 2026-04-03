@@ -343,8 +343,9 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 	// We need to extract fields based on `output_model` and `raw_tool_output`.
 
 	// Redact credential values from tool output before storing in state.
-	// Exception: resolve_credential must return raw values for programmatic use.
-	if a.Redactor != nil && toolResult != nil && toolName != "resolve_credential" {
+	// resolve_credential now returns {{CREDENTIAL:...}} placeholders for
+	// secret fields, so no exemption is needed.
+	if a.Redactor != nil && toolResult != nil {
 		toolResult = a.Redactor.RedactMap(toolResult)
 	}
 

@@ -373,9 +373,10 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	astonishAgent.AutoApprove = cfg.AutoApprove
 	astonishAgent.SessionService = sessionService
 
-	// Wire credential redactor if credential store is available
+	// Wire credential redactor and store for placeholder substitution
 	if cs := tools.GetCredentialStore(); cs != nil {
 		astonishAgent.Redactor = cs.Redactor()
+		astonishAgent.CredentialStore = cs
 	}
 
 	// Create ADK agent wrapper

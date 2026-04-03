@@ -397,33 +397,26 @@ func resolveCredential(_ tool.Context, args ResolveCredentialArgs) (ResolveCrede
 	switch cred.Type {
 	case credentials.CredPassword:
 		result.Username = cred.Username
-		result.Password = cred.Password
+		result.Password = credentials.FormatPlaceholder(args.Name, "password")
 	case credentials.CredBasic:
 		result.Username = cred.Username
-		result.Password = cred.Password
+		result.Password = credentials.FormatPlaceholder(args.Name, "password")
 	case credentials.CredBearer:
-		result.Token = cred.Token
+		result.Token = credentials.FormatPlaceholder(args.Name, "token")
 	case credentials.CredAPIKey:
 		result.Header = cred.Header
-		result.Value = cred.Value
+		result.Value = credentials.FormatPlaceholder(args.Name, "value")
 	case credentials.CredOAuthClientCreds:
 		// Don't expose client secret — use http_request with credential param instead
 		result.AuthURL = cred.AuthURL
 		result.ClientID = cred.ClientID
 		result.Message = "Use http_request with credential parameter for OAuth — the token is managed automatically."
 	case credentials.CredOAuthAuthCode:
-		// Resolve to get a valid (refreshed if needed) access token
-		_, headerValue, err := credentialStoreVar.Resolve(args.Name)
-		if err != nil {
-			return ResolveCredentialResult{
-				Status:  "error",
-				Message: fmt.Sprintf("Failed to resolve OAuth token: %v", err),
-			}, nil
-		}
-		// Extract the token from "Bearer <token>"
-		result.Token = strings.TrimPrefix(headerValue, "Bearer ")
+		// Return a placeholder — the real token is resolved at execution time
+		// when the placeholder is substituted in process_write, shell_command, etc.
+		result.Token = credentials.FormatPlaceholder(args.Name, "token")
 		result.ClientID = cred.ClientID
-		result.Message = "Access token resolved (auto-refreshed if expired). Prefer using http_request with credential parameter — it handles the Bearer header automatically."
+		result.Message = "Access token placeholder returned (auto-refreshed when used). Prefer using http_request with credential parameter — it handles the Bearer header automatically."
 	}
 
 	return result, nil
@@ -462,7 +455,7 @@ func NewTestCredentialTool() (tool.Tool, error) {
 func NewResolveCredentialTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "resolve_credential",
-		Description: `Retrieve raw fields of a stored credential by name. Use for non-HTTP auth (SSH, FTP, databases) — pipe values to process_write. Returns type-specific fields (username/password, token, header/value). Values are NOT redacted in the result but ARE scrubbed from text responses.`,
+		Description: `Retrieve fields of a stored credential by name. Use for non-HTTP auth (SSH, FTP, databases). Returns type-specific fields: non-secret fields (username, header) as plaintext, secret fields (password, token, value) as {{CREDENTIAL:name:field}} placeholders. Pass placeholders directly to process_write, shell_command, browser_type, etc. — the system substitutes real values at execution time. The real secrets never appear in your context.`,
 	}, resolveCredential)
 }
 

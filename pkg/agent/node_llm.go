@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/model"
@@ -700,9 +701,29 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			}
 		}
 
-		// Add AfterToolCallback for debugging and raw_tool_output handling
+		// Add credential placeholder substitution callback.
+		// Uses SubstituteAndRestore so the AfterToolCallback can undo the
+		// in-place mutation, keeping placeholders in the session event.
+		var credentialRestore func()
+		if a.CredentialStore != nil {
+			store := a.CredentialStore
+			beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
+				credentialRestore = credentials.SubstituteAndRestore(args, store)
+				return nil, nil
+			})
+		}
+
+		// Add AfterToolCallback for debugging and raw_tool_output handling.
+		// Wraps buildAfterToolCallback with credential placeholder restore.
+		innerAfterTool := a.buildAfterToolCallback(node, state, cbBuf)
 		afterToolCallbacks = []llmagent.AfterToolCallback{
-			a.buildAfterToolCallback(node, state, cbBuf),
+			func(ctx tool.Context, t tool.Tool, args map[string]any, result map[string]any, err error) (map[string]any, error) {
+				if credentialRestore != nil {
+					credentialRestore()
+					credentialRestore = nil
+				}
+				return innerAfterTool(ctx, t, args, result, err)
+			},
 		}
 
 		llmAgent, err = llmagent.New(llmagent.Config{

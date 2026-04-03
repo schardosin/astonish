@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/provider/llmerror"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
@@ -200,15 +201,28 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		sessionAppName := ctx.Session().AppName()
 		sessionUserID := ctx.Session().UserID()
 
+		// Shared variable between Before and After tool callbacks for
+		// credential placeholder restore. Safe because ADK processes tool
+		// calls sequentially within a single invocation.
+		var credentialRestore func()
+
 		// Create the AfterToolCallback for trace recording
 		afterToolCallback := func(ctx tool.Context, t tool.Tool, input, output map[string]any, err error) (map[string]any, error) {
-			// Redact credential values from tool output before the LLM sees them.
-			// Exception: resolve_credential must return raw values so the LLM can
-			// use them programmatically (e.g., pipe a password to sshpass via process_write).
-			// Secrets in the LLM's text responses are still caught by the session
-			// transcript redactor and channel output redactor.
+			// Restore credential placeholders in the args map. This undoes the
+			// in-place substitution from BeforeToolCallback, ensuring the session
+			// event (which shares the same args map by reference) retains
+			// {{CREDENTIAL:...}} placeholders instead of real secret values.
+			if credentialRestore != nil {
+				credentialRestore()
+				credentialRestore = nil
+			}
+
+			// Redact credential values from all tool outputs before the LLM sees them.
+			// resolve_credential now returns {{CREDENTIAL:...}} placeholders instead
+			// of raw values, so no exemption is needed — placeholders pass through
+			// the redactor unchanged.
 			redactedOutput := output
-			if c.Redactor != nil && output != nil && t.Name() != "resolve_credential" {
+			if c.Redactor != nil && output != nil {
 				redactedOutput = c.Redactor.RedactMap(output)
 			}
 
@@ -252,6 +266,22 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			return redactedOutput, err
 		}
 
+		// Build BeforeToolCallbacks — credential placeholder substitution.
+		// When the LLM uses {{CREDENTIAL:name:field}} tokens in tool args
+		// (from resolve_credential output), this callback replaces them with
+		// real values just before the tool executes. The AfterToolCallback
+		// restores the original placeholders so the session event (which
+		// shares the same args map by reference) never persists real secrets.
+		var beforeToolCallbacks []llmagent.BeforeToolCallback
+
+		if c.CredentialStore != nil {
+			store := c.CredentialStore
+			beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
+				credentialRestore = credentials.SubstituteAndRestore(args, store)
+				return nil, nil // proceed with (possibly mutated) args
+			})
+		}
+
 		// Build BeforeModelCallbacks
 		var beforeModelCallbacks []llmagent.BeforeModelCallback
 
@@ -274,6 +304,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			Instruction:          instruction,
 			Tools:                c.Tools,
 			Toolsets:             c.Toolsets,
+			BeforeToolCallbacks:  beforeToolCallbacks,
 			BeforeModelCallbacks: beforeModelCallbacks,
 			AfterToolCallbacks: []llmagent.AfterToolCallback{
 				afterToolCallback,

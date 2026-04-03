@@ -1243,7 +1243,8 @@ func handleSandboxSetup() error {
 		if platform == sandbox.PlatformUnsupported {
 			// If Incus is installed but we lack socket permissions, auto-escalate
 			// via sudo rather than showing the "not available" screen.
-			if sandbox.NeedsEscalation() && strings.Contains(strings.ToLower(reason), "permission denied") {
+			lowReason := strings.ToLower(reason)
+			if sandbox.NeedsEscalation() && (strings.Contains(lowReason, "permission denied") || strings.Contains(lowReason, "not accessible")) {
 				return sandbox.Escalate()
 			}
 

@@ -74,8 +74,11 @@ func incusCheck() (Platform, string) {
 	cmd := exec.Command("incus", "info")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		detail := firstLine(output)
-		// Distinguish permission errors from daemon-not-running
-		if strings.Contains(detail, "permission denied") || strings.Contains(detail, "Permission denied") {
+		// Distinguish permission errors from daemon-not-running.
+		// Incus may report "Permission denied" (OS-level) or its own
+		// "You don't have the needed permissions" message.
+		lowDetail := strings.ToLower(detail)
+		if strings.Contains(lowDetail, "permission denied") || strings.Contains(lowDetail, "don't have the needed permissions") {
 			return PlatformUnsupported, fmt.Sprintf(
 				"Incus is installed but the socket is not accessible (permission denied).\n"+
 					"Either run as root or add your user to the 'incus' group:\n"+

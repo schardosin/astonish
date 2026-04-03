@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"os/user"
 	"path/filepath"
 	"time"
 
@@ -559,7 +560,20 @@ func GetProviderType(instanceName string, instance ProviderConfig) string {
 	return ""
 }
 
+// GetConfigDir returns the Astonish configuration directory.
+// When running under sudo, it resolves the real (non-root) user's home
+// directory via SUDO_USER so that config, sessions, and other data files
+// are consistent regardless of whether the command was escalated.
 func GetConfigDir() (string, error) {
+	// Check for SUDO_USER first: when escalated via sudo, $HOME is /root
+	// but we want the invoking user's config directory.
+	if os.Getuid() == 0 {
+		if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
+			if u, err := user.Lookup(sudoUser); err == nil {
+				return filepath.Join(u.HomeDir, ".config", "astonish"), nil
+			}
+		}
+	}
 	configDir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err

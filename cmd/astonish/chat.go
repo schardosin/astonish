@@ -7,6 +7,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/launcher"
+	"github.com/schardosin/astonish/pkg/sandbox"
 )
 
 func handleChatCommand(args []string) error {
@@ -14,6 +15,11 @@ func handleChatCommand(args []string) error {
 	if err != nil {
 		fmt.Printf("Warning: Failed to load config: %v\n", err)
 		appCfg = &config.AppConfig{}
+	}
+
+	// Escalate to root on Linux when sandbox is enabled.
+	if sandbox.NeedsEscalation() && sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
+		return sandbox.Escalate()
 	}
 
 	chatCmd := flag.NewFlagSet("chat", flag.ExitOnError)

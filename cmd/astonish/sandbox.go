@@ -23,6 +23,12 @@ func handleSandboxCommand(args []string) error {
 		return nil
 	}
 
+	// Sandbox commands always need root on Linux for overlay mounts,
+	// UID shifting, and Incus socket access. Re-exec via sudo if needed.
+	if sandbox.NeedsEscalation() {
+		return sandbox.Escalate()
+	}
+
 	switch args[0] {
 	case "status":
 		return handleSandboxStatus()

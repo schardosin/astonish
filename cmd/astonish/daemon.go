@@ -10,6 +10,7 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/daemon"
 	"github.com/schardosin/astonish/pkg/fleet"
+	"github.com/schardosin/astonish/pkg/sandbox"
 )
 
 func handleDaemonCommand(args []string) error {
@@ -44,6 +45,16 @@ func handleDaemonCommand(args []string) error {
 }
 
 func handleDaemonInstall(args []string) error {
+	// Daemon install on Linux with sandbox enabled needs root for the
+	// service to have overlay mount and UID shifting capabilities.
+	if sandbox.NeedsEscalation() {
+		if cfg, err := config.LoadAppConfig(); err == nil && cfg != nil {
+			if sandbox.IsSandboxEnabled(&cfg.Sandbox) {
+				return sandbox.Escalate()
+			}
+		}
+	}
+
 	installCmd := flag.NewFlagSet("daemon install", flag.ExitOnError)
 	port := installCmd.Int("port", 0, "HTTP port (default: from config or 9393)")
 
@@ -139,7 +150,7 @@ func handleDaemonInstall(args []string) error {
 	fmt.Printf("  Port: %d\n", installPort)
 	fmt.Printf("  Logs: %s\n", svc.LogPath())
 	if svc.IsSystem() {
-		fmt.Printf("\nRun 'sudo astonish daemon start' to start the service.\n")
+		fmt.Printf("\nRun 'astonish daemon start' to start the service.\n")
 	} else {
 		fmt.Printf("\nRun 'astonish daemon start' to start the service.\n")
 	}
@@ -261,6 +272,15 @@ func handleDaemonStatus() error {
 }
 
 func handleDaemonRun(args []string) error {
+	// Daemon run (foreground) with sandbox enabled needs root.
+	if sandbox.NeedsEscalation() {
+		if cfg, err := config.LoadAppConfig(); err == nil && cfg != nil {
+			if sandbox.IsSandboxEnabled(&cfg.Sandbox) {
+				return sandbox.Escalate()
+			}
+		}
+	}
+
 	runCmd := flag.NewFlagSet("daemon run", flag.ExitOnError)
 	port := runCmd.Int("port", 0, "HTTP port (default: from config or 9393)")
 
@@ -298,11 +318,14 @@ func handleDaemonLogs(args []string) error {
 }
 
 // requireSystemPrivileges checks whether a system-level systemd unit exists
-// but the current user is not root. If so, it prints a helpful message and
-// returns an error to abort the command. For user-level installs or when
-// already running as root, it returns nil.
+// but the current user is not root. If so, it auto-escalates via sudo on Linux
+// (re-executing the current command with elevated privileges). On non-Linux
+// platforms or when already root, it returns nil.
 func requireSystemPrivileges(action string) error {
 	if os.Getuid() != 0 && daemon.SystemUnitExists() {
+		if sandbox.NeedsEscalation() {
+			return sandbox.Escalate()
+		}
 		return fmt.Errorf(
 			"system-level service detected at /etc/systemd/system/.\n"+
 				"Run with sudo: sudo astonish daemon %s", action)
@@ -330,13 +353,12 @@ func printDaemonUsage() {
 	fmt.Println("  -f          Follow log output (for 'logs' command)")
 	fmt.Println("  -n          Number of log lines to show (default: 50)")
 	fmt.Println("")
-	fmt.Println("On Linux, use 'sudo' for system-level install (runs as root with overlay")
-	fmt.Println("mount capabilities). Without sudo, installs as a user-level service.")
+	fmt.Println("On Linux with sandbox enabled, commands that need root will automatically")
+	fmt.Println("prompt for your password via sudo.")
 	fmt.Println("")
 	fmt.Println("examples:")
-	fmt.Println("  sudo astonish daemon install    # System-level (recommended on Linux)")
-	fmt.Println("  astonish daemon install          # User-level")
-	fmt.Println("  sudo astonish daemon start")
+	fmt.Println("  astonish daemon install")
+	fmt.Println("  astonish daemon start")
 	fmt.Println("  astonish daemon status")
 	fmt.Println("  astonish daemon logs -f")
 	fmt.Println("  astonish daemon run --port 9394")

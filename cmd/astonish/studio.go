@@ -11,6 +11,7 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/launcher"
+	"github.com/schardosin/astonish/pkg/sandbox"
 )
 
 func handleStudioCommand(args []string) error {
@@ -19,6 +20,16 @@ func handleStudioCommand(args []string) error {
 
 	if err := studioCmd.Parse(args); err != nil {
 		return fmt.Errorf("failed to parse flags: %w", err)
+	}
+
+	// Escalate to root on Linux when sandbox is enabled (needs overlay
+	// mounts, UID shifting, and Incus socket access).
+	if sandbox.NeedsEscalation() {
+		if cfg, err := config.LoadAppConfig(); err == nil && cfg != nil {
+			if sandbox.IsSandboxEnabled(&cfg.Sandbox) {
+				return sandbox.Escalate()
+			}
+		}
 	}
 
 	// Set up provider environment variables from config

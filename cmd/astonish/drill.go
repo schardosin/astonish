@@ -444,6 +444,16 @@ var containerToolNames = map[string]bool{
 }
 
 func handleDrillRunCommand(args []string) error {
+	// Escalate to root on Linux when sandbox is enabled — drill suites
+	// that use sandbox templates need overlay mount and UID shifting capabilities.
+	if sandbox.NeedsEscalation() {
+		if cfg, err := config.LoadAppConfig(); err == nil && cfg != nil {
+			if sandbox.IsSandboxEnabled(&cfg.Sandbox) {
+				return sandbox.Escalate()
+			}
+		}
+	}
+
 	runCmd := flag.NewFlagSet("test run", flag.ExitOnError)
 	tagFlag := runCmd.String("tag", "", "Filter tests by tag (comma-separated)")
 	verbose := runCmd.Bool("verbose", false, "Verbose output")

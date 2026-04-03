@@ -70,13 +70,22 @@ func incusCheck() (Platform, string) {
 		return PlatformUnsupported, "Incus is not installed.\nInstall with: apt install incus && incus admin init"
 	}
 
-	// Binary exists — check if the daemon is running
+	// Binary exists — check if the daemon is reachable
 	cmd := exec.Command("incus", "info")
 	if output, err := cmd.CombinedOutput(); err != nil {
+		detail := firstLine(output)
+		// Distinguish permission errors from daemon-not-running
+		if strings.Contains(detail, "permission denied") || strings.Contains(detail, "Permission denied") {
+			return PlatformUnsupported, fmt.Sprintf(
+				"Incus is installed but the socket is not accessible (permission denied).\n"+
+					"Either run as root or add your user to the 'incus' group:\n"+
+					"  sudo usermod -aG incus $USER && newgrp incus\n"+
+					"Detail: %s", detail)
+		}
 		return PlatformUnsupported, fmt.Sprintf(
-			"Incus is installed but the daemon is not running.\n"+
+			"Incus is installed but the daemon is not reachable.\n"+
 				"Start it with: sudo systemctl start incus\n"+
-				"Detail: %s", firstLine(output))
+				"Detail: %s", detail)
 	}
 
 	return PlatformLinuxNative, ""

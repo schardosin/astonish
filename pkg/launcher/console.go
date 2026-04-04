@@ -15,6 +15,7 @@ import (
 	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/provider"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
@@ -377,6 +378,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	if cs := tools.GetCredentialStore(); cs != nil {
 		astonishAgent.Redactor = cs.Redactor()
 		astonishAgent.CredentialStore = cs
+		astonishAgent.PendingSecrets = credentials.NewPendingVault(cs.Redactor())
 	}
 
 	// Create ADK agent wrapper

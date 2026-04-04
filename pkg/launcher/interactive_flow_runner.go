@@ -221,6 +221,7 @@ func (ifr *InteractiveFlowRunner) startFlow(
 	if cs := tools.GetCredentialStore(); cs != nil {
 		astonishAgent.Redactor = cs.Redactor()
 		astonishAgent.CredentialStore = cs
+		astonishAgent.PendingSecrets = credentials.NewPendingVault(cs.Redactor())
 	}
 
 	// Create ADK agent

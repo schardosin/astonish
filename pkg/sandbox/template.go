@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -1171,13 +1173,14 @@ func pushAstonishBinaryFromHost(client *IncusClient, containerName string) error
 		return fmt.Errorf("failed to stat binary: %w", err)
 	}
 
-	fmt.Printf("  Binary: %s (%.1f MB)\n", realPath, float64(info.Size())/(1024*1024))
+	expectedSize := info.Size()
+	fmt.Printf("  Binary: %s (%.1f MB)\n", realPath, float64(expectedSize)/(1024*1024))
 
 	if err := client.PushFile(containerName, BinaryDestPath, f, 0755); err != nil {
 		return fmt.Errorf("failed to push binary to container: %w", err)
 	}
 
-	return verifyBinaryInContainer(client, containerName)
+	return verifyBinaryInContainer(client, containerName, expectedSize)
 }
 
 // pushAstonishBinaryFromDocker copies the pre-baked Linux binary from the
@@ -1207,17 +1210,35 @@ func pushAstonishBinaryFromDocker(client *IncusClient, containerName string) err
 		return fmt.Errorf("failed to push binary to container: %w", err)
 	}
 
-	return verifyBinaryInContainer(client, containerName)
+	return verifyBinaryInContainer(client, containerName, int64(len(binaryData)))
 }
 
-// verifyBinaryInContainer checks that the pushed binary is executable inside the container.
-func verifyBinaryInContainer(client *IncusClient, containerName string) error {
+// verifyBinaryInContainer checks that the pushed binary is correct inside the container.
+// It verifies both the file size (matches expectedSize) and that the binary can execute.
+func verifyBinaryInContainer(client *IncusClient, containerName string, expectedSize int64) error {
+	// Verify file size matches what we pushed (catches truncation during transfer)
+	if expectedSize > 0 {
+		sizeOutput, err := ExecSimpleWithEnv(client, containerName, []string{"stat", "-c", "%s", BinaryDestPath}, nil)
+		if err != nil {
+			return fmt.Errorf("failed to stat binary in container: %w", err)
+		}
+		sizeOutput = strings.TrimSpace(sizeOutput)
+		actualSize, parseErr := strconv.ParseInt(sizeOutput, 10, 64)
+		if parseErr != nil {
+			return fmt.Errorf("failed to parse binary size in container (got %q): %w", sizeOutput, parseErr)
+		}
+		if actualSize != expectedSize {
+			return fmt.Errorf("binary size mismatch: expected %d bytes, got %d bytes (truncated during push?)", expectedSize, actualSize)
+		}
+	}
+
+	// Verify the binary can actually execute
 	exitCode, err := client.ExecSimple(containerName, []string{BinaryDestPath, "--version"})
 	if err != nil {
 		return fmt.Errorf("binary verification failed: %w", err)
 	}
 	if exitCode != 0 {
-		return fmt.Errorf("binary verification exited with code %d", exitCode)
+		return fmt.Errorf("binary verification exited with code %d (possible corruption)", exitCode)
 	}
 	return nil
 }

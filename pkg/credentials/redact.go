@@ -71,6 +71,19 @@ func (r *Redactor) AddSecret(name, value string) {
 	r.addVariantsLocked(name, value)
 }
 
+// AddTransientSecret registers a secret value for redaction without a
+// credential name. Used as a safety net for pending secrets extracted from
+// user messages (<<<value>>> tags) before they are formally saved. The
+// redaction label uses "pending-secret" as the name.
+func (r *Redactor) AddTransientSecret(value string) {
+	if len(value) < minSignatureLen {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.addVariantsLocked("pending-secret", value)
+}
+
 // RemoveByName removes all signatures associated with a credential name.
 func (r *Redactor) RemoveByName(name string) {
 	r.mu.Lock()

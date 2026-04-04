@@ -34,11 +34,16 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			return origYield(event, err)
 		}
 
-		// Extract user text
+		// Extract user text, sanitizing <<<secret>>> tags before the LLM sees them.
+		// The PendingVault replaces raw values with <<<SECRET_N>>> tokens and
+		// immediately registers the raw values with the Redactor as a safety net.
 		userText := ""
 		if ctx.UserContent() != nil {
 			for _, p := range ctx.UserContent().Parts {
 				if p.Text != "" {
+					if c.PendingSecrets != nil {
+						p.Text = c.PendingSecrets.Extract(p.Text)
+					}
 					userText += p.Text
 				}
 			}
@@ -205,6 +210,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		// credential placeholder restore. Safe because ADK processes tool
 		// calls sequentially within a single invocation.
 		var credentialRestore func()
+		var pendingSecretRestore func()
 
 		// Create the AfterToolCallback for trace recording
 		afterToolCallback := func(ctx tool.Context, t tool.Tool, input, output map[string]any, err error) (map[string]any, error) {
@@ -215,6 +221,12 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			if credentialRestore != nil {
 				credentialRestore()
 				credentialRestore = nil
+			}
+			// Restore <<<SECRET_N>>> tokens in the args map (same pattern as
+			// credential placeholders, for user-provided pending secrets).
+			if pendingSecretRestore != nil {
+				pendingSecretRestore()
+				pendingSecretRestore = nil
 			}
 
 			// Redact credential values from all tool outputs before the LLM sees them.
@@ -279,6 +291,16 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 				credentialRestore = credentials.SubstituteAndRestore(args, store)
 				return nil, nil // proceed with (possibly mutated) args
+			})
+		}
+
+		// Resolve <<<SECRET_N>>> tokens in tool args to real values.
+		// These tokens come from user messages sanitized by PendingVault.Extract().
+		if c.PendingSecrets != nil {
+			vault := c.PendingSecrets
+			beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
+				pendingSecretRestore = vault.SubstituteAndRestore(args)
+				return nil, nil
 			})
 		}
 

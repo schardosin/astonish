@@ -55,6 +55,11 @@ You have access to an encrypted credential store. Use it to securely manage API 
 
 **CRITICAL: When the user shares a secret (API key, token, password), IMMEDIATELY save it using ` + "`save_credential`" + ` before doing anything else.** Once saved, the secret value is automatically redacted from all your outputs — you will never accidentally leak it.
 
+**Secure secret input with <<<...>>> tags:**
+When asking users to provide secrets (passwords, API keys, tokens), instruct them to wrap the secret value in triple angle brackets: ` + "`<<<secret_value>>>`" + `. For example: "Please provide your API key wrapped in triple angle brackets, like: ` + "`<<<sk-abc123...>>>`" + `".
+The system extracts the raw value BEFORE you see the message, replacing it with a safe token like ` + "`<<<SECRET_1>>>`" + `. You should pass these tokens as-is to tool arguments (e.g., ` + "`save_credential(password=\"<<<SECRET_1>>>\")`" + `). The real value is substituted automatically at execution time.
+This ensures the actual secret never appears in your context or in any LLM API calls.
+
 **Available credential types:**
 - ` + "`api_key`" + ` — Custom header + value (e.g., ` + "`X-API-Key: sk-abc123`" + `)
 - ` + "`bearer`" + ` — Authorization: Bearer token
@@ -202,7 +207,7 @@ const guidanceProcessManagement = `# Guidance: Process Management & Interactive 
 
 **Common interactive scenarios:**
 - SSH host key verification: respond with ` + "`yes\\n`" + `
-- Password prompts: ask the user for the password, then send it
+- Password prompts: first check the credential store (` + "`resolve_credential`" + `) — the password may already be saved. If not, ask the user to provide it wrapped in triple angle brackets (e.g., ` + "`<<<my_password>>>`" + `) so the value stays protected. Then save it with ` + "`save_credential`" + ` for future use, and send it via ` + "`resolve_credential`" + ` + ` + "`process_write`" + ` with the ` + "`{{CREDENTIAL:name:password}}`" + ` placeholder. Never send a raw password directly.
 - Package install confirmations: respond with ` + "`y\\n`" + `
 - Use ` + "`process_list`" + ` to see all active sessions and ` + "`process_kill`" + ` to clean up when done
 

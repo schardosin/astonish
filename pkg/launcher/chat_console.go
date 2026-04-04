@@ -548,6 +548,12 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 			}
 		}
 
+		// seenPartialText filters out aggregated text events that duplicate
+		// already-streamed partial chunks. ADK's StreamingResponseAggregator
+		// yields every text segment twice in SSE mode: once as partial deltas
+		// (Partial=true) and once as a non-partial aggregate (Partial=false).
+		// Without filtering, text appears doubled in the console output.
+		seenPartialText := false
 		for event, err := range r.Run(ctx, userID, sess.ID(), userMsg, adkagent.RunConfig{
 			StreamingMode: adkagent.StreamingModeSSE,
 		}) {
@@ -609,9 +615,22 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 			hasTool := false
 			chunk := ""
 			for _, p := range event.LLMResponse.Content.Parts {
-				chunk += p.Text
+				if p.Text != "" {
+					if event.LLMResponse.Partial {
+						seenPartialText = true
+						chunk += p.Text
+					} else if !seenPartialText {
+						// Non-partial with no preceding partials — synthetic or
+						// non-streaming event. Display it.
+						chunk += p.Text
+					} else {
+						// Non-partial AFTER partials — aggregated duplicate. Skip.
+						seenPartialText = false
+					}
+				}
 				if p.FunctionCall != nil {
 					hasTool = true
+					seenPartialText = false
 					// Start spinner showing which tool is running
 					startSpinner(fmt.Sprintf("Running %s...", p.FunctionCall.Name))
 					spinnerStopped = false
@@ -622,6 +641,7 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				}
 				if p.FunctionResponse != nil {
 					hasTool = true
+					seenPartialText = false
 				}
 			}
 			if hasTool {
@@ -680,6 +700,7 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 			lastEventWasTool = false
 			spinnerStopped = false
 
+			seenPartialText2 := false
 			for event, err := range r.Run(ctx, userID, sess.ID(), userMsg, adkagent.RunConfig{
 				StreamingMode: adkagent.StreamingModeSSE,
 			}) {
@@ -697,14 +718,25 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				hasTool := false
 				chunk := ""
 				for _, p := range event.LLMResponse.Content.Parts {
-					chunk += p.Text
+					if p.Text != "" {
+						if event.LLMResponse.Partial {
+							seenPartialText2 = true
+							chunk += p.Text
+						} else if !seenPartialText2 {
+							chunk += p.Text
+						} else {
+							seenPartialText2 = false
+						}
+					}
 					if p.FunctionCall != nil {
 						hasTool = true
+						seenPartialText2 = false
 						startSpinner(fmt.Sprintf("Running %s...", p.FunctionCall.Name))
 						spinnerStopped = false
 					}
 					if p.FunctionResponse != nil {
 						hasTool = true
+						seenPartialText2 = false
 					}
 				}
 				if hasTool {

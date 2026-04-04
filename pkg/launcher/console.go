@@ -512,6 +512,10 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		// Declare suppression variables here so they are accessible throughout the loop and after
 		suppressStreaming := false
 		var userMessageFields []string
+
+		// seenPartialText filters out aggregated text events that duplicate
+		// already-streamed partial chunks (same fix as chat_console.go).
+		seenPartialText := false
 		nodeJustChanged := false          // Flag to skip userMessage processing on initial node change event
 		turnHadUserMessageFields := false // Track if any node in this turn had userMessageFields (persists across node changes)
 
@@ -874,10 +878,22 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 				continue
 			}
 
-			// Extract text from response
+			// Extract text from response, filtering out aggregated duplicates.
 			chunk := ""
 			for _, p := range event.LLMResponse.Content.Parts {
-				chunk += p.Text
+				if p.Text != "" {
+					if event.LLMResponse.Partial {
+						seenPartialText = true
+						chunk += p.Text
+					} else if !seenPartialText {
+						chunk += p.Text
+					} else {
+						seenPartialText = false
+					}
+				}
+				if p.FunctionCall != nil || p.FunctionResponse != nil {
+					seenPartialText = false
+				}
 			}
 
 			if chunk != "" {

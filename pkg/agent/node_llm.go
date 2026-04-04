@@ -705,6 +705,7 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		// Uses SubstituteAndRestore so the AfterToolCallback can undo the
 		// in-place mutation, keeping placeholders in the session event.
 		var credentialRestore func()
+		var pendingSecretRestore func()
 		if a.CredentialStore != nil {
 			store := a.CredentialStore
 			beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
@@ -713,14 +714,27 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 			})
 		}
 
+		// Resolve <<<SECRET_N>>> tokens in tool args to real values.
+		if a.PendingSecrets != nil {
+			vault := a.PendingSecrets
+			beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
+				pendingSecretRestore = vault.SubstituteAndRestore(args)
+				return nil, nil
+			})
+		}
+
 		// Add AfterToolCallback for debugging and raw_tool_output handling.
-		// Wraps buildAfterToolCallback with credential placeholder restore.
+		// Wraps buildAfterToolCallback with credential and pending secret placeholder restore.
 		innerAfterTool := a.buildAfterToolCallback(node, state, cbBuf)
 		afterToolCallbacks = []llmagent.AfterToolCallback{
 			func(ctx tool.Context, t tool.Tool, args map[string]any, result map[string]any, err error) (map[string]any, error) {
 				if credentialRestore != nil {
 					credentialRestore()
 					credentialRestore = nil
+				}
+				if pendingSecretRestore != nil {
+					pendingSecretRestore()
+					pendingSecretRestore = nil
 				}
 				return innerAfterTool(ctx, t, args, result, err)
 			},

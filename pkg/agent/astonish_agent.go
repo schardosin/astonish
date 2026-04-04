@@ -30,8 +30,9 @@ type AstonishAgent struct {
 	IsWebMode       bool // If true, avoids ANSI codes in output
 	AutoApprove     bool // If true, automatically approves all tool executions
 	SessionService  session.Service
-	Redactor        *credentials.Redactor // Redacts credential values from tool/LLM outputs (nil = disabled)
-	CredentialStore *credentials.Store    // Credential store for placeholder substitution (nil = disabled)
+	Redactor        *credentials.Redactor     // Redacts credential values from tool/LLM outputs (nil = disabled)
+	CredentialStore *credentials.Store        // Credential store for placeholder substitution (nil = disabled)
+	PendingSecrets  *credentials.PendingVault // Per-session vault for <<<SECRET_N>>> token resolution (nil = disabled)
 }
 
 // NewAstonishAgent creates a new AstonishAgent.

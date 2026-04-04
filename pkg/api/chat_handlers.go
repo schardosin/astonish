@@ -456,6 +456,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	defer func() { chatAgent.UIEventCallback = nil }()
 
 	// Run the agent and stream events
+	seenPartialText := false // tracks whether partial (streaming delta) text was sent in the current LLM turn
 	for event, runErr := range rnr.Run(ctx, studioChatUserID, sessionID, userMsg, adkagent.RunConfig{
 		StreamingMode: adkagent.StreamingModeSSE,
 	}) {
@@ -548,11 +549,31 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		// Process content parts
 		if event.LLMResponse.Content != nil {
 			for _, part := range event.LLMResponse.Content.Parts {
-				// Streaming text
+				// Streaming text — in SSE mode, ADK's streaming aggregator
+				// yields each text chunk as a Partial event, then emits a
+				// non-partial aggregated event with the full accumulated text.
+				// We only forward partial (delta) chunks to the UI. The
+				// non-partial aggregate is skipped to avoid duplication.
+				// Non-streaming text (e.g., synthetic events from Astonish
+				// code) is always non-partial and has no preceding partials,
+				// so seenPartialText will be false and the text passes through.
 				if part.Text != "" {
-					safeSendSSE("text", map[string]interface{}{
-						"text": part.Text,
-					})
+					if event.LLMResponse.Partial {
+						seenPartialText = true
+						safeSendSSE("text", map[string]interface{}{
+							"text": part.Text,
+						})
+					} else if !seenPartialText {
+						// Non-partial text with no preceding partials —
+						// this is a non-streaming / synthetic response.
+						safeSendSSE("text", map[string]interface{}{
+							"text": part.Text,
+						})
+					} else {
+						// Non-partial after partials → aggregated duplicate, skip.
+						// Reset for the next LLM turn.
+						seenPartialText = false
+					}
 				}
 				// Tool call — redact args so piped secrets (e.g. process_write
 				// with a password from resolve_credential) are not exposed in the UI.

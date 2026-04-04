@@ -1290,6 +1290,10 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		redactor := credStore.Redactor()
 		chatAgent.Redactor = redactor
 		chatAgent.CredentialStore = credStore
+		// Create per-session PendingVault for <<<SECRET_N>>> token resolution.
+		// The vault extracts raw secrets from user messages before the LLM sees
+		// them, and registers them with the redactor as a safety net.
+		chatAgent.PendingSecrets = credentials.NewPendingVault(redactor)
 		// Also wire to file-based session store for transcript redaction
 		if fs, ok := sessionService.(*persistentsession.FileStore); ok {
 			fs.RedactFunc = redactor.Redact
@@ -1310,6 +1314,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		subAgentMgr.MemoryManager = memMgr
 		subAgentMgr.Redactor = chatAgent.Redactor
 		subAgentMgr.CredentialStore = credStore
+		subAgentMgr.PendingSecrets = chatAgent.PendingSecrets
 		subAgentMgr.EventForwarder = chatAgent.ForwardSubTaskEvent
 		subAgentMgr.AppName = "astonish"
 		subAgentMgr.UserID = "console_user"

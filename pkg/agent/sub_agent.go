@@ -110,6 +110,7 @@ type SubAgentManager struct {
 	Compactor       *persistentsession.Compactor // Context window compactor for sub-agents (nil = disabled)
 	Redactor        *credentials.Redactor        // Redacts credential values from tool outputs (nil = disabled)
 	CredentialStore *credentials.Store           // Credential store for placeholder substitution (nil = disabled)
+	PendingSecrets  *credentials.PendingVault    // Per-session vault for <<<SECRET_N>>> token resolution (nil = disabled)
 	AppName         string                       // Application name for sessions
 	UserID          string                       // User ID for sessions
 
@@ -339,6 +340,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	// Shared variable for credential placeholder restore between Before and
 	// After tool callbacks. Safe because ADK processes calls sequentially.
 	var credentialRestore func()
+	var pendingSecretRestore func()
 
 	// Wire credential redaction so sub-agent tool outputs don't leak secrets
 	// into the session transcript. resolve_credential now returns placeholders,
@@ -352,6 +354,10 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 				credentialRestore()
 				credentialRestore = nil
 			}
+			if pendingSecretRestore != nil {
+				pendingSecretRestore()
+				pendingSecretRestore = nil
+			}
 			if output != nil {
 				return redactor.RedactMap(output), err
 			}
@@ -364,6 +370,10 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 				credentialRestore()
 				credentialRestore = nil
 			}
+			if pendingSecretRestore != nil {
+				pendingSecretRestore()
+				pendingSecretRestore = nil
+			}
 			return output, err
 		})
 	}
@@ -375,6 +385,15 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		store := m.CredentialStore
 		beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 			credentialRestore = credentials.SubstituteAndRestore(args, store)
+			return nil, nil
+		})
+	}
+
+	// Resolve <<<SECRET_N>>> tokens in tool args to real values.
+	if m.PendingSecrets != nil {
+		vault := m.PendingSecrets
+		beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
+			pendingSecretRestore = vault.SubstituteAndRestore(args)
 			return nil, nil
 		})
 	}

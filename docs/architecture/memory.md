@@ -1,0 +1,192 @@
+# Memory & Knowledge
+
+## Overview
+
+Astonish provides persistent, searchable memory for the AI agent. The memory system stores knowledge as markdown files, indexes them with a hybrid vector + keyword search engine, and automatically retrieves relevant knowledge before each LLM turn. This gives the agent the ability to learn from past interactions, remember project-specific details, and improve over time.
+
+The system runs entirely locally by default -- embeddings are computed in-process using a pure Go implementation, with no external API calls required.
+
+## Key Design Decisions
+
+### Why Hybrid Search (Vector + BM25)
+
+Pure vector search excels at semantic similarity ("find docs about authentication") but misses exact keyword matches ("find docs mentioning `BIFROST_API_KEY`"). Pure keyword search handles exact terms but misses semantic equivalence. The hybrid approach combines both:
+
+- **Vector search**: Finds semantically similar documents using cosine similarity on embedding vectors.
+- **BM25 keyword search**: Finds documents containing specific terms using TF-IDF scoring.
+- **Reciprocal Rank Fusion (RRF)**: Combines results from both methods using the formula `1 / (k + rank)` where `k=60`. This gives high-ranked results from either method a boost while avoiding domination by either approach.
+
+Additionally, a **topic relevance penalty** (0.5x multiplier) is applied to results with zero keyword overlap with the query, preventing the retrieval of semantically-similar-but-topically-irrelevant documents.
+
+### Why Local Embeddings
+
+The default embedding model is **all-MiniLM-L6-v2** (384 dimensions) running in-process via Hugot + GoMLX. This was chosen because:
+
+- **No API dependency**: Works offline, no API key needed, no rate limits, no cost.
+- **Privacy**: Document content never leaves the machine.
+- **Speed**: In-process computation avoids network round-trips. Good enough for the index sizes Astonish handles (hundreds of documents, not millions).
+- **Pure Go**: GoMLX provides a Go-native ML runtime, avoiding CGo and Python dependencies.
+
+A patch (`patchGoMLXBackendForLowCPU`) fixes a deadlock in GoMLX on systems with 1-2 CPUs by reducing the internal worker pool size.
+
+Cloud fallback options (OpenAI, Ollama, OpenAI-compatible) are available for users who prefer them.
+
+### Why Heading-Aware Chunking
+
+Markdown documents are chunked at `##` heading boundaries rather than fixed token counts. This preserves semantic coherence -- a section about "OAuth Setup" stays together instead of being split arbitrarily. Small sections (under 100 characters) are merged with the next section to avoid fragments. A size-based fallback with overlap handles very large sections.
+
+### Why File-Based Knowledge Storage
+
+Knowledge is stored as markdown files in a watched directory rather than a database:
+
+- **Human-readable**: Users can read, edit, and version-control their knowledge base with standard tools.
+- **Composable**: Different knowledge categories live in different directories (guidance, skills, flows, general knowledge).
+- **Incremental indexing**: SHA-256 hashing detects changed files, re-indexing only what's modified. File watchers (fsnotify) trigger re-indexing on changes.
+- **Schema versioning**: A schema version (currently v6) forces full re-indexing when the chunking or indexing strategy changes.
+
+### Why Three Special Documents
+
+Three auto-managed markdown files serve specific purposes:
+
+- **MEMORY.md**: Section-based knowledge store where the agent saves durable knowledge (workarounds, patterns, API quirks). Sections are indexed by `##` heading. Supports deduplication and overwrite modes.
+- **INSTRUCTIONS.md**: User-editable behavior directives. Loaded into the system prompt's Tier 1 (always visible). Default content covers communication style, permissions, and task approach.
+- **SELF.md**: Auto-generated system awareness document containing the current configuration -- providers, MCP servers, tools, memory settings, channels, agent identity. Regenerated when config changes. Indexed for retrieval when the agent needs to know its own capabilities.
+
+## Architecture
+
+### Knowledge Retrieval Per Turn
+
+```
+User sends message
+    |
+    v
+ChatAgent.Run():
+  1. Build search query from user message
+  2. For short messages: augment with last LLM response context
+    |
+    v
+  3. Partitioned search:
+     a. Guidance docs (KnowledgeSearchByCategory, max 3, min score 0.3)
+        - How-to instructions for capabilities
+     b. General knowledge (KnowledgeSearch, max 5, min score 0.3)
+        - Memory, skills, flows, user knowledge
+    |
+    v
+  4. Deduplicate results
+  5. Format as "Relevant Knowledge" section
+  6. Set SystemPromptBuilder.RelevantKnowledge
+    |
+    v
+  7. System prompt appends knowledge at the end (Tier 3)
+     (static prefix remains cacheable for KV-cache)
+```
+
+### Indexing Pipeline
+
+```
+Memory directory (e.g., ~/.config/astonish/memory/)
+  ├── guidance/          # Capability how-to docs (Tier 2)
+  ├── skills/            # Skill documentation
+  ├── flows/             # Flow knowledge docs
+  ├── MEMORY.md          # Agent's saved knowledge
+  ├── INSTRUCTIONS.md    # User behavior directives
+  └── SELF.md            # Auto-generated system awareness
+    |
+    v
+Indexer.FullSync():
+  1. Walk directory tree, find all .md files
+  2. Compute SHA-256 hash for each file
+  3. Compare with stored hashes -- skip unchanged files
+  4. For changed files:
+     a. Read content
+     b. Chunk at ## headings (merge small sections, split large ones)
+     c. Assign category from path (guidance, skill, flow, knowledge, etc.)
+     d. Compute embeddings (local or cloud)
+     e. Store in chromem-go vector DB
+     f. Update BM25 inverted index
+  5. Remove entries for deleted files
+```
+
+### Search Pipeline
+
+```
+SearchHybrid(query, maxResults, minScore):
+  |
+  v
+1. Vector search:
+   - Embed query using same embedding function
+   - Cosine similarity against all indexed documents
+   - Top maxResults*2 results with category filter
+  |
+  v
+2. BM25 search:
+   - Tokenize query
+   - Score documents using TF-IDF (sublinear TF: 1+log(tf))
+   - Cosine similarity on TF-IDF vectors
+   - Top maxResults*2 results with category filter
+  |
+  v
+3. Reciprocal Rank Fusion:
+   - Score = sum(1 / (k + rank)) for each method where result appears
+   - k = 60 (standard RRF constant)
+   - Sort by combined score
+  |
+  v
+4. Topic relevance penalty:
+   - For each result: check keyword overlap with query
+   - Zero overlap → multiply score by 0.5
+  |
+  v
+5. Apply minScore threshold, return top maxResults
+```
+
+### Memory Save Flow
+
+```
+Agent decides to save knowledge (prompted by system instructions or memory reflector):
+  |
+  v
+memory_save tool:
+  - category: "OAuth/Google Calendar"
+  - content: "- Must use offline access_type for refresh tokens\n- ..."
+  - file: "integrations/google-calendar.md" (optional)
+  |
+  v
+1. If file specified: append/write to that path under memory directory
+2. Otherwise: append section to MEMORY.md under "## category" heading
+3. Deduplication: compare new content against existing section
+4. Trigger re-indexing of the modified file
+```
+
+### BM25 Implementation
+
+The BM25 index is a pure Go implementation:
+
+- **Document preprocessing**: Lowercase, split on non-alphanumeric, filter stopwords, collect term frequencies.
+- **IDF**: `log(N / df)` where N is total docs, df is document frequency for the term.
+- **TF**: Sublinear `1 + log(tf)` to dampen high-frequency terms.
+- **Scoring**: TF-IDF vector cosine similarity (not the classic BM25 formula with document length normalization).
+- **Category filtering**: Optional filter restricts search to specific document categories.
+
+## Key Files
+
+| File | Purpose |
+|---|---|
+| `pkg/memory/store.go` | Store: chromem-go wrapper, Search, SearchHybrid, RRF fusion |
+| `pkg/memory/indexer.go` | Indexer: file discovery, incremental sync, SHA-256 hashing, fsnotify watcher |
+| `pkg/memory/chunker.go` | Heading-aware markdown chunking, category assignment |
+| `pkg/memory/bm25.go` | Pure Go BM25 inverted index with TF-IDF cosine scoring |
+| `pkg/memory/memory.go` | Manager: MEMORY.md section CRUD, deduplication |
+| `pkg/memory/embedder.go` | Embedding function resolver (local vs cloud) |
+| `pkg/memory/hugot_embedder.go` | Local in-process embeddings via Hugot + GoMLX |
+| `pkg/memory/instructions.go` | INSTRUCTIONS.md management with defaults |
+| `pkg/memory/self_awareness.go` | SELF.md auto-generation from system configuration |
+
+## Interactions
+
+- **Agent Engine**: Auto-knowledge retrieval queries the store before each LLM turn. Memory reflector saves knowledge after turns. ToolIndex shares the same chromem-go DB for tool discovery.
+- **Skills**: Skill documents are indexed alongside memory documents for retrieval.
+- **Flows**: Flow knowledge documents (generated during distillation) are indexed for discovery.
+- **Tools**: `memory_save`, `memory_get`, `memory_search` tools provide direct agent access to the memory system.
+- **Configuration**: Embedding provider and memory directory are configured in app config.
+- **Daemon**: Memory indexer is initialized during daemon startup with fsnotify watcher for live updates.

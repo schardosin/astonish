@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -466,6 +467,10 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 		return nil
 	}
 
+	// secretInputPattern matches prompts or output_model fields that indicate
+	// the node collects secrets. These nodes must not appear in -p flags.
+	secretInputPattern := regexp.MustCompile(`(?i)(secret|password|token|api[_\s]?key)`)
+
 	type inputNode struct {
 		name        string
 		prompt      string
@@ -473,9 +478,23 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 	}
 	var inputs []inputNode
 	for _, node := range flow.Nodes {
-		if node.Type == "input" {
-			inputs = append(inputs, inputNode{name: node.Name, prompt: node.Prompt, outputModel: node.OutputModel})
+		if node.Type != "input" {
+			continue
 		}
+		// Skip nodes that collect secrets — they should not appear in -p flags
+		isSecret := secretInputPattern.MatchString(node.Prompt)
+		if !isSecret {
+			for field := range node.OutputModel {
+				if secretInputPattern.MatchString(field) {
+					isSecret = true
+					break
+				}
+			}
+		}
+		if isSecret {
+			continue
+		}
+		inputs = append(inputs, inputNode{name: node.Name, prompt: node.Prompt, outputModel: node.OutputModel})
 	}
 	if len(inputs) == 0 {
 		return nil

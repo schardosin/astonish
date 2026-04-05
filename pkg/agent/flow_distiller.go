@@ -221,7 +221,12 @@ func (d *FlowDistiller) buildDistillationPrompt(req DistillRequest, previousYAML
 	sb.WriteString("6. After tool execution, add an LLM processing node that formats the output\n")
 	sb.WriteString("7. Add an output node to display the formatted result\n")
 	sb.WriteString("8. Include proper flow edges connecting START -> nodes -> END\n")
-	sb.WriteString("9. NEVER include memory_save or other internal-only tools in the flow. Memory is a chat-mode concern, not a flow step.\n\n")
+	sb.WriteString("9. NEVER include memory_save or other internal-only tools in the flow. Memory is a chat-mode concern, not a flow step.\n")
+	sb.WriteString("10. CREDENTIAL HANDLING: Flows must NEVER ask for raw secrets (passwords, tokens, API keys, secrets) and must NEVER call save_credential.\n")
+	sb.WriteString("    - Add an input node asking for the CREDENTIAL NAME (a reference to an already-saved credential in the encrypted store)\n")
+	sb.WriteString("    - Use resolve_credential with that credential name to obtain secure placeholders\n")
+	sb.WriteString("    - In shell commands, use the {{CREDENTIAL:{credential_var}:password}} pattern — the inner {credential_var} is resolved from state at prompt time, then the outer {{CREDENTIAL:...}} placeholder is substituted with the real secret at tool execution time\n")
+	sb.WriteString("    - NEVER hardcode credential names in the YAML — always use a {variable} from an input node\n\n")
 
 	// Include actual output if captured, so the distiller can replicate the format
 	if req.Trace.FinalOutput != "" {

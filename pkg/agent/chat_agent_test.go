@@ -314,6 +314,53 @@ nodes:
 	}
 }
 
+func TestExtractInputParams_SkipsSecretNodes(t *testing.T) {
+	// Input nodes that collect secrets (password, token, API key, secret)
+	// must not appear in the suggested -p flags.
+	ca := &ChatAgent{
+		FlowDistiller: &FlowDistiller{
+			LLM: func(ctx context.Context, prompt string) (string, error) {
+				return "get_host=10.0.0.1\n", nil
+			},
+		},
+	}
+	trace := NewExecutionTrace("test")
+	trace.RecordStep("shell_command", map[string]any{"command": "ssh 10.0.0.1"}, nil, nil)
+	trace.Finalize()
+
+	params := ca.extractInputParams(context.Background(), `
+nodes:
+  - name: get_host
+    type: input
+    prompt: "Enter host:"
+    output_model:
+      host: str
+  - name: get_secret
+    type: input
+    prompt: "Enter your password:"
+    output_model:
+      user_password: str
+  - name: get_token
+    type: input
+    prompt: "Enter API token:"
+    output_model:
+      api_token: str
+  - name: get_cred_secret
+    type: input
+    prompt: "Enter the application credential secret:"
+    output_model:
+      app_credential_secret: str
+`, trace)
+
+	// Only get_host should be included — secret nodes are skipped
+	if len(params) != 1 {
+		t.Fatalf("expected 1 param (secrets filtered), got %d: %v", len(params), params)
+	}
+	if params[0] != "get_host=10.0.0.1" {
+		t.Errorf("expected get_host=10.0.0.1, got %s", params[0])
+	}
+}
+
 func TestFlowYAML_ParsesInputNodes(t *testing.T) {
 	// Verify the YAML parsing correctly identifies input nodes
 	yamlStr := `

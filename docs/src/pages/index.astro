@@ -1048,7 +1048,7 @@ import '../styles/custom.css';
       <div class="section-inner" style="max-width: 1100px;">
         <div class="section-header reveal">
           <h2 class="section-title">How Astonish Compares</h2>
-          <p class="section-subtitle">More than a chatbot. More than an automation tool.</p>
+          <p class="section-subtitle">Depth where it matters.</p>
         </div>
 
         <div class="comparison-card reveal-scale" style="overflow-x: auto;">
@@ -1056,47 +1056,40 @@ import '../styles/custom.css';
             <thead>
               <tr>
                 <th>Capability</th>
-                <th>ChatGPT / Claude</th>
-                <th>LangChain / CrewAI</th>
+                <th>OpenClaw</th>
                 <th style="color: var(--purple-600);">Astonish</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td>Real tool execution</td>
-                <td>Sandboxed / limited</td>
-                <td>Code your own integrations</td>
-                <td><strong>74+ built-in tools, runs locally</strong></td>
+                <td>Sandbox isolation</td>
+                <td>Docker; MCP servers run on host</td>
+                <td><strong>LXC/Incus; MCP servers inside container</strong></td>
               </tr>
               <tr>
-                <td>Persistent memory</td>
-                <td>Session-only or limited</td>
-                <td>Build your own RAG</td>
-                <td><strong>Automatic cross-session memory</strong></td>
+                <td>Credential security</td>
+                <td>Env var sanitization + keychain</td>
+                <td><strong>AES-256-GCM + redaction + pre-LLM secret scanner</strong></td>
               </tr>
               <tr>
-                <td>Multi-agent teams</td>
+                <td>Memory system</td>
+                <td>File-based knowledge (Markdown)</td>
+                <td><strong>Hybrid vector + BM25, in-process embeddings</strong></td>
+              </tr>
+              <tr>
+                <td>Browser automation</td>
+                <td>Sidecar container + VNC</td>
+                <td><strong>go-rod anti-fingerprinting + CDP handoff</strong></td>
+              </tr>
+              <tr>
+                <td>Flow automation</td>
                 <td>Not available</td>
-                <td>Code-defined crews</td>
-                <td><strong>Fleet with YAML templates</strong></td>
+                <td><strong>Distill chat to reusable YAML flows</strong></td>
               </tr>
               <tr>
-                <td>Chat channels</td>
-                <td>Web only</td>
-                <td>Not included</td>
-                <td><strong>Telegram, Email, Studio, CLI</strong></td>
-              </tr>
-              <tr>
-                <td>Automation</td>
-                <td>Not available</td>
-                <td>Code pipelines</td>
-                <td><strong>Distill chat to flows, cron schedule</strong></td>
-              </tr>
-              <tr>
-                <td>Runs on</td>
-                <td>Cloud only</td>
-                <td>Python environment + deps</td>
-                <td><strong>Single binary, your machine</strong></td>
+                <td>Deployment</td>
+                <td>Node.js monorepo + Docker</td>
+                <td><strong>Single Go binary, runs locally</strong></td>
               </tr>
             </tbody>
           </table>

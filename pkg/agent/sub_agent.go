@@ -141,7 +141,9 @@ type SubAgentManager struct {
 	SearchToolsTool tool.Tool
 
 	// Internal
-	sem chan struct{} // concurrency semaphore
+	sem          chan struct{}     // concurrency semaphore
+	lastTracesMu sync.Mutex        // protects lastTraces
+	lastTraces   []*ExecutionTrace // child traces from the most recent RunTasks call
 }
 
 // excludedChildTools are tools that sub-agents must NOT have access to.
@@ -177,6 +179,26 @@ func NewSubAgentManager(cfg SubAgentConfig) *SubAgentManager {
 		Config: cfg,
 		sem:    sem,
 	}
+}
+
+// StashLastTraces stores sub-agent traces from the most recent RunTasks call.
+// The afterToolCallback retrieves these via PopLastTraces to attach them to
+// the parent trace's delegate_tasks step. Thread-safe; safe to call from any
+// goroutine, though in practice ADK processes tool calls sequentially.
+func (m *SubAgentManager) StashLastTraces(traces []*ExecutionTrace) {
+	m.lastTracesMu.Lock()
+	m.lastTraces = traces
+	m.lastTracesMu.Unlock()
+}
+
+// PopLastTraces retrieves and clears the stashed sub-agent traces.
+// Returns nil if no traces were stashed.
+func (m *SubAgentManager) PopLastTraces() []*ExecutionTrace {
+	m.lastTracesMu.Lock()
+	traces := m.lastTraces
+	m.lastTraces = nil
+	m.lastTracesMu.Unlock()
+	return traces
 }
 
 // RunTasks executes multiple sub-agent tasks concurrently and returns results.

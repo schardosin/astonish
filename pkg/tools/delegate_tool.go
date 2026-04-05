@@ -100,6 +100,20 @@ func delegateTasks(ctx tool.Context, args DelegateTasksArgs) (DelegateTasksResul
 	// Execute all tasks via the SubAgentManager
 	results := subAgentManagerVar.RunTasks(ctx, tasks)
 
+	// Stash sub-agent execution traces for the parent's afterToolCallback.
+	// The callback retrieves these via PopLastTraces() and attaches them to
+	// the delegate_tasks TraceStep.SubAgentTraces field, giving the memory
+	// reflection system visibility into what sub-agents actually did.
+	var childTraces []*agent.ExecutionTrace
+	for _, r := range results {
+		if r.Trace != nil {
+			childTraces = append(childTraces, r.Trace)
+		}
+	}
+	if len(childTraces) > 0 {
+		subAgentManagerVar.StashLastTraces(childTraces)
+	}
+
 	// Build response
 	resultItems := make([]SubTaskResultItem, len(results))
 	successCount := 0

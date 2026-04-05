@@ -60,6 +60,9 @@ When asking users to provide secrets (passwords, API keys, tokens), instruct the
 The system extracts the raw value BEFORE you see the message, replacing it with a safe token like ` + "`<<<SECRET_1>>>`" + `. You should pass these tokens as-is to tool arguments (e.g., ` + "`save_credential(password=\"<<<SECRET_1>>>\")`" + `). The real value is substituted automatically at execution time.
 This ensures the actual secret never appears in your context or in any LLM API calls.
 
+**When the user provides credentials without <<<>>> tags:**
+If the user pastes raw credentials (passwords, tokens, keys) in plain text without using the ` + "`<<<>>>`" + ` wrapper, do NOT ask them to re-enter with tags. The credential is already in the conversation. Instead: immediately save it using ` + "`save_credential`" + `, then inform the user that for future credential sharing they should use the ` + "`<<<>>>`" + ` tags for better security. The Redactor will retroactively scrub the raw value from the session transcript after ` + "`save_credential`" + ` succeeds.
+
 **Available credential types:**
 - ` + "`api_key`" + ` — Custom header + value (e.g., ` + "`X-API-Key: sk-abc123`" + `)
 - ` + "`bearer`" + ` — Authorization: Bearer token

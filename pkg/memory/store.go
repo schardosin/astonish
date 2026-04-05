@@ -2,9 +2,15 @@ package memory
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/gob"
+	"encoding/hex"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 
 	chromem "github.com/philippgille/chromem-go"
@@ -203,6 +209,63 @@ func (s *Store) DeleteByIDs(ctx context.Context, ids []string) error {
 // Count returns the number of documents in the collection.
 func (s *Store) Count() int {
 	return s.collection.Count()
+}
+
+// StoredPaths returns the set of unique file paths that have vectors in the
+// chromem-go persistence directory. It scans the .gob files directly, decoding
+// only the Metadata field to extract the "path" key. This is used by the
+// indexer to detect orphan vectors that are not tracked by file_index.json
+// (e.g., after the file index is lost or reset).
+func (s *Store) StoredPaths() (map[string]bool, error) {
+	if s.config.VectorDir == "" {
+		return nil, nil
+	}
+
+	// The "memory" collection lives in <VectorDir>/<hash("memory")>/
+	collHash := sha256.Sum256([]byte("memory"))
+	collDir := filepath.Join(s.config.VectorDir, hex.EncodeToString(collHash[:4]))
+
+	entries, err := os.ReadDir(collDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read vector directory: %w", err)
+	}
+
+	// docMeta is a lightweight struct for gob-decoding only the Metadata field.
+	// gob silently ignores fields present in the stream but absent in the target,
+	// so ID/Content/Embedding are skipped during decoding.
+	type docMeta struct {
+		Metadata map[string]string
+	}
+
+	paths := make(map[string]bool)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".gob") {
+			continue
+		}
+		// Skip the collection metadata file.
+		if e.Name() == "00000000.gob" {
+			continue
+		}
+		fpath := filepath.Join(collDir, e.Name())
+		f, err := os.Open(fpath)
+		if err != nil {
+			continue // best-effort
+		}
+		var m docMeta
+		err = gob.NewDecoder(f).Decode(&m)
+		f.Close()
+		if err != nil {
+			continue // corrupt file — skip
+		}
+		if p := m.Metadata["path"]; p != "" {
+			paths[p] = true
+		}
+	}
+
+	return paths, nil
 }
 
 // Config returns the store configuration.

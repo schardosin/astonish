@@ -116,7 +116,7 @@ func (idx *Indexer) IndexAll(ctx context.Context) error {
 		}
 	}
 
-	// Remove chunks for deleted files
+	// Remove chunks for deleted files (tracked by fileIndex).
 	for path := range idx.fileIndex {
 		if !existingPaths[path] {
 			if idx.debugMode {
@@ -128,6 +128,31 @@ func (idx *Indexer) IndexAll(ctx context.Context) error {
 				}
 			}
 			delete(idx.fileIndex, path)
+		}
+	}
+
+	// Orphan cleanup: remove vectors whose source files no longer exist on disk.
+	// The fileIndex-based cleanup above only catches files that fileIndex tracks.
+	// If file_index.json was lost, reset, or version-bumped, fileIndex may be
+	// empty while chromem-go still has persisted .gob vectors from a previous
+	// run. Scanning the persistence directory catches these orphans.
+	storedPaths, err := idx.store.StoredPaths()
+	if err != nil {
+		if idx.debugMode {
+			slog.Warn("orphan scan failed", "component", "memory-indexer", "error", err)
+		}
+	} else {
+		for path := range storedPaths {
+			if !existingPaths[path] {
+				if idx.debugMode {
+					slog.Info("removing orphan vectors", "component", "memory-indexer", "file", path)
+				}
+				if err := idx.store.DeleteByPath(ctx, path); err != nil {
+					if idx.debugMode {
+						slog.Error("error removing orphan", "component", "memory-indexer", "file", path, "error", err)
+					}
+				}
+			}
 		}
 	}
 

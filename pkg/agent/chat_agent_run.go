@@ -253,6 +253,17 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			}
 
 			trace.RecordStep(t.Name(), input, redactedOutput, err)
+
+			// Attach sub-agent execution traces to the delegate_tasks step.
+			// The delegate tool stashes child traces via SubAgentManager after
+			// RunTasks completes; we pop them here and attach them so the memory
+			// reflection system can see what sub-agents actually did.
+			if t.Name() == "delegate_tasks" && c.SubAgentManager != nil {
+				if childTraces := c.SubAgentManager.PopLastTraces(); len(childTraces) > 0 {
+					trace.AttachSubAgentTraces(childTraces)
+				}
+			}
+
 			if c.DebugMode {
 				status := "OK"
 				if err != nil {
@@ -490,9 +501,11 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 		// Post-task memory reflection: give the LLM one last chance to save
 		// durable knowledge discovered during the turn. Runs silently — no
-		// events are yielded to the user.
+		// events are yielded to the user. Session events provide conversation
+		// context so the reflection LLM can see collected information (domains,
+		// project names, auth URLs, etc.) even when few tool calls were made.
 		if c.MemoryReflector != nil {
-			c.MemoryReflector.Reflect(ctx, trace)
+			c.MemoryReflector.Reflect(ctx, trace, ctx.Session().Events())
 		}
 
 		// Store the trace keyed by session ID for on-demand /distill

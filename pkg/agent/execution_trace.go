@@ -60,6 +60,17 @@ func (t *ExecutionTrace) RecordStep(toolName string, args map[string]any, result
 	t.Steps = append(t.Steps, step)
 }
 
+// AttachSubAgentTraces attaches child execution traces to the most recent step.
+// Called after RecordStep("delegate_tasks", ...) to link the sub-agent traces
+// so the memory reflection system can see what sub-agents actually did.
+func (t *ExecutionTrace) AttachSubAgentTraces(traces []*ExecutionTrace) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.Steps) > 0 {
+		t.Steps[len(t.Steps)-1].SubAgentTraces = traces
+	}
+}
+
 // Finalize marks the trace as complete.
 func (t *ExecutionTrace) Finalize() {
 	t.EndedAt = time.Now()

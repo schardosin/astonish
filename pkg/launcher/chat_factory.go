@@ -1334,6 +1334,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			}
 		}
 		tools.SetSubAgentManager(subAgentMgr)
+		chatAgent.SubAgentManager = subAgentMgr
 	}
 
 	// --- 6b. Initialize Flow Registry ---

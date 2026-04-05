@@ -63,6 +63,8 @@ type ChatAgent struct {
 	MemoryReflector           *MemoryReflector              // Post-task memory reflection (nil = disabled)
 	KnowledgeSearch           KnowledgeSearchFunc           // Auto-retrieve relevant knowledge per turn (nil = disabled)
 	KnowledgeSearchByCategory KnowledgeSearchByCategoryFunc // Auto-retrieve guidance docs per turn (nil = disabled)
+	// Task delegation
+	SubAgentManager *SubAgentManager // Sub-agent manager for trace attachment (nil = no delegation)
 	// Tool discovery
 	ToolIndex *ToolIndex // Semantic tool index for auto-discovery (nil = disabled)
 

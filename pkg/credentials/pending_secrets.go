@@ -29,7 +29,8 @@ type PendingVault struct {
 	mu       sync.Mutex
 	secrets  map[string]string // "<<<SECRET_1>>>" → "hunter2"
 	counter  int
-	redactor *Redactor // optional: immediately register raw values as known secrets
+	redactor *Redactor      // optional: immediately register raw values as known secrets
+	Scanner  *SecretScanner // optional: proactive secret detection (entropy + keyword + structural)
 }
 
 // NewPendingVault creates a new per-session secret vault. If a Redactor is
@@ -44,11 +45,26 @@ func NewPendingVault(redactor *Redactor) *PendingVault {
 
 // Extract scans text for <<<value>>> tags, extracts the raw secret values,
 // stores them in the vault, and replaces them with <<<SECRET_N>>> tokens.
-// Returns the sanitized text. If no tags are found, returns text unchanged.
+// If a SecretScanner is attached, a second pass detects untagged secrets
+// using keyword, entropy, and structural analysis.
+// Returns the sanitized text. If no tags or secrets are found, returns text unchanged.
 //
 // The raw values are immediately registered with the Redactor (if present)
 // as a safety net — even if they somehow leak, the redactor will catch them.
 func (v *PendingVault) Extract(text string) string {
+	// Pass 1: Handle explicit <<<secret>>> tags
+	text = v.extractExplicitTags(text)
+
+	// Pass 2: Proactive detection of untagged secrets
+	if v.Scanner != nil && v.Scanner.Enabled {
+		text = v.extractDetectedSecrets(text)
+	}
+
+	return text
+}
+
+// extractExplicitTags handles the existing <<<value>>> tag extraction.
+func (v *PendingVault) extractExplicitTags(text string) string {
 	if !userSecretTagRe.MatchString(text) {
 		return text
 	}
@@ -82,6 +98,49 @@ func (v *PendingVault) Extract(text string) string {
 
 		return token
 	})
+}
+
+// extractDetectedSecrets runs the SecretScanner on text and replaces any
+// detected secrets with <<<SECRET_N>>> tokens. Processes detections in
+// reverse order to preserve byte offsets.
+func (v *PendingVault) extractDetectedSecrets(text string) string {
+	detections := v.Scanner.Scan(text)
+	if len(detections) == 0 {
+		return text
+	}
+
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	// Process in reverse order so byte offsets remain valid
+	for i := len(detections) - 1; i >= 0; i-- {
+		d := detections[i]
+		rawValue := d.Original
+
+		// Check if this exact value was already extracted (dedup)
+		existingToken := ""
+		for token, stored := range v.secrets {
+			if stored == rawValue {
+				existingToken = token
+				break
+			}
+		}
+
+		if existingToken == "" {
+			v.counter++
+			existingToken = fmt.Sprintf("<<<SECRET_%d>>>", v.counter)
+			v.secrets[existingToken] = rawValue
+
+			// Register with redactor immediately
+			if v.redactor != nil {
+				v.redactor.AddTransientSecret(rawValue)
+			}
+		}
+
+		text = text[:d.Start] + existingToken + text[d.End:]
+	}
+
+	return text
 }
 
 // Resolve returns the raw secret value for a <<<SECRET_N>>> token.

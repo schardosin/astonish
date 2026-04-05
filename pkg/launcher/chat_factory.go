@@ -1306,6 +1306,22 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		// The vault extracts raw secrets from user messages before the LLM sees
 		// them, and registers them with the redactor as a safety net.
 		chatAgent.PendingSecrets = credentials.NewPendingVault(redactor)
+		// Attach proactive secret scanner if enabled (default: true).
+		// Scans user messages for untagged secrets using keyword, entropy,
+		// and structural analysis before they reach the LLM provider.
+		if cfg.AppConfig == nil || cfg.AppConfig.Security.IsSecretScannerEnabled() {
+			scanner := credentials.NewSecretScanner()
+			if cfg.AppConfig != nil {
+				sc := cfg.AppConfig.Security.SecretScanner
+				if sc.EntropyThreshold > 0 {
+					scanner.EntropyThreshold = sc.EntropyThreshold
+				}
+				if sc.MinTokenLength > 0 {
+					scanner.MinTokenLength = sc.MinTokenLength
+				}
+			}
+			chatAgent.PendingSecrets.Scanner = scanner
+		}
 		// Also wire to file-based session store for transcript redaction
 		if fs, ok := sessionService.(*persistentsession.FileStore); ok {
 			fs.RedactFunc = redactor.Redact

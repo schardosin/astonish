@@ -222,6 +222,20 @@ func (ifr *InteractiveFlowRunner) startFlow(
 		astonishAgent.Redactor = cs.Redactor()
 		astonishAgent.CredentialStore = cs
 		astonishAgent.PendingSecrets = credentials.NewPendingVault(cs.Redactor())
+		// Attach proactive secret scanner
+		if ifr.AppConfig == nil || ifr.AppConfig.Security.IsSecretScannerEnabled() {
+			scanner := credentials.NewSecretScanner()
+			if ifr.AppConfig != nil {
+				sc := ifr.AppConfig.Security.SecretScanner
+				if sc.EntropyThreshold > 0 {
+					scanner.EntropyThreshold = sc.EntropyThreshold
+				}
+				if sc.MinTokenLength > 0 {
+					scanner.MinTokenLength = sc.MinTokenLength
+				}
+			}
+			astonishAgent.PendingSecrets.Scanner = scanner
+		}
 	}
 
 	// Create ADK agent

@@ -156,6 +156,20 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 		astonishAgent.Redactor = cs.Redactor()
 		astonishAgent.CredentialStore = cs
 		astonishAgent.PendingSecrets = credentials.NewPendingVault(cs.Redactor())
+		// Attach proactive secret scanner
+		if cfg.AppConfig == nil || cfg.AppConfig.Security.IsSecretScannerEnabled() {
+			scanner := credentials.NewSecretScanner()
+			if cfg.AppConfig != nil {
+				sc := cfg.AppConfig.Security.SecretScanner
+				if sc.EntropyThreshold > 0 {
+					scanner.EntropyThreshold = sc.EntropyThreshold
+				}
+				if sc.MinTokenLength > 0 {
+					scanner.MinTokenLength = sc.MinTokenLength
+				}
+			}
+			astonishAgent.PendingSecrets.Scanner = scanner
+		}
 	}
 
 	// Create ADK agent wrapper

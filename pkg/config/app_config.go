@@ -25,6 +25,7 @@ type AppConfig struct {
 	AgentIdentity AgentIdentityConfig        `yaml:"agent_identity,omitempty"`
 	OpenCode      OpenCodeConfig             `yaml:"opencode,omitempty"`
 	Sandbox       SandboxConfig              `yaml:"sandbox,omitempty"`
+	Security      SecurityConfig             `yaml:"security,omitempty"`
 }
 
 // SandboxConfig controls the session container isolation system.
@@ -36,6 +37,28 @@ type SandboxConfig struct {
 	Limits     SandboxLimits      `yaml:"limits,omitempty" json:"limits,omitempty"`
 	Network    string             `yaml:"network,omitempty" json:"network,omitempty"`
 	Prune      SandboxPruneConfig `yaml:"prune,omitempty" json:"prune,omitempty"`
+}
+
+// SecurityConfig controls security features like proactive secret detection.
+type SecurityConfig struct {
+	SecretScanner SecretScannerConfig `yaml:"secret_scanner,omitempty" json:"secret_scanner,omitempty"`
+}
+
+// SecretScannerConfig controls the proactive secret detection engine that
+// scans user messages before sending them to the LLM provider.
+type SecretScannerConfig struct {
+	Enabled          *bool   `yaml:"enabled,omitempty" json:"enabled,omitempty"`                     // Default: true (nil means true)
+	EntropyThreshold float64 `yaml:"entropy_threshold,omitempty" json:"entropy_threshold,omitempty"` // Shannon entropy bits/char. Default: 4.0
+	MinTokenLength   int     `yaml:"min_token_length,omitempty" json:"min_token_length,omitempty"`   // Minimum chars for entropy/structural check. Default: 16
+}
+
+// IsSecretScannerEnabled returns true if the secret scanner should run.
+// Default is true (nil means enabled).
+func (c *SecurityConfig) IsSecretScannerEnabled() bool {
+	if c.SecretScanner.Enabled == nil {
+		return true
+	}
+	return *c.SecretScanner.Enabled
 }
 
 // SandboxLimits defines resource limits for session containers.

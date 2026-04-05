@@ -445,11 +445,13 @@ type flowNode struct {
 	OutputModel map[string]string `yaml:"output_model,omitempty"`
 }
 
-// extractInputParams parses the distilled YAML to find input node parameters,
+// extractInputParams parses the distilled YAML to find input nodes,
 // then asks the LLM to fill in the actual values from the execution trace.
-// When an input node has output_model fields, each field becomes its own -p flag
-// (e.g., -p credential_name=openstack-hcp03 -p auth_url=...).
-// Returns a slice of "key=value" strings suitable for -p flags.
+// Each input node produces one -p flag keyed by the node name (e.g.,
+// -p get_openstack_params=https://identity-3.qa-de-1.cloud.sap/v3).
+// The output_model field names are included in the LLM prompt as context
+// but are not used as -p keys — the flow runner matches by node name.
+// Returns a slice of "nodeName=value" strings suitable for -p flags.
 func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trace *ExecutionTrace) []string {
 	if trace == nil || yamlStr == "" || c.FlowDistiller == nil {
 		return nil
@@ -464,36 +466,18 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 		return nil
 	}
 
-	// Build a flat list of parameters to resolve. When an input node has
-	// output_model, each field is a separate parameter. Otherwise the node
-	// name itself is the parameter.
-	type paramInfo struct {
-		key      string // field name (or node name if no output_model)
-		nodeName string // parent input node name
-		prompt   string // input node prompt (context for the LLM)
+	type inputNode struct {
+		name        string
+		prompt      string
+		outputModel map[string]string
 	}
-	var params []paramInfo
+	var inputs []inputNode
 	for _, node := range flow.Nodes {
-		if node.Type != "input" {
-			continue
-		}
-		if len(node.OutputModel) > 0 {
-			for fieldName := range node.OutputModel {
-				params = append(params, paramInfo{
-					key:      fieldName,
-					nodeName: node.Name,
-					prompt:   node.Prompt,
-				})
-			}
-		} else {
-			params = append(params, paramInfo{
-				key:      node.Name,
-				nodeName: node.Name,
-				prompt:   node.Prompt,
-			})
+		if node.Type == "input" {
+			inputs = append(inputs, inputNode{name: node.Name, prompt: node.Prompt, outputModel: node.OutputModel})
 		}
 	}
-	if len(params) == 0 {
+	if len(inputs) == 0 {
 		return nil
 	}
 
@@ -519,8 +503,16 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 	}
 
 	sb.WriteString("\n# Parameters to Fill\n")
-	for _, p := range params {
-		sb.WriteString(fmt.Sprintf("- %s (from input %q, prompt: %q)\n", p.key, p.nodeName, p.prompt))
+	for _, inp := range inputs {
+		sb.WriteString(fmt.Sprintf("- %s (prompt: %q)", inp.name, inp.prompt))
+		if len(inp.outputModel) > 0 {
+			var fields []string
+			for k := range inp.outputModel {
+				fields = append(fields, k)
+			}
+			sb.WriteString(fmt.Sprintf(" [stores value as: %s]", strings.Join(fields, ", ")))
+		}
+		sb.WriteString("\n")
 	}
 
 	sb.WriteString("\n# Instructions\n")
@@ -549,9 +541,9 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 	}
 
 	// Parse response: expect "name=value" lines
-	validNames := make(map[string]bool, len(params))
-	for _, p := range params {
-		validNames[p.key] = true
+	validNames := make(map[string]bool, len(inputs))
+	for _, inp := range inputs {
+		validNames[inp.name] = true
 	}
 
 	resolved := make(map[string]string)
@@ -571,15 +563,15 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 		}
 	}
 
-	// Build result in parameter order
-	var result []string
-	for _, p := range params {
-		if val, ok := resolved[p.key]; ok {
-			result = append(result, p.key+"="+val)
+	// Build result in input order
+	var params []string
+	for _, inp := range inputs {
+		if val, ok := resolved[inp.name]; ok {
+			params = append(params, inp.name+"="+val)
 		} else {
-			result = append(result, p.key+"=<value>")
+			params = append(params, inp.name+"=<value>")
 		}
 	}
 
-	return result
+	return params
 }

@@ -214,8 +214,8 @@ func (d *FlowDistiller) buildDistillationPrompt(req DistillRequest, previousYAML
 	// Instructions
 	sb.WriteString("# Instructions\n\n")
 	sb.WriteString("1. Create a valid YAML flow with input -> processing -> output nodes\n")
-	sb.WriteString("2. Replace literal values (IPs, paths, specific queries) with {parameter} variables\n")
-	sb.WriteString("3. Add an input node to collect parameters from the user\n")
+	sb.WriteString("2. Replace literal values (IPs, paths, credentials, region names, IDs, URLs) with {parameter} variables\n")
+	sb.WriteString("3. Create ONE input node PER parameter. Each input node collects exactly ONE value and has exactly ONE field in output_model. Do NOT combine multiple parameters into a single input node.\n")
 	sb.WriteString("4. Each tool-calling step should be an LLM node with tools: true\n")
 	sb.WriteString("5. Use tools_selection to restrict to only the tools that were actually used\n")
 	sb.WriteString("6. After tool execution, add an LLM processing node that formats the output\n")

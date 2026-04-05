@@ -289,12 +289,15 @@ func TestIsHighDiversity(t *testing.T) {
 		input string
 		want  bool
 	}{
-		{"abcdefghijklmnopqrst", false}, // only lowercase
-		{"ABCDEFGHIJKLMNOPQRST", false}, // only uppercase
-		{"12345678901234567890", false}, // only digits
-		{"aBcDeFgHiJkLmNoPqRsT", false}, // upper + lower only = 2 classes
-		{"aB1cD2eF3gH4iJ5kL6mN", true},  // upper + lower + digits = 3
-		{"aB1!cD2@eF3#gH4$iJ5%", true},  // all 4 classes
+		{"abcdefghijklmnopqrst", false},      // only lowercase
+		{"ABCDEFGHIJKLMNOPQRST", false},      // only uppercase
+		{"12345678901234567890", false},      // only digits
+		{"aBcDeFgHiJkLmNoPqRsT", false},      // upper + lower only = 2 classes
+		{"aB1cD2eF3gH4iJ5kL6mN", true},       // upper + lower + digits = 3 classes (still diverse)
+		{"aB1!cD2@eF3#gH4$iJ5%", true},       // all 4 classes (! @ # $ % are non-structural specials)
+		{"OS_IDENTITY_API_VERSION=3", false}, // upper + lower + digit + structural (_=) = NOT diverse
+		{"OS_PROJECT_NAME=test", false},      // structural chars don't count as special
+		{"xK9#mP2$vL5nQ8wR", true},           // upper + lower + digit + special (# $) = diverse
 	}
 
 	for _, tt := range tests {
@@ -318,5 +321,172 @@ func TestTokenize(t *testing.T) {
 	}
 	if tokens[2].value != "test" {
 		t.Errorf("expected 'test', got %q", tokens[2].value)
+	}
+}
+
+// --- ENV VAR false positive tests ---
+
+func TestSecretScanner_EnvVarsNotFlagged(t *testing.T) {
+	s := NewSecretScanner()
+
+	// The exact message that caused the false positive: standard OpenStack
+	// environment variables should NOT be detected as secrets.
+	msg := "OS_AUTH_URL=https://identity-3.qa-de-1.cloud.sap/v3\n" +
+		"OS_IDENTITY_API_VERSION=3\n" +
+		"OS_PROJECT_NAME=\"PostfixEmailBackend\"\n" +
+		"OS_PROJECT_DOMAIN_NAME=\"hcp03\"\n" +
+		"OS_USER_DOMAIN_NAME=\"hcp03\"\n" +
+		"OS_REGION_NAME=qa-de-1"
+
+	detections := s.Scan(msg)
+	if len(detections) > 0 {
+		for _, d := range detections {
+			t.Errorf("env var should NOT be flagged: [%s] %q", d.Layer, d.Original)
+		}
+	}
+}
+
+func TestSecretScanner_CommonEnvVarsNotFlagged(t *testing.T) {
+	s := NewSecretScanner()
+
+	safeEnvLines := []string{
+		"KUBECONFIG=/home/user/.kube/config",
+		"GOPATH=/home/user/go",
+		"JAVA_HOME=/usr/lib/jvm/java-17",
+		"NODE_ENV=production",
+		"AWS_DEFAULT_REGION=us-east-1",
+		"DATABASE_URL=redis://localhost:6379",
+		"API_ENDPOINT=https://api.example.com/v2",
+		"SPRING_PROFILES_ACTIVE=production,debug",
+		"LOG_LEVEL=INFO",
+		"SERVER_PORT=8080",
+		"GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json",
+	}
+
+	for _, line := range safeEnvLines {
+		detections := s.Scan(line)
+		for _, d := range detections {
+			t.Errorf("env var %q should NOT be flagged: [%s] %q", line, d.Layer, d.Original)
+		}
+	}
+}
+
+func TestSecretScanner_EnvVarWithSecretValueStillCaught(t *testing.T) {
+	s := NewSecretScanner()
+
+	tests := []struct {
+		input   string
+		wantVal string
+	}{
+		// Non-keyword env var name, but value looks like an API key
+		{"MY_APP_CONFIG=sk-proj-abc123def456ghi789jkl012", "sk-proj-abc123def456ghi789jkl012"},
+		// Non-keyword env var with genuinely random value
+		{"RANDOM_VAR=aB3$dE7fG9!hJ2kL5nQ8w", "aB3$dE7fG9!hJ2kL5nQ8w"},
+	}
+
+	for _, tt := range tests {
+		detections := s.Scan(tt.input)
+		found := false
+		for _, d := range detections {
+			if d.Original == tt.wantVal {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Scan(%q): expected detection of VALUE %q, got %v",
+				tt.input, tt.wantVal, detections)
+		}
+	}
+}
+
+func TestSecretScanner_NonHTTPUrlsSafe(t *testing.T) {
+	s := NewSecretScanner()
+
+	// Non-HTTP URLs without credentials should not be flagged
+	safeURLs := []string{
+		"redis://localhost:6379/0",
+		"mongodb://localhost:27017/mydb",
+		"amqp://localhost:5672",
+		"ftp://files.example.com/pub",
+	}
+
+	for _, u := range safeURLs {
+		detections := s.Scan(u)
+		for _, d := range detections {
+			t.Errorf("URL %q should not be flagged: [%s] %q", u, d.Layer, d.Original)
+		}
+	}
+}
+
+// --- isStructuralChar tests ---
+
+func TestIsStructuralChar(t *testing.T) {
+	structural := []rune{'_', '-', '.', '=', '/', ':', '"', '\''}
+	for _, r := range structural {
+		if !isStructuralChar(r) {
+			t.Errorf("isStructuralChar(%q) = false, want true", r)
+		}
+	}
+	nonStructural := []rune{'!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '+', '~'}
+	for _, r := range nonStructural {
+		if isStructuralChar(r) {
+			t.Errorf("isStructuralChar(%q) = true, want false", r)
+		}
+	}
+}
+
+// --- extractEnvValue tests ---
+
+func TestExtractEnvValue(t *testing.T) {
+	tests := []struct {
+		input   string
+		wantVal string
+		wantOK  bool
+	}{
+		{"OS_AUTH_URL=https://example.com", "https://example.com", true},
+		{`OS_PROJECT_NAME="PostfixEmailBackend"`, "PostfixEmailBackend", true},
+		{"NODE_ENV=production", "production", true},
+		{"_PRIVATE=value", "value", true},
+		{"123INVALID=value", "", false},     // key must start with letter or underscore
+		{"no-dashes=value", "", false},      // dashes not valid in env var names
+		{"EMPTY=", "", false},               // no value after =
+		{"NOEQUALS", "", false},             // no = sign
+		{"password=secret", "secret", true}, // valid env var pattern
+	}
+
+	for _, tt := range tests {
+		val, ok := extractEnvValue(tt.input)
+		if ok != tt.wantOK || val != tt.wantVal {
+			t.Errorf("extractEnvValue(%q) = (%q, %v), want (%q, %v)",
+				tt.input, val, ok, tt.wantVal, tt.wantOK)
+		}
+	}
+}
+
+// --- isPurelyAlphabetic tests ---
+
+func TestIsPurelyAlphabetic(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"PostfixEmailBackend", true},
+		{"HelloWorld", true},
+		{"lowercase", true},
+		{"UPPERCASE", true},
+		{"has123digits", false},
+		{"has-dash", false},
+		{"has_underscore", false},
+		{"has space", false},
+		{"has!special", false},
+		{"", true}, // vacuously true
+	}
+
+	for _, tt := range tests {
+		got := isPurelyAlphabetic(tt.input)
+		if got != tt.want {
+			t.Errorf("isPurelyAlphabetic(%q) = %v, want %v", tt.input, got, tt.want)
+		}
 	}
 }

@@ -79,23 +79,49 @@ func (s *SecretScanner) Scan(text string) []Detection {
 			continue
 		}
 
+		// For KEY=VALUE tokens where KEY is an environment variable name,
+		// evaluate only the VALUE portion. This prevents false positives on
+		// config lines like OS_PROJECT_NAME="PostfixEmailBackend" where
+		// the key inflates entropy and diversity scores.
+		evalTarget := tok.value
+		evalStart := tok.start
+		if value, ok := extractEnvValue(tok.value); ok {
+			if len(value) < s.MinTokenLength {
+				continue
+			}
+			if isSafeValue(value) {
+				continue
+			}
+			if isPurelyAlphabetic(value) {
+				continue
+			}
+			evalTarget = value
+			eqPos := strings.Index(tok.value, "=")
+			afterEq := tok.value[eqPos+1:]
+			quoteStrip := 0
+			if len(afterEq) > 0 && (afterEq[0] == '"' || afterEq[0] == '\'') {
+				quoteStrip = 1
+			}
+			evalStart = tok.start + eqPos + 1 + quoteStrip
+		}
+
 		// Layer 2: Entropy
-		if shannonEntropy(tok.value) >= s.EntropyThreshold {
+		if shannonEntropy(evalTarget) >= s.EntropyThreshold {
 			detections = append(detections, Detection{
-				Original: tok.value,
-				Start:    tok.start,
-				End:      tok.start + len(tok.value),
+				Original: evalTarget,
+				Start:    evalStart,
+				End:      evalStart + len(evalTarget),
 				Layer:    "entropy",
 			})
 			continue
 		}
 
 		// Layer 3: Structural patterns (high char-class diversity)
-		if len(tok.value) >= 20 && isHighDiversity(tok.value) {
+		if len(evalTarget) >= 20 && isHighDiversity(evalTarget) {
 			detections = append(detections, Detection{
-				Original: tok.value,
-				Start:    tok.start,
-				End:      tok.start + len(tok.value),
+				Original: evalTarget,
+				Start:    evalStart,
+				End:      evalStart + len(evalTarget),
 				Layer:    "structural",
 			})
 		}
@@ -201,6 +227,8 @@ func shannonEntropy(s string) float64 {
 // isHighDiversity returns true if the string has high character-class diversity,
 // which is typical of generated secrets (mixing upper, lower, digits, special).
 // Requires at least 3 of 4 character classes present and a significant mix ratio.
+// Common structural characters (_, -, ., =, /, :, quotes) are NOT counted as
+// "special" because they appear naturally in identifiers, paths, and config values.
 func isHighDiversity(s string) bool {
 	var hasUpper, hasLower, hasDigit, hasSpecial bool
 	for _, r := range s {
@@ -211,7 +239,7 @@ func isHighDiversity(s string) bool {
 			hasLower = true
 		case unicode.IsDigit(r):
 			hasDigit = true
-		case !unicode.IsSpace(r):
+		case !unicode.IsSpace(r) && !isStructuralChar(r):
 			hasSpecial = true
 		}
 	}
@@ -233,14 +261,26 @@ func isHighDiversity(s string) bool {
 	return classes >= 3
 }
 
+// isStructuralChar returns true for characters that commonly appear in
+// identifiers, paths, URLs, and config values — they should not count as
+// "special" for the purposes of diversity analysis.
+func isStructuralChar(r rune) bool {
+	switch r {
+	case '_', '-', '.', '=', '/', ':', '"', '\'':
+		return true
+	}
+	return false
+}
+
 // --- Safe pattern exclusions ---
 
 var (
 	// UUIDs: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 	uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-	// URLs without embedded credentials (no @ before the host)
-	urlRe = regexp.MustCompile(`^https?://[^@\s]+$`)
+	// URLs without embedded credentials (no @ before the host).
+	// Covers any scheme (http, https, redis, postgres, mongodb, amqp, etc.).
+	urlRe = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*://[^@\s]+$`)
 
 	// File paths (unix or windows)
 	filePathRe = regexp.MustCompile(`^[/~.]|^[A-Za-z]:\\`)
@@ -310,6 +350,9 @@ func isSafePattern(s string) bool {
 	return false
 }
 
+// envVarRe matches environment variable assignment patterns (KEY=...).
+var envVarRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+
 // isSafeValue checks if a value (the part after = in KEY=VALUE) is safe.
 func isSafeValue(s string) bool {
 	if urlRe.MatchString(s) {
@@ -328,6 +371,37 @@ func isSafeValue(s string) bool {
 		return true
 	}
 	return false
+}
+
+// --- KEY=VALUE helpers ---
+
+// extractEnvValue extracts the value from a KEY=VALUE token where KEY is a
+// valid environment variable name ([A-Za-z_][A-Za-z0-9_]*). Returns the
+// unquoted value and true, or ("", false) if the token is not an env var
+// assignment.
+func extractEnvValue(tok string) (string, bool) {
+	if !envVarRe.MatchString(tok) {
+		return "", false
+	}
+	idx := strings.Index(tok, "=")
+	if idx < 0 || idx >= len(tok)-1 {
+		return "", false
+	}
+	value := tok[idx+1:]
+	value = strings.Trim(value, `"'`)
+	return value, true
+}
+
+// isPurelyAlphabetic returns true if the string contains only Unicode letters.
+// Purely alphabetic strings are never secrets — real secrets always contain
+// digits, symbols, or mixed character classes.
+func isPurelyAlphabetic(s string) bool {
+	for _, r := range s {
+		if !unicode.IsLetter(r) {
+			return false
+		}
+	}
+	return true
 }
 
 // --- Tokenizer ---

@@ -22,6 +22,7 @@ import (
 	emailpkg "github.com/schardosin/astonish/pkg/email"
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/launcher"
+	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/scheduler"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
@@ -181,6 +182,25 @@ func Run(cfg RunConfig) error {
 		logger.Printf("Studio device authorization disabled by config")
 	}
 
+	// --- Start memory indexer (independent of channels/ChatAgent) ---
+	// The vector index must be maintained by the daemon regardless of whether
+	// channels are enabled. Studio's lazy-init skips IndexAll when the daemon
+	// is running, trusting the daemon to keep the index up to date.
+	var daemonIndexer *memory.DaemonIndexerResult
+	{
+		var embGetSecret config.SecretGetter
+		if credStore != nil {
+			embGetSecret = credStore.GetSecret
+		}
+		di, diErr := memory.StartDaemonIndexer(ctx, appCfg, cfg.Debug, embGetSecret)
+		if diErr != nil {
+			logger.Printf("Warning: Memory indexer failed to start: %v", diErr)
+		} else if di != nil {
+			daemonIndexer = di
+			defer di.Cleanup()
+		}
+	}
+
 	// --- Initialize shared ChatAgent if channels need it ---
 	// The scheduler is always-on by default but doesn't require a ChatAgent at startup:
 	// - Routine jobs use the headless runner (creates its own LLM)
@@ -208,13 +228,14 @@ func Run(cfg RunConfig) error {
 
 		// Build a fully-wired ChatAgent for channel/scheduler use
 		fr, factoryErr := launcher.NewWiredChatAgent(ctx, &launcher.ChatFactoryConfig{
-			AppConfig:    appCfg,
-			ProviderName: appCfg.General.DefaultProvider,
-			ModelName:    appCfg.General.DefaultModel,
-			DebugMode:    cfg.Debug,
-			AutoApprove:  true, // Channels/scheduler auto-approve all tools
-			IsDaemon:     true, // We ARE the daemon — always run indexing/watchers.
-			SessionStore: sharedFileStore,
+			AppConfig:     appCfg,
+			ProviderName:  appCfg.General.DefaultProvider,
+			ModelName:     appCfg.General.DefaultModel,
+			DebugMode:     cfg.Debug,
+			AutoApprove:   true, // Channels/scheduler auto-approve all tools
+			IsDaemon:      true, // We ARE the daemon — always run indexing/watchers.
+			SessionStore:  sharedFileStore,
+			DaemonIndexer: daemonIndexer,
 		})
 		if factoryErr != nil {
 			logger.Printf("Warning: Failed to initialize ChatAgent: %v", factoryErr)

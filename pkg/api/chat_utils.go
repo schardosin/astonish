@@ -273,3 +273,42 @@ func persistRunError(ctx context.Context, svc session.Service, sessionID string,
 		slog.Error("failed to append error event to session", "component", "persistRunError", "session_id", sessionID, "error", err)
 	}
 }
+
+// persistSessionMessage appends a user or model text message to the session.
+// This is used for interactions that bypass runner.Run() (like slash commands)
+// so they appear in the persisted session history.
+func persistSessionMessage(ctx context.Context, svc session.Service, sessionID, role, text string) {
+	if svc == nil || sessionID == "" || text == "" {
+		return
+	}
+	resp, err := svc.Get(ctx, &session.GetRequest{
+		AppName:   studioChatAppName,
+		UserID:    studioChatUserID,
+		SessionID: sessionID,
+	})
+	if err != nil {
+		slog.Error("failed to get session for persist", "component", "persistSessionMessage", "session_id", sessionID, "error", err)
+		return
+	}
+
+	author := role
+	if role == "model" {
+		author = "model"
+	}
+
+	event := &session.Event{
+		ID:        fmt.Sprintf("%s-%d", role, time.Now().UnixMilli()),
+		Author:    author,
+		Timestamp: time.Now(),
+		LLMResponse: model.LLMResponse{
+			Content: &genai.Content{
+				Role:  role,
+				Parts: []*genai.Part{{Text: text}},
+			},
+		},
+	}
+
+	if err := svc.AppendEvent(ctx, resp.Session, event); err != nil {
+		slog.Error("failed to append event to session", "component", "persistSessionMessage", "session_id", sessionID, "role", role, "error", err)
+	}
+}

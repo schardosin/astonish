@@ -65,7 +65,7 @@ func (c *ChatAgent) reconstructTraces(ctx context.Context, ds DistillSession) []
 				}
 			}
 			current = &ExecutionTrace{
-				UserRequest: userText,
+				UserRequest: strings.TrimSpace(timestampPattern.ReplaceAllString(userText, "")),
 				StartedAt:   event.Timestamp,
 			}
 			pendingCalls = make(map[string]map[string]any)
@@ -282,6 +282,21 @@ func (c *ChatAgent) PreviewDistill(ctx context.Context, ds DistillSession) (stri
 	return description, nil
 }
 
+// HasPendingDistill returns true if there is a pending distill preview
+// for the given session, waiting for user confirmation.
+func (c *ChatAgent) HasPendingDistill(sessionID string) bool {
+	c.traceMu.Lock()
+	defer c.traceMu.Unlock()
+	return c.pendingDistill[sessionID] != nil
+}
+
+// CancelPendingDistill clears any pending distill preview for the given session.
+func (c *ChatAgent) CancelPendingDistill(sessionID string) {
+	c.traceMu.Lock()
+	delete(c.pendingDistill, sessionID)
+	c.traceMu.Unlock()
+}
+
 // ConfirmAndDistill runs flow distillation using the traces identified by
 // a prior call to PreviewDistill. The print function receives status/result text.
 func (c *ChatAgent) ConfirmAndDistill(ctx context.Context, ds DistillSession, print func(string)) error {
@@ -475,6 +490,14 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 		}
 	}
 
+	// Include the final agent output — it often mentions the concrete values
+	// (hostnames, credentials, node names) that were used during execution.
+	if trace.FinalOutput != "" {
+		sb.WriteString("\n# Agent Output\n")
+		sb.WriteString(trace.FinalOutput)
+		sb.WriteString("\n")
+	}
+
 	sb.WriteString("\n# Input Parameters to Fill\n")
 	for _, inp := range inputs {
 		sb.WriteString(fmt.Sprintf("- %s (prompt: %q)", inp.name, inp.prompt))
@@ -491,9 +514,12 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 	sb.WriteString("\n# Instructions\n")
 	sb.WriteString("Each input node shows a prompt to the user and the user types a SHORT answer.\n")
 	sb.WriteString("From the trace, determine the EXACT LITERAL value that was used.\n")
+	sb.WriteString("Look in the user request, tool arguments, and agent output for concrete values like hostnames, credentials, paths, etc.\n")
 	sb.WriteString("The value must be what a user would type at the prompt - concise and minimal.\n\n")
-	sb.WriteString("Examples of GOOD values: 10.0.0.50, admin, /var/log/syslog, 8080, my-server\n")
+	sb.WriteString("Examples of GOOD values: 10.0.0.50, admin, /var/log/syslog, 8080, my-server, proxmox\n")
 	sb.WriteString("Examples of BAD values: the server IP is 10.0.0.50, ssh admin user at ip 10.0.0.50\n\n")
+	sb.WriteString("IMPORTANT: You MUST provide a value for every parameter. Never leave a parameter without a value.\n")
+	sb.WriteString("If the exact value is not obvious, use the most likely value based on the context.\n\n")
 	sb.WriteString("Respond with ONLY the parameter values, one per line, in this exact format:\n")
 	sb.WriteString("parameter_name=value\n\n")
 	sb.WriteString("Do not add quotes, explanations, descriptions, or extra text. Just the key=value lines.\n")

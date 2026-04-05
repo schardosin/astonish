@@ -323,6 +323,52 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Intercept yes/no for pending distill confirmation.
+	// After /distill shows a preview and prompts "Type yes to confirm",
+	// the next user message of "yes" or "no" is handled here instead of
+	// being sent to the LLM.
+	if req.SessionID != "" && chatAgent.HasPendingDistill(req.SessionID) {
+		lower := strings.ToLower(msg)
+		if lower == "yes" || lower == "y" {
+			// Persist user confirmation
+			persistSessionMessage(ctx, sessionService, req.SessionID, "user", msg)
+
+			ds := agent.DistillSession{
+				SessionID: req.SessionID,
+				AppName:   studioChatAppName,
+				UserID:    studioChatUserID,
+			}
+			// Accumulate all distill output so we can persist it as one message
+			var distillOutput strings.Builder
+			SendSSE(w, flusher, "text", map[string]interface{}{"text": "Distilling flow...\n"})
+			distillOutput.WriteString("Distilling flow...\n")
+			err := chatAgent.ConfirmAndDistill(ctx, ds, func(text string) {
+				SendSSE(w, flusher, "text", map[string]interface{}{"text": text})
+				distillOutput.WriteString(text)
+			})
+			if err != nil {
+				errText := fmt.Sprintf("Distillation failed: %v", err)
+				SendSSE(w, flusher, "text", map[string]interface{}{"text": errText})
+				distillOutput.WriteString(errText)
+			}
+			persistSessionMessage(ctx, sessionService, req.SessionID, "model", distillOutput.String())
+			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+			return
+		} else if lower == "no" || lower == "n" {
+			// Persist user cancellation
+			persistSessionMessage(ctx, sessionService, req.SessionID, "user", msg)
+			chatAgent.CancelPendingDistill(req.SessionID)
+			responseText := "Distillation cancelled."
+			SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})
+			persistSessionMessage(ctx, sessionService, req.SessionID, "model", responseText)
+			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+			return
+		}
+		// If the message is neither yes nor no, clear the pending distill
+		// and fall through to send the message to the LLM as normal.
+		chatAgent.CancelPendingDistill(req.SessionID)
+	}
+
 	// Create or resume session
 	sessionID := req.SessionID
 	isNew := false
@@ -715,10 +761,13 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 		}
 
 	case cmd == "/distill":
+		// Persist the user's /distill command to the session
+		persistSessionMessage(ctx, sessionService, sessionID, "user", "/distill")
+
 		if sessionID == "" {
-			SendSSE(w, flusher, "system", map[string]interface{}{
-				"content": "No active session to distill.",
-			})
+			responseText := "No active session to distill."
+			SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})
+			persistSessionMessage(ctx, sessionService, sessionID, "model", responseText)
 		} else {
 			ds := agent.DistillSession{
 				SessionID: sessionID,
@@ -727,14 +776,13 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 			}
 			description, err := chatAgent.PreviewDistill(ctx, ds)
 			if err != nil {
-				SendSSE(w, flusher, "system", map[string]interface{}{
-					"content": fmt.Sprintf("Cannot distill: %v", err),
-				})
+				responseText := fmt.Sprintf("Cannot distill: %v", err)
+				SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})
+				persistSessionMessage(ctx, sessionService, sessionID, "model", responseText)
 			} else {
-				SendSSE(w, flusher, "distill_preview", map[string]interface{}{
-					"description": description,
-					"sessionId":   sessionID,
-				})
+				responseText := fmt.Sprintf("**Task identified:** %s\n\nType `yes` to distill into a reusable flow, or `no` to cancel.", description)
+				SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})
+				persistSessionMessage(ctx, sessionService, sessionID, "model", responseText)
 			}
 		}
 

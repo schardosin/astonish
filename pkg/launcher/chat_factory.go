@@ -48,6 +48,11 @@ type ChatFactoryConfig struct {
 	// preventing index.json race conditions between fleet sessions and
 	// sub-agent sessions.
 	SessionStore *persistentsession.FileStore
+
+	// DaemonIndexer is an optional pre-created memory indexer from the daemon.
+	// When set, the factory reuses it instead of creating a new store/indexer,
+	// avoiding double-indexing and duplicate file watchers.
+	DaemonIndexer *memory.DaemonIndexerResult
 }
 
 // ChatFactoryResult holds everything produced by the factory.
@@ -198,7 +203,14 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	indexingDone := make(chan struct{})
 	var indexingErr error
 
-	if memMgr != nil && cfg.AppConfig != nil && cfg.AppConfig.Memory.IsMemoryEnabled() {
+	// If the daemon already started the indexer, reuse it.
+	if cfg.DaemonIndexer != nil {
+		memStore = cfg.DaemonIndexer.Store
+		memIndexer = cfg.DaemonIndexer.Indexer
+		memEmbeddingFunc = cfg.DaemonIndexer.EmbeddingFunc
+		memorySearchAvailable = true
+		close(indexingDone) // daemon handles indexing lifecycle
+	} else if memMgr != nil && cfg.AppConfig != nil && cfg.AppConfig.Memory.IsMemoryEnabled() {
 		memCfg := &cfg.AppConfig.Memory
 
 		memDir, mdErr := config.GetMemoryDir(memCfg)
@@ -246,7 +258,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 						}
 					} else {
 						memStore = store
-						memIndexer = memory.NewIndexer(store, storeCfg, false)
+						memIndexer = memory.NewIndexer(store, storeCfg, cfg.DebugMode)
 						store.SetIndexer(memIndexer)
 						memorySearchAvailable = true
 

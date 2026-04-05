@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search, Users } from 'lucide-react'
+import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search, Users, Info } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { fetchSessions, fetchSessionHistory, deleteSession, connectChat, stopChat } from '../api/studioChat'
@@ -523,11 +523,13 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             }
             break
 
-          case 'distill_preview':
-            setMessages((prev: ChatMsg[]) => [...prev, {
-              type: 'system',
-              content: `**Distill Preview**\n\n${data.description}\n\nSession: \`${data.sessionId}\``,
-            }])
+          case 'system':
+            if (data.content) {
+              setMessages((prev: ChatMsg[]) => [...prev, {
+                type: 'system',
+                content: data.content as string,
+              }])
+            }
             break
 
           case 'approval':
@@ -1322,6 +1324,23 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                       <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>{fMsg.text}</ReactMarkdown>
                       </div>
+                    </div>
+                  </div>
+                )
+              }
+
+              if (msg.type === 'system') {
+                return (
+                  <div key={index} className="my-2 p-4 rounded-lg" style={{
+                    background: 'rgba(99, 102, 241, 0.08)',
+                    border: '1px solid rgba(99, 102, 241, 0.2)',
+                  }}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <Info size={14} style={{ color: 'rgba(129, 140, 248, 0.9)' }} />
+                      <span className="text-xs font-medium" style={{ color: 'rgba(129, 140, 248, 0.9)' }}>System</span>
+                    </div>
+                    <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content as string}</ReactMarkdown>
                     </div>
                   </div>
                 )

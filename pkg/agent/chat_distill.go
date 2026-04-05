@@ -445,9 +445,11 @@ type flowNode struct {
 	OutputModel map[string]string `yaml:"output_model,omitempty"`
 }
 
-// extractInputParams parses the distilled YAML to find input node names,
+// extractInputParams parses the distilled YAML to find input node parameters,
 // then asks the LLM to fill in the actual values from the execution trace.
-// Returns a slice of "nodeName=value" strings suitable for -p flags.
+// When an input node has output_model fields, each field becomes its own -p flag
+// (e.g., -p credential_name=openstack-hcp03 -p auth_url=...).
+// Returns a slice of "key=value" strings suitable for -p flags.
 func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trace *ExecutionTrace) []string {
 	if trace == nil || yamlStr == "" || c.FlowDistiller == nil {
 		return nil
@@ -462,24 +464,42 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 		return nil
 	}
 
-	type inputNode struct {
-		name        string
-		prompt      string
-		outputModel map[string]string
+	// Build a flat list of parameters to resolve. When an input node has
+	// output_model, each field is a separate parameter. Otherwise the node
+	// name itself is the parameter.
+	type paramInfo struct {
+		key      string // field name (or node name if no output_model)
+		nodeName string // parent input node name
+		prompt   string // input node prompt (context for the LLM)
 	}
-	var inputs []inputNode
+	var params []paramInfo
 	for _, node := range flow.Nodes {
-		if node.Type == "input" {
-			inputs = append(inputs, inputNode{name: node.Name, prompt: node.Prompt, outputModel: node.OutputModel})
+		if node.Type != "input" {
+			continue
+		}
+		if len(node.OutputModel) > 0 {
+			for fieldName := range node.OutputModel {
+				params = append(params, paramInfo{
+					key:      fieldName,
+					nodeName: node.Name,
+					prompt:   node.Prompt,
+				})
+			}
+		} else {
+			params = append(params, paramInfo{
+				key:      node.Name,
+				nodeName: node.Name,
+				prompt:   node.Prompt,
+			})
 		}
 	}
-	if len(inputs) == 0 {
+	if len(params) == 0 {
 		return nil
 	}
 
 	// Build a prompt for the LLM to fill in the parameter values
 	var sb strings.Builder
-	sb.WriteString("Given this execution trace, determine what SHORT value the user would type for each input node.\n\n")
+	sb.WriteString("Given this execution trace, determine the concrete value for each parameter.\n\n")
 
 	sb.WriteString("# Execution Trace\n")
 	sb.WriteString("User request: " + trace.UserRequest + "\n\n")
@@ -498,28 +518,19 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 		sb.WriteString("\n")
 	}
 
-	sb.WriteString("\n# Input Parameters to Fill\n")
-	for _, inp := range inputs {
-		sb.WriteString(fmt.Sprintf("- %s (prompt: %q)", inp.name, inp.prompt))
-		if len(inp.outputModel) > 0 {
-			var fields []string
-			for k := range inp.outputModel {
-				fields = append(fields, k)
-			}
-			sb.WriteString(fmt.Sprintf(" [extracts fields: %s]", strings.Join(fields, ", ")))
-		}
-		sb.WriteString("\n")
+	sb.WriteString("\n# Parameters to Fill\n")
+	for _, p := range params {
+		sb.WriteString(fmt.Sprintf("- %s (from input %q, prompt: %q)\n", p.key, p.nodeName, p.prompt))
 	}
 
 	sb.WriteString("\n# Instructions\n")
-	sb.WriteString("Each input node shows a prompt to the user and the user types a SHORT answer.\n")
-	sb.WriteString("From the trace, determine the EXACT LITERAL value that was used.\n")
-	sb.WriteString("Look in the user request, tool arguments, and agent output for concrete values like hostnames, credentials, paths, etc.\n")
-	sb.WriteString("The value must be what a user would type at the prompt - concise and minimal.\n\n")
-	sb.WriteString("Examples of GOOD values: 10.0.0.50, admin, /var/log/syslog, 8080, my-server, proxmox\n")
-	sb.WriteString("Examples of BAD values: the server IP is 10.0.0.50, ssh admin user at ip 10.0.0.50\n\n")
-	sb.WriteString("IMPORTANT: You MUST provide a value for every parameter. Never leave a parameter without a value.\n")
-	sb.WriteString("If the exact value is not obvious, use the most likely value based on the context.\n\n")
+	sb.WriteString("For each parameter, find the EXACT LITERAL value that was used during execution.\n")
+	sb.WriteString("Look in the tool arguments (especially shell commands, API calls) and the agent output for concrete values.\n")
+	sb.WriteString("Extract values like URLs, credential names, IDs, region names, hostnames, paths, etc. directly from the trace.\n\n")
+	sb.WriteString("Examples of GOOD values: openstack-hcp03, https://identity-3.qa-de-1.cloud.sap/v3, qa-de-1, ACTIVE, 10.0.0.50, admin\n")
+	sb.WriteString("Examples of BAD values: the auth URL, use the credential, enter the region name\n\n")
+	sb.WriteString("IMPORTANT: You MUST provide a value for every parameter. The values ARE in the trace — look carefully at the tool arguments.\n")
+	sb.WriteString("If a value appears inside a shell command string, extract just the value (e.g., from OS_AUTH_URL=\"https://...\" extract the URL).\n\n")
 	sb.WriteString("Respond with ONLY the parameter values, one per line, in this exact format:\n")
 	sb.WriteString("parameter_name=value\n\n")
 	sb.WriteString("Do not add quotes, explanations, descriptions, or extra text. Just the key=value lines.\n")
@@ -538,9 +549,9 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 	}
 
 	// Parse response: expect "name=value" lines
-	validNames := make(map[string]bool, len(inputs))
-	for _, inp := range inputs {
-		validNames[inp.name] = true
+	validNames := make(map[string]bool, len(params))
+	for _, p := range params {
+		validNames[p.key] = true
 	}
 
 	resolved := make(map[string]string)
@@ -560,15 +571,15 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 		}
 	}
 
-	// Build result in input order
-	var params []string
-	for _, inp := range inputs {
-		if val, ok := resolved[inp.name]; ok {
-			params = append(params, inp.name+"="+val)
+	// Build result in parameter order
+	var result []string
+	for _, p := range params {
+		if val, ok := resolved[p.key]; ok {
+			result = append(result, p.key+"="+val)
 		} else {
-			params = append(params, inp.name+"=<value>")
+			result = append(result, p.key+"=<value>")
 		}
 	}
 
-	return params
+	return result
 }

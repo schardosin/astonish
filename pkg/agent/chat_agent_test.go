@@ -72,11 +72,14 @@ nodes:
 }
 
 func TestExtractInputParams_ParsesLLMResponse(t *testing.T) {
-	// Mock the LLM to return known parameter values
+	// Mock the LLM to return known parameter values.
+	// The new extractInputParams expands output_model fields into individual
+	// parameters, so the LLM is asked for field-level keys (server_ip, ssh_user)
+	// rather than node-level keys (get_connection_info, get_ssh_user).
 	ca := &ChatAgent{
 		FlowDistiller: &FlowDistiller{
 			LLM: func(ctx context.Context, prompt string) (string, error) {
-				return "get_connection_info=192.168.1.200\nget_ssh_user=root\n", nil
+				return "server_ip=192.168.1.200\nssh_user=root\n", nil
 			},
 		},
 	}
@@ -115,11 +118,11 @@ nodes:
 		paramMap[parts[0]] = parts[1]
 	}
 
-	if paramMap["get_connection_info"] != "192.168.1.200" {
-		t.Errorf("expected get_connection_info=192.168.1.200, got %s", paramMap["get_connection_info"])
+	if paramMap["server_ip"] != "192.168.1.200" {
+		t.Errorf("expected server_ip=192.168.1.200, got %s", paramMap["server_ip"])
 	}
-	if paramMap["get_ssh_user"] != "root" {
-		t.Errorf("expected get_ssh_user=root, got %s", paramMap["get_ssh_user"])
+	if paramMap["ssh_user"] != "root" {
+		t.Errorf("expected ssh_user=root, got %s", paramMap["ssh_user"])
 	}
 }
 
@@ -205,19 +208,19 @@ nodes:
 		t.Errorf("LLM prompt should include output_model fields:\n%s", capturedPrompt)
 	}
 	// The prompt should include conciseness guidance
-	if !containsAll(capturedPrompt, "SHORT", "EXACT LITERAL") {
+	if !containsAll(capturedPrompt, "EXACT LITERAL") {
 		t.Errorf("LLM prompt should include conciseness instructions:\n%s", capturedPrompt)
 	}
 }
 
 func TestExtractInputParams_OutputModelMultipleFields(t *testing.T) {
-	// Verify output_model with multiple fields is included in the prompt
+	// Verify output_model with multiple fields produces individual -p flags
 	var capturedPrompt string
 	ca := &ChatAgent{
 		FlowDistiller: &FlowDistiller{
 			LLM: func(ctx context.Context, prompt string) (string, error) {
 				capturedPrompt = prompt
-				return "get_connection_info=root@192.168.1.200\n", nil
+				return "ssh_user=root\nssh_ip=192.168.1.200\n", nil
 			},
 		},
 	}
@@ -242,11 +245,20 @@ nodes:
     tools: true
 `, trace)
 
-	if len(params) != 1 {
-		t.Fatalf("expected 1 param, got %d: %v", len(params), params)
+	if len(params) != 2 {
+		t.Fatalf("expected 2 params, got %d: %v", len(params), params)
 	}
-	if params[0] != "get_connection_info=root@192.168.1.200" {
-		t.Errorf("expected get_connection_info=root@192.168.1.200, got %s", params[0])
+
+	paramMap := make(map[string]string)
+	for _, p := range params {
+		parts := splitFirst(p, "=")
+		paramMap[parts[0]] = parts[1]
+	}
+	if paramMap["ssh_user"] != "root" {
+		t.Errorf("expected ssh_user=root, got %s", paramMap["ssh_user"])
+	}
+	if paramMap["ssh_ip"] != "192.168.1.200" {
+		t.Errorf("expected ssh_ip=192.168.1.200, got %s", paramMap["ssh_ip"])
 	}
 	// Prompt should mention the output_model fields
 	if !containsAll(capturedPrompt, "ssh_user", "ssh_ip") {

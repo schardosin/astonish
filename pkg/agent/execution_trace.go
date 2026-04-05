@@ -35,7 +35,7 @@ type TraceStep struct {
 // NewExecutionTrace creates a new trace for a user request.
 func NewExecutionTrace(userRequest string) *ExecutionTrace {
 	return &ExecutionTrace{
-		UserRequest: userRequest,
+		UserRequest: strings.TrimSpace(timestampPattern.ReplaceAllString(userRequest, "")),
 		StartedAt:   time.Now(),
 	}
 }

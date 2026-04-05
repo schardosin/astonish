@@ -481,9 +481,19 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 		return nil
 	}
 
+	// Build reverse map: output_model field name -> node name.
+	// The LLM may respond with field names instead of node names; this lets
+	// us accept both (e.g., "os_auth_url=..." maps to "get_parameters").
+	fieldToNode := make(map[string]string)
+	for _, inp := range inputs {
+		for field := range inp.outputModel {
+			fieldToNode[field] = inp.name
+		}
+	}
+
 	// Build a prompt for the LLM to fill in the parameter values
 	var sb strings.Builder
-	sb.WriteString("Given this execution trace, determine the concrete value for each parameter.\n\n")
+	sb.WriteString("Given this execution trace, determine the concrete value for each input parameter.\n\n")
 
 	sb.WriteString("# Execution Trace\n")
 	sb.WriteString("User request: " + trace.UserRequest + "\n\n")
@@ -502,7 +512,8 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 		sb.WriteString("\n")
 	}
 
-	sb.WriteString("\n# Parameters to Fill\n")
+	sb.WriteString("\n# Input Parameters to Fill\n")
+	sb.WriteString("Each line below is an input node. Use the NODE NAME as the key in your response.\n\n")
 	for _, inp := range inputs {
 		sb.WriteString(fmt.Sprintf("- %s (prompt: %q)", inp.name, inp.prompt))
 		if len(inp.outputModel) > 0 {
@@ -516,19 +527,28 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 	}
 
 	sb.WriteString("\n# Instructions\n")
-	sb.WriteString("For each parameter, find the EXACT LITERAL value that was used during execution.\n")
+	sb.WriteString("For each input node, find the EXACT LITERAL value that was used during execution.\n")
 	sb.WriteString("Look in the tool arguments (especially shell commands, API calls) and the agent output for concrete values.\n")
 	sb.WriteString("Extract values like URLs, credential names, IDs, region names, hostnames, paths, etc. directly from the trace.\n\n")
-	sb.WriteString("Examples of GOOD values: openstack-hcp03, https://identity-3.qa-de-1.cloud.sap/v3, qa-de-1, ACTIVE, 10.0.0.50, admin\n")
-	sb.WriteString("Examples of BAD values: the auth URL, use the credential, enter the region name\n\n")
-	sb.WriteString("IMPORTANT: You MUST provide a value for every parameter. The values ARE in the trace — look carefully at the tool arguments.\n")
-	sb.WriteString("If a value appears inside a shell command string, extract just the value (e.g., from OS_AUTH_URL=\"https://...\" extract the URL).\n\n")
-	sb.WriteString("Respond with ONLY the parameter values, one per line, in this exact format:\n")
-	sb.WriteString("parameter_name=value\n\n")
+	sb.WriteString("Respond with ONLY the values, one per line, using the NODE NAME as the key:\n")
+	// Provide a concrete example using the actual input names
+	if len(inputs) > 0 {
+		sb.WriteString("Example format:\n")
+		for _, inp := range inputs {
+			sb.WriteString(fmt.Sprintf("  %s=<extracted value>\n", inp.name))
+		}
+		sb.WriteString("\n")
+	}
 	sb.WriteString("Do not add quotes, explanations, descriptions, or extra text. Just the key=value lines.\n")
 
+	prompt := sb.String()
+
+	if c.DebugMode {
+		slog.Debug("llm param extraction prompt", "component", "chat", "prompt", prompt)
+	}
+
 	// Call LLM
-	response, err := c.FlowDistiller.LLM(context.Background(), sb.String())
+	response, err := c.FlowDistiller.LLM(context.Background(), prompt)
 	if err != nil {
 		if c.DebugMode {
 			slog.Debug("llm param extraction failed", "component", "chat", "error", err)
@@ -540,7 +560,9 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 		slog.Debug("llm param extraction response", "component", "chat", "response", response)
 	}
 
-	// Parse response: expect "name=value" lines
+	// Parse response: expect "name=value" lines.
+	// Accept both node names (get_parameters) and output_model field names
+	// (os_auth_url) — map field names back to node names via fieldToNode.
 	validNames := make(map[string]bool, len(inputs))
 	for _, inp := range inputs {
 		validNames[inp.name] = true
@@ -558,8 +580,20 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 		}
 		key := strings.TrimSpace(parts[0])
 		val := strings.TrimSpace(parts[1])
-		if validNames[key] && val != "" {
+		if val == "" || val == "<value>" || val == "<extracted value>" {
+			continue
+		}
+
+		// Direct match: key is a node name
+		if validNames[key] {
 			resolved[key] = val
+			continue
+		}
+		// Indirect match: key is an output_model field name
+		if nodeName, ok := fieldToNode[key]; ok {
+			if _, alreadySet := resolved[nodeName]; !alreadySet {
+				resolved[nodeName] = val
+			}
 		}
 	}
 

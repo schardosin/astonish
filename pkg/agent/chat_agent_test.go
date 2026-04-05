@@ -207,7 +207,7 @@ nodes:
 		t.Errorf("LLM prompt should include output_model fields:\n%s", capturedPrompt)
 	}
 	// The prompt should include conciseness guidance
-	if !containsAll(capturedPrompt, "EXACT LITERAL") {
+	if !containsAll(capturedPrompt, "EXACT LITERAL", "NODE NAME") {
 		t.Errorf("LLM prompt should include conciseness instructions:\n%s", capturedPrompt)
 	}
 }
@@ -255,6 +255,62 @@ nodes:
 	// Prompt should mention the output_model fields as context
 	if !containsAll(capturedPrompt, "ssh_user", "ssh_ip") {
 		t.Errorf("LLM prompt should include output_model field names:\n%s", capturedPrompt)
+	}
+}
+
+func TestExtractInputParams_FieldNameFallback(t *testing.T) {
+	// When the LLM responds with output_model field names instead of node names,
+	// extractInputParams should map them back to the parent node name.
+	ca := &ChatAgent{
+		FlowDistiller: &FlowDistiller{
+			LLM: func(ctx context.Context, prompt string) (string, error) {
+				// LLM responds with field names, not node names
+				return "os_auth_url=https://identity.example.com/v3\nos_region_name=eu-west-1\n", nil
+			},
+		},
+	}
+
+	trace := NewExecutionTrace("list openstack VMs")
+	trace.RecordStep("shell_command", map[string]any{
+		"command": "openstack server list --os-auth-url https://identity.example.com/v3 --os-region-name eu-west-1",
+	}, nil, nil)
+	trace.Finalize()
+
+	params := ca.extractInputParams(context.Background(), `
+nodes:
+  - name: get_auth_url
+    type: input
+    prompt: "Enter OpenStack Auth URL:"
+    output_model:
+      os_auth_url: str
+  - name: get_region
+    type: input
+    prompt: "Enter region:"
+    output_model:
+      os_region_name: str
+  - name: list_vms
+    type: llm
+    prompt: "List VMs at {os_auth_url} in {os_region_name}"
+    tools: true
+`, trace)
+
+	if len(params) != 2 {
+		t.Fatalf("expected 2 params, got %d: %v", len(params), params)
+	}
+
+	paramMap := make(map[string]string)
+	for _, p := range params {
+		parts := splitFirst(p, "=")
+		paramMap[parts[0]] = parts[1]
+	}
+
+	// Field name "os_auth_url" should map back to node name "get_auth_url"
+	if paramMap["get_auth_url"] != "https://identity.example.com/v3" {
+		t.Errorf("expected get_auth_url=https://identity.example.com/v3, got %s", paramMap["get_auth_url"])
+	}
+	// Field name "os_region_name" should map back to node name "get_region"
+	if paramMap["get_region"] != "eu-west-1" {
+		t.Errorf("expected get_region=eu-west-1, got %s", paramMap["get_region"])
 	}
 }
 

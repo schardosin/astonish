@@ -94,6 +94,19 @@ func handleSandboxCommand(args []string) error {
 		return handleSandboxCp(args[1], localPath)
 	case "prune":
 		return handleSandboxPrune()
+	case "reset":
+		return handleSandboxReset()
+	case "save":
+		if len(args) < 3 {
+			return fmt.Errorf("usage: astonish sandbox save <session-id> <template-name> [--description \"...\"]")
+		}
+		description := ""
+		for i, a := range args[3:] {
+			if (a == "--description" || a == "-d") && i+1 < len(args[3:]) {
+				description = args[3:][i+1]
+			}
+		}
+		return handleSandboxSave(args[1], args[2], description)
 	case "template", "tpl":
 		return handleSandboxTemplateCommand(args[1:])
 	default:
@@ -156,7 +169,7 @@ func handleSandboxTemplateCommand(args []string) error {
 }
 
 func printSandboxUsage() {
-	fmt.Println("usage: astonish sandbox {status,init,list,create,shell,expose,unexpose,url,cp,refresh,destroy,prune,template} ...")
+	fmt.Println("usage: astonish sandbox {status,init,list,create,shell,save,reset,expose,unexpose,url,cp,refresh,destroy,prune,template} ...")
 	fmt.Println("")
 	fmt.Println("Manage session container isolation.")
 	fmt.Println("")
@@ -166,6 +179,8 @@ func printSandboxUsage() {
 	fmt.Println("  list (ls)           List active session containers")
 	fmt.Println("  create <template>   Create a sandbox container from a template and open a shell")
 	fmt.Println("  shell <session-id>  Open interactive shell in a session container")
+	fmt.Println("  save <id> <name>    Save a session container as a template (use 'base' to override @base)")
+	fmt.Println("  reset               Destroy and recreate @base template from scratch")
 	fmt.Println("  expose <id> <port>  Expose a container port through the Studio reverse proxy")
 	fmt.Println("  unexpose <id> <port> Remove a port from the reverse proxy")
 	fmt.Println("  url <id> <port>     Print the proxy URL for an exposed port")
@@ -878,6 +893,217 @@ func handleSandboxPrune() error {
 		fmt.Println("No orphaned containers found.")
 	} else {
 		fmt.Printf("Pruned %d orphaned container(s).\n", pruned)
+	}
+
+	return nil
+}
+
+// --- Reset (@base → fresh install) ---
+
+func handleSandboxReset() error {
+	client, err := connectOrFail()
+	if err != nil {
+		return err
+	}
+
+	tplRegistry, err := sandbox.NewTemplateRegistry()
+	if err != nil {
+		return err
+	}
+
+	sessRegistry, err := sandbox.NewSessionRegistry()
+	if err != nil {
+		return err
+	}
+
+	baseName := sandbox.TemplateName(sandbox.BaseTemplate)
+
+	// Check if @base even exists
+	baseExists := client.InstanceExists(baseName) || tplRegistry.Get(sandbox.BaseTemplate) != nil
+
+	// Warn about affected custom templates
+	var affectedTemplates []*sandbox.TemplateMeta
+	for _, t := range tplRegistry.List() {
+		if t.Name != sandbox.BaseTemplate && t.BasedOn == sandbox.BaseTemplate {
+			affectedTemplates = append(affectedTemplates, t)
+		}
+	}
+
+	// Warn about active sessions
+	activeSessions := sessRegistry.List()
+
+	fmt.Println("")
+	fmt.Println("WARNING: This will destroy the current @base template and recreate it")
+	fmt.Println("from a fresh OS image with core tools reinstalled.")
+
+	if len(affectedTemplates) > 0 {
+		fmt.Printf("\nThe following custom templates are based on @base and will need to be recreated:\n")
+		for _, t := range affectedTemplates {
+			desc := t.Description
+			if desc != "" {
+				desc = " (" + desc + ")"
+			}
+			fmt.Printf("  - %s%s\n", t.Name, desc)
+		}
+	}
+
+	if len(activeSessions) > 0 {
+		fmt.Printf("\n%d active session container(s) may lose their overlay base layer.\n", len(activeSessions))
+	}
+
+	// Confirm
+	var proceed bool
+	fmt.Println("")
+	confirmErr := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Proceed with reset?").
+				Affirmative("Yes, reset @base").
+				Negative("Cancel").
+				Value(&proceed),
+		),
+	).Run()
+	if confirmErr != nil || !proceed {
+		fmt.Println("Reset cancelled.")
+		return nil
+	}
+
+	// Tear down existing @base
+	if baseExists {
+		fmt.Println("\nDestroying current @base template...")
+
+		// Resolve pool path for overlay cleanup
+		poolName, poolErr := sandbox.GetPoolForProfile(client)
+		if poolErr == nil {
+			poolPath, pathErr := sandbox.GetPoolSourcePath(client, poolName)
+			if pathErr == nil && sandbox.IsOverlayMounted(poolPath, baseName) {
+				if err := sandbox.UnmountSessionOverlay(poolPath, baseName); err != nil {
+					fmt.Printf("  Warning: failed to unmount overlay: %v\n", err)
+				}
+			}
+		}
+
+		if client.IsRunning(baseName) {
+			if err := client.StopInstance(baseName, false); err != nil {
+				fmt.Printf("  Warning: failed to stop @base: %v\n", err)
+			}
+		}
+
+		if client.HasSnapshot(baseName, sandbox.SnapshotName) {
+			if err := client.DeleteSnapshot(baseName, sandbox.SnapshotName); err != nil {
+				fmt.Printf("  Warning: failed to delete snapshot: %v\n", err)
+			}
+		}
+
+		if client.InstanceExists(baseName) {
+			if err := client.StopAndDeleteInstance(baseName); err != nil {
+				return fmt.Errorf("failed to destroy @base container: %w", err)
+			}
+		}
+
+		// Remove from registry
+		if err := tplRegistry.Remove(sandbox.BaseTemplate); err != nil {
+			fmt.Printf("  Warning: failed to remove registry entry: %v\n", err)
+		}
+
+		fmt.Println("Current @base template destroyed.")
+	}
+
+	// Prompt for optional tools (same as sandbox init)
+	fmt.Println("")
+	opts := promptOptionalTools()
+
+	// Recreate from scratch
+	return sandbox.InitBaseTemplate(client, tplRegistry, opts)
+}
+
+// --- Save (session → template) ---
+
+func handleSandboxSave(identifier, templateName, description string) error {
+	client, err := connectOrFail()
+	if err != nil {
+		return err
+	}
+
+	sessRegistry, err := sandbox.NewSessionRegistry()
+	if err != nil {
+		return err
+	}
+
+	tplRegistry, err := sandbox.NewTemplateRegistry()
+	if err != nil {
+		return err
+	}
+
+	// Resolve the identifier (session ID, container name, or prefix)
+	sessionID, found := sessRegistry.ResolveSessionID(identifier)
+	if !found {
+		return fmt.Errorf("no container found for %q\nUse 'astonish sandbox list' to see active containers", identifier)
+	}
+
+	entry := sessRegistry.Get(sessionID)
+	if entry == nil {
+		return fmt.Errorf("session %q found but has no registry entry", sessionID)
+	}
+
+	containerName := entry.ContainerName
+	sourceTemplate := entry.TemplateName
+	if sourceTemplate == "" {
+		sourceTemplate = sandbox.BaseTemplate
+	}
+
+	// Normalize: accept both "base" and "@base"
+	isPromoteToBase := templateName == "base" || templateName == "@base"
+
+	if isPromoteToBase {
+		// Promote session → @base via a temporary intermediate template.
+		// 1. Save the session as a temp template
+		// 2. Promote the temp template to @base
+		// 3. Clean up the temp template
+		const tmpName = "_promote-from-session"
+
+		fmt.Printf("Saving session %s (%s) as new @base template...\n",
+			sessionID[:min(8, len(sessionID))], containerName)
+
+		// Clean up any leftover temp template from a previous failed run
+		if tplRegistry.Get(tmpName) != nil {
+			_ = sandbox.DeleteTemplate(client, tplRegistry, tmpName)
+		}
+
+		// Step 1: Save session as temp template
+		if err := sandbox.CreateTemplateFromContainer(
+			client, tplRegistry, containerName, tmpName, "temporary promote", sourceTemplate,
+		); err != nil {
+			return fmt.Errorf("failed to save session as template: %w", err)
+		}
+
+		// Step 2: Promote to @base
+		if err := sandbox.PromoteTemplate(client, tplRegistry, tmpName); err != nil {
+			// Clean up temp on failure
+			_ = sandbox.DeleteTemplate(client, tplRegistry, tmpName)
+			return fmt.Errorf("failed to promote to @base: %w", err)
+		}
+
+		// Step 3: Clean up temp template (promote already took its contents)
+		if tplRegistry.Get(tmpName) != nil {
+			_ = sandbox.DeleteTemplate(client, tplRegistry, tmpName)
+		}
+
+		fmt.Println("Done. The @base template now contains the session's state.")
+		fmt.Println("All new sessions will use this as their starting point.")
+	} else {
+		// Save session as a named custom template
+		fmt.Printf("Saving session %s (%s) as template %q...\n",
+			sessionID[:min(8, len(sessionID))], containerName, templateName)
+
+		if err := sandbox.CreateTemplateFromContainer(
+			client, tplRegistry, containerName, templateName, description, sourceTemplate,
+		); err != nil {
+			return fmt.Errorf("failed to save session as template: %w", err)
+		}
+
+		fmt.Printf("Template %q created from session %s.\n", templateName, sessionID[:min(8, len(sessionID))])
+		fmt.Printf("Use 'astonish sandbox template shell %s' to inspect it.\n", templateName)
 	}
 
 	return nil

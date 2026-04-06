@@ -1,9 +1,11 @@
 package email
 
 import (
+	"bytes"
 	"crypto/tls"
 	"fmt"
 	"mime"
+	"mime/quotedprintable"
 	"net"
 	"net/smtp"
 	"strings"
@@ -51,7 +53,7 @@ func SendSMTP(cfg *Config, msg OutgoingMessage, extraHeaders map[string]string) 
 		buf.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
 		buf.WriteString("Content-Transfer-Encoding: quoted-printable\r\n")
 		buf.WriteString("\r\n")
-		buf.WriteString(msg.Body)
+		buf.WriteString(encodeQuotedPrintable(msg.Body))
 		buf.WriteString("\r\n")
 
 		// HTML part
@@ -59,7 +61,7 @@ func SendSMTP(cfg *Config, msg OutgoingMessage, extraHeaders map[string]string) 
 		buf.WriteString("Content-Type: text/html; charset=utf-8\r\n")
 		buf.WriteString("Content-Transfer-Encoding: quoted-printable\r\n")
 		buf.WriteString("\r\n")
-		buf.WriteString(msg.HTML)
+		buf.WriteString(encodeQuotedPrintable(msg.HTML))
 		buf.WriteString("\r\n")
 
 		buf.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
@@ -68,7 +70,7 @@ func SendSMTP(cfg *Config, msg OutgoingMessage, extraHeaders map[string]string) 
 		buf.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
 		buf.WriteString("Content-Transfer-Encoding: quoted-printable\r\n")
 		buf.WriteString("\r\n")
-		buf.WriteString(msg.Body)
+		buf.WriteString(encodeQuotedPrintable(msg.Body))
 	}
 
 	// Collect all recipients
@@ -210,4 +212,16 @@ func encodeSubject(subject string) string {
 		}
 	}
 	return subject
+}
+
+// encodeQuotedPrintable encodes text using quoted-printable encoding (RFC 2045).
+// This ensures long lines are wrapped at 76 characters and non-ASCII bytes are
+// properly encoded, which is required when Content-Transfer-Encoding is set to
+// quoted-printable in the MIME headers.
+func encodeQuotedPrintable(text string) string {
+	var buf bytes.Buffer
+	w := quotedprintable.NewWriter(&buf)
+	_, _ = w.Write([]byte(text))
+	_ = w.Close()
+	return buf.String()
 }

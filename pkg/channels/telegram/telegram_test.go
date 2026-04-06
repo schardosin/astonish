@@ -134,7 +134,7 @@ func TestSplitMessage(t *testing.T) {
 	}
 }
 
-func TestMarkdownToTelegramHTML(t *testing.T) {
+func TestMarkdownToHTML(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
@@ -261,7 +261,7 @@ func TestMarkdownToTelegramHTML(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			output := markdownToTelegramHTML(tt.input)
+			output := MarkdownToHTML(tt.input)
 			tt.check(t, output)
 		})
 	}
@@ -283,7 +283,7 @@ func TestStripHTMLTags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := stripHTMLTags(tt.input)
+			got := StripHTMLTags(tt.input)
 			if got != tt.want {
 				t.Errorf("stripHTMLTags(%q) = %q, want %q", tt.input, got, tt.want)
 			}

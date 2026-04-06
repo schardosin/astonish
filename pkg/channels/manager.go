@@ -394,18 +394,25 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	typingCtx, typingCancel := context.WithCancel(ctx)
 	go m.sendTypingLoop(typingCtx, ch, target)
 
-	// Process events as they arrive. Each complete LLM text turn is sent
-	// as a separate message immediately, giving the user real-time updates
-	// during multi-tool operations instead of one giant message at the end.
+	// Process events as they arrive. For real-time channels (Telegram, etc.),
+	// each complete LLM text turn is sent as a separate message immediately,
+	// giving the user real-time updates during multi-tool operations.
+	// For batch channels (email), only the final text turn is sent — earlier
+	// turns (like "Let me look into that...") are dropped because email
+	// recipients should get one concise reply, not a stream of intermediate steps.
 	// Images from tool results (e.g., browser_take_screenshot) are collected
 	// and attached to the next outbound text message.
 	var messagesSent int
 	var pendingImages []ImageAttachment
 
+	// Email is a batch channel: keep only the last text turn, send once at the end.
+	isBatchChannel := msg.ChannelID == "email"
+	var batchText string
+
 	for event, err := range r.Run(ctx, userID, sess.ID(), userContent, adkagent.RunConfig{}) {
 		if err != nil {
 			m.logger.Printf("[channels] Agent error for %s: %v", route.SessionKey, err)
-			if messagesSent == 0 {
+			if messagesSent == 0 && batchText == "" {
 				if err := ch.Send(ctx, target, OutboundMessage{
 					Text:    friendlyErrorMessage(err),
 					ReplyTo: msg.ID,
@@ -458,7 +465,14 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 			continue
 		}
 
-		// Send this turn's text as a message immediately.
+		if isBatchChannel {
+			// Last-wins: only the final text turn matters for email.
+			// Intermediate narration ("Let me look into that...") is dropped.
+			batchText = displayText
+			continue
+		}
+
+		// Streaming mode: send this turn's text as a message immediately.
 		// Attach any pending images from preceding tool calls.
 		outMsg := OutboundMessage{
 			Text:   displayText,
@@ -472,6 +486,22 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 			outMsg.ReplyTo = msg.ID
 		}
 
+		if err := ch.Send(ctx, target, outMsg); err != nil {
+			m.logger.Printf("[channels] Failed to send message to %s: %v", msg.ChannelID, err)
+		} else {
+			messagesSent++
+		}
+	}
+
+	// Batch channel: send the final text turn as a single message.
+	if isBatchChannel && batchText != "" {
+		outMsg := OutboundMessage{
+			Text:    batchText,
+			Format:  FormatHTML,
+			ReplyTo: msg.ID,
+			Images:  pendingImages,
+		}
+		pendingImages = nil
 		if err := ch.Send(ctx, target, outMsg); err != nil {
 			m.logger.Printf("[channels] Failed to send message to %s: %v", msg.ChannelID, err)
 		} else {
@@ -713,10 +743,11 @@ func channelHints(channelID string) string {
 - Be conversational — this is a chat, not a terminal`
 	case "email":
 		return `You are responding via email.
+- Produce ONE comprehensive reply — do not narrate intermediate steps
 - Use proper email formatting with a greeting and sign-off
 - Keep responses clear and well-structured
 - You can use longer, more detailed responses than chat (email is async)
-- Use markdown for formatting (it will be rendered as rich text)
+- Use markdown for formatting (it will be rendered as HTML)
 - Do not include unnecessary pleasantries in every message if the conversation is ongoing
 - Thread context: you are replying to an email conversation`
 	default:

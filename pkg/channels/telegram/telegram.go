@@ -190,7 +190,7 @@ func (t *TelegramChannel) Send(ctx context.Context, target channels.Target, msg 
 		// Convert markdown for caption if needed
 		caption := remainingText
 		if msg.Format == channels.FormatHTML {
-			caption = markdownToTelegramHTML(remainingText)
+			caption = MarkdownToHTML(remainingText)
 		}
 		if len(caption) <= maxCaptionLength {
 			textForCaption = caption
@@ -243,7 +243,7 @@ func (t *TelegramChannel) Send(ctx context.Context, target channels.Target, msg 
 	text := remainingText
 	parseMode := ""
 	if msg.Format == channels.FormatHTML {
-		text = markdownToTelegramHTML(remainingText)
+		text = MarkdownToHTML(remainingText)
 		parseMode = "HTML"
 	}
 
@@ -265,7 +265,7 @@ func (t *TelegramChannel) Send(ctx context.Context, target channels.Target, msg 
 			// If HTML parsing fails, strip tags and retry as plain text
 			if parseMode == "HTML" && strings.Contains(sendErr.Error(), "can't parse") {
 				t.logger.Printf("[telegram] HTML parse failed, retrying as plain text: %v", sendErr)
-				teleMsg.Text = stripHTMLTags(chunk)
+				teleMsg.Text = StripHTMLTags(chunk)
 				teleMsg.ParseMode = ""
 				_, retryErr := bot.Send(teleMsg)
 				if retryErr != nil {
@@ -527,10 +527,11 @@ var (
 	tableSepRe = regexp.MustCompile(`(?m)^\|[\s\-:|]+\|$`)
 )
 
-// markdownToTelegramHTML converts standard markdown to Telegram-supported HTML.
+// MarkdownToHTML converts standard markdown to Telegram-supported HTML.
 // Telegram supports: <b>, <i>, <code>, <pre>, <a href="...">.
 // Unsupported constructs (tables, images) are converted to plain text.
-func markdownToTelegramHTML(text string) string {
+// This function is also reused by the email channel for HTML rendering.
+func MarkdownToHTML(text string) string {
 	// Step 1: Extract fenced code blocks and replace with placeholders.
 	// This prevents HTML-escaping and formatting inside code.
 	var codeBlocks []string
@@ -642,9 +643,9 @@ func markdownToTelegramHTML(text string) string {
 	return strings.TrimSpace(text)
 }
 
-// stripHTMLTags removes all HTML tags from text, used as a fallback when
+// StripHTMLTags removes all HTML tags from text, used as a fallback when
 // Telegram rejects the HTML.
-func stripHTMLTags(text string) string {
+func StripHTMLTags(text string) string {
 	text = htmlTagRe.ReplaceAllString(text, "")
 	return html.UnescapeString(text)
 }

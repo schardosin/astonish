@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/schardosin/astonish/pkg/channels"
+	"github.com/schardosin/astonish/pkg/channels/telegram"
 	emailpkg "github.com/schardosin/astonish/pkg/email"
 )
 
@@ -208,6 +209,14 @@ func (e *EmailChannel) Send(ctx context.Context, target channels.Target, msg cha
 		Body:    msg.Text,
 	}
 
+	// Convert markdown to HTML for rich email rendering.
+	// The SMTP layer sends multipart/alternative (text + HTML) when HTML is set,
+	// so email clients that support HTML see the formatted version while
+	// plain-text clients fall back to the raw markdown.
+	if msg.Format == channels.FormatHTML {
+		outgoing.HTML = markdownToEmailHTML(msg.Text)
+	}
+
 	// If this is a reply to an inbound message, use Reply for proper threading
 	if msg.ReplyTo != "" {
 		_, err := client.Reply(ctx, msg.ReplyTo, false, outgoing)
@@ -376,4 +385,45 @@ func extractName(from string) string {
 		return strings.TrimSpace(from[:idx])
 	}
 	return from
+}
+
+// markdownToEmailHTML converts markdown text to HTML suitable for email clients.
+// It uses the shared MarkdownToHTML converter for the core transformation, then
+// post-processes the result for email: converting \n to <br> outside <pre> blocks
+// and wrapping in a minimal HTML document structure.
+func markdownToEmailHTML(text string) string {
+	html := telegram.MarkdownToHTML(text)
+
+	// Convert newlines to <br> outside of <pre>...</pre> blocks.
+	// Inside <pre>, browsers/email clients already preserve whitespace.
+	var result strings.Builder
+	for {
+		preStart := strings.Index(html, "<pre")
+		if preStart == -1 {
+			// No more <pre> blocks — convert remaining text.
+			result.WriteString(strings.ReplaceAll(html, "\n", "<br>\n"))
+			break
+		}
+		// Convert newlines before the <pre> block.
+		result.WriteString(strings.ReplaceAll(html[:preStart], "\n", "<br>\n"))
+
+		// Find the closing </pre> tag.
+		preEnd := strings.Index(html[preStart:], "</pre>")
+		if preEnd == -1 {
+			// Unclosed <pre> — write the rest as-is.
+			result.WriteString(html[preStart:])
+			break
+		}
+		preEnd += preStart + len("</pre>")
+		// Write the <pre>...</pre> block unchanged (newlines preserved by <pre>).
+		result.WriteString(html[preStart:preEnd])
+		html = html[preEnd:]
+	}
+
+	return `<!DOCTYPE html>
+<html>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px; line-height: 1.6; color: #333;">
+` + result.String() + `
+</body>
+</html>`
 }

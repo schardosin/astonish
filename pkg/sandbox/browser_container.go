@@ -203,10 +203,18 @@ func BrowserContainerInstallCommands(engine, arch string) [][]string {
 	// KasmVNC has several interactive prompts that hang ExecSimple (which has
 	// no stdin): (1) user creation prompt, (2) desktop environment selection.
 	// We pre-create all required files to skip these prompts entirely.
+	//
+	// All config file operations run as root (not via su/runuser) because in
+	// unprivileged LXC containers on Docker+Incus, the UID shift applied by
+	// ShiftTemplateRootfs makes /home/browser owned by nobody:nogroup from
+	// the perspective of non-mapped users. We create files as root and set
+	// ownership explicitly with chown.
 	cmds = append(cmds,
-		// Create the .vnc directory
-		[]string{"su", "-", "browser", "-c", "mkdir -p ~/.vnc"},
+		// Create the .vnc directory as root with correct ownership
+		[]string{"install", "-d", "-o", "browser", "-g", "browser", "-m", "755", "/home/browser/.vnc"},
 		// Write kasmvnc.yaml: disable SSL (internal proxy handles TLS),
+		// disable IPv6 (KasmVNC can't bind the same port on both IPv4 and
+		// IPv6 simultaneously — upstream bug kasmtech/KasmVNC#183),
 		// disable the interactive prompt, and bind to all interfaces.
 		[]string{"sh", "-c", `cat > /home/browser/.vnc/kasmvnc.yaml << 'KASMCFG'
 network:
@@ -239,15 +247,16 @@ XSTARTUP
 chmod +x /home/browser/.vnc/xstartup
 chown browser:browser /home/browser/.vnc/xstartup`},
 		// Mark desktop environment as already selected (skips select-de.sh prompt)
-		[]string{"su", "-", "browser", "-c", "touch ~/.vnc/.de-was-selected"},
+		[]string{"sh", "-c", "touch /home/browser/.vnc/.de-was-selected && chown browser:browser /home/browser/.vnc/.de-was-selected"},
 		// Create a default KasmVNC user "user" with write permission.
 		// The actual password is set at handoff time; this just ensures the
 		// user entry exists so vncserver doesn't prompt for user creation.
-		// Use full path /usr/bin/kasmvncpasswd because su - resets PATH and
-		// on some platforms (Docker+Incus on macOS) the login shell PATH for
-		// the freshly-created browser user may not include /usr/bin.
+		// Use runuser instead of su — in unprivileged LXC containers on
+		// Docker+Incus, su fails with "Authentication failure" because PAM
+		// can't read /etc/shadow (UID namespace mapping breaks pam_unix).
+		// runuser (part of util-linux, always present) bypasses PAM.
 		[]string{"sh", "-c",
-			`printf "kasmvnc\nkasmvnc\n" | su - browser -c "/usr/bin/kasmvncpasswd -u user -w"`,
+			`printf "kasmvnc\nkasmvnc\n" | runuser -u browser -- /usr/bin/kasmvncpasswd -u user -w`,
 		},
 	)
 
@@ -257,11 +266,22 @@ chown browser:browser /home/browser/.vnc/xstartup`},
 			[]string{"pip3", "install", "--break-system-packages", "cloakbrowser"},
 			// Download the CloakBrowser Chromium binary into ~browser/.cloakbrowser/
 			// Run as the browser user so the binary lands in the right home directory.
-			[]string{"su", "-", "browser", "-c",
-				"python3 -c \"import cloakbrowser; print(cloakbrowser.ensure_binary())\"",
+			// Use runuser (not su) to avoid PAM authentication failures in
+			// unprivileged LXC containers on Docker+Incus.
+			[]string{"runuser", "-u", "browser", "--",
+				"python3", "-c", "import cloakbrowser; print(cloakbrowser.ensure_binary())",
 			},
 		)
 	}
+
+	// Common: fix ownership of browser home directory.
+	// In unprivileged LXC containers on Docker+Incus, the UID shift
+	// (ShiftTemplateRootfs) makes files owned by nobody:nogroup after
+	// the template is snapshotted. Ensure the browser user owns its
+	// home directory and all files within it.
+	cmds = append(cmds,
+		[]string{"chown", "-R", "browser:browser", "/home/browser"},
+	)
 
 	// Common: clean up apt cache to reduce image size
 	cmds = append(cmds,
@@ -298,8 +318,22 @@ func StartKasmVNC(client *IncusClient, containerName string, cfg BrowserContaine
 		height = 720
 	}
 
+	// Fix ownership of the browser home directory. In unprivileged LXC
+	// containers (especially Docker+Incus on macOS), the UID shift applied
+	// by ShiftTemplateRootfs during template creation can leave /home/browser
+	// owned by nobody:nogroup. The browser user needs write access to
+	// ~/.vnc for vncserver to create pidfiles and logs.
+	chownCmd := []string{"chown", "-R", "browser:browser", "/home/browser"}
+	if _, err := client.ExecSimple(containerName, chownCmd); err != nil {
+		return fmt.Errorf("failed to fix browser home ownership: %w", err)
+	}
+
 	geometry := fmt.Sprintf("%dx%d", width, height)
-	startCmd := []string{"su", "-", "browser", "-c",
+	// Use runuser instead of su — in unprivileged LXC containers on
+	// Docker+Incus, su fails with "Authentication failure" because PAM
+	// can't read /etc/shadow through the UID namespace mapping.
+	// runuser (part of util-linux) bypasses PAM authentication.
+	startCmd := []string{"runuser", "-l", "browser", "-c",
 		fmt.Sprintf("vncserver :%s -geometry %s -depth 24 -websocketPort %d -DisableBasicAuth",
 			kasmVNCDisplay,
 			geometry,
@@ -360,7 +394,7 @@ func StartChromiumInContainer(client *IncusClient, containerName string, cfg Bro
 	time.Sleep(1 * time.Second)
 
 	// Allow any local user (root, browser) to connect to the Xvnc display.
-	xhostCmd := []string{"su", "-", "browser", "-c",
+	xhostCmd := []string{"runuser", "-l", "browser", "-c",
 		fmt.Sprintf("DISPLAY=:%s xhost +local:", kasmVNCDisplay),
 	}
 	_, _ = client.ExecSimple(containerName, xhostCmd)
@@ -393,14 +427,14 @@ func StartChromiumInContainer(client *IncusClient, containerName string, cfg Bro
 		}
 
 		launchScript = fmt.Sprintf(`
-BROWSER_BIN=$(su - browser -c 'python3 -c "from cloakbrowser.config import get_binary_path; print(get_binary_path())"')
+BROWSER_BIN=$(runuser -u browser -- python3 -c "from cloakbrowser.config import get_binary_path; print(get_binary_path())")
 if [ -z "$BROWSER_BIN" ] || [ ! -f "$BROWSER_BIN" ]; then
   echo "CloakBrowser binary not found" >&2
   exit 1
 fi
 export DISPLAY=%s
 # Launch CloakBrowser as the browser user on the Xvnc display
-su - browser -c "DISPLAY=%s $BROWSER_BIN \
+runuser -l browser -c "DISPLAY=%s $BROWSER_BIN \
   --no-sandbox \
   --disable-gpu \
   --disable-dev-shm-usage \
@@ -424,7 +458,7 @@ sleep 1
 
 		launchScript = fmt.Sprintf(
 			"export DISPLAY=%s\n"+
-				"chromium "+
+				"runuser -l browser -c \"DISPLAY=%s chromium "+
 				"--no-sandbox "+
 				"--disable-gpu "+
 				"--disable-dev-shm-usage "+
@@ -435,9 +469,9 @@ sleep 1
 				"--disable-backgrounding-occluded-windows "+
 				"--disable-renderer-backgrounding "+
 				"--disable-blink-features=AutomationControlled%s "+
-				"about:blank &\nsleep 1\n"+
+				"about:blank &\"\nsleep 1\n"+
 				"# Bridge CDP port to all interfaces so the host can connect\n%s",
-			display, internalCDPPort, width, height, BrowserProfileMountPath, proxyFlag, socatBridge,
+			display, display, internalCDPPort, width, height, BrowserProfileMountPath, proxyFlag, socatBridge,
 		)
 	}
 

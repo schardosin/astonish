@@ -1395,8 +1395,10 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		// share the same container instead of each creating a new one.
 		if sandboxNodePool != nil {
 			pool := sandboxNodePool
+			bmgr := browserMgr // capture for closure
 			subAgentMgr.OnChildSession = func(parentSessionID, childSessionID string) {
 				pool.Alias(childSessionID, parentSessionID)
+				bmgr.AliasSession(childSessionID, parentSessionID)
 			}
 		}
 		tools.SetSubAgentManager(subAgentMgr)

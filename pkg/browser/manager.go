@@ -213,6 +213,9 @@ type Manager struct {
 	containerIP string
 	// sessionID is the agent session this Manager is bound to.
 	sessionID string
+	// sessionAliases maps delegate sub-agent session IDs to their parent
+	// session ID, so EnsureSessionID resolves them to the same container.
+	sessionAliases map[string]string
 
 	// ContainerResolveFunc resolves the session container for browser execution.
 	// Called lazily by launchInContainer() to get the container name and IP.
@@ -269,16 +272,46 @@ func (m *Manager) SetSessionID(id string) {
 	m.sessionID = id
 }
 
-// EnsureSessionID sets the session ID if it hasn't been set yet. This is
-// called from browser tools on every invocation — the first call stamps the
-// real ADK session ID so the container name includes it. Subsequent calls
-// are no-ops.
+// EnsureSessionID sets the session ID, resolving delegate sub-agent aliases
+// to the parent session. Called from browser tools on every invocation.
+// When the session changes (e.g. new chat session), the browser connection
+// is reset so GetOrLaunch re-resolves the container for the new session.
 func (m *Manager) EnsureSessionID(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.sessionID == "" && id != "" {
-		m.sessionID = id
+	if id == "" {
+		return
 	}
+	// Resolve alias: delegate sub-agents map to their parent session.
+	if alias, ok := m.sessionAliases[id]; ok {
+		id = alias
+	}
+	if m.sessionID == id {
+		return // no change
+	}
+	// Session changed — reset browser connection so GetOrLaunch
+	// re-resolves the container for the new session.
+	if m.browser != nil {
+		_ = m.browser.Close()
+		m.browser = nil
+	}
+	m.sessionID = id
+	m.containerName = ""
+	m.containerIP = ""
+	m.config.RemoteCDPURL = ""
+}
+
+// AliasSession maps a delegate sub-agent's session ID to its parent session ID.
+// This ensures that when a sub-agent calls browser tools, EnsureSessionID
+// resolves to the parent's container instead of trying to find a non-existent
+// container for the child session.
+func (m *Manager) AliasSession(childID, parentID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sessionAliases == nil {
+		m.sessionAliases = make(map[string]string)
+	}
+	m.sessionAliases[childID] = parentID
 }
 
 // ContainerName returns the LXC container name, if the browser is running in

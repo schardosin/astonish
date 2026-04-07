@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -658,6 +659,14 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				}
 				browserMgr.ContainerStartBrowserFunc = func(containerName string) error {
 					return sandbox.StartChromiumInContainer(client, containerName, bCfg)
+				}
+
+				// ContainerDialFunc: tunnel TCP connections through the Incus exec API.
+				// This makes CDP (and /json/version HTTP) work even when container
+				// bridge IPs are not routable from the host (Docker+Incus on macOS).
+				browserMgr.ContainerDialFunc = func(containerName string, port int) (net.Conn, error) {
+					dialer := &sandbox.ContainerDialer{Client: client}
+					return dialer.Dial(containerName, port)
 				}
 			}
 		}

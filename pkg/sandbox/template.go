@@ -245,7 +245,16 @@ func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry, opts Base
 			engineLabel = "CloakBrowser"
 		}
 		progress("Installing %s and KasmVNC...\n", engineLabel)
-		for _, cmd := range BrowserContainerInstallCommands(opts.BrowserEngine) {
+
+		// Get the server architecture so browser install commands can select
+		// the correct .deb packages (amd64 vs arm64).
+		serverArch, archErr := client.ServerArchitecture()
+		if archErr != nil {
+			client.StopAndDeleteInstance(containerName)
+			return fmt.Errorf("failed to detect server architecture for browser install: %w", archErr)
+		}
+
+		for _, cmd := range BrowserContainerInstallCommands(opts.BrowserEngine, serverArch) {
 			progress("  Running: %v\n", cmd)
 			exitCode, err := client.ExecSimple(containerName, cmd)
 			if err != nil {

@@ -28,12 +28,8 @@ const (
 	// BrowserProfileMountPath is the Chromium profile dir inside containers.
 	BrowserProfileMountPath = "/home/browser/.config/chromium"
 
-	// xtradeb Chromium version for direct .deb download. We download from the
-	// Launchpad pool directly instead of adding the PPA (which fails apt-get
-	// update on Docker+Incus due to GPG key verification through Docker NAT).
-	// Update this when a new Chromium version is available in the xtradeb PPA.
-	xtradebChromiumVersion = "146.0.7680.177-1xtradeb1.2404.1"
-	xtradebPoolURL         = "https://ppa.launchpadcontent.net/xtradeb/apps/ubuntu/pool/main/c/chromium"
+	// kasmVNCVersion is the KasmVNC release version to install.
+	kasmVNCVersion = "1.3.3"
 )
 
 // BrowserContainerConfig controls browser runtime configuration inside a container.
@@ -83,13 +79,16 @@ func IsContainerCompatibleEngine(engine string) bool {
 
 // BrowserContainerInstallCommands returns the commands to install the browser
 // engine and KasmVNC inside a container template. The commands are engine-aware:
-// "default" installs Google Chrome via direct .deb download (Ubuntu's own
+// "default" installs Chromium from the xtradeb PPA (Ubuntu's own
 // chromium-browser package is snap-only and hangs in LXC containers),
 // "cloakbrowser" installs python3 + pip3 + xvfb + the CloakBrowser package.
 //
+// The arch parameter is the Incus server architecture ("x86_64" or "aarch64")
+// and is used to select the correct KasmVNC .deb for the platform.
+//
 // Common packages (X11 deps, fonts, KasmVNC, browser user) are shared across
 // all engines.
-func BrowserContainerInstallCommands(engine string) [][]string {
+func BrowserContainerInstallCommands(engine, arch string) [][]string {
 	// Common: apt update
 	cmds := [][]string{
 		{"apt-get", "update"},
@@ -119,26 +118,25 @@ func BrowserContainerInstallCommands(engine string) [][]string {
 			// Utilities
 			"wget", "ca-certificates",
 		})
-	default: // "default" — Chromium from xtradeb (direct .deb download, no PPA)
+	default: // "default" — Chromium from xtradeb PPA
 		// Ubuntu 24.04's chromium-browser package is a snap transitional shim
 		// that triggers `snap install chromium`. Snap does not work inside
 		// unprivileged LXC containers (requires squashfs mounts and AppArmor
 		// confinement), causing the install to hang indefinitely.
 		//
-		// The xtradeb PPA provides native Chromium .deb packages but adding
-		// the PPA via add-apt-repository + apt-get update fails on Docker+Incus
-		// (macOS) due to GPG key verification issues through Docker's NAT.
-		// Google Chrome's .deb also fails (dependency resolution issues).
+		// The xtradeb/apps PPA provides native Chromium .deb packages for both
+		// amd64 and arm64. We use the PPA so apt auto-selects the correct
+		// architecture — critical for Apple Silicon Macs where Docker+Incus
+		// runs arm64 containers.
 		//
-		// Solution: download the .deb files directly from the Launchpad pool
-		// (plain HTTPS, no PPA key needed) and install with apt-get which
-		// resolves transitive deps from the default Ubuntu repos.
-		chromiumCommonURL := fmt.Sprintf("%s/chromium-common_%s_amd64.deb", xtradebPoolURL, xtradebChromiumVersion)
-		chromiumURL := fmt.Sprintf("%s/chromium_%s_amd64.deb", xtradebPoolURL, xtradebChromiumVersion)
-
+		// After adding the PPA, apt-get update may fail with exit code 100
+		// due to AppStream metadata (dep11/Components) download errors during
+		// Ubuntu mirror syncs. These errors are non-fatal for package
+		// installation, so we tolerate them with "|| true".
 		cmds = append(cmds,
-			// Install shared deps first (from default Ubuntu repos — no PPA needed)
+			// Install add-apt-repository tool + shared deps
 			[]string{"apt-get", "install", "-y",
+				"software-properties-common",
 				// Chromium shared deps
 				"fonts-liberation", "fonts-noto-color-emoji",
 				"xdg-utils", "libnss3", "libatk-bridge2.0-0",
@@ -155,13 +153,15 @@ func BrowserContainerInstallCommands(engine string) [][]string {
 				// Utilities
 				"wget", "ca-certificates",
 			},
-			// Download chromium-common and chromium .debs directly from Launchpad pool
-			[]string{"wget", "-q", "-O", "/tmp/chromium-common.deb", chromiumCommonURL},
-			[]string{"wget", "-q", "-O", "/tmp/chromium.deb", chromiumURL},
-			// Install both with apt-get (resolves transitive deps from Ubuntu repos)
-			[]string{"apt-get", "install", "-y", "/tmp/chromium-common.deb", "/tmp/chromium.deb"},
-			// Clean up
-			[]string{"rm", "-f", "/tmp/chromium-common.deb", "/tmp/chromium.deb"},
+			// Add PPA with native Chromium .deb packages (amd64 + arm64)
+			[]string{"add-apt-repository", "-y", "ppa:xtradeb/apps"},
+			// Refresh package lists. Tolerate AppStream metadata errors (dep11
+			// Components download failures during mirror syncs) — these don't
+			// affect package installation. The "|| true" prevents exit code 100
+			// from aborting the template creation.
+			[]string{"sh", "-c", "apt-get update || true"},
+			// Install Chromium (apt auto-selects the correct architecture)
+			[]string{"apt-get", "install", "-y", "chromium"},
 		)
 	}
 
@@ -175,14 +175,24 @@ func BrowserContainerInstallCommands(engine string) [][]string {
 		[]string{"usermod", "-aG", "ssl-cert", "browser"},
 	)
 
-	// Common: install KasmVNC from release deb (Ubuntu 24.04 noble amd64).
+	// Map Incus server architecture to Debian package architecture.
+	// Incus returns "x86_64" or "aarch64"; .deb filenames use "amd64" or "arm64".
+	debArch := "amd64"
+	if arch == "aarch64" {
+		debArch = "arm64"
+	}
+
+	// Common: install KasmVNC from release deb (Ubuntu 24.04 noble).
 	// Use apt-get install with the .deb path (not dpkg) — this resolves and
 	// installs transitive dependencies in a single step. The dpkg + apt-get -f
 	// pattern silently removes the package on Docker+Incus when deps fail.
+	kasmURL := fmt.Sprintf(
+		"https://github.com/kasmtech/KasmVNC/releases/download/v%s/kasmvncserver_noble_%s_%s.deb",
+		kasmVNCVersion, kasmVNCVersion, debArch,
+	)
 	cmds = append(cmds,
-		// Download the KasmVNC .deb
-		[]string{"wget", "-q", "-O", "/tmp/kasmvnc.deb",
-			"https://github.com/kasmtech/KasmVNC/releases/download/v1.3.3/kasmvncserver_noble_1.3.3_amd64.deb"},
+		// Download the KasmVNC .deb (architecture-aware)
+		[]string{"wget", "-q", "-O", "/tmp/kasmvnc.deb", kasmURL},
 		// Install with apt-get which resolves deps properly (requires apt 1.1+, Ubuntu 24.04 has 2.7+)
 		[]string{"apt-get", "install", "-y", "/tmp/kasmvnc.deb"},
 		// Clean up the .deb

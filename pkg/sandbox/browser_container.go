@@ -168,11 +168,6 @@ func BrowserContainerInstallCommands(engine, arch string) [][]string {
 	// Common: create browser user (KasmVNC cannot run as root)
 	cmds = append(cmds,
 		[]string{"useradd", "-m", "-s", "/bin/bash", "browser"},
-		// KasmVNC needs to read the SSL snakeoil key (/etc/ssl/private/ssl-cert-snakeoil.key)
-		// even when require_ssl is false — the Xvnc binary validates the cert path at startup.
-		// The key file is owned by root:ssl-cert with mode 640, so the browser user must be
-		// in the ssl-cert group to avoid a startup failure.
-		[]string{"usermod", "-aG", "ssl-cert", "browser"},
 	)
 
 	// Map Incus server architecture to Debian package architecture.
@@ -206,20 +201,22 @@ func BrowserContainerInstallCommands(engine, arch string) [][]string {
 		// restrictions on copy-up operations.
 		[]string{"sh", "-c",
 			`make-ssl-cert generate-default-snakeoil --force-overwrite 2>/dev/null || ` +
-				`(openssl req -x509 -newkey rsa:2048 ` +
+				`openssl req -x509 -newkey rsa:2048 ` +
 				`-keyout /etc/ssl/private/ssl-cert-snakeoil.key ` +
 				`-out /etc/ssl/certs/ssl-cert-snakeoil.pem ` +
-				`-days 3650 -nodes -subj '/CN=localhost' 2>/dev/null && ` +
-				`chmod 640 /etc/ssl/private/ssl-cert-snakeoil.key && ` +
-				`chown root:ssl-cert /etc/ssl/private/ssl-cert-snakeoil.key)`,
+				`-days 3650 -nodes -subj '/CN=localhost' 2>/dev/null`,
 		},
-		// Relax /etc/ssl/private/ directory permissions so the browser user
-		// (and mapped-root) can read the snakeoil key inside unprivileged
-		// session containers. In session containers on overlayfs, the kernel
-		// denies copy-up operations in user namespaces for directories with
-		// restrictive modes (0710). Since SSL is disabled (require_ssl: false)
-		// and the container is isolated behind the exec tunnel, this is safe.
+		// Force the key + directory world-readable, owned by root:root.
+		// On Docker+Incus (macOS), the ssl-cert group GID can become
+		// unmapped (nobody:nogroup) after UID shifting, leaving the file
+		// unreadable by all users — even root inside the unprivileged
+		// container can't chmod it back. Using root:root + 644 avoids
+		// any group-based UID mapping issues entirely. Safe because SSL
+		// is disabled (require_ssl: false) and the container is isolated
+		// behind the exec tunnel.
 		[]string{"chmod", "755", "/etc/ssl/private"},
+		[]string{"chmod", "644", "/etc/ssl/private/ssl-cert-snakeoil.key"},
+		[]string{"chown", "root:root", "/etc/ssl/private/ssl-cert-snakeoil.key"},
 	)
 
 	// Common: configure KasmVNC for headless/non-interactive operation.

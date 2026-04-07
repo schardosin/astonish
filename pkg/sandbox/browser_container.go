@@ -146,10 +146,8 @@ func BrowserContainerInstallCommands(engine string) [][]string {
 			// Download Google Chrome stable .deb (always latest stable, no version to hardcode)
 			[]string{"wget", "-q", "-O", "/tmp/google-chrome.deb",
 				"https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"},
-			// Install the .deb (dpkg may fail on missing transitive deps — that's expected)
-			[]string{"sh", "-c", "dpkg -i /tmp/google-chrome.deb || true"},
-			// Fix any missing dependencies (completes the Chrome install)
-			[]string{"apt-get", "install", "-f", "-y"},
+			// Install with apt-get which resolves deps properly (requires apt 1.1+)
+			[]string{"apt-get", "install", "-y", "/tmp/google-chrome.deb"},
 			// Clean up the .deb
 			[]string{"rm", "-f", "/tmp/google-chrome.deb"},
 			// Symlink to /usr/bin/chromium for compatibility with StartChromiumInContainer
@@ -169,24 +167,17 @@ func BrowserContainerInstallCommands(engine string) [][]string {
 	)
 
 	// Common: install KasmVNC from release deb (Ubuntu 24.04 noble amd64).
-	// Each step is a separate command so failures produce clear exit codes
-	// instead of being silently swallowed by shell operator precedence bugs.
+	// Use apt-get install with the .deb path (not dpkg) — this resolves and
+	// installs transitive dependencies in a single step. The dpkg + apt-get -f
+	// pattern silently removes the package on Docker+Incus when deps fail.
 	cmds = append(cmds,
 		// Download the KasmVNC .deb
 		[]string{"wget", "-q", "-O", "/tmp/kasmvnc.deb",
 			"https://github.com/kasmtech/KasmVNC/releases/download/v1.3.3/kasmvncserver_noble_1.3.3_amd64.deb"},
-		// Install the .deb (dpkg may fail on missing transitive deps — that's expected)
-		[]string{"sh", "-c", "dpkg -i /tmp/kasmvnc.deb || true"},
-		// Fix any missing dependencies (completes the KasmVNC install).
-		// WARNING: if deps can't be satisfied, apt-get -f may silently REMOVE
-		// the broken package instead of fixing it (exits 0 either way).
-		[]string{"apt-get", "install", "-f", "-y"},
+		// Install with apt-get which resolves deps properly (requires apt 1.1+, Ubuntu 24.04 has 2.7+)
+		[]string{"apt-get", "install", "-y", "/tmp/kasmvnc.deb"},
 		// Clean up the .deb
 		[]string{"rm", "-f", "/tmp/kasmvnc.deb"},
-		// Verify KasmVNC was actually installed. apt-get install -f -y can
-		// silently remove a broken package instead of fixing its deps, so we
-		// must check the binary exists before proceeding.
-		[]string{"test", "-x", "/usr/bin/kasmvncpasswd"},
 	)
 
 	// Common: configure KasmVNC for headless/non-interactive operation.

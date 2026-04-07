@@ -624,11 +624,9 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		sandboxTplRegistry = tplRegistry
 		sandboxSessRegistry = sessRegistry
 
-		// Wire browser container callbacks when sandbox is available.
-		// The browser Manager calls these lazily on first GetOrLaunch() to
-		// provision/destroy containers without importing the sandbox package.
-		// Engine compatibility is checked: custom/remote engines can't run in
-		// containers, so the browser falls back to host mode for those.
+		// Wire browser to run inside the session container when sandbox is
+		// available. The browser resolves the session container (already
+		// managed by NodeClientPool) and starts Chromium + KasmVNC inside it.
 		{
 			bcfg := browserMgr.Config()
 			engine := sandbox.DetectBrowserEngine(sandbox.BrowserContainerConfig{
@@ -647,15 +645,19 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					FingerprintSeed:     bcfg.FingerprintSeed,
 					FingerprintPlatform: bcfg.FingerprintPlatform,
 				}
-				browserMgr.ContainerLaunchFunc = func(sessionID string, shared bool) (string, string, error) {
-					info, err := sandbox.LaunchBrowserContainer(client, sessionID, shared, bCfg)
-					if err != nil {
-						return "", "", err
+				browserMgr.ContainerResolveFunc = func(sessionID string) (string, string, error) {
+					containerName := sandbox.SessionContainerName(sessionID)
+					if !client.IsRunning(containerName) {
+						return "", "", fmt.Errorf("session container %q is not running", containerName)
 					}
-					return info.ContainerName, info.ContainerIP, nil
+					ip, err := client.GetContainerIPv4(containerName)
+					if err != nil {
+						return "", "", fmt.Errorf("failed to get IP for session container %q: %w", containerName, err)
+					}
+					return containerName, ip, nil
 				}
-				browserMgr.ContainerDestroyFunc = func(containerName string) error {
-					return sandbox.DestroyBrowserContainer(client, containerName)
+				browserMgr.ContainerStartBrowserFunc = func(containerName string) error {
+					return sandbox.StartChromiumInContainer(client, containerName, bCfg)
 				}
 			}
 		}
@@ -1771,7 +1773,6 @@ func browserConfigFromApp(appCfg *config.AppConfig) browser.BrowserConfig {
 		FingerprintPlatform: b.FingerprintPlatform,
 		HandoffBindAddress:  b.HandoffBindAddress,
 		HandoffPort:         b.HandoffPort,
-		ContainerMode:       b.ContainerMode,
 		KasmVNCPort:         b.KasmVNCPort,
 		KasmVNCPassword:     b.KasmVNCPassword,
 	})

@@ -2,8 +2,12 @@ package browser
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -13,6 +17,7 @@ import (
 	"time"
 
 	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/cdp"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/launcher/flags"
 	"github.com/go-rod/rod/lib/proto"
@@ -57,12 +62,8 @@ type BrowserConfig struct {
 	HandoffBindAddress string // Network bind address for CDP handoff. Default: "127.0.0.1"
 	HandoffPort        int    // TCP port for CDP handoff proxy. Default: 9222
 
-	// Container mode: "dedicated" (default) or "shared".
-	// "dedicated": per-session browser container (clean profile).
-	// "shared": single long-lived browser container (persistent profile).
-	// Container mode is only active when SandboxEnabled is true on the Manager.
-	ContainerMode   string // "dedicated" or "shared"
-	KasmVNCPort     int    // Port KasmVNC listens on inside the container. Default: 6901.
+	// KasmVNCPort is the port KasmVNC listens on inside the container. Default: 6901.
+	KasmVNCPort     int
 	KasmVNCPassword string // VNC password for handoff. Empty = auto-generated.
 }
 
@@ -107,7 +108,6 @@ type ConfigOverrides struct {
 	HandoffPort         int
 	FingerprintSeed     string
 	FingerprintPlatform string
-	ContainerMode       string
 	KasmVNCPort         int
 	KasmVNCPassword     string
 }
@@ -156,9 +156,6 @@ func OverrideConfig(o ConfigOverrides) BrowserConfig {
 	if o.FingerprintPlatform != "" {
 		cfg.FingerprintPlatform = o.FingerprintPlatform
 	}
-	if o.ContainerMode != "" {
-		cfg.ContainerMode = o.ContainerMode
-	}
 	if o.KasmVNCPort > 0 {
 		cfg.KasmVNCPort = o.KasmVNCPort
 	}
@@ -183,9 +180,9 @@ func defaultProfileDir() string {
 // By default, Chrome runs in headed mode (with Xvfb on Linux) for maximum
 // stealth. Falls back to headless if Xvfb is unavailable.
 //
-// When ContainerMode is "dedicated" or "shared", the browser runs inside an
-// LXC container managed by the sandbox package. The Manager connects to it via
-// a remote CDP URL instead of launching Chrome locally.
+// When SandboxEnabled is true, the browser runs inside the session container
+// (the same container used by shell_command, file tools, etc.). The Manager
+// connects to Chromium via a remote CDP URL through the container's bridge IP.
 type Manager struct {
 	mu        sync.Mutex
 	browser   *rod.Browser
@@ -209,30 +206,35 @@ type Manager struct {
 	handoff       *HandoffServer
 	handoffReason string
 
-	// Container state (set when ContainerMode is "dedicated" or "shared").
-	// containerName is the LXC container running the browser.
+	// Container state (set when SandboxEnabled is true).
+	// containerName is the session container the browser runs in.
 	containerName string
 	// containerIP is the container's bridge IPv4 address.
 	containerIP string
-	// sessionID is the agent session this Manager is bound to (for dedicated containers).
+	// sessionID is the agent session this Manager is bound to.
 	sessionID string
 
-	// ContainerLaunchFunc is called lazily by launchInContainer() to provision
-	// a browser container when no container info has been set. This callback
-	// avoids a circular import between browser and sandbox packages.
-	// The function receives (sessionID, shared bool) and returns
-	// (containerName, containerIP, error).
-	ContainerLaunchFunc func(sessionID string, shared bool) (string, string, error)
+	// ContainerResolveFunc resolves the session container for browser execution.
+	// Called lazily by launchInContainer() to get the container name and IP.
+	// The browser runs in the same session container as other tools.
+	// Returns (containerName, containerIP, error).
+	ContainerResolveFunc func(sessionID string) (string, string, error)
 
-	// ContainerDestroyFunc is called from Cleanup() to destroy dedicated
-	// browser containers. The function receives the containerName.
-	// Not called for shared containers (they persist across sessions).
-	ContainerDestroyFunc func(containerName string) error
+	// ContainerStartBrowserFunc starts Chromium + KasmVNC + socat inside the
+	// session container. Called after ContainerResolveFunc succeeds. The browser
+	// package doesn't import the sandbox package, so this callback bridges the gap.
+	ContainerStartBrowserFunc func(containerName string) error
+
+	// ContainerDialFunc creates a tunneled net.Conn to a port inside the named
+	// container. This is wired by the launcher to sandbox.ContainerDialer.Dial,
+	// routing connections through the Incus exec API (socat STDIO) rather than
+	// direct TCP to the container's bridge IP. This makes CDP work on both
+	// Linux native and Docker+Incus (macOS/Windows) where bridge IPs are not
+	// routable from the host.
+	ContainerDialFunc func(containerName string, port int) (net.Conn, error)
 
 	// SandboxEnabled is set to true by the launcher when sandbox is available.
-	// When true, the browser runs inside an LXC container instead of locally.
-	// This replaces the old static "host" ContainerMode value — host mode is
-	// now the implicit fallback when SandboxEnabled is false.
+	// When true, the browser runs inside the session container instead of locally.
 	SandboxEnabled bool
 }
 
@@ -247,9 +249,6 @@ func NewManager(cfg BrowserConfig) *Manager {
 	}
 	if cfg.NavigationTimeout == 0 {
 		cfg.NavigationTimeout = 30 * time.Second
-	}
-	if cfg.ContainerMode == "" {
-		cfg.ContainerMode = "dedicated"
 	}
 	if cfg.KasmVNCPort == 0 {
 		cfg.KasmVNCPort = 6901
@@ -320,9 +319,8 @@ func (m *Manager) IsContainerMode() bool {
 //
 // If headed mode fails (no display, no Xvfb), falls back to headless with a warning.
 //
-// In container modes ("dedicated" or "shared"), the browser is launched inside
-// an LXC container and connected via a remote CDP URL. The container is managed
-// by the sandbox package.
+// When SandboxEnabled is true, the browser is launched inside the session
+// container and connected via a remote CDP URL.
 func (m *Manager) GetOrLaunch() (*rod.Browser, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -463,79 +461,204 @@ func (m *Manager) connectRemote() (*rod.Browser, error) {
 // Chromium with HTTP 404 because it doesn't route WebSocket upgrades at the
 // root path.
 //
+// When ContainerDialFunc is set (exec tunnel mode), the HTTP request is routed
+// through the tunnel instead of direct TCP to the container IP. This makes it
+// work on Docker+Incus (macOS) where container bridge IPs are not routable.
+//
 // The function retries for up to 15 seconds to allow Chromium and socat time
 // to become ready after container launch.
-func (m *Manager) resolveCDPURL(ip string) (string, error) {
-	raw := fmt.Sprintf("ws://%s:%d", ip, cdpPort)
+func (m *Manager) resolveCDPURL(containerName, ip string) (string, error) {
+	// Build an HTTP client that routes through the exec tunnel when available.
+	var httpClient *http.Client
+	if m.ContainerDialFunc != nil && containerName != "" {
+		httpClient = &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+					return m.ContainerDialFunc(containerName, cdpPort)
+				},
+			},
+			Timeout: 5 * time.Second,
+		}
+	} else {
+		httpClient = &http.Client{Timeout: 5 * time.Second}
+	}
+
+	versionURL := fmt.Sprintf("http://%s:%d/json/version", ip, cdpPort)
 
 	var lastErr error
 	for range 30 { // 30 × 500ms = 15s
-		resolved, err := launcher.ResolveURL(raw)
-		if err == nil {
-			m.logger.Printf("Resolved CDP URL: %s", resolved)
-			return resolved, nil
+		resp, err := httpClient.Get(versionURL)
+		if err != nil {
+			lastErr = err
+			time.Sleep(500 * time.Millisecond)
+			continue
 		}
-		lastErr = err
-		time.Sleep(500 * time.Millisecond)
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		// Parse the JSON response to extract webSocketDebuggerUrl.
+		var result struct {
+			WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
+		}
+		if err := json.Unmarshal(body, &result); err != nil {
+			lastErr = fmt.Errorf("failed to parse /json/version response: %w", err)
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		if result.WebSocketDebuggerURL == "" {
+			lastErr = fmt.Errorf("/json/version returned empty webSocketDebuggerUrl")
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		m.logger.Printf("Resolved CDP URL: %s", result.WebSocketDebuggerURL)
+		return result.WebSocketDebuggerURL, nil
 	}
-	return "", fmt.Errorf("failed to resolve CDP URL at %s after 15s: %w", raw, lastErr)
+	return "", fmt.Errorf("failed to resolve CDP URL at %s after 15s: %w", versionURL, lastErr)
 }
 
-// launchInContainer launches the browser inside an LXC container and connects
-// via remote CDP. The container is created by the sandbox package; this method
-// only handles the CDP connection and rod initialization.
+// launchInContainer launches the browser inside the session container and
+// connects via remote CDP. The container is managed by the sandbox package's
+// NodeClientPool — this method resolves the container info, starts Chromium
+// inside it, and connects via CDP.
 //
-// The caller (typically the launcher or API layer) must call
-// sandbox.LaunchBrowserContainer() before the first GetOrLaunch() call, setting
-// m.config.RemoteCDPURL to the container's CDP endpoint. Alternatively, this
-// method can be called with containerName/containerIP already set on the Manager
-// (via SetContainerInfo) to avoid circular dependencies between browser and sandbox.
+// When ContainerDialFunc is set, the CDP WebSocket connection is tunneled
+// through the Incus exec API (socat), making it work on all platforms.
 //
 // Must be called with m.mu held.
 func (m *Manager) launchInContainer() (*rod.Browser, error) {
-	// If RemoteCDPURL is already set (by the launcher after creating the container),
+	// If RemoteCDPURL is already set (by a previous call or external setup),
 	// resolve it to the full debugger URL if it's a bare host:port.
 	if m.config.RemoteCDPURL != "" {
 		if err := m.ensureResolvedCDPURL(); err != nil {
 			return nil, err
 		}
-		return m.connectRemote()
+		return m.connectContainerCDP()
 	}
 
 	// If container info was set directly, resolve the CDP URL from its IP.
 	if m.containerIP != "" {
-		resolved, err := m.resolveCDPURL(m.containerIP)
+		resolved, err := m.resolveCDPURL(m.containerName, m.containerIP)
 		if err != nil {
 			return nil, err
 		}
 		m.config.RemoteCDPURL = resolved
+		return m.connectContainerCDP()
+	}
+
+	// Resolve the session container — get its name and IP from the sandbox.
+	if m.ContainerResolveFunc == nil {
+		return nil, fmt.Errorf(
+			"browser sandbox mode is enabled but no ContainerResolveFunc is set; " +
+				"set ContainerResolveFunc on the Manager before GetOrLaunch()",
+		)
+	}
+
+	name, ip, err := m.ContainerResolveFunc(m.sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve session container: %w", err)
+	}
+	m.containerName = name
+	m.containerIP = ip
+
+	// Start Chromium + KasmVNC + socat inside the session container.
+	if m.ContainerStartBrowserFunc != nil {
+		if err := m.ContainerStartBrowserFunc(name); err != nil {
+			// Clear stale state so the next GetOrLaunch() retries the full
+			// resolve → start → connect sequence instead of short-circuiting
+			// at the containerIP check above.
+			m.containerName = ""
+			m.containerIP = ""
+			return nil, fmt.Errorf("failed to start browser in container %q: %w", name, err)
+		}
+	}
+
+	// Resolve the CDP WebSocket URL from the container IP.
+	resolved, err := m.resolveCDPURL(name, ip)
+	if err != nil {
+		// Clear stale state so retries go through the full sequence.
+		m.containerName = ""
+		m.containerIP = ""
+		return nil, err
+	}
+	m.config.RemoteCDPURL = resolved
+	return m.connectContainerCDP()
+}
+
+// connectContainerCDP connects to Chromium inside a container via CDP.
+//
+// When ContainerDialFunc is set, the CDP WebSocket is tunneled through the
+// Incus exec API, making container services reachable from any host. The
+// tunnel dialer is injected into go-rod's cdp.WebSocket.Dialer field, and
+// the pre-connected cdp.Client is passed to rod via Browser.Client().
+//
+// When ContainerDialFunc is nil (legacy fallback), it falls back to the
+// standard connectRemote() path using direct TCP.
+//
+// Must be called with m.mu held.
+func (m *Manager) connectContainerCDP() (*rod.Browser, error) {
+	cdpURL := m.config.RemoteCDPURL
+
+	// If no tunnel dialer is available, fall back to direct connection.
+	if m.ContainerDialFunc == nil || m.containerName == "" {
+		m.logger.Printf("Connecting to container browser (direct) at %s", cdpURL)
 		return m.connectRemote()
 	}
 
-	// Lazy provisioning: call the launch callback if set.
-	// This is wired by the launcher to call sandbox.LaunchBrowserContainer().
-	if m.ContainerLaunchFunc != nil {
-		shared := m.config.ContainerMode == "shared"
-		name, ip, err := m.ContainerLaunchFunc(m.sessionID, shared)
-		if err != nil {
-			return nil, fmt.Errorf("failed to provision browser container: %w", err)
-		}
-		m.containerName = name
-		m.containerIP = ip
+	m.logger.Printf("Connecting to container browser (exec tunnel) at %s", cdpURL)
 
-		resolved, err := m.resolveCDPURL(ip)
-		if err != nil {
-			return nil, err
-		}
-		m.config.RemoteCDPURL = resolved
-		return m.connectRemote()
+	containerName := m.containerName
+
+	// Create a cdp.WebSocket with our tunnel dialer injected.
+	// The Dialer field routes the TCP dial through socat inside the container.
+	ws := &cdp.WebSocket{
+		Dialer: tunnelDialer{
+			dialFunc:      m.ContainerDialFunc,
+			containerName: containerName,
+			port:          cdpPort,
+		},
 	}
 
-	return nil, fmt.Errorf(
-		"browser container mode is %q but no container has been provisioned yet; "+
-			"set ContainerLaunchFunc on the Manager or call SetContainerInfo() before GetOrLaunch()",
-		m.config.ContainerMode,
-	)
+	if err := ws.Connect(context.Background(), cdpURL, nil); err != nil {
+		return nil, fmt.Errorf("failed to connect CDP WebSocket via tunnel to %s: %w", cdpURL, err)
+	}
+
+	// Create a cdp.Client from the connected WebSocket.
+	client := cdp.New().Start(ws)
+
+	// Create the rod Browser with the pre-connected client (no ControlURL).
+	b := rod.New().Client(client).NoDefaultDevice()
+	if err := b.Connect(); err != nil {
+		_ = ws.Close()
+		return nil, fmt.Errorf("failed to connect rod browser via tunnel: %w", err)
+	}
+
+	m.browser = b
+	m.cdpURL = cdpURL
+
+	// Detect version from the remote browser for UA matching.
+	m.detectChromeVersion()
+
+	m.logger.Printf("Connected to container browser via exec tunnel (version: %s)", m.chromeVersion)
+	return b, nil
+}
+
+// tunnelDialer implements cdp.Dialer by routing connections through a
+// ContainerDialFunc (exec tunnel via socat).
+type tunnelDialer struct {
+	dialFunc      func(containerName string, port int) (net.Conn, error)
+	containerName string
+	port          int
+}
+
+func (d tunnelDialer) DialContext(_ context.Context, _, _ string) (net.Conn, error) {
+	return d.dialFunc(d.containerName, d.port)
 }
 
 // ensureResolvedCDPURL checks whether m.config.RemoteCDPURL already contains
@@ -552,7 +675,7 @@ func (m *Manager) ensureResolvedCDPURL() error {
 	if err != nil {
 		return fmt.Errorf("invalid RemoteCDPURL %q: %w", u, err)
 	}
-	resolved, err := m.resolveCDPURL(parsed.Hostname())
+	resolved, err := m.resolveCDPURL(m.containerName, parsed.Hostname())
 	if err != nil {
 		return err
 	}
@@ -1011,16 +1134,12 @@ func (m *Manager) Cleanup() {
 	// Stop Xvfb virtual display if we started one.
 	m.stopXvfb()
 
-	// Destroy dedicated browser containers. Shared containers persist
-	// across sessions and are only stopped, never destroyed, here.
-	if m.containerName != "" && m.SandboxEnabled && m.config.ContainerMode == "dedicated" && m.ContainerDestroyFunc != nil {
-		// Revoke handoff token before destroying the container so
-		// the auth middleware rejects any trailing requests immediately.
+	// Revoke any VNC handoff tokens for this container.
+	if m.containerName != "" && m.SandboxEnabled {
 		GetHandoffTokenRegistry().Revoke(m.containerName)
-
-		if err := m.ContainerDestroyFunc(m.containerName); err != nil {
-			m.logger.Printf("failed to destroy browser container %q: %v", m.containerName, err)
-		}
+		// Note: we do NOT destroy the session container here — its lifecycle
+		// is managed by the sandbox's NodeClientPool. The browser was just a
+		// guest process in the session container.
 		m.containerName = ""
 		m.containerIP = ""
 	}

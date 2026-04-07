@@ -332,11 +332,8 @@ func handleSandboxInit() error {
 
 	opts := promptOptionalTools()
 
-	if err := sandbox.InitBaseTemplate(client, registry, opts); err != nil {
-		return err
-	}
-
-	// Create browser container template after base template succeeds.
+	// Wire browser engine into base template options so browser packages
+	// (Chromium, KasmVNC, X11 deps) are installed in the base template.
 	if appCfg != nil {
 		bCfg := sandbox.BrowserContainerConfig{
 			ChromePath:          appCfg.Browser.ChromePath,
@@ -345,15 +342,15 @@ func handleSandboxInit() error {
 		}
 		engine := sandbox.DetectBrowserEngine(bCfg)
 		if sandbox.IsContainerCompatibleEngine(engine) {
-			fmt.Println("\nCreating browser container template...")
-			if err := sandbox.InitBrowserTemplate(client, registry, bCfg, nil); err != nil {
-				fmt.Printf("Warning: browser template creation failed: %v\n", err)
-				fmt.Println("Browser will fall back to host mode.")
-			}
+			opts.BrowserEngine = engine
 		} else {
 			fmt.Printf("\nNote: browser engine %q is not compatible with container mode.\n", engine)
 			fmt.Println("The browser will run on the host. Switch to 'default' or 'cloakbrowser' to enable containerized browsing.")
 		}
+	}
+
+	if err := sandbox.InitBaseTemplate(client, registry, opts); err != nil {
+		return err
 	}
 
 	return nil
@@ -1036,6 +1033,21 @@ func handleSandboxReset() error {
 	// Prompt for optional tools (same as sandbox init)
 	fmt.Println("")
 	opts := promptOptionalTools()
+
+	// Wire browser engine into base template options so browser packages
+	// (Chromium, KasmVNC, X11 deps) are installed in the base template.
+	appCfg, _ := config.LoadAppConfig()
+	if appCfg != nil {
+		bCfg := sandbox.BrowserContainerConfig{
+			ChromePath:          appCfg.Browser.ChromePath,
+			FingerprintSeed:     appCfg.Browser.FingerprintSeed,
+			FingerprintPlatform: appCfg.Browser.FingerprintPlatform,
+		}
+		engine := sandbox.DetectBrowserEngine(bCfg)
+		if sandbox.IsContainerCompatibleEngine(engine) {
+			opts.BrowserEngine = engine
+		}
+	}
 
 	// Recreate from scratch
 	return sandbox.InitBaseTemplate(client, tplRegistry, opts)

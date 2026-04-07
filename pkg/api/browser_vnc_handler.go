@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -37,20 +38,20 @@ func BrowserVNCProxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Connect to sandbox to discover container IP
+	// Connect to sandbox to verify container connectivity
 	client, err := sandboxConnect()
 	if err != nil {
 		http.Error(w, "failed to connect to sandbox: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	ip, err := getCachedIP(client, containerName)
-	if err != nil {
+	if _, err := getCachedIP(client, containerName); err != nil {
 		http.Error(w, "failed to resolve container IP: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 
 	port := sandbox.DefaultKasmVNCPort
+	dialer := &sandbox.ContainerDialer{Client: client}
 
 	// Strip headers that confuse KasmVNC's auth layer. KasmVNC inspects
 	// several headers for authentication decisions (SSO/auth-proxy pattern)
@@ -74,16 +75,18 @@ func BrowserVNCProxyHandler(w http.ResponseWriter, r *http.Request) {
 	r.Header.Del("X-Original-Method")
 	r.Header.Del("Referer")
 
-	// WebSocket upgrade — use raw TCP proxy for the VNC stream
+	// WebSocket upgrade — use tunnel proxy for the VNC stream
 	if isWebSocketUpgrade(r) {
-		proxyWebSocket(w, r, ip, port, proxyPath)
+		proxyWebSocket(w, r, func() (net.Conn, error) {
+			return dialer.Dial(containerName, port)
+		}, proxyPath)
 		return
 	}
 
 	// Regular HTTP — reverse proxy to KasmVNC's web interface
 	target := &url.URL{
 		Scheme: "http",
-		Host:   ip + ":" + strconv.Itoa(port),
+		Host:   "127.0.0.1:" + strconv.Itoa(port),
 	}
 
 	proxy := &httputil.ReverseProxy{
@@ -94,6 +97,7 @@ func BrowserVNCProxyHandler(w http.ResponseWriter, r *http.Request) {
 			req.URL.RawQuery = r.URL.RawQuery
 			req.Host = target.Host
 		},
+		Transport: dialer.HTTPTransport(containerName, port),
 		ModifyResponse: func(resp *http.Response) error {
 			// Strip headers that block iframe embedding. KasmVNC sets
 			// Cross-Origin-Embedder-Policy and Cross-Origin-Opener-Policy

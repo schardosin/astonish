@@ -241,14 +241,7 @@ func SandboxInitHandler(w http.ResponseWriter, r *http.Request) {
 		opts.InstallTools = make(map[string]bool)
 	}
 
-	if err := sandbox.InitBaseTemplate(client, registry, opts); err != nil {
-		SendSSE(w, flusher, "error", map[string]string{"error": err.Error()})
-		return
-	}
-
-	// Create browser container template after base template succeeds.
-	// Detect the configured browser engine and create an engine-specific
-	// template. Custom/remote engines are incompatible with containers.
+	// Wire browser engine so browser packages are installed in the base template.
 	if appCfg != nil {
 		bCfg := sandbox.BrowserContainerConfig{
 			ChromePath:          appCfg.Browser.ChromePath,
@@ -257,23 +250,13 @@ func SandboxInitHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		engine := sandbox.DetectBrowserEngine(bCfg)
 		if sandbox.IsContainerCompatibleEngine(engine) {
-			browserProgress := func(msg string) {
-				msg = strings.TrimRight(msg, "\n")
-				if msg != "" {
-					SendSSE(w, flusher, "progress", map[string]string{"message": "[browser] " + msg})
-				}
-			}
-			if err := sandbox.InitBrowserTemplate(client, registry, bCfg, browserProgress); err != nil {
-				// Non-fatal: warn but continue (browser falls back to host mode)
-				SendSSE(w, flusher, "progress", map[string]string{
-					"message": fmt.Sprintf("Warning: browser template failed: %v (browser will use host mode)", err),
-				})
-			}
-		} else {
-			SendSSE(w, flusher, "progress", map[string]string{
-				"message": fmt.Sprintf("Browser engine %q is not compatible with containers; browser will use host mode.", engine),
-			})
+			opts.BrowserEngine = engine
 		}
+	}
+
+	if err := sandbox.InitBaseTemplate(client, registry, opts); err != nil {
+		SendSSE(w, flusher, "error", map[string]string{"error": err.Error()})
+		return
 	}
 
 	SendSSE(w, flusher, "done", map[string]string{"status": "success"})

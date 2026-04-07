@@ -394,12 +394,6 @@ type BrowserAppConfig struct {
 	// HandoffPort is the TCP port for the CDP handoff proxy. Default: 9222.
 	HandoffPort int `yaml:"handoff_port,omitempty" json:"handoff_port,omitempty"`
 
-	// ContainerMode controls browser container lifecycle when sandbox is enabled.
-	// "dedicated" (default): each agent session gets its own browser container (clean profile, isolated).
-	// "shared": all sessions share a single long-lived browser container (persistent profile).
-	// Container mode is only active when sandbox is enabled. Without sandbox, the
-	// browser always runs on the host regardless of this setting.
-	ContainerMode string `yaml:"container_mode,omitempty" json:"container_mode,omitempty"`
 	// KasmVNCPort is the port KasmVNC listens on inside the browser container. Default: 6901.
 	KasmVNCPort int `yaml:"kasmvnc_port,omitempty" json:"kasmvnc_port,omitempty"`
 	// KasmVNCPassword is the VNC password for handoff sessions. If empty, a random

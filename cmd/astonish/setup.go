@@ -1404,34 +1404,22 @@ func handleSandboxSetup() error {
 
 		opts := promptOptionalTools()
 
-		if err := sandbox.InitBaseTemplate(client, registry, opts); err != nil {
-			return fmt.Errorf("sandbox setup: %w", err)
-		}
-
-		// Create browser container template after base template succeeds.
-		// Detect the configured browser engine and create an engine-specific
-		// template. Custom/remote engines are incompatible with containers —
-		// skip with a warning (browser falls back to host mode).
-		browserCfg, _ := config.LoadAppConfig()
-		if browserCfg != nil {
+		// Wire browser engine into base template options so browser packages
+		// (Chromium, KasmVNC, X11 deps) are installed in the base template.
+		if appCfg, cfgErr := config.LoadAppConfig(); cfgErr == nil && appCfg != nil {
 			bCfg := sandbox.BrowserContainerConfig{
-				ChromePath:          browserCfg.Browser.ChromePath,
-				FingerprintSeed:     browserCfg.Browser.FingerprintSeed,
-				FingerprintPlatform: browserCfg.Browser.FingerprintPlatform,
+				ChromePath:          appCfg.Browser.ChromePath,
+				FingerprintSeed:     appCfg.Browser.FingerprintSeed,
+				FingerprintPlatform: appCfg.Browser.FingerprintPlatform,
 			}
 			engine := sandbox.DetectBrowserEngine(bCfg)
 			if sandbox.IsContainerCompatibleEngine(engine) {
-				fmt.Println()
-				fmt.Println("Creating browser container template...")
-				if err := sandbox.InitBrowserTemplate(client, registry, bCfg, nil); err != nil {
-					fmt.Printf("Warning: browser template creation failed: %v\n", err)
-					fmt.Println("Browser will fall back to host mode. You can retry later with 'astonish sandbox init'.")
-				}
-			} else {
-				fmt.Printf("\nNote: browser engine %q is not compatible with container mode.\n", engine)
-				fmt.Println("The browser will run on the host during agent sessions.")
-				fmt.Println("Switch to 'default' or 'cloakbrowser' engine to enable containerized browsing.")
+				opts.BrowserEngine = engine
 			}
+		}
+
+		if err := sandbox.InitBaseTemplate(client, registry, opts); err != nil {
+			return fmt.Errorf("sandbox setup: %w", err)
 		}
 
 		clearScreen()

@@ -213,6 +213,7 @@ network:
   protocol: http
   interface: 0.0.0.0
   use_ipv4: true
+  use_ipv6: false
   ssl:
     require_ssl: false
 user_session:

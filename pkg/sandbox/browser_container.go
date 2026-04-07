@@ -197,6 +197,22 @@ func BrowserContainerInstallCommands(engine, arch string) [][]string {
 		[]string{"apt-get", "install", "-y", "/tmp/kasmvnc.deb"},
 		// Clean up the .deb
 		[]string{"rm", "-f", "/tmp/kasmvnc.deb"},
+		// Ensure the SSL snakeoil certificate exists. KasmVNC validates the
+		// cert path at startup even when require_ssl is false. The ssl-cert
+		// package's postinst may fail silently in unprivileged containers, so
+		// regenerate explicitly. Fall back to raw openssl if make-ssl-cert fails.
+		// This MUST run at template creation time — session containers on
+		// overlayfs cannot modify /etc/ssl/private/ due to user namespace
+		// restrictions on copy-up operations.
+		[]string{"sh", "-c",
+			`make-ssl-cert generate-default-snakeoil --force-overwrite 2>/dev/null || ` +
+				`(openssl req -x509 -newkey rsa:2048 ` +
+				`-keyout /etc/ssl/private/ssl-cert-snakeoil.key ` +
+				`-out /etc/ssl/certs/ssl-cert-snakeoil.pem ` +
+				`-days 3650 -nodes -subj '/CN=localhost' 2>/dev/null && ` +
+				`chmod 640 /etc/ssl/private/ssl-cert-snakeoil.key && ` +
+				`chown root:ssl-cert /etc/ssl/private/ssl-cert-snakeoil.key)`,
+		},
 	)
 
 	// Common: configure KasmVNC for headless/non-interactive operation.

@@ -20,7 +20,9 @@ type BrowserNavigateResult struct {
 
 // BrowserNavigate navigates the browser to a URL.
 func BrowserNavigate(mgr *browser.Manager, guard *browser.NavigationGuard) func(tool.Context, BrowserNavigateArgs) (BrowserNavigateResult, error) {
-	return func(_ tool.Context, args BrowserNavigateArgs) (BrowserNavigateResult, error) {
+	return func(ctx tool.Context, args BrowserNavigateArgs) (BrowserNavigateResult, error) {
+		mgr.EnsureSessionID(ctx.SessionID())
+
 		if args.URL == "" {
 			return BrowserNavigateResult{}, fmt.Errorf("url is required")
 		}

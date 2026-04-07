@@ -183,12 +183,11 @@ func GenerateSelfMD(cfg *SelfMDConfig) string {
 	// Browser handoff
 	if cfg.HandoffAvailable {
 		sb.WriteString("## Browser Handoff\n")
-		sb.WriteString("Two-step human-in-the-loop flow:\n")
-		sb.WriteString("1. browser_request_human — starts CDP proxy, returns connection instructions immediately\n")
-		sb.WriteString("2. Relay the instructions to the user (listen address, chrome://inspect steps)\n")
-		sb.WriteString("3. browser_handoff_complete — blocks until user finishes\n")
-		sb.WriteString("4. browser_snapshot — check what changed\n")
-		sb.WriteString("- Completion: auto-detected when DevTools disconnects, or user visits /handoff/done\n")
+		sb.WriteString("non-blocking visual browser sharing:\n")
+		sb.WriteString("1. browser_request_human — opens visual browser access for the user, returns immediately\n")
+		sb.WriteString("2. Chat stays fully interactive — you can continue controlling the browser while the user watches\n")
+		sb.WriteString("3. User clicks 'Done' when they no longer need visual access\n")
+		sb.WriteString("4. browser_snapshot — check current state if needed\n")
 		sb.WriteString("- Primary use: CAPTCHA solving, complex auth flows, payment forms\n")
 		sb.WriteString("\n")
 	}

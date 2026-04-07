@@ -624,6 +624,42 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		sandboxTplRegistry = tplRegistry
 		sandboxSessRegistry = sessRegistry
 
+		// Wire browser container callbacks when sandbox is available.
+		// The browser Manager calls these lazily on first GetOrLaunch() to
+		// provision/destroy containers without importing the sandbox package.
+		// Engine compatibility is checked: custom/remote engines can't run in
+		// containers, so the browser falls back to host mode for those.
+		{
+			bcfg := browserMgr.Config()
+			engine := sandbox.DetectBrowserEngine(sandbox.BrowserContainerConfig{
+				ChromePath: bcfg.ChromePath,
+			})
+			if sandbox.IsContainerCompatibleEngine(engine) {
+				browserMgr.SandboxEnabled = true
+				client := sandboxClient // capture for closures
+				bCfg := sandbox.BrowserContainerConfig{
+					ViewportWidth:       bcfg.ViewportWidth,
+					ViewportHeight:      bcfg.ViewportHeight,
+					KasmVNCPort:         bcfg.KasmVNCPort,
+					KasmVNCPassword:     bcfg.KasmVNCPassword,
+					Proxy:               bcfg.Proxy,
+					ChromePath:          bcfg.ChromePath,
+					FingerprintSeed:     bcfg.FingerprintSeed,
+					FingerprintPlatform: bcfg.FingerprintPlatform,
+				}
+				browserMgr.ContainerLaunchFunc = func(sessionID string, shared bool) (string, string, error) {
+					info, err := sandbox.LaunchBrowserContainer(client, sessionID, shared, bCfg)
+					if err != nil {
+						return "", "", err
+					}
+					return info.ContainerName, info.ContainerIP, nil
+				}
+				browserMgr.ContainerDestroyFunc = func(containerName string) error {
+					return sandbox.DestroyBrowserContainer(client, containerName)
+				}
+			}
+		}
+
 		// Wire sandbox pool to all lazy MCP toolsets so stdio MCP servers
 		// start inside the session's container instead of on the host.
 		// SSE transport servers are unaffected (isSSETransport check inside).
@@ -1735,6 +1771,9 @@ func browserConfigFromApp(appCfg *config.AppConfig) browser.BrowserConfig {
 		FingerprintPlatform: b.FingerprintPlatform,
 		HandoffBindAddress:  b.HandoffBindAddress,
 		HandoffPort:         b.HandoffPort,
+		ContainerMode:       b.ContainerMode,
+		KasmVNCPort:         b.KasmVNCPort,
+		KasmVNCPassword:     b.KasmVNCPassword,
 	})
 }
 

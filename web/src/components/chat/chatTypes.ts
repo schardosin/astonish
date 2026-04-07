@@ -89,6 +89,14 @@ export interface FleetExecutionMessage {
   status: string
 }
 
+export interface BrowserHandoffMessage {
+  type: 'browser_handoff'
+  vncProxyUrl: string
+  pageUrl: string
+  pageTitle: string
+  reason: string
+}
+
 export interface FleetEvent {
   type: string
   phase?: string
@@ -117,6 +125,7 @@ export type ChatMsg =
   | SystemMessage
   | RetryMessage
   | FleetExecutionMessage
+  | BrowserHandoffMessage
 
 // ---- Fleet info / state ----
 

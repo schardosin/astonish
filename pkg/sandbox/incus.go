@@ -596,3 +596,92 @@ func mapKeys[K comparable, V any](m map[K]V) []K {
 	}
 	return keys
 }
+
+// --- Storage volume management ---
+
+// EnsureStorageVolume creates a custom storage volume in the default pool if
+// it does not already exist. Used for persistent data that must survive
+// container destruction (e.g., browser profile data).
+func (c *IncusClient) EnsureStorageVolume(name string) error {
+	pool, err := c.defaultPoolName()
+	if err != nil {
+		return err
+	}
+
+	// Check if volume already exists
+	_, _, err = c.server.GetStoragePoolVolume(pool, "custom", name)
+	if err == nil {
+		return nil // already exists
+	}
+
+	vol := api.StorageVolumesPost{
+		Name: name,
+		Type: "custom",
+	}
+
+	if err := c.server.CreateStoragePoolVolume(pool, vol); err != nil {
+		return fmt.Errorf("failed to create storage volume %q in pool %q: %w", name, pool, err)
+	}
+
+	return nil
+}
+
+// DeleteStorageVolume removes a custom storage volume from the default pool.
+func (c *IncusClient) DeleteStorageVolume(name string) error {
+	pool, err := c.defaultPoolName()
+	if err != nil {
+		return err
+	}
+
+	if err := c.server.DeleteStoragePoolVolume(pool, "custom", name); err != nil {
+		return fmt.Errorf("failed to delete storage volume %q from pool %q: %w", name, pool, err)
+	}
+
+	return nil
+}
+
+// AttachVolume adds a storage volume as a disk device to an instance. The volume
+// is mounted at mountPath inside the container. The instance should be stopped
+// when attaching volumes to avoid mount issues.
+func (c *IncusClient) AttachVolume(instanceName, volumeName, mountPath string) error {
+	pool, err := c.defaultPoolName()
+	if err != nil {
+		return err
+	}
+
+	inst, etag, err := c.server.GetInstance(instanceName)
+	if err != nil {
+		return fmt.Errorf("failed to get instance %q: %w", instanceName, err)
+	}
+
+	if inst.Devices == nil {
+		inst.Devices = make(map[string]map[string]string)
+	}
+
+	deviceName := "vol-" + volumeName
+	inst.Devices[deviceName] = map[string]string{
+		"type":   "disk",
+		"pool":   pool,
+		"source": volumeName,
+		"path":   mountPath,
+	}
+
+	op, err := c.server.UpdateInstance(instanceName, inst.Writable(), etag)
+	if err != nil {
+		return fmt.Errorf("failed to attach volume %q to %q: %w", volumeName, instanceName, err)
+	}
+
+	return op.Wait()
+}
+
+// defaultPoolName returns the name of the first (default) storage pool.
+func (c *IncusClient) defaultPoolName() (string, error) {
+	pools, err := c.server.GetStoragePools()
+	if err != nil {
+		return "", fmt.Errorf("failed to list storage pools: %w", err)
+	}
+	if len(pools) == 0 {
+		return "", fmt.Errorf("no storage pools configured")
+	}
+	return pools[0].Name, nil
+}

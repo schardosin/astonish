@@ -284,6 +284,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 
 	// Register browser automation tools
 	browserMgr := browser.NewManager(browserConfigFromApp(cfg.AppConfig))
+	wireBrowserContainerCallbacks(browserMgr)
 	browserTools, browserErr := tools.GetBrowserTools(browserMgr)
 	if browserErr != nil {
 		if cfg.DebugMode {

@@ -833,6 +833,11 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/channels/status", ChannelsStatusHandler).Methods("GET")
 	router.HandleFunc("/api/channels/reload", ChannelsReloadHandler).Methods("POST")
 
+	// Browser VNC proxy endpoints (KasmVNC in container)
+	router.HandleFunc("/api/browser/vnc-info/{container}", BrowserVNCInfoHandler).Methods("GET")
+	router.HandleFunc("/api/browser/vnc/{container}/{path:.*}", BrowserVNCProxyHandler)
+	router.HandleFunc("/api/browser/handoff-done", BrowserHandoffDoneHandler).Methods("POST")
+
 	// Scheduler endpoints
 	router.HandleFunc("/api/scheduler/jobs", SchedulerJobsHandler).Methods("GET", "POST")
 	router.HandleFunc("/api/scheduler/jobs/{id}/run", SchedulerJobRunHandler).Methods("POST")

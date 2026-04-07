@@ -177,6 +177,7 @@ func (ifr *InteractiveFlowRunner) startFlow(
 	}
 
 	browserMgr := browser.NewManager(browserConfigFromApp(ifr.AppConfig))
+	wireBrowserContainerCallbacks(browserMgr)
 	browserTools, browserErr := tools.GetBrowserTools(browserMgr)
 	if browserErr == nil {
 		internalTools = append(internalTools, browserTools...)

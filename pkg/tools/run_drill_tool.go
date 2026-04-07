@@ -282,7 +282,7 @@ var testBrowserToolNames = map[string]bool{
 	"browser_set_offline": true, "browser_set_headers": true, "browser_set_credentials": true,
 	"browser_set_geolocation": true, "browser_set_media": true, "browser_set_timezone": true,
 	"browser_set_locale": true, "browser_set_device": true,
-	"browser_request_human": true, "browser_handoff_complete": true,
+	"browser_request_human": true,
 }
 
 // closableExecutor extends ToolExecutor with a Close method and sandbox check.
@@ -690,13 +690,6 @@ func (b *testBrowserExecutor) Execute(_ context.Context, name string, args map[s
 			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
 		}
 		return BrowserRequestHuman(b.mgr)(nil, a)
-
-	case "browser_handoff_complete":
-		var a BrowserHandoffCompleteArgs
-		if err := json.Unmarshal(argsJSON, &a); err != nil {
-			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
-		}
-		return BrowserHandoffComplete(b.mgr)(nil, a)
 
 	default:
 		return nil, fmt.Errorf("unknown browser tool: %s", name)

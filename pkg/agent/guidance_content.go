@@ -42,11 +42,11 @@ The browser does NOT share cookies or sessions with ` + "`shell_command`" + ` (c
 
 **Human-in-the-loop (browser handoff):**
 Use ` + "`browser_request_human`" + ` for CAPTCHAs, complex MFA, payment forms, or any visual challenge you cannot solve.
-1. Call ` + "`browser_request_human`" + ` — returns immediately with CDP connection instructions.
-2. **Relay the connection instructions to the user.**
-3. Call ` + "`browser_handoff_complete`" + ` to wait for the user to finish.
-4. Take a fresh ` + "`browser_snapshot`" + ` afterward.
-You MUST show the user the connection details before calling browser_handoff_complete.
+1. Call ` + "`browser_request_human`" + ` — returns immediately and opens visual browser access for the user.
+2. **Relay the reason to the user.** The browser panel appears automatically in Studio.
+3. The chat stays **fully interactive** — you can continue receiving instructions and controlling the browser while the user watches and interacts via the visual panel.
+4. When the user clicks "Done", the visual session ends but the browser remains available.
+5. Take a fresh ` + "`browser_snapshot`" + ` if you need to see the current state.
 `
 
 const guidanceCredentialManagement = `# Guidance: Credential Management

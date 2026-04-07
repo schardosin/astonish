@@ -78,9 +78,48 @@ func GetBrowserManager() *browser.Manager {
 				FingerprintPlatform: b.FingerprintPlatform,
 				HandoffBindAddress:  b.HandoffBindAddress,
 				HandoffPort:         b.HandoffPort,
+				ContainerMode:       b.ContainerMode,
+				KasmVNCPort:         b.KasmVNCPort,
+				KasmVNCPassword:     b.KasmVNCPassword,
 			})
 		}
 		globalBrowserMgr = browser.NewManager(cfg)
+
+		// Wire browser container callbacks when sandbox is available.
+		// The flow API uses a global (shared) browser manager, so container
+		// provisioning always uses shared=true regardless of config.
+		// Engine compatibility is checked: custom/remote engines fall back to host.
+		engine := sandbox.DetectBrowserEngine(sandbox.BrowserContainerConfig{
+			ChromePath: cfg.ChromePath,
+		})
+		if sandbox.IsContainerCompatibleEngine(engine) {
+			// Check if sandbox runtime is available (lazy — just set the flag
+			// and callbacks, the runtime connection happens on first use).
+			globalBrowserMgr.SandboxEnabled = true
+			globalBrowserMgr.ContainerLaunchFunc = func(sessionID string, _ bool) (string, string, error) {
+				client, err := sandbox.SetupSandboxRuntime()
+				if err != nil {
+					return "", "", fmt.Errorf("sandbox runtime not available for browser container: %w", err)
+				}
+				bCfg := sandbox.BrowserContainerConfig{
+					ViewportWidth:       cfg.ViewportWidth,
+					ViewportHeight:      cfg.ViewportHeight,
+					KasmVNCPort:         cfg.KasmVNCPort,
+					KasmVNCPassword:     cfg.KasmVNCPassword,
+					Proxy:               cfg.Proxy,
+					ChromePath:          cfg.ChromePath,
+					FingerprintSeed:     cfg.FingerprintSeed,
+					FingerprintPlatform: cfg.FingerprintPlatform,
+				}
+				// Always shared for the global browser manager (singleton)
+				info, err := sandbox.LaunchBrowserContainer(client, sessionID, true, bCfg)
+				if err != nil {
+					return "", "", err
+				}
+				return info.ContainerName, info.ContainerIP, nil
+			}
+			// No ContainerDestroyFunc — global browser manager is shared, not destroyed per-session
+		}
 	})
 	return globalBrowserMgr
 }

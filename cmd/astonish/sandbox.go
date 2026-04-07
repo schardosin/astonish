@@ -175,7 +175,7 @@ func printSandboxUsage() {
 	fmt.Println("")
 	fmt.Println("subcommands:")
 	fmt.Println("  status              Show sandbox environment info")
-	fmt.Println("  init                One-time setup: create base template with core tools")
+	fmt.Println("  init                One-time setup: create base + browser templates")
 	fmt.Println("  list (ls)           List active session containers")
 	fmt.Println("  create <template>   Create a sandbox container from a template and open a shell")
 	fmt.Println("  shell <session-id>  Open interactive shell in a session container")
@@ -332,7 +332,31 @@ func handleSandboxInit() error {
 
 	opts := promptOptionalTools()
 
-	return sandbox.InitBaseTemplate(client, registry, opts)
+	if err := sandbox.InitBaseTemplate(client, registry, opts); err != nil {
+		return err
+	}
+
+	// Create browser container template after base template succeeds.
+	if appCfg != nil {
+		bCfg := sandbox.BrowserContainerConfig{
+			ChromePath:          appCfg.Browser.ChromePath,
+			FingerprintSeed:     appCfg.Browser.FingerprintSeed,
+			FingerprintPlatform: appCfg.Browser.FingerprintPlatform,
+		}
+		engine := sandbox.DetectBrowserEngine(bCfg)
+		if sandbox.IsContainerCompatibleEngine(engine) {
+			fmt.Println("\nCreating browser container template...")
+			if err := sandbox.InitBrowserTemplate(client, registry, bCfg, nil); err != nil {
+				fmt.Printf("Warning: browser template creation failed: %v\n", err)
+				fmt.Println("Browser will fall back to host mode.")
+			}
+		} else {
+			fmt.Printf("\nNote: browser engine %q is not compatible with container mode.\n", engine)
+			fmt.Println("The browser will run on the host. Switch to 'default' or 'cloakbrowser' to enable containerized browsing.")
+		}
+	}
+
+	return nil
 }
 
 // promptOptionalTools walks the user through each optional tool with an

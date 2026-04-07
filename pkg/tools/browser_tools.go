@@ -306,16 +306,8 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 
 	requestHumanTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_request_human",
-		Description: "Start a browser handoff session for human intervention (CAPTCHAs, MFA, payment forms). Returns immediately with CDP connection instructions — relay these to the user, then call browser_handoff_complete.",
+		Description: "Share the browser visually with the user for human intervention (CAPTCHAs, MFA, payment forms). Returns immediately — the chat stays interactive so the user can give you instructions while watching the browser. The user clicks Done when they no longer need visual access.",
 	}, BrowserRequestHuman(mgr))
-	if err != nil {
-		return nil, err
-	}
-
-	handoffCompleteTool, err := functiontool.New(functiontool.Config{
-		Name:        "browser_handoff_complete",
-		Description: "Wait for user to finish an active browser handoff. Call after relaying connection instructions from browser_request_human. Blocks until user signals done. Take browser_snapshot afterward.",
-	}, BrowserHandoffComplete(mgr))
 	if err != nil {
 		return nil, err
 	}
@@ -336,6 +328,6 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 		setOfflineTool, setHeadersTool, setCredentialsTool,
 		setGeolocationTool, setMediaTool, setTimezoneTool, setLocaleTool, setDeviceTool,
 		// Human-in-the-loop
-		requestHumanTool, handoffCompleteTool,
+		requestHumanTool,
 	}, nil
 }

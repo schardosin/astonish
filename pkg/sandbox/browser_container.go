@@ -177,10 +177,16 @@ func BrowserContainerInstallCommands(engine string) [][]string {
 			"https://github.com/kasmtech/KasmVNC/releases/download/v1.3.3/kasmvncserver_noble_1.3.3_amd64.deb"},
 		// Install the .deb (dpkg may fail on missing transitive deps — that's expected)
 		[]string{"sh", "-c", "dpkg -i /tmp/kasmvnc.deb || true"},
-		// Fix any missing dependencies (completes the KasmVNC install)
+		// Fix any missing dependencies (completes the KasmVNC install).
+		// WARNING: if deps can't be satisfied, apt-get -f may silently REMOVE
+		// the broken package instead of fixing it (exits 0 either way).
 		[]string{"apt-get", "install", "-f", "-y"},
 		// Clean up the .deb
 		[]string{"rm", "-f", "/tmp/kasmvnc.deb"},
+		// Verify KasmVNC was actually installed. apt-get install -f -y can
+		// silently remove a broken package instead of fixing its deps, so we
+		// must check the binary exists before proceeding.
+		[]string{"test", "-x", "/usr/bin/kasmvncpasswd"},
 	)
 
 	// Common: configure KasmVNC for headless/non-interactive operation.
@@ -226,8 +232,11 @@ chown browser:browser /home/browser/.vnc/xstartup`},
 		// Create a default KasmVNC user "user" with write permission.
 		// The actual password is set at handoff time; this just ensures the
 		// user entry exists so vncserver doesn't prompt for user creation.
+		// Use full path /usr/bin/kasmvncpasswd because su - resets PATH and
+		// on some platforms (Docker+Incus on macOS) the login shell PATH for
+		// the freshly-created browser user may not include /usr/bin.
 		[]string{"sh", "-c",
-			`printf "kasmvnc\nkasmvnc\n" | su - browser -c "kasmvncpasswd -u user -w"`,
+			`printf "kasmvnc\nkasmvnc\n" | su - browser -c "/usr/bin/kasmvncpasswd -u user -w"`,
 		},
 	)
 

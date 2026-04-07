@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/schardosin/astonish/pkg/browser"
 )
 
 const (
@@ -259,6 +260,21 @@ func AuthMiddleware(am *AuthManager, next http.Handler) http.Handler {
 			return
 		}
 
+		// Browser VNC proxy is accessed via iframe where the session cookie
+		// may not be sent (SameSite=Strict blocks cookies on iframe navigations).
+		// Instead of a blanket bypass, we validate that the container has an
+		// active handoff token. The initial page load carries the token in the
+		// query string (?token=...). Sub-resource requests (JS, CSS, images)
+		// don't have the token in the URL, but we allow them if the container
+		// has any active token registered (the handoff is in progress).
+		if strings.HasPrefix(path, "/api/browser/vnc/") {
+			if validateVNCAccess(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			// Fall through to 401 below
+		}
+
 		// Check session cookie
 		if am.ValidateRequest(r) {
 			next.ServeHTTP(w, r)
@@ -294,6 +310,43 @@ func isLoopback(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// validateVNCAccess checks if the request is authorized to access the
+// VNC proxy. It extracts the container name from the URL path and
+// checks two things:
+//
+//  1. If the request has a ?token= query param, validate it directly.
+//     This is the initial iframe page load.
+//
+//  2. Otherwise, check if the container has any active handoff token.
+//     This covers sub-resource requests (JS, CSS, images) that the
+//     KasmVNC page loads and which don't carry the token.
+func validateVNCAccess(r *http.Request) bool {
+	// Extract container name from path: /api/browser/vnc/{container}/...
+	path := r.URL.Path
+	const prefix = "/api/browser/vnc/"
+	rest := path[len(prefix):]
+	container := rest
+	if idx := strings.IndexByte(rest, '/'); idx >= 0 {
+		container = rest[:idx]
+	}
+	if container == "" {
+		return false
+	}
+
+	registry := browser.GetHandoffTokenRegistry()
+
+	// Check explicit token in query string (initial page load)
+	if token := r.URL.Query().Get("token"); token != "" {
+		if tokenContainer, ok := registry.ValidateToken(token); ok && tokenContainer == container {
+			return true
+		}
+		return false
+	}
+
+	// Sub-resource request — validate that container has an active handoff
+	return registry.ValidateContainer(container)
 }
 
 // authPageHTML is a self-contained HTML page that displays the authorization code

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -141,6 +142,14 @@ func RateLimitMiddleware(cfg *RateLimitConfig, next http.Handler) http.Handler {
 
 		// Only rate-limit API paths
 		if len(path) < 4 || path[:4] != "/api" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// VNC proxy is exempt — KasmVNC's web client loads 40+ sub-resources
+		// (JS bundles, CSS, images, sounds) simultaneously on page load, which
+		// would exhaust the API rate budget in a single burst.
+		if strings.HasPrefix(path, "/api/browser/vnc/") {
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -175,7 +175,7 @@ func printSandboxUsage() {
 	fmt.Println("")
 	fmt.Println("subcommands:")
 	fmt.Println("  status              Show sandbox environment info")
-	fmt.Println("  init                One-time setup: create base template with core tools")
+	fmt.Println("  init                One-time setup: create base + browser templates")
 	fmt.Println("  list (ls)           List active session containers")
 	fmt.Println("  create <template>   Create a sandbox container from a template and open a shell")
 	fmt.Println("  shell <session-id>  Open interactive shell in a session container")
@@ -332,7 +332,28 @@ func handleSandboxInit() error {
 
 	opts := promptOptionalTools()
 
-	return sandbox.InitBaseTemplate(client, registry, opts)
+	// Wire browser engine into base template options so browser packages
+	// (Chromium, KasmVNC, X11 deps) are installed in the base template.
+	if appCfg != nil {
+		bCfg := sandbox.BrowserContainerConfig{
+			ChromePath:          appCfg.Browser.ChromePath,
+			FingerprintSeed:     appCfg.Browser.FingerprintSeed,
+			FingerprintPlatform: appCfg.Browser.FingerprintPlatform,
+		}
+		engine := sandbox.DetectBrowserEngine(bCfg)
+		if sandbox.IsContainerCompatibleEngine(engine) {
+			opts.BrowserEngine = engine
+		} else {
+			fmt.Printf("\nNote: browser engine %q is not compatible with container mode.\n", engine)
+			fmt.Println("The browser will run on the host. Switch to 'default' or 'cloakbrowser' to enable containerized browsing.")
+		}
+	}
+
+	if err := sandbox.InitBaseTemplate(client, registry, opts); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // promptOptionalTools walks the user through each optional tool with an
@@ -1012,6 +1033,21 @@ func handleSandboxReset() error {
 	// Prompt for optional tools (same as sandbox init)
 	fmt.Println("")
 	opts := promptOptionalTools()
+
+	// Wire browser engine into base template options so browser packages
+	// (Chromium, KasmVNC, X11 deps) are installed in the base template.
+	appCfg, _ := config.LoadAppConfig()
+	if appCfg != nil {
+		bCfg := sandbox.BrowserContainerConfig{
+			ChromePath:          appCfg.Browser.ChromePath,
+			FingerprintSeed:     appCfg.Browser.FingerprintSeed,
+			FingerprintPlatform: appCfg.Browser.FingerprintPlatform,
+		}
+		engine := sandbox.DetectBrowserEngine(bCfg)
+		if sandbox.IsContainerCompatibleEngine(engine) {
+			opts.BrowserEngine = engine
+		}
+	}
 
 	// Recreate from scratch
 	return sandbox.InitBaseTemplate(client, tplRegistry, opts)

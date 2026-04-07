@@ -1404,6 +1404,20 @@ func handleSandboxSetup() error {
 
 		opts := promptOptionalTools()
 
+		// Wire browser engine into base template options so browser packages
+		// (Chromium, KasmVNC, X11 deps) are installed in the base template.
+		if appCfg, cfgErr := config.LoadAppConfig(); cfgErr == nil && appCfg != nil {
+			bCfg := sandbox.BrowserContainerConfig{
+				ChromePath:          appCfg.Browser.ChromePath,
+				FingerprintSeed:     appCfg.Browser.FingerprintSeed,
+				FingerprintPlatform: appCfg.Browser.FingerprintPlatform,
+			}
+			engine := sandbox.DetectBrowserEngine(bCfg)
+			if sandbox.IsContainerCompatibleEngine(engine) {
+				opts.BrowserEngine = engine
+			}
+		}
+
 		if err := sandbox.InitBaseTemplate(client, registry, opts); err != nil {
 			return fmt.Errorf("sandbox setup: %w", err)
 		}

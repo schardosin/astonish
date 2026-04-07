@@ -7,11 +7,12 @@ import type { ChatSession } from '../api/studioChat'
 import { startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions } from '../api/fleetChat'
 import type { FleetSession } from '../api/fleetChat'
 import HomePage from './HomePage'
-import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage } from './chat/chatTypes'
+import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage } from './chat/chatTypes'
 import { getAgentColor } from './chat/chatTypes'
 import FleetStartDialog from './chat/FleetStartDialog'
 import FleetTemplatePicker from './chat/FleetTemplatePicker'
 import FleetExecutionPanel from './chat/FleetExecutionPanel'
+import BrowserView from './chat/BrowserView'
 
 // Extended ChatSession with optional fleet fields coming from the sidebar
 interface SidebarSession extends ChatSession {
@@ -473,7 +474,20 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             break
 
           case 'tool_result':
-            setMessages((prev: ChatMsg[]) => [...prev, { type: 'tool_result', toolName: data.name, toolResult: data.result }])
+            // Detect browser handoff with VNC viewer
+            if (data.name === 'browser_request_human' && data.result && typeof data.result === 'object' && (data.result as Record<string, unknown>).vnc_proxy_url) {
+              const result = data.result as Record<string, unknown>
+              const vncUrl = String(result.vnc_proxy_url || '')
+              setMessages((prev: ChatMsg[]) => [...prev, {
+                type: 'browser_handoff',
+                vncProxyUrl: vncUrl,
+                pageUrl: String(result.page_url || ''),
+                pageTitle: String(result.page_title || ''),
+                reason: String(result.message || 'Human assistance needed'),
+              } as BrowserHandoffMessage])
+            } else {
+              setMessages((prev: ChatMsg[]) => [...prev, { type: 'tool_result', toolName: data.name, toolResult: data.result }])
+            }
             // Clear wizard context once the fleet plan or drill suite has been saved
             if (data.name === 'save_fleet_plan' || data.name === 'save_drill') {
               setActiveWizardContext(null)
@@ -1182,6 +1196,23 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
               if (msg.type === 'tool_call' || msg.type === 'tool_result') {
                 return renderToolCard(msg, index)
+              }
+
+              if (msg.type === 'browser_handoff') {
+                const handoff = msg as BrowserHandoffMessage
+                return (
+                  <BrowserView
+                    key={index}
+                    data={handoff}
+                    theme={theme}
+                    onDone={() => {
+                      // Replace with a completed marker
+                      setMessages((prev: ChatMsg[]) => prev.map((m, i) =>
+                        i === index ? { ...m, type: 'browser_handoff' } as BrowserHandoffMessage : m
+                      ))
+                    }}
+                  />
+                )
               }
 
               if (msg.type === 'image') {

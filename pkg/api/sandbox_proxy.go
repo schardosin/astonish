@@ -115,16 +115,13 @@ func SandboxProxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve container IP
-	ip, err := getCachedIP(client, containerName)
-	if err != nil {
+	// Resolve container IP (used for logging/diagnostics, not for dialing)
+	if _, err := getCachedIP(client, containerName); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
 		fmt.Fprintf(w, `{"error":"cannot resolve container IP: %s"}`, err.Error())
 		return
 	}
-
-	targetBase := fmt.Sprintf("http://%s:%d", ip, port)
 
 	// Extract the downstream path (everything after /api/sandbox/proxy/{container}/{port})
 	prefix := fmt.Sprintf("/api/sandbox/proxy/%s/%s", containerName, portStr)
@@ -135,12 +132,16 @@ func SandboxProxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// WebSocket upgrade
 	if isWebSocketUpgrade(r) {
-		proxyWebSocket(w, r, ip, port, downstreamPath)
+		proxyWebSocket(w, r, func() (net.Conn, error) {
+			dialer := &sandbox.ContainerDialer{Client: client}
+			return dialer.Dial(containerName, port)
+		}, downstreamPath)
 		return
 	}
 
 	// HTTP reverse proxy
-	target, err := url.Parse(targetBase)
+	dialer := &sandbox.ContainerDialer{Client: client}
+	target, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("invalid proxy target URL: %s", err), http.StatusInternalServerError)
 		return
@@ -164,6 +165,7 @@ func SandboxProxyHandler(w http.ResponseWriter, r *http.Request) {
 			req.Header.Set("X-Forwarded-Host", r.Host)
 			req.Header.Set("X-Forwarded-Proto", "http")
 		},
+		Transport: dialer.HTTPTransport(containerName, port),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadGateway)
@@ -264,36 +266,28 @@ func (m *PortProxyManager) StartProxy(containerName string, containerPort int) (
 		return 0, err
 	}
 
-	// Resolve container IP
+	// Verify container connectivity
 	client, err := sandboxConnect()
 	if err != nil {
 		return 0, fmt.Errorf("sandbox unavailable: %w", err)
 	}
-	ip, err := getCachedIP(client, containerName)
-	if err != nil {
+	if _, err := getCachedIP(client, containerName); err != nil {
 		return 0, fmt.Errorf("cannot resolve container IP: %w", err)
 	}
 
-	targetBase := fmt.Sprintf("http://%s:%d", ip, containerPort)
-	if _, err := url.Parse(targetBase); err != nil {
-		return 0, fmt.Errorf("invalid proxy target URL %q: %w", targetBase, err)
-	}
+	dialer := &sandbox.ContainerDialer{Client: client}
+	tunnelTarget := fmt.Sprintf("http://127.0.0.1:%d", containerPort)
 
 	// Build the handler: reverse proxy + WebSocket support
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Re-resolve IP on each request (uses cache with TTL)
-		currentIP, err := getCachedIP(client, containerName)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("cannot resolve container IP: %s", err), http.StatusBadGateway)
-			return
-		}
-
 		if isWebSocketUpgrade(r) {
-			proxyWebSocket(w, r, currentIP, containerPort, r.URL.Path)
+			proxyWebSocket(w, r, func() (net.Conn, error) {
+				return dialer.Dial(containerName, containerPort)
+			}, r.URL.Path)
 			return
 		}
 
-		currentTarget, err := url.Parse(fmt.Sprintf("http://%s:%d", currentIP, containerPort))
+		currentTarget, err := url.Parse(tunnelTarget)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("invalid proxy target URL: %s", err), http.StatusBadGateway)
 			return
@@ -317,6 +311,7 @@ func (m *PortProxyManager) StartProxy(containerName string, containerPort int) (
 				req.Header.Set("X-Forwarded-Host", r.Host)
 				req.Header.Set("X-Forwarded-Proto", "http")
 			},
+			Transport: dialer.HTTPTransport(containerName, containerPort),
 			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 				http.Error(w, fmt.Sprintf("proxy error: %s", err), http.StatusBadGateway)
 			},
@@ -331,7 +326,7 @@ func (m *PortProxyManager) StartProxy(containerName string, containerPort int) (
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	slog.Info("starting listener", "component", "sandbox-proxy", "host_port", hostPort, "container_ip", ip, "container_port", containerPort, "container", containerName)
+	slog.Info("starting listener", "component", "sandbox-proxy", "host_port", hostPort, "container_port", containerPort, "container", containerName)
 
 	// Start listener in background
 	go func() {
@@ -577,18 +572,22 @@ func ServeSubdomainProxy(w http.ResponseWriter, r *http.Request, containerName s
 		return
 	}
 
-	currentIP, err := getCachedIP(client, containerName)
-	if err != nil {
+	// Verify container is reachable
+	if _, err := getCachedIP(client, containerName); err != nil {
 		http.Error(w, fmt.Sprintf("cannot resolve container IP: %s", err), http.StatusBadGateway)
 		return
 	}
 
+	dialer := &sandbox.ContainerDialer{Client: client}
+
 	if isWebSocketUpgrade(r) {
-		proxyWebSocket(w, r, currentIP, containerPort, r.URL.Path)
+		proxyWebSocket(w, r, func() (net.Conn, error) {
+			return dialer.Dial(containerName, containerPort)
+		}, r.URL.Path)
 		return
 	}
 
-	currentTarget, err := url.Parse(fmt.Sprintf("http://%s:%d", currentIP, containerPort))
+	currentTarget, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", containerPort))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("invalid proxy target URL: %s", err), http.StatusBadGateway)
 		return
@@ -611,6 +610,7 @@ func ServeSubdomainProxy(w http.ResponseWriter, r *http.Request, containerName s
 			req.Header.Set("X-Forwarded-Host", r.Host)
 			req.Header.Set("X-Forwarded-Proto", "http")
 		},
+		Transport: dialer.HTTPTransport(containerName, containerPort),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			http.Error(w, fmt.Sprintf("proxy error: %s", err), http.StatusBadGateway)
 		},
@@ -640,19 +640,18 @@ func isWebSocketUpgrade(r *http.Request) bool {
 // TCP hijacking. This avoids message-level copying and works transparently
 // with any WebSocket application (including Vite HMR, Socket.IO, etc.).
 //
+// The dialFunc creates the backend TCP connection (typically via exec tunnel).
+//
 // The approach:
-//  1. Dial a raw TCP connection to the backend container
+//  1. Dial a connection to the backend container via dialFunc
 //  2. Write the original HTTP upgrade request to the backend
 //  3. Read the backend's 101 Switching Protocols response
 //  4. Hijack the client connection from the HTTP server
 //  5. Forward the 101 response to the client
-//  6. Bidirectionally pipe raw bytes between the two TCP connections
-func proxyWebSocket(w http.ResponseWriter, r *http.Request, ip string, port int, path string) {
-	// Build the backend address
-	backendAddr := net.JoinHostPort(ip, strconv.Itoa(port))
-
-	// Dial the backend
-	backendConn, err := net.DialTimeout("tcp", backendAddr, 10*time.Second)
+//  6. Bidirectionally pipe raw bytes between the two connections
+func proxyWebSocket(w http.ResponseWriter, r *http.Request, dialFunc func() (net.Conn, error), path string) {
+	// Dial the backend via the provided dial function (exec tunnel)
+	backendConn, err := dialFunc()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("WebSocket backend dial failed: %s", err), http.StatusBadGateway)
 		return
@@ -668,11 +667,12 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request, ip string, port int,
 	}
 
 	// Write the HTTP upgrade request to the backend.
-	// Set Host to the backend address so the upstream server (e.g. Vite)
+	// Set Host to the remote address so the upstream server (e.g. Vite)
 	// doesn't reject based on host mismatch.
+	backendHost := backendConn.RemoteAddr().String()
 	var reqBuf strings.Builder
 	fmt.Fprintf(&reqBuf, "%s %s HTTP/1.1\r\n", r.Method, reqURI)
-	fmt.Fprintf(&reqBuf, "Host: %s\r\n", backendAddr)
+	fmt.Fprintf(&reqBuf, "Host: %s\r\n", backendHost)
 
 	// Forward all headers except Host (already set above)
 	for key, vals := range r.Header {
@@ -759,7 +759,7 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request, ip string, port int,
 		}
 	}
 
-	slog.Info("WebSocket connected", "component", "sandbox-proxy", "remote_addr", r.RemoteAddr, "backend", backendAddr, "path", path)
+	slog.Info("WebSocket connected", "component", "sandbox-proxy", "remote_addr", r.RemoteAddr, "backend", backendHost, "path", path)
 
 	// Bidirectional raw byte forwarding
 	done := make(chan struct{})

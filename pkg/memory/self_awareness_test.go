@@ -218,11 +218,9 @@ func TestGenerateSelfMD_BrowserHandoff(t *testing.T) {
 	checks := []string{
 		"## Browser Handoff",
 		"browser_request_human",
-		"browser_handoff_complete",
 		"browser_snapshot",
-		"chrome://inspect",
 		"CAPTCHA",
-		"auto-detected",
+		"non-blocking",
 	}
 	for _, check := range checks {
 		if !strings.Contains(content, check) {

@@ -393,6 +393,12 @@ type BrowserAppConfig struct {
 	HandoffBindAddress string `yaml:"handoff_bind_address,omitempty" json:"handoff_bind_address,omitempty"`
 	// HandoffPort is the TCP port for the CDP handoff proxy. Default: 9222.
 	HandoffPort int `yaml:"handoff_port,omitempty" json:"handoff_port,omitempty"`
+
+	// KasmVNCPort is the port KasmVNC listens on inside the browser container. Default: 6901.
+	KasmVNCPort int `yaml:"kasmvnc_port,omitempty" json:"kasmvnc_port,omitempty"`
+	// KasmVNCPassword is the VNC password for handoff sessions. If empty, a random
+	// password is generated per handoff session.
+	KasmVNCPassword string `yaml:"kasmvnc_password,omitempty" json:"kasmvnc_password,omitempty"`
 }
 
 // AgentIdentityConfig holds the agent's persona for web portal registrations.

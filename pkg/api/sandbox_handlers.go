@@ -241,6 +241,19 @@ func SandboxInitHandler(w http.ResponseWriter, r *http.Request) {
 		opts.InstallTools = make(map[string]bool)
 	}
 
+	// Wire browser engine so browser packages are installed in the base template.
+	if appCfg != nil {
+		bCfg := sandbox.BrowserContainerConfig{
+			ChromePath:          appCfg.Browser.ChromePath,
+			FingerprintSeed:     appCfg.Browser.FingerprintSeed,
+			FingerprintPlatform: appCfg.Browser.FingerprintPlatform,
+		}
+		engine := sandbox.DetectBrowserEngine(bCfg)
+		if sandbox.IsContainerCompatibleEngine(engine) {
+			opts.BrowserEngine = engine
+		}
+	}
+
 	if err := sandbox.InitBaseTemplate(client, registry, opts); err != nil {
 		SendSSE(w, flusher, "error", map[string]string{"error": err.Error()})
 		return

@@ -29,6 +29,7 @@ var CoreTools = []string{
 	"jq",
 	"unzip",
 	"build-essential",
+	"socat",
 	"docker.io",
 }
 
@@ -42,6 +43,9 @@ func CoreToolInstallCommands() [][]string {
 			"git", "curl", "wget", "jq", "unzip", "build-essential",
 			"python3", "python3-pip", "python3-venv",
 			"ca-certificates", "gnupg",
+			// socat — required for exec-based TCP tunneling to container services
+			// (browser CDP, VNC proxy, sandbox HTTP proxy)
+			"socat",
 			// Docker runtime (daemon + CLI + containerd) — required for
 			// containerized MCP servers and Docker-based workflows
 			"docker.io",
@@ -104,6 +108,13 @@ func OptionalTools() []OptionalTool {
 type BaseTemplateOptions struct {
 	// InstallTools maps optional tool IDs to true if they should be installed.
 	InstallTools map[string]bool
+
+	// BrowserEngine is the detected browser engine ("default", "cloakbrowser",
+	// "custom", "remote"). When set to a container-compatible engine ("default"
+	// or "cloakbrowser"), browser packages (Chromium/CloakBrowser, KasmVNC,
+	// socat, X11 deps) are included in the base template. Empty or incompatible
+	// engines skip browser installation — the browser runs on the host instead.
+	BrowserEngine string
 
 	// ProgressFunc, when non-nil, receives progress messages instead of
 	// printing them to stdout. This allows callers (e.g. API handlers)
@@ -223,6 +234,30 @@ func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry, opts Base
 			}
 		}
 		progress("  %s installed.\n", tool.Name)
+	}
+
+	// Install browser packages (Chromium/CloakBrowser, KasmVNC, X11 deps) when
+	// a container-compatible engine is configured. This enables browser tools to
+	// run inside the session container with visual access via KasmVNC.
+	if IsContainerCompatibleEngine(opts.BrowserEngine) {
+		engineLabel := "Chromium"
+		if opts.BrowserEngine == "cloakbrowser" {
+			engineLabel = "CloakBrowser"
+		}
+		progress("Installing %s and KasmVNC...\n", engineLabel)
+		for _, cmd := range BrowserContainerInstallCommands(opts.BrowserEngine) {
+			progress("  Running: %v\n", cmd)
+			exitCode, err := client.ExecSimple(containerName, cmd)
+			if err != nil {
+				client.StopAndDeleteInstance(containerName)
+				return fmt.Errorf("failed to install browser (%v): %w", cmd, err)
+			}
+			if exitCode != 0 {
+				client.StopAndDeleteInstance(containerName)
+				return fmt.Errorf("browser install: command %v exited with code %d", cmd, exitCode)
+			}
+		}
+		progress("  %s + KasmVNC installed.\n", engineLabel)
 	}
 
 	// Enable security.nesting — Docker is a core tool and requires nesting

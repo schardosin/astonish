@@ -624,6 +624,44 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		sandboxTplRegistry = tplRegistry
 		sandboxSessRegistry = sessRegistry
 
+		// Wire browser to run inside the session container when sandbox is
+		// available. The browser resolves the session container (already
+		// managed by NodeClientPool) and starts Chromium + KasmVNC inside it.
+		{
+			bcfg := browserMgr.Config()
+			engine := sandbox.DetectBrowserEngine(sandbox.BrowserContainerConfig{
+				ChromePath: bcfg.ChromePath,
+			})
+			if sandbox.IsContainerCompatibleEngine(engine) {
+				browserMgr.SandboxEnabled = true
+				client := sandboxClient // capture for closures
+				bCfg := sandbox.BrowserContainerConfig{
+					ViewportWidth:       bcfg.ViewportWidth,
+					ViewportHeight:      bcfg.ViewportHeight,
+					KasmVNCPort:         bcfg.KasmVNCPort,
+					KasmVNCPassword:     bcfg.KasmVNCPassword,
+					Proxy:               bcfg.Proxy,
+					ChromePath:          bcfg.ChromePath,
+					FingerprintSeed:     bcfg.FingerprintSeed,
+					FingerprintPlatform: bcfg.FingerprintPlatform,
+				}
+				browserMgr.ContainerResolveFunc = func(sessionID string) (string, string, error) {
+					containerName := sandbox.SessionContainerName(sessionID)
+					if !client.IsRunning(containerName) {
+						return "", "", fmt.Errorf("session container %q is not running", containerName)
+					}
+					ip, err := client.GetContainerIPv4(containerName)
+					if err != nil {
+						return "", "", fmt.Errorf("failed to get IP for session container %q: %w", containerName, err)
+					}
+					return containerName, ip, nil
+				}
+				browserMgr.ContainerStartBrowserFunc = func(containerName string) error {
+					return sandbox.StartChromiumInContainer(client, containerName, bCfg)
+				}
+			}
+		}
+
 		// Wire sandbox pool to all lazy MCP toolsets so stdio MCP servers
 		// start inside the session's container instead of on the host.
 		// SSE transport servers are unaffected (isSSETransport check inside).
@@ -1735,6 +1773,8 @@ func browserConfigFromApp(appCfg *config.AppConfig) browser.BrowserConfig {
 		FingerprintPlatform: b.FingerprintPlatform,
 		HandoffBindAddress:  b.HandoffBindAddress,
 		HandoffPort:         b.HandoffPort,
+		KasmVNCPort:         b.KasmVNCPort,
+		KasmVNCPassword:     b.KasmVNCPassword,
 	})
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -78,9 +79,70 @@ func GetBrowserManager() *browser.Manager {
 				FingerprintPlatform: b.FingerprintPlatform,
 				HandoffBindAddress:  b.HandoffBindAddress,
 				HandoffPort:         b.HandoffPort,
+				KasmVNCPort:         b.KasmVNCPort,
+				KasmVNCPassword:     b.KasmVNCPassword,
 			})
 		}
 		globalBrowserMgr = browser.NewManager(cfg)
+
+		// Wire browser container callbacks when sandbox is available.
+		// The browser runs inside the session container (managed by
+		// NodeClientPool). Engine compatibility is checked: custom/remote
+		// engines fall back to host mode.
+		engine := sandbox.DetectBrowserEngine(sandbox.BrowserContainerConfig{
+			ChromePath: cfg.ChromePath,
+		})
+		if sandbox.IsContainerCompatibleEngine(engine) {
+			globalBrowserMgr.SandboxEnabled = true
+
+			// ContainerResolveFunc: look up the session container name + IP.
+			globalBrowserMgr.ContainerResolveFunc = func(sessionID string) (string, string, error) {
+				client, err := sandbox.SetupSandboxRuntime()
+				if err != nil {
+					return "", "", fmt.Errorf("sandbox runtime not available: %w", err)
+				}
+				containerName := sandbox.SessionContainerName(sessionID)
+				if !client.IsRunning(containerName) {
+					return "", "", fmt.Errorf("session container %q is not running", containerName)
+				}
+				ip, err := client.GetContainerIPv4(containerName)
+				if err != nil {
+					return "", "", fmt.Errorf("failed to get IP for session container %q: %w", containerName, err)
+				}
+				return containerName, ip, nil
+			}
+
+			// ContainerStartBrowserFunc: start Chromium + KasmVNC inside the container.
+			bCfg := sandbox.BrowserContainerConfig{
+				ViewportWidth:       cfg.ViewportWidth,
+				ViewportHeight:      cfg.ViewportHeight,
+				KasmVNCPort:         cfg.KasmVNCPort,
+				KasmVNCPassword:     cfg.KasmVNCPassword,
+				Proxy:               cfg.Proxy,
+				ChromePath:          cfg.ChromePath,
+				FingerprintSeed:     cfg.FingerprintSeed,
+				FingerprintPlatform: cfg.FingerprintPlatform,
+			}
+			globalBrowserMgr.ContainerStartBrowserFunc = func(containerName string) error {
+				client, err := sandbox.SetupSandboxRuntime()
+				if err != nil {
+					return fmt.Errorf("sandbox runtime not available: %w", err)
+				}
+				return sandbox.StartChromiumInContainer(client, containerName, bCfg)
+			}
+
+			// ContainerDialFunc: tunnel TCP connections through the Incus exec API.
+			// This makes CDP (and /json/version HTTP) work even when container bridge
+			// IPs are not routable from the host (Docker+Incus on macOS).
+			globalBrowserMgr.ContainerDialFunc = func(containerName string, port int) (net.Conn, error) {
+				client, err := sandbox.SetupSandboxRuntime()
+				if err != nil {
+					return nil, fmt.Errorf("sandbox runtime not available: %w", err)
+				}
+				dialer := &sandbox.ContainerDialer{Client: client}
+				return dialer.Dial(containerName, port)
+			}
+		}
 	})
 	return globalBrowserMgr
 }

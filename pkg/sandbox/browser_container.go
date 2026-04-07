@@ -73,7 +73,7 @@ func IsContainerCompatibleEngine(engine string) bool {
 
 // BrowserContainerInstallCommands returns the commands to install the browser
 // engine and KasmVNC inside a container template. The commands are engine-aware:
-// "default" installs Chromium from the xtradeb PPA (Ubuntu's own
+// "default" installs Google Chrome via direct .deb download (Ubuntu's own
 // chromium-browser package is snap-only and hangs in LXC containers),
 // "cloakbrowser" installs python3 + pip3 + xvfb + the CloakBrowser package.
 //
@@ -109,25 +109,25 @@ func BrowserContainerInstallCommands(engine string) [][]string {
 			// Utilities
 			"wget", "ca-certificates",
 		})
-	default: // "default" — Chromium from xtradeb PPA
+	default: // "default" — Google Chrome via direct .deb download
 		// Ubuntu 24.04's chromium-browser package is a snap transitional shim
 		// that triggers `snap install chromium`. Snap does not work inside
 		// unprivileged LXC containers (requires squashfs mounts and AppArmor
 		// confinement), causing the install to hang indefinitely.
 		//
-		// The xtradeb/apps PPA provides a native .deb build of Chromium for
-		// Ubuntu noble. Binary installs to /usr/bin/chromium.
+		// Third-party PPAs (e.g., xtradeb/apps) provide native Chromium .debs
+		// but their apt-get update fails on Docker+Incus (macOS) due to PPA
+		// GPG key verification issues through the Docker network stack.
+		//
+		// Google Chrome's official .deb is downloaded directly from dl.google.com
+		// — no PPA, no signing keys, no apt-get update needed. The .deb declares
+		// its own dependencies which are resolved by apt-get install -f -y.
+		// Binary installs to /usr/bin/google-chrome-stable; we symlink it to
+		// /usr/bin/chromium for compatibility with all existing code paths.
 		cmds = append(cmds,
-			// Install add-apt-repository tool
-			[]string{"apt-get", "install", "-y", "software-properties-common"},
-			// Add PPA with native Chromium .deb packages
-			[]string{"add-apt-repository", "-y", "ppa:xtradeb/apps"},
-			// Refresh package lists after adding PPA
-			[]string{"apt-get", "update"},
-			// Install Chromium + shared deps
+			// Install shared deps first (from default Ubuntu repos — no PPA needed)
 			[]string{"apt-get", "install", "-y",
-				"chromium",
-				// Chromium shared deps
+				// Chromium/Chrome shared deps
 				"fonts-liberation", "fonts-noto-color-emoji",
 				"xdg-utils", "libnss3", "libatk-bridge2.0-0",
 				"libx11-xcb1", "libxcomposite1", "libxrandr2",
@@ -143,6 +143,18 @@ func BrowserContainerInstallCommands(engine string) [][]string {
 				// Utilities
 				"wget", "ca-certificates",
 			},
+			// Download Google Chrome stable .deb (always latest stable, no version to hardcode)
+			[]string{"wget", "-q", "-O", "/tmp/google-chrome.deb",
+				"https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"},
+			// Install the .deb (dpkg may fail on missing transitive deps — that's expected)
+			[]string{"sh", "-c", "dpkg -i /tmp/google-chrome.deb || true"},
+			// Fix any missing dependencies (completes the Chrome install)
+			[]string{"apt-get", "install", "-f", "-y"},
+			// Clean up the .deb
+			[]string{"rm", "-f", "/tmp/google-chrome.deb"},
+			// Symlink to /usr/bin/chromium for compatibility with StartChromiumInContainer
+			// and all other code that references the "chromium" binary name.
+			[]string{"ln", "-sf", "/usr/bin/google-chrome-stable", "/usr/bin/chromium"},
 		)
 	}
 
@@ -156,12 +168,20 @@ func BrowserContainerInstallCommands(engine string) [][]string {
 		[]string{"usermod", "-aG", "ssl-cert", "browser"},
 	)
 
-	// Common: install KasmVNC from release deb (Ubuntu 24.04 noble amd64)
-	cmds = append(cmds, []string{"sh", "-c",
-		"wget -q https://github.com/kasmtech/KasmVNC/releases/download/v1.3.3/kasmvncserver_noble_1.3.3_amd64.deb -O /tmp/kasmvnc.deb && " +
-			"dpkg -i /tmp/kasmvnc.deb || apt-get install -f -y && " +
-			"rm -f /tmp/kasmvnc.deb",
-	})
+	// Common: install KasmVNC from release deb (Ubuntu 24.04 noble amd64).
+	// Each step is a separate command so failures produce clear exit codes
+	// instead of being silently swallowed by shell operator precedence bugs.
+	cmds = append(cmds,
+		// Download the KasmVNC .deb
+		[]string{"wget", "-q", "-O", "/tmp/kasmvnc.deb",
+			"https://github.com/kasmtech/KasmVNC/releases/download/v1.3.3/kasmvncserver_noble_1.3.3_amd64.deb"},
+		// Install the .deb (dpkg may fail on missing transitive deps — that's expected)
+		[]string{"sh", "-c", "dpkg -i /tmp/kasmvnc.deb || true"},
+		// Fix any missing dependencies (completes the KasmVNC install)
+		[]string{"apt-get", "install", "-f", "-y"},
+		// Clean up the .deb
+		[]string{"rm", "-f", "/tmp/kasmvnc.deb"},
+	)
 
 	// Common: configure KasmVNC for headless/non-interactive operation.
 	// KasmVNC has several interactive prompts that hang ExecSimple (which has
@@ -376,7 +396,7 @@ sleep 1
 # Bridge CDP port to all interfaces so the host can connect
 %s`, display, display, internalCDPPort, width, height, BrowserProfileMountPath, fingerprintFlags, proxyFlag, socatBridge)
 
-	default: // "default" — headed Chromium from xtradeb PPA (/usr/bin/chromium)
+	default: // "default" — headed Google Chrome (/usr/bin/chromium via symlink)
 		proxyFlag := ""
 		if cfg.Proxy != "" {
 			proxyFlag = fmt.Sprintf(" --proxy-server=%s", cfg.Proxy)

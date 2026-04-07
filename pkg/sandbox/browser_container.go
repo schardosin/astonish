@@ -318,21 +318,15 @@ func StartKasmVNC(client *IncusClient, containerName string, cfg BrowserContaine
 		height = 720
 	}
 
-	// Fix ownership of the browser home directory. In unprivileged LXC
-	// containers (especially Docker+Incus on macOS), the UID shift applied
-	// by ShiftTemplateRootfs during template creation can leave /home/browser
-	// owned by nobody:nogroup. The browser user needs write access to
-	// ~/.vnc for vncserver to create pidfiles and logs.
-	chownCmd := []string{"chown", "-R", "browser:browser", "/home/browser"}
-	if _, err := client.ExecSimple(containerName, chownCmd); err != nil {
-		return fmt.Errorf("failed to fix browser home ownership: %w", err)
-	}
-
-	geometry := fmt.Sprintf("%dx%d", width, height)
 	// Use runuser instead of su — in unprivileged LXC containers on
 	// Docker+Incus, su fails with "Authentication failure" because PAM
 	// can't read /etc/shadow through the UID namespace mapping.
 	// runuser (part of util-linux) bypasses PAM authentication.
+	//
+	// Note: /home/browser ownership is correct because ShiftTemplateRootfs
+	// shifts ALL UIDs (not just root) during template creation. The shifted
+	// UIDs are captured in the snapshot and inherited by session containers.
+	geometry := fmt.Sprintf("%dx%d", width, height)
 	startCmd := []string{"runuser", "-l", "browser", "-c",
 		fmt.Sprintf("vncserver :%s -geometry %s -depth 24 -websocketPort %d -DisableBasicAuth",
 			kasmVNCDisplay,

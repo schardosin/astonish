@@ -71,8 +71,14 @@ func preseedIdmap(client *IncusClient, containerName string) error {
 // containers that use it as their overlay lower layer see pre-shifted files,
 // enabling instant container start without per-session UID shifting.
 //
-// The shift uses chown --from=0:0 to only shift files at UID/GID 0 (the
-// default for freshly created containers), preventing double-shifting.
+// The shift handles ALL UIDs in the rootfs (root, system users, and regular
+// users like the browser user). It enumerates unique UID:GID pairs below the
+// shift base and runs a targeted chown for each, preserving per-user ownership
+// distinctions (e.g., UID 0→1000000, UID 1001→1001001).
+//
+// Double-shifting is prevented by checking volatile.last_state.idmap before
+// shifting — if it already matches the expected idmap, the rootfs was shifted
+// in a previous run and we skip it.
 //
 // For privileged containers, this is a no-op.
 func ShiftTemplateRootfs(client *IncusClient, templateName string) error {
@@ -105,6 +111,16 @@ func ShiftTemplateRootfs(client *IncusClient, templateName string) error {
 		return nil
 	}
 
+	// Guard against double-shifting: if volatile.last_state.idmap already
+	// matches the expected idmap, the rootfs was shifted in a previous run.
+	if lastIdmap, hasLast := inst.Config["volatile.last_state.idmap"]; hasLast && lastIdmap == nextIdmap {
+		slog.Debug("rootfs already shifted (idmap matches), skipping",
+			"component", "sandbox",
+			"template", templateName,
+		)
+		return nil
+	}
+
 	// Parse the idmap to get the UID/GID shift values
 	uidShift, gidShift, err := parseIdmapShifts(nextIdmap)
 	if err != nil {
@@ -133,21 +149,56 @@ func ShiftTemplateRootfs(client *IncusClient, templateName string) error {
 	return preseedIdmap(client, containerName)
 }
 
-// chownShift recursively chowns a directory tree from UID/GID 0 to the
-// specified shifted values. Uses --from=0:0 to skip already-shifted files.
+// chownShift recursively shifts all UIDs and GIDs in a directory tree by the
+// specified offset. It handles ALL users (root, system users, regular users)
+// by enumerating unique UID:GID pairs below the shift base and running a
+// targeted `chown --from=U:G (U+shift):(G+shift)` for each pair.
+//
+// This is more correct than the previous --from=0:0 approach which only
+// shifted root-owned files, leaving non-root users (e.g., the browser user
+// at UID 1001) unshifted and unmapped inside the container.
+//
 // Dispatches through execOnSandboxHost so it works on both native Linux
 // and Docker+Incus (where the chown runs inside the Docker container).
 func chownShift(rootfs string, uidShift, gidShift int64) error {
-	output, err := execOnSandboxHost([]string{
-		"chown", "-Rh", "--from=0:0",
-		fmt.Sprintf("%d:%d", uidShift, gidShift),
-		rootfs,
-	})
+	// Enumerate all unique UID:GID pairs in the rootfs that are below
+	// the shift base (i.e., not yet shifted). Then run a targeted
+	// `chown -Rh --from=U:G (U+uidShift):(G+gidShift)` for each pair.
+	// Using --from ensures only files matching the exact original UID:GID
+	// are touched, preserving per-user ownership distinctions.
+	//
+	// The shell script:
+	// 1. find -printf '%U:%G\n' — prints numeric uid:gid for every file
+	// 2. sort -u — deduplicates (typically ~20-30 unique pairs)
+	// 3. For each pair where uid < shift_base, run chown --from
+	//
+	// This is efficient: the find pass is a single directory walk, and
+	// each subsequent chown --from pass only stats+chowns matching files.
+	script := fmt.Sprintf(`
+set -e
+ROOTFS=%q
+UID_SHIFT=%d
+GID_SHIFT=%d
+
+# Collect unique uid:gid pairs below the shift base
+pairs=$(find "$ROOTFS" -printf '%%U:%%G\n' 2>/dev/null | sort -un)
+
+for pair in $pairs; do
+    u="${pair%%:*}"
+    g="${pair#*:}"
+    # Only shift UIDs that haven't been shifted yet (below the shift base)
+    if [ "$u" -lt "$UID_SHIFT" ] && [ "$g" -lt "$GID_SHIFT" ]; then
+        new_u=$((u + UID_SHIFT))
+        new_g=$((g + GID_SHIFT))
+        chown -Rh --from="$u:$g" "$new_u:$new_g" "$ROOTFS" 2>/dev/null || true
+    fi
+done
+`, rootfs, uidShift, gidShift)
+
+	output, err := execOnSandboxHost([]string{"sh", "-c", script})
 	if err != nil {
-		// chown -R returns exit code 1 if any individual file fails,
-		// even if the vast majority succeeded. Check if it's just
-		// harmless "No such file" errors.
 		errMsg := string(output)
+		// Filter harmless "No such file" errors (race with transient files)
 		hasRealError := false
 		for _, line := range strings.Split(errMsg, "\n") {
 			line = strings.TrimSpace(line)

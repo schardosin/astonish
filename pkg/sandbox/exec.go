@@ -316,3 +316,59 @@ func ExecSimpleWithEnv(client *IncusClient, containerName string, command []stri
 
 	return buf.String(), nil
 }
+
+// ExecWithOutput runs a non-interactive command inside a container, captures
+// combined stdout+stderr (via "2>&1" wrapper), and returns the exit code and
+// output separately. Unlike ExecSimple (which discards output) or
+// ExecSimpleWithEnv (which wraps non-zero exit codes in an error), this
+// function lets callers inspect both the exit code and output independently.
+//
+// This is particularly useful for commands like vncserver where specific exit
+// codes have meaning (e.g., 29 = "already running") and the output is needed
+// for diagnostic error messages.
+func ExecWithOutput(client *IncusClient, containerName string, command []string) (int, string, error) {
+	// Wrap the command in sh -c "... 2>&1" to merge stderr into stdout,
+	// since ExecNonInteractive only captures stdout.
+	wrappedCmd := []string{"sh", "-c", shellJoin(command) + " 2>&1"}
+
+	proc, err := ExecNonInteractive(client, containerName, wrappedCmd, ExecOpts{})
+	if err != nil {
+		return -1, "", err
+	}
+	defer proc.Close()
+
+	var buf bytes.Buffer
+	go func() {
+		if _, copyErr := io.Copy(&buf, proc.Stdout); copyErr != nil {
+			slog.Debug("failed to copy process stdout", "error", copyErr)
+		}
+	}()
+
+	exitCode, err := proc.Wait()
+	if err != nil {
+		return -1, buf.String(), fmt.Errorf("exec failed: %w", err)
+	}
+
+	return exitCode, buf.String(), nil
+}
+
+// shellJoin quotes and joins command arguments for use in sh -c "...".
+func shellJoin(args []string) string {
+	var buf bytes.Buffer
+	for i, arg := range args {
+		if i > 0 {
+			buf.WriteByte(' ')
+		}
+		// Simple quoting: wrap in single quotes, escape embedded single quotes
+		buf.WriteByte('\'')
+		for _, c := range arg {
+			if c == '\'' {
+				buf.WriteString("'\\''")
+			} else {
+				buf.WriteRune(c)
+			}
+		}
+		buf.WriteByte('\'')
+	}
+	return buf.String()
+}

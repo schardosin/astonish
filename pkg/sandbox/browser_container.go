@@ -213,6 +213,13 @@ func BrowserContainerInstallCommands(engine, arch string) [][]string {
 				`chmod 640 /etc/ssl/private/ssl-cert-snakeoil.key && ` +
 				`chown root:ssl-cert /etc/ssl/private/ssl-cert-snakeoil.key)`,
 		},
+		// Relax /etc/ssl/private/ directory permissions so the browser user
+		// (and mapped-root) can read the snakeoil key inside unprivileged
+		// session containers. In session containers on overlayfs, the kernel
+		// denies copy-up operations in user namespaces for directories with
+		// restrictive modes (0710). Since SSL is disabled (require_ssl: false)
+		// and the container is isolated behind the exec tunnel, this is safe.
+		[]string{"chmod", "755", "/etc/ssl/private"},
 	)
 
 	// Common: configure KasmVNC for headless/non-interactive operation.
@@ -351,13 +358,16 @@ func StartKasmVNC(client *IncusClient, containerName string, cfg BrowserContaine
 		),
 	}
 
-	exitCode, err := client.ExecSimple(containerName, startCmd)
+	// Use ExecWithOutput to capture stdout+stderr — previous iterations
+	// of this code used ExecSimple which discarded all output, making it
+	// impossible to diagnose failures without manual incus exec debugging.
+	exitCode, output, err := ExecWithOutput(client, containerName, startCmd)
 	if err != nil {
-		return fmt.Errorf("failed to start KasmVNC: %w", err)
+		return fmt.Errorf("failed to start KasmVNC: %w (output: %s)", err, output)
 	}
 	// Exit code 29 means "a VNC server is already running" on this display.
 	if exitCode != 0 && exitCode != 29 {
-		return fmt.Errorf("KasmVNC start exited with code %d", exitCode)
+		return fmt.Errorf("KasmVNC start exited with code %d: %s", exitCode, strings.TrimSpace(output))
 	}
 
 	return nil
@@ -485,13 +495,16 @@ sleep 1
 		)
 	}
 
-	cmd := []string{"sh", "-c", launchScript}
-	exitCode, err := client.ExecSimple(containerName, cmd)
+	// Use ExecWithOutput to capture stdout+stderr for diagnostic error messages.
+	// The launch script runs background processes (chromium &, socat &) so we
+	// wrap it in sh -c ourselves rather than using ExecWithOutput's wrapper.
+	cmd := []string{"sh", "-c", launchScript + "\n"}
+	exitCode, output, err := ExecWithOutput(client, containerName, cmd)
 	if err != nil {
-		return fmt.Errorf("failed to launch browser: %w", err)
+		return fmt.Errorf("failed to launch browser: %w (output: %s)", err, output)
 	}
 	if exitCode != 0 {
-		return fmt.Errorf("browser launch exited with code %d", exitCode)
+		return fmt.Errorf("browser launch exited with code %d: %s", exitCode, strings.TrimSpace(output))
 	}
 
 	// Wait briefly for Chromium + socat to start

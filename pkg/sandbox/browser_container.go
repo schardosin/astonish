@@ -11,19 +11,29 @@ const (
 	// DefaultKasmVNCPort is the default port KasmVNC listens on inside the container.
 	DefaultKasmVNCPort = 6901
 	// kasmVNCDisplay is the X11 display number used by KasmVNC. The websocket
-	// port is set independently via -websocketPort, so the display number is
-	// just a low, arbitrary value.
-	kasmVNCDisplay = 1
-	// DefaultCDPPort is the external port for Chromium's CDP endpoint, exposed on
-	// 0.0.0.0 via socat. This is the port go-rod connects to from the host.
+	// port is kasmVNCPort + (display * 100) = 6901 for display :0.
+	kasmVNCDisplay = "0"
+	// DefaultCDPPort is the port exposed by the socat bridge inside the container.
+	// Chromium's --remote-debugging-port binds to 127.0.0.1 only (ignores
+	// --remote-debugging-address=0.0.0.0 since M91+). We use socat to forward
+	// from 0.0.0.0:DefaultCDPPort to 127.0.0.1:internalCDPPort, which makes
+	// the DevTools endpoint accessible from outside the container.
 	DefaultCDPPort = 9222
-	// internalCDPPort is the loopback-only port Chromium actually binds to.
-	// Chromium ignores --remote-debugging-address (it only works in content_shell,
+	// internalCDPPort is the Chromium DevTools port inside the container. Set to
+	// 9223 to avoid clashing with the socat bridge on 9222. Chromium listens on
+	// this port (localhost only — see DefaultCDPPort comment above for why that's
 	// not the full browser) and always binds DevTools to 127.0.0.1. We use socat
 	// to forward from 0.0.0.0:DefaultCDPPort to 127.0.0.1:internalCDPPort.
 	internalCDPPort = 9223
 	// BrowserProfileMountPath is the Chromium profile dir inside containers.
 	BrowserProfileMountPath = "/home/browser/.config/chromium"
+
+	// xtradeb Chromium version for direct .deb download. We download from the
+	// Launchpad pool directly instead of adding the PPA (which fails apt-get
+	// update on Docker+Incus due to GPG key verification through Docker NAT).
+	// Update this when a new Chromium version is available in the xtradeb PPA.
+	xtradebChromiumVersion = "146.0.7680.177-1xtradeb1.2404.1"
+	xtradebPoolURL         = "https://ppa.launchpadcontent.net/xtradeb/apps/ubuntu/pool/main/c/chromium"
 )
 
 // BrowserContainerConfig controls browser runtime configuration inside a container.
@@ -109,25 +119,27 @@ func BrowserContainerInstallCommands(engine string) [][]string {
 			// Utilities
 			"wget", "ca-certificates",
 		})
-	default: // "default" — Google Chrome via direct .deb download
+	default: // "default" — Chromium from xtradeb (direct .deb download, no PPA)
 		// Ubuntu 24.04's chromium-browser package is a snap transitional shim
 		// that triggers `snap install chromium`. Snap does not work inside
 		// unprivileged LXC containers (requires squashfs mounts and AppArmor
 		// confinement), causing the install to hang indefinitely.
 		//
-		// Third-party PPAs (e.g., xtradeb/apps) provide native Chromium .debs
-		// but their apt-get update fails on Docker+Incus (macOS) due to PPA
-		// GPG key verification issues through the Docker network stack.
+		// The xtradeb PPA provides native Chromium .deb packages but adding
+		// the PPA via add-apt-repository + apt-get update fails on Docker+Incus
+		// (macOS) due to GPG key verification issues through Docker's NAT.
+		// Google Chrome's .deb also fails (dependency resolution issues).
 		//
-		// Google Chrome's official .deb is downloaded directly from dl.google.com
-		// — no PPA, no signing keys, no apt-get update needed. The .deb declares
-		// its own dependencies which are resolved by apt-get install -f -y.
-		// Binary installs to /usr/bin/google-chrome-stable; we symlink it to
-		// /usr/bin/chromium for compatibility with all existing code paths.
+		// Solution: download the .deb files directly from the Launchpad pool
+		// (plain HTTPS, no PPA key needed) and install with apt-get which
+		// resolves transitive deps from the default Ubuntu repos.
+		chromiumCommonURL := fmt.Sprintf("%s/chromium-common_%s_amd64.deb", xtradebPoolURL, xtradebChromiumVersion)
+		chromiumURL := fmt.Sprintf("%s/chromium_%s_amd64.deb", xtradebPoolURL, xtradebChromiumVersion)
+
 		cmds = append(cmds,
 			// Install shared deps first (from default Ubuntu repos — no PPA needed)
 			[]string{"apt-get", "install", "-y",
-				// Chromium/Chrome shared deps
+				// Chromium shared deps
 				"fonts-liberation", "fonts-noto-color-emoji",
 				"xdg-utils", "libnss3", "libatk-bridge2.0-0",
 				"libx11-xcb1", "libxcomposite1", "libxrandr2",
@@ -143,16 +155,13 @@ func BrowserContainerInstallCommands(engine string) [][]string {
 				// Utilities
 				"wget", "ca-certificates",
 			},
-			// Download Google Chrome stable .deb (always latest stable, no version to hardcode)
-			[]string{"wget", "-q", "-O", "/tmp/google-chrome.deb",
-				"https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"},
-			// Install with apt-get which resolves deps properly (requires apt 1.1+)
-			[]string{"apt-get", "install", "-y", "/tmp/google-chrome.deb"},
-			// Clean up the .deb
-			[]string{"rm", "-f", "/tmp/google-chrome.deb"},
-			// Symlink to /usr/bin/chromium for compatibility with StartChromiumInContainer
-			// and all other code that references the "chromium" binary name.
-			[]string{"ln", "-sf", "/usr/bin/google-chrome-stable", "/usr/bin/chromium"},
+			// Download chromium-common and chromium .debs directly from Launchpad pool
+			[]string{"wget", "-q", "-O", "/tmp/chromium-common.deb", chromiumCommonURL},
+			[]string{"wget", "-q", "-O", "/tmp/chromium.deb", chromiumURL},
+			// Install both with apt-get (resolves transitive deps from Ubuntu repos)
+			[]string{"apt-get", "install", "-y", "/tmp/chromium-common.deb", "/tmp/chromium.deb"},
+			// Clean up
+			[]string{"rm", "-f", "/tmp/chromium-common.deb", "/tmp/chromium.deb"},
 		)
 	}
 
@@ -280,7 +289,7 @@ func StartKasmVNC(client *IncusClient, containerName string, cfg BrowserContaine
 
 	geometry := fmt.Sprintf("%dx%d", width, height)
 	startCmd := []string{"su", "-", "browser", "-c",
-		fmt.Sprintf("vncserver :%d -geometry %s -depth 24 -websocketPort %d -DisableBasicAuth",
+		fmt.Sprintf("vncserver :%s -geometry %s -depth 24 -websocketPort %d -DisableBasicAuth",
 			kasmVNCDisplay,
 			geometry,
 			port,
@@ -341,7 +350,7 @@ func StartChromiumInContainer(client *IncusClient, containerName string, cfg Bro
 
 	// Allow any local user (root, browser) to connect to the Xvnc display.
 	xhostCmd := []string{"su", "-", "browser", "-c",
-		fmt.Sprintf("DISPLAY=:%d xhost +local:", kasmVNCDisplay),
+		fmt.Sprintf("DISPLAY=:%s xhost +local:", kasmVNCDisplay),
 	}
 	_, _ = client.ExecSimple(containerName, xhostCmd)
 
@@ -355,7 +364,7 @@ func StartChromiumInContainer(client *IncusClient, containerName string, cfg Bro
 		DefaultCDPPort, internalCDPPort,
 	)
 
-	display := fmt.Sprintf(":%d", kasmVNCDisplay)
+	display := fmt.Sprintf(":%s", kasmVNCDisplay)
 
 	switch engine {
 	case "cloakbrowser":

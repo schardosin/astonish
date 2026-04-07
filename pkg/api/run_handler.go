@@ -63,7 +63,8 @@ var browserOnce sync.Once
 func GetBrowserManager() *browser.Manager {
 	browserOnce.Do(func() {
 		cfg := browser.DefaultConfig()
-		if appCfg, err := config.LoadAppConfig(); err == nil {
+		appCfg, cfgErr := config.LoadAppConfig()
+		if cfgErr == nil {
 			b := &appCfg.Browser
 			cfg = browser.OverrideConfig(browser.ConfigOverrides{
 				Headless:            b.Headless,
@@ -88,11 +89,12 @@ func GetBrowserManager() *browser.Manager {
 		// Wire browser container callbacks when sandbox is available.
 		// The browser runs inside the session container (managed by
 		// NodeClientPool). Engine compatibility is checked: custom/remote
-		// engines fall back to host mode.
+		// engines fall back to host mode. Sandbox must also be enabled in
+		// config — otherwise SetupSandboxRuntime() will fail at runtime.
 		engine := sandbox.DetectBrowserEngine(sandbox.BrowserContainerConfig{
 			ChromePath: cfg.ChromePath,
 		})
-		if sandbox.IsContainerCompatibleEngine(engine) {
+		if sandbox.IsContainerCompatibleEngine(engine) && cfgErr == nil && sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
 			globalBrowserMgr.SandboxEnabled = true
 
 			// ContainerResolveFunc: look up the session container name + IP.

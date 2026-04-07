@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -414,7 +415,12 @@ func StartChromiumInContainer(client *IncusClient, containerName string, cfg Bro
 	xhostCmd := []string{"runuser", "-l", "browser", "-c",
 		fmt.Sprintf("DISPLAY=:%s xhost +local:", kasmVNCDisplay),
 	}
-	_, _ = client.ExecSimple(containerName, xhostCmd)
+	exitCode, err := client.ExecSimple(containerName, xhostCmd)
+	if err != nil {
+		slog.Warn("xhost +local: failed", "container", containerName, "error", err)
+	} else if exitCode != 0 {
+		slog.Warn("xhost +local: exited with non-zero code", "container", containerName, "exit_code", exitCode)
+	}
 
 	engine := DetectBrowserEngine(cfg)
 

@@ -434,6 +434,16 @@ func StartChromiumInContainer(client *IncusClient, containerName string, cfg Bro
 
 	display := fmt.Sprintf(":%s", kasmVNCDisplay)
 
+	// On Docker+Incus (Apple Silicon Macs), V8's JIT compiler generates ARM64
+	// instructions that are not fully supported through the nested virtualization
+	// stack (macOS → Docker VM → Incus LXC). This causes SIGILL crashes when
+	// navigating to JavaScript-heavy pages. Disabling JIT forces V8 to use its
+	// interpreter (Ignition) for all JavaScript, which is slower but stable.
+	jitlessFlag := ""
+	if activePlatform == PlatformDockerIncus {
+		jitlessFlag = " --js-flags=--jitless"
+	}
+
 	switch engine {
 	case "cloakbrowser":
 		fingerprintFlags := ""
@@ -459,6 +469,7 @@ export DISPLAY=%s
 # Launch CloakBrowser as the browser user on the Xvnc display
 runuser -l browser -c "DISPLAY=%s $BROWSER_BIN \
   --no-sandbox \
+  --test-type \
   --disable-gpu \
   --disable-dev-shm-usage \
   --remote-debugging-port=%d \
@@ -467,11 +478,11 @@ runuser -l browser -c "DISPLAY=%s $BROWSER_BIN \
   --disable-background-timer-throttling \
   --disable-backgrounding-occluded-windows \
   --disable-renderer-backgrounding \
-  --disable-blink-features=AutomationControlled%s%s \
+  --disable-blink-features=AutomationControlled%s%s%s \
   about:blank &"
 sleep 1
 # Bridge CDP port to all interfaces so the host can connect
-%s`, display, display, internalCDPPort, width, height, BrowserProfileMountPath, fingerprintFlags, proxyFlag, socatBridge)
+%s`, display, display, internalCDPPort, width, height, BrowserProfileMountPath, jitlessFlag, fingerprintFlags, proxyFlag, socatBridge)
 
 	default: // "default" — headed Google Chrome (/usr/bin/chromium via symlink)
 		proxyFlag := ""
@@ -483,6 +494,7 @@ sleep 1
 			"export DISPLAY=%s\n"+
 				"runuser -l browser -c \"DISPLAY=%s chromium "+
 				"--no-sandbox "+
+				"--test-type "+
 				"--disable-gpu "+
 				"--disable-dev-shm-usage "+
 				"--remote-debugging-port=%d "+
@@ -491,10 +503,10 @@ sleep 1
 				"--disable-background-timer-throttling "+
 				"--disable-backgrounding-occluded-windows "+
 				"--disable-renderer-backgrounding "+
-				"--disable-blink-features=AutomationControlled%s "+
+				"--disable-blink-features=AutomationControlled%s%s "+
 				"about:blank &\"\nsleep 1\n"+
 				"# Bridge CDP port to all interfaces so the host can connect\n%s",
-			display, display, internalCDPPort, width, height, BrowserProfileMountPath, proxyFlag, socatBridge,
+			display, display, internalCDPPort, width, height, BrowserProfileMountPath, jitlessFlag, proxyFlag, socatBridge,
 		)
 	}
 

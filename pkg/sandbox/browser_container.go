@@ -434,14 +434,21 @@ func StartChromiumInContainer(client *IncusClient, containerName string, cfg Bro
 
 	display := fmt.Sprintf(":%s", kasmVNCDisplay)
 
-	// On Docker+Incus (Apple Silicon Macs), V8's JIT compiler generates ARM64
-	// instructions that are not fully supported through the nested virtualization
-	// stack (macOS → Docker VM → Incus LXC). This causes SIGILL crashes when
-	// navigating to JavaScript-heavy pages. Disabling JIT forces V8 to use its
-	// interpreter (Ignition) for all JavaScript, which is slower but stable.
-	jitlessFlag := ""
+	// On Docker+Incus (Apple Silicon Macs), multiple Chromium subsystems
+	// generate ARM64 instructions that are not fully supported through the
+	// nested virtualization stack (macOS → Docker VM → Incus LXC). This causes
+	// SIGILL (Illegal Instruction) crashes when browsing complex pages.
+	//
+	// Mitigations applied only on Docker+Incus:
+	//   --js-flags=--jitless,--no-wasm  Disable V8 JIT AND WebAssembly JIT
+	//     (WASM has its own compilation pipeline separate from --jitless).
+	//   --disable-features=WebAssembly  Belt-and-suspenders WASM kill switch
+	//     at the Chromium feature level.
+	//   --disable-gpu-rasterization     Force CPU-only rasterization so Skia
+	//     avoids optional ARM64 SIMD paths that may trigger SIGILL.
+	nestedVMFlags := ""
 	if activePlatform == PlatformDockerIncus {
-		jitlessFlag = " --js-flags=--jitless"
+		nestedVMFlags = " --js-flags=--jitless,--no-wasm --disable-features=WebAssembly --disable-gpu-rasterization"
 	}
 
 	switch engine {
@@ -482,7 +489,7 @@ runuser -l browser -c "DISPLAY=%s $BROWSER_BIN \
   about:blank &"
 sleep 1
 # Bridge CDP port to all interfaces so the host can connect
-%s`, display, display, internalCDPPort, width, height, BrowserProfileMountPath, jitlessFlag, fingerprintFlags, proxyFlag, socatBridge)
+%s`, display, display, internalCDPPort, width, height, BrowserProfileMountPath, nestedVMFlags, fingerprintFlags, proxyFlag, socatBridge)
 
 	default: // "default" — headed Google Chrome (/usr/bin/chromium via symlink)
 		proxyFlag := ""
@@ -506,7 +513,7 @@ sleep 1
 				"--disable-blink-features=AutomationControlled%s%s "+
 				"about:blank &\"\nsleep 1\n"+
 				"# Bridge CDP port to all interfaces so the host can connect\n%s",
-			display, display, internalCDPPort, width, height, BrowserProfileMountPath, jitlessFlag, proxyFlag, socatBridge,
+			display, display, internalCDPPort, width, height, BrowserProfileMountPath, nestedVMFlags, proxyFlag, socatBridge,
 		)
 	}
 

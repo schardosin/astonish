@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/api"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/tools"
@@ -22,11 +23,12 @@ import (
 
 // StudioServer wraps the HTTP server with lifecycle management.
 type StudioServer struct {
-	server       *http.Server
-	listener     net.Listener
-	port         int
-	Auth         *api.AuthManager // nil means no auth (direct CLI mode)
-	sessionStore *persistentsession.FileStore
+	server        *http.Server
+	listener      net.Listener
+	port          int
+	Auth          *api.AuthManager // nil means no auth (direct CLI mode)
+	sessionStore  *persistentsession.FileStore
+	daemonIndexer *memory.DaemonIndexerResult
 }
 
 // StudioOption configures optional StudioServer behavior.
@@ -44,6 +46,14 @@ func WithSessionStore(store *persistentsession.FileStore) StudioOption {
 	return func(s *StudioServer) { s.sessionStore = store }
 }
 
+// WithDaemonIndexer injects the daemon's memory indexer into the Studio server.
+// When set, the Studio chat agent reuses the daemon's Store and Indexer instead
+// of creating its own, ensuring a single chromem-go instance so that file watcher
+// updates from the daemon are immediately visible to Studio search queries.
+func WithDaemonIndexer(di *memory.DaemonIndexerResult) StudioOption {
+	return func(s *StudioServer) { s.daemonIndexer = di }
+}
+
 // NewStudioServer creates a configured Studio server without starting it.
 func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 	s := &StudioServer{port: port}
@@ -52,7 +62,8 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 	}
 
 	// Wire Studio Chat initialization (lazy, runs on first chat request)
-	sharedStore := s.sessionStore // capture for closure
+	sharedStore := s.sessionStore    // capture for closure
+	sharedIndexer := s.daemonIndexer // capture for closure
 	api.SetStudioChatInitFunc(func(ctx context.Context) (*api.StudioChatComponents, error) {
 		appCfg, err := config.LoadAppConfig()
 		if err != nil {
@@ -60,14 +71,15 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 		}
 
 		result, err := NewWiredChatAgent(ctx, &ChatFactoryConfig{
-			AppConfig:    appCfg,
-			ProviderName: appCfg.General.DefaultProvider,
-			ModelName:    appCfg.General.DefaultModel,
-			DebugMode:    false,
-			AutoApprove:  false,
-			WorkspaceDir: "",
-			IsDaemon:     false,
-			SessionStore: sharedStore,
+			AppConfig:     appCfg,
+			ProviderName:  appCfg.General.DefaultProvider,
+			ModelName:     appCfg.General.DefaultModel,
+			DebugMode:     false,
+			AutoApprove:   false,
+			WorkspaceDir:  "",
+			IsDaemon:      false,
+			SessionStore:  sharedStore,
+			DaemonIndexer: sharedIndexer,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize chat agent: %w", err)

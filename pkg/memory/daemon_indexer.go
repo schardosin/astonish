@@ -105,11 +105,13 @@ func StartDaemonIndexer(ctx context.Context, appCfg *config.AppConfig, debugMode
 		}
 		watchCtx, watchCancel := context.WithCancel(ctx)
 		cleanups = append(cleanups, watchCancel)
+		slog.Info("starting memory file watcher", "component", "daemon-indexer", "debounce_ms", debounceMs)
 		go func() {
-			if wErr := indexer.WatchAndSync(watchCtx, debounceMs); wErr != nil {
-				if debugMode {
-					slog.Warn("memory file watcher error", "component", "daemon-indexer", "error", wErr)
-				}
+			wErr := indexer.WatchAndSync(watchCtx, debounceMs)
+			if wErr != nil {
+				slog.Warn("memory file watcher exited with error", "component", "daemon-indexer", "error", wErr)
+			} else {
+				slog.Info("memory file watcher stopped", "component", "daemon-indexer")
 			}
 		}()
 	}

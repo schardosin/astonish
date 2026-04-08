@@ -622,6 +622,9 @@ func Run(cfg RunConfig) error {
 	if sharedFileStore != nil {
 		studioOpts = append(studioOpts, launcher.WithSessionStore(sharedFileStore))
 	}
+	if daemonIndexer != nil {
+		studioOpts = append(studioOpts, launcher.WithDaemonIndexer(daemonIndexer))
+	}
 	studio, err := launcher.NewStudioServer(port, studioOpts...)
 	if err != nil {
 		logger.Printf("Failed to start HTTP server: %v", err)

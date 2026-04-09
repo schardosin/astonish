@@ -281,6 +281,63 @@ chown browser:browser /home/browser/.vnc/xstartup`},
 		},
 	)
 
+	// ARM64 (aarch64): build a small LD_PRELOAD shim that masks problematic
+	// HWCAP/HWCAP2 CPU feature bits. On Apple Silicon Macs, the Docker Desktop
+	// VM advertises advanced ARMv9 features (SVE2, SME, SME2, BF16, etc.) via
+	// getauxval(AT_HWCAP/AT_HWCAP2). Libraries like libjpeg-turbo, Skia,
+	// BoringSSL, and zlib detect these features at runtime and use optimized
+	// code paths — but some of these instructions are not fully functional in
+	// the nested virtualization stack (macOS → Docker VM → Incus LXC), causing
+	// SIGILL crashes when rendering image-heavy pages.
+	//
+	// The shim intercepts getauxval() and masks out everything beyond baseline
+	// ARMv8.0 + safe extensions (NEON, AES, SHA, CRC32, atomics). This forces
+	// all libraries to use their baseline NEON code paths which work correctly.
+	if arch == "aarch64" {
+		// The C source for the HWCAP masking shim.
+		hwcapShimSource := `
+#define _GNU_SOURCE
+#include <sys/auxv.h>
+#include <dlfcn.h>
+
+/* Safe HWCAP bits to keep (ARMv8.0 baseline + common extensions):
+ *   FP, ASIMD, EVTSTRM, AES, PMULL, SHA1, SHA2, CRC32, ATOMICS,
+ *   FPHP, ASIMDHP, CPUID, ASIMDRDM, JSCVT, FCMA, LRCPC, DCPOP,
+ *   SHA3, ASIMDDP, SHA512, ASIMDFHM, DIT, USCAT, ILRCPC, FLAGM, SB
+ * Masked out: SVE(22), SSBS(28), PACA(30), PACG(31), and bits 32+
+ */
+#define HWCAP_SAFE_MASK  0x2FBFFFFFul
+
+/* Safe HWCAP2 bits: DCPODP(0), FLAGM2(7), FRINT(8), I8MM(13)
+ * Masked out: SVE2, all SVE* variants, BF16, BTI, MTE, SME, SME2, etc.
+ */
+#define HWCAP2_SAFE_MASK 0x2181ul
+
+unsigned long getauxval(unsigned long type) {
+    unsigned long (*real_getauxval)(unsigned long) =
+        (unsigned long (*)(unsigned long))dlsym(RTLD_NEXT, "getauxval");
+    unsigned long val = real_getauxval(type);
+    if (type == AT_HWCAP)  return val & HWCAP_SAFE_MASK;
+    if (type == AT_HWCAP2) return val & HWCAP2_SAFE_MASK;
+    return val;
+}
+`
+		cmds = append(cmds,
+			// Install gcc (needed to compile the shim)
+			[]string{"apt-get", "install", "-y", "gcc"},
+			// Write the C source, compile to shared library, clean up
+			[]string{"sh", "-c",
+				fmt.Sprintf(`cat > /tmp/hwcap_mask.c << 'SHIMEOF'
+%s
+SHIMEOF
+gcc -shared -fPIC -o /usr/lib/hwcap_mask.so /tmp/hwcap_mask.c -ldl
+rm -f /tmp/hwcap_mask.c`, hwcapShimSource),
+			},
+			// Remove gcc to keep the template lean (only needed at build time)
+			[]string{"sh", "-c", "apt-get remove -y gcc && apt-get autoremove -y"},
+		)
+	}
+
 	// CloakBrowser-specific: install the Python package and download the binary
 	if engine == "cloakbrowser" {
 		cmds = append(cmds,
@@ -439,16 +496,22 @@ func StartChromiumInContainer(client *IncusClient, containerName string, cfg Bro
 	// nested virtualization stack (macOS → Docker VM → Incus LXC). This causes
 	// SIGILL (Illegal Instruction) crashes when browsing complex pages.
 	//
-	// Mitigations applied only on Docker+Incus:
+	// The primary fix is the HWCAP masking shim (hwcap_mask.so, compiled
+	// during template creation for aarch64). It intercepts getauxval() and
+	// masks out problematic ARMv9 features (SVE2, SME, SME2, BF16, BTI, etc.)
+	// that the Docker Desktop VM advertises but that don't fully work through
+	// the nested virtualization layers. This forces all libraries (libjpeg-turbo,
+	// Skia, BoringSSL, zlib) to use their baseline NEON code paths.
+	//
+	// Additional Chromium flags as defense-in-depth:
 	//   --js-flags=--jitless,--no-wasm  Disable V8 JIT AND WebAssembly JIT
-	//     (WASM has its own compilation pipeline separate from --jitless).
 	//   --disable-features=WebAssembly  Belt-and-suspenders WASM kill switch
-	//     at the Chromium feature level.
-	//   --disable-gpu-rasterization     Force CPU-only rasterization so Skia
-	//     avoids optional ARM64 SIMD paths that may trigger SIGILL.
+	//   --disable-gpu-rasterization     Force CPU-only rasterization
 	nestedVMFlags := ""
+	ldPreload := ""
 	if activePlatform == PlatformDockerIncus {
 		nestedVMFlags = " --js-flags=--jitless,--no-wasm --disable-features=WebAssembly --disable-gpu-rasterization"
+		ldPreload = "LD_PRELOAD=/usr/lib/hwcap_mask.so "
 	}
 
 	switch engine {
@@ -474,7 +537,7 @@ if [ -z "$BROWSER_BIN" ] || [ ! -f "$BROWSER_BIN" ]; then
 fi
 export DISPLAY=%s
 # Launch CloakBrowser as the browser user on the Xvnc display
-runuser -l browser -c "DISPLAY=%s $BROWSER_BIN \
+runuser -l browser -c "%sDISPLAY=%s $BROWSER_BIN \
   --no-sandbox \
   --test-type \
   --disable-gpu \
@@ -489,7 +552,7 @@ runuser -l browser -c "DISPLAY=%s $BROWSER_BIN \
   about:blank &"
 sleep 1
 # Bridge CDP port to all interfaces so the host can connect
-%s`, display, display, internalCDPPort, width, height, BrowserProfileMountPath, nestedVMFlags, fingerprintFlags, proxyFlag, socatBridge)
+%s`, display, ldPreload, display, internalCDPPort, width, height, BrowserProfileMountPath, nestedVMFlags, fingerprintFlags, proxyFlag, socatBridge)
 
 	default: // "default" — headed Google Chrome (/usr/bin/chromium via symlink)
 		proxyFlag := ""
@@ -499,7 +562,7 @@ sleep 1
 
 		launchScript = fmt.Sprintf(
 			"export DISPLAY=%s\n"+
-				"runuser -l browser -c \"DISPLAY=%s chromium "+
+				"runuser -l browser -c \"%sDISPLAY=%s chromium "+
 				"--no-sandbox "+
 				"--test-type "+
 				"--disable-gpu "+
@@ -513,7 +576,7 @@ sleep 1
 				"--disable-blink-features=AutomationControlled%s%s "+
 				"about:blank &\"\nsleep 1\n"+
 				"# Bridge CDP port to all interfaces so the host can connect\n%s",
-			display, display, internalCDPPort, width, height, BrowserProfileMountPath, nestedVMFlags, proxyFlag, socatBridge,
+			display, ldPreload, display, internalCDPPort, width, height, BrowserProfileMountPath, nestedVMFlags, proxyFlag, socatBridge,
 		)
 	}
 

@@ -491,26 +491,20 @@ func StartChromiumInContainer(client *IncusClient, containerName string, cfg Bro
 
 	display := fmt.Sprintf(":%s", kasmVNCDisplay)
 
-	// On Docker+Incus (Apple Silicon Macs), multiple Chromium subsystems
-	// generate ARM64 instructions that are not fully supported through the
-	// nested virtualization stack (macOS → Docker VM → Incus LXC). This causes
-	// SIGILL (Illegal Instruction) crashes when browsing complex pages.
+	// On Docker+Incus (Apple Silicon Macs), the Docker Desktop VM advertises
+	// advanced ARMv9 CPU features (SVE2, SME, SME2, BF16, BTI, etc.) via
+	// getauxval(AT_HWCAP/AT_HWCAP2). Libraries bundled in Chromium
+	// (libjpeg-turbo, Skia, BoringSSL, zlib) detect these at runtime and use
+	// optimized code paths — but some instructions are not fully functional
+	// through the nested virtualization stack (macOS → Docker VM → Incus LXC),
+	// causing SIGILL crashes on image-heavy pages.
 	//
-	// The primary fix is the HWCAP masking shim (hwcap_mask.so, compiled
-	// during template creation for aarch64). It intercepts getauxval() and
-	// masks out problematic ARMv9 features (SVE2, SME, SME2, BF16, BTI, etc.)
-	// that the Docker Desktop VM advertises but that don't fully work through
-	// the nested virtualization layers. This forces all libraries (libjpeg-turbo,
-	// Skia, BoringSSL, zlib) to use their baseline NEON code paths.
-	//
-	// Additional Chromium flags as defense-in-depth:
-	//   --js-flags=--jitless,--no-wasm  Disable V8 JIT AND WebAssembly JIT
-	//   --disable-features=WebAssembly  Belt-and-suspenders WASM kill switch
-	//   --disable-gpu-rasterization     Force CPU-only rasterization
-	nestedVMFlags := ""
+	// The fix is hwcap_mask.so (compiled during template creation for aarch64),
+	// which intercepts getauxval() and masks HWCAP/HWCAP2 down to safe ARMv8.0
+	// baseline features. This forces all libraries to use their baseline NEON
+	// code paths which work correctly.
 	ldPreload := ""
 	if activePlatform == PlatformDockerIncus {
-		nestedVMFlags = " --js-flags=--jitless,--no-wasm --disable-features=WebAssembly --disable-gpu-rasterization"
 		ldPreload = "LD_PRELOAD=/usr/lib/hwcap_mask.so "
 	}
 
@@ -548,11 +542,11 @@ runuser -l browser -c "%sDISPLAY=%s $BROWSER_BIN \
   --disable-background-timer-throttling \
   --disable-backgrounding-occluded-windows \
   --disable-renderer-backgrounding \
-  --disable-blink-features=AutomationControlled%s%s%s \
+  --disable-blink-features=AutomationControlled%s%s \
   about:blank &"
 sleep 1
 # Bridge CDP port to all interfaces so the host can connect
-%s`, display, ldPreload, display, internalCDPPort, width, height, BrowserProfileMountPath, nestedVMFlags, fingerprintFlags, proxyFlag, socatBridge)
+%s`, display, ldPreload, display, internalCDPPort, width, height, BrowserProfileMountPath, fingerprintFlags, proxyFlag, socatBridge)
 
 	default: // "default" — headed Google Chrome (/usr/bin/chromium via symlink)
 		proxyFlag := ""
@@ -573,10 +567,10 @@ sleep 1
 				"--disable-background-timer-throttling "+
 				"--disable-backgrounding-occluded-windows "+
 				"--disable-renderer-backgrounding "+
-				"--disable-blink-features=AutomationControlled%s%s "+
+				"--disable-blink-features=AutomationControlled%s "+
 				"about:blank &\"\nsleep 1\n"+
 				"# Bridge CDP port to all interfaces so the host can connect\n%s",
-			display, ldPreload, display, internalCDPPort, width, height, BrowserProfileMountPath, nestedVMFlags, proxyFlag, socatBridge,
+			display, ldPreload, display, internalCDPPort, width, height, BrowserProfileMountPath, proxyFlag, socatBridge,
 		)
 	}
 

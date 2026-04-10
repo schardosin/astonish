@@ -253,11 +253,24 @@ func (s *Store) UninstallFlow(tapName, flowName string) error {
 
 // GetInstalledFlowPath returns the path to an installed flow, if it exists
 func (s *Store) GetInstalledFlowPath(tapName, flowName string) (string, bool) {
-	tapCacheDir := filepath.Join(s.storeDir, sanitizeName(tapName))
-	flowPath := filepath.Join(tapCacheDir, sanitizeName(flowName)+".yaml")
+	// Sanitize and validate to prevent path traversal
+	safeTap := sanitizeName(tapName)
+	safeFlow := sanitizeName(flowName)
+	if strings.Contains(safeTap, "..") || strings.Contains(safeFlow, "..") {
+		return "", false
+	}
+	tapCacheDir := filepath.Join(s.storeDir, safeTap)
+	flowPath := filepath.Join(tapCacheDir, safeFlow+".yaml")
 
-	if _, err := os.Stat(flowPath); err == nil {
-		return flowPath, true
+	// Verify the resolved path stays within the store directory
+	absStore, err1 := filepath.Abs(s.storeDir)
+	absFlow, err2 := filepath.Abs(flowPath)
+	if err1 != nil || err2 != nil || !strings.HasPrefix(absFlow, absStore+string(filepath.Separator)) {
+		return "", false
+	}
+
+	if _, err := os.Stat(absFlow); err == nil {
+		return absFlow, true
 	}
 	return "", false
 }

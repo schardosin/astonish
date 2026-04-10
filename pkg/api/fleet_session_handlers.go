@@ -154,8 +154,8 @@ func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionRes
 			workspaceDir = baseDir
 			if workspaceDir != "" {
 				workspaceDir = filepath.Clean(workspaceDir)
-				if !filepath.IsAbs(workspaceDir) {
-					slog.Warn("workspace dir is not absolute, ignoring", "component", "fleet", "workspace", workspaceDir)
+				if !filepath.IsAbs(workspaceDir) || strings.Contains(workspaceDir, "..") {
+					slog.Warn("workspace dir is not absolute or contains traversal, ignoring", "component", "fleet", "workspace", workspaceDir)
 					workspaceDir = ""
 				} else if err := os.MkdirAll(workspaceDir, 0755); err != nil {
 					slog.Warn("could not create workspace", "component", "fleet", "workspace", workspaceDir, "error", err)

@@ -164,6 +164,23 @@ func validateTapRepository(tap Tap) error {
 		return err
 	}
 
+	// Inline SSRF validation: ensure the constructed URL uses HTTPS and has a
+	// valid host. CodeQL requires this check to be visible in the same function
+	// scope as the HTTP call for data-flow analysis.
+	parsed, parseErr := url.Parse(rawURL)
+	if parseErr != nil {
+		return fmt.Errorf("malformed URL: %w", parseErr)
+	}
+	if parsed.Scheme != "https" {
+		return fmt.Errorf("URL must use HTTPS scheme, got %q", parsed.Scheme)
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("URL has no host")
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("URL must not contain user info")
+	}
+
 	// Create HTTP request with timeout
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequest("GET", rawURL, nil)

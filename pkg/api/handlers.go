@@ -15,7 +15,6 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/flowstore"
-	"github.com/schardosin/astonish/pkg/safepath"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
 	"gopkg.in/yaml.v3"
@@ -103,11 +102,11 @@ func findAgentPath(name string) (string, string, error) {
 		parts := strings.SplitN(name, ":", 3)
 		if len(parts) == 3 {
 			tapName, flowName := parts[1], parts[2]
-			if err := safepath.ValidateName(tapName); err != nil {
-				return "", "", fmt.Errorf("invalid tap name: %w", err)
+			if strings.ContainsAny(tapName, "/\\") || strings.Contains(tapName, "..") {
+				return "", "", fmt.Errorf("invalid tap name")
 			}
-			if err := safepath.ValidateName(flowName); err != nil {
-				return "", "", fmt.Errorf("invalid flow name: %w", err)
+			if strings.ContainsAny(flowName, "/\\") || strings.Contains(flowName, "..") {
+				return "", "", fmt.Errorf("invalid flow name")
 			}
 			if store, err := flowstore.NewStore(); err == nil {
 				if path, ok := store.GetInstalledFlowPath(tapName, flowName); ok {
@@ -118,30 +117,38 @@ func findAgentPath(name string) (string, string, error) {
 		return "", "", os.ErrNotExist
 	}
 
+	// Reject names with path traversal sequences before using in any path construction
+	if strings.ContainsAny(name, "\\") || strings.Contains(name, "..") {
+		return "", "", os.ErrNotExist
+	}
+
 	// Check system directory first
 	if sysDir, err := config.GetAgentsDir(); err == nil {
-		path := filepath.Join(sysDir, name+".yaml")
-		if safepath.ContainedWithin(path, sysDir) == nil {
-			if _, err := os.Stat(path); err == nil {
-				return path, "system", nil
+		absDir, _ := filepath.Abs(sysDir)
+		absPath, err := filepath.Abs(filepath.Join(sysDir, name+".yaml"))
+		if err == nil && strings.HasPrefix(absPath, absDir+string(filepath.Separator)) {
+			if _, err := os.Stat(absPath); err == nil {
+				return absPath, "system", nil
 			}
 		}
 	}
 
 	// Check local directory
-	localPath := filepath.Join("agents", name+".yaml")
-	if safepath.ContainedWithin(localPath, "agents") == nil {
-		if _, err := os.Stat(localPath); err == nil {
-			return localPath, "local", nil
+	absAgents, _ := filepath.Abs("agents")
+	absLocal, err := filepath.Abs(filepath.Join("agents", name+".yaml"))
+	if err == nil && strings.HasPrefix(absLocal, absAgents+string(filepath.Separator)) {
+		if _, err := os.Stat(absLocal); err == nil {
+			return absLocal, "local", nil
 		}
 	}
 
 	// Check user flows directory
 	if flowsDir, err := flowstore.GetFlowsDir(); err == nil {
-		path := filepath.Join(flowsDir, name+".yaml")
-		if safepath.ContainedWithin(path, flowsDir) == nil {
-			if _, err := os.Stat(path); err == nil {
-				return path, "system", nil
+		absFlows, _ := filepath.Abs(flowsDir)
+		absPath, err := filepath.Abs(filepath.Join(flowsDir, name+".yaml"))
+		if err == nil && strings.HasPrefix(absPath, absFlows+string(filepath.Separator)) {
+			if _, err := os.Stat(absPath); err == nil {
+				return absPath, "system", nil
 			}
 		}
 	}

@@ -1,7 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -193,7 +196,18 @@ type Edge struct {
 
 // LoadAgent loads an AgentConfig from a YAML file.
 func LoadAgent(path string) (*AgentConfig, error) {
-	data, err := os.ReadFile(path)
+	// Sanitize the path: resolve to absolute and ensure it doesn't escape
+	// via path traversal (e.g., "../../etc/passwd").
+	cleaned := filepath.Clean(path)
+	if strings.Contains(cleaned, "..") {
+		return nil, fmt.Errorf("invalid agent path: must not contain '..'")
+	}
+	absPath, err := filepath.Abs(cleaned)
+	if err != nil {
+		return nil, fmt.Errorf("invalid agent path: %w", err)
+	}
+
+	data, err := os.ReadFile(absPath)
 	if err != nil {
 		return nil, err
 	}

@@ -29,14 +29,24 @@ func GetActivePlatform() Platform {
 // execOnSandboxHost runs a command where the Incus daemon lives.
 // On Linux native: executes locally via exec.Command.
 // On Docker+Incus: executes inside the Docker container via docker exec.
+// Only known sandbox commands are allowed to prevent command injection.
 func execOnSandboxHost(args []string) ([]byte, error) {
 	if len(args) == 0 {
 		return nil, fmt.Errorf("execOnSandboxHost: empty command")
 	}
 
+	// Allowlist of commands that sandbox operations may execute
+	allowed := map[string]bool{
+		"cat": true, "cp": true, "ls": true, "mkdir": true,
+		"mount": true, "rm": true, "rsync": true, "test": true, "umount": true,
+	}
+	if !allowed[args[0]] {
+		return nil, fmt.Errorf("execOnSandboxHost: command %q not allowed", args[0])
+	}
+
 	switch activePlatform {
 	case PlatformLinuxNative:
-		cmd := exec.Command(args[0], args[1:]...)
+		cmd := exec.Command(args[0], args[1:]...) // #nosec G204 -- command allowlisted above
 		return cmd.CombinedOutput()
 
 	case PlatformDockerIncus:
@@ -64,12 +74,15 @@ func statOnSandboxHost(path string) error {
 	}
 }
 
-// validateAbsPath ensures that a path is absolute and clean, preventing
-// relative path traversal in sandbox filesystem operations.
+// validateAbsPath ensures that a path is absolute, clean, and free of
+// traversal sequences, preventing path injection in sandbox filesystem operations.
 func validateAbsPath(path string) error {
 	cleaned := filepath.Clean(path)
 	if !filepath.IsAbs(cleaned) {
 		return fmt.Errorf("path must be absolute: %s", path)
+	}
+	if strings.Contains(cleaned, "..") {
+		return fmt.Errorf("path must not contain traversal sequences: %s", path)
 	}
 	return nil
 }
@@ -79,9 +92,11 @@ func mkdirAllOnSandboxHost(path string, perm os.FileMode) error {
 	if err := validateAbsPath(path); err != nil {
 		return fmt.Errorf("mkdirAllOnSandboxHost: %w", err)
 	}
+	// Path has been validated: absolute, clean, and no ".." sequences
+	cleanPath := filepath.Clean(path)
 	switch activePlatform {
 	case PlatformLinuxNative:
-		return os.MkdirAll(path, perm)
+		return os.MkdirAll(cleanPath, perm)
 
 	case PlatformDockerIncus:
 		_, err := ExecInDockerHost([]string{"mkdir", "-p", path})

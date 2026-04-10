@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	adksession "google.golang.org/adk/session"
 )
@@ -26,8 +27,14 @@ type TranscriptEntry struct {
 }
 
 // NewTranscript creates a Transcript for the given file path.
+// The path is cleaned and validated to prevent path traversal.
 func NewTranscript(path string) *Transcript {
-	return &Transcript{path: path}
+	cleaned := filepath.Clean(path)
+	if strings.Contains(cleaned, "..") {
+		// Return a transcript with an empty path; operations will fail safely
+		return &Transcript{path: ""}
+	}
+	return &Transcript{path: cleaned}
 }
 
 // WriteHeader writes the initial header line to a new transcript file.

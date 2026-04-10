@@ -139,8 +139,8 @@ func setupLocal(workspaceDir, srcPath string) error {
 
 	srcPath = expandHome(srcPath)
 	srcPath = filepath.Clean(srcPath)
-	if !filepath.IsAbs(srcPath) {
-		return fmt.Errorf("source path must be absolute, got %s", srcPath)
+	if !filepath.IsAbs(srcPath) || strings.Contains(srcPath, "..") {
+		return fmt.Errorf("source path must be absolute and free of traversal sequences, got %s", srcPath)
 	}
 
 	info, err := os.Stat(srcPath)
@@ -217,7 +217,11 @@ func gitCloneRemote(workspaceDir, repo string) error {
 
 // isGitRepo returns true if the directory exists and contains a .git directory.
 func isGitRepo(dir string) bool {
-	info, err := os.Stat(filepath.Join(dir, ".git"))
+	cleanDir := filepath.Clean(dir)
+	if strings.Contains(cleanDir, "..") {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(cleanDir, ".git"))
 	return err == nil && info.IsDir()
 }
 

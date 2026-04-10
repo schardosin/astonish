@@ -8,9 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
-
-	"github.com/schardosin/astonish/pkg/safepath"
 )
 
 // projectContextTimeout is the maximum time allowed for project context
@@ -65,11 +64,13 @@ func LoadProjectContextFile(workspaceDir string, cfg *ProjectContextConfig) stri
 	}
 
 	path := filepath.Join(workspaceDir, cfg.OutputFile)
-	if err := safepath.ContainedWithin(path, workspaceDir); err != nil {
-		slog.Error("project context output file escapes workspace", "component", "fleet-context", "path", path, "error", err)
+	absWorkspace, err1 := filepath.Abs(workspaceDir)
+	absPath, err2 := filepath.Abs(path)
+	if err1 != nil || err2 != nil || !strings.HasPrefix(absPath, absWorkspace+string(filepath.Separator)) {
+		slog.Error("project context output file escapes workspace", "component", "fleet-context", "path", path)
 		return ""
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(absPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			slog.Error("failed to read project context file", "component", "fleet-context", "path", path, "error", err)

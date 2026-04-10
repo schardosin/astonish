@@ -138,6 +138,10 @@ func setupLocal(workspaceDir, srcPath string) error {
 	}
 
 	srcPath = expandHome(srcPath)
+	srcPath = filepath.Clean(srcPath)
+	if !filepath.IsAbs(srcPath) {
+		return fmt.Errorf("source path must be absolute, got %s", srcPath)
+	}
 
 	info, err := os.Stat(srcPath)
 	if err != nil {
@@ -159,7 +163,7 @@ func setupLocal(workspaceDir, srcPath string) error {
 
 	// Non-git local directory or --local failed: full copy.
 	slog.Info("copying workspace with cp -a", "component", "fleet-workspace", "src", srcPath, "dst", workspaceDir)
-	cmd := exec.Command("cp", "-a", srcPath, workspaceDir)
+	cmd := exec.Command("cp", "-a", "--", srcPath, workspaceDir)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -173,7 +177,7 @@ func setupLocal(workspaceDir, srcPath string) error {
 // The cloned repo retains the original's remote configuration so "git fetch origin"
 // still works against the upstream remote.
 func gitCloneLocal(srcDir, dstDir string) error {
-	cmd := exec.Command("git", "clone", "--local", srcDir, dstDir)
+	cmd := exec.Command("git", "clone", "--local", "--", srcDir, dstDir)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -195,8 +199,14 @@ func gitCloneRemote(workspaceDir, repo string) error {
 		repoURL = "https://github.com/" + repo + ".git"
 	}
 
+	// Validate the URL starts with an expected protocol to prevent flag injection
+	if !strings.HasPrefix(repoURL, "https://") && !strings.HasPrefix(repoURL, "http://") &&
+		!strings.HasPrefix(repoURL, "git@") && !strings.HasPrefix(repoURL, "ssh://") {
+		return fmt.Errorf("unsupported repo URL scheme: %s", repoURL)
+	}
+
 	slog.Info("git clone from remote", "component", "fleet-workspace", "repo", repoURL, "dst", workspaceDir)
-	cmd := exec.Command("git", "clone", repoURL, workspaceDir)
+	cmd := exec.Command("git", "clone", "--", repoURL, workspaceDir)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

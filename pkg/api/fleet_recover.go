@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/fleet"
+	"github.com/schardosin/astonish/pkg/safepath"
 	"github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/model"
@@ -51,7 +52,11 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 		workspaceDir = plan.ResolveWorkspaceDir()
 	}
 	if workspaceDir != "" {
-		if mkErr := os.MkdirAll(workspaceDir, 0755); mkErr != nil {
+		workspaceDir = filepath.Clean(workspaceDir)
+		if !filepath.IsAbs(workspaceDir) {
+			slog.Warn("workspace dir is not absolute, ignoring", "component", "fleet-recover", "workspace", workspaceDir)
+			workspaceDir = ""
+		} else if mkErr := os.MkdirAll(workspaceDir, 0755); mkErr != nil {
 			slog.Warn("could not create workspace", "component", "fleet-recover", "workspace", workspaceDir, "error", mkErr)
 		}
 	}
@@ -68,6 +73,9 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 		return fmt.Errorf("file store not available for session recovery")
 	}
 
+	if err := safepath.ValidateName(cfg.SessionID); err != nil {
+		return fmt.Errorf("invalid session ID: %w", err)
+	}
 	transcriptPath := filepath.Join(fileStore.BaseDir(), studioChatAppName, studioChatUserID, cfg.SessionID+".jsonl")
 	transcript := session.NewTranscript(transcriptPath)
 

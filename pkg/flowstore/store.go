@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -251,7 +252,32 @@ func buildRawGitHubURL(repoURL, branch, filePath string) (rawURL string, token s
 		return "", "", fmt.Errorf("invalid GitHub URL format: %s (expected: github.com/owner/repo or github.enterprise.com/owner/repo)", repoURL)
 	}
 
+	if err := validateConstructedURL(rawURL); err != nil {
+		return "", "", fmt.Errorf("invalid tap URL: %w", err)
+	}
 	return rawURL, token, nil
+}
+
+// validateConstructedURL ensures that a URL constructed from user-supplied tap
+// configuration actually uses HTTPS and points to a valid hostname. This
+// prevents SSRF via crafted tap URLs that could target internal services.
+func validateConstructedURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("malformed URL: %w", err)
+	}
+	if parsed.Scheme != "https" {
+		return fmt.Errorf("URL must use HTTPS scheme, got %q", parsed.Scheme)
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("URL has no host")
+	}
+	// Reject URLs with user info (e.g. https://user@host/...) which can be
+	// used to bypass hostname checks
+	if parsed.User != nil {
+		return fmt.Errorf("URL must not contain user info")
+	}
+	return nil
 }
 
 // buildRawGitHubURLWithRefs uses refs/heads/ format which bypasses CDN caching
@@ -290,6 +316,9 @@ func buildRawGitHubURLWithRefs(repoURL, branch, filePath string) (rawURL string,
 		return "", "", fmt.Errorf("invalid GitHub URL format: %s (expected: github.com/owner/repo or github.enterprise.com/owner/repo)", repoURL)
 	}
 
+	if err := validateConstructedURL(rawURL); err != nil {
+		return "", "", fmt.Errorf("invalid tap URL: %w", err)
+	}
 	return rawURL, token, nil
 }
 

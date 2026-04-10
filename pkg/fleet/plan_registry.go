@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/safepath"
 	"gopkg.in/yaml.v3"
 )
 
@@ -138,6 +139,9 @@ func (r *PlanRegistry) Save(plan *FleetPlan) error {
 		return fmt.Errorf("marshalling fleet plan %q: %w", plan.Name, err)
 	}
 
+	if err := safepath.ValidateName(plan.Key); err != nil {
+		return fmt.Errorf("invalid plan key %q: %w", plan.Key, err)
+	}
 	path := filepath.Join(r.dir, plan.Key+".yaml")
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("writing fleet plan file %s: %w", path, err)
@@ -151,6 +155,9 @@ func (r *PlanRegistry) Save(plan *FleetPlan) error {
 
 // Delete removes a fleet plan from disk and the in-memory registry.
 func (r *PlanRegistry) Delete(key string) error {
+	if err := safepath.ValidateName(key); err != nil {
+		return fmt.Errorf("invalid plan key %q: %w", key, err)
+	}
 	path := filepath.Join(r.dir, key+".yaml")
 	if err := os.Remove(path); err != nil {
 		if os.IsNotExist(err) {

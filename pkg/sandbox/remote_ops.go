@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -63,8 +64,21 @@ func statOnSandboxHost(path string) error {
 	}
 }
 
+// validateAbsPath ensures that a path is absolute and clean, preventing
+// relative path traversal in sandbox filesystem operations.
+func validateAbsPath(path string) error {
+	cleaned := filepath.Clean(path)
+	if !filepath.IsAbs(cleaned) {
+		return fmt.Errorf("path must be absolute: %s", path)
+	}
+	return nil
+}
+
 // mkdirAllOnSandboxHost creates a directory and all parents on the sandbox host.
 func mkdirAllOnSandboxHost(path string, perm os.FileMode) error {
+	if err := validateAbsPath(path); err != nil {
+		return fmt.Errorf("mkdirAllOnSandboxHost: %w", err)
+	}
 	switch activePlatform {
 	case PlatformLinuxNative:
 		return os.MkdirAll(path, perm)
@@ -184,7 +198,7 @@ func isOverlayMountedOnSandboxHost(containerRootfs string) bool {
 
 // rsyncOnSandboxHost runs rsync on the sandbox host filesystem.
 func rsyncOnSandboxHost(src, dst string) error {
-	output, err := execOnSandboxHost([]string{"rsync", "-a", "--delete", src, dst})
+	output, err := execOnSandboxHost([]string{"rsync", "-a", "--delete", "--", src, dst})
 	if err != nil {
 		return fmt.Errorf("rsync failed: %w\nOutput: %s", err, string(output))
 	}
@@ -193,7 +207,7 @@ func rsyncOnSandboxHost(src, dst string) error {
 
 // cpOnSandboxHost runs cp -a on the sandbox host filesystem.
 func cpOnSandboxHost(src, dst string) error {
-	output, err := execOnSandboxHost([]string{"cp", "-a", src, dst})
+	output, err := execOnSandboxHost([]string{"cp", "-a", "--", src, dst})
 	if err != nil {
 		return fmt.Errorf("cp failed: %w\nOutput: %s", err, string(output))
 	}

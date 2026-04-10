@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/flowstore"
+	"github.com/schardosin/astonish/pkg/safepath"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
 	"gopkg.in/yaml.v3"
@@ -101,6 +103,12 @@ func findAgentPath(name string) (string, string, error) {
 		parts := strings.SplitN(name, ":", 3)
 		if len(parts) == 3 {
 			tapName, flowName := parts[1], parts[2]
+			if err := safepath.ValidateName(tapName); err != nil {
+				return "", "", fmt.Errorf("invalid tap name: %w", err)
+			}
+			if err := safepath.ValidateName(flowName); err != nil {
+				return "", "", fmt.Errorf("invalid flow name: %w", err)
+			}
 			if store, err := flowstore.NewStore(); err == nil {
 				if path, ok := store.GetInstalledFlowPath(tapName, flowName); ok {
 					return path, "store", nil
@@ -113,22 +121,28 @@ func findAgentPath(name string) (string, string, error) {
 	// Check system directory first
 	if sysDir, err := config.GetAgentsDir(); err == nil {
 		path := filepath.Join(sysDir, name+".yaml")
-		if _, err := os.Stat(path); err == nil {
-			return path, "system", nil
+		if safepath.ContainedWithin(path, sysDir) == nil {
+			if _, err := os.Stat(path); err == nil {
+				return path, "system", nil
+			}
 		}
 	}
 
 	// Check local directory
 	localPath := filepath.Join("agents", name+".yaml")
-	if _, err := os.Stat(localPath); err == nil {
-		return localPath, "local", nil
+	if safepath.ContainedWithin(localPath, "agents") == nil {
+		if _, err := os.Stat(localPath); err == nil {
+			return localPath, "local", nil
+		}
 	}
 
 	// Check user flows directory
 	if flowsDir, err := flowstore.GetFlowsDir(); err == nil {
 		path := filepath.Join(flowsDir, name+".yaml")
-		if _, err := os.Stat(path); err == nil {
-			return path, "system", nil
+		if safepath.ContainedWithin(path, flowsDir) == nil {
+			if _, err := os.Stat(path); err == nil {
+				return path, "system", nil
+			}
 		}
 	}
 

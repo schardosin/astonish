@@ -150,7 +150,7 @@ func AddTapHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tapName, err := store.AddTap(req.URL, req.Alias)
+	tapName, err := store.AddTap(cleanURL, req.Alias)
 	if err != nil {
 		http.Error(w, "Failed to add tap: "+err.Error(), http.StatusBadRequest)
 		return

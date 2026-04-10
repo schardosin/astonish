@@ -30,6 +30,11 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1"
   },
+  "overrides": {
+    "eslint-plugin-react-hooks": {
+      "eslint": "$eslint"
+    }
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@tailwindcss/vite": "^4.2.2",

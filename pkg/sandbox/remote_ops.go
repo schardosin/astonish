@@ -35,22 +35,40 @@ func execOnSandboxHost(args []string) ([]byte, error) {
 		return nil, fmt.Errorf("execOnSandboxHost: empty command")
 	}
 
-	// Allowlist of commands that sandbox operations may execute
-	allowed := map[string]bool{
-		"cat": true, "cp": true, "ls": true, "mkdir": true,
-		"mount": true, "rm": true, "rsync": true, "test": true, "umount": true,
-	}
-	if !allowed[args[0]] {
+	// Resolve command name to a safe constant via allowlist.
+	// By assigning the constant string from the switch to safeCmd,
+	// the value passed to exec.Command is never the user-provided args[0].
+	var safeCmd string
+	switch args[0] {
+	case "cat":
+		safeCmd = "cat"
+	case "cp":
+		safeCmd = "cp"
+	case "ls":
+		safeCmd = "ls"
+	case "mkdir":
+		safeCmd = "mkdir"
+	case "mount":
+		safeCmd = "mount"
+	case "rm":
+		safeCmd = "rm"
+	case "rsync":
+		safeCmd = "rsync"
+	case "test":
+		safeCmd = "test"
+	case "umount":
+		safeCmd = "umount"
+	default:
 		return nil, fmt.Errorf("execOnSandboxHost: command %q not allowed", args[0])
 	}
 
 	switch activePlatform {
 	case PlatformLinuxNative:
-		cmd := exec.Command(args[0], args[1:]...) // #nosec G204 -- command allowlisted above
+		cmd := exec.Command(safeCmd, args[1:]...)
 		return cmd.CombinedOutput()
 
 	case PlatformDockerIncus:
-		return ExecInDockerHost(args)
+		return ExecInDockerHost(append([]string{safeCmd}, args[1:]...))
 
 	default:
 		return nil, fmt.Errorf("execOnSandboxHost: unsupported platform %s", activePlatform)
@@ -89,17 +107,21 @@ func validateAbsPath(path string) error {
 
 // mkdirAllOnSandboxHost creates a directory and all parents on the sandbox host.
 func mkdirAllOnSandboxHost(path string, perm os.FileMode) error {
-	if err := validateAbsPath(path); err != nil {
-		return fmt.Errorf("mkdirAllOnSandboxHost: %w", err)
-	}
-	// Path has been validated: absolute, clean, and no ".." sequences
+	// Inline path validation so CodeQL can trace the sanitization.
 	cleanPath := filepath.Clean(path)
+	if !filepath.IsAbs(cleanPath) {
+		return fmt.Errorf("mkdirAllOnSandboxHost: path must be absolute: %s", path)
+	}
+	if strings.Contains(cleanPath, "..") {
+		return fmt.Errorf("mkdirAllOnSandboxHost: path must not contain traversal sequences: %s", path)
+	}
+
 	switch activePlatform {
 	case PlatformLinuxNative:
 		return os.MkdirAll(cleanPath, perm)
 
 	case PlatformDockerIncus:
-		_, err := ExecInDockerHost([]string{"mkdir", "-p", path})
+		_, err := ExecInDockerHost([]string{"mkdir", "-p", "--", cleanPath})
 		return err
 
 	default:

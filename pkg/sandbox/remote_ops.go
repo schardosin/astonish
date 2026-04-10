@@ -94,19 +94,6 @@ func statOnSandboxHost(path string) error {
 	}
 }
 
-// validateAbsPath ensures that a path is absolute, clean, and free of
-// traversal sequences, preventing path injection in sandbox filesystem operations.
-func validateAbsPath(path string) error {
-	cleaned := filepath.Clean(path)
-	if !filepath.IsAbs(cleaned) {
-		return fmt.Errorf("path must be absolute: %s", path)
-	}
-	if strings.Contains(cleaned, "..") {
-		return fmt.Errorf("path must not contain traversal sequences: %s", path)
-	}
-	return nil
-}
-
 // mkdirAllOnSandboxHost creates a directory and all parents on the sandbox host.
 func mkdirAllOnSandboxHost(path string, perm os.FileMode) error {
 	// Inline path validation so CodeQL can trace the sanitization.

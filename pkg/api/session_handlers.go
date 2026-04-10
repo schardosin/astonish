@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"time"
 
@@ -16,6 +17,10 @@ import (
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"google.golang.org/adk/session"
 )
+
+// validSessionID matches UUID-format session IDs (with optional prefix).
+// Prevents path traversal and command injection via session ID parameters.
+var validSessionID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
 
 // StudioSessionsHandler handles GET /api/studio/sessions.
 func StudioSessionsHandler(w http.ResponseWriter, r *http.Request) {
@@ -157,6 +162,10 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionID := mux.Vars(r)["id"]
+	if !validSessionID.MatchString(sessionID) {
+		http.Error(w, "invalid session ID", http.StatusBadRequest)
+		return
+	}
 
 	// If this is an active fleet session, stop it and clean up sandbox
 	registry := getFleetSessionRegistry()

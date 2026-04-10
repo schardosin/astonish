@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -13,6 +14,11 @@ import (
 	"github.com/schardosin/astonish/pkg/sandbox"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 )
+
+// validTemplateName matches only safe template names: lowercase alphanumeric,
+// hyphens, and underscores, 1-64 chars. This prevents shell metacharacters and
+// path traversal sequences from reaching exec.Command via sandbox operations.
+var validTemplateName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
 // --- Existing types ---
 
@@ -588,6 +594,10 @@ func SandboxTemplateCreateHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "template name is required")
 		return
 	}
+	if !validTemplateName.MatchString(req.Name) {
+		respondError(w, http.StatusBadRequest, "invalid template name: must be alphanumeric with hyphens/underscores, 1-64 chars")
+		return
+	}
 	if req.Name == "base" {
 		respondError(w, http.StatusBadRequest, "cannot create a template named 'base'")
 		return
@@ -619,6 +629,10 @@ func SandboxTemplateDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
 	if name == "" {
 		respondError(w, http.StatusBadRequest, "missing template name")
+		return
+	}
+	if !validTemplateName.MatchString(name) {
+		respondError(w, http.StatusBadRequest, "invalid template name")
 		return
 	}
 	if name == "base" {
@@ -654,6 +668,10 @@ func SandboxTemplateSnapshotHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "missing template name")
 		return
 	}
+	if !validTemplateName.MatchString(name) {
+		respondError(w, http.StatusBadRequest, "invalid template name")
+		return
+	}
 
 	client, err := sandboxConnect()
 	if err != nil {
@@ -681,6 +699,10 @@ func SandboxTemplatePromoteHandler(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
 	if name == "" {
 		respondError(w, http.StatusBadRequest, "missing template name")
+		return
+	}
+	if !validTemplateName.MatchString(name) {
+		respondError(w, http.StatusBadRequest, "invalid template name")
 		return
 	}
 	if name == "base" {

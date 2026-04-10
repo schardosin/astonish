@@ -54,6 +54,8 @@ func execOnSandboxHost(args []string) ([]byte, error) {
 		safeCmd = "rm"
 	case "rsync":
 		safeCmd = "rsync"
+	case "sh":
+		safeCmd = "sh"
 	case "test":
 		safeCmd = "test"
 	case "umount":

@@ -4,11 +4,22 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/flowstore"
 )
+
+// validTapURL matches GitHub repository URL formats accepted by AddTap:
+//   - "owner" or "owner/repo" (public GitHub shorthand)
+//   - "github.com/owner/repo"
+//   - "github.enterprise.com/owner/repo"
+//
+// Only alphanumeric, hyphens, underscores, dots, and slashes are allowed.
+// This prevents SSRF by ensuring the URL cannot contain crafted hostnames
+// targeting internal services.
+var validTapURL = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,253}(/[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}){0,2}$`)
 
 // FlowStoreListResponse is the response for GET /api/flow-store
 type FlowStoreListResponse struct {
@@ -122,6 +133,14 @@ func AddTapHandler(w http.ResponseWriter, r *http.Request) {
 
 	if req.URL == "" {
 		http.Error(w, "URL is required", http.StatusBadRequest)
+		return
+	}
+
+	// Strip protocol prefix before validation (parseTapURL also strips these)
+	cleanURL := strings.TrimPrefix(strings.TrimPrefix(req.URL, "https://"), "http://")
+	cleanURL = strings.TrimSuffix(strings.TrimSuffix(cleanURL, ".git"), "/")
+	if !validTapURL.MatchString(cleanURL) {
+		http.Error(w, "Invalid tap URL format: must be a GitHub repository (e.g. owner/repo or github.com/owner/repo)", http.StatusBadRequest)
 		return
 	}
 

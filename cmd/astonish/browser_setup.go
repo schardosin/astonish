@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -78,7 +77,7 @@ func browserStatusDescription(engine string, cfg *config.AppConfig) string {
 	case "default":
 		return "Currently using: Default Chromium (auto-downloaded)"
 	case "cloakbrowser":
-		desc := fmt.Sprintf("Currently using: CloakBrowser at %s", cfg.Browser.ChromePath)
+		desc := "Currently using: CloakBrowser"
 		if cfg.Browser.FingerprintPlatform != "" {
 			desc += fmt.Sprintf(" (platform: %s)", cfg.Browser.FingerprintPlatform)
 		}
@@ -121,154 +120,17 @@ func configureBrowserDefault(cfg *config.AppConfig) error {
 	return nil
 }
 
-// configureBrowserCloak sets up CloakBrowser with dependency validation,
-// automatic installation, and fingerprint configuration.
+// configureBrowserCloak configures CloakBrowser (anti-detect Chromium with
+// stealth patches) and prompts for fingerprint settings. The actual
+// installation of CloakBrowser happens inside the sandbox container during
+// template creation — this function only saves the config values that tell
+// the sandbox builder to use the CloakBrowser engine instead of default
+// Chromium.
 func configureBrowserCloak(cfg *config.AppConfig) error {
-	clearScreen()
-	fmt.Println("  Checking dependencies...")
-	fmt.Println()
-
-	// 1. Check OS (CloakBrowser only supports Linux and macOS)
-	if runtime.GOOS == "windows" {
-		printBrowserError("CloakBrowser does not support Windows. Use the Default engine or a Custom path.")
-		return fmt.Errorf("unsupported platform: windows")
-	}
-
-	// 2. Check Python 3
-	python3, err := exec.LookPath("python3")
-	if err != nil {
-		printBrowserCheck(false, "Python 3", "")
-		fmt.Println()
-		printBrowserError("Python 3 is required to install CloakBrowser.\n  Install it with: apt install python3")
-		return fmt.Errorf("python3 not found")
-	}
-	printBrowserCheck(true, "Python 3", "")
-
-	// 3. Check pip3
-	_, err = exec.LookPath("pip3")
-	if err != nil {
-		printBrowserCheck(false, "pip3", "")
-		fmt.Println()
-
-		var installPip bool
-		err = huh.NewForm(
-			huh.NewGroup(
-				huh.NewConfirm().
-					Title("pip3 is required but not found").
-					Description("Install python3-pip automatically?").
-					Affirmative("Yes, install").
-					Negative("No, abort").
-					Value(&installPip),
-			),
-		).Run()
-		if err != nil {
-			return err
-		}
-		if !installPip {
-			printBrowserError("pip3 is required. Install it with: apt install python3-pip")
-			return fmt.Errorf("pip3 not found")
-		}
-
-		fmt.Println("  Installing pip3...")
-		cmd := exec.Command("apt-get", "install", "-y", "-qq", "python3-pip")
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			printBrowserError(fmt.Sprintf("Failed to install pip3: %v\n  Install manually with: apt install python3-pip", err))
-			return fmt.Errorf("failed to install pip3: %w", err)
-		}
-		printBrowserCheck(true, "pip3", "installed")
-	} else {
-		printBrowserCheck(true, "pip3", "")
-	}
-
-	// 4. Check Xvfb
-	_, err = exec.LookPath("Xvfb")
-	if err != nil {
-		// Also try lowercase
-		_, err = exec.LookPath("xvfb")
-	}
-	if err != nil {
-		printBrowserCheck(false, "Xvfb", "")
-		fmt.Println()
-
-		var installXvfb bool
-		err = huh.NewForm(
-			huh.NewGroup(
-				huh.NewConfirm().
-					Title("Xvfb is required for headed stealth mode").
-					Description("Without Xvfb, the browser falls back to headless mode which is easier to detect.\nInstall Xvfb automatically?").
-					Affirmative("Yes, install").
-					Negative("No, abort").
-					Value(&installXvfb),
-			),
-		).Run()
-		if err != nil {
-			return err
-		}
-		if !installXvfb {
-			printBrowserError("Xvfb is required for CloakBrowser stealth mode.\n  Install it with: apt install xvfb")
-			return fmt.Errorf("xvfb not found")
-		}
-
-		fmt.Println("  Installing Xvfb...")
-		cmd := exec.Command("apt-get", "install", "-y", "-qq", "xvfb")
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			printBrowserError(fmt.Sprintf("Failed to install Xvfb: %v\n  Install manually with: apt install xvfb", err))
-			return fmt.Errorf("failed to install xvfb: %w", err)
-		}
-		printBrowserCheck(true, "Xvfb", "installed")
-	} else {
-		printBrowserCheck(true, "Xvfb", "")
-	}
-
-	// 5. Check/install CloakBrowser
-	binaryPath := findCloakBrowserBinary()
-	if binaryPath == "" {
-		printBrowserCheck(false, "CloakBrowser", "")
-		fmt.Println()
-		fmt.Println("  Installing CloakBrowser (this may take a moment)...")
-
-		// Install the Python package
-		cmd := exec.Command("pip3", "install", "--break-system-packages", "cloakbrowser")
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			printBrowserError(fmt.Sprintf("Failed to install CloakBrowser package: %v", err))
-			return fmt.Errorf("failed to install cloakbrowser: %w", err)
-		}
-
-		// Download the binary
-		fmt.Println("  Downloading CloakBrowser Chromium binary...")
-		out, err := exec.Command(python3, "-c",
-			"import cloakbrowser; print(cloakbrowser.ensure_binary())").CombinedOutput()
-		if err != nil {
-			printBrowserError(fmt.Sprintf("Failed to download CloakBrowser binary: %v\n  Output: %s", err, strings.TrimSpace(string(out))))
-			return fmt.Errorf("failed to download cloakbrowser binary: %w", err)
-		}
-
-		binaryPath = strings.TrimSpace(string(out))
-		if binaryPath == "" || !fileExists(binaryPath) {
-			printBrowserError("CloakBrowser binary not found after download")
-			return fmt.Errorf("cloakbrowser binary not found")
-		}
-	}
-
-	// Verify the binary works
-	verOut, err := exec.Command(binaryPath, "--version").CombinedOutput()
-	if err != nil {
-		printBrowserError(fmt.Sprintf("CloakBrowser binary failed to run: %v", err))
-		return fmt.Errorf("cloakbrowser binary failed: %w", err)
-	}
-	version := strings.TrimSpace(string(verOut))
-	printBrowserCheck(true, "CloakBrowser", version)
-
-	// 6. Fingerprint platform selection
+	// 1. Fingerprint platform selection
 	var platform string
 	clearScreen()
-	err = huh.NewForm(
+	err := huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Fingerprint platform").
@@ -285,7 +147,7 @@ func configureBrowserCloak(cfg *config.AppConfig) error {
 		return err
 	}
 
-	// 7. Fingerprint seed
+	// 2. Fingerprint seed
 	var seedChoice string
 	clearScreen()
 	err = huh.NewForm(
@@ -325,16 +187,20 @@ func configureBrowserCloak(cfg *config.AppConfig) error {
 		}
 	}
 
-	// 8. Save config
-	cfg.Browser.ChromePath = binaryPath
+	// 3. Save config — use "cloakbrowser" as the ChromePath sentinel so
+	// DetectBrowserEngine() identifies this as the CloakBrowser engine.
+	// The actual binary is installed inside the sandbox container during
+	// template creation (see BrowserContainerInstallCommands).
+	cfg.Browser.ChromePath = "cloakbrowser"
 	cfg.Browser.FingerprintSeed = seed
 	cfg.Browser.FingerprintPlatform = platform
+	cfg.Browser.RemoteCDPURL = ""
 
 	if err := config.SaveAppConfig(cfg); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
-	printBrowserSuccess(fmt.Sprintf("Browser configured to use CloakBrowser!\n  Engine: CloakBrowser (%s)\n  Platform: %s\n  Fingerprint seed: %s", version, platform, seed))
+	printBrowserSuccess(fmt.Sprintf("Browser configured to use CloakBrowser!\n  Platform: %s\n  Fingerprint seed: %s\n\n  CloakBrowser will be installed in the sandbox container.", platform, seed))
 	return nil
 }
 
@@ -536,47 +402,6 @@ func discoverCDPEndpoint(endpoint string) (wsURL string, version string, err err
 	}
 
 	return wsURL, result.Browser, nil
-}
-
-// findCloakBrowserBinary looks for an existing CloakBrowser installation.
-// First checks via Python (reliable, version-independent), then falls back
-// to scanning the known cache directory.
-func findCloakBrowserBinary() string {
-	// Try Python resolution first (handles version changes gracefully)
-	python3, err := exec.LookPath("python3")
-	if err == nil {
-		out, err := exec.Command(python3, "-c",
-			"from cloakbrowser.config import get_binary_path; print(get_binary_path())").CombinedOutput()
-		if err == nil {
-			path := strings.TrimSpace(string(out))
-			if path != "" && fileExists(path) {
-				return path
-			}
-		}
-	}
-
-	// Fallback: scan the known cache directory for any chromium-*/chrome
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	cacheDir := filepath.Join(home, ".cloakbrowser")
-	entries, err := os.ReadDir(cacheDir)
-	if err != nil {
-		return ""
-	}
-
-	// Pick the latest version directory (sorted lexicographically)
-	var latest string
-	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), "chromium-") {
-			candidate := filepath.Join(cacheDir, e.Name(), "chrome")
-			if fileExists(candidate) {
-				latest = candidate
-			}
-		}
-	}
-	return latest
 }
 
 // generateFingerprintSeed creates a random numeric seed between 10000 and 99999.

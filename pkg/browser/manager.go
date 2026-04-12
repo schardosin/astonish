@@ -563,6 +563,23 @@ func (m *Manager) resolveCDPURL(containerName, ip string) (string, error) {
 //
 // Must be called with m.mu held.
 func (m *Manager) launchInContainer() (*rod.Browser, error) {
+	b, err := m.launchInContainerInner()
+	if err != nil {
+		return nil, err
+	}
+
+	// Close extra tabs that Chromium may have opened on startup (e.g.
+	// first-run welcome page, session restore, default homepage). We want
+	// to start with a single about:blank tab so the AI agent controls
+	// exactly what is open. This is only done for container-launched
+	// browsers — not for connectRemote() with external anti-detect browsers
+	// whose tab state we should not touch.
+	m.closeExtraTabs(b)
+
+	return b, nil
+}
+
+func (m *Manager) launchInContainerInner() (*rod.Browser, error) {
 	// If RemoteCDPURL is already set (by a previous call or external setup),
 	// resolve it to the full debugger URL if it's a bare host:port.
 	if m.config.RemoteCDPURL != "" {
@@ -925,6 +942,23 @@ func (m *Manager) CurrentPage() (*rod.Page, error) {
 	m.activePg = pg
 	m.ensurePageState(pg)
 	return pg, nil
+}
+
+// closeExtraTabs closes all but one tab in the browser. Chromium may open
+// extra tabs on startup (first-run welcome, session restore, default homepage).
+// We keep the first tab (typically about:blank) and close the rest so the
+// agent starts with a clean, single-tab browser.
+// Must be called with m.mu held.
+func (m *Manager) closeExtraTabs(b *rod.Browser) {
+	pages, err := b.Pages()
+	if err != nil || len(pages) <= 1 {
+		return
+	}
+	// Keep the first page, close the rest.
+	for _, pg := range pages[1:] {
+		_ = pg.Close()
+	}
+	m.logger.Printf("Closed %d extra startup tab(s)", len(pages)-1)
 }
 
 // SetActivePage sets a specific page as the active page.

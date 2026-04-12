@@ -100,14 +100,36 @@ func BrowserContainerInstallCommands(engine, arch string) [][]string {
 	case "cloakbrowser":
 		// CloakBrowser needs python3, pip3, xvfb (for headed stealth mode),
 		// plus all the shared X11/font deps that Chromium requires.
+		// Unlike the "default" engine where `apt install chromium` pulls in
+		// transitive deps automatically, CloakBrowser is a standalone binary
+		// download — we must install every shared library it links against.
 		cmds = append(cmds, []string{"apt-get", "install", "-y",
 			// CloakBrowser runtime deps
 			"python3", "python3-pip", "xvfb",
-			// Chromium shared deps (CloakBrowser is a patched Chromium)
+			// Chromium shared deps (CloakBrowser is a patched Chromium).
+			// These must be listed explicitly because the binary is not
+			// installed via apt and has no automatic dependency resolution.
 			"fonts-liberation", "fonts-noto-color-emoji",
 			"xdg-utils", "libnss3", "libatk-bridge2.0-0",
 			"libx11-xcb1", "libxcomposite1", "libxrandr2",
 			"libgbm1", "libasound2t64",
+			"libcups2",            // CUPS printing (required by Chromium's print subsystem)
+			"libpango-1.0-0",      // text layout and rendering
+			"libcairo2",           // 2D graphics
+			"libdbus-1-3",         // D-Bus IPC
+			"libdrm2",             // Direct Rendering Manager
+			"libexpat1",           // XML parsing
+			"libxdamage1",         // X11 damage extension
+			"libxext6",            // X11 extensions
+			"libxfixes3",          // X11 fixes extension
+			"libxkbcommon0",       // keyboard handling
+			"libatspi2.0-0",       // accessibility
+			"libvulkan1",          // Vulkan graphics (optional but avoids warnings)
+			"libxcb-dri3-0",       // XCB DRI3 extension (GPU buffer sharing)
+			"libatk1.0-0",         // ATK accessibility toolkit (base, needed alongside bridge)
+			"libgtk-3-0",          // GTK3 (Chromium UI toolkit dependency)
+			"libgdk-pixbuf-2.0-0", // GDK-Pixbuf image loading
+			"libnspr4",            // Netscape Portable Runtime (NSS dependency)
 			// KasmVNC dependencies
 			"libjpeg-turbo8", "libwebp-dev", "libssl3",
 			"xfonts-base", "xfonts-75dpi", "xfonts-100dpi",
@@ -530,7 +552,9 @@ if [ -z "$BROWSER_BIN" ] || [ ! -f "$BROWSER_BIN" ]; then
   exit 1
 fi
 export DISPLAY=%s
-# Launch CloakBrowser as the browser user on the Xvnc display
+BROWSER_LOG=/tmp/cloakbrowser.log
+# Launch CloakBrowser as the browser user on the Xvnc display.
+# Redirect stdout+stderr to a log file so we can diagnose crashes.
 runuser -l browser -c "%sDISPLAY=%s $BROWSER_BIN \
   --no-sandbox \
   --test-type \
@@ -542,11 +566,47 @@ runuser -l browser -c "%sDISPLAY=%s $BROWSER_BIN \
   --disable-background-timer-throttling \
   --disable-backgrounding-occluded-windows \
   --disable-renderer-backgrounding \
-  --disable-blink-features=AutomationControlled%s%s \
-  about:blank &"
-sleep 1
+  --disable-blink-features=AutomationControlled \
+  --no-first-run \
+  --no-default-browser-check \
+  --noerrdialogs \
+  --disable-features=TranslateUI%s%s \
+  about:blank >$BROWSER_LOG 2>&1 &"
+sleep 2
+# Verify the browser process started by checking if any chrome/chromium
+# process is running. If not, the binary crashed on startup — report the
+# log so the error propagates to the user instead of a generic CDP timeout.
+if ! pgrep -u browser -f 'chrome|chromium' >/dev/null 2>&1; then
+  echo "CloakBrowser process died on startup. Binary: $BROWSER_BIN" >&2
+  echo "--- browser log ---" >&2
+  cat $BROWSER_LOG >&2 2>/dev/null
+  echo "--- end log ---" >&2
+  exit 1
+fi
+# Verify the DevTools port is bound. CloakBrowser may start the main process
+# but fail to initialize the DevTools server (e.g. if the binary does not
+# support --remote-debugging-port). Wait up to 5 seconds for port %d.
+CDP_READY=0
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  if ss -tln 2>/dev/null | grep -q ':%d '; then
+    CDP_READY=1
+    break
+  fi
+  sleep 0.5
+done
+if [ "$CDP_READY" = "0" ]; then
+  echo "CloakBrowser started but DevTools port %d is not listening after 5s." >&2
+  echo "Binary: $BROWSER_BIN" >&2
+  echo "Listening ports:" >&2
+  ss -tln >&2 2>/dev/null
+  echo "--- browser log ---" >&2
+  cat $BROWSER_LOG >&2 2>/dev/null
+  echo "--- end log ---" >&2
+  exit 1
+fi
 # Bridge CDP port to all interfaces so the host can connect
-%s`, display, ldPreload, display, internalCDPPort, width, height, BrowserProfileMountPath, fingerprintFlags, proxyFlag, socatBridge)
+%s`, display, ldPreload, display, internalCDPPort, width, height, BrowserProfileMountPath, fingerprintFlags, proxyFlag,
+			internalCDPPort, internalCDPPort, internalCDPPort, socatBridge)
 
 	default: // "default" — headed Google Chrome (/usr/bin/chromium via symlink)
 		proxyFlag := ""
@@ -567,7 +627,11 @@ sleep 1
 				"--disable-background-timer-throttling "+
 				"--disable-backgrounding-occluded-windows "+
 				"--disable-renderer-backgrounding "+
-				"--disable-blink-features=AutomationControlled%s "+
+				"--disable-blink-features=AutomationControlled "+
+				"--no-first-run "+
+				"--no-default-browser-check "+
+				"--noerrdialogs "+
+				"--disable-features=TranslateUI%s "+
 				"about:blank &\"\nsleep 1\n"+
 				"# Bridge CDP port to all interfaces so the host can connect\n%s",
 			display, ldPreload, display, internalCDPPort, width, height, BrowserProfileMountPath, proxyFlag, socatBridge,

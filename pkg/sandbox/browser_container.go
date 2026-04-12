@@ -457,54 +457,10 @@ func StopKasmVNC(_ *IncusClient, _ string, _ int) error {
 	return nil
 }
 
-// StartChromiumInContainer launches the browser inside the container with
-// remote debugging enabled so go-rod can connect via CDP.
-//
-// Chromium always binds its DevTools server to 127.0.0.1 (the
-// --remote-debugging-address flag only works in content_shell, not the full
-// browser). We work around this by running Chromium on internalCDPPort
-// (loopback) and using socat to forward from 0.0.0.0:DefaultCDPPort to
-// 127.0.0.1:internalCDPPort, making CDP accessible from the host.
-//
-// Both engines run Chromium in headed mode on DISPLAY=:1. The X server is
-// provided by KasmVNC (Xvnc), which is started first and persists for the
-// container's lifetime.
-func StartChromiumInContainer(client *IncusClient, containerName string, cfg BrowserContainerConfig) error {
-	width := cfg.ViewportWidth
-	if width == 0 {
-		width = 1280
-	}
-	height := cfg.ViewportHeight
-	if height == 0 {
-		height = 720
-	}
-
-	// Start KasmVNC (Xvnc) as the X server for display :1. This provides
-	// both the virtual display for headed Chromium and the VNC web client
-	// for human handoff sessions. Xvnc stays alive for the container's
-	// lifetime — it IS the display backend.
-	if err := StartKasmVNC(client, containerName, cfg); err != nil {
-		return fmt.Errorf("failed to start Xvnc display server: %w", err)
-	}
-
-	// Brief wait for Xvnc to be ready to accept X11 connections.
-	time.Sleep(1 * time.Second)
-
-	// Allow any local user (root, browser) to connect to the Xvnc display.
-	xhostCmd := []string{"runuser", "-l", "browser", "-c",
-		fmt.Sprintf("DISPLAY=:%s xhost +local:", kasmVNCDisplay),
-	}
-	exitCode, err := client.ExecSimple(containerName, xhostCmd)
-	if err != nil {
-		slog.Warn("xhost +local: failed", "container", containerName, "error", err)
-	} else if exitCode != 0 {
-		slog.Warn("xhost +local: exited with non-zero code", "container", containerName, "exit_code", exitCode)
-	}
-
-	engine := DetectBrowserEngine(cfg)
-
-	var launchScript string
-
+// buildLaunchScript generates the shell script that starts the browser inside
+// the container. Extracted from StartChromiumInContainer so it can be tested
+// without a real IncusClient.
+func buildLaunchScript(engine string, cfg BrowserContainerConfig, width, height int) string {
 	// socat bridge: expose CDP on all interfaces.
 	socatBridge := fmt.Sprintf(
 		"socat TCP-LISTEN:%d,fork,bind=0.0.0.0,reuseaddr TCP:127.0.0.1:%d &\n",
@@ -545,7 +501,7 @@ func StartChromiumInContainer(client *IncusClient, containerName string, cfg Bro
 			proxyFlag = fmt.Sprintf(" --proxy-server=%s", cfg.Proxy)
 		}
 
-		launchScript = fmt.Sprintf(`
+		return fmt.Sprintf(`
 BROWSER_BIN=$(runuser -u browser -- python3 -c "from cloakbrowser.config import get_binary_path; print(get_binary_path())")
 if [ -z "$BROWSER_BIN" ] || [ ! -f "$BROWSER_BIN" ]; then
   echo "CloakBrowser binary not found" >&2
@@ -614,7 +570,7 @@ fi
 			proxyFlag = fmt.Sprintf(" --proxy-server=%s", cfg.Proxy)
 		}
 
-		launchScript = fmt.Sprintf(
+		return fmt.Sprintf(
 			"export DISPLAY=%s\n"+
 				"runuser -l browser -c \"%sDISPLAY=%s chromium "+
 				"--no-sandbox "+
@@ -637,6 +593,55 @@ fi
 			display, ldPreload, display, internalCDPPort, width, height, BrowserProfileMountPath, proxyFlag, socatBridge,
 		)
 	}
+}
+
+// StartChromiumInContainer launches the browser inside the container with
+// remote debugging enabled so go-rod can connect via CDP.
+//
+// Chromium always binds its DevTools server to 127.0.0.1 (the
+// --remote-debugging-address flag only works in content_shell, not the full
+// browser). We work around this by running Chromium on internalCDPPort
+// (loopback) and using socat to forward from 0.0.0.0:DefaultCDPPort to
+// 127.0.0.1:internalCDPPort, making CDP accessible from the host.
+//
+// Both engines run Chromium in headed mode on DISPLAY=:1. The X server is
+// provided by KasmVNC (Xvnc), which is started first and persists for the
+// container's lifetime.
+func StartChromiumInContainer(client *IncusClient, containerName string, cfg BrowserContainerConfig) error {
+	width := cfg.ViewportWidth
+	if width == 0 {
+		width = 1280
+	}
+	height := cfg.ViewportHeight
+	if height == 0 {
+		height = 720
+	}
+
+	// Start KasmVNC (Xvnc) as the X server for display :1. This provides
+	// both the virtual display for headed Chromium and the VNC web client
+	// for human handoff sessions. Xvnc stays alive for the container's
+	// lifetime — it IS the display backend.
+	if err := StartKasmVNC(client, containerName, cfg); err != nil {
+		return fmt.Errorf("failed to start Xvnc display server: %w", err)
+	}
+
+	// Brief wait for Xvnc to be ready to accept X11 connections.
+	time.Sleep(1 * time.Second)
+
+	// Allow any local user (root, browser) to connect to the Xvnc display.
+	xhostCmd := []string{"runuser", "-l", "browser", "-c",
+		fmt.Sprintf("DISPLAY=:%s xhost +local:", kasmVNCDisplay),
+	}
+	exitCode, err := client.ExecSimple(containerName, xhostCmd)
+	if err != nil {
+		slog.Warn("xhost +local: failed", "container", containerName, "error", err)
+	} else if exitCode != 0 {
+		slog.Warn("xhost +local: exited with non-zero code", "container", containerName, "exit_code", exitCode)
+	}
+
+	engine := DetectBrowserEngine(cfg)
+
+	launchScript := buildLaunchScript(engine, cfg, width, height)
 
 	// Use ExecWithOutput to capture stdout+stderr for diagnostic error messages.
 	// The launch script runs background processes (chromium &, socat &) so we

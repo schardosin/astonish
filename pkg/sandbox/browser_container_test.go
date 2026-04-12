@@ -184,6 +184,244 @@ func TestBrowserContainerInstallCommands_CloakBrowserEngine(t *testing.T) {
 	}
 }
 
+// TestCloakBrowserInstallCommands_RequiredSharedLibs verifies that the
+// CloakBrowser install command list includes every shared library that the
+// standalone Chromium binary needs. These cannot be auto-resolved by apt
+// because CloakBrowser is installed via pip, not as a .deb package.
+func TestCloakBrowserInstallCommands_RequiredSharedLibs(t *testing.T) {
+	cmds := BrowserContainerInstallCommands("cloakbrowser", "x86_64")
+	flat := flattenCommands(cmds)
+
+	// Each of these packages was confirmed required during live testing.
+	// Missing any one causes the CloakBrowser binary to fail with a
+	// "cannot open shared object file" error on startup.
+	requiredLibs := []struct {
+		pkg  string
+		desc string
+	}{
+		{"libcups2", "CUPS printing (Chromium print subsystem)"},
+		{"libpango-1.0-0", "text layout and rendering"},
+		{"libcairo2", "2D graphics"},
+		{"libdbus-1-3", "D-Bus IPC"},
+		{"libdrm2", "Direct Rendering Manager"},
+		{"libexpat1", "XML parsing"},
+		{"libxdamage1", "X11 damage extension"},
+		{"libxext6", "X11 extensions"},
+		{"libxfixes3", "X11 fixes extension"},
+		{"libxkbcommon0", "keyboard handling"},
+		{"libatspi2.0-0", "accessibility"},
+		{"libvulkan1", "Vulkan graphics"},
+		{"libxcb-dri3-0", "XCB DRI3 extension (GPU buffer sharing)"},
+		{"libatk1.0-0", "ATK accessibility toolkit"},
+		{"libgtk-3-0", "GTK3 (Chromium UI toolkit)"},
+		{"libgdk-pixbuf-2.0-0", "GDK-Pixbuf image loading"},
+		{"libnspr4", "Netscape Portable Runtime (NSS dependency)"},
+		{"libnss3", "Network Security Services"},
+		{"libatk-bridge2.0-0", "ATK-Bridge accessibility"},
+		{"libx11-xcb1", "X11-XCB bridge"},
+		{"libxcomposite1", "X11 composite extension"},
+		{"libxrandr2", "X11 RandR extension"},
+		{"libgbm1", "Mesa GBM (buffer management)"},
+		{"libasound2t64", "ALSA sound"},
+	}
+
+	for _, lib := range requiredLibs {
+		if !strings.Contains(flat, lib.pkg) {
+			t.Errorf("missing required shared library package %q (%s)", lib.pkg, lib.desc)
+		}
+	}
+}
+
+// TestLaunchScript_NoExtraTabFlags verifies that both the default and
+// CloakBrowser launch scripts include Chromium flags that prevent extra
+// tabs from opening on startup (first-run page, default browser check, etc.).
+func TestLaunchScript_NoExtraTabFlags(t *testing.T) {
+	requiredFlags := []string{
+		"--no-first-run",
+		"--no-default-browser-check",
+		"--noerrdialogs",
+		"--disable-features=TranslateUI",
+	}
+
+	for _, engine := range []string{"default", "cloakbrowser"} {
+		t.Run(engine, func(t *testing.T) {
+			cfg := BrowserContainerConfig{}
+			if engine == "cloakbrowser" {
+				cfg.ChromePath = "cloakbrowser"
+			}
+			script := buildLaunchScript(engine, cfg, 1280, 720)
+
+			for _, flag := range requiredFlags {
+				if !strings.Contains(script, flag) {
+					t.Errorf("launch script missing flag %q", flag)
+				}
+			}
+		})
+	}
+}
+
+// TestLaunchScript_CloakBrowser_HasDiagnostics verifies that the CloakBrowser
+// launch script includes startup diagnostics: stderr log capture, process
+// liveness check via pgrep, and CDP port binding verification via ss.
+// These diagnostics surface the real error when CloakBrowser crashes on
+// startup instead of a generic "CDP timeout after 15s" message.
+func TestLaunchScript_CloakBrowser_HasDiagnostics(t *testing.T) {
+	script := buildLaunchScript("cloakbrowser", BrowserContainerConfig{
+		ChromePath: "cloakbrowser",
+	}, 1280, 720)
+
+	checks := []struct {
+		substr string
+		desc   string
+	}{
+		{"BROWSER_LOG=/tmp/cloakbrowser.log", "stderr log file path"},
+		{">$BROWSER_LOG 2>&1", "stdout+stderr redirect to log file"},
+		{"pgrep -u browser", "process liveness check via pgrep"},
+		{"CloakBrowser process died on startup", "crash error message"},
+		{"cat $BROWSER_LOG", "log dump on failure"},
+		{"ss -tln", "CDP port binding check via ss"},
+		{"CDP_READY=", "CDP readiness loop variable"},
+		{"CloakBrowser started but DevTools port", "CDP port failure message"},
+	}
+
+	for _, c := range checks {
+		if !strings.Contains(script, c.substr) {
+			t.Errorf("CloakBrowser launch script missing diagnostic: %s (expected %q)", c.desc, c.substr)
+		}
+	}
+}
+
+// TestLaunchScript_Default_NoDiagnostics verifies that the default Chromium
+// launch script does NOT include CloakBrowser-specific diagnostics (pgrep,
+// BROWSER_LOG, etc.) — the default engine is installed via apt and is more
+// reliable, so the extra diagnostics would be noise.
+func TestLaunchScript_Default_NoDiagnostics(t *testing.T) {
+	script := buildLaunchScript("default", BrowserContainerConfig{}, 1280, 720)
+
+	// These are CloakBrowser-specific and should NOT appear in the default script.
+	unwanted := []string{
+		"BROWSER_LOG=",
+		"pgrep",
+		"CDP_READY=",
+		"CloakBrowser",
+	}
+
+	for _, s := range unwanted {
+		if strings.Contains(script, s) {
+			t.Errorf("default launch script should not contain CloakBrowser diagnostic %q", s)
+		}
+	}
+}
+
+// TestLaunchScript_SharedFlags verifies that both engines include core
+// Chromium flags required for container operation (sandbox disabled, CDP port,
+// user data dir, anti-detection, etc.).
+func TestLaunchScript_SharedFlags(t *testing.T) {
+	sharedFlags := []string{
+		"--no-sandbox",
+		"--disable-gpu",
+		"--disable-dev-shm-usage",
+		fmt.Sprintf("--remote-debugging-port=%d", internalCDPPort),
+		"--disable-background-timer-throttling",
+		"--disable-backgrounding-occluded-windows",
+		"--disable-renderer-backgrounding",
+		"--disable-blink-features=AutomationControlled",
+		BrowserProfileMountPath,
+		"about:blank",
+	}
+
+	for _, engine := range []string{"default", "cloakbrowser"} {
+		t.Run(engine, func(t *testing.T) {
+			cfg := BrowserContainerConfig{}
+			if engine == "cloakbrowser" {
+				cfg.ChromePath = "cloakbrowser"
+			}
+			script := buildLaunchScript(engine, cfg, 1280, 720)
+
+			for _, flag := range sharedFlags {
+				if !strings.Contains(script, flag) {
+					t.Errorf("launch script missing shared flag/value %q", flag)
+				}
+			}
+		})
+	}
+}
+
+// TestLaunchScript_SocatBridge verifies that both engines include the socat
+// bridge command that forwards CDP from 0.0.0.0:DefaultCDPPort to the
+// internal loopback port.
+func TestLaunchScript_SocatBridge(t *testing.T) {
+	expected := fmt.Sprintf("socat TCP-LISTEN:%d,fork,bind=0.0.0.0,reuseaddr TCP:127.0.0.1:%d",
+		DefaultCDPPort, internalCDPPort)
+
+	for _, engine := range []string{"default", "cloakbrowser"} {
+		t.Run(engine, func(t *testing.T) {
+			cfg := BrowserContainerConfig{}
+			if engine == "cloakbrowser" {
+				cfg.ChromePath = "cloakbrowser"
+			}
+			script := buildLaunchScript(engine, cfg, 1280, 720)
+
+			if !strings.Contains(script, expected) {
+				t.Errorf("launch script missing socat bridge command")
+			}
+		})
+	}
+}
+
+// TestLaunchScript_CloakBrowser_FingerprintFlags verifies that CloakBrowser
+// fingerprint flags are included when configured.
+func TestLaunchScript_CloakBrowser_FingerprintFlags(t *testing.T) {
+	script := buildLaunchScript("cloakbrowser", BrowserContainerConfig{
+		ChromePath:          "cloakbrowser",
+		FingerprintSeed:     "42",
+		FingerprintPlatform: "windows",
+	}, 1280, 720)
+
+	if !strings.Contains(script, "--fingerprint 42") {
+		t.Error("launch script missing --fingerprint seed")
+	}
+	if !strings.Contains(script, "--fingerprint-platform windows") {
+		t.Error("launch script missing --fingerprint-platform")
+	}
+}
+
+// TestLaunchScript_ProxyFlag verifies that the proxy flag is included when
+// configured, for both engines.
+func TestLaunchScript_ProxyFlag(t *testing.T) {
+	for _, engine := range []string{"default", "cloakbrowser"} {
+		t.Run(engine, func(t *testing.T) {
+			cfg := BrowserContainerConfig{Proxy: "socks5://127.0.0.1:1080"}
+			if engine == "cloakbrowser" {
+				cfg.ChromePath = "cloakbrowser"
+			}
+			script := buildLaunchScript(engine, cfg, 1280, 720)
+
+			if !strings.Contains(script, "--proxy-server=socks5://127.0.0.1:1080") {
+				t.Error("launch script missing proxy flag")
+			}
+		})
+	}
+}
+
+// TestLaunchScript_ViewportSize verifies that the viewport dimensions are
+// passed to the --window-size flag.
+func TestLaunchScript_ViewportSize(t *testing.T) {
+	for _, engine := range []string{"default", "cloakbrowser"} {
+		t.Run(engine, func(t *testing.T) {
+			cfg := BrowserContainerConfig{}
+			if engine == "cloakbrowser" {
+				cfg.ChromePath = "cloakbrowser"
+			}
+			script := buildLaunchScript(engine, cfg, 1920, 1080)
+
+			if !strings.Contains(script, "--window-size=1920,1080") {
+				t.Error("launch script missing correct --window-size")
+			}
+		})
+	}
+}
+
 // flattenCommands joins all command slices into a single string for substring matching.
 func flattenCommands(cmds [][]string) string {
 	var parts []string

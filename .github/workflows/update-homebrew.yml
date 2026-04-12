@@ -2,7 +2,7 @@ name: Update Homebrew Formula
 
 on:
   workflow_run:
-    workflows: ["Release"]
+    workflows: ["Docker Incus Image"]
     types:
       - completed
 
@@ -13,7 +13,7 @@ jobs:
   update-homebrew:
     name: Update Homebrew Formula
     runs-on: ubuntu-latest
-    # Only run if the Release workflow succeeded
+    # Only run if the Docker Incus Image workflow succeeded
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
 
     steps:

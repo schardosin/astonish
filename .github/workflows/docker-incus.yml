@@ -1,9 +1,10 @@
 name: Docker Incus Image
 
 on:
-  push:
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_run:
+    workflows: ["Release"]
+    types:
+      - completed
 
 permissions:
   contents: read
@@ -12,11 +13,13 @@ jobs:
   build-and-push:
     name: Build and push multi-arch image
     runs-on: ubuntu-latest
-    if: github.repository == 'schardosin/astonish'
+    if: github.repository == 'schardosin/astonish' && github.event.workflow_run.conclusion == 'success'
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -40,7 +43,7 @@ jobs:
         run: |
           # Both binaries need the frontend embedded and version ldflags
           touch web/embed.go
-          LDFLAGS="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=${{ github.ref_name }}"
+          LDFLAGS="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=${{ github.event.workflow_run.head_branch }}"
 
           echo "Building linux/amd64..."
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o astonish-linux-amd64 .
@@ -70,5 +73,5 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            schardosin/astonish-incus:${{ github.ref_name }}
+            schardosin/astonish-incus:${{ github.event.workflow_run.head_branch }}
             schardosin/astonish-incus:latest

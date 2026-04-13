@@ -35,7 +35,7 @@ require (
 	golang.org/x/net v0.52.0
 	golang.org/x/term v0.41.0
 	google.golang.org/adk v1.0.0
-	google.golang.org/genai v1.52.1
+	google.golang.org/genai v1.53.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

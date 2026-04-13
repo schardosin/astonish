@@ -34,7 +34,7 @@ require (
 	golang.org/x/image v0.39.0
 	golang.org/x/net v0.53.0
 	golang.org/x/term v0.42.0
-	google.golang.org/adk v1.0.0
+	google.golang.org/adk v1.1.0
 	google.golang.org/genai v1.53.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -46,7 +46,7 @@ require (
 	github.com/AdaLogics/go-fuzz-headers v0.0.0-20240806141605-e8a1dd7889d6 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.31.0 // indirect
 	github.com/JohannesKaufmann/dom v0.2.0 // indirect
-	github.com/a2aproject/a2a-go v0.3.10 // indirect
+	github.com/a2aproject/a2a-go v0.3.13 // indirect
 	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/apex/log v1.9.0 // indirect
 	github.com/araddon/dateparse v0.0.0-20210429162001-6b43995a97de // indirect
@@ -95,6 +95,7 @@ require (
 	github.com/googleapis/gax-go/v2 v2.15.0 // indirect
 	github.com/gorilla/securecookie v1.1.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 // indirect
+	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/klauspost/pgzip v1.2.6 // indirect
 	github.com/knights-analytics/ortgenai v0.2.0 // indirect

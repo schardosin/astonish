@@ -266,6 +266,25 @@ func (m *ChannelManager) Status() map[string]ChannelStatus {
 	return statuses
 }
 
+// UpdateAllowlists updates the sender allowlists on running channels that
+// implement AllowlistUpdater. The allowlists map is keyed by channel ID
+// (e.g. "email", "telegram"). Returns true if any channel was updated.
+func (m *ChannelManager) UpdateAllowlists(allowlists map[string][]string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	updated := false
+	for id, ch := range m.channels {
+		if updater, ok := ch.(AllowlistUpdater); ok {
+			if newList, has := allowlists[id]; has {
+				updater.UpdateAllowlist(newList)
+				updated = true
+			}
+		}
+	}
+	return updated
+}
+
 // --- Fleet session tracking ---
 
 // SetActiveFleet associates a chat session key with an active fleet session ID.

@@ -63,4 +63,32 @@ func TestRouter_Route(t *testing.T) {
 			t.Errorf("same inputs should produce same key, got %q and %q", r1.SessionKey, r2.SessionKey)
 		}
 	})
+
+	t.Run("ThreadID overrides ChatID for session key", func(t *testing.T) {
+		msg := InboundMessage{
+			ChannelID: "email",
+			ChatType:  ChatTypeDirect,
+			ChatID:    "alice@example.com",
+			ThreadID:  "email:direct:alice@example.com-a1b2c3d4",
+		}
+		result := r.Route(msg)
+		want := "email:direct:alice@example.com-a1b2c3d4"
+		if result.SessionKey != want {
+			t.Errorf("Route() with ThreadID = %q, want %q", result.SessionKey, want)
+		}
+	})
+
+	t.Run("empty ThreadID falls back to ChatID", func(t *testing.T) {
+		msg := InboundMessage{
+			ChannelID: "telegram",
+			ChatType:  ChatTypeDirect,
+			ChatID:    "12345",
+			ThreadID:  "",
+		}
+		result := r.Route(msg)
+		want := "telegram:direct:12345"
+		if result.SessionKey != want {
+			t.Errorf("Route() with empty ThreadID = %q, want %q", result.SessionKey, want)
+		}
+	})
 }

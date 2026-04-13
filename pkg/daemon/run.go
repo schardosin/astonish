@@ -312,6 +312,12 @@ func Run(cfg RunConfig) error {
 					MaxBodyChars: freshCfg.Channels.Email.MaxBodyChars,
 					Commands:     mgr.Commands(),
 				}, log.Default())
+				// Inject thread index for per-thread email sessions.
+				// Each email thread gets its own session; replies chain back
+				// to the same session via In-Reply-To / References headers.
+				if sharedFileStore != nil {
+					em.SetThreadIndex(sharedFileStore.ThreadIndex())
+				}
 				mgr.Register(em)
 				logger.Printf("Email channel registered (%s)", freshCfg.Channels.Email.Address)
 			}
@@ -443,6 +449,24 @@ func Run(cfg RunConfig) error {
 		return nil
 	}
 	api.SetChannelReloadFunc(reloadChannels)
+
+	// --- Start config file watcher for hot-reload ---
+	configPath, configPathErr := config.GetConfigPath()
+	if configPathErr != nil {
+		logger.Printf("Warning: Failed to resolve config path for watcher: %v", configPathErr)
+	} else {
+		go func() {
+			if err := WatchConfig(ctx, configPath, ConfigWatcherOpts{
+				DebounceMs:     1500,
+				Logger:         logger,
+				GetManager:     func() *channels.ChannelManager { return channelMgr },
+				ReloadChannels: reloadChannels,
+				LastConfig:     appCfg,
+			}); err != nil {
+				logger.Printf("Warning: Config watcher stopped: %v", err)
+			}
+		}()
+	}
 
 	// --- Initialize scheduler if enabled ---
 	var sched *scheduler.Scheduler

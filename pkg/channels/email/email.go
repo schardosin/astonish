@@ -5,6 +5,7 @@ package email
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log"
 	"net/mail"
@@ -16,6 +17,7 @@ import (
 	"github.com/schardosin/astonish/pkg/channels"
 	"github.com/schardosin/astonish/pkg/channels/telegram"
 	emailpkg "github.com/schardosin/astonish/pkg/email"
+	"github.com/schardosin/astonish/pkg/session"
 )
 
 // Config holds configuration for the Email channel adapter.
@@ -54,8 +56,14 @@ type EmailChannel struct {
 	// seenIDs tracks Message-IDs we've already processed to avoid duplicates.
 	seenIDs  map[string]bool
 	seenMu   sync.Mutex
+	allowMu  sync.RWMutex
 	allowSet map[string]bool
 	allowAll bool
+
+	// threadIndex maps email Message-IDs to session keys for per-thread sessions.
+	// When set, new emails create new sessions and replies are routed to the
+	// same session as the original thread. When nil, falls back to per-sender routing.
+	threadIndex *session.ThreadIndex
 }
 
 // New creates a new Email channel adapter.
@@ -90,6 +98,14 @@ func New(cfg *Config, logger *log.Logger) *EmailChannel {
 		allowSet: allowSet,
 		allowAll: allowAll,
 	}
+}
+
+// SetThreadIndex injects the thread index for per-thread email sessions.
+// Must be called before Start. When set, new emails create new sessions and
+// replies (identified by In-Reply-To / References) are routed to the existing
+// thread session. Without it, all emails from a sender share one session.
+func (e *EmailChannel) SetThreadIndex(idx *session.ThreadIndex) {
+	e.threadIndex = idx
 }
 
 // ID returns the channel identifier.
@@ -194,6 +210,8 @@ func (e *EmailChannel) Stop(ctx context.Context) error {
 }
 
 // Send delivers an outbound message via email (SMTP).
+// If thread indexing is enabled, the outbound Message-ID is indexed to the
+// session so that user replies to our response chain correctly.
 func (e *EmailChannel) Send(ctx context.Context, target channels.Target, msg channels.OutboundMessage) error {
 	e.mu.RLock()
 	client := e.client
@@ -217,23 +235,37 @@ func (e *EmailChannel) Send(ctx context.Context, target channels.Target, msg cha
 		outgoing.HTML = markdownToEmailHTML(msg.Text)
 	}
 
+	var outboundMessageID string
+	var err error
+
 	// If this is a reply to an inbound message, use Reply for proper threading
 	if msg.ReplyTo != "" {
-		_, err := client.Reply(ctx, msg.ReplyTo, false, outgoing)
+		outboundMessageID, err = client.Reply(ctx, msg.ReplyTo, false, outgoing)
+	} else {
+		outboundMessageID, err = client.Send(ctx, outgoing)
+	}
+
+	if err != nil {
 		return err
 	}
 
-	_, err := client.Send(ctx, outgoing)
-	return err
+	// Index the outbound Message-ID so the user's reply to our response
+	// chains back to the same session. target.ThreadID contains the session key.
+	if e.threadIndex != nil && outboundMessageID != "" && target.ThreadID != "" {
+		if indexErr := e.threadIndex.Associate([]string{outboundMessageID}, target.ThreadID); indexErr != nil {
+			e.logger.Printf("[email] Warning: failed to index outbound Message-ID: %v", indexErr)
+		}
+	}
+
+	return nil
 }
 
 // BroadcastTargets returns one target per allowed sender address.
 func (e *EmailChannel) BroadcastTargets() []channels.Target {
+	e.allowMu.RLock()
+	defer e.allowMu.RUnlock()
 	var targets []channels.Target
-	for _, addr := range e.config.AllowFrom {
-		if addr == "*" {
-			continue
-		}
+	for addr := range e.allowSet {
 		targets = append(targets, channels.Target{
 			ChannelID: "email",
 			ChatID:    addr,
@@ -295,21 +327,26 @@ func (e *EmailChannel) checkNewEmails(ctx context.Context) {
 			continue
 		}
 
-		// Read full message for the body
+		// Read full message for the body and threading headers
 		fullMsg, err := client.ReadMessage(ctx, summary.ID)
 		if err != nil {
 			e.logger.Printf("[email] Error reading message %s: %v", summary.ID, err)
 			continue
 		}
 
+		// Determine the session routing via thread-based routing
+		threadSessionKey := e.resolveThreadSession(senderAddr, fullMsg)
+
 		// Build normalized inbound message
 		inbound := channels.InboundMessage{
 			ID:         summary.ID,
+			MessageID:  fullMsg.Headers["Message-ID"],
 			ChannelID:  "email",
 			SenderID:   senderAddr,
 			SenderName: extractName(summary.From),
-			ChatID:     senderAddr, // Session key uses sender address
+			ChatID:     senderAddr, // Delivery address (for sending replies)
 			ChatType:   channels.ChatTypeDirect,
+			ThreadID:   threadSessionKey, // Thread-specific session key (overrides Router)
 			Text:       fullMsg.Body,
 			Timestamp:  summary.Date,
 			Raw:        fullMsg,
@@ -338,8 +375,97 @@ func (e *EmailChannel) checkNewEmails(ctx context.Context) {
 	e.seenMu.Unlock()
 }
 
+// resolveThreadSession determines the full session key for an email based on
+// threading headers. If thread indexing is enabled:
+//   - Replies (In-Reply-To / References) are matched to existing sessions
+//   - New emails (no threading headers or no match) create new thread sessions
+//
+// Returns the full session key (e.g., "email:direct:alice@example.com-a1b2c3d4")
+// which is placed in InboundMessage.ThreadID to override the Router.
+// Without thread indexing, returns empty string (Router falls back to ChatID).
+func (e *EmailChannel) resolveThreadSession(senderAddr string, msg *emailpkg.Message) string {
+	if e.threadIndex == nil {
+		return "" // fallback: per-sender session via ChatID
+	}
+
+	messageID := msg.Headers["Message-ID"]
+	inReplyTo := msg.Headers["In-Reply-To"]
+	references := msg.Headers["References"]
+
+	// Build the chain of parent Message-IDs to look up (newest first)
+	var parentIDs []string
+	if inReplyTo != "" {
+		parentIDs = append(parentIDs, inReplyTo)
+	}
+	// Parse References header: space-separated list of Message-IDs
+	if references != "" {
+		refs := parseReferences(references)
+		// Walk in reverse (newest first) for faster matching
+		for i := len(refs) - 1; i >= 0; i-- {
+			// Skip duplicates with In-Reply-To
+			if refs[i] != inReplyTo {
+				parentIDs = append(parentIDs, refs[i])
+			}
+		}
+	}
+
+	// Try to find an existing session via thread chain
+	if len(parentIDs) > 0 {
+		if sessionKey, ok := e.threadIndex.LookupChain(parentIDs); ok {
+			// Index the current Message-ID to this session too
+			if messageID != "" {
+				if err := e.threadIndex.Associate([]string{messageID}, sessionKey); err != nil {
+					e.logger.Printf("[email] Warning: failed to index Message-ID %s: %v", messageID, err)
+				}
+			}
+			return sessionKey
+		}
+	}
+
+	// No match — this is a new thread. Generate a thread-specific session key.
+	threadID := generateThreadID(senderAddr, messageID)
+	sessionKey := fmt.Sprintf("email:%s:%s", channels.ChatTypeDirect, threadID)
+
+	// Index the current Message-ID so future replies can find this session.
+	if messageID != "" {
+		if err := e.threadIndex.Associate([]string{messageID}, sessionKey); err != nil {
+			e.logger.Printf("[email] Warning: failed to index Message-ID %s: %v", messageID, err)
+		}
+	}
+
+	return sessionKey
+}
+
+// generateThreadID creates a deterministic, human-readable thread identifier
+// from the sender address and Message-ID. Format: <sender>-<short-hash>.
+// The hash ensures uniqueness across threads from the same sender.
+func generateThreadID(senderAddr, messageID string) string {
+	if messageID == "" {
+		// Fallback for messages without a Message-ID (extremely rare)
+		messageID = fmt.Sprintf("noid-%d", time.Now().UnixNano())
+	}
+	h := sha256.Sum256([]byte(messageID))
+	shortHash := fmt.Sprintf("%x", h[:4]) // 8 hex chars
+	return fmt.Sprintf("%s-%s", senderAddr, shortHash)
+}
+
+// parseReferences splits a References header value into individual Message-IDs.
+// The References header contains space-separated Message-IDs per RFC 2822.
+func parseReferences(refs string) []string {
+	var result []string
+	for _, part := range strings.Fields(refs) {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
+}
+
 // isAllowed checks if a sender is in the allowlist.
 func (e *EmailChannel) isAllowed(senderAddr string) bool {
+	e.allowMu.RLock()
+	defer e.allowMu.RUnlock()
 	if e.allowAll {
 		return true
 	}
@@ -347,6 +473,37 @@ func (e *EmailChannel) isAllowed(senderAddr string) bool {
 		return false
 	}
 	return e.allowSet[strings.ToLower(senderAddr)]
+}
+
+// UpdateAllowlist replaces the sender allowlist at runtime without requiring
+// a channel restart. It also clears the seenIDs cache so that previously
+// blocked (but still unread) emails are re-evaluated on the next poll cycle.
+// Implements the channels.AllowlistUpdater interface.
+func (e *EmailChannel) UpdateAllowlist(allowFrom []string) {
+	newSet := make(map[string]bool, len(allowFrom))
+	newAll := false
+	for _, addr := range allowFrom {
+		if addr == "*" {
+			newAll = true
+		} else {
+			newSet[strings.ToLower(addr)] = true
+		}
+	}
+
+	e.allowMu.Lock()
+	e.allowSet = newSet
+	e.allowAll = newAll
+	e.allowMu.Unlock()
+
+	// Clear seenIDs so previously-blocked (but still unread) emails
+	// are re-evaluated with the new allowlist on the next poll cycle.
+	// This is safe because processed emails are already marked as read
+	// on the IMAP server and won't appear in the NOT \Seen search.
+	e.seenMu.Lock()
+	e.seenIDs = make(map[string]bool)
+	e.seenMu.Unlock()
+
+	e.logger.Printf("[email] Allowlist updated (%d entries), cleared seen cache", len(allowFrom))
 }
 
 // setError updates the channel status with an error message.

@@ -2,12 +2,14 @@ package email
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
 	"mime"
 	"mime/multipart"
+	"mime/quotedprintable"
 	"net/mail"
 	"regexp"
 	"strings"
@@ -40,6 +42,21 @@ type ParsedBody struct {
 	Attachments []AttachmentInfo
 }
 
+// decodeCTE wraps a reader with the appropriate Content-Transfer-Encoding
+// decoder. Email bodies and MIME parts are transmitted with encodings like
+// base64 or quoted-printable; the raw bytes must be decoded before use.
+func decodeCTE(r io.Reader, encoding string) io.Reader {
+	switch strings.ToLower(strings.TrimSpace(encoding)) {
+	case "base64":
+		return base64.NewDecoder(base64.StdEncoding, r)
+	case "quoted-printable":
+		return quotedprintable.NewReader(r)
+	default:
+		// "7bit", "8bit", "binary", or empty — no decoding needed
+		return r
+	}
+}
+
 // ParseMIMEBody parses the body of an email message, extracting text, HTML,
 // and attachment metadata. The msg parameter should have its body positioned
 // at the start. maxBodyChars limits the size of text/html returned.
@@ -56,7 +73,8 @@ func ParseMIMEBody(msg *mail.Message, maxBodyChars int) (*ParsedBody, error) {
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil {
 		// Fall back to reading the whole body as text
-		body, readErr := io.ReadAll(io.LimitReader(msg.Body, int64(maxBodyChars)))
+		reader := decodeCTE(msg.Body, msg.Header.Get("Content-Transfer-Encoding"))
+		body, readErr := io.ReadAll(io.LimitReader(reader, int64(maxBodyChars)))
 		if readErr != nil {
 			return nil, readErr
 		}
@@ -75,12 +93,14 @@ func ParseMIMEBody(msg *mail.Message, maxBodyChars int) (*ParsedBody, error) {
 			return result, nil // Return partial results on error
 		}
 	} else if strings.HasPrefix(mediaType, "text/html") {
-		body, _ := io.ReadAll(io.LimitReader(msg.Body, int64(maxBodyChars)))
+		reader := decodeCTE(msg.Body, msg.Header.Get("Content-Transfer-Encoding"))
+		body, _ := io.ReadAll(io.LimitReader(reader, int64(maxBodyChars)))
 		result.HTML = string(body)
 		result.Text = htmlToText(result.HTML)
 	} else {
 		// text/plain or unknown — treat as text
-		body, _ := io.ReadAll(io.LimitReader(msg.Body, int64(maxBodyChars)))
+		reader := decodeCTE(msg.Body, msg.Header.Get("Content-Transfer-Encoding"))
+		body, _ := io.ReadAll(io.LimitReader(reader, int64(maxBodyChars)))
 		result.Text = string(body)
 	}
 
@@ -129,7 +149,8 @@ func parseMultipart(body io.Reader, boundary string, result *ParsedBody, maxChar
 
 		case strings.HasPrefix(partMediaType, "text/html"):
 			if result.HTML == "" {
-				data, _ := io.ReadAll(io.LimitReader(part, int64(maxChars)))
+				reader := decodeCTE(part, part.Header.Get("Content-Transfer-Encoding"))
+				data, _ := io.ReadAll(io.LimitReader(reader, int64(maxChars)))
 				result.HTML = string(data)
 				if result.Text == "" {
 					result.Text = htmlToText(result.HTML)
@@ -138,7 +159,8 @@ func parseMultipart(body io.Reader, boundary string, result *ParsedBody, maxChar
 
 		case strings.HasPrefix(partMediaType, "text/plain"):
 			if result.Text == "" {
-				data, _ := io.ReadAll(io.LimitReader(part, int64(maxChars)))
+				reader := decodeCTE(part, part.Header.Get("Content-Transfer-Encoding"))
+				data, _ := io.ReadAll(io.LimitReader(reader, int64(maxChars)))
 				result.Text = string(data)
 			}
 

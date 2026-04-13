@@ -314,7 +314,7 @@ func PruneOrphans(client *IncusClient, registry *SessionRegistry, existingSessio
 		}
 
 		// Orphaned — destroy
-		fmt.Printf("Pruning orphaned container %q (session %s)...\n", entry.ContainerName, entry.SessionID[:8])
+		fmt.Printf("Pruning orphaned container %q (session %s)...\n", entry.ContainerName, safeShortID(entry.SessionID, 16))
 
 		if client.InstanceExists(entry.ContainerName) {
 			if err := destroyOverlayContainer(client, entry.ContainerName); err != nil {
@@ -433,7 +433,8 @@ func PruneStaleOnStartup(client *IncusClient, registry *SessionRegistry, existin
 }
 
 // matchContainerToSession tries to find a session ID in existingSessionIDs
-// that matches an astn-sess-* container name by its 8-char prefix.
+// that matches an astn-sess-* container name. It derives the expected
+// container name for each session ID and compares.
 // Fleet containers (astn-fleet-*) use a different naming scheme that can't
 // be reversed to a session ID, so they return empty.
 func matchContainerToSession(containerName string, existingSessionIDs map[string]bool) string {
@@ -441,13 +442,8 @@ func matchContainerToSession(containerName string, existingSessionIDs map[string
 		return ""
 	}
 
-	prefix := strings.TrimPrefix(containerName, SessionPrefix)
-	if prefix == "" {
-		return ""
-	}
-
 	for sessionID := range existingSessionIDs {
-		if strings.HasPrefix(sessionID, prefix) {
+		if SessionContainerName(sessionID) == containerName {
 			return sessionID
 		}
 	}

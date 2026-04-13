@@ -508,8 +508,9 @@ func handleSandboxCreate(templateName, label string) error {
 	// Generate a session ID. If --name is provided, use it directly so
 	// it is easy to identify in `sandbox list`. Otherwise generate one
 	// from the template name and a timestamp.
-	// The session ID must produce valid Incus container names (alphanumeric
-	// and hyphens only) since SessionContainerName uses the first 8 chars.
+	// The session ID must produce valid Incus container names.
+	// SessionContainerName sanitizes the ID (replacing invalid chars with
+	// hyphens) and truncates to 20 chars, so any string is safe.
 	var sessionID string
 	if label != "" {
 		sessionID = label

@@ -164,10 +164,7 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 	)
 
 	// --- 10. Welcome message ---
-	shortID := sess.ID()
-	if len(shortID) > 8 {
-		shortID = shortID[:8]
-	}
+	shortID := persistentsession.SafeShortID(sess.ID(), 16)
 
 	if isResumed {
 		// Friendly welcome back
@@ -415,10 +412,7 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 					fmt.Printf("%sError:%s Failed to create new session: %v\n\n", "\033[31m", ColorReset, newErr)
 				} else {
 					sess = newResp.Session
-					shortID = sess.ID()
-					if len(shortID) > 8 {
-						shortID = shortID[:8]
-					}
+					shortID = persistentsession.SafeShortID(sess.ID(), 16)
 					fmt.Printf("%sFresh start!%s New session: %s\n\n", ColorGreen, ColorReset, shortID)
 				}
 			case input == "/help":

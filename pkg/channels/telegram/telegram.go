@@ -46,6 +46,7 @@ type TelegramChannel struct {
 	msgCount atomic.Int64
 
 	// allowSet is built from config.AllowFrom for fast lookup.
+	allowMu  sync.RWMutex
 	allowSet map[string]bool
 }
 
@@ -315,6 +316,8 @@ func (t *TelegramChannel) Status() channels.ChannelStatus {
 // In direct messages, Telegram chat ID == user ID, so each AllowFrom
 // entry becomes a delivery target.
 func (t *TelegramChannel) BroadcastTargets() []channels.Target {
+	t.allowMu.RLock()
+	defer t.allowMu.RUnlock()
 	targets := make([]channels.Target, 0, len(t.allowSet))
 	for id := range t.allowSet {
 		targets = append(targets, channels.Target{
@@ -336,7 +339,10 @@ func (t *TelegramChannel) processUpdate(ctx context.Context, update tgbotapi.Upd
 
 	// Allowlist check — only explicitly allowed senders can interact.
 	// An empty allowlist blocks everyone (safe default for a bot with tool access).
-	if !t.allowSet[senderID] {
+	t.allowMu.RLock()
+	allowed := t.allowSet[senderID]
+	t.allowMu.RUnlock()
+	if !allowed {
 		t.logger.Printf("[telegram] Blocked message from unauthorized sender %s (%s)",
 			senderID, msg.From.UserName)
 		return
@@ -422,6 +428,21 @@ func (t *TelegramChannel) setError(errMsg string) {
 	defer t.mu.Unlock()
 	t.status.Error = errMsg
 	t.status.Connected = false
+}
+
+// UpdateAllowlist replaces the sender allowlist at runtime without requiring
+// a channel restart. Implements the channels.AllowlistUpdater interface.
+func (t *TelegramChannel) UpdateAllowlist(allowFrom []string) {
+	newSet := make(map[string]bool, len(allowFrom))
+	for _, id := range allowFrom {
+		newSet[id] = true
+	}
+
+	t.allowMu.Lock()
+	t.allowSet = newSet
+	t.allowMu.Unlock()
+
+	t.logger.Printf("[telegram] Allowlist updated (%d entries)", len(allowFrom))
 }
 
 // registerBotCommands calls Telegram's setMyCommands API to populate the

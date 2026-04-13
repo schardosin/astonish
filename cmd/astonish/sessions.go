@@ -96,11 +96,16 @@ func handleSessionsList() error {
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "ID\tTITLE\tMESSAGES\tUPDATED\tAGE")
+
+	// Compute shortest unique prefix for each session ID
+	allIDs := make([]string, len(metas))
+	for i, m := range metas {
+		allIDs[i] = m.ID
+	}
+	shortIDs := persistentsession.ShortIDs(allIDs)
+
 	for _, m := range metas {
-		id := m.ID
-		if len(id) > 8 {
-			id = id[:8]
-		}
+		id := shortIDs[m.ID]
 		title := m.Title
 		if title == "" {
 			title = "-"
@@ -413,7 +418,8 @@ func resolveSessionID(index *persistentsession.SessionIndex, partial string) (st
 	case 1:
 		return matches[0], nil
 	default:
-		return "", fmt.Errorf("ambiguous session ID %q matches %d sessions", partial, len(matches))
+		sort.Strings(matches)
+		return "", fmt.Errorf("ambiguous session ID %q matches %d sessions:\n  %s", partial, len(matches), strings.Join(matches, "\n  "))
 	}
 }
 

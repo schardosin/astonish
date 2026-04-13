@@ -73,6 +73,7 @@ type MessageHandler func(ctx context.Context, msg InboundMessage) error
 // InboundMessage is a platform-normalized inbound message.
 type InboundMessage struct {
 	ID         string    // Platform message ID
+	MessageID  string    // RFC 2822 Message-ID header (email only, for thread tracking)
 	ChannelID  string    // Channel adapter ID (e.g., "telegram")
 	SenderID   string    // Normalized sender identifier
 	SenderName string    // Human-readable sender name
@@ -117,6 +118,13 @@ type ChannelStatus struct {
 	ConnectedAt  time.Time // When the connection was established
 	Error        string    // Last error message (empty if healthy)
 	MessageCount int64     // Total messages processed since start
+}
+
+// AllowlistUpdater is an optional interface that channels can implement to
+// update their sender allowlist at runtime without requiring a full restart.
+// This is called when config.yaml changes and only the allow_from list differs.
+type AllowlistUpdater interface {
+	UpdateAllowlist(allowFrom []string)
 }
 
 // CommandRefresher is an optional interface that channels can implement to

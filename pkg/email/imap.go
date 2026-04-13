@@ -227,6 +227,10 @@ func (c *IMAPSMTPClient) ListMessages(ctx context.Context, opts ListOpts) ([]Mes
 			}
 			summary.Subject = env.Subject
 			summary.Date = env.Date
+			summary.MessageID = env.MessageID
+			if len(env.InReplyTo) > 0 {
+				summary.InReplyTo = env.InReplyTo[0]
+			}
 		}
 
 		// Check read/unread status
@@ -338,6 +342,12 @@ func (c *IMAPSMTPClient) ReadMessage(ctx context.Context, id string) (*Message, 
 	if bodyBytes != nil && len(bodyBytes) > 0 {
 		mailMsg, parseErr := mail.ReadMessage(bytes.NewReader(bodyBytes))
 		if parseErr == nil {
+			// Extract References header from raw MIME headers (not in IMAP ENVELOPE).
+			// This is the full threading chain used for robust thread matching.
+			if refs := mailMsg.Header.Get("References"); refs != "" {
+				result.Headers["References"] = refs
+			}
+
 			maxChars := c.cfg.MaxBodyChars
 			if maxChars <= 0 {
 				maxChars = 50000

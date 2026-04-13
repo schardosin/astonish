@@ -130,20 +130,67 @@ func TemplateName(name string) string {
 }
 
 // SessionContainerName returns the full Incus container name for a session.
+// The session ID is sanitized to contain only alphanumeric and hyphen
+// characters (Incus requirement) and truncated to fit the 63-char limit.
 func SessionContainerName(sessionID string) string {
-	if len(sessionID) > 8 {
-		return SessionPrefix + sessionID[:8]
+	sanitized := sanitizeInstanceName(sessionID)
+	// Max Incus name = 63 chars. SessionPrefix is 10 chars, leaving 53.
+	// Use up to 40 chars from the sanitized ID for good uniqueness
+	// (channel session IDs like "email-direct-<addr>" need more room).
+	const maxSuffix = 40
+	if len(sanitized) > maxSuffix {
+		sanitized = sanitized[:maxSuffix]
 	}
-	return SessionPrefix + sessionID
+	// Trim trailing hyphens (invalid for Incus instance names)
+	sanitized = strings.TrimRight(sanitized, "-")
+	if sanitized == "" {
+		sanitized = "unknown"
+	}
+	return SessionPrefix + sanitized
+}
+
+// sanitizeInstanceName replaces characters that are invalid in Incus instance
+// names with hyphens and collapses consecutive hyphens. Incus allows only
+// lowercase alphanumeric characters and hyphens, and names must not start or
+// end with a hyphen.
+func sanitizeInstanceName(s string) string {
+	s = strings.ToLower(s)
+	var b strings.Builder
+	b.Grow(len(s))
+	prevHyphen := true // treat start as hyphen to skip leading hyphens
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			prevHyphen = false
+		} else if !prevHyphen {
+			b.WriteByte('-')
+			prevHyphen = true
+		}
+	}
+	return strings.TrimRight(b.String(), "-")
 }
 
 // FleetContainerName returns the full Incus container name for a fleet session.
 func FleetContainerName(planKey, agentKey, taskSlug string) string {
-	name := FleetPrefix + planKey + "-" + agentKey
+	name := FleetPrefix + sanitizeInstanceName(planKey) + "-" + sanitizeInstanceName(agentKey)
 	if taskSlug != "" {
-		name += "-" + taskSlug
+		name += "-" + sanitizeInstanceName(taskSlug)
 	}
+	// Enforce Incus max name length (63 chars)
+	if len(name) > 63 {
+		name = name[:63]
+	}
+	name = strings.TrimRight(name, "-")
 	return name
+}
+
+// safeShortID truncates a session ID for display purposes without panicking
+// on short strings. Used in log messages where the full ID list is unavailable.
+func safeShortID(id string, maxLen int) string {
+	if len(id) <= maxLen {
+		return id
+	}
+	return id[:maxLen]
 }
 
 // SnapshotSource returns the snapshot source string for cloning.

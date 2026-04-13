@@ -725,10 +725,7 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 			status += fmt.Sprintf("- Flows: %d saved\n", len(entries))
 		}
 		if sessionID != "" {
-			shortID := sessionID
-			if len(shortID) > 8 {
-				shortID = shortID[:8]
-			}
+			shortID := persistentsession.SafeShortID(sessionID, 16)
 			status += fmt.Sprintf("- Session: `%s`", shortID)
 		}
 		SendSSE(w, flusher, "system", map[string]interface{}{"content": status})

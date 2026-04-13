@@ -17,6 +17,8 @@ type MessageSummary struct {
 	Date           time.Time `json:"date"`
 	Unread         bool      `json:"unread"`
 	HasAttachments bool      `json:"has_attachments"`
+	MessageID      string    `json:"message_id,omitempty"`  // RFC 2822 Message-ID header
+	InReplyTo      string    `json:"in_reply_to,omitempty"` // RFC 2822 In-Reply-To header
 }
 
 // Message is a fully-parsed email.

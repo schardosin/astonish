@@ -21,10 +21,11 @@ import (
 // FileStore implements ADK's session.Service interface with file-based persistence.
 // Sessions are stored as JSONL transcript files with a JSON metadata index.
 type FileStore struct {
-	baseDir  string // e.g. ~/.config/astonish/sessions/
-	index    *SessionIndex
-	mu       sync.RWMutex
-	sessions map[string]*fileSession // sessionID -> in-memory session (loaded on demand)
+	baseDir     string // e.g. ~/.config/astonish/sessions/
+	index       *SessionIndex
+	threadIndex *ThreadIndex
+	mu          sync.RWMutex
+	sessions    map[string]*fileSession // sessionID -> in-memory session (loaded on demand)
 
 	// RedactFunc, if set, sanitizes text before persisting to disk.
 	// Used to strip credential values from session transcripts.
@@ -49,12 +50,14 @@ func NewFileStore(baseDir string) (*FileStore, error) {
 	}
 
 	indexPath := filepath.Join(baseDir, "index.json")
+	threadIndexPath := filepath.Join(baseDir, "thread_index.json")
 	return &FileStore{
-		baseDir:   baseDir,
-		index:     NewSessionIndex(indexPath),
-		sessions:  make(map[string]*fileSession),
-		appState:  make(map[string]stateMap),
-		userState: make(map[string]map[string]stateMap),
+		baseDir:     baseDir,
+		index:       NewSessionIndex(indexPath),
+		threadIndex: NewThreadIndex(threadIndexPath),
+		sessions:    make(map[string]*fileSession),
+		appState:    make(map[string]stateMap),
+		userState:   make(map[string]map[string]stateMap),
 	}, nil
 }
 
@@ -241,6 +244,7 @@ func (s *FileStore) List(ctx context.Context, req *adksession.ListRequest) (*adk
 
 // Delete deletes a session by removing its transcript and index entry.
 // If the session has child sub-sessions, they are cascade-deleted as well.
+// Thread index entries pointing to this session are also removed.
 func (s *FileStore) Delete(ctx context.Context, req *adksession.DeleteRequest) error {
 	if req.AppName == "" || req.UserID == "" || req.SessionID == "" {
 		return fmt.Errorf("app_name, user_id, session_id are required, got app_name: %q, user_id: %q, session_id: %q",
@@ -266,6 +270,11 @@ func (s *FileStore) Delete(ctx context.Context, req *adksession.DeleteRequest) e
 	// Remove transcript file
 	transcriptPath := filepath.Join(s.baseDir, req.AppName, req.UserID, req.SessionID+".jsonl")
 	os.Remove(transcriptPath) // ignore error if file doesn't exist
+
+	// Remove thread index entries that point to this session (best-effort)
+	if err := s.threadIndex.RemoveSession(req.SessionID); err != nil {
+		slog.Warn("failed to clean up thread index", "session", req.SessionID, "error", err)
+	}
 
 	// Remove from index (cascades children automatically)
 	return s.index.Remove(req.SessionID)
@@ -368,7 +377,8 @@ func (s *FileStore) ResolveSessionID(partial string) (string, error) {
 	case 1:
 		return matches[0], nil
 	default:
-		return "", fmt.Errorf("ambiguous session ID %q matches %d sessions", partial, len(matches))
+		sort.Strings(matches)
+		return "", fmt.Errorf("ambiguous session ID %q matches %d sessions:\n  %s", partial, len(matches), strings.Join(matches, "\n  "))
 	}
 }
 
@@ -421,6 +431,12 @@ func (s *FileStore) BaseDir() string {
 // This is used by the trace API to walk child sessions.
 func (s *FileStore) Index() *SessionIndex {
 	return s.index
+}
+
+// ThreadIndex returns the underlying ThreadIndex for direct access.
+// Used by the email channel to map Message-IDs to session keys.
+func (s *FileStore) ThreadIndex() *ThreadIndex {
+	return s.threadIndex
 }
 
 // ReadTranscriptEvents reads all events from a session's transcript file.

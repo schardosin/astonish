@@ -41,7 +41,11 @@ func fleetCommand(mgr *ChannelManager) *Command {
 
 			// Check if a fleet session is already active for this chat
 			if sessionID := mgr.GetActiveFleet(cc.SessionKey); sessionID != "" {
-				return fmt.Sprintf("A fleet session is already active (%s). Use /fleet_stop to end it first.", sessionID[:8]), nil
+				shortID := sessionID
+				if len(shortID) > 16 {
+					shortID = shortID[:16]
+				}
+				return fmt.Sprintf("A fleet session is already active (%s). Use /fleet_stop to end it first.", shortID), nil
 			}
 
 			args := strings.TrimSpace(strings.TrimPrefix(cc.RawText, "/fleet"))

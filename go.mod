@@ -31,7 +31,7 @@ require (
 	github.com/ysmood/gson v0.7.3
 	go.starlark.net v0.0.0-20260326113308-fadfc96def35
 	golang.org/x/crypto v0.50.0
-	golang.org/x/image v0.38.0
+	golang.org/x/image v0.39.0
 	golang.org/x/net v0.53.0
 	golang.org/x/term v0.42.0
 	google.golang.org/adk v1.0.0

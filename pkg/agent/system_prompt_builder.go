@@ -120,6 +120,9 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString("- For multi-step tasks, execute sequentially, report progress, and search memory first for prior solutions.\n")
 	sb.WriteString("- After completing a task where you overcame obstacles or discovered non-obvious solutions, save the knowledge using memory_save. Search memory_search(\"memory usage\") first to retrieve the full saving guidelines.\n")
 	sb.WriteString("- When the user asks you to do something, briefly acknowledge before starting work.\n")
+	if b.SkillIndex != "" {
+		sb.WriteString("- **Skill-first rule:** When a task matches any Available Skill, you MUST call `skill_lookup` to load it — no exceptions. Do this alongside your first batch of tool calls (e.g. parallel with memory_search). The skill provides canonical commands and context that may be newer than stored memory. Having prior knowledge of a working method is NOT a reason to skip loading the skill.\n")
+	}
 	if b.hasSearchToolsTool() {
 		sb.WriteString("- When you're unsure which tool or tool group to use for a task, call `search_tools` with a description of what you need. Do NOT guess tool availability — verify via `search_tools`.\n")
 		sb.WriteString("- When asked to list available tools, call `search_tools(query=\"*\")` to get the verified complete inventory. Do not reconstruct the list from memory.\n")
@@ -237,7 +240,8 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("\n## Knowledge For This Task\n\n")
 		sb.WriteString("CRITICAL — You MUST apply the following knowledge when executing the user's current request. ")
 		sb.WriteString("It contains proven commands, specific flags, and workarounds that are KNOWN TO WORK ")
-		sb.WriteString("from previous sessions. Use the exact commands and approaches described here:\n\n")
+		sb.WriteString("from previous sessions. Use the exact commands and approaches described here.\n")
+		sb.WriteString("Note: This knowledge does NOT replace loading relevant skills via `skill_lookup` — always load matching skills for up-to-date context.\n\n")
 		sb.WriteString(b.RelevantKnowledge)
 	}
 

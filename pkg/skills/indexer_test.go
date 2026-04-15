@@ -102,7 +102,7 @@ func TestSyncSkillsIneligibleSynced(t *testing.T) {
 	}
 }
 
-func TestSyncSkillsIneligibleEnvSynced(t *testing.T) {
+func TestSyncSkillsEnvVarSkillIsEligible(t *testing.T) {
 	memDir := t.TempDir()
 	allSkills := []Skill{
 		{Name: "needs-token", Description: "Needs token", Content: "# Token skill", RequireEnv: []string{"NONEXISTENT_TOKEN_XYZ"}},
@@ -113,12 +113,18 @@ func TestSyncSkillsIneligibleEnvSynced(t *testing.T) {
 	outPath := filepath.Join(memDir, "skills", "needs-token.md")
 	data, err := os.ReadFile(outPath)
 	if err != nil {
-		t.Fatalf("Skill with missing env should be synced: %v", err)
+		t.Fatalf("Skill with RequireEnv should be synced: %v", err)
 	}
 
 	content := string(data)
-	if !contains(content, "$NONEXISTENT_TOKEN_XYZ") {
-		t.Error("Missing requirements note should mention the env var")
+	// RequireEnv no longer affects eligibility — env vars are resolved from the
+	// credential store at runtime. So there should be no "Setup required" note.
+	if contains(content, "Setup required") {
+		t.Error("Skill with only RequireEnv should NOT include setup-required note (env vars resolved at runtime)")
+	}
+	// Skill content should still be present
+	if !contains(content, "# Token skill") {
+		t.Error("Synced file should include skill content")
 	}
 }
 

@@ -108,14 +108,16 @@ func TestIsEligibleOSRestriction(t *testing.T) {
 	}
 }
 
-func TestIsEligibleMissingEnv(t *testing.T) {
+func TestIsEligibleIgnoresEnvVars(t *testing.T) {
 	s := Skill{
 		Name:        "test",
 		Description: "test",
 		RequireEnv:  []string{"NONEXISTENT_ENV_VAR_XYZ123"},
 	}
-	if s.IsEligible() {
-		t.Error("Expected missing env var to be ineligible")
+	// RequireEnv is no longer checked — env vars should be resolved
+	// from the credential store at runtime, not treated as prerequisites.
+	if !s.IsEligible() {
+		t.Error("Expected skill with RequireEnv to be eligible (env vars are resolved at runtime)")
 	}
 }
 
@@ -127,8 +129,10 @@ func TestMissingRequirements(t *testing.T) {
 		RequireEnv:  []string{"NONEXISTENT_ENV_VAR_XYZ123"},
 	}
 	missing := s.MissingRequirements()
-	if len(missing) != 2 {
-		t.Errorf("Expected 2 missing, got %d: %v", len(missing), missing)
+	// Only the missing binary should be reported — env vars are no longer
+	// checked (they are resolved from the credential store at runtime).
+	if len(missing) != 1 {
+		t.Errorf("Expected 1 missing (binary only), got %d: %v", len(missing), missing)
 	}
 }
 

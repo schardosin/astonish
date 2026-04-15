@@ -89,7 +89,7 @@ func NewSkillLookupTool(allSkills []skills.Skill) (tool.Tool, error) {
 		Name: "skill_lookup",
 		Description: "Load full instructions for a CLI tool skill by name. " +
 			"Use this to learn how to use a CLI tool or workflow before executing commands. " +
-			"Skills that need setup will include their missing requirements. " +
+			"If a skill references environment variables for auth, resolve them from the credential store. " +
 			"Check the Available Skills list in the system prompt for valid skill names.",
 	}, SkillLookup(allSkills))
 }

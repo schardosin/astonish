@@ -51,11 +51,9 @@ func (s *Skill) IsEligible() bool {
 			return false
 		}
 	}
-	for _, env := range s.RequireEnv {
-		if os.Getenv(env) == "" {
-			return false
-		}
-	}
+	// NOTE: RequireEnv is intentionally NOT checked here. Environment variables
+	// referenced by skills (e.g. $PVE_TOKEN) should be resolved at runtime from
+	// the credential store via resolve_credential, not treated as hard prerequisites.
 	return true
 }
 
@@ -79,11 +77,8 @@ func (s *Skill) MissingRequirements() []string {
 			missing = append(missing, bin)
 		}
 	}
-	for _, env := range s.RequireEnv {
-		if os.Getenv(env) == "" {
-			missing = append(missing, "$"+env)
-		}
-	}
+	// NOTE: RequireEnv is intentionally NOT checked here. Environment variables
+	// referenced by skills should be resolved at runtime from the credential store.
 	return missing
 }
 

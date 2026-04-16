@@ -17,6 +17,7 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/fleet"
+	"github.com/schardosin/astonish/pkg/pdfgen"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"google.golang.org/adk/session"
@@ -373,4 +374,68 @@ func readFromSandboxContainer(sessionID, filePath string) ([]byte, bool) {
 	}
 
 	return content, true
+}
+
+// StudioArtifactPDFHandler reads a markdown artifact and returns it as a PDF.
+// Uses the same three-tier fallback as StudioArtifactDownloadHandler to locate
+// the source markdown, then converts it to PDF using the pdfgen package.
+//
+// GET /api/studio/artifacts/pdf?path=<path>&session=<sessionID>
+func StudioArtifactPDFHandler(w http.ResponseWriter, r *http.Request) {
+	filePath := r.URL.Query().Get("path")
+	if filePath == "" {
+		http.Error(w, "missing 'path' query parameter", http.StatusBadRequest)
+		return
+	}
+
+	sessionID := r.URL.Query().Get("session")
+	cleanPath := filepath.Clean(filePath)
+
+	// Read the source markdown content using the same 3-tier fallback.
+	var mdContent []byte
+
+	// Tier 1: Try reading from host filesystem
+	if content, err := os.ReadFile(cleanPath); err == nil {
+		mdContent = content
+	}
+
+	// Tier 2: Try reading from sandbox container
+	if mdContent == nil && sessionID != "" {
+		if content, ok := readFromSandboxContainer(sessionID, cleanPath); ok {
+			mdContent = content
+		}
+	}
+
+	// Tier 3: Fall back to reading from persisted session JSONL
+	if mdContent == nil && sessionID != "" {
+		cm := GetChatManager()
+		if fs := cm.fileStore(); fs != nil {
+			if content, ok := readArtifactContentFromSession(fs, sessionID, cleanPath); ok {
+				mdContent = []byte(content)
+			}
+		}
+	}
+
+	if mdContent == nil {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+
+	// Convert markdown to PDF
+	pdfData, err := pdfgen.ConvertMarkdownToPDF(mdContent)
+	if err != nil {
+		slog.Error("failed to convert markdown to PDF", "path", cleanPath, "error", err)
+		http.Error(w, "PDF conversion failed", http.StatusInternalServerError)
+		return
+	}
+
+	// Serve as downloadable PDF
+	baseName := filepath.Base(cleanPath)
+	ext := filepath.Ext(baseName)
+	pdfName := baseName[:len(baseName)-len(ext)] + ".pdf"
+
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", pdfName))
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(pdfData)))
+	w.Write(pdfData)
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/schardosin/astonish/pkg/pdfgen"
 	"github.com/schardosin/astonish/pkg/provider/llmerror"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
@@ -185,6 +186,26 @@ func (m *ChannelManager) readFile(sessionID, path string) ([]byte, error) {
 		return m.ReadFileFunc(sessionID, path)
 	}
 	return os.ReadFile(path)
+}
+
+// fileToDocument converts a file artifact into a DocumentAttachment. For
+// markdown files (.md), the content is converted to PDF so Telegram users
+// receive a formatted document instead of raw markdown text.
+func (m *ChannelManager) fileToDocument(data []byte, filePath string) DocumentAttachment {
+	filename := filepath.Base(filePath)
+	ext := strings.ToLower(filepath.Ext(filename))
+
+	if ext == ".md" || ext == ".markdown" {
+		pdfData, err := pdfgen.ConvertMarkdownToPDF(data)
+		if err != nil {
+			m.logger.Printf("[channels] PDF conversion failed for %s, sending as markdown: %v", filename, err)
+			return DocumentAttachment{Data: data, Filename: filename}
+		}
+		pdfName := filename[:len(filename)-len(ext)] + ".pdf"
+		return DocumentAttachment{Data: pdfData, Filename: pdfName}
+	}
+
+	return DocumentAttachment{Data: data, Filename: filename}
 }
 
 // SetAuthorizeFunc sets the device authorization handler for the /authorize command.
@@ -498,7 +519,8 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 
 		// Drain file artifacts from write_file/edit_file tool calls.
 		// Read each file and attach as a document. Uses sandbox-aware
-		// readFile to handle files inside containers.
+		// readFile to handle files inside containers. Markdown files
+		// are converted to PDF for a better channel experience.
 		for _, file := range m.agent.DrainFiles() {
 			data, err := m.readFile(sessionID, file.Path)
 			if err != nil {
@@ -509,10 +531,7 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 				m.logger.Printf("[channels] Skipping file artifact %s: size %d exceeds %d limit", file.Path, len(data), maxDocumentSize)
 				continue
 			}
-			pendingDocuments = append(pendingDocuments, DocumentAttachment{
-				Data:     data,
-				Filename: filepath.Base(file.Path),
-			})
+			pendingDocuments = append(pendingDocuments, m.fileToDocument(data, file.Path))
 		}
 
 		// Extract user-facing text only. Skip internal parts: function
@@ -596,10 +615,7 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 			m.logger.Printf("[channels] Skipping file artifact %s: size %d exceeds %d limit", file.Path, len(data), maxDocumentSize)
 			continue
 		}
-		pendingDocuments = append(pendingDocuments, DocumentAttachment{
-			Data:     data,
-			Filename: filepath.Base(file.Path),
-		})
+		pendingDocuments = append(pendingDocuments, m.fileToDocument(data, file.Path))
 	}
 
 	if len(pendingImages) > 0 || len(pendingDocuments) > 0 {

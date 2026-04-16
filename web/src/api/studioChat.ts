@@ -269,3 +269,10 @@ export function getArtifactDownloadUrl(path: string, sessionId?: string): string
   if (sessionId) url += `&session=${encodeURIComponent(sessionId)}`
   return url
 }
+
+/** Get the download URL for a markdown artifact converted to PDF by the backend. */
+export function getArtifactPDFUrl(path: string, sessionId?: string): string {
+  let url = `${API_BASE}/artifacts/pdf?path=${encodeURIComponent(path)}`
+  if (sessionId) url += `&session=${encodeURIComponent(sessionId)}`
+  return url
+}

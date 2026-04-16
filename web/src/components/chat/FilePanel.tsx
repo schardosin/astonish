@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { X, FileText, Download, ChevronDown, Loader, FilePlus, Edit3, Eye } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { fetchArtifactContent, getArtifactDownloadUrl } from '../../api/studioChat'
+import { fetchArtifactContent, getArtifactDownloadUrl, getArtifactPDFUrl } from '../../api/studioChat'
 import type { SessionArtifact } from './chatTypes'
 
 interface FilePanelProps {
@@ -110,47 +110,15 @@ export default function FilePanel({ artifacts, initialPath, sessionId, onClose }
     setDownloadOpen(false)
   }, [overlayPath, overlayArtifact, sessionId])
 
-  const handleExportPDF = useCallback(async () => {
-    if (!contentRef.current || !content) return
-    setExporting('pdf')
+  const handleExportPDF = useCallback(() => {
+    if (!overlayPath) return
     setDownloadOpen(false)
-
-    // Track dark mode state outside try/catch so we can always restore it.
-    const wasDark = document.documentElement.classList.contains('dark')
-    try {
-      const html2pdf = (await import('html2pdf.js')).default
-      const tempDiv = document.createElement('div')
-      tempDiv.style.padding = '40px'
-      tempDiv.style.fontFamily = 'system-ui, -apple-system, sans-serif'
-      tempDiv.style.fontSize = '14px'
-      tempDiv.style.lineHeight = '1.6'
-      tempDiv.style.color = '#1a1a1a'
-      tempDiv.style.background = '#ffffff'
-      tempDiv.style.maxWidth = '800px'
-      tempDiv.innerHTML = contentRef.current.innerHTML
-      document.body.appendChild(tempDiv)
-
-      // Temporarily switch to light mode so html2canvas resolves CSS variables
-      // (e.g., --text-primary, --text-secondary) to light-mode values instead
-      // of dark-mode near-white colors that would be invisible on white background.
-      if (wasDark) document.documentElement.classList.remove('dark')
-
-      await html2pdf().set({
-        margin: [15, 15],
-        filename: (overlayArtifact?.fileName || 'file').replace(/\.[^.]+$/, '.pdf'),
-        html2canvas: { scale: 2, useCORS: true },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-      }).from(tempDiv).save()
-
-      document.body.removeChild(tempDiv)
-    } catch (err) {
-      console.error('PDF export failed:', err)
-    } finally {
-      // Always restore dark mode if it was active before export.
-      if (wasDark) document.documentElement.classList.add('dark')
-      setExporting(null)
-    }
-  }, [content, overlayArtifact])
+    const url = getArtifactPDFUrl(overlayPath, sessionId || undefined)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = (overlayArtifact?.fileName || 'file').replace(/\.[^.]+$/, '.pdf')
+    a.click()
+  }, [overlayPath, overlayArtifact, sessionId])
 
   const handleExportDOCX = useCallback(async () => {
     if (!content) return

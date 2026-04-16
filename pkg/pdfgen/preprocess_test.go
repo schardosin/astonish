@@ -42,6 +42,44 @@ func TestPreprocessMarkdown_Ellipsis(t *testing.T) {
 	}
 }
 
+func TestPreprocessMarkdown_DoubleEncodedEntities(t *testing.T) {
+	// LLMs sometimes produce double-encoded HTML entities
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "double-encoded ampersand",
+			input: "Tom &amp;amp; Jerry",
+			want:  "Tom & Jerry",
+		},
+		{
+			name:  "double-encoded quotes",
+			input: "said &amp;quot;hello&amp;quot;",
+			want:  `said "hello"`,
+		},
+		{
+			name:  "triple-encoded ampersand",
+			input: "&amp;amp;amp; start",
+			want:  "& start",
+		},
+		{
+			name:  "mixed single and double encoded",
+			input: "A &amp; B &amp;amp; C &amp;quot;D&amp;quot;",
+			want:  `A & B & C "D"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := preprocessMarkdown(tt.input)
+			if got != tt.want {
+				t.Errorf("preprocessMarkdown(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPreprocessMarkdown_Combined(t *testing.T) {
 	// Simulates typical LLM-generated content with mixed encoding issues
 	input := `&quot;Apple&quot; released iOS 19 &amp; macOS 16 ` +

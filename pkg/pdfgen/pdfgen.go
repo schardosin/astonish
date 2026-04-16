@@ -51,7 +51,15 @@ func ConvertMarkdownToPDF(source []byte) ([]byte, error) {
 // ISO 8859-1 / Latin-1 characters.
 func preprocessMarkdown(s string) string {
 	// Step 1: Decode HTML entities (&quot; → ", &amp; → &, etc.)
-	s = html.UnescapeString(s)
+	// LLMs sometimes produce double- or triple-encoded entities
+	// (e.g., &amp;amp; or &amp;quot;), so we loop until stable.
+	for i := 0; i < 5; i++ {
+		decoded := html.UnescapeString(s)
+		if decoded == s {
+			break
+		}
+		s = decoded
+	}
 
 	// Step 2: Replace common Unicode characters with Latin-1 safe equivalents.
 	// These are frequently produced by LLMs and web content.

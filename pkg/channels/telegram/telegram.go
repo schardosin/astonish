@@ -165,7 +165,8 @@ func (t *TelegramChannel) Stop(ctx context.Context) error {
 
 // Send delivers an outbound message to a Telegram chat.
 // Images are sent as photos first (with optional caption), then any remaining
-// text is sent as message chunks respecting the 4096-char limit.
+// text is sent as message chunks respecting the 4096-char limit, and finally
+// document attachments (file artifacts) are sent.
 func (t *TelegramChannel) Send(ctx context.Context, target channels.Target, msg channels.OutboundMessage) error {
 	t.mu.RLock()
 	bot := t.botAPI
@@ -237,44 +238,65 @@ func (t *TelegramChannel) Send(ctx context.Context, target channels.Target, msg 
 	}
 
 	// --- Phase 2: Send remaining text (if not consumed as caption) ---
-	if strings.TrimSpace(remainingText) == "" {
-		return nil
-	}
-
-	text := remainingText
-	parseMode := ""
-	if msg.Format == channels.FormatHTML {
-		text = MarkdownToHTML(remainingText)
-		parseMode = "HTML"
-	}
-
-	chunks := splitMessage(text, maxMessageLength)
-
-	for i, chunk := range chunks {
-		teleMsg := tgbotapi.NewMessage(chatID, chunk)
-		teleMsg.ParseMode = parseMode
-
-		// Set reply-to on the first chunk only (if not already set on a photo)
-		if i == 0 && msg.ReplyTo != "" && len(msg.Images) == 0 {
-			if replyID, err := strconv.Atoi(msg.ReplyTo); err == nil {
-				teleMsg.ReplyToMessageID = replyID
-			}
+	if strings.TrimSpace(remainingText) != "" {
+		text := remainingText
+		parseMode := ""
+		if msg.Format == channels.FormatHTML {
+			text = MarkdownToHTML(remainingText)
+			parseMode = "HTML"
 		}
 
-		_, sendErr := bot.Send(teleMsg)
-		if sendErr != nil {
-			// If HTML parsing fails, strip tags and retry as plain text
-			if parseMode == "HTML" && strings.Contains(sendErr.Error(), "can't parse") {
-				t.logger.Printf("[telegram] HTML parse failed, retrying as plain text: %v", sendErr)
-				teleMsg.Text = StripHTMLTags(chunk)
-				teleMsg.ParseMode = ""
-				_, retryErr := bot.Send(teleMsg)
-				if retryErr != nil {
-					return fmt.Errorf("telegram: send failed: %w", retryErr)
+		chunks := splitMessage(text, maxMessageLength)
+
+		for i, chunk := range chunks {
+			teleMsg := tgbotapi.NewMessage(chatID, chunk)
+			teleMsg.ParseMode = parseMode
+
+			// Set reply-to on the first chunk only (if not already set on a photo)
+			if i == 0 && msg.ReplyTo != "" && len(msg.Images) == 0 {
+				if replyID, err := strconv.Atoi(msg.ReplyTo); err == nil {
+					teleMsg.ReplyToMessageID = replyID
 				}
-				continue
 			}
-			return fmt.Errorf("telegram: send failed: %w", sendErr)
+
+			_, sendErr := bot.Send(teleMsg)
+			if sendErr != nil {
+				// If HTML parsing fails, strip tags and retry as plain text
+				if parseMode == "HTML" && strings.Contains(sendErr.Error(), "can't parse") {
+					t.logger.Printf("[telegram] HTML parse failed, retrying as plain text: %v", sendErr)
+					teleMsg.Text = StripHTMLTags(chunk)
+					teleMsg.ParseMode = ""
+					_, retryErr := bot.Send(teleMsg)
+					if retryErr != nil {
+						return fmt.Errorf("telegram: send failed: %w", retryErr)
+					}
+					continue
+				}
+				return fmt.Errorf("telegram: send failed: %w", sendErr)
+			}
+		}
+	}
+
+	// --- Phase 3: Send document attachments (file artifacts) ---
+	for _, doc := range msg.Documents {
+		if len(doc.Data) == 0 {
+			continue
+		}
+		filename := doc.Filename
+		if filename == "" {
+			filename = "file"
+		}
+		docBytes := tgbotapi.FileBytes{
+			Name:  filename,
+			Bytes: doc.Data,
+		}
+		teleDoc := tgbotapi.NewDocument(chatID, docBytes)
+		if doc.Caption != "" {
+			teleDoc.Caption = doc.Caption
+		}
+		if _, err := bot.Send(teleDoc); err != nil {
+			t.logger.Printf("[telegram] Failed to send document %s: %v", filename, err)
+			// Non-fatal — continue with remaining documents
 		}
 	}
 

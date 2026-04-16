@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -424,6 +426,11 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	var messagesSent int
 	var pendingImages []ImageAttachment
 
+	// File artifacts from write_file/edit_file tool calls are collected and
+	// sent as document attachments alongside the response message.
+	var pendingDocuments []DocumentAttachment
+	const maxDocumentSize = 10 * 1024 * 1024 // 10 MB limit for document attachments
+
 	// Email is a batch channel: keep only the last text turn, send once at the end.
 	isBatchChannel := msg.ChannelID == "email"
 	var batchText string
@@ -464,6 +471,24 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 			})
 		}
 
+		// Drain file artifacts from write_file/edit_file tool calls.
+		// Read each file from disk and attach as a document.
+		for _, file := range m.agent.DrainFiles() {
+			data, err := os.ReadFile(file.Path)
+			if err != nil {
+				m.logger.Printf("[channels] Failed to read file artifact %s: %v", file.Path, err)
+				continue
+			}
+			if len(data) > maxDocumentSize {
+				m.logger.Printf("[channels] Skipping file artifact %s: size %d exceeds %d limit", file.Path, len(data), maxDocumentSize)
+				continue
+			}
+			pendingDocuments = append(pendingDocuments, DocumentAttachment{
+				Data:     data,
+				Filename: filepath.Base(file.Path),
+			})
+		}
+
 		// Extract user-facing text only. Skip internal parts: function
 		// calls, function responses, and chain-of-thought (Thought).
 		var eventText strings.Builder
@@ -492,13 +517,15 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 		}
 
 		// Streaming mode: send this turn's text as a message immediately.
-		// Attach any pending images from preceding tool calls.
+		// Attach any pending images and documents from preceding tool calls.
 		outMsg := OutboundMessage{
-			Text:   displayText,
-			Format: FormatHTML,
-			Images: pendingImages,
+			Text:      displayText,
+			Format:    FormatHTML,
+			Images:    pendingImages,
+			Documents: pendingDocuments,
 		}
-		pendingImages = nil // consumed
+		pendingImages = nil    // consumed
+		pendingDocuments = nil // consumed
 
 		// Only the first message is a reply to the user's message
 		if messagesSent == 0 {
@@ -515,12 +542,14 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	// Batch channel: send the final text turn as a single message.
 	if isBatchChannel && batchText != "" {
 		outMsg := OutboundMessage{
-			Text:    batchText,
-			Format:  FormatHTML,
-			ReplyTo: msg.ID,
-			Images:  pendingImages,
+			Text:      batchText,
+			Format:    FormatHTML,
+			ReplyTo:   msg.ID,
+			Images:    pendingImages,
+			Documents: pendingDocuments,
 		}
 		pendingImages = nil
+		pendingDocuments = nil
 		if err := ch.Send(ctx, target, outMsg); err != nil {
 			m.logger.Printf("[channels] Failed to send message to %s: %v", msg.ChannelID, err)
 		} else {
@@ -530,15 +559,33 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 
 	// If images were produced but no text followed (e.g., the LLM's final
 	// turn was a tool call with no commentary), send them as a standalone message.
-	if len(pendingImages) > 0 {
+	// Also drain any remaining file artifacts that weren't consumed above.
+	for _, file := range m.agent.DrainFiles() {
+		data, err := os.ReadFile(file.Path)
+		if err != nil {
+			m.logger.Printf("[channels] Failed to read file artifact %s: %v", file.Path, err)
+			continue
+		}
+		if len(data) > maxDocumentSize {
+			m.logger.Printf("[channels] Skipping file artifact %s: size %d exceeds %d limit", file.Path, len(data), maxDocumentSize)
+			continue
+		}
+		pendingDocuments = append(pendingDocuments, DocumentAttachment{
+			Data:     data,
+			Filename: filepath.Base(file.Path),
+		})
+	}
+
+	if len(pendingImages) > 0 || len(pendingDocuments) > 0 {
 		outMsg := OutboundMessage{
-			Images: pendingImages,
+			Images:    pendingImages,
+			Documents: pendingDocuments,
 		}
 		if messagesSent == 0 {
 			outMsg.ReplyTo = msg.ID
 		}
 		if err := ch.Send(ctx, target, outMsg); err != nil {
-			m.logger.Printf("[channels] Failed to send images to %s: %v", msg.ChannelID, err)
+			m.logger.Printf("[channels] Failed to send attachments to %s: %v", msg.ChannelID, err)
 		} else {
 			messagesSent++
 		}

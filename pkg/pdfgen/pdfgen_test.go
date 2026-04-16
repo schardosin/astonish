@@ -1,6 +1,11 @@
 package pdfgen
 
 import (
+	"bytes"
+	"compress/flate"
+	"io"
+	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -84,4 +89,48 @@ func TestConvertMarkdownToPDF_LargeContent(t *testing.T) {
 	}
 
 	t.Logf("Generated large PDF: %d bytes", len(pdf))
+}
+
+func TestConvertMarkdownToPDF_NoHTMLEntitiesInOutput(t *testing.T) {
+	// Verify that the PDF output does not contain HTML-encoded entities.
+	// This catches a goldmark-pdf bug where EscapeHTML defaults to true,
+	// causing & to become &amp;, " to become &quot;, etc. in PDF text streams.
+	source := []byte(`# Report
+
+Tom & Jerry said "hello" world.
+
+GTC 2025 & 2026 -- Blackwell Ultra.
+
+Key Facts & Timeline: "important" <tag> values.
+
+LLM entities: &amp; and &quot;quoted&quot; and &lt;angle&gt;.
+`)
+
+	pdfData, err := ConvertMarkdownToPDF(source)
+	if err != nil {
+		t.Fatalf("ConvertMarkdownToPDF failed: %v", err)
+	}
+
+	// Decompress PDF content streams and check for HTML entities
+	re := regexp.MustCompile(`(?s)stream\r?\n(.+?)\r?\nendstream`)
+	matches := re.FindAllSubmatch(pdfData, -1)
+	if len(matches) == 0 {
+		t.Fatal("no streams found in PDF output")
+	}
+
+	badEntities := []string{"&amp;", "&quot;", "&lt;", "&gt;"}
+
+	for i, m := range matches {
+		reader := flate.NewReader(bytes.NewReader(m[1]))
+		decompressed, err := io.ReadAll(reader)
+		if err != nil {
+			continue // skip non-flate streams
+		}
+		text := string(decompressed)
+		for _, ent := range badEntities {
+			if strings.Contains(text, ent) {
+				t.Errorf("PDF stream %d contains HTML entity %q; goldmark-pdf EscapeHTML may be enabled", i, ent)
+			}
+		}
+	}
 }

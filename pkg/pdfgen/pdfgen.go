@@ -33,6 +33,9 @@ func ConvertMarkdownToPDF(source []byte) ([]byte, error) {
 				pdf.WithBodyFont(pdf.FontHelvetica),
 				pdf.WithCodeFont(pdf.FontCourier),
 				pdf.WithLinkColor(color.RGBA{R: 0, G: 102, B: 204, A: 255}),
+				// Disable HTML escaping — goldmark-pdf defaults to escaping &, ", <, >
+				// as &amp;, &quot;, etc. which is wrong for PDF text streams.
+				pdf.WithEscapeHTML(false),
 			),
 		),
 	)

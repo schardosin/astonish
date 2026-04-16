@@ -1418,6 +1418,11 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				chatAgent.SubTaskProgressCallback(evt)
 			}
 		}
+		// Wire file artifact capture so sub-agent write_file/edit_file calls
+		// propagate file artifacts to the parent ChatAgent for channel delivery
+		// (e.g., as Telegram document attachments).
+		subAgentMgr.FileArtifactCapture = chatAgent.CaptureFileArtifact
+
 		subAgentMgr.AppName = "astonish"
 		subAgentMgr.UserID = "console_user"
 

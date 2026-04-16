@@ -174,6 +174,13 @@ type SubAgentManager struct {
 	// ones. Set by the launcher to NodeClientPool.Alias.
 	OnChildSession func(parentSessionID, childSessionID string)
 
+	// FileArtifactCapture, when set, is called when a sub-agent writes or
+	// edits a file via write_file/edit_file tool calls. This propagates file
+	// artifacts from sub-agents to the parent ChatAgent so they can be
+	// delivered to the user (e.g., as Telegram document attachments).
+	// Set by the launcher to ChatAgent.CaptureFileArtifact. Thread-safe.
+	FileArtifactCapture func(path, toolName string)
+
 	// Tool discovery: ToolIndex enables sub-agents to auto-discover which tools
 	// they need based on the task description. When a sub-agent is created with
 	// an empty ToolFilter, the index is queried to find relevant tool groups.
@@ -564,6 +571,26 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 			if pendingSecretRestore != nil {
 				pendingSecretRestore()
 				pendingSecretRestore = nil
+			}
+			return output, err
+		})
+	}
+
+	// Capture file artifacts from sub-agent write_file/edit_file tool calls.
+	// This propagates file artifacts to the parent ChatAgent so they can be
+	// delivered to the user via channels (e.g., as Telegram documents).
+	if m.FileArtifactCapture != nil {
+		capture := m.FileArtifactCapture
+		afterToolCallbacks = append(afterToolCallbacks, func(ctx tool.Context, t tool.Tool, input, output map[string]any, err error) (map[string]any, error) {
+			switch t.Name() {
+			case "write_file":
+				if path, ok := input["file_path"].(string); ok && path != "" {
+					capture(path, t.Name())
+				}
+			case "edit_file":
+				if path, ok := input["path"].(string); ok && path != "" {
+					capture(path, t.Name())
+				}
 			}
 			return output, err
 		})

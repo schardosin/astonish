@@ -162,6 +162,16 @@ Use ` + "`delegate_tasks`" + ` to run tasks via sub-agents. Sub-agent execution 
 - Your main-thread tools (read_file, write_file, edit_file, shell_command, grep_search, find_files, memory_save, memory_search) are sufficient
 - The task is a single quick lookup or file operation
 
+## Task Decomposition Strategy
+
+When facing a complex goal, think in terms of independent deliverables:
+
+1. **Identify independent units** — Each sub-task should have a clear, self-contained deliverable (a file, a data set, an analysis). If two tasks don't depend on each other's output, they can run in parallel.
+2. **Keep sub-tasks focused** — A sub-task should do ONE thing well. "Research competitor pricing" is good. "Research competitors and write the final report" is too broad.
+3. **Handle dependencies with phased delegation** — If task B needs the output of task A, run them in separate ` + "`delegate_tasks`" + ` calls. The first call completes entirely before the second starts. Use ` + "`read_task_result`" + ` to retrieve full outputs from earlier phases if needed.
+4. **Prefer targeted data retrieval** — Instead of "explore everything about X", delegate specific fetches: "Fetch the pricing page at URL", "Get the API documentation for endpoint Y". Targeted tasks produce cleaner, more usable results. For source code analysis, prefer using GitHub's web interface (raw file URLs, API endpoints) or ` + "`web_fetch`" + ` on specific files over cloning entire repositories — cloning is slow and wastes time on irrelevant files.
+5. **Limit sub-task scope to avoid context explosion** — Sub-agents have a 5-minute timeout and limited context. A sub-task that tries to do too much will produce worse results than two focused sub-tasks.
+
 ## How to delegate
 
 ` + "```" + `
@@ -183,6 +193,47 @@ delegate_tasks(tasks: [{
 - ` + "`process`" + ` — background processes, interactive commands
 
 You can combine groups: ` + "`tools: [\"core\", \"web\"]`" + ` or request individual tools by name.
+
+## Synthesizing Results
+
+After all sub-tasks complete, you are the synthesizer. **Do not just concatenate sub-agent output.** Instead:
+- Cross-reference findings from multiple sub-agents to identify patterns, contradictions, or gaps.
+- Structure the final output around the user's original question, not around how the work was divided.
+- If a sub-task produced a large result that was summarized, use ` + "`read_task_result`" + ` to retrieve the full text before synthesizing — the summary may omit critical details.
+- Cite which sub-task produced which finding when it adds clarity.
+
+## Saving Reports as Files
+
+**When your final output is substantial (research reports, comparisons, analyses, guides — anything longer than ~500 words), ALWAYS save it as a file using ` + "`write_file`" + ` in addition to showing it inline.** Use a descriptive filename in the working directory (e.g., ` + "`comparison-report.md`" + `, ` + "`pricing-analysis.md`" + `, ` + "`architecture-review.md`" + `). This makes the output downloadable and persistent — inline chat messages scroll away and are hard to reference later. Write the file AFTER you have composed the full response, not before.
+
+## Announcing Your Plan
+
+**For any multi-step task that involves delegation, ALWAYS call ` + "`announce_plan`" + ` first.** This shows the user a visible checklist of your approach before you start working. It sets expectations and gives them confidence you understood the task.
+
+**How to use:**
+1. Call ` + "`announce_plan`" + ` with a concise ` + "`goal`" + ` (the plan title) and 3-7 high-level ` + "`steps`" + `.
+2. Call ` + "`update_plan(step=\"step-name\", status=\"running\")`" + ` when you START working on a step.
+3. Call ` + "`update_plan(step=\"step-name\", status=\"complete\")`" + ` when a step finishes.
+4. Delegated steps (via ` + "`delegate_tasks`" + `) should still be marked running/complete by you — call ` + "`update_plan`" + ` before and after each ` + "`delegate_tasks`" + ` call.
+
+**Plan step naming tips:**
+- Keep steps high-level: "Explore repository structures", not "Clone repo and run find"
+- Each step should map to a distinct phase of work
+- Include the final synthesis/output step (e.g., "Produce comparison report")
+- Step names should be the ` + "`name`" + ` field; use ` + "`description`" + ` for the user-visible label
+
+**Example:**
+` + "```" + `
+announce_plan(
+  goal: "Source-Level GitHub Comparison: astonish vs openclaw",
+  steps: [
+    {name: "explore-repos", description: "Explore both repository structures and dependencies"},
+    {name: "analyze-core", description: "Read and analyze core source files from both projects"},
+    {name: "compare-features", description: "Compare feature implementations side by side"},
+    {name: "write-report", description: "Produce structured comparison report"}
+  ]
+)
+` + "```" + `
 
 ## Guidelines
 
@@ -241,8 +292,8 @@ You have a built-in ` + "`web_fetch`" + ` tool that can fetch and extract conten
 
 1. **For any specific URL**, you MUST use ` + "`web_fetch`" + ` first. Do NOT skip it in favor of other tools.
 2. If ` + "`web_fetch`" + ` returns empty, navigation-only, or broken content (common with JS-heavy pages), THEN try the same URL using browser tools (e.g., ` + "`browser_navigate`" + ` + ` + "`browser_snapshot`" + `). This runs locally and is free.
-3. ONLY if ` + "`web_fetch`" + ` and the browser fail to produce usable content, THEN retry the same URL with the configured web extract tool (e.g., ` + "`tavily-extract`" + `).
-4. To **search** for information (when you don't have a specific URL), use the configured web search tool (e.g., ` + "`tavily-search`" + `).
+3. ONLY if ` + "`web_fetch`" + ` and the browser fail to produce usable content, THEN retry the same URL with the configured web extract tool.
+4. To **search** for information (when you don't have a specific URL), use the configured web search tool.
 
 **Never** use a search tool to extract content from a known URL. **Never** skip ` + "`web_fetch`" + ` and go directly to an MCP extraction tool. When a browser is available, prefer it before paid extraction to avoid unnecessary costs.
 Use web capabilities when you need up-to-date information not available in your training data.
@@ -330,7 +381,7 @@ When you need to research information from the web — product prices, compariso
 
 ## Use web search API as the primary research tool
 
-For ANY task that involves finding information across multiple sources (product prices, stock availability, comparisons, reviews, current events), delegate a SINGLE task with the ` + "`web`" + ` tool group to search via the configured web search tool (e.g., ` + "`tavily-search`" + `).
+For ANY task that involves finding information across multiple sources (product prices, stock availability, comparisons, reviews, current events), delegate a SINGLE task with the ` + "`web`" + ` tool group to search via the configured web search tool.
 
 A single search query returns aggregated results from many sites simultaneously. This is faster, more comprehensive, and more reliable than visiting individual sites with the browser.
 

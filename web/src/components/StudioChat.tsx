@@ -1,18 +1,22 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search, Users, Info } from 'lucide-react'
+import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search, Users, Info, FileText } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { fetchSessions, fetchSessionHistory, deleteSession, connectChat, stopChat } from '../api/studioChat'
+import { fetchSessions, fetchSessionHistory, deleteSession, connectChat, stopChat, fetchSessionStatus, connectChatStream } from '../api/studioChat'
 import type { ChatSession } from '../api/studioChat'
 import { startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions } from '../api/fleetChat'
 import type { FleetSession } from '../api/fleetChat'
 import HomePage from './HomePage'
-import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage } from './chat/chatTypes'
+import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage } from './chat/chatTypes'
 import { getAgentColor } from './chat/chatTypes'
 import FleetStartDialog from './chat/FleetStartDialog'
 import FleetTemplatePicker from './chat/FleetTemplatePicker'
 import FleetExecutionPanel from './chat/FleetExecutionPanel'
+import TaskPlanPanel from './chat/TaskPlanPanel'
+import PlanPanel from './chat/PlanPanel'
+import FilePanel from './chat/FilePanel'
 import BrowserView from './chat/BrowserView'
+import ArtifactCard from './chat/ArtifactCard'
 
 // Extended ChatSession with optional fleet fields coming from the sidebar
 interface SidebarSession extends ChatSession {
@@ -56,11 +60,18 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   const [rawViewIndices, setRawViewIndices] = useState<Set<number>>(new Set())
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
+  // File panel state
+  const [filePanelOpen, setFilePanelOpen] = useState(false)
+  const [sessionArtifacts, setSessionArtifacts] = useState<SessionArtifact[]>([])
+  const [filePanelInitialPath, setFilePanelInitialPath] = useState<string | null>(null)
+
   // Refs
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const streamingTextRef = useRef('')
+  const isNearBottomRef = useRef(true)
+  const [showScrollButton, setShowScrollButton] = useState(false)
 
   const slashCommands = useMemo(() => [
     { cmd: '/help', desc: 'Show available commands' },
@@ -166,19 +177,58 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
         } catch {
           // fetchFleetSessions may fail if fleet system not initialized; that's ok
         }
-        // Not a fleet session (or fleet no longer active), load as regular
+        // Check if this session has an active background chat runner
+        try {
+          const status = await fetchSessionStatus(initialSessionId)
+          if (status.running) {
+            changeSession(initialSessionId)
+            reconnectToChatRunner(initialSessionId)
+            return
+          }
+        } catch {
+          // Status endpoint may fail; fall through to history
+        }
+        // Not a fleet session or active runner, load as regular history
         loadSessionHistory(initialSessionId)
       }
     }
     init()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-scroll on new messages
+  // Auto-scroll on new messages — only if user is near the bottom
   useEffect(() => {
-    if (scrollRef.current) {
+    if (scrollRef.current && isNearBottomRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
+    // Show scroll button when not at bottom and there are messages
+    if (!isNearBottomRef.current && messages.length > 0) {
+      setShowScrollButton(true)
+    }
   }, [messages])
+
+  // Track scroll position to detect if user scrolled up
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const handleScroll = () => {
+      const threshold = 80
+      const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold
+      isNearBottomRef.current = atBottom
+      if (atBottom) {
+        setShowScrollButton(false)
+      }
+    }
+    el.addEventListener('scroll', handleScroll, { passive: true })
+    return () => el.removeEventListener('scroll', handleScroll)
+  }, []) // Re-attaches if scrollRef changes — but ref is stable
+
+  const scrollToBottom = useCallback(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+      isNearBottomRef.current = true
+      setShowScrollButton(false)
+    }
+  }, [])
 
   // Focus input when not streaming
   useEffect(() => {
@@ -204,8 +254,16 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     try {
       setIsLoadingHistory(true)
       const data = await fetchSessionHistory(sessionId)
-      // If the response includes fleet messages, convert them to the fleet_message format
       const dataAny = data as Record<string, any>
+
+      // Extract artifacts from the session detail response
+      if (dataAny.artifacts && Array.isArray(dataAny.artifacts)) {
+        setSessionArtifacts(dataAny.artifacts as SessionArtifact[])
+      } else {
+        setSessionArtifacts([])
+      }
+
+      // If the response includes fleet messages, convert them to the fleet_message format
       if (dataAny.fleetMessages && dataAny.fleetMessages.length > 0) {
         const fleetMsgs: ChatMsg[] = dataAny.fleetMessages.map((m: any) => ({
           type: 'fleet_message' as const,
@@ -218,15 +276,286 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
         }))
         setMessages(fleetMsgs)
       } else {
-        setMessages((data.messages || []) as unknown as ChatMsg[])
+        // Map API messages to frontend ChatMsg types.
+        // The API uses StudioMessage with generic fields (content, toolName);
+        // some message types need field remapping for the frontend types.
+        const apiMessages = (data.messages || []) as Array<Record<string, any>>
+        const mapped: ChatMsg[] = apiMessages.map(m => {
+          if (m.type === 'artifact' && m.content) {
+            return { type: 'artifact', path: m.content, toolName: m.toolName || 'write_file' } as ArtifactMessage
+          }
+          return m as unknown as ChatMsg
+        })
+        setMessages(mapped)
       }
     } catch (err: any) {
       console.error('Failed to load session history:', err)
       setMessages([])
+      setSessionArtifacts([])
     } finally {
       setIsLoadingHistory(false)
     }
   }
+
+  // Reconnect to an active background chat runner. The runner streams all
+  // buffered events (catch-up) followed by live events. This uses the same
+  // event handler as sendMessage so all event types are handled identically.
+  const reconnectToChatRunner = useCallback((sessionId: string) => {
+    setMessages([])
+    setSessionArtifacts([])
+    setIsStreaming(true)
+    streamingTextRef.current = ''
+
+    const controller = connectChatStream({
+      sessionId,
+      onEvent: (eventType, data) => {
+        // Reuse the exact same event handling as sendMessage's onEvent
+        switch (eventType) {
+          case 'session':
+            if (data.sessionId) {
+              changeSession(data.sessionId as string)
+            }
+            break
+
+          case 'text':
+            if (data.text) {
+              streamingTextRef.current += data.text
+              const currentText = streamingTextRef.current
+              setMessages((prev: ChatMsg[]) => {
+                const last = prev[prev.length - 1]
+                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
+                  return [...prev.slice(0, -1), { type: 'agent', content: currentText, _streaming: true }]
+                }
+                return [...prev, { type: 'agent', content: currentText, _streaming: true }]
+              })
+            }
+            break
+
+          case 'tool_call':
+            if (streamingTextRef.current) {
+              const finalText = streamingTextRef.current
+              streamingTextRef.current = ''
+              setMessages((prev: ChatMsg[]) => {
+                const last = prev[prev.length - 1]
+                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
+                  return [...prev.slice(0, -1), { type: 'agent', content: finalText }]
+                }
+                return prev
+              })
+            }
+            setMessages((prev: ChatMsg[]) => [...prev, { type: 'tool_call', toolName: data.name, toolArgs: data.args }])
+            break
+
+          case 'tool_result':
+            if (data.name === 'browser_request_human' && data.result && typeof data.result === 'object' && (data.result as Record<string, unknown>).vnc_proxy_url) {
+              const result = data.result as Record<string, unknown>
+              setMessages((prev: ChatMsg[]) => [...prev, {
+                type: 'browser_handoff',
+                vncProxyUrl: String(result.vnc_proxy_url || ''),
+                pageUrl: String(result.page_url || ''),
+                pageTitle: String(result.page_title || ''),
+                reason: String(result.message || 'Human assistance needed'),
+              } as BrowserHandoffMessage])
+            } else {
+              setMessages((prev: ChatMsg[]) => [...prev, { type: 'tool_result', toolName: data.name, toolResult: data.result }])
+            }
+            break
+
+          case 'image':
+            if (data.data && data.mimeType) {
+              setMessages((prev: ChatMsg[]) => [...prev, { type: 'image', data: data.data, mimeType: data.mimeType }])
+            }
+            break
+
+          case 'artifact':
+            if (data.path) {
+              const fileName = (data.path as string).split('/').pop() || 'file'
+              const ext = fileName.includes('.') ? fileName.split('.').pop()?.toLowerCase() || '' : ''
+              const fileType = ext === 'md' ? 'Markdown' : ext === 'py' ? 'Python' : ext === 'go' ? 'Go' : ext === 'js' ? 'JavaScript' : ext === 'ts' ? 'TypeScript' : ext || 'File'
+              setSessionArtifacts(prev => {
+                if (prev.some(a => a.path === data.path)) return prev
+                return [...prev, { path: data.path as string, fileName, fileType, toolName: (data.tool_name as string) || 'write_file' }]
+              })
+              // Also add inline artifact message to the chat thread
+              setMessages((prev: ChatMsg[]) => [...prev, {
+                type: 'artifact',
+                path: data.path as string,
+                toolName: (data.tool_name as string) || 'write_file',
+              } as ArtifactMessage])
+            }
+            break
+
+          case 'flow_output':
+            if (streamingTextRef.current) {
+              const finalText = streamingTextRef.current
+              streamingTextRef.current = ''
+              setMessages((prev: ChatMsg[]) => {
+                const last = prev[prev.length - 1]
+                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
+                  return [...prev.slice(0, -1), { type: 'agent', content: finalText }]
+                }
+                return prev
+              })
+            }
+            if (data.content) {
+              setMessages((prev: ChatMsg[]) => [...prev, { type: 'agent', content: data.content as string }])
+            }
+            break
+
+          case 'approval':
+            setMessages((prev: ChatMsg[]) => [...prev, { type: 'approval', toolName: data.tool, options: data.options }])
+            break
+
+          case 'auto_approved':
+            setMessages((prev: ChatMsg[]) => [...prev, { type: 'auto_approved', toolName: data.tool }])
+            break
+
+          case 'thinking':
+            setMessages((prev: ChatMsg[]) => {
+              const filtered = prev.filter(m => m.type !== 'thinking')
+              return [...filtered, { type: 'thinking', content: data.text }]
+            })
+            break
+
+          case 'retry':
+            setMessages((prev: ChatMsg[]) => [...prev, { type: 'retry', attempt: data.attempt, maxRetries: data.maxRetries, reason: data.reason }])
+            break
+
+          case 'error':
+            setMessages((prev: ChatMsg[]) => [...prev, { type: 'error', content: (data.error as string) || (data.message as string) || 'Unknown error' }])
+            break
+
+          case 'error_info':
+            setMessages((prev: ChatMsg[]) => [...prev, { type: 'error_info', title: data.title, reason: data.reason, suggestion: data.suggestion, originalError: data.originalError }])
+            break
+
+          case 'done':
+            if (streamingTextRef.current) {
+              const finalText = streamingTextRef.current
+              streamingTextRef.current = ''
+              setMessages((prev: ChatMsg[]) => {
+                const last = prev[prev.length - 1]
+                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
+                  return [...prev.slice(0, -1), { type: 'agent', content: finalText }]
+                }
+                return prev
+              })
+            }
+            setMessages((prev: ChatMsg[]) => prev.filter(m => m.type !== 'thinking'))
+            break
+
+          case 'subtask_progress': {
+            const stEventType = data.event_type as string
+
+            // ── Plan events ──
+            if (stEventType === 'plan_announced') {
+              const steps: PlanStepInfo[] = ((data.plan_steps as Array<{ name: string; description: string }>) || []).map(s => ({
+                name: s.name,
+                description: s.description,
+                status: 'pending' as const,
+              }))
+              setMessages((prev: ChatMsg[]) => [...prev, {
+                type: 'plan',
+                goal: (data.plan_goal as string) || '',
+                steps,
+              } as PlanMessage])
+              break
+            }
+
+            if (stEventType === 'plan_step_update') {
+              const stepName = data.step_name as string
+              const stepStatus = data.step_status as PlanStepInfo['status']
+              setMessages((prev: ChatMsg[]) => {
+                for (let i = prev.length - 1; i >= 0; i--) {
+                  if (prev[i].type === 'plan') {
+                    const plan = prev[i] as PlanMessage
+                    const updatedSteps = plan.steps.map(s =>
+                      s.name === stepName ? { ...s, status: stepStatus } : s
+                    )
+                    return prev.map((m, idx) => idx === i ? { ...plan, steps: updatedSteps } : m)
+                  }
+                }
+                return prev
+              })
+              break
+            }
+
+            // ── Delegation events ──
+            const stEvent: SubTaskEvent = {
+              type: stEventType,
+              task_name: data.task_name as string | undefined,
+              status: data.status as string | undefined,
+              duration: data.duration as string | undefined,
+              error: data.error as string | undefined,
+              tool_name: data.tool_name as string | undefined,
+              tool_args: data.tool_args,
+              tool_result: data.tool_result,
+              text: data.text as string | undefined,
+              tasks: data.tasks as SubTaskInfo[] | undefined,
+              timestamp: Date.now(),
+            }
+            setMessages((prev: ChatMsg[]) => {
+              let existingIdx = -1
+              for (let i = prev.length - 1; i >= 0; i--) {
+                if (prev[i].type === 'subtask_execution' && (prev[i] as SubTaskExecutionMessage).status === 'running') {
+                  existingIdx = i
+                  break
+                }
+              }
+              const existing = existingIdx >= 0 ? prev[existingIdx] as SubTaskExecutionMessage : undefined
+              if (existing) {
+                const updated: SubTaskExecutionMessage = { ...existing, events: [...existing.events, stEvent] }
+                if (stEventType === 'delegation_complete') {
+                  updated.status = (data.status as string) || 'complete'
+                }
+                if (stEventType === 'delegation_start' && stEvent.tasks) {
+                  updated.tasks = stEvent.tasks
+                }
+                return prev.map((m, i) => i === existingIdx ? updated : m)
+              }
+              const tasks: SubTaskInfo[] = (stEventType === 'delegation_start' && stEvent.tasks) ? stEvent.tasks : []
+              return [...prev, {
+                type: 'subtask_execution',
+                events: [stEvent],
+                tasks,
+                status: 'running',
+              } as SubTaskExecutionMessage]
+            })
+            break
+          }
+
+          default:
+            break
+        }
+      },
+      onError: (err) => {
+        console.error('Chat reconnect stream error:', err)
+        setIsStreaming(false)
+      },
+      onDone: () => {
+        // Check for dangling partial streaming text (same as sendMessage)
+        setMessages((prev: ChatMsg[]) => {
+          const last = prev[prev.length - 1]
+          if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
+            const finalText = streamingTextRef.current || (last as AgentMessage).content
+            streamingTextRef.current = ''
+            const finalized = prev.map((m, i) =>
+              i === prev.length - 1 ? { type: 'agent', content: finalText } as ChatMsg : m
+            )
+            return [...finalized, {
+              type: 'error',
+              content: 'The model stopped responding unexpectedly. You can send a follow-up message to continue.',
+            } as ChatMsg]
+          }
+          return prev.filter(m => m.type !== 'thinking')
+        })
+        setIsStreaming(false)
+        setTimeout(() => loadSessions(), 1000)
+      },
+    })
+
+    abortRef.current = controller
+  }, [changeSession])
 
   const handleSelectSession = useCallback(async (sessionId: string) => {
     // Cancel any active stream
@@ -235,6 +564,9 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
       abortRef.current = null
     }
     setIsStreaming(false)
+    setFilePanelOpen(false)
+    setSessionArtifacts([])
+    setFilePanelInitialPath(null)
 
     // Check if this is a fleet session (from sidebar data)
     const session = sessions.find(s => s.id === sessionId)
@@ -276,8 +608,21 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     }
 
     changeSession(sessionId, { userInitiated: true })
+
+    // Check if this session has an active background runner — if so, reconnect
+    // to the live SSE stream instead of loading static history.
+    try {
+      const status = await fetchSessionStatus(sessionId)
+      if (status.running) {
+        reconnectToChatRunner(sessionId)
+        return
+      }
+    } catch {
+      // Status endpoint may fail if chat manager not initialized; fall through to history
+    }
+
     await loadSessionHistory(sessionId)
-  }, [sessions, isFleetMode, connectToFleetStream, changeSession])
+  }, [sessions, isFleetMode, connectToFleetStream, changeSession, reconnectToChatRunner])
 
   const handleNewSession = useCallback(() => {
     if (abortRef.current) {
@@ -294,6 +639,9 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     setIsStreaming(false)
     changeSession(null, { userInitiated: true })
     setMessages([])
+    setSessionArtifacts([])
+    setFilePanelOpen(false)
+    setFilePanelInitialPath(null)
     if (inputRef.current) inputRef.current.focus()
   }, [isFleetMode, changeSession])
 
@@ -332,14 +680,16 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   }, [activeSessionId, sessions, isFleetMode])
 
   const handleStop = useCallback(() => {
+    // Disconnect the SSE viewer
     if (abortRef.current) {
       abortRef.current.abort()
       abortRef.current = null
     }
+    // Stop the background runner (this is the actual kill switch)
     if (isFleetMode && fleetSessionId) {
       stopFleetSession(fleetSessionId)
     } else if (activeSessionId) {
-      stopChat(activeSessionId)
+      stopChat(activeSessionId) // calls POST /api/studio/sessions/{id}/stop which stops the background runner
     }
     setIsStreaming(false)
   }, [activeSessionId, isFleetMode, fleetSessionId])
@@ -380,6 +730,9 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   // Send a human message to the fleet session
   const sendFleetHumanMessage = useCallback(async (text: string) => {
     if (!text.trim() || !fleetSessionId) return
+    // Reset scroll position — user expects to see the conversation flow
+    isNearBottomRef.current = true
+    setShowScrollButton(false)
     // Add human message to UI immediately
     setMessages((prev: ChatMsg[]) => [...prev, { type: 'fleet_message', sender: 'customer', text, timestamp: Date.now() }])
     setInput('')
@@ -414,6 +767,10 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   const sendMessage = useCallback((text: string, options: { systemContext?: string } = {}) => {
     if (!text.trim()) return
     const userMsg = text.trim()
+
+    // Reset scroll position — user expects to see the conversation flow
+    isNearBottomRef.current = true
+    setShowScrollButton(false)
 
     // Add user message to chat (unless it's a slash command)
     if (!userMsg.startsWith('/')) {
@@ -497,6 +854,24 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           case 'image':
             if (data.data && data.mimeType) {
               setMessages((prev: ChatMsg[]) => [...prev, { type: 'image', data: data.data, mimeType: data.mimeType }])
+            }
+            break
+
+          case 'artifact':
+            if (data.path) {
+              const fileName = (data.path as string).split('/').pop() || 'file'
+              const ext = fileName.includes('.') ? fileName.split('.').pop()?.toLowerCase() || '' : ''
+              const fileType = ext === 'md' ? 'Markdown' : ext === 'py' ? 'Python' : ext === 'go' ? 'Go' : ext === 'js' ? 'JavaScript' : ext === 'ts' ? 'TypeScript' : ext || 'File'
+              setSessionArtifacts(prev => {
+                if (prev.some(a => a.path === data.path)) return prev
+                return [...prev, { path: data.path as string, fileName, fileType, toolName: (data.tool_name as string) || 'write_file' }]
+              })
+              // Also add inline artifact message to the chat thread
+              setMessages((prev: ChatMsg[]) => [...prev, {
+                type: 'artifact',
+                path: data.path as string,
+                toolName: (data.tool_name as string) || 'write_file',
+              } as ArtifactMessage])
             }
             break
 
@@ -672,6 +1047,96 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             })
             break
 
+          case 'subtask_progress': {
+            // Handle plan events and sub-task progress events.
+            // Plan events create/update a PlanMessage; delegation events manage SubTaskExecutionMessage.
+            const eventType = data.event_type as string
+
+            // ── Plan events ──
+            if (eventType === 'plan_announced') {
+              const steps: PlanStepInfo[] = ((data.plan_steps as Array<{ name: string; description: string }>) || []).map(s => ({
+                name: s.name,
+                description: s.description,
+                status: 'pending' as const,
+              }))
+              setMessages((prev: ChatMsg[]) => [...prev, {
+                type: 'plan',
+                goal: (data.plan_goal as string) || '',
+                steps,
+              } as PlanMessage])
+              break
+            }
+
+            if (eventType === 'plan_step_update') {
+              const stepName = data.step_name as string
+              const stepStatus = data.step_status as PlanStepInfo['status']
+              setMessages((prev: ChatMsg[]) => {
+                // Find the most recent plan message
+                for (let i = prev.length - 1; i >= 0; i--) {
+                  if (prev[i].type === 'plan') {
+                    const plan = prev[i] as PlanMessage
+                    const updatedSteps = plan.steps.map(s =>
+                      s.name === stepName ? { ...s, status: stepStatus } : s
+                    )
+                    return prev.map((m, idx) => idx === i ? { ...plan, steps: updatedSteps } : m)
+                  }
+                }
+                return prev
+              })
+              break
+            }
+
+            // ── Delegation events (existing subtask_execution handling) ──
+            const event: SubTaskEvent = {
+              type: eventType,
+              task_name: data.task_name as string | undefined,
+              status: data.status as string | undefined,
+              duration: data.duration as string | undefined,
+              error: data.error as string | undefined,
+              tool_name: data.tool_name as string | undefined,
+              tool_args: data.tool_args,
+              tool_result: data.tool_result,
+              text: data.text as string | undefined,
+              tasks: data.tasks as SubTaskInfo[] | undefined,
+              timestamp: Date.now(),
+            }
+
+            setMessages((prev: ChatMsg[]) => {
+              // Find the latest subtask_execution message that is still running (search from end)
+              let existingIdx = -1
+              for (let i = prev.length - 1; i >= 0; i--) {
+                if (prev[i].type === 'subtask_execution' && (prev[i] as SubTaskExecutionMessage).status === 'running') {
+                  existingIdx = i
+                  break
+                }
+              }
+              const existing = existingIdx >= 0 ? prev[existingIdx] as SubTaskExecutionMessage : undefined
+
+              if (existing) {
+                const updated: SubTaskExecutionMessage = { ...existing, events: [...existing.events, event] }
+                // Update status on delegation_complete
+                if (eventType === 'delegation_complete') {
+                  updated.status = (data.status as string) || 'complete'
+                }
+                // Update tasks list on delegation_start (if somehow received after creation)
+                if (eventType === 'delegation_start' && event.tasks) {
+                  updated.tasks = event.tasks
+                }
+                return prev.map((m, i) => i === existingIdx ? updated : m)
+              }
+
+              // First event: create the subtask_execution message
+              const tasks: SubTaskInfo[] = (eventType === 'delegation_start' && event.tasks) ? event.tasks : []
+              return [...prev, {
+                type: 'subtask_execution',
+                events: [event],
+                tasks,
+                status: 'running',
+              } as SubTaskExecutionMessage]
+            })
+            break
+          }
+
           case 'retry':
             setMessages((prev: ChatMsg[]) => [...prev, {
               type: 'retry',
@@ -722,6 +1187,24 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
         setIsStreaming(false)
       },
       onDone: () => {
+        // Check for dangling partial streaming text — if the stream ended
+        // without a proper 'done' event (e.g., server crash, network drop),
+        // finalize whatever text was received and show an error.
+        setMessages((prev: ChatMsg[]) => {
+          const last = prev[prev.length - 1]
+          if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
+            const finalText = streamingTextRef.current || (last as AgentMessage).content
+            streamingTextRef.current = ''
+            const finalized = prev.map((m, i) =>
+              i === prev.length - 1 ? { type: 'agent', content: finalText } as ChatMsg : m
+            )
+            return [...finalized, {
+              type: 'error',
+              content: 'The model stopped responding unexpectedly. You can send a follow-up message to continue.',
+            } as ChatMsg]
+          }
+          return prev.filter(m => m.type !== 'thinking')
+        })
         setIsStreaming(false)
         // Refresh sessions to pick up title updates
         setTimeout(() => loadSessions(), 1000)
@@ -1098,7 +1581,34 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
       )}
 
       {/* Chat Area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        {/* File icon toolbar — shown when session has artifacts */}
+        {sessionArtifacts.length > 0 && (
+          <div
+            className="flex items-center justify-end px-3 py-1.5 shrink-0"
+            style={{ borderBottom: '1px solid var(--border-color)' }}
+          >
+            <button
+              onClick={() => { setFilePanelOpen(!filePanelOpen); setFilePanelInitialPath(null) }}
+              className="flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors"
+              style={{
+                background: filePanelOpen ? 'var(--accent-bg, rgba(59, 130, 246, 0.15))' : 'transparent',
+                color: filePanelOpen ? 'var(--accent-color, #60a5fa)' : 'var(--text-secondary)',
+                border: filePanelOpen ? '1px solid var(--accent-border, rgba(59, 130, 246, 0.3))' : '1px solid transparent',
+              }}
+              title={`${sessionArtifacts.length} file(s) generated`}
+            >
+              <FileText size={13} />
+              <span>Files</span>
+              <span className="px-1 py-0 rounded text-[10px] font-medium" style={{
+                background: 'var(--accent-bg, rgba(59, 130, 246, 0.15))',
+                color: 'var(--accent-color, #60a5fa)',
+              }}>
+                {sessionArtifacts.length}
+              </span>
+            </button>
+          </div>
+        )}
         {/* Fleet session header */}
         {isFleetMode && fleetInfo && (
           <div className="flex items-center justify-between px-4 py-2" style={{ borderBottom: '1px solid var(--border-color)', background: 'rgba(6, 182, 212, 0.05)' }}>
@@ -1124,8 +1634,9 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             </button>
           </div>
         )}
-        {/* Messages Area */}
-        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
+        {/* Messages Area (with scroll-to-bottom button) */}
+        <div className="flex-1 relative overflow-hidden">
+        <div ref={scrollRef} className="absolute inset-0 overflow-y-auto p-4 space-y-4">
           {isLoadingHistory ? (
             <div className="flex items-center justify-center py-16">
               <Loader size={24} className="animate-spin text-purple-400" />
@@ -1310,6 +1821,14 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 return <FleetExecutionPanel key={index} data={msg as FleetExecutionMessage} />
               }
 
+              if (msg.type === 'plan') {
+                return <PlanPanel key={index} data={msg as PlanMessage} />
+              }
+
+              if (msg.type === 'subtask_execution') {
+                return <TaskPlanPanel key={index} data={msg as SubTaskExecutionMessage} />
+              }
+
               if (msg.type === 'fleet_message') {
                 const fMsg = msg as FleetMessageItem
                 const isHuman = fMsg.sender === 'customer'
@@ -1387,6 +1906,22 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 )
               }
 
+              if (msg.type === 'artifact') {
+                const artifactMsg = msg as ArtifactMessage
+                return (
+                  <div key={index}>
+                    <ArtifactCard
+                      data={artifactMsg}
+                      sessionId={activeSessionId}
+                      onOpenInPanel={(path) => {
+                        setFilePanelInitialPath(path)
+                        setFilePanelOpen(true)
+                      }}
+                    />
+                  </div>
+                )
+              }
+
               return null
             })
           )}
@@ -1398,6 +1933,22 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               <span className="text-xs text-purple-300">Processing...</span>
             </div>
           )}
+        </div>
+        {/* Scroll to bottom button */}
+        {showScrollButton && (
+          <button
+            onClick={scrollToBottom}
+            className="absolute bottom-3 right-5 z-10 p-2 rounded-full shadow-lg transition-all hover:scale-105 cursor-pointer"
+            style={{
+              background: 'var(--bg-secondary)',
+              border: '1px solid var(--border-color)',
+              color: 'var(--text-secondary)',
+            }}
+            title="Scroll to bottom"
+          >
+            <ChevronDown size={16} />
+          </button>
+        )}
         </div>
 
         {/* Input Area */}
@@ -1494,6 +2045,16 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           </form>
         </div>
       </div>
+
+      {/* File Panel — right side split panel for viewing artifacts */}
+      {filePanelOpen && sessionArtifacts.length > 0 && (
+        <FilePanel
+          artifacts={sessionArtifacts}
+          initialPath={filePanelInitialPath}
+          sessionId={activeSessionId}
+          onClose={() => setFilePanelOpen(false)}
+        />
+      )}
     </div>
 
     {/* Fleet start dialog */}

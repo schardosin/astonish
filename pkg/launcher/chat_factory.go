@@ -458,6 +458,24 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		} else {
 			coreTools = append(coreTools, delegateTool)
 
+			// read_task_result: allows the orchestrator to retrieve full sub-task
+			// outputs that were summarized by delegate_tasks to prevent context explosion.
+			readResultTool, readResultErr := tools.NewReadTaskResultTool()
+			if readResultErr == nil {
+				coreTools = append(coreTools, readResultTool)
+			}
+
+			// announce_plan / update_plan: allow the orchestrator to announce a
+			// structured plan before starting work, and mark steps as complete.
+			announcePlanTool, apErr := tools.NewAnnouncePlanTool()
+			if apErr == nil {
+				coreTools = append(coreTools, announcePlanTool)
+			}
+			updatePlanTool, upErr := tools.NewUpdatePlanTool()
+			if upErr == nil {
+				coreTools = append(coreTools, updatePlanTool)
+			}
+
 			subAgentCfg := agent.SubAgentConfig{
 				MaxDepth:      cfg.AppConfig.SubAgents.MaxDepth,
 				MaxConcurrent: cfg.AppConfig.SubAgents.MaxConcurrent,
@@ -785,6 +803,8 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		"memory_save":    true,
 		"memory_search":  true,
 		"delegate_tasks": true,
+		"announce_plan":  true,
+		"update_plan":    true,
 		"opencode":       true,
 	}
 
@@ -1391,8 +1411,23 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		subAgentMgr.CredentialStore = credStore
 		subAgentMgr.PendingSecrets = chatAgent.PendingSecrets
 		subAgentMgr.EventForwarder = chatAgent.ForwardSubTaskEvent
+		// Wire structured sub-task progress: delegate to ChatAgent.SubTaskProgressCallback
+		// which is set dynamically by ChatRunner.Run() for Studio sessions.
+		subAgentMgr.SubTaskProgress = func(evt agent.SubTaskProgressEvent) {
+			if chatAgent.SubTaskProgressCallback != nil {
+				chatAgent.SubTaskProgressCallback(evt)
+			}
+		}
 		subAgentMgr.AppName = "astonish"
 		subAgentMgr.UserID = "console_user"
+
+		// Wire plan tools: announce_plan / update_plan emit events through
+		// the same ChatAgent.SubTaskProgressCallback pipeline.
+		tools.SetPlanProgressCallback(func(evt agent.SubTaskProgressEvent) {
+			if chatAgent.SubTaskProgressCallback != nil {
+				chatAgent.SubTaskProgressCallback(evt)
+			}
+		})
 		// Wire tool discovery so sub-agents can auto-discover their tools
 		if toolIndex != nil {
 			subAgentMgr.ToolIndex = toolIndex

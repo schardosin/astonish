@@ -243,6 +243,19 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			// stashed in the ChatAgent's image queue for channel delivery.
 			redactedOutput = c.extractAndStripImages(redactedOutput)
 
+			// Capture file artifacts from write_file and edit_file tool calls.
+			// The file path is extracted from input args and stashed for UI delivery.
+			switch t.Name() {
+			case "write_file":
+				if path, ok := input["file_path"].(string); ok && path != "" {
+					c.CaptureFileArtifact(path, t.Name())
+				}
+			case "edit_file":
+				if path, ok := input["path"].(string); ok && path != "" {
+					c.CaptureFileArtifact(path, t.Name())
+				}
+			}
+
 			// Strip large flow output from run_flow results. The full output
 			// is stashed for direct delivery to the user (via SSE or channel),
 			// and replaced with a short pointer so the LLM doesn't try to

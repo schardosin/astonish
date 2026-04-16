@@ -108,10 +108,28 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 			// aggregated non-partial response for session persistence.
 			var textAccum strings.Builder
 
+			// Track whether the LLM sent a proper finish_reason. If the stream
+			// ends (io.EOF) without any finish_reason, the response was truncated
+			// — typically by a gateway timeout or connection drop.
+			finishReasonSeen := false
+
 			for {
 				resp, err := stream.Recv()
 				if errors.Is(err, io.EOF) {
-					// Emit aggregated text response at stream end
+					// Stream ended — check if we got a proper completion signal.
+					if !finishReasonSeen && textAccum.Len() > 0 {
+						// Emit whatever text we accumulated (so it gets persisted)
+						// then return an error so the caller knows the response is incomplete.
+						yield(&model.LLMResponse{
+							Content: &genai.Content{
+								Role:  "model",
+								Parts: []*genai.Part{{Text: textAccum.String()}},
+							},
+						}, nil)
+						yield(nil, fmt.Errorf("LLM stream ended without a finish_reason — the response was likely truncated by a gateway timeout or connection drop"))
+						return
+					}
+					// Normal completion: emit aggregated text response at stream end
 					if textAccum.Len() > 0 {
 						yield(&model.LLMResponse{
 							Content: &genai.Content{
@@ -130,6 +148,12 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 				// Handle tool call deltas
 				if len(resp.Choices) > 0 {
 					choice := resp.Choices[0]
+
+					// Track finish_reason — any non-empty value means the LLM
+					// completed its response normally (not a premature disconnect).
+					if choice.FinishReason != "" {
+						finishReasonSeen = true
+					}
 
 					// Accumulate tool calls
 					for _, tc := range choice.Delta.ToolCalls {

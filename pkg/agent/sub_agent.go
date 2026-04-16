@@ -29,6 +29,42 @@ type SubAgentConfig struct {
 	TaskTimeout   time.Duration `yaml:"task_timeout,omitempty" json:"task_timeout,omitempty"`     // Per-task timeout (default: 5m)
 }
 
+// SubTaskProgressEvent represents a structured lifecycle event for sub-task
+// plan visualization in the UI. These are higher-level than raw ADK events.
+type SubTaskProgressEvent struct {
+	Type     string `json:"type"`                // "delegation_start", "task_start", "task_complete", "task_failed", "task_retry", "task_tool_call", "task_tool_result", "task_text", "plan_announced", "plan_step_update"
+	TaskName string `json:"task_name,omitempty"` // Name of the sub-task (matches SubAgentTask.Name)
+	// Fields for delegation_start
+	Tasks []SubTaskInfo `json:"tasks,omitempty"` // All tasks in the delegation (only for delegation_start)
+	// Fields for task_complete / task_failed
+	Status   string `json:"status,omitempty"`   // "success", "error", "timeout" (for task_complete/task_failed)
+	Duration string `json:"duration,omitempty"` // Human-readable duration (for task_complete/task_failed)
+	Error    string `json:"error,omitempty"`    // Error message (for task_failed)
+	// Fields for task_tool_call / task_tool_result / task_text
+	ToolName   string `json:"tool_name,omitempty"`   // Tool name (for task_tool_call / task_tool_result)
+	ToolArgs   any    `json:"tool_args,omitempty"`   // Tool arguments (for task_tool_call)
+	ToolResult any    `json:"tool_result,omitempty"` // Tool result (for task_tool_result)
+	Text       string `json:"text,omitempty"`        // Text output (for task_text)
+	// Fields for plan_announced
+	PlanGoal  string         `json:"plan_goal,omitempty"`  // Plan title (for plan_announced)
+	PlanSteps []PlanStepInfo `json:"plan_steps,omitempty"` // Plan steps (for plan_announced)
+	// Fields for plan_step_update
+	StepName   string `json:"step_name,omitempty"`   // Step name to update (for plan_step_update)
+	StepStatus string `json:"step_status,omitempty"` // New step status: running, complete, failed (for plan_step_update)
+}
+
+// SubTaskInfo provides a summary of a task for the delegation_start event.
+type SubTaskInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// PlanStepInfo describes a step in the high-level execution plan.
+type PlanStepInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
 // SubAgentTask describes a single sub-agent task to execute.
 type SubAgentTask struct {
 	Name         string   // Short identifier for the sub-agent (e.g. "researcher", "coder")
@@ -124,6 +160,13 @@ type SubAgentManager struct {
 	// Thread-safe: may be called from multiple sub-agent goroutines.
 	EventForwarder func(event *adksession.Event)
 
+	// SubTaskProgress, when set, is called for structured sub-task lifecycle
+	// events (task_start, task_complete, task_failed) and tagged sub-agent
+	// activity (task_tool_call, task_tool_result, task_text). This enables
+	// task plan visualization in the UI. Set by the launcher to
+	// ChatAgent.SubTaskProgressCallback. Thread-safe.
+	SubTaskProgress func(event SubTaskProgressEvent)
+
 	// OnChildSession, when set, is called after a sub-agent session is created
 	// but before the sub-agent starts running. It receives the parent and child
 	// session IDs. Used to alias the child session to the parent's sandbox
@@ -171,7 +214,7 @@ func NewSubAgentManager(cfg SubAgentConfig) *SubAgentManager {
 		cfg.MaxConcurrent = 5
 	}
 	if cfg.TaskTimeout <= 0 {
-		cfg.TaskTimeout = 5 * time.Minute
+		cfg.TaskTimeout = 10 * time.Minute
 	}
 
 	sem := make(chan struct{}, cfg.MaxConcurrent)
@@ -203,6 +246,8 @@ func (m *SubAgentManager) PopLastTraces() []*ExecutionTrace {
 
 // RunTasks executes multiple sub-agent tasks concurrently and returns results.
 // Tasks are fan-out with a semaphore controlling concurrency.
+// Failed tasks that were making progress are automatically retried once with
+// a fresh timeout and a continuation prompt carrying forward partial context.
 // This method blocks until all tasks complete (or timeout).
 func (m *SubAgentManager) RunTasks(ctx context.Context, tasks []SubAgentTask) []TaskResult {
 	results := make([]TaskResult, len(tasks))
@@ -226,7 +271,36 @@ func (m *SubAgentManager) RunTasks(ctx context.Context, tasks []SubAgentTask) []
 				return
 			}
 
-			results[idx] = m.RunTask(ctx, t)
+			result := m.RunTask(ctx, t)
+
+			// Auto-retry: if the task failed with a retryable error and was
+			// making progress (had tool calls or partial output), retry once
+			// with a fresh timeout and a continuation prompt.
+			if isRetryableFailure(result) && hasProgress(result) {
+				// Emit task_retry event so the UI knows
+				if m.SubTaskProgress != nil {
+					m.SubTaskProgress(SubTaskProgressEvent{
+						Type:     "task_retry",
+						TaskName: t.Name,
+						Error:    result.Error,
+					})
+				}
+
+				slog.Info("retrying failed sub-task",
+					"task", t.Name,
+					"status", result.Status,
+					"error", result.Error,
+					"tool_calls", result.ToolCalls,
+					"duration", result.Duration,
+				)
+
+				// Build continuation prompt with partial context from first attempt
+				retryTask := t
+				retryTask.Description = buildRetryPrompt(t.Description, result)
+				result = m.RunTask(ctx, retryTask)
+			}
+
+			results[idx] = result
 		}(i, task)
 	}
 
@@ -234,11 +308,103 @@ func (m *SubAgentManager) RunTasks(ctx context.Context, tasks []SubAgentTask) []
 	return results
 }
 
+// isRetryableFailure returns true if the task result indicates a transient
+// failure that is worth retrying (timeout, API errors, rate limits).
+func isRetryableFailure(r TaskResult) bool {
+	if r.Status == "timeout" {
+		return true
+	}
+	if r.Status != "error" {
+		return false
+	}
+	errLower := strings.ToLower(r.Error)
+	transientPatterns := []string{
+		"context deadline exceeded",
+		"connection refused",
+		"connection reset",
+		"i/o timeout",
+		"server error",
+		"bad gateway",
+		"service unavailable",
+		"429",
+		"502",
+		"503",
+		"504",
+	}
+	for _, pattern := range transientPatterns {
+		if strings.Contains(errLower, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasProgress returns true if the task made meaningful progress before failing
+// (had tool calls or produced partial output).
+func hasProgress(r TaskResult) bool {
+	return r.ToolCalls > 0 || len(r.Result) > 0
+}
+
+// buildRetryPrompt creates a continuation prompt that includes partial context
+// from the first attempt so the retried sub-agent can pick up where it left off.
+func buildRetryPrompt(originalDescription string, firstAttempt TaskResult) string {
+	var sb strings.Builder
+	sb.WriteString("CONTINUATION: Your previous attempt was interrupted (")
+	sb.WriteString(firstAttempt.Status)
+	if firstAttempt.Error != "" {
+		sb.WriteString(": ")
+		sb.WriteString(firstAttempt.Error)
+	}
+	sb.WriteString(").\n\n")
+
+	// Include partial output from first attempt (truncated to avoid bloating the prompt)
+	if firstAttempt.Result != "" {
+		partial := firstAttempt.Result
+		const maxPartialLen = 2000
+		if len(partial) > maxPartialLen {
+			partial = partial[:maxPartialLen] + "\n... (truncated)"
+		}
+		sb.WriteString("Here is what you accomplished before the interruption:\n")
+		sb.WriteString(partial)
+		sb.WriteString("\n\n")
+	}
+
+	sb.WriteString("Continue from where you left off. Do NOT repeat work already done above. Original task:\n")
+	sb.WriteString(originalDescription)
+	return sb.String()
+}
+
 // RunTask executes a single sub-agent task synchronously.
 // It creates a child session, builds a filtered ChatAgent, runs the full
 // agent loop, collects the output and trace, then returns the result.
 func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskResult {
 	start := time.Now()
+
+	// Emit task_start progress event
+	if m.SubTaskProgress != nil {
+		m.SubTaskProgress(SubTaskProgressEvent{
+			Type:     "task_start",
+			TaskName: task.Name,
+		})
+	}
+
+	// Emit task_complete or task_failed on every exit path
+	var result TaskResult
+	defer func() {
+		if m.SubTaskProgress != nil {
+			evtType := "task_complete"
+			if result.Status != "success" {
+				evtType = "task_failed"
+			}
+			m.SubTaskProgress(SubTaskProgressEvent{
+				Type:     evtType,
+				TaskName: task.Name,
+				Status:   result.Status,
+				Duration: result.Duration.Round(100 * 1e6).String(),
+				Error:    result.Error,
+			})
+		}
+	}()
 
 	// Apply task timeout (use override if set)
 	timeout := m.Config.TaskTimeout
@@ -250,12 +416,13 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 
 	// Depth check
 	if task.ParentDepth >= m.Config.MaxDepth {
-		return TaskResult{
+		result = TaskResult{
 			Name:     task.Name,
 			Status:   "error",
 			Error:    fmt.Sprintf("max delegation depth %d reached", m.Config.MaxDepth),
 			Duration: time.Since(start),
 		}
+		return result
 	}
 
 	// Resolve tools for the child from requested groups/names
@@ -290,12 +457,13 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	// If tool resolution produced warnings AND resolved zero tools, fail early
 	// with a clear message so the calling LLM can self-correct.
 	if len(resolveWarnings) > 0 && len(childTools) == 0 && len(childToolsets) == 0 {
-		return TaskResult{
+		result = TaskResult{
 			Name:     task.Name,
 			Status:   "error",
 			Error:    strings.Join(resolveWarnings, "; "),
 			Duration: time.Since(start),
 		}
+		return result
 	}
 
 	// Build child system prompt: use custom prompt if set, otherwise build default
@@ -324,12 +492,13 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		State:     createState,
 	})
 	if err != nil {
-		return TaskResult{
+		result = TaskResult{
 			Name:     task.Name,
 			Status:   "error",
 			Error:    fmt.Sprintf("failed to create child session: %v", err),
 			Duration: time.Since(start),
 		}
+		return result
 	}
 
 	// Persist the task name as the session title so fleet reconstruction
@@ -432,12 +601,13 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		AfterToolCallbacks:   afterToolCallbacks,
 	})
 	if err != nil {
-		return TaskResult{
+		result = TaskResult{
 			Name:     task.Name,
 			Status:   "error",
 			Error:    fmt.Sprintf("failed to create child agent: %v", err),
 			Duration: time.Since(start),
 		}
+		return result
 	}
 
 	// Create runner
@@ -447,12 +617,13 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		SessionService: m.SessionService,
 	})
 	if err != nil {
-		return TaskResult{
+		result = TaskResult{
 			Name:     task.Name,
 			Status:   "error",
 			Error:    fmt.Sprintf("failed to create runner: %v", err),
 			Duration: time.Since(start),
 		}
+		return result
 	}
 
 	// Build user message from task description (with absolute timestamp for
@@ -467,7 +638,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	for event, runErr := range r.Run(taskCtx, m.UserID, childSessionID, userMsg, adkagent.RunConfig{}) {
 		if runErr != nil {
 			trace.Finalize()
-			return TaskResult{
+			result = TaskResult{
 				Name:      task.Name,
 				Status:    "error",
 				Result:    strings.Join(outputParts, ""),
@@ -476,6 +647,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 				ToolCalls: toolCallCount,
 				Duration:  time.Since(start),
 			}
+			return result
 		}
 
 		if event == nil {
@@ -493,6 +665,14 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 			for _, part := range event.LLMResponse.Content.Parts {
 				if part.Text != "" && !part.Thought {
 					outputParts = append(outputParts, part.Text)
+					// Emit task_text progress event
+					if m.SubTaskProgress != nil {
+						m.SubTaskProgress(SubTaskProgressEvent{
+							Type:     "task_text",
+							TaskName: task.Name,
+							Text:     part.Text,
+						})
+					}
 				}
 				// Record tool calls in trace
 				if part.FunctionCall != nil {
@@ -504,6 +684,15 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 						}
 					}
 					trace.RecordStep(part.FunctionCall.Name, args, nil, nil)
+					// Emit task_tool_call progress event
+					if m.SubTaskProgress != nil {
+						m.SubTaskProgress(SubTaskProgressEvent{
+							Type:     "task_tool_call",
+							TaskName: task.Name,
+							ToolName: part.FunctionCall.Name,
+							ToolArgs: args,
+						})
+					}
 				}
 				// Record tool results in trace
 				if part.FunctionResponse != nil {
@@ -517,6 +706,15 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 						}
 					}
 					trace.mu.Unlock()
+					// Emit task_tool_result progress event
+					if m.SubTaskProgress != nil {
+						m.SubTaskProgress(SubTaskProgressEvent{
+							Type:       "task_tool_result",
+							TaskName:   task.Name,
+							ToolName:   part.FunctionResponse.Name,
+							ToolResult: part.FunctionResponse.Response,
+						})
+					}
 				}
 			}
 		}
@@ -539,7 +737,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		errMsg = "task timed out"
 	}
 
-	return TaskResult{
+	result = TaskResult{
 		Name:      task.Name,
 		Status:    status,
 		Result:    finalOutput,
@@ -548,6 +746,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		Duration:  time.Since(start),
 		Error:     errMsg,
 	}
+	return result
 }
 
 // resolveTools resolves the requested tool names/groups into concrete tools

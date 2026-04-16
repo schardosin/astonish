@@ -41,12 +41,13 @@ type DelegateTasksArgs struct {
 
 // SubTaskResultItem holds the result of a single delegated sub-task.
 type SubTaskResultItem struct {
-	Name      string `json:"name"`
-	Status    string `json:"status"`
-	Result    string `json:"result,omitempty"`
-	ToolCalls int    `json:"tool_calls"`
-	Duration  string `json:"duration"`
-	Error     string `json:"error,omitempty"`
+	Name         string `json:"name"`
+	Status       string `json:"status"`
+	Result       string `json:"result,omitempty"`
+	FullResultID string `json:"full_result_id,omitempty"` // ID for read_task_result if result was summarized
+	ToolCalls    int    `json:"tool_calls"`
+	Duration     string `json:"duration"`
+	Error        string `json:"error,omitempty"`
 }
 
 // DelegateTasksResult is the output schema for the delegate_tasks tool.
@@ -97,6 +98,21 @@ func delegateTasks(ctx tool.Context, args DelegateTasksArgs) (DelegateTasksResul
 		}
 	}
 
+	// Emit delegation_start progress event with the full task plan
+	if subAgentManagerVar.SubTaskProgress != nil {
+		taskInfos := make([]agent.SubTaskInfo, len(args.Tasks))
+		for i, t := range args.Tasks {
+			taskInfos[i] = agent.SubTaskInfo{
+				Name:        t.Name,
+				Description: t.Task,
+			}
+		}
+		subAgentManagerVar.SubTaskProgress(agent.SubTaskProgressEvent{
+			Type:  "delegation_start",
+			Tasks: taskInfos,
+		})
+	}
+
 	// Execute all tasks via the SubAgentManager
 	results := subAgentManagerVar.RunTasks(ctx, tasks)
 
@@ -114,21 +130,38 @@ func delegateTasks(ctx tool.Context, args DelegateTasksArgs) (DelegateTasksResul
 		subAgentManagerVar.StashLastTraces(childTraces)
 	}
 
-	// Build response
+	// Build response — summarize large results to prevent context explosion.
+	// The full result is stored in TaskResultStore and can be retrieved via
+	// read_task_result when the orchestrator needs complete data for synthesis.
+	const summarizeThreshold = 3000 // chars
+	store := GetTaskResultStore()
+
 	resultItems := make([]SubTaskResultItem, len(results))
 	successCount := 0
 	for i, r := range results {
-		resultItems[i] = SubTaskResultItem{
+		item := SubTaskResultItem{
 			Name:      r.Name,
 			Status:    r.Status,
-			Result:    r.Result,
 			ToolCalls: r.ToolCalls,
 			Duration:  r.Duration.Round(100 * 1e6).String(), // Round to 100ms
 			Error:     r.Error,
 		}
+
 		if r.Status == "success" {
 			successCount++
 		}
+
+		// For large results, store the full text and provide a summary
+		if len(r.Result) > summarizeThreshold && r.Status == "success" {
+			summary := summarizeResult(r.Result, r.Name)
+			resultID := store.Store(r.Name, r.Result, summary)
+			item.Result = summary
+			item.FullResultID = resultID
+		} else {
+			item.Result = r.Result
+		}
+
+		resultItems[i] = item
 	}
 
 	// Build summary
@@ -147,6 +180,14 @@ func delegateTasks(ctx tool.Context, args DelegateTasksArgs) (DelegateTasksResul
 		overallStatus = "partial"
 	}
 
+	// Emit delegation_complete progress event
+	if subAgentManagerVar.SubTaskProgress != nil {
+		subAgentManagerVar.SubTaskProgress(agent.SubTaskProgressEvent{
+			Type:   "delegation_complete",
+			Status: overallStatus,
+		})
+	}
+
 	return DelegateTasksResult{
 		Status:  overallStatus,
 		Results: resultItems,
@@ -158,11 +199,100 @@ func delegateTasks(ctx tool.Context, args DelegateTasksArgs) (DelegateTasksResul
 func NewDelegateTasksTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "delegate_tasks",
-		Description: `Delegate tasks to parallel sub-agents with isolated sessions. Each sub-agent gets the tool groups you specify (e.g., ["core"], ["browser"], ["core", "web"]) or auto-discovers tools based on the task description if tools is omitted. Use this for specialized tasks like browser automation, web fetching, email, API calls, or any task requiring tools not on the main thread. Each sub-agent has read-only memory, a search_tools capability, and a 5-minute timeout. Max 10 tasks per call.`,
+		Description: `Delegate tasks to parallel sub-agents with isolated sessions. Each sub-agent gets the tool groups you specify (e.g., ["core"], ["browser"], ["core", "web"]) or auto-discovers tools based on the task description if tools is omitted. Use this for specialized tasks like browser automation, web fetching, email, API calls, or any task requiring tools not on the main thread. Each sub-agent has read-only memory, a search_tools capability, and a 10-minute timeout (automatically retried once if making progress). Max 10 tasks per call.`,
 	}, delegateTasks)
 }
 
 // GetDelegateTasksTool returns the delegate_tasks tool (or nil if unavailable).
 func GetDelegateTasksTool() (tool.Tool, error) {
 	return NewDelegateTasksTool()
+}
+
+// summarizeResult creates a concise summary of a large sub-task result.
+// This is a structural extraction — it preserves section headings, key findings,
+// tables, and conclusions while removing verbose explanations and code blocks.
+// For truly effective summarization, an LLM call would be ideal, but this
+// approach avoids the latency and cost while providing a good-enough result
+// for the orchestrator to decide whether to read the full output.
+func summarizeResult(fullResult string, taskName string) string {
+	lines := strings.Split(fullResult, "\n")
+
+	var summary strings.Builder
+	summary.WriteString(fmt.Sprintf("[Summary of %q — full output: %d chars. Use read_task_result with the full_result_id to get complete text.]\n\n", taskName, len(fullResult)))
+
+	// Extract headings, key bullets, and the first few lines of each section
+	const maxSummaryLines = 60
+	summaryLines := 0
+	inCodeBlock := false
+	skipUntilHeading := false
+	linesInSection := 0
+
+	for _, line := range lines {
+		if summaryLines >= maxSummaryLines {
+			summary.WriteString("\n... (truncated — use read_task_result for full content)\n")
+			break
+		}
+
+		trimmed := strings.TrimSpace(line)
+
+		// Track code blocks and skip their contents
+		if strings.HasPrefix(trimmed, "```") {
+			inCodeBlock = !inCodeBlock
+			if inCodeBlock {
+				continue // skip code block opener
+			}
+			continue // skip code block closer
+		}
+		if inCodeBlock {
+			continue
+		}
+
+		// Always include headings
+		if strings.HasPrefix(trimmed, "#") {
+			skipUntilHeading = false
+			linesInSection = 0
+			summary.WriteString(line)
+			summary.WriteString("\n")
+			summaryLines++
+			continue
+		}
+
+		if skipUntilHeading {
+			continue
+		}
+
+		// Include table rows (they contain structured data)
+		if strings.HasPrefix(trimmed, "|") {
+			summary.WriteString(line)
+			summary.WriteString("\n")
+			summaryLines++
+			continue
+		}
+
+		// Include key bullet points and findings
+		if strings.HasPrefix(trimmed, "- **") || strings.HasPrefix(trimmed, "* **") ||
+			strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") {
+			linesInSection++
+			if linesInSection <= 6 { // first 6 bullets per section
+				summary.WriteString(line)
+				summary.WriteString("\n")
+				summaryLines++
+			}
+			continue
+		}
+
+		// Include non-empty lines up to a limit per section
+		if trimmed != "" {
+			linesInSection++
+			if linesInSection <= 4 { // first 4 prose lines per section
+				summary.WriteString(line)
+				summary.WriteString("\n")
+				summaryLines++
+			} else if linesInSection == 5 {
+				skipUntilHeading = true
+			}
+		}
+	}
+
+	return summary.String()
 }

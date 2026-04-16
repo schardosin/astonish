@@ -333,6 +333,38 @@ button, input, select, textarea {
   background-color: var(--bg-tertiary);
 }
 
+/* Document viewer variant — used in the full-screen file overlay for more readable document presentation */
+.markdown-body.markdown-body--document {
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+.markdown-body.markdown-body--document h1 { font-size: 1.75em; margin-top: 1.5em; }
+.markdown-body.markdown-body--document h2 { font-size: 1.4em; margin-top: 1.4em; }
+.markdown-body.markdown-body--document h3 { font-size: 1.15em; margin-top: 1.2em; }
+
+.markdown-body.markdown-body--document p { margin-bottom: 1.15em; }
+
+.markdown-body.markdown-body--document ul,
+.markdown-body.markdown-body--document ol { margin-bottom: 1.15em; }
+.markdown-body.markdown-body--document li { margin-bottom: 0.3em; }
+
+.markdown-body.markdown-body--document pre {
+  padding: 16px 20px;
+  font-size: 13px;
+  margin-bottom: 1.25em;
+}
+
+.markdown-body.markdown-body--document blockquote {
+  margin-bottom: 1.25em;
+  padding: 0.2em 1.2em;
+}
+
+.markdown-body.markdown-body--document table th,
+.markdown-body.markdown-body--document table td {
+  padding: 8px 16px;
+}
+
 /* Toast Notification Animation */
 @keyframes slide-up {
   from {

@@ -97,6 +97,34 @@ export interface BrowserHandoffMessage {
   reason: string
 }
 
+// ---- Sub-task execution (delegate_tasks) progress ----
+
+export interface SubTaskExecutionMessage {
+  type: 'subtask_execution'
+  events: SubTaskEvent[]
+  tasks: SubTaskInfo[]        // All tasks in the delegation (from delegation_start)
+  status: string              // 'running' | 'complete' | 'error' | 'partial'
+}
+
+export interface SubTaskInfo {
+  name: string
+  description: string
+}
+
+export interface SubTaskEvent {
+  type: string                // delegation_start, delegation_complete, task_start, task_complete, task_failed, task_tool_call, task_tool_result, task_text
+  task_name?: string
+  status?: string
+  duration?: string
+  error?: string
+  tool_name?: string
+  tool_args?: unknown
+  tool_result?: unknown
+  text?: string
+  tasks?: SubTaskInfo[]
+  timestamp?: number
+}
+
 export interface FleetEvent {
   type: string
   phase?: string
@@ -108,6 +136,34 @@ export interface FleetEvent {
   result?: unknown
   timestamp?: number
   [key: string]: unknown
+}
+
+export interface ArtifactMessage {
+  type: 'artifact'
+  path: string
+  toolName: string
+}
+
+// Session-level artifact info (from session detail API)
+export interface SessionArtifact {
+  path: string
+  fileName: string
+  fileType: string
+  toolName: string
+}
+
+// ---- Execution plan (announce_plan / update_plan) ----
+
+export interface PlanMessage {
+  type: 'plan'
+  goal: string                // Plan title (e.g., "Source-Level GitHub Comparison")
+  steps: PlanStepInfo[]       // Ordered list of plan steps
+}
+
+export interface PlanStepInfo {
+  name: string
+  description: string
+  status: 'pending' | 'running' | 'complete' | 'failed'
 }
 
 export type ChatMsg =
@@ -125,7 +181,10 @@ export type ChatMsg =
   | SystemMessage
   | RetryMessage
   | FleetExecutionMessage
+  | SubTaskExecutionMessage
+  | ArtifactMessage
   | BrowserHandoffMessage
+  | PlanMessage
 
 // ---- Fleet info / state ----
 

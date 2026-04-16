@@ -55,6 +55,13 @@ type ChannelManager struct {
 	pendingContexts   map[string]string
 	pendingContextsMu sync.Mutex
 
+	// ReadFileFunc reads a file given a session ID and file path. When sandbox
+	// is enabled, the file may live inside a container rather than on the host
+	// filesystem. The daemon injects a closure that tries the host first, then
+	// falls back to pulling from the session's sandbox container.
+	// When nil, os.ReadFile is used directly (no sandbox awareness).
+	ReadFileFunc func(sessionID, path string) ([]byte, error)
+
 	// Fleet dependency functions — injected by the daemon to avoid circular imports.
 	// These allow fleet commands to access the fleet registries and session management
 	// without the channels package importing pkg/api.
@@ -162,6 +169,22 @@ func NewChannelManager(chatAgent *agent.ChatAgent, sessSvc session.Service, logg
 // SetRedactor sets the credential redactor for outbound message sanitization.
 func (m *ChannelManager) SetRedactor(r *credentials.Redactor) {
 	m.redactor = r
+}
+
+// SetReadFileFunc sets a sandbox-aware file reader for document attachments.
+// When set, handleInbound uses this instead of os.ReadFile to support reading
+// files from sandbox containers.
+func (m *ChannelManager) SetReadFileFunc(fn func(sessionID, path string) ([]byte, error)) {
+	m.ReadFileFunc = fn
+}
+
+// readFile reads a file, using the sandbox-aware ReadFileFunc if available,
+// otherwise falling back to os.ReadFile.
+func (m *ChannelManager) readFile(sessionID, path string) ([]byte, error) {
+	if m.ReadFileFunc != nil {
+		return m.ReadFileFunc(sessionID, path)
+	}
+	return os.ReadFile(path)
 }
 
 // SetAuthorizeFunc sets the device authorization handler for the /authorize command.
@@ -435,7 +458,9 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	isBatchChannel := msg.ChannelID == "email"
 	var batchText string
 
-	for event, err := range r.Run(ctx, userID, sess.ID(), userContent, adkagent.RunConfig{}) {
+	sessionID := sess.ID() // captured for sandbox-aware file reads
+
+	for event, err := range r.Run(ctx, userID, sessionID, userContent, adkagent.RunConfig{}) {
 		if err != nil {
 			m.logger.Printf("[channels] Agent error for %s: %v", route.SessionKey, err)
 			if messagesSent == 0 && batchText == "" {
@@ -472,9 +497,10 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 		}
 
 		// Drain file artifacts from write_file/edit_file tool calls.
-		// Read each file from disk and attach as a document.
+		// Read each file and attach as a document. Uses sandbox-aware
+		// readFile to handle files inside containers.
 		for _, file := range m.agent.DrainFiles() {
-			data, err := os.ReadFile(file.Path)
+			data, err := m.readFile(sessionID, file.Path)
 			if err != nil {
 				m.logger.Printf("[channels] Failed to read file artifact %s: %v", file.Path, err)
 				continue
@@ -561,7 +587,7 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	// turn was a tool call with no commentary), send them as a standalone message.
 	// Also drain any remaining file artifacts that weren't consumed above.
 	for _, file := range m.agent.DrainFiles() {
-		data, err := os.ReadFile(file.Path)
+		data, err := m.readFile(sessionID, file.Path)
 		if err != nil {
 			m.logger.Printf("[channels] Failed to read file artifact %s: %v", file.Path, err)
 			continue

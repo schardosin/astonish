@@ -36,6 +36,11 @@ func ConvertMarkdownToPDF(source []byte) ([]byte, error) {
 				// Disable HTML escaping — goldmark-pdf defaults to escaping &, ", <, >
 				// as &amp;, &quot;, etc. which is wrong for PDF text streams.
 				pdf.WithEscapeHTML(false),
+				// Tighten line spacing. The default Normal style has Spacing: 3 (total
+				// line height 15pt with 12pt font). The library uses Size+Spacing as the
+				// BR gap between list items, paragraphs, etc. — which creates large gaps
+				// between bullet points. Setting Spacing to 0 gives a compact layout.
+				tightSpacing(),
 			),
 		),
 	)
@@ -46,6 +51,25 @@ func ConvertMarkdownToPDF(source []byte) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+// tightSpacing returns a goldmark-pdf option that reduces inter-element spacing.
+// The default Normal style has Spacing: 3 which the library uses as BR(Size+Spacing)
+// between list items, paragraphs, and other block elements. This creates excessive
+// gaps between bullet points. Setting to 0 means list items are spaced by just the
+// font size (12pt), while paragraphs still get double spacing (entering + leaving BR).
+func tightSpacing() pdf.Option {
+	return pdf.OptionFunc(func(c *pdf.Config) {
+		c.Styles.Normal.Spacing = 0
+		c.Styles.H1.Spacing = 3
+		c.Styles.H2.Spacing = 3
+		c.Styles.H3.Spacing = 2
+		c.Styles.H4.Spacing = 2
+		c.Styles.H5.Spacing = 2
+		c.Styles.H6.Spacing = 2
+		c.Styles.THeader.Spacing = 1
+		c.Styles.TBody.Spacing = 1
+	})
 }
 
 // preprocessMarkdown decodes HTML entities and replaces Unicode characters

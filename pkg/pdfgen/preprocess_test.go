@@ -91,3 +91,73 @@ func TestPreprocessMarkdown_Combined(t *testing.T) {
 		t.Errorf("preprocessMarkdown():\n  got:  %q\n  want: %q", got, want)
 	}
 }
+
+func TestPreprocessMarkdown_EmojiStripped(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "rocket emoji",
+			input: "🚀 Launch day",
+			want:  " Launch day",
+		},
+		{
+			name:  "warning with variation selector",
+			input: "⚠️ Risks to Watch",
+			want:  " Risks to Watch",
+		},
+		{
+			name:  "multiple emoji in heading",
+			input: "## 🔧 GTC 2025 & 2026 🌍",
+			want:  "##  GTC 2025 & 2026 ",
+		},
+		{
+			name:  "emoji between text",
+			input: "Consumer 💡 & PC 📊 Ambitions",
+			want:  "Consumer  & PC  Ambitions",
+		},
+		{
+			name:  "plain ASCII unchanged",
+			input: "No emoji here, just text & quotes.",
+			want:  "No emoji here, just text & quotes.",
+		},
+		{
+			name:  "Latin-1 accents preserved",
+			input: "caf\u00E9 na\u00EFve r\u00E9sum\u00E9",
+			want:  "caf\u00E9 na\u00EFve r\u00E9sum\u00E9",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := preprocessMarkdown(tt.input)
+			if got != tt.want {
+				t.Errorf("preprocessMarkdown(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStripNonLatin1(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"ASCII only", "hello world", "hello world"},
+		{"Latin-1 preserved", "caf\u00E9", "caf\u00E9"},
+		{"emoji removed", "hello 🚀 world", "hello  world"},
+		{"CJK removed", "test \u4e16\u754c", "test "},
+		{"variation selector removed", "\u2764\uFE0F", ""},
+		{"empty string", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripNonLatin1(tt.input)
+			if got != tt.want {
+				t.Errorf("stripNonLatin1(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}

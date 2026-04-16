@@ -159,5 +159,26 @@ func preprocessMarkdown(s string) string {
 
 	s = replacer.Replace(s)
 
+	// Step 3: Strip any remaining characters outside the Latin-1 range (> U+00FF).
+	// This catches emoji (🚀, ⚠️, 🔧, etc.) and other Unicode symbols that the
+	// built-in PDF fonts cannot render. Without this, they appear as mojibake
+	// (e.g., ð\x9f\x9a\x80 for 🚀). We strip rather than replace because there
+	// is no meaningful ASCII equivalent for most emoji.
+	s = stripNonLatin1(s)
+
 	return s
+}
+
+// stripNonLatin1 removes all runes outside the Latin-1 range (U+0000–U+00FF)
+// from the string. This includes emoji, CJK characters, and other multi-byte
+// Unicode that built-in PDF fonts cannot render.
+func stripNonLatin1(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r <= 0x00FF {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

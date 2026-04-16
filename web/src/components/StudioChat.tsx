@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search, Users, Info, FileText } from 'lucide-react'
+import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search, Users, Info, FileText, Globe } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { fetchSessions, fetchSessionHistory, deleteSession, connectChat, stopChat, fetchSessionStatus, connectChatStream } from '../api/studioChat'
@@ -17,11 +17,143 @@ import PlanPanel from './chat/PlanPanel'
 import FilePanel from './chat/FilePanel'
 import BrowserView from './chat/BrowserView'
 import ArtifactCard from './chat/ArtifactCard'
+import ResultCard from './chat/ResultCard'
 
 // Extended ChatSession with optional fleet fields coming from the sidebar
 interface SidebarSession extends ChatSession {
   fleetKey?: string
   fleetName?: string
+}
+
+// Web search tool name patterns (matches tool results from search MCP servers)
+const WEB_SEARCH_PATTERNS = ['search', 'web_search', 'web-search', 'web_fetch', 'scrape', 'crawl', 'extract', 'browse']
+
+// Extract URLs from a tool result value (deeply searches objects/arrays/strings)
+function extractUrlsFromResult(result: unknown): string[] {
+  const urls: string[] = []
+  const urlRegex = /https?:\/\/[^\s"',\]}>]+/g
+
+  function walk(val: unknown) {
+    if (typeof val === 'string') {
+      const matches = val.match(urlRegex)
+      if (matches) urls.push(...matches)
+    } else if (Array.isArray(val)) {
+      val.forEach(walk)
+    } else if (val && typeof val === 'object') {
+      Object.values(val as Record<string, unknown>).forEach(walk)
+    }
+  }
+  walk(result)
+
+  // Deduplicate and filter out API/internal URLs
+  return [...new Set(urls)].filter(u =>
+    !u.includes('api.tavily') &&
+    !u.includes('api.firecrawl') &&
+    !u.includes('localhost') &&
+    !u.includes('127.0.0.1')
+  )
+}
+
+// Collect web source URLs from tool_result messages preceding an agent message
+function collectSourceUrls(messages: ChatMsg[], agentIndex: number): string[] {
+  const urls: string[] = []
+  // Walk backwards from the agent message, collecting URLs from web search tool results
+  for (let i = agentIndex - 1; i >= 0; i--) {
+    const m = messages[i]
+    // Stop at user messages or other agent messages (only look at the current "turn")
+    if (m.type === 'user' || m.type === 'agent') break
+
+    if (m.type === 'tool_result') {
+      const tr = m as ToolResultMessage
+      const toolName = String(tr.toolName || '').toLowerCase()
+      const isWebTool = WEB_SEARCH_PATTERNS.some(p => toolName.includes(p))
+      if (isWebTool && tr.toolResult) {
+        urls.push(...extractUrlsFromResult(tr.toolResult))
+      }
+    }
+  }
+  return [...new Set(urls)]
+}
+
+// Inline citation pill component
+function SourceCitations({ urls }: { urls: string[] }) {
+  const [expanded, setExpanded] = useState(false)
+
+  if (urls.length === 0) return null
+
+  // Extract domain for display
+  const getDomain = (url: string) => {
+    try { return new URL(url).hostname.replace('www.', '') }
+    catch { return url }
+  }
+
+  // Favicon URL via Google's favicon service
+  const getFavicon = (url: string) => {
+    try {
+      const hostname = new URL(url).hostname
+      return `https://www.google.com/s2/favicons?domain=${hostname}&sz=16`
+    } catch { return '' }
+  }
+
+  return (
+    <div className="mt-2">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="source-citation-pill flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs cursor-pointer transition-colors hover:opacity-80"
+        style={{
+          background: 'var(--bg-tertiary)',
+          border: '1px solid var(--border-color)',
+          color: 'var(--text-secondary)',
+        }}
+      >
+        {/* Stacked favicons (show up to 3) */}
+        <span className="flex items-center -space-x-1">
+          {urls.slice(0, 3).map((url, i) => (
+            <img
+              key={i}
+              src={getFavicon(url)}
+              alt=""
+              className="w-4 h-4 rounded-full border"
+              style={{ borderColor: 'var(--bg-tertiary)' }}
+              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+            />
+          ))}
+        </span>
+        <Globe size={12} style={{ color: 'var(--text-muted)' }} />
+        <span>{urls.length} source{urls.length !== 1 ? 's' : ''}</span>
+      </button>
+
+      {expanded && (
+        <div
+          className="mt-1.5 p-2 rounded-lg space-y-1 text-xs"
+          style={{
+            background: 'var(--bg-tertiary)',
+            border: '1px solid var(--border-color)',
+          }}
+        >
+          {urls.map((url, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <img
+                src={getFavicon(url)}
+                alt=""
+                className="w-3.5 h-3.5 rounded shrink-0"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+              />
+              <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="truncate hover:underline"
+                style={{ color: 'var(--accent)' }}
+              >
+                {getDomain(url)}
+              </a>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function StudioChat({ theme, initialSessionId, pendingChatMessage, onPendingChatMessageConsumed, onSessionChange }: { theme: string; initialSessionId?: string | null; pendingChatMessage?: string | null; onPendingChatMessageConsumed?: () => void; onSessionChange?: (sessionId: string | null) => void }) {
@@ -411,10 +543,9 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             break
 
           case 'thinking':
-            setMessages((prev: ChatMsg[]) => {
-              const filtered = prev.filter(m => m.type !== 'thinking')
-              return [...filtered, { type: 'thinking', content: data.text }]
-            })
+            if (data.text) {
+              setMessages((prev: ChatMsg[]) => [...prev, { type: 'thinking', content: data.text }])
+            }
             break
 
           case 'retry':
@@ -441,7 +572,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 return prev
               })
             }
-            setMessages((prev: ChatMsg[]) => prev.filter(m => m.type !== 'thinking'))
             break
 
           case 'subtask_progress': {
@@ -547,7 +677,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               content: 'The model stopped responding unexpectedly. You can send a follow-up message to continue.',
             } as ChatMsg]
           }
-          return prev.filter(m => m.type !== 'thinking')
+          return prev
         })
         setIsStreaming(false)
         setTimeout(() => loadSessions(), 1000)
@@ -937,11 +1067,9 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             break
 
           case 'thinking':
-            // Show as a transient indicator (replace previous thinking)
-            setMessages((prev: ChatMsg[]) => {
-              const filtered = prev.filter(m => m.type !== 'thinking')
-              return [...filtered, { type: 'thinking', content: data.text }]
-            })
+            if (data.text) {
+              setMessages((prev: ChatMsg[]) => [...prev, { type: 'thinking', content: data.text }])
+            }
             break
 
           case 'fleet_redirect':
@@ -1173,8 +1301,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 return prev
               })
             }
-            // Remove transient thinking messages (fleet_execution is kept as persistent)
-            setMessages((prev: ChatMsg[]) => prev.filter(m => m.type !== 'thinking'))
             break
 
           default:
@@ -1203,7 +1329,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               content: 'The model stopped responding unexpectedly. You can send a follow-up message to continue.',
             } as ChatMsg]
           }
-          return prev.filter(m => m.type !== 'thinking')
+          return prev
         })
         setIsStreaming(false)
         // Refresh sessions to pick up title updates
@@ -1659,6 +1785,35 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               }
 
               if (msg.type === 'agent') {
+                // Detect if this is a "final result" — long final agent message after tool activity
+                const isFinalResult = !isStreaming &&
+                  !(msg as AgentMessage)._streaming &&
+                  msg.content.length > 500 &&
+                  // Must be the last agent message in the list
+                  !messages.slice(index + 1).some(m => m.type === 'agent') &&
+                  // Must have tool activity somewhere before it
+                  messages.slice(0, index).some(m =>
+                    m.type === 'tool_call' || m.type === 'tool_result' ||
+                    m.type === 'subtask_execution' || m.type === 'fleet_execution'
+                  )
+
+                // Collect web source URLs for citation pill
+                const sourceUrls = !(msg as AgentMessage)._streaming ? collectSourceUrls(messages, index) : []
+
+                if (isFinalResult) {
+                  return (
+                    <div key={index} className="space-y-1">
+                      <div className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Agent</div>
+                      <ResultCard
+                        content={msg.content}
+                        showRaw={rawViewIndices.has(index)}
+                        onToggleRaw={() => toggleRawView(index)}
+                      />
+                      <SourceCitations urls={sourceUrls} />
+                    </div>
+                  )
+                }
+
                 return (
                   <div key={index} className="space-y-1">
                     <div className="flex items-center justify-between">
@@ -1701,6 +1856,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                         </div>
                       )}
                     </div>
+                    {sourceUrls.length > 0 && <SourceCitations urls={sourceUrls} />}
                   </div>
                 )
               }
@@ -1809,10 +1965,11 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               }
 
               if (msg.type === 'thinking') {
+                const text = (msg.content as string) || ''
+                if (!text) return null
                 return (
-                  <div key={index} className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm w-fit bg-yellow-500/10 text-yellow-400 border border-yellow-500/20">
-                    <Loader size={14} className="animate-spin" />
-                    <span>{(msg.content as string) || 'Thinking...'}</span>
+                  <div key={index} className="thinking-note">
+                    {text}
                   </div>
                 )
               }
@@ -1927,7 +2084,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           )}
 
           {/* Streaming indicator */}
-          {isStreaming && !isFleetMode && messages.length > 0 && messages[messages.length - 1]?.type !== 'thinking' && messages[messages.length - 1]?.type !== 'fleet_execution' && (
+          {isStreaming && !isFleetMode && messages.length > 0 && messages[messages.length - 1]?.type !== 'fleet_execution' && (
             <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-purple-500/10 border border-purple-500/20 w-fit">
               <Loader size={14} className="text-purple-400 animate-spin" />
               <span className="text-xs text-purple-300">Processing...</span>

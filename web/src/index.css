@@ -380,3 +380,55 @@ button, input, select, textarea {
 .animate-slide-up {
   animation: slide-up 0.3s ease-out;
 }
+
+/* Inline thinking notes — Perplexity-style serif italic text between steps */
+.thinking-note {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-style: italic;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  padding: 2px 0;
+}
+
+/* Connected vertical timeline dots */
+.timeline-dot {
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--border-color);
+  background: var(--bg-primary);
+  position: relative;
+  z-index: 2;
+}
+
+.timeline-dot--running {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--bg-primary);
+}
+
+.timeline-dot--complete {
+  border-color: #22c55e;
+  color: #22c55e;
+  background: var(--bg-primary);
+}
+
+.timeline-dot--failed {
+  border-color: #ef4444;
+  color: #ef4444;
+  background: var(--bg-primary);
+}
+
+.timeline-dot--pending {
+  border-color: var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.timeline-line {
+  z-index: 1;
+}

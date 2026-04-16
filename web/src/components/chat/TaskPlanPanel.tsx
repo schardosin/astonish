@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { ChevronRight, ChevronDown, Loader, Check, Wrench, ListTodo, RotateCcw } from 'lucide-react'
+import { ChevronDown, Loader, Check, Wrench, ListTodo, RotateCcw, Code, Globe, GitFork, FileUp } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { SubTaskExecutionMessage, SubTaskEvent } from './chatTypes'
@@ -13,23 +13,47 @@ interface TaskState {
   retrying?: boolean
   duration?: string
   error?: string
+  startTimestamp?: number
 }
 
-// Collapsible task plan panel showing real-time progress of delegate_tasks sub-agents.
-// Displays a structured task breakdown with per-task tool calls and text output,
-// similar to how Perplexity Computer shows its research steps.
+// Format a timestamp to HH:MM
+function formatTime(ts?: number): string {
+  if (!ts) return ''
+  const d = new Date(ts)
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+// Pick an icon for a step based on the tool name or event type
+function stepIcon(task: TaskState) {
+  // Check last tool name used for a hint
+  const lastTool = [...task.events].reverse().find(e => e.tool_name)?.tool_name || ''
+  if (lastTool.includes('search') || lastTool.includes('web') || lastTool.includes('fetch')) {
+    return <Globe size={12} />
+  }
+  if (lastTool.includes('write') || lastTool.includes('file') || lastTool.includes('save')) {
+    return <FileUp size={12} />
+  }
+  if (lastTool.includes('code') || lastTool.includes('exec') || lastTool.includes('run')) {
+    return <Code size={12} />
+  }
+  if (task.events.some(e => e.type === 'task_tool_call')) {
+    return <Wrench size={12} />
+  }
+  return <ListTodo size={12} />
+}
+
+// Connected vertical timeline panel showing real-time progress of delegate_tasks sub-agents.
+// Perplexity-inspired: continuous vertical line, circular status dots, per-step icons,
+// timestamps on hover, click to expand details.
 export default function TaskPlanPanel({ data }: { data: SubTaskExecutionMessage }) {
-  const [expanded, setExpanded] = useState(true)
   const [expandedTasks, setExpandedTasks] = useState<Record<string, boolean>>({})
   const [expandedContent, setExpandedContent] = useState<Set<string>>(new Set())
 
   // Derive task states from the event stream
   const taskStates = useMemo(() => {
-    // Start with the task plan from delegation_start
     const taskMap: Record<string, TaskState> = {}
     const taskOrder: string[] = []
 
-    // Initialize from the tasks array (populated on delegation_start)
     for (const t of data.tasks) {
       if (!taskMap[t.name]) {
         taskMap[t.name] = {
@@ -42,13 +66,11 @@ export default function TaskPlanPanel({ data }: { data: SubTaskExecutionMessage 
       }
     }
 
-    // Process events to update task states
     for (const evt of data.events) {
       if (evt.type === 'delegation_start' || evt.type === 'delegation_complete') continue
 
       const taskName = evt.task_name || '_unknown'
       if (!taskMap[taskName]) {
-        // Task appeared without delegation_start (edge case)
         taskMap[taskName] = {
           name: taskName,
           description: '',
@@ -64,6 +86,7 @@ export default function TaskPlanPanel({ data }: { data: SubTaskExecutionMessage 
       if (evt.type === 'task_start') {
         task.status = 'running'
         task.retrying = false
+        task.startTimestamp = evt.timestamp
       } else if (evt.type === 'task_retry') {
         task.status = 'running'
         task.retrying = true
@@ -86,6 +109,7 @@ export default function TaskPlanPanel({ data }: { data: SubTaskExecutionMessage 
 
   const completedCount = taskStates.filter(t => t.status === 'complete').length
   const totalCount = taskStates.length
+  const allDone = data.status !== 'running'
 
   const toggleTask = (name: string) => {
     setExpandedTasks(prev => ({ ...prev, [name]: !prev[name] }))
@@ -100,11 +124,30 @@ export default function TaskPlanPanel({ data }: { data: SubTaskExecutionMessage 
     })
   }
 
-  const statusIcon = (status: string) => {
-    if (status === 'running') return <Loader size={12} className="animate-spin text-amber-400" />
-    if (status === 'complete') return <Check size={12} className="text-green-400" />
-    if (status === 'failed') return <span className="text-red-400 text-xs font-bold">!</span>
-    return <span className="text-gray-500 text-xs">&#x2022;</span>
+  // Status dot for the timeline
+  const statusDot = (status: string) => {
+    if (status === 'running') {
+      return (
+        <div className="timeline-dot timeline-dot--running">
+          <Loader size={10} className="animate-spin" />
+        </div>
+      )
+    }
+    if (status === 'complete') {
+      return (
+        <div className="timeline-dot timeline-dot--complete">
+          <Check size={10} />
+        </div>
+      )
+    }
+    if (status === 'failed') {
+      return (
+        <div className="timeline-dot timeline-dot--failed">
+          <span className="text-[8px] font-bold">!</span>
+        </div>
+      )
+    }
+    return <div className="timeline-dot timeline-dot--pending" />
   }
 
   const TRUNCATE_THRESHOLD = 800
@@ -139,7 +182,8 @@ export default function TaskPlanPanel({ data }: { data: SubTaskExecutionMessage 
             >
               <button
                 onClick={() => toggleContent(eventKey)}
-                className="text-[10px] text-amber-400 hover:text-amber-300 px-2 py-0.5 mb-1 rounded bg-black/50 cursor-pointer"
+                className="text-[10px] hover:opacity-80 px-2 py-0.5 mb-1 rounded bg-black/50 cursor-pointer"
+                style={{ color: 'var(--accent)' }}
               >
                 Show more ({Math.ceil(text.length / 1000)}k chars)
               </button>
@@ -149,7 +193,8 @@ export default function TaskPlanPanel({ data }: { data: SubTaskExecutionMessage 
             <div className="flex justify-center mt-1">
               <button
                 onClick={() => toggleContent(eventKey)}
-                className="text-[10px] text-amber-400 hover:text-amber-300 px-2 py-0.5 rounded bg-black/30 cursor-pointer"
+                className="text-[10px] hover:opacity-80 px-2 py-0.5 rounded bg-black/30 cursor-pointer"
+                style={{ color: 'var(--accent)' }}
               >
                 Show less
               </button>
@@ -160,7 +205,6 @@ export default function TaskPlanPanel({ data }: { data: SubTaskExecutionMessage 
     )
   }
 
-  // Render a tool call/result card
   const renderToolCard = (evt: SubTaskEvent, eventKey: string) => {
     const isCall = evt.type === 'task_tool_call'
     const name = evt.tool_name || 'unknown'
@@ -183,7 +227,6 @@ export default function TaskPlanPanel({ data }: { data: SubTaskExecutionMessage 
     )
   }
 
-  // Render task text output
   const renderTaskText = (evt: SubTaskEvent, eventKey: string) => {
     const textContent = evt.text || ''
     if (!textContent) return null
@@ -205,11 +248,10 @@ export default function TaskPlanPanel({ data }: { data: SubTaskExecutionMessage 
     )
   }
 
-  // Render a single event within a task
   const renderTaskEvent = (evt: SubTaskEvent, taskIdx: number, evtIdx: number) => {
     const eventKey = `subtask-${taskIdx}-${evtIdx}`
     if (evt.type === 'task_start' || evt.type === 'task_complete' || evt.type === 'task_failed') {
-      return null // Status shown in header
+      return null
     }
     if (evt.type === 'task_tool_call' || evt.type === 'task_tool_result') {
       return renderToolCard(evt, eventKey)
@@ -221,66 +263,129 @@ export default function TaskPlanPanel({ data }: { data: SubTaskExecutionMessage 
   }
 
   return (
-    <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 overflow-hidden text-sm">
+    <div
+      className="rounded-lg overflow-hidden text-sm transition-opacity duration-300"
+      style={{
+        border: '1px solid var(--border-color)',
+        background: 'var(--bg-secondary)',
+        opacity: allDone ? 0.85 : 1,
+      }}
+    >
       {/* Header */}
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-amber-400 hover:bg-amber-500/10 transition-colors cursor-pointer"
-      >
-        {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        {data.status === 'running' && <Loader size={14} className="animate-spin" />}
-        {(data.status === 'complete' || data.status === 'partial') && <Check size={14} className="text-green-400" />}
-        {data.status === 'error' && <span className="text-red-400 font-bold">!</span>}
-        <ListTodo size={14} />
-        <span className="font-medium">Task Plan</span>
-        <span className="text-amber-400/60 text-xs ml-auto">
+      <div className="flex items-center gap-2.5 px-4 py-2.5">
+        {data.status === 'running' && <Loader size={15} className="animate-spin shrink-0" style={{ color: 'var(--accent)' }} />}
+        {(data.status === 'complete' || data.status === 'partial') && <Check size={15} className="text-green-400 shrink-0" />}
+        {data.status === 'error' && <span className="text-red-400 font-bold shrink-0">!</span>}
+        <GitFork size={15} className="shrink-0" style={{ color: 'var(--text-muted)' }} />
+        <span className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>Task Delegation</span>
+        <span className="text-xs ml-auto" style={{ color: 'var(--text-muted)' }}>
           {completedCount}/{totalCount} task{totalCount !== 1 ? 's' : ''}
         </span>
-      </button>
+      </div>
 
-      {/* Task list */}
-      {expanded && (
-        <div className="border-t border-amber-500/20 px-2 py-1">
-          {taskStates.map((task, taskIdx) => (
-            <div key={task.name} className="my-1">
-              {/* Task header */}
+      {/* Timeline */}
+      <div
+        className="px-4 pb-3"
+        style={{ borderTop: '1px solid var(--border-color)' }}
+      >
+        {taskStates.map((task, taskIdx) => {
+          const isExpanded = expandedTasks[task.name] === true
+          const isLast = taskIdx === taskStates.length - 1
+
+          return (
+            <div key={task.name} className="relative group/task">
+              {/* Vertical connector line */}
+              {!isLast && (
+                <div
+                  className="timeline-line"
+                  style={{
+                    position: 'absolute',
+                    left: '9px',
+                    top: '20px',
+                    bottom: '0',
+                    width: '1px',
+                    background: 'var(--border-color)',
+                  }}
+                />
+              )}
+
+              {/* Task row */}
               <button
                 onClick={() => toggleTask(task.name)}
-                className="w-full flex items-center gap-2 px-2 py-1.5 rounded hover:bg-amber-500/10 transition-colors cursor-pointer"
+                className="w-full flex items-center gap-3 py-2 text-left cursor-pointer relative z-10"
               >
-                {expandedTasks[task.name] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                {statusIcon(task.status)}
-                <span className="text-gray-200 font-medium text-xs">{task.name}</span>
-                {task.description && (
-                  <span className="text-gray-500 text-xs truncate max-w-[300px]">{task.description}</span>
-                )}
-                {task.status === 'running' && (
-                  <span className="text-amber-400/60 text-xs ml-auto flex items-center gap-1">
-                    {task.retrying && <RotateCcw size={10} />}
-                    {task.retrying ? 'retrying...' : 'running'}
-                  </span>
-                )}
-                {task.status === 'complete' && task.duration && (
-                  <span className="text-gray-500 text-xs ml-auto">{task.duration}</span>
-                )}
-                {task.status === 'failed' && (
-                  <span className="text-red-400 text-xs ml-auto truncate max-w-[200px]">{task.error || 'failed'}</span>
-                )}
+                {/* Status dot */}
+                {statusDot(task.status)}
+
+                {/* Icon */}
+                <span style={{ color: 'var(--text-muted)' }}>{stepIcon(task)}</span>
+
+                {/* Task name */}
+                <span
+                  className="text-xs font-medium flex-1 truncate"
+                  style={{
+                    color: task.status === 'running'
+                      ? 'var(--text-primary)'
+                      : task.status === 'complete'
+                        ? 'var(--text-secondary)'
+                        : task.status === 'failed'
+                          ? '#ef4444'
+                          : 'var(--text-muted)',
+                  }}
+                >
+                  {task.name}
+                  {task.description && (
+                    <span className="font-normal ml-1.5" style={{ color: 'var(--text-muted)' }}>
+                      {task.description}
+                    </span>
+                  )}
+                </span>
+
+                {/* Right side: status/timestamp/duration (show on hover) */}
+                <span className="flex items-center gap-2 shrink-0">
+                  {task.status === 'running' && (
+                    <span className="text-[11px] flex items-center gap-1" style={{ color: 'var(--accent)' }}>
+                      {task.retrying && <RotateCcw size={10} />}
+                      {task.retrying ? 'retrying' : 'running'}
+                    </span>
+                  )}
+                  {task.status === 'failed' && (
+                    <span className="text-[11px] text-red-400 truncate max-w-[120px]">{task.error || 'failed'}</span>
+                  )}
+                  {task.duration && (
+                    <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                      {task.duration}
+                    </span>
+                  )}
+                  {task.startTimestamp && (
+                    <span
+                      className="text-[11px] opacity-0 group-hover/task:opacity-100 transition-opacity"
+                      style={{ color: 'var(--text-muted)' }}
+                    >
+                      {formatTime(task.startTimestamp)}
+                    </span>
+                  )}
+                  {isExpanded ? (
+                    <ChevronDown size={12} style={{ color: 'var(--text-muted)' }} />
+                  ) : (
+                    <ChevronDown size={12} className="rotate-[-90deg]" style={{ color: 'var(--text-muted)' }} />
+                  )}
+                </span>
               </button>
 
-              {/* Task contents — collapsed by default, click to expand */}
-              {expandedTasks[task.name] && (
-                <div className="ml-4 pl-2 border-l border-amber-500/15 pb-1">
+              {/* Expanded task details */}
+              {isExpanded && (
+                <div className="ml-[28px] pb-2 relative z-10">
                   {task.events.length === 0 && task.status === 'pending' && (
-                    <div className="text-xs text-gray-500 px-2 py-1">Waiting to start...</div>
+                    <div className="text-xs py-1" style={{ color: 'var(--text-muted)' }}>Waiting to start...</div>
                   )}
                   {task.events.map((evt, evtIdx) => renderTaskEvent(evt, taskIdx, evtIdx))}
                 </div>
               )}
             </div>
-          ))}
-        </div>
-      )}
+          )
+        })}
+      </div>
     </div>
   )
 }

@@ -15,6 +15,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/api"
+	"github.com/schardosin/astonish/pkg/browser"
 	"github.com/schardosin/astonish/pkg/channels"
 	emailchan "github.com/schardosin/astonish/pkg/channels/email"
 	"github.com/schardosin/astonish/pkg/channels/telegram"
@@ -299,6 +300,15 @@ func Run(cfg RunConfig) error {
 				return io.ReadAll(reader)
 			})
 		}
+
+		// Wire a browser provider for Chrome-based PDF generation. This gives
+		// channel document attachments (e.g., Telegram) full Unicode/emoji support
+		// and professional CSS-based layout when converting markdown to PDF.
+		// Uses a dedicated headless browser to avoid interfering with the user's
+		// browser session. Falls back to goldmark-pdf if Chrome is unavailable.
+		pdfBrowserMgr := browser.NewManager(browser.DefaultConfig())
+		mgr.BrowserPDF = pdfBrowserMgr
+		defer pdfBrowserMgr.Cleanup()
 
 		// Register Telegram if enabled
 		if freshCfg.Channels.Telegram.IsTelegramEnabled() {

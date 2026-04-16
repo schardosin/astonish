@@ -63,6 +63,12 @@ type ChannelManager struct {
 	// When nil, os.ReadFile is used directly (no sandbox awareness).
 	ReadFileFunc func(sessionID, path string) ([]byte, error)
 
+	// BrowserPDF is an optional browser provider for high-quality Chrome-based
+	// PDF generation. When set, fileToDocument uses headless Chrome to render
+	// markdown as styled HTML → PDF with full Unicode/emoji support. When nil,
+	// falls back to the pure-Go goldmark-pdf renderer (Latin-1 only).
+	BrowserPDF pdfgen.BrowserProvider
+
 	// Fleet dependency functions — injected by the daemon to avoid circular imports.
 	// These allow fleet commands to access the fleet registries and session management
 	// without the channels package importing pkg/api.
@@ -189,16 +195,20 @@ func (m *ChannelManager) readFile(sessionID, path string) ([]byte, error) {
 }
 
 // fileToDocument converts a file artifact into a DocumentAttachment. For
-// markdown files (.md), the content is converted to PDF so Telegram users
-// receive a formatted document instead of raw markdown text.
+// markdown files (.md), the content is converted to PDF using headless Chrome
+// so Telegram users receive a formatted document instead of raw markdown text.
 func (m *ChannelManager) fileToDocument(data []byte, filePath string) DocumentAttachment {
 	filename := filepath.Base(filePath)
 	ext := strings.ToLower(filepath.Ext(filename))
 
 	if ext == ".md" || ext == ".markdown" {
-		pdfData, err := pdfgen.ConvertMarkdownToPDF(data)
+		if m.BrowserPDF == nil {
+			m.logger.Printf("[channels] No browser available for PDF generation of %s, sending as markdown", filename)
+			return DocumentAttachment{Data: data, Filename: filename}
+		}
+		pdfData, err := pdfgen.ConvertMarkdownToPDFChrome(data, m.BrowserPDF)
 		if err != nil {
-			m.logger.Printf("[channels] PDF conversion failed for %s, sending as markdown: %v", filename, err)
+			m.logger.Printf("[channels] PDF generation failed for %s, sending as markdown: %v", filename, err)
 			return DocumentAttachment{Data: data, Filename: filename}
 		}
 		pdfName := filename[:len(filename)-len(ext)] + ".pdf"

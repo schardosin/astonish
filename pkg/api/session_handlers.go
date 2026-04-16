@@ -421,13 +421,39 @@ func StudioArtifactPDFHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Convert markdown to PDF
-	pdfData, err := pdfgen.ConvertMarkdownToPDF(mdContent)
-	if err != nil {
-		slog.Error("failed to convert markdown to PDF", "path", cleanPath, "error", err)
-		http.Error(w, "PDF conversion failed", http.StatusInternalServerError)
+	// Convert markdown to PDF using headless Chrome inside the session container.
+	slog.Info("PDF: starting Chrome PDF generation", "path", cleanPath, "sessionID", sessionID)
+
+	// Use a timeout so the request doesn't hang indefinitely if Chrome is stuck.
+	type pdfResult struct {
+		data []byte
+		err  error
+	}
+	ch := make(chan pdfResult, 1)
+	go func() {
+		slog.Info("PDF: getting browser manager", "sessionID", sessionID)
+		browserMgr := GetPDFBrowserManager(sessionID)
+		slog.Info("PDF: browser manager obtained, calling ConvertMarkdownToPDFChrome")
+		data, err := pdfgen.ConvertMarkdownToPDFChrome(mdContent, browserMgr)
+		slog.Info("PDF: ConvertMarkdownToPDFChrome returned", "err", err, "size", len(data))
+		ch <- pdfResult{data, err}
+	}()
+
+	var pdfData []byte
+	select {
+	case result := <-ch:
+		if result.err != nil {
+			slog.Error("PDF generation failed", "path", cleanPath, "error", result.err)
+			http.Error(w, fmt.Sprintf("PDF generation failed: %v", result.err), http.StatusInternalServerError)
+			return
+		}
+		pdfData = result.data
+	case <-time.After(30 * time.Second):
+		slog.Error("PDF generation timed out after 30s", "path", cleanPath, "sessionID", sessionID)
+		http.Error(w, "PDF generation timed out", http.StatusGatewayTimeout)
 		return
 	}
+	slog.Info("PDF generated via Chrome", "path", cleanPath, "size", len(pdfData))
 
 	// Serve as downloadable PDF
 	baseName := filepath.Base(cleanPath)

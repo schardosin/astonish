@@ -46,7 +46,16 @@ type StudioSessionDetailResponse struct {
 	StudioSessionResponse
 	Messages      []StudioMessage       `json:"messages"`
 	FleetMessages []FleetMessageSummary `json:"fleetMessages,omitempty"`
-	Artifacts     []ArtifactInfo        `json:"artifacts,omitempty"` // files generated during the session
+	Artifacts     []ArtifactInfo        `json:"artifacts,omitempty"`  // files generated during the session
+	TotalUsage    *UsageSummary         `json:"totalUsage,omitempty"` // cumulative token usage across all LLM calls
+}
+
+// UsageSummary holds cumulative token usage for a session, derived from
+// the UsageMetadata attached to each LLM response in the session transcript.
+type UsageSummary struct {
+	InputTokens  int32 `json:"inputTokens"`
+	OutputTokens int32 `json:"outputTokens"`
+	TotalTokens  int32 `json:"totalTokens"`
 }
 
 // ArtifactInfo describes a file artifact produced during a session.

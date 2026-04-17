@@ -146,6 +146,9 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 	// Collect file artifacts from write_file/edit_file tool calls
 	artifacts := collectArtifacts(getResp.Session.Events())
 
+	// Collect cumulative token usage from all LLM responses
+	totalUsage := collectUsage(getResp.Session.Events())
+
 	resp := StudioSessionDetailResponse{
 		StudioSessionResponse: StudioSessionResponse{
 			ID:           meta.ID,
@@ -154,8 +157,9 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 			UpdatedAt:    meta.UpdatedAt.Format(time.RFC3339),
 			MessageCount: meta.MessageCount,
 		},
-		Messages:  messages,
-		Artifacts: artifacts,
+		Messages:   messages,
+		Artifacts:  artifacts,
+		TotalUsage: totalUsage,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

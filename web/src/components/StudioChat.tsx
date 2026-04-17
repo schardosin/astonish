@@ -405,6 +405,18 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
         setSessionArtifacts([])
       }
 
+      // Restore cumulative token usage from the persisted session data.
+      // The backend sums UsageMetadata across all LLM responses in the transcript.
+      if (dataAny.totalUsage) {
+        setTokenUsage({
+          inputTokens: dataAny.totalUsage.inputTokens || 0,
+          outputTokens: dataAny.totalUsage.outputTokens || 0,
+          totalTokens: dataAny.totalUsage.totalTokens || 0,
+        })
+      } else {
+        setTokenUsage({ inputTokens: 0, outputTokens: 0, totalTokens: 0 })
+      }
+
       // If the response includes fleet messages, convert them to the fleet_message format
       if (dataAny.fleetMessages && dataAny.fleetMessages.length > 0) {
         const fleetMsgs: ChatMsg[] = dataAny.fleetMessages.map((m: any) => ({

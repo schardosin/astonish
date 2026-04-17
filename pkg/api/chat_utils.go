@@ -422,6 +422,29 @@ func finalizePlanSteps(messages []StudioMessage) {
 	}
 }
 
+// collectUsage sums UsageMetadata from all LLM responses in the session
+// transcript. Each non-partial event with a non-nil UsageMetadata represents
+// one API call's token counts. Returns nil if no usage data is present.
+func collectUsage(events session.Events) *UsageSummary {
+	var input, output, total int32
+	for i := range events.Len() {
+		event := events.At(i)
+		if um := event.LLMResponse.UsageMetadata; um != nil {
+			input += um.PromptTokenCount
+			output += um.CandidatesTokenCount
+			total += um.TotalTokenCount
+		}
+	}
+	if total == 0 {
+		return nil
+	}
+	return &UsageSummary{
+		InputTokens:  input,
+		OutputTokens: output,
+		TotalTokens:  total,
+	}
+}
+
 // collectArtifacts scans ADK session events for successful write_file/edit_file
 // tool calls and returns a deduplicated list of file artifacts. This is used to
 // populate the artifacts field in the session detail API response, enabling the

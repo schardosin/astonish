@@ -337,7 +337,6 @@ Astonish owes a significant debt to [OpenClaw](https://github.com/openclaw/openc
 
 **What we learned from Perplexity Computer:**
 - A plan-first execution model with visible step progression gives users confidence in what the agent is doing and why.
-- Automatic model selection per sub-task (multi-model orchestration) can improve quality and reduce cost — a direction Astonish supports through its 15+ provider integrations, even if model routing is manual today.
 - Sub-agent delegation with isolated contexts is the right pattern for parallel research and analysis tasks.
 - Token usage transparency matters. Users should see exactly what they're spending, not estimates.
 

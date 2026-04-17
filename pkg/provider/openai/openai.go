@@ -706,7 +706,7 @@ func wrapOpenAIError(err error) error {
 // through JSON to get a mutable map.
 func sanitizeToolParams(params any) any {
 	if params == nil {
-		return params
+		return map[string]any{"type": "object", "properties": map[string]any{}}
 	}
 
 	m, ok := params.(map[string]any)

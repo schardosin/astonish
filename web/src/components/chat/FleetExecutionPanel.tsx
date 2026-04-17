@@ -1,15 +1,35 @@
 import { useState, useMemo } from 'react'
-import { ChevronRight, ChevronDown, Loader, Check, Wrench } from 'lucide-react'
+import { ChevronDown, Loader, Check, Wrench, Users, Globe, Code, GitFork } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { FleetExecutionMessage, FleetEvent } from './chatTypes'
 
-// Collapsible fleet execution panel showing real-time progress of fleet phases.
-// The orchestrator renders inline (no collapsible header). Agent phases are
-// collapsible, but their contents (tool calls, text, etc.) are always visible
-// with truncated output and a "Show more" button for long content.
+// Format a timestamp to HH:MM
+function formatTime(ts?: number): string {
+  if (!ts) return ''
+  const d = new Date(ts)
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+// Pick an icon for a phase based on agent name or event content
+function phaseIcon(phase: { name: string; agent: string; events: FleetEvent[] }) {
+  const agent = phase.agent.toLowerCase()
+  if (agent.includes('search') || agent.includes('web') || agent.includes('research')) {
+    return <Globe size={12} />
+  }
+  if (agent.includes('code') || agent.includes('dev') || agent.includes('engineer')) {
+    return <Code size={12} />
+  }
+  if (agent.includes('orchestrat') || phase.name === '_orchestrator') {
+    return <GitFork size={12} />
+  }
+  return <Users size={12} />
+}
+
+// Connected vertical timeline for fleet execution.
+// Perplexity-inspired: continuous vertical line, circular status dots, per-phase icons,
+// timestamps on hover, click to expand details.
 export default function FleetExecutionPanel({ data }: { data: FleetExecutionMessage }) {
-  const [expanded, setExpanded] = useState(true)
   const [expandedPhases, setExpandedPhases] = useState<Record<string, boolean>>({})
   const [expandedContent, setExpandedContent] = useState<Set<string>>(new Set())
 
@@ -18,9 +38,9 @@ export default function FleetExecutionPanel({ data }: { data: FleetExecutionMess
     agent: string
     events: FleetEvent[]
     status: string
+    startTimestamp?: number
   }
 
-  // Group events by phase
   const phases = useMemo(() => {
     const phaseMap: Record<string, Phase> = {}
     const phaseOrder: string[] = []
@@ -32,19 +52,19 @@ export default function FleetExecutionPanel({ data }: { data: FleetExecutionMess
         phaseOrder.push(key)
       }
       phaseMap[key].events.push(evt)
-      if (evt.type === 'phase_start') phaseMap[key].status = 'running'
-      if (evt.type === 'phase_complete') phaseMap[key].status = 'complete'
-      if (evt.type === 'phase_failed') phaseMap[key].status = 'failed'
-      if (evt.type === 'conversation_start') phaseMap[key].status = 'running'
-      if (evt.type === 'conversation_complete') phaseMap[key].status = 'complete'
-      if (evt.type === 'conversation_turn_failed') phaseMap[key].status = 'failed'
+      if (evt.type === 'phase_start' || evt.type === 'conversation_start') {
+        phaseMap[key].status = 'running'
+        if (!phaseMap[key].startTimestamp) phaseMap[key].startTimestamp = evt.timestamp
+      }
+      if (evt.type === 'phase_complete' || evt.type === 'conversation_complete') phaseMap[key].status = 'complete'
+      if (evt.type === 'phase_failed' || evt.type === 'conversation_turn_failed') phaseMap[key].status = 'failed'
       if (evt.agent) phaseMap[key].agent = evt.agent
     }
     return phaseOrder.map(k => phaseMap[k])
   }, [data.events])
 
-  // Count non-orchestrator phases for the header
   const agentPhaseCount = phases.filter(p => p.name !== '_orchestrator').length
+  const allDone = data.status !== 'running'
 
   const togglePhase = (name: string) => {
     setExpandedPhases(prev => ({ ...prev, [name]: !prev[name] }))
@@ -59,19 +79,34 @@ export default function FleetExecutionPanel({ data }: { data: FleetExecutionMess
     })
   }
 
-  const statusIcon = (status: string) => {
-    if (status === 'running') return <Loader size={12} className="animate-spin text-cyan-400" />
-    if (status === 'complete') return <Check size={12} className="text-green-400" />
-    if (status === 'failed') return <span className="text-red-400 text-xs font-bold">!</span>
-    return <span className="text-gray-500 text-xs">-</span>
+  // Status dot for the timeline
+  const statusDot = (status: string) => {
+    if (status === 'running') {
+      return (
+        <div className="timeline-dot timeline-dot--running">
+          <Loader size={10} className="animate-spin" />
+        </div>
+      )
+    }
+    if (status === 'complete') {
+      return (
+        <div className="timeline-dot timeline-dot--complete">
+          <Check size={10} />
+        </div>
+      )
+    }
+    if (status === 'failed') {
+      return (
+        <div className="timeline-dot timeline-dot--failed">
+          <span className="text-[8px] font-bold">!</span>
+        </div>
+      )
+    }
+    return <div className="timeline-dot timeline-dot--pending" />
   }
 
-  // Content truncation threshold (characters). Content longer than this shows
-  // a truncated preview with a "Show more" button.
   const TRUNCATE_THRESHOLD = 800
 
-  // Render the content area of a tool card. Always visible (no collapse toggle).
-  // Long content is truncated with a "Show more" / "Show less" button.
   const renderCardContent = (cardData: unknown, eventKey: string) => {
     if (cardData == null || cardData === undefined) return null
     const text = typeof cardData === 'string' ? cardData : JSON.stringify(cardData, null, 2)
@@ -102,7 +137,8 @@ export default function FleetExecutionPanel({ data }: { data: FleetExecutionMess
             >
               <button
                 onClick={() => toggleContent(eventKey)}
-                className="text-[10px] text-cyan-400 hover:text-cyan-300 px-2 py-0.5 mb-1 rounded bg-black/50 cursor-pointer"
+                className="text-[10px] hover:opacity-80 px-2 py-0.5 mb-1 rounded bg-black/50 cursor-pointer"
+                style={{ color: 'var(--accent)' }}
               >
                 Show more ({Math.ceil(text.length / 1000)}k chars)
               </button>
@@ -112,7 +148,8 @@ export default function FleetExecutionPanel({ data }: { data: FleetExecutionMess
             <div className="flex justify-center mt-1">
               <button
                 onClick={() => toggleContent(eventKey)}
-                className="text-[10px] text-cyan-400 hover:text-cyan-300 px-2 py-0.5 rounded bg-black/30 cursor-pointer"
+                className="text-[10px] hover:opacity-80 px-2 py-0.5 rounded bg-black/30 cursor-pointer"
+                style={{ color: 'var(--accent)' }}
               >
                 Show less
               </button>
@@ -123,7 +160,6 @@ export default function FleetExecutionPanel({ data }: { data: FleetExecutionMess
     )
   }
 
-  // Render a tool call/result card — always expanded, no collapse toggle
   const renderFleetToolCard = (evt: FleetEvent, eventKey: string) => {
     const isCall = evt.type === 'worker_tool_call' || evt.type === 'tool_call' || evt.type === 'opencode_tool_call'
     const name = evt.detail || 'unknown'
@@ -148,7 +184,6 @@ export default function FleetExecutionPanel({ data }: { data: FleetExecutionMess
     )
   }
 
-  // Render agent text
   const renderFleetText = (evt: FleetEvent, eventKey: string) => {
     const textContent = evt.text || evt.message || ''
     if (!textContent) return null
@@ -174,7 +209,6 @@ export default function FleetExecutionPanel({ data }: { data: FleetExecutionMess
     )
   }
 
-  // Render a conversation turn indicator
   const renderConversationTurn = (evt: FleetEvent, eventKey: string) => {
     const isComplete = evt.type === 'conversation_turn_complete'
     const isFailed = evt.type === 'conversation_turn_failed'
@@ -206,15 +240,10 @@ export default function FleetExecutionPanel({ data }: { data: FleetExecutionMess
     )
   }
 
-  // Render a single event based on its type
   const renderPhaseEvent = (evt: FleetEvent, phaseIdx: number, evtIdx: number) => {
     const eventKey = `fleet-${phaseIdx}-${evtIdx}`
-    if (evt.type === 'phase_start' || evt.type === 'phase_complete' || evt.type === 'phase_failed') {
-      return null
-    }
-    if (evt.type === 'conversation_start' || evt.type === 'conversation_complete') {
-      return null
-    }
+    if (evt.type === 'phase_start' || evt.type === 'phase_complete' || evt.type === 'phase_failed') return null
+    if (evt.type === 'conversation_start' || evt.type === 'conversation_complete') return null
     if (evt.type === 'conversation_turn' || evt.type === 'conversation_turn_complete' || evt.type === 'conversation_turn_failed') {
       return renderConversationTurn(evt, eventKey)
     }
@@ -236,7 +265,7 @@ export default function FleetExecutionPanel({ data }: { data: FleetExecutionMess
           ) : (
             <Check size={10} className="text-cyan-400" />
           )}
-           <span className="text-cyan-400/70">{evt.message || (isStart ? 'OpenCode step started' : 'OpenCode step finished')}</span>
+          <span className="text-cyan-400/70">{evt.message || (isStart ? 'OpenCode step started' : 'OpenCode step finished')}</span>
         </div>
       )
     }
@@ -244,58 +273,123 @@ export default function FleetExecutionPanel({ data }: { data: FleetExecutionMess
   }
 
   return (
-    <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 overflow-hidden text-sm">
+    <div
+      className="rounded-lg overflow-hidden text-sm transition-opacity duration-300"
+      style={{
+        border: '1px solid var(--border-color)',
+        background: 'var(--bg-secondary)',
+        opacity: allDone ? 0.85 : 1,
+      }}
+    >
       {/* Header */}
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-cyan-400 hover:bg-cyan-500/10 transition-colors cursor-pointer"
+      <div className="flex items-center gap-2.5 px-4 py-2.5">
+        {data.status === 'running' && <Loader size={15} className="animate-spin shrink-0" style={{ color: 'var(--accent)' }} />}
+        {data.status === 'complete' && <Check size={15} className="text-green-400 shrink-0" />}
+        <Users size={15} className="shrink-0" style={{ color: 'var(--text-muted)' }} />
+        <span className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>Fleet Execution</span>
+        <span className="text-xs ml-auto" style={{ color: 'var(--text-muted)' }}>
+          {agentPhaseCount} phase{agentPhaseCount !== 1 ? 's' : ''}
+        </span>
+      </div>
+
+      {/* Timeline */}
+      <div
+        className="px-4 pb-3"
+        style={{ borderTop: '1px solid var(--border-color)' }}
       >
-        {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        {data.status === 'running' && <Loader size={14} className="animate-spin" />}
-        {data.status === 'complete' && <Check size={14} className="text-green-400" />}
-        <span className="font-medium">Fleet Execution</span>
-        <span className="text-cyan-400/60 text-xs ml-auto">{agentPhaseCount} phase{agentPhaseCount !== 1 ? 's' : ''}</span>
-      </button>
-
-      {/* Content */}
-      {expanded && (
-        <div className="border-t border-cyan-500/20 px-2 py-1">
-          {phases.map((phase, phaseIdx) => {
-            // Orchestrator events render inline — no collapsible header
-            if (phase.name === '_orchestrator') {
-              return (
-                <div key={phase.name} className="pb-1">
-                  {phase.events.map((evt, evtIdx) => renderPhaseEvent(evt, phaseIdx, evtIdx))}
-                </div>
-              )
-            }
-
-            // Agent phases render as collapsible sections
+        {phases.map((phase, phaseIdx) => {
+          // Orchestrator events render inline (no timeline row)
+          if (phase.name === '_orchestrator') {
             return (
-              <div key={phase.name} className="my-1">
-                {/* Phase header */}
-                <button
-                  onClick={() => togglePhase(phase.name)}
-                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded hover:bg-cyan-500/10 transition-colors cursor-pointer"
-                >
-                  {expandedPhases[phase.name] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                  {statusIcon(phase.status)}
-                  <span className="text-gray-200 font-medium">{phase.name}</span>
-                  {phase.agent && <span className="text-gray-500 text-xs">({phase.agent})</span>}
-                  {phase.status === 'running' && <span className="text-cyan-400/60 text-xs ml-auto">running</span>}
-                </button>
-
-                {/* Phase contents — collapsed by default, auto-expand running phase */}
-                {(expandedPhases[phase.name] || (phase.status === 'running' && expandedPhases[phase.name] !== false)) && (
-                  <div className="ml-4 pl-2 border-l border-cyan-500/15 pb-1">
-                    {phase.events.map((evt, evtIdx) => renderPhaseEvent(evt, phaseIdx, evtIdx))}
-                  </div>
-                )}
+              <div key={phase.name} className="py-1">
+                {phase.events.map((evt, evtIdx) => renderPhaseEvent(evt, phaseIdx, evtIdx))}
               </div>
             )
-          })}
-        </div>
-      )}
+          }
+
+          const isExpanded = expandedPhases[phase.name] === true || (phase.status === 'running' && expandedPhases[phase.name] !== false)
+          const isLast = phaseIdx === phases.length - 1
+
+          return (
+            <div key={phase.name} className="relative group/phase">
+              {/* Vertical connector line */}
+              {!isLast && (
+                <div
+                  className="timeline-line"
+                  style={{
+                    position: 'absolute',
+                    left: '9px',
+                    top: '20px',
+                    bottom: '0',
+                    width: '1px',
+                    background: 'var(--border-color)',
+                  }}
+                />
+              )}
+
+              {/* Phase row */}
+              <button
+                onClick={() => togglePhase(phase.name)}
+                className="w-full flex items-center gap-3 py-2 text-left cursor-pointer relative z-10"
+              >
+                {/* Status dot */}
+                {statusDot(phase.status)}
+
+                {/* Icon */}
+                <span style={{ color: 'var(--text-muted)' }}>{phaseIcon(phase)}</span>
+
+                {/* Phase name */}
+                <span
+                  className="text-xs font-medium flex-1 truncate"
+                  style={{
+                    color: phase.status === 'running'
+                      ? 'var(--text-primary)'
+                      : phase.status === 'complete'
+                        ? 'var(--text-secondary)'
+                        : phase.status === 'failed'
+                          ? '#ef4444'
+                          : 'var(--text-muted)',
+                  }}
+                >
+                  {phase.name}
+                  {phase.agent && (
+                    <span className="font-normal ml-1.5" style={{ color: 'var(--text-muted)' }}>
+                      ({phase.agent})
+                    </span>
+                  )}
+                </span>
+
+                {/* Right side: timestamp on hover */}
+                <span className="flex items-center gap-2 shrink-0">
+                  {phase.status === 'running' && (
+                    <span className="text-[11px]" style={{ color: 'var(--accent)' }}>running</span>
+                  )}
+                  {phase.startTimestamp && (
+                    <span
+                      className="text-[11px] opacity-0 group-hover/phase:opacity-100 transition-opacity"
+                      style={{ color: 'var(--text-muted)' }}
+                    >
+                      {formatTime(phase.startTimestamp)}
+                    </span>
+                  )}
+                  {isExpanded ? (
+                    <ChevronDown size={12} style={{ color: 'var(--text-muted)' }} />
+                  ) : (
+                    <ChevronDown size={12} className="rotate-[-90deg]" style={{ color: 'var(--text-muted)' }} />
+                  )}
+                </span>
+              </button>
+
+              {/* Expanded phase details */}
+              {isExpanded && (
+                <div className="ml-[28px] pb-2 relative z-10">
+                  {phase.events.map((evt, evtIdx) => renderPhaseEvent(evt, phaseIdx, evtIdx))}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

@@ -139,6 +139,15 @@ func (p *Provider) handleResponse(body io.Reader, yield func(*model.LLMResponse,
 		}
 	}
 
+	// Map Anthropic usage to ADK UsageMetadata.
+	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
+		llmResp.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{
+			PromptTokenCount:     int32(resp.Usage.InputTokens),
+			CandidatesTokenCount: int32(resp.Usage.OutputTokens),
+			TotalTokenCount:      int32(resp.Usage.InputTokens + resp.Usage.OutputTokens),
+		}
+	}
+
 	yield(llmResp, nil)
 }
 
@@ -157,6 +166,9 @@ func (p *Provider) handleStream(body io.Reader, yield func(*model.LLMResponse, e
 	// aggregated non-partial response for session persistence.
 	var textAccum strings.Builder
 
+	// Accumulate token usage from message_start and message_delta events.
+	var inputTokens, outputTokens int32
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
@@ -173,6 +185,19 @@ func (p *Provider) handleStream(body io.Reader, yield func(*model.LLMResponse, e
 		}
 
 		switch event.Type {
+		case "message_start":
+			// Anthropic sends input token count on the message_start event.
+			if event.Message != nil {
+				inputTokens = int32(event.Message.Usage.InputTokens)
+				outputTokens = int32(event.Message.Usage.OutputTokens)
+			}
+
+		case "message_delta":
+			// Anthropic sends output token count on the message_delta event.
+			if event.Usage != nil {
+				outputTokens = int32(event.Usage.OutputTokens)
+			}
+
 		case "content_block_start":
 			if event.ContentBlock != nil && event.ContentBlock.Type == "tool_use" {
 				// Emit aggregated text before tool calls (model may produce
@@ -246,6 +271,16 @@ func (p *Provider) handleStream(body io.Reader, yield func(*model.LLMResponse, e
 		}
 	}
 
+	// Build UsageMetadata from accumulated token counts.
+	var usage *genai.GenerateContentResponseUsageMetadata
+	if inputTokens > 0 || outputTokens > 0 {
+		usage = &genai.GenerateContentResponseUsageMetadata{
+			PromptTokenCount:     inputTokens,
+			CandidatesTokenCount: outputTokens,
+			TotalTokenCount:      inputTokens + outputTokens,
+		}
+	}
+
 	// Emit aggregated text response at stream end
 	if textAccum.Len() > 0 {
 		yield(&model.LLMResponse{
@@ -253,6 +288,16 @@ func (p *Provider) handleStream(body io.Reader, yield func(*model.LLMResponse, e
 				Role:  "model",
 				Parts: []*genai.Part{{Text: textAccum.String()}},
 			},
+			UsageMetadata: usage,
+		}, nil)
+	} else if usage != nil {
+		// No trailing text — attach usage to a content-less response so
+		// the ChatRunner still sees the token counts (e.g. tool-only turns).
+		yield(&model.LLMResponse{
+			Content: &genai.Content{
+				Role: "model",
+			},
+			UsageMetadata: usage,
 		}, nil)
 	}
 }
@@ -389,6 +434,10 @@ type Response struct {
 	Type    string    `json:"type"`
 	Role    string    `json:"role"`
 	Content []Content `json:"content"`
+	Usage   struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
 }
 
 type StreamEvent struct {
@@ -396,6 +445,17 @@ type StreamEvent struct {
 	Delta        *StreamDelta `json:"delta,omitempty"`
 	ContentBlock *Content     `json:"content_block,omitempty"` // For content_block_start
 	Index        int          `json:"index,omitempty"`
+	// message_start carries the full message envelope with usage.
+	Message *struct {
+		Usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	} `json:"message,omitempty"`
+	// message_delta carries final usage (output tokens).
+	Usage *struct {
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage,omitempty"`
 }
 
 type StreamDelta struct {

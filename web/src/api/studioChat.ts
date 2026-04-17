@@ -165,3 +165,114 @@ export async function stopChat(sessionId: string): Promise<void> {
     console.warn('Failed to stop chat:', err)
   }
 }
+
+/**
+ * Check if a session has an active background runner.
+ */
+export async function fetchSessionStatus(sessionId: string): Promise<{ sessionId: string; running: boolean; eventCount?: number }> {
+  const response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/status`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch session status: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+/**
+ * Reconnect to an active background chat runner via SSE.
+ * Returns an AbortController that can be used to disconnect (without stopping the runner).
+ */
+export function connectChatStream({ sessionId, onEvent, onError, onDone }: {
+  sessionId: string
+  onEvent: SSEEventCallback
+  onError?: ErrorCallback
+  onDone?: DoneCallback
+}): AbortController {
+  const controller = new AbortController()
+
+  const run = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/stream`, {
+        method: 'GET',
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        const text = await response.text()
+        throw new Error(text || `HTTP ${response.status}`)
+      }
+
+      const reader = response.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const blocks = buffer.split('\n\n')
+        buffer = blocks.pop()!
+
+        for (const block of blocks) {
+          if (!block.trim()) continue
+          const lines = block.split('\n')
+          let eventType = 'message'
+          let dataStr = ''
+
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              eventType = line.slice(7).trim()
+            } else if (line.startsWith('data: ')) {
+              dataStr = line.slice(6)
+            }
+          }
+
+          if (dataStr) {
+            try {
+              const data = JSON.parse(dataStr)
+              onEvent(eventType, data)
+            } catch (e) {
+              console.error('Failed to parse SSE data:', e, dataStr)
+            }
+          }
+        }
+      }
+
+      if (onDone) onDone()
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        if (onDone) onDone()
+      } else {
+        if (onError) onError(err instanceof Error ? err : new Error(String(err)))
+      }
+    }
+  }
+
+  run()
+  return controller
+}
+
+// --- Artifact APIs ---
+
+/** Fetch the raw text content of a file artifact for the in-browser viewer. */
+export async function fetchArtifactContent(path: string, sessionId?: string): Promise<string> {
+  let url = `${API_BASE}/artifacts/content?path=${encodeURIComponent(path)}`
+  if (sessionId) url += `&session=${encodeURIComponent(sessionId)}`
+  const resp = await fetch(url)
+  if (!resp.ok) throw new Error(`Failed to fetch artifact content: ${resp.status}`)
+  return resp.text()
+}
+
+/** Get the download URL for a raw file artifact. */
+export function getArtifactDownloadUrl(path: string, sessionId?: string): string {
+  let url = `${API_BASE}/artifacts?path=${encodeURIComponent(path)}`
+  if (sessionId) url += `&session=${encodeURIComponent(sessionId)}`
+  return url
+}
+
+/** Get the download URL for a markdown artifact converted to PDF by the backend. */
+export function getArtifactPDFUrl(path: string, sessionId?: string): string {
+  let url = `${API_BASE}/artifacts/pdf?path=${encodeURIComponent(path)}`
+  if (sessionId) url += `&session=${encodeURIComponent(sessionId)}`
+  return url
+}

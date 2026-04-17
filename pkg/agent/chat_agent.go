@@ -40,7 +40,6 @@ type KnowledgeSearchByCategoryFunc func(ctx context.Context, query string, bm25Q
 // It wraps ADK's llmagent in a persistent chat session where the LLM
 // decides which tools to call and how to proceed.
 //
-
 // Execution records a trace. After reusable tasks, auto-distillation
 // generates a flow YAML + knowledge doc. /distill remains as manual fallback.
 type ChatAgent struct {
@@ -93,6 +92,13 @@ type ChatAgent struct {
 	// called concurrently from multiple sub-agent goroutines.
 	UIEventCallback func(event *session.Event)
 
+	// SubTaskProgressCallback, when set, is called for structured sub-task
+	// lifecycle events (delegation_start, task_start, task_complete, task_failed).
+	// Unlike UIEventCallback (which forwards raw ADK events), this provides
+	// higher-level progress tracking for task plan visualization in the UI.
+	// Thread-safe: may be called concurrently from multiple sub-agent goroutines.
+	SubTaskProgressCallback func(event SubTaskProgressEvent)
+
 	// Internal: reuse AstonishAgent for approval formatting
 	approvalHelper *AstonishAgent
 
@@ -106,11 +112,22 @@ type ChatAgent struct {
 	pendingImages []ImageFromTool
 	imageMu       sync.Mutex
 
+	// File artifact side-channel: file paths captured from write_file and
+	// edit_file tool calls, delivered to the UI for inline display/download.
+	pendingFiles []FileArtifact
+	fileMu       sync.Mutex
+
 	// Flow output side-channel: large flow outputs are stripped from the
 	// tool result (so the LLM doesn't try to summarize them) and stashed
 	// here for direct delivery to the user via SSE or channel output.
 	pendingFlowOutput string
 	flowOutputMu      sync.Mutex
+
+	// Plan auto-progression: tracks step state from announce_plan so that
+	// AfterToolCallback can automatically mark steps running/complete
+	// without requiring the LLM to call update_plan (saving full round-trips).
+	activePlan   *PlanState
+	activePlanMu sync.Mutex
 }
 
 // ImageFromTool holds image data extracted from a tool result before the
@@ -119,6 +136,13 @@ type ChatAgent struct {
 type ImageFromTool struct {
 	Data   []byte // raw image bytes
 	Format string // "png" or "jpeg"
+}
+
+// FileArtifact holds metadata about a file created/modified by a tool call.
+// Captured from write_file and edit_file tool args for UI display.
+type FileArtifact struct {
+	Path     string // Absolute file path
+	ToolName string // "write_file" or "edit_file"
 }
 
 // distillPreview holds the result of PreviewDistill for use by ConfirmAndDistill.
@@ -314,6 +338,27 @@ func (c *ChatAgent) DrainImages() []ImageFromTool {
 	return imgs
 }
 
+// CaptureFileArtifact records a file artifact produced by a tool call.
+// Thread-safe: may be called from the afterToolCallback goroutine.
+func (c *ChatAgent) CaptureFileArtifact(path string, toolName string) {
+	c.fileMu.Lock()
+	defer c.fileMu.Unlock()
+	c.pendingFiles = append(c.pendingFiles, FileArtifact{
+		Path:     path,
+		ToolName: toolName,
+	})
+}
+
+// DrainFiles returns and clears all pending file artifacts captured from
+// tool results during the current agent run. Thread-safe.
+func (c *ChatAgent) DrainFiles() []FileArtifact {
+	c.fileMu.Lock()
+	defer c.fileMu.Unlock()
+	files := c.pendingFiles
+	c.pendingFiles = nil
+	return files
+}
+
 // DrainFlowOutput returns and clears any pending flow output that was
 // extracted from a run_flow tool result during the current agent run.
 // Thread-safe. The SSE handler calls this to deliver the full flow output
@@ -324,6 +369,14 @@ func (c *ChatAgent) DrainFlowOutput() string {
 	out := c.pendingFlowOutput
 	c.pendingFlowOutput = ""
 	return out
+}
+
+// SetActivePlan stores the plan state for auto-progression in AfterToolCallback.
+// Thread-safe: called from the announce_plan tool's planStateCallback.
+func (c *ChatAgent) SetActivePlan(plan *PlanState) {
+	c.activePlanMu.Lock()
+	c.activePlan = plan
+	c.activePlanMu.Unlock()
 }
 
 // extractAndStripFlowOutput checks a run_flow tool result for a large "output"

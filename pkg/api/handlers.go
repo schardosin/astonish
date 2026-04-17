@@ -870,6 +870,11 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/studio/sessions/{id}", StudioSessionHandler).Methods("GET")
 	router.HandleFunc("/api/studio/sessions/{id}", StudioDeleteSessionHandler).Methods("DELETE")
 	router.HandleFunc("/api/studio/sessions/{id}/stop", StudioStopHandler).Methods("POST")
+	router.HandleFunc("/api/studio/sessions/{id}/stream", StudioChatStreamHandler).Methods("GET")
+	router.HandleFunc("/api/studio/sessions/{id}/status", StudioChatStatusHandler).Methods("GET")
+	router.HandleFunc("/api/studio/artifacts", StudioArtifactDownloadHandler).Methods("GET")
+	router.HandleFunc("/api/studio/artifacts/content", StudioArtifactContentHandler).Methods("GET")
+	router.HandleFunc("/api/studio/artifacts/pdf", StudioArtifactPDFHandler).Methods("GET")
 
 	// Fleet endpoints
 	router.HandleFunc("/api/fleets", ListFleetsHandler).Methods("GET")

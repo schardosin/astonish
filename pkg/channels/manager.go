@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/schardosin/astonish/pkg/pdfgen"
 	"github.com/schardosin/astonish/pkg/provider/llmerror"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
@@ -52,6 +55,19 @@ type ChannelManager struct {
 	// regular chat message. Consumed (cleared) after first use.
 	pendingContexts   map[string]string
 	pendingContextsMu sync.Mutex
+
+	// ReadFileFunc reads a file given a session ID and file path. When sandbox
+	// is enabled, the file may live inside a container rather than on the host
+	// filesystem. The daemon injects a closure that tries the host first, then
+	// falls back to pulling from the session's sandbox container.
+	// When nil, os.ReadFile is used directly (no sandbox awareness).
+	ReadFileFunc func(sessionID, path string) ([]byte, error)
+
+	// BrowserPDF is an optional browser provider for high-quality Chrome-based
+	// PDF generation. When set, fileToDocument uses headless Chrome to render
+	// markdown as styled HTML → PDF with full Unicode/emoji support. When nil,
+	// falls back to the pure-Go goldmark-pdf renderer (Latin-1 only).
+	BrowserPDF pdfgen.BrowserProvider
 
 	// Fleet dependency functions — injected by the daemon to avoid circular imports.
 	// These allow fleet commands to access the fleet registries and session management
@@ -160,6 +176,46 @@ func NewChannelManager(chatAgent *agent.ChatAgent, sessSvc session.Service, logg
 // SetRedactor sets the credential redactor for outbound message sanitization.
 func (m *ChannelManager) SetRedactor(r *credentials.Redactor) {
 	m.redactor = r
+}
+
+// SetReadFileFunc sets a sandbox-aware file reader for document attachments.
+// When set, handleInbound uses this instead of os.ReadFile to support reading
+// files from sandbox containers.
+func (m *ChannelManager) SetReadFileFunc(fn func(sessionID, path string) ([]byte, error)) {
+	m.ReadFileFunc = fn
+}
+
+// readFile reads a file, using the sandbox-aware ReadFileFunc if available,
+// otherwise falling back to os.ReadFile.
+func (m *ChannelManager) readFile(sessionID, path string) ([]byte, error) {
+	if m.ReadFileFunc != nil {
+		return m.ReadFileFunc(sessionID, path)
+	}
+	return os.ReadFile(path)
+}
+
+// fileToDocument converts a file artifact into a DocumentAttachment. For
+// markdown files (.md), the content is converted to PDF using headless Chrome
+// so Telegram users receive a formatted document instead of raw markdown text.
+func (m *ChannelManager) fileToDocument(data []byte, filePath string) DocumentAttachment {
+	filename := filepath.Base(filePath)
+	ext := strings.ToLower(filepath.Ext(filename))
+
+	if ext == ".md" || ext == ".markdown" {
+		if m.BrowserPDF == nil {
+			m.logger.Printf("[channels] No browser available for PDF generation of %s, sending as markdown", filename)
+			return DocumentAttachment{Data: data, Filename: filename}
+		}
+		pdfData, err := pdfgen.ConvertMarkdownToPDFChrome(data, m.BrowserPDF)
+		if err != nil {
+			m.logger.Printf("[channels] PDF generation failed for %s, sending as markdown: %v", filename, err)
+			return DocumentAttachment{Data: data, Filename: filename}
+		}
+		pdfName := filename[:len(filename)-len(ext)] + ".pdf"
+		return DocumentAttachment{Data: pdfData, Filename: pdfName}
+	}
+
+	return DocumentAttachment{Data: data, Filename: filename}
 }
 
 // SetAuthorizeFunc sets the device authorization handler for the /authorize command.
@@ -424,11 +480,18 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	var messagesSent int
 	var pendingImages []ImageAttachment
 
+	// File artifacts from write_file/edit_file tool calls are collected and
+	// sent as document attachments alongside the response message.
+	var pendingDocuments []DocumentAttachment
+	const maxDocumentSize = 10 * 1024 * 1024 // 10 MB limit for document attachments
+
 	// Email is a batch channel: keep only the last text turn, send once at the end.
 	isBatchChannel := msg.ChannelID == "email"
 	var batchText string
 
-	for event, err := range r.Run(ctx, userID, sess.ID(), userContent, adkagent.RunConfig{}) {
+	sessionID := sess.ID() // captured for sandbox-aware file reads
+
+	for event, err := range r.Run(ctx, userID, sessionID, userContent, adkagent.RunConfig{}) {
 		if err != nil {
 			m.logger.Printf("[channels] Agent error for %s: %v", route.SessionKey, err)
 			if messagesSent == 0 && batchText == "" {
@@ -464,6 +527,23 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 			})
 		}
 
+		// Drain file artifacts from write_file/edit_file tool calls.
+		// Read each file and attach as a document. Uses sandbox-aware
+		// readFile to handle files inside containers. Markdown files
+		// are converted to PDF for a better channel experience.
+		for _, file := range m.agent.DrainFiles() {
+			data, err := m.readFile(sessionID, file.Path)
+			if err != nil {
+				m.logger.Printf("[channels] Failed to read file artifact %s: %v", file.Path, err)
+				continue
+			}
+			if len(data) > maxDocumentSize {
+				m.logger.Printf("[channels] Skipping file artifact %s: size %d exceeds %d limit", file.Path, len(data), maxDocumentSize)
+				continue
+			}
+			pendingDocuments = append(pendingDocuments, m.fileToDocument(data, file.Path))
+		}
+
 		// Extract user-facing text only. Skip internal parts: function
 		// calls, function responses, and chain-of-thought (Thought).
 		var eventText strings.Builder
@@ -492,13 +572,15 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 		}
 
 		// Streaming mode: send this turn's text as a message immediately.
-		// Attach any pending images from preceding tool calls.
+		// Attach any pending images and documents from preceding tool calls.
 		outMsg := OutboundMessage{
-			Text:   displayText,
-			Format: FormatHTML,
-			Images: pendingImages,
+			Text:      displayText,
+			Format:    FormatHTML,
+			Images:    pendingImages,
+			Documents: pendingDocuments,
 		}
-		pendingImages = nil // consumed
+		pendingImages = nil    // consumed
+		pendingDocuments = nil // consumed
 
 		// Only the first message is a reply to the user's message
 		if messagesSent == 0 {
@@ -515,12 +597,14 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	// Batch channel: send the final text turn as a single message.
 	if isBatchChannel && batchText != "" {
 		outMsg := OutboundMessage{
-			Text:    batchText,
-			Format:  FormatHTML,
-			ReplyTo: msg.ID,
-			Images:  pendingImages,
+			Text:      batchText,
+			Format:    FormatHTML,
+			ReplyTo:   msg.ID,
+			Images:    pendingImages,
+			Documents: pendingDocuments,
 		}
 		pendingImages = nil
+		pendingDocuments = nil
 		if err := ch.Send(ctx, target, outMsg); err != nil {
 			m.logger.Printf("[channels] Failed to send message to %s: %v", msg.ChannelID, err)
 		} else {
@@ -530,15 +614,30 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 
 	// If images were produced but no text followed (e.g., the LLM's final
 	// turn was a tool call with no commentary), send them as a standalone message.
-	if len(pendingImages) > 0 {
+	// Also drain any remaining file artifacts that weren't consumed above.
+	for _, file := range m.agent.DrainFiles() {
+		data, err := m.readFile(sessionID, file.Path)
+		if err != nil {
+			m.logger.Printf("[channels] Failed to read file artifact %s: %v", file.Path, err)
+			continue
+		}
+		if len(data) > maxDocumentSize {
+			m.logger.Printf("[channels] Skipping file artifact %s: size %d exceeds %d limit", file.Path, len(data), maxDocumentSize)
+			continue
+		}
+		pendingDocuments = append(pendingDocuments, m.fileToDocument(data, file.Path))
+	}
+
+	if len(pendingImages) > 0 || len(pendingDocuments) > 0 {
 		outMsg := OutboundMessage{
-			Images: pendingImages,
+			Images:    pendingImages,
+			Documents: pendingDocuments,
 		}
 		if messagesSent == 0 {
 			outMsg.ReplyTo = msg.ID
 		}
 		if err := ch.Send(ctx, target, outMsg); err != nil {
-			m.logger.Printf("[channels] Failed to send images to %s: %v", msg.ChannelID, err)
+			m.logger.Printf("[channels] Failed to send attachments to %s: %v", msg.ChannelID, err)
 		} else {
 			messagesSent++
 		}

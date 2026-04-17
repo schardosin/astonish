@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -23,13 +24,37 @@ var titleThinkTagRe = regexp.MustCompile(`(?s)<(?:think|thinking)>.*?</(?:think|
 // Format: "[2026-03-20 14:30:05 UTC]\n"
 var userTimestampRe = regexp.MustCompile(`^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \w+\]\n`)
 
+// pendingDelegation holds buffered data from a delegate_tasks FunctionCall
+// until the matching FunctionResponse arrives, so we can reconstruct a
+// complete subtask_execution message.
+type pendingDelegation struct {
+	tasks []SubTaskInfoMsg // task plan from the call args
+}
+
 // eventsToMessages transforms ADK session events into a flat message list for the frontend.
 // An optional redactor is applied to all text parts and tool args/results to prevent
 // credential exposure. This is the defense-in-depth layer: even if retroactive transcript
 // redaction missed a secret, the UI will never display it in plaintext.
+//
+// delegate_tasks tool calls and their responses are reconstructed into
+// subtask_execution messages that render as TaskPlanPanel in the frontend,
+// preserving the task plan visualization for completed sessions.
 func eventsToMessages(events session.Events, redactor *credentials.Redactor) []StudioMessage {
 	var messages []StudioMessage
 	var lastInvocationID string // track invocation boundary for coalescing
+
+	// Buffer delegate_tasks calls by their FunctionCall ID so we can match
+	// them with the corresponding FunctionResponse. ADK function calls carry
+	// a unique ID that the response echoes back.
+	pendingDelegations := make(map[string]*pendingDelegation)
+
+	// Buffer write_file/edit_file calls so we can emit inline artifact
+	// messages when the corresponding FunctionResponse confirms success.
+	type pendingWriteFile struct {
+		path     string
+		toolName string
+	}
+	pendingWriteFiles := make(map[string]pendingWriteFile)
 
 	for i := range events.Len() {
 		event := events.At(i)
@@ -75,6 +100,41 @@ func eventsToMessages(events session.Events, redactor *credentials.Redactor) []S
 				lastInvocationID = eventInvID
 			}
 			if part.FunctionCall != nil {
+				// Intercept delegate_tasks calls: buffer the task plan and
+				// suppress the flat tool_call message. The matching
+				// FunctionResponse below will produce a subtask_execution
+				// message instead.
+				if part.FunctionCall.Name == "delegate_tasks" {
+					pd := extractDelegationPlan(part.FunctionCall.Args)
+					pendingDelegations[part.FunctionCall.ID] = pd
+					continue
+				}
+
+				// Intercept announce_plan: emit a plan message immediately.
+				if part.FunctionCall.Name == "announce_plan" {
+					msg := buildPlanMessage(part.FunctionCall.Args)
+					messages = append(messages, msg)
+					continue
+				}
+
+				// Intercept update_plan: update the most recent plan message's step.
+				if part.FunctionCall.Name == "update_plan" {
+					applyPlanStepUpdate(messages, part.FunctionCall.Args)
+					continue
+				}
+
+				// Buffer write_file/edit_file calls to emit artifact messages
+				// when their FunctionResponse confirms success.
+				if part.FunctionCall.Name == "write_file" || part.FunctionCall.Name == "edit_file" {
+					p := extractFilePath(part.FunctionCall.Name, part.FunctionCall.Args)
+					if p != "" {
+						pendingWriteFiles[part.FunctionCall.ID] = pendingWriteFile{
+							path:     p,
+							toolName: part.FunctionCall.Name,
+						}
+					}
+				}
+
 				args := part.FunctionCall.Args
 				if redactor != nil && args != nil {
 					args = redactor.RedactMap(args)
@@ -86,6 +146,23 @@ func eventsToMessages(events session.Events, redactor *credentials.Redactor) []S
 				})
 			}
 			if part.FunctionResponse != nil {
+				// Intercept delegate_tasks responses: combine with the
+				// buffered task plan to produce a subtask_execution message.
+				if part.FunctionResponse.Name == "delegate_tasks" {
+					msg := buildSubTaskExecutionMessage(
+						pendingDelegations[part.FunctionResponse.ID],
+						part.FunctionResponse.Response,
+					)
+					delete(pendingDelegations, part.FunctionResponse.ID)
+					messages = append(messages, msg)
+					continue
+				}
+
+				// Suppress plan tool responses — no useful display info.
+				if part.FunctionResponse.Name == "announce_plan" || part.FunctionResponse.Name == "update_plan" {
+					continue
+				}
+
 				resp := part.FunctionResponse.Response
 				if redactor != nil && resp != nil {
 					resp = redactor.RedactMap(resp)
@@ -95,11 +172,429 @@ func eventsToMessages(events session.Events, redactor *credentials.Redactor) []S
 					ToolName:   part.FunctionResponse.Name,
 					ToolResult: summarizeToolResult(resp),
 				})
+
+				// Emit inline artifact message for successful write_file/edit_file
+				if pw, ok := pendingWriteFiles[part.FunctionResponse.ID]; ok {
+					delete(pendingWriteFiles, part.FunctionResponse.ID)
+					// Only emit if the tool succeeded (no error in response)
+					hasError := false
+					if resp != nil {
+						if _, errField := resp["error"]; errField {
+							hasError = true
+						}
+					}
+					if !hasError {
+						messages = append(messages, StudioMessage{
+							Type:     "artifact",
+							Content:  pw.path,
+							ToolName: pw.toolName,
+						})
+					}
+				}
 			}
 		}
 	}
 
+	// Post-process: for completed sessions, promote any remaining "pending" or
+	// "running" plan steps to "complete". The session is done, so all steps
+	// should reflect their final state. Only "failed" steps stay as-is.
+	finalizePlanSteps(messages)
+
 	return messages
+}
+
+// extractDelegationPlan parses the task plan from a delegate_tasks FunctionCall args map.
+func extractDelegationPlan(args map[string]any) *pendingDelegation {
+	pd := &pendingDelegation{}
+	if args == nil {
+		return pd
+	}
+
+	tasksRaw, ok := args["tasks"]
+	if !ok {
+		return pd
+	}
+
+	tasksList, ok := tasksRaw.([]any)
+	if !ok {
+		return pd
+	}
+
+	for _, t := range tasksList {
+		taskMap, ok := t.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := taskMap["name"].(string)
+		// The description field is called "task" in the tool input schema
+		desc, _ := taskMap["task"].(string)
+		if name != "" {
+			pd.tasks = append(pd.tasks, SubTaskInfoMsg{
+				Name:        name,
+				Description: desc,
+			})
+		}
+	}
+	return pd
+}
+
+// buildSubTaskExecutionMessage reconstructs a subtask_execution message from
+// a buffered delegation plan and the delegate_tasks response.
+func buildSubTaskExecutionMessage(pd *pendingDelegation, resp map[string]any) StudioMessage {
+	msg := StudioMessage{
+		Type:   "subtask_execution",
+		Status: "complete",
+	}
+
+	// Use tasks from the buffered call if available
+	if pd != nil {
+		msg.Tasks = pd.tasks
+	}
+
+	// Build synthetic events from the response results
+	var events []SubTaskEventMsg
+
+	// Opening event
+	events = append(events, SubTaskEventMsg{
+		Type: "delegation_start",
+	})
+
+	if resp != nil {
+		// Extract overall status
+		if status, ok := resp["status"].(string); ok {
+			msg.Status = status
+		}
+
+		// Extract per-task results
+		if resultsRaw, ok := resp["results"]; ok {
+			if resultsList, ok := resultsRaw.([]any); ok {
+				for _, r := range resultsList {
+					rMap, ok := r.(map[string]any)
+					if !ok {
+						continue
+					}
+					taskName, _ := rMap["name"].(string)
+					taskStatus, _ := rMap["status"].(string)
+					taskDuration, _ := rMap["duration"].(string)
+					taskError, _ := rMap["error"].(string)
+					taskResult, _ := rMap["result"].(string)
+
+					// Emit task_start
+					events = append(events, SubTaskEventMsg{
+						Type:     "task_start",
+						TaskName: taskName,
+					})
+
+					// Emit task_text with the sub-agent's result output (if any)
+					if taskResult != "" {
+						events = append(events, SubTaskEventMsg{
+							Type:     "task_text",
+							TaskName: taskName,
+							Text:     taskResult,
+						})
+					}
+
+					// Emit task_complete or task_failed
+					if taskStatus == "success" {
+						events = append(events, SubTaskEventMsg{
+							Type:     "task_complete",
+							TaskName: taskName,
+							Duration: taskDuration,
+						})
+					} else {
+						events = append(events, SubTaskEventMsg{
+							Type:     "task_failed",
+							TaskName: taskName,
+							Duration: taskDuration,
+							Error:    taskError,
+						})
+					}
+				}
+			}
+		}
+	}
+
+	// Closing event
+	events = append(events, SubTaskEventMsg{
+		Type:   "delegation_complete",
+		Status: msg.Status,
+	})
+
+	msg.Events = events
+
+	// If we didn't get tasks from the call args (edge case: missing FunctionCall ID match),
+	// try to reconstruct task names from the response results.
+	if len(msg.Tasks) == 0 && resp != nil {
+		if resultsRaw, ok := resp["results"]; ok {
+			if resultsList, ok := resultsRaw.([]any); ok {
+				for _, r := range resultsList {
+					rMap, ok := r.(map[string]any)
+					if !ok {
+						continue
+					}
+					name, _ := rMap["name"].(string)
+					if name != "" {
+						msg.Tasks = append(msg.Tasks, SubTaskInfoMsg{
+							Name: name,
+						})
+					}
+				}
+			}
+		}
+	}
+
+	return msg
+}
+
+// buildPlanMessage creates a plan message from an announce_plan FunctionCall args map.
+func buildPlanMessage(args map[string]any) StudioMessage {
+	msg := StudioMessage{
+		Type: "plan",
+	}
+
+	if args == nil {
+		return msg
+	}
+
+	msg.Goal, _ = args["goal"].(string)
+
+	if stepsRaw, ok := args["steps"]; ok {
+		if stepsList, ok := stepsRaw.([]any); ok {
+			for _, s := range stepsList {
+				sMap, ok := s.(map[string]any)
+				if !ok {
+					continue
+				}
+				name, _ := sMap["name"].(string)
+				desc, _ := sMap["description"].(string)
+				if name != "" {
+					msg.Steps = append(msg.Steps, PlanStepMsg{
+						Name:        name,
+						Description: desc,
+						Status:      "pending",
+					})
+				}
+			}
+		}
+	}
+
+	return msg
+}
+
+// applyPlanStepUpdate updates the most recent plan message's step status
+// based on an update_plan FunctionCall args map.
+func applyPlanStepUpdate(messages []StudioMessage, args map[string]any) {
+	if args == nil {
+		return
+	}
+
+	stepName, _ := args["step"].(string)
+	stepStatus, _ := args["status"].(string)
+	if stepName == "" || stepStatus == "" {
+		return
+	}
+
+	// Find the most recent plan message (search from end)
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Type == "plan" {
+			for j := range messages[i].Steps {
+				if messages[i].Steps[j].Name == stepName {
+					messages[i].Steps[j].Status = stepStatus
+				}
+			}
+			return
+		}
+	}
+}
+
+// finalizePlanSteps promotes any "pending" or "running" plan steps to "complete"
+// for completed session history. Only "failed" steps are left as-is.
+func finalizePlanSteps(messages []StudioMessage) {
+	for i := range messages {
+		if messages[i].Type == "plan" {
+			for j := range messages[i].Steps {
+				s := messages[i].Steps[j].Status
+				if s == "pending" || s == "running" {
+					messages[i].Steps[j].Status = "complete"
+				}
+			}
+		}
+	}
+}
+
+// collectUsage sums UsageMetadata from all LLM responses in the session
+// transcript. Each non-partial event with a non-nil UsageMetadata represents
+// one API call's token counts. Returns nil if no usage data is present.
+func collectUsage(events session.Events) *UsageSummary {
+	var input, output, total int32
+	for i := range events.Len() {
+		event := events.At(i)
+		if um := event.LLMResponse.UsageMetadata; um != nil {
+			input += um.PromptTokenCount
+			output += um.CandidatesTokenCount
+			total += um.TotalTokenCount
+		}
+	}
+	if total == 0 {
+		return nil
+	}
+	return &UsageSummary{
+		InputTokens:  input,
+		OutputTokens: output,
+		TotalTokens:  total,
+	}
+}
+
+// collectArtifacts scans ADK session events for successful write_file/edit_file
+// tool calls and returns a deduplicated list of file artifacts. This is used to
+// populate the artifacts field in the session detail API response, enabling the
+// file panel in the UI for completed sessions.
+func collectArtifacts(events session.Events) []ArtifactInfo {
+	// Track pending write_file/edit_file calls by FunctionCall ID
+	type pendingWrite struct {
+		path     string
+		toolName string
+	}
+	pending := make(map[string]pendingWrite)
+
+	// Deduplicate by path (keep the last write to each file)
+	seen := make(map[string]bool)
+	var artifacts []ArtifactInfo
+
+	for i := range events.Len() {
+		event := events.At(i)
+		if event.LLMResponse.Content == nil {
+			continue
+		}
+
+		for _, part := range event.LLMResponse.Content.Parts {
+			if part.FunctionCall != nil {
+				name := part.FunctionCall.Name
+				if name == "write_file" || name == "edit_file" {
+					path := extractFilePath(name, part.FunctionCall.Args)
+					if path != "" {
+						pending[part.FunctionCall.ID] = pendingWrite{
+							path:     path,
+							toolName: name,
+						}
+					}
+				}
+			}
+			if part.FunctionResponse != nil {
+				pw, ok := pending[part.FunctionResponse.ID]
+				if !ok {
+					continue
+				}
+				delete(pending, part.FunctionResponse.ID)
+
+				// Check if the tool succeeded (no error in response)
+				if resp := part.FunctionResponse.Response; resp != nil {
+					if _, hasErr := resp["error"]; hasErr {
+						continue
+					}
+				}
+
+				// Deduplicate by path
+				if seen[pw.path] {
+					continue
+				}
+				seen[pw.path] = true
+
+				artifacts = append(artifacts, ArtifactInfo{
+					Path:     pw.path,
+					FileName: filepath.Base(pw.path),
+					FileType: fileTypeFromExt(filepath.Ext(pw.path)),
+					ToolName: pw.toolName,
+				})
+			}
+		}
+	}
+
+	return artifacts
+}
+
+// extractFilePath gets the file path from a write_file or edit_file tool call args.
+func extractFilePath(toolName string, args map[string]any) string {
+	if args == nil {
+		return ""
+	}
+	switch toolName {
+	case "write_file":
+		if p, ok := args["file_path"].(string); ok {
+			return p
+		}
+	case "edit_file":
+		if p, ok := args["path"].(string); ok {
+			return p
+		}
+	}
+	return ""
+}
+
+// fileTypeFromExt returns a human-readable file type from a file extension.
+func fileTypeFromExt(ext string) string {
+	ext = strings.ToLower(ext)
+	switch ext {
+	case ".md", ".markdown":
+		return "Markdown"
+	case ".go":
+		return "Go"
+	case ".py":
+		return "Python"
+	case ".js":
+		return "JavaScript"
+	case ".ts":
+		return "TypeScript"
+	case ".tsx":
+		return "TypeScript JSX"
+	case ".jsx":
+		return "JSX"
+	case ".json":
+		return "JSON"
+	case ".yaml", ".yml":
+		return "YAML"
+	case ".html", ".htm":
+		return "HTML"
+	case ".css":
+		return "CSS"
+	case ".sh", ".bash":
+		return "Shell"
+	case ".sql":
+		return "SQL"
+	case ".txt":
+		return "Text"
+	case ".csv":
+		return "CSV"
+	case ".xml":
+		return "XML"
+	case ".toml":
+		return "TOML"
+	case ".rs":
+		return "Rust"
+	case ".java":
+		return "Java"
+	case ".rb":
+		return "Ruby"
+	case ".php":
+		return "PHP"
+	case ".c", ".h":
+		return "C"
+	case ".cpp", ".hpp", ".cc":
+		return "C++"
+	case ".swift":
+		return "Swift"
+	case ".kt":
+		return "Kotlin"
+	case ".dockerfile":
+		return "Dockerfile"
+	case ".env":
+		return "Environment"
+	default:
+		if ext == "" {
+			return "File"
+		}
+		return strings.TrimPrefix(ext, ".")
+	}
 }
 
 // stripUserMessageTimestamp removes the timestamp prefix from a user message
@@ -311,4 +806,56 @@ func persistSessionMessage(ctx context.Context, svc session.Service, sessionID, 
 	if err := svc.AppendEvent(ctx, resp.Session, event); err != nil {
 		slog.Error("failed to append event to session", "component", "persistSessionMessage", "session_id", sessionID, "role", role, "error", err)
 	}
+}
+
+// readArtifactContentFromSession scans a session's persisted events for a
+// write_file FunctionCall whose file_path matches the requested path, and
+// returns the content argument. This is used as a fallback when the actual
+// file no longer exists on disk (e.g., written to /tmp, or inside a sandbox
+// container that is stopped).
+func readArtifactContentFromSession(fs *persistentsession.FileStore, sessionID, filePath string) (string, bool) {
+	if fs == nil {
+		return "", false
+	}
+
+	getResp, err := fs.Get(context.Background(), &session.GetRequest{
+		AppName:   studioChatAppName,
+		UserID:    studioChatUserID,
+		SessionID: sessionID,
+	})
+	if err != nil {
+		return "", false
+	}
+
+	events := getResp.Session.Events()
+	cleanTarget := filepath.Clean(filePath)
+
+	// Scan from the end to find the most recent write to this path
+	for i := events.Len() - 1; i >= 0; i-- {
+		event := events.At(i)
+		if event.LLMResponse.Content == nil {
+			continue
+		}
+		for _, part := range event.LLMResponse.Content.Parts {
+			if part.FunctionCall == nil {
+				continue
+			}
+			if part.FunctionCall.Name != "write_file" {
+				continue
+			}
+			args := part.FunctionCall.Args
+			if args == nil {
+				continue
+			}
+			p, _ := args["file_path"].(string)
+			if filepath.Clean(p) != cleanTarget {
+				continue
+			}
+			content, _ := args["content"].(string)
+			if content != "" {
+				return content, true
+			}
+		}
+	}
+	return "", false
 }

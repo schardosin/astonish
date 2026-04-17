@@ -59,6 +59,17 @@ var sessionOnce sync.Once
 var globalBrowserMgr *browser.Manager
 var browserOnce sync.Once
 
+// pdfBrowserMgr is a dedicated browser for PDF rendering only. Kept separate
+// from globalBrowserMgr so PDF generation doesn't interfere with the user's
+// active browsing session (EnsureSessionID is destructive — it closes the
+// existing browser when switching sessions).
+//
+// When sandbox is enabled, this manager runs Chrome inside the session container
+// (which has Chromium + emoji fonts pre-installed). When sandbox is disabled,
+// it falls back to a local headless Chrome.
+var pdfBrowserMgr *browser.Manager
+var pdfBrowserOnce sync.Once
+
 // GetBrowserManager returns the shared browser manager for all sessions.
 func GetBrowserManager() *browser.Manager {
 	browserOnce.Do(func() {
@@ -87,25 +98,69 @@ func GetBrowserManager() *browser.Manager {
 		globalBrowserMgr = browser.NewManager(cfg)
 
 		// Wire browser container callbacks when sandbox is available.
-		// The browser runs inside the session container (managed by
-		// NodeClientPool). Engine compatibility is checked: custom/remote
-		// engines fall back to host mode. Sandbox must also be enabled in
-		// config — otherwise SetupSandboxRuntime() will fail at runtime.
-		engine := sandbox.DetectBrowserEngine(sandbox.BrowserContainerConfig{
-			ChromePath: cfg.ChromePath,
-		})
-		if sandbox.IsContainerCompatibleEngine(engine) && cfgErr == nil && sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
-			globalBrowserMgr.SandboxEnabled = true
+		wireSandboxBrowserCallbacks(globalBrowserMgr, cfg, appCfg, cfgErr)
+	})
+	return globalBrowserMgr
+}
 
-			// ContainerResolveFunc: look up the session container name + IP.
-			globalBrowserMgr.ContainerResolveFunc = func(sessionID string) (string, string, error) {
+// GetPDFBrowserManager returns a dedicated browser manager for PDF rendering.
+// When sandbox is enabled, Chrome runs inside the session container (which has
+// emoji fonts + Chromium pre-installed). The sessionID identifies which
+// container to use. When sandbox is disabled, a local headless Chrome is used.
+//
+// This is separate from GetBrowserManager() because EnsureSessionID is
+// destructive — it closes the existing browser when switching sessions.
+// Using a dedicated manager prevents PDF generation from killing the user's
+// active browsing session.
+func GetPDFBrowserManager(sessionID string) *browser.Manager {
+	pdfBrowserOnce.Do(func() {
+		slog.Info("PDF browser: initializing dedicated PDF browser manager")
+		cfg := browser.DefaultConfig()
+		cfg.Headless = true
+		// Use a temp profile directory to avoid Chrome lock conflicts
+		// with the main browser manager's profile.
+		cfg.UserDataDir = ""
+
+		appCfg, cfgErr := config.LoadAppConfig()
+		if cfgErr == nil {
+			// Apply Chrome path override from config if set.
+			if appCfg.Browser.ChromePath != "" {
+				cfg.ChromePath = appCfg.Browser.ChromePath
+			}
+		}
+		pdfBrowserMgr = browser.NewManager(cfg)
+
+		// Wire sandbox callbacks so Chrome runs inside the session container.
+		wireSandboxBrowserCallbacks(pdfBrowserMgr, cfg, appCfg, cfgErr)
+
+		// Override ContainerResolveFunc: the PDF manager must ensure the
+		// container is running (it may have been stopped by the idle watchdog
+		// or a template snapshot). The shared wireSandboxBrowserCallbacks only
+		// checks IsRunning and fails — we need EnsureSessionContainer which
+		// re-mounts the overlay and starts a stopped container.
+		if pdfBrowserMgr.SandboxEnabled {
+			sandboxLimits := &appCfg.Sandbox.Limits
+			pdfBrowserMgr.ContainerResolveFunc = func(sessID string) (string, string, error) {
 				client, err := sandbox.SetupSandboxRuntime()
 				if err != nil {
 					return "", "", fmt.Errorf("sandbox runtime not available: %w", err)
 				}
-				containerName := sandbox.SessionContainerName(sessionID)
-				if !client.IsRunning(containerName) {
-					return "", "", fmt.Errorf("session container %q is not running", containerName)
+				sessRegistry, err := sandbox.NewSessionRegistry()
+				if err != nil {
+					return "", "", fmt.Errorf("failed to open session registry: %w", err)
+				}
+				tplRegistry, err := sandbox.NewTemplateRegistry()
+				if err != nil {
+					return "", "", fmt.Errorf("failed to open template registry: %w", err)
+				}
+				// Look up the template name from the registry entry.
+				templateName := "@base"
+				if entry := sessRegistry.Get(sessID); entry != nil && entry.TemplateName != "" {
+					templateName = entry.TemplateName
+				}
+				containerName, err := sandbox.EnsureSessionContainer(client, sessRegistry, tplRegistry, sessID, templateName, sandboxLimits)
+				if err != nil {
+					return "", "", fmt.Errorf("failed to ensure session container: %w", err)
 				}
 				ip, err := client.GetContainerIPv4(containerName)
 				if err != nil {
@@ -113,40 +168,77 @@ func GetBrowserManager() *browser.Manager {
 				}
 				return containerName, ip, nil
 			}
-
-			// ContainerStartBrowserFunc: start Chromium + KasmVNC inside the container.
-			bCfg := sandbox.BrowserContainerConfig{
-				ViewportWidth:       cfg.ViewportWidth,
-				ViewportHeight:      cfg.ViewportHeight,
-				KasmVNCPort:         cfg.KasmVNCPort,
-				KasmVNCPassword:     cfg.KasmVNCPassword,
-				Proxy:               cfg.Proxy,
-				ChromePath:          cfg.ChromePath,
-				FingerprintSeed:     cfg.FingerprintSeed,
-				FingerprintPlatform: cfg.FingerprintPlatform,
-			}
-			globalBrowserMgr.ContainerStartBrowserFunc = func(containerName string) error {
-				client, err := sandbox.SetupSandboxRuntime()
-				if err != nil {
-					return fmt.Errorf("sandbox runtime not available: %w", err)
-				}
-				return sandbox.StartChromiumInContainer(client, containerName, bCfg)
-			}
-
-			// ContainerDialFunc: tunnel TCP connections through the Incus exec API.
-			// This makes CDP (and /json/version HTTP) work even when container bridge
-			// IPs are not routable from the host (Docker+Incus on macOS).
-			globalBrowserMgr.ContainerDialFunc = func(containerName string, port int) (net.Conn, error) {
-				client, err := sandbox.SetupSandboxRuntime()
-				if err != nil {
-					return nil, fmt.Errorf("sandbox runtime not available: %w", err)
-				}
-				dialer := &sandbox.ContainerDialer{Client: client}
-				return dialer.Dial(containerName, port)
-			}
 		}
+
+		slog.Info("PDF browser: initialized", "sandboxEnabled", pdfBrowserMgr.SandboxEnabled)
 	})
-	return globalBrowserMgr
+
+	// Set the session ID so the manager knows which container to use.
+	// Safe to call on every request — it's a no-op if the session hasn't changed.
+	if sessionID != "" {
+		slog.Info("PDF browser: setting session ID", "sessionID", sessionID)
+		pdfBrowserMgr.EnsureSessionID(sessionID)
+		slog.Info("PDF browser: session ID set")
+	}
+
+	return pdfBrowserMgr
+}
+
+// wireSandboxBrowserCallbacks wires container callbacks onto a browser.Manager
+// when sandbox mode is enabled. This is shared between GetBrowserManager and
+// GetPDFBrowserManager to avoid duplicating the sandbox wiring logic.
+func wireSandboxBrowserCallbacks(mgr *browser.Manager, cfg browser.BrowserConfig, appCfg *config.AppConfig, cfgErr error) {
+	engine := sandbox.DetectBrowserEngine(sandbox.BrowserContainerConfig{
+		ChromePath: cfg.ChromePath,
+	})
+	if !sandbox.IsContainerCompatibleEngine(engine) || cfgErr != nil || appCfg == nil || !sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
+		return
+	}
+
+	mgr.SandboxEnabled = true
+
+	mgr.ContainerResolveFunc = func(sessionID string) (string, string, error) {
+		client, err := sandbox.SetupSandboxRuntime()
+		if err != nil {
+			return "", "", fmt.Errorf("sandbox runtime not available: %w", err)
+		}
+		containerName := sandbox.SessionContainerName(sessionID)
+		if !client.IsRunning(containerName) {
+			return "", "", fmt.Errorf("session container %q is not running", containerName)
+		}
+		ip, err := client.GetContainerIPv4(containerName)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to get IP for session container %q: %w", containerName, err)
+		}
+		return containerName, ip, nil
+	}
+
+	bCfg := sandbox.BrowserContainerConfig{
+		ViewportWidth:       cfg.ViewportWidth,
+		ViewportHeight:      cfg.ViewportHeight,
+		KasmVNCPort:         cfg.KasmVNCPort,
+		KasmVNCPassword:     cfg.KasmVNCPassword,
+		Proxy:               cfg.Proxy,
+		ChromePath:          cfg.ChromePath,
+		FingerprintSeed:     cfg.FingerprintSeed,
+		FingerprintPlatform: cfg.FingerprintPlatform,
+	}
+	mgr.ContainerStartBrowserFunc = func(containerName string) error {
+		client, err := sandbox.SetupSandboxRuntime()
+		if err != nil {
+			return fmt.Errorf("sandbox runtime not available: %w", err)
+		}
+		return sandbox.StartChromiumInContainer(client, containerName, bCfg)
+	}
+
+	mgr.ContainerDialFunc = func(containerName string, port int) (net.Conn, error) {
+		client, err := sandbox.SetupSandboxRuntime()
+		if err != nil {
+			return nil, fmt.Errorf("sandbox runtime not available: %w", err)
+		}
+		dialer := &sandbox.ContainerDialer{Client: client}
+		return dialer.Dial(containerName, port)
+	}
 }
 
 // GetSessionManager returns the singleton session manager

@@ -262,12 +262,23 @@ func ParseResponse(body []byte) (*model.LLMResponse, error) {
 		}
 	}
 
-	return &model.LLMResponse{
+	resp := &model.LLMResponse{
 		Content: &genai.Content{
 			Role:  "model",
 			Parts: parts,
 		},
-	}, nil
+	}
+
+	// Map Bedrock usage to ADK UsageMetadata.
+	if bedrockResp.Usage.InputTokens > 0 || bedrockResp.Usage.OutputTokens > 0 {
+		resp.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{
+			PromptTokenCount:     int32(bedrockResp.Usage.InputTokens),
+			CandidatesTokenCount: int32(bedrockResp.Usage.OutputTokens),
+			TotalTokenCount:      int32(bedrockResp.Usage.InputTokens + bedrockResp.Usage.OutputTokens),
+		}
+	}
+
+	return resp, nil
 }
 
 // ParseStream parses a Bedrock SSE stream and yields ADK LLMResponses.
@@ -280,6 +291,9 @@ func ParseStream(reader io.Reader) iter.Seq2[*model.LLMResponse, error] {
 		var currentToolUse *ContentBlock
 		var jsonBuffer strings.Builder
 		var textAccum strings.Builder
+
+		// Accumulate token usage from message_start and message_delta events.
+		var inputTokens, outputTokens int32
 
 		for {
 			line, err := bufReader.ReadBytes('\n')
@@ -316,6 +330,17 @@ func ParseStream(reader io.Reader) iter.Seq2[*model.LLMResponse, error] {
 						Text        string `json:"text"`
 						PartialJSON string `json:"partial_json"`
 					} `json:"delta"`
+					// message_start carries the full message envelope with usage.
+					Message *struct {
+						Usage struct {
+							InputTokens  int `json:"input_tokens"`
+							OutputTokens int `json:"output_tokens"`
+						} `json:"usage"`
+					} `json:"message"`
+					// message_delta carries final usage (output tokens).
+					Usage *struct {
+						OutputTokens int `json:"output_tokens"`
+					} `json:"usage"`
 				}
 
 				if err := json.Unmarshal(data, &chunk); err != nil {
@@ -325,6 +350,19 @@ func ParseStream(reader io.Reader) iter.Seq2[*model.LLMResponse, error] {
 
 				// Handle different chunk types
 				switch chunk.Type {
+				case "message_start":
+					// Bedrock (Anthropic models) sends input token count on message_start.
+					if chunk.Message != nil {
+						inputTokens = int32(chunk.Message.Usage.InputTokens)
+						outputTokens = int32(chunk.Message.Usage.OutputTokens)
+					}
+
+				case "message_delta":
+					// Bedrock sends output token count on message_delta.
+					if chunk.Usage != nil {
+						outputTokens = int32(chunk.Usage.OutputTokens)
+					}
+
 				case "content_block_start":
 					// Start of a new content block (text or tool_use)
 					if chunk.ContentBlock != nil && chunk.ContentBlock.Type == "tool_use" {
@@ -412,6 +450,16 @@ func ParseStream(reader io.Reader) iter.Seq2[*model.LLMResponse, error] {
 			}
 		}
 
+		// Build UsageMetadata from accumulated token counts.
+		var usage *genai.GenerateContentResponseUsageMetadata
+		if inputTokens > 0 || outputTokens > 0 {
+			usage = &genai.GenerateContentResponseUsageMetadata{
+				PromptTokenCount:     inputTokens,
+				CandidatesTokenCount: outputTokens,
+				TotalTokenCount:      inputTokens + outputTokens,
+			}
+		}
+
 		// Emit aggregated text response at stream end
 		if textAccum.Len() > 0 {
 			yield(&model.LLMResponse{
@@ -419,6 +467,16 @@ func ParseStream(reader io.Reader) iter.Seq2[*model.LLMResponse, error] {
 					Role:  "model",
 					Parts: []*genai.Part{{Text: textAccum.String()}},
 				},
+				UsageMetadata: usage,
+			}, nil)
+		} else if usage != nil {
+			// No trailing text — attach usage to a content-less response so
+			// the ChatRunner still sees the token counts (e.g. tool-only turns).
+			yield(&model.LLMResponse{
+				Content: &genai.Content{
+					Role: "model",
+				},
+				UsageMetadata: usage,
 			}, nil)
 		}
 	}

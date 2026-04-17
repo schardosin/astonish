@@ -19,7 +19,7 @@
 
 Astonish is an autonomous AI agent you run locally. It solves problems dynamically using LLM-driven tool-use loops (shell commands, file edits, web fetches, browser automation, email, memory recall) and adapts to whatever the task demands. When a task is complex enough, Astonish can distill the successful execution into a reusable YAML flow. The agent gets smarter as you use it.
 
-Deeply inspired by [OpenClaw](https://github.com/openclaw/openclaw) and the pioneering work it did on personal AI assistants (always-on daemons, skills-as-markdown, multi-channel messaging, tool-use-first architecture), Astonish takes those lessons and implements them in Go as a single compiled binary with a twist: **automatic workflow distillation**. Every successful complex interaction can become a reusable, auditable, versionable workflow.
+Inspired by [OpenClaw](https://github.com/openclaw/openclaw)'s vision of personal AI assistants (always-on daemons, skills-as-markdown, multi-channel messaging) and by [Perplexity Computer](https://www.perplexity.ai/hub/blog/perplexity-computer)'s demonstration that multi-model orchestration, sub-agent delegation, and transparent execution tracking are the future of AI agents, Astonish takes the best ideas from both and implements them in Go as a single compiled binary. The result: **Perplexity Computer's power with OpenClaw's flexibility**, fully open-source and running on your hardware.
 
 ---
 
@@ -201,6 +201,20 @@ Agent:  I'll delegate these as parallel tasks...
 
 ---
 
+## 📊 Transparent Execution
+
+Inspired by Perplexity Computer's approach to execution visibility, Astonish Studio now provides real-time insight into what the agent is doing, how much it costs, and where it is in the plan.
+
+**Plan auto-progression.** When the agent announces a multi-step plan, each step automatically transitions from pending to running to complete as the agent works. No manual `update_plan` calls needed. Delegation starts and tool execution triggers advance the plan in real-time. The Studio toolbar shows the current phase at a glance.
+
+**Token usage tracking.** Every LLM call reports actual input/output tokens from the provider API (OpenAI, Anthropic, Google, Bedrock). No heuristic estimates. The Studio toolbar shows cumulative token usage in a popover, and usage persists across browser refreshes by deriving totals from the session transcript.
+
+**Email with PDF attachments.** When the agent delivers reports via email, markdown artifacts are converted to PDF through a headless Chrome pipeline and attached to the message. The same reports that appear in Studio are delivered as professional documents to any inbox.
+
+**Token optimization.** Sub-agent results under 20,000 characters are inlined directly into the orchestrator's context instead of requiring an extra round-trip. Combined with plan simplification, this reduces total token consumption by over 40% compared to naive delegation.
+
+---
+
 ## 🔐 Encrypted Credentials
 
 Secrets are encrypted at rest with AES-256-GCM and protected by a five-layer defense:
@@ -314,6 +328,24 @@ Astonish owes a significant debt to [OpenClaw](https://github.com/openclaw/openc
 - **Flow distillation.** Successful agent interactions crystallize into reusable, auditable YAML workflows. The system accumulates knowledge over time.
 - **Go-native.** Single compiled binary with no runtime dependencies. Runs on anything from a Raspberry Pi to a CI/CD pipeline.
 - **Dual-mode execution.** Dynamic chat and structured flows share the same tool system, provider layer, and session infrastructure.
+
+---
+
+## 🖥️ Standing on Shoulders: Perplexity Computer
+
+[Perplexity Computer](https://www.perplexity.ai/hub/blog/perplexity-computer) proved that the next generation of AI agents needs multi-model orchestration, automatic sub-agent creation, plan tracking with transparent execution, and the ability to run asynchronously for hours on complex tasks. Astonish takes these ideas and makes them available as open-source software you control.
+
+**What we learned from Perplexity Computer:**
+- A plan-first execution model with visible step progression gives users confidence in what the agent is doing and why.
+- Multi-model orchestration (using the right model for each sub-task) dramatically improves quality and reduces cost.
+- Sub-agent delegation with isolated contexts is the right pattern for parallel research and analysis tasks.
+- Token usage transparency matters. Users should see exactly what they're spending, not estimates.
+
+**What Astonish offers that Perplexity Computer doesn't:**
+- **Open-source and self-hosted.** Your data never leaves your machine. No subscription required.
+- **Flow distillation.** Perplexity Computer has no equivalent. Successful agent runs crystallize into reusable YAML workflows you can version-control, schedule, and share.
+- **Multi-channel delivery.** Results aren't trapped in a web UI. The agent delivers reports with PDF attachments via Telegram, Email, or any connected channel.
+- **Full tool ecosystem.** 58+ built-in tools, MCP server support, browser automation, encrypted credentials, semantic memory. You own the entire stack.
 
 ---
 

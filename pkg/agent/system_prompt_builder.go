@@ -190,12 +190,32 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString("Use `memory_search` with the capability name (e.g., \"browser automation\", \"credential management\", ")
 	sb.WriteString("\"job scheduling\") to retrieve instructions before using a complex feature for the first time in a conversation.\n")
 
+	// 6a2. Web search/extract tool hints — tell the LLM the exact tool names
+	// so it doesn't fall back to web_fetch when a dedicated search tool is configured.
+	if b.WebSearchAvailable && b.WebSearchToolName != "" {
+		sb.WriteString(fmt.Sprintf("\n**Web search tool:** `%s` — use this tool for web searches. Do NOT use `web_fetch` for search queries.\n", b.WebSearchToolName))
+	}
+	if b.WebExtractAvailable && b.WebExtractToolName != "" {
+		sb.WriteString(fmt.Sprintf("**Web extract tool:** `%s` — use this tool to extract content from URLs when `web_fetch` fails.\n", b.WebExtractToolName))
+	}
+
 	// 6b. Task delegation — list available tool groups for delegate_tasks
 	if len(b.Catalog) > 0 {
 		sb.WriteString("\n## Task Delegation\n\n")
 		sb.WriteString("`delegate_tasks` runs tasks in isolated sub-agents with their own sessions. ")
 		sb.WriteString("Use it for: parallel execution of independent tasks, long-running operations, or tasks requiring isolation. ")
 		sb.WriteString("Do NOT use it just to access tools — relevant tools are injected automatically and can be called directly.\n\n")
+
+		sb.WriteString("**Planning strategy:**\n")
+		sb.WriteString("1. For multi-step tasks, call `announce_plan` first to show the user your approach as a visible checklist.\n")
+		sb.WriteString("2. Decompose complex goals into independent, parallelizable sub-tasks (each with a clear deliverable).\n")
+		sb.WriteString("3. Keep each sub-task focused: one research question, one file operation, one API interaction.\n")
+		sb.WriteString("4. If tasks have dependencies, run them in separate `delegate_tasks` calls (first batch completes before the second starts).\n")
+		sb.WriteString("5. Give each sub-task a descriptive name (e.g., \"fetch-pricing-page\", \"analyze-competitors\") — users see these as progress steps.\n")
+		sb.WriteString("6. After all sub-tasks complete, **synthesize** the results yourself — don't just concatenate sub-agent output.\n")
+		sb.WriteString("7. For substantial final outputs (reports, analyses, comparisons), save as a file with `write_file` so the user can download it.\n")
+		sb.WriteString("8. Plan steps are updated automatically as tools complete — do NOT try to update them manually.\n\n")
+
 		sb.WriteString("**Available tool groups (for delegation):**\n")
 		ctx := &minimalReadonlyContext{Context: context.Background()}
 		for _, g := range b.Catalog {
@@ -285,10 +305,18 @@ func (b *SystemPromptBuilder) buildCapabilitiesLine() string {
 		caps = append(caps, "persistent memory")
 	}
 	if b.WebSearchAvailable {
-		caps = append(caps, "web search")
+		if b.WebSearchToolName != "" {
+			caps = append(caps, fmt.Sprintf("web search via `%s`", b.WebSearchToolName))
+		} else {
+			caps = append(caps, "web search")
+		}
 	}
 	if b.WebExtractAvailable {
-		caps = append(caps, "web content extraction")
+		if b.WebExtractToolName != "" {
+			caps = append(caps, fmt.Sprintf("web content extraction via `%s`", b.WebExtractToolName))
+		} else {
+			caps = append(caps, "web content extraction")
+		}
 	}
 	if b.hasEmailTools() {
 		caps = append(caps, "email")

@@ -18,8 +18,8 @@ func TestNewSubAgentManager_Defaults(t *testing.T) {
 	if mgr.Config.MaxConcurrent != 5 {
 		t.Errorf("MaxConcurrent = %d, want 5", mgr.Config.MaxConcurrent)
 	}
-	if mgr.Config.TaskTimeout != 5*time.Minute {
-		t.Errorf("TaskTimeout = %v, want 5m", mgr.Config.TaskTimeout)
+	if mgr.Config.TaskTimeout != 10*time.Minute {
+		t.Errorf("TaskTimeout = %v, want 10m", mgr.Config.TaskTimeout)
 	}
 }
 

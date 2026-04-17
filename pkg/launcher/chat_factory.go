@@ -458,6 +458,21 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		} else {
 			coreTools = append(coreTools, delegateTool)
 
+			// read_task_result: allows the orchestrator to retrieve full sub-task
+			// outputs that were summarized by delegate_tasks to prevent context explosion.
+			readResultTool, readResultErr := tools.NewReadTaskResultTool()
+			if readResultErr == nil {
+				coreTools = append(coreTools, readResultTool)
+			}
+
+			// announce_plan: allows the orchestrator to announce a
+			// structured plan before starting work. Plan steps are auto-
+			// progressed by AfterToolCallback (no update_plan needed).
+			announcePlanTool, apErr := tools.NewAnnouncePlanTool()
+			if apErr == nil {
+				coreTools = append(coreTools, announcePlanTool)
+			}
+
 			subAgentCfg := agent.SubAgentConfig{
 				MaxDepth:      cfg.AppConfig.SubAgents.MaxDepth,
 				MaxConcurrent: cfg.AppConfig.SubAgents.MaxConcurrent,
@@ -785,6 +800,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		"memory_save":    true,
 		"memory_search":  true,
 		"delegate_tasks": true,
+		"announce_plan":  true,
 		"opencode":       true,
 	}
 
@@ -1391,8 +1407,33 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		subAgentMgr.CredentialStore = credStore
 		subAgentMgr.PendingSecrets = chatAgent.PendingSecrets
 		subAgentMgr.EventForwarder = chatAgent.ForwardSubTaskEvent
+		// Wire structured sub-task progress: delegate to ChatAgent.SubTaskProgressCallback
+		// which is set dynamically by ChatRunner.Run() for Studio sessions.
+		subAgentMgr.SubTaskProgress = func(evt agent.SubTaskProgressEvent) {
+			if chatAgent.SubTaskProgressCallback != nil {
+				chatAgent.SubTaskProgressCallback(evt)
+			}
+		}
+		// Wire file artifact capture so sub-agent write_file/edit_file calls
+		// propagate file artifacts to the parent ChatAgent for channel delivery
+		// (e.g., as Telegram document attachments).
+		subAgentMgr.FileArtifactCapture = chatAgent.CaptureFileArtifact
+
 		subAgentMgr.AppName = "astonish"
 		subAgentMgr.UserID = "console_user"
+
+		// Wire plan tools: announce_plan emits events through
+		// the same ChatAgent.SubTaskProgressCallback pipeline.
+		tools.SetPlanProgressCallback(func(evt agent.SubTaskProgressEvent) {
+			if chatAgent.SubTaskProgressCallback != nil {
+				chatAgent.SubTaskProgressCallback(evt)
+			}
+		})
+		// Wire plan state storage so AfterToolCallback can auto-progress steps.
+		tools.SetPlanStateCallback(func(goal string, steps []agent.PlanStepInfo) {
+			plan := agent.NewPlanState(goal, steps)
+			chatAgent.SetActivePlan(plan)
+		})
 		// Wire tool discovery so sub-agents can auto-discover their tools
 		if toolIndex != nil {
 			subAgentMgr.ToolIndex = toolIndex

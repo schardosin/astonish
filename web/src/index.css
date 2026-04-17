@@ -333,6 +333,38 @@ button, input, select, textarea {
   background-color: var(--bg-tertiary);
 }
 
+/* Document viewer variant — used in the full-screen file overlay for more readable document presentation */
+.markdown-body.markdown-body--document {
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+.markdown-body.markdown-body--document h1 { font-size: 1.75em; margin-top: 1.5em; }
+.markdown-body.markdown-body--document h2 { font-size: 1.4em; margin-top: 1.4em; }
+.markdown-body.markdown-body--document h3 { font-size: 1.15em; margin-top: 1.2em; }
+
+.markdown-body.markdown-body--document p { margin-bottom: 1.15em; }
+
+.markdown-body.markdown-body--document ul,
+.markdown-body.markdown-body--document ol { margin-bottom: 1.15em; }
+.markdown-body.markdown-body--document li { margin-bottom: 0.3em; }
+
+.markdown-body.markdown-body--document pre {
+  padding: 16px 20px;
+  font-size: 13px;
+  margin-bottom: 1.25em;
+}
+
+.markdown-body.markdown-body--document blockquote {
+  margin-bottom: 1.25em;
+  padding: 0.2em 1.2em;
+}
+
+.markdown-body.markdown-body--document table th,
+.markdown-body.markdown-body--document table td {
+  padding: 8px 16px;
+}
+
 /* Toast Notification Animation */
 @keyframes slide-up {
   from {
@@ -347,4 +379,56 @@ button, input, select, textarea {
 
 .animate-slide-up {
   animation: slide-up 0.3s ease-out;
+}
+
+/* Inline thinking notes — Perplexity-style serif italic text between steps */
+.thinking-note {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-style: italic;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  padding: 2px 0;
+}
+
+/* Connected vertical timeline dots */
+.timeline-dot {
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--border-color);
+  background: var(--bg-primary);
+  position: relative;
+  z-index: 2;
+}
+
+.timeline-dot--running {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--bg-primary);
+}
+
+.timeline-dot--complete {
+  border-color: #22c55e;
+  color: #22c55e;
+  background: var(--bg-primary);
+}
+
+.timeline-dot--failed {
+  border-color: #ef4444;
+  color: #ef4444;
+  background: var(--bg-primary);
+}
+
+.timeline-dot--pending {
+  border-color: var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.timeline-line {
+  z-index: 1;
 }

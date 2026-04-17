@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // MCPServerConfig represents the configuration for a single MCP server
@@ -91,11 +92,26 @@ func mergeStandardServers(cfg *MCPConfig) {
 	}
 	getter := getInstalledSecretGetter()
 
-	// First: inject key-based servers that have credentials
+	// First: inject key-based servers that have credentials.
+	// For web-category servers (Tavily, Brave, Firecrawl), only load the one
+	// that matches the configured web search tool. This prevents inactive web
+	// search providers from being registered, indexed, and offered to the LLM.
 	if appCfg != nil {
+		activeWebServerID := ""
+		if appCfg.General.WebSearchTool != "" {
+			if parts := strings.SplitN(appCfg.General.WebSearchTool, ":", 2); len(parts) >= 1 {
+				activeWebServerID = parts[0]
+			}
+		}
+
 		for _, srv := range GetStandardServers() {
 			if len(srv.EnvVars) == 0 {
 				continue // keyless handled below
+			}
+
+			// For web-category servers, only load the active one.
+			if srv.Category == "web" && srv.ID != activeWebServerID {
+				continue
 			}
 
 			// Resolve API key: credential store first, then config.yaml

@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/api"
+	"github.com/schardosin/astonish/pkg/browser"
 	"github.com/schardosin/astonish/pkg/channels"
 	emailchan "github.com/schardosin/astonish/pkg/channels/email"
 	"github.com/schardosin/astonish/pkg/channels/telegram"
@@ -266,6 +268,47 @@ func Run(cfg RunConfig) error {
 		if factoryResult.CredentialStore != nil {
 			mgr.SetRedactor(factoryResult.CredentialStore.Redactor())
 		}
+
+		// Wire sandbox-aware file reader so channel document attachments can
+		// read files from inside sandbox containers. Without this, os.ReadFile
+		// fails for container-internal paths (e.g., /tmp/report.md).
+		if sandbox.IsSandboxEnabled(&freshCfg.Sandbox) {
+			mgr.SetReadFileFunc(func(sessionID, path string) ([]byte, error) {
+				// Tier 1: try reading from the host filesystem.
+				if data, err := os.ReadFile(path); err == nil {
+					return data, nil
+				}
+
+				// Tier 2: pull from the session's sandbox container.
+				registry, err := sandbox.NewSessionRegistry()
+				if err != nil {
+					return nil, fmt.Errorf("sandbox session registry unavailable: %w", err)
+				}
+				entry := registry.Get(sessionID)
+				if entry == nil || entry.ContainerName == "" {
+					return nil, fmt.Errorf("no sandbox container for session %s", sessionID)
+				}
+				client, err := sandbox.Connect(sandbox.DetectPlatform())
+				if err != nil {
+					return nil, fmt.Errorf("failed to connect to sandbox: %w", err)
+				}
+				reader, _, err := client.PullFile(entry.ContainerName, path)
+				if err != nil {
+					return nil, fmt.Errorf("failed to pull %s from container %s: %w", path, entry.ContainerName, err)
+				}
+				defer reader.Close()
+				return io.ReadAll(reader)
+			})
+		}
+
+		// Wire a browser provider for Chrome-based PDF generation. This gives
+		// channel document attachments (e.g., Telegram) full Unicode/emoji support
+		// and professional CSS-based layout when converting markdown to PDF.
+		// Uses a dedicated headless browser to avoid interfering with the user's
+		// browser session. Falls back to goldmark-pdf if Chrome is unavailable.
+		pdfBrowserMgr := browser.NewManager(browser.DefaultConfig())
+		mgr.BrowserPDF = pdfBrowserMgr
+		defer pdfBrowserMgr.Cleanup()
 
 		// Register Telegram if enabled
 		if freshCfg.Channels.Telegram.IsTelegramEnabled() {

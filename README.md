@@ -19,7 +19,7 @@
 
 Astonish is an autonomous AI agent you run locally. It solves problems dynamically using LLM-driven tool-use loops (shell commands, file edits, web fetches, browser automation, email, memory recall) and adapts to whatever the task demands. When a task is complex enough, Astonish can distill the successful execution into a reusable YAML flow. The agent gets smarter as you use it.
 
-Inspired by [OpenClaw](https://github.com/openclaw/openclaw)'s vision of personal AI assistants (always-on daemons, skills-as-markdown, multi-channel messaging) and by [Perplexity Computer](https://www.perplexity.ai/hub/blog/perplexity-computer)'s demonstration that multi-model orchestration, sub-agent delegation, and transparent execution tracking are the future of AI agents, Astonish takes the best ideas from both and implements them in Go as a single compiled binary. The result: **Perplexity Computer's power with OpenClaw's flexibility**, fully open-source and running on your hardware.
+Inspired by [OpenClaw](https://github.com/openclaw/openclaw)'s vision of personal AI assistants (always-on daemons, skills-as-markdown, multi-channel messaging) and by [Perplexity Computer](https://www.perplexity.ai/hub/blog/perplexity-computer)'s demonstration that sub-agent delegation, plan tracking, and transparent execution are the future of AI agents, Astonish takes the best ideas from both and implements them in Go as a single compiled binary. The result: **Perplexity Computer's ambition with OpenClaw's flexibility**, fully open-source and running on your hardware.
 
 ---
 
@@ -333,11 +333,11 @@ Astonish owes a significant debt to [OpenClaw](https://github.com/openclaw/openc
 
 ## 🖥️ Standing on Shoulders: Perplexity Computer
 
-[Perplexity Computer](https://www.perplexity.ai/hub/blog/perplexity-computer) proved that the next generation of AI agents needs multi-model orchestration, automatic sub-agent creation, plan tracking with transparent execution, and the ability to run asynchronously for hours on complex tasks. Astonish takes these ideas and makes them available as open-source software you control.
+[Perplexity Computer](https://www.perplexity.ai/hub/blog/perplexity-computer) proved that the next generation of AI agents needs automatic sub-agent creation, plan tracking with transparent execution, and the ability to run asynchronously for hours on complex tasks. Astonish draws on several of these ideas and makes them available as open-source software you control.
 
 **What we learned from Perplexity Computer:**
 - A plan-first execution model with visible step progression gives users confidence in what the agent is doing and why.
-- Multi-model orchestration (using the right model for each sub-task) dramatically improves quality and reduces cost.
+- Automatic model selection per sub-task (multi-model orchestration) can improve quality and reduce cost — a direction Astonish supports through its 15+ provider integrations, even if model routing is manual today.
 - Sub-agent delegation with isolated contexts is the right pattern for parallel research and analysis tasks.
 - Token usage transparency matters. Users should see exactly what they're spending, not estimates.
 

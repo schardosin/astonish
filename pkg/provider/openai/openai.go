@@ -71,6 +71,9 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 			Model:    p.model,
 			Messages: messages,
 			Tools:    tools,
+			StreamOptions: &openai.StreamOptions{
+				IncludeUsage: true,
+			},
 		}
 
 		// Apply max_completion_tokens if configured
@@ -113,6 +116,10 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 			// — typically by a gateway timeout or connection drop.
 			finishReasonSeen := false
 
+			// Capture token usage from the final stream chunk (sent when
+			// StreamOptions.IncludeUsage is true).
+			var streamUsage *genai.GenerateContentResponseUsageMetadata
+
 			for {
 				resp, err := stream.Recv()
 				if errors.Is(err, io.EOF) {
@@ -125,6 +132,7 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 								Role:  "model",
 								Parts: []*genai.Part{{Text: textAccum.String()}},
 							},
+							UsageMetadata: streamUsage,
 						}, nil)
 						yield(nil, fmt.Errorf("LLM stream ended without a finish_reason — the response was likely truncated by a gateway timeout or connection drop"))
 						return
@@ -136,6 +144,7 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 								Role:  "model",
 								Parts: []*genai.Part{{Text: textAccum.String()}},
 							},
+							UsageMetadata: streamUsage,
 						}, nil)
 					}
 					return
@@ -143,6 +152,16 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 				if err != nil {
 					yield(nil, wrapOpenAIError(err))
 					return
+				}
+
+				// Capture token usage from the final chunk (OpenAI sends usage
+				// on the last chunk when StreamOptions.IncludeUsage is true).
+				if resp.Usage != nil {
+					streamUsage = &genai.GenerateContentResponseUsageMetadata{
+						PromptTokenCount:     int32(resp.Usage.PromptTokens),
+						CandidatesTokenCount: int32(resp.Usage.CompletionTokens),
+						TotalTokenCount:      int32(resp.Usage.TotalTokens),
+					}
 				}
 
 				// Handle tool call deltas
@@ -236,6 +255,7 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 									Role:  "model",
 									Parts: parts,
 								},
+								UsageMetadata: streamUsage,
 							}, nil)
 						}
 						return
@@ -608,6 +628,11 @@ func (p *Provider) toLLMResponse(resp openai.ChatCompletionResponse) *model.LLMR
 		Content: &genai.Content{
 			Role:  "model",
 			Parts: parts,
+		},
+		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+			PromptTokenCount:     int32(resp.Usage.PromptTokens),
+			CandidatesTokenCount: int32(resp.Usage.CompletionTokens),
+			TotalTokenCount:      int32(resp.Usage.TotalTokens),
 		},
 	}
 }

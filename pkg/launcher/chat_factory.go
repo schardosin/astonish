@@ -465,15 +465,12 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				coreTools = append(coreTools, readResultTool)
 			}
 
-			// announce_plan / update_plan: allow the orchestrator to announce a
-			// structured plan before starting work, and mark steps as complete.
+			// announce_plan: allows the orchestrator to announce a
+			// structured plan before starting work. Plan steps are auto-
+			// progressed by AfterToolCallback (no update_plan needed).
 			announcePlanTool, apErr := tools.NewAnnouncePlanTool()
 			if apErr == nil {
 				coreTools = append(coreTools, announcePlanTool)
-			}
-			updatePlanTool, upErr := tools.NewUpdatePlanTool()
-			if upErr == nil {
-				coreTools = append(coreTools, updatePlanTool)
 			}
 
 			subAgentCfg := agent.SubAgentConfig{
@@ -804,7 +801,6 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		"memory_search":  true,
 		"delegate_tasks": true,
 		"announce_plan":  true,
-		"update_plan":    true,
 		"opencode":       true,
 	}
 
@@ -1426,12 +1422,17 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		subAgentMgr.AppName = "astonish"
 		subAgentMgr.UserID = "console_user"
 
-		// Wire plan tools: announce_plan / update_plan emit events through
+		// Wire plan tools: announce_plan emits events through
 		// the same ChatAgent.SubTaskProgressCallback pipeline.
 		tools.SetPlanProgressCallback(func(evt agent.SubTaskProgressEvent) {
 			if chatAgent.SubTaskProgressCallback != nil {
 				chatAgent.SubTaskProgressCallback(evt)
 			}
+		})
+		// Wire plan state storage so AfterToolCallback can auto-progress steps.
+		tools.SetPlanStateCallback(func(goal string, steps []agent.PlanStepInfo) {
+			plan := agent.NewPlanState(goal, steps)
+			chatAgent.SetActivePlan(plan)
 		})
 		// Wire tool discovery so sub-agents can auto-discover their tools
 		if toolIndex != nil {

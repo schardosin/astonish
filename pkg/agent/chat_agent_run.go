@@ -277,6 +277,35 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 				}
 			}
 
+			// ── Auto-progress plan steps (after tool execution) ──
+			// Only delegate_tasks needs after-completion handling: when the
+			// delegation finishes, its step is done and the next step starts.
+			// All other step-start transitions happen in BeforeToolCallback.
+			if t.Name() == "delegate_tasks" && err == nil {
+				c.activePlanMu.Lock()
+				plan := c.activePlan
+				c.activePlanMu.Unlock()
+
+				if plan != nil {
+					if completed, started := plan.CompleteCurrentAndAdvance(); completed != "" {
+						if c.SubTaskProgressCallback != nil {
+							c.SubTaskProgressCallback(SubTaskProgressEvent{
+								Type:       "plan_step_update",
+								StepName:   completed,
+								StepStatus: "complete",
+							})
+							if started != "" {
+								c.SubTaskProgressCallback(SubTaskProgressEvent{
+									Type:       "plan_step_update",
+									StepName:   started,
+									StepStatus: "running",
+								})
+							}
+						}
+					}
+				}
+			}
+
 			if c.DebugMode {
 				status := "OK"
 				if err != nil {
@@ -327,6 +356,54 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 				return nil, nil
 			})
 		}
+
+		// ── Auto-progress plan steps (before tool execution) ──
+		// When a plan is active, mark step transitions at tool *start* so
+		// the UI reflects the current phase immediately. Without this, a
+		// long-running delegate_tasks call would keep the *previous* step
+		// as "running" for its entire duration.
+		//
+		// - delegate_tasks starting: the previous phase (e.g. search) is done
+		//   → complete current step, start next (the delegation step).
+		// - Any other tool starting: ensure a step is running (handles the
+		//   first tool call after announce_plan).
+		beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
+			c.activePlanMu.Lock()
+			plan := c.activePlan
+			c.activePlanMu.Unlock()
+
+			if plan == nil || t.Name() == "announce_plan" {
+				return nil, nil
+			}
+
+			emitPlanUpdate := func(stepName, status string) {
+				if c.SubTaskProgressCallback != nil {
+					c.SubTaskProgressCallback(SubTaskProgressEvent{
+						Type:       "plan_step_update",
+						StepName:   stepName,
+						StepStatus: status,
+					})
+				}
+			}
+
+			switch t.Name() {
+			case "delegate_tasks":
+				// Delegation starting → previous phase is done, start the delegation step.
+				if completed, started := plan.CompleteCurrentAndAdvance(); completed != "" {
+					emitPlanUpdate(completed, "complete")
+					if started != "" {
+						emitPlanUpdate(started, "running")
+					}
+				}
+			default:
+				// For any other tool, ensure a step is running.
+				if started := plan.AdvanceOnToolStart(); started != "" {
+					emitPlanUpdate(started, "running")
+				}
+			}
+
+			return nil, nil
+		})
 
 		// Build BeforeModelCallbacks
 		var beforeModelCallbacks []llmagent.BeforeModelCallback
@@ -502,6 +579,29 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		}
 
 	postLoop:
+		// Auto-complete any remaining plan steps at end of turn.
+		// This handles the final step (e.g., "write report") which
+		// completes when the LLM produces its final text response.
+		c.activePlanMu.Lock()
+		endPlan := c.activePlan
+		c.activePlanMu.Unlock()
+
+		if endPlan != nil {
+			for _, stepName := range endPlan.CompleteAll() {
+				if c.SubTaskProgressCallback != nil {
+					c.SubTaskProgressCallback(SubTaskProgressEvent{
+						Type:       "plan_step_update",
+						StepName:   stepName,
+						StepStatus: "complete",
+					})
+				}
+			}
+			// Clear the plan — it's done for this turn.
+			c.activePlanMu.Lock()
+			c.activePlan = nil
+			c.activePlanMu.Unlock()
+		}
+
 		// Finalize the trace
 		trace.Finalize()
 

@@ -48,12 +48,20 @@ type AttachmentInfo struct {
 
 // OutgoingMessage represents an email to be sent.
 type OutgoingMessage struct {
-	To      []string `json:"to"`
-	CC      []string `json:"cc,omitempty"`
-	Subject string   `json:"subject"`
-	Body    string   `json:"body"`               // Plain text body
-	HTML    string   `json:"html,omitempty"`     // Optional HTML body
-	ReplyTo string   `json:"reply_to,omitempty"` // Reply-To header address
+	To          []string     `json:"to"`
+	CC          []string     `json:"cc,omitempty"`
+	Subject     string       `json:"subject"`
+	Body        string       `json:"body"`                  // Plain text body
+	HTML        string       `json:"html,omitempty"`        // Optional HTML body
+	ReplyTo     string       `json:"reply_to,omitempty"`    // Reply-To header address
+	Attachments []Attachment `json:"attachments,omitempty"` // File attachments (e.g., PDF reports)
+}
+
+// Attachment is a binary file to include as a MIME attachment in an outgoing email.
+type Attachment struct {
+	Filename    string // Display filename (e.g., "report.pdf")
+	Data        []byte // Raw file bytes
+	ContentType string // MIME type (e.g., "application/pdf"); auto-detected if empty
 }
 
 // ListOpts controls which messages are returned by ListMessages.

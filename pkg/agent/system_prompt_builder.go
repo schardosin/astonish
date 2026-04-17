@@ -214,7 +214,7 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("5. Give each sub-task a descriptive name (e.g., \"fetch-pricing-page\", \"analyze-competitors\") — users see these as progress steps.\n")
 		sb.WriteString("6. After all sub-tasks complete, **synthesize** the results yourself — don't just concatenate sub-agent output.\n")
 		sb.WriteString("7. For substantial final outputs (reports, analyses, comparisons), save as a file with `write_file` so the user can download it.\n")
-		sb.WriteString("8. Use `update_plan` to mark plan steps as running/complete as you work through them.\n\n")
+		sb.WriteString("8. Plan steps are updated automatically as tools complete — do NOT try to update them manually.\n\n")
 
 		sb.WriteString("**Available tool groups (for delegation):**\n")
 		ctx := &minimalReadonlyContext{Context: context.Background()}

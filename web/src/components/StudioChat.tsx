@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search, Users, Info, FileText, Globe } from 'lucide-react'
+import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search, Users, Info, FileText, Globe, ListChecks } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { fetchSessions, fetchSessionHistory, deleteSession, connectChat, stopChat, fetchSessionStatus, connectChatStream } from '../api/studioChat'
@@ -15,6 +15,9 @@ import FleetExecutionPanel from './chat/FleetExecutionPanel'
 import TaskPlanPanel from './chat/TaskPlanPanel'
 import PlanPanel from './chat/PlanPanel'
 import FilePanel from './chat/FilePanel'
+import TodoPanel from './chat/TodoPanel'
+import UsagePopover from './chat/UsagePopover'
+import type { TokenUsage } from './chat/UsagePopover'
 import BrowserView from './chat/BrowserView'
 import ArtifactCard from './chat/ArtifactCard'
 import ResultCard from './chat/ResultCard'
@@ -196,6 +199,13 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   const [filePanelOpen, setFilePanelOpen] = useState(false)
   const [sessionArtifacts, setSessionArtifacts] = useState<SessionArtifact[]>([])
   const [filePanelInitialPath, setFilePanelInitialPath] = useState<string | null>(null)
+
+  // Todo panel state
+  const [todoPanelOpen, setTodoPanelOpen] = useState(false)
+
+  // Token usage state (from API-reported UsageMetadata)
+  const [tokenUsage, setTokenUsage] = useState<TokenUsage>({ inputTokens: 0, outputTokens: 0, totalTokens: 0 })
+  const [sessionStartTime, setSessionStartTime] = useState<number | null>(null)
 
   // Refs
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -436,6 +446,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     setMessages([])
     setSessionArtifacts([])
     setIsStreaming(true)
+    setSessionStartTime(Date.now())
     streamingTextRef.current = ''
 
     const controller = connectChatStream({
@@ -654,6 +665,18 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             break
           }
 
+          case 'usage': {
+            const input = (data.input_tokens as number) || 0
+            const output = (data.output_tokens as number) || 0
+            const total = (data.total_tokens as number) || 0
+            setTokenUsage(prev => ({
+              inputTokens: prev.inputTokens + input,
+              outputTokens: prev.outputTokens + output,
+              totalTokens: prev.totalTokens + total,
+            }))
+            break
+          }
+
           default:
             break
         }
@@ -697,6 +720,9 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     setFilePanelOpen(false)
     setSessionArtifacts([])
     setFilePanelInitialPath(null)
+    setTodoPanelOpen(false)
+    setTokenUsage({ inputTokens: 0, outputTokens: 0, totalTokens: 0 })
+    setSessionStartTime(null)
 
     // Check if this is a fleet session (from sidebar data)
     const session = sessions.find(s => s.id === sessionId)
@@ -772,6 +798,9 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     setSessionArtifacts([])
     setFilePanelOpen(false)
     setFilePanelInitialPath(null)
+    setTodoPanelOpen(false)
+    setTokenUsage({ inputTokens: 0, outputTokens: 0, totalTokens: 0 })
+    setSessionStartTime(null)
     if (inputRef.current) inputRef.current.focus()
   }, [isFleetMode, changeSession])
 
@@ -912,6 +941,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
       inputRef.current.style.height = 'auto'
     }
     setIsStreaming(true)
+    setSessionStartTime(Date.now())
     streamingTextRef.current = ''
 
     const controller = connectChat({
@@ -1302,6 +1332,18 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               })
             }
             break
+
+          case 'usage': {
+            const input = (data.input_tokens as number) || 0
+            const output = (data.output_tokens as number) || 0
+            const total = (data.total_tokens as number) || 0
+            setTokenUsage(prev => ({
+              inputTokens: prev.inputTokens + input,
+              outputTokens: prev.outputTokens + output,
+              totalTokens: prev.totalTokens + total,
+            }))
+            break
+          }
 
           default:
             break
@@ -1708,14 +1750,43 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
       {/* Chat Area */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        {/* File icon toolbar — shown when session has artifacts */}
-        {sessionArtifacts.length > 0 && (
-          <div
-            className="flex items-center justify-end px-3 py-1.5 shrink-0"
-            style={{ borderBottom: '1px solid var(--border-color)' }}
+        {/* Toolbar bar — always visible */}
+        <div
+          className="flex items-center justify-end gap-1.5 px-3 py-1.5 shrink-0"
+          style={{ borderBottom: '1px solid var(--border-color)' }}
+        >
+          {/* Todo button — shows plan steps in side panel */}
+          <button
+            onClick={() => { setTodoPanelOpen(!todoPanelOpen); if (!todoPanelOpen) setFilePanelOpen(false) }}
+            className="flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors"
+            style={{
+              background: todoPanelOpen ? 'var(--accent-bg, rgba(59, 130, 246, 0.15))' : 'transparent',
+              color: todoPanelOpen ? 'var(--accent-color, #60a5fa)' : 'var(--text-secondary)',
+              border: todoPanelOpen ? '1px solid var(--accent-border, rgba(59, 130, 246, 0.3))' : '1px solid transparent',
+            }}
+            title="Todo / Plan"
           >
+            <ListChecks size={13} />
+            <span>Todo</span>
+            {messages.some(m => m.type === 'plan') && (
+              <span className="px-1 py-0 rounded text-[10px] font-medium" style={{
+                background: 'var(--accent-bg, rgba(59, 130, 246, 0.15))',
+                color: 'var(--accent-color, #60a5fa)',
+              }}>
+                {(() => {
+                  const plans = messages.filter(m => m.type === 'plan') as PlanMessage[]
+                  const plan = plans[plans.length - 1]
+                  const done = plan.steps.filter(s => s.status === 'complete').length
+                  return `${done}/${plan.steps.length}`
+                })()}
+              </span>
+            )}
+          </button>
+
+          {/* Files button — shown when session has artifacts */}
+          {sessionArtifacts.length > 0 && (
             <button
-              onClick={() => { setFilePanelOpen(!filePanelOpen); setFilePanelInitialPath(null) }}
+              onClick={() => { setFilePanelOpen(!filePanelOpen); setFilePanelInitialPath(null); if (!filePanelOpen) setTodoPanelOpen(false) }}
               className="flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors"
               style={{
                 background: filePanelOpen ? 'var(--accent-bg, rgba(59, 130, 246, 0.15))' : 'transparent',
@@ -1733,8 +1804,15 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 {sessionArtifacts.length}
               </span>
             </button>
-          </div>
-        )}
+          )}
+
+          {/* Usage popover — shows token counts */}
+          <UsagePopover
+            usage={tokenUsage}
+            isStreaming={isStreaming}
+            sessionStartTime={sessionStartTime}
+          />
+        </div>
         {/* Fleet session header */}
         {isFleetMode && fleetInfo && (
           <div className="flex items-center justify-between px-4 py-2" style={{ borderBottom: '1px solid var(--border-color)', background: 'rgba(6, 182, 212, 0.05)' }}>
@@ -2210,6 +2288,14 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           initialPath={filePanelInitialPath}
           sessionId={activeSessionId}
           onClose={() => setFilePanelOpen(false)}
+        />
+      )}
+
+      {/* Todo Panel — right side split panel for plan steps */}
+      {todoPanelOpen && (
+        <TodoPanel
+          messages={messages}
+          onClose={() => setTodoPanelOpen(false)}
         />
       )}
     </div>

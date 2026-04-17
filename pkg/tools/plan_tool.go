@@ -12,16 +12,27 @@ import (
 // → SSE → frontend without any new callback wiring.
 var planProgressCallback func(event agent.SubTaskProgressEvent)
 
+// planStateCallback is set by the launcher to store the announced plan in
+// ChatAgent.PlanState, enabling auto-progression of plan steps in
+// AfterToolCallback without requiring update_plan LLM round-trips.
+var planStateCallback func(goal string, steps []agent.PlanStepInfo)
+
 // SetPlanProgressCallback sets the callback used by plan tools to emit SSE events.
 func SetPlanProgressCallback(fn func(event agent.SubTaskProgressEvent)) {
 	planProgressCallback = fn
+}
+
+// SetPlanStateCallback sets the callback used by announce_plan to store the
+// plan in ChatAgent for auto-progression.
+func SetPlanStateCallback(fn func(goal string, steps []agent.PlanStepInfo)) {
+	planStateCallback = fn
 }
 
 // --- announce_plan tool ---
 
 // PlanStepInput describes a single step in a plan.
 type PlanStepInput struct {
-	Name        string `json:"name" jsonschema:"Short identifier for this step (e.g., 'explore-repos', 'analyze-implementations', 'write-report'). Used to reference the step in update_plan calls."`
+	Name        string `json:"name" jsonschema:"Short identifier for this step (e.g., 'explore-repos', 'analyze-implementations', 'write-report')."`
 	Description string `json:"description" jsonschema:"Human-readable description of what this step accomplishes (e.g., 'Explore both repository structures and dependencies')."`
 }
 
@@ -37,10 +48,6 @@ type AnnouncePlanResult struct {
 }
 
 func announcePlan(_ tool.Context, args AnnouncePlanArgs) (AnnouncePlanResult, error) {
-	if planProgressCallback == nil {
-		return AnnouncePlanResult{Status: "ok"}, nil
-	}
-
 	steps := make([]agent.PlanStepInfo, len(args.Steps))
 	for i, s := range args.Steps {
 		steps[i] = agent.PlanStepInfo{
@@ -49,11 +56,19 @@ func announcePlan(_ tool.Context, args AnnouncePlanArgs) (AnnouncePlanResult, er
 		}
 	}
 
-	planProgressCallback(agent.SubTaskProgressEvent{
-		Type:      "plan_announced",
-		PlanGoal:  args.Goal,
-		PlanSteps: steps,
-	})
+	// Store the plan in ChatAgent for auto-progression.
+	if planStateCallback != nil {
+		planStateCallback(args.Goal, steps)
+	}
+
+	// Emit SSE event for frontend rendering.
+	if planProgressCallback != nil {
+		planProgressCallback(agent.SubTaskProgressEvent{
+			Type:      "plan_announced",
+			PlanGoal:  args.Goal,
+			PlanSteps: steps,
+		})
+	}
 
 	return AnnouncePlanResult{Status: "ok"}, nil
 }
@@ -62,41 +77,6 @@ func announcePlan(_ tool.Context, args AnnouncePlanArgs) (AnnouncePlanResult, er
 func NewAnnouncePlanTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "announce_plan",
-		Description: `Announce a structured plan before starting multi-step work. Call this BEFORE your first delegate_tasks call to show the user your high-level approach. The plan appears as a visible checklist in the UI. Keep steps high-level (3-7 steps) — each step represents a distinct phase, not individual tool calls. Use update_plan to mark steps as running/complete as you work through them.`,
+		Description: `Announce a structured plan before starting multi-step work. Call this BEFORE your first delegate_tasks call to show the user your high-level approach. The plan appears as a visible checklist in the UI — steps are automatically marked running/complete as tools execute, so you do not need to update them manually. Keep steps high-level (3-7 steps) — each step represents a distinct phase, not individual tool calls.`,
 	}, announcePlan)
-}
-
-// --- update_plan tool ---
-
-// UpdatePlanArgs is the input schema for the update_plan tool.
-type UpdatePlanArgs struct {
-	Step   string `json:"step" jsonschema:"The step name to update (must match a name from the announce_plan call)."`
-	Status string `json:"status" jsonschema:"New status: 'running', 'complete', or 'failed'."`
-}
-
-// UpdatePlanResult is the output of the update_plan tool.
-type UpdatePlanResult struct {
-	Status string `json:"status"`
-}
-
-func updatePlan(_ tool.Context, args UpdatePlanArgs) (UpdatePlanResult, error) {
-	if planProgressCallback == nil {
-		return UpdatePlanResult{Status: "ok"}, nil
-	}
-
-	planProgressCallback(agent.SubTaskProgressEvent{
-		Type:       "plan_step_update",
-		StepName:   args.Step,
-		StepStatus: args.Status,
-	})
-
-	return UpdatePlanResult{Status: "ok"}, nil
-}
-
-// NewUpdatePlanTool creates the update_plan tool.
-func NewUpdatePlanTool() (tool.Tool, error) {
-	return functiontool.New(functiontool.Config{
-		Name:        "update_plan",
-		Description: `Update the status of a plan step. Use this to mark steps as 'running' when you start working on them, 'complete' when done, or 'failed' if they cannot be completed. Only needed for steps you handle yourself (non-delegated work like synthesis or report writing) — delegated steps are auto-tracked.`,
-	}, updatePlan)
 }

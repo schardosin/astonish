@@ -175,7 +175,7 @@ func (cr *ChatRunner) Run(
 	// info (delegation_start, task_start, task_complete) and tagged activity
 	// (task_tool_call, task_tool_result, task_text) with the task name.
 	// Also carries plan events (plan_announced, plan_step_update) from the
-	// announce_plan / update_plan tools.
+	// announce_plan tool.
 	chatAgent.SubTaskProgressCallback = func(evt agent.SubTaskProgressEvent) {
 		data := map[string]any{
 			"event_type": evt.Type,
@@ -279,7 +279,7 @@ func (cr *ChatRunner) Run(
 					hasContent = true
 					// Suppress plan tool calls — their effect is visible via the PlanPanel,
 					// showing them as raw tool_call messages adds noise.
-					if part.FunctionCall.Name == "announce_plan" || part.FunctionCall.Name == "update_plan" {
+					if part.FunctionCall.Name == "announce_plan" {
 						continue
 					}
 					args := part.FunctionCall.Args
@@ -294,7 +294,7 @@ func (cr *ChatRunner) Run(
 				if part.FunctionResponse != nil {
 					hasContent = true
 					// Suppress plan tool results — no useful info for the user.
-					if part.FunctionResponse.Name == "announce_plan" || part.FunctionResponse.Name == "update_plan" {
+					if part.FunctionResponse.Name == "announce_plan" {
 						continue
 					}
 					resp := part.FunctionResponse.Response
@@ -308,6 +308,17 @@ func (cr *ChatRunner) Run(
 					cr.drainImagesAndFlowOutput(chatAgent)
 				}
 			}
+		}
+
+		// Emit usage event when the provider reports token counts.
+		// Only for non-partial responses to avoid duplicate emissions.
+		if event.LLMResponse.UsageMetadata != nil && !event.LLMResponse.Partial {
+			um := event.LLMResponse.UsageMetadata
+			cr.emitEvent("usage", map[string]any{
+				"input_tokens":  um.PromptTokenCount,
+				"output_tokens": um.CandidatesTokenCount,
+				"total_tokens":  um.TotalTokenCount,
+			})
 		}
 	}
 
@@ -362,7 +373,7 @@ func (cr *ChatRunner) Run(
 						}
 					}
 					if part.FunctionCall != nil {
-						if part.FunctionCall.Name == "announce_plan" || part.FunctionCall.Name == "update_plan" {
+						if part.FunctionCall.Name == "announce_plan" {
 							continue
 						}
 						args := part.FunctionCall.Args
@@ -375,7 +386,7 @@ func (cr *ChatRunner) Run(
 						})
 					}
 					if part.FunctionResponse != nil {
-						if part.FunctionResponse.Name == "announce_plan" || part.FunctionResponse.Name == "update_plan" {
+						if part.FunctionResponse.Name == "announce_plan" {
 							continue
 						}
 						resp := part.FunctionResponse.Response
@@ -389,6 +400,16 @@ func (cr *ChatRunner) Run(
 						cr.drainImagesAndFlowOutput(chatAgent)
 					}
 				}
+			}
+
+			// Emit usage event for retry loop too.
+			if event.LLMResponse.UsageMetadata != nil && !event.LLMResponse.Partial {
+				um := event.LLMResponse.UsageMetadata
+				cr.emitEvent("usage", map[string]any{
+					"input_tokens":  um.PromptTokenCount,
+					"output_tokens": um.CandidatesTokenCount,
+					"total_tokens":  um.TotalTokenCount,
+				})
 			}
 		}
 	} else if lastRunErr == nil && !hasContent && cr.ctx.Err() == nil {

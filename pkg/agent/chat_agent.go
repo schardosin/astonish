@@ -40,7 +40,6 @@ type KnowledgeSearchByCategoryFunc func(ctx context.Context, query string, bm25Q
 // It wraps ADK's llmagent in a persistent chat session where the LLM
 // decides which tools to call and how to proceed.
 //
-
 // Execution records a trace. After reusable tasks, auto-distillation
 // generates a flow YAML + knowledge doc. /distill remains as manual fallback.
 type ChatAgent struct {
@@ -123,6 +122,12 @@ type ChatAgent struct {
 	// here for direct delivery to the user via SSE or channel output.
 	pendingFlowOutput string
 	flowOutputMu      sync.Mutex
+
+	// Plan auto-progression: tracks step state from announce_plan so that
+	// AfterToolCallback can automatically mark steps running/complete
+	// without requiring the LLM to call update_plan (saving full round-trips).
+	activePlan   *PlanState
+	activePlanMu sync.Mutex
 }
 
 // ImageFromTool holds image data extracted from a tool result before the
@@ -364,6 +369,14 @@ func (c *ChatAgent) DrainFlowOutput() string {
 	out := c.pendingFlowOutput
 	c.pendingFlowOutput = ""
 	return out
+}
+
+// SetActivePlan stores the plan state for auto-progression in AfterToolCallback.
+// Thread-safe: called from the announce_plan tool's planStateCallback.
+func (c *ChatAgent) SetActivePlan(plan *PlanState) {
+	c.activePlanMu.Lock()
+	c.activePlan = plan
+	c.activePlanMu.Unlock()
 }
 
 // extractAndStripFlowOutput checks a run_flow tool result for a large "output"

@@ -157,6 +157,7 @@ Use ` + "`delegate_tasks`" + ` to run tasks via sub-agents. Sub-agent execution 
 - The task requires tools not on the main thread (browser, web, email, credentials, sandbox_templates, fleet_plans, drills, etc.)
 - You have 2+ independent tasks that can run in parallel
 - A task involves many sequential tool calls (file analysis, API testing, container setup)
+- The task is web research (search + read articles) — delegate so only concise findings enter your context, not raw search results that bloat it
 
 **Do it yourself (no delegation) when:**
 - Your main-thread tools (read_file, write_file, edit_file, shell_command, grep_search, find_files, memory_save, memory_search) are sufficient
@@ -208,13 +209,12 @@ After all sub-tasks complete, you are the synthesizer. **Do not just concatenate
 
 ## Announcing Your Plan
 
-**For any multi-step task that involves delegation, ALWAYS call ` + "`announce_plan`" + ` first.** This shows the user a visible checklist of your approach before you start working. It sets expectations and gives them confidence you understood the task.
+**For any multi-step task that involves delegation, ALWAYS call ` + "`announce_plan`" + ` first.** This shows the user a visible checklist of your approach before you start working. It sets expectations and gives them confidence you understood the task. Plan steps are updated automatically as tools complete — do not try to update them manually.
 
 **How to use:**
 1. Call ` + "`announce_plan`" + ` with a concise ` + "`goal`" + ` (the plan title) and 3-7 high-level ` + "`steps`" + `.
-2. Call ` + "`update_plan(step=\"step-name\", status=\"running\")`" + ` when you START working on a step.
-3. Call ` + "`update_plan(step=\"step-name\", status=\"complete\")`" + ` when a step finishes.
-4. Delegated steps (via ` + "`delegate_tasks`" + `) should still be marked running/complete by you — call ` + "`update_plan`" + ` before and after each ` + "`delegate_tasks`" + ` call.
+2. Each step should correspond to a phase of work (typically one ` + "`delegate_tasks`" + ` call or a major tool invocation).
+3. Steps are automatically marked running when work begins and complete when it finishes.
 
 **Plan step naming tips:**
 - Keep steps high-level: "Explore repository structures", not "Clone repo and run find"

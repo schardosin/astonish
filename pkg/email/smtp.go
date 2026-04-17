@@ -3,10 +3,12 @@ package email
 import (
 	"bytes"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"mime"
 	"mime/quotedprintable"
 	"net"
+	"net/http"
 	"net/smtp"
 	"strings"
 	"time"
@@ -41,36 +43,35 @@ func SendSMTP(cfg *Config, msg OutgoingMessage, extraHeaders map[string]string) 
 		buf.WriteString(fmt.Sprintf("%s: %s\r\n", key, value))
 	}
 
-	// Body
-	if msg.HTML != "" {
-		// Multipart alternative: text + HTML
-		boundary := fmt.Sprintf("==astonish_%d==", time.Now().UnixNano())
-		buf.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=\"%s\"\r\n", boundary))
+	// Body — with optional file attachments.
+	// When attachments are present, the MIME structure is:
+	//   multipart/mixed
+	//     multipart/alternative (text + HTML body)
+	//     application/octet-stream (attachment 1)
+	//     application/octet-stream (attachment 2)
+	// Without attachments, the structure is the same as before:
+	//   multipart/alternative (text + HTML) or plain text.
+	hasAttachments := len(msg.Attachments) > 0
+
+	if hasAttachments {
+		// Outer boundary: multipart/mixed
+		mixedBoundary := fmt.Sprintf("==astonish_mixed_%d==", time.Now().UnixNano())
+		buf.WriteString(fmt.Sprintf("Content-Type: multipart/mixed; boundary=\"%s\"\r\n", mixedBoundary))
 		buf.WriteString("\r\n")
 
-		// Text part
-		buf.WriteString(fmt.Sprintf("--%s\r\n", boundary))
-		buf.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
-		buf.WriteString("Content-Transfer-Encoding: quoted-printable\r\n")
-		buf.WriteString("\r\n")
-		buf.WriteString(encodeQuotedPrintable(msg.Body))
-		buf.WriteString("\r\n")
+		// First part: the message body (text or text+HTML)
+		buf.WriteString(fmt.Sprintf("--%s\r\n", mixedBoundary))
+		writeBodyPart(&buf, msg)
 
-		// HTML part
-		buf.WriteString(fmt.Sprintf("--%s\r\n", boundary))
-		buf.WriteString("Content-Type: text/html; charset=utf-8\r\n")
-		buf.WriteString("Content-Transfer-Encoding: quoted-printable\r\n")
-		buf.WriteString("\r\n")
-		buf.WriteString(encodeQuotedPrintable(msg.HTML))
-		buf.WriteString("\r\n")
+		// Attachment parts
+		for _, att := range msg.Attachments {
+			buf.WriteString(fmt.Sprintf("--%s\r\n", mixedBoundary))
+			writeAttachmentPart(&buf, att)
+		}
 
-		buf.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
+		buf.WriteString(fmt.Sprintf("--%s--\r\n", mixedBoundary))
 	} else {
-		// Plain text only
-		buf.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
-		buf.WriteString("Content-Transfer-Encoding: quoted-printable\r\n")
-		buf.WriteString("\r\n")
-		buf.WriteString(encodeQuotedPrintable(msg.Body))
+		writeBodyPart(&buf, msg)
 	}
 
 	// Collect all recipients
@@ -224,4 +225,70 @@ func encodeQuotedPrintable(text string) string {
 	_, _ = w.Write([]byte(text))
 	_ = w.Close()
 	return buf.String()
+}
+
+// writeBodyPart writes the email body (text-only or multipart/alternative)
+// as a MIME part. When used inside a multipart/mixed envelope, this becomes
+// one part of the mixed message. When used standalone, it writes the
+// Content-Type header directly.
+func writeBodyPart(buf *strings.Builder, msg OutgoingMessage) {
+	if msg.HTML != "" {
+		// Multipart alternative: text + HTML
+		altBoundary := fmt.Sprintf("==astonish_alt_%d==", time.Now().UnixNano())
+		buf.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=\"%s\"\r\n", altBoundary))
+		buf.WriteString("\r\n")
+
+		// Text part
+		buf.WriteString(fmt.Sprintf("--%s\r\n", altBoundary))
+		buf.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
+		buf.WriteString("Content-Transfer-Encoding: quoted-printable\r\n")
+		buf.WriteString("\r\n")
+		buf.WriteString(encodeQuotedPrintable(msg.Body))
+		buf.WriteString("\r\n")
+
+		// HTML part
+		buf.WriteString(fmt.Sprintf("--%s\r\n", altBoundary))
+		buf.WriteString("Content-Type: text/html; charset=utf-8\r\n")
+		buf.WriteString("Content-Transfer-Encoding: quoted-printable\r\n")
+		buf.WriteString("\r\n")
+		buf.WriteString(encodeQuotedPrintable(msg.HTML))
+		buf.WriteString("\r\n")
+
+		buf.WriteString(fmt.Sprintf("--%s--\r\n", altBoundary))
+	} else {
+		// Plain text only
+		buf.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
+		buf.WriteString("Content-Transfer-Encoding: quoted-printable\r\n")
+		buf.WriteString("\r\n")
+		buf.WriteString(encodeQuotedPrintable(msg.Body))
+	}
+}
+
+// writeAttachmentPart writes a single file attachment as a base64-encoded
+// MIME part with Content-Disposition: attachment.
+func writeAttachmentPart(buf *strings.Builder, att Attachment) {
+	contentType := att.ContentType
+	if contentType == "" {
+		contentType = http.DetectContentType(att.Data)
+	}
+
+	// Encode filename for non-ASCII characters (RFC 2231)
+	encodedName := mime.QEncoding.Encode("utf-8", att.Filename)
+
+	buf.WriteString(fmt.Sprintf("Content-Type: %s; name=\"%s\"\r\n", contentType, encodedName))
+	buf.WriteString("Content-Transfer-Encoding: base64\r\n")
+	buf.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=\"%s\"\r\n", encodedName))
+	buf.WriteString("\r\n")
+
+	// Base64-encode in 76-char lines per RFC 2045
+	encoded := base64.StdEncoding.EncodeToString(att.Data)
+	for len(encoded) > 76 {
+		buf.WriteString(encoded[:76])
+		buf.WriteString("\r\n")
+		encoded = encoded[76:]
+	}
+	if len(encoded) > 0 {
+		buf.WriteString(encoded)
+		buf.WriteString("\r\n")
+	}
 }

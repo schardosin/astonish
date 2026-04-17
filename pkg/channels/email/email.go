@@ -235,6 +235,20 @@ func (e *EmailChannel) Send(ctx context.Context, target channels.Target, msg cha
 		outgoing.HTML = markdownToEmailHTML(msg.Text)
 	}
 
+	// Convert document attachments (e.g., PDF reports generated from markdown
+	// files) to SMTP-level attachments. The ChannelManager already handles
+	// markdown-to-PDF conversion in fileToDocument(), so these are ready
+	// to attach as-is.
+	for _, doc := range msg.Documents {
+		if len(doc.Data) == 0 {
+			continue
+		}
+		outgoing.Attachments = append(outgoing.Attachments, emailpkg.Attachment{
+			Filename: doc.Filename,
+			Data:     doc.Data,
+		})
+	}
+
 	var outboundMessageID string
 	var err error
 

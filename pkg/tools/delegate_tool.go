@@ -133,7 +133,10 @@ func delegateTasks(ctx tool.Context, args DelegateTasksArgs) (DelegateTasksResul
 	// Build response — summarize large results to prevent context explosion.
 	// The full result is stored in TaskResultStore and can be retrieved via
 	// read_task_result when the orchestrator needs complete data for synthesis.
-	const summarizeThreshold = 3000 // chars
+	// Threshold is 20000 chars (~5k tokens): an extra read_task_result round-trip
+	// costs ~30k tokens (full context resent), so inlining results under this
+	// size is almost always cheaper than summarizing and round-tripping.
+	const summarizeThreshold = 20000 // chars
 	store := GetTaskResultStore()
 
 	resultItems := make([]SubTaskResultItem, len(results))

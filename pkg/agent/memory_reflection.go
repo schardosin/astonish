@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -51,20 +50,22 @@ type MemorySaveStore interface {
 const reflectionPrompt = `You are a memory management assistant. Your ONLY job is to decide whether the conversation and task execution below contain durable knowledge worth saving to persistent memory.
 
 Durable knowledge includes:
-- Connection details, configuration parameters, or environment-specific information collected during conversation (domains, project names, auth URLs, regions, API endpoints, service types, hostnames, ports, usernames)
+- Connection details, configuration parameters, or environment-specific information (hostnames, API base URLs, auth methods, credential names, ports)
 - Workarounds discovered after initial failures (what failed, why, what worked)
 - Non-obvious file paths, API endpoints, configuration patterns
 - Shell command quirks, syntax gotchas, tool-specific behaviors
 - Integration details (auth flows, required headers, API schemas, credential names)
 
-NOT durable knowledge (do NOT save):
-- Command outputs, resource lists, current status, or anything ephemeral
-- Trivial factual information the user provided that has no environment-specific value (e.g., explaining how a command works)
-- Generic programming concepts unrelated to this specific environment or toolchain
-- Results that change over time (IPs of dynamic resources, pod names, etc.)
+NOT durable knowledge — NEVER save, even if they appear in tool results:
+- Lists of resources that change over time (VMs, containers, pods, databases, storage volumes, user accounts, running processes). These MUST be fetched live each time — saving them creates stale snapshots that will become wrong.
+- Resource names/IDs and their current mapping (e.g., "ID 100 = my-server, ID 101 = my-database"). These change when resources are added or removed.
+- Current status of any resource (running, stopped, healthy, degraded, etc.)
+- Command outputs, log snippets, disk usage, memory usage, or any live metrics
+- Trivial factual information with no environment-specific value
+- Generic programming concepts unrelated to this specific environment
 - Secret values (passwords, tokens, API keys) — NEVER include actual secret values
 
-IMPORTANT: When connection details, configuration parameters, or credential metadata were exchanged in the conversation, those ARE durable knowledge — save them even if the user provided them. Future sessions need this context to avoid re-asking for the same information.
+IMPORTANT: Connection details (hostnames, API base URLs, auth methods, credential names) ARE durable knowledge — save them even if the user provided them. However, the actual CONTENTS retrieved from those connections (resource lists, statuses, query results) are NOT durable and must NOT be saved.
 
 If you find durable knowledge worth saving, call memory_save with:
 - category: a short descriptive heading
@@ -74,6 +75,18 @@ If you find durable knowledge worth saving, call memory_save with:
 If there is nothing worth saving, respond with exactly: "No durable knowledge to save."
 
 You may call memory_save multiple times if there are distinct categories of knowledge.`
+
+// validationPrompt is the system instruction for the post-extraction validation
+// LLM call. This runs after the reflector decides to save, comparing proposed
+// content against the existing section to filter out duplicates.
+const validationPrompt = `You are a memory deduplication filter. You receive existing section content and proposed new content. Your job is to return ONLY the lines from the proposed content that contain genuinely new information not already covered by the existing content.
+
+Rules:
+- If a proposed line contains the same URL, hostname, IP, credential name, file path, endpoint, or configuration value that already appears in the existing content — even with different wording — it is NOT new. Remove it.
+- If a proposed line is a rephrased or summarized version of information already present, it is NOT new. Remove it.
+- If a proposed line adds a genuinely new fact (a value, detail, or piece of knowledge not present anywhere in the existing content), keep it.
+- Return ONLY the new lines as bullet points using "- " prefix, preserving their original wording.
+- If NOTHING is genuinely new, respond with exactly: NONE`
 
 // Reflect analyzes the execution trace and conversation context, then optionally
 // saves knowledge to memory. It runs a single LLM call with the memory_save tool
@@ -193,6 +206,8 @@ func (r *MemoryReflector) Reflect(ctx context.Context, trace *ExecutionTrace, ev
 }
 
 // executeSave runs a single memory_save call using the MemoryManager directly.
+// For append operations (overwrite=false), it validates the proposed content
+// against the existing section to filter out duplicates before writing.
 func (r *MemoryReflector) executeSave(ctx context.Context, fc *genai.FunctionCall) {
 	args := fc.Args
 	if args == nil {
@@ -209,9 +224,29 @@ func (r *MemoryReflector) executeSave(ctx context.Context, fc *genai.FunctionCal
 		return
 	}
 
-	// Use the same MemorySave function from the tools package, but call
-	// the manager directly to avoid import cycles.
 	targetFile := strings.TrimSpace(file)
+
+	// Resolve the file path for section lookup
+	var filePath string
+	if targetFile == "" || strings.EqualFold(targetFile, "MEMORY.md") {
+		filePath = r.MemoryManager.Path
+	} else if r.MemoryStore != nil && r.MemoryStore.Config() != nil {
+		filePath = filepath.Join(r.MemoryStore.Config().MemoryDir, targetFile)
+	}
+
+	// Validate content against existing section (skip for overwrite or missing path)
+	if !overwrite && filePath != "" {
+		existingContent, found := memory.GetSectionContent(filePath, category)
+		if found && existingContent != "" {
+			filtered := r.validateContent(ctx, category, existingContent, content)
+			if filtered == "" {
+				slog.Debug("memory reflection validation filtered all content",
+					"component", "memory-reflection", "category", category)
+				return
+			}
+			content = filtered
+		}
+	}
 
 	if targetFile == "" || strings.EqualFold(targetFile, "MEMORY.md") {
 		// Core tier: append to MEMORY.md
@@ -231,46 +266,17 @@ func (r *MemoryReflector) executeSave(ctx context.Context, fc *genai.FunctionCal
 			}()
 		}
 	} else {
-		// Knowledge tier: write to specific file
+		// Knowledge tier: write to specific file using section-aware dedup
 		if r.MemoryStore == nil || r.MemoryStore.Config() == nil {
 			slog.Debug("memory reflection skipped knowledge tier save: no store configured", "component", "memory-reflection")
 			return
 		}
 
-		memDir := r.MemoryStore.Config().MemoryDir
-		absPath := filepath.Join(memDir, targetFile)
+		absPath := filepath.Join(r.MemoryStore.Config().MemoryDir, targetFile)
 
-		// Ensure parent directory exists
-		dir := filepath.Dir(absPath)
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			slog.Debug("memory reflection failed to create directory", "component", "memory-reflection", "dir", dir, "error", err)
+		if err := memory.AppendToFile(absPath, category, content, overwrite, r.DebugMode); err != nil {
+			slog.Debug("memory reflection failed to write file", "component", "memory-reflection", "file", targetFile, "error", err)
 			return
-		}
-
-		// Build content with category heading
-		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("\n## %s\n\n", category))
-		sb.WriteString(content)
-		sb.WriteString("\n")
-
-		// Append or overwrite
-		if overwrite {
-			if err := os.WriteFile(absPath, []byte(sb.String()), 0644); err != nil {
-				slog.Debug("memory reflection failed to write file", "component", "memory-reflection", "file", targetFile, "error", err)
-				return
-			}
-		} else {
-			f, err := os.OpenFile(absPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-			if err != nil {
-				slog.Debug("memory reflection failed to open file for append", "component", "memory-reflection", "file", targetFile, "error", err)
-				return
-			}
-			_, err = f.WriteString(sb.String())
-			f.Close()
-			if err != nil {
-				slog.Debug("memory reflection failed to append to file", "component", "memory-reflection", "file", targetFile, "error", err)
-				return
-			}
 		}
 
 		slog.Debug("memory reflection saved to file", "component", "memory-reflection", "file", targetFile, "category", category)
@@ -284,6 +290,65 @@ func (r *MemoryReflector) executeSave(ctx context.Context, fc *genai.FunctionCal
 			}()
 		}
 	}
+}
+
+// validateContent makes a small LLM call to compare proposed content against
+// existing section content and returns only genuinely new lines. Returns empty
+// string if nothing is new.
+func (r *MemoryReflector) validateContent(ctx context.Context, category, existingContent, proposedContent string) string {
+	userPrompt := fmt.Sprintf("## Existing content in section %q:\n%s\n\n## Proposed new content:\n%s",
+		category, existingContent, proposedContent)
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{
+				Parts: []*genai.Part{{Text: userPrompt}},
+				Role:  "user",
+			},
+		},
+		Config: &genai.GenerateContentConfig{
+			SystemInstruction: &genai.Content{
+				Parts: []*genai.Part{{Text: validationPrompt}},
+			},
+		},
+	}
+
+	var lastResp *model.LLMResponse
+	for resp, err := range r.LLM.GenerateContent(ctx, req, false) {
+		if err != nil {
+			slog.Debug("memory validation LLM error", "component", "memory-reflection", "error", err)
+			// On error, allow the original content through as a fallback
+			return proposedContent
+		}
+		lastResp = resp
+	}
+
+	if lastResp == nil || lastResp.Content == nil {
+		return proposedContent
+	}
+
+	// Extract text response
+	var responseText string
+	for _, part := range lastResp.Content.Parts {
+		if part.Text != "" {
+			responseText = strings.TrimSpace(part.Text)
+			break
+		}
+	}
+
+	if responseText == "" || strings.EqualFold(responseText, "NONE") {
+		return ""
+	}
+
+	if r.DebugMode {
+		slog.Debug("memory validation filtered content",
+			"component", "memory-reflection",
+			"category", category,
+			"original_len", len(proposedContent),
+			"filtered_len", len(responseText))
+	}
+
+	return responseText
 }
 
 // countToolCallsRecursive returns the total number of tool calls in the trace,
@@ -332,7 +397,7 @@ func traceContainsMemorySave(trace *ExecutionTrace) bool {
 
 // buildReflectionContext creates a rich context for the reflection LLM prompt,
 // including the conversation exchange and tool execution trace with sub-agent
-// details. This replaces the simpler buildTraceSummary.
+// details.
 func buildReflectionContext(trace *ExecutionTrace, events session.Events) string {
 	var sb strings.Builder
 

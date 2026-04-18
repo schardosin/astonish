@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 // Manager handles reading and writing the MEMORY.md file.
@@ -58,14 +59,30 @@ func (m *Manager) Load() (string, error) {
 
 // Append adds content under a ## Category heading in MEMORY.md.
 // If the section doesn't exist, it is created. Duplicate lines
-// (exact match) within the same section are skipped.
+// (exact match) within the same section are skipped. Section headings
+// are matched using fuzzy word-overlap (Jaccard similarity) so that
+// "Proxmox Server" and "Proxmox Server Configuration" merge into one section.
 // When overwrite is true, the entire section is replaced with the new content.
 func (m *Manager) Append(category, content string, overwrite bool) error {
 	if err := m.EnsureDir(); err != nil {
 		return fmt.Errorf("failed to create memory directory: %w", err)
 	}
+	return AppendToFile(m.Path, category, content, overwrite, m.DebugMode)
+}
 
-	existing, err := m.Load()
+// AppendToFile adds content under a ## Category heading in any markdown file.
+// It applies the same section-aware deduplication and fuzzy heading matching
+// used for MEMORY.md. The file and parent directories are created if needed.
+// This is the shared implementation used by both the core tier (MEMORY.md)
+// and knowledge tier (topic-specific files).
+func AppendToFile(path, category, content string, overwrite, debugMode bool) error {
+	// Ensure parent directory exists
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("failed to create directory for %s: %w", path, err)
+	}
+
+	// Read existing content
+	existing, err := readFileOrEmpty(path)
 	if err != nil {
 		return err
 	}
@@ -73,7 +90,7 @@ func (m *Manager) Append(category, content string, overwrite bool) error {
 	// Parse existing file into sections
 	sections := parseSections(existing)
 
-	// Find or create the target section
+	// Find or create the target section (fuzzy match)
 	sectionKey := strings.TrimSpace(category)
 	section, exists := sections.get(sectionKey)
 	if !exists {
@@ -93,8 +110,8 @@ func (m *Manager) Append(category, content string, overwrite bool) error {
 		}
 		section.lines = cleaned
 
-		if m.DebugMode {
-			slog.Debug("overwrote section", "component", "memory", "category", category, "lines", len(cleaned))
+		if debugMode {
+			slog.Debug("overwrote section", "component", "memory", "category", category, "matched", section.heading, "lines", len(cleaned))
 		}
 	} else {
 		// Add new lines, skipping duplicates
@@ -117,24 +134,57 @@ func (m *Manager) Append(category, content string, overwrite bool) error {
 		}
 
 		if added == 0 {
-			if m.DebugMode {
-				slog.Debug("no new lines to add to section", "component", "memory", "category", category)
+			if debugMode {
+				slog.Debug("no new lines to add to section", "component", "memory", "category", category, "matched", section.heading)
 			}
 			return nil
 		}
 
-		if m.DebugMode {
-			slog.Debug("added lines to section", "component", "memory", "added", added, "category", category)
+		if debugMode {
+			slog.Debug("added lines to section", "component", "memory", "added", added, "category", category, "matched", section.heading)
 		}
 	}
 
 	// Write back
 	output := sections.render()
-	if err := os.WriteFile(m.Path, []byte(output), 0644); err != nil {
-		return fmt.Errorf("failed to write memory file: %w", err)
+	if err := os.WriteFile(path, []byte(output), 0644); err != nil {
+		return fmt.Errorf("failed to write file %s: %w", path, err)
 	}
 
 	return nil
+}
+
+// readFileOrEmpty reads a file, returning "" if it does not exist.
+func readFileOrEmpty(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to read file %s: %w", path, err)
+	}
+	return string(data), nil
+}
+
+// GetSectionContent reads a markdown file and returns the content of the
+// section that matches the given category heading (using fuzzy/subset matching).
+// Returns the section content as a string and true if a matching section was
+// found, or ("", false) if no match exists or the file doesn't exist.
+// This is used by the memory reflector to check existing content before writing.
+func GetSectionContent(path, category string) (string, bool) {
+	existing, err := readFileOrEmpty(path)
+	if err != nil || existing == "" {
+		return "", false
+	}
+
+	sections := parseSections(existing)
+	sectionKey := strings.TrimSpace(category)
+	section, found := sections.get(sectionKey)
+	if !found || len(section.lines) == 0 {
+		return "", false
+	}
+
+	return strings.Join(section.lines, "\n"), true
 }
 
 // memorySection represents a ## heading and its content lines.
@@ -156,14 +206,149 @@ func newSectionList() *sectionList {
 	}
 }
 
+// fuzzyMatchThreshold is the minimum Jaccard similarity score for two section
+// headings to be considered the same topic. 0.5 means at least half of the
+// significant words must overlap.
+const fuzzyMatchThreshold = 0.5
+
 func (sl *sectionList) get(heading string) (*memorySection, bool) {
-	// Case-insensitive lookup
+	// 1. Exact case-insensitive match (fast path, preserves existing behavior)
 	for _, s := range sl.sections {
 		if strings.EqualFold(s.heading, heading) {
 			return s, true
 		}
 	}
+
+	// 2. Subset match: if all significant words of one heading appear in the
+	// other, the headings describe the same topic at different specificity
+	// levels (e.g., "Proxmox" absorbs "Proxmox API Access").
+	newWords := headingWords(heading)
+	if len(newWords) == 0 {
+		return nil, false
+	}
+
+	for _, s := range sl.sections {
+		existWords := headingWords(s.heading)
+		if len(existWords) == 0 {
+			continue
+		}
+		if isSubset(newWords, existWords) || isSubset(existWords, newWords) {
+			return s, true
+		}
+	}
+
+	// 3. Fuzzy match: compare significant words using Jaccard similarity
+	var bestSection *memorySection
+	bestScore := 0.0
+
+	for _, s := range sl.sections {
+		existWords := headingWords(s.heading)
+		score := jaccardSimilarity(newWords, existWords)
+		if score > bestScore {
+			bestScore = score
+			bestSection = s
+		}
+	}
+
+	if bestScore >= fuzzyMatchThreshold && bestSection != nil {
+		return bestSection, true
+	}
+
 	return nil, false
+}
+
+// isSubset returns true if every word in set a also exists in set b.
+func isSubset(a, b map[string]bool) bool {
+	if len(a) == 0 {
+		return false
+	}
+	for w := range a {
+		if !b[w] {
+			return false
+		}
+	}
+	return true
+}
+
+// headingStopWords are structural/filler words stripped before comparing
+// headings. These carry no topic identity and cause false negatives when
+// the LLM rephrases the same concept (e.g., "Server Configuration" vs
+// "Connection Details").
+var headingStopWords = map[string]bool{
+	"details":       true,
+	"detail":        true,
+	"configuration": true,
+	"config":        true,
+	"connection":    true,
+	"service":       true,
+	"environment":   true,
+	"info":          true,
+	"information":   true,
+	"settings":      true,
+	"setup":         true,
+	"status":        true,
+	"the":           true,
+	"and":           true,
+	"for":           true,
+	"with":          true,
+}
+
+// headingWords extracts significant words from a heading for comparison.
+// It lowercases, removes punctuation, filters stop words, and applies
+// basic plural stemming (trailing "s" removal for words 5+ chars).
+func headingWords(heading string) map[string]bool {
+	words := make(map[string]bool)
+
+	// Split on whitespace and common punctuation
+	fields := strings.FieldsFunc(strings.ToLower(heading), func(r rune) bool {
+		return unicode.IsSpace(r) || r == '-' || r == '/' || r == '(' || r == ')' || r == ',' || r == ':'
+	})
+
+	for _, w := range fields {
+		// Remove any remaining non-alphanumeric chars
+		w = strings.TrimFunc(w, func(r rune) bool {
+			return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+		})
+		if w == "" {
+			continue
+		}
+		if headingStopWords[w] {
+			continue
+		}
+		// Basic plural stemming to normalize singular/plural forms.
+		// Handles: "servers"->"server", "accounts"->"account",
+		// "repositories"->"repository", "entries"->"entry".
+		if len(w) >= 5 {
+			if strings.HasSuffix(w, "ies") {
+				w = w[:len(w)-3] + "y"
+			} else if strings.HasSuffix(w, "s") && !strings.HasSuffix(w, "ss") {
+				w = w[:len(w)-1]
+			}
+		}
+		words[w] = true
+	}
+	return words
+}
+
+// jaccardSimilarity computes |A ∩ B| / |A ∪ B| for two word sets.
+// Returns 0 if both sets are empty.
+func jaccardSimilarity(a, b map[string]bool) float64 {
+	if len(a) == 0 && len(b) == 0 {
+		return 0
+	}
+
+	intersection := 0
+	for w := range a {
+		if b[w] {
+			intersection++
+		}
+	}
+
+	union := len(a) + len(b) - intersection
+	if union == 0 {
+		return 0
+	}
+	return float64(intersection) / float64(union)
 }
 
 func (sl *sectionList) add(s *memorySection) {

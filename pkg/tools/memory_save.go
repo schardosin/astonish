@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -84,34 +83,8 @@ func MemorySave(mgr *memory.Manager, store MemorySaveStore) func(ctx tool.Contex
 
 		absPath := filepath.Join(memDir, clean)
 
-		// Create directories as needed
-		if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
-			return MemorySaveResult{}, fmt.Errorf("failed to create directory: %w", err)
-		}
-
-		// Read existing content
-		existing, readErr := os.ReadFile(absPath)
-		if readErr != nil && !os.IsNotExist(readErr) {
-			slog.Debug("failed to read existing memory file", "path", absPath, "error", readErr)
-		}
-		existingStr := string(existing)
-
-		// Append content under category heading
-		var sb strings.Builder
-		if existingStr != "" {
-			sb.WriteString(existingStr)
-			if !strings.HasSuffix(existingStr, "\n") {
-				sb.WriteString("\n")
-			}
-			sb.WriteString("\n")
-		}
-		sb.WriteString("## ")
-		sb.WriteString(args.Category)
-		sb.WriteString("\n")
-		sb.WriteString(args.Content)
-		sb.WriteString("\n")
-
-		if err := os.WriteFile(absPath, []byte(sb.String()), 0644); err != nil {
+		// Use section-aware append with dedup and fuzzy heading matching
+		if err := memory.AppendToFile(absPath, args.Category, args.Content, args.Overwrite, false); err != nil {
 			return MemorySaveResult{}, fmt.Errorf("failed to write to %s: %w", clean, err)
 		}
 

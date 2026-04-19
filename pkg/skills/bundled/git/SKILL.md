@@ -1,13 +1,37 @@
 ---
 name: git
-description: "Advanced git operations — rebase, bisect, stash, worktree, reflog, cherry-pick"
+description: "Git operations — clone, shallow clone, sparse checkout, rebase, bisect, stash, worktree, reflog, cherry-pick"
 require_bins: ["git"]
 ---
 
-# Git (Advanced)
+# Git
 
 Basic operations (add, commit, push, pull, log, diff) are assumed knowledge.
-This skill covers advanced operations that benefit from reference.
+This skill covers cloning strategies and advanced operations that benefit from reference.
+
+## Cloning & Fetching
+```
+git clone <url>                          # Full clone
+git clone --depth 1 <url>               # Shallow clone (latest commit only — fast)
+git clone --filter=blob:none <url>      # Blobless clone (full history, lazy file fetches)
+git clone --sparse <url>                # Sparse clone (checkout only root)
+```
+After sparse clone, use `git sparse-checkout` to select specific directories:
+```
+git sparse-checkout set src/ pkg/       # Only check out src/ and pkg/
+git sparse-checkout add docs/           # Add another directory
+```
+
+**When to clone:** For any task that requires reading, analyzing, or comparing multiple files from a repository, clone it locally first. This gives you full access to `grep_search`, `file_tree`, `read_file`, and the complete codebase — far more efficient than fetching files one-by-one via HTTP.
+
+**If clone fails:** Do NOT immediately abandon cloning. Follow this fallback chain:
+1. **Retry once** — DNS and network errors are often transient, especially in sandboxed environments.
+2. **Try `gh repo clone`** — the GitHub CLI uses different auth and transport paths that may succeed when `git clone` fails. Load the `github` skill if needed.
+3. **Diagnose** — run `nslookup github.com` or `curl -I https://github.com` to check connectivity before concluding the network is unavailable.
+4. **Try `web_fetch`** on `raw.githubusercontent.com/<owner>/<repo>/main/<path>` — lightweight HTTP fetch, no MCP server needed.
+5. **Only as a last resort**, fall back to MCP scraping tools (e.g., firecrawl). These are slow, truncation-prone, and produce dramatically worse results than a local clone.
+
+Never conclude "network is unavailable" from a single failed clone attempt.
 
 ## Interactive Rebase
 ```

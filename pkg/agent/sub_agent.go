@@ -190,6 +190,16 @@ type SubAgentManager struct {
 	// additional tools mid-execution via explicit search.
 	SearchToolsTool tool.Tool
 
+	// SkillLookupTool is injected into every sub-agent so it can load
+	// skill content on demand when it encounters a matching task (e.g.,
+	// git/github skills for repository operations).
+	SkillLookupTool tool.Tool
+
+	// SkillIndex is the lightweight skill listing (names + descriptions)
+	// injected into sub-agent system prompts so they know which skills
+	// exist and can call skill_lookup to load them.
+	SkillIndex string
+
 	// Internal
 	sem          chan struct{}     // concurrency semaphore
 	lastTracesMu sync.Mutex        // protects lastTraces
@@ -459,6 +469,12 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	// tools mid-execution if its initial set is insufficient.
 	if m.SearchToolsTool != nil {
 		childTools = append(childTools, m.SearchToolsTool)
+	}
+
+	// Inject skill_lookup into every sub-agent so it can load skill content
+	// on demand (e.g., git/github skills for repository operations).
+	if m.SkillLookupTool != nil {
+		childTools = append(childTools, m.SkillLookupTool)
 	}
 
 	// If tool resolution produced warnings AND resolved zero tools, fail early
@@ -964,6 +980,13 @@ func (m *SubAgentManager) buildChildPrompt(task SubAgentTask) string {
 			sb.WriteString(EscapeCurlyPlaceholders(memContent))
 			sb.WriteString("\n")
 		}
+	}
+
+	// Inject skill index so sub-agents know which skills exist and can
+	// call skill_lookup to load them on demand.
+	if m.SkillIndex != "" {
+		sb.WriteString("\n")
+		sb.WriteString(m.SkillIndex)
 	}
 
 	return sb.String()

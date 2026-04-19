@@ -371,12 +371,20 @@ func (c *ChatAgent) DrainFlowOutput() string {
 	return out
 }
 
-// SetActivePlan stores the plan state for auto-progression in AfterToolCallback.
+// SetActivePlan stores the plan state for auto-progression.
 // Thread-safe: called from the announce_plan tool's planStateCallback.
 func (c *ChatAgent) SetActivePlan(plan *PlanState) {
 	c.activePlanMu.Lock()
 	c.activePlan = plan
 	c.activePlanMu.Unlock()
+}
+
+// GetActivePlan returns the current plan state, or nil if no plan is active.
+// Thread-safe: may be called from sub-agent progress event handlers.
+func (c *ChatAgent) GetActivePlan() *PlanState {
+	c.activePlanMu.Lock()
+	defer c.activePlanMu.Unlock()
+	return c.activePlan
 }
 
 // extractAndStripFlowOutput checks a run_flow tool result for a large "output"

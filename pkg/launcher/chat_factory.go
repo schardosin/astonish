@@ -486,6 +486,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	var loadedSkills []skills.Skill
 	var skillIndex string
 	var skillToolSlice []tool.Tool
+	var skillLookupTool tool.Tool // hoisted for SubAgentManager wiring
 	if cfg.AppConfig != nil && cfg.AppConfig.Skills.IsSkillsEnabled() {
 		skillsCfg := &cfg.AppConfig.Skills
 		workDir := cfg.WorkspaceDir
@@ -521,6 +522,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					}
 				} else {
 					skillToolSlice = append(skillToolSlice, skillTool)
+					skillLookupTool = skillTool // keep reference for sub-agent injection
 				}
 			}
 			if cfg.DebugMode {
@@ -1407,9 +1409,38 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		subAgentMgr.CredentialStore = credStore
 		subAgentMgr.PendingSecrets = chatAgent.PendingSecrets
 		subAgentMgr.EventForwarder = chatAgent.ForwardSubTaskEvent
-		// Wire structured sub-task progress: delegate to ChatAgent.SubTaskProgressCallback
-		// which is set dynamically by ChatRunner.Run() for Studio sessions.
+		// Wire structured sub-task progress: drive plan step transitions from
+		// sub-task lifecycle events, then forward to ChatAgent.SubTaskProgressCallback
+		// (which is set dynamically by ChatRunner.Run() for Studio sessions).
 		subAgentMgr.SubTaskProgress = func(evt agent.SubTaskProgressEvent) {
+			// Drive plan step transitions via name-based matching.
+			// task_start → mark the matching plan step as "running"
+			// task_complete → mark the matching plan step as "complete"
+			if plan := chatAgent.GetActivePlan(); plan != nil {
+				switch evt.Type {
+				case "task_start":
+					if stepName := plan.StartStepByName(evt.TaskName); stepName != "" {
+						if chatAgent.SubTaskProgressCallback != nil {
+							chatAgent.SubTaskProgressCallback(agent.SubTaskProgressEvent{
+								Type:       "plan_step_update",
+								StepName:   stepName,
+								StepStatus: "running",
+							})
+						}
+					}
+				case "task_complete":
+					if stepName := plan.CompleteStepByName(evt.TaskName); stepName != "" {
+						if chatAgent.SubTaskProgressCallback != nil {
+							chatAgent.SubTaskProgressCallback(agent.SubTaskProgressEvent{
+								Type:       "plan_step_update",
+								StepName:   stepName,
+								StepStatus: "complete",
+							})
+						}
+					}
+				}
+			}
+			// Forward the original event to the UI as before.
 			if chatAgent.SubTaskProgressCallback != nil {
 				chatAgent.SubTaskProgressCallback(evt)
 			}
@@ -1440,6 +1471,14 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 		if searchToolsTool != nil {
 			subAgentMgr.SearchToolsTool = searchToolsTool
+		}
+		// Wire skill awareness into sub-agents so they can load skill
+		// content on demand (e.g., git/github skills for repo operations).
+		if skillLookupTool != nil {
+			subAgentMgr.SkillLookupTool = skillLookupTool
+		}
+		if skillIndex != "" {
+			subAgentMgr.SkillIndex = skillIndex
 		}
 		// Alias sub-agent sessions to the parent's sandbox container so they
 		// share the same container instead of each creating a new one.

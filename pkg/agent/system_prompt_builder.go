@@ -211,9 +211,9 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("2. Decompose complex goals into independent, parallelizable sub-tasks (each with a clear deliverable).\n")
 		sb.WriteString("3. Keep each sub-task focused: one research question, one file operation, one API interaction.\n")
 		sb.WriteString("4. If tasks have dependencies, run them in separate `delegate_tasks` calls (first batch completes before the second starts).\n")
-		sb.WriteString("5. Give each sub-task a descriptive name (e.g., \"fetch-pricing-page\", \"analyze-competitors\") — users see these as progress steps.\n")
+		sb.WriteString("5. Name delegate tasks using plan step names as prefixes (e.g., plan step \"analyze-astonish\" → tasks \"analyze-astonish-core\", \"analyze-astonish-memory\"). This drives accurate progress tracking.\n")
 		sb.WriteString("6. After all sub-tasks complete, **synthesize** the results yourself — don't just concatenate sub-agent output.\n")
-		sb.WriteString("7. For substantial final outputs (reports, analyses, comparisons), save as a file with `write_file` so the user can download it.\n")
+		sb.WriteString("7. For research, analysis, or comparison tasks, save the final deliverable as a markdown file with `write_file` (not `opencode`). Present a summary inline.\n")
 		sb.WriteString("8. Plan steps are updated automatically as tools complete — do NOT try to update them manually.\n\n")
 
 		sb.WriteString("**Available tool groups (for delegation):**\n")

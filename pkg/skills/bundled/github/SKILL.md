@@ -1,6 +1,6 @@
 ---
 name: github
-description: "GitHub operations via the gh CLI — PRs, issues, releases, workflows, gists"
+description: "GitHub operations via the gh CLI — clone, fork, PRs, issues, releases, workflows, gists, repo exploration"
 require_bins: ["gh"]
 ---
 

@@ -583,10 +583,14 @@ software engineering tasks autonomously. It operates in the specified working di
 has full access to the filesystem and terminal.
 
 Use this tool when you need to:
-- Write or modify code
-- Run builds, tests, or other commands
-- Perform complex multi-step implementations
-- Search and analyze codebases
+- Perform complex multi-step coding tasks (refactoring, debugging, implementing features)
+- Run builds, tests, or multi-command workflows that require iterative interaction
+- Work on a codebase that needs exploration + modification in a dedicated context
+
+Do NOT use this tool for:
+- Writing a single file — use write_file directly (faster, no overhead)
+- Simple shell commands — use shell_command directly
+- Reading or searching files — use read_file, grep_search, find_files directly
 
 Arguments:
 - task: Detailed description of what OpenCode should do. Include all context, file paths,

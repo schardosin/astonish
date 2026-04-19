@@ -277,34 +277,9 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 				}
 			}
 
-			// ── Auto-progress plan steps (after tool execution) ──
-			// Only delegate_tasks needs after-completion handling: when the
-			// delegation finishes, its step is done and the next step starts.
-			// All other step-start transitions happen in BeforeToolCallback.
-			if t.Name() == "delegate_tasks" && err == nil {
-				c.activePlanMu.Lock()
-				plan := c.activePlan
-				c.activePlanMu.Unlock()
-
-				if plan != nil {
-					if completed, started := plan.CompleteCurrentAndAdvance(); completed != "" {
-						if c.SubTaskProgressCallback != nil {
-							c.SubTaskProgressCallback(SubTaskProgressEvent{
-								Type:       "plan_step_update",
-								StepName:   completed,
-								StepStatus: "complete",
-							})
-							if started != "" {
-								c.SubTaskProgressCallback(SubTaskProgressEvent{
-									Type:       "plan_step_update",
-									StepName:   started,
-									StepStatus: "running",
-								})
-							}
-						}
-					}
-				}
-			}
+			// Plan step progression for delegate_tasks is handled by the
+			// SubTaskProgress event handler (task_start / task_complete)
+			// with name-based matching — not here. See chat_factory.go wiring.
 
 			if c.DebugMode {
 				status := "OK"
@@ -358,47 +333,30 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		}
 
 		// ── Auto-progress plan steps (before tool execution) ──
-		// When a plan is active, mark step transitions at tool *start* so
-		// the UI reflects the current phase immediately. Without this, a
-		// long-running delegate_tasks call would keep the *previous* step
-		// as "running" for its entire duration.
+		// When a plan is active, mark the first pending step as "running"
+		// when any non-delegate tool starts. This handles the initial
+		// tool calls after announce_plan (e.g., shell_command for cloning).
 		//
-		// - delegate_tasks starting: the previous phase (e.g. search) is done
-		//   → complete current step, start next (the delegation step).
-		// - Any other tool starting: ensure a step is running (handles the
-		//   first tool call after announce_plan).
+		// delegate_tasks steps are driven by sub-task lifecycle events
+		// (task_start / task_complete) via name-based matching in the
+		// SubTaskProgress handler — NOT by positional advancement here.
 		beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 			c.activePlanMu.Lock()
 			plan := c.activePlan
 			c.activePlanMu.Unlock()
 
-			if plan == nil || t.Name() == "announce_plan" {
+			if plan == nil || t.Name() == "announce_plan" || t.Name() == "delegate_tasks" {
 				return nil, nil
 			}
 
-			emitPlanUpdate := func(stepName, status string) {
+			// For any non-delegate tool, ensure a step is running.
+			if started := plan.AdvanceOnToolStart(); started != "" {
 				if c.SubTaskProgressCallback != nil {
 					c.SubTaskProgressCallback(SubTaskProgressEvent{
 						Type:       "plan_step_update",
-						StepName:   stepName,
-						StepStatus: status,
+						StepName:   started,
+						StepStatus: "running",
 					})
-				}
-			}
-
-			switch t.Name() {
-			case "delegate_tasks":
-				// Delegation starting → previous phase is done, start the delegation step.
-				if completed, started := plan.CompleteCurrentAndAdvance(); completed != "" {
-					emitPlanUpdate(completed, "complete")
-					if started != "" {
-						emitPlanUpdate(started, "running")
-					}
-				}
-			default:
-				// For any other tool, ensure a step is running.
-				if started := plan.AdvanceOnToolStart(); started != "" {
-					emitPlanUpdate(started, "running")
 				}
 			}
 

@@ -170,7 +170,7 @@ When facing a complex goal, think in terms of independent deliverables:
 1. **Identify independent units** — Each sub-task should have a clear, self-contained deliverable (a file, a data set, an analysis). If two tasks don't depend on each other's output, they can run in parallel.
 2. **Keep sub-tasks focused** — A sub-task should do ONE thing well. "Research competitor pricing" is good. "Research competitors and write the final report" is too broad.
 3. **Handle dependencies with phased delegation** — If task B needs the output of task A, run them in separate ` + "`delegate_tasks`" + ` calls. The first call completes entirely before the second starts. Use ` + "`read_task_result`" + ` to retrieve full outputs from earlier phases if needed.
-4. **Prefer targeted data retrieval** — Instead of "explore everything about X", delegate specific fetches: "Fetch the pricing page at URL", "Get the API documentation for endpoint Y". Targeted tasks produce cleaner, more usable results. For source code analysis, prefer using GitHub's web interface (raw file URLs, API endpoints) or ` + "`web_fetch`" + ` on specific files over cloning entire repositories — cloning is slow and wastes time on irrelevant files.
+4. **Choose the right data retrieval strategy** — For web research, delegate targeted fetches: "Fetch the pricing page at URL", "Get the API documentation for endpoint Y". Targeted tasks produce cleaner, more usable results. However, **for source code analysis or repository exploration, clone the repository locally** using ` + "`git clone`" + ` or ` + "`gh repo clone`" + ` (via ` + "`shell_command`" + `) — this gives sub-agents full access to ` + "`grep_search`" + `, ` + "`file_tree`" + `, ` + "`read_file`" + `, and the complete codebase. Reserve ` + "`web_fetch`" + ` on raw GitHub URLs only for quick single-file lookups where cloning would be overkill. If a clone fails, retry before switching strategies — transient network failures (especially in sandboxed environments) are common and do not mean the network is permanently unavailable.
 5. **Limit sub-task scope to avoid context explosion** — Sub-agents have a 5-minute timeout and limited context. A sub-task that tries to do too much will produce worse results than two focused sub-tasks.
 
 ## How to delegate
@@ -203,9 +203,19 @@ After all sub-tasks complete, you are the synthesizer. **Do not just concatenate
 - If a sub-task produced a large result that was summarized, use ` + "`read_task_result`" + ` to retrieve the full text before synthesizing — the summary may omit critical details.
 - Cite which sub-task produced which finding when it adds clarity.
 
-## Saving Reports as Files
+## Structured Output & Reports
 
-**When your final output is substantial (research reports, comparisons, analyses, guides — anything longer than ~500 words), ALWAYS save it as a file using ` + "`write_file`" + ` in addition to showing it inline.** Use a descriptive filename in the working directory (e.g., ` + "`comparison-report.md`" + `, ` + "`pricing-analysis.md`" + `, ` + "`architecture-review.md`" + `). This makes the output downloadable and persistent — inline chat messages scroll away and are hard to reference later. Write the file AFTER you have composed the full response, not before.
+When the user's request involves research, analysis, or comparison work — or when they explicitly ask for a report — your final deliverable should be a **well-structured document saved as a file** using ` + "`write_file`" + `. This applies to:
+- Deep comparisons or competitive analyses
+- Architecture or code reviews
+- Research summaries with multiple sections
+- Any output the user is likely to share, reference later, or export
+
+**Rules:**
+- Use ` + "`write_file`" + ` directly — do NOT delegate file writing to ` + "`opencode`" + ` or sub-agents.
+- Use a descriptive filename in the working directory (e.g., ` + "`comparison-report.md`" + `, ` + "`pricing-analysis.md`" + `, ` + "`architecture-review.md`" + `).
+- Write the file AFTER composing the full content, then present a concise summary inline in the chat with key findings. The user gets both: a downloadable document and an at-a-glance overview.
+- For shorter or conversational outputs (quick answers, single-topic explanations, status updates), responding directly in the chat is sufficient — no file needed.
 
 ## Announcing Your Plan
 
@@ -239,7 +249,7 @@ announce_plan(
 
 - ALWAYS send a brief acknowledgment message BEFORE calling delegate_tasks
 - Be specific in task descriptions — sub-agents work autonomously without your conversation context
-- Name sub-agents descriptively (e.g., 'api-researcher', 'template-saver', 'drill-runner')
+- **Name delegate tasks using plan step names as prefixes** — plan progress is tracked by matching delegate task names to plan step names. If your plan has a step named ` + "`analyze-astonish`" + `, name delegate tasks ` + "`analyze-astonish-core`" + `, ` + "`analyze-astonish-memory`" + `, etc. This ensures the UI checklist updates accurately.
 - Sub-agents can read memory but cannot write to it
 - Max 10 tasks per delegation call, each with a 5-minute timeout
 - For multi-step workflows, delegate each phase as a separate task with clear inputs/outputs

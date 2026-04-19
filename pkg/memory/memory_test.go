@@ -814,3 +814,124 @@ func TestGetSectionContent_FileDoesNotExist(t *testing.T) {
 		t.Error("should return false for nonexistent file")
 	}
 }
+
+// --- KnowledgeFiles tests ---
+
+func TestKnowledgeFiles_AllEntriesExist(t *testing.T) {
+	expected := []string{"tools", "workarounds", "infrastructure", "projects", "others"}
+	for _, kind := range expected {
+		if _, ok := KnowledgeFiles[kind]; !ok {
+			t.Errorf("missing KnowledgeFiles entry for kind %q", kind)
+		}
+	}
+	if len(KnowledgeFiles) != len(expected) {
+		t.Errorf("expected %d entries, got %d", len(expected), len(KnowledgeFiles))
+	}
+}
+
+// --- ResolveKnowledgeFile tests ---
+
+func TestResolveKnowledgeFile_RedirectsToExistingSection(t *testing.T) {
+	memDir := t.TempDir()
+
+	// Create knowledge directory
+	knowledgeDir := filepath.Join(memDir, "knowledge")
+	os.MkdirAll(knowledgeDir, 0755)
+
+	// Write a section to workarounds.md
+	workaroundsPath := filepath.Join(knowledgeDir, "workarounds.md")
+	os.WriteFile(workaroundsPath, []byte("## SSH Interactive Login\n- Use process_write\n"), 0644)
+
+	// Proposed write is to tools.md for "SSH Interactive Login"
+	proposedPath := filepath.Join(knowledgeDir, "tools.md")
+
+	absPath, relPath := ResolveKnowledgeFile(memDir, KnowledgeFiles, proposedPath, "SSH Interactive Login")
+
+	// Should redirect to workarounds.md where the section already exists
+	if absPath != workaroundsPath {
+		t.Errorf("expected redirect to %s, got %s", workaroundsPath, absPath)
+	}
+	if relPath != "knowledge/workarounds.md" {
+		t.Errorf("expected rel path 'knowledge/workarounds.md', got %q", relPath)
+	}
+}
+
+func TestResolveKnowledgeFile_FuzzyMatchRedirects(t *testing.T) {
+	memDir := t.TempDir()
+
+	knowledgeDir := filepath.Join(memDir, "knowledge")
+	os.MkdirAll(knowledgeDir, 0755)
+
+	// Write "Proxmox Server" section to infrastructure.md
+	infraPath := filepath.Join(knowledgeDir, "infrastructure.md")
+	os.WriteFile(infraPath, []byte("## Proxmox Server\n- Hostname: proxmox.local\n"), 0644)
+
+	// Try to write "Proxmox Server Configuration" to tools.md — should fuzzy-match
+	proposedPath := filepath.Join(knowledgeDir, "tools.md")
+
+	absPath, relPath := ResolveKnowledgeFile(memDir, KnowledgeFiles, proposedPath, "Proxmox Server Configuration")
+
+	if absPath != infraPath {
+		t.Errorf("expected fuzzy redirect to infrastructure.md, got %s", absPath)
+	}
+	if relPath != "knowledge/infrastructure.md" {
+		t.Errorf("expected rel path 'knowledge/infrastructure.md', got %q", relPath)
+	}
+}
+
+func TestResolveKnowledgeFile_NoMatchReturnsProposed(t *testing.T) {
+	memDir := t.TempDir()
+
+	knowledgeDir := filepath.Join(memDir, "knowledge")
+	os.MkdirAll(knowledgeDir, 0755)
+
+	// Create an empty workarounds.md
+	os.WriteFile(filepath.Join(knowledgeDir, "workarounds.md"), []byte("## Browser Quirks\n- Some quirk\n"), 0644)
+
+	proposedPath := filepath.Join(knowledgeDir, "tools.md")
+
+	absPath, relPath := ResolveKnowledgeFile(memDir, KnowledgeFiles, proposedPath, "SSH Interactive Login")
+
+	// No match in any file, should return proposed path
+	if absPath != proposedPath {
+		t.Errorf("expected proposed path %s, got %s", proposedPath, absPath)
+	}
+	if relPath != "" {
+		t.Errorf("expected empty relPath, got %q", relPath)
+	}
+}
+
+func TestResolveKnowledgeFile_SkipsProposedFile(t *testing.T) {
+	memDir := t.TempDir()
+
+	knowledgeDir := filepath.Join(memDir, "knowledge")
+	os.MkdirAll(knowledgeDir, 0755)
+
+	// Write "SSH" section to tools.md (the proposed file)
+	toolsPath := filepath.Join(knowledgeDir, "tools.md")
+	os.WriteFile(toolsPath, []byte("## SSH Interactive Login\n- Use process_write\n"), 0644)
+
+	// Propose to write to tools.md — should NOT redirect to itself
+	absPath, relPath := ResolveKnowledgeFile(memDir, KnowledgeFiles, toolsPath, "SSH Interactive Login")
+
+	if absPath != toolsPath {
+		t.Errorf("expected proposed path returned as-is, got %s", absPath)
+	}
+	if relPath != "" {
+		t.Errorf("expected empty relPath when no redirect, got %q", relPath)
+	}
+}
+
+func TestResolveKnowledgeFile_EmptyCategory(t *testing.T) {
+	memDir := t.TempDir()
+	proposedPath := filepath.Join(memDir, "knowledge", "tools.md")
+
+	absPath, relPath := ResolveKnowledgeFile(memDir, KnowledgeFiles, proposedPath, "")
+
+	if absPath != proposedPath {
+		t.Errorf("expected proposed path for empty category, got %s", absPath)
+	}
+	if relPath != "" {
+		t.Errorf("expected empty relPath for empty category, got %q", relPath)
+	}
+}

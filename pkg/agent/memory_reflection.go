@@ -68,9 +68,9 @@ NOT durable knowledge — NEVER save, even if they appear in tool results:
 IMPORTANT: Connection details (hostnames, API base URLs, auth methods, credential names) ARE durable knowledge — save them even if the user provided them. However, the actual CONTENTS retrieved from those connections (resource lists, statuses, query results) are NOT durable and must NOT be saved.
 
 If you find durable knowledge worth saving, call memory_save with:
-- category: a short descriptive heading
+- category: a short descriptive heading (e.g., "SSH Interactive Login", "Proxmox API Patterns")
 - content: the knowledge as concise bullet points
-- file: "MEMORY.md" for core connection/environment facts, or a topic-specific path like "tools/sap-ai-core.md" or "workarounds/browser-scraping.md" for procedural knowledge
+- kind: "tools" for tool quirks/CLI syntax/API patterns, "workarounds" for problems+solutions, "infrastructure" for servers/networking/services, "projects" for project-specific knowledge, "others" for anything else. Omit kind for core MEMORY.md facts (connection details, server info, credentials).
 
 If there is nothing worth saving, respond with exactly: "No durable knowledge to save."
 
@@ -152,22 +152,23 @@ func (r *MemoryReflector) Reflect(ctx context.Context, trace *ExecutionTrace, ev
 						"properties": map[string]any{
 							"category": map[string]any{
 								"type":        "string",
-								"description": "A short category heading (e.g., Workarounds, API Patterns, Tool Quirks, Server Configuration)",
+								"description": "A short category heading (e.g., SSH Interactive Login, Proxmox API, Browser Quirks, Server Configuration)",
 							},
 							"content": map[string]any{
 								"type":        "string",
 								"description": "The knowledge to save, as concise bullet points using '- ' prefix",
 							},
-							"file": map[string]any{
+							"kind": map[string]any{
 								"type":        "string",
-								"description": "Target file relative to memory dir. Use 'MEMORY.md' for core facts (connection details, server info), or a topic-specific path like 'tools/sap-ai-core.md' or 'workarounds/browser.md' for procedural knowledge.",
+								"enum":        []any{"tools", "workarounds", "infrastructure", "projects", "others"},
+								"description": "Knowledge category. 'tools' for tool quirks/CLI/API patterns, 'workarounds' for problems+solutions, 'infrastructure' for servers/networking, 'projects' for project-specific, 'others' for miscellaneous. Omit for core MEMORY.md facts.",
 							},
 							"overwrite": map[string]any{
 								"type":        "boolean",
 								"description": "When true, replaces the entire section instead of appending",
 							},
 						},
-						"required": []string{"category", "content", "file"},
+						"required": []string{"category", "content"},
 					},
 				}},
 			}},
@@ -216,7 +217,7 @@ func (r *MemoryReflector) executeSave(ctx context.Context, fc *genai.FunctionCal
 
 	category, _ := args["category"].(string)
 	content, _ := args["content"].(string)
-	file, _ := args["file"].(string)
+	kind, _ := args["kind"].(string)
 	overwrite, _ := args["overwrite"].(bool)
 
 	if category == "" || content == "" {
@@ -224,14 +225,32 @@ func (r *MemoryReflector) executeSave(ctx context.Context, fc *genai.FunctionCal
 		return
 	}
 
-	targetFile := strings.TrimSpace(file)
+	kind = strings.TrimSpace(strings.ToLower(kind))
 
-	// Resolve the file path for section lookup
+	// Resolve the file path based on kind
 	var filePath string
-	if targetFile == "" || strings.EqualFold(targetFile, "MEMORY.md") {
+	var relPath string
+	if kind == "" {
+		// Core tier: MEMORY.md
 		filePath = r.MemoryManager.Path
-	} else if r.MemoryStore != nil && r.MemoryStore.Config() != nil {
-		filePath = filepath.Join(r.MemoryStore.Config().MemoryDir, targetFile)
+	} else {
+		rel, ok := memory.KnowledgeFiles[kind]
+		if !ok {
+			slog.Debug("memory reflection skipped save: invalid kind", "component", "memory-reflection", "kind", kind)
+			return
+		}
+		relPath = rel
+		if r.MemoryStore != nil && r.MemoryStore.Config() != nil {
+			memDir := r.MemoryStore.Config().MemoryDir
+			filePath = filepath.Join(memDir, rel)
+
+			// Cross-file section check
+			resolvedPath, resolvedRel := memory.ResolveKnowledgeFile(memDir, memory.KnowledgeFiles, filePath, category)
+			filePath = resolvedPath
+			if resolvedRel != "" {
+				relPath = resolvedRel
+			}
+		}
 	}
 
 	// Validate content against existing section (skip for overwrite or missing path)
@@ -248,7 +267,7 @@ func (r *MemoryReflector) executeSave(ctx context.Context, fc *genai.FunctionCal
 		}
 	}
 
-	if targetFile == "" || strings.EqualFold(targetFile, "MEMORY.md") {
+	if kind == "" {
 		// Core tier: append to MEMORY.md
 		err := r.MemoryManager.Append(category, content, overwrite)
 		if err != nil {
@@ -266,26 +285,25 @@ func (r *MemoryReflector) executeSave(ctx context.Context, fc *genai.FunctionCal
 			}()
 		}
 	} else {
-		// Knowledge tier: write to specific file using section-aware dedup
-		if r.MemoryStore == nil || r.MemoryStore.Config() == nil {
+		// Knowledge tier: write to resolved file using section-aware dedup
+		if filePath == "" {
 			slog.Debug("memory reflection skipped knowledge tier save: no store configured", "component", "memory-reflection")
 			return
 		}
 
-		absPath := filepath.Join(r.MemoryStore.Config().MemoryDir, targetFile)
-
-		if err := memory.AppendToFile(absPath, category, content, overwrite, r.DebugMode); err != nil {
-			slog.Debug("memory reflection failed to write file", "component", "memory-reflection", "file", targetFile, "error", err)
+		if err := memory.AppendToFile(filePath, category, content, overwrite, r.DebugMode); err != nil {
+			slog.Debug("memory reflection failed to write file", "component", "memory-reflection", "file", relPath, "error", err)
 			return
 		}
 
-		slog.Debug("memory reflection saved to file", "component", "memory-reflection", "file", targetFile, "category", category)
+		slog.Debug("memory reflection saved to file", "component", "memory-reflection", "file", relPath, "category", category)
 
 		// Trigger reindex
 		if r.MemoryStore != nil {
+			reindexPath := relPath
 			go func() {
-				if err := r.MemoryStore.ReindexFile(context.Background(), targetFile); err != nil {
-					slog.Warn("failed to reindex memory file", "file", targetFile, "error", err)
+				if err := r.MemoryStore.ReindexFile(context.Background(), reindexPath); err != nil {
+					slog.Warn("failed to reindex memory file", "file", reindexPath, "error", err)
 				}
 			}()
 		}

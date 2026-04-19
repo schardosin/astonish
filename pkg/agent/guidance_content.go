@@ -314,11 +314,16 @@ const guidanceMemoryUsage = `# Guidance: Memory Usage
 
 When you discover NEW durable facts during an interaction, save them using **memory_save**.
 
-**Auto-save workarounds:** After completing a task where your initial approach FAILED and you found a working alternative, ALWAYS save the solution using ` + "`memory_save`" + ` with a topic file (e.g., file="tools/yt-dlp.md"). Include: what failed, why, and the working command/approach. This prevents repeating the same trial-and-error in future sessions.
+**Auto-save workarounds:** After completing a task where your initial approach FAILED and you found a working alternative, ALWAYS save the solution using ` + "`memory_save`" + ` with kind="workarounds". Include: what failed, why, and the working command/approach. This prevents repeating the same trial-and-error in future sessions.
 
-**What to save to MEMORY.md (core):** connection details (IPs, hostnames, users, auth methods, ports), server roles, network topology, user preferences, project conventions, **and API/service integrations** (credential name, service name, API base URL, OAuth scopes, redirect URI, discovered resources like calendar names, repo lists, or account details). Keep it concise — only durable facts.
+**What to save to MEMORY.md (omit kind):** connection details (IPs, hostnames, users, auth methods, ports), server roles, network topology, user preferences, project conventions, **and API/service integrations** (credential name, service name, API base URL, OAuth scopes, redirect URI, discovered resources like calendar names, repo lists, or account details). Keep it concise — only durable facts.
 
-**What to save to knowledge files (via file param):** procedural knowledge discovered during problem-solving — API quirks, command syntax learned through trial and error, configuration steps, workarounds, how-to procedures. Things you figured out that would save time next time.
+**What to save to knowledge files (via kind param):** procedural knowledge discovered during problem-solving. Use the appropriate kind:
+- ` + "`kind=\"tools\"`" + ` — tool quirks, CLI syntax, API access patterns, credential usage
+- ` + "`kind=\"workarounds\"`" + ` — problems encountered and their solutions, error workarounds
+- ` + "`kind=\"infrastructure\"`" + ` — server configuration, networking, deployment, service architecture
+- ` + "`kind=\"projects\"`" + ` — project-specific knowledge (build commands, API endpoints, fleet plans)
+- ` + "`kind=\"others\"`" + ` — anything that doesn't fit the above categories
 
 **Behavior preferences:** If the user tells you to change how you behave (e.g., always use a certain tool, skip confirmations for certain operations), save that to INSTRUCTIONS.md rather than MEMORY.md.
 

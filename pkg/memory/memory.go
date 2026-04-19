@@ -16,6 +16,16 @@ type Manager struct {
 	DebugMode bool
 }
 
+// KnowledgeFiles maps kind values to their canonical file paths relative to the memory dir.
+// This is the single source of truth for the knowledge tier file structure.
+var KnowledgeFiles = map[string]string{
+	"tools":          "knowledge/tools.md",
+	"workarounds":    "knowledge/workarounds.md",
+	"infrastructure": "knowledge/infrastructure.md",
+	"projects":       "knowledge/projects.md",
+	"others":         "knowledge/others.md",
+}
+
 // DefaultPath returns the default MEMORY.md path.
 func DefaultPath() (string, error) {
 	configDir, err := os.UserConfigDir()
@@ -185,6 +195,40 @@ func GetSectionContent(path, category string) (string, bool) {
 	}
 
 	return strings.Join(section.lines, "\n"), true
+}
+
+// ResolveKnowledgeFile checks whether a section heading already exists in any
+// of the knowledge tier files. If a matching section is found in a file other
+// than the proposed one, it returns that file's absolute path and relative path
+// so content is appended there instead (preventing cross-bucket duplication).
+// If no cross-file match is found, returns (proposedPath, "").
+//
+// knowledgeFiles maps kind names to relative paths (e.g., "tools" -> "knowledge/tools.md").
+func ResolveKnowledgeFile(memDir string, knowledgeFiles map[string]string, proposedPath, category string) (absPath, relPath string) {
+	sectionKey := strings.TrimSpace(category)
+	if sectionKey == "" {
+		return proposedPath, ""
+	}
+
+	// Check each knowledge file (excluding the proposed one) for a matching section
+	for _, rel := range knowledgeFiles {
+		abs := filepath.Join(memDir, rel)
+		if abs == proposedPath {
+			continue
+		}
+
+		existing, err := readFileOrEmpty(abs)
+		if err != nil || existing == "" {
+			continue
+		}
+
+		sections := parseSections(existing)
+		if _, found := sections.get(sectionKey); found {
+			return abs, rel
+		}
+	}
+
+	return proposedPath, ""
 }
 
 // memorySection represents a ## heading and its content lines.

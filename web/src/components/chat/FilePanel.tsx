@@ -128,7 +128,7 @@ export default function FilePanel({ artifacts, initialPath, sessionId, onClose }
       const { unified } = await import('unified')
       const remarkParse = (await import('remark-parse')).default
       const remarkGfm = (await import('remark-gfm')).default
-      const remarkDocx = (await import('remark-docx')).default
+      const { remarkDocx } = await import('@m2d/remark-docx')
       const { saveAs } = await import('file-saver')
 
       const processor = unified()
@@ -137,9 +137,7 @@ export default function FilePanel({ artifacts, initialPath, sessionId, onClose }
         .use(remarkDocx)
 
       const result = await processor.process(content)
-      const blob = new Blob([await result.result], {
-        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      })
+      const blob = await result.result as Blob
       saveAs(blob, (overlayArtifact?.fileName || 'file').replace(/\.[^.]+$/, '.docx'))
     } catch (err) {
       console.error('DOCX export failed:', err)

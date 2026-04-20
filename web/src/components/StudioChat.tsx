@@ -7,7 +7,7 @@ import type { ChatSession } from '../api/studioChat'
 import { startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions } from '../api/fleetChat'
 import type { FleetSession } from '../api/fleetChat'
 import HomePage from './HomePage'
-import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, DistillPreviewMessage, DistillSavedMessage } from './chat/chatTypes'
+import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, AppPreviewMessage, DistillPreviewMessage, DistillSavedMessage } from './chat/chatTypes'
 import { getAgentColor } from './chat/chatTypes'
 import FleetStartDialog from './chat/FleetStartDialog'
 import FleetTemplatePicker from './chat/FleetTemplatePicker'
@@ -21,6 +21,7 @@ import type { TokenUsage } from './chat/UsagePopover'
 import BrowserView from './chat/BrowserView'
 import ArtifactCard from './chat/ArtifactCard'
 import DistillPreviewCard from './chat/DistillPreviewCard'
+import AppPreviewCard from './chat/AppPreviewCard'
 import ResultCard from './chat/ResultCard'
 
 // Extended ChatSession with optional fleet fields coming from the sidebar
@@ -483,6 +484,15 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               runCommand: m.runCommand || '',
             } as DistillSavedMessage
           }
+          if (m.type === 'app_preview') {
+            return {
+              type: 'app_preview',
+              code: m.code || '',
+              title: m.title || 'App Preview',
+              description: m.description || '',
+              version: m.version || 1,
+            } as AppPreviewMessage
+          }
           return m as unknown as ChatMsg
         })
         setMessages(mapped)
@@ -649,6 +659,28 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               tags: (data.tags as string[]) || [],
               explanation: data.explanation as string || '',
             } as DistillPreviewMessage])
+            break
+
+          case 'app_preview':
+            // Finalize any streaming text first
+            if (streamingTextRef.current) {
+              const finalText = streamingTextRef.current
+              streamingTextRef.current = ''
+              setMessages((prev: ChatMsg[]) => {
+                const last = prev[prev.length - 1]
+                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
+                  return [...prev.slice(0, -1), { type: 'agent', content: finalText }]
+                }
+                return prev
+              })
+            }
+            setMessages((prev: ChatMsg[]) => [...prev, {
+              type: 'app_preview',
+              code: data.code as string,
+              title: data.title as string || 'App Preview',
+              description: data.description as string || '',
+              version: (data.version as number) || 1,
+            } as AppPreviewMessage])
             break
 
           case 'distill_saved':
@@ -1428,6 +1460,28 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               tags: (data.tags as string[]) || [],
               explanation: data.explanation as string || '',
             } as DistillPreviewMessage])
+            break
+
+          case 'app_preview':
+            // Finalize any streaming text first
+            if (streamingTextRef.current) {
+              const finalText = streamingTextRef.current
+              streamingTextRef.current = ''
+              setMessages((prev: ChatMsg[]) => {
+                const last = prev[prev.length - 1]
+                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
+                  return [...prev.slice(0, -1), { type: 'agent', content: finalText }]
+                }
+                return prev
+              })
+            }
+            setMessages((prev: ChatMsg[]) => [...prev, {
+              type: 'app_preview',
+              code: data.code as string,
+              title: data.title as string || 'App Preview',
+              description: data.description as string || '',
+              version: (data.version as number) || 1,
+            } as AppPreviewMessage])
             break
 
           case 'distill_saved':
@@ -2282,6 +2336,24 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                         setFilePanelInitialPath(path)
                         setFilePanelOpen(true)
                       }}
+                    />
+                  </div>
+                )
+              }
+
+              if (msg.type === 'app_preview') {
+                const appMsg = msg as AppPreviewMessage
+                // Collect all app_preview versions with the same title for version navigation
+                const allVersions = messages.filter(
+                  (m): m is AppPreviewMessage => m.type === 'app_preview' && (m as AppPreviewMessage).title === appMsg.title
+                )
+                const versionIdx = allVersions.findIndex(v => v.version === appMsg.version)
+                return (
+                  <div key={index}>
+                    <AppPreviewCard
+                      data={appMsg}
+                      versions={allVersions.length > 1 ? allVersions : undefined}
+                      versionIndex={versionIdx >= 0 ? versionIdx : 0}
                     />
                   </div>
                 )

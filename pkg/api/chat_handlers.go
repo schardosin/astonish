@@ -78,7 +78,7 @@ type FleetMessageSummary struct {
 
 // StudioMessage is a simplified message for the frontend.
 type StudioMessage struct {
-	Type       string      `json:"type"`                 // user, agent, tool_call, tool_result, subtask_execution, plan, distill_preview, distill_saved, system
+	Type       string      `json:"type"`                 // user, agent, tool_call, tool_result, subtask_execution, plan, distill_preview, distill_saved, app_preview, system
 	Content    string      `json:"content,omitempty"`    // text content
 	ToolName   string      `json:"toolName,omitempty"`   // for tool_call/tool_result
 	ToolArgs   interface{} `json:"toolArgs,omitempty"`   // for tool_call
@@ -103,6 +103,11 @@ type StudioMessage struct {
 	// distill_saved fields
 	FilePath   string `json:"filePath,omitempty"`   // saved file path
 	RunCommand string `json:"runCommand,omitempty"` // suggested run command
+
+	// app_preview fields — populated for generative UI app previews
+	AppCode    string `json:"code,omitempty"`    // JSX source code
+	AppTitle   string `json:"title,omitempty"`   // app title (extracted from component name)
+	AppVersion int    `json:"version,omitempty"` // version number (increments on refinement)
 }
 
 // SubTaskInfoMsg describes a single task in a delegation plan (for history reconstruction).

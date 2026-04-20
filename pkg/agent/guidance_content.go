@@ -429,3 +429,145 @@ Use the browser only as a targeted follow-up, not as the primary discovery metho
 2. **Compile**: Format the search results into the user's requested format (table, summary, etc.)
 3. **Verify** (only if needed): If a specific data point seems stale, missing, or suspicious, delegate ONE browser task to check that specific URL — never multiple parallel browser agents for the same research goal
 `
+
+const guidanceGenerativeUI = `# Guidance: Generative UI (Visual Apps)
+
+When the user asks you to build a visual interface, create a UI, make a dashboard, build an app, or any request that implies a visual interactive component, you should generate a live-rendered React component.
+
+## How to Create a Visual App
+
+Wrap your React component code in a special code fence using ` + "the marker `astonish-app`" + `:
+
+` + "````" + `
+` + "```" + `astonish-app
+import React, { useState } from 'react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { TrendingUp } from 'lucide-react';
+
+export default function Dashboard() {
+  const [period, setPeriod] = useState('week');
+  const data = [
+    { name: 'Mon', value: 40 },
+    { name: 'Tue', value: 65 },
+    { name: 'Wed', value: 55 },
+    { name: 'Thu', value: 80 },
+    { name: 'Fri', value: 45 },
+  ];
+
+  return (
+    <div className="p-6 space-y-4">
+      <div className="flex items-center gap-2">
+        <TrendingUp className="w-5 h-5 text-blue-400" />
+        <h1 className="text-xl font-bold text-white">Weekly Stats</h1>
+      </div>
+      <div className="flex gap-2">
+        <button
+          onClick={() => setPeriod('week')}
+          className={` + "`px-3 py-1 rounded text-sm ${period === 'week' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`" + `}
+        >Week</button>
+        <button
+          onClick={() => setPeriod('month')}
+          className={` + "`px-3 py-1 rounded text-sm ${period === 'month' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`" + `}
+        >Month</button>
+      </div>
+      <ResponsiveContainer width="100%" height={200}>
+        <BarChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+          <XAxis dataKey="name" stroke="#9ca3af" />
+          <YAxis stroke="#9ca3af" />
+          <Tooltip contentStyle={{ background: '#1f2937', border: '1px solid #374151', borderRadius: '8px' }} />
+          <Bar dataKey="value" fill="#3b82f6" radius={[4,4,0,0]} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+` + "```\n````" + `
+
+The component will render live in the user's browser as an interactive preview.
+
+## Available Libraries — ONLY These Exist
+
+The sandbox has ONLY these libraries. Nothing else is available:
+
+1. **React 19** — ` + "`import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'`" + `
+2. **Tailwind CSS v4** — All utility classes work. Use ` + "`className`" + ` on HTML elements.
+3. **Recharts** — ` + "`import { BarChart, Bar, LineChart, Line, PieChart, Pie, AreaChart, Area, RadarChart, Radar, ScatterChart, Scatter, XAxis, YAxis, ZAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ReferenceLine, Brush } from 'recharts'`" + `
+4. **Lucide React icons** — ` + "`import { ArrowRight, Check, Settings, User, Heart, Star, Search, Menu, X, ChevronDown, Plus, Trash2, Edit, Download, Upload, Clock, Calendar, Mail, Phone, MapPin, Globe, Lock, Eye, Bell, Home, Folder, File, Image, Code, Terminal, Database, Server, Cloud, Zap, Sun, Moon, TrendingUp, TrendingDown, Activity, AlertCircle, Info, CheckCircle, XCircle, Filter, SortAsc, SortDesc, MoreHorizontal, ExternalLink, Copy, RefreshCw, Play, Pause, SkipForward, Volume2, Maximize2, Minimize2, ChevronRight, ChevronLeft, ChevronUp, ArrowUp, ArrowDown, ArrowLeft, RotateCcw, Bookmark, Share2, Send, Layers, Grid, List, BarChart3, PieChart as PieChartIcon, LineChart as LineChartIcon } from 'lucide-react'`" + `
+
+## CRITICAL: What is NOT Available
+
+There is NO component library. The following DO NOT EXIST in the sandbox:
+- No ` + "`Button`" + `, ` + "`Card`" + `, ` + "`Input`" + `, ` + "`Badge`" + `, ` + "`Dialog`" + `, ` + "`Select`" + `, ` + "`Tabs`" + `, ` + "`Avatar`" + `, ` + "`Separator`" + ` — shadcn/ui does NOT exist
+- No ` + "`@/components/*`" + ` or ` + "`@/lib/*`" + ` imports — there is no filesystem
+- No Material UI, Chakra UI, Ant Design, Mantine, or any other component library
+- No ` + "`axios`" + `, ` + "`fetch`" + ` to external APIs, ` + "`lodash`" + `, ` + "`date-fns`" + `, ` + "`framer-motion`" + `, or any npm package not listed above
+- No ` + "`next/image`" + `, ` + "`next/link`" + `, or any framework-specific imports
+
+## How to Build UI Without a Component Library
+
+Use native HTML elements styled with Tailwind. This is what you MUST do instead:
+
+**Buttons:** ` + "`<button className=\"px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors\">Click me</button>`" + `
+
+**Cards:** ` + "`<div className=\"p-4 bg-gray-800 rounded-xl border border-gray-700\">...</div>`" + `
+
+**Inputs:** ` + "`<input className=\"w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent\" />`" + `
+
+**Badges:** ` + "`<span className=\"px-2 py-0.5 text-xs rounded-full bg-green-500/20 text-green-400\">Active</span>`" + `
+
+**Selects:** ` + "`<select className=\"px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white\"><option>...</option></select>`" + `
+
+**Tabs:** Build with useState and conditional rendering:
+` + "```" + `jsx
+const [tab, setTab] = useState('overview');
+<div className="flex border-b border-gray-700">
+  {['overview', 'details'].map(t => (
+    <button key={t} onClick={() => setTab(t)}
+      className={` + "`px-4 py-2 text-sm ${tab === t ? 'border-b-2 border-blue-500 text-white' : 'text-gray-400 hover:text-white'}`" + `}
+    >{t}</button>
+  ))}
+</div>
+` + "```" + `
+
+**If you need a reusable component, define it in the same file above the main export:**
+` + "```" + `jsx
+function Badge({ children, variant = 'default' }) {
+  const colors = { default: 'bg-gray-700 text-gray-300', success: 'bg-green-500/20 text-green-400' };
+  return <span className={` + "`px-2 py-0.5 text-xs rounded-full ${colors[variant]}`" + `}>{children}</span>;
+}
+
+export default function App() {
+  return <Badge variant="success">Online</Badge>;
+}
+` + "```" + `
+
+## Rules for Generated Components
+
+1. **Use ONLY native HTML elements** — ` + "`<div>`" + `, ` + "`<button>`" + `, ` + "`<input>`" + `, ` + "`<select>`" + `, ` + "`<table>`" + `, ` + "`<span>`" + `, ` + "`<a>`" + `, ` + "`<img>`" + `, ` + "`<form>`" + `, etc. Style them with Tailwind.
+2. **Define helper components inline** — If you need a ` + "`Button`" + ` or ` + "`Card`" + ` abstraction, define it as a function in the same file. Never import from non-existent modules.
+3. **Export default** — Export your main component as the default export.
+4. **Single file** — Everything must be in one file. Define helpers above the main export.
+5. **Self-contained** — Include all data, state, and logic within the component. Use hardcoded sample data.
+6. **Dark-mode aware** — The preview renders on a dark background (` + "`#0f0f0f`" + `). Use light text on dark backgrounds. Cards: ` + "`bg-gray-800`" + ` / ` + "`bg-gray-900`" + `. Text: ` + "`text-white`" + ` / ` + "`text-gray-300`" + `.
+7. **Make it interactive** — Use ` + "`useState`" + ` for buttons, toggles, tabs, filters.
+8. **Responsive** — Use responsive Tailwind classes (` + "`md:`" + `, ` + "`lg:`" + `) where appropriate.
+
+## When to Generate a Visual App
+
+Generate a visual app when the user:
+- Asks to "build", "create", "make", "design" a UI, dashboard, app, widget, form, chart, or page
+- Asks for a visualization of data
+- Requests an interactive tool (calculator, timer, converter, editor)
+- Asks for a prototype or mockup
+- Says "show me" something visual
+
+Do NOT generate a visual app when the user is clearly asking about code architecture, asking you to write backend code, or asking for explanations.
+
+## Iterative Refinement
+
+After generating a visual app, the user may ask for modifications ("make the header blue", "add a search bar", "change the chart type"). When refining:
+- Output the COMPLETE updated component (not a diff or partial code).
+- Keep all existing functionality unless explicitly asked to remove it.
+- Wrap the updated code in the same ` + "`astonish-app`" + ` fence.
+`

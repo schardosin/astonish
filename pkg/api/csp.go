@@ -43,7 +43,10 @@ func CSPMiddleware(next http.Handler) http.Handler {
 		// Also skip X-Content-Type-Options because KasmVNC serves JS files
 		// as text/plain. With "nosniff" browsers refuse to execute scripts
 		// that don't have a JavaScript MIME type.
-		if !strings.HasPrefix(r.URL.Path, "/api/browser/vnc/") {
+		// Skip CSP for app-preview runtime scripts — they're static JS
+		// files fetched by the parent page, and strict CSP isn't needed.
+		if !strings.HasPrefix(r.URL.Path, "/api/browser/vnc/") &&
+			!strings.HasPrefix(r.URL.Path, "/api/app-preview/") {
 			w.Header().Set("Content-Security-Policy", cspPolicy)
 			w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 			w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")

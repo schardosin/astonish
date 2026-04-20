@@ -87,6 +87,11 @@ func eventsToMessages(events session.Events, redactor *credentials.Redactor) []S
 						lastInvocationID = eventInvID
 						continue
 					}
+					if am := tryParseAppPreviewMessage(text); am != nil {
+						messages = append(messages, *am)
+						lastInvocationID = eventInvID
+						continue
+					}
 				}
 
 				// Defense-in-depth: redact any credential values from text
@@ -968,4 +973,57 @@ func tryParseDistillMessage(text string) *StudioMessage {
 		}
 	}
 	return nil
+}
+
+// --- App preview persistence ---
+//
+// App preview messages are persisted using the same prefix-marker pattern as distill.
+// Format: [app_preview]<JSON payload>
+
+const appPreviewPrefix = "[app_preview]"
+
+// appPreviewPayload is the JSON structure persisted inside the text event.
+type appPreviewPayload struct {
+	Code        string `json:"code"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+	Version     int    `json:"version"`
+}
+
+// persistAppPreview serializes an app preview as a structured text event.
+func persistAppPreview(ctx context.Context, svc session.Service, sessionID, code, title string, version int) {
+	if svc == nil || sessionID == "" || code == "" {
+		return
+	}
+	payload := appPreviewPayload{
+		Code:    code,
+		Title:   title,
+		Version: version,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		slog.Error("failed to marshal app preview", "error", err)
+		return
+	}
+	persistSessionMessage(ctx, svc, sessionID, "model", appPreviewPrefix+string(data))
+}
+
+// tryParseAppPreviewMessage checks if a text starts with the app_preview marker prefix
+// and returns a structured StudioMessage if so. Returns nil if not an app preview message.
+func tryParseAppPreviewMessage(text string) *StudioMessage {
+	if !strings.HasPrefix(text, appPreviewPrefix) {
+		return nil
+	}
+	jsonStr := text[len(appPreviewPrefix):]
+	var payload appPreviewPayload
+	if err := json.Unmarshal([]byte(jsonStr), &payload); err != nil {
+		return nil
+	}
+	return &StudioMessage{
+		Type:        "app_preview",
+		AppCode:     payload.Code,
+		AppTitle:    payload.Title,
+		Description: payload.Description,
+		AppVersion:  payload.Version,
+	}
 }

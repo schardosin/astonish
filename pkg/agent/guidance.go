@@ -21,6 +21,7 @@ var GuidanceDocs = map[string]string{
 	"web-research":          guidanceWebResearch,
 	"memory-usage":          guidanceMemoryUsage,
 	"sandbox-templates":     guidanceSandboxTemplates,
+	"generative-ui":         guidanceGenerativeUI,
 }
 
 // SyncGuidanceToMemory writes guidance docs to memory/guidance/.

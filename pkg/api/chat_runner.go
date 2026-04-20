@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -426,6 +427,10 @@ func (cr *ChatRunner) Run(
 			go generateStudioSessionTitle(llm, fileStore, cr.SessionID, msg)
 		}
 	}
+
+	// Post-processing: detect astonish-app code fences in the accumulated response
+	// text and emit app_preview events + persist them.
+	cr.detectAndEmitAppPreviews(sessionService)
 }
 
 // processStateDelta extracts approval, retry, error, and thinking events from state deltas.
@@ -500,6 +505,81 @@ func (cr *ChatRunner) drainImagesAndFlowOutput(chatAgent *agent.ChatAgent) {
 			"tool_name": file.ToolName,
 		})
 	}
+}
+
+// appPreviewFenceRe matches ```astonish-app code fences. It captures the code content
+// between the opening and closing fences.
+var appPreviewFenceRe = regexp.MustCompile("(?s)```astonish-app\\s*\\n(.*?)\\n```")
+
+// detectAndEmitAppPreviews scans the buffered text events for astonish-app code fences.
+// When found, it emits an app_preview event and persists it to the session transcript.
+func (cr *ChatRunner) detectAndEmitAppPreviews(sessionService session.Service) {
+	// Reconstruct the full response text from buffered text events
+	cr.eventsMu.RLock()
+	var fullText strings.Builder
+	for _, ev := range cr.events {
+		if ev.Type == "text" {
+			if t, ok := ev.Data["text"].(string); ok {
+				fullText.WriteString(t)
+			}
+		}
+	}
+	cr.eventsMu.RUnlock()
+
+	text := fullText.String()
+	matches := appPreviewFenceRe.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 {
+		return
+	}
+
+	for i, match := range matches {
+		code := strings.TrimSpace(match[1])
+		if code == "" {
+			continue
+		}
+
+		// Extract a title from the component function name if possible
+		title := extractComponentTitle(code)
+		version := i + 1
+
+		cr.emitEvent("app_preview", map[string]any{
+			"code":        code,
+			"title":       title,
+			"description": "",
+			"version":     version,
+		})
+
+		// Persist to session transcript
+		persistAppPreview(cr.ctx, sessionService, cr.SessionID, code, title, version)
+	}
+}
+
+// extractComponentTitle tries to find a function/const component name from JSX code.
+// It looks for patterns like "function MyComponent()" or "const MyComponent =".
+func extractComponentTitle(code string) string {
+	// Try function declaration first
+	funcRe := regexp.MustCompile(`(?m)^(?:export\s+default\s+)?function\s+([A-Z][a-zA-Z0-9]*)`)
+	if m := funcRe.FindStringSubmatch(code); len(m) > 1 {
+		return splitCamelCase(m[1])
+	}
+	// Try const/let declaration
+	constRe := regexp.MustCompile(`(?m)^(?:export\s+default\s+)?(?:const|let)\s+([A-Z][a-zA-Z0-9]*)`)
+	if m := constRe.FindStringSubmatch(code); len(m) > 1 {
+		return splitCamelCase(m[1])
+	}
+	return "App Preview"
+}
+
+// splitCamelCase converts "SalesDashboard" to "Sales Dashboard".
+func splitCamelCase(s string) string {
+	var result strings.Builder
+	for i, r := range s {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			result.WriteRune(' ')
+		}
+		result.WriteRune(r)
+	}
+	return result.String()
 }
 
 // isStreamTruncationError returns true if the error indicates the LLM stream

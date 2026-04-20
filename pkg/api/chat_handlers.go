@@ -108,6 +108,7 @@ type StudioMessage struct {
 	AppCode    string `json:"code,omitempty"`    // JSX source code
 	AppTitle   string `json:"title,omitempty"`   // app title (extracted from component name)
 	AppVersion int    `json:"version,omitempty"` // version number (increments on refinement)
+	AppID      string `json:"appId,omitempty"`   // stable UUID for cross-turn matching
 }
 
 // SubTaskInfoMsg describes a single task in a delegation plan (for history reconstruction).
@@ -452,6 +453,68 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Lazy reconstruction of active app state from session history.
+	// Handles the case where the server restarted and in-memory state was lost.
+	if req.SessionID != "" && !chatAgent.HasActiveApp(req.SessionID) {
+		getResp, err := sessionService.Get(r.Context(), &session.GetRequest{
+			AppName:   studioChatAppName,
+			UserID:    studioChatUserID,
+			SessionID: req.SessionID,
+		})
+		if err == nil && getResp != nil && getResp.Session != nil {
+			if app := reconstructActiveApp(getResp.Session.Events()); app != nil {
+				chatAgent.SetActiveApp(req.SessionID, app)
+			}
+		}
+	}
+
+	// Intercept messages for active app refinement (iterative visual app loop).
+	// Unlike distill (which fully intercepts), "refine" falls through to normal
+	// agent flow with context injection; only "done" is handled as early-return.
+	if req.SessionID != "" && chatAgent.HasActiveApp(req.SessionID) {
+		llmFunc := makeLLMFuncFromModel(comp.LLM)
+		appIntent := chatAgent.ClassifyAppIntent(r.Context(), msg, llmFunc)
+
+		switch appIntent {
+		case agent.AppIntentDone:
+			// User is done refining — clear state and acknowledge
+			userText := msg
+			if msg == "__app_done__" {
+				userText = "Done"
+			}
+			persistSessionMessage(r.Context(), sessionService, req.SessionID, "user", userText)
+			chatAgent.ClearActiveApp(req.SessionID)
+			responseText := "App refinement complete. You can continue chatting or start a new app."
+			SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})
+			SendSSE(w, flusher, "app_done", map[string]interface{}{"done": true})
+			persistSessionMessage(r.Context(), sessionService, req.SessionID, "model", responseText)
+			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+			return
+
+		case agent.AppIntentRefine:
+			// Inject current app source into system context so the LLM
+			// knows it's refining an existing component, then fall through
+			// to the normal agent flow.
+			activeApp := chatAgent.GetActiveApp(req.SessionID)
+			if activeApp != nil {
+				refinementCtx := agent.BuildAppRefinementContext(activeApp)
+				if req.SystemContext != "" {
+					req.SystemContext = req.SystemContext + "\n\n" + refinementCtx
+				} else {
+					req.SystemContext = refinementCtx
+				}
+				// Record the modification request in the active app history
+				chatAgent.RecordAppModification(req.SessionID, msg)
+			}
+			// Fall through to normal agent flow
+
+		case agent.AppIntentUnrelated:
+			// Clear active app context and proceed normally
+			chatAgent.ClearActiveApp(req.SessionID)
+			// Fall through to normal agent flow
+		}
+	}
+
 	// Create or resume session
 	sessionID := req.SessionID
 	isNew := false
@@ -720,4 +783,33 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 		})
 	}
 	SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+}
+
+// makeLLMFuncFromModel wraps an ADK model.LLM into a simple prompt→response function
+// suitable for lightweight classification calls (e.g. app refinement intent).
+func makeLLMFuncFromModel(llm model.LLM) func(ctx context.Context, prompt string) (string, error) {
+	return func(ctx context.Context, prompt string) (string, error) {
+		req := &model.LLMRequest{
+			Contents: []*genai.Content{
+				{
+					Parts: []*genai.Part{{Text: prompt}},
+					Role:  "user",
+				},
+			},
+		}
+		var text string
+		for resp, err := range llm.GenerateContent(ctx, req, false) {
+			if err != nil {
+				return text, err
+			}
+			if resp.Content != nil {
+				for _, p := range resp.Content.Parts {
+					if p.Text != "" {
+						text += p.Text
+					}
+				}
+			}
+		}
+		return text, nil
+	}
 }

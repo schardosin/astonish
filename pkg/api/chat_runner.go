@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/schardosin/astonish/pkg/agent"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	adkagent "google.golang.org/adk/agent"
@@ -430,7 +431,7 @@ func (cr *ChatRunner) Run(
 
 	// Post-processing: detect astonish-app code fences in the accumulated response
 	// text and emit app_preview events + persist them.
-	cr.detectAndEmitAppPreviews(sessionService)
+	cr.detectAndEmitAppPreviews(chatAgent, sessionService)
 }
 
 // processStateDelta extracts approval, retry, error, and thinking events from state deltas.
@@ -512,8 +513,9 @@ func (cr *ChatRunner) drainImagesAndFlowOutput(chatAgent *agent.ChatAgent) {
 var appPreviewFenceRe = regexp.MustCompile("(?s)```astonish-app\\s*\\n(.*?)\\n```")
 
 // detectAndEmitAppPreviews scans the buffered text events for astonish-app code fences.
-// When found, it emits an app_preview event and persists it to the session transcript.
-func (cr *ChatRunner) detectAndEmitAppPreviews(sessionService session.Service) {
+// When found, it emits an app_preview event, persists it to the session transcript,
+// and updates the active app state on the ChatAgent for cross-turn refinement.
+func (cr *ChatRunner) detectAndEmitAppPreviews(chatAgent *agent.ChatAgent, sessionService session.Service) {
 	// Reconstruct the full response text from buffered text events
 	cr.eventsMu.RLock()
 	var fullText strings.Builder
@@ -532,25 +534,54 @@ func (cr *ChatRunner) detectAndEmitAppPreviews(sessionService session.Service) {
 		return
 	}
 
-	for i, match := range matches {
+	// Check if there's an existing active app for this session
+	existingApp := chatAgent.GetActiveApp(cr.SessionID)
+
+	for _, match := range matches {
 		code := strings.TrimSpace(match[1])
 		if code == "" {
 			continue
 		}
 
-		// Extract a title from the component function name if possible
 		title := extractComponentTitle(code)
-		version := i + 1
+
+		var appID string
+		var version int
+
+		if existingApp != nil {
+			// Refinement of existing app — keep appId, increment version
+			appID = existingApp.AppID
+			version = existingApp.Version + 1
+			existingApp.Versions = append(existingApp.Versions, existingApp.Code)
+			existingApp.Code = code
+			existingApp.Version = version
+			existingApp.Title = title
+		} else {
+			// New app — generate fresh appId
+			appID = uuid.New().String()
+			version = 1
+			existingApp = &agent.ActiveApp{
+				AppID:    appID,
+				Title:    title,
+				Code:     code,
+				Versions: []string{},
+				Version:  version,
+			}
+		}
 
 		cr.emitEvent("app_preview", map[string]any{
 			"code":        code,
 			"title":       title,
 			"description": "",
 			"version":     version,
+			"appId":       appID,
 		})
 
 		// Persist to session transcript
-		persistAppPreview(cr.ctx, sessionService, cr.SessionID, code, title, version)
+		persistAppPreview(cr.ctx, sessionService, cr.SessionID, code, title, version, appID)
+
+		// Update active app state for cross-turn refinement
+		chatAgent.SetActiveApp(cr.SessionID, existingApp)
 	}
 }
 

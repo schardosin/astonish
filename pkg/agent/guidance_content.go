@@ -567,7 +567,17 @@ Do NOT generate a visual app when the user is clearly asking about code architec
 ## Iterative Refinement
 
 After generating a visual app, the user may ask for modifications ("make the header blue", "add a search bar", "change the chart type"). When refining:
+
+- **The current app source code will be provided in your system context** under "Active App Refinement". Use that as your starting point — do NOT re-invent the component from scratch.
 - Output the COMPLETE updated component (not a diff or partial code).
 - Keep all existing functionality unless explicitly asked to remove it.
 - Wrap the updated code in the same ` + "`astonish-app`" + ` fence.
+- Maintain the same component name and structure. Only change what the user asked for.
+- If the user asks for something that conflicts with existing features, explain the tradeoff and implement their request.
+
+**Important:** When you see "Active App Refinement" in your session context, the user is iterating on an existing app. You MUST:
+1. Read the provided source code carefully
+2. Apply ONLY the requested changes
+3. Output the full updated component in an ` + "`astonish-app`" + ` fence
+4. Do NOT add features the user didn't ask for
 `

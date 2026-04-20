@@ -988,10 +988,11 @@ type appPreviewPayload struct {
 	Title       string `json:"title"`
 	Description string `json:"description,omitempty"`
 	Version     int    `json:"version"`
+	AppID       string `json:"appId,omitempty"`
 }
 
 // persistAppPreview serializes an app preview as a structured text event.
-func persistAppPreview(ctx context.Context, svc session.Service, sessionID, code, title string, version int) {
+func persistAppPreview(ctx context.Context, svc session.Service, sessionID, code, title string, version int, appID string) {
 	if svc == nil || sessionID == "" || code == "" {
 		return
 	}
@@ -999,6 +1000,7 @@ func persistAppPreview(ctx context.Context, svc session.Service, sessionID, code
 		Code:    code,
 		Title:   title,
 		Version: version,
+		AppID:   appID,
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -1025,5 +1027,51 @@ func tryParseAppPreviewMessage(text string) *StudioMessage {
 		AppTitle:    payload.Title,
 		Description: payload.Description,
 		AppVersion:  payload.Version,
+		AppID:       payload.AppID,
 	}
+}
+
+// reconstructActiveApp scans session events for app_preview prefix markers and
+// rebuilds the ActiveApp state. Used when the server restarts and in-memory state
+// is lost. Returns nil if no app previews are found in the session.
+func reconstructActiveApp(events session.Events) *agent.ActiveApp {
+	var latestApp *agent.ActiveApp
+
+	for i := range events.Len() {
+		event := events.At(i)
+		if event.LLMResponse.Content == nil {
+			continue
+		}
+		for _, part := range event.LLMResponse.Content.Parts {
+			if part.Text == "" {
+				continue
+			}
+			if !strings.HasPrefix(part.Text, appPreviewPrefix) {
+				continue
+			}
+			jsonStr := part.Text[len(appPreviewPrefix):]
+			var payload appPreviewPayload
+			if err := json.Unmarshal([]byte(jsonStr), &payload); err != nil {
+				continue
+			}
+
+			if latestApp == nil || (payload.AppID != "" && payload.AppID != latestApp.AppID) {
+				// New app (or first app found)
+				latestApp = &agent.ActiveApp{
+					AppID:    payload.AppID,
+					Title:    payload.Title,
+					Code:     payload.Code,
+					Versions: []string{},
+					Version:  payload.Version,
+				}
+			} else {
+				// Same app, newer version — append previous code to history
+				latestApp.Versions = append(latestApp.Versions, latestApp.Code)
+				latestApp.Code = payload.Code
+				latestApp.Version = payload.Version
+				latestApp.Title = payload.Title
+			}
+		}
+	}
+	return latestApp
 }

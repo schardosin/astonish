@@ -174,6 +174,7 @@ export interface AppPreviewMessage {
   title: string
   description: string
   version: number
+  appId?: string
 }
 
 // ---- Distill flow preview ----

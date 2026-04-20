@@ -199,3 +199,71 @@ func TestEventsToMessages_ToolCallBreaksCoalescing(t *testing.T) {
 		t.Errorf("message[2]: unexpected %+v", msgs[2])
 	}
 }
+
+func TestTryParseAppPreviewMessage_WithAppID(t *testing.T) {
+	text := `[app_preview]{"code":"function App() { return <div>hi</div> }","title":"My App","version":1,"appId":"uuid-123"}`
+	msg := tryParseAppPreviewMessage(text)
+	if msg == nil {
+		t.Fatal("expected non-nil message")
+	}
+	if msg.Type != "app_preview" {
+		t.Errorf("expected type app_preview, got %q", msg.Type)
+	}
+	if msg.AppID != "uuid-123" {
+		t.Errorf("expected appId uuid-123, got %q", msg.AppID)
+	}
+	if msg.AppVersion != 1 {
+		t.Errorf("expected version 1, got %d", msg.AppVersion)
+	}
+}
+
+func TestTryParseAppPreviewMessage_WithoutAppID(t *testing.T) {
+	// Backward compatibility: old format without appId
+	text := `[app_preview]{"code":"function Old() {}","title":"Old App","version":2}`
+	msg := tryParseAppPreviewMessage(text)
+	if msg == nil {
+		t.Fatal("expected non-nil message")
+	}
+	if msg.AppID != "" {
+		t.Errorf("expected empty appId, got %q", msg.AppID)
+	}
+	if msg.AppVersion != 2 {
+		t.Errorf("expected version 2, got %d", msg.AppVersion)
+	}
+}
+
+func TestReconstructActiveApp(t *testing.T) {
+	events := testEvents{
+		textEvent("inv-1", "model", `[app_preview]{"code":"function V1() {}","title":"App","version":1,"appId":"uuid-abc"}`),
+		textEvent("inv-2", "model", `[app_preview]{"code":"function V2() {}","title":"App","version":2,"appId":"uuid-abc"}`),
+	}
+	app := reconstructActiveApp(events)
+	if app == nil {
+		t.Fatal("expected non-nil active app")
+	}
+	if app.AppID != "uuid-abc" {
+		t.Errorf("expected appId uuid-abc, got %q", app.AppID)
+	}
+	if app.Version != 2 {
+		t.Errorf("expected version 2, got %d", app.Version)
+	}
+	if app.Code != "function V2() {}" {
+		t.Errorf("expected V2 code, got %q", app.Code)
+	}
+	if len(app.Versions) != 1 {
+		t.Fatalf("expected 1 version in history, got %d", len(app.Versions))
+	}
+	if app.Versions[0] != "function V1() {}" {
+		t.Errorf("expected V1 in history, got %q", app.Versions[0])
+	}
+}
+
+func TestReconstructActiveApp_NoAppPreviews(t *testing.T) {
+	events := testEvents{
+		textEvent("inv-1", "model", "Hello world"),
+	}
+	app := reconstructActiveApp(events)
+	if app != nil {
+		t.Errorf("expected nil, got %+v", app)
+	}
+}

@@ -129,6 +129,12 @@ type ChatAgent struct {
 	// without requiring the LLM to call update_plan (saving full round-trips).
 	activePlan   *PlanState
 	activePlanMu sync.Mutex
+
+	// Active app refinement: per-session state for iterative generative UI refinement.
+	// When set, the chat handler injects the current app source into SessionContext
+	// so the LLM can apply incremental changes.
+	activeApps  map[string]*ActiveApp // keyed by session ID
+	activeAppMu sync.Mutex
 }
 
 // ImageFromTool holds image data extracted from a tool result before the
@@ -193,6 +199,7 @@ func NewChatAgent(llm model.LLM, internalTools []tool.Tool, toolsets []tool.Tool
 		traceHistory:         make(map[string][]*ExecutionTrace),
 		pendingDistill:       make(map[string]*distillPreview),
 		pendingDistillReview: make(map[string]*DistillReview),
+		activeApps:           make(map[string]*ActiveApp),
 	}
 }
 

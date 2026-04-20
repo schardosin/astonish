@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search, Users, Info, FileText, Globe, ListChecks } from 'lucide-react'
+import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search, Users, Info, FileText, Globe, ListChecks, AppWindow } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { fetchSessions, fetchSessionHistory, deleteSession, connectChat, stopChat, fetchSessionStatus, connectChatStream } from '../api/studioChat'
@@ -16,6 +16,7 @@ import TaskPlanPanel from './chat/TaskPlanPanel'
 import PlanPanel from './chat/PlanPanel'
 import FilePanel from './chat/FilePanel'
 import TodoPanel from './chat/TodoPanel'
+import AppsPanel from './chat/AppsPanel'
 import UsagePopover from './chat/UsagePopover'
 import type { TokenUsage } from './chat/UsagePopover'
 import BrowserView from './chat/BrowserView'
@@ -173,6 +174,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
+  const [activeAppId, setActiveAppId] = useState<string | null>(null) // ID of app currently being refined
 
   // Fleet state
   const [isFleetMode, setIsFleetMode] = useState(false)
@@ -204,6 +206,9 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
   // Todo panel state
   const [todoPanelOpen, setTodoPanelOpen] = useState(false)
+
+  // Apps panel state
+  const [appsPanelOpen, setAppsPanelOpen] = useState(false)
 
   // Token usage state (from API-reported UsageMetadata)
   const [tokenUsage, setTokenUsage] = useState<TokenUsage>({ inputTokens: 0, outputTokens: 0, totalTokens: 0 })
@@ -259,6 +264,8 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   // Wrapper to keep URL in sync with active session
   const changeSession = useCallback((sessionId: string | null, { userInitiated = false } = {}) => {
     setActiveSessionId(sessionId)
+    setActiveAppId(null) // clear active app refinement state on session switch
+    setAppsPanelOpen(false)
     if (userInitiated) {
       setActiveWizardContext(null) // only clear wizard context on explicit user navigation
     }
@@ -491,11 +498,18 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               title: m.title || 'App Preview',
               description: m.description || '',
               version: m.version || 1,
+              appId: m.appId || undefined,
             } as AppPreviewMessage
           }
           return m as unknown as ChatMsg
         })
         setMessages(mapped)
+        // Restore active app state from session history
+        const appPreviews = mapped.filter((m): m is AppPreviewMessage => m.type === 'app_preview')
+        if (appPreviews.length > 0) {
+          const lastApp = appPreviews[appPreviews.length - 1]
+          if (lastApp.appId) setActiveAppId(lastApp.appId)
+        }
       }
     } catch (err: any) {
       console.error('Failed to load session history:', err)
@@ -680,7 +694,13 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               title: data.title as string || 'App Preview',
               description: data.description as string || '',
               version: (data.version as number) || 1,
+              appId: data.appId as string || undefined,
             } as AppPreviewMessage])
+            if (data.appId) setActiveAppId(data.appId as string)
+            break
+
+          case 'app_done':
+            setActiveAppId(null)
             break
 
           case 'distill_saved':
@@ -1054,7 +1074,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     setShowScrollButton(false)
 
     // Add user message to chat (unless it's a slash command or internal action)
-    if (!userMsg.startsWith('/') && !userMsg.startsWith('__distill_')) {
+    if (!userMsg.startsWith('/') && !userMsg.startsWith('__distill_') && !userMsg.startsWith('__app_')) {
       setMessages((prev: ChatMsg[]) => [...prev, { type: 'user', content: userMsg }])
     }
 
@@ -1481,7 +1501,13 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               title: data.title as string || 'App Preview',
               description: data.description as string || '',
               version: (data.version as number) || 1,
+              appId: data.appId as string || undefined,
             } as AppPreviewMessage])
+            if (data.appId) setActiveAppId(data.appId as string)
+            break
+
+          case 'app_done':
+            setActiveAppId(null)
             break
 
           case 'distill_saved':
@@ -1933,7 +1959,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
         >
           {/* Todo button — shows plan steps in side panel */}
           <button
-            onClick={() => { setTodoPanelOpen(!todoPanelOpen); if (!todoPanelOpen) setFilePanelOpen(false) }}
+            onClick={() => { setTodoPanelOpen(!todoPanelOpen); if (!todoPanelOpen) { setFilePanelOpen(false); setAppsPanelOpen(false) } }}
             className="flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors"
             style={{
               background: todoPanelOpen ? 'var(--accent-bg, rgba(59, 130, 246, 0.15))' : 'transparent',
@@ -1962,7 +1988,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           {/* Files button — shown when session has artifacts */}
           {sessionArtifacts.length > 0 && (
             <button
-              onClick={() => { setFilePanelOpen(!filePanelOpen); setFilePanelInitialPath(null); if (!filePanelOpen) setTodoPanelOpen(false) }}
+              onClick={() => { setFilePanelOpen(!filePanelOpen); setFilePanelInitialPath(null); if (!filePanelOpen) { setTodoPanelOpen(false); setAppsPanelOpen(false) } }}
               className="flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors"
               style={{
                 background: filePanelOpen ? 'var(--accent-bg, rgba(59, 130, 246, 0.15))' : 'transparent',
@@ -1978,6 +2004,33 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 color: 'var(--accent-color, #60a5fa)',
               }}>
                 {sessionArtifacts.length}
+              </span>
+            </button>
+          )}
+
+          {/* Apps button — shown when session has app previews */}
+          {messages.some(m => m.type === 'app_preview') && (
+            <button
+              onClick={() => { setAppsPanelOpen(!appsPanelOpen); if (!appsPanelOpen) { setTodoPanelOpen(false); setFilePanelOpen(false) } }}
+              className="flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors"
+              style={{
+                background: appsPanelOpen ? 'var(--accent-bg, rgba(59, 130, 246, 0.15))' : 'transparent',
+                color: appsPanelOpen ? 'var(--accent-color, #60a5fa)' : 'var(--text-secondary)',
+                border: appsPanelOpen ? '1px solid var(--accent-border, rgba(59, 130, 246, 0.3))' : '1px solid transparent',
+              }}
+              title="Generated apps"
+            >
+              <AppWindow size={13} />
+              <span>Apps</span>
+              <span className="px-1 py-0 rounded text-[10px] font-medium" style={{
+                background: 'var(--accent-bg, rgba(59, 130, 246, 0.15))',
+                color: 'var(--accent-color, #60a5fa)',
+              }}>
+                {(() => {
+                  const appPreviews = messages.filter(m => m.type === 'app_preview') as AppPreviewMessage[]
+                  const uniqueApps = new Set(appPreviews.map(a => a.appId || a.title))
+                  return uniqueApps.size
+                })()}
               </span>
             </button>
           )}
@@ -2343,17 +2396,30 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
               if (msg.type === 'app_preview') {
                 const appMsg = msg as AppPreviewMessage
-                // Collect all app_preview versions with the same title for version navigation
+                // Collect all app_preview versions for this app (by appId, fallback to title)
                 const allVersions = messages.filter(
-                  (m): m is AppPreviewMessage => m.type === 'app_preview' && (m as AppPreviewMessage).title === appMsg.title
+                  (m): m is AppPreviewMessage => m.type === 'app_preview' && (
+                    appMsg.appId
+                      ? (m as AppPreviewMessage).appId === appMsg.appId
+                      : (m as AppPreviewMessage).title === appMsg.title
+                  )
                 )
-                const versionIdx = allVersions.findIndex(v => v.version === appMsg.version)
+                // Only render the card on the LAST version's message to avoid duplicates
+                const lastVersion = allVersions[allVersions.length - 1]
+                if (lastVersion && lastVersion !== appMsg) {
+                  return null // Skip earlier versions — they'll be shown via version nav
+                }
+                const versionIdx = allVersions.length - 1 // Default to latest
+                // Check if this app is actively being refined
+                const isActive = activeAppId != null && (appMsg.appId === activeAppId)
                 return (
                   <div key={index}>
                     <AppPreviewCard
                       data={appMsg}
                       versions={allVersions.length > 1 ? allVersions : undefined}
-                      versionIndex={versionIdx >= 0 ? versionIdx : 0}
+                      versionIndex={versionIdx}
+                      isActive={isActive}
+                      onDone={isActive ? () => sendMessage('__app_done__') : undefined}
                     />
                   </div>
                 )
@@ -2560,6 +2626,15 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
         <TodoPanel
           messages={messages}
           onClose={() => setTodoPanelOpen(false)}
+        />
+      )}
+
+      {/* Apps Panel — right side split panel for generated apps */}
+      {appsPanelOpen && (
+        <AppsPanel
+          messages={messages}
+          activeAppId={activeAppId}
+          onClose={() => setAppsPanelOpen(false)}
         />
       )}
     </div>

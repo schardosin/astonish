@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Maximize2, Minimize2, Code, X, ChevronLeft, ChevronRight, AppWindow } from 'lucide-react'
+import { Maximize2, Minimize2, Code, X, ChevronLeft, ChevronRight, AppWindow, Check } from 'lucide-react'
 import AppPreview from './AppPreview'
 import type { AppPreviewMessage } from './chatTypes'
 
@@ -10,6 +10,10 @@ interface AppPreviewCardProps {
   /** Current version index within the versions array */
   versionIndex?: number
   onNavigateVersion?: (index: number) => void
+  /** Called when user clicks "Done" to signal they're satisfied */
+  onDone?: () => void
+  /** Whether this is the active (latest) app being refined */
+  isActive?: boolean
 }
 
 export default function AppPreviewCard({
@@ -17,6 +21,8 @@ export default function AppPreviewCard({
   versions,
   versionIndex = 0,
   onNavigateVersion,
+  onDone,
+  isActive = false,
 }: AppPreviewCardProps) {
   const [showCode, setShowCode] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -25,6 +31,9 @@ export default function AppPreviewCard({
   const hasMultipleVersions = versions && versions.length > 1
   const canGoPrev = hasMultipleVersions && versionIndex > 0
   const canGoNext = hasMultipleVersions && versionIndex < (versions?.length ?? 0) - 1
+
+  // The displayed version — either the navigated version or the current data
+  const displayedData = versions && versions[versionIndex] ? versions[versionIndex] : data
 
   // Close fullscreen on Escape
   useEffect(() => {
@@ -47,14 +56,14 @@ export default function AppPreviewCard({
   }, [isFullscreen])
 
   const handleCopyCode = useCallback(() => {
-    navigator.clipboard.writeText(data.code)
-  }, [data.code])
+    navigator.clipboard.writeText(displayedData.code)
+  }, [displayedData.code])
 
   const renderCard = (fullscreen: boolean) => (
     <div
       className={fullscreen ? 'flex flex-col h-full' : 'my-3 rounded-xl overflow-hidden w-full max-w-3xl'}
       style={fullscreen ? {} : {
-        border: '1px solid var(--border-color)',
+        border: `1px solid ${isActive ? 'var(--accent)' : 'var(--border-color)'}`,
         background: 'var(--bg-secondary)',
         boxShadow: 'var(--shadow-soft)',
       }}
@@ -67,11 +76,11 @@ export default function AppPreviewCard({
         <div className="flex items-center gap-2 min-w-0">
           <AppWindow size={16} style={{ color: 'var(--accent)' }} className="flex-shrink-0" />
           <span className="text-sm font-semibold truncate" style={{ color: 'var(--accent)' }}>
-            {data.title || 'App Preview'}
+            {displayedData.title || 'App Preview'}
           </span>
-          {data.description && (
+          {displayedData.description && (
             <span className="text-xs truncate hidden sm:inline" style={{ color: 'var(--text-muted)' }}>
-              {data.description}
+              {displayedData.description}
             </span>
           )}
         </div>
@@ -90,7 +99,7 @@ export default function AppPreviewCard({
                 <ChevronLeft size={14} />
               </button>
               <span className="text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
-                v{data.version}
+                v{displayedData.version}
               </span>
               <button
                 onClick={() => canGoNext && onNavigateVersion?.(versionIndex + 1)}
@@ -102,6 +111,22 @@ export default function AppPreviewCard({
                 <ChevronRight size={14} />
               </button>
             </div>
+          )}
+
+          {/* Done button (only shown when actively refining) */}
+          {isActive && onDone && (
+            <button
+              onClick={onDone}
+              className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer mr-1"
+              style={{
+                color: 'var(--text-on-accent)',
+                background: 'var(--accent)',
+              }}
+              title="Finish refining this app"
+            >
+              <Check size={12} />
+              Done
+            </button>
           )}
 
           {/* Code toggle */}
@@ -164,7 +189,7 @@ export default function AppPreviewCard({
               color: 'var(--text-secondary)',
             }}
           >
-            <code>{data.code}</code>
+            <code>{displayedData.code}</code>
           </pre>
         </div>
       )}
@@ -172,7 +197,7 @@ export default function AppPreviewCard({
       {/* Preview */}
       <div className={fullscreen ? 'flex-1 overflow-auto p-2' : 'px-3 py-2'}>
         <AppPreview
-          code={data.code}
+          code={displayedData.code}
           maxHeight={fullscreen ? 9999 : 500}
         />
       </div>

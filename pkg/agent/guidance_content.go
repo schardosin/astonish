@@ -549,7 +549,7 @@ export default function App() {
 3. **Export default** — Export your main component as the default export.
 4. **Single file** — Everything must be in one file. Define helpers above the main export.
 5. **Self-contained** — Include all data, state, and logic within the component. Use hardcoded sample data.
-6. **Dark-mode aware** — The preview renders on a dark background (` + "`#0b1222`" + `). Use light text on dark backgrounds. Cards: ` + "`bg-gray-800`" + ` / ` + "`bg-gray-900`" + `. Text: ` + "`text-white`" + ` / ` + "`text-gray-300`" + `.
+6. **Dark-mode aware** — The preview renders on a themed background. **Do NOT set any background class (bg-*) on the outermost container element** — it must be transparent so the sandbox theme shows through. Use background classes only on inner elements like cards, sections, and panels. Inner cards: ` + "`bg-gray-800`" + ` / ` + "`bg-gray-900`" + `. Text: ` + "`text-white`" + ` / ` + "`text-gray-300`" + `.
 7. **Make it interactive** — Use ` + "`useState`" + ` for buttons, toggles, tabs, filters.
 8. **Responsive** — Use responsive Tailwind classes (` + "`md:`" + `, ` + "`lg:`" + `) where appropriate.
 

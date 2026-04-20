@@ -35,6 +35,15 @@ window.onerror = function(msg, src, line, col, err) {
   body { padding: 16px; color: #e5e5e5; }
   html { background: #0b1222 !important; }
   #root { min-height: 20px; }
+  /* Force the component's outermost element to be transparent so the sandbox
+     themed background (#0b1222 dark / #fafbfe light) shows through. LLMs
+     frequently generate bg-gray-950, bg-black, min-h-screen etc. on the root
+     container. CSS !important beats Tailwind utilities (which don't use
+     !important), and unlike DOM manipulation this survives React re-renders. */
+  #root > *:first-child {
+    background-color: transparent !important;
+    min-height: auto !important;
+  }
   #error-display {
     padding: 12px 16px; margin: 8px; border-radius: 8px;
     background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3);

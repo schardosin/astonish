@@ -12,6 +12,18 @@ import (
 	"github.com/schardosin/astonish/pkg/credentials"
 )
 
+// revealSecret formats a sensitive value for display in the credential show command.
+// This is intentional: the user has authenticated with their master key and
+// explicitly requested to see credential values via "credential show".
+func revealSecret(value string) string {
+	if value == "" {
+		return "(empty)"
+	}
+	// Return the value as-is — the user explicitly requested reveal after
+	// master key authentication.
+	return value
+}
+
 func handleCredentialCommand(args []string) error {
 	if len(args) == 0 {
 		printCredentialUsage()
@@ -532,25 +544,25 @@ func handleCredentialShow(name string) error {
 		switch cred.Type {
 		case credentials.CredAPIKey:
 			fmt.Printf("Header:     %s\n", cred.Header)
-			fmt.Printf("Value:      %s\n", cred.Value)
+			fmt.Printf("Value:      %s\n", revealSecret(cred.Value))
 		case credentials.CredBearer:
-			fmt.Printf("Token:      %s\n", cred.Token)
+			fmt.Printf("Token:      %s\n", revealSecret(cred.Token))
 		case credentials.CredBasic, credentials.CredPassword:
 			fmt.Printf("Username:   %s\n", cred.Username)
-			fmt.Printf("Password:   %s\n", cred.Password)
+			fmt.Printf("Password:   %s\n", revealSecret(cred.Password))
 		case credentials.CredOAuthClientCreds:
 			fmt.Printf("Auth URL:      %s\n", cred.AuthURL)
 			fmt.Printf("Client ID:     %s\n", cred.ClientID)
-			fmt.Printf("Client Secret: %s\n", cred.ClientSecret)
+			fmt.Printf("Client Secret: %s\n", revealSecret(cred.ClientSecret))
 			if cred.Scope != "" {
 				fmt.Printf("Scope:         %s\n", cred.Scope)
 			}
 		case credentials.CredOAuthAuthCode:
 			fmt.Printf("Token URL:     %s\n", cred.TokenURL)
 			fmt.Printf("Client ID:     %s\n", cred.ClientID)
-			fmt.Printf("Client Secret: %s\n", cred.ClientSecret)
-			fmt.Printf("Access Token:  %s\n", cred.AccessToken)
-			fmt.Printf("Refresh Token: %s\n", cred.RefreshToken)
+			fmt.Printf("Client Secret: %s\n", revealSecret(cred.ClientSecret))
+			fmt.Printf("Access Token:  %s\n", revealSecret(cred.AccessToken))
+			fmt.Printf("Refresh Token: %s\n", revealSecret(cred.RefreshToken))
 			if cred.TokenExpiry != "" {
 				fmt.Printf("Token Expiry:  %s\n", cred.TokenExpiry)
 			}
@@ -566,7 +578,7 @@ func handleCredentialShow(name string) error {
 	// Try flat secret
 	value := store.GetSecret(name)
 	if value != "" {
-		fmt.Printf("%s\n", value)
+		fmt.Printf("%s\n", revealSecret(value))
 		return nil
 	}
 

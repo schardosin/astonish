@@ -1,10 +1,8 @@
 name: Docker Incus Image
 
 on:
-  workflow_run:
-    workflows: ["Release"]
-    types:
-      - completed
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -13,13 +11,13 @@ jobs:
   build-and-push:
     name: Build and push multi-arch image
     runs-on: ubuntu-latest
-    if: github.repository == 'schardosin/astonish' && github.event.workflow_run.conclusion == 'success'
+    if: github.repository == 'schardosin/astonish'
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.event.release.tag_name }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -41,7 +39,7 @@ jobs:
 
       - name: Cross-compile Linux binaries
         env:
-          VERSION_TAG: ${{ github.event.workflow_run.head_branch }}
+          VERSION_TAG: ${{ github.event.release.tag_name }}
         run: |
           # Both binaries need the frontend embedded and version ldflags
           touch web/embed.go
@@ -75,5 +73,5 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            schardosin/astonish-incus:${{ github.event.workflow_run.head_branch }}
+            schardosin/astonish-incus:${{ github.event.release.tag_name }}
             schardosin/astonish-incus:latest

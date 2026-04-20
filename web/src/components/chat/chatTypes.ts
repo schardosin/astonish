@@ -166,6 +166,23 @@ export interface PlanStepInfo {
   status: 'pending' | 'running' | 'complete' | 'failed'
 }
 
+// ---- Distill flow preview ----
+
+export interface DistillPreviewMessage {
+  type: 'distill_preview'
+  yaml: string
+  flowName: string
+  description: string
+  tags: string[]
+  explanation: string
+}
+
+export interface DistillSavedMessage {
+  type: 'distill_saved'
+  filePath: string
+  runCommand: string
+}
+
 export type ChatMsg =
   | FleetMessageItem
   | UserMessage
@@ -185,6 +202,8 @@ export type ChatMsg =
   | ArtifactMessage
   | BrowserHandoffMessage
   | PlanMessage
+  | DistillPreviewMessage
+  | DistillSavedMessage
 
 // ---- Fleet info / state ----
 

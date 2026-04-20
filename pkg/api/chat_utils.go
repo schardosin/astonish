@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/credentials"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"google.golang.org/adk/model"
@@ -75,6 +77,18 @@ func eventsToMessages(events session.Events, redactor *credentials.Redactor) []S
 					// Format: "[2026-03-20 14:30:05 UTC]\n<text>"
 					text = stripUserMessageTimestamp(text)
 				}
+
+				// Check for structured distill messages (model only).
+				// These are persisted with a special prefix marker and must
+				// be reconstructed as their own message types, not coalesced.
+				if role == "model" {
+					if dm := tryParseDistillMessage(text); dm != nil {
+						messages = append(messages, *dm)
+						lastInvocationID = eventInvID
+						continue
+					}
+				}
+
 				// Defense-in-depth: redact any credential values from text
 				// before sending to the frontend. This catches secrets in user
 				// messages and agent responses that may have been persisted
@@ -858,4 +872,100 @@ func readArtifactContentFromSession(fs *persistentsession.FileStore, sessionID, 
 		}
 	}
 	return "", false
+}
+
+// --- Distill preview/saved persistence ---
+//
+// Distill preview and saved messages are persisted as model text events with a
+// special prefix marker so eventsToMessages can reconstruct them as structured
+// StudioMessage objects. The format is:
+//   [distill_preview]<JSON payload>
+//   [distill_saved]<JSON payload>
+
+const distillPreviewPrefix = "[distill_preview]"
+const distillSavedPrefix = "[distill_saved]"
+
+// distillPreviewPayload is the JSON structure persisted inside the text event.
+type distillPreviewPayload struct {
+	YAML        string   `json:"yaml"`
+	FlowName    string   `json:"flowName"`
+	Description string   `json:"description"`
+	Tags        []string `json:"tags,omitempty"`
+	Explanation string   `json:"explanation,omitempty"`
+}
+
+// distillSavedPayload is the JSON structure persisted inside the text event.
+type distillSavedPayload struct {
+	FilePath   string `json:"filePath"`
+	RunCommand string `json:"runCommand"`
+}
+
+// persistDistillPreview serializes a DistillReview as a structured text event.
+func persistDistillPreview(ctx context.Context, svc session.Service, sessionID string, review *agent.DistillReview) {
+	if svc == nil || sessionID == "" || review == nil {
+		return
+	}
+	payload := distillPreviewPayload{
+		YAML:        review.YAML,
+		FlowName:    review.FlowName,
+		Description: review.Description,
+		Tags:        review.Tags,
+		Explanation: review.Explanation,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		slog.Error("failed to marshal distill preview", "error", err)
+		return
+	}
+	persistSessionMessage(ctx, svc, sessionID, "model", distillPreviewPrefix+string(data))
+}
+
+// persistDistillSaved serializes a distill-saved result as a structured text event.
+func persistDistillSaved(ctx context.Context, svc session.Service, sessionID, filePath, runCmd string) {
+	if svc == nil || sessionID == "" {
+		return
+	}
+	payload := distillSavedPayload{
+		FilePath:   filePath,
+		RunCommand: runCmd,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		slog.Error("failed to marshal distill saved", "error", err)
+		return
+	}
+	persistSessionMessage(ctx, svc, sessionID, "model", distillSavedPrefix+string(data))
+}
+
+// tryParseDistillMessage checks if a text starts with a distill marker prefix
+// and returns a structured StudioMessage if so. Returns nil if not a distill message.
+func tryParseDistillMessage(text string) *StudioMessage {
+	if strings.HasPrefix(text, distillPreviewPrefix) {
+		jsonStr := text[len(distillPreviewPrefix):]
+		var payload distillPreviewPayload
+		if err := json.Unmarshal([]byte(jsonStr), &payload); err != nil {
+			return nil
+		}
+		return &StudioMessage{
+			Type:        "distill_preview",
+			YAML:        payload.YAML,
+			FlowName:    payload.FlowName,
+			Description: payload.Description,
+			Tags:        payload.Tags,
+			Explanation: payload.Explanation,
+		}
+	}
+	if strings.HasPrefix(text, distillSavedPrefix) {
+		jsonStr := text[len(distillSavedPrefix):]
+		var payload distillSavedPayload
+		if err := json.Unmarshal([]byte(jsonStr), &payload); err != nil {
+			return nil
+		}
+		return &StudioMessage{
+			Type:       "distill_saved",
+			FilePath:   payload.FilePath,
+			RunCommand: payload.RunCommand,
+		}
+	}
+	return nil
 }

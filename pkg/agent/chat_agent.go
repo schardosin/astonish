@@ -103,9 +103,10 @@ type ChatAgent struct {
 	approvalHelper *AstonishAgent
 
 	// Internal: per-session execution traces for on-demand /distill
-	traceHistory   map[string][]*ExecutionTrace // keyed by session ID
-	pendingDistill map[string]*distillPreview   // keyed by session ID
-	traceMu        sync.Mutex                   // protects traceHistory and pendingDistill
+	traceHistory         map[string][]*ExecutionTrace // keyed by session ID
+	pendingDistill       map[string]*distillPreview   // keyed by session ID
+	pendingDistillReview map[string]*DistillReview    // keyed by session ID — interactive review state
+	traceMu              sync.Mutex                   // protects traceHistory, pendingDistill, and pendingDistillReview
 
 	// Image side-channel: images stripped from tool results before they
 	// enter session history, available for channels to deliver to users.
@@ -151,6 +152,18 @@ type distillPreview struct {
 	Traces      []*ExecutionTrace // selected traces to distill
 }
 
+// DistillReview holds the state of an interactive distill review session.
+// The user can request modifications until they're satisfied, then save.
+type DistillReview struct {
+	YAML          string            // Current YAML draft
+	FlowName      string            // Suggested flow name
+	Description   string            // Flow description
+	Tags          []string          // Flow tags
+	Explanation   string            // Human-readable explanation
+	Traces        []*ExecutionTrace // Original traces (for context in modifications)
+	Modifications []string          // History of user change requests
+}
+
 // DistillSession identifies a session for distillation, providing the
 // information needed to look up persisted session events for trace
 // reconstruction across daemon restarts.
@@ -168,17 +181,18 @@ func NewChatAgent(llm model.LLM, internalTools []tool.Tool, toolsets []tool.Tool
 	maxToolCalls := 100
 
 	return &ChatAgent{
-		LLM:            llm,
-		Tools:          internalTools,
-		Toolsets:       toolsets,
-		SessionService: sessionService,
-		SystemPrompt:   promptBuilder,
-		DebugMode:      debugMode,
-		AutoApprove:    autoApprove,
-		MaxToolCalls:   maxToolCalls,
-		approvalHelper: &AstonishAgent{LLM: llm, AutoApprove: autoApprove},
-		traceHistory:   make(map[string][]*ExecutionTrace),
-		pendingDistill: make(map[string]*distillPreview),
+		LLM:                  llm,
+		Tools:                internalTools,
+		Toolsets:             toolsets,
+		SessionService:       sessionService,
+		SystemPrompt:         promptBuilder,
+		DebugMode:            debugMode,
+		AutoApprove:          autoApprove,
+		MaxToolCalls:         maxToolCalls,
+		approvalHelper:       &AstonishAgent{LLM: llm, AutoApprove: autoApprove},
+		traceHistory:         make(map[string][]*ExecutionTrace),
+		pendingDistill:       make(map[string]*distillPreview),
+		pendingDistillReview: make(map[string]*DistillReview),
 	}
 }
 

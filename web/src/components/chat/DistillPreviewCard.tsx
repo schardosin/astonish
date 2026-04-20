@@ -155,22 +155,46 @@ export default function DistillPreviewCard({ data, isActive = false, onSave, onR
                     <Workflow size={12} style={{ color: 'var(--text-muted)' }} />
                     <span className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Nodes</span>
                   </div>
-                  <div className="space-y-1.5">
+                  <div
+                    className="rounded-lg overflow-hidden"
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'auto auto 1fr',
+                      background: 'var(--bg-tertiary)',
+                    }}
+                  >
                     {explanation.nodes.map((node, i) => {
-                      const style = getTypeStyle(node.type)
+                      const typeStyle = getTypeStyle(node.type)
                       return (
-                        <div key={i} className="flex items-start gap-2 rounded-lg px-2.5 py-1.5" style={{ background: 'var(--bg-tertiary)' }}>
-                          <div className="flex items-center gap-1.5 flex-shrink-0 mt-px">
-                            <code className="text-[11px] font-semibold px-1.5 py-0.5 rounded" style={{ background: style.bg, color: style.text }}>
-                              {node.name}
-                            </code>
-                            {node.type && (
-                              <span className="text-[10px] px-1 py-0.5 rounded" style={{ color: style.text, opacity: 0.8 }}>
-                                {node.type}
-                              </span>
-                            )}
-                          </div>
-                          <span className="text-[11px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                        <div key={i} className="contents">
+                          <code
+                            className="text-[11px] font-semibold px-1.5 py-1.5 whitespace-nowrap"
+                            style={{
+                              background: typeStyle.bg,
+                              color: typeStyle.text,
+                              borderTop: i > 0 ? '1px solid var(--border-color)' : undefined,
+                              paddingLeft: '10px',
+                            }}
+                          >
+                            {node.name}
+                          </code>
+                          <span
+                            className="text-[10px] px-2 py-1.5 whitespace-nowrap"
+                            style={{
+                              color: typeStyle.text,
+                              opacity: 0.8,
+                              borderTop: i > 0 ? '1px solid var(--border-color)' : undefined,
+                            }}
+                          >
+                            {node.type || '\u00A0'}
+                          </span>
+                          <span
+                            className="text-[11px] leading-relaxed py-1.5 pr-2.5"
+                            style={{
+                              color: 'var(--text-secondary)',
+                              borderTop: i > 0 ? '1px solid var(--border-color)' : undefined,
+                            }}
+                          >
                             {node.description}
                           </span>
                         </div>
@@ -187,14 +211,33 @@ export default function DistillPreviewCard({ data, isActive = false, onSave, onR
                     <TerminalSquare size={12} style={{ color: 'var(--text-muted)' }} />
                     <span className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Input Parameters</span>
                   </div>
-                  <div className="space-y-1">
+                  <div
+                    className="rounded-lg overflow-hidden"
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'auto 1fr',
+                      background: 'var(--bg-tertiary)',
+                    }}
+                  >
                     {explanation.params.map((param, i) => (
-                      <div key={i} className="flex items-start gap-2 px-2.5 py-1.5 rounded-lg" style={{ background: 'var(--bg-tertiary)' }}>
-                        <code className="text-[11px] font-semibold flex-shrink-0 px-1.5 py-0.5 rounded mt-px"
-                          style={{ background: 'rgba(59, 130, 246, 0.1)', color: 'rgb(59, 130, 246)' }}>
+                      <div key={i} className="contents">
+                        <code
+                          className="text-[11px] font-semibold px-2.5 py-1.5 whitespace-nowrap"
+                          style={{
+                            background: 'rgba(59, 130, 246, 0.1)',
+                            color: 'rgb(59, 130, 246)',
+                            borderTop: i > 0 ? '1px solid var(--border-color)' : undefined,
+                          }}
+                        >
                           {param.name}
                         </code>
-                        <span className="text-[11px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                        <span
+                          className="text-[11px] leading-relaxed px-2.5 py-1.5"
+                          style={{
+                            color: 'var(--text-secondary)',
+                            borderTop: i > 0 ? '1px solid var(--border-color)' : undefined,
+                          }}
+                        >
                           {param.description}
                         </span>
                       </div>

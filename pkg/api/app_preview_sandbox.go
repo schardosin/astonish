@@ -27,9 +27,7 @@ window.onerror = function(msg, src, line, col, err) {
 <style type="text/tailwindcss"></style>
 <style>
   * { box-sizing: border-box; }
-  body { margin: 0; padding: 16px; font-family: system-ui, -apple-system, sans-serif; }
-  body.dark { background: #0b1222; color: #e5e5e5; }
-  body.light { background: #fafbfe; color: #1a1a1a; }
+  body { margin: 0; padding: 16px; font-family: system-ui, -apple-system, sans-serif; background: #0b1222 !important; color: #e5e5e5; }
   #root { min-height: 20px; }
   #error-display {
     padding: 12px 16px; margin: 8px; border-radius: 8px;
@@ -39,7 +37,7 @@ window.onerror = function(msg, src, line, col, err) {
   }
 </style>
 </head>
-<body class="dark">
+<body class="dark" style="background: #0b1222;">
 <div id="root"></div>
 <div id="error-display"></div>
 <script>
@@ -182,7 +180,10 @@ window.onerror = function(msg, src, line, col, err) {
     }
 
     if (msg.type === 'theme') {
-      document.body.className = msg.mode === 'light' ? 'light' : 'dark';
+      var isLight = msg.mode === 'light';
+      document.body.className = isLight ? 'light' : 'dark';
+      document.body.style.background = isLight ? '#fafbfe' : '#0b1222';
+      document.body.style.color = isLight ? '#1a1a1a' : '#e5e5e5';
     }
   });
 

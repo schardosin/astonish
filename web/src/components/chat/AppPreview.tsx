@@ -7,6 +7,10 @@ interface AppPreviewProps {
   maxHeight?: number
 }
 
+function detectTheme(): 'dark' | 'light' {
+  return document.documentElement.classList.contains('dark') ? 'dark' : 'light'
+}
+
 export default function AppPreview({ code, maxHeight = 500 }: AppPreviewProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [height, setHeight] = useState(200)
@@ -21,6 +25,12 @@ export default function AppPreview({ code, maxHeight = 500 }: AppPreviewProps) {
     }
   }, [])
 
+  const sendTheme = useCallback(() => {
+    if (iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.postMessage({ type: 'theme', mode: detectTheme() }, '*')
+    }
+  }, [])
+
   useEffect(() => {
     function handleMessage(e: MessageEvent) {
       if (e.source !== iframeRef.current?.contentWindow) return
@@ -30,6 +40,7 @@ export default function AppPreview({ code, maxHeight = 500 }: AppPreviewProps) {
       switch (msg.type) {
         case 'sandbox_ready':
           setReady(true)
+          sendTheme()
           if (pendingCode.current) {
             sendCode(pendingCode.current)
             pendingCode.current = null
@@ -49,7 +60,16 @@ export default function AppPreview({ code, maxHeight = 500 }: AppPreviewProps) {
 
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
-  }, [maxHeight, sendCode])
+  }, [maxHeight, sendCode, sendTheme])
+
+  // Watch for theme changes on the document element and forward to sandbox
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      sendTheme()
+    })
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+    return () => observer.disconnect()
+  }, [sendTheme])
 
   useEffect(() => {
     if (!code) return
@@ -72,7 +92,7 @@ export default function AppPreview({ code, maxHeight = 500 }: AppPreviewProps) {
           border: 'none',
           borderRadius: '8px',
           overflow: 'hidden',
-          background: 'var(--bg-tertiary)',
+          background: 'var(--bg-primary)',
           transition: 'height 0.2s ease',
         }}
         title="App Preview"

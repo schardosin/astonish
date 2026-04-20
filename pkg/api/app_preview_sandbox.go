@@ -28,8 +28,8 @@ window.onerror = function(msg, src, line, col, err) {
 <style>
   * { box-sizing: border-box; }
   body { margin: 0; padding: 16px; font-family: system-ui, -apple-system, sans-serif; }
-  body.dark { background: #0f0f0f; color: #e5e5e5; }
-  body.light { background: #ffffff; color: #1a1a1a; }
+  body.dark { background: #0b1222; color: #e5e5e5; }
+  body.light { background: #fafbfe; color: #1a1a1a; }
   #root { min-height: 20px; }
   #error-display {
     padding: 12px 16px; margin: 8px; border-radius: 8px;

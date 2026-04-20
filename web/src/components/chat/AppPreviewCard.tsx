@@ -61,7 +61,7 @@ export default function AppPreviewCard({
 
   const renderCard = (fullscreen: boolean) => (
     <div
-      className={fullscreen ? 'flex flex-col h-full' : 'my-3 rounded-xl overflow-hidden w-full max-w-3xl'}
+      className={fullscreen ? 'flex flex-col h-full' : 'my-3 rounded-xl overflow-hidden w-full'}
       style={fullscreen ? {} : {
         border: `1px solid ${isActive ? 'var(--accent)' : 'var(--border-color)'}`,
         background: 'var(--bg-secondary)',

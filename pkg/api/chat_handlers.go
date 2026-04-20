@@ -817,6 +817,9 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 // makeLLMFuncFromModel wraps an ADK model.LLM into a simple prompt→response function
 // suitable for lightweight classification calls (e.g. app refinement intent).
 func makeLLMFuncFromModel(llm model.LLM) func(ctx context.Context, prompt string) (string, error) {
+	if llm == nil {
+		return nil
+	}
 	return func(ctx context.Context, prompt string) (string, error) {
 		req := &model.LLMRequest{
 			Contents: []*genai.Content{

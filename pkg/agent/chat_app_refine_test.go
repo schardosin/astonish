@@ -69,6 +69,19 @@ func TestClassifyAppIntent_MagicStrings(t *testing.T) {
 		{"perfect", AppIntentSave},
 		{"save it", AppIntentSave},
 		{"save this app", AppIntentSave},
+		// Substring-based save detection (natural phrasing)
+		{"save for me", AppIntentSave},
+		{"please save this", AppIntentSave},
+		{"save it now", AppIntentSave},
+		{"go ahead and save it", AppIntentSave},
+		{"you can save the app", AppIntentSave},
+		{"just save it please", AppIntentSave},
+		// New exact match keywords
+		{"save", AppIntentSave},
+		{"yes", AppIntentSave},
+		{"yep", AppIntentSave},
+		{"looks great", AppIntentSave},
+		{"all done", AppIntentSave},
 		// Without LLM, everything else defaults to refine
 		{"make the header blue", AppIntentRefine},
 		{"add a search bar", AppIntentRefine},

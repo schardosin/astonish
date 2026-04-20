@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -92,10 +93,23 @@ func (c *ChatAgent) ClassifyAppIntent(ctx context.Context, msg string, llmFunc f
 
 	// Quick heuristics for obvious cases
 	lower := strings.ToLower(trimmed)
-	saveKeywords := []string{"done", "i'm done", "im done", "that's it", "looks good", "perfect",
-		"save it", "save this app", "save this", "save the app", "ship it"}
-	for _, kw := range saveKeywords {
+
+	// Exact match save keywords
+	saveExact := []string{"done", "i'm done", "im done", "that's it", "looks good", "perfect",
+		"save it", "save this app", "save this", "save the app", "ship it", "yes", "yep", "yup",
+		"save", "looks great", "that works", "good enough", "all done"}
+	for _, kw := range saveExact {
 		if lower == kw {
+			return AppIntentSave
+		}
+	}
+
+	// Substring-based save detection — catches natural phrasing like "save for me",
+	// "please save this", "go ahead and save", "you can save it now", etc.
+	saveContains := []string{"save for", "save it", "save this", "save the app", "go ahead and save",
+		"you can save", "please save", "just save"}
+	for _, phrase := range saveContains {
+		if strings.Contains(lower, phrase) {
 			return AppIntentSave
 		}
 	}
@@ -119,7 +133,7 @@ func (c *ChatAgent) classifyAppViaLLM(ctx context.Context, msg string, llmFunc f
 The user has just been shown a generated React component (visual app preview) and can do one of three things:
 
 1. REFINE — They want to modify the app. Examples: "Make the header blue", "Add a search bar", "Change the chart to a bar chart", "Make it responsive".
-2. SAVE — They are satisfied and want to save the app. Examples: "Looks good", "I'm done", "That's perfect", "Save it", "Ship it", "Save this app".
+2. SAVE — They are satisfied and want to save the app. Examples: "Looks good", "I'm done", "That's perfect", "Save it", "Ship it", "Save this app", "Save for me", "Please save", "Yes save it", "Go ahead and save".
 3. UNRELATED — Their message has nothing to do with the app being shown. Examples: "What's the weather?", "Help me write a function", "Search for Python docs".
 
 User message: %q
@@ -128,6 +142,7 @@ Respond with exactly one word: REFINE, SAVE, or UNRELATED`, msg)
 
 	response, err := llmFunc(ctx, prompt)
 	if err != nil {
+		slog.Debug("app intent classification LLM failed", "error", err, "msg", msg)
 		return -1
 	}
 
@@ -137,6 +152,8 @@ Respond with exactly one word: REFINE, SAVE, or UNRELATED`, msg)
 		answer = answer[:idx]
 	}
 
+	slog.Debug("app intent classification result", "msg", msg, "raw", response, "parsed", answer)
+
 	switch answer {
 	case "REFINE":
 		return AppIntentRefine
@@ -145,6 +162,7 @@ Respond with exactly one word: REFINE, SAVE, or UNRELATED`, msg)
 	case "UNRELATED":
 		return AppIntentUnrelated
 	default:
+		slog.Debug("app intent classification unknown answer", "answer", answer, "raw", response)
 		return -1
 	}
 }

@@ -23,6 +23,7 @@ import BrowserView from './chat/BrowserView'
 import ArtifactCard from './chat/ArtifactCard'
 import DistillPreviewCard from './chat/DistillPreviewCard'
 import AppPreviewCard from './chat/AppPreviewCard'
+import AppCodeIndicator from './chat/AppCodeIndicator'
 import ResultCard from './chat/ResultCard'
 
 // Extended ChatSession with optional fleet fields coming from the sidebar
@@ -197,6 +198,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set())
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
   const [rawViewIndices, setRawViewIndices] = useState<Set<number>>(new Set())
+  const [expandedCodeIndices, setExpandedCodeIndices] = useState<Set<number>>(new Set())
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
   // File panel state
@@ -2163,11 +2165,51 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                         <pre className="text-sm whitespace-pre-wrap break-words font-mono" style={{ color: 'var(--text-primary)' }}>
                           {msg.content}
                         </pre>
-                      ) : (
-                        <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                        </div>
-                      )}
+                      ) : (() => {
+                        // Split out astonish-app code fences so they render as a stable
+                        // AppCodeIndicator outside the ReactMarkdown tree. This avoids
+                        // the jank of ReactMarkdown recreating the component on every
+                        // streaming text update.
+                        const appFenceRe = /```astonish-app\s*\n([\s\S]*?)(?:\n```|$)/
+                        const match = msg.content.match(appFenceRe)
+                        if (!match) {
+                          return (
+                            <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
+                              <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                            </div>
+                          )
+                        }
+                        const fenceStart = match.index!
+                        const fenceEnd = fenceStart + match[0].length
+                        const before = msg.content.slice(0, fenceStart).trimEnd()
+                        const appCode = match[1]
+                        const after = msg.content.slice(fenceEnd).trimStart()
+                        return (
+                          <>
+                            {before && (
+                              <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{before}</ReactMarkdown>
+                              </div>
+                            )}
+                            <AppCodeIndicator
+                              streaming={!!(msg as AgentMessage)._streaming}
+                              code={appCode}
+                              expanded={expandedCodeIndices.has(index)}
+                              onToggle={() => setExpandedCodeIndices(prev => {
+                                const next = new Set(prev)
+                                if (next.has(index)) next.delete(index)
+                                else next.add(index)
+                                return next
+                              })}
+                            />
+                            {after && (
+                              <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{after}</ReactMarkdown>
+                              </div>
+                            )}
+                          </>
+                        )
+                      })()}
                     </div>
                     {sourceUrls.length > 0 && <SourceCitations urls={sourceUrls} />}
                   </div>

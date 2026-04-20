@@ -24,10 +24,16 @@ window.onerror = function(msg, src, line, col, err) {
 </script>
 <script src="/api/app-preview/runtime.js"></script>
 <script src="/api/app-preview/tailwind.js"></script>
-<style type="text/tailwindcss"></style>
+<style type="text/tailwindcss">
+  @theme {
+    --color-bg-app: #0b1222;
+  }
+</style>
 <style>
   * { box-sizing: border-box; }
-  body { margin: 0; padding: 16px; font-family: system-ui, -apple-system, sans-serif; background: #0b1222 !important; color: #e5e5e5; }
+  html, body { margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
+  body { padding: 16px; color: #e5e5e5; }
+  html { background: #0b1222 !important; }
   #root { min-height: 20px; }
   #error-display {
     padding: 12px 16px; margin: 8px; border-radius: 8px;
@@ -37,7 +43,7 @@ window.onerror = function(msg, src, line, col, err) {
   }
 </style>
 </head>
-<body class="dark" style="background: #0b1222;">
+<body class="dark" style="background: transparent;">
 <div id="root"></div>
 <div id="error-display"></div>
 <script>
@@ -182,7 +188,7 @@ window.onerror = function(msg, src, line, col, err) {
     if (msg.type === 'theme') {
       var isLight = msg.mode === 'light';
       document.body.className = isLight ? 'light' : 'dark';
-      document.body.style.background = isLight ? '#fafbfe' : '#0b1222';
+      document.documentElement.style.background = isLight ? '#fafbfe' : '#0b1222';
       document.body.style.color = isLight ? '#1a1a1a' : '#e5e5e5';
     }
   });

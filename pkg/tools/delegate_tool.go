@@ -32,6 +32,7 @@ type SubTaskInput struct {
 	Task         string   `json:"task" jsonschema:"Clear description of what the sub-agent should accomplish. Be specific about the expected output."`
 	Instructions string   `json:"instructions,omitempty" jsonschema:"Additional context or constraints for this sub-agent. Include relevant file paths, API details, or formatting requirements."`
 	Tools        []string `json:"tools,omitempty" jsonschema:"Tool group names or individual tool names for this sub-agent (e.g., ['core'], ['browser'], ['core', 'web'], ['mcp:github']). If omitted, tools are auto-discovered based on the task description. Available groups are listed in the system prompt under Task Delegation."`
+	PlanStep     string   `json:"plan_step,omitempty" jsonschema:"The plan step this task belongs to. Set this to the 'name' of the step from announce_plan that this task contributes to. Multiple tasks can share the same plan_step — the step completes only when ALL tasks with that plan_step finish. If omitted, progress tracking falls back to name-based matching."`
 }
 
 // DelegateTasksArgs is the input schema for the delegate_tasks tool.
@@ -92,6 +93,7 @@ func delegateTasks(ctx tool.Context, args DelegateTasksArgs) (DelegateTasksResul
 			Description:  safeTask,
 			Instructions: safeInstructions,
 			ToolFilter:   input.Tools,
+			PlanStep:     input.PlanStep,
 			ParentID:     ctx.SessionID(),
 			ParentDepth:  0,                                 // delegate_tasks creates top-level sub-agents
 			OnEvent:      subAgentManagerVar.EventForwarder, // transparent streaming to UI
@@ -105,6 +107,7 @@ func delegateTasks(ctx tool.Context, args DelegateTasksArgs) (DelegateTasksResul
 			taskInfos[i] = agent.SubTaskInfo{
 				Name:        t.Name,
 				Description: t.Task,
+				PlanStep:    t.PlanStep,
 			}
 		}
 		subAgentManagerVar.SubTaskProgress(agent.SubTaskProgressEvent{
@@ -202,7 +205,9 @@ func delegateTasks(ctx tool.Context, args DelegateTasksArgs) (DelegateTasksResul
 func NewDelegateTasksTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "delegate_tasks",
-		Description: `Delegate tasks to parallel sub-agents with isolated sessions. Each sub-agent gets the tool groups you specify (e.g., ["core"], ["browser"], ["core", "web"]) or auto-discovers tools based on the task description if tools is omitted. Use this for specialized tasks like browser automation, web fetching, email, API calls, or any task requiring tools not on the main thread. Each sub-agent has read-only memory, a search_tools capability, and a 10-minute timeout (automatically retried once if making progress). Max 10 tasks per call.`,
+		Description: `Delegate tasks to parallel sub-agents with isolated sessions. Each sub-agent gets the tool groups you specify (e.g., ["core"], ["browser"], ["core", "web"]) or auto-discovers tools based on the task description if tools is omitted. Use this for specialized tasks like browser automation, web fetching, email, API calls, or any task requiring tools not on the main thread. Each sub-agent has read-only memory, a search_tools capability, and a 10-minute timeout (automatically retried once if making progress). Max 10 tasks per call.
+
+When a plan is active (you called announce_plan), set the plan_step field on each task to link it to a plan step. Multiple tasks can share the same plan_step — the step is marked complete only when ALL tasks with that plan_step finish. This drives accurate progress tracking in the UI.`,
 	}, delegateTasks)
 }
 

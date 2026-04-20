@@ -1413,29 +1413,36 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		// sub-task lifecycle events, then forward to ChatAgent.SubTaskProgressCallback
 		// (which is set dynamically by ChatRunner.Run() for Studio sessions).
 		subAgentMgr.SubTaskProgress = func(evt agent.SubTaskProgressEvent) {
-			// Drive plan step transitions via name-based matching.
-			// task_start → mark the matching plan step as "running"
-			// task_complete → mark the matching plan step as "complete"
+			// Drive plan step transitions via explicit plan_step binding.
+			// task_start → resolve step name, register task, mark step "running"
+			// task_complete → mark task done; if all tasks for step done, mark step "complete"
 			if plan := chatAgent.GetActivePlan(); plan != nil {
 				switch evt.Type {
 				case "task_start":
-					if stepName := plan.StartStepByName(evt.TaskName); stepName != "" {
-						if chatAgent.SubTaskProgressCallback != nil {
-							chatAgent.SubTaskProgressCallback(agent.SubTaskProgressEvent{
-								Type:       "plan_step_update",
-								StepName:   stepName,
-								StepStatus: "running",
-							})
+					// Resolve the plan step: use explicit plan_step if set, else prefix match
+					stepName := plan.ResolveStepName(evt.PlanStep, evt.TaskName)
+					if stepName != "" {
+						if emittedStep := plan.StartStep(stepName, evt.TaskName); emittedStep != "" {
+							if chatAgent.SubTaskProgressCallback != nil {
+								chatAgent.SubTaskProgressCallback(agent.SubTaskProgressEvent{
+									Type:       "plan_step_update",
+									StepName:   emittedStep,
+									StepStatus: "running",
+								})
+							}
 						}
 					}
 				case "task_complete":
-					if stepName := plan.CompleteStepByName(evt.TaskName); stepName != "" {
-						if chatAgent.SubTaskProgressCallback != nil {
-							chatAgent.SubTaskProgressCallback(agent.SubTaskProgressEvent{
-								Type:       "plan_step_update",
-								StepName:   stepName,
-								StepStatus: "complete",
-							})
+					stepName := plan.ResolveStepName(evt.PlanStep, evt.TaskName)
+					if stepName != "" {
+						if completedStep := plan.CompleteTask(stepName, evt.TaskName); completedStep != "" {
+							if chatAgent.SubTaskProgressCallback != nil {
+								chatAgent.SubTaskProgressCallback(agent.SubTaskProgressEvent{
+									Type:       "plan_step_update",
+									StepName:   completedStep,
+									StepStatus: "complete",
+								})
+							}
 						}
 					}
 				}

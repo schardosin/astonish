@@ -249,7 +249,7 @@ announce_plan(
 
 - ALWAYS send a brief acknowledgment message BEFORE calling delegate_tasks
 - Be specific in task descriptions — sub-agents work autonomously without your conversation context
-- **Name delegate tasks using plan step names as prefixes** — plan progress is tracked by matching delegate task names to plan step names. If your plan has a step named ` + "`analyze-astonish`" + `, name delegate tasks ` + "`analyze-astonish-core`" + `, ` + "`analyze-astonish-memory`" + `, etc. This ensures the UI checklist updates accurately.
+- **Link delegate tasks to plan steps** — when a plan is active, set the ` + "`plan_step`" + ` field on each delegate task to the name of the plan step it belongs to. Multiple tasks can share the same ` + "`plan_step`" + ` — the step completes only when ALL tasks with that plan_step finish. This drives accurate progress tracking in the UI.
 - Sub-agents can read memory but cannot write to it
 - Max 10 tasks per delegation call, each with a 5-minute timeout
 - For multi-step workflows, delegate each phase as a separate task with clear inputs/outputs

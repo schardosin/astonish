@@ -79,6 +79,6 @@ func NewAnnouncePlanTool() (tool.Tool, error) {
 		Name:        "announce_plan",
 		Description: `Announce a structured plan before starting multi-step work. Call this BEFORE your first delegate_tasks call to show the user your high-level approach. The plan appears as a visible checklist in the UI — steps are automatically marked running/complete as sub-tasks execute, so you do not need to update them manually. Keep steps high-level (3-7 steps) — each step represents a distinct phase, not individual tool calls.
 
-IMPORTANT: Plan step names are used for progress tracking via prefix matching. When you later call delegate_tasks, use your plan step names as prefixes in the task names. For example, if your plan has a step named "analyze-astonish", name your delegate tasks "analyze-astonish-core", "analyze-astonish-memory", etc. This ensures progress is tracked accurately.`,
+When you later call delegate_tasks, set the plan_step field on each task to the name of the plan step it belongs to. This links tasks to plan steps for accurate progress tracking.`,
 	}, announcePlan)
 }

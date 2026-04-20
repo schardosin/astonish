@@ -227,6 +227,33 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     { cmd: '/drill-add', desc: 'Add new drills to an existing suite' },
   ], [])
 
+  // Pre-compute which artifact paths should be embedded inside the ResultCard
+  // (the final "Response" card) instead of rendered as inline ArtifactCards.
+  // When the session has a final-result message AND artifacts, all turn artifacts
+  // are shown embedded in the ResultCard, and their inline cards are suppressed.
+  const embeddedArtifactPaths = useMemo(() => {
+    const paths = new Set<string>()
+    if (isStreaming || sessionArtifacts.length === 0) return paths
+    // Check if there's a final result message (same logic as in the render)
+    let hasFinalResult = false
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.type === 'agent' && !(m as AgentMessage)._streaming && m.content.length > 500) {
+        const hasLaterAgent = messages.slice(i + 1).some(x => x.type === 'agent')
+        const hasToolBefore = messages.slice(0, i).some(x =>
+          x.type === 'tool_call' || x.type === 'tool_result' ||
+          x.type === 'subtask_execution' || x.type === 'fleet_execution'
+        )
+        if (!hasLaterAgent && hasToolBefore) hasFinalResult = true
+        break
+      }
+    }
+    if (!hasFinalResult) return paths
+    // Collect all artifact paths from this session
+    for (const a of sessionArtifacts) paths.add(a.path)
+    return paths
+  }, [messages, isStreaming, sessionArtifacts])
+
   // Wrapper to keep URL in sync with active session
   const changeSession = useCallback((sessionId: string | null, { userInitiated = false } = {}) => {
     setActiveSessionId(sessionId)
@@ -1898,6 +1925,12 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                         content={msg.content}
                         showRaw={rawViewIndices.has(index)}
                         onToggleRaw={() => toggleRawView(index)}
+                        artifacts={sessionArtifacts.length > 0 ? sessionArtifacts : undefined}
+                        sessionId={activeSessionId}
+                        onOpenFileInPanel={(path) => {
+                          setFilePanelInitialPath(path)
+                          setFilePanelOpen(true)
+                        }}
                       />
                       <SourceCitations urls={sourceUrls} />
                     </div>
@@ -2155,6 +2188,8 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
               if (msg.type === 'artifact') {
                 const artifactMsg = msg as ArtifactMessage
+                // Suppress inline card when this artifact is embedded in the ResultCard
+                if (embeddedArtifactPaths.has(artifactMsg.path)) return null
                 return (
                   <div key={index}>
                     <ArtifactCard

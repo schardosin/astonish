@@ -34,6 +34,7 @@ type SubAgentConfig struct {
 type SubTaskProgressEvent struct {
 	Type     string `json:"type"`                // "delegation_start", "task_start", "task_complete", "task_failed", "task_retry", "task_tool_call", "task_tool_result", "task_text", "plan_announced", "plan_step_update"
 	TaskName string `json:"task_name,omitempty"` // Name of the sub-task (matches SubAgentTask.Name)
+	PlanStep string `json:"plan_step,omitempty"` // Plan step this task belongs to (for progress tracking)
 	// Fields for delegation_start
 	Tasks []SubTaskInfo `json:"tasks,omitempty"` // All tasks in the delegation (only for delegation_start)
 	// Fields for task_complete / task_failed
@@ -57,6 +58,7 @@ type SubTaskProgressEvent struct {
 type SubTaskInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	PlanStep    string `json:"plan_step,omitempty"` // Which plan step this task belongs to
 }
 
 // PlanStepInfo describes a step in the high-level execution plan.
@@ -73,6 +75,7 @@ type SubAgentTask struct {
 	ToolFilter   []string // Specific tool names to include (empty = all allowed)
 	Model        string   // Override model (empty = use parent's model)
 	Provider     string   // Override provider (empty = use parent's provider)
+	PlanStep     string   // Plan step this task belongs to (for progress tracking)
 
 	// CustomPrompt, when true, uses Instructions directly as the LLM system prompt
 	// instead of wrapping it with buildChildPrompt(). This is used by fleet agents
@@ -299,6 +302,7 @@ func (m *SubAgentManager) RunTasks(ctx context.Context, tasks []SubAgentTask) []
 					m.SubTaskProgress(SubTaskProgressEvent{
 						Type:     "task_retry",
 						TaskName: t.Name,
+						PlanStep: t.PlanStep,
 						Error:    result.Error,
 					})
 				}
@@ -402,6 +406,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		m.SubTaskProgress(SubTaskProgressEvent{
 			Type:     "task_start",
 			TaskName: task.Name,
+			PlanStep: task.PlanStep,
 		})
 	}
 
@@ -416,6 +421,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 			m.SubTaskProgress(SubTaskProgressEvent{
 				Type:     evtType,
 				TaskName: task.Name,
+				PlanStep: task.PlanStep,
 				Status:   result.Status,
 				Duration: result.Duration.Round(100 * 1e6).String(),
 				Error:    result.Error,

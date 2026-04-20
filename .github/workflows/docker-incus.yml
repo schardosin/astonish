@@ -19,7 +19,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.workflow_run.head_branch }}
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -40,10 +40,12 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: Cross-compile Linux binaries
+        env:
+          VERSION_TAG: ${{ github.event.workflow_run.head_branch }}
         run: |
           # Both binaries need the frontend embedded and version ldflags
           touch web/embed.go
-          LDFLAGS="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=${{ github.event.workflow_run.head_branch }}"
+          LDFLAGS="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=${VERSION_TAG}"
 
           echo "Building linux/amd64..."
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o astonish-linux-amd64 .

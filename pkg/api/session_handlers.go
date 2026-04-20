@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -230,6 +231,21 @@ func StudioStopHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// validateArtifactPath sanitizes and validates a user-provided file path for
+// artifact access. It ensures the path is absolute after cleaning and rejects
+// paths that attempt directory traversal. Returns the cleaned path or an error.
+func validateArtifactPath(rawPath string) (string, error) {
+	// Reject traversal attempts before cleaning
+	if strings.Contains(rawPath, "..") {
+		return "", fmt.Errorf("path contains illegal traversal")
+	}
+	cleaned := filepath.Clean(rawPath)
+	if !filepath.IsAbs(cleaned) {
+		return "", fmt.Errorf("path must be absolute")
+	}
+	return cleaned, nil
+}
+
 // StudioArtifactDownloadHandler serves file artifacts for download.
 // Uses the same three-tier fallback strategy as StudioArtifactContentHandler
 // so downloads work even when the original file no longer exists on the host.
@@ -243,7 +259,11 @@ func StudioArtifactDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionID := r.URL.Query().Get("session")
-	cleanPath := filepath.Clean(filePath)
+	cleanPath, err := validateArtifactPath(filePath)
+	if err != nil {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
 	fileName := filepath.Base(cleanPath)
 
 	// Tier 1: Try serving directly from host filesystem
@@ -303,10 +323,14 @@ func StudioArtifactContentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionID := r.URL.Query().Get("session")
-	cleanPath := filepath.Clean(filePath)
+	cleanPath, err := validateArtifactPath(filePath)
+	if err != nil {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
 
 	// Tier 1: Try reading from host filesystem
-	if content, err := os.ReadFile(cleanPath); err == nil {
+	if content, err := os.ReadFile(cleanPath); err == nil { // #nosec G304 -- path validated by validateArtifactPath
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write(content)
 		return
@@ -393,7 +417,11 @@ func StudioArtifactPDFHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionID := r.URL.Query().Get("session")
-	cleanPath := filepath.Clean(filePath)
+	cleanPath, err := validateArtifactPath(filePath)
+	if err != nil {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
 
 	// Read the source markdown content using the same 3-tier fallback.
 	var mdContent []byte

@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { X, FileText, Download, ChevronDown, Loader, FilePlus, Edit3, Eye } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { unified } from 'unified'
+import remarkParse from 'remark-parse'
 import { fetchArtifactContent, getArtifactDownloadUrl, getArtifactPDFUrl } from '../../api/studioChat'
 import type { SessionArtifact } from './chatTypes'
 
@@ -125,9 +127,6 @@ export default function FilePanel({ artifacts, initialPath, sessionId, onClose }
     setExporting('docx')
     setDownloadOpen(false)
     try {
-      const { unified } = await import('unified')
-      const remarkParse = (await import('remark-parse')).default
-      const remarkGfm = (await import('remark-gfm')).default
       const { remarkDocx } = await import('@m2d/remark-docx')
       const { saveAs } = await import('file-saver')
 

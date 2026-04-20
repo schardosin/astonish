@@ -1,23 +1,16 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { ReactFlowProvider } from '@xyflow/react'
+import { useState, useCallback, useMemo, useEffect, useRef, lazy, Suspense } from 'react'
 import type { Node, Edge } from '@xyflow/react'
 import yaml from 'js-yaml'
 import TopBar from './components/TopBar'
 import Sidebar from './components/Sidebar'
-import FlowCanvas from './components/FlowCanvas'
 import ChatPanel from './components/ChatPanel'
-import YamlDrawer from './components/YamlDrawer'
 import Header from './components/Header'
 import NodeEditor from './components/NodeEditor'
 import EdgeEditor from './components/EdgeEditor'
 import CreateAgentModal from './components/CreateAgentModal'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import AIChatPanel from './components/AIChatPanel'
-import SettingsPage from './components/SettingsPage'
 import SetupWizard from './components/SetupWizard'
-import StudioChat from './components/StudioChat'
-import FleetView from './components/FleetView'
-import DrillView from './components/DrillView'
 import MCPDependenciesPanel from './components/MCPDependenciesPanel'
 import InstallMcpModal from './components/InstallMcpModal'
 import { useTheme } from './hooks/useTheme'
@@ -46,6 +39,16 @@ import {
   type YamlData,
 } from './components/AppTypes'
 import './index.css'
+
+// Lazy-loaded components for code-splitting.
+// These bring in large dependencies (React Flow, CodeMirror, etc.)
+// and are only rendered conditionally.
+const FlowCanvas = lazy(() => import('./components/FlowCanvas'))
+const YamlDrawer = lazy(() => import('./components/YamlDrawer'))
+const SettingsPage = lazy(() => import('./components/SettingsPage'))
+const StudioChat = lazy(() => import('./components/StudioChat'))
+const FleetView = lazy(() => import('./components/FleetView'))
+const DrillView = lazy(() => import('./components/DrillView'))
 
 function App() {
   const { theme, toggleTheme } = useTheme()
@@ -1294,7 +1297,7 @@ layout:
   }, [deleteTarget, selectedAgent, loadAgents])
 
   return (
-    <ReactFlowProvider>
+    <>
       {/* Setup Wizard */}
       {showSetupWizard && !isCheckingSetup && (
         <SetupWizard
@@ -1350,6 +1353,7 @@ layout:
         {/* Main Content */}
         <div className="flex-1 flex flex-col overflow-hidden">
           {view === 'chat' ? (
+            <Suspense fallback={null}>
             <StudioChat
               theme={theme}
               initialSessionId={path.view === 'chat' ? path.params.sessionId : ''}
@@ -1363,7 +1367,9 @@ layout:
                 }
               }}
             />
+            </Suspense>
           ) : view === 'fleet' ? (
+            <Suspense fallback={null}>
             <FleetView
               theme={theme}
               path={path}
@@ -1373,7 +1379,9 @@ layout:
                 navigate(buildPath('chat'))
               }}
             />
+            </Suspense>
           ) : view === 'drill' ? (
+            <Suspense fallback={null}>
             <DrillView
               theme={theme}
               path={path}
@@ -1391,6 +1399,7 @@ layout:
                 navigate(buildPath('chat'))
               }}
             />
+            </Suspense>
           ) : !selectedAgent ? (
              <div className="flex-1 flex items-center justify-center p-8 text-center" style={{ color: 'var(--text-muted)' }}>
                Select a flow from the sidebar to continue
@@ -1556,6 +1565,7 @@ layout:
           <div className={`flex-1 flex overflow-hidden ${!isRunning && (editingNode || showYaml) ? 'h-1/2' : ''}`}>
             {/* Flow Canvas */}
             <div className={`flex-1 transition-all duration-300 ${isRunning ? 'w-1/2' : ''}`}>
+              <Suspense fallback={null}>
               <FlowCanvas
                 key={selectedAgent ? selectedAgent.id : 'empty'}
                 nodes={nodes as any}
@@ -1593,6 +1603,7 @@ layout:
                   setShowAIChat(true)
                 }}
               />
+              </Suspense>
             </div>
 
             {/* Chat Panel (visible when running) */}
@@ -1644,12 +1655,14 @@ layout:
                   readOnly={selectedAgent?.source === 'store'}
                 />
               ) : (
+                <Suspense fallback={null}>
                 <YamlDrawer
                   content={yamlContent}
                   onChange={handleYamlChange}
                   onClose={() => setShowYaml(false)}
                   theme={theme}
                 />
+                </Suspense>
               )}
             </div>
           )}
@@ -1723,6 +1736,7 @@ layout:
 
       {/* Settings Page */}
       {showSettings && (
+        <Suspense fallback={null}>
         <SettingsPage
           onClose={() => {
             if (selectedAgent) {
@@ -1740,6 +1754,7 @@ layout:
           onUpdateClick={() => setShowUpgradeDialog(updateAvailable)}
           appVersion={appVersion}
         />
+        </Suspense>
       )}
 
       {/* Toast Notification */}
@@ -1751,7 +1766,7 @@ layout:
       {showUpgradeDialog && (
         <UpgradeDialog info={showUpgradeDialog} onClose={() => setShowUpgradeDialog(null)} />
       )}
-    </ReactFlowProvider>
+    </>
   )
 }
 

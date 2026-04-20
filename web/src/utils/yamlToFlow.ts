@@ -1,4 +1,4 @@
-import ELK from 'elkjs/lib/elk.bundled.js'
+import type ELK_TYPE from 'elkjs/lib/elk.bundled.js'
 
 // --- Types ---
 
@@ -40,7 +40,16 @@ interface SavedLayout {
 
 // --- Constants ---
 
-const elk = new ELK()
+// Lazy-load ELK to avoid bundling elkjs in the main chunk.
+// It's only needed when computing layouts, which is always async.
+let _elk: InstanceType<typeof ELK_TYPE> | null = null
+async function getElk() {
+  if (!_elk) {
+    const { default: ELK } = await import('elkjs/lib/elk.bundled.js')
+    _elk = new ELK()
+  }
+  return _elk
+}
 
 const NODE_TYPE_MAP: Record<string, string> = {
   input: 'input',
@@ -268,6 +277,7 @@ export async function autoLayoutAsync(nodes: FlowNode[], edges: FlowEdge[]): Pro
   }
 
   try {
+    const elk = await getElk()
     const layoutedGraph = await elk.layout(graph)
     
     return nodes.map((node) => {

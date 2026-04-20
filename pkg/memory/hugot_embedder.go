@@ -87,7 +87,7 @@ func NewHugotEmbedder(modelsDir string, debugMode bool) (*HugotEmbedder, error) 
 		opts := hugot.NewDownloadOptions()
 		opts.Verbose = debugMode
 		opts.OnnxFilePath = "onnx/model.onnx" // Select the standard (non-quantized) ONNX model
-		downloadedPath, dlErr := hugot.DownloadModel(DefaultEmbeddingModel, modelsDir, opts)
+		downloadedPath, dlErr := hugot.DownloadModel(context.Background(), DefaultEmbeddingModel, modelsDir, opts)
 		if dlErr != nil {
 			return nil, fmt.Errorf("failed to download embedding model: %w", dlErr)
 		}
@@ -98,7 +98,7 @@ func NewHugotEmbedder(modelsDir string, debugMode bool) (*HugotEmbedder, error) 
 	}
 
 	// Create Hugot session with pure Go backend (GoMLX simplego)
-	session, err := hugot.NewGoSession()
+	session, err := hugot.NewGoSession(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Hugot Go session: %w", err)
 	}
@@ -150,7 +150,7 @@ func (h *HugotEmbedder) EmbeddingFunc() chromem.EmbeddingFunc {
 			text = text[:embeddingMaxChars]
 		}
 
-		output, err := h.pipeline.RunPipeline([]string{text})
+		output, err := h.pipeline.RunPipeline(ctx, []string{text})
 		if err != nil {
 			return nil, fmt.Errorf("embedding failed: %w", err)
 		}

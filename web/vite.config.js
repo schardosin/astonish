@@ -22,6 +22,9 @@ export default defineConfig({
   build: {
     // Output to dist/{version}/ - this ensures Go re-embeds when version changes
     outDir: `dist/${version}`,
-    emptyOutDir: true
+    emptyOutDir: true,
+    // The remaining large chunks are lazy-loaded third-party libraries
+    // (elkjs, mermaid, cytoscape) that cannot be split further.
+    chunkSizeWarningLimit: 1500
   }
 })

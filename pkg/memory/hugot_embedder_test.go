@@ -62,7 +62,7 @@ func TestHugotEmbedderRunPipeline(t *testing.T) {
 
 	go func() {
 		defer close(done)
-		_, runErr = embedder.pipeline.RunPipeline([]string{"Hello world"})
+		_, runErr = embedder.pipeline.RunPipeline(context.Background(), []string{"Hello world"})
 	}()
 
 	select {

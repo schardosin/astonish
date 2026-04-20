@@ -78,7 +78,7 @@ type FleetMessageSummary struct {
 
 // StudioMessage is a simplified message for the frontend.
 type StudioMessage struct {
-	Type       string      `json:"type"`                 // user, agent, tool_call, tool_result, subtask_execution, plan, system
+	Type       string      `json:"type"`                 // user, agent, tool_call, tool_result, subtask_execution, plan, distill_preview, distill_saved, system
 	Content    string      `json:"content,omitempty"`    // text content
 	ToolName   string      `json:"toolName,omitempty"`   // for tool_call/tool_result
 	ToolArgs   interface{} `json:"toolArgs,omitempty"`   // for tool_call
@@ -92,6 +92,17 @@ type StudioMessage struct {
 	// plan fields — populated for announce_plan history reconstruction
 	Goal  string        `json:"goal,omitempty"`  // plan title
 	Steps []PlanStepMsg `json:"steps,omitempty"` // plan steps with status
+
+	// distill_preview fields — populated for flow distillation review
+	YAML        string   `json:"yaml,omitempty"`        // generated flow YAML
+	FlowName    string   `json:"flowName,omitempty"`    // suggested flow name
+	Description string   `json:"description,omitempty"` // flow description
+	Tags        []string `json:"tags,omitempty"`        // flow tags
+	Explanation string   `json:"explanation,omitempty"` // human-readable explanation
+
+	// distill_saved fields
+	FilePath   string `json:"filePath,omitempty"`   // saved file path
+	RunCommand string `json:"runCommand,omitempty"` // suggested run command
 }
 
 // SubTaskInfoMsg describes a single task in a delegation plan (for history reconstruction).
@@ -377,42 +388,63 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Intercept yes/no for pending distill confirmation.
-	if req.SessionID != "" && chatAgent.HasPendingDistill(req.SessionID) {
-		lower := strings.ToLower(msg)
-		if lower == "yes" || lower == "y" {
-			persistSessionMessage(r.Context(), sessionService, req.SessionID, "user", msg)
+	// Intercept messages for pending distill review (interactive modification loop).
+	if req.SessionID != "" && chatAgent.HasPendingDistillReview(req.SessionID) {
+		intent := chatAgent.ClassifyDistillReviewIntent(r.Context(), msg)
 
-			ds := agent.DistillSession{
-				SessionID: req.SessionID,
-				AppName:   studioChatAppName,
-				UserID:    studioChatUserID,
+		switch intent {
+		case agent.DistillIntentSave:
+			// Save the flow — persist a clean user message
+			userText := msg
+			if msg == "__distill_save__" {
+				userText = "Save Flow"
 			}
-			var distillOutput strings.Builder
-			SendSSE(w, flusher, "text", map[string]interface{}{"text": "Distilling flow...\n"})
-			distillOutput.WriteString("Distilling flow...\n")
-			err := chatAgent.ConfirmAndDistill(r.Context(), ds, func(text string) {
-				SendSSE(w, flusher, "text", map[string]interface{}{"text": text})
-				distillOutput.WriteString(text)
-			})
+			persistSessionMessage(r.Context(), sessionService, req.SessionID, "user", userText)
+			filePath, runCmd, err := chatAgent.SaveDistillReview(r.Context(), req.SessionID)
 			if err != nil {
-				errText := fmt.Sprintf("Distillation failed: %v", err)
+				errText := fmt.Sprintf("Failed to save flow: %v", err)
 				SendSSE(w, flusher, "text", map[string]interface{}{"text": errText})
-				distillOutput.WriteString(errText)
+				persistSessionMessage(r.Context(), sessionService, req.SessionID, "model", errText)
+			} else {
+				SendSSE(w, flusher, "distill_saved", map[string]interface{}{
+					"filePath":   filePath,
+					"runCommand": runCmd,
+				})
+				persistDistillSaved(r.Context(), sessionService, req.SessionID, filePath, runCmd)
 			}
-			persistSessionMessage(r.Context(), sessionService, req.SessionID, "model", distillOutput.String())
 			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
 			return
-		} else if lower == "no" || lower == "n" {
+
+		case agent.DistillIntentCancel:
 			persistSessionMessage(r.Context(), sessionService, req.SessionID, "user", msg)
-			chatAgent.CancelPendingDistill(req.SessionID)
-			responseText := "Distillation cancelled."
+			chatAgent.CancelDistillReview(req.SessionID)
+			responseText := "Distill review cancelled."
 			SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})
 			persistSessionMessage(r.Context(), sessionService, req.SessionID, "model", responseText)
 			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
 			return
+
+		default: // DistillIntentModify
+			persistSessionMessage(r.Context(), sessionService, req.SessionID, "user", msg)
+			SendSSE(w, flusher, "text", map[string]interface{}{"text": "Modifying flow...\n"})
+			review, err := chatAgent.ModifyDistillReview(r.Context(), req.SessionID, msg)
+			if err != nil {
+				errText := fmt.Sprintf("Failed to modify flow: %v\nYou can try another change, type `save` to save as-is, or `cancel` to abort.", err)
+				SendSSE(w, flusher, "text", map[string]interface{}{"text": errText})
+				persistSessionMessage(r.Context(), sessionService, req.SessionID, "model", errText)
+			} else {
+				SendSSE(w, flusher, "distill_preview", map[string]interface{}{
+					"yaml":        review.YAML,
+					"flowName":    review.FlowName,
+					"description": review.Description,
+					"tags":        review.Tags,
+					"explanation": review.Explanation,
+				})
+				persistDistillPreview(r.Context(), sessionService, req.SessionID, review)
+			}
+			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+			return
 		}
-		chatAgent.CancelPendingDistill(req.SessionID)
 	}
 
 	// Create or resume session
@@ -649,15 +681,31 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 				AppName:   studioChatAppName,
 				UserID:    studioChatUserID,
 			}
-			description, err := chatAgent.PreviewDistill(ctx, ds)
+			// Identify traces and immediately run distillation (no confirmation step)
+			_, err := chatAgent.PreviewDistill(ctx, ds)
 			if err != nil {
 				responseText := fmt.Sprintf("Cannot distill: %v", err)
 				SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})
 				persistSessionMessage(ctx, sessionService, sessionID, "model", responseText)
 			} else {
-				responseText := fmt.Sprintf("**Task identified:** %s\n\nType `yes` to distill into a reusable flow, or `no` to cancel.", description)
-				SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})
-				persistSessionMessage(ctx, sessionService, sessionID, "model", responseText)
+				// Run distillation and send preview directly
+				review, distillErr := chatAgent.DistillToReview(ctx, ds, func(text string) {
+					SendSSE(w, flusher, "text", map[string]interface{}{"text": text})
+				})
+				if distillErr != nil {
+					errText := fmt.Sprintf("Distillation failed: %v", distillErr)
+					SendSSE(w, flusher, "text", map[string]interface{}{"text": errText})
+					persistSessionMessage(ctx, sessionService, sessionID, "model", errText)
+				} else {
+					SendSSE(w, flusher, "distill_preview", map[string]interface{}{
+						"yaml":        review.YAML,
+						"flowName":    review.FlowName,
+						"description": review.Description,
+						"tags":        review.Tags,
+						"explanation": review.Explanation,
+					})
+					persistDistillPreview(ctx, sessionService, sessionID, review)
+				}
 			}
 		}
 

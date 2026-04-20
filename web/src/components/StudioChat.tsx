@@ -7,7 +7,7 @@ import type { ChatSession } from '../api/studioChat'
 import { startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions } from '../api/fleetChat'
 import type { FleetSession } from '../api/fleetChat'
 import HomePage from './HomePage'
-import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage } from './chat/chatTypes'
+import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, DistillPreviewMessage, DistillSavedMessage } from './chat/chatTypes'
 import { getAgentColor } from './chat/chatTypes'
 import FleetStartDialog from './chat/FleetStartDialog'
 import FleetTemplatePicker from './chat/FleetTemplatePicker'
@@ -20,6 +20,7 @@ import UsagePopover from './chat/UsagePopover'
 import type { TokenUsage } from './chat/UsagePopover'
 import BrowserView from './chat/BrowserView'
 import ArtifactCard from './chat/ArtifactCard'
+import DistillPreviewCard from './chat/DistillPreviewCard'
 import ResultCard from './chat/ResultCard'
 
 // Extended ChatSession with optional fleet fields coming from the sidebar
@@ -465,6 +466,23 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           if (m.type === 'artifact' && m.content) {
             return { type: 'artifact', path: m.content, toolName: m.toolName || 'write_file' } as ArtifactMessage
           }
+          if (m.type === 'distill_preview') {
+            return {
+              type: 'distill_preview',
+              yaml: m.yaml || '',
+              flowName: m.flowName || '',
+              description: m.description || '',
+              tags: m.tags || [],
+              explanation: m.explanation || '',
+            } as DistillPreviewMessage
+          }
+          if (m.type === 'distill_saved') {
+            return {
+              type: 'distill_saved',
+              filePath: m.filePath || '',
+              runCommand: m.runCommand || '',
+            } as DistillSavedMessage
+          }
           return m as unknown as ChatMsg
         })
         setMessages(mapped)
@@ -608,6 +626,39 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
           case 'error_info':
             setMessages((prev: ChatMsg[]) => [...prev, { type: 'error_info', title: data.title, reason: data.reason, suggestion: data.suggestion, originalError: data.originalError }])
+            break
+
+          case 'distill_preview':
+            // Finalize any streaming text first
+            if (streamingTextRef.current) {
+              const finalText = streamingTextRef.current
+              streamingTextRef.current = ''
+              setMessages((prev: ChatMsg[]) => {
+                const last = prev[prev.length - 1]
+                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
+                  return [...prev.slice(0, -1), { type: 'agent', content: finalText }]
+                }
+                return prev
+              })
+            }
+            setMessages((prev: ChatMsg[]) => [...prev, {
+              type: 'distill_preview',
+              yaml: data.yaml as string,
+              flowName: data.flowName as string,
+              description: data.description as string,
+              tags: (data.tags as string[]) || [],
+              explanation: data.explanation as string || '',
+            } as DistillPreviewMessage])
+            break
+
+          case 'distill_saved':
+            setMessages((prev: ChatMsg[]) => [...prev, {
+              type: 'distill_saved',
+              filePath: data.filePath as string,
+              runCommand: data.runCommand as string,
+            } as DistillSavedMessage])
+            // Notify App to refresh the flows list
+            window.dispatchEvent(new Event('astonish:flows-updated'))
             break
 
           case 'done':
@@ -970,8 +1021,8 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     isNearBottomRef.current = true
     setShowScrollButton(false)
 
-    // Add user message to chat (unless it's a slash command)
-    if (!userMsg.startsWith('/')) {
+    // Add user message to chat (unless it's a slash command or internal action)
+    if (!userMsg.startsWith('/') && !userMsg.startsWith('__distill_')) {
       setMessages((prev: ChatMsg[]) => [...prev, { type: 'user', content: userMsg }])
     }
 
@@ -1355,6 +1406,38 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               suggestion: data.suggestion,
               originalError: data.originalError,
             }])
+            break
+
+          case 'distill_preview':
+            if (streamingTextRef.current) {
+              const finalText = streamingTextRef.current
+              streamingTextRef.current = ''
+              setMessages((prev: ChatMsg[]) => {
+                const last = prev[prev.length - 1]
+                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
+                  return [...prev.slice(0, -1), { type: 'agent', content: finalText }]
+                }
+                return prev
+              })
+            }
+            setMessages((prev: ChatMsg[]) => [...prev, {
+              type: 'distill_preview',
+              yaml: data.yaml as string,
+              flowName: data.flowName as string,
+              description: data.description as string,
+              tags: (data.tags as string[]) || [],
+              explanation: data.explanation as string || '',
+            } as DistillPreviewMessage])
+            break
+
+          case 'distill_saved':
+            setMessages((prev: ChatMsg[]) => [...prev, {
+              type: 'distill_saved',
+              filePath: data.filePath as string,
+              runCommand: data.runCommand as string,
+            } as DistillSavedMessage])
+            // Notify App to refresh the flows list
+            window.dispatchEvent(new Event('astonish:flows-updated'))
             break
 
           case 'done':
@@ -2200,6 +2283,68 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                         setFilePanelOpen(true)
                       }}
                     />
+                  </div>
+                )
+              }
+
+              if (msg.type === 'distill_preview') {
+                const previewMsg = msg as DistillPreviewMessage
+                // A preview card is active (shows action buttons) when:
+                // 1. It's the last distill_preview in the message list
+                // 2. There's no distill_saved or cancel after it (review not concluded)
+                const isLastPreview = (() => {
+                  for (let j = index + 1; j < messages.length; j++) {
+                    const m = messages[j]
+                    if (m.type === 'distill_preview' || m.type === 'distill_saved') return false
+                  }
+                  return true
+                })()
+                return (
+                  <div key={index}>
+                    <DistillPreviewCard
+                      data={previewMsg}
+                      isActive={isLastPreview}
+                      onSave={() => sendMessage('__distill_save__')}
+                      onRequestChanges={() => {
+                        if (inputRef.current) {
+                          inputRef.current.focus()
+                          inputRef.current.placeholder = 'Describe what you want to change in the flow...'
+                        }
+                      }}
+                      onCancel={() => sendMessage('__distill_cancel__')}
+                    />
+                  </div>
+                )
+              }
+
+              if (msg.type === 'distill_saved') {
+                const savedMsg = msg as DistillSavedMessage
+                return (
+                  <div key={index} className="my-3 rounded-xl overflow-hidden w-full max-w-2xl"
+                    style={{ border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', boxShadow: 'var(--shadow-soft)' }}>
+                    <div className="px-4 py-3">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Check size={16} style={{ color: 'var(--success)' }} />
+                        <span className="text-sm font-semibold" style={{ color: 'var(--success)' }}>Flow Saved</span>
+                      </div>
+                      <div className="text-xs mb-2" style={{ color: 'var(--text-secondary)' }}>
+                        Saved to: <code className="px-1.5 py-0.5 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--accent)' }}>{savedMsg.filePath}</code>
+                      </div>
+                      <div className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>Run with:</div>
+                      <div className="flex items-center gap-2">
+                        <pre className="flex-1 p-2 rounded-lg text-[11px] overflow-x-auto" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
+                          <code>{savedMsg.runCommand}</code>
+                        </pre>
+                        <button
+                          onClick={() => navigator.clipboard.writeText(savedMsg.runCommand)}
+                          className="flex-shrink-0 p-1.5 rounded transition-colors cursor-pointer"
+                          style={{ color: 'var(--accent)' }}
+                          title="Copy command"
+                        >
+                          <Copy size={13} />
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 )
               }

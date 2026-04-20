@@ -359,6 +359,13 @@ function App() {
     }
   }
 
+  // Refresh agents/flows list when a flow is saved via distillation
+  useEffect(() => {
+    const handleFlowsUpdated = () => { loadAgents() }
+    window.addEventListener('astonish:flows-updated', handleFlowsUpdated)
+    return () => window.removeEventListener('astonish:flows-updated', handleFlowsUpdated)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Push new YAML to history (called after applying changes)
   const pushToHistory = useCallback((newYaml: string) => {
     if (!newYaml) return

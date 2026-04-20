@@ -628,3 +628,282 @@ func (c *ChatAgent) extractInputParams(ctx context.Context, yamlStr string, trac
 
 	return params
 }
+
+// --- Interactive Distill Review Methods ---
+
+// DistillToReview runs flow distillation and stores the result as a review draft
+// instead of saving immediately. Returns the DistillReview for the frontend to
+// render a preview. The user can then request modifications or save.
+func (c *ChatAgent) DistillToReview(ctx context.Context, ds DistillSession, print func(string)) (*DistillReview, error) {
+	sessionID := ds.SessionID
+
+	c.traceMu.Lock()
+	preview := c.pendingDistill[sessionID]
+	delete(c.pendingDistill, sessionID)
+	c.traceMu.Unlock()
+
+	if preview == nil || len(preview.Traces) == 0 {
+		return nil, fmt.Errorf("no pending distill preview — call PreviewDistill first")
+	}
+
+	if c.FlowDistiller == nil {
+		return nil, fmt.Errorf("flow distillation is not configured")
+	}
+
+	merged := c.mergeTraces(preview.Traces)
+	flattenTraces(merged)
+
+	print("Distilling execution into a reusable flow...\n")
+
+	result, err := c.FlowDistiller.Distill(ctx, DistillRequest{
+		UserRequest: merged.UserRequest,
+		Trace:       merged,
+	})
+	if err != nil {
+		if result == nil {
+			return nil, fmt.Errorf("flow distillation failed: %w", err)
+		}
+		// Continue with best-effort result
+		print(fmt.Sprintf("Note: flow generated with warnings: %v\n", err))
+	}
+
+	review := &DistillReview{
+		YAML:        result.YAML,
+		FlowName:    result.FlowName,
+		Description: result.Description,
+		Tags:        result.Tags,
+		Explanation: result.Explanation,
+		Traces:      preview.Traces,
+	}
+
+	c.traceMu.Lock()
+	c.pendingDistillReview[sessionID] = review
+	c.traceMu.Unlock()
+
+	return review, nil
+}
+
+// HasPendingDistillReview returns true if there is a pending distill review
+// for the given session, waiting for user modifications or save.
+func (c *ChatAgent) HasPendingDistillReview(sessionID string) bool {
+	c.traceMu.Lock()
+	defer c.traceMu.Unlock()
+	return c.pendingDistillReview[sessionID] != nil
+}
+
+// GetPendingDistillReview returns the current distill review for the session, or nil.
+func (c *ChatAgent) GetPendingDistillReview(sessionID string) *DistillReview {
+	c.traceMu.Lock()
+	defer c.traceMu.Unlock()
+	return c.pendingDistillReview[sessionID]
+}
+
+// CancelDistillReview clears any pending distill review for the given session.
+func (c *ChatAgent) CancelDistillReview(sessionID string) {
+	c.traceMu.Lock()
+	delete(c.pendingDistillReview, sessionID)
+	c.traceMu.Unlock()
+}
+
+// ModifyDistillReview modifies the pending distill review based on user feedback.
+// Returns the updated DistillReview with the new YAML and explanation.
+func (c *ChatAgent) ModifyDistillReview(ctx context.Context, sessionID string, changeRequest string) (*DistillReview, error) {
+	c.traceMu.Lock()
+	review := c.pendingDistillReview[sessionID]
+	c.traceMu.Unlock()
+
+	if review == nil {
+		return nil, fmt.Errorf("no pending distill review for this session")
+	}
+
+	if c.FlowDistiller == nil {
+		return nil, fmt.Errorf("flow distillation is not configured")
+	}
+
+	// Build modification request with history
+	modReq := DistillModifyRequest{
+		CurrentYAML:   review.YAML,
+		ChangeRequest: changeRequest,
+		History:       review.Modifications,
+	}
+
+	// Include the original trace if available
+	if len(review.Traces) > 0 {
+		modReq.OriginalTrace = c.mergeTraces(review.Traces)
+	}
+
+	result, err := c.FlowDistiller.ModifyFlow(ctx, modReq)
+	if err != nil {
+		if result == nil {
+			return nil, fmt.Errorf("flow modification failed: %w", err)
+		}
+		// Continue with best-effort result
+	}
+
+	// Update the review
+	c.traceMu.Lock()
+	review.YAML = result.YAML
+	review.FlowName = result.FlowName
+	review.Description = result.Description
+	review.Tags = result.Tags
+	review.Explanation = result.Explanation
+	review.Modifications = append(review.Modifications, changeRequest)
+	c.traceMu.Unlock()
+
+	return review, nil
+}
+
+// SaveDistillReview saves the current distill review to disk and registers it.
+// Returns the file path and a suggested run command.
+func (c *ChatAgent) SaveDistillReview(ctx context.Context, sessionID string) (filePath string, runCmd string, err error) {
+	c.traceMu.Lock()
+	review := c.pendingDistillReview[sessionID]
+	delete(c.pendingDistillReview, sessionID)
+	c.traceMu.Unlock()
+
+	if review == nil {
+		return "", "", fmt.Errorf("no pending distill review to save")
+	}
+
+	// Determine save directory
+	saveDir := c.FlowSaveDir
+	if saveDir == "" {
+		configDir, cfgErr := os.UserConfigDir()
+		if cfgErr != nil {
+			return "", "", fmt.Errorf("failed to determine config directory: %w", cfgErr)
+		}
+		saveDir = filepath.Join(configDir, "astonish", "flows")
+	}
+
+	if mkErr := os.MkdirAll(saveDir, 0755); mkErr != nil {
+		return "", "", fmt.Errorf("failed to create flow directory: %w", mkErr)
+	}
+
+	filename := review.FlowName + ".yaml"
+	flowPath := filepath.Join(saveDir, filename)
+
+	if _, statErr := os.Stat(flowPath); statErr == nil {
+		filename = fmt.Sprintf("%s_%s.yaml", review.FlowName, time.Now().Format("20060102_150405"))
+		flowPath = filepath.Join(saveDir, filename)
+	}
+
+	if writeErr := os.WriteFile(flowPath, []byte(review.YAML), 0644); writeErr != nil {
+		return "", "", fmt.Errorf("failed to write flow file: %w", writeErr)
+	}
+
+	// Register in the flow registry
+	if c.FlowRegistry != nil {
+		entry := FlowRegistryEntry{
+			FlowFile:    filename,
+			Description: review.Description,
+			Tags:        review.Tags,
+			CreatedAt:   time.Now(),
+		}
+		if regErr := c.FlowRegistry.Register(entry); regErr != nil {
+			if c.DebugMode {
+				slog.Debug("failed to register flow", "component", "chat", "error", regErr)
+			}
+		}
+	}
+
+	// Build run command with parameter suggestions
+	cmd := "astonish flows run " + review.FlowName
+	if len(review.Traces) > 0 {
+		merged := c.mergeTraces(review.Traces)
+		paramFlags := c.extractInputParams(ctx, review.YAML, merged)
+		for _, pf := range paramFlags {
+			parts := strings.SplitN(pf, "=", 2)
+			if len(parts) == 2 && strings.ContainsAny(parts[1], " \t") {
+				cmd += fmt.Sprintf(` -p %s="%s"`, parts[0], parts[1])
+			} else {
+				cmd += " -p " + pf
+			}
+		}
+	}
+	cmd += " --auto-approve"
+
+	return flowPath, cmd, nil
+}
+
+// DistillReviewIntent represents the classified intent of a user message
+// during a distill review.
+type DistillReviewIntent int
+
+const (
+	// DistillIntentSave means the user wants to save the flow as-is.
+	DistillIntentSave DistillReviewIntent = iota
+	// DistillIntentCancel means the user wants to cancel/abort the review.
+	DistillIntentCancel
+	// DistillIntentModify means the user wants to change the flow.
+	DistillIntentModify
+)
+
+// ClassifyDistillReviewIntent determines the user's intent from their message
+// during a distill review. It uses the LLM to understand natural language
+// intent rather than brittle pattern matching.
+func (c *ChatAgent) ClassifyDistillReviewIntent(ctx context.Context, msg string) DistillReviewIntent {
+	trimmed := strings.TrimSpace(msg)
+
+	// Internal marker from the Save/Cancel buttons — no LLM needed
+	if trimmed == "__distill_save__" {
+		return DistillIntentSave
+	}
+	if trimmed == "__distill_cancel__" {
+		return DistillIntentCancel
+	}
+
+	// Use LLM to classify intent
+	if c.FlowDistiller != nil && c.FlowDistiller.LLM != nil {
+		intent := c.classifyViaLLM(ctx, trimmed)
+		if intent >= 0 {
+			return intent
+		}
+	}
+
+	// Fallback if LLM is unavailable: treat as modification
+	return DistillIntentModify
+}
+
+// classifyViaLLM asks the LLM to classify the user's intent.
+// Returns -1 if classification fails.
+func (c *ChatAgent) classifyViaLLM(ctx context.Context, msg string) DistillReviewIntent {
+	prompt := fmt.Sprintf(`You are classifying a user's message during a flow review process.
+The user has just been shown a generated flow (YAML workflow) and is being asked to review it.
+They can do one of three things:
+
+1. SAVE — They want to accept and save the flow as-is. This includes any affirmative response like "yes", "save it", "looks good", "ship it", "go ahead", "you can save it now", etc.
+2. CANCEL — They want to discard the flow entirely. This includes "no", "cancel", "nevermind", "don't save", "scrap it", etc.
+3. MODIFY — They want to make specific changes to the flow. This includes requests like "add an error handler", "rename the first node", "change the model to gpt-4", etc.
+
+User message: %q
+
+Respond with exactly one word: SAVE, CANCEL, or MODIFY`, msg)
+
+	response, err := c.FlowDistiller.LLM(ctx, prompt)
+	if err != nil {
+		if c.DebugMode {
+			slog.Debug("distill intent classification LLM failed", "component", "chat", "error", err)
+		}
+		return -1
+	}
+
+	answer := strings.ToUpper(strings.TrimSpace(response))
+	// Extract the first word in case the LLM is verbose
+	if idx := strings.IndexAny(answer, " \n\t.,"); idx > 0 {
+		answer = answer[:idx]
+	}
+
+	switch answer {
+	case "SAVE":
+		return DistillIntentSave
+	case "CANCEL":
+		return DistillIntentCancel
+	case "MODIFY":
+		return DistillIntentModify
+	default:
+		if c.DebugMode {
+			slog.Debug("distill intent classification: unrecognized LLM response", "component", "chat", "response", response)
+		}
+		return -1
+	}
+}

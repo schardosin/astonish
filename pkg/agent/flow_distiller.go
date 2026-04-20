@@ -99,6 +99,15 @@ type DistillResult struct {
 	FlowName    string   // Suggested filename (snake_case, no extension)
 	Description string   // Human-readable description for registry
 	Tags        []string // For registry indexing
+	Explanation string   // Human-readable explanation of the flow structure
+}
+
+// DistillModifyRequest holds the inputs for modifying a distilled flow.
+type DistillModifyRequest struct {
+	CurrentYAML   string // The current YAML to modify
+	ChangeRequest string // What the user wants changed
+	OriginalTrace *ExecutionTrace
+	History       []string // Previous modification requests for context
 }
 
 // Distill converts an execution trace into a YAML flow definition.
@@ -142,9 +151,10 @@ func (d *FlowDistiller) Distill(ctx context.Context, req DistillRequest) (*Disti
 			}
 		}
 
-		// Extract metadata from response
+		// Extract metadata and explanation from response
 		result := &DistillResult{YAML: yamlStr}
 		d.extractMetadata(response, result)
+		result.Explanation = extractExplanationBlock(response)
 
 		return result, nil
 	}
@@ -257,7 +267,20 @@ func (d *FlowDistiller) buildDistillationPrompt(req DistillRequest, previousYAML
 	sb.WriteString("flow_name: suggested_filename_in_snake_case\n")
 	sb.WriteString("description: one-line human description of what this flow does\n")
 	sb.WriteString("tags: comma, separated, tags\n\n")
-	sb.WriteString("Then provide the complete YAML flow in a ```yaml code block.\n")
+	sb.WriteString("Then provide the complete YAML flow in a ```yaml code block.\n\n")
+	sb.WriteString("After the YAML block, provide a brief explanation in this exact format:\n\n")
+	sb.WriteString("```explanation\n")
+	sb.WriteString("## Summary\n")
+	sb.WriteString("<one sentence describing what this flow does>\n\n")
+	sb.WriteString("## Nodes\n")
+	sb.WriteString("- **<node_name>** (<type>): <what it does>\n")
+	sb.WriteString("- ...\n\n")
+	sb.WriteString("## Input Parameters\n")
+	sb.WriteString("- **<param_name>**: <description> (example: `<example_value>`)\n")
+	sb.WriteString("- ...\n\n")
+	sb.WriteString("## Notes\n")
+	sb.WriteString("<any important notes about the flow behavior, if applicable>\n")
+	sb.WriteString("```\n")
 
 	return sb.String()
 }
@@ -342,6 +365,176 @@ func extractYAMLBlock(text string) string {
 	}
 
 	return strings.TrimSpace(remaining[:endIdx])
+}
+
+// extractExplanationBlock extracts the explanation content from a ```explanation code block.
+func extractExplanationBlock(text string) string {
+	startMarker := "```explanation"
+	endMarker := "```"
+
+	startIdx := strings.Index(text, startMarker)
+	if startIdx == -1 {
+		return ""
+	}
+
+	startIdx += len(startMarker)
+	remaining := text[startIdx:]
+
+	endIdx := strings.Index(remaining, endMarker)
+	if endIdx == -1 {
+		return ""
+	}
+
+	return strings.TrimSpace(remaining[:endIdx])
+}
+
+// ModifyFlow takes an existing flow YAML and modifies it based on the user's request.
+// It returns the modified DistillResult with updated YAML and explanation.
+func (d *FlowDistiller) ModifyFlow(ctx context.Context, req DistillModifyRequest) (*DistillResult, error) {
+	maxRetries := d.MaxRetries
+	if maxRetries <= 0 {
+		maxRetries = 3
+	}
+
+	availableTools := d.buildToolInfoList()
+	var lastYAML string
+	var lastErrors []string
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		prompt := d.buildModificationPrompt(req, lastYAML, lastErrors)
+
+		response, err := d.LLM(ctx, prompt)
+		if err != nil {
+			return nil, fmt.Errorf("LLM call failed on attempt %d: %w", attempt+1, err)
+		}
+
+		yamlStr := extractYAMLBlock(response)
+		if yamlStr == "" {
+			lastErrors = []string{"No YAML code block found in response. Please wrap the flow in ```yaml ... ``` markers."}
+			lastYAML = ""
+			continue
+		}
+
+		if d.ValidateYAML != nil {
+			validation := d.ValidateYAML(yamlStr, availableTools)
+			if !validation.Valid {
+				lastYAML = yamlStr
+				lastErrors = validation.Errors
+				continue
+			}
+		}
+
+		result := &DistillResult{YAML: yamlStr}
+		d.extractMetadata(response, result)
+		result.Explanation = extractExplanationBlock(response)
+
+		return result, nil
+	}
+
+	if lastYAML != "" {
+		result := &DistillResult{YAML: lastYAML}
+		d.extractMetadata("", result)
+		if result.Description == "" {
+			result.Description = "Modified flow (may have validation warnings)"
+		}
+		return result, fmt.Errorf("flow modified but has validation errors after %d attempts: %s",
+			maxRetries, strings.Join(lastErrors, "; "))
+	}
+
+	return nil, fmt.Errorf("failed to generate valid modified YAML after %d attempts", maxRetries)
+}
+
+// buildModificationPrompt constructs the prompt for modifying an existing flow.
+func (d *FlowDistiller) buildModificationPrompt(req DistillModifyRequest, previousYAML string, validationErrors []string) string {
+	var sb strings.Builder
+
+	sb.WriteString("# Task\n\n")
+	sb.WriteString("Modify this existing Astonish YAML flow based on the user's request.\n\n")
+
+	// Include the flow schema
+	if d.GetSchema != nil {
+		sb.WriteString("# Astonish Flow Schema\n\n")
+		sb.WriteString(d.GetSchema())
+	}
+
+	// Available tools
+	toolInfos := d.buildToolInfoList()
+	if len(toolInfos) > 0 {
+		sb.WriteString("\n\n# Available Tools\n\nONLY use tools from this list:\n")
+		for _, t := range toolInfos {
+			if internalOnlyTools[t.Name] {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("- %s: %s (source: %s)\n", t.Name, t.Description, t.Source))
+		}
+	}
+
+	// Current YAML
+	sb.WriteString("\n\n# Current Flow YAML\n\n```yaml\n")
+	sb.WriteString(req.CurrentYAML)
+	sb.WriteString("\n```\n\n")
+
+	// Modification history for context
+	if len(req.History) > 0 {
+		sb.WriteString("# Previous Modification Requests\n\n")
+		for i, h := range req.History {
+			sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, h))
+		}
+		sb.WriteString("\n")
+	}
+
+	// User's change request
+	sb.WriteString("# User's Change Request\n\n")
+	sb.WriteString(req.ChangeRequest)
+	sb.WriteString("\n\n")
+
+	// Instructions
+	sb.WriteString("# Instructions\n\n")
+	sb.WriteString("1. Modify the flow YAML based on the user's request\n")
+	sb.WriteString("2. Preserve the existing flow structure unless the change requires restructuring\n")
+	sb.WriteString("3. Only modify what the user requested — keep all other nodes and connections intact\n")
+	sb.WriteString("4. Ensure all edges are valid (every from/to references an existing node or START/END)\n")
+	sb.WriteString("5. Follow the same rules as flow creation: one input node per parameter, tools: true for tool-calling steps, etc.\n")
+	sb.WriteString("6. NEVER include memory_save or other internal-only tools\n\n")
+
+	// If retrying, include previous errors
+	if previousYAML != "" && len(validationErrors) > 0 {
+		sb.WriteString("# IMPORTANT: Previous Attempt Failed Validation\n\n")
+		sb.WriteString("Your previous YAML had these errors:\n")
+		for _, e := range validationErrors {
+			sb.WriteString(fmt.Sprintf("- %s\n", e))
+		}
+		sb.WriteString("\nPrevious YAML:\n```yaml\n")
+		sb.WriteString(previousYAML)
+		sb.WriteString("\n```\n\n")
+		sb.WriteString("Fix ALL the errors above and generate a corrected YAML flow.\n\n")
+	}
+
+	// Response format
+	sb.WriteString("# Response Format\n\n")
+	sb.WriteString("First, provide metadata on separate lines:\n")
+	sb.WriteString("flow_name: suggested_filename_in_snake_case\n")
+	sb.WriteString("description: one-line human description of what this flow does\n")
+	sb.WriteString("tags: comma, separated, tags\n\n")
+	sb.WriteString("Then provide the complete modified YAML flow in a ```yaml code block.\n\n")
+	sb.WriteString("After the YAML block, provide a brief explanation in this exact format:\n\n")
+	sb.WriteString("```explanation\n")
+	sb.WriteString("## Summary\n")
+	sb.WriteString("<one sentence describing what this flow does>\n\n")
+	sb.WriteString("## Nodes\n")
+	sb.WriteString("- **<node_name>** (<type>): <what it does>\n")
+	sb.WriteString("- ...\n\n")
+	sb.WriteString("## Input Parameters\n")
+	sb.WriteString("- **<param_name>**: <description> (example: `<example_value>`)\n")
+	sb.WriteString("- ...\n\n")
+	sb.WriteString("## Changes Made\n")
+	sb.WriteString("- <brief description of what was changed>\n")
+	sb.WriteString("- ...\n\n")
+	sb.WriteString("## Notes\n")
+	sb.WriteString("<any important notes about the flow behavior, if applicable>\n")
+	sb.WriteString("```\n")
+
+	return sb.String()
 }
 
 // flattenTraces replaces delegate_tasks trace steps with the actual tool calls

@@ -869,6 +869,12 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/app-preview/runtime.js", AppPreviewRuntimeHandler).Methods("GET")
 	router.HandleFunc("/api/app-preview/tailwind.js", AppPreviewTailwindHandler).Methods("GET")
 
+	// Visual Apps CRUD (generative UI persistence)
+	router.HandleFunc("/api/apps", ListAppsHandler).Methods("GET")
+	router.HandleFunc("/api/apps/{name}", GetAppHandler).Methods("GET")
+	router.HandleFunc("/api/apps/{name}", SaveAppHandler).Methods("PUT")
+	router.HandleFunc("/api/apps/{name}", DeleteAppHandler).Methods("DELETE")
+
 	// Studio Chat endpoints
 	router.HandleFunc("/api/studio/chat", StudioChatHandler).Methods("POST")
 	router.HandleFunc("/api/studio/sessions", StudioSessionsHandler).Methods("GET")

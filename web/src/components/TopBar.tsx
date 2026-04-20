@@ -1,4 +1,4 @@
-import { Moon, Sun, Settings, Cpu, Grid, MessageSquare, Rocket, ShieldCheck, ShieldAlert, Crosshair } from 'lucide-react'
+import { Moon, Sun, Settings, Cpu, Grid, MessageSquare, Rocket, ShieldCheck, ShieldAlert, Crosshair, AppWindow } from 'lucide-react'
 
 interface SandboxStatus {
   sandboxEnabled: boolean
@@ -100,6 +100,22 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, onOpenSan
         >
           <Crosshair size={14} />
           <span className="text-xs font-medium">Drill</span>
+        </button>
+
+        <button 
+          onClick={() => onNavigate && onNavigate('apps')}
+          className={`hidden md:flex items-center gap-2 px-3 py-2 rounded-xl transition-all ${
+            currentView === 'apps' 
+              ? 'shadow-md' 
+              : 'hover:bg-purple-500/10'
+          }`}
+          style={{ 
+            background: currentView === 'apps' ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : (theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'var(--bg-tertiary)'), 
+            color: currentView === 'apps' ? '#fff' : 'var(--text-secondary)' 
+          }}
+        >
+          <AppWindow size={14} />
+          <span className="text-xs font-medium">Apps</span>
         </button>
       </div>
 

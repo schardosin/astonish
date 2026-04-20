@@ -194,6 +194,12 @@ export interface DistillSavedMessage {
   runCommand: string
 }
 
+export interface AppSavedMessage {
+  type: 'app_saved'
+  name: string
+  path: string
+}
+
 export type ChatMsg =
   | FleetMessageItem
   | UserMessage
@@ -216,6 +222,7 @@ export type ChatMsg =
   | AppPreviewMessage
   | DistillPreviewMessage
   | DistillSavedMessage
+  | AppSavedMessage
 
 // ---- Fleet info / state ----
 

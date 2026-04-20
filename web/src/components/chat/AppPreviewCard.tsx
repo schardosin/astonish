@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Maximize2, Minimize2, Code, X, ChevronLeft, ChevronRight, AppWindow, Check } from 'lucide-react'
+import { Maximize2, Minimize2, Code, X, ChevronLeft, ChevronRight, AppWindow, Save } from 'lucide-react'
 import AppPreview from './AppPreview'
 import type { AppPreviewMessage } from './chatTypes'
 
@@ -113,7 +113,7 @@ export default function AppPreviewCard({
             </div>
           )}
 
-          {/* Done button (only shown when actively refining) */}
+          {/* Save button (only shown when actively refining) */}
           {isActive && onDone && (
             <button
               onClick={onDone}
@@ -122,10 +122,10 @@ export default function AppPreviewCard({
                 color: 'var(--text-on-accent)',
                 background: 'var(--accent)',
               }}
-              title="Finish refining this app"
+              title="Save this app"
             >
-              <Check size={12} />
-              Done
+              <Save size={12} />
+              Save
             </button>
           )}
 

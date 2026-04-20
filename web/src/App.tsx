@@ -49,6 +49,7 @@ const SettingsPage = lazy(() => import('./components/SettingsPage'))
 const StudioChat = lazy(() => import('./components/StudioChat'))
 const FleetView = lazy(() => import('./components/FleetView'))
 const DrillView = lazy(() => import('./components/DrillView'))
+const AppsView = lazy(() => import('./components/AppsView'))
 
 function App() {
   const { theme, toggleTheme } = useTheme()
@@ -499,6 +500,8 @@ function App() {
       setView('fleet')
     } else if (path.view === 'drill') {
       setView('drill')
+    } else if (path.view === 'apps') {
+      setView('apps')
     }
   }, [path, agents]) // Re-run when path or agents list changes
 
@@ -1398,6 +1401,12 @@ layout:
                 setPendingChatMessage(`/drill-add ${suiteName}`)
                 navigate(buildPath('chat'))
               }}
+            />
+            </Suspense>
+          ) : view === 'apps' ? (
+            <Suspense fallback={null}>
+            <AppsView
+              theme={theme}
             />
             </Suspense>
           ) : !selectedAgent ? (

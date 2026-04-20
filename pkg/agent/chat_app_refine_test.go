@@ -60,12 +60,15 @@ func TestClassifyAppIntent_MagicStrings(t *testing.T) {
 		msg    string
 		expect AppRefinementIntent
 	}{
-		{"__app_done__", AppIntentDone},
-		{"done", AppIntentDone},
-		{"Done", AppIntentDone},
-		{"I'm done", AppIntentDone},
-		{"looks good", AppIntentDone},
-		{"perfect", AppIntentDone},
+		{"__app_save__", AppIntentSave},
+		{"__app_done__", AppIntentSave}, // Done is now equivalent to save
+		{"done", AppIntentSave},
+		{"Done", AppIntentSave},
+		{"I'm done", AppIntentSave},
+		{"looks good", AppIntentSave},
+		{"perfect", AppIntentSave},
+		{"save it", AppIntentSave},
+		{"save this app", AppIntentSave},
 		// Without LLM, everything else defaults to refine
 		{"make the header blue", AppIntentRefine},
 		{"add a search bar", AppIntentRefine},
@@ -91,7 +94,8 @@ func TestClassifyAppIntent_WithLLM(t *testing.T) {
 		expect    AppRefinementIntent
 	}{
 		{"make it blue", "REFINE", AppIntentRefine},
-		{"I'm satisfied", "DONE", AppIntentDone},
+		{"I'm satisfied", "DONE", AppIntentSave},  // LLM says DONE → maps to Save
+		{"I'm satisfied", "SAVE", AppIntentSave},   // LLM says SAVE → maps to Save
 		{"what's the weather?", "UNRELATED", AppIntentUnrelated},
 		{"something", "refine\n", AppIntentRefine}, // lowercase + trailing newline
 		{"something", "UNKNOWN_RESPONSE", AppIntentRefine}, // fallback to refine

@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { AppWindow, ChevronRight, ChevronDown, Loader } from 'lucide-react'
 
 interface AppCodeIndicatorProps {

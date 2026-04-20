@@ -22,7 +22,8 @@ type AppRefinementIntent int
 
 const (
 	AppIntentRefine    AppRefinementIntent = iota // User wants to modify the app
-	AppIntentDone                                 // User is done refining
+	AppIntentSave                                 // User wants to save the app and stop refining
+	AppIntentDone                                 // User is done refining (legacy, treated as save)
 	AppIntentUnrelated                            // Message is unrelated to the app
 )
 
@@ -81,15 +82,22 @@ func (c *ChatAgent) RecordAppModification(sessionID string, modification string)
 func (c *ChatAgent) ClassifyAppIntent(ctx context.Context, msg string, llmFunc func(ctx context.Context, prompt string) (string, error)) AppRefinementIntent {
 	trimmed := strings.TrimSpace(msg)
 
-	// Magic marker from the "Done" button in the UI
+	// Magic markers from UI buttons
+	if trimmed == "__app_save__" {
+		return AppIntentSave
+	}
 	if trimmed == "__app_done__" {
-		return AppIntentDone
+		return AppIntentSave // Done is now equivalent to save
 	}
 
 	// Quick heuristics for obvious cases
 	lower := strings.ToLower(trimmed)
-	if lower == "done" || lower == "i'm done" || lower == "im done" || lower == "that's it" || lower == "looks good" || lower == "perfect" {
-		return AppIntentDone
+	saveKeywords := []string{"done", "i'm done", "im done", "that's it", "looks good", "perfect",
+		"save it", "save this app", "save this", "save the app", "ship it"}
+	for _, kw := range saveKeywords {
+		if lower == kw {
+			return AppIntentSave
+		}
 	}
 
 	// LLM classification if available
@@ -111,12 +119,12 @@ func (c *ChatAgent) classifyAppViaLLM(ctx context.Context, msg string, llmFunc f
 The user has just been shown a generated React component (visual app preview) and can do one of three things:
 
 1. REFINE — They want to modify the app. Examples: "Make the header blue", "Add a search bar", "Change the chart to a bar chart", "Make it responsive".
-2. DONE — They are satisfied and want to finish refining. Examples: "Looks good", "I'm done", "That's perfect", "Save it", "Ship it".
+2. SAVE — They are satisfied and want to save the app. Examples: "Looks good", "I'm done", "That's perfect", "Save it", "Ship it", "Save this app".
 3. UNRELATED — Their message has nothing to do with the app being shown. Examples: "What's the weather?", "Help me write a function", "Search for Python docs".
 
 User message: %q
 
-Respond with exactly one word: REFINE, DONE, or UNRELATED`, msg)
+Respond with exactly one word: REFINE, SAVE, or UNRELATED`, msg)
 
 	response, err := llmFunc(ctx, prompt)
 	if err != nil {
@@ -132,8 +140,8 @@ Respond with exactly one word: REFINE, DONE, or UNRELATED`, msg)
 	switch answer {
 	case "REFINE":
 		return AppIntentRefine
-	case "DONE":
-		return AppIntentDone
+	case "SAVE", "DONE":
+		return AppIntentSave
 	case "UNRELATED":
 		return AppIntentUnrelated
 	default:

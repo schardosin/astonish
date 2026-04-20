@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/apps"
 	adrill "github.com/schardosin/astonish/pkg/drill"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/tools"
@@ -470,23 +472,50 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Intercept messages for active app refinement (iterative visual app loop).
 	// Unlike distill (which fully intercepts), "refine" falls through to normal
-	// agent flow with context injection; only "done" is handled as early-return.
+	// agent flow with context injection; only "save" is handled as early-return.
 	if req.SessionID != "" && chatAgent.HasActiveApp(req.SessionID) {
 		llmFunc := makeLLMFuncFromModel(comp.LLM)
 		appIntent := chatAgent.ClassifyAppIntent(r.Context(), msg, llmFunc)
 
 		switch appIntent {
-		case agent.AppIntentDone:
-			// User is done refining — clear state and acknowledge
+		case agent.AppIntentSave, agent.AppIntentDone:
+			// User wants to save the app — persist to disk, clear state, acknowledge
+			activeApp := chatAgent.GetActiveApp(req.SessionID)
 			userText := msg
-			if msg == "__app_done__" {
-				userText = "Done"
+			if msg == "__app_save__" || msg == "__app_done__" {
+				userText = "Save"
 			}
 			persistSessionMessage(r.Context(), sessionService, req.SessionID, "user", userText)
+
+			// Save the app to disk
+			var savedPath, savedName string
+			if activeApp != nil {
+				savedApp := &apps.VisualApp{
+					Name:        activeApp.Title,
+					Description: activeApp.Title,
+					Code:        activeApp.Code,
+					Version:     activeApp.Version,
+					SessionID:   req.SessionID,
+				}
+				var saveErr error
+				savedPath, saveErr = apps.SaveApp(savedApp)
+				if saveErr != nil {
+					slog.Error("failed to save app", "error", saveErr)
+				}
+				savedName = apps.Slugify(activeApp.Title)
+			}
+
 			chatAgent.ClearActiveApp(req.SessionID)
-			responseText := "App refinement complete. You can continue chatting or start a new app."
+
+			responseText := "App saved! You can find it in the Apps tab, or continue chatting."
+			if savedPath == "" {
+				responseText = "App refinement complete. You can continue chatting or start a new app."
+			}
 			SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})
-			SendSSE(w, flusher, "app_done", map[string]interface{}{"done": true})
+			SendSSE(w, flusher, "app_saved", map[string]interface{}{
+				"name": savedName,
+				"path": savedPath,
+			})
 			persistSessionMessage(r.Context(), sessionService, req.SessionID, "model", responseText)
 			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
 			return

@@ -7,7 +7,7 @@ import type { ChatSession } from '../api/studioChat'
 import { startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions } from '../api/fleetChat'
 import type { FleetSession } from '../api/fleetChat'
 import HomePage from './HomePage'
-import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, AppPreviewMessage, DistillPreviewMessage, DistillSavedMessage } from './chat/chatTypes'
+import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, AppPreviewMessage, AppSavedMessage, DistillPreviewMessage, DistillSavedMessage } from './chat/chatTypes'
 import { getAgentColor } from './chat/chatTypes'
 import FleetStartDialog from './chat/FleetStartDialog'
 import FleetTemplatePicker from './chat/FleetTemplatePicker'
@@ -702,7 +702,16 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             break
 
           case 'app_done':
+          case 'app_saved':
             setActiveAppId(null)
+            if (data.name) {
+              setMessages((prev: ChatMsg[]) => [...prev, {
+                type: 'app_saved',
+                name: data.name as string || '',
+                path: data.path as string || '',
+              } as AppSavedMessage])
+            }
+            window.dispatchEvent(new Event('astonish:apps-updated'))
             break
 
           case 'distill_saved':
@@ -1509,7 +1518,16 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             break
 
           case 'app_done':
+          case 'app_saved':
             setActiveAppId(null)
+            if (data.name) {
+              setMessages((prev: ChatMsg[]) => [...prev, {
+                type: 'app_saved',
+                name: data.name as string || '',
+                path: data.path as string || '',
+              } as AppSavedMessage])
+            }
+            window.dispatchEvent(new Event('astonish:apps-updated'))
             break
 
           case 'distill_saved':
@@ -2461,7 +2479,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                       versions={allVersions.length > 1 ? allVersions : undefined}
                       versionIndex={versionIdx}
                       isActive={isActive}
-                      onDone={isActive ? () => sendMessage('__app_done__') : undefined}
+                      onDone={isActive ? () => sendMessage('__app_save__') : undefined}
                     />
                   </div>
                 )
@@ -2523,6 +2541,24 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                         >
                           <Copy size={13} />
                         </button>
+                      </div>
+                    </div>
+                  </div>
+                )
+              }
+
+              if (msg.type === 'app_saved') {
+                const savedMsg = msg as AppSavedMessage
+                return (
+                  <div key={index} className="my-3 rounded-xl overflow-hidden w-full max-w-2xl"
+                    style={{ border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', boxShadow: 'var(--shadow-soft)' }}>
+                    <div className="px-4 py-3">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Check size={16} style={{ color: 'var(--success)' }} />
+                        <span className="text-sm font-semibold" style={{ color: 'var(--success)' }}>App Saved</span>
+                      </div>
+                      <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                        Saved as <code className="px-1.5 py-0.5 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--accent)' }}>{savedMsg.name}</code> — view it in the Apps tab.
                       </div>
                     </div>
                   </div>

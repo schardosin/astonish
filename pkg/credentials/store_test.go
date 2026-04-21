@@ -1153,3 +1153,155 @@ func TestOAuthAuthCodeRemoveAndReload(t *testing.T) {
 	}
 	_ = output // redaction behavior after remove is not strictly specified
 }
+
+func TestSanitizeCredential(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    *Credential
+		expected *Credential
+	}{
+		{
+			name: "trailing quote and comma from JSON copy-paste",
+			input: &Credential{
+				Type:         CredOAuthClientCreds,
+				AuthURL:      "https://auth.example.com/oauth/token",
+				ClientID:     `sb-abc-123!b2002|my-service!b1045",`,
+				ClientSecret: `d856-secret-value$rQQqU=",`,
+			},
+			expected: &Credential{
+				Type:         CredOAuthClientCreds,
+				AuthURL:      "https://auth.example.com/oauth/token",
+				ClientID:     `sb-abc-123!b2002|my-service!b1045`,
+				ClientSecret: `d856-secret-value$rQQqU=`,
+			},
+		},
+		{
+			name: "surrounding double quotes",
+			input: &Credential{
+				Type:  CredBearer,
+				Token: `"my-bearer-token"`,
+			},
+			expected: &Credential{
+				Type:  CredBearer,
+				Token: "my-bearer-token",
+			},
+		},
+		{
+			name: "surrounding single quotes",
+			input: &Credential{
+				Type:  CredAPIKey,
+				Header: "X-API-Key",
+				Value: `'my-api-key'`,
+			},
+			expected: &Credential{
+				Type:  CredAPIKey,
+				Header: "X-API-Key",
+				Value: "my-api-key",
+			},
+		},
+		{
+			name: "leading and trailing whitespace",
+			input: &Credential{
+				Type:     CredBasic,
+				Username: "  admin  ",
+				Password: "  secret  ",
+			},
+			expected: &Credential{
+				Type:     CredBasic,
+				Username: "admin",
+				Password: "secret",
+			},
+		},
+		{
+			name: "trailing semicolons",
+			input: &Credential{
+				Type:  CredBearer,
+				Token: "my-token;",
+			},
+			expected: &Credential{
+				Type:  CredBearer,
+				Token: "my-token",
+			},
+		},
+		{
+			name: "clean values unchanged",
+			input: &Credential{
+				Type:         CredOAuthClientCreds,
+				AuthURL:      "https://auth.example.com/token",
+				ClientID:     "clean-client-id",
+				ClientSecret: "clean-secret",
+				Scope:        "read write",
+			},
+			expected: &Credential{
+				Type:         CredOAuthClientCreds,
+				AuthURL:      "https://auth.example.com/token",
+				ClientID:     "clean-client-id",
+				ClientSecret: "clean-secret",
+				Scope:        "read write",
+			},
+		},
+		{
+			name: "empty fields stay empty",
+			input: &Credential{
+				Type: CredAPIKey,
+			},
+			expected: &Credential{
+				Type: CredAPIKey,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sanitizeCredential(tt.input)
+			if tt.input.Header != tt.expected.Header {
+				t.Errorf("Header: got %q, want %q", tt.input.Header, tt.expected.Header)
+			}
+			if tt.input.Value != tt.expected.Value {
+				t.Errorf("Value: got %q, want %q", tt.input.Value, tt.expected.Value)
+			}
+			if tt.input.Token != tt.expected.Token {
+				t.Errorf("Token: got %q, want %q", tt.input.Token, tt.expected.Token)
+			}
+			if tt.input.Username != tt.expected.Username {
+				t.Errorf("Username: got %q, want %q", tt.input.Username, tt.expected.Username)
+			}
+			if tt.input.Password != tt.expected.Password {
+				t.Errorf("Password: got %q, want %q", tt.input.Password, tt.expected.Password)
+			}
+			if tt.input.AuthURL != tt.expected.AuthURL {
+				t.Errorf("AuthURL: got %q, want %q", tt.input.AuthURL, tt.expected.AuthURL)
+			}
+			if tt.input.ClientID != tt.expected.ClientID {
+				t.Errorf("ClientID: got %q, want %q", tt.input.ClientID, tt.expected.ClientID)
+			}
+			if tt.input.ClientSecret != tt.expected.ClientSecret {
+				t.Errorf("ClientSecret: got %q, want %q", tt.input.ClientSecret, tt.expected.ClientSecret)
+			}
+			if tt.input.Scope != tt.expected.Scope {
+				t.Errorf("Scope: got %q, want %q", tt.input.Scope, tt.expected.Scope)
+			}
+		})
+	}
+}
+
+func TestSanitizeSecretValue(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{`"my-api-key",`, "my-api-key"},
+		{`'my-api-key';`, "my-api-key"},
+		{`  spaced  `, "spaced"},
+		{`clean-value`, "clean-value"},
+		{`""`, ""},
+		{``, ""},
+	}
+
+	for _, tt := range tests {
+		got := sanitizeSecretValue(tt.input)
+		if got != tt.expected {
+			t.Errorf("sanitizeSecretValue(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}

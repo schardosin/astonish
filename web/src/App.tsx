@@ -1407,6 +1407,8 @@ layout:
             <Suspense fallback={null}>
             <AppsView
               theme={theme}
+              appName={path.view === 'apps' ? path.params.appName : ''}
+              onNavigate={(hashPath: string) => navigate(hashPath)}
               onImproveApp={(message: string, systemContext: string) => {
                 setPendingChatMessage({ message, systemContext })
                 navigate(buildPath('chat'))

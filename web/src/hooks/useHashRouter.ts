@@ -93,7 +93,7 @@ function parseHash(hash: string): RouterPath {
   }
 
   if (view === 'apps') {
-    return { view: 'apps', params: {} }
+    return { view: 'apps', params: { appName: parts[1] ? decodeURIComponent(parts[1]) : '' } }
   }
 
   if (view === 'home') {
@@ -130,6 +130,9 @@ export function buildPath(view: string, params: BuildPathParams = {}): string {
       }
       return '/drill'
     case 'apps':
+      if (params.subKey) {
+        return `/apps/${encodeURIComponent(params.subKey)}`
+      }
       return '/apps'
     default:
       return '/chat'

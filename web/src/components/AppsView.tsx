@@ -7,6 +7,8 @@ import CodeDrawer from './CodeDrawer'
 
 interface AppsViewProps {
   theme: string
+  appName?: string
+  onNavigate?: (path: string) => void
   onImproveApp?: (message: string, systemContext: string) => void
 }
 
@@ -41,8 +43,7 @@ function formatDate(dateStr: string) {
   return d.toLocaleDateString()
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export default function AppsView({ theme, onImproveApp }: AppsViewProps) {
+export default function AppsView({ theme, appName, onNavigate, onImproveApp }: AppsViewProps) {
   const [apps, setApps] = useState<AppListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedApp, setSelectedApp] = useState<VisualApp | null>(null)
@@ -74,6 +75,27 @@ export default function AppsView({ theme, onImproveApp }: AppsViewProps) {
     return () => window.removeEventListener('astonish:apps-updated', handler)
   }, [loadApps])
 
+  // Load app from URL param (deep link or refresh)
+  useEffect(() => {
+    if (appName && !selectedApp) {
+      fetchApp(appName)
+        .then(app => {
+          setSelectedApp(app)
+          setCodeContent(app.code)
+          setShowCode(false)
+          setSaveStatus(null)
+        })
+        .catch(() => {
+          // App not found — navigate back to list
+          if (onNavigate) onNavigate('/apps')
+        })
+    } else if (!appName && selectedApp) {
+      // URL navigated back to /apps — clear selection
+      setSelectedApp(null)
+      setShowCode(false)
+    }
+  }, [appName]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleOpenApp = useCallback(async (name: string) => {
     try {
       const app = await fetchApp(name)
@@ -81,10 +103,13 @@ export default function AppsView({ theme, onImproveApp }: AppsViewProps) {
       setCodeContent(app.code)
       setShowCode(false)
       setSaveStatus(null)
+      if (onNavigate) {
+        onNavigate(`/apps/${encodeURIComponent(name)}`)
+      }
     } catch {
       // Ignore
     }
-  }, [])
+  }, [onNavigate])
 
   const handleDeleteApp = useCallback(async (name: string) => {
     try {
@@ -92,12 +117,13 @@ export default function AppsView({ theme, onImproveApp }: AppsViewProps) {
       setApps(prev => prev.filter(a => a.name !== name))
       if (selectedApp?.name === name) {
         setSelectedApp(null)
+        if (onNavigate) onNavigate('/apps')
       }
     } catch {
       // Ignore
     }
     setDeleteConfirm(null)
-  }, [selectedApp])
+  }, [selectedApp, onNavigate])
 
   const handleSaveCode = useCallback(async () => {
     if (!selectedApp) return
@@ -153,7 +179,10 @@ export default function AppsView({ theme, onImproveApp }: AppsViewProps) {
           style={{ borderBottom: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}
         >
           <button
-            onClick={() => setSelectedApp(null)}
+            onClick={() => {
+              setSelectedApp(null)
+              if (onNavigate) onNavigate('/apps')
+            }}
             className="flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors cursor-pointer"
             style={{ color: 'var(--text-secondary)' }}
           >

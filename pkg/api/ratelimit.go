@@ -120,13 +120,18 @@ func (c *RateLimitConfig) Close() {
 }
 
 // NewDefaultRateLimitConfig creates rate limiters with sensible defaults.
-// This is a single-user desktop app, not a public API — limits are generous
-// to avoid blocking normal UI usage (page loads fire 10-15 parallel requests,
-// each app preview iframe loads 3 assets, SSE streams hold connections, etc.)
+// This is a single-user desktop app behind auth, not a public API.
+// The API limit is intentionally high (3000/min = 50 req/sec) because:
+//  - The React UI fires 10-15 parallel requests on every page load
+//  - Each app preview iframe loads 3 assets, with many previews per chat
+//  - SSE streams, state queries, and polling add continuous load
+//  - Remote access via reverse proxy means requests are NOT loopback-exempt
+//
+// The auth limit stays strict to prevent brute-force code guessing.
 func NewDefaultRateLimitConfig() *RateLimitConfig {
 	return &RateLimitConfig{
 		Auth: NewRateLimiter(10, time.Minute),
-		API:  NewRateLimiter(600, time.Minute),
+		API:  NewRateLimiter(3000, time.Minute),
 	}
 }
 

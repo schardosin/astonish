@@ -301,8 +301,21 @@ window.onerror = function(msg, src, line, col, err) {
   }
 
   window.useAppState = function useAppState() {
+    // Helper: create a query result that IS an array (so .map/.reduce/.filter work
+    // directly) but also has .data/.loading/.error properties for destructuring.
+    // This lets both patterns work:
+    //   const rows = db.query('...');          rows.map(...)    ← works
+    //   const { data, loading } = db.query('...');  data.map(...) ← also works
+    function __qr(rows, loading, error) {
+      var arr = [].concat(rows || []);
+      arr.data = arr;
+      arr.loading = !!loading;
+      arr.error = error || null;
+      return arr;
+    }
+
     // Single piece of state: cache of all query results
-    // Shape: { [queryKey]: { data, loading, error } }
+    // Shape: { [queryKey]: augmented-array }
     var _cache = React.useState({});
     var queryCache = _cache[0];
     var setQueryCache = _cache[1];
@@ -345,9 +358,9 @@ window.onerror = function(msg, src, line, col, err) {
           setQueryCache(function(prev) {
             var next = Object.assign({}, prev);
             if (resp.error) {
-              next[key] = { data: prev[key] ? prev[key].data : [], loading: false, error: resp.error };
+              next[key] = __qr(prev[key] || [], false, resp.error);
             } else {
-              next[key] = { data: resp.data || [], loading: false, error: null };
+              next[key] = __qr(resp.data, false, null);
             }
             return next;
           });
@@ -368,7 +381,9 @@ window.onerror = function(msg, src, line, col, err) {
       });
     }, []);
 
-    // query: pure lookup — registers query, returns cached { data, loading, error }
+    // query: pure lookup — registers query, returns result.
+    // The return value IS an array (so .map/.reduce/.filter work directly)
+    // AND has .data/.loading/.error properties (so destructuring works too).
     // NOT a hook — safe to call anywhere (conditionally, in helpers, loops, etc.)
     var queryFn = React.useCallback(function(sql, params) {
       var paramsArr = params || [];
@@ -386,9 +401,9 @@ window.onerror = function(msg, src, line, col, err) {
           setQueryCache(function(prev) {
             var next = Object.assign({}, prev);
             if (resp.error) {
-              next[key] = { data: [], loading: false, error: resp.error };
+              next[key] = __qr([], false, resp.error);
             } else {
-              next[key] = { data: resp.data || [], loading: false, error: null };
+              next[key] = __qr(resp.data, false, null);
             }
             return next;
           });
@@ -396,7 +411,7 @@ window.onerror = function(msg, src, line, col, err) {
       }
 
       // Return cached result or loading defaults
-      return queryCache[key] || { data: [], loading: true, error: null };
+      return queryCache[key] || __qr([], true, null);
     }, [queryCache]);
 
     return { exec: execFn, query: queryFn };

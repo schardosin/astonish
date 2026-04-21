@@ -890,7 +890,19 @@ The ` + "`useAppState`" + ` hook gives your component a per-app **SQLite databas
 
 Returns an object with two methods:
 - ` + "`db.exec(sql, params?)`" + ` — Execute write/DDL SQL (CREATE, INSERT, UPDATE, DELETE). Returns ` + "`Promise<{ rowsAffected, lastInsertId }>`" + `.
-- ` + "`db.query(sql, params?)`" + ` — Reactive read query. Returns ` + "`{ data, loading, error }`" + `. **` + "`data`" + ` is always an array** (empty ` + "`[]`" + ` while loading or on error, never null). Automatically re-fetches when any ` + "`db.exec()`" + ` is called.
+- ` + "`db.query(sql, params?)`" + ` — Reactive read query. **Returns a rows array directly** — you can call ` + "`.map()`" + `, ` + "`.filter()`" + `, ` + "`.reduce()`" + ` on the result immediately. The array also has ` + "`.loading`" + ` and ` + "`.error`" + ` properties. Returns ` + "`[]`" + ` while loading. Automatically re-fetches when any ` + "`db.exec()`" + ` is called.
+
+Both patterns work:
+` + "```" + `jsx
+// Pattern 1 — direct (recommended):
+const rows = db.query('SELECT * FROM items');
+rows.map(item => ...)     // works — rows IS the array
+rows.loading              // boolean — true while fetching
+
+// Pattern 2 — destructured:
+const { data, loading } = db.query('SELECT * FROM items');
+data.map(item => ...)     // also works
+` + "```" + `
 
 ` + "```" + `jsx
 import React, { useState, useEffect } from 'react';
@@ -906,7 +918,7 @@ export default function TodoApp() {
   }, []);
 
   // Reactive query — automatically re-runs after any db.exec()
-  const { data: todos, loading } = db.query('SELECT * FROM todos ORDER BY created_at DESC');
+  const todos = db.query('SELECT * FROM todos ORDER BY created_at DESC');
 
   const addTodo = async () => {
     if (!newTodo.trim()) return;
@@ -922,7 +934,7 @@ export default function TodoApp() {
     await db.exec('DELETE FROM todos WHERE id = ?', [id]);
   };
 
-  if (loading) return <div className="p-4 text-gray-400">Loading...</div>;
+  if (todos.loading) return <div className="p-4 text-gray-400">Loading...</div>;
 
   return (
     <div className="p-4 space-y-4">
@@ -961,8 +973,8 @@ export default function InventoryTracker() {
     db.exec('CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, category TEXT DEFAULT \'General\', quantity INTEGER DEFAULT 1, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)');
   }, []);
 
-  const { data: items } = db.query('SELECT * FROM items ORDER BY category, name');
-  const { data: categories } = db.query('SELECT DISTINCT category FROM items ORDER BY category');
+  const items = db.query('SELECT * FROM items ORDER BY category, name');
+  const categories = db.query('SELECT DISTINCT category FROM items ORDER BY category');
 
   const addItem = async () => {
     if (!name.trim()) return;
@@ -1017,7 +1029,7 @@ export default function InventoryTracker() {
 - Use ` + "`INTEGER`" + ` for booleans (0/1) — SQLite has no native boolean type
 - Always use parameterized queries (` + "`?`" + ` placeholders with params array) — NEVER string-concatenate user input into SQL
 - ` + "`db.query()`" + ` is reactive — it automatically re-runs after any ` + "`db.exec()`" + ` call, so you don't need to manually refetch
-- ` + "`db.query()`" + ` always returns ` + "`data`" + ` as an array (empty ` + "`[]`" + ` while loading, never null) — safe to call ` + "`.map()`" + `, ` + "`.filter()`" + `, ` + "`.reduce()`" + ` directly without null checks
+- ` + "`db.query()`" + ` **returns a rows array directly** — you can call ` + "`.map()`" + `, ` + "`.filter()`" + `, ` + "`.reduce()`" + ` on the result immediately. It also has ` + "`.loading`" + ` and ` + "`.error`" + ` properties. Returns empty ` + "`[]`" + ` while loading (never null).
 - ` + "`db.query()`" + ` is NOT a hook — it is a pure lookup. You can safely call it conditionally, inside helper functions, or in loops. Only ` + "`useAppState()`" + ` itself must be called at the component top level.
 - **CRITICAL: NEVER call ` + "`db.exec()`" + ` inside a ` + "`useEffect`" + ` that depends on ` + "`db.query()`" + ` results** — this creates an infinite loop (exec triggers re-fetch, results change, effect fires, exec again). The ONLY safe ` + "`db.exec()`" + ` inside useEffect is schema creation with an empty dependency array ` + "`useEffect(() => { db.exec('CREATE TABLE IF NOT EXISTS ...') }, [])`" + `.
 - Data persists across page refreshes and app restarts — it's stored in a SQLite database file on the server

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -17,9 +18,10 @@ import (
 
 // appDataRequest is the JSON body for POST /api/apps/data.
 // sourceId uses convention-based routing:
-//   - "mcp:<serverName>/<toolName>" → invoke MCP tool
-//   - "http:<METHOD>:<url>"         → make HTTP request
-//   - "static:<key>"                → return static data from app config
+//   - "mcp:<serverName>/<toolName>"      → invoke MCP tool
+//   - "http:<METHOD>:<url>"              → make HTTP request (no auth)
+//   - "http:<METHOD>:<url>@<credential>" → make HTTP request with credential auth
+//   - "static:<key>"                     → return static data from app config
 type appDataRequest struct {
 	SourceID  string         `json:"sourceId"`
 	Args      map[string]any `json:"args"`
@@ -211,9 +213,10 @@ func sendStreamEvent(w http.ResponseWriter, flusher http.Flusher, sourceID strin
 }
 
 // resolveDataSource routes a sourceId to the appropriate backend:
-//   - "mcp:<server>/<tool>"    → MCP tool invocation
-//   - "http:<METHOD>:<url>"    → server-side HTTP request
-//   - "static:<key>"           → static data from app's DataSource config
+//   - "mcp:<server>/<tool>"           → MCP tool invocation
+//   - "http:<METHOD>:<url>"           → server-side HTTP request (no auth)
+//   - "http:<METHOD>:<url>@<cred>"    → server-side HTTP request with credential auth
+//   - "static:<key>"                  → static data from app's DataSource config
 //
 // If sourceId doesn't match any convention, it tries to find a matching
 // DataSource in the saved app (if appName is provided).
@@ -255,8 +258,15 @@ func resolveMCPSource(ctx context.Context, serverTool string, args map[string]an
 	return result, nil
 }
 
+// credentialSuffixRe matches a @credential-name suffix at the end of a URL.
+// Only matches simple names (alphanumeric, dash, underscore) after the last @,
+// ensuring it doesn't conflict with @ in URLs (e.g., user:pass@host).
+var credentialSuffixRe = regexp.MustCompile(`@([a-zA-Z][a-zA-Z0-9_-]*)$`)
+
 // resolveHTTPSource makes a server-side HTTP request.
-// spec format: "<METHOD>:<url>"
+// spec format: "<METHOD>:<url>" or "<METHOD>:<url>@<credential-name>"
+// When a @credential-name suffix is present, the named credential is resolved
+// from the credential store and its auth header is injected into the request.
 func resolveHTTPSource(spec string, args map[string]any) (any, error) {
 	parts := strings.SplitN(spec, ":", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
@@ -264,6 +274,13 @@ func resolveHTTPSource(spec string, args map[string]any) (any, error) {
 	}
 	method := strings.ToUpper(parts[0])
 	url := parts[1]
+
+	// Extract @credential-name suffix from URL if present
+	var credentialName string
+	if m := credentialSuffixRe.FindStringSubmatchIndex(url); m != nil {
+		credentialName = url[m[2]:m[3]]
+		url = url[:m[0]]
+	}
 
 	// Build the request
 	var body io.Reader
@@ -294,6 +311,19 @@ func resolveHTTPSource(spec string, args map[string]any) (any, error) {
 				httpReq.Header.Set(k, s)
 			}
 		}
+	}
+
+	// Resolve and inject credential (after custom headers — credential takes precedence for auth)
+	if credentialName != "" {
+		store := getAPICredentialStore()
+		if store == nil {
+			return nil, fmt.Errorf("credential store is not available — cannot resolve credential %q", credentialName)
+		}
+		headerKey, headerValue, err := store.Resolve(credentialName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve credential %q: %w", credentialName, err)
+		}
+		httpReq.Header.Set(headerKey, headerValue)
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}

@@ -250,6 +250,7 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString("  sourceId format: `\"http:GET:<url>\"` for HTTP or `\"mcp:<server>/<tool>\"` for MCP tools.\n")
 	sb.WriteString("  Example: `const { data, loading, error } = useAppData('http:GET:https://api.example.com/data')`\n")
 	sb.WriteString("  Dynamic URLs: useAppData('http:GET:https://api.example.com/' + encodeURIComponent(variable))\n")
+	sb.WriteString("  Authenticated APIs: append `@credential-name` to the URL, e.g. `useAppData('http:GET:https://api.example.com/data@my-api-key')`. The credential is resolved server-side from the Astonish credential store.\n")
 	sb.WriteString("- For mutations, use `useAppAction(actionId)` which returns an async function.\n")
 	sb.WriteString("- Only React 19, Tailwind CSS v4, Recharts, and Lucide icons are available. No component libraries (no shadcn/ui).\n")
 	sb.WriteString("- Use ONLY native HTML elements styled with Tailwind. Define helper components inline.\n")

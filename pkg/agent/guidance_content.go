@@ -567,6 +567,7 @@ Fetches data from a backend source. Returns ` + "`{ data, loading, error, refetc
 - ` + "`\"mcp:<serverName>/<toolName>\"`" + ` — Invokes an MCP tool. Example: ` + "`\"mcp:postgres-mcp/query\"`" + `
 - ` + "`\"http:GET:<url>\"`" + ` — Makes an HTTP GET request. Example: ` + "`\"http:GET:https://api.example.com/data\"`" + `
 - ` + "`\"http:POST:<url>\"`" + ` — Makes an HTTP POST request.
+- ` + "`\"http:<METHOD>:<url>@<credential-name>\"`" + ` — Makes an HTTP request with authentication. The ` + "`@credential-name`" + ` suffix references a named credential from the Astonish credential store (configured in Settings > Credentials). The credential is resolved server-side and its auth header is injected into the request. Example: ` + "`\"http:GET:https://api.example.com/data@my-api-key\"`" + `
 
 **options:**
 - ` + "`args`" + ` — Object passed to the backend (MCP tool args, or HTTP body for POST).
@@ -620,6 +621,25 @@ export default function WeatherApp() {
 }
 ` + "```" + `
 
+**Example — Authenticated API using a credential:**
+` + "```" + `jsx
+export default function GitHubRepos() {
+  const { data, loading, error } = useAppData('http:GET:https://api.github.com/user/repos@github-token');
+
+  if (loading) return <div className="p-4 text-gray-400">Loading...</div>;
+  if (error) return <div className="p-4 text-red-400">Error: {error}</div>;
+
+  return (
+    <div className="p-4 space-y-2">
+      <h2 className="text-lg font-bold text-white">My Repos</h2>
+      {data?.map(repo => (
+        <div key={repo.id} className="p-2 bg-gray-800 rounded text-gray-300">{repo.full_name}</div>
+      ))}
+    </div>
+  );
+}
+` + "```" + `
+
 ### useAppAction(actionId)
 
 Returns an async function for triggering write operations (mutations). Uses the same sourceId convention.
@@ -655,6 +675,7 @@ export default function TaskManager() {
 
 - **Use hardcoded data** for mockups, prototypes, static dashboards, and demos where no external data source is mentioned.
 - **Use useAppData** whenever the user mentions a URL, API endpoint, database, MCP server, or says things like "connect to", "fetch from", "query", "pull data from", "call this API", or provides any URL. The sourceId for HTTP APIs is simply ` + "`\"http:GET:<the-url>\"`" + ` — put the user's URL directly in the sourceId string.
+- **Authenticated APIs** — If the API requires authentication, append ` + "`@credential-name`" + ` to the sourceId: ` + "`\"http:GET:https://api.example.com/data@my-api-key\"`" + `. The credential must exist in the Astonish credential store (Settings > Credentials). Ask the user for the credential name if they mention authentication. Credentials support API keys, Bearer tokens, Basic auth, and OAuth (client_credentials and authorization_code with auto-refresh).
 - **Dynamic URLs** — If the URL contains a variable part (like a city name), construct the sourceId dynamically: ` + "`const { data, loading } = useAppData(` + \"`http:GET:https://api.example.com/${variable}`\" + `)`" + `. The hook re-fetches automatically when the sourceId string changes.
 - **Ask the user** what MCP server/tool or HTTP endpoint to use if they request live data but don't specify the source.
 - **NEVER use fetch() or XMLHttpRequest** — even if it seems simpler. The proxy is required for all external data.

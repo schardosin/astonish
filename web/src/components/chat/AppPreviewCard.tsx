@@ -14,6 +14,8 @@ interface AppPreviewCardProps {
   onSave?: (name: string) => void
   /** Whether this is the active (latest) app being refined */
   isActive?: boolean
+  /** Session ID for scoping persistent state of unsaved in-chat apps */
+  sessionId?: string | null
 }
 
 export default function AppPreviewCard({
@@ -23,6 +25,7 @@ export default function AppPreviewCard({
   onNavigateVersion,
   onSave,
   isActive = false,
+  sessionId,
 }: AppPreviewCardProps) {
   const [showCode, setShowCode] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -274,7 +277,7 @@ export default function AppPreviewCard({
         <AppPreview
           code={displayedData.code}
           maxHeight={fullscreen ? 9999 : 500}
-          stateId={displayedData.title || displayedData.appId || ''}
+          stateId={sessionId ? `session:${sessionId}:${displayedData.title || displayedData.appId || ''}` : (displayedData.title || displayedData.appId || '')}
         />
       </div>
     </div>

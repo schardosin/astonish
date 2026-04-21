@@ -2489,6 +2489,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                       versionIndex={versionIdx}
                       isActive={isActive}
                       onSave={isActive ? (name: string) => sendMessage(`__app_save__:${name}`) : undefined}
+                      sessionId={activeSessionId}
                     />
                   </div>
                 )

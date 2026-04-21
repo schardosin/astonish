@@ -249,7 +249,7 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString("- For ANY external data (APIs, URLs the user provides), use `useAppData(sourceId)` which is a pre-injected global function (no import needed).\n")
 	sb.WriteString("  sourceId format: `\"http:GET:<url>\"` for HTTP or `\"mcp:<server>/<tool>\"` for MCP tools.\n")
 	sb.WriteString("  Example: `const { data, loading, error } = useAppData('http:GET:https://api.example.com/data')`\n")
-	sb.WriteString("  Dynamic URLs: `useAppData(` + \"`http:GET:https://api.example.com/${variable}`\" + `)`\n")
+	sb.WriteString("  Dynamic URLs: useAppData('http:GET:https://api.example.com/' + encodeURIComponent(variable))\n")
 	sb.WriteString("- For mutations, use `useAppAction(actionId)` which returns an async function.\n")
 	sb.WriteString("- Only React 19, Tailwind CSS v4, Recharts, and Lucide icons are available. No component libraries (no shadcn/ui).\n")
 	sb.WriteString("- Use ONLY native HTML elements styled with Tailwind. Define helper components inline.\n")

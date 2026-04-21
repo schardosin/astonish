@@ -484,7 +484,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			// User wants to save the app — persist to disk, clear state, acknowledge
 			activeApp := chatAgent.GetActiveApp(req.SessionID)
 			userText := msg
-			if msg == "__app_save__" || msg == "__app_done__" {
+			if msg == "__app_save__" || msg == "__app_done__" || strings.HasPrefix(msg, "__app_save__:") {
 				userText = "Save"
 			}
 			persistSessionMessage(r.Context(), sessionService, req.SessionID, "user", userText)

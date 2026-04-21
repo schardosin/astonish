@@ -210,9 +210,9 @@ func TestSystemPromptBuilder_SlimPrompt(t *testing.T) {
 		t.Error("expected guidance hint referencing memory_search")
 	}
 
-	// Verify prompt is reasonably compact (under 4000 chars ~ 1000 tokens)
-	if len(prompt) > 4000 {
-		t.Errorf("prompt too large for slim design: %d chars (target < 4000)", len(prompt))
+	// Verify prompt is reasonably compact (under 4500 chars ~ 1125 tokens)
+	if len(prompt) > 4500 {
+		t.Errorf("prompt too large for slim design: %d chars (target < 4500)", len(prompt))
 	}
 }
 

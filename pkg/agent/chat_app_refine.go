@@ -94,11 +94,13 @@ func (c *ChatAgent) ClassifyAppIntent(ctx context.Context, msg string, llmFunc f
 	trimmed := strings.TrimSpace(msg)
 
 	// Magic markers from UI buttons — no LLM needed
-	if trimmed == "__app_save__" {
+	if trimmed == "__app_save__" || trimmed == "__app_done__" {
 		return AppIntentResult{Intent: AppIntentSave}
 	}
-	if trimmed == "__app_done__" {
-		return AppIntentResult{Intent: AppIntentSave}
+	// __app_save__:CustomName — save with a user-provided name
+	if strings.HasPrefix(trimmed, "__app_save__:") {
+		name := strings.TrimSpace(trimmed[len("__app_save__:"):])
+		return AppIntentResult{Intent: AppIntentSave, SaveName: name}
 	}
 
 	// Use LLM to classify intent

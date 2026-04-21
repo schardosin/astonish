@@ -10,8 +10,8 @@ interface AppPreviewCardProps {
   /** Current version index within the versions array */
   versionIndex?: number
   onNavigateVersion?: (index: number) => void
-  /** Called when user clicks "Done" to signal they're satisfied */
-  onDone?: () => void
+  /** Called when user confirms save — passes the user-chosen name */
+  onSave?: (name: string) => void
   /** Whether this is the active (latest) app being refined */
   isActive?: boolean
 }
@@ -21,11 +21,14 @@ export default function AppPreviewCard({
   versions,
   versionIndex = 0,
   onNavigateVersion,
-  onDone,
+  onSave,
   isActive = false,
 }: AppPreviewCardProps) {
   const [showCode, setShowCode] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [showSaveDialog, setShowSaveDialog] = useState(false)
+  const [saveName, setSaveName] = useState('')
+  const saveInputRef = useRef<HTMLInputElement>(null)
   const fullscreenRef = useRef<HTMLDivElement>(null)
 
   const hasMultipleVersions = versions && versions.length > 1
@@ -34,6 +37,27 @@ export default function AppPreviewCard({
 
   // The displayed version — either the navigated version or the current data
   const displayedData = versions && versions[versionIndex] ? versions[versionIndex] : data
+
+  // Focus save input when dialog opens
+  useEffect(() => {
+    if (showSaveDialog && saveInputRef.current) {
+      saveInputRef.current.focus()
+      saveInputRef.current.select()
+    }
+  }, [showSaveDialog])
+
+  const handleSaveClick = useCallback(() => {
+    setSaveName(displayedData.title || 'My App')
+    setShowSaveDialog(true)
+  }, [displayedData.title])
+
+  const handleSaveConfirm = useCallback(() => {
+    const name = saveName.trim()
+    if (name && onSave) {
+      onSave(name)
+      setShowSaveDialog(false)
+    }
+  }, [saveName, onSave])
 
   // Close fullscreen on Escape
   useEffect(() => {
@@ -114,9 +138,9 @@ export default function AppPreviewCard({
           )}
 
           {/* Save button (only shown when actively refining) */}
-          {isActive && onDone && (
+          {isActive && onSave && !showSaveDialog && (
             <button
-              onClick={onDone}
+              onClick={handleSaveClick}
               className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer mr-1"
               style={{
                 color: 'var(--text-on-accent)',
@@ -165,6 +189,57 @@ export default function AppPreviewCard({
           )}
         </div>
       </div>
+
+      {/* Save dialog — inline bar below header */}
+      {showSaveDialog && (
+        <div
+          className="flex items-center gap-2 px-4 py-2.5"
+          style={{ borderBottom: '1px solid var(--border-color)', background: 'var(--bg-tertiary)' }}
+        >
+          <label className="text-xs whitespace-nowrap" style={{ color: 'var(--text-secondary)' }}>
+            App name:
+          </label>
+          <input
+            ref={saveInputRef}
+            type="text"
+            value={saveName}
+            onChange={(e) => setSaveName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleSaveConfirm()
+              if (e.key === 'Escape') setShowSaveDialog(false)
+            }}
+            className="flex-1 px-2.5 py-1 rounded-lg text-sm border focus:outline-none focus:ring-1"
+            style={{
+              background: 'var(--bg-primary)',
+              borderColor: 'var(--border-color)',
+              color: 'var(--text-primary)',
+              // @ts-expect-error CSS custom property for focus ring
+              '--tw-ring-color': 'var(--accent)',
+            }}
+            placeholder="Enter app name..."
+          />
+          <button
+            onClick={handleSaveConfirm}
+            disabled={!saveName.trim()}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default"
+            style={{
+              color: 'var(--text-on-accent)',
+              background: 'var(--accent)',
+            }}
+          >
+            <Save size={12} />
+            Save
+          </button>
+          <button
+            onClick={() => setShowSaveDialog(false)}
+            className="p-1 rounded transition-colors cursor-pointer"
+            style={{ color: 'var(--text-muted)' }}
+            title="Cancel"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
       {/* Code panel (toggle) */}
       {showCode && (

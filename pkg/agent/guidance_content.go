@@ -507,19 +507,90 @@ There is NO component library. The following DO NOT EXIST in the sandbox:
 
 ## How to Build UI Without a Component Library
 
-Use native HTML elements styled with Tailwind. This is what you MUST do instead:
+Use native HTML elements styled with Tailwind. Follow this design system for polished, consistent results.
 
-**Buttons:** ` + "`<button className=\"px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors\">Click me</button>`" + `
+### Color Palette
 
-**Cards:** ` + "`<div className=\"p-4 bg-gray-800 rounded-xl border border-gray-700\">...</div>`" + `
+- **Outermost container:** transparent (NO bg-* class) — the sandbox provides the themed background
+- **Cards/panels:** ` + "`bg-gray-900 border border-gray-800 rounded-xl`" + `
+- **Inner elements (inputs, nested containers):** ` + "`bg-gray-800 border border-gray-700 rounded-lg`" + `
+- **Text hierarchy:** ` + "`text-white`" + ` (headings/primary), ` + "`text-gray-300`" + ` (body), ` + "`text-gray-400`" + ` (secondary), ` + "`text-gray-500`" + ` (labels/muted)
+- **Accent colors (use semantically):**
+  - **Emerald/green** — positive values, success, growth, money
+  - **Blue** — informational, links, secondary metrics
+  - **Purple** — totals, aggregates, net worth
+  - **Amber/yellow** — warnings, counts, neutral highlights
+  - **Red/rose** — errors, negative values, destructive actions
 
-**Inputs:** ` + "`<input className=\"w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent\" />`" + `
+### Standard Component Patterns
 
-**Badges:** ` + "`<span className=\"px-2 py-0.5 text-xs rounded-full bg-green-500/20 text-green-400\">Active</span>`" + `
+**Card:**
+` + "`<div className=\"bg-gray-900 rounded-xl p-4 border border-gray-800\">...</div>`" + `
 
-**Selects:** ` + "`<select className=\"px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white\"><option>...</option></select>`" + `
+**Color-coded KPI / summary card:**
+` + "```" + `jsx
+<div className="bg-gradient-to-br from-emerald-900/40 to-emerald-950/40 rounded-xl p-4 border border-emerald-800/50">
+  <p className="text-xs text-emerald-400 mb-1">Label</p>
+  <p className="text-2xl font-bold text-emerald-300">$12,500</p>
+  <p className="text-xs text-gray-500 mt-1">Supporting text</p>
+</div>
+` + "```" + `
+Use different accent colors per card (emerald, blue, purple, amber) to distinguish metrics.
 
-**Tabs:** Build with useState and conditional rendering:
+**Input with label (inside a card):**
+` + "```" + `jsx
+<div className="bg-gray-900 rounded-xl p-3 border border-gray-800">
+  <label className="text-xs text-gray-500 flex items-center gap-1 mb-1">
+    <DollarSign className="w-3 h-3" /> Label
+  </label>
+  <input
+    type="number"
+    className="w-full bg-gray-800 text-white rounded-lg px-3 py-2 text-sm border border-gray-700 focus:border-emerald-500 focus:outline-none"
+  />
+</div>
+` + "```" + `
+
+**Button:** ` + "`<button className=\"px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm\">Click me</button>`" + `
+
+**Subtle/secondary button:** ` + "`<button className=\"px-3 py-1.5 rounded-lg text-xs bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white border border-gray-700 transition-colors\">Option</button>`" + `
+
+**Badge:** ` + "`<span className=\"inline-flex items-center rounded-full border border-white/15 bg-white/5 px-2 py-0.5 text-xs text-white/80\">Status</span>`" + `
+
+**Select:** ` + "`<select className=\"px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:border-emerald-500 focus:outline-none\"><option>...</option></select>`" + `
+
+**Table:**
+` + "```" + `jsx
+<table className="w-full text-sm">
+  <thead>
+    <tr className="text-gray-500 text-xs border-b border-gray-800">
+      <th className="text-left py-2 px-3">Name</th>
+      <th className="text-right py-2 px-3">Amount</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr className="border-b border-gray-800/50 hover:bg-gray-800/30">
+      <td className="py-2 px-3 text-white">Row label</td>
+      <td className="py-2 px-3 text-right text-emerald-400 font-medium">$1,234</td>
+    </tr>
+  </tbody>
+</table>
+` + "```" + `
+Right-align numeric columns. Use colored text (` + "`text-emerald-400`" + `, ` + "`text-blue-400`" + `) for values and ` + "`font-medium`" + ` for emphasis.
+
+**Header with icon:**
+` + "```" + `jsx
+<div className="flex items-center gap-3">
+  <div className="p-2 bg-emerald-600/20 rounded-lg">
+    <Calculator className="w-6 h-6 text-emerald-400" />
+  </div>
+  <div>
+    <h1 className="text-2xl font-bold text-white">Title</h1>
+    <p className="text-gray-500 text-sm">Description text</p>
+  </div>
+</div>
+` + "```" + `
+
+**Tabs:**
 ` + "```" + `jsx
 const [tab, setTab] = useState('overview');
 <div className="flex border-b border-gray-700">
@@ -530,6 +601,20 @@ const [tab, setTab] = useState('overview');
   ))}
 </div>
 ` + "```" + `
+
+**Info/explanation block:**
+` + "`<div className=\"bg-gray-900/50 rounded-xl p-4 border border-gray-800 text-sm text-gray-400\">...</div>`" + `
+
+### Layout Principles
+
+- Use ` + "`space-y-6`" + ` between major page sections
+- Use ` + "`gap-3`" + ` within grids
+- Use responsive grids: ` + "`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3`" + ` (adjust column count to content)
+- Wrap summary/KPI cards in a ` + "`grid grid-cols-2 md:grid-cols-4 gap-3`" + `
+- Wrap control inputs in a ` + "`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3`" + `
+- Use ` + "`tabular-nums`" + ` for numbers that change dynamically (counters, financial data)
+- Typical page structure: header → controls → summary cards → charts → tables (adapt to the content; not all sections are needed)
+- **Always include a Recharts visualization** (AreaChart, LineChart, BarChart, etc.) when the app involves numerical data, time series, growth projections, financial calculations, comparisons, or any data that benefits from a visual representation. Charts are a key strength of the sandbox — use them proactively.
 
 **If you need a reusable component, define it in the same file above the main export:**
 ` + "```" + `jsx
@@ -551,7 +636,7 @@ export default function App() {
 4. **Single file** — Everything must be in one file. Define helpers above the main export.
 5. **Self-contained** — Include all data, state, and logic within the component. Use hardcoded sample data for static apps; use ` + "`useAppData`" + ` for live data (see below).
 6. **NEVER use fetch(), XMLHttpRequest, or axios** — The sandbox blocks direct network access. ALL external data MUST go through ` + "`useAppData('http:GET:<url>')`" + ` or ` + "`useAppData('mcp:<server>/<tool>')`" + `. This is the ONLY way to get external data. If the user gives you a URL or API endpoint, put it in the useAppData sourceId, e.g. ` + "`useAppData('http:GET:https://api.example.com/data')`" + `.
-7. **Dark-mode aware** — The preview renders on a themed background. **Do NOT set any background class (bg-*) on the outermost container element** — it must be transparent so the sandbox theme shows through. Use background classes only on inner elements like cards, sections, and panels. Inner cards: ` + "`bg-gray-800`" + ` / ` + "`bg-gray-900`" + `. Text: ` + "`text-white`" + ` / ` + "`text-gray-300`" + `.
+7. **Dark-mode aware** — The preview renders on a themed background. **Do NOT set any background class (bg-*) on the outermost container element** — it must be transparent so the sandbox theme shows through. Follow the Visual Design System above: ` + "`bg-gray-900`" + ` for cards, ` + "`bg-gray-800`" + ` for inputs/inner elements, semantic accent colors for data.
 8. **Make it interactive** — Use ` + "`useState`" + ` for buttons, toggles, tabs, filters.
 9. **Responsive** — Use responsive Tailwind classes (` + "`md:`" + `, ` + "`lg:`" + `) where appropriate.
 

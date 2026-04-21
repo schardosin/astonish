@@ -263,7 +263,7 @@ export default function AppsView({ theme, appName, onNavigate, onImproveApp }: A
         {/* Content area */}
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Preview iframe */}
-          <div className={`${showCode ? 'h-1/2' : 'flex-1'} overflow-hidden p-4`}>
+          <div className={`${showCode ? 'h-1/2' : 'flex-1'} overflow-auto p-4`}>
             <AppPreview code={selectedApp.code} maxHeight={9999} appName={selectedApp.name} />
           </div>
 

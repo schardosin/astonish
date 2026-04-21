@@ -2123,6 +2123,8 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 const isFinalResult = !isStreaming &&
                   !(msg as AgentMessage)._streaming &&
                   msg.content.length > 500 &&
+                  // App code fences must always go through the fence-splitting path
+                  !msg.content.includes('```astonish-app') &&
                   // Must be the last agent message in the list
                   !messages.slice(index + 1).some(m => m.type === 'agent') &&
                   // Must have tool activity somewhere before it
@@ -2486,7 +2488,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                       versions={allVersions.length > 1 ? allVersions : undefined}
                       versionIndex={versionIdx}
                       isActive={isActive}
-                      onDone={isActive ? () => sendMessage('__app_save__') : undefined}
+                      onSave={isActive ? (name: string) => sendMessage(`__app_save__:${name}`) : undefined}
                     />
                   </div>
                 )

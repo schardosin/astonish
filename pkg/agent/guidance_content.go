@@ -765,6 +765,123 @@ export default function TaskManager() {
 - **Ask the user** what MCP server/tool or HTTP endpoint to use if they request live data but don't specify the source.
 - **NEVER use fetch() or XMLHttpRequest** — even if it seems simpler. The proxy is required for all external data.
 
+## AI Capabilities — useAppAI
+
+The ` + "`useAppAI`" + ` hook lets your component make one-shot LLM calls for tasks like summarization, classification, text generation, or analysis. It uses the same model configured for the Astonish agent.
+
+### useAppAI(options?)
+
+Returns an async function you call with a prompt. The LLM processes it and returns a text response.
+
+` + "```" + `jsx
+import { useAppAI } from 'astonish';
+
+// Basic usage — returns a callable function
+const askAI = useAppAI();
+const summary = await askAI('Summarize this text: ...');
+
+// With a system instruction — shapes the AI's behavior
+const analyst = useAppAI({ system: 'You are a concise data analyst. Respond in bullet points.' });
+const insights = await analyst('What trends do you see?', { context: salesData });
+` + "```" + `
+
+**Parameters:**
+- ` + "`options.system`" + ` (optional string) — System instruction that shapes the AI's role/behavior
+
+**The returned function signature:**
+- ` + "`askAI(prompt, callOptions?)`" + ` → ` + "`Promise<string>`" + `
+- ` + "`prompt`" + ` — The user's request text
+- ` + "`callOptions.context`" + ` (optional) — Structured data to include as context (automatically serialized to JSON)
+
+### Example: Summarize Button
+
+` + "```" + `jsx
+import { useState } from 'react';
+import { useAppAI } from 'astonish';
+
+export default function ArticleViewer() {
+  const [article] = useState('The quarterly earnings report shows...');
+  const [summary, setSummary] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const summarize = useAppAI({ system: 'Summarize in 2-3 sentences. Be concise.' });
+
+  const handleSummarize = async () => {
+    setLoading(true);
+    try {
+      const result = await summarize('Summarize this article', { context: article });
+      setSummary(result);
+    } catch (err) {
+      setSummary('Error: ' + err.message);
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="p-4">
+      <p className="text-gray-300">{article}</p>
+      <button onClick={handleSummarize} disabled={loading}
+        className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-50">
+        {loading ? 'Summarizing...' : 'Summarize'}
+      </button>
+      {summary && <div className="mt-4 p-3 bg-gray-800 rounded-lg text-gray-200">{summary}</div>}
+    </div>
+  );
+}
+` + "```" + `
+
+### Example: Combining data + AI
+
+` + "```" + `jsx
+import { useState } from 'react';
+import { useAppData, useAppAI } from 'astonish';
+
+export default function SmartDashboard() {
+  const { data: metrics, loading } = useAppData('http:GET:https://api.example.com/metrics');
+  const [analysis, setAnalysis] = useState(null);
+  const [analyzing, setAnalyzing] = useState(false);
+
+  const analyze = useAppAI({ system: 'You are a business analyst. Identify anomalies and trends.' });
+
+  const handleAnalyze = async () => {
+    setAnalyzing(true);
+    try {
+      const result = await analyze('Analyze these metrics and highlight anomalies', { context: metrics });
+      setAnalysis(result);
+    } catch (err) {
+      setAnalysis('Error: ' + err.message);
+    }
+    setAnalyzing(false);
+  };
+
+  if (loading) return <div>Loading data...</div>;
+  return (
+    <div className="p-4">
+      {/* Render metrics charts/tables */}
+      <button onClick={handleAnalyze} disabled={analyzing}
+        className="px-4 py-2 bg-purple-600 text-white rounded-lg">
+        {analyzing ? 'Analyzing...' : 'AI Analysis'}
+      </button>
+      {analysis && <div className="mt-4 p-3 bg-gray-800 rounded-lg whitespace-pre-wrap">{analysis}</div>}
+    </div>
+  );
+}
+` + "```" + `
+
+### When to use useAppAI
+
+- **Summarization** — "Add a button to summarize these results"
+- **Classification** — Categorizing items, sentiment analysis, labeling data
+- **Text generation** — Writing descriptions, generating reports, drafting responses
+- **Analysis** — "Let me ask questions about this data", "Explain these metrics"
+- **Any on-demand AI processing** triggered by user action in the app
+
+**Tips:**
+- Pass relevant data as ` + "`context`" + ` rather than embedding it in the prompt string — it gets serialized cleanly
+- Set a ` + "`system`" + ` prompt to control response format and tone
+- Show a loading state while waiting (the call may take a few seconds)
+- Handle errors with try/catch — network or LLM failures throw an Error
+
 ## When to Generate a Visual App
 
 Generate a visual app when the user:

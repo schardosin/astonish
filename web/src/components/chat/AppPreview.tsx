@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
-import { fetchAppData, fetchAppAction } from '../../api/apps'
+import { fetchAppData, fetchAppAction, fetchAppAI } from '../../api/apps'
 
 const SANDBOX_URL = '/api/app-preview/sandbox'
 
@@ -79,6 +79,9 @@ export default function AppPreview({ code, maxHeight = 500, appName = '' }: AppP
         case 'action_request':
           handleActionRequest(msg)
           break
+        case 'ai_request':
+          handleAIRequest(msg)
+          break
         case 'data_subscribe':
           handleDataSubscribe(msg)
           break
@@ -132,6 +135,31 @@ export default function AppPreview({ code, maxHeight = 500, appName = '' }: AppP
           type: 'action_response',
           requestId,
           error: err instanceof Error ? err.message : 'Action request failed',
+        })
+      }
+    }
+
+    // Relay ai_request from iframe → backend → iframe
+    async function handleAIRequest(msg: Record<string, unknown>) {
+      const { prompt, system, context, requestId } = msg as {
+        prompt: string
+        system: string
+        context: unknown
+        requestId: string
+      }
+      try {
+        const resp = await fetchAppAI(prompt, system, context, requestId)
+        sendToIframe({
+          type: 'ai_response',
+          requestId: resp.requestId || requestId,
+          text: resp.text,
+          error: resp.error,
+        })
+      } catch (err: unknown) {
+        sendToIframe({
+          type: 'ai_response',
+          requestId,
+          error: err instanceof Error ? err.message : 'AI request failed',
         })
       }
     }

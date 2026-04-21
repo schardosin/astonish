@@ -873,6 +873,7 @@ func RegisterRoutes(router *mux.Router) {
 	// App data proxy endpoints (must be before /api/apps/{name} to avoid capture)
 	router.HandleFunc("/api/apps/data", AppDataHandler).Methods("POST")
 	router.HandleFunc("/api/apps/action", AppActionHandler).Methods("POST")
+	router.HandleFunc("/api/apps/ai", AppAIHandler).Methods("POST")
 
 	router.HandleFunc("/api/apps", ListAppsHandler).Methods("GET")
 	router.HandleFunc("/api/apps/{name}", GetAppHandler).Methods("GET")

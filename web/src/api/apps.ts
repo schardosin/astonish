@@ -109,6 +109,32 @@ export async function fetchAppAction(
   return res.json()
 }
 
+// --- AI proxy API ---
+
+export interface AppAIResponse {
+  requestId: string
+  text?: string
+  error?: string
+}
+
+/** Send a one-shot AI (LLM) request through the backend proxy. */
+export async function fetchAppAI(
+  prompt: string,
+  system: string = '',
+  context: unknown = null,
+  requestId: string = '',
+): Promise<AppAIResponse> {
+  const res = await fetch(`${API_BASE}/apps/ai`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt, system, context, requestId }),
+  })
+  if (!res.ok) {
+    return { requestId, error: `HTTP ${res.status}: ${res.statusText}` }
+  }
+  return res.json()
+}
+
 /**
  * Open an SSE connection for streaming data updates from a saved app.
  * Returns a cleanup function to close the connection.

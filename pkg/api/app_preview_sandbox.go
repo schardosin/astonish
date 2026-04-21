@@ -114,7 +114,7 @@ window.onerror = function(msg, src, line, col, err) {
     var msg = e.data;
     if (!msg || !msg.type) return;
 
-    if (msg.type === 'data_response' || msg.type === 'action_response') {
+    if (msg.type === 'data_response' || msg.type === 'action_response' || msg.type === 'ai_response') {
       var cb = __dataCallbacks[msg.requestId];
       if (cb) {
         delete __dataCallbacks[msg.requestId];
@@ -130,21 +130,22 @@ window.onerror = function(msg, src, line, col, err) {
     }
   });
 
-  // Send a data/action request to parent and return a Promise
-  function __requestFromParent(type, payload) {
+  // Send a data/action/ai request to parent and return a Promise.
+  // timeoutMs defaults to 30s for data/action, callers can override (e.g. 120s for AI).
+  function __requestFromParent(type, payload, timeoutMs) {
+    var timeout = timeoutMs || 30000;
     return new Promise(function(resolve) {
       var requestId = __genRequestId();
       __dataCallbacks[requestId] = resolve;
       payload.requestId = requestId;
       payload.type = type;
       window.parent.postMessage(payload, '*');
-      // Timeout after 30s
       setTimeout(function() {
         if (__dataCallbacks[requestId]) {
           delete __dataCallbacks[requestId];
-          resolve({ error: 'Request timed out after 30 seconds' });
+          resolve({ error: 'Request timed out after ' + (timeout / 1000) + ' seconds' });
         }
-      }, 30000);
+      }, timeout);
     });
   }
 
@@ -230,6 +231,25 @@ window.onerror = function(msg, src, line, col, err) {
     }, [actionId]);
   };
 
+  // ── useAppAI hook ──────────────────────────────────────────────────
+  // Usage: const askAI = useAppAI({ system: 'You are a data analyst.' })
+  //        const text = await askAI('Summarize this data', { context: myData })
+  window.useAppAI = function useAppAI(options) {
+    options = options || {};
+    var systemPrompt = options.system || '';
+    return React.useCallback(function(prompt, callOptions) {
+      callOptions = callOptions || {};
+      return __requestFromParent('ai_request', {
+        prompt: prompt,
+        system: systemPrompt,
+        context: callOptions.context || null
+      }, 120000).then(function(resp) {
+        if (resp.error) throw new Error(resp.error);
+        return resp.text;
+      });
+    }, [systemPrompt]);
+  };
+
   // Make hooks available via require('astonish') too — added to modules below
   // ── End data hooks ─────────────────────────────────────────────────
 
@@ -244,7 +264,7 @@ window.onerror = function(msg, src, line, col, err) {
     'react-dom/client': window.ReactDOM,
     'recharts': window.Recharts || {},
     'lucide-react': window.LucideReact || {},
-    'astonish': { useAppData: window.useAppData, useAppAction: window.useAppAction },
+    'astonish': { useAppData: window.useAppData, useAppAction: window.useAppAction, useAppAI: window.useAppAI },
   };
 
   function sandboxRequire(name) {

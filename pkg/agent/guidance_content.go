@@ -1017,6 +1017,8 @@ export default function InventoryTracker() {
 - Use ` + "`INTEGER`" + ` for booleans (0/1) — SQLite has no native boolean type
 - Always use parameterized queries (` + "`?`" + ` placeholders with params array) — NEVER string-concatenate user input into SQL
 - ` + "`db.query()`" + ` is reactive — it automatically re-runs after any ` + "`db.exec()`" + ` call, so you don't need to manually refetch
+- ` + "`db.query()`" + ` is NOT a hook — it is a pure lookup. You can safely call it conditionally, inside helper functions, or in loops. Only ` + "`useAppState()`" + ` itself must be called at the component top level.
+- **CRITICAL: NEVER call ` + "`db.exec()`" + ` inside a ` + "`useEffect`" + ` that depends on ` + "`db.query()`" + ` results** — this creates an infinite loop (exec triggers re-fetch, results change, effect fires, exec again). The ONLY safe ` + "`db.exec()`" + ` inside useEffect is schema creation with an empty dependency array ` + "`useEffect(() => { db.exec('CREATE TABLE IF NOT EXISTS ...') }, [])`" + `.
 - Data persists across page refreshes and app restarts — it's stored in a SQLite database file on the server
 
 ## When to Generate a Visual App

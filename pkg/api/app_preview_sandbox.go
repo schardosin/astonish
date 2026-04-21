@@ -260,20 +260,62 @@ window.onerror = function(msg, src, line, col, err) {
   //   const { data, loading, error } = db.query('SELECT * FROM items');
   //   await db.exec('INSERT INTO items (name) VALUES (?)', ['New item']);
   //
+  // DESIGN: db.query() is NOT a hook — it's a pure lookup into cached state.
+  // This means db.query() can be called anywhere (conditionally, in helpers, etc.)
+  // without violating React hooks rules. All reactive state is managed at the
+  // useAppState() level via a single useState + useEffect pair.
+  //
   // Global mutation counter — shared across all useAppState instances.
-  // Incremented on every db.exec(), causes all db.query() hooks to re-fetch.
   var __stateVersion = { current: 0 };
   var __stateVersionListeners = [];
+  var __stateDebounceTimer = null;
+
+  // Circuit breaker: prevent infinite re-fetch loops
+  var __refetchTimestamps = [];
+  var __circuitBroken = false;
+
+  function __shouldAllowRefetch() {
+    if (__circuitBroken) return false;
+    var now = Date.now();
+    __refetchTimestamps.push(now);
+    // Keep only last 2 seconds
+    while (__refetchTimestamps.length > 0 && now - __refetchTimestamps[0] > 2000) {
+      __refetchTimestamps.shift();
+    }
+    if (__refetchTimestamps.length > 10) {
+      __circuitBroken = true;
+      console.warn('[useAppState] Circuit breaker tripped: too many re-fetches (>10 in 2s). Pausing reactive queries. Reload to reset.');
+      return false;
+    }
+    return true;
+  }
 
   function __notifyStateChange() {
-    __stateVersion.current++;
-    __stateVersionListeners.forEach(function(fn) { fn(__stateVersion.current); });
+    // Debounce: coalesce rapid exec() calls into a single version bump
+    if (__stateDebounceTimer) return;
+    __stateDebounceTimer = setTimeout(function() {
+      __stateDebounceTimer = null;
+      __stateVersion.current++;
+      __stateVersionListeners.forEach(function(fn) { fn(__stateVersion.current); });
+    }, 50);
   }
 
   window.useAppState = function useAppState() {
-    // Subscribe to version changes for reactive re-fetching
-    var _v = React.useState(__stateVersion.current);
-    var setVersion = _v[1];
+    // Single piece of state: cache of all query results
+    // Shape: { [queryKey]: { data, loading, error } }
+    var _cache = React.useState({});
+    var queryCache = _cache[0];
+    var setQueryCache = _cache[1];
+
+    // Track registered queries: { [queryKey]: { sql, params } }
+    var registeredQueries = React.useRef({});
+    // Track the version we last fetched at
+    var lastFetchedVersion = React.useRef(-1);
+
+    // Subscribe to global version changes
+    var _ver = React.useState(__stateVersion.current);
+    var version = _ver[0];
+    var setVersion = _ver[1];
 
     React.useEffect(function() {
       __stateVersionListeners.push(setVersion);
@@ -283,6 +325,37 @@ window.onerror = function(msg, src, line, col, err) {
       };
     }, [setVersion]);
 
+    // Single effect: re-fetch ALL registered queries when version changes
+    React.useEffect(function() {
+      var queries = registeredQueries.current;
+      var keys = Object.keys(queries);
+      if (keys.length === 0) return;
+      if (lastFetchedVersion.current === version) return;
+      lastFetchedVersion.current = version;
+
+      if (!__shouldAllowRefetch()) return;
+
+      keys.forEach(function(key) {
+        var q = queries[key];
+        __requestFromParent('state_query', {
+          appName: __appName,
+          sql: q.sql,
+          params: q.params
+        }).then(function(resp) {
+          setQueryCache(function(prev) {
+            var next = Object.assign({}, prev);
+            if (resp.error) {
+              next[key] = { data: prev[key] ? prev[key].data : null, loading: false, error: resp.error };
+            } else {
+              next[key] = { data: resp.data, loading: false, error: null };
+            }
+            return next;
+          });
+        });
+      });
+    }, [version]);
+
+    // exec: write/DDL — returns promise, triggers debounced re-fetch
     var execFn = React.useCallback(function(sql, params) {
       return __requestFromParent('state_exec', {
         appName: __appName,
@@ -295,65 +368,38 @@ window.onerror = function(msg, src, line, col, err) {
       });
     }, []);
 
+    // query: pure lookup — registers query, returns cached { data, loading, error }
+    // NOT a hook — safe to call anywhere (conditionally, in helpers, loops, etc.)
     var queryFn = React.useCallback(function(sql, params) {
-      // queryFn is the raw async query — used internally by the query hook
-      return __requestFromParent('state_query', {
-        appName: __appName,
-        sql: sql,
-        params: params || []
-      }).then(function(resp) {
-        if (resp.error) throw new Error(resp.error);
-        return resp.data;
-      });
-    }, []);
+      var paramsArr = params || [];
+      var key = sql + '|' + JSON.stringify(paramsArr);
 
-    // query() returns { data, loading, error } and reactively re-fetches on mutations
-    var queryHook = React.useCallback(function useQuery(sql, params) {
-      var _d = React.useState(null);   var data = _d[0];    var setData = _d[1];
-      var _l = React.useState(true);   var loading = _l[0]; var setLoading = _l[1];
-      var _e = React.useState(null);   var err = _e[0];     var setErr = _e[1];
-      var genRef = React.useRef(0);
-      var versionRef = React.useRef(-1);
-
-      // Subscribe to version changes
-      var _ver = React.useState(__stateVersion.current);
-      var version = _ver[0]; var setVer = _ver[1];
-
-      React.useEffect(function() {
-        __stateVersionListeners.push(setVer);
-        return function() {
-          var idx = __stateVersionListeners.indexOf(setVer);
-          if (idx >= 0) __stateVersionListeners.splice(idx, 1);
-        };
-      }, [setVer]);
-
-      // Serialize params for dependency tracking
-      var paramsKey = JSON.stringify(params || []);
-
-      React.useEffect(function() {
-        if (!sql) return;
-        var gen = ++genRef.current;
-        setLoading(true);
-        setErr(null);
+      // Register this query if new
+      if (!registeredQueries.current[key]) {
+        registeredQueries.current[key] = { sql: sql, params: paramsArr };
+        // Trigger initial fetch
         __requestFromParent('state_query', {
           appName: __appName,
           sql: sql,
-          params: params || []
+          params: paramsArr
         }).then(function(resp) {
-          if (gen !== genRef.current) return;
-          if (resp.error) {
-            setErr(resp.error);
-          } else {
-            setData(resp.data);
-          }
-          setLoading(false);
+          setQueryCache(function(prev) {
+            var next = Object.assign({}, prev);
+            if (resp.error) {
+              next[key] = { data: null, loading: false, error: resp.error };
+            } else {
+              next[key] = { data: resp.data, loading: false, error: null };
+            }
+            return next;
+          });
         });
-      }, [sql, paramsKey, version]);
+      }
 
-      return { data: data, loading: loading, error: err };
-    }, []);
+      // Return cached result or loading defaults
+      return queryCache[key] || { data: null, loading: true, error: null };
+    }, [queryCache]);
 
-    return { exec: execFn, query: queryHook };
+    return { exec: execFn, query: queryFn };
   };
 
   // Make hooks available via require('astonish') too — added to modules below

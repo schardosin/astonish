@@ -65,9 +65,17 @@ func getAppDB(appName string) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to open database %q: %w", dbPath, err)
 	}
 
+	// Serialize all access through a single connection to eliminate lock contention.
+	// Per-app databases have low concurrency — this is the safest approach.
+	db.SetMaxOpenConns(1)
+
 	// Enable WAL mode for better concurrent read/write performance
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		slog.Debug("failed to enable WAL mode", "app", appName, "error", err)
+	}
+	// Wait up to 5 seconds if the database is locked instead of failing immediately
+	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		slog.Debug("failed to set busy timeout", "app", appName, "error", err)
 	}
 	// Enable foreign keys
 	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {

@@ -125,6 +125,71 @@ func CloseAndDeleteAppDB(appName string) error {
 	return nil
 }
 
+// CleanupSessionAppDBs removes all session-scoped app databases for the given
+// session ID. In-chat previews store state in databases named like
+// session_{slugified-session-id}_{app_title}.db — this function finds and
+// removes all of them when a session is deleted.
+// Returns the number of databases removed.
+func CleanupSessionAppDBs(sessionID string) int {
+	if sessionID == "" {
+		return 0
+	}
+
+	dir, err := apps.AppsDir()
+	if err != nil {
+		slog.Debug("session db cleanup: cannot determine apps dir", "error", err)
+		return 0
+	}
+
+	// The stateId format is "session:{sessionId}:{title}" which slugifies to
+	// "session_{slugified_session_id}_{slugified_title}"
+	prefix := "session_" + apps.Slugify(sessionID) + "_"
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		slog.Debug("session db cleanup: cannot read apps dir", "error", err)
+		return 0
+	}
+
+	cleaned := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".db") {
+			continue
+		}
+		// Skip journal files
+		if strings.HasSuffix(name, ".db-wal") || strings.HasSuffix(name, ".db-shm") {
+			continue
+		}
+
+		slug := strings.TrimSuffix(name, ".db")
+		if !strings.HasPrefix(slug, prefix) {
+			continue
+		}
+
+		// Close pooled connection if any
+		appDBPool.mu.Lock()
+		if db, ok := appDBPool.dbs[slug]; ok {
+			db.Close()
+			delete(appDBPool.dbs, slug)
+		}
+		appDBPool.mu.Unlock()
+
+		// Remove .db and journal files
+		for _, suffix := range []string{".db", ".db-wal", ".db-shm"} {
+			path := filepath.Join(dir, slug+suffix)
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				slog.Debug("session db cleanup: failed to remove", "path", path, "error", err)
+			}
+		}
+
+		slog.Debug("session db cleanup: removed database", "slug", slug, "sessionId", sessionID)
+		cleaned++
+	}
+
+	return cleaned
+}
+
 // CleanupOrphanAppDBs removes .db files that have no matching .yaml file
 // and are older than the given age threshold. This catches orphaned databases
 // from deleted apps or abandoned in-chat previews.

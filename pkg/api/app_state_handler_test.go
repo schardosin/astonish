@@ -134,3 +134,69 @@ func TestCleanupOrphanAppDBs_EmptyDir(t *testing.T) {
 		t.Errorf("expected 0 cleaned, got %d", cleaned)
 	}
 }
+
+func TestCleanupSessionAppDBs(t *testing.T) {
+	appsDir := setupTestAppsDir(t)
+
+	sessionID := "37062e2d-631e-47c1-8a22-a98f8b52266a"
+
+	// Create session-scoped .db files (simulating slugified "session:{id}:{title}")
+	// Slugify("session:37062e2d-...:Todo App") = "session_37062e2d_631e_47c1_8a22_a98f8b52266a_todo_app"
+	sessionDB1 := filepath.Join(appsDir, "session_37062e2d_631e_47c1_8a22_a98f8b52266a_todo_app.db")
+	sessionDB1WAL := filepath.Join(appsDir, "session_37062e2d_631e_47c1_8a22_a98f8b52266a_todo_app.db-wal")
+	sessionDB2 := filepath.Join(appsDir, "session_37062e2d_631e_47c1_8a22_a98f8b52266a_weather_dash.db")
+
+	for _, p := range []string{sessionDB1, sessionDB1WAL, sessionDB2} {
+		if err := os.WriteFile(p, []byte("test"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Create a .db for a different session — should NOT be removed
+	otherDB := filepath.Join(appsDir, "session_aaaa_bbbb_cccc_other_app.db")
+	if err := os.WriteFile(otherDB, []byte("test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a saved app .db — should NOT be removed
+	savedDB := filepath.Join(appsDir, "my_saved_app.db")
+	if err := os.WriteFile(savedDB, []byte("test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cleaned := CleanupSessionAppDBs(sessionID)
+
+	if cleaned != 2 {
+		t.Errorf("expected 2 cleaned, got %d", cleaned)
+	}
+
+	// Session DBs should be gone
+	if _, err := os.Stat(sessionDB1); !os.IsNotExist(err) {
+		t.Error("session todo_app.db should have been deleted")
+	}
+	if _, err := os.Stat(sessionDB1WAL); !os.IsNotExist(err) {
+		t.Error("session todo_app.db-wal should have been deleted")
+	}
+	if _, err := os.Stat(sessionDB2); !os.IsNotExist(err) {
+		t.Error("session weather_dash.db should have been deleted")
+	}
+
+	// Other session's DB should still exist
+	if _, err := os.Stat(otherDB); err != nil {
+		t.Error("other session's .db should still exist")
+	}
+
+	// Saved app DB should still exist
+	if _, err := os.Stat(savedDB); err != nil {
+		t.Error("saved app .db should still exist")
+	}
+}
+
+func TestCleanupSessionAppDBs_EmptySessionID(t *testing.T) {
+	setupTestAppsDir(t)
+
+	cleaned := CleanupSessionAppDBs("")
+	if cleaned != 0 {
+		t.Errorf("expected 0 for empty sessionID, got %d", cleaned)
+	}
+}

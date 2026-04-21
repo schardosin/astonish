@@ -7,10 +7,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/apps"
@@ -571,8 +573,39 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		userMsg = agent.NewTimestampedUserContent(msg)
 	}
 
+	// Seed ActiveApp from system context when opening a saved app for refinement.
+	// This avoids making the LLM re-emit the component on the first turn.
+	var seededAppPreview map[string]any
+	if isNew && req.SystemContext != "" {
+		if code, title := extractAppFromSystemContext(req.SystemContext); code != "" {
+			appID := uuid.New().String()
+			activeApp := &agent.ActiveApp{
+				AppID:    appID,
+				Title:    title,
+				Code:     code,
+				Versions: []string{},
+				Version:  1,
+			}
+			chatAgent.SetActiveApp(sessionID, activeApp)
+			persistAppPreview(r.Context(), sessionService, sessionID, code, title, 1, appID)
+			seededAppPreview = map[string]any{
+				"code":    code,
+				"title":   title,
+				"version": 1,
+				"appId":   appID,
+			}
+		}
+	}
+
 	// Launch background runner — the agent runs independently of this HTTP request.
 	runner := newChatRunner(sessionID, isNew)
+
+	// If we seeded an app preview, emit it through the runner so the frontend
+	// shows the AppPreviewCard immediately (before the LLM responds).
+	if seededAppPreview != nil {
+		runner.emitEvent("app_preview", seededAppPreview)
+	}
+
 	registry := getChatRunnerRegistry()
 	registry.Register(sessionID, runner)
 
@@ -849,4 +882,27 @@ func makeLLMFuncFromModel(llm model.LLM) func(ctx context.Context, prompt string
 		}
 		return text, nil
 	}
+}
+
+// refinementCodeBlockRe matches the fenced code block after "### Current Source Code"
+// in the system context injected by the "Improve with AI" flow.
+var refinementCodeBlockRe = regexp.MustCompile("(?s)### Current Source Code\\s*```jsx\\s*\\n(.+?)\\n```")
+
+// extractAppFromSystemContext detects the "## Active App Refinement" marker
+// in the system context and extracts the app's current code and title.
+// Returns ("", "") if the system context does not contain a refinement payload.
+func extractAppFromSystemContext(systemContext string) (code, title string) {
+	if !strings.Contains(systemContext, "## Active App Refinement") {
+		return "", ""
+	}
+	matches := refinementCodeBlockRe.FindStringSubmatch(systemContext)
+	if len(matches) < 2 {
+		return "", ""
+	}
+	code = strings.TrimSpace(matches[1])
+	if code == "" {
+		return "", ""
+	}
+	title = extractComponentTitle(code)
+	return code, title
 }

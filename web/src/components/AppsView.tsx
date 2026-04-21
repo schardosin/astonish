@@ -125,16 +125,15 @@ export default function AppsView({ theme, onImproveApp }: AppsViewProps) {
     const systemContext = [
       '## Active App Refinement\n',
       `The user wants to improve a saved visual app called "${selectedApp.name}" (version ${selectedApp.version}).`,
-      'Apply the user\'s requested changes to the CURRENT source code below and output the COMPLETE updated component.',
+      'When the user describes changes, apply them to the CURRENT source code below and output the COMPLETE updated component.',
       'You MUST output the full component inside an ```astonish-app code fence — do NOT output a diff or partial snippet.',
       'Preserve all existing functionality unless the user explicitly asks to remove it.',
+      'Do NOT re-emit the current code. Just greet the user and ask what they would like to change.',
       '',
       '### Current Source Code\n',
       '```jsx',
       selectedApp.code,
       '```',
-      '',
-      'First, show the current app by outputting it unchanged inside an ```astonish-app fence, then ask the user what they would like to change.',
     ].join('\n')
     onImproveApp('I want to improve this app.', systemContext)
   }, [selectedApp, onImproveApp])

@@ -267,3 +267,49 @@ func TestReconstructActiveApp_NoAppPreviews(t *testing.T) {
 		t.Errorf("expected nil, got %+v", app)
 	}
 }
+
+func TestExtractAppFromSystemContext(t *testing.T) {
+	tests := []struct {
+		name       string
+		ctx        string
+		wantCode   string
+		wantTitle  string
+	}{
+		{
+			name:     "valid refinement context",
+			ctx:      "## Active App Refinement\n\nSome text.\n\n### Current Source Code\n\n```jsx\nfunction WeatherApp() {\n  return <div>Hello</div>\n}\nexport default WeatherApp\n```\n",
+			wantCode: "function WeatherApp() {\n  return <div>Hello</div>\n}\nexport default WeatherApp",
+			wantTitle: "Weather App",
+		},
+		{
+			name:     "no refinement marker",
+			ctx:      "Some random system context without the marker",
+			wantCode: "",
+			wantTitle: "",
+		},
+		{
+			name:     "refinement marker but no code block",
+			ctx:      "## Active App Refinement\n\nNo code here.",
+			wantCode: "",
+			wantTitle: "",
+		},
+		{
+			name:     "empty system context",
+			ctx:      "",
+			wantCode: "",
+			wantTitle: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code, title := extractAppFromSystemContext(tt.ctx)
+			if code != tt.wantCode {
+				t.Errorf("code = %q, want %q", code, tt.wantCode)
+			}
+			if title != tt.wantTitle {
+				t.Errorf("title = %q, want %q", title, tt.wantTitle)
+			}
+		})
+	}
+}

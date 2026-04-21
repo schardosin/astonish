@@ -120,10 +120,13 @@ func (c *RateLimitConfig) Close() {
 }
 
 // NewDefaultRateLimitConfig creates rate limiters with sensible defaults.
+// This is a single-user desktop app, not a public API — limits are generous
+// to avoid blocking normal UI usage (page loads fire 10-15 parallel requests,
+// each app preview iframe loads 3 assets, SSE streams hold connections, etc.)
 func NewDefaultRateLimitConfig() *RateLimitConfig {
 	return &RateLimitConfig{
 		Auth: NewRateLimiter(10, time.Minute),
-		API:  NewRateLimiter(120, time.Minute),
+		API:  NewRateLimiter(600, time.Minute),
 	}
 }
 
@@ -150,6 +153,20 @@ func RateLimitMiddleware(cfg *RateLimitConfig, next http.Handler) http.Handler {
 		// (JS bundles, CSS, images, sounds) simultaneously on page load, which
 		// would exhaust the API rate budget in a single burst.
 		if strings.HasPrefix(path, "/api/browser/vnc/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// App preview sandbox assets are exempt — every iframe loads sandbox HTML,
+		// runtime.js, and tailwind.js. Multiple app previews on screen multiply this.
+		if strings.HasPrefix(path, "/api/app-preview/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// SSE stream endpoints are exempt — they're long-lived connections (one
+		// per session), not repeated requests. Counting them would waste budget.
+		if strings.HasSuffix(path, "/stream") {
 			next.ServeHTTP(w, r)
 			return
 		}

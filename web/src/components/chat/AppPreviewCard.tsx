@@ -274,6 +274,7 @@ export default function AppPreviewCard({
         <AppPreview
           code={displayedData.code}
           maxHeight={fullscreen ? 9999 : 500}
+          stateId={displayedData.title || displayedData.appId || ''}
         />
       </div>
     </div>

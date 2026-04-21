@@ -104,6 +104,8 @@ window.onerror = function(msg, src, line, col, err) {
   // Active data subscriptions keyed by sourceId → array of setState callbacks
   var __dataSubscriptions = {};
   var __requestCounter = 0;
+  // App context — set by parent via set_context message
+  var __appName = '';
 
   function __genRequestId() {
     return 'req-' + (++__requestCounter) + '-' + Math.random().toString(36).substr(2, 6);
@@ -114,7 +116,7 @@ window.onerror = function(msg, src, line, col, err) {
     var msg = e.data;
     if (!msg || !msg.type) return;
 
-    if (msg.type === 'data_response' || msg.type === 'action_response' || msg.type === 'ai_response') {
+    if (msg.type === 'data_response' || msg.type === 'action_response' || msg.type === 'ai_response' || msg.type === 'state_response') {
       var cb = __dataCallbacks[msg.requestId];
       if (cb) {
         delete __dataCallbacks[msg.requestId];
@@ -250,6 +252,110 @@ window.onerror = function(msg, src, line, col, err) {
     }, [systemPrompt]);
   };
 
+  // ── useAppState hook ───────────────────────────────────────────────
+  // Provides per-app persistent SQLite database via the backend.
+  // Usage:
+  //   const db = useAppState();
+  //   db.exec('CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT)');
+  //   const { data, loading, error } = db.query('SELECT * FROM items');
+  //   await db.exec('INSERT INTO items (name) VALUES (?)', ['New item']);
+  //
+  // Global mutation counter — shared across all useAppState instances.
+  // Incremented on every db.exec(), causes all db.query() hooks to re-fetch.
+  var __stateVersion = { current: 0 };
+  var __stateVersionListeners = [];
+
+  function __notifyStateChange() {
+    __stateVersion.current++;
+    __stateVersionListeners.forEach(function(fn) { fn(__stateVersion.current); });
+  }
+
+  window.useAppState = function useAppState() {
+    // Subscribe to version changes for reactive re-fetching
+    var _v = React.useState(__stateVersion.current);
+    var setVersion = _v[1];
+
+    React.useEffect(function() {
+      __stateVersionListeners.push(setVersion);
+      return function() {
+        var idx = __stateVersionListeners.indexOf(setVersion);
+        if (idx >= 0) __stateVersionListeners.splice(idx, 1);
+      };
+    }, [setVersion]);
+
+    var execFn = React.useCallback(function(sql, params) {
+      return __requestFromParent('state_exec', {
+        appName: __appName,
+        sql: sql,
+        params: params || []
+      }).then(function(resp) {
+        if (resp.error) throw new Error(resp.error);
+        __notifyStateChange();
+        return resp.data;
+      });
+    }, []);
+
+    var queryFn = React.useCallback(function(sql, params) {
+      // queryFn is the raw async query — used internally by the query hook
+      return __requestFromParent('state_query', {
+        appName: __appName,
+        sql: sql,
+        params: params || []
+      }).then(function(resp) {
+        if (resp.error) throw new Error(resp.error);
+        return resp.data;
+      });
+    }, []);
+
+    // query() returns { data, loading, error } and reactively re-fetches on mutations
+    var queryHook = React.useCallback(function useQuery(sql, params) {
+      var _d = React.useState(null);   var data = _d[0];    var setData = _d[1];
+      var _l = React.useState(true);   var loading = _l[0]; var setLoading = _l[1];
+      var _e = React.useState(null);   var err = _e[0];     var setErr = _e[1];
+      var genRef = React.useRef(0);
+      var versionRef = React.useRef(-1);
+
+      // Subscribe to version changes
+      var _ver = React.useState(__stateVersion.current);
+      var version = _ver[0]; var setVer = _ver[1];
+
+      React.useEffect(function() {
+        __stateVersionListeners.push(setVer);
+        return function() {
+          var idx = __stateVersionListeners.indexOf(setVer);
+          if (idx >= 0) __stateVersionListeners.splice(idx, 1);
+        };
+      }, [setVer]);
+
+      // Serialize params for dependency tracking
+      var paramsKey = JSON.stringify(params || []);
+
+      React.useEffect(function() {
+        if (!sql) return;
+        var gen = ++genRef.current;
+        setLoading(true);
+        setErr(null);
+        __requestFromParent('state_query', {
+          appName: __appName,
+          sql: sql,
+          params: params || []
+        }).then(function(resp) {
+          if (gen !== genRef.current) return;
+          if (resp.error) {
+            setErr(resp.error);
+          } else {
+            setData(resp.data);
+          }
+          setLoading(false);
+        });
+      }, [sql, paramsKey, version]);
+
+      return { data: data, loading: loading, error: err };
+    }, []);
+
+    return { exec: execFn, query: queryHook };
+  };
+
   // Make hooks available via require('astonish') too — added to modules below
   // ── End data hooks ─────────────────────────────────────────────────
 
@@ -264,7 +370,7 @@ window.onerror = function(msg, src, line, col, err) {
     'react-dom/client': window.ReactDOM,
     'recharts': window.Recharts || {},
     'lucide-react': window.LucideReact || {},
-    'astonish': { useAppData: window.useAppData, useAppAction: window.useAppAction, useAppAI: window.useAppAI },
+    'astonish': { useAppData: window.useAppData, useAppAction: window.useAppAction, useAppAI: window.useAppAI, useAppState: window.useAppState },
   };
 
   function sandboxRequire(name) {
@@ -355,6 +461,10 @@ window.onerror = function(msg, src, line, col, err) {
       document.body.className = isLight ? 'light' : 'dark';
       document.documentElement.style.background = isLight ? '#fafbfe' : '#0b1222';
       document.body.style.color = isLight ? '#1a1a1a' : '#e5e5e5';
+    }
+
+    if (msg.type === 'set_context') {
+      if (msg.appName) __appName = msg.appName;
     }
   });
 

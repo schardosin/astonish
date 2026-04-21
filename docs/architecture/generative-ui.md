@@ -4,7 +4,7 @@
 
 Generative UI brings in-chat UI generation to Astonish -- the AI writes React components in response to user requests, renders them live in a sandboxed iframe, and supports iterative refinement through conversation. This is similar to what Claude Artifacts, ChatGPT Canvas, and Vercel v0 provide: the user describes a UI ("build me a sales dashboard"), the AI generates a working React component, and it renders immediately in the chat. The user can then refine it ("add a search bar", "make the chart a bar chart") through follow-up messages.
 
-Beyond ephemeral chat previews, generated UIs can be saved as **Apps** -- a new top-level concept alongside Flows, Fleet, and Drill. Saved apps persist as YAML definitions in `~/.config/astonish/apps/`, appear in a dedicated Apps tab in Studio, and can fetch live data through the Go backend proxy (leveraging existing MCP tools and HTTP APIs). This creates a natural progression: prototype in chat, refine interactively, save as a reusable app, connect to live data.
+Beyond ephemeral chat previews, generated UIs can be saved as **Apps** -- a new top-level concept alongside Flows, Fleet, and Drill. Saved apps persist as YAML definitions in `~/.config/astonish/apps/`, appear in a dedicated Apps tab in Studio, and can fetch live data through the Go backend proxy (leveraging existing MCP tools and HTTP APIs). Apps can also make AI calls using the same LLM as the main agent. This creates a natural progression: prototype in chat, refine interactively, save as a reusable app, connect to live data, add AI capabilities.
 
 ## Key Design Decisions
 
@@ -19,7 +19,7 @@ JSX generation was chosen because:
 
 - The expressiveness ceiling is dramatically higher. A component schema can handle dashboards and forms but fails for creative UIs (games, visualizations, interactive tutorials, custom layouts).
 - Modern LLMs are excellent at writing React code. Claude, GPT-4, and similar models produce working React components reliably.
-- The sandboxed iframe provides security isolation equivalent to what Claude Artifacts uses -- the generated code cannot access the parent page, cookies, or local storage.
+- The sandboxed iframe provides security isolation -- the generated code runs in a restricted context with communication limited to `postMessage`.
 - The same code that renders in the preview can be saved directly as the app source. No translation layer between "preview format" and "storage format."
 
 The tradeoff is that generated code can crash. This is mitigated by an error boundary inside the iframe that catches runtime errors and reports them to the parent, allowing the AI to fix the issue in the refinement loop.
@@ -30,16 +30,19 @@ The generated JSX needs a runtime environment. Three options were evaluated:
 
 - **Full Vite dev server per app**: Most compatible but heavyweight. Each preview would spawn a Node.js process, use ~100MB RAM, and take seconds to start.
 - **Incus container sandbox**: Maximum isolation but requires the sandbox infrastructure. Too heavy for a UI preview that just needs to render React.
-- **Sucrase + iframe sandbox**: Sucrase is a 50KB JSX-to-JS compiler that runs in the browser. Combined with an iframe using `sandbox="allow-scripts"`, it provides fast compilation (~5ms) with strong isolation.
+- **Sucrase + iframe sandbox**: Sucrase is a lightweight JSX-to-JS compiler that runs in the browser. Combined with an iframe using `sandbox="allow-scripts allow-same-origin"`, it provides fast compilation (~5ms) with isolation.
 
 Sucrase was chosen because:
 
-- It compiles JSX to `React.createElement` calls without a full Babel toolchain. No AST plugins, no module resolution -- just JSX transformation.
-- The iframe's `sandbox` attribute restricts the generated code: no access to parent DOM, no `fetch` to arbitrary origins (communication goes through `postMessage`), no navigation, no popups.
-- The `srcdoc` attribute embeds the entire runtime as a self-contained HTML document, avoiding any network dependency for the preview itself.
+- It compiles JSX to `React.createElement` calls without a full Babel toolchain. Combined with the `imports` transform, it also converts ES module `import`/`export` syntax to `require()`/`module.exports`, which the sandbox resolves through a custom module system.
+- The iframe's `sandbox` attribute restricts the generated code: no navigation, no popups, no form submission. Communication with the parent page is limited to `postMessage`.
 - Cold start is effectively zero -- Sucrase compiles on the main thread in single-digit milliseconds for typical component sizes.
 
-Libraries (React, Tailwind, Lucide, Recharts) are loaded from CDN in the iframe's HTML template. This avoids bundling them into the main Astonish UI bundle while ensuring they're cached across preview renders.
+The iframe sandbox uses `sandbox="allow-scripts allow-same-origin"`. The `allow-same-origin` is required so the iframe can:
+- Load runtime scripts (`/api/app-preview/runtime.js`, `/api/app-preview/tailwind.js`) from the same origin
+- Send authentication cookies with API requests relayed through the parent page
+
+Libraries (React 19, ReactDOM, Sucrase, Recharts, Lucide React) are **pre-bundled into a single IIFE** via Vite during the build step (`vite.config.sandbox.js`). The resulting `sandbox-runtime.js` file is embedded into the Go binary and served at `/api/app-preview/runtime.js`. Tailwind CSS v4's browser runtime is similarly served at `/api/app-preview/tailwind.js`. This avoids any CDN dependency -- the sandbox works fully offline.
 
 ### Why a New "Apps" Concept Instead of Extending Flows
 
@@ -58,13 +61,13 @@ The Apps tab sits alongside Chat, Flows, Fleet, and Drill in the top navigation,
 
 Apps need live data -- database queries, API calls, MCP tool invocations. Three options were considered:
 
-1. **Direct fetch from iframe**: The generated code calls `fetch()` directly. Simple but fundamentally broken: the iframe sandbox restricts network access, CORS blocks most APIs, and there's no way to inject authentication tokens securely.
+1. **Direct fetch from iframe**: The generated code calls `fetch()` directly. Simple but fundamentally broken: the sandbox's restricted context makes cross-origin requests unreliable, CORS blocks most APIs, and there's no way to inject authentication tokens securely.
 2. **Proxy through Go backend**: The iframe sends data requests via `postMessage` to the parent page, which calls a Go API endpoint, which executes the actual request. Results flow back through the same channel.
 3. **Hybrid**: Backend proxy for MCP/tool data, direct fetch for public APIs.
 
 Backend proxy was chosen because:
 
-- **Security**: API keys and credentials never reach the iframe. The Go backend uses the existing credential system (`{{CREDENTIAL:name:field}}` substitution) to inject secrets server-side.
+- **Security**: API keys and credentials never reach the iframe. The Go backend resolves credentials from the credential store server-side (via `@credential-name` suffix on sourceId URLs).
 - **MCP integration**: The proxy can invoke any registered MCP tool, giving apps access to databases, GitHub, Slack, and every other MCP server configured in Astonish -- without the iframe needing to know anything about MCP.
 - **CORS elimination**: The Go backend makes server-side HTTP requests, bypassing browser CORS restrictions entirely.
 - **Audit trail**: All data requests go through the backend, providing a single point for logging, rate limiting, and access control.
@@ -98,15 +101,22 @@ LLM generates JSX with ```astonish-app fence marker
 SSE stream: text events contain the fenced code block
   |
   v
-StudioChat.tsx: detects ```astonish-app in streaming text
+chat_runner.go: detects ```astonish-app, extracts code, emits app_preview SSE event
+  |
+  v
+StudioChat.tsx: receives app_preview event, creates AppPreviewMessage
+  |
+  v
+AppPreviewCard.tsx: renders card with toolbar (fullscreen, code, save)
   |
   v
 AppPreview.tsx: renders in sandboxed iframe
   |
-  +-- Sucrase compiles JSX → JS
+  +-- Sends code via postMessage to iframe
+  +-- Sucrase compiles JSX → JS (with imports + typescript transforms)
   +-- React 19 renders the component
-  +-- Tailwind CSS styles it
-  +-- Error boundary catches crashes
+  +-- Tailwind CSS v4 browser runtime styles it
+  +-- Error boundary catches crashes and reports back via postMessage
   |
   v
 User sees a working calculator in the chat
@@ -114,52 +124,56 @@ User sees a working calculator in the chat
 
 #### Iframe Sandbox Runtime
 
-The `AppPreview` component constructs an iframe with a self-contained HTML document via `srcdoc`:
+The `AppPreview` component creates an iframe pointing to `/api/app-preview/sandbox`, served by `AppPreviewSandboxHandler` in Go. The sandbox HTML loads two pre-bundled scripts from the same origin:
 
 ```html
 <!DOCTYPE html>
 <html>
 <head>
-  <script src="https://cdn.jsdelivr.net/npm/react@19/umd/react.production.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/react-dom@19/umd/react-dom.production.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/sucrase@3/dist/sucrase.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/recharts@2/umd/Recharts.js"></script>
-  <link href="https://cdn.jsdelivr.net/npm/@tailwindcss/cdn@4" rel="stylesheet">
-  <!-- Lucide icons injected as a global object -->
+<script src="/api/app-preview/runtime.js"></script>
+<script src="/api/app-preview/tailwind.js"></script>
+<style type="text/tailwindcss">
+  @theme { --color-bg-app: #0b1222; }
+</style>
+<style>
+  /* Force transparent root to prevent LLM-generated dark backgrounds from covering the themed sandbox background */
+  #root > *:first-child { background-color: transparent !important; min-height: auto !important; }
+</style>
 </head>
-<body>
-  <div id="root"></div>
-  <script>
-    window.addEventListener('message', (e) => {
-      if (e.data.type === 'render') {
-        try {
-          const code = Sucrase.transform(e.data.code, {
-            transforms: ['jsx'],
-            jsxPragma: 'React.createElement',
-            jsxFragmentPragma: 'React.Fragment'
-          }).code;
-          const module = {};
-          new Function('React', 'module', 'exports', ...libs, code)(
-            React, module, module, ...libValues
-          );
-          const Component = module.exports.default || module.exports;
-          ReactDOM.createRoot(document.getElementById('root')).render(
-            React.createElement(Component)
-          );
-          window.parent.postMessage({ type: 'render_success', height: document.body.scrollHeight }, '*');
-        } catch (err) {
-          window.parent.postMessage({ type: 'render_error', error: err.message, stack: err.stack }, '*');
-        }
-      }
-    });
-  </script>
+<body class="dark">
+<div id="root"></div>
+<div id="error-display"></div>
+<script>
+  // Bootstrap: validate runtime globals, set up module system, listen for postMessage
+  // ...
+</script>
 </body>
 </html>
 ```
 
-The iframe uses these sandbox attributes:
-- `sandbox="allow-scripts"`: Permits JavaScript execution but blocks top-navigation, popups, form submission, and same-origin access.
-- No `allow-same-origin`: The iframe cannot access the parent page's DOM, cookies, localStorage, or session data.
+The `runtime.js` bundle is a single IIFE built by Vite (`vite.config.sandbox.js`) that contains React 19, ReactDOM, Sucrase, Recharts, and Lucide React icons. The `tailwind.js` file is the `@tailwindcss/browser` runtime (~271KB) that provides Tailwind CSS v4 processing directly in the browser.
+
+When the parent sends a `render` message, the sandbox:
+
+1. Pre-processes the code: if no `export default` is found, appends one for the last PascalCase function.
+2. Compiles with Sucrase using `transforms: ['jsx', 'typescript', 'imports']`:
+   - `jsx` converts JSX to `React.createElement` calls
+   - `typescript` strips type annotations (LLMs sometimes generate TypeScript)
+   - `imports` converts `import`/`export` to `require()`/`module.exports`
+3. Executes the compiled code via `new Function()`, with a custom `require()` that resolves module names to the pre-loaded globals.
+4. Renders the default-exported component into `#root` using `ReactDOM.createRoot`.
+5. Reports the content height back to the parent via `postMessage`.
+
+The custom module system maps these module names:
+- `'react'` → `window.React`
+- `'react-dom'`, `'react-dom/client'` → `window.ReactDOM`
+- `'recharts'` → `window.Recharts`
+- `'lucide-react'` → `window.LucideReact`
+- `'astonish'` → `{ useAppData, useAppAction, useAppAI }`
+
+The iframe uses `sandbox="allow-scripts allow-same-origin"`:
+- `allow-scripts`: Permits JavaScript execution.
+- `allow-same-origin`: Required for loading sub-resources from the same origin and sending auth cookies. Blocks top-navigation, popups, and form submission.
 
 #### SSE Event: `app_preview`
 
@@ -167,21 +181,23 @@ A new SSE event type carries the generated app to the frontend:
 
 ```
 event: app_preview
-data: {"code":"function Calculator() { ... }","title":"Calculator","description":"A basic calculator","version":1}
+data: {"code":"function Calculator() { ... }","title":"Calculator","description":"","version":1,"appId":"550e8400-e29b-41d4-a716-446655440000"}
 ```
 
-Backend struct:
+The event includes an `appId` (UUID) for stable cross-turn matching during iterative refinement:
 
 ```go
-type AppPreviewData struct {
-    Code        string `json:"code"`
-    Title       string `json:"title"`
-    Description string `json:"description"`
-    Version     int    `json:"version"`
+// Emitted as map[string]any in chat_runner.go
+map[string]any{
+    "code":    code,
+    "title":   title,
+    "description": "",
+    "version": version,
+    "appId":   appID,
 }
 ```
 
-The event is emitted when the backend detects an `astonish-app` fenced code block in the LLM's streaming response. Detection happens in the SSE text handler: accumulated text is scanned for the fence markers, and when a complete block is found, the `app_preview` event is sent alongside the text event.
+The event is emitted when the backend detects an `astonish-app` fenced code block in the LLM's streaming response. Detection happens in `chat_runner.go`: accumulated text is scanned for the fence markers, and when a complete block is found, the `app_preview` event is sent alongside the text event.
 
 #### Frontend Message Type
 
@@ -192,19 +208,22 @@ interface AppPreviewMessage {
     title: string
     description: string
     version: number
+    appId?: string  // Stable UUID for cross-turn matching
 }
 ```
 
-This is added to the `ChatMsg` union in `chatTypes.ts`. In `StudioChat.tsx`, the `app_preview` SSE event handler creates an `AppPreviewMessage` and appends it to the message list. The message renderer displays the `AppPreview` component with a toolbar: **Open Fullscreen**, **View Code**, **Save as App**.
+This is added to the `ChatMsg` union in `chatTypes.ts`. In `StudioChat.tsx`, the `app_preview` SSE event handler creates an `AppPreviewMessage` and appends it to the message list. The `AppPreviewCard` component renders the preview with a toolbar: **Fullscreen**, **Code**, **Save**, and version navigation.
 
 #### Code Fence Detection
 
-The LLM is instructed (via system prompt injection) to wrap generated UI code in a specific fence:
+The LLM is instructed (via the system prompt) to wrap generated UI code in a specific fence:
 
 ````
 ```astonish-app
-function MyComponent() {
-  const [count, setCount] = React.useState(0);
+import React, { useState } from 'react';
+
+export default function MyComponent() {
+  const [count, setCount] = useState(0);
   return (
     <div className="p-4">
       <button onClick={() => setCount(c => c + 1)}>Count: {count}</button>
@@ -214,38 +233,33 @@ function MyComponent() {
 ```
 ````
 
-The frontend detects this fence in the streaming text and:
+The backend detects this fence in the streaming text and:
 1. Extracts the code content.
-2. Creates an `AppPreviewMessage` and inserts it into the message list.
-3. Hides the raw code block from the markdown rendering (replaces it with a reference to the rendered preview).
+2. Emits an `app_preview` SSE event with the code, auto-detected title, and version.
+3. The frontend shows a compact `AppCodeIndicator` in place of the raw code block in the markdown rendering.
 
 This dual-path approach (code fence in text + explicit SSE event) ensures the preview works whether the AI uses a tool or outputs inline code.
 
 #### System Prompt for UI Generation
 
-When the AI detects a UI generation intent (via the existing intent classification system or an explicit `/app` command), a supplementary system prompt is injected:
+The system prompt uses a three-tier architecture:
 
-```
-You can generate interactive React components that render live in the user's browser.
+- **Tier 1 (always present)**: Critical rules embedded in the static system prompt (`system_prompt_builder.go`). Includes the `astonish-app` fence format, available libraries, import patterns, `useAppData`/`useAppAction`/`useAppAI` hook syntax, and the "no fetch()" rule.
+- **Tier 2 (vector search)**: Comprehensive guidance stored as a guidance document (`guidance_content.go`) and retrieved via memory search for "generative-ui". Includes full hook documentation, code examples, design system patterns, and refinement instructions.
 
-When creating a UI component, wrap your code in an ```astonish-app fence. Rules:
-- Write a single default-exported React function component
-- React is available globally (use React.useState, React.useEffect, etc.)
-- Tailwind CSS v4 is available for styling
-- Lucide icons: import from the global `icons` object (e.g., icons.Search, icons.Plus)
-- Recharts: BarChart, LineChart, PieChart, etc. are available globally
-- Do NOT use import statements -- all libraries are pre-loaded
-- Use React.useState and React.useEffect for state and side effects
-- The component should be self-contained and immediately renderable
-```
+Key differences from the original design:
+- LLMs use standard ES `import` statements (`import React, { useState } from 'react'`), not global variables. Sucrase's `imports` transform converts these to `require()` calls.
+- Lucide icons are imported from `'lucide-react'`: `import { Search, Plus } from 'lucide-react'`
+- Recharts components are imported from `'recharts'`: `import { BarChart, Bar, XAxis, YAxis } from 'recharts'`
+- Data hooks are imported from `'astonish'`: `import { useAppData, useAppAI } from 'astonish'`
 
 #### Preview UX in Chat
 
-The app preview renders in the chat as an elevated card:
+The app preview renders in the chat as an elevated card (`AppPreviewCard`):
 
 ```
 ┌─────────────────────────────────────────────┐
-│  ◆ Calculator                    [⛶] [</>] [💾] │
+│  ◆ Calculator                [⛶] [</>] [Save] │
 │─────────────────────────────────────────────│
 │                                             │
 │        ┌──────────────────┐                │
@@ -259,11 +273,11 @@ The app preview renders in the chat as an elevated card:
 ```
 
 Toolbar actions:
-- **⛶ Fullscreen**: Opens the iframe in a modal overlay filling the viewport.
-- **</> Code**: Toggles a CodeMirror panel showing the JSX source.
-- **💾 Save**: Triggers the save-as-app flow (Phase 3).
+- **⛶ Fullscreen**: Opens the iframe in a fixed overlay filling the viewport.
+- **</> Code**: Toggles an inline code panel showing the JSX source.
+- **Save**: Opens an inline name input bar (pre-filled with auto-detected title), then triggers the save flow.
 
-The preview card auto-sizes to the iframe's content height (communicated via `postMessage` from the iframe after render). Maximum height in the chat is 500px with scroll; fullscreen removes this limit.
+The preview card auto-sizes to the iframe's content height (communicated via `postMessage` from the iframe after render). Maximum height in the chat is 500px; fullscreen removes this limit.
 
 ### Phase 2: Iterative Refinement
 
@@ -273,24 +287,21 @@ The user can modify the generated app through conversation, with each iteration 
 User: "Make the header blue and add a search bar"
   |
   v
-ChatAgent: detects active app context
+ChatAgent: ClassifyAppIntent() determines this is a refinement request (via LLM classification)
   |
   v
 System prompt includes current JSX source as context:
-  "The user is refining an app. Current source code:
-   ```
-   function Dashboard() { ... }
-   ```
+  "Active App Refinement — current source code: [code]
    Apply the requested changes and output the updated component."
   |
   v
 LLM generates updated JSX
   |
   v
-Frontend: updates the existing AppPreviewMessage (same card, new version)
+chat_runner.go: detects updated code, emits app_preview with incremented version and same appId
   |
   v
-Iframe re-renders with new code (smooth transition)
+Frontend: AppPreviewCard shows new version, version navigation allows browsing history
 ```
 
 #### Active App Tracking
@@ -298,15 +309,20 @@ Iframe re-renders with new code (smooth transition)
 The chat session maintains state for the "active app" being refined:
 
 ```go
+// pkg/agent/chat_app_refine.go
 type ActiveApp struct {
-    Code     string   `json:"code"`
-    Title    string   `json:"title"`
-    Versions []string `json:"versions"` // history of code versions
-    Version  int      `json:"version"`
+    AppID         string   `json:"appId"`         // Stable UUID for cross-turn matching
+    Code          string   `json:"code"`          // Current version's source code
+    Title         string   `json:"title"`         // Auto-detected component name
+    Versions      []string `json:"versions"`      // History of previous code versions
+    Version       int      `json:"version"`       // Current version number
+    Modifications []string `json:"modifications"` // History of user change requests
 }
 ```
 
-This is stored in the ChatAgent's per-session state (similar to `pendingDistillReview`). When the user sends a follow-up message while an app is active, the current source code is injected into the LLM context so it can apply incremental changes.
+This is stored in the ChatAgent's per-session state (keyed by session ID, protected by a mutex). When the user sends a follow-up message while an app is active, the current source code is injected into the LLM context so it can apply incremental changes.
+
+On the first turn of an "Improve with AI" session (coming from the Apps tab), the backend **seeds** the `ActiveApp` and emits an `app_preview` SSE event immediately -- before the LLM responds -- so the user sees the app card right away. A duplicate detection guard prevents the LLM from re-emitting the same code.
 
 #### Version History
 
@@ -320,27 +336,29 @@ Each refinement increments the version counter and stores the previous code in t
 └─────────────────────────────────────────────┘
 ```
 
-Users can browse previous versions. Clicking a previous version restores that code in the preview. Sending a new message from an older version creates a branch (the new version is based on the displayed version, not the latest).
+Users can browse previous versions. Clicking a previous version restores that code in the preview.
 
 #### Session Persistence
 
 App previews are persisted to the session JSONL transcript using the same prefix-marker pattern as distill previews:
 
 ```
-[app_preview]{"code":"...","title":"...","description":"...","version":3}
+[app_preview]{"code":"...","title":"...","description":"...","version":3,"appId":"..."}
 ```
 
-On session reload, `tryParseAppPreviewMessage()` detects these prefixes and reconstructs `AppPreviewMessage` objects. The version history is reconstructed by collecting all `app_preview` entries with the same title.
+On session reload, `tryParseAppPreviewMessage()` detects these prefixes and reconstructs `AppPreviewMessage` objects. The version history is reconstructed by collecting all `app_preview` entries with the same `appId`.
 
 #### Refinement Intent Detection
 
-When a pending active app exists and the user sends a message, the system must determine if the message is:
+When an active app exists and the user sends a message, the system determines the intent using **LLM-first classification** (`ClassifyAppIntent` in `chat_app_refine.go`). The only early returns are for magic string markers sent by the UI:
 
-1. **App refinement**: "Make the header blue" → update the app.
-2. **App action**: "Save this app" → trigger save flow.
-3. **Unrelated**: "What's the weather?" → normal chat, deactivate the app context.
+- `__app_save__` or `__app_save__:<name>` → save intent (from the Save button)
+- `__app_done__` → done intent
 
-This uses a lightweight LLM classification call (similar to `ClassifyDistillReviewIntent()`) or keyword heuristics for obvious cases ("save", "done", "cancel").
+Everything else goes to the LLM, which classifies the message as one of:
+1. **Refine**: "Make the header blue" → update the app
+2. **Save**: "Save this app as Sales Dashboard" → trigger save flow
+3. **Unrelated**: "What's the weather?" → normal chat, deactivate app context
 
 ### Phase 3: Apps Persistence & Management
 
@@ -357,9 +375,14 @@ updated_at: 2026-04-20T10:30:00Z
 session_id: abc-123-def-456  # originating chat session
 
 code: |
-  function SalesDashboard() {
-    const [data, setData] = React.useState([]);
-    const [filter, setFilter] = React.useState('all');
+  import React, { useState } from 'react';
+  import { useAppData } from 'astonish';
+  import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer } from 'recharts';
+
+  export default function SalesDashboard() {
+    const { data, loading } = useAppData('mcp:postgres-mcp/query', {
+      args: { query: "SELECT * FROM sales ORDER BY date DESC LIMIT 100" }
+    });
     // ... full JSX component source
   }
 
@@ -406,29 +429,38 @@ type DataSource struct {
 
 Storage location: `~/.config/astonish/apps/{app_name}.yaml`
 
+All CRUD operations (`SaveApp`, `LoadApp`, `DeleteApp`, `ListApps`, `Slugify`) are in `pkg/apps/types.go`.
+
 #### API Endpoints
 
 | Method | Endpoint | Purpose |
 |---|---|---|
 | `GET` | `/api/apps` | List all saved apps (name, description, updatedAt) |
-| `GET` | `/api/apps/:name` | Get full app definition including code |
-| `PUT` | `/api/apps/:name` | Create or update an app |
-| `DELETE` | `/api/apps/:name` | Delete an app |
-| `POST` | `/api/apps/:name/data` | Proxy a data request for a running app |
+| `GET` | `/api/apps/{name}` | Get full app definition including code |
+| `PUT` | `/api/apps/{name}` | Create or update an app |
+| `DELETE` | `/api/apps/{name}` | Delete an app |
+| `GET` | `/api/apps/{name}/stream` | SSE streaming for data source polling |
+| `POST` | `/api/apps/data` | Proxy a data request (sourceId + args in body) |
+| `POST` | `/api/apps/action` | Proxy an action/mutation request |
+| `POST` | `/api/apps/ai` | Proxy an AI/LLM request |
+| `GET` | `/api/app-preview/sandbox` | Serve the sandbox HTML page |
+| `GET` | `/api/app-preview/runtime.js` | Serve the pre-bundled sandbox runtime |
+| `GET` | `/api/app-preview/tailwind.js` | Serve the Tailwind CSS browser runtime |
 
-These are registered in `pkg/api/server.go` alongside the existing route groups.
+The `/api/apps/data`, `/api/apps/action`, and `/api/apps/ai` routes are registered **before** `/api/apps/{name}` to avoid the Gorilla Mux wildcard capturing them. All routes are registered in `pkg/api/handlers.go`.
 
 #### Save Flow (Chat → App)
 
-When the user clicks "Save as App" or says "save this app":
+When the user clicks the "Save" button on the `AppPreviewCard`:
 
-1. A save dialog appears (name, description -- pre-filled from the AI's suggestions).
-2. The frontend calls `PUT /api/apps/:name` with the current code, title, description, data sources, and originating session ID.
-3. The backend writes the YAML to `~/.config/astonish/apps/{name}.yaml`.
-4. An `app_saved` SSE event confirms the save.
-5. A DOM event (`astonish:apps-updated`) refreshes the Apps tab listing.
+1. An inline name input bar appears (pre-filled with the auto-detected component title).
+2. The user confirms (Enter or click Save), which sends `__app_save__:<name>` as a chat message.
+3. The backend's `ClassifyAppIntent` detects the save intent, extracting the custom name.
+4. The backend calls `apps.SaveApp()` to write the YAML to `~/.config/astonish/apps/{name}.yaml`.
+5. An `app_saved` SSE event confirms the save (with `name` and `path`).
+6. A DOM event (`astonish:apps-updated`) refreshes the Apps tab listing.
 
-This mirrors the distill save flow almost exactly: preview in chat → confirm → save to disk → notification.
+Users can also save via natural language ("save this as Sales Dashboard"), which the LLM intent classifier routes to the save flow.
 
 #### Apps Tab (Frontend)
 
@@ -442,44 +474,60 @@ The Apps view (`AppsView.tsx`) has two sub-views:
 
 **List View:**
 - Grid of saved apps with name, description, last updated
-- Search and filter
-- Click to run, edit, or delete
+- Click to run or delete
 
 **Runner View:**
-- Full-viewport iframe rendering of the app
-- Toolbar: "Edit in Chat" (opens a new chat session with the app's code as context), "View Code", "Data Sources", "Settings"
-- Data sources are active (polling or streaming via the backend proxy)
+- Full-viewport iframe rendering of the app (with deep-linking: `#/apps/AppName`)
+- Toolbar: "Improve with AI" (opens a new chat session with the app's code as context), "View Code" (toggles a bottom drawer with CodeMirror JSX editor), "Delete"
+- Data sources are active (polling via the parent-side relay)
+- Page refresh preserves the selected app via URL hash
 
 ### Phase 4: Live Data & Backend Proxy
 
 Apps fetch data through the Go backend, with support for MCP tools, HTTP APIs, and real-time updates.
+
+#### Convention-Based Routing
+
+The primary mechanism for data access is **convention-based sourceId routing**. The `sourceId` string passed to `useAppData` or `useAppAction` determines how the backend resolves the request:
+
+| Prefix | Format | Example | Backend Action |
+|---|---|---|---|
+| `mcp:` | `mcp:<server>/<tool>` | `mcp:postgres-mcp/query` | Invoke MCP tool via `mcp.InvokeTool()` |
+| `http:` | `http:<METHOD>:<url>` | `http:GET:https://api.example.com/data` | Server-side HTTP request |
+| `http:` | `http:<METHOD>:<url>@<cred>` | `http:GET:https://api.example.com/data@my-key` | HTTP request with credential auth |
+| `static:` | `static:<key>` | `static:config` | Return static data from app's DataSource config |
+
+When a `sourceId` doesn't match any convention prefix and an `appName` is provided, the backend falls back to looking up the app's saved `DataSources` YAML config for a matching `id`.
+
+#### Credential Resolution
+
+Credentials are resolved server-side using the `@credential-name` suffix convention. A regex (`@([a-zA-Z][a-zA-Z0-9_-]*)$`) extracts the credential name from the end of the URL, ensuring it doesn't conflict with `@` symbols in HTTP basic auth URLs.
+
+The credential store (`pkg/credentials/store.go`) resolves the name to a header key/value pair via `store.Resolve(name)`. This supports API keys, Bearer tokens, Basic auth, and OAuth (client_credentials and authorization_code with auto-refresh). Credentials never reach the iframe.
 
 #### Data Request Flow
 
 ```
 App (iframe)
   |
-  | postMessage({ type: 'data_request', sourceId: 'sales_data', requestId: 'req-1' })
+  | useAppData('mcp:postgres-mcp/query', { args: { query: 'SELECT ...' } })
+  |   → postMessage({ type: 'data_request', sourceId: 'mcp:postgres-mcp/query', requestId: 'req-1', args: {...} })
   |
   v
 Parent page (AppPreview.tsx)
   |
-  | POST /api/apps/:name/data { sourceId: 'sales_data', requestId: 'req-1' }
+  | POST /api/apps/data { sourceId: 'mcp:postgres-mcp/query', args: {...}, requestId: 'req-1' }
   |
   v
-Go backend (app_data_handler.go)
+Go backend (app_data_handler.go) → resolveDataSource()
   |
-  +-- type: mcp_tool → invoke MCP tool via existing infrastructure
-  |     - Look up server from config
-  |     - Call tool with args
-  |     - Return result as JSON
-  |
-  +-- type: http_api → server-side HTTP request
-  |     - Apply credential substitution to URL/headers
-  |     - Make request, return response body
+  +-- "mcp:" prefix → resolveMCPSource() → mcp.InvokeTool()
+  +-- "http:" prefix → resolveHTTPSource() → server-side HTTP (with optional @credential auth)
+  +-- "static:" prefix → resolveStaticSource() → return from app YAML config
+  +-- fallback → resolveAppDataSource() → look up in saved app's DataSources
   |
   v
-Response flows back: backend → HTTP → parent → postMessage → iframe
+Response flows back: backend → JSON → parent → postMessage({ type: 'data_response' }) → iframe
 ```
 
 #### postMessage Protocol
@@ -490,188 +538,159 @@ Messages between the iframe and parent page use a typed protocol:
 
 | Message Type | Fields | Purpose |
 |---|---|---|
-| `render_success` | `height` | Component rendered, report content height |
+| `sandbox_ready` | (none) | Sandbox initialized, ready to receive code |
+| `render_success` | `height` | Component rendered successfully, report content height |
 | `render_error` | `error`, `stack` | Compilation or runtime error |
 | `data_request` | `sourceId`, `requestId`, `args` | Request data from a source |
-| `action_request` | `actionId`, `requestId`, `payload` | Trigger a backend action |
+| `action_request` | `actionId`, `requestId`, `payload` | Trigger a backend action (mutation) |
+| `ai_request` | `prompt`, `system`, `context`, `requestId` | Request an AI/LLM call |
+| `data_subscribe` | `sourceId`, `args`, `interval` | Start polling a data source |
+| `data_unsubscribe` | `sourceId` | Stop polling a data source |
 
 **Parent → Iframe:**
 
 | Message Type | Fields | Purpose |
 |---|---|---|
 | `render` | `code` | Send JSX source to compile and render |
+| `theme` | `mode` | Light/dark theme sync (`'light'` or `'dark'`) |
 | `data_response` | `requestId`, `data`, `error` | Response to a data request |
-| `data_update` | `sourceId`, `data` | Pushed data update (from polling/SSE) |
-| `theme` | `mode` | Light/dark theme sync |
+| `action_response` | `requestId`, `data`, `error` | Response to an action request |
+| `ai_response` | `requestId`, `text`, `error` | Response to an AI request |
+| `data_update` | `sourceId`, `data`, `error` | Pushed data update (from polling) |
 
 #### Pre-Injected Hooks
 
-The iframe runtime includes pre-built hooks that abstract the postMessage protocol:
+The iframe runtime includes three pre-built hooks that abstract the postMessage protocol. They are available both as globals (`window.useAppData`) and via ES import (`import { useAppData } from 'astonish'`):
+
+**`useAppData(sourceId, options?)`** — Fetch data from a source.
 
 ```javascript
-// Available inside generated apps without imports
+// Returns { data, loading, error, refetch }
+const { data, loading, error } = useAppData('http:GET:https://api.example.com/data');
 
-function useAppData(sourceId, options = {}) {
-  const [data, setData] = React.useState(null);
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState(null);
+// With args (for MCP tools)
+const { data } = useAppData('mcp:postgres-mcp/query', {
+  args: { query: 'SELECT * FROM sales' }
+});
 
-  React.useEffect(() => {
-    // Sends postMessage to parent
-    // Parent proxies to backend
-    // Handles polling based on DataSource.interval
-    // Returns { data, loading, error, refetch }
-  }, [sourceId]);
+// With polling interval (milliseconds)
+const { data } = useAppData('http:GET:https://api.example.com/metrics', {
+  interval: 30000  // refresh every 30s
+});
 
-  return { data, loading, error, refetch };
-}
-
-function useAppAction(actionId) {
-  // Returns an async function that sends an action_request
-  // via postMessage, waits for the response, and returns the result
-  return React.useCallback(async (payload) => {
-    // postMessage → parent → backend → response
-  }, [actionId]);
-}
+// With credential auth
+const { data } = useAppData('http:GET:https://api.example.com/data@my-api-key');
 ```
 
-The AI is instructed to use these hooks when generating apps that need live data:
+**`useAppAction(actionId)`** — Trigger a mutation/action.
 
-```jsx
-function SalesDashboard() {
-  const { data, loading } = useAppData('sales_data');
-
-  if (loading) return <div>Loading...</div>;
-
-  return (
-    <Recharts.BarChart data={data}>
-      <Recharts.Bar dataKey="revenue" fill="#8884d8" />
-    </Recharts.BarChart>
-  );
-}
+```javascript
+// Returns an async function
+const runQuery = useAppAction('mcp:postgres-mcp/query');
+const result = await runQuery({ query: 'INSERT INTO ...' });
 ```
+
+**`useAppAI(options?)`** — Make a one-shot LLM call.
+
+```javascript
+// Returns an async function
+const askAI = useAppAI({ system: 'You are a concise data analyst.' });
+const summary = await askAI('Summarize this data', { context: tableData });
+// summary is a string
+```
+
+The AI hook uses a 2-minute timeout (vs 30s for data/action hooks) since LLM calls can take longer. The backend handler (`POST /api/apps/ai`) uses the same LLM model configured for the main Astonish agent via `ChatManager`.
 
 #### Polling and Streaming
 
-Data sources with an `interval` field are automatically polled:
+Data sources with an `interval` option are automatically polled:
 
-- The parent page sets up a `setInterval` that calls the data proxy endpoint.
+- The iframe sends a `data_subscribe` message to the parent with the interval.
+- The parent page (`AppPreview.tsx`) sets up a `setInterval` (minimum 5s) that calls the data proxy endpoint.
 - Results are forwarded to the iframe via `data_update` postMessages.
 - The `useAppData` hook receives these updates and triggers React re-renders.
+- When the component unmounts, a `data_unsubscribe` message stops polling.
 
-For real-time data sources, the parent establishes an SSE connection to `GET /api/apps/:name/stream?sourceId=X`. Events from this stream are forwarded to the iframe as `data_update` messages.
-
-#### Data Source Configuration UI
-
-When saving an app that uses `useAppData`, the save dialog includes a data source configuration section:
-
-```
-┌─────────────────────────────────────────────────────┐
-│  Data Source: sales_data                            │
-│                                                     │
-│  Type: [MCP Tool ▾]                                │
-│  Server: [postgres-mcp ▾]                          │
-│  Tool: [query ▾]                                   │
-│  Args:                                             │
-│    query: SELECT * FROM sales ORDER BY date DESC   │
-│  Refresh: [Every 30 seconds ▾]                     │
-└─────────────────────────────────────────────────────┘
-```
-
-The AI can also define data sources inline when generating the app, and the save flow extracts them from the code annotations.
+For saved apps with server-side polling, the backend provides an SSE endpoint at `GET /api/apps/{name}/stream?sourceId=X` that polls the data source and streams `data_update` events.
 
 ### Phase 5: Polish & Advanced Features
 
 #### App Templates
 
-Pre-built starting points for common patterns:
-
-| Template | Description | Data Sources |
-|---|---|---|
-| Dashboard | Metric cards, charts, filters | Configurable |
-| CRUD Table | Sortable table with create/edit/delete | MCP or HTTP |
-| Form Builder | Multi-step form with validation | Action triggers |
-| Data Viewer | JSON/CSV explorer with search | File or API |
-| Monitoring | Real-time metrics with alerts | Streaming |
-
-Templates are stored as YAML files in the official store and can be loaded via the `/app` command:
-
-```
-/app template:dashboard
-```
+*Not yet implemented.* Planned: pre-built starting points for common patterns (Dashboard, CRUD Table, Form Builder, Data Viewer, Monitoring) stored as YAML files loadable via the `/app` command.
 
 #### App Export
 
-Saved apps can be exported as:
-
-- **Standalone HTML**: A single file containing the React runtime, Tailwind, and the app code. Works offline, shareable.
-- **YAML definition**: For sharing between Astonish instances or publishing to a store.
+*Not yet implemented.* Planned: export as standalone HTML (single file with embedded runtime) or YAML definition (for sharing between Astonish instances).
 
 #### Multi-View Apps
 
-Support for apps with multiple pages/views:
+Supported naturally by the JSX approach -- the AI generates a component with internal routing. No framework changes needed:
 
-```yaml
-code: |
-  function App() {
-    const [view, setView] = React.useState('dashboard');
-    return (
-      <div>
-        <nav>
-          <button onClick={() => setView('dashboard')}>Dashboard</button>
-          <button onClick={() => setView('settings')}>Settings</button>
-        </nav>
-        {view === 'dashboard' && <Dashboard />}
-        {view === 'settings' && <Settings />}
-      </div>
-    );
-  }
+```jsx
+export default function App() {
+  const [view, setView] = useState('dashboard');
+  return (
+    <div>
+      <nav>
+        <button onClick={() => setView('dashboard')}>Dashboard</button>
+        <button onClick={() => setView('settings')}>Settings</button>
+      </nav>
+      {view === 'dashboard' && <Dashboard />}
+      {view === 'settings' && <Settings />}
+    </div>
+  );
+}
 ```
-
-This is supported naturally by the JSX approach -- the AI generates a component with internal routing. No framework changes needed.
 
 #### Code Editor
 
-The Apps tab includes a built-in CodeMirror editor for manual code editing:
+The Apps tab includes a built-in CodeMirror editor for viewing and editing app source code:
 
-- Split view: editor on left, live preview on right
-- Changes in the editor update the preview in real-time (debounced Sucrase compilation)
-- Uses the same CodeMirror instance already used for YAML editing in the flow canvas
+- **Bottom drawer layout**: The preview fills the top portion, the code editor fills the bottom (toggled via the "Code" button in the toolbar).
+- Uses CodeMirror with `@codemirror/lang-javascript` for JSX syntax highlighting.
+- Implemented in `CodeDrawer.tsx`.
 
 ## Implementation Phases
 
-| Phase | Description | Dependencies | New Files |
+| Phase | Status | Description | Key Files |
 |---|---|---|---|
-| **1** | In-chat JSX preview: iframe sandbox, Sucrase compilation, code fence detection, `app_preview` SSE event, `AppPreview` component | None (foundation) | `web/src/components/chat/AppPreview.tsx`, updates to `StudioChat.tsx`, `chatTypes.ts`, `chat_runner.go`, `chat_handlers.go` |
-| **2** | Iterative refinement: active app tracking, version history, session persistence, refinement intent detection | Phase 1 | Updates to `chat_agent.go`, `chat_utils.go`, `StudioChat.tsx` |
-| **3** | Apps persistence: YAML storage, CRUD API, Apps tab, save-from-chat flow | Phase 1 | `pkg/apps/` package, `pkg/api/app_handlers.go`, `web/src/components/AppsView.tsx`, `web/src/api/apps.ts` |
-| **4** | Live data: backend proxy, postMessage protocol, `useAppData`/`useAppAction` hooks, polling/streaming | Phase 3 | `pkg/api/app_data_handler.go`, iframe runtime updates |
-| **5** | Polish: templates, export, multi-view, code editor | Phase 3 | Various |
+| **1** | Complete | In-chat JSX preview: iframe sandbox, Sucrase compilation, code fence detection, `app_preview` SSE event | `AppPreview.tsx`, `AppPreviewCard.tsx`, `app_preview_sandbox.go`, `chat_runner.go` |
+| **2** | Complete | Iterative refinement: active app tracking, LLM intent classification, version history, session persistence | `chat_app_refine.go`, `chat_handlers.go`, `StudioChat.tsx` |
+| **3** | Complete | Apps persistence: YAML storage, CRUD API, Apps tab, save-from-chat, deep-linking | `pkg/apps/types.go`, `app_handlers.go`, `AppsView.tsx`, `apps.ts` |
+| **4** | Complete | Live data: backend proxy, convention-based routing, `useAppData`/`useAppAction`/`useAppAI` hooks, credential support, polling/streaming | `app_data_handler.go`, `app_ai_handler.go`, `mcp/invoke.go` |
+| **5** | Partial | Code editor (bottom drawer with CodeMirror). Templates and export not yet implemented. | `CodeDrawer.tsx` |
 
-Phase 1 is the critical foundation. Everything else builds incrementally on top of it. The approach is designed so that each phase delivers usable functionality -- Phase 1 alone lets users generate and preview UIs in chat, which is valuable even without persistence or data fetching.
-
-## Key Files (Planned)
+## Key Files
 
 | File | Purpose |
 |---|---|
-| `web/src/components/chat/AppPreview.tsx` | Sandboxed iframe component: Sucrase compilation, postMessage communication, error boundary, height auto-sizing |
-| `web/src/components/chat/AppPreviewCard.tsx` | Chat message card wrapping AppPreview with toolbar (fullscreen, code view, save) and version navigation |
-| `web/src/components/AppsView.tsx` | Apps tab: list view (grid of saved apps) and runner view (full-viewport iframe) |
-| `web/src/api/apps.ts` | API client: fetchApps, fetchApp, saveApp, deleteApp, proxyDataRequest |
-| `web/src/components/chat/chatTypes.ts` | New `AppPreviewMessage` type in the ChatMsg union |
-| `pkg/apps/types.go` | Go types: VisualApp, DataSource |
-| `pkg/apps/store.go` | App YAML storage: load, save, list, delete from `~/.config/astonish/apps/` |
-| `pkg/api/app_handlers.go` | REST handlers: CRUD for apps, data proxy endpoint |
-| `pkg/api/chat_runner.go` | App preview SSE event emission, code fence detection in streaming text |
-| `pkg/agent/chat_agent.go` | ActiveApp state tracking for iterative refinement |
-| `pkg/agent/chat_app.go` | App refinement logic: intent classification, context injection, version management |
+| `pkg/api/app_preview_sandbox.go` | Sandbox HTML template with Sucrase compilation, postMessage protocol, `useAppData`/`useAppAction`/`useAppAI` hooks, custom module system |
+| `pkg/api/app_data_handler.go` | Data/action proxy: convention-based routing (`mcp:`, `http:`, `static:`), credential resolution, SSE streaming |
+| `pkg/api/app_ai_handler.go` | AI proxy: one-shot LLM calls for in-app AI features (2-minute timeout) |
+| `pkg/api/app_handlers.go` | REST CRUD handlers for apps (`GET`/`PUT`/`DELETE /api/apps/`) |
+| `pkg/api/chat_runner.go` | App preview SSE event emission, code fence detection in streaming text, `extractComponentTitle()` |
+| `pkg/api/chat_handlers.go` | Save flow orchestration, app seeding, intent classification wiring |
+| `pkg/agent/chat_app_refine.go` | `ActiveApp` struct, `ClassifyAppIntent()` LLM-first classification, `AppIntentResult` |
+| `pkg/agent/guidance_content.go` | Tier 2 guidance document: full hook documentation, code examples, design system, refinement instructions |
+| `pkg/agent/system_prompt_builder.go` | Tier 1 critical rules: fence format, available hooks, "no fetch()" rule, style hints |
+| `pkg/apps/types.go` | `VisualApp`, `DataSource` structs, CRUD functions (`SaveApp`, `LoadApp`, `DeleteApp`, `ListApps`, `Slugify`) |
+| `pkg/mcp/invoke.go` | MCP tool invocation helper used by the data proxy |
+| `web/src/components/chat/AppPreview.tsx` | Sandboxed iframe component: postMessage relay for data/action/AI requests, polling management, theme sync |
+| `web/src/components/chat/AppPreviewCard.tsx` | Chat message card: toolbar (fullscreen, code, save with name dialog), version navigation |
+| `web/src/components/chat/AppCodeIndicator.tsx` | Compact collapsed indicator for `astonish-app` code blocks in chat |
+| `web/src/components/AppsView.tsx` | Apps tab: list view, runner view with deep-linking (`#/apps/AppName`) |
+| `web/src/components/CodeDrawer.tsx` | Bottom panel code editor with CodeMirror JSX syntax highlighting |
+| `web/src/api/apps.ts` | API client: `fetchApps`, `fetchApp`, `saveApp`, `deleteApp`, `fetchAppData`, `fetchAppAction`, `fetchAppAI`, `connectAppStream` |
+| `web/src/components/chat/chatTypes.ts` | `AppPreviewMessage`, `AppSavedMessage` types in the `ChatMsg` union |
 
 ## Interactions
 
-- **Agent Engine**: The ChatAgent detects UI generation intent and injects a supplementary system prompt with component-writing instructions. The active app context is tracked per-session for refinement. The same `BeforeModelCallback` architecture injects the current source code when refining.
-- **Sessions**: App previews are persisted in the session JSONL transcript using prefix markers (`[app_preview]`), following the same pattern as distill previews. Session reload reconstructs app preview messages and version history.
-- **MCP**: The data proxy endpoint invokes MCP tools via the existing tool infrastructure. Any MCP server configured in Astonish is available as a data source for apps, providing access to databases, APIs, and external services.
-- **Credentials**: Data source configurations support `{{CREDENTIAL:name:field}}` placeholders. The backend substitutes real values when proxying requests, so credentials never reach the iframe.
-- **API & Studio**: New REST endpoints for app CRUD and data proxy. The Apps tab is a new top-level view in the Studio UI. The `TopBar` component gains an "Apps" navigation item.
+- **Agent Engine**: The ChatAgent detects UI generation intent via the system prompt and guidance documents. The active app context is tracked per-session for refinement. When an active app exists, `ClassifyAppIntent()` uses an LLM call to determine whether the user wants to refine, save, or do something unrelated. The current source code is injected into the system prompt for refinement turns.
+- **Sessions**: App previews are persisted in the session JSONL transcript using prefix markers (`[app_preview]`), following the same pattern as distill previews. Session reload reconstructs app preview messages and version history. Session titles are generated synchronously before the `done` SSE event.
+- **MCP**: The data proxy endpoint invokes MCP tools via `mcp.InvokeTool()`. Any MCP server configured in Astonish is available as a data source for apps via the `mcp:<server>/<tool>` sourceId convention, providing access to databases, APIs, and external services.
+- **Credentials**: Data sources use the `@credential-name` suffix convention on sourceId URLs. The backend resolves credentials from the Astonish credential store (`pkg/credentials/store.go`) via `store.Resolve(name)`, which returns an auth header key/value pair. Credentials support API keys, Bearer tokens, Basic auth, and OAuth (client_credentials and authorization_code with auto-refresh). Credentials never reach the iframe.
+- **AI**: Apps can make one-shot LLM calls via the `useAppAI` hook. The backend handler (`POST /api/apps/ai`) uses the same model as the main Astonish agent (resolved via `ChatManager`). Calls are non-streaming with a 2-minute timeout. The LLM has no tool access -- apps should fetch data separately via `useAppData` and pass it as context.
+- **API & Studio**: REST endpoints for app CRUD and data/action/AI proxy. The Apps tab is a new top-level view in the Studio UI. The `TopBar` component has an "Apps" navigation item. Deep-linking via URL hash (`#/apps/AppName`) preserves app selection across page refreshes.
 - **Flows**: Apps and flows are independent concepts with separate storage and schemas. However, a flow could invoke an app (display it to the user) via a future `show_app` output node type, and an app could trigger a flow via the action system.
 - **Sandbox**: The iframe sandbox is browser-native (not Incus). However, data sources that invoke MCP tools may execute within sandbox containers if the MCP server runs in a container (via the existing `ContainerMCPTransport`).

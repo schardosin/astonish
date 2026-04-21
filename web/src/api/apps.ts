@@ -135,6 +135,50 @@ export async function fetchAppAI(
   return res.json()
 }
 
+// --- App State (SQLite) API ---
+
+export interface AppStateResponse {
+  requestId: string
+  data?: unknown
+  error?: string
+}
+
+/** Execute a read-only SQL query against an app's persistent state database. */
+export async function fetchAppStateQuery(
+  appName: string,
+  sql: string,
+  params: unknown[] = [],
+  requestId: string = '',
+): Promise<AppStateResponse> {
+  const res = await fetch(`${API_BASE}/apps/state/query`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ appName, sql, params, requestId }),
+  })
+  if (!res.ok) {
+    return { requestId, error: `HTTP ${res.status}: ${res.statusText}` }
+  }
+  return res.json()
+}
+
+/** Execute a write/DDL SQL statement against an app's persistent state database. */
+export async function fetchAppStateExec(
+  appName: string,
+  sql: string,
+  params: unknown[] = [],
+  requestId: string = '',
+): Promise<AppStateResponse> {
+  const res = await fetch(`${API_BASE}/apps/state/exec`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ appName, sql, params, requestId }),
+  })
+  if (!res.ok) {
+    return { requestId, error: `HTTP ${res.status}: ${res.statusText}` }
+  }
+  return res.json()
+}
+
 /**
  * Open an SSE connection for streaming data updates from a saved app.
  * Returns a cleanup function to close the connection.

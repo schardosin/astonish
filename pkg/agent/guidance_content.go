@@ -882,6 +882,143 @@ export default function SmartDashboard() {
 - Show a loading state while waiting (the call may take a few seconds)
 - Handle errors with try/catch — network or LLM failures throw an Error
 
+## Persistent State — useAppState
+
+The ` + "`useAppState`" + ` hook gives your component a per-app **SQLite database** for persistent structured data. Data survives page refreshes, app restarts, and server restarts. Each app gets its own isolated database file.
+
+### useAppState()
+
+Returns an object with two methods:
+- ` + "`db.exec(sql, params?)`" + ` — Execute write/DDL SQL (CREATE, INSERT, UPDATE, DELETE). Returns ` + "`Promise<{ rowsAffected, lastInsertId }>`" + `.
+- ` + "`db.query(sql, params?)`" + ` — Reactive read query. Returns ` + "`{ data, loading, error }`" + `. **Automatically re-fetches when any ` + "`db.exec()`" + ` is called.**
+
+` + "```" + `jsx
+import React, { useState, useEffect } from 'react';
+import { useAppState } from 'astonish';
+
+export default function TodoApp() {
+  const db = useAppState();
+  const [newTodo, setNewTodo] = useState('');
+
+  // Create table on first load (idempotent)
+  useEffect(() => {
+    db.exec('CREATE TABLE IF NOT EXISTS todos (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, done INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)');
+  }, []);
+
+  // Reactive query — automatically re-runs after any db.exec()
+  const { data: todos, loading } = db.query('SELECT * FROM todos ORDER BY created_at DESC');
+
+  const addTodo = async () => {
+    if (!newTodo.trim()) return;
+    await db.exec('INSERT INTO todos (text) VALUES (?)', [newTodo]);
+    setNewTodo('');
+  };
+
+  const toggleDone = async (id, currentDone) => {
+    await db.exec('UPDATE todos SET done = ? WHERE id = ?', [currentDone ? 0 : 1, id]);
+  };
+
+  const deleteTodo = async (id) => {
+    await db.exec('DELETE FROM todos WHERE id = ?', [id]);
+  };
+
+  if (loading) return <div className="p-4 text-gray-400">Loading...</div>;
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="flex gap-2">
+        <input value={newTodo} onChange={e => setNewTodo(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && addTodo()}
+          className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200"
+          placeholder="Add a todo..." />
+        <button onClick={addTodo} className="px-4 py-2 bg-blue-600 text-white rounded-lg">Add</button>
+      </div>
+      {(todos || []).map(todo => (
+        <div key={todo.id} className="flex items-center gap-3 p-3 bg-gray-900 rounded-lg border border-gray-800">
+          <input type="checkbox" checked={!!todo.done} onChange={() => toggleDone(todo.id, todo.done)} />
+          <span className={todo.done ? 'line-through text-gray-500' : 'text-gray-200'}>{todo.text}</span>
+          <button onClick={() => deleteTodo(todo.id)} className="ml-auto text-red-400 text-sm">Delete</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+` + "```" + `
+
+### Example: Inventory Tracker with Categories
+
+` + "```" + `jsx
+import React, { useState, useEffect } from 'react';
+import { useAppState } from 'astonish';
+
+export default function InventoryTracker() {
+  const db = useAppState();
+  const [name, setName] = useState('');
+  const [category, setCategory] = useState('General');
+  const [quantity, setQuantity] = useState(1);
+
+  useEffect(() => {
+    db.exec('CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, category TEXT DEFAULT \'General\', quantity INTEGER DEFAULT 1, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)');
+  }, []);
+
+  const { data: items } = db.query('SELECT * FROM items ORDER BY category, name');
+  const { data: categories } = db.query('SELECT DISTINCT category FROM items ORDER BY category');
+
+  const addItem = async () => {
+    if (!name.trim()) return;
+    await db.exec('INSERT INTO items (name, category, quantity) VALUES (?, ?, ?)', [name, category, quantity]);
+    setName('');
+  };
+
+  const updateQuantity = async (id, newQty) => {
+    if (newQty <= 0) {
+      await db.exec('DELETE FROM items WHERE id = ?', [id]);
+    } else {
+      await db.exec('UPDATE items SET quantity = ? WHERE id = ?', [newQty, id]);
+    }
+  };
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="flex gap-2">
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="Item name"
+          className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200" />
+        <input value={category} onChange={e => setCategory(e.target.value)} placeholder="Category"
+          className="w-32 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200" />
+        <input type="number" value={quantity} onChange={e => setQuantity(+e.target.value)} min={1}
+          className="w-20 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200" />
+        <button onClick={addItem} className="px-4 py-2 bg-emerald-600 text-white rounded-lg">Add</button>
+      </div>
+      {(items || []).map(item => (
+        <div key={item.id} className="flex items-center gap-3 p-3 bg-gray-900 rounded-lg border border-gray-800">
+          <span className="text-gray-400 text-sm">{item.category}</span>
+          <span className="text-gray-200">{item.name}</span>
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={() => updateQuantity(item.id, item.quantity - 1)} className="px-2 py-1 bg-gray-800 rounded text-gray-300">-</button>
+            <span className="text-gray-200 w-8 text-center">{item.quantity}</span>
+            <button onClick={() => updateQuantity(item.id, item.quantity + 1)} className="px-2 py-1 bg-gray-800 rounded text-gray-300">+</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+` + "```" + `
+
+### When to use useAppState
+
+- **Persistent data** — the user says "save", "remember", "store", "track", "keep a list of", "maintain", "log", "record"
+- **CRUD apps** — todo lists, inventory, contacts, notes, bookmarks, wish lists
+- **User-maintained datasets** — categories, tags, configuration, preferences
+- **Collected results** — data gathered from APIs or AI that the user wants to keep
+
+**Tips:**
+- Always use ` + "`CREATE TABLE IF NOT EXISTS`" + ` in a ` + "`useEffect([], [])`" + ` for schema setup — it runs once and is idempotent
+- Use ` + "`INTEGER`" + ` for booleans (0/1) — SQLite has no native boolean type
+- Always use parameterized queries (` + "`?`" + ` placeholders with params array) — NEVER string-concatenate user input into SQL
+- ` + "`db.query()`" + ` is reactive — it automatically re-runs after any ` + "`db.exec()`" + ` call, so you don't need to manually refetch
+- Data persists across page refreshes and app restarts — it's stored in a SQLite database file on the server
+
 ## When to Generate a Visual App
 
 Generate a visual app when the user:

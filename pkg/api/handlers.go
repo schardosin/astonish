@@ -874,6 +874,8 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/apps/data", AppDataHandler).Methods("POST")
 	router.HandleFunc("/api/apps/action", AppActionHandler).Methods("POST")
 	router.HandleFunc("/api/apps/ai", AppAIHandler).Methods("POST")
+	router.HandleFunc("/api/apps/state/query", AppStateQueryHandler).Methods("POST")
+	router.HandleFunc("/api/apps/state/exec", AppStateExecHandler).Methods("POST")
 
 	router.HandleFunc("/api/apps", ListAppsHandler).Methods("GET")
 	router.HandleFunc("/api/apps/{name}", GetAppHandler).Methods("GET")

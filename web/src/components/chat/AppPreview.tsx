@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
-import { fetchAppData, fetchAppAction, fetchAppAI } from '../../api/apps'
+import { fetchAppData, fetchAppAction, fetchAppAI, fetchAppStateQuery, fetchAppStateExec } from '../../api/apps'
 
 const SANDBOX_URL = '/api/app-preview/sandbox'
 
@@ -8,13 +8,15 @@ interface AppPreviewProps {
   maxHeight?: number
   /** Optional app name — used for saved app data source lookups */
   appName?: string
+  /** App identifier for persistent state (appName takes precedence, falls back to this) */
+  stateId?: string
 }
 
 function detectTheme(): 'dark' | 'light' {
   return document.documentElement.classList.contains('dark') ? 'dark' : 'light'
 }
 
-export default function AppPreview({ code, maxHeight = 500, appName = '' }: AppPreviewProps) {
+export default function AppPreview({ code, maxHeight = 500, appName = '', stateId = '' }: AppPreviewProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [height, setHeight] = useState(200)
   const [error, setError] = useState<string | null>(null)
@@ -57,6 +59,13 @@ export default function AppPreview({ code, maxHeight = 500, appName = '' }: AppP
         case 'sandbox_ready':
           setReady(true)
           sendTheme()
+          // Send app context for state operations
+          {
+            const effectiveAppName = appName || stateId
+            if (effectiveAppName) {
+              sendToIframe({ type: 'set_context', appName: effectiveAppName })
+            }
+          }
           if (pendingCode.current) {
             sendCode(pendingCode.current)
             pendingCode.current = null
@@ -81,6 +90,12 @@ export default function AppPreview({ code, maxHeight = 500, appName = '' }: AppP
           break
         case 'ai_request':
           handleAIRequest(msg)
+          break
+        case 'state_query':
+          handleStateQuery(msg)
+          break
+        case 'state_exec':
+          handleStateExec(msg)
           break
         case 'data_subscribe':
           handleDataSubscribe(msg)
@@ -164,6 +179,74 @@ export default function AppPreview({ code, maxHeight = 500, appName = '' }: AppP
       }
     }
 
+    // Relay state_query from iframe → backend → iframe
+    async function handleStateQuery(msg: Record<string, unknown>) {
+      const { appName: reqAppName, sql, params, requestId } = msg as {
+        appName: string
+        sql: string
+        params: unknown[]
+        requestId: string
+      }
+      const effectiveName = reqAppName || appName || stateId
+      if (!effectiveName) {
+        sendToIframe({
+          type: 'state_response',
+          requestId,
+          error: 'App name is required for state operations. Save the app first or provide a stateId.',
+        })
+        return
+      }
+      try {
+        const resp = await fetchAppStateQuery(effectiveName, sql, params, requestId)
+        sendToIframe({
+          type: 'state_response',
+          requestId: resp.requestId || requestId,
+          data: resp.data,
+          error: resp.error,
+        })
+      } catch (err: unknown) {
+        sendToIframe({
+          type: 'state_response',
+          requestId,
+          error: err instanceof Error ? err.message : 'State query failed',
+        })
+      }
+    }
+
+    // Relay state_exec from iframe → backend → iframe
+    async function handleStateExec(msg: Record<string, unknown>) {
+      const { appName: reqAppName, sql, params, requestId } = msg as {
+        appName: string
+        sql: string
+        params: unknown[]
+        requestId: string
+      }
+      const effectiveName = reqAppName || appName || stateId
+      if (!effectiveName) {
+        sendToIframe({
+          type: 'state_response',
+          requestId,
+          error: 'App name is required for state operations. Save the app first or provide a stateId.',
+        })
+        return
+      }
+      try {
+        const resp = await fetchAppStateExec(effectiveName, sql, params, requestId)
+        sendToIframe({
+          type: 'state_response',
+          requestId: resp.requestId || requestId,
+          data: resp.data,
+          error: resp.error,
+        })
+      } catch (err: unknown) {
+        sendToIframe({
+          type: 'state_response',
+          requestId,
+          error: err instanceof Error ? err.message : 'State exec failed',
+        })
+      }
+    }
+
     // Set up polling for data_subscribe messages from iframe
     function handleDataSubscribe(msg: Record<string, unknown>) {
       const { sourceId, args, interval } = msg as {
@@ -211,7 +294,7 @@ export default function AppPreview({ code, maxHeight = 500, appName = '' }: AppP
 
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
-  }, [maxHeight, sendCode, sendTheme, sendToIframe, appName])
+  }, [maxHeight, sendCode, sendTheme, sendToIframe, appName, stateId])
 
   // Watch for theme changes on the document element and forward to sandbox
   useEffect(() => {

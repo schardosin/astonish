@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/schardosin/astonish/pkg/apps"
 
@@ -90,6 +91,108 @@ func CloseAllAppDBs() {
 		}
 	}
 	appDBPool.dbs = make(map[string]*sql.DB)
+}
+
+// CloseAndDeleteAppDB closes and removes the database file for the given app.
+// Call this when an app is deleted to prevent orphaned .db files.
+func CloseAndDeleteAppDB(appName string) error {
+	slug := apps.Slugify(appName)
+
+	// Close the pooled connection if present
+	appDBPool.mu.Lock()
+	if db, ok := appDBPool.dbs[slug]; ok {
+		db.Close()
+		delete(appDBPool.dbs, slug)
+	}
+	appDBPool.mu.Unlock()
+
+	dir, err := apps.AppsDir()
+	if err != nil {
+		return fmt.Errorf("cannot determine apps dir: %w", err)
+	}
+
+	// Remove .db and its journal files (.db-wal, .db-shm)
+	var errs []string
+	for _, suffix := range []string{".db", ".db-wal", ".db-shm"} {
+		path := filepath.Join(dir, slug+suffix)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Sprintf("%s: %v", suffix, err))
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("errors removing db files: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// CleanupOrphanAppDBs removes .db files that have no matching .yaml file
+// and are older than the given age threshold. This catches orphaned databases
+// from deleted apps or abandoned in-chat previews.
+// Returns the number of databases cleaned up.
+func CleanupOrphanAppDBs(maxAge time.Duration) int {
+	dir, err := apps.AppsDir()
+	if err != nil {
+		slog.Debug("orphan db cleanup: cannot determine apps dir", "error", err)
+		return 0
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		slog.Debug("orphan db cleanup: cannot read apps dir", "error", err)
+		return 0
+	}
+
+	now := time.Now()
+	cleaned := 0
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".db") {
+			continue
+		}
+		// Skip journal files — they'll be cleaned with their parent .db
+		if strings.HasSuffix(name, ".db-wal") || strings.HasSuffix(name, ".db-shm") {
+			continue
+		}
+
+		slug := strings.TrimSuffix(name, ".db")
+		yamlPath := filepath.Join(dir, slug+".yaml")
+
+		// Check if a matching .yaml exists
+		if _, err := os.Stat(yamlPath); err == nil {
+			continue // Has a matching app — not orphaned
+		}
+
+		// Check age
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if now.Sub(info.ModTime()) < maxAge {
+			continue // Too recent — might still be in use
+		}
+
+		// Close pooled connection if any
+		appDBPool.mu.Lock()
+		if db, ok := appDBPool.dbs[slug]; ok {
+			db.Close()
+			delete(appDBPool.dbs, slug)
+		}
+		appDBPool.mu.Unlock()
+
+		// Remove .db and journal files
+		for _, suffix := range []string{".db", ".db-wal", ".db-shm"} {
+			path := filepath.Join(dir, slug+suffix)
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				slog.Debug("orphan db cleanup: failed to remove", "path", path, "error", err)
+			}
+		}
+
+		slog.Debug("orphan db cleanup: removed orphaned database", "slug", slug)
+		cleaned++
+	}
+
+	return cleaned
 }
 
 // ── Request/Response Types ───────────────────────────────────────────

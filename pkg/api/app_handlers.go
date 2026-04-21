@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/gorilla/mux"
@@ -94,6 +95,12 @@ func DeleteAppHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
+
+	// Clean up the associated SQLite database (if any)
+	if err := CloseAndDeleteAppDB(name); err != nil {
+		slog.Debug("failed to clean up app database", "app", name, "error", err)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
 }

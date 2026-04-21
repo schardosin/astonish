@@ -345,9 +345,9 @@ window.onerror = function(msg, src, line, col, err) {
           setQueryCache(function(prev) {
             var next = Object.assign({}, prev);
             if (resp.error) {
-              next[key] = { data: prev[key] ? prev[key].data : null, loading: false, error: resp.error };
+              next[key] = { data: prev[key] ? prev[key].data : [], loading: false, error: resp.error };
             } else {
-              next[key] = { data: resp.data, loading: false, error: null };
+              next[key] = { data: resp.data || [], loading: false, error: null };
             }
             return next;
           });
@@ -386,9 +386,9 @@ window.onerror = function(msg, src, line, col, err) {
           setQueryCache(function(prev) {
             var next = Object.assign({}, prev);
             if (resp.error) {
-              next[key] = { data: null, loading: false, error: resp.error };
+              next[key] = { data: [], loading: false, error: resp.error };
             } else {
-              next[key] = { data: resp.data, loading: false, error: null };
+              next[key] = { data: resp.data || [], loading: false, error: null };
             }
             return next;
           });
@@ -396,7 +396,7 @@ window.onerror = function(msg, src, line, col, err) {
       }
 
       // Return cached result or loading defaults
-      return queryCache[key] || { data: null, loading: true, error: null };
+      return queryCache[key] || { data: [], loading: true, error: null };
     }, [queryCache]);
 
     return { exec: execFn, query: queryFn };

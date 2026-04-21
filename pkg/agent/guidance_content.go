@@ -890,7 +890,7 @@ The ` + "`useAppState`" + ` hook gives your component a per-app **SQLite databas
 
 Returns an object with two methods:
 - ` + "`db.exec(sql, params?)`" + ` — Execute write/DDL SQL (CREATE, INSERT, UPDATE, DELETE). Returns ` + "`Promise<{ rowsAffected, lastInsertId }>`" + `.
-- ` + "`db.query(sql, params?)`" + ` — Reactive read query. Returns ` + "`{ data, loading, error }`" + `. **Automatically re-fetches when any ` + "`db.exec()`" + ` is called.**
+- ` + "`db.query(sql, params?)`" + ` — Reactive read query. Returns ` + "`{ data, loading, error }`" + `. **` + "`data`" + ` is always an array** (empty ` + "`[]`" + ` while loading or on error, never null). Automatically re-fetches when any ` + "`db.exec()`" + ` is called.
 
 ` + "```" + `jsx
 import React, { useState, useEffect } from 'react';
@@ -933,7 +933,7 @@ export default function TodoApp() {
           placeholder="Add a todo..." />
         <button onClick={addTodo} className="px-4 py-2 bg-blue-600 text-white rounded-lg">Add</button>
       </div>
-      {(todos || []).map(todo => (
+      {todos.map(todo => (
         <div key={todo.id} className="flex items-center gap-3 p-3 bg-gray-900 rounded-lg border border-gray-800">
           <input type="checkbox" checked={!!todo.done} onChange={() => toggleDone(todo.id, todo.done)} />
           <span className={todo.done ? 'line-through text-gray-500' : 'text-gray-200'}>{todo.text}</span>
@@ -989,7 +989,7 @@ export default function InventoryTracker() {
           className="w-20 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200" />
         <button onClick={addItem} className="px-4 py-2 bg-emerald-600 text-white rounded-lg">Add</button>
       </div>
-      {(items || []).map(item => (
+      {items.map(item => (
         <div key={item.id} className="flex items-center gap-3 p-3 bg-gray-900 rounded-lg border border-gray-800">
           <span className="text-gray-400 text-sm">{item.category}</span>
           <span className="text-gray-200">{item.name}</span>
@@ -1017,6 +1017,7 @@ export default function InventoryTracker() {
 - Use ` + "`INTEGER`" + ` for booleans (0/1) — SQLite has no native boolean type
 - Always use parameterized queries (` + "`?`" + ` placeholders with params array) — NEVER string-concatenate user input into SQL
 - ` + "`db.query()`" + ` is reactive — it automatically re-runs after any ` + "`db.exec()`" + ` call, so you don't need to manually refetch
+- ` + "`db.query()`" + ` always returns ` + "`data`" + ` as an array (empty ` + "`[]`" + ` while loading, never null) — safe to call ` + "`.map()`" + `, ` + "`.filter()`" + `, ` + "`.reduce()`" + ` directly without null checks
 - ` + "`db.query()`" + ` is NOT a hook — it is a pure lookup. You can safely call it conditionally, inside helper functions, or in loops. Only ` + "`useAppState()`" + ` itself must be called at the component top level.
 - **CRITICAL: NEVER call ` + "`db.exec()`" + ` inside a ` + "`useEffect`" + ` that depends on ` + "`db.query()`" + ` results** — this creates an infinite loop (exec triggers re-fetch, results change, effect fires, exec again). The ONLY safe ` + "`db.exec()`" + ` inside useEffect is schema creation with an empty dependency array ` + "`useEffect(() => { db.exec('CREATE TABLE IF NOT EXISTS ...') }, [])`" + `.
 - Data persists across page refreshes and app restarts — it's stored in a SQLite database file on the server

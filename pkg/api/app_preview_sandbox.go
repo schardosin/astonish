@@ -98,6 +98,141 @@ window.onerror = function(msg, src, line, col, err) {
     window.parent.postMessage({ type: 'render_error', error: msg, stack: stack || '' }, '*');
   }
 
+  // ── Data hooks infrastructure ──────────────────────────────────────
+  // Pending request callbacks keyed by requestId
+  var __dataCallbacks = {};
+  // Active data subscriptions keyed by sourceId → array of setState callbacks
+  var __dataSubscriptions = {};
+  var __requestCounter = 0;
+
+  function __genRequestId() {
+    return 'req-' + (++__requestCounter) + '-' + Math.random().toString(36).substr(2, 6);
+  }
+
+  // Listen for data responses from parent
+  window.addEventListener('message', function(e) {
+    var msg = e.data;
+    if (!msg || !msg.type) return;
+
+    if (msg.type === 'data_response' || msg.type === 'action_response') {
+      var cb = __dataCallbacks[msg.requestId];
+      if (cb) {
+        delete __dataCallbacks[msg.requestId];
+        cb(msg);
+      }
+    }
+
+    if (msg.type === 'data_update') {
+      var subs = __dataSubscriptions[msg.sourceId];
+      if (subs) {
+        subs.forEach(function(cb) { cb(msg.data, msg.error || null); });
+      }
+    }
+  });
+
+  // Send a data/action request to parent and return a Promise
+  function __requestFromParent(type, payload) {
+    return new Promise(function(resolve) {
+      var requestId = __genRequestId();
+      __dataCallbacks[requestId] = resolve;
+      payload.requestId = requestId;
+      payload.type = type;
+      window.parent.postMessage(payload, '*');
+      // Timeout after 30s
+      setTimeout(function() {
+        if (__dataCallbacks[requestId]) {
+          delete __dataCallbacks[requestId];
+          resolve({ error: 'Request timed out after 30 seconds' });
+        }
+      }, 30000);
+    });
+  }
+
+  // ── useAppData hook ────────────────────────────────────────────────
+  // Usage: const { data, loading, error, refetch } = useAppData('mcp:server/tool', { args: { query: 'SELECT ...' }, interval: 30000 })
+  window.useAppData = function useAppData(sourceId, options) {
+    options = options || {};
+    var generationRef = React.useRef(0);
+    var _s1 = React.useState(null);    var data = _s1[0];    var setData = _s1[1];
+    var _s2 = React.useState(true);    var loading = _s2[0]; var setLoading = _s2[1];
+    var _s3 = React.useState(null);    var error = _s3[0];   var setError = _s3[1];
+
+    var fetchData = React.useCallback(function() {
+      var gen = ++generationRef.current;
+      setLoading(true);
+      setError(null);
+      __requestFromParent('data_request', {
+        sourceId: sourceId,
+        args: options.args || {}
+      }).then(function(resp) {
+        // Ignore stale responses from previous sourceId
+        if (gen !== generationRef.current) return;
+        if (resp.error) {
+          setError(resp.error);
+          setLoading(false);
+        } else {
+          setData(resp.data);
+          setLoading(false);
+        }
+      });
+    }, [sourceId]);
+
+    React.useEffect(function() {
+      fetchData();
+
+      // Subscribe for push updates
+      if (!__dataSubscriptions[sourceId]) __dataSubscriptions[sourceId] = [];
+      var handler = function(newData, newError) {
+        if (newError) { setError(newError); } else { setData(newData); }
+        setLoading(false);
+      };
+      __dataSubscriptions[sourceId].push(handler);
+
+      // Request polling if interval specified
+      if (options.interval && options.interval > 0) {
+        window.parent.postMessage({
+          type: 'data_subscribe',
+          sourceId: sourceId,
+          args: options.args || {},
+          interval: options.interval
+        }, '*');
+      }
+
+      return function() {
+        // Bump generation to invalidate any in-flight requests
+        generationRef.current++;
+        var subs = __dataSubscriptions[sourceId];
+        if (subs) {
+          var idx = subs.indexOf(handler);
+          if (idx >= 0) subs.splice(idx, 1);
+        }
+        // Unsubscribe polling
+        if (options.interval && options.interval > 0) {
+          window.parent.postMessage({ type: 'data_unsubscribe', sourceId: sourceId }, '*');
+        }
+      };
+    }, [sourceId, fetchData]);
+
+    return { data: data, loading: loading, error: error, refetch: fetchData };
+  };
+
+  // ── useAppAction hook ──────────────────────────────────────────────
+  // Usage: const runQuery = useAppAction('mcp:server/tool'); const result = await runQuery({ query: '...' })
+  window.useAppAction = function useAppAction(actionId) {
+    return React.useCallback(function(payload) {
+      return __requestFromParent('action_request', {
+        actionId: actionId,
+        payload: payload || {}
+      }).then(function(resp) {
+        if (resp.error) throw new Error(resp.error);
+        return resp.data;
+      });
+    }, [actionId]);
+  };
+
+  // Make hooks available via require('astonish') too — added to modules below
+  // ── End data hooks ─────────────────────────────────────────────────
+
   function reportHeight() {
     var h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
     window.parent.postMessage({ type: 'render_success', height: h }, '*');
@@ -109,13 +244,14 @@ window.onerror = function(msg, src, line, col, err) {
     'react-dom/client': window.ReactDOM,
     'recharts': window.Recharts || {},
     'lucide-react': window.LucideReact || {},
+    'astonish': { useAppData: window.useAppData, useAppAction: window.useAppAction },
   };
 
   function sandboxRequire(name) {
     if (modules[name]) return modules[name];
     var baseName = name.split('/')[0];
     if (modules[baseName]) return modules[baseName];
-    throw new Error('Module not found: ' + name + '. Available: react, recharts, lucide-react');
+    throw new Error('Module not found: ' + name + '. Available: react, recharts, lucide-react, astonish');
   }
 
   window.addEventListener('message', function(e) {

@@ -501,7 +501,8 @@ There is NO component library. The following DO NOT EXIST in the sandbox:
 - No ` + "`Button`" + `, ` + "`Card`" + `, ` + "`Input`" + `, ` + "`Badge`" + `, ` + "`Dialog`" + `, ` + "`Select`" + `, ` + "`Tabs`" + `, ` + "`Avatar`" + `, ` + "`Separator`" + ` — shadcn/ui does NOT exist
 - No ` + "`@/components/*`" + ` or ` + "`@/lib/*`" + ` imports — there is no filesystem
 - No Material UI, Chakra UI, Ant Design, Mantine, or any other component library
-- No ` + "`axios`" + `, ` + "`fetch`" + ` to external APIs, ` + "`lodash`" + `, ` + "`date-fns`" + `, ` + "`framer-motion`" + `, or any npm package not listed above
+- **No ` + "`fetch()`" + `, ` + "`XMLHttpRequest`" + `, or ` + "`axios`" + `** — Network requests are BLOCKED in the sandbox. To get external data, use ` + "`useAppData`" + ` (see "Live Data" section below). NEVER use fetch() directly.
+- No ` + "`lodash`" + `, ` + "`date-fns`" + `, ` + "`framer-motion`" + `, or any npm package not listed above
 - No ` + "`next/image`" + `, ` + "`next/link`" + `, or any framework-specific imports
 
 ## How to Build UI Without a Component Library
@@ -548,10 +549,115 @@ export default function App() {
 2. **Define helper components inline** — If you need a ` + "`Button`" + ` or ` + "`Card`" + ` abstraction, define it as a function in the same file. Never import from non-existent modules.
 3. **Export default** — Export your main component as the default export.
 4. **Single file** — Everything must be in one file. Define helpers above the main export.
-5. **Self-contained** — Include all data, state, and logic within the component. Use hardcoded sample data.
-6. **Dark-mode aware** — The preview renders on a themed background. **Do NOT set any background class (bg-*) on the outermost container element** — it must be transparent so the sandbox theme shows through. Use background classes only on inner elements like cards, sections, and panels. Inner cards: ` + "`bg-gray-800`" + ` / ` + "`bg-gray-900`" + `. Text: ` + "`text-white`" + ` / ` + "`text-gray-300`" + `.
-7. **Make it interactive** — Use ` + "`useState`" + ` for buttons, toggles, tabs, filters.
-8. **Responsive** — Use responsive Tailwind classes (` + "`md:`" + `, ` + "`lg:`" + `) where appropriate.
+5. **Self-contained** — Include all data, state, and logic within the component. Use hardcoded sample data for static apps; use ` + "`useAppData`" + ` for live data (see below).
+6. **NEVER use fetch(), XMLHttpRequest, or axios** — The sandbox blocks direct network access. ALL external data MUST go through ` + "`useAppData('http:GET:<url>')`" + ` or ` + "`useAppData('mcp:<server>/<tool>')`" + `. This is the ONLY way to get external data. If the user gives you a URL or API endpoint, put it in the useAppData sourceId, e.g. ` + "`useAppData('http:GET:https://api.example.com/data')`" + `.
+7. **Dark-mode aware** — The preview renders on a themed background. **Do NOT set any background class (bg-*) on the outermost container element** — it must be transparent so the sandbox theme shows through. Use background classes only on inner elements like cards, sections, and panels. Inner cards: ` + "`bg-gray-800`" + ` / ` + "`bg-gray-900`" + `. Text: ` + "`text-white`" + ` / ` + "`text-gray-300`" + `.
+8. **Make it interactive** — Use ` + "`useState`" + ` for buttons, toggles, tabs, filters.
+9. **Responsive** — Use responsive Tailwind classes (` + "`md:`" + `, ` + "`lg:`" + `) where appropriate.
+
+## Live Data — useAppData & useAppAction
+
+When the user asks for an app that displays live/dynamic data from external sources, use the built-in data hooks. These are available as **global functions** — no import needed (they are pre-injected in the sandbox).
+
+### useAppData(sourceId, options?)
+
+Fetches data from a backend source. Returns ` + "`{ data, loading, error, refetch }`" + `.
+
+**sourceId convention:**
+- ` + "`\"mcp:<serverName>/<toolName>\"`" + ` — Invokes an MCP tool. Example: ` + "`\"mcp:postgres-mcp/query\"`" + `
+- ` + "`\"http:GET:<url>\"`" + ` — Makes an HTTP GET request. Example: ` + "`\"http:GET:https://api.example.com/data\"`" + `
+- ` + "`\"http:POST:<url>\"`" + ` — Makes an HTTP POST request.
+
+**options:**
+- ` + "`args`" + ` — Object passed to the backend (MCP tool args, or HTTP body for POST).
+- ` + "`interval`" + ` — Polling interval in milliseconds. If set, the data auto-refreshes. Example: ` + "`30000`" + ` for 30 seconds.
+
+**Example — MCP tool (database query):**
+` + "```" + `jsx
+export default function SalesTable() {
+  const { data, loading, error } = useAppData('mcp:postgres-mcp/query', {
+    args: { query: 'SELECT * FROM sales ORDER BY date DESC LIMIT 20' }
+  });
+
+  if (loading) return <div className="p-4 text-gray-400">Loading...</div>;
+  if (error) return <div className="p-4 text-red-400">Error: {error}</div>;
+
+  return (
+    <table className="w-full text-sm text-gray-300">
+      <thead><tr className="border-b border-gray-700">{/* ... */}</tr></thead>
+      <tbody>{data?.rows?.map((row, i) => <tr key={i}>{/* ... */}</tr>)}</tbody>
+    </table>
+  );
+}
+` + "```" + `
+
+**Example — HTTP API with dynamic URL and user input:**
+` + "```" + `jsx
+export default function WeatherApp() {
+  const [city, setCity] = React.useState('Orlando');
+  const [query, setQuery] = React.useState('Orlando');
+
+  // sourceId changes when query changes → hook re-fetches automatically
+  const url = ` + "`http:GET:https://wttr.in/${encodeURIComponent(query)}?format=j1`" + `;
+  const { data, loading, error } = useAppData(url);
+
+  return (
+    <div className="p-6 space-y-4">
+      <div className="flex gap-2">
+        <input value={city} onChange={e => setCity(e.target.value)}
+          className="flex-1 px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white"
+          placeholder="Enter city..." />
+        <button onClick={() => setQuery(city)}
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+          Search
+        </button>
+      </div>
+      {loading && <p className="text-gray-400">Loading...</p>}
+      {error && <p className="text-red-400">{error}</p>}
+      {data && <p className="text-2xl text-white">{data?.current_condition?.[0]?.temp_C}°C</p>}
+    </div>
+  );
+}
+` + "```" + `
+
+### useAppAction(actionId)
+
+Returns an async function for triggering write operations (mutations). Uses the same sourceId convention.
+
+**Example:**
+` + "```" + `jsx
+export default function TaskManager() {
+  const { data, loading, refetch } = useAppData('mcp:postgres-mcp/query', {
+    args: { query: 'SELECT * FROM tasks WHERE status != \'done\'' }
+  });
+  const markDone = useAppAction('mcp:postgres-mcp/query');
+
+  async function handleComplete(taskId) {
+    await markDone({ query: ` + "`UPDATE tasks SET status = 'done' WHERE id = ${taskId}`" + ` });
+    refetch();
+  }
+
+  if (loading) return <div className="p-4 text-gray-400">Loading...</div>;
+  return (
+    <div className="p-4 space-y-2">
+      {data?.rows?.map(task => (
+        <div key={task.id} className="flex justify-between items-center p-2 bg-gray-800 rounded">
+          <span className="text-white">{task.title}</span>
+          <button onClick={() => handleComplete(task.id)} className="px-2 py-1 text-xs bg-green-600 text-white rounded">Done</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+` + "```" + `
+
+### When to use data hooks vs hardcoded data
+
+- **Use hardcoded data** for mockups, prototypes, static dashboards, and demos where no external data source is mentioned.
+- **Use useAppData** whenever the user mentions a URL, API endpoint, database, MCP server, or says things like "connect to", "fetch from", "query", "pull data from", "call this API", or provides any URL. The sourceId for HTTP APIs is simply ` + "`\"http:GET:<the-url>\"`" + ` — put the user's URL directly in the sourceId string.
+- **Dynamic URLs** — If the URL contains a variable part (like a city name), construct the sourceId dynamically: ` + "`const { data, loading } = useAppData(` + \"`http:GET:https://api.example.com/${variable}`\" + `)`" + `. The hook re-fetches automatically when the sourceId string changes.
+- **Ask the user** what MCP server/tool or HTTP endpoint to use if they request live data but don't specify the source.
+- **NEVER use fetch() or XMLHttpRequest** — even if it seems simpler. The proxy is required for all external data.
 
 ## When to Generate a Visual App
 

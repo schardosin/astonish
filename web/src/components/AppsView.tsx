@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { AppWindow, Trash2, Code, X, ArrowLeft, Clock, ExternalLink } from 'lucide-react'
+import { AppWindow, Trash2, Code, ArrowLeft, Clock } from 'lucide-react'
 import { fetchApps, fetchApp, deleteApp } from '../api/apps'
 import type { AppListItem, VisualApp } from '../api/apps'
 import AppPreview from './chat/AppPreview'
@@ -190,7 +190,7 @@ export default function AppsView({ theme }: AppsViewProps) {
 
           {/* Preview iframe */}
           <div className="flex-1 overflow-auto p-4">
-            <AppPreview code={selectedApp.code} maxHeight={9999} />
+            <AppPreview code={selectedApp.code} maxHeight={9999} appName={selectedApp.name} />
           </div>
         </div>
       </div>

@@ -422,10 +422,14 @@ func (cr *ChatRunner) Run(
 		})
 	}
 
-	// Generate title for new sessions after first exchange
+	// Generate title for new sessions after first exchange.
+	// This runs synchronously (before the deferred done/closeSubscribers) so the
+	// session_title SSE event reaches the browser while the connection is still open.
 	if cr.IsNew && msg != "" {
 		if fileStore != nil {
-			go generateStudioSessionTitle(llm, fileStore, cr.SessionID, msg)
+			generateStudioSessionTitle(llm, fileStore, cr.SessionID, msg, func(title string) {
+				cr.emitEvent("session_title", map[string]any{"title": title})
+			})
 		}
 	}
 

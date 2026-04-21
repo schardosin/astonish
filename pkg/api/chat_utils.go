@@ -698,7 +698,9 @@ func fleetEventsToMessages(events []*session.Event) []FleetMessageSummary {
 }
 
 // generateStudioSessionTitle calls the LLM to produce a short session title.
-func generateStudioSessionTitle(llm model.LLM, store *persistentsession.FileStore, sessionID, userMessage string) {
+// The optional onTitle callback is invoked with the generated title so callers
+// can push a real-time SSE event to connected browsers.
+func generateStudioSessionTitle(llm model.LLM, store *persistentsession.FileStore, sessionID, userMessage string, onTitle func(string)) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -712,13 +714,14 @@ func generateStudioSessionTitle(llm model.LLM, store *persistentsession.FileStor
 		},
 		Config: &genai.GenerateContentConfig{
 			Temperature:     genai.Ptr(float32(0.3)),
-			MaxOutputTokens: 30,
+			MaxOutputTokens: 100,
 		},
 	}
 
 	var title string
 	for resp, err := range llm.GenerateContent(ctx, req, false) {
 		if err != nil {
+			slog.Warn("session title LLM error", "session_id", sessionID, "error", err)
 			return
 		}
 		if resp.Content != nil {
@@ -729,8 +732,16 @@ func generateStudioSessionTitle(llm model.LLM, store *persistentsession.FileStor
 	}
 
 	title = titleThinkTagRe.ReplaceAllString(title, "")
+	// Also strip unclosed thinking tags (model hit token limit mid-tag)
+	if idx := strings.Index(title, "<think"); idx >= 0 {
+		title = title[:idx]
+	}
+	if idx := strings.Index(title, "<thinking"); idx >= 0 {
+		title = title[:idx]
+	}
 	title = strings.TrimSpace(title)
 	if title == "" {
+		slog.Debug("session title generation produced empty result", "session_id", sessionID)
 		return
 	}
 	if len(title) > 80 {
@@ -739,6 +750,8 @@ func generateStudioSessionTitle(llm model.LLM, store *persistentsession.FileStor
 
 	if err := store.SetSessionTitle(sessionID, title); err != nil {
 		slog.Warn("failed to set session title", "session_id", sessionID, "error", err)
+	} else if onTitle != nil {
+		onTitle(title)
 	}
 }
 

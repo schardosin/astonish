@@ -28,6 +28,12 @@ const (
 	AppIntentUnrelated                            // Message is unrelated to the app
 )
 
+// AppIntentResult holds the classified intent plus optional metadata from the LLM.
+type AppIntentResult struct {
+	Intent   AppRefinementIntent
+	SaveName string // Optional custom name extracted from "save as X" messages (empty = use auto title)
+}
+
 // HasActiveApp returns true if the given session has an active app being refined.
 func (c *ChatAgent) HasActiveApp(sessionID string) bool {
 	c.activeAppMu.Lock()
@@ -75,95 +81,102 @@ func (c *ChatAgent) RecordAppModification(sessionID string, modification string)
 }
 
 // ClassifyAppIntent determines whether a user message is a refinement request,
-// a "done" signal, or unrelated to the active app. Uses magic string markers
-// from UI buttons first, then falls back to LLM classification.
+// a save signal, or unrelated to the active app. Uses the LLM to understand
+// natural language intent rather than brittle pattern matching.
 //
-// llmFunc should be a simple prompt→response function (same signature as
-// FlowDistiller.LLM). Pass nil to skip LLM classification and use heuristics only.
-func (c *ChatAgent) ClassifyAppIntent(ctx context.Context, msg string, llmFunc func(ctx context.Context, prompt string) (string, error)) AppRefinementIntent {
+// Only magic string markers from UI buttons are handled without the LLM.
+// Everything else — including obvious phrases like "save", "looks good" — goes
+// through LLM classification to avoid false positives from heuristic matching.
+//
+// llmFunc should be a simple prompt→response function. Pass nil to fall back
+// to AppIntentRefine (safe default, same as distill flow).
+func (c *ChatAgent) ClassifyAppIntent(ctx context.Context, msg string, llmFunc func(ctx context.Context, prompt string) (string, error)) AppIntentResult {
 	trimmed := strings.TrimSpace(msg)
 
-	// Magic markers from UI buttons
+	// Magic markers from UI buttons — no LLM needed
 	if trimmed == "__app_save__" {
-		return AppIntentSave
+		return AppIntentResult{Intent: AppIntentSave}
 	}
 	if trimmed == "__app_done__" {
-		return AppIntentSave // Done is now equivalent to save
+		return AppIntentResult{Intent: AppIntentSave}
 	}
 
-	// Quick heuristics for obvious cases
-	lower := strings.ToLower(trimmed)
-
-	// Exact match save keywords
-	saveExact := []string{"done", "i'm done", "im done", "that's it", "looks good", "perfect",
-		"save it", "save this app", "save this", "save the app", "ship it", "yes", "yep", "yup",
-		"save", "looks great", "that works", "good enough", "all done"}
-	for _, kw := range saveExact {
-		if lower == kw {
-			return AppIntentSave
-		}
-	}
-
-	// Substring-based save detection — catches natural phrasing like "save for me",
-	// "please save this", "go ahead and save", "you can save it now", etc.
-	saveContains := []string{"save for", "save it", "save this", "save the app", "go ahead and save",
-		"you can save", "please save", "just save"}
-	for _, phrase := range saveContains {
-		if strings.Contains(lower, phrase) {
-			return AppIntentSave
-		}
-	}
-
-	// LLM classification if available
+	// Use LLM to classify intent
 	if llmFunc != nil {
-		intent := c.classifyAppViaLLM(ctx, trimmed, llmFunc)
-		if intent >= 0 {
-			return intent
+		result := c.classifyAppViaLLM(ctx, trimmed, llmFunc)
+		if result.Intent >= 0 {
+			return result
 		}
 	}
 
-	// Fallback: treat as refinement (safe default — user can always say "done")
-	return AppIntentRefine
+	// Fallback if LLM is unavailable: treat as refinement (safe default)
+	return AppIntentResult{Intent: AppIntentRefine}
 }
 
 // classifyAppViaLLM asks the LLM to classify the user's intent regarding an active app.
-// Returns -1 if classification fails.
-func (c *ChatAgent) classifyAppViaLLM(ctx context.Context, msg string, llmFunc func(ctx context.Context, prompt string) (string, error)) AppRefinementIntent {
+// Returns Intent == -1 if classification fails.
+func (c *ChatAgent) classifyAppViaLLM(ctx context.Context, msg string, llmFunc func(ctx context.Context, prompt string) (string, error)) AppIntentResult {
 	prompt := fmt.Sprintf(`You are classifying a user's message during an interactive app refinement session.
 The user has just been shown a generated React component (visual app preview) and can do one of three things:
 
 1. REFINE — They want to modify the app. Examples: "Make the header blue", "Add a search bar", "Change the chart to a bar chart", "Make it responsive".
-2. SAVE — They are satisfied and want to save the app. Examples: "Looks good", "I'm done", "That's perfect", "Save it", "Ship it", "Save this app", "Save for me", "Please save", "Yes save it", "Go ahead and save".
+2. SAVE — They are satisfied and want to save/keep the app. Examples: "Looks good", "I'm done", "That's perfect", "Save it", "Ship it", "Save this app", "Save for me", "Please save", "Yes save it", "Go ahead and save", "Done", "All done", "Looks great", "Perfect", "Yes".
+   - If the user specifies a custom name, include it after a colon. Examples: "Save as Weather" → SAVE:Weather, "Save it as My Dashboard" → SAVE:My Dashboard, "Name it Weather and save" → SAVE:Weather, "Call it Sales Tracker" → SAVE:Sales Tracker.
+   - If no custom name is specified, respond with just SAVE (no colon).
 3. UNRELATED — Their message has nothing to do with the app being shown. Examples: "What's the weather?", "Help me write a function", "Search for Python docs".
 
 User message: %q
 
-Respond with exactly one word: REFINE, SAVE, or UNRELATED`, msg)
+Respond with one of: REFINE, SAVE, SAVE:<custom name>, or UNRELATED`, msg)
 
 	response, err := llmFunc(ctx, prompt)
 	if err != nil {
 		slog.Debug("app intent classification LLM failed", "error", err, "msg", msg)
-		return -1
+		return AppIntentResult{Intent: -1}
 	}
 
-	answer := strings.ToUpper(strings.TrimSpace(response))
-	// Extract the first word in case the LLM is verbose
-	if idx := strings.IndexAny(answer, " \n\t.,"); idx > 0 {
+	raw := strings.TrimSpace(response)
+	slog.Debug("app intent classification result", "msg", msg, "raw", raw)
+
+	// Normalize: uppercase, take first line only
+	answer := strings.ToUpper(raw)
+	if idx := strings.IndexAny(answer, "\n"); idx > 0 {
+		answer = answer[:idx]
+	}
+	answer = strings.TrimSpace(answer)
+
+	// Check for SAVE:<name> pattern
+	if strings.HasPrefix(answer, "SAVE:") {
+		// Extract the custom name from the raw response (preserve original casing)
+		rawFirstLine := raw
+		if idx := strings.IndexAny(rawFirstLine, "\n"); idx > 0 {
+			rawFirstLine = rawFirstLine[:idx]
+		}
+		rawFirstLine = strings.TrimSpace(rawFirstLine)
+
+		customName := ""
+		if colonIdx := strings.Index(rawFirstLine, ":"); colonIdx >= 0 {
+			customName = strings.TrimSpace(rawFirstLine[colonIdx+1:])
+		}
+		slog.Debug("app intent: SAVE with custom name", "name", customName)
+		return AppIntentResult{Intent: AppIntentSave, SaveName: customName}
+	}
+
+	// Strip trailing punctuation or extra words from the answer
+	if idx := strings.IndexAny(answer, " \t.,;!"); idx > 0 {
 		answer = answer[:idx]
 	}
 
-	slog.Debug("app intent classification result", "msg", msg, "raw", response, "parsed", answer)
-
 	switch answer {
 	case "REFINE":
-		return AppIntentRefine
+		return AppIntentResult{Intent: AppIntentRefine}
 	case "SAVE", "DONE":
-		return AppIntentSave
+		return AppIntentResult{Intent: AppIntentSave}
 	case "UNRELATED":
-		return AppIntentUnrelated
+		return AppIntentResult{Intent: AppIntentUnrelated}
 	default:
-		slog.Debug("app intent classification unknown answer", "answer", answer, "raw", response)
-		return -1
+		slog.Debug("app intent classification unknown answer", "answer", answer, "raw", raw)
+		return AppIntentResult{Intent: -1}
 	}
 }
 

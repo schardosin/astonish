@@ -585,19 +585,38 @@ func (cr *ChatRunner) detectAndEmitAppPreviews(chatAgent *agent.ChatAgent, sessi
 	}
 }
 
-// extractComponentTitle tries to find a function/const component name from JSX code.
-// It looks for patterns like "function MyComponent()" or "const MyComponent =".
+// extractComponentTitle tries to find the main component name from JSX code.
+// It prioritizes "export default function X" / "export default const X" patterns
+// over helper components defined earlier in the file.
 func extractComponentTitle(code string) string {
-	// Try function declaration first
-	funcRe := regexp.MustCompile(`(?m)^(?:export\s+default\s+)?function\s+([A-Z][a-zA-Z0-9]*)`)
-	if m := funcRe.FindStringSubmatch(code); len(m) > 1 {
+	// Priority 1: export default function/const declaration
+	exportDefaultRe := regexp.MustCompile(`(?m)^export\s+default\s+function\s+([A-Z][a-zA-Z0-9]*)`)
+	if m := exportDefaultRe.FindStringSubmatch(code); len(m) > 1 {
 		return splitCamelCase(m[1])
 	}
-	// Try const/let declaration
-	constRe := regexp.MustCompile(`(?m)^(?:export\s+default\s+)?(?:const|let)\s+([A-Z][a-zA-Z0-9]*)`)
-	if m := constRe.FindStringSubmatch(code); len(m) > 1 {
+	exportDefaultConstRe := regexp.MustCompile(`(?m)^export\s+default\s+(?:const|let)\s+([A-Z][a-zA-Z0-9]*)`)
+	if m := exportDefaultConstRe.FindStringSubmatch(code); len(m) > 1 {
 		return splitCamelCase(m[1])
 	}
+
+	// Priority 2: Look for "export default X" at end, then find "function X" or "const X" above
+	exportDefaultNameRe := regexp.MustCompile(`(?m)^export\s+default\s+([A-Z][a-zA-Z0-9]*)\s*;?\s*$`)
+	if m := exportDefaultNameRe.FindStringSubmatch(code); len(m) > 1 {
+		return splitCamelCase(m[1])
+	}
+
+	// Priority 3: Last PascalCase function/const (main component is typically last, helpers above)
+	funcRe := regexp.MustCompile(`(?m)^(?:export\s+)?function\s+([A-Z][a-zA-Z0-9]*)`)
+	matches := funcRe.FindAllStringSubmatch(code, -1)
+	if len(matches) > 0 {
+		return splitCamelCase(matches[len(matches)-1][1])
+	}
+	constRe := regexp.MustCompile(`(?m)^(?:export\s+)?(?:const|let)\s+([A-Z][a-zA-Z0-9]*)`)
+	matches = constRe.FindAllStringSubmatch(code, -1)
+	if len(matches) > 0 {
+		return splitCamelCase(matches[len(matches)-1][1])
+	}
+
 	return "App Preview"
 }
 

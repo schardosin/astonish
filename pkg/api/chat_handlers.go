@@ -477,7 +477,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		llmFunc := makeLLMFuncFromModel(comp.LLM)
 		appIntent := chatAgent.ClassifyAppIntent(r.Context(), msg, llmFunc)
 
-		switch appIntent {
+		switch appIntent.Intent {
 		case agent.AppIntentSave, agent.AppIntentDone:
 			// User wants to save the app — persist to disk, clear state, acknowledge
 			activeApp := chatAgent.GetActiveApp(req.SessionID)
@@ -490,9 +490,14 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			// Save the app to disk
 			var savedPath, savedName string
 			if activeApp != nil {
+				// Use custom name from LLM classification if provided, otherwise fall back to auto-title
+				appName := activeApp.Title
+				if appIntent.SaveName != "" {
+					appName = appIntent.SaveName
+				}
 				savedApp := &apps.VisualApp{
-					Name:        activeApp.Title,
-					Description: activeApp.Title,
+					Name:        appName,
+					Description: appName,
 					Code:        activeApp.Code,
 					Version:     activeApp.Version,
 					SessionID:   req.SessionID,
@@ -502,7 +507,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 				if saveErr != nil {
 					slog.Error("failed to save app", "error", saveErr)
 				}
-				savedName = apps.Slugify(activeApp.Title)
+				savedName = apps.Slugify(appName)
 			}
 
 			chatAgent.ClearActiveApp(req.SessionID)

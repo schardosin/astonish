@@ -60,38 +60,24 @@ func TestClassifyAppIntent_MagicStrings(t *testing.T) {
 		msg    string
 		expect AppRefinementIntent
 	}{
+		// Magic markers from UI buttons — no LLM needed
 		{"__app_save__", AppIntentSave},
-		{"__app_done__", AppIntentSave}, // Done is now equivalent to save
-		{"done", AppIntentSave},
-		{"Done", AppIntentSave},
-		{"I'm done", AppIntentSave},
-		{"looks good", AppIntentSave},
-		{"perfect", AppIntentSave},
-		{"save it", AppIntentSave},
-		{"save this app", AppIntentSave},
-		// Substring-based save detection (natural phrasing)
-		{"save for me", AppIntentSave},
-		{"please save this", AppIntentSave},
-		{"save it now", AppIntentSave},
-		{"go ahead and save it", AppIntentSave},
-		{"you can save the app", AppIntentSave},
-		{"just save it please", AppIntentSave},
-		// New exact match keywords
-		{"save", AppIntentSave},
-		{"yes", AppIntentSave},
-		{"yep", AppIntentSave},
-		{"looks great", AppIntentSave},
-		{"all done", AppIntentSave},
-		// Without LLM, everything else defaults to refine
+		{"__app_done__", AppIntentSave},
+		// Without LLM (nil), everything else defaults to refine
 		{"make the header blue", AppIntentRefine},
-		{"add a search bar", AppIntentRefine},
+		{"save it", AppIntentRefine},       // no LLM = defaults to refine (heuristics removed)
+		{"done", AppIntentRefine},           // no LLM = defaults to refine
+		{"looks good", AppIntentRefine},     // no LLM = defaults to refine
 		{"what's the weather?", AppIntentRefine}, // no LLM = defaults to refine
 	}
 
 	for _, tt := range tests {
-		got := ca.ClassifyAppIntent(context.Background(), tt.msg, nil)
-		if got != tt.expect {
-			t.Errorf("ClassifyAppIntent(%q) = %d, want %d", tt.msg, got, tt.expect)
+		result := ca.ClassifyAppIntent(context.Background(), tt.msg, nil)
+		if result.Intent != tt.expect {
+			t.Errorf("ClassifyAppIntent(%q, nil) = %d, want %d", tt.msg, result.Intent, tt.expect)
+		}
+		if result.SaveName != "" {
+			t.Errorf("ClassifyAppIntent(%q, nil) SaveName = %q, want empty", tt.msg, result.SaveName)
 		}
 	}
 }
@@ -102,26 +88,51 @@ func TestClassifyAppIntent_WithLLM(t *testing.T) {
 	}
 
 	tests := []struct {
-		msg       string
-		llmReply  string
-		expect    AppRefinementIntent
+		msg      string
+		llmReply string
+		expect   AppRefinementIntent
+		saveName string
 	}{
-		{"make it blue", "REFINE", AppIntentRefine},
-		{"I'm satisfied", "DONE", AppIntentSave},  // LLM says DONE → maps to Save
-		{"I'm satisfied", "SAVE", AppIntentSave},   // LLM says SAVE → maps to Save
-		{"what's the weather?", "UNRELATED", AppIntentUnrelated},
-		{"something", "refine\n", AppIntentRefine}, // lowercase + trailing newline
-		{"something", "UNKNOWN_RESPONSE", AppIntentRefine}, // fallback to refine
+		{"make it blue", "REFINE", AppIntentRefine, ""},
+		{"I'm satisfied", "SAVE", AppIntentSave, ""},
+		{"I'm satisfied", "DONE", AppIntentSave, ""},  // LLM says DONE → maps to Save
+		{"what's the weather?", "UNRELATED", AppIntentUnrelated, ""},
+		{"something", "refine\n", AppIntentRefine, ""},              // lowercase + trailing newline
+		{"something", "UNKNOWN_RESPONSE", AppIntentRefine, ""},      // unknown → fallback to refine
+		{"save as Weather", "SAVE:Weather", AppIntentSave, "Weather"},
+		{"save it as My Dashboard", "SAVE:My Dashboard", AppIntentSave, "My Dashboard"},
+		{"call it Sales Tracker", "SAVE:Sales Tracker", AppIntentSave, "Sales Tracker"},
 	}
 
 	for _, tt := range tests {
 		llmFunc := func(_ context.Context, _ string) (string, error) {
 			return tt.llmReply, nil
 		}
-		got := ca.ClassifyAppIntent(context.Background(), tt.msg, llmFunc)
-		if got != tt.expect {
-			t.Errorf("ClassifyAppIntent(%q, llm=%q) = %d, want %d", tt.msg, tt.llmReply, got, tt.expect)
+		result := ca.ClassifyAppIntent(context.Background(), tt.msg, llmFunc)
+		if result.Intent != tt.expect {
+			t.Errorf("ClassifyAppIntent(%q, llm=%q).Intent = %d, want %d", tt.msg, tt.llmReply, result.Intent, tt.expect)
 		}
+		if result.SaveName != tt.saveName {
+			t.Errorf("ClassifyAppIntent(%q, llm=%q).SaveName = %q, want %q", tt.msg, tt.llmReply, result.SaveName, tt.saveName)
+		}
+	}
+}
+
+func TestClassifyAppIntent_LLMError(t *testing.T) {
+	ca := &ChatAgent{
+		activeApps: make(map[string]*ActiveApp),
+	}
+
+	// When LLM returns an error, should fall back to AppIntentRefine
+	llmFunc := func(_ context.Context, _ string) (string, error) {
+		return "", context.DeadlineExceeded
+	}
+	result := ca.ClassifyAppIntent(context.Background(), "save it", llmFunc)
+	if result.Intent != AppIntentRefine {
+		t.Errorf("expected AppIntentRefine on LLM error, got %d", result.Intent)
+	}
+	if result.SaveName != "" {
+		t.Errorf("expected empty SaveName on LLM error, got %q", result.SaveName)
 	}
 }
 

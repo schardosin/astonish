@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { AppWindow, Trash2, Code, ArrowLeft, Clock } from 'lucide-react'
-import { fetchApps, fetchApp, deleteApp } from '../api/apps'
+import { fetchApps, fetchApp, deleteApp, saveApp } from '../api/apps'
 import type { AppListItem, VisualApp } from '../api/apps'
 import AppPreview from './chat/AppPreview'
+import CodeDrawer from './CodeDrawer'
 
 interface AppsViewProps {
   theme: string
@@ -46,6 +47,9 @@ export default function AppsView({ theme }: AppsViewProps) {
   const [selectedApp, setSelectedApp] = useState<VisualApp | null>(null)
   const [showCode, setShowCode] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+  const [codeContent, setCodeContent] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'error' | null>(null)
 
   const loadApps = useCallback(async () => {
     try {
@@ -73,7 +77,9 @@ export default function AppsView({ theme }: AppsViewProps) {
     try {
       const app = await fetchApp(name)
       setSelectedApp(app)
+      setCodeContent(app.code)
       setShowCode(false)
+      setSaveStatus(null)
     } catch {
       // Ignore
     }
@@ -91,6 +97,27 @@ export default function AppsView({ theme }: AppsViewProps) {
     }
     setDeleteConfirm(null)
   }, [selectedApp])
+
+  const handleSaveCode = useCallback(async () => {
+    if (!selectedApp) return
+    setIsSaving(true)
+    setSaveStatus(null)
+    try {
+      await saveApp(selectedApp.name, {
+        description: selectedApp.description,
+        code: codeContent,
+        version: selectedApp.version,
+        sessionId: selectedApp.sessionId,
+      })
+      setSelectedApp(prev => prev ? { ...prev, code: codeContent } : prev)
+      setSaveStatus('saved')
+      setTimeout(() => setSaveStatus(null), 3000)
+    } catch {
+      setSaveStatus('error')
+    } finally {
+      setIsSaving(false)
+    }
+  }, [selectedApp, codeContent])
 
   // Runner view
   if (selectedApp) {
@@ -125,12 +152,15 @@ export default function AppsView({ theme }: AppsViewProps) {
 
           <button
             onClick={() => setShowCode(!showCode)}
-            className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors cursor-pointer ${showCode ? 'ring-1' : ''}`}
-            style={{ color: showCode ? 'var(--accent)' : 'var(--text-muted)' }}
+            className="flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors cursor-pointer"
+            style={{
+              background: showCode ? 'rgba(6, 182, 212, 0.15)' : 'transparent',
+              color: showCode ? '#22d3ee' : 'var(--text-muted)',
+            }}
             title={showCode ? 'Hide code' : 'View code'}
           >
             <Code size={14} />
-            Code
+            {showCode ? 'Hide Code' : 'View Code'}
           </button>
 
           <button
@@ -166,32 +196,28 @@ export default function AppsView({ theme }: AppsViewProps) {
         )}
 
         {/* Content area */}
-        <div className="flex-1 flex overflow-hidden">
-          {/* Code panel */}
-          {showCode && (
-            <div className="w-[400px] shrink-0 overflow-auto"
-              style={{ borderRight: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}>
-              <div className="flex items-center justify-between px-3 py-2"
-                style={{ borderBottom: '1px solid var(--border-color)' }}>
-                <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Source Code</span>
-                <button
-                  onClick={() => navigator.clipboard.writeText(selectedApp.code)}
-                  className="text-[10px] px-1.5 py-0.5 rounded cursor-pointer"
-                  style={{ color: 'var(--accent)', background: 'var(--bg-tertiary)' }}
-                >
-                  Copy
-                </button>
-              </div>
-              <pre className="p-3 text-xs font-mono leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                <code>{selectedApp.code}</code>
-              </pre>
-            </div>
-          )}
-
+        <div className="flex-1 flex flex-col overflow-hidden">
           {/* Preview iframe */}
-          <div className="flex-1 overflow-auto p-4">
+          <div className={`${showCode ? 'h-1/2' : 'flex-1'} overflow-hidden p-4`}>
             <AppPreview code={selectedApp.code} maxHeight={9999} appName={selectedApp.name} />
           </div>
+
+          {/* Bottom code drawer */}
+          {showCode && (
+            <div className="h-1/2" style={{ borderTop: '1px solid var(--border-color)' }}>
+              <CodeDrawer
+                code={codeContent}
+                onChange={(val) => setCodeContent(val)}
+                onClose={() => setShowCode(false)}
+                theme={theme === 'dark' ? 'dark' : 'light'}
+                title={selectedApp.name}
+                subtitle="JSX / React component"
+                onSave={handleSaveCode}
+                isSaving={isSaving}
+                saveStatus={saveStatus}
+              />
+            </div>
+          )}
         </div>
       </div>
     )

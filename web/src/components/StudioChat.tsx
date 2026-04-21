@@ -163,7 +163,7 @@ function SourceCitations({ urls }: { urls: string[] }) {
   )
 }
 
-export default function StudioChat({ theme, initialSessionId, pendingChatMessage, onPendingChatMessageConsumed, onSessionChange }: { theme: string; initialSessionId?: string | null; pendingChatMessage?: string | null; onPendingChatMessageConsumed?: () => void; onSessionChange?: (sessionId: string | null) => void }) {
+export default function StudioChat({ theme, initialSessionId, pendingChatMessage, onPendingChatMessageConsumed, onSessionChange }: { theme: string; initialSessionId?: string | null; pendingChatMessage?: { message: string; systemContext?: string } | null; onPendingChatMessageConsumed?: () => void; onSessionChange?: (sessionId: string | null) => void }) {
   // Session state
   const [sessions, setSessions] = useState<SidebarSession[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(initialSessionId || null)
@@ -1622,15 +1622,22 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     }
   }, [pendingDrillPrompt, isStreaming, sendMessage])
 
-  // Process pending chat message passed from another view (e.g., Fleet UI "Create Plan with AI Guide")
+  // Process pending chat message passed from another view (e.g., Fleet UI "Create Plan with AI Guide", Apps "Improve with AI")
   useEffect(() => {
     if (pendingChatMessage && !isStreaming) {
-      sendMessage(pendingChatMessage)
+      // If there's an active session and the pending message needs a fresh session
+      // (has systemContext, e.g. app refinement), clear the session first.
+      // sendMessage with activeSessionId=null will create a new session.
+      if (activeSessionId && pendingChatMessage.systemContext) {
+        changeSession(null)
+        return // re-runs on next render when activeSessionId is null
+      }
+      sendMessage(pendingChatMessage.message, { systemContext: pendingChatMessage.systemContext })
       if (onPendingChatMessageConsumed) {
         onPendingChatMessageConsumed()
       }
     }
-  }, [pendingChatMessage, isStreaming, sendMessage, onPendingChatMessageConsumed])
+  }, [pendingChatMessage, isStreaming, sendMessage, onPendingChatMessageConsumed, activeSessionId, changeSession])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { AppWindow, Trash2, Code, ArrowLeft, Clock } from 'lucide-react'
+import { AppWindow, Trash2, Code, ArrowLeft, Clock, Sparkles } from 'lucide-react'
 import { fetchApps, fetchApp, deleteApp, saveApp } from '../api/apps'
 import type { AppListItem, VisualApp } from '../api/apps'
 import AppPreview from './chat/AppPreview'
@@ -7,6 +7,7 @@ import CodeDrawer from './CodeDrawer'
 
 interface AppsViewProps {
   theme: string
+  onImproveApp?: (message: string, systemContext: string) => void
 }
 
 function EmptyState() {
@@ -41,7 +42,7 @@ function formatDate(dateStr: string) {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-export default function AppsView({ theme }: AppsViewProps) {
+export default function AppsView({ theme, onImproveApp }: AppsViewProps) {
   const [apps, setApps] = useState<AppListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedApp, setSelectedApp] = useState<VisualApp | null>(null)
@@ -119,6 +120,25 @@ export default function AppsView({ theme }: AppsViewProps) {
     }
   }, [selectedApp, codeContent])
 
+  const handleImproveWithAI = useCallback(() => {
+    if (!selectedApp || !onImproveApp) return
+    const systemContext = [
+      '## Active App Refinement\n',
+      `The user wants to improve a saved visual app called "${selectedApp.name}" (version ${selectedApp.version}).`,
+      'Apply the user\'s requested changes to the CURRENT source code below and output the COMPLETE updated component.',
+      'You MUST output the full component inside an ```astonish-app code fence — do NOT output a diff or partial snippet.',
+      'Preserve all existing functionality unless the user explicitly asks to remove it.',
+      '',
+      '### Current Source Code\n',
+      '```jsx',
+      selectedApp.code,
+      '```',
+      '',
+      'First, show the current app by outputting it unchanged inside an ```astonish-app fence, then ask the user what they would like to change.',
+    ].join('\n')
+    onImproveApp('I want to improve this app.', systemContext)
+  }, [selectedApp, onImproveApp])
+
   // Runner view
   if (selectedApp) {
     return (
@@ -149,6 +169,18 @@ export default function AppsView({ theme }: AppsViewProps) {
               </span>
             )}
           </div>
+
+          {onImproveApp && (
+            <button
+              onClick={handleImproveWithAI}
+              className="flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors cursor-pointer"
+              style={{ color: 'var(--text-muted)' }}
+              title="Improve this app with AI in Chat"
+            >
+              <Sparkles size={14} />
+              Improve with AI
+            </button>
+          )}
 
           <button
             onClick={() => setShowCode(!showCode)}

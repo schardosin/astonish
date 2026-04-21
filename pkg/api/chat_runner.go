@@ -543,6 +543,12 @@ func (cr *ChatRunner) detectAndEmitAppPreviews(chatAgent *agent.ChatAgent, sessi
 			continue
 		}
 
+		// Skip if the LLM re-emitted the exact same code that was already seeded
+		// (e.g., on the first turn of an "Improve with AI" session).
+		if existingApp != nil && existingApp.Code == code {
+			continue
+		}
+
 		title := extractComponentTitle(code)
 
 		var appID string

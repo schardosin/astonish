@@ -35,11 +35,15 @@ jobs:
     steps:
       - name: Determine version tag
         id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          WORKFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=${{ github.event.workflow_run.head_branch }}" >> $GITHUB_OUTPUT
+            echo "tag=$WORKFLOW_HEAD_BRANCH" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Checkout code

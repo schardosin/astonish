@@ -9,8 +9,9 @@ import (
 // The policy restricts resource loading to the same origin with targeted
 // exceptions for Tailwind CSS inline styles and WebSocket connections.
 //
-// frame-src 'self' allows the Studio UI to embed same-origin iframes (e.g.
-// the KasmVNC browser view during human-in-the-loop handoff sessions).
+// frame-src 'self' allows the Studio UI to embed same-origin iframes
+// (e.g. the KasmVNC browser view during human-in-the-loop handoff sessions
+// and the generative UI sandbox served from /api/app-preview/sandbox-full).
 //
 // The sha256 hash in script-src allows the inline <script> in the device
 // authorization page (auth.go authPageHTML). If that script changes, the
@@ -28,6 +29,21 @@ const cspPolicy = "default-src 'self'; " +
 	"base-uri 'self'; " +
 	"form-action 'self'"
 
+// sandboxCSP is the Content-Security-Policy for the generative UI sandbox
+// iframe served at /api/app-preview/sandbox-full. It is intentionally
+// permissive (allows inline scripts, eval) because security isolation is
+// enforced by the iframe sandbox="allow-scripts" attribute WITHOUT
+// allow-same-origin — the document runs on an opaque origin and cannot
+// access the parent's DOM, cookies, localStorage, or make credentialed
+// requests. connect-src 'none' ensures no direct network access; all data
+// flows through postMessage to the parent.
+const sandboxCSP = "default-src 'none'; " +
+	"script-src 'unsafe-inline' 'unsafe-eval'; " +
+	"style-src 'unsafe-inline'; " +
+	"img-src data: blob:; " +
+	"font-src data:; " +
+	"connect-src 'none'"
+
 // CSPMiddleware adds Content-Security-Policy and other security headers
 // to all responses. It should be applied inside auth but outside the
 // subdomain proxy (proxied container apps have their own CSP).
@@ -43,15 +59,23 @@ func CSPMiddleware(next http.Handler) http.Handler {
 		// Also skip X-Content-Type-Options because KasmVNC serves JS files
 		// as text/plain. With "nosniff" browsers refuse to execute scripts
 		// that don't have a JavaScript MIME type.
-		// Skip CSP for app-preview runtime scripts — they're static JS
-		// files fetched by the parent page, and strict CSP isn't needed.
-		if !strings.HasPrefix(r.URL.Path, "/api/browser/vnc/") &&
-			!strings.HasPrefix(r.URL.Path, "/api/app-preview/") {
-			w.Header().Set("Content-Security-Policy", cspPolicy)
-			w.Header().Set("X-Frame-Options", "SAMEORIGIN")
-			w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-			w.Header().Set("X-Content-Type-Options", "nosniff")
+		if strings.HasPrefix(r.URL.Path, "/api/browser/vnc/") {
+			next.ServeHTTP(w, r)
+			return
 		}
+
+		// The generative UI sandbox iframe gets a permissive CSP because
+		// it needs inline scripts and eval (Sucrase transpilation). Origin
+		// isolation is enforced by the iframe sandbox attribute — see
+		// sandboxCSP comment above.
+		if r.URL.Path == "/api/app-preview/sandbox-full" {
+			w.Header().Set("Content-Security-Policy", sandboxCSP)
+		} else {
+			w.Header().Set("Content-Security-Policy", cspPolicy)
+		}
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		next.ServeHTTP(w, r)
 	})
 }

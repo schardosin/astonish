@@ -1,7 +1,13 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
 import { fetchAppData, fetchAppAction, fetchAppAI, fetchAppStateQuery, fetchAppStateExec } from '../../api/apps'
 
-const SANDBOX_URL = '/api/app-preview/sandbox'
+// The sandbox HTML is served directly by the backend with its own permissive
+// CSP (allowing inline scripts/eval). Origin isolation is enforced by the
+// iframe sandbox="allow-scripts" attribute (no allow-same-origin), which gives
+// the document an opaque origin — it cannot access the parent's DOM, cookies,
+// localStorage, or make credentialed requests. The browser caches the response
+// via Cache-Control: public, max-age=86400, immutable.
+const SANDBOX_URL = '/api/app-preview/sandbox-full'
 
 interface AppPreviewProps {
   code: string
@@ -319,7 +325,7 @@ export default function AppPreview({ code, maxHeight = 500, appName = '', stateI
       <iframe
         ref={iframeRef}
         src={SANDBOX_URL}
-        sandbox="allow-scripts allow-same-origin"
+        sandbox="allow-scripts"
         style={{
           width: '100%',
           height: `${height}px`,

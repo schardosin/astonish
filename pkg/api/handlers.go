@@ -865,6 +865,7 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/scheduler/jobs/{id}", SchedulerJobHandler).Methods("GET", "PUT", "DELETE")
 
 	// App Preview sandbox (generative UI iframe)
+	router.HandleFunc("/api/app-preview/sandbox-full", AppPreviewSandboxFullHandler).Methods("GET")
 	router.HandleFunc("/api/app-preview/sandbox", AppPreviewSandboxHandler).Methods("GET")
 	router.HandleFunc("/api/app-preview/runtime.js", AppPreviewRuntimeHandler).Methods("GET")
 	router.HandleFunc("/api/app-preview/tailwind.js", AppPreviewTailwindHandler).Methods("GET")

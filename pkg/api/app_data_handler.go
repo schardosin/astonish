@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -15,6 +17,86 @@ import (
 	"github.com/schardosin/astonish/pkg/apps"
 	"github.com/schardosin/astonish/pkg/mcp"
 )
+
+// maxResponseBodySize is the maximum number of bytes the HTTP data proxy will
+// read from an external response. This prevents out-of-memory conditions if
+// a sandboxed app (accidentally or maliciously) points to a huge resource.
+const maxResponseBodySize = 10 << 20 // 10 MB
+
+// privateIPNets lists CIDR ranges that the HTTP data proxy must never contact.
+// This prevents SSRF attacks where a sandboxed app could probe internal
+// services, cloud metadata endpoints, or other private infrastructure.
+var privateIPNets []*net.IPNet
+
+func init() {
+	for _, cidr := range []string{
+		"0.0.0.0/8",          // "this" network (RFC 1122)
+		"10.0.0.0/8",         // RFC 1918
+		"100.64.0.0/10",      // shared address space (RFC 6598, e.g. CGNAT)
+		"127.0.0.0/8",        // loopback
+		"169.254.0.0/16",     // link-local / cloud metadata (AWS, GCP, Azure)
+		"172.16.0.0/12",      // RFC 1918
+		"192.0.0.0/24",       // IETF protocol assignments (RFC 6890)
+		"192.168.0.0/16",     // RFC 1918
+		"198.18.0.0/15",      // benchmarking (RFC 2544)
+		"::1/128",            // IPv6 loopback
+		"fc00::/7",           // IPv6 unique local (RFC 4193)
+		"fe80::/10",          // IPv6 link-local
+	} {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			panic(fmt.Sprintf("bad CIDR in privateIPNets: %s: %v", cidr, err))
+		}
+		privateIPNets = append(privateIPNets, ipNet)
+	}
+}
+
+// isPrivateIP reports whether the given IP falls within a private,
+// loopback, link-local, or otherwise non-public address range.
+func isPrivateIP(ip net.IP) bool {
+	// Normalize IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1) to plain IPv4
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+	}
+	for _, ipNet := range privateIPNets {
+		if ipNet.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// ssrfSafeTransport returns an *http.Transport that validates resolved IPs
+// before connecting, blocking requests to private/internal networks.
+// Checking at the dial level prevents DNS-rebinding attacks where a public
+// hostname resolves to 127.0.0.1 or another private address.
+func ssrfSafeTransport() *http.Transport {
+	return &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, fmt.Errorf("invalid address %q: %w", addr, err)
+			}
+
+			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+			if err != nil {
+				return nil, fmt.Errorf("DNS lookup failed for %q: %w", host, err)
+			}
+
+			for _, ipAddr := range ips {
+				if isPrivateIP(ipAddr.IP) {
+					return nil, fmt.Errorf("requests to private/internal networks are not allowed (host %q resolved to %s)", host, ipAddr.IP)
+				}
+			}
+
+			// All IPs are public — connect to the first one.
+			dialer := &net.Dialer{Timeout: 10 * time.Second}
+			return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+		},
+		TLSHandshakeTimeout: 10 * time.Second,
+		MaxIdleConnsPerHost: 4,
+	}
+}
 
 // appDataRequest is the JSON body for POST /api/apps/data.
 // sourceId uses convention-based routing:
@@ -263,6 +345,31 @@ func resolveMCPSource(ctx context.Context, serverTool string, args map[string]an
 // ensuring it doesn't conflict with @ in URLs (e.g., user:pass@host).
 var credentialSuffixRe = regexp.MustCompile(`@([a-zA-Z][a-zA-Z0-9_-]*)$`)
 
+// validateHTTPURL performs a fast, pre-flight check on the URL before any
+// network I/O. It rejects non-http(s) schemes and IP-literal hosts that
+// resolve to private ranges. Hostnames are checked later at dial time.
+func validateHTTPURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("unsupported URL scheme %q (only http and https are allowed)", parsed.Scheme)
+	}
+
+	// If the host is an IP literal, check it immediately.
+	host := parsed.Hostname()
+	if ip := net.ParseIP(host); ip != nil {
+		if isPrivateIP(ip) {
+			return fmt.Errorf("requests to private/internal networks are not allowed (%s)", ip)
+		}
+	}
+
+	return nil
+}
+
 // resolveHTTPSource makes a server-side HTTP request.
 // spec format: "<METHOD>:<url>" or "<METHOD>:<url>@<credential-name>"
 // When a @credential-name suffix is present, the named credential is resolved
@@ -326,14 +433,31 @@ func resolveHTTPSource(spec string, args map[string]any) (any, error) {
 		httpReq.Header.Set(headerKey, headerValue)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	// Validate the URL scheme and host before making the request.
+	// The Transport's DialContext also checks resolved IPs (DNS-rebinding defence).
+	if err := validateHTTPURL(url); err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: ssrfSafeTransport(),
+		// Do not follow redirects to private IPs — each hop is checked
+		// by the Transport's DialContext, but we also cap redirects.
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			return nil
+		},
+	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodySize))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}

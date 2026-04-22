@@ -2,28 +2,32 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/schardosin/astonish/web"
 )
 
-// appPreviewSandboxHTML is the HTML page served inside the generative-UI
-// iframe. It loads pre-bundled scripts via <script src="..."> from the
-// same origin. The iframe uses sandbox="allow-scripts allow-same-origin"
-// so it can load sub-resources and send auth cookies.
-const appPreviewSandboxHTML = `<!DOCTYPE html>
+// sandboxHTMLHead is the opening portion of the sandbox HTML, before scripts.
+const sandboxHTMLHead = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Restrictive CSP: only inline scripts (for our runtime) and inline styles
+     (for Tailwind). No connect-src, no fetch, no external resources.
+     All data flows through postMessage to the parent. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:;">
 <script>
 window.__runtimeError = null;
 window.onerror = function(msg, src, line, col, err) {
   window.__runtimeError = msg + ' (at ' + (src||'inline') + ':' + line + ':' + col + ')';
 };
-</script>
-<script src="/api/app-preview/runtime.js"></script>
-<script src="/api/app-preview/tailwind.js"></script>
+</script>`
+
+// sandboxHTMLBody is the HTML after all <script> tags have been inserted.
+// It contains the styles, DOM, and the application bootstrap script.
+const sandboxHTMLBody = `
 <style type="text/tailwindcss">
   @theme {
     --color-bg-app: #0b1222;
@@ -540,15 +544,70 @@ window.onerror = function(msg, src, line, col, err) {
 </body>
 </html>`
 
-// AppPreviewSandboxHandler serves the generative-UI sandbox HTML.
-// The iframe uses sandbox="allow-scripts allow-same-origin" so it shares
-// the parent origin, sends auth cookies, and can load sub-resources.
-// This endpoint is behind auth — no bypass.
+// sandboxFullOnce caches the fully assembled sandbox HTML with inlined JS.
+var (
+	sandboxFullOnce sync.Once
+	sandboxFullHTML string
+)
+
+// buildSandboxFullHTML assembles the complete sandbox HTML with the runtime
+// and Tailwind JS inlined as <script> blocks. This is used with srcdoc so
+// the iframe runs on an opaque ("null") origin with sandbox="allow-scripts"
+// — no allow-same-origin — preventing access to the parent's DOM, cookies,
+// localStorage, and API endpoints.
+func buildSandboxFullHTML() string {
+	runtimeJS := web.GetSandboxRuntime()
+	tailwindJS := web.GetTailwindBrowser()
+
+	var b strings.Builder
+	b.WriteString(sandboxHTMLHead)
+
+	// Inline the runtime JS (React, Sucrase, Recharts, Lucide)
+	if runtimeJS != nil {
+		b.WriteString("\n<script>")
+		b.Write(runtimeJS)
+		b.WriteString("</script>")
+	}
+
+	// Inline the Tailwind CSS browser runtime
+	if tailwindJS != nil {
+		b.WriteString("\n<script>")
+		b.Write(tailwindJS)
+		b.WriteString("</script>")
+	}
+
+	b.WriteString(sandboxHTMLBody)
+	return b.String()
+}
+
+// AppPreviewSandboxFullHandler serves the fully self-contained sandbox HTML
+// with all JS inlined. The frontend caches this response and uses it as
+// iframe.srcdoc, allowing sandbox="allow-scripts" without allow-same-origin.
+//
+// GET /api/app-preview/sandbox-full
+func AppPreviewSandboxFullHandler(w http.ResponseWriter, r *http.Request) {
+	sandboxFullOnce.Do(func() {
+		sandboxFullHTML = buildSandboxFullHTML()
+	})
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// Cache for 24h — the content only changes when the binary is rebuilt.
+	w.Header().Set("Cache-Control", "public, max-age=86400, immutable")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(sandboxFullHTML))
+}
+
+// AppPreviewSandboxHandler serves the legacy sandbox HTML (external script refs).
+// Kept for backward compatibility but no longer used by the frontend.
 func AppPreviewSandboxHandler(w http.ResponseWriter, r *http.Request) {
+	// Build the legacy version with <script src> tags
+	legacy := sandboxHTMLHead +
+		"\n<script src=\"/api/app-preview/runtime.js\"></script>" +
+		"\n<script src=\"/api/app-preview/tailwind.js\"></script>" +
+		sandboxHTMLBody
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(appPreviewSandboxHTML))
+	_, _ = w.Write([]byte(legacy))
 }
 
 // sandboxRuntimeOnce caches the embedded sandbox-runtime.js file.

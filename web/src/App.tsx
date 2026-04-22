@@ -49,6 +49,7 @@ const SettingsPage = lazy(() => import('./components/SettingsPage'))
 const StudioChat = lazy(() => import('./components/StudioChat'))
 const FleetView = lazy(() => import('./components/FleetView'))
 const DrillView = lazy(() => import('./components/DrillView'))
+const AppsView = lazy(() => import('./components/AppsView'))
 
 function App() {
   const { theme, toggleTheme } = useTheme()
@@ -145,7 +146,7 @@ function App() {
   const [showSetupWizard, setShowSetupWizard] = useState(false)
   const [isCheckingSetup, setIsCheckingSetup] = useState(true)
   const [view, setView] = useState('chat')
-  const [pendingChatMessage, setPendingChatMessage] = useState<string | null>(null)
+  const [pendingChatMessage, setPendingChatMessage] = useState<{ message: string; systemContext?: string } | null>(null)
   const [sandboxStatus, setSandboxStatus] = useState<SandboxStatus | null>(null)
 
   // Check if setup is required on mount
@@ -499,6 +500,8 @@ function App() {
       setView('fleet')
     } else if (path.view === 'drill') {
       setView('drill')
+    } else if (path.view === 'apps') {
+      setView('apps')
     }
   }, [path, agents]) // Re-run when path or agents list changes
 
@@ -1375,7 +1378,7 @@ layout:
               path={path}
               onNavigate={(hashPath: string) => navigate(hashPath)}
               onCreatePlan={(templateKey: string) => {
-                setPendingChatMessage(`/fleet-plan ${templateKey}`)
+                setPendingChatMessage({ message: `/fleet-plan ${templateKey}` })
                 navigate(buildPath('chat'))
               }}
             />
@@ -1388,14 +1391,26 @@ layout:
               onNavigate={(hashPath: string) => navigate(hashPath)}
               onRunSuite={(suiteName: string, template?: unknown) => {
                 if (template) {
-                  setPendingChatMessage(`Switch the sandbox to template "${template}" and then run the drill suite "${suiteName}"`)
+                  setPendingChatMessage({ message: `Switch the sandbox to template "${template}" and then run the drill suite "${suiteName}"` })
                 } else {
-                  setPendingChatMessage(`Run the drill suite "${suiteName}"`)
+                  setPendingChatMessage({ message: `Run the drill suite "${suiteName}"` })
                 }
                 navigate(buildPath('chat'))
               }}
               onAddDrills={(suiteName: string) => {
-                setPendingChatMessage(`/drill-add ${suiteName}`)
+                setPendingChatMessage({ message: `/drill-add ${suiteName}` })
+                navigate(buildPath('chat'))
+              }}
+            />
+            </Suspense>
+          ) : view === 'apps' ? (
+            <Suspense fallback={null}>
+            <AppsView
+              theme={theme}
+              appName={path.view === 'apps' ? path.params.appName : ''}
+              onNavigate={(hashPath: string) => navigate(hashPath)}
+              onImproveApp={(message: string, systemContext: string) => {
+                setPendingChatMessage({ message, systemContext })
                 navigate(buildPath('chat'))
               }}
             />

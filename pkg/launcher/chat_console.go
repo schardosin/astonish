@@ -832,13 +832,14 @@ func generateSessionTitle(ctx context.Context, llm model.LLM, store *persistents
 		},
 		Config: &genai.GenerateContentConfig{
 			Temperature:     genai.Ptr(float32(0.3)),
-			MaxOutputTokens: 30,
+			MaxOutputTokens: 100,
 		},
 	}
 
 	var title string
 	for resp, err := range llm.GenerateContent(ctx, req, false) {
 		if err != nil {
+			slog.Warn("session title LLM error", "session_id", sessionID, "error", err)
 			return
 		}
 		if resp.Content != nil {
@@ -849,8 +850,16 @@ func generateSessionTitle(ctx context.Context, llm model.LLM, store *persistents
 	}
 
 	title = consoleThinkTagRe.ReplaceAllString(title, "")
+	// Also strip unclosed thinking tags (model hit token limit mid-tag)
+	if idx := strings.Index(title, "<think"); idx >= 0 {
+		title = title[:idx]
+	}
+	if idx := strings.Index(title, "<thinking"); idx >= 0 {
+		title = title[:idx]
+	}
 	title = strings.TrimSpace(title)
 	if title == "" {
+		slog.Debug("session title generation produced empty result", "session_id", sessionID)
 		return
 	}
 	// Truncate if somehow too long

@@ -71,9 +71,14 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 			Model:    p.model,
 			Messages: messages,
 			Tools:    tools,
-			StreamOptions: &openai.StreamOptions{
+		}
+
+		// StreamOptions is only valid when streaming is enabled.
+		// Some providers (e.g., OpenAI, OpenRouter) reject it otherwise.
+		if streaming {
+			openAIReq.StreamOptions = &openai.StreamOptions{
 				IncludeUsage: true,
-			},
+			}
 		}
 
 		// Apply max_completion_tokens if configured

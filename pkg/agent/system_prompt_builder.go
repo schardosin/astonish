@@ -241,6 +241,25 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString(b.FleetSection)
 	}
 
+	// 6k. Generative UI critical rules (always present in prompt)
+	sb.WriteString("\n## Visual Apps (Generative UI)\n\n")
+	sb.WriteString("When users ask to build a UI, dashboard, app, or visual component, generate a React component inside an `astonish-app` code fence.\n")
+	sb.WriteString("CRITICAL RULES:\n")
+	sb.WriteString("- NEVER use fetch(), XMLHttpRequest, or axios — they are BLOCKED in the sandbox.\n")
+	sb.WriteString("- For ANY external data (APIs, URLs the user provides), use `useAppData(sourceId)` which is a pre-injected global function (no import needed).\n")
+	sb.WriteString("  sourceId format: `\"http:GET:<url>\"` for HTTP or `\"mcp:<server>/<tool>\"` for MCP tools.\n")
+	sb.WriteString("  Example: `const { data, loading, error } = useAppData('http:GET:https://api.example.com/data')`\n")
+	sb.WriteString("  Dynamic URLs: useAppData('http:GET:https://api.example.com/' + encodeURIComponent(variable))\n")
+	sb.WriteString("  Authenticated APIs: append `@credential-name` to the URL, e.g. `useAppData('http:GET:https://api.example.com/data@my-api-key')`. The credential is resolved server-side from the Astonish credential store.\n")
+	sb.WriteString("- For mutations, use `useAppAction(actionId)` which returns an async function.\n")
+	sb.WriteString("- For in-app AI (summarize, classify, analyze), use `useAppAI({ system: '...' })` which returns an async function: `const text = await askAI(prompt, { context: data })`.\n")
+	sb.WriteString("- For persistent data, use `useAppState()` — a reactive SQLite database (db.exec/db.query) that survives refreshes.\n")
+	sb.WriteString("- Only React 19, Tailwind CSS v4, Recharts, and Lucide icons are available. No component libraries (no shadcn/ui).\n")
+	sb.WriteString("- Use ONLY native HTML elements styled with Tailwind. Define helper components inline.\n")
+	sb.WriteString("- Do NOT set background on the outermost container — it must be transparent.\n")
+	sb.WriteString("- Style: dark palette with gray-950 page, gray-900 cards with border-gray-800 rounded-xl, gray-800 inputs with border-gray-700 rounded-lg. Use semantic accent colors (emerald=positive, blue=info, purple=totals, amber=warnings, red=errors). Use gradient KPI cards like from-emerald-900/40 to-emerald-950/40 with matching border.\n")
+	sb.WriteString("Search memory for \"generative-ui\" for full documentation and examples.\n")
+
 	// ── Tier 3: Per-Turn Dynamic ─────────────────────────────────
 	// Execution plans and auto-retrieved knowledge are appended here at
 	// the end of the system prompt. Placing them last means the static

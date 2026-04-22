@@ -166,6 +166,17 @@ export interface PlanStepInfo {
   status: 'pending' | 'running' | 'complete' | 'failed'
 }
 
+// ---- Generative UI app preview ----
+
+export interface AppPreviewMessage {
+  type: 'app_preview'
+  code: string
+  title: string
+  description: string
+  version: number
+  appId?: string
+}
+
 // ---- Distill flow preview ----
 
 export interface DistillPreviewMessage {
@@ -181,6 +192,12 @@ export interface DistillSavedMessage {
   type: 'distill_saved'
   filePath: string
   runCommand: string
+}
+
+export interface AppSavedMessage {
+  type: 'app_saved'
+  name: string
+  path: string
 }
 
 export type ChatMsg =
@@ -202,8 +219,10 @@ export type ChatMsg =
   | ArtifactMessage
   | BrowserHandoffMessage
   | PlanMessage
+  | AppPreviewMessage
   | DistillPreviewMessage
   | DistillSavedMessage
+  | AppSavedMessage
 
 // ---- Fleet info / state ----
 

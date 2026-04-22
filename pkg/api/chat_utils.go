@@ -87,6 +87,11 @@ func eventsToMessages(events session.Events, redactor *credentials.Redactor) []S
 						lastInvocationID = eventInvID
 						continue
 					}
+					if am := tryParseAppPreviewMessage(text); am != nil {
+						messages = append(messages, *am)
+						lastInvocationID = eventInvID
+						continue
+					}
 				}
 
 				// Defense-in-depth: redact any credential values from text
@@ -693,7 +698,9 @@ func fleetEventsToMessages(events []*session.Event) []FleetMessageSummary {
 }
 
 // generateStudioSessionTitle calls the LLM to produce a short session title.
-func generateStudioSessionTitle(llm model.LLM, store *persistentsession.FileStore, sessionID, userMessage string) {
+// The optional onTitle callback is invoked with the generated title so callers
+// can push a real-time SSE event to connected browsers.
+func generateStudioSessionTitle(llm model.LLM, store *persistentsession.FileStore, sessionID, userMessage string, onTitle func(string)) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -707,13 +714,14 @@ func generateStudioSessionTitle(llm model.LLM, store *persistentsession.FileStor
 		},
 		Config: &genai.GenerateContentConfig{
 			Temperature:     genai.Ptr(float32(0.3)),
-			MaxOutputTokens: 30,
+			MaxOutputTokens: 100,
 		},
 	}
 
 	var title string
 	for resp, err := range llm.GenerateContent(ctx, req, false) {
 		if err != nil {
+			slog.Warn("session title LLM error", "session_id", sessionID, "error", err)
 			return
 		}
 		if resp.Content != nil {
@@ -724,8 +732,16 @@ func generateStudioSessionTitle(llm model.LLM, store *persistentsession.FileStor
 	}
 
 	title = titleThinkTagRe.ReplaceAllString(title, "")
+	// Also strip unclosed thinking tags (model hit token limit mid-tag)
+	if idx := strings.Index(title, "<think"); idx >= 0 {
+		title = title[:idx]
+	}
+	if idx := strings.Index(title, "<thinking"); idx >= 0 {
+		title = title[:idx]
+	}
 	title = strings.TrimSpace(title)
 	if title == "" {
+		slog.Debug("session title generation produced empty result", "session_id", sessionID)
 		return
 	}
 	if len(title) > 80 {
@@ -734,6 +750,8 @@ func generateStudioSessionTitle(llm model.LLM, store *persistentsession.FileStor
 
 	if err := store.SetSessionTitle(sessionID, title); err != nil {
 		slog.Warn("failed to set session title", "session_id", sessionID, "error", err)
+	} else if onTitle != nil {
+		onTitle(title)
 	}
 }
 
@@ -968,4 +986,105 @@ func tryParseDistillMessage(text string) *StudioMessage {
 		}
 	}
 	return nil
+}
+
+// --- App preview persistence ---
+//
+// App preview messages are persisted using the same prefix-marker pattern as distill.
+// Format: [app_preview]<JSON payload>
+
+const appPreviewPrefix = "[app_preview]"
+
+// appPreviewPayload is the JSON structure persisted inside the text event.
+type appPreviewPayload struct {
+	Code        string `json:"code"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+	Version     int    `json:"version"`
+	AppID       string `json:"appId,omitempty"`
+}
+
+// persistAppPreview serializes an app preview as a structured text event.
+func persistAppPreview(ctx context.Context, svc session.Service, sessionID, code, title string, version int, appID string) {
+	if svc == nil || sessionID == "" || code == "" {
+		return
+	}
+	payload := appPreviewPayload{
+		Code:    code,
+		Title:   title,
+		Version: version,
+		AppID:   appID,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		slog.Error("failed to marshal app preview", "error", err)
+		return
+	}
+	persistSessionMessage(ctx, svc, sessionID, "model", appPreviewPrefix+string(data))
+}
+
+// tryParseAppPreviewMessage checks if a text starts with the app_preview marker prefix
+// and returns a structured StudioMessage if so. Returns nil if not an app preview message.
+func tryParseAppPreviewMessage(text string) *StudioMessage {
+	if !strings.HasPrefix(text, appPreviewPrefix) {
+		return nil
+	}
+	jsonStr := text[len(appPreviewPrefix):]
+	var payload appPreviewPayload
+	if err := json.Unmarshal([]byte(jsonStr), &payload); err != nil {
+		return nil
+	}
+	return &StudioMessage{
+		Type:        "app_preview",
+		AppCode:     payload.Code,
+		AppTitle:    payload.Title,
+		Description: payload.Description,
+		AppVersion:  payload.Version,
+		AppID:       payload.AppID,
+	}
+}
+
+// reconstructActiveApp scans session events for app_preview prefix markers and
+// rebuilds the ActiveApp state. Used when the server restarts and in-memory state
+// is lost. Returns nil if no app previews are found in the session.
+func reconstructActiveApp(events session.Events) *agent.ActiveApp {
+	var latestApp *agent.ActiveApp
+
+	for i := range events.Len() {
+		event := events.At(i)
+		if event.LLMResponse.Content == nil {
+			continue
+		}
+		for _, part := range event.LLMResponse.Content.Parts {
+			if part.Text == "" {
+				continue
+			}
+			if !strings.HasPrefix(part.Text, appPreviewPrefix) {
+				continue
+			}
+			jsonStr := part.Text[len(appPreviewPrefix):]
+			var payload appPreviewPayload
+			if err := json.Unmarshal([]byte(jsonStr), &payload); err != nil {
+				continue
+			}
+
+			if latestApp == nil || (payload.AppID != "" && payload.AppID != latestApp.AppID) {
+				// New app (or first app found)
+				latestApp = &agent.ActiveApp{
+					AppID:    payload.AppID,
+					Title:    payload.Title,
+					Code:     payload.Code,
+					Versions: []string{},
+					Version:  payload.Version,
+				}
+			} else {
+				// Same app, newer version — append previous code to history
+				latestApp.Versions = append(latestApp.Versions, latestApp.Code)
+				latestApp.Code = payload.Code
+				latestApp.Version = payload.Version
+				latestApp.Title = payload.Title
+			}
+		}
+	}
+	return latestApp
 }

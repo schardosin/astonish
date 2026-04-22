@@ -91,6 +91,9 @@ type oauthTokenResponse struct {
 }
 
 // fetchOAuthToken performs the OAuth2 client_credentials flow.
+// Client credentials are sent via HTTP Basic Auth (RFC 6749 §2.3.1), which is
+// more widely supported than sending them in the POST body. Many providers
+// (e.g., SAP XSUAA/UAA, some Okta configs) reject POST-body credentials.
 func fetchOAuthToken(cred *Credential) (token string, expiresIn int, err error) {
 	if cred.AuthURL == "" {
 		return "", 0, fmt.Errorf("auth_url is required for OAuth credentials")
@@ -102,18 +105,23 @@ func fetchOAuthToken(cred *Credential) (token string, expiresIn int, err error) 
 		return "", 0, fmt.Errorf("client_secret is required for OAuth credentials")
 	}
 
-	// Build form-encoded body
+	// Build form-encoded body (credentials sent via Basic Auth, not in body)
 	form := url.Values{
-		"grant_type":    {"client_credentials"},
-		"client_id":     {cred.ClientID},
-		"client_secret": {cred.ClientSecret},
+		"grant_type": {"client_credentials"},
 	}
 	if cred.Scope != "" {
 		form.Set("scope", cred.Scope)
 	}
 
+	req, err := http.NewRequest("POST", cred.AuthURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", 0, fmt.Errorf("build token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(cred.ClientID, cred.ClientSecret)
+
 	client := &http.Client{Timeout: oauthTimeout}
-	resp, err := client.Post(cred.AuthURL, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", 0, fmt.Errorf("token request: %w", err)
 	}
@@ -178,12 +186,17 @@ func refreshAuthCodeToken(cred *Credential) (accessToken, newRefreshToken string
 	form := url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {cred.RefreshToken},
-		"client_id":     {cred.ClientID},
-		"client_secret": {cred.ClientSecret},
 	}
 
+	req, err := http.NewRequest("POST", cred.TokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", "", 0, fmt.Errorf("build refresh token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(cred.ClientID, cred.ClientSecret)
+
 	client := &http.Client{Timeout: oauthTimeout}
-	resp, err := client.Post(cred.TokenURL, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("refresh token request: %w", err)
 	}

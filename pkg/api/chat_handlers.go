@@ -5,13 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/apps"
 	adrill "github.com/schardosin/astonish/pkg/drill"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/tools"
@@ -78,7 +82,7 @@ type FleetMessageSummary struct {
 
 // StudioMessage is a simplified message for the frontend.
 type StudioMessage struct {
-	Type       string      `json:"type"`                 // user, agent, tool_call, tool_result, subtask_execution, plan, distill_preview, distill_saved, system
+	Type       string      `json:"type"`                 // user, agent, tool_call, tool_result, subtask_execution, plan, distill_preview, distill_saved, app_preview, system
 	Content    string      `json:"content,omitempty"`    // text content
 	ToolName   string      `json:"toolName,omitempty"`   // for tool_call/tool_result
 	ToolArgs   interface{} `json:"toolArgs,omitempty"`   // for tool_call
@@ -103,6 +107,12 @@ type StudioMessage struct {
 	// distill_saved fields
 	FilePath   string `json:"filePath,omitempty"`   // saved file path
 	RunCommand string `json:"runCommand,omitempty"` // suggested run command
+
+	// app_preview fields — populated for generative UI app previews
+	AppCode    string `json:"code,omitempty"`    // JSX source code
+	AppTitle   string `json:"title,omitempty"`   // app title (extracted from component name)
+	AppVersion int    `json:"version,omitempty"` // version number (increments on refinement)
+	AppID      string `json:"appId,omitempty"`   // stable UUID for cross-turn matching
 }
 
 // SubTaskInfoMsg describes a single task in a delegation plan (for history reconstruction).
@@ -447,6 +457,100 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Lazy reconstruction of active app state from session history.
+	// Handles the case where the server restarted and in-memory state was lost.
+	if req.SessionID != "" && !chatAgent.HasActiveApp(req.SessionID) {
+		getResp, err := sessionService.Get(r.Context(), &session.GetRequest{
+			AppName:   studioChatAppName,
+			UserID:    studioChatUserID,
+			SessionID: req.SessionID,
+		})
+		if err == nil && getResp != nil && getResp.Session != nil {
+			if app := reconstructActiveApp(getResp.Session.Events()); app != nil {
+				chatAgent.SetActiveApp(req.SessionID, app)
+			}
+		}
+	}
+
+	// Intercept messages for active app refinement (iterative visual app loop).
+	// Unlike distill (which fully intercepts), "refine" falls through to normal
+	// agent flow with context injection; only "save" is handled as early-return.
+	if req.SessionID != "" && chatAgent.HasActiveApp(req.SessionID) {
+		llmFunc := makeLLMFuncFromModel(comp.LLM)
+		appIntent := chatAgent.ClassifyAppIntent(r.Context(), msg, llmFunc)
+
+		switch appIntent.Intent {
+		case agent.AppIntentSave, agent.AppIntentDone:
+			// User wants to save the app — persist to disk, clear state, acknowledge
+			activeApp := chatAgent.GetActiveApp(req.SessionID)
+			userText := msg
+			if msg == "__app_save__" || msg == "__app_done__" || strings.HasPrefix(msg, "__app_save__:") {
+				userText = "Save"
+			}
+			persistSessionMessage(r.Context(), sessionService, req.SessionID, "user", userText)
+
+			// Save the app to disk
+			var savedPath, savedName string
+			if activeApp != nil {
+				// Use custom name from LLM classification if provided, otherwise fall back to auto-title
+				appName := activeApp.Title
+				if appIntent.SaveName != "" {
+					appName = appIntent.SaveName
+				}
+				savedApp := &apps.VisualApp{
+					Name:        appName,
+					Description: appName,
+					Code:        activeApp.Code,
+					Version:     activeApp.Version,
+					SessionID:   req.SessionID,
+				}
+				var saveErr error
+				savedPath, saveErr = apps.SaveApp(savedApp)
+				if saveErr != nil {
+					slog.Error("failed to save app", "error", saveErr)
+				}
+				savedName = apps.Slugify(appName)
+			}
+
+			chatAgent.ClearActiveApp(req.SessionID)
+
+			responseText := "App saved! You can find it in the Apps tab, or continue chatting."
+			if savedPath == "" {
+				responseText = "App refinement complete. You can continue chatting or start a new app."
+			}
+			SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})
+			SendSSE(w, flusher, "app_saved", map[string]interface{}{
+				"name": savedName,
+				"path": savedPath,
+			})
+			persistSessionMessage(r.Context(), sessionService, req.SessionID, "model", responseText)
+			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+			return
+
+		case agent.AppIntentRefine:
+			// Inject current app source into system context so the LLM
+			// knows it's refining an existing component, then fall through
+			// to the normal agent flow.
+			activeApp := chatAgent.GetActiveApp(req.SessionID)
+			if activeApp != nil {
+				refinementCtx := agent.BuildAppRefinementContext(activeApp)
+				if req.SystemContext != "" {
+					req.SystemContext = req.SystemContext + "\n\n" + refinementCtx
+				} else {
+					req.SystemContext = refinementCtx
+				}
+				// Record the modification request in the active app history
+				chatAgent.RecordAppModification(req.SessionID, msg)
+			}
+			// Fall through to normal agent flow
+
+		case agent.AppIntentUnrelated:
+			// Clear active app context and proceed normally
+			chatAgent.ClearActiveApp(req.SessionID)
+			// Fall through to normal agent flow
+		}
+	}
+
 	// Create or resume session
 	sessionID := req.SessionID
 	isNew := false
@@ -469,8 +573,39 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		userMsg = agent.NewTimestampedUserContent(msg)
 	}
 
+	// Seed ActiveApp from system context when opening a saved app for refinement.
+	// This avoids making the LLM re-emit the component on the first turn.
+	var seededAppPreview map[string]any
+	if isNew && req.SystemContext != "" {
+		if code, title := extractAppFromSystemContext(req.SystemContext); code != "" {
+			appID := uuid.New().String()
+			activeApp := &agent.ActiveApp{
+				AppID:    appID,
+				Title:    title,
+				Code:     code,
+				Versions: []string{},
+				Version:  1,
+			}
+			chatAgent.SetActiveApp(sessionID, activeApp)
+			persistAppPreview(r.Context(), sessionService, sessionID, code, title, 1, appID)
+			seededAppPreview = map[string]any{
+				"code":    code,
+				"title":   title,
+				"version": 1,
+				"appId":   appID,
+			}
+		}
+	}
+
 	// Launch background runner — the agent runs independently of this HTTP request.
 	runner := newChatRunner(sessionID, isNew)
+
+	// If we seeded an app preview, emit it through the runner so the frontend
+	// shows the AppPreviewCard immediately (before the LLM responds).
+	if seededAppPreview != nil {
+		runner.emitEvent("app_preview", seededAppPreview)
+	}
+
 	registry := getChatRunnerRegistry()
 	registry.Register(sessionID, runner)
 
@@ -715,4 +850,59 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 		})
 	}
 	SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+}
+
+// makeLLMFuncFromModel wraps an ADK model.LLM into a simple prompt→response function
+// suitable for lightweight classification calls (e.g. app refinement intent).
+func makeLLMFuncFromModel(llm model.LLM) func(ctx context.Context, prompt string) (string, error) {
+	if llm == nil {
+		return nil
+	}
+	return func(ctx context.Context, prompt string) (string, error) {
+		req := &model.LLMRequest{
+			Contents: []*genai.Content{
+				{
+					Parts: []*genai.Part{{Text: prompt}},
+					Role:  "user",
+				},
+			},
+		}
+		var text string
+		for resp, err := range llm.GenerateContent(ctx, req, false) {
+			if err != nil {
+				return text, err
+			}
+			if resp.Content != nil {
+				for _, p := range resp.Content.Parts {
+					if p.Text != "" {
+						text += p.Text
+					}
+				}
+			}
+		}
+		return text, nil
+	}
+}
+
+// refinementCodeBlockRe matches the fenced code block after "### Current Source Code"
+// in the system context injected by the "Improve with AI" flow.
+var refinementCodeBlockRe = regexp.MustCompile("(?s)### Current Source Code\\s*```jsx\\s*\\n(.+?)\\n```")
+
+// extractAppFromSystemContext detects the "## Active App Refinement" marker
+// in the system context and extracts the app's current code and title.
+// Returns ("", "") if the system context does not contain a refinement payload.
+func extractAppFromSystemContext(systemContext string) (code, title string) {
+	if !strings.Contains(systemContext, "## Active App Refinement") {
+		return "", ""
+	}
+	matches := refinementCodeBlockRe.FindStringSubmatch(systemContext)
+	if len(matches) < 2 {
+		return "", ""
+	}
+	code = strings.TrimSpace(matches[1])
+	if code == "" {
+		return "", ""
+	}
+	title = extractComponentTitle(code)
+	return code, title
 }

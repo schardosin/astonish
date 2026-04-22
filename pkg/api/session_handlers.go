@@ -214,6 +214,11 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 	// Best-effort: destroy sandbox container if one exists for this session
 	sandbox.TryDestroySessionContainer(sessionID)
 
+	// Best-effort: clean up session-scoped app state databases
+	if cleaned := CleanupSessionAppDBs(sessionID); cleaned > 0 {
+		slog.Debug("cleaned up session app databases", "sessionId", sessionID, "count", cleaned)
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 

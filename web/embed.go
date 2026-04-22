@@ -12,6 +12,38 @@ var distFS embed.FS
 // GetDistFS returns the embedded dist filesystem
 // Supports versioned builds where output is dist/{version}/
 func GetDistFS() fs.FS {
+	return resolveDistFS()
+}
+
+// GetSandboxRuntime returns the pre-bundled sandbox runtime JS file
+// (sandbox-runtime.js) from the embedded dist filesystem, or nil if not found.
+func GetSandboxRuntime() []byte {
+	distFS := resolveDistFS()
+	if distFS == nil {
+		return nil
+	}
+	data, err := fs.ReadFile(distFS, "sandbox-runtime.js")
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+// GetTailwindBrowser returns the Tailwind CSS v4 browser runtime script
+// (tailwind-browser.js) from the embedded dist filesystem, or nil if not found.
+func GetTailwindBrowser() []byte {
+	distFS := resolveDistFS()
+	if distFS == nil {
+		return nil
+	}
+	data, err := fs.ReadFile(distFS, "tailwind-browser.js")
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+func resolveDistFS() fs.FS {
 	// First, check if dist exists
 	entries, err := distFS.ReadDir("dist")
 	if err != nil || len(entries) == 0 {

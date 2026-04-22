@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search, Users, Info, FileText, Globe, ListChecks } from 'lucide-react'
+import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search, Users, Info, FileText, Globe, ListChecks, AppWindow } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { fetchSessions, fetchSessionHistory, deleteSession, connectChat, stopChat, fetchSessionStatus, connectChatStream } from '../api/studioChat'
@@ -7,7 +7,7 @@ import type { ChatSession } from '../api/studioChat'
 import { startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions } from '../api/fleetChat'
 import type { FleetSession } from '../api/fleetChat'
 import HomePage from './HomePage'
-import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, DistillPreviewMessage, DistillSavedMessage } from './chat/chatTypes'
+import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, AppPreviewMessage, AppSavedMessage, DistillPreviewMessage, DistillSavedMessage } from './chat/chatTypes'
 import { getAgentColor } from './chat/chatTypes'
 import FleetStartDialog from './chat/FleetStartDialog'
 import FleetTemplatePicker from './chat/FleetTemplatePicker'
@@ -16,11 +16,14 @@ import TaskPlanPanel from './chat/TaskPlanPanel'
 import PlanPanel from './chat/PlanPanel'
 import FilePanel from './chat/FilePanel'
 import TodoPanel from './chat/TodoPanel'
+import AppsPanel from './chat/AppsPanel'
 import UsagePopover from './chat/UsagePopover'
 import type { TokenUsage } from './chat/UsagePopover'
 import BrowserView from './chat/BrowserView'
 import ArtifactCard from './chat/ArtifactCard'
 import DistillPreviewCard from './chat/DistillPreviewCard'
+import AppPreviewCard from './chat/AppPreviewCard'
+import AppCodeIndicator from './chat/AppCodeIndicator'
 import ResultCard from './chat/ResultCard'
 
 // Extended ChatSession with optional fleet fields coming from the sidebar
@@ -160,7 +163,7 @@ function SourceCitations({ urls }: { urls: string[] }) {
   )
 }
 
-export default function StudioChat({ theme, initialSessionId, pendingChatMessage, onPendingChatMessageConsumed, onSessionChange }: { theme: string; initialSessionId?: string | null; pendingChatMessage?: string | null; onPendingChatMessageConsumed?: () => void; onSessionChange?: (sessionId: string | null) => void }) {
+export default function StudioChat({ theme, initialSessionId, pendingChatMessage, onPendingChatMessageConsumed, onSessionChange }: { theme: string; initialSessionId?: string | null; pendingChatMessage?: { message: string; systemContext?: string } | null; onPendingChatMessageConsumed?: () => void; onSessionChange?: (sessionId: string | null) => void }) {
   // Session state
   const [sessions, setSessions] = useState<SidebarSession[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(initialSessionId || null)
@@ -172,6 +175,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
+  const [activeAppId, setActiveAppId] = useState<string | null>(null) // ID of app currently being refined
 
   // Fleet state
   const [isFleetMode, setIsFleetMode] = useState(false)
@@ -194,6 +198,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set())
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
   const [rawViewIndices, setRawViewIndices] = useState<Set<number>>(new Set())
+  const [expandedCodeIndices, setExpandedCodeIndices] = useState<Set<number>>(new Set())
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
   // File panel state
@@ -203,6 +208,9 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
   // Todo panel state
   const [todoPanelOpen, setTodoPanelOpen] = useState(false)
+
+  // Apps panel state
+  const [appsPanelOpen, setAppsPanelOpen] = useState(false)
 
   // Token usage state (from API-reported UsageMetadata)
   const [tokenUsage, setTokenUsage] = useState<TokenUsage>({ inputTokens: 0, outputTokens: 0, totalTokens: 0 })
@@ -258,6 +266,8 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   // Wrapper to keep URL in sync with active session
   const changeSession = useCallback((sessionId: string | null, { userInitiated = false } = {}) => {
     setActiveSessionId(sessionId)
+    setActiveAppId(null) // clear active app refinement state on session switch
+    setAppsPanelOpen(false)
     if (userInitiated) {
       setActiveWizardContext(null) // only clear wizard context on explicit user navigation
     }
@@ -483,9 +493,25 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               runCommand: m.runCommand || '',
             } as DistillSavedMessage
           }
+          if (m.type === 'app_preview') {
+            return {
+              type: 'app_preview',
+              code: m.code || '',
+              title: m.title || 'App Preview',
+              description: m.description || '',
+              version: m.version || 1,
+              appId: m.appId || undefined,
+            } as AppPreviewMessage
+          }
           return m as unknown as ChatMsg
         })
         setMessages(mapped)
+        // Restore active app state from session history
+        const appPreviews = mapped.filter((m): m is AppPreviewMessage => m.type === 'app_preview')
+        if (appPreviews.length > 0) {
+          const lastApp = appPreviews[appPreviews.length - 1]
+          if (lastApp.appId) setActiveAppId(lastApp.appId)
+        }
       }
     } catch (err: any) {
       console.error('Failed to load session history:', err)
@@ -649,6 +675,43 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               tags: (data.tags as string[]) || [],
               explanation: data.explanation as string || '',
             } as DistillPreviewMessage])
+            break
+
+          case 'app_preview':
+            // Finalize any streaming text first
+            if (streamingTextRef.current) {
+              const finalText = streamingTextRef.current
+              streamingTextRef.current = ''
+              setMessages((prev: ChatMsg[]) => {
+                const last = prev[prev.length - 1]
+                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
+                  return [...prev.slice(0, -1), { type: 'agent', content: finalText }]
+                }
+                return prev
+              })
+            }
+            setMessages((prev: ChatMsg[]) => [...prev, {
+              type: 'app_preview',
+              code: data.code as string,
+              title: data.title as string || 'App Preview',
+              description: data.description as string || '',
+              version: (data.version as number) || 1,
+              appId: data.appId as string || undefined,
+            } as AppPreviewMessage])
+            if (data.appId) setActiveAppId(data.appId as string)
+            break
+
+          case 'app_done':
+          case 'app_saved':
+            setActiveAppId(null)
+            if (data.name) {
+              setMessages((prev: ChatMsg[]) => [...prev, {
+                type: 'app_saved',
+                name: data.name as string || '',
+                path: data.path as string || '',
+              } as AppSavedMessage])
+            }
+            window.dispatchEvent(new Event('astonish:apps-updated'))
             break
 
           case 'distill_saved':
@@ -1022,7 +1085,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     setShowScrollButton(false)
 
     // Add user message to chat (unless it's a slash command or internal action)
-    if (!userMsg.startsWith('/') && !userMsg.startsWith('__distill_')) {
+    if (!userMsg.startsWith('/') && !userMsg.startsWith('__distill_') && !userMsg.startsWith('__app_')) {
       setMessages((prev: ChatMsg[]) => [...prev, { type: 'user', content: userMsg }])
     }
 
@@ -1430,6 +1493,43 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             } as DistillPreviewMessage])
             break
 
+          case 'app_preview':
+            // Finalize any streaming text first
+            if (streamingTextRef.current) {
+              const finalText = streamingTextRef.current
+              streamingTextRef.current = ''
+              setMessages((prev: ChatMsg[]) => {
+                const last = prev[prev.length - 1]
+                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
+                  return [...prev.slice(0, -1), { type: 'agent', content: finalText }]
+                }
+                return prev
+              })
+            }
+            setMessages((prev: ChatMsg[]) => [...prev, {
+              type: 'app_preview',
+              code: data.code as string,
+              title: data.title as string || 'App Preview',
+              description: data.description as string || '',
+              version: (data.version as number) || 1,
+              appId: data.appId as string || undefined,
+            } as AppPreviewMessage])
+            if (data.appId) setActiveAppId(data.appId as string)
+            break
+
+          case 'app_done':
+          case 'app_saved':
+            setActiveAppId(null)
+            if (data.name) {
+              setMessages((prev: ChatMsg[]) => [...prev, {
+                type: 'app_saved',
+                name: data.name as string || '',
+                path: data.path as string || '',
+              } as AppSavedMessage])
+            }
+            window.dispatchEvent(new Event('astonish:apps-updated'))
+            break
+
           case 'distill_saved':
             setMessages((prev: ChatMsg[]) => [...prev, {
               type: 'distill_saved',
@@ -1522,15 +1622,22 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     }
   }, [pendingDrillPrompt, isStreaming, sendMessage])
 
-  // Process pending chat message passed from another view (e.g., Fleet UI "Create Plan with AI Guide")
+  // Process pending chat message passed from another view (e.g., Fleet UI "Create Plan with AI Guide", Apps "Improve with AI")
   useEffect(() => {
     if (pendingChatMessage && !isStreaming) {
-      sendMessage(pendingChatMessage)
+      // If there's an active session and the pending message needs a fresh session
+      // (has systemContext, e.g. app refinement), clear the session first.
+      // sendMessage with activeSessionId=null will create a new session.
+      if (activeSessionId && pendingChatMessage.systemContext) {
+        changeSession(null)
+        return // re-runs on next render when activeSessionId is null
+      }
+      sendMessage(pendingChatMessage.message, { systemContext: pendingChatMessage.systemContext })
       if (onPendingChatMessageConsumed) {
         onPendingChatMessageConsumed()
       }
     }
-  }, [pendingChatMessage, isStreaming, sendMessage, onPendingChatMessageConsumed])
+  }, [pendingChatMessage, isStreaming, sendMessage, onPendingChatMessageConsumed, activeSessionId, changeSession])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -1879,7 +1986,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
         >
           {/* Todo button — shows plan steps in side panel */}
           <button
-            onClick={() => { setTodoPanelOpen(!todoPanelOpen); if (!todoPanelOpen) setFilePanelOpen(false) }}
+            onClick={() => { setTodoPanelOpen(!todoPanelOpen); if (!todoPanelOpen) { setFilePanelOpen(false); setAppsPanelOpen(false) } }}
             className="flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors"
             style={{
               background: todoPanelOpen ? 'var(--accent-bg, rgba(59, 130, 246, 0.15))' : 'transparent',
@@ -1908,7 +2015,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           {/* Files button — shown when session has artifacts */}
           {sessionArtifacts.length > 0 && (
             <button
-              onClick={() => { setFilePanelOpen(!filePanelOpen); setFilePanelInitialPath(null); if (!filePanelOpen) setTodoPanelOpen(false) }}
+              onClick={() => { setFilePanelOpen(!filePanelOpen); setFilePanelInitialPath(null); if (!filePanelOpen) { setTodoPanelOpen(false); setAppsPanelOpen(false) } }}
               className="flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors"
               style={{
                 background: filePanelOpen ? 'var(--accent-bg, rgba(59, 130, 246, 0.15))' : 'transparent',
@@ -1924,6 +2031,33 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 color: 'var(--accent-color, #60a5fa)',
               }}>
                 {sessionArtifacts.length}
+              </span>
+            </button>
+          )}
+
+          {/* Apps button — shown when session has app previews */}
+          {messages.some(m => m.type === 'app_preview') && (
+            <button
+              onClick={() => { setAppsPanelOpen(!appsPanelOpen); if (!appsPanelOpen) { setTodoPanelOpen(false); setFilePanelOpen(false) } }}
+              className="flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors"
+              style={{
+                background: appsPanelOpen ? 'var(--accent-bg, rgba(59, 130, 246, 0.15))' : 'transparent',
+                color: appsPanelOpen ? 'var(--accent-color, #60a5fa)' : 'var(--text-secondary)',
+                border: appsPanelOpen ? '1px solid var(--accent-border, rgba(59, 130, 246, 0.3))' : '1px solid transparent',
+              }}
+              title="Generated apps"
+            >
+              <AppWindow size={13} />
+              <span>Apps</span>
+              <span className="px-1 py-0 rounded text-[10px] font-medium" style={{
+                background: 'var(--accent-bg, rgba(59, 130, 246, 0.15))',
+                color: 'var(--accent-color, #60a5fa)',
+              }}>
+                {(() => {
+                  const appPreviews = messages.filter(m => m.type === 'app_preview') as AppPreviewMessage[]
+                  const uniqueApps = new Set(appPreviews.map(a => a.appId || a.title))
+                  return uniqueApps.size
+                })()}
               </span>
             </button>
           )}
@@ -1989,6 +2123,8 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 const isFinalResult = !isStreaming &&
                   !(msg as AgentMessage)._streaming &&
                   msg.content.length > 500 &&
+                  // App code fences must always go through the fence-splitting path
+                  !msg.content.includes('```astonish-app') &&
                   // Must be the last agent message in the list
                   !messages.slice(index + 1).some(m => m.type === 'agent') &&
                   // Must have tool activity somewhere before it
@@ -2056,11 +2192,51 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                         <pre className="text-sm whitespace-pre-wrap break-words font-mono" style={{ color: 'var(--text-primary)' }}>
                           {msg.content}
                         </pre>
-                      ) : (
-                        <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                        </div>
-                      )}
+                      ) : (() => {
+                        // Split out astonish-app code fences so they render as a stable
+                        // AppCodeIndicator outside the ReactMarkdown tree. This avoids
+                        // the jank of ReactMarkdown recreating the component on every
+                        // streaming text update.
+                        const appFenceRe = /```astonish-app\s*\n([\s\S]*?)(?:\n```|$)/
+                        const match = msg.content.match(appFenceRe)
+                        if (!match) {
+                          return (
+                            <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
+                              <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                            </div>
+                          )
+                        }
+                        const fenceStart = match.index!
+                        const fenceEnd = fenceStart + match[0].length
+                        const before = msg.content.slice(0, fenceStart).trimEnd()
+                        const appCode = match[1]
+                        const after = msg.content.slice(fenceEnd).trimStart()
+                        return (
+                          <>
+                            {before && (
+                              <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{before}</ReactMarkdown>
+                              </div>
+                            )}
+                            <AppCodeIndicator
+                              streaming={!!(msg as AgentMessage)._streaming}
+                              code={appCode}
+                              expanded={expandedCodeIndices.has(index)}
+                              onToggle={() => setExpandedCodeIndices(prev => {
+                                const next = new Set(prev)
+                                if (next.has(index)) next.delete(index)
+                                else next.add(index)
+                                return next
+                              })}
+                            />
+                            {after && (
+                              <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{after}</ReactMarkdown>
+                              </div>
+                            )}
+                          </>
+                        )
+                      })()}
                     </div>
                     {sourceUrls.length > 0 && <SourceCitations urls={sourceUrls} />}
                   </div>
@@ -2287,6 +2463,38 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 )
               }
 
+              if (msg.type === 'app_preview') {
+                const appMsg = msg as AppPreviewMessage
+                // Collect all app_preview versions for this app (by appId, fallback to title)
+                const allVersions = messages.filter(
+                  (m): m is AppPreviewMessage => m.type === 'app_preview' && (
+                    appMsg.appId
+                      ? (m as AppPreviewMessage).appId === appMsg.appId
+                      : (m as AppPreviewMessage).title === appMsg.title
+                  )
+                )
+                // Only render the card on the LAST version's message to avoid duplicates
+                const lastVersion = allVersions[allVersions.length - 1]
+                if (lastVersion && lastVersion !== appMsg) {
+                  return null // Skip earlier versions — they'll be shown via version nav
+                }
+                const versionIdx = allVersions.length - 1 // Default to latest
+                // Check if this app is actively being refined
+                const isActive = activeAppId != null && (appMsg.appId === activeAppId)
+                return (
+                  <div key={index}>
+                    <AppPreviewCard
+                      data={appMsg}
+                      versions={allVersions.length > 1 ? allVersions : undefined}
+                      versionIndex={versionIdx}
+                      isActive={isActive}
+                      onSave={isActive ? (name: string) => sendMessage(`__app_save__:${name}`) : undefined}
+                      sessionId={activeSessionId}
+                    />
+                  </div>
+                )
+              }
+
               if (msg.type === 'distill_preview') {
                 const previewMsg = msg as DistillPreviewMessage
                 // A preview card is active (shows action buttons) when:
@@ -2343,6 +2551,24 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                         >
                           <Copy size={13} />
                         </button>
+                      </div>
+                    </div>
+                  </div>
+                )
+              }
+
+              if (msg.type === 'app_saved') {
+                const savedMsg = msg as AppSavedMessage
+                return (
+                  <div key={index} className="my-3 rounded-xl overflow-hidden w-full max-w-2xl"
+                    style={{ border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', boxShadow: 'var(--shadow-soft)' }}>
+                    <div className="px-4 py-3">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Check size={16} style={{ color: 'var(--success)' }} />
+                        <span className="text-sm font-semibold" style={{ color: 'var(--success)' }}>App Saved</span>
+                      </div>
+                      <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                        Saved as <code className="px-1.5 py-0.5 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--accent)' }}>{savedMsg.name}</code> — view it in the Apps tab.
                       </div>
                     </div>
                   </div>
@@ -2488,6 +2714,15 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
         <TodoPanel
           messages={messages}
           onClose={() => setTodoPanelOpen(false)}
+        />
+      )}
+
+      {/* Apps Panel — right side split panel for generated apps */}
+      {appsPanelOpen && (
+        <AppsPanel
+          messages={messages}
+          activeAppId={activeAppId}
+          onClose={() => setAppsPanelOpen(false)}
         />
       )}
     </div>

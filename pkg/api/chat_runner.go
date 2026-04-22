@@ -5,10 +5,12 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/schardosin/astonish/pkg/agent"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	adkagent "google.golang.org/adk/agent"
@@ -420,12 +422,20 @@ func (cr *ChatRunner) Run(
 		})
 	}
 
-	// Generate title for new sessions after first exchange
+	// Generate title for new sessions after first exchange.
+	// This runs synchronously (before the deferred done/closeSubscribers) so the
+	// session_title SSE event reaches the browser while the connection is still open.
 	if cr.IsNew && msg != "" {
 		if fileStore != nil {
-			go generateStudioSessionTitle(llm, fileStore, cr.SessionID, msg)
+			generateStudioSessionTitle(llm, fileStore, cr.SessionID, msg, func(title string) {
+				cr.emitEvent("session_title", map[string]any{"title": title})
+			})
 		}
 	}
+
+	// Post-processing: detect astonish-app code fences in the accumulated response
+	// text and emit app_preview events + persist them.
+	cr.detectAndEmitAppPreviews(chatAgent, sessionService)
 }
 
 // processStateDelta extracts approval, retry, error, and thinking events from state deltas.
@@ -500,6 +510,136 @@ func (cr *ChatRunner) drainImagesAndFlowOutput(chatAgent *agent.ChatAgent) {
 			"tool_name": file.ToolName,
 		})
 	}
+}
+
+// appPreviewFenceRe matches ```astonish-app code fences. It captures the code content
+// between the opening and closing fences.
+var appPreviewFenceRe = regexp.MustCompile("(?s)```astonish-app\\s*\\n(.*?)\\n```")
+
+// detectAndEmitAppPreviews scans the buffered text events for astonish-app code fences.
+// When found, it emits an app_preview event, persists it to the session transcript,
+// and updates the active app state on the ChatAgent for cross-turn refinement.
+func (cr *ChatRunner) detectAndEmitAppPreviews(chatAgent *agent.ChatAgent, sessionService session.Service) {
+	// Reconstruct the full response text from buffered text events
+	cr.eventsMu.RLock()
+	var fullText strings.Builder
+	for _, ev := range cr.events {
+		if ev.Type == "text" {
+			if t, ok := ev.Data["text"].(string); ok {
+				fullText.WriteString(t)
+			}
+		}
+	}
+	cr.eventsMu.RUnlock()
+
+	text := fullText.String()
+	matches := appPreviewFenceRe.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 {
+		return
+	}
+
+	// Check if there's an existing active app for this session
+	existingApp := chatAgent.GetActiveApp(cr.SessionID)
+
+	for _, match := range matches {
+		code := strings.TrimSpace(match[1])
+		if code == "" {
+			continue
+		}
+
+		// Skip if the LLM re-emitted the exact same code that was already seeded
+		// (e.g., on the first turn of an "Improve with AI" session).
+		if existingApp != nil && existingApp.Code == code {
+			continue
+		}
+
+		title := extractComponentTitle(code)
+
+		var appID string
+		var version int
+
+		if existingApp != nil {
+			// Refinement of existing app — keep appId, increment version
+			appID = existingApp.AppID
+			version = existingApp.Version + 1
+			existingApp.Versions = append(existingApp.Versions, existingApp.Code)
+			existingApp.Code = code
+			existingApp.Version = version
+			existingApp.Title = title
+		} else {
+			// New app — generate fresh appId
+			appID = uuid.New().String()
+			version = 1
+			existingApp = &agent.ActiveApp{
+				AppID:    appID,
+				Title:    title,
+				Code:     code,
+				Versions: []string{},
+				Version:  version,
+			}
+		}
+
+		cr.emitEvent("app_preview", map[string]any{
+			"code":        code,
+			"title":       title,
+			"description": "",
+			"version":     version,
+			"appId":       appID,
+		})
+
+		// Persist to session transcript
+		persistAppPreview(cr.ctx, sessionService, cr.SessionID, code, title, version, appID)
+
+		// Update active app state for cross-turn refinement
+		chatAgent.SetActiveApp(cr.SessionID, existingApp)
+	}
+}
+
+// extractComponentTitle tries to find the main component name from JSX code.
+// It prioritizes "export default function X" / "export default const X" patterns
+// over helper components defined earlier in the file.
+func extractComponentTitle(code string) string {
+	// Priority 1: export default function/const declaration
+	exportDefaultRe := regexp.MustCompile(`(?m)^export\s+default\s+function\s+([A-Z][a-zA-Z0-9]*)`)
+	if m := exportDefaultRe.FindStringSubmatch(code); len(m) > 1 {
+		return splitCamelCase(m[1])
+	}
+	exportDefaultConstRe := regexp.MustCompile(`(?m)^export\s+default\s+(?:const|let)\s+([A-Z][a-zA-Z0-9]*)`)
+	if m := exportDefaultConstRe.FindStringSubmatch(code); len(m) > 1 {
+		return splitCamelCase(m[1])
+	}
+
+	// Priority 2: Look for "export default X" at end, then find "function X" or "const X" above
+	exportDefaultNameRe := regexp.MustCompile(`(?m)^export\s+default\s+([A-Z][a-zA-Z0-9]*)\s*;?\s*$`)
+	if m := exportDefaultNameRe.FindStringSubmatch(code); len(m) > 1 {
+		return splitCamelCase(m[1])
+	}
+
+	// Priority 3: Last PascalCase function/const (main component is typically last, helpers above)
+	funcRe := regexp.MustCompile(`(?m)^(?:export\s+)?function\s+([A-Z][a-zA-Z0-9]*)`)
+	matches := funcRe.FindAllStringSubmatch(code, -1)
+	if len(matches) > 0 {
+		return splitCamelCase(matches[len(matches)-1][1])
+	}
+	constRe := regexp.MustCompile(`(?m)^(?:export\s+)?(?:const|let)\s+([A-Z][a-zA-Z0-9]*)`)
+	matches = constRe.FindAllStringSubmatch(code, -1)
+	if len(matches) > 0 {
+		return splitCamelCase(matches[len(matches)-1][1])
+	}
+
+	return "App Preview"
+}
+
+// splitCamelCase converts "SalesDashboard" to "Sales Dashboard".
+func splitCamelCase(s string) string {
+	var result strings.Builder
+	for i, r := range s {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			result.WriteRune(' ')
+		}
+		result.WriteRune(r)
+	}
+	return result.String()
 }
 
 // isStreamTruncationError returns true if the error indicates the LLM stream

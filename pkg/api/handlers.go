@@ -864,6 +864,26 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/scheduler/jobs/{id}/run", SchedulerJobRunHandler).Methods("POST")
 	router.HandleFunc("/api/scheduler/jobs/{id}", SchedulerJobHandler).Methods("GET", "PUT", "DELETE")
 
+	// App Preview sandbox (generative UI iframe)
+	router.HandleFunc("/api/app-preview/sandbox-full", AppPreviewSandboxFullHandler).Methods("GET")
+	router.HandleFunc("/api/app-preview/sandbox", AppPreviewSandboxHandler).Methods("GET")
+	router.HandleFunc("/api/app-preview/runtime.js", AppPreviewRuntimeHandler).Methods("GET")
+	router.HandleFunc("/api/app-preview/tailwind.js", AppPreviewTailwindHandler).Methods("GET")
+
+	// Visual Apps CRUD (generative UI persistence)
+	// App data proxy endpoints (must be before /api/apps/{name} to avoid capture)
+	router.HandleFunc("/api/apps/data", AppDataHandler).Methods("POST")
+	router.HandleFunc("/api/apps/action", AppActionHandler).Methods("POST")
+	router.HandleFunc("/api/apps/ai", AppAIHandler).Methods("POST")
+	router.HandleFunc("/api/apps/state/query", AppStateQueryHandler).Methods("POST")
+	router.HandleFunc("/api/apps/state/exec", AppStateExecHandler).Methods("POST")
+
+	router.HandleFunc("/api/apps", ListAppsHandler).Methods("GET")
+	router.HandleFunc("/api/apps/{name}", GetAppHandler).Methods("GET")
+	router.HandleFunc("/api/apps/{name}", SaveAppHandler).Methods("PUT")
+	router.HandleFunc("/api/apps/{name}", DeleteAppHandler).Methods("DELETE")
+	router.HandleFunc("/api/apps/{name}/stream", AppStreamHandler).Methods("GET")
+
 	// Studio Chat endpoints
 	router.HandleFunc("/api/studio/chat", StudioChatHandler).Methods("POST")
 	router.HandleFunc("/api/studio/sessions", StudioSessionsHandler).Methods("GET")

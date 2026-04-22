@@ -92,6 +92,10 @@ function parseHash(hash: string): RouterPath {
     return { view: 'drill', params: { subView, subKey, subKey2 } }
   }
 
+  if (view === 'apps') {
+    return { view: 'apps', params: { appName: parts[1] ? decodeURIComponent(parts[1]) : '' } }
+  }
+
   if (view === 'home') {
     return { view: 'chat', params: {} }
   }
@@ -125,6 +129,11 @@ export function buildPath(view: string, params: BuildPathParams = {}): string {
         return `/drill/${params.subView}/${encodeURIComponent(params.subKey)}`
       }
       return '/drill'
+    case 'apps':
+      if (params.subKey) {
+        return `/apps/${encodeURIComponent(params.subKey)}`
+      }
+      return '/apps'
     default:
       return '/chat'
   }

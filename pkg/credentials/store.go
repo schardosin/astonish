@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -125,6 +126,13 @@ func Open(configDir string) (*Store, error) {
 		return nil, err
 	}
 
+	// Sanitize any existing credentials that may have copy-paste artifacts
+	// (e.g., trailing quotes/commas from JSON). This is idempotent — clean
+	// values pass through unchanged. Only saves if something actually changed.
+	if s.sanitizeExisting() {
+		_ = s.save() // best-effort; don't fail Open() over this
+	}
+
 	// Build redaction signatures from loaded credentials
 	s.redactor.UpdateFromCredentials(s.data.Credentials)
 
@@ -170,8 +178,72 @@ func (s *Store) Get(name string) *Credential {
 	return &cp
 }
 
+// sanitizeCredential strips common copy-paste artifacts from credential fields.
+// Users often paste values from JSON, YAML, or terminal output that include
+// trailing quotes, commas, semicolons, or surrounding whitespace.
+func sanitizeCredential(cred *Credential) {
+	cred.Header = cleanFieldValue(cred.Header)
+	cred.Value = cleanFieldValue(cred.Value)
+	cred.Token = cleanFieldValue(cred.Token)
+	cred.Username = cleanFieldValue(cred.Username)
+	cred.Password = cleanFieldValue(cred.Password)
+	cred.AuthURL = cleanFieldValue(cred.AuthURL)
+	cred.ClientID = cleanFieldValue(cred.ClientID)
+	cred.ClientSecret = cleanFieldValue(cred.ClientSecret)
+	cred.Scope = cleanFieldValue(cred.Scope)
+	cred.TokenURL = cleanFieldValue(cred.TokenURL)
+	cred.AccessToken = cleanFieldValue(cred.AccessToken)
+	cred.RefreshToken = cleanFieldValue(cred.RefreshToken)
+	// Note: TokenExpiry is an RFC3339 timestamp, skip sanitization
+}
+
+// sanitizeSecretValue strips common copy-paste artifacts from a secret value.
+func sanitizeSecretValue(s string) string {
+	return cleanFieldValue(s)
+}
+
+// cleanFieldValue removes copy-paste artifacts: surrounding whitespace,
+// trailing commas/semicolons, and matched surrounding quotes.
+func cleanFieldValue(s string) string {
+	s = strings.TrimSpace(s)
+	// Strip trailing JSON/YAML artifacts first (comma, semicolon)
+	s = strings.TrimRight(s, ",; \t")
+	// Strip matched surrounding quotes: "value" or 'value'
+	if len(s) >= 2 {
+		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
+			s = s[1 : len(s)-1]
+		}
+	}
+	// One more pass for any remaining trailing artifacts after unquoting
+	s = strings.TrimRight(s, "\",;' \t")
+	return strings.TrimSpace(s)
+}
+
+// sanitizeExisting runs sanitization on all stored credentials and secrets.
+// Returns true if any value was actually changed (indicating a save is needed).
+func (s *Store) sanitizeExisting() bool {
+	changed := false
+	for _, cred := range s.data.Credentials {
+		before := *cred
+		sanitizeCredential(cred)
+		if *cred != before {
+			changed = true
+		}
+	}
+	for key, val := range s.data.Secrets {
+		cleaned := sanitizeSecretValue(val)
+		if cleaned != val {
+			s.data.Secrets[key] = cleaned
+			changed = true
+		}
+	}
+	return changed
+}
+
 // Set adds or updates a credential and persists the store.
 func (s *Store) Set(name string, cred *Credential) error {
+	sanitizeCredential(cred)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -285,6 +357,8 @@ func (s *Store) Redactor() *Redactor {
 // The key uses dot notation (e.g., "provider.anthropic.api_key").
 // The value is automatically registered for redaction.
 func (s *Store) SetSecret(key, value string) error {
+	value = sanitizeSecretValue(value)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -303,7 +377,7 @@ func (s *Store) SetSecretBatch(secrets map[string]string) error {
 	defer s.mu.Unlock()
 
 	for key, value := range secrets {
-		s.data.Secrets[key] = value
+		s.data.Secrets[key] = sanitizeSecretValue(value)
 	}
 	if err := s.save(); err != nil {
 		return err

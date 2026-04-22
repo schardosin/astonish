@@ -1129,7 +1129,13 @@ func runCleanupCycle(appCfg *config.AppConfig, sessionStore *persistentsession.F
 		}
 	}
 
-	// 2. Prune orphan sandbox containers
+	// 2. Clean up orphaned app databases (no matching .yaml, older than 7 days)
+	cleaned := api.CleanupOrphanAppDBs(7 * 24 * time.Hour)
+	if cleaned > 0 {
+		logger.Printf("[cleanup] Removed %d orphaned app database(s)", cleaned)
+	}
+
+	// 3. Prune orphan sandbox containers
 	if sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
 		platform := sandbox.DetectPlatform()
 		if platform != sandbox.PlatformUnsupported {

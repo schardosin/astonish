@@ -11,11 +11,11 @@
   },
   "dependencies": {
     "@astrojs/react": "^4.4.2",
-    "@astrojs/starlight": "^0.37.1",
+    "@astrojs/starlight": "^0.38.3",
     "@bsmnt/scrollytelling": "^0.3.3",
     "@six-tech/starlight-theme-six": "^1.0.16",
     "@tailwindcss/vite": "^4.1.18",
-    "astro": "^5.18.1",
+    "astro": "^6.1.8",
     "astro-mermaid": "^1.4.0",
     "gsap": "^3.14.2",
     "react": "^19.2.3",

@@ -36,6 +36,10 @@ type SelfMDConfig struct {
 	EmailAddress    string // The agent's email address (e.g., "agent@gmail.com")
 	EmailToolsAvail bool   // Email tools available (true if IMAP/SMTP creds exist, even if channel disabled)
 
+	// Apps (Generative UI)
+	AppsEnabled    bool // Whether the Apps / generative UI system is available
+	SavedAppsCount int  // Number of saved apps in ~/.config/astonish/apps/
+
 	// Browser / Handoff
 	HandoffAvailable bool // Whether browser_request_human tool is registered
 
@@ -146,6 +150,27 @@ func GenerateSelfMD(cfg *SelfMDConfig) string {
 		sb.WriteString(fmt.Sprintf("- Loaded: %d eligible skills\n", len(cfg.SkillNames)))
 		sb.WriteString(fmt.Sprintf("- Available: %s\n", strings.Join(cfg.SkillNames, ", ")))
 		sb.WriteString("- Retrieval: automatic (vector search) + explicit (skill_lookup tool)\n\n")
+	}
+
+	// Apps (Generative UI)
+	if cfg.AppsEnabled {
+		sb.WriteString("## Apps (Generative UI)\n")
+		sb.WriteString("You can create live, interactive React applications that render directly in the chat.\n")
+		sb.WriteString("- **Create**: wrap JSX in a ` ```astonish-app ` code fence. The component renders instantly in a sandboxed iframe.\n")
+		sb.WriteString("- **Refine**: the user can ask for changes conversationally and you regenerate the component.\n")
+		sb.WriteString("- **Save**: apps can be saved by name for later use (stored in `~/.config/astonish/apps/`).\n")
+		if cfg.SavedAppsCount > 0 {
+			sb.WriteString(fmt.Sprintf("- **Saved apps**: %d\n", cfg.SavedAppsCount))
+		}
+		sb.WriteString("- **Data hooks** (available inside apps):\n")
+		sb.WriteString("  - `useAppData(sourceId)` — fetch data from MCP tools, HTTP APIs, or static sources\n")
+		sb.WriteString("  - `useAppAction(actionId)` — trigger mutations (MCP tools, HTTP POST/PUT/DELETE)\n")
+		sb.WriteString("  - `useAppAI(opts)` — one-shot LLM calls for in-app intelligence (summarize, classify, etc.)\n")
+		sb.WriteString("  - `useAppState()` — per-app persistent SQLite database for local state\n")
+		sb.WriteString("- **Libraries**: React 19, Recharts, Lucide React, and Tailwind CSS are available in the sandbox.\n")
+		sb.WriteString("- **Security**: apps run in a fully sandboxed iframe (no direct network access, no DOM access to parent).\n")
+		sb.WriteString("- For detailed hook documentation and design patterns, search memory for \"generative-ui\".\n")
+		sb.WriteString("\n")
 	}
 
 	// Channels

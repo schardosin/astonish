@@ -14,6 +14,7 @@ import (
 	chromem "github.com/philippgille/chromem-go"
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/api"
+	"github.com/schardosin/astonish/pkg/apps"
 	"github.com/schardosin/astonish/pkg/browser"
 	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/config"
@@ -1832,6 +1833,12 @@ func factoryBuildSelfMDConfig(
 			selfCfg.HandoffAvailable = true
 			break
 		}
+	}
+
+	// Apps (Generative UI) — always available as a built-in capability
+	selfCfg.AppsEnabled = true
+	if savedApps, err := apps.ListApps(); err == nil {
+		selfCfg.SavedAppsCount = len(savedApps)
 	}
 
 	// Agent identity

@@ -307,3 +307,65 @@ func TestGenerateSelfMD_NoAgentIdentity(t *testing.T) {
 		t.Error("identity section should not appear when not configured")
 	}
 }
+
+func TestGenerateSelfMD_AppsEnabled(t *testing.T) {
+	cfg := &SelfMDConfig{
+		ProviderName:   "test",
+		ModelName:      "test-model",
+		AppsEnabled:    true,
+		SavedAppsCount: 5,
+	}
+
+	content := GenerateSelfMD(cfg)
+
+	checks := []string{
+		"## Apps (Generative UI)",
+		"astonish-app",
+		"useAppData",
+		"useAppAction",
+		"useAppAI",
+		"useAppState",
+		"**Saved apps**: 5",
+		"sandboxed iframe",
+		"Recharts",
+		"Lucide React",
+		"generative-ui",
+	}
+	for _, check := range checks {
+		if !strings.Contains(content, check) {
+			t.Errorf("expected content to contain %q", check)
+		}
+	}
+}
+
+func TestGenerateSelfMD_AppsEnabledNoSaved(t *testing.T) {
+	cfg := &SelfMDConfig{
+		ProviderName:   "test",
+		ModelName:      "test-model",
+		AppsEnabled:    true,
+		SavedAppsCount: 0,
+	}
+
+	content := GenerateSelfMD(cfg)
+
+	if !strings.Contains(content, "## Apps (Generative UI)") {
+		t.Error("expected apps section when enabled")
+	}
+	if strings.Contains(content, "Saved apps:") {
+		t.Error("saved apps count should not appear when zero")
+	}
+}
+
+func TestGenerateSelfMD_AppsDisabled(t *testing.T) {
+	cfg := &SelfMDConfig{
+		ProviderName: "test",
+		ModelName:    "test-model",
+		AppsEnabled:  false,
+	}
+
+	content := GenerateSelfMD(cfg)
+
+	if strings.Contains(content, "## Apps (Generative UI)") {
+		t.Error("apps section should not appear when not enabled")
+	}
+}

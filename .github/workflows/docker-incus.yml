@@ -1,8 +1,23 @@
 name: Docker Incus Image
 
 on:
-  release:
-    types: [published]
+  # Primary trigger: fires automatically when the Release workflow completes.
+  # Using workflow_run instead of release:published because GitHub suppresses
+  # downstream workflow triggers when the release is created by GITHUB_TOKEN
+  # (which the Release workflow uses via softprops/action-gh-release).
+  workflow_run:
+    workflows: ["Release"]
+    types:
+      - completed
+
+  # Manual trigger: for re-running on a specific tag (e.g. if the automatic
+  # run failed or was missed).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v2.9.0)'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -11,13 +26,26 @@ jobs:
   build-and-push:
     name: Build and push multi-arch image
     runs-on: ubuntu-latest
-    if: github.repository == 'schardosin/astonish'
+    if: >-
+      github.repository == 'schardosin/astonish' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        startsWith(github.event.workflow_run.head_branch, 'v')))
 
     steps:
+      - name: Determine version tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.event.workflow_run.head_branch }}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Checkout code
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ steps.version.outputs.tag }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -39,7 +67,7 @@ jobs:
 
       - name: Cross-compile Linux binaries
         env:
-          VERSION_TAG: ${{ github.event.release.tag_name }}
+          VERSION_TAG: ${{ steps.version.outputs.tag }}
         run: |
           # Both binaries need the frontend embedded and version ldflags
           touch web/embed.go
@@ -73,5 +101,5 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            schardosin/astonish-incus:${{ github.event.release.tag_name }}
+            schardosin/astonish-incus:${{ steps.version.outputs.tag }}
             schardosin/astonish-incus:latest

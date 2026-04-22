@@ -61,6 +61,33 @@ astonish chat --resume                 # Resume your last session
 
 ---
 
+## ✨ Visual Apps
+
+The agent can build live, interactive React applications directly in the conversation. Describe what you need and a running app appears in your chat — styled with Tailwind CSS, with charts, icons, data connections, and persistent storage.
+
+```
+You:    "Build me a project tracker with task priorities and due dates"
+Agent:  Here's a project tracker with persistent storage...
+        [Live interactive app appears in chat]
+
+You:    "Add a chart showing tasks completed per week"
+Agent:  [App updates with a Recharts bar chart]
+
+You:    "Save it"
+Agent:  Saved as "project_tracker" — open it anytime from the Apps tab.
+```
+
+- **React + Tailwind + Recharts + Lucide.** Full component library with charts and 200+ icons, all running in the browser.
+- **Live data** via `useAppData`. Connect to MCP tools, REST APIs (with OAuth credentials), or static config. The agent wires up the data sources for you.
+- **In-app AI** via `useAppAI`. One-shot LLM calls for summarization, classification, or analysis — embedded directly in the app.
+- **Persistent state** via `useAppState`. Each app gets its own SQLite database that survives page reloads. Build CRUD apps, not just dashboards.
+- **Iterative refinement.** Ask for changes and the app updates in place. Save when you're happy.
+- **Security sandboxed.** Apps run in an isolated iframe with an opaque origin. No access to parent DOM, cookies, or APIs. Data flows through an SSRF-protected server-side proxy.
+
+Saved apps live in the **Apps** tab in Studio and as YAML files in `~/.config/astonish/apps/`.
+
+---
+
 ## 🔄 Flow Distillation
 
 This is what makes Astonish different. The agent doesn't just solve problems, it learns from how it solved them.
@@ -306,9 +333,18 @@ flowchart TB
         F4["Scheduled execution"]
     end
 
+    subgraph Apps["✨ Visual Apps"]
+        direction TB
+        A1["React/JSX generation"]
+        A2["Sandboxed iframe preview"]
+        A3["Data hooks + AI + State"]
+        A4["Save & manage in Studio"]
+    end
+
     Chat -->|/distill| Distill
     Distill --> Flows
     Flows -->|"context for chat"| Chat
+    Chat -->|"astonish-app"| Apps
 ```
 
 The agent starts dynamic. As workflows accumulate, common tasks gain structure that you can inspect, edit, schedule, and share.
@@ -351,6 +387,7 @@ Astonish owes a significant debt to [OpenClaw](https://github.com/openclaw/openc
 ## 🎯 Use Cases
 
 - **DevOps & Infrastructure.** SSH into servers, check health, deploy containers, manage Kubernetes clusters. The agent learns your runbooks and distills them into repeatable flows.
+- **Dashboards & Internal Tools.** Describe what you need and get a live React app with charts, data connections, and persistent state. Build admin panels, monitoring dashboards, data explorers, or any interactive tool — no frontend setup required.
 - **Code Review & Development.** Navigate codebases, run tests, review PRs, refactor code. Sub-agents can parallelize across multiple files or modules.
 - **Research & Web Tasks.** Fetch pages, extract content, search the web, automate browser workflows. 32 native browser tools handle login flows, form filling, and data extraction.
 - **Scheduled Automation.** Set up cron jobs through conversation. The daemon runs them on schedule and delivers results to your Telegram or Email.

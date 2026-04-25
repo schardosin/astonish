@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -274,21 +276,26 @@ const sandboxHTMLBody = `
   var __stateVersionListeners = [];
   var __stateDebounceTimer = null;
 
-  // Circuit breaker: prevent infinite re-fetch loops
-  var __refetchTimestamps = [];
+  // Circuit breaker: prevent infinite request loops.
+  // Tracks ALL outgoing state_query/state_exec requests (initial fetches,
+  // re-fetches, and exec calls). If more than 30 requests fire within 2
+  // seconds, the breaker trips and blocks all further requests until the
+  // page is reloaded. This catches any loop variant — whether from
+  // queryFn instability, version-change cascades, or generated app bugs.
+  var __requestTimestamps = [];
   var __circuitBroken = false;
 
-  function __shouldAllowRefetch() {
+  function __shouldAllowRequest() {
     if (__circuitBroken) return false;
     var now = Date.now();
-    __refetchTimestamps.push(now);
+    __requestTimestamps.push(now);
     // Keep only last 2 seconds
-    while (__refetchTimestamps.length > 0 && now - __refetchTimestamps[0] > 2000) {
-      __refetchTimestamps.shift();
+    while (__requestTimestamps.length > 0 && now - __requestTimestamps[0] > 2000) {
+      __requestTimestamps.shift();
     }
-    if (__refetchTimestamps.length > 10) {
+    if (__requestTimestamps.length > 30) {
       __circuitBroken = true;
-      console.warn('[useAppState] Circuit breaker tripped: too many re-fetches (>10 in 2s). Pausing reactive queries. Reload to reset.');
+      console.warn('[useAppState] Circuit breaker tripped: too many requests (>30 in 2s). All state operations paused. Reload to reset.');
       return false;
     }
     return true;
@@ -324,6 +331,13 @@ const sandboxHTMLBody = `
     var queryCache = _cache[0];
     var setQueryCache = _cache[1];
 
+    // Keep a ref to the latest queryCache so queryFn can read it without
+    // having queryCache as a dependency (which would recreate queryFn on
+    // every cache update and cause infinite re-render loops when consumer
+    // code puts db in a useEffect dependency array).
+    var queryCacheRef = React.useRef(queryCache);
+    queryCacheRef.current = queryCache;
+
     // Track registered queries: { [queryKey]: { sql, params } }
     var registeredQueries = React.useRef({});
     // Track the version we last fetched at
@@ -350,7 +364,7 @@ const sandboxHTMLBody = `
       if (lastFetchedVersion.current === version) return;
       lastFetchedVersion.current = version;
 
-      if (!__shouldAllowRefetch()) return;
+      if (!__shouldAllowRequest()) return;
 
       keys.forEach(function(key) {
         var q = queries[key];
@@ -374,6 +388,9 @@ const sandboxHTMLBody = `
 
     // exec: write/DDL — returns promise, triggers debounced re-fetch
     var execFn = React.useCallback(function(sql, params) {
+      if (!__shouldAllowRequest()) {
+        return Promise.reject(new Error('Circuit breaker: too many requests'));
+      }
       return __requestFromParent('state_exec', {
         appName: __appName,
         sql: sql,
@@ -389,6 +406,12 @@ const sandboxHTMLBody = `
     // The return value IS an array (so .map/.reduce/.filter work directly)
     // AND has .data/.loading/.error properties (so destructuring works too).
     // NOT a hook — safe to call anywhere (conditionally, in helpers, loops, etc.)
+    //
+    // IMPORTANT: queryFn has NO dependencies (stable identity) — it reads the
+    // cache via queryCacheRef instead of closing over queryCache state.  This
+    // prevents an infinite loop: queryCache change → queryFn recreated → db
+    // object recreated → consumer useEffect([db]) fires → exec() → version
+    // bump → re-fetch → queryCache change → …
     var queryFn = React.useCallback(function(sql, params) {
       var paramsArr = params || [];
       var key = sql + '|' + JSON.stringify(paramsArr);
@@ -396,29 +419,35 @@ const sandboxHTMLBody = `
       // Register this query if new
       if (!registeredQueries.current[key]) {
         registeredQueries.current[key] = { sql: sql, params: paramsArr };
-        // Trigger initial fetch
-        __requestFromParent('state_query', {
-          appName: __appName,
-          sql: sql,
-          params: paramsArr
-        }).then(function(resp) {
-          setQueryCache(function(prev) {
-            var next = Object.assign({}, prev);
-            if (resp.error) {
-              next[key] = __qr([], false, resp.error);
-            } else {
-              next[key] = __qr(resp.data, false, null);
-            }
-            return next;
+        // Trigger initial fetch (guarded by circuit breaker)
+        if (__shouldAllowRequest()) {
+          __requestFromParent('state_query', {
+            appName: __appName,
+            sql: sql,
+            params: paramsArr
+          }).then(function(resp) {
+            setQueryCache(function(prev) {
+              var next = Object.assign({}, prev);
+              if (resp.error) {
+                next[key] = __qr([], false, resp.error);
+              } else {
+                next[key] = __qr(resp.data, false, null);
+              }
+              return next;
+            });
           });
-        });
+        }
       }
 
-      // Return cached result or loading defaults
-      return queryCache[key] || __qr([], true, null);
-    }, [queryCache]);
+      // Return cached result or loading defaults (read via ref, not state)
+      return queryCacheRef.current[key] || __qr([], true, null);
+    }, []);
 
-    return { exec: execFn, query: queryFn };
+    // Memoize the returned object so consumers that put db in a dependency
+    // array (e.g. useEffect([db])) do not re-fire on every render.
+    return React.useMemo(function() {
+      return { exec: execFn, query: queryFn };
+    }, [execFn, queryFn]);
   };
 
   // Make hooks available via require('astonish') too — added to modules below
@@ -548,6 +577,7 @@ const sandboxHTMLBody = `
 var (
 	sandboxFullOnce sync.Once
 	sandboxFullHTML string
+	sandboxFullETag string // ETag derived from content hash
 )
 
 // buildSandboxFullHTML assembles the complete sandbox HTML with the runtime
@@ -584,14 +614,31 @@ func buildSandboxFullHTML() string {
 // with all JS inlined. The frontend caches this response and uses it as
 // iframe.srcdoc, allowing sandbox="allow-scripts" without allow-same-origin.
 //
+// Uses ETag-based revalidation so browsers always check for freshness after
+// a server rebuild, but get a cheap 304 Not Modified when the content hasn't
+// changed. This prevents stale sandbox code from being served from browser
+// cache after a binary update.
+//
 // GET /api/app-preview/sandbox-full
 func AppPreviewSandboxFullHandler(w http.ResponseWriter, r *http.Request) {
 	sandboxFullOnce.Do(func() {
 		sandboxFullHTML = buildSandboxFullHTML()
+		hash := sha256.Sum256([]byte(sandboxFullHTML))
+		sandboxFullETag = fmt.Sprintf(`"%x"`, hash[:8]) // 16-char hex, quoted per HTTP spec
 	})
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	// Cache for 24h — the content only changes when the binary is rebuilt.
-	w.Header().Set("Cache-Control", "public, max-age=86400, immutable")
+	// no-cache: browser must revalidate with the server on every use, but can
+	// store the response for conditional requests (If-None-Match).
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("ETag", sandboxFullETag)
+
+	// If the client already has this version, return 304 (no body).
+	if match := r.Header.Get("If-None-Match"); match == sandboxFullETag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(sandboxFullHTML))
 }

@@ -365,6 +365,38 @@ button, input, select, textarea {
   padding: 8px 16px;
 }
 
+/* Mermaid diagram blocks */
+.markdown-body .mermaid-diagram {
+  display: flex;
+  justify-content: center;
+  margin: 1em 0;
+  padding: 16px;
+  border-radius: 10px;
+  background-color: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  overflow-x: auto;
+}
+
+.markdown-body .mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* In dark mode, invert mermaid text colors for readability */
+.dark .markdown-body .mermaid-diagram {
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+.markdown-body .mermaid-error {
+  margin: 1em 0;
+}
+
+/* Document variant — slightly more spacing */
+.markdown-body.markdown-body--document .mermaid-diagram {
+  margin: 1.25em 0;
+  padding: 20px;
+}
+
 /* Toast Notification Animation */
 @keyframes slide-up {
   from {

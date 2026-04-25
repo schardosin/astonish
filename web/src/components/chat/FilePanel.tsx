@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { X, FileText, Download, ChevronDown, Loader, FilePlus, Edit3, Eye } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { markdownComponents } from './markdownComponents'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import { fetchArtifactContent, getArtifactDownloadUrl, getArtifactPDFUrl } from '../../api/studioChat'
@@ -347,7 +348,7 @@ export default function FilePanel({ artifacts, initialPath, sessionId, onClose }
                 <div ref={contentRef} className="max-w-4xl mx-auto">
                   {isMarkdown ? (
                     <div className="markdown-body markdown-body--document">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{content}</ReactMarkdown>
                     </div>
                   ) : (
                     <pre

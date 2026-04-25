@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { ChevronDown, Loader, Check, Wrench, Users, Globe, Code, GitFork } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { markdownComponents } from './markdownComponents'
 import type { FleetExecutionMessage, FleetEvent } from './chatTypes'
 
 // Format a timestamp to HH:MM
@@ -202,7 +203,7 @@ export default function FleetExecutionPanel({ data }: { data: FleetExecutionMess
             <div className="text-[10px] font-medium text-cyan-400 mb-1">OpenCode</div>
           )}
           <div className="markdown-body text-xs" style={{ color: 'var(--text-primary)' }}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{textContent}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{textContent}</ReactMarkdown>
           </div>
         </div>
       </div>

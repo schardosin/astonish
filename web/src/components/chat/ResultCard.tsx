@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Copy, Check, Maximize2, Minimize2, ChevronDown, ChevronUp, FileText, Download, Loader, FilePlus, Edit3 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { markdownComponents } from './markdownComponents'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import { fetchArtifactContent, getArtifactDownloadUrl, getArtifactPDFUrl } from '../../api/studioChat'
@@ -241,7 +242,7 @@ function EmbeddedFileViewer({ artifact, sessionId, onOpenInPanel }: {
           <div className="max-w-4xl">
             {isMarkdown ? (
               <div className="markdown-body markdown-body--document text-sm">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{content}</ReactMarkdown>
               </div>
             ) : (
               <pre
@@ -357,7 +358,7 @@ export default function ResultCard({
               </pre>
             ) : (
               <div style={{ color: 'var(--text-primary)' }} className="markdown-body markdown-body--document text-sm">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{content}</ReactMarkdown>
               </div>
             )}
           </div>
@@ -422,7 +423,7 @@ export default function ResultCard({
               </pre>
             ) : (
               <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{content}</ReactMarkdown>
               </div>
             )}
           </div>

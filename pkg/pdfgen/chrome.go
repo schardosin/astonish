@@ -100,6 +100,23 @@ func renderHTMLToPDF(bp BrowserProvider, html string) ([]byte, error) {
 		return nil, fmt.Errorf("failed to wait for fonts: %w", err)
 	}
 
+	// Wait for mermaid diagrams (if any) to finish rendering. The inline
+	// script in the HTML template sets window.__mermaidDone = true once all
+	// ```mermaid code blocks have been converted to SVG. We poll briefly
+	// to avoid blocking indefinitely if mermaid fails to load.
+	_, err = pg.Eval(`() => new Promise((resolve) => {
+		if (window.__mermaidDone) { resolve(true); return; }
+		let tries = 0;
+		const iv = setInterval(() => {
+			tries++;
+			if (window.__mermaidDone || tries > 100) { clearInterval(iv); resolve(true); }
+		}, 50);
+	})`)
+	if err != nil {
+		// Non-fatal: diagrams may not render but the rest of the PDF is fine.
+		fmt.Printf("warning: mermaid wait failed: %v\n", err)
+	}
+
 	// Print to PDF with sensible margins and background printing.
 	marginV := 0.6  // inches (~1.5cm) top/bottom
 	marginH := 0.75 // inches (~1.9cm) left/right
@@ -124,21 +141,63 @@ func renderHTMLToPDF(bp BrowserProvider, html string) ([]byte, error) {
 }
 
 // wrapInHTMLTemplate wraps an HTML fragment in a complete HTML document with
-// CSS styling optimized for print/PDF output.
+// CSS styling optimized for print/PDF output. Includes mermaid.js for
+// rendering mermaid fenced code blocks as SVG diagrams.
 func wrapInHTMLTemplate(body string) string {
-	return fmt.Sprintf(`<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<style>
-%s
-</style>
-</head>
-<body>
-%s
-</body>
-</html>`, pdfCSS, body)
+	return fmt.Sprintf("<!DOCTYPE html>\n"+
+		"<html lang=\"en\">\n<head>\n<meta charset=\"UTF-8\">\n"+
+		"<style>\n%s\n</style>\n"+
+		"<script src=\"https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js\"></script>\n"+
+		"<script>\n%s\n</script>\n"+
+		"</head>\n<body>\n%s\n</body>\n</html>",
+		pdfCSS, mermaidInitScript, body)
 }
+
+// mermaidInitScript is the inline JavaScript that converts
+// <pre><code class="language-mermaid">...</code></pre> blocks (produced by
+// goldmark from fenced mermaid code blocks) into rendered SVG diagrams.
+// It runs on DOMContentLoaded and sets window.__mermaidDone when complete,
+// which the Go code polls for before printing to PDF.
+const mermaidInitScript = `
+document.addEventListener('DOMContentLoaded', async function() {
+  var codeBlocks = document.querySelectorAll('code.language-mermaid');
+  if (codeBlocks.length === 0) {
+    window.__mermaidDone = true;
+    return;
+  }
+
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'neutral',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+    securityLevel: 'loose'
+  });
+
+  try {
+    for (var i = 0; i < codeBlocks.length; i++) {
+      var codeEl = codeBlocks[i];
+      var preEl = codeEl.parentElement;
+      var source = codeEl.textContent || '';
+      var id = 'mermaid-pdf-' + i;
+
+      var result = await mermaid.render(id, source.trim());
+      var container = document.createElement('div');
+      container.className = 'mermaid-diagram';
+      container.innerHTML = result.svg;
+
+      if (preEl && preEl.tagName === 'PRE') {
+        preEl.replaceWith(container);
+      } else {
+        codeEl.replaceWith(container);
+      }
+    }
+  } catch (e) {
+    console.error('Mermaid rendering failed:', e);
+  }
+
+  window.__mermaidDone = true;
+});
+`
 
 // pdfCSS is the embedded stylesheet for PDF output. It provides clean
 // typography, compact list spacing, styled tables, and code blocks.
@@ -308,5 +367,19 @@ img {
   a { color: #0066cc; }
   h1, h2, h3 { page-break-after: avoid; }
   table, pre, blockquote { page-break-inside: avoid; }
+}
+
+/* Mermaid diagrams */
+.mermaid-diagram {
+  display: flex;
+  justify-content: center;
+  margin: 0.8em 0;
+  padding: 16px;
+  page-break-inside: avoid;
+}
+
+.mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
 }
 `

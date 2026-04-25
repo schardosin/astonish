@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { ChevronDown, Loader, Check, Wrench, ListTodo, RotateCcw, Code, Globe, GitFork, FileUp } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { markdownComponents } from './markdownComponents'
 import type { SubTaskExecutionMessage, SubTaskEvent } from './chatTypes'
 
 // Task status derived from events
@@ -241,7 +242,7 @@ export default function TaskPlanPanel({ data }: { data: SubTaskExecutionMessage 
           }}
         >
           <div className="markdown-body text-xs" style={{ color: 'var(--text-primary)' }}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{textContent}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{textContent}</ReactMarkdown>
           </div>
         </div>
       </div>

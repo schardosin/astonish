@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Send, Brain, Wrench, Loader, RotateCcw, Square, Code, Copy, Check } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { markdownComponents } from './chat/markdownComponents'
 
 interface ChatMessage {
   type: string
@@ -171,8 +172,9 @@ export default function ChatPanel({ messages, onSendMessage, onStartRun, onStop,
                       <ReactMarkdown 
                         remarkPlugins={[remarkGfm]} 
                         components={message.preserveWhitespace ? {
+                          ...markdownComponents,
                           p: ({node, ...props}) => <p style={{whiteSpace: 'pre-wrap'}} {...props} />
-                        } : undefined}
+                        } : markdownComponents}
                       >
                         {message.content}
                       </ReactMarkdown>

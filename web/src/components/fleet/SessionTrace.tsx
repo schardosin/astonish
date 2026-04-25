@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { markdownComponents } from '../chat/markdownComponents'
 import {
   fetchFleetTrace, fetchFleetSessions, connectFleetStream,
   stopFleetSession, fetchFleetThreads, fetchFleetMessages,
@@ -477,7 +478,7 @@ function TraceEntryRow({ entry, index, expanded, onToggle }: TraceEntryRowProps)
           <div className="flex-1 min-w-0">
             {expanded ? (
               <div className="rounded p-2 text-xs" style={{ background: 'rgba(255,255,255,0.03)', color: 'var(--text-secondary)' }}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.text || ''}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{entry.text || ''}</ReactMarkdown>
               </div>
             ) : (
               <button
@@ -621,7 +622,7 @@ function ThreadMessageRow({ msg, index, expanded, onToggle }: ThreadMessageRowPr
         <div className="flex-1 min-w-0">
           {expanded ? (
             <div className="rounded p-3 text-xs" style={{ background: 'rgba(255,255,255,0.03)', color: 'var(--text-secondary)' }}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text || ''}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{msg.text || ''}</ReactMarkdown>
               {msg.artifacts && Object.keys(msg.artifacts).length > 0 && (
                 <div className="mt-2 pt-2" style={{ borderTop: '1px solid var(--border-color)' }}>
                   <span className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Artifacts: </span>

@@ -111,6 +111,27 @@ func TestWrapInHTMLTemplate(t *testing.T) {
 	}
 }
 
+func TestWrapInHTMLTemplate_MermaidSupport(t *testing.T) {
+	result := wrapInHTMLTemplate("<p>test</p>")
+
+	checks := []string{
+		"mermaid",                            // mermaid.js CDN reference
+		"mermaid.min.js",                     // script source
+		"code.language-mermaid",              // selector for mermaid code blocks
+		"mermaid.initialize",                 // initialization call
+		"mermaid.render",                     // render call
+		"window.__mermaidDone",               // completion signal
+		".mermaid-diagram",                   // CSS for rendered diagrams
+		"page-break-inside: avoid",           // diagrams avoid page breaks
+	}
+
+	for _, want := range checks {
+		if !strings.Contains(result, want) {
+			t.Errorf("wrapInHTMLTemplate missing mermaid support: %q not found", want)
+		}
+	}
+}
+
 func TestConvertMarkdownToPDFChrome_NilBrowser(t *testing.T) {
 	_, err := ConvertMarkdownToPDFChrome([]byte("# Test"), nil)
 	if err == nil {

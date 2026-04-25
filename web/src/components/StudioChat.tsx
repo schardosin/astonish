@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search, Users, Info, FileText, Globe, ListChecks, AppWindow } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { markdownComponents } from './chat/markdownComponents'
 import { fetchSessions, fetchSessionHistory, deleteSession, connectChat, stopChat, fetchSessionStatus, connectChatStream } from '../api/studioChat'
 import type { ChatSession } from '../api/studioChat'
 import { startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions } from '../api/fleetChat'
@@ -2202,7 +2203,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                         if (!match) {
                           return (
                             <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
-                              <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{msg.content}</ReactMarkdown>
                             </div>
                           )
                         }
@@ -2215,7 +2216,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                           <>
                             {before && (
                               <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{before}</ReactMarkdown>
+                                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{before}</ReactMarkdown>
                               </div>
                             )}
                             <AppCodeIndicator
@@ -2231,7 +2232,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                             />
                             {after && (
                               <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{after}</ReactMarkdown>
+                                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{after}</ReactMarkdown>
                               </div>
                             )}
                           </>
@@ -2411,7 +2412,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                       }}
                     >
                       <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{fMsg.text}</ReactMarkdown>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{fMsg.text}</ReactMarkdown>
                       </div>
                     </div>
                   </div>
@@ -2429,7 +2430,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                       <span className="text-xs font-medium" style={{ color: 'rgba(129, 140, 248, 0.9)' }}>System</span>
                     </div>
                     <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content as string}</ReactMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{msg.content as string}</ReactMarkdown>
                     </div>
                   </div>
                 )

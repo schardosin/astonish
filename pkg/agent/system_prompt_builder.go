@@ -255,10 +255,11 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString("- For in-app AI (summarize, classify, analyze), use `useAppAI({ system: '...' })` which returns an async function: `const text = await askAI(prompt, { context: data })`.\n")
 	sb.WriteString("- For persistent data, use `useAppState()` — a reactive SQLite database (db.exec/db.query) that survives refreshes.\n")
 	sb.WriteString("- Only React 19, Tailwind CSS v4, Recharts, and Lucide icons are available. No component libraries (no shadcn/ui).\n")
-	sb.WriteString("- Use ONLY native HTML elements styled with Tailwind. Define helper components inline.\n")
+	sb.WriteString("- Use ONLY native HTML elements styled with Tailwind. Define helper components as top-level functions ABOVE the main export — never nested inside it.\n")
 	sb.WriteString("- Do NOT set background on the outermost container — it must be transparent.\n")
 	sb.WriteString("- Style: dark palette with gray-950 page, gray-900 cards with border-gray-800 rounded-xl, gray-800 inputs with border-gray-700 rounded-lg. Use semantic accent colors (emerald=positive, blue=info, purple=totals, amber=warnings, red=errors). Use gradient KPI cards like from-emerald-900/40 to-emerald-950/40 with matching border.\n")
 	sb.WriteString("Search memory for \"generative-ui\" for full documentation and examples.\n")
+	sb.WriteString("**Reports vs apps:** For reports/analyses with diagrams, use `write_file` + mermaid blocks, not `astonish-app`.\n")
 
 	// ── Tier 3: Per-Turn Dynamic ─────────────────────────────────
 	// Execution plans and auto-retrieved knowledge are appended here at

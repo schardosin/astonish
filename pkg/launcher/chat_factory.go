@@ -1477,8 +1477,14 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		if toolIndex != nil {
 			subAgentMgr.ToolIndex = toolIndex
 		}
-		if searchToolsTool != nil {
-			subAgentMgr.SearchToolsTool = searchToolsTool
+		// Provide a factory that creates child-scoped search_tools instances.
+		// Each sub-agent gets its own instance whose onResults callback feeds
+		// into the child's dynamic tool injection pipeline (not the parent's).
+		if toolIndex != nil {
+			idx := toolIndex // capture for closure
+			subAgentMgr.SearchToolsFactory = func(onResults func([]string)) (tool.Tool, error) {
+				return tools.NewSearchToolsTool(idx, onResults)
+			}
 		}
 		// Wire skill awareness into sub-agents so they can load skill
 		// content on demand (e.g., git/github skills for repo operations).

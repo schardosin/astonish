@@ -189,9 +189,11 @@ type SubAgentManager struct {
 	// an empty ToolFilter, the index is queried to find relevant tool groups.
 	ToolIndex *ToolIndex
 
-	// SearchToolsTool is injected into every sub-agent so it can discover
-	// additional tools mid-execution via explicit search.
-	SearchToolsTool tool.Tool
+	// SearchToolsFactory creates a child-scoped search_tools tool instance.
+	// Each sub-agent gets its own instance whose onResults callback feeds into
+	// the child's dynamic tool injection pipeline (not the parent's).
+	// Set by the launcher; nil = search_tools not available to sub-agents.
+	SearchToolsFactory func(onResults func([]string)) (tool.Tool, error)
 
 	// SkillLookupTool is injected into every sub-agent so it can load
 	// skill content on demand when it encounters a matching task (e.g.,
@@ -471,10 +473,38 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		childTools, childToolsets, resolveWarnings = m.resolveTools(toolFilter)
 	}
 
-	// Inject search_tools into every sub-agent so it can discover additional
-	// tools mid-execution if its initial set is insufficient.
-	if m.SearchToolsTool != nil {
-		childTools = append(childTools, m.SearchToolsTool)
+	// --- Dynamic tool injection for sub-agents ---
+	// Mirrors the main ChatAgent's DynamicToolInjectionCallback: tools discovered
+	// via (1) automatic hybrid search on the task description and (2) explicit
+	// search_tools calls mid-execution are injected into the child's LLM requests.
+	var childSearchToolsResults []string
+	var childSearchToolsMu sync.Mutex
+	var childDynamicMatches []ToolMatch
+
+	// Source 1: Automatic hybrid search on the task description.
+	// This is the equivalent of chat_agent_run.go's per-turn tool search.
+	if m.ToolIndex != nil && task.Description != "" {
+		matches, err := m.ToolIndex.SearchHybrid(
+			context.Background(), task.Description, 8, 0.005,
+		)
+		if err == nil && len(matches) > 0 {
+			childDynamicMatches = matches
+		}
+	}
+
+	// Source 2: Create a child-scoped search_tools instance whose onResults
+	// callback feeds into this child's injection pipeline (not the parent's).
+	if m.SearchToolsFactory != nil {
+		childSearchTool, stErr := m.SearchToolsFactory(func(names []string) {
+			childSearchToolsMu.Lock()
+			childSearchToolsResults = append(childSearchToolsResults, names...)
+			childSearchToolsMu.Unlock()
+		})
+		if stErr == nil {
+			childTools = append(childTools, childSearchTool)
+		} else {
+			slog.Warn("failed to create child search_tools", "task", task.Name, "error", stErr)
+		}
 	}
 
 	// Inject skill_lookup into every sub-agent so it can load skill content
@@ -501,6 +531,15 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		childPrompt = task.Instructions
 	} else {
 		childPrompt = m.buildChildPrompt(task)
+	}
+
+	// Append dynamically discovered tools to the prompt so the LLM knows
+	// what additional tools are available beyond its static set.
+	if len(childDynamicMatches) > 0 {
+		relevantTools := FormatToolMatchesForPrompt(childDynamicMatches)
+		if relevantTools != "" {
+			childPrompt += "\n## Dynamically Available Tools\nThese tools have been auto-discovered based on your task and are available for you to call directly:\n" + relevantTools
+		}
 	}
 
 	// Create child session linked to parent
@@ -552,6 +591,52 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	// a single large response (e.g., file_tree on /) from causing a 400 Bad Request.
 	// Must run BEFORE compaction so the compactor sees reasonable-sized content.
 	beforeModelCallbacks = append(beforeModelCallbacks, TruncateToolResponsesCallback())
+
+	// Dynamically inject relevant tools into each child LLM request.
+	// Mirrors the main ChatAgent's DynamicToolInjectionCallback: tools from
+	// automatic hybrid search (childDynamicMatches) and explicit search_tools
+	// discoveries (childSearchToolsResults) are injected into every LLM call.
+	if m.ToolIndex != nil {
+		toolIndex := m.ToolIndex // capture for closure
+		beforeModelCallbacks = append(beforeModelCallbacks, func(_ adkagent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
+			toolsToInject := make(map[string]bool)
+
+			// Source 1: automatic hybrid search matches on task description
+			for _, match := range childDynamicMatches {
+				if !match.IsMainTool {
+					toolsToInject[match.ToolName] = true
+				}
+			}
+
+			// Source 2: search_tools explicit discoveries (accumulated intra-execution)
+			childSearchToolsMu.Lock()
+			for _, name := range childSearchToolsResults {
+				toolsToInject[name] = true
+			}
+			childSearchToolsMu.Unlock()
+
+			if len(toolsToInject) == 0 {
+				return nil, nil
+			}
+
+			for toolName := range toolsToInject {
+				if _, exists := req.Tools[toolName]; exists {
+					continue // already registered
+				}
+				// Respect the sub-agent exclusion list
+				if excludedChildTools[toolName] {
+					continue
+				}
+				entry := toolIndex.GetToolEntry(toolName)
+				if entry == nil || entry.Tool == nil {
+					continue
+				}
+				packToolIntoRequest(req, entry.Tool)
+			}
+
+			return nil, nil
+		})
+	}
 
 	if m.Compactor != nil {
 		beforeModelCallbacks = append(beforeModelCallbacks, m.Compactor.BeforeModelCallback())

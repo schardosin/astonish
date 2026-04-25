@@ -234,6 +234,22 @@ func (cr *ChatRunner) Run(
 			data["step_status"] = evt.StepStatus
 		}
 		cr.emitEvent("subtask_progress", data)
+
+		// Special handling: when a sub-agent calls browser_request_human and
+		// returns a VNC proxy URL, emit an additional tool_result event so the
+		// frontend renders the BrowserView component. Without this, the VNC URL
+		// is buried inside the subtask_progress event and the user never sees
+		// the browser panel.
+		if evt.Type == "task_tool_result" && evt.ToolName == "browser_request_human" {
+			if resultMap, ok := evt.ToolResult.(map[string]any); ok {
+				if _, hasVNC := resultMap["vnc_proxy_url"]; hasVNC {
+					cr.emitEvent("tool_result", map[string]any{
+						"name":   "browser_request_human",
+						"result": resultMap,
+					})
+				}
+			}
+		}
 	}
 	defer func() { chatAgent.SubTaskProgressCallback = nil }()
 

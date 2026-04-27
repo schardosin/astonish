@@ -1,0 +1,12 @@
+{
+  "name": "empty-thinking",
+  "description": "Agent emits a thinking event with empty text (should be filtered)",
+  "category": "misc",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-empty-think", "isNew": true } },
+    { "type": "thinking", "data": { "text": "" } },
+    { "type": "text", "data": { "text": "Here is the answer." } },
+    { "type": "usage", "data": { "input_tokens": 50, "output_tokens": 25, "total_tokens": 75 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

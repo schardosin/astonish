@@ -1,0 +1,15 @@
+{
+  "name": "usage-accumulation",
+  "description": "Multiple usage events that should accumulate token counts",
+  "category": "misc",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-usage", "isNew": true } },
+    { "type": "text", "data": { "text": "Let me search for that." } },
+    { "type": "tool_call", "data": { "name": "web_search", "args": { "query": "test" } } },
+    { "type": "tool_result", "data": { "name": "web_search", "result": "Results found" } },
+    { "type": "usage", "data": { "input_tokens": 100, "output_tokens": 50, "total_tokens": 150 } },
+    { "type": "text", "data": { "text": "Based on the search results, here is the answer." } },
+    { "type": "usage", "data": { "input_tokens": 200, "output_tokens": 100, "total_tokens": 300 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "app-version-navigation",
+  "description": "Multiple app_preview versions for the same appId to test version navigation",
+  "category": "apps",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-app-versions", "isNew": true } },
+    { "type": "app_preview", "data": { "code": "<div>v1</div>", "title": "Dashboard", "description": "First version", "version": 1, "appId": "app-multi-001" } },
+    { "type": "text", "data": { "text": "Let me improve it." } },
+    { "type": "app_preview", "data": { "code": "<div>v2 improved</div>", "title": "Dashboard", "description": "Improved version", "version": 2, "appId": "app-multi-001" } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

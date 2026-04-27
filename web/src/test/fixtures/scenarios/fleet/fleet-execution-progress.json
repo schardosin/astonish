@@ -1,0 +1,17 @@
+{
+  "name": "fleet-execution-progress",
+  "description": "Fleet execution with progress phases including planning and implementation",
+  "category": "fleet",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-fleet-progress", "isNew": true } },
+    { "type": "fleet_progress", "data": { "type": "phase_start", "phase": "Planning" } },
+    { "type": "fleet_progress", "data": { "type": "conversation_start", "phase": "Planning", "agent": "architect" } },
+    { "type": "fleet_progress", "data": { "type": "agent_message", "phase": "Planning", "agent": "architect", "text": "Designing the architecture" } },
+    { "type": "fleet_progress", "data": { "type": "phase_complete", "phase": "Planning" } },
+    { "type": "fleet_progress", "data": { "type": "phase_start", "phase": "Implementation" } },
+    { "type": "fleet_progress", "data": { "type": "conversation_start", "phase": "Implementation", "agent": "developer" } },
+    { "type": "fleet_progress", "data": { "type": "agent_message", "phase": "Implementation", "agent": "developer", "text": "Writing the code" } },
+    { "type": "fleet_progress", "data": { "type": "fleet_complete", "phase": "Implementation" } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

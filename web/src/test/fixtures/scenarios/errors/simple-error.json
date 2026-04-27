@@ -1,0 +1,10 @@
+{
+  "name": "simple-error",
+  "description": "Backend sends an error event",
+  "category": "errors",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-error-1", "isNew": true } },
+    { "type": "error", "data": { "error": "Rate limit exceeded. Please try again in 30 seconds." } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

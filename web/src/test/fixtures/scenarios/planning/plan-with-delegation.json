@@ -1,0 +1,30 @@
+{
+  "name": "plan-with-delegation",
+  "description": "Full plan announced with step transitions tied to delegation",
+  "category": "planning",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-plan-deleg", "isNew": true } },
+    { "type": "text", "data": { "text": "I'll create a plan and execute it." } },
+    { "type": "subtask_progress", "data": { "event_type": "plan_announced", "plan_goal": "Research and analyze market competitors", "plan_steps": [
+      { "name": "Research", "description": "Find top competitors" },
+      { "name": "Analyze", "description": "Compare features and pricing" },
+      { "name": "Report", "description": "Write comprehensive report" }
+    ] } },
+    { "type": "subtask_progress", "data": { "event_type": "plan_step_update", "step_name": "Research", "step_status": "running" } },
+    { "type": "subtask_progress", "data": { "event_type": "delegation_start", "tasks": [{ "name": "Research competitors", "description": "Search for competitors" }] } },
+    { "type": "subtask_progress", "data": { "event_type": "task_start", "task_name": "Research competitors" } },
+    { "type": "subtask_progress", "data": { "event_type": "task_complete", "task_name": "Research competitors", "status": "success", "duration": "4.0s" } },
+    { "type": "subtask_progress", "data": { "event_type": "delegation_complete", "status": "success" } },
+    { "type": "subtask_progress", "data": { "event_type": "plan_step_update", "step_name": "Research", "step_status": "complete" } },
+    { "type": "subtask_progress", "data": { "event_type": "plan_step_update", "step_name": "Analyze", "step_status": "running" } },
+    { "type": "subtask_progress", "data": { "event_type": "delegation_start", "tasks": [{ "name": "Feature comparison", "description": "Compare features" }] } },
+    { "type": "subtask_progress", "data": { "event_type": "task_start", "task_name": "Feature comparison" } },
+    { "type": "subtask_progress", "data": { "event_type": "task_complete", "task_name": "Feature comparison", "status": "success", "duration": "3.5s" } },
+    { "type": "subtask_progress", "data": { "event_type": "delegation_complete", "status": "success" } },
+    { "type": "subtask_progress", "data": { "event_type": "plan_step_update", "step_name": "Analyze", "step_status": "complete" } },
+    { "type": "subtask_progress", "data": { "event_type": "plan_step_update", "step_name": "Report", "step_status": "complete" } },
+    { "type": "text", "data": { "text": "The analysis is complete. Here are the findings." } },
+    { "type": "usage", "data": { "input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

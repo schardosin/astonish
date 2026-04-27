@@ -1,0 +1,15 @@
+{
+  "name": "tool-with-artifact",
+  "description": "Agent writes a file, producing both tool_result and artifact events",
+  "category": "tools",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-tool-artifact", "isNew": true } },
+    { "type": "text", "data": { "text": "I'll create that file for you." } },
+    { "type": "tool_call", "data": { "name": "write_file", "args": { "path": "/workspace/report.md", "content": "# Report\n\nThis is the report." } } },
+    { "type": "tool_result", "data": { "name": "write_file", "result": "File written successfully" } },
+    { "type": "artifact", "data": { "path": "/workspace/report.md", "tool_name": "write_file" } },
+    { "type": "text", "data": { "text": "I've created the report at /workspace/report.md." } },
+    { "type": "usage", "data": { "input_tokens": 100, "output_tokens": 60, "total_tokens": 160 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

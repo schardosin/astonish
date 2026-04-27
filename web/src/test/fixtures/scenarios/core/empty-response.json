@@ -1,0 +1,10 @@
+{
+  "name": "empty-response",
+  "description": "Model returns no content, backend sends error event",
+  "category": "core",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-empty", "isNew": true } },
+    { "type": "error", "data": { "error": "The model returned an empty response. Please try rephrasing your request." } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

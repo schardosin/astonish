@@ -1,0 +1,12 @@
+{
+  "name": "stream-abort",
+  "description": "Partial stream to test abort behavior",
+  "category": "core",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-abort", "isNew": true } },
+    { "type": "text", "data": { "text": "Starting to analyze the data, this will take a while because " } },
+    { "type": "text", "data": { "text": "I need to process multiple sources..." } },
+    { "type": "usage", "data": { "input_tokens": 50, "output_tokens": 20, "total_tokens": 70 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

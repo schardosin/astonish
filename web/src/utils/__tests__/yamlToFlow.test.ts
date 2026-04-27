@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { parseNodes, parseEdges, autoLayout, yamlToFlow, extractLayout } from '../yamlToFlow'
 
 describe('parseNodes', () => {
@@ -79,11 +79,14 @@ describe('parseNodes', () => {
   })
 
   it('handles node without name gracefully', () => {
+    // Suppress expected console.error from parseNodes error handling
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const yamlData = { nodes: [{ type: 'llm' }] }
     const nodes = parseNodes(yamlData)
     expect(nodes).toHaveLength(3)
     expect(nodes[1].id).toBe('error_node_0')
     expect(nodes[1].data.hasError).toBe(true)
+    consoleSpy.mockRestore()
   })
 })
 

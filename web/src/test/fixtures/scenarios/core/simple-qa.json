@@ -1,0 +1,11 @@
+{
+  "name": "simple-qa",
+  "description": "Basic Q&A: agent streams a text response",
+  "category": "core",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-simple-qa", "isNew": true } },
+    { "type": "text", "data": { "text": "Go is a statically typed language designed at Google. It features garbage collection, structural typing, and CSP-style concurrency." } },
+    { "type": "usage", "data": { "input_tokens": 50, "output_tokens": 30, "total_tokens": 80 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

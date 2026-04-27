@@ -1,0 +1,12 @@
+{
+  "name": "session-title-update",
+  "description": "Backend generates a title for the new session mid-stream",
+  "category": "core",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-titled", "isNew": true } },
+    { "type": "text", "data": { "text": "Here are some Go testing best practices." } },
+    { "type": "session_title", "data": { "title": "Go Testing Tips" } },
+    { "type": "usage", "data": { "input_tokens": 40, "output_tokens": 20, "total_tokens": 60 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

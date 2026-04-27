@@ -1,0 +1,11 @@
+{
+  "name": "approval-flow",
+  "description": "Tool requires user approval before execution",
+  "category": "tools",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-approval", "isNew": true } },
+    { "type": "text", "data": { "text": "I need to run a shell command to check the system." } },
+    { "type": "approval", "data": { "tool": "shell_command", "options": ["Allow", "Deny"] } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

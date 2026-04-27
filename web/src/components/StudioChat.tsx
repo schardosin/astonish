@@ -1938,13 +1938,16 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                         </span>
                       </div>
                     </div>
-                    <button
+                    <div
+                      role="button"
+                      tabIndex={0}
                       onClick={(e) => handleDeleteSession(e, session.id)}
-                      className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/20 transition-all"
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleDeleteSession(e as unknown as React.MouseEvent, session.id) } }}
+                      className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/20 transition-all cursor-pointer"
                       title="Delete conversation"
                     >
                       <Trash2 size={12} className="text-red-400" />
-                    </button>
+                    </div>
                   </div>
                 </button>
               ))

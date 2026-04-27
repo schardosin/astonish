@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import SettingsPage from '../SettingsPage'
 
@@ -51,9 +51,13 @@ describe('SettingsPage', () => {
     theme: 'dark',
   }
 
-  it('renders loading state initially', () => {
+  it('renders loading state initially', async () => {
     render(<SettingsPage {...defaultProps} />)
     expect(screen.getByText('Loading settings...')).toBeInTheDocument()
+    // Wait for async effects to settle (fetchSettings, fetchMCPConfig, etc.)
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
   })
 
   it('renders the settings title after loading', async () => {

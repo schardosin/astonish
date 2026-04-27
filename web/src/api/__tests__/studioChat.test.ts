@@ -212,8 +212,11 @@ describe('studioChat API', () => {
     })
 
     it('does not throw on failure', async () => {
+      // Suppress expected console.warn from stopChat's catch block
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
       globalThis.fetch = vi.fn().mockRejectedValue(new Error('network error'))
       await expect(stopChat('x')).resolves.toBeUndefined()
+      warnSpy.mockRestore()
     })
   })
 })

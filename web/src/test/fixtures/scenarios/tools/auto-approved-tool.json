@@ -1,0 +1,14 @@
+{
+  "name": "auto-approved-tool",
+  "description": "Tool is auto-approved before execution",
+  "category": "tools",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-auto-approve", "isNew": true } },
+    { "type": "auto_approved", "data": { "tool": "shell_command" } },
+    { "type": "tool_call", "data": { "name": "shell_command", "args": { "command": "ls -la" } } },
+    { "type": "tool_result", "data": { "name": "shell_command", "result": "total 48\ndrwxr-xr-x  5 user  staff  160 Jan 1 00:00 ." } },
+    { "type": "text", "data": { "text": "The directory listing shows 5 entries." } },
+    { "type": "usage", "data": { "input_tokens": 80, "output_tokens": 40, "total_tokens": 120 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

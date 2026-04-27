@@ -1,0 +1,24 @@
+{
+  "name": "multi-task-parallel",
+  "description": "Agent delegates multiple tasks that run in parallel",
+  "category": "delegation",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-delegate-multi", "isNew": true } },
+    { "type": "text", "data": { "text": "I'll research this from multiple angles." } },
+    { "type": "subtask_progress", "data": { "event_type": "delegation_start", "tasks": [
+      { "name": "Market research", "description": "Research current market trends" },
+      { "name": "Competitor analysis", "description": "Analyze top 5 competitors" },
+      { "name": "Write summary", "description": "Compile findings into a report" }
+    ] } },
+    { "type": "subtask_progress", "data": { "event_type": "task_start", "task_name": "Market research" } },
+    { "type": "subtask_progress", "data": { "event_type": "task_start", "task_name": "Competitor analysis" } },
+    { "type": "subtask_progress", "data": { "event_type": "task_complete", "task_name": "Market research", "status": "success", "duration": "5.1s" } },
+    { "type": "subtask_progress", "data": { "event_type": "task_start", "task_name": "Write summary" } },
+    { "type": "subtask_progress", "data": { "event_type": "task_complete", "task_name": "Competitor analysis", "status": "success", "duration": "4.3s" } },
+    { "type": "subtask_progress", "data": { "event_type": "task_complete", "task_name": "Write summary", "status": "success", "duration": "2.8s" } },
+    { "type": "subtask_progress", "data": { "event_type": "delegation_complete", "status": "success" } },
+    { "type": "text", "data": { "text": "All tasks completed successfully. Here is the full analysis." } },
+    { "type": "usage", "data": { "input_tokens": 800, "output_tokens": 400, "total_tokens": 1200 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

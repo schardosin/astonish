@@ -1,0 +1,11 @@
+{
+  "name": "mermaid-diagram",
+  "description": "Agent response containing a mermaid code block",
+  "category": "misc",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-mermaid", "isNew": true } },
+    { "type": "text", "data": { "text": "Here is the architecture diagram:\n\n```mermaid\ngraph TD\n    A[Client] --> B[Load Balancer]\n    B --> C[Server 1]\n    B --> D[Server 2]\n```\n\nThis shows the basic setup." } },
+    { "type": "usage", "data": { "input_tokens": 80, "output_tokens": 40, "total_tokens": 120 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

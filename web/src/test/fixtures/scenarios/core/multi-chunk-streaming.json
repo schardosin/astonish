@@ -1,0 +1,13 @@
+{
+  "name": "multi-chunk-streaming",
+  "description": "Text arrives in multiple small chunks that accumulate into a single message",
+  "category": "core",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-multi-chunk", "isNew": true } },
+    { "type": "text", "data": { "text": "Hello " } },
+    { "type": "text", "data": { "text": "world, " } },
+    { "type": "text", "data": { "text": "how are you today?" } },
+    { "type": "usage", "data": { "input_tokens": 10, "output_tokens": 8, "total_tokens": 18 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

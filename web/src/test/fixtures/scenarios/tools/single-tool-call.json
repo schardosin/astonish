@@ -1,0 +1,14 @@
+{
+  "name": "single-tool-call",
+  "description": "Agent uses web_search tool then provides a text answer",
+  "category": "tools",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-tool-1", "isNew": true } },
+    { "type": "text", "data": { "text": "Let me search for that information." } },
+    { "type": "tool_call", "data": { "name": "web_search", "args": { "query": "Go testing best practices 2024" } } },
+    { "type": "tool_result", "data": { "name": "web_search", "result": "Found 5 results: 1. Table-driven tests... 2. Use testify..." } },
+    { "type": "text", "data": { "text": "Based on my search, here are the best practices for Go testing." } },
+    { "type": "usage", "data": { "input_tokens": 150, "output_tokens": 80, "total_tokens": 230 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Studio Chat (`StudioChat.tsx`) is the primary user interface for Astonish. It handles 28 SSE event types, orchestrates 19 sub-components, manages 35 state variables, and interacts with 12+ API endpoints. Every new feature -- tool execution, task delegation, app generation, downloads -- flows through this single component.
+The Studio Chat (`StudioChat.tsx`) is the primary user interface for Astonish. It handles 30 SSE event types, orchestrates 19 sub-components, manages 35 state variables, and interacts with 12+ API endpoints. Every new feature -- tool execution, task delegation, app generation, downloads -- flows through this single component.
 
 Without structured scenario-based testing, regressions are invisible until they hit production. This document defines every testable scenario, the infrastructure required to test them, and the implementation plan.
 
@@ -64,7 +64,8 @@ web/src/test/
 │       │   ├── session-title-update.json
 │       │   ├── new-session-command.json
 │       │   ├── empty-response.json
-│       │   └── stream-abort.json
+│       │   ├── stream-abort.json
+│       │   └── report-preview.json
 │       ├── tools/
 │       │   ├── single-tool-call.json
 │       │   ├── parallel-tool-calls.json
@@ -135,7 +136,8 @@ web/src/test/
     ├── session-management.test.tsx
     ├── clipboard.test.tsx
     ├── usage-tracking.test.tsx
-    └── wizard-flows.test.tsx
+    ├── wizard-flows.test.tsx
+    └── report-preview.test.tsx
 ```
 
 ### JSON Fixture Format
@@ -1520,21 +1522,24 @@ This mock LLM server is reusable across Go integration tests (Phase 2) and could
 ### Completed
 
 #### Layer 1 — SSE Scenario Tests (Vitest)
-- **24 test files, 87 scenario tests, 35 JSON fixture files** — all passing
+- **25 test files, 90 scenario tests, 36 JSON fixture files** — all passing
 - Infrastructure: `sseSimulator.ts`, `mockFetch.ts` (with queue support and `onChatRequest` callback), `renderChat.tsx` (with `data-testid` support), `scenarioSetup.tsx` (shared mocks)
 - Categories covered: core chat (A1-A2, A5-A8), tools (B1-B2, B6-B7), delegation (D1-D2, D4-D5), planning (E1-E3, F1), apps (G1-G3), errors (I1-I4), distill (J1-J2), downloads (K8, L1), fleet (O5, O9), browser (P1), sessions (S1-S5), slash commands (R1-R3), panels (N1-N4), clipboard (T1), misc (Q1-Q3, V1, U1)
 - **Phase 2 additions:** multi-turn conversations, tool Deny button, reconnection, session switch while streaming
+- **Phase 2.5 additions:** report_preview rendering, sources rendering, heuristic removal verification
 
 #### Layer 2 — Backend Integration Tests (Go)
-- **5 files, 54 integration tests** — all passing, 0 data races
+- **5 files, 58 integration tests** — all passing, 0 data races
 - `MockLLM` with turn-based queue, `TruncationMockLLM`, `BlockingLLM`
 - Scenarios X1-X10 + 17 expanded tests (state deltas, truncation retry, multi-turn, context cancellation, subscriber management, app preview refinement)
 - **Phase 2 additions (P0):** Tool error propagation (3 tests), parallel tool dispatch (2 tests), SSE HTTP handler wire format (3 tests), approval flow with autoApprove=false (3 tests)
+- **Phase 2.5 additions:** Report fence detection (2 tests), sources extraction (2 tests)
 
 #### Layer 3 — Prompt Contract Tests (Go)
 - **1 file, 31 tests** — golden file snapshot + 60+ structural assertions
 - Multi-configuration tests (9) for conditional sections
 - Size regression guards (minimal ≤5,100B, maximal ≤10,700B)
+- **Phase 2.5 update:** Golden file updated for `astonish-report` fence; contract 20 asserts `astonish-report` instead of `write_file`
 
 #### Pre-existing test fixes
 - Fixed `act()` warnings in App, SettingsPage, SetupWizard, StudioChat tests
@@ -1552,12 +1557,12 @@ This mock LLM server is reusable across Go integration tests (Phase 2) and could
 
 | Layer | Files | Tests |
 |-------|-------|-------|
-| L1: SSE Scenario Tests | 24 | 87 |
-| L2: Backend Integration | 5 | 54 |
+| L1: SSE Scenario Tests | 25 | 90 |
+| L2: Backend Integration | 5 | 58 |
 | L3: Prompt Contracts | 1 | 31 |
 | Pre-existing unit tests (Go) | 102 | ~1,345 |
 | Pre-existing unit tests (Frontend) | 13 | ~98 |
-| **Total** | **145** | **~1,615** |
+| **Total** | **146** | **~1,622** |
 
 ---
 
@@ -1646,6 +1651,29 @@ Each gap was verified against the codebase.
 
 **Delivered:** 11 new backend tests (P0 gaps) + 8 new frontend scenario tests + infrastructure improvements.
 
+### Phase 2.5: Standardized `astonish-*` Fence Rendering ✅ COMPLETE
+
+**Delivered:** 4 new backend tests + 3 new frontend scenario tests + system prompt updates.
+
+This phase replaced hybrid heuristic/event-driven rendering patterns with a consistent pipeline:
+**LLM wraps content in `astonish-*` fence → backend detects fence → SSE event → frontend renders.**
+
+| Area | What | Status |
+|------|------|--------|
+| Backend | `detectAndEmitReportPreviews()` — extracts `astonish-report` fence → `report_preview` event | ✅ |
+| Backend | `detectAndEmitSources()` — extracts URLs from web search tool results → `sources` event | ✅ |
+| Backend | System prompt updated: reports use `astonish-report` fence instead of `write_file` | ✅ |
+| Frontend | `report_preview` SSE handler → renders `ResultCard` (document card with PDF/DOCX export) | ✅ |
+| Frontend | `sources` SSE handler → renders `SourceCitations` (URL pills) | ✅ |
+| Frontend | Removed `isFinalResult` content-length heuristic | ✅ |
+| Frontend | Removed `collectSourceUrls` backward-crawling URL extraction | ✅ |
+| Frontend | Generalized `AppCodeIndicator` → `FenceIndicator` for all `astonish-*` fences | ✅ |
+| Frontend | Generic fence regex: `` /```(astonish-\w+)/ `` replaces app-specific regex | ✅ |
+| L2 (Go) | Report fence detection + negative test | ✅ 2 tests |
+| L2 (Go) | Sources extraction + negative test | ✅ 2 tests |
+| L1 (Frontend) | Report preview rendering, sources pills, heuristic removal verification | ✅ 3 tests |
+| L3 | Golden file + contract 20 updated for `astonish-report` | ✅ |
+
 | Item | Priority | Layer | What | Status |
 |------|----------|-------|------|--------|
 | 1 | P0 | L2 (Go) | Tool execution error tests | ✅ 3 tests |
@@ -1713,6 +1741,8 @@ Every fixture event must match the backend's wire format. Here are the canonical
 | `fleet_session` | `{ fleet_key: string, fleet_name: string, agents: string[] }` |
 | `fleet_state` | `{ state: string, active_agent?: string }` |
 | `fleet_done` | `{}` |
+| `report_preview` | `{ content: string, title: string }` |
+| `sources` | `{ urls: string[] }` |
 
 ### `subtask_progress` Sub-Event Data Shapes
 

@@ -193,8 +193,8 @@ func TestSystemPromptContracts_GenerativeUI(t *testing.T) {
 	// Contract 3: Mermaid diagrams for reports
 	assertContains(t, prompt, "mermaid", "mermaid blocks — MermaidBlock.tsx renders ```mermaid fences, reports use astonish-report + mermaid")
 
-	// Contract 20: astonish-report fence for structured output
-	assertContains(t, prompt, "astonish-report", "astonish-report fence — backend reportPreviewFenceRe detects this fence and emits report_preview event")
+	// Contract 20: write_file for structured report output
+	assertContains(t, prompt, "write_file", "write_file tool — reports are saved as files via write_file, rendered as ResultCard with Files panel")
 
 	// useAppData sourceId format
 	assertContains(t, prompt, `"http:GET:`, "useAppData HTTP sourceId format — frontend parses this prefix to route data requests")

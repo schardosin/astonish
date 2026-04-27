@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -25,7 +24,7 @@ import (
 // It mirrors the SSE events that were previously emitted inline.
 type ChatEvent struct {
 	ID        string         `json:"id"`
-	Type      string         `json:"type"` // text, tool_call, tool_result, image, flow_output, approval, auto_approved, thinking, retry, error, error_info, session, done, app_preview, report_preview, sources
+	Type      string         `json:"type"` // text, tool_call, tool_result, image, flow_output, approval, auto_approved, thinking, retry, error, error_info, session, done
 	Data      map[string]any `json:"data"`
 	Timestamp time.Time      `json:"timestamp"`
 }
@@ -450,13 +449,9 @@ func (cr *ChatRunner) Run(
 		}
 	}
 
-	// Post-processing: detect astonish-* code fences in the accumulated response
-	// text and emit structured preview events.
+	// Post-processing: detect astonish-app code fences in the accumulated response
+	// text and emit app_preview events + persist them.
 	cr.detectAndEmitAppPreviews(chatAgent, sessionService)
-	cr.detectAndEmitReportPreviews()
-
-	// Extract source URLs from web search tool results.
-	cr.detectAndEmitSources()
 }
 
 // processStateDelta extracts approval, retry, error, and thinking events from state deltas.
@@ -661,103 +656,6 @@ func splitCamelCase(s string) string {
 		result.WriteRune(r)
 	}
 	return result.String()
-}
-
-// reportPreviewFenceRe matches ```astonish-report code fences. It captures the
-// markdown content between the opening and closing fences.
-var reportPreviewFenceRe = regexp.MustCompile("(?s)```astonish-report\\s*\\n(.*?)\\n```")
-
-// reportTitleRe extracts the first # heading from report markdown.
-var reportTitleRe = regexp.MustCompile(`(?m)^#\s+(.+)$`)
-
-// detectAndEmitReportPreviews scans the buffered text events for astonish-report
-// code fences. When found, it emits a report_preview event with the markdown
-// content and an extracted title.
-func (cr *ChatRunner) detectAndEmitReportPreviews() {
-	cr.eventsMu.RLock()
-	var fullText strings.Builder
-	for _, ev := range cr.events {
-		if ev.Type == "text" {
-			if t, ok := ev.Data["text"].(string); ok {
-				fullText.WriteString(t)
-			}
-		}
-	}
-	cr.eventsMu.RUnlock()
-
-	text := fullText.String()
-	matches := reportPreviewFenceRe.FindAllStringSubmatch(text, -1)
-	if len(matches) == 0 {
-		return
-	}
-
-	for _, match := range matches {
-		content := strings.TrimSpace(match[1])
-		if content == "" {
-			continue
-		}
-
-		// Extract title from the first # heading
-		title := "Report"
-		if m := reportTitleRe.FindStringSubmatch(content); len(m) > 1 {
-			title = strings.TrimSpace(m[1])
-		}
-
-		cr.emitEvent("report_preview", map[string]any{
-			"content": content,
-			"title":   title,
-		})
-	}
-}
-
-// sourceURLRe matches http/https URLs in text.
-var sourceURLRe = regexp.MustCompile(`https?://[^\s"',\]}>]+`)
-
-// webSearchToolPatterns are substrings that identify web search tools by name.
-var webSearchToolPatterns = []string{"search", "web_search", "web_fetch", "scrape", "crawl", "extract", "browse"}
-
-// detectAndEmitSources scans tool_result events for web search tool results,
-// extracts URLs, deduplicates, and emits a sources event.
-func (cr *ChatRunner) detectAndEmitSources() {
-	cr.eventsMu.RLock()
-	var urls []string
-	seen := make(map[string]bool)
-	for _, ev := range cr.events {
-		if ev.Type != "tool_result" {
-			continue
-		}
-		name, _ := ev.Data["name"].(string)
-		nameLower := strings.ToLower(name)
-		isWebTool := false
-		for _, pat := range webSearchToolPatterns {
-			if strings.Contains(nameLower, pat) {
-				isWebTool = true
-				break
-			}
-		}
-		if !isWebTool {
-			continue
-		}
-		// Extract URLs from the serialized result
-		resultJSON, _ := json.Marshal(ev.Data["result"])
-		for _, u := range sourceURLRe.FindAllString(string(resultJSON), -1) {
-			// Filter out internal/localhost URLs
-			if strings.Contains(u, "localhost") || strings.Contains(u, "127.0.0.1") {
-				continue
-			}
-			if !seen[u] {
-				seen[u] = true
-				urls = append(urls, u)
-			}
-		}
-	}
-	cr.eventsMu.RUnlock()
-
-	if len(urls) > 0 {
-		cr.emitEvent("sources", map[string]any{
-			"urls": urls,
-		})
-	}
 }
 
 // isStreamTruncationError returns true if the error indicates the LLM stream

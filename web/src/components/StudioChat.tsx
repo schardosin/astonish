@@ -8,7 +8,7 @@ import type { ChatSession } from '../api/studioChat'
 import { startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions } from '../api/fleetChat'
 import type { FleetSession } from '../api/fleetChat'
 import HomePage from './HomePage'
-import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, AppPreviewMessage, AppSavedMessage, DistillPreviewMessage, DistillSavedMessage, ReportPreviewMessage, SourcesMessage } from './chat/chatTypes'
+import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, AppPreviewMessage, AppSavedMessage, DistillPreviewMessage, DistillSavedMessage } from './chat/chatTypes'
 import { getAgentColor } from './chat/chatTypes'
 import FleetStartDialog from './chat/FleetStartDialog'
 import FleetTemplatePicker from './chat/FleetTemplatePicker'
@@ -24,13 +24,63 @@ import BrowserView from './chat/BrowserView'
 import ArtifactCard from './chat/ArtifactCard'
 import DistillPreviewCard from './chat/DistillPreviewCard'
 import AppPreviewCard from './chat/AppPreviewCard'
-import FenceIndicator from './chat/FenceIndicator'
+import AppCodeIndicator from './chat/AppCodeIndicator'
 import ResultCard from './chat/ResultCard'
 
 // Extended ChatSession with optional fleet fields coming from the sidebar
 interface SidebarSession extends ChatSession {
   fleetKey?: string
   fleetName?: string
+}
+
+// Web search tool name patterns (matches tool results from search MCP servers)
+const WEB_SEARCH_PATTERNS = ['search', 'web_search', 'web-search', 'web_fetch', 'scrape', 'crawl', 'extract', 'browse']
+
+// Extract URLs from a tool result value (deeply searches objects/arrays/strings)
+function extractUrlsFromResult(result: unknown): string[] {
+  const urls: string[] = []
+  const urlRegex = /https?:\/\/[^\s"',\]}>]+/g
+
+  function walk(val: unknown) {
+    if (typeof val === 'string') {
+      const matches = val.match(urlRegex)
+      if (matches) urls.push(...matches)
+    } else if (Array.isArray(val)) {
+      val.forEach(walk)
+    } else if (val && typeof val === 'object') {
+      Object.values(val as Record<string, unknown>).forEach(walk)
+    }
+  }
+  walk(result)
+
+  // Deduplicate and filter out API/internal URLs
+  return [...new Set(urls)].filter(u =>
+    !u.includes('api.tavily') &&
+    !u.includes('api.firecrawl') &&
+    !u.includes('localhost') &&
+    !u.includes('127.0.0.1')
+  )
+}
+
+// Collect web source URLs from tool_result messages preceding an agent message
+function collectSourceUrls(messages: ChatMsg[], agentIndex: number): string[] {
+  const urls: string[] = []
+  // Walk backwards from the agent message, collecting URLs from web search tool results
+  for (let i = agentIndex - 1; i >= 0; i--) {
+    const m = messages[i]
+    // Stop at user messages or other agent messages (only look at the current "turn")
+    if (m.type === 'user' || m.type === 'agent') break
+
+    if (m.type === 'tool_result') {
+      const tr = m as ToolResultMessage
+      const toolName = String(tr.toolName || '').toLowerCase()
+      const isWebTool = WEB_SEARCH_PATTERNS.some(p => toolName.includes(p))
+      if (isWebTool && tr.toolResult) {
+        urls.push(...extractUrlsFromResult(tr.toolResult))
+      }
+    }
+  }
+  return [...new Set(urls)]
 }
 
 // Inline citation pill component
@@ -194,10 +244,21 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   const embeddedArtifactPaths = useMemo(() => {
     const paths = new Set<string>()
     if (isStreaming || sessionArtifacts.length === 0) return paths
-    // Check if there's a report_preview message — when present, artifacts
-    // are embedded inside the ResultCard and should be suppressed inline.
-    const hasReportPreview = messages.some(m => m.type === 'report_preview')
-    if (!hasReportPreview) return paths
+    // Check if there's a final result message (same logic as in the render)
+    let hasFinalResult = false
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.type === 'agent' && !(m as AgentMessage)._streaming && m.content.length > 500) {
+        const hasLaterAgent = messages.slice(i + 1).some(x => x.type === 'agent')
+        const hasToolBefore = messages.slice(0, i).some(x =>
+          x.type === 'tool_call' || x.type === 'tool_result' ||
+          x.type === 'subtask_execution' || x.type === 'fleet_execution'
+        )
+        if (!hasLaterAgent && hasToolBefore) hasFinalResult = true
+        break
+      }
+    }
+    if (!hasFinalResult) return paths
     // Collect all artifact paths from this session
     for (const a of sessionArtifacts) paths.add(a.path)
     return paths
@@ -652,33 +713,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               } as AppSavedMessage])
             }
             window.dispatchEvent(new Event('astonish:apps-updated'))
-            break
-
-          case 'report_preview':
-            // Finalize any streaming text first
-            if (streamingTextRef.current) {
-              const finalText = streamingTextRef.current
-              streamingTextRef.current = ''
-              setMessages((prev: ChatMsg[]) => {
-                const last = prev[prev.length - 1]
-                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
-                  return [...prev.slice(0, -1), { type: 'agent', content: finalText }]
-                }
-                return prev
-              })
-            }
-            setMessages((prev: ChatMsg[]) => [...prev, {
-              type: 'report_preview',
-              content: data.content as string,
-              title: data.title as string || 'Report',
-            } as ReportPreviewMessage])
-            break
-
-          case 'sources':
-            setMessages((prev: ChatMsg[]) => [...prev, {
-              type: 'sources',
-              urls: (data.urls as string[]) || [],
-            } as SourcesMessage])
             break
 
           case 'distill_saved':
@@ -1497,33 +1531,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             window.dispatchEvent(new Event('astonish:apps-updated'))
             break
 
-          case 'report_preview':
-            // Finalize any streaming text first
-            if (streamingTextRef.current) {
-              const finalText = streamingTextRef.current
-              streamingTextRef.current = ''
-              setMessages((prev: ChatMsg[]) => {
-                const last = prev[prev.length - 1]
-                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
-                  return [...prev.slice(0, -1), { type: 'agent', content: finalText }]
-                }
-                return prev
-              })
-            }
-            setMessages((prev: ChatMsg[]) => [...prev, {
-              type: 'report_preview',
-              content: data.content as string,
-              title: data.title as string || 'Report',
-            } as ReportPreviewMessage])
-            break
-
-          case 'sources':
-            setMessages((prev: ChatMsg[]) => [...prev, {
-              type: 'sources',
-              urls: (data.urls as string[]) || [],
-            } as SourcesMessage])
-            break
-
           case 'distill_saved':
             setMessages((prev: ChatMsg[]) => [...prev, {
               type: 'distill_saved',
@@ -2116,6 +2123,43 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               }
 
               if (msg.type === 'agent') {
+                // Detect if this is a "final result" — long final agent message after tool activity
+                const isFinalResult = !isStreaming &&
+                  !(msg as AgentMessage)._streaming &&
+                  msg.content.length > 500 &&
+                  // App code fences must always go through the fence-splitting path
+                  !msg.content.includes('```astonish-app') &&
+                  // Must be the last agent message in the list
+                  !messages.slice(index + 1).some(m => m.type === 'agent') &&
+                  // Must have tool activity somewhere before it
+                  messages.slice(0, index).some(m =>
+                    m.type === 'tool_call' || m.type === 'tool_result' ||
+                    m.type === 'subtask_execution' || m.type === 'fleet_execution'
+                  )
+
+                // Collect web source URLs for citation pill
+                const sourceUrls = !(msg as AgentMessage)._streaming ? collectSourceUrls(messages, index) : []
+
+                if (isFinalResult) {
+                  return (
+                    <div key={index} className="space-y-1">
+                      <div className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Agent</div>
+                      <ResultCard
+                        content={msg.content}
+                        showRaw={rawViewIndices.has(index)}
+                        onToggleRaw={() => toggleRawView(index)}
+                        artifacts={sessionArtifacts.length > 0 ? sessionArtifacts : undefined}
+                        sessionId={activeSessionId}
+                        onOpenFileInPanel={(path) => {
+                          setFilePanelInitialPath(path)
+                          setFilePanelOpen(true)
+                        }}
+                      />
+                      <SourceCitations urls={sourceUrls} />
+                    </div>
+                  )
+                }
+
                 return (
                   <div key={index} className="space-y-1">
                     <div className="flex items-center justify-between">
@@ -2153,12 +2197,12 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                           {msg.content}
                         </pre>
                       ) : (() => {
-                        // Split out astonish-* code fences so they render as a stable
-                        // FenceIndicator outside the ReactMarkdown tree. This avoids
+                        // Split out astonish-app code fences so they render as a stable
+                        // AppCodeIndicator outside the ReactMarkdown tree. This avoids
                         // the jank of ReactMarkdown recreating the component on every
                         // streaming text update.
-                        const fenceRe = /```(astonish-\w+)\s*\n([\s\S]*?)(?:\n```|$)/
-                        const match = msg.content.match(fenceRe)
+                        const appFenceRe = /```astonish-app\s*\n([\s\S]*?)(?:\n```|$)/
+                        const match = msg.content.match(appFenceRe)
                         if (!match) {
                           return (
                             <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
@@ -2169,8 +2213,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                         const fenceStart = match.index!
                         const fenceEnd = fenceStart + match[0].length
                         const before = msg.content.slice(0, fenceStart).trimEnd()
-                        const fenceType = match[1].replace('astonish-', '')
-                        const fenceCode = match[2]
+                        const appCode = match[1]
                         const after = msg.content.slice(fenceEnd).trimStart()
                         return (
                           <>
@@ -2179,10 +2222,9 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                                 <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{before}</ReactMarkdown>
                               </div>
                             )}
-                            <FenceIndicator
-                              fenceType={fenceType}
+                            <AppCodeIndicator
                               streaming={!!(msg as AgentMessage)._streaming}
-                              code={fenceCode}
+                              code={appCode}
                               expanded={expandedCodeIndices.has(index)}
                               onToggle={() => setExpandedCodeIndices(prev => {
                                 const next = new Set(prev)
@@ -2200,6 +2242,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                         )
                       })()}
                     </div>
+                    {sourceUrls.length > 0 && <SourceCitations urls={sourceUrls} />}
                   </div>
                 )
               }
@@ -2534,34 +2577,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                     </div>
                   </div>
                 )
-              }
-
-              if (msg.type === 'report_preview') {
-                const reportMsg = msg as any
-                return (
-                  <div key={index} className="space-y-1">
-                    <div className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Report</div>
-                    <ResultCard
-                      content={reportMsg.content}
-                      showRaw={rawViewIndices.has(index)}
-                      onToggleRaw={() => toggleRawView(index)}
-                      artifacts={sessionArtifacts.length > 0 ? sessionArtifacts : undefined}
-                      sessionId={activeSessionId}
-                      onOpenFileInPanel={(path) => {
-                        setFilePanelInitialPath(path)
-                        setFilePanelOpen(true)
-                      }}
-                    />
-                  </div>
-                )
-              }
-
-              if (msg.type === 'sources') {
-                const sourcesMsg = msg as any
-                if (sourcesMsg.urls && sourcesMsg.urls.length > 0) {
-                  return <SourceCitations key={index} urls={sourcesMsg.urls} />
-                }
-                return null
               }
 
               return null

@@ -4,28 +4,18 @@
  * Tests the copy-to-clipboard functionality on agent messages.
  */
 
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { waitFor, act, fireEvent } from '@testing-library/react'
+
+// Shared mocks (react-markdown, remark-gfm, HomePage, FleetStartDialog, FleetTemplatePicker, MermaidBlock)
+import './scenarioSetup'
+
 import { renderChat } from '../helpers/renderChat'
 import type { RenderChatResult } from '../helpers/renderChat'
 import type { FixtureEvent } from '../helpers/sseSimulator'
 
 // Fixtures
 import simpleQa from '../fixtures/scenarios/core/simple-qa.json'
-
-// Mock react-markdown and remark-gfm to avoid ESM issues in jsdom
-vi.mock('react-markdown', () => ({
-  default: ({ children }: { children: string }) => <span data-testid="markdown">{children}</span>,
-}))
-vi.mock('remark-gfm', () => ({ default: () => {} }))
-vi.mock('../../components/HomePage', () => ({
-  default: () => <div data-testid="home-page">HomePage</div>,
-}))
-vi.mock('../../components/chat/FleetStartDialog', () => ({ default: () => null }))
-vi.mock('../../components/chat/FleetTemplatePicker', () => ({ default: () => null }))
-vi.mock('../../components/chat/MermaidBlock', () => ({
-  default: ({ chart }: { chart: string }) => <pre data-testid="mermaid">{chart}</pre>,
-}))
 
 // Ensure navigator.clipboard exists in jsdom so copyToClipboard() doesn't throw.
 // jsdom may reset the reference between module setup and component execution,

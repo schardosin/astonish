@@ -1,0 +1,11 @@
+{
+  "name": "multi-turn-2",
+  "description": "Second turn of a multi-turn conversation (follow-up)",
+  "category": "core",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-multi-turn", "isNew": false } },
+    { "type": "text", "data": { "text": "Go 1.0 was released in March 2012. The latest stable version includes generics support added in Go 1.18." } },
+    { "type": "usage", "data": { "input_tokens": 80, "output_tokens": 35, "total_tokens": 115 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

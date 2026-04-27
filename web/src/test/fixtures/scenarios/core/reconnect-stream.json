@@ -1,0 +1,14 @@
+{
+  "name": "reconnect-stream",
+  "description": "Reconnection to an active session with buffered events",
+  "category": "core",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-reconnect", "isNew": false } },
+    { "type": "text", "data": { "text": "I found the information you requested. " } },
+    { "type": "tool_call", "data": { "id": "call-recon-1", "name": "web_search", "args": { "query": "latest Go release" } } },
+    { "type": "tool_result", "data": { "id": "call-recon-1", "name": "web_search", "result": { "snippet": "Go 1.24 was released in February 2025" } } },
+    { "type": "text", "data": { "text": "According to my search, Go 1.24 was released in February 2025." } },
+    { "type": "usage", "data": { "input_tokens": 120, "output_tokens": 45, "total_tokens": 165 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

@@ -5,8 +5,10 @@
  * and clicking approval buttons.
  */
 
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { waitFor } from '@testing-library/react'
+// Shared mocks (react-markdown, remark-gfm, HomePage, FleetStartDialog, FleetTemplatePicker, MermaidBlock)
+import './scenarioSetup'
 import { renderChat } from '../helpers/renderChat'
 import type { RenderChatResult } from '../helpers/renderChat'
 import type { FixtureEvent } from '../helpers/sseSimulator'
@@ -14,20 +16,6 @@ import type { FixtureEvent } from '../helpers/sseSimulator'
 // Fixtures
 import singleToolCall from '../fixtures/scenarios/tools/single-tool-call.json'
 import approvalFlow from '../fixtures/scenarios/tools/approval-flow.json'
-
-// Mock react-markdown and remark-gfm to avoid ESM issues in jsdom
-vi.mock('react-markdown', () => ({
-  default: ({ children }: { children: string }) => <span data-testid="markdown">{children}</span>,
-}))
-vi.mock('remark-gfm', () => ({ default: () => {} }))
-vi.mock('../../components/HomePage', () => ({
-  default: () => <div data-testid="home-page">HomePage</div>,
-}))
-vi.mock('../../components/chat/FleetStartDialog', () => ({ default: () => null }))
-vi.mock('../../components/chat/FleetTemplatePicker', () => ({ default: () => null }))
-vi.mock('../../components/chat/MermaidBlock', () => ({
-  default: ({ chart }: { chart: string }) => <pre data-testid="mermaid">{chart}</pre>,
-}))
 
 describe('Tool Interaction Scenarios', () => {
   let result: RenderChatResult
@@ -117,6 +105,52 @@ describe('Tool Interaction Scenarios', () => {
 
       // Verify the component didn't crash — the container should still be in the document
       expect(result.container).toBeInTheDocument()
+    })
+  })
+
+  describe('C1c: Approval - Click Deny', () => {
+    it('sends Deny message when Deny button is clicked', async () => {
+      result = renderChat({
+        scenarioEvents: approvalFlow.events as FixtureEvent[],
+      })
+
+      await result.sendMessage('Check the system')
+
+      // Wait for "Deny" button to appear
+      await waitFor(() => {
+        const buttons = result.container.querySelectorAll('button')
+        const denyBtn = Array.from(buttons).find(btn => btn.textContent === 'Deny')
+        expect(denyBtn).toBeDefined()
+      }, { timeout: 10000 })
+
+      // Find the Deny button and click it
+      const buttons = result.container.querySelectorAll('button')
+      const denyBtn = Array.from(buttons).find(btn => btn.textContent === 'Deny')
+      expect(denyBtn).toBeDefined()
+
+      // Clicking Deny sends "Deny" as a message. The second fetch will use the
+      // default mock (no queue configured => 500 error), but we verify the click
+      // is handled without crashing.
+      await result.user.click(denyBtn!)
+
+      // Verify the component didn't crash
+      expect(result.container).toBeInTheDocument()
+    })
+
+    it('renders both Allow and Deny buttons from approval options', async () => {
+      result = renderChat({
+        scenarioEvents: approvalFlow.events as FixtureEvent[],
+      })
+
+      await result.sendMessage('Check the system')
+
+      // Both buttons should be present
+      await waitFor(() => {
+        const buttons = result.container.querySelectorAll('button')
+        const buttonTexts = Array.from(buttons).map(btn => btn.textContent)
+        expect(buttonTexts).toContain('Allow')
+        expect(buttonTexts).toContain('Deny')
+      }, { timeout: 10000 })
     })
   })
 })

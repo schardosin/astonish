@@ -1,0 +1,11 @@
+{
+  "name": "multi-turn-1",
+  "description": "First turn of a multi-turn conversation",
+  "category": "core",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-multi-turn", "isNew": true } },
+    { "type": "text", "data": { "text": "Go was created by Robert Griesemer, Rob Pike, and Ken Thompson at Google." } },
+    { "type": "usage", "data": { "input_tokens": 30, "output_tokens": 20, "total_tokens": 50 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

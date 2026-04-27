@@ -1,3 +1,4 @@
+/* eslint-disable no-undef */
 /**
  * Shared Fetch Mock — intelligent routing for StudioChat API calls.
  *
@@ -13,8 +14,12 @@
 import { createSSEResponse, type FixtureEvent } from './sseSimulator'
 
 export interface MockFetchConfig {
-  /** Events for POST /api/studio/chat — returned as SSE stream */
-  scenarioEvents?: FixtureEvent[]
+  /** Events for POST /api/studio/chat — returned as SSE stream.
+   *  Can be a single array (same events for every POST) or an array of arrays
+   *  (queue: first POST gets queue[0], second POST gets queue[1], etc.).
+   *  When the queue is exhausted, the last array is reused.
+   */
+  scenarioEvents?: FixtureEvent[] | FixtureEvent[][]
   /** Events for GET /api/studio/sessions/:id/stream — returned as SSE stream */
   reconnectEvents?: FixtureEvent[]
   /** Response for GET /api/studio/sessions */
@@ -43,6 +48,8 @@ export interface MockFetchConfig {
   fleets?: unknown[]
   /** Additional URL handlers (url pattern -> response data) */
   customHandlers?: Record<string, () => Response | Promise<Response>>
+  /** Optional callback invoked with parsed request body on POST /api/studio/chat */
+  onChatRequest?: (body: Record<string, unknown>) => void
 }
 
 /**
@@ -73,6 +80,7 @@ export function mockTextResponse(text: string, ok = true): Response {
  */
 export function setupMockFetch(config: MockFetchConfig = {}): () => void {
   const originalFetch = globalThis.fetch
+  let chatPostCount = 0  // Track sequential POST calls for queue support
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === 'string' ? input : (input instanceof URL ? input.toString() : input.url)
@@ -89,19 +97,47 @@ export function setupMockFetch(config: MockFetchConfig = {}): () => void {
 
     // POST /api/studio/chat — SSE stream
     if (method === 'POST' && url.includes('/api/studio/chat')) {
+      // Parse and validate request body if callback provided
+      if (config.onChatRequest && init?.body) {
+        try {
+          const bodyText = typeof init.body === 'string' ? init.body : new TextDecoder().decode(init.body as ArrayBuffer)
+          const parsed = JSON.parse(bodyText)
+          config.onChatRequest(parsed)
+        } catch {
+          // Ignore parse errors — body validation is best-effort
+        }
+      }
+
       if (!config.scenarioEvents) {
         return mockJsonResponse({ error: 'No scenario configured' }, false, 500)
       }
-      return createSSEResponse(config.scenarioEvents)
+
+      // Support queue mode: scenarioEvents can be FixtureEvent[] or FixtureEvent[][]
+      // If the first element is an array, we're in queue mode.
+      let events: FixtureEvent[]
+      if (config.scenarioEvents.length > 0 && Array.isArray(config.scenarioEvents[0])) {
+        // Queue mode: array of arrays
+        const queue = config.scenarioEvents as FixtureEvent[][]
+        const idx = Math.min(chatPostCount, queue.length - 1)
+        events = queue[idx]
+      } else {
+        // Single mode: same events for every POST
+        events = config.scenarioEvents as FixtureEvent[]
+      }
+      chatPostCount++
+      return createSSEResponse(events)
     }
 
     // GET /api/studio/sessions/:id/stream — SSE reconnect stream
     if (method === 'GET' && url.match(/\/api\/studio\/sessions\/[^/]+\/stream/)) {
-      const events = config.reconnectEvents || config.scenarioEvents
-      if (!events) {
-        return mockJsonResponse({ error: 'No reconnect events configured' }, false, 500)
+      if (config.reconnectEvents) {
+        return createSSEResponse(config.reconnectEvents)
       }
-      return createSSEResponse(events)
+      // Fallback to scenarioEvents (single mode only)
+      if (config.scenarioEvents && config.scenarioEvents.length > 0 && !Array.isArray(config.scenarioEvents[0])) {
+        return createSSEResponse(config.scenarioEvents as FixtureEvent[])
+      }
+      return mockJsonResponse({ error: 'No reconnect events configured' }, false, 500)
     }
 
     // GET /api/studio/sessions/:id/status

@@ -18,8 +18,11 @@ import { setupMockFetch, type MockFetchConfig } from './mockFetch'
 import type { FixtureEvent } from './sseSimulator'
 
 export interface RenderChatOptions {
-  /** SSE events to replay when user sends a message */
-  scenarioEvents?: FixtureEvent[]
+  /** SSE events to replay when user sends a message.
+   *  Single array = same events for every POST.
+   *  Array of arrays = queue: first POST gets [0], second gets [1], etc.
+   */
+  scenarioEvents?: FixtureEvent[] | FixtureEvent[][]
   /** SSE events for reconnection stream */
   reconnectEvents?: FixtureEvent[]
   /** Pre-existing sessions in the sidebar */
@@ -111,8 +114,9 @@ export function renderChat(options: RenderChatOptions = {}): RenderChatResult {
   }
 
   const sendMessage = async (text: string) => {
-    // Find the textarea
-    const textarea = screen.getByPlaceholderText(/type.*message|ask.*anything/i)
+    // Find the textarea (prefer data-testid, fall back to placeholder pattern)
+    const textarea = renderResult.container.querySelector('[data-testid="chat-input"]') as HTMLElement
+      || screen.getByPlaceholderText(/type.*message|ask.*anything/i)
 
     // Type the message
     await user.clear(textarea)
@@ -132,7 +136,8 @@ export function renderChat(options: RenderChatOptions = {}): RenderChatResult {
     await waitFor(
       () => {
         // Stream has completed when the textarea placeholder is back to idle
-        const ta = screen.getByPlaceholderText(/type.*message|ask.*anything|agent is responding/i)
+        const ta = renderResult.container.querySelector('[data-testid="chat-input"]') as HTMLElement
+          || screen.getByPlaceholderText(/type.*message|ask.*anything|agent is responding/i)
         const placeholder = ta.getAttribute('placeholder') || ''
         if (placeholder.toLowerCase().includes('responding')) {
           throw new Error('Still streaming')
@@ -150,7 +155,8 @@ export function renderChat(options: RenderChatOptions = {}): RenderChatResult {
   const waitForStreamComplete = async () => {
     await waitFor(
       () => {
-        const ta = screen.getByPlaceholderText(/type.*message|ask.*anything|agent is responding/i)
+        const ta = renderResult.container.querySelector('[data-testid="chat-input"]') as HTMLElement
+          || screen.getByPlaceholderText(/type.*message|ask.*anything|agent is responding/i)
         const placeholder = ta.getAttribute('placeholder') || ''
         if (placeholder.toLowerCase().includes('responding')) {
           throw new Error('Still streaming')
@@ -172,7 +178,8 @@ export function renderChat(options: RenderChatOptions = {}): RenderChatResult {
   }
 
   const getMessageArea = (): HTMLElement | null => {
-    return (renderResult.container.querySelector('[class*="messages"]') ||
+    return (renderResult.container.querySelector('[data-testid="message-area"]') ||
+           renderResult.container.querySelector('[class*="messages"]') ||
            renderResult.container.querySelector('[style*="overflow"]')) as HTMLElement | null
   }
 

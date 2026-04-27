@@ -5,28 +5,18 @@
  * based on session state (e.g., Files button appears when artifacts exist).
  */
 
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { waitFor } from '@testing-library/react'
+
+// Shared mocks (react-markdown, remark-gfm, HomePage, FleetStartDialog, FleetTemplatePicker, MermaidBlock)
+import './scenarioSetup'
+
 import { renderChat } from '../helpers/renderChat'
 import type { RenderChatResult } from '../helpers/renderChat'
 import type { FixtureEvent } from '../helpers/sseSimulator'
 
 // Fixtures — reuse artifact-created to get sessionArtifacts populated
 import artifactCreated from '../fixtures/scenarios/downloads/artifact-created.json'
-
-// Mocks
-vi.mock('react-markdown', () => ({
-  default: ({ children }: { children: string }) => <span data-testid="markdown">{children}</span>,
-}))
-vi.mock('remark-gfm', () => ({ default: () => {} }))
-vi.mock('../../components/HomePage', () => ({
-  default: () => <div data-testid="home-page">HomePage</div>,
-}))
-vi.mock('../../components/chat/FleetStartDialog', () => ({ default: () => null }))
-vi.mock('../../components/chat/FleetTemplatePicker', () => ({ default: () => null }))
-vi.mock('../../components/chat/MermaidBlock', () => ({
-  default: ({ chart }: { chart: string }) => <pre data-testid="mermaid">{chart}</pre>,
-}))
 
 describe('Panel Management Scenarios', () => {
   let result: RenderChatResult

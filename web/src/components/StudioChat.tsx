@@ -2100,7 +2100,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
         )}
         {/* Messages Area (with scroll-to-bottom button) */}
         <div className="flex-1 relative overflow-hidden">
-        <div ref={scrollRef} className="absolute inset-0 overflow-y-auto p-4 space-y-4">
+        <div ref={scrollRef} data-testid="message-area" className="absolute inset-0 overflow-y-auto p-4 space-y-4">
           {isLoadingHistory ? (
             <div className="flex items-center justify-center py-16">
               <Loader size={24} className="animate-spin text-purple-400" />
@@ -2648,6 +2648,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             )}
             <div className="relative flex-1">
               <textarea
+                data-testid="chat-input"
                 ref={inputRef}
                 value={input}
                 onChange={handleInputChange}
@@ -2693,6 +2694,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               />
             </div>
             <button
+              data-testid="send-button"
               type="submit"
               disabled={(isStreaming && !isFleetMode) || !input.trim()}
               className="px-4 py-2.5 bg-[#805AD5] hover:bg-[#6B46C1] text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"

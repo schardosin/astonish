@@ -288,3 +288,63 @@ func newMockTool(name, description string, result map[string]any) tool.Tool {
 	}
 	return t
 }
+
+// newMockErrorTool creates an ADK-compatible tool that always returns an error.
+// This tests error propagation from tool execution → runner → SSE event stream.
+func newMockErrorTool(name, description, errMsg string) tool.Tool {
+	handler := func(_ tool.Context, _ mockToolArgs) (mockToolResult, error) {
+		return mockToolResult{}, fmt.Errorf("%s", errMsg)
+	}
+	t, err := functiontool.New(functiontool.Config{
+		Name:        name,
+		Description: description,
+	}, handler)
+	if err != nil {
+		panic(fmt.Sprintf("failed to create mock error tool %q: %v", name, err))
+	}
+	return t
+}
+
+// newMockPanicTool creates an ADK-compatible tool that panics during execution.
+// This tests that panics in tool execution are caught and converted to error events.
+func newMockPanicTool(name, description, panicMsg string) tool.Tool {
+	handler := func(_ tool.Context, _ mockToolArgs) (mockToolResult, error) {
+		panic(panicMsg)
+	}
+	t, err := functiontool.New(functiontool.Config{
+		Name:        name,
+		Description: description,
+	}, handler)
+	if err != nil {
+		panic(fmt.Sprintf("failed to create mock panic tool %q: %v", name, err))
+	}
+	return t
+}
+
+// runAndCollectWithApprove is like runAndCollect but allows setting autoApprove to false.
+func runAndCollectWithApprove(t *testing.T, env *integrationTestEnv, msg string, autoApprove bool, systemContext string, timeout ...time.Duration) []ChatEvent {
+	t.Helper()
+
+	to := 10 * time.Second
+	if len(timeout) > 0 {
+		to = timeout[0]
+	}
+
+	userMsg := &genai.Content{
+		Role:  "user",
+		Parts: []*genai.Part{{Text: msg}},
+	}
+
+	go env.Runner.Run(
+		env.ChatAgent,
+		env.SessionService,
+		env.MockLLM,
+		nil, // fileStore
+		userMsg,
+		msg,
+		autoApprove,
+		systemContext,
+	)
+
+	return collectEvents(t, env.EventCh, to)
+}

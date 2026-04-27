@@ -1515,51 +1515,155 @@ This mock LLM server is reusable across Go integration tests (Phase 2) and could
 
 ---
 
+## Implementation Status
+
+### Completed
+
+#### Layer 1 — SSE Scenario Tests (Vitest)
+- **24 test files, 87 scenario tests, 35 JSON fixture files** — all passing
+- Infrastructure: `sseSimulator.ts`, `mockFetch.ts` (with queue support and `onChatRequest` callback), `renderChat.tsx` (with `data-testid` support), `scenarioSetup.tsx` (shared mocks)
+- Categories covered: core chat (A1-A2, A5-A8), tools (B1-B2, B6-B7), delegation (D1-D2, D4-D5), planning (E1-E3, F1), apps (G1-G3), errors (I1-I4), distill (J1-J2), downloads (K8, L1), fleet (O5, O9), browser (P1), sessions (S1-S5), slash commands (R1-R3), panels (N1-N4), clipboard (T1), misc (Q1-Q3, V1, U1)
+- **Phase 2 additions:** multi-turn conversations, tool Deny button, reconnection, session switch while streaming
+
+#### Layer 2 — Backend Integration Tests (Go)
+- **5 files, 54 integration tests** — all passing, 0 data races
+- `MockLLM` with turn-based queue, `TruncationMockLLM`, `BlockingLLM`
+- Scenarios X1-X10 + 17 expanded tests (state deltas, truncation retry, multi-turn, context cancellation, subscriber management, app preview refinement)
+- **Phase 2 additions (P0):** Tool error propagation (3 tests), parallel tool dispatch (2 tests), SSE HTTP handler wire format (3 tests), approval flow with autoApprove=false (3 tests)
+
+#### Layer 3 — Prompt Contract Tests (Go)
+- **1 file, 31 tests** — golden file snapshot + 60+ structural assertions
+- Multi-configuration tests (9) for conditional sections
+- Size regression guards (minimal ≤5,100B, maximal ≤10,700B)
+
+#### Pre-existing test fixes
+- Fixed `act()` warnings in App, SettingsPage, SetupWizard, StudioChat tests
+- Suppressed expected console noise
+- Fixed button-inside-button HTML violation in StudioChat.tsx sidebar
+
+#### Infrastructure improvements (Phase 2)
+- Extracted 6 duplicated `vi.mock()` blocks from 20 test files into shared `scenarioSetup.tsx`
+- Added queue-based `mockFetch` for multi-turn conversations (`FixtureEvent[] | FixtureEvent[][]`)
+- Added `onChatRequest` callback for request body validation
+- Added `data-testid` attributes to `StudioChat.tsx` (`chat-input`, `message-area`, `send-button`)
+- Updated `renderChat.tsx` to prefer `data-testid` selectors with fallback to regex patterns
+
+### Current Counts
+
+| Layer | Files | Tests |
+|-------|-------|-------|
+| L1: SSE Scenario Tests | 24 | 87 |
+| L2: Backend Integration | 5 | 54 |
+| L3: Prompt Contracts | 1 | 31 |
+| Pre-existing unit tests (Go) | 102 | ~1,345 |
+| Pre-existing unit tests (Frontend) | 13 | ~98 |
+| **Total** | **145** | **~1,615** |
+
+---
+
+## Gap Analysis & Remediation
+
+An external review of the test suite identified coverage gaps across three priority tiers.
+Each gap was verified against the codebase.
+
+### P0 — High-Risk Gaps (Backend)
+
+#### Gap 1: Tool execution errors untested
+**Status:** Verified TRUE — `newMockTool()` at `integration_test.go:278` hardcodes `nil` error return. No mock tool ever returns an error. Error propagation from tool → runner → event stream is dark.
+
+**Fix:** Add `newMockErrorTool(name, errMsg)` variant. Add tests:
+- Tool returns error → verify `error` event with tool name and message
+- Tool panics → verify error event (not crash)
+
+#### Gap 2: Parallel tool dispatch untested
+**Status:** Verified TRUE — `MultiToolCallTurn` defined at `mock_llm_test.go:154` but never called in any test. Zero tests exercise LLM returning multiple function calls simultaneously.
+
+**Fix:** Add test using `MultiToolCallTurn` — verify all tool_call events emitted, all tool_result events emitted, ordering consistent.
+
+#### Gap 3: SSE HTTP handler wire format untested
+**Status:** Verified TRUE — Integration tests call `runner.Run()` directly, bypassing HTTP entirely. No test validates SSE framing (`event: <type>\ndata: <json>\n\n`), Content-Type headers, or flushing.
+
+**Fix:** Add `httptest.NewRecorder()` test exercising the actual `streamRunnerEvents()` → `SendSSE()` path. Verify Content-Type, event framing, valid JSON, `done` is last.
+
+#### Gap 4: Full approval flow (autoApprove=false) untested
+**Status:** Partially verified — State delta tests (X11, X11b, X12, X12b) DO test approval event emission via `processStateDelta()`. But `runAndCollect()` hardcodes `autoApprove: true` at `integration_test.go:94`. The full pause→resume state machine (ProtectedTool returns `ErrWaitingForApproval` → runner terminates → next message resumes) is never exercised end-to-end.
+
+**Fix:** Add integration test with `autoApprove=false`. Verify: first run emits approval event and terminates, second run (simulating "Yes") executes tool and completes.
+
+### P1 — Infrastructure Hardening
+
+#### Gap 5: Duplicated vi.mock() blocks
+**Status:** Verified TRUE — All 20 scenario test files repeat identical `vi.mock()` blocks (react-markdown, remark-gfm, HomePage, FleetStartDialog, FleetTemplatePicker, MermaidBlock).
+
+**Fix:** Extract to `web/src/test/scenarios/setup.ts`. Register as `setupFiles` in vitest config (scoped to scenario tests) or use shared import.
+
+#### Gap 6: mockFetch returns same events for every POST
+**Status:** Verified TRUE — `config.scenarioEvents` is set once and returned for every `POST /api/studio/chat`. No mechanism for call-count-aware or body-aware responses.
+
+**Fix:** Accept `scenarioEvents` as `FixtureEvent[] | FixtureEvent[][]`. When an array-of-arrays, shift the first item on each POST call. Enables multi-turn conversation testing.
+
+#### Gap 7: No frontend multi-turn conversation test
+**Status:** Verified TRUE — Each `it()` block sends exactly one message. No test exercises send→receive→send→receive.
+
+**Fix:** Add test using queue-based mockFetch (Gap 6). Send 2 messages, verify both responses render.
+
+#### Gap 8: Tool Deny button never clicked
+**Status:** Verified TRUE — `tool-execution.test.tsx:173` asserts the Deny button exists (`expect(denyBtn).toBeDefined()`) but never clicks it.
+
+**Fix:** Add test in `tool-interactions.test.tsx` that clicks Deny, verifies the rejection message is sent.
+
+#### Gap 9: reconnectEvents infrastructure unused
+**Status:** Verified TRUE — `renderChat.tsx:24` accepts `reconnectEvents` and `mockFetch.ts:100` routes it, but zero scenario tests use it.
+
+**Fix:** Add reconnection scenario test using the existing infrastructure.
+
+### P2 — Nice to Have
+
+#### Gap 10: Fragile placeholder regex selectors
+**Status:** Verified TRUE — `renderChat.tsx` uses `getByPlaceholderText(/type.*message|ask.*anything/i)` and `querySelector('[class*="messages"]')`. No `data-testid` attributes exist anywhere in StudioChat.tsx or its 19 sub-components.
+
+**Fix:** Add `data-testid="chat-input"`, `data-testid="message-area"`, `data-testid="send-button"` to StudioChat.tsx. Update `renderChat.tsx` helpers to use `getByTestId()`.
+
+#### Gap 11: mockFetch never validates request bodies
+**Status:** Verified TRUE — Chat POST handler at `mockFetch.ts:91-96` checks method and URL only. `init?.body` is never read.
+
+**Fix:** Add optional `onChatRequest` callback to mockFetch config. Parse request body, pass to callback for assertion. Add one test verifying correct `{ message, sessionId }` shape.
+
+#### Gap 12: No session-switch-while-streaming test
+**Status:** Not yet verified but plausible — no test starts a stream and then changes sessions mid-stream.
+
+**Fix:** Add scenario test that starts SSE events flowing, then simulates clicking a different session. Verify old stream stops, no crash, no orphaned state.
+
+---
+
 ## Implementation Priorities
 
-### Phase 1: Infrastructure + Core Scenarios (Week 1-2)
+### Phase 1: Infrastructure + Core Scenarios ✅ COMPLETE
 
-**Goal:** Build the test infrastructure and validate the approach with the most critical scenarios.
+**Delivered:** 79 frontend scenario tests + 43 backend integration tests + 31 prompt contract tests.
 
-| Priority | What | Scenarios | Why |
-|----------|------|-----------|-----|
-| P0 | SSE Simulator + Mock Fetch + Chat Renderer | Infrastructure | Everything depends on this |
-| P0 | Core chat flow | A1-A8 | Most basic functionality |
-| P0 | Tool execution | B1-B5, B7 | Most common user flow |
-| P0 | Error handling | I1-I5 | Users hit errors frequently |
-| P1 | Tool approval | C1-C3 | Security-critical flow |
-| P1 | Task delegation | D1-D5 | Complex, high-regression-risk |
+### Phase 2: Gap Remediation ✅ COMPLETE
 
-**Deliverables:** ~30 test scenarios passing, infrastructure proven.
+**Delivered:** 11 new backend tests (P0 gaps) + 8 new frontend scenario tests + infrastructure improvements.
 
-### Phase 2: Feature Scenarios (Week 3-4)
+| Item | Priority | Layer | What | Status |
+|------|----------|-------|------|--------|
+| 1 | P0 | L2 (Go) | Tool execution error tests | ✅ 3 tests |
+| 2 | P0 | L2 (Go) | Parallel tool dispatch tests | ✅ 2 tests |
+| 3 | P0 | L2 (Go) | SSE HTTP handler wire format test | ✅ 3 tests |
+| 4 | P0 | L2 (Go) | Full approval flow (autoApprove=false) | ✅ 3 tests |
+| 5 | P1 | L1 (Frontend) | Extract duplicated vi.mock() to shared setup | ✅ scenarioSetup.tsx |
+| 6 | P1 | L1 (Frontend) | Multi-turn mockFetch support (event queue) | ✅ queue mode |
+| 7 | P1 | L1 (Frontend) | Frontend multi-turn conversation test | ✅ 2 tests |
+| 8 | P1 | L1 (Frontend) | Tool Deny button click test | ✅ 2 tests |
+| 9 | P1 | L1 (Frontend) | Reconnection test | ✅ 2 tests |
+| 10 | P2 | L1 (Frontend) | Add data-testid attributes, replace regex selectors | ✅ 3 attributes |
+| 11 | P2 | L1 (Frontend) | Request body validation in mockFetch | ✅ onChatRequest callback |
+| 12 | P2 | L1 (Frontend) | Session switch while streaming test | ✅ 2 tests |
 
-| Priority | What | Scenarios | Why |
-|----------|------|-----------|-----|
-| P1 | Plan tracking | E1-E7, F1-F3 | Tightly coupled with delegation |
-| P1 | Downloads/export | K1-K8 | User-facing, easy to break |
-| P1 | File/artifact management | L1-L6 | Core file workflow |
-| P2 | Panel management | N1-N5 | UI state bugs |
-| P2 | Session management | S1-S5 | Session switching regressions |
-| P2 | App preview | G1-G7 | Complex but less frequent |
-| P2 | ResultCard | M1-M5 | Display-layer concerns |
+### Phase 3: Remaining Scenarios (Future)
 
-**Deliverables:** ~70 test scenarios passing.
-
-### Phase 3: Advanced Scenarios + Backend Integration (Week 5-6)
-
-| Priority | What | Scenarios | Why |
-|----------|------|-----------|-----|
-| P2 | Fleet mode | O1-O10 | Complete feature area |
-| P2 | Distill flow | J1-J5 | End-to-end wizard flow |
-| P2 | Wizard flows | W1-W4 | Multi-turn system context |
-| P2 | Slash commands | R1-R6 | UI interaction tests |
-| P3 | Browser handoff | P1-P3 | Niche feature |
-| P3 | Mermaid diagrams | U1-U3 | Rendering edge cases |
-| P3 | Clipboard / Usage | T1-T4, V1-V3 | Low regression risk |
-| P3 | Go integration tests | X1-X9 | Backend validation |
-
-**Deliverables:** ~120 test scenarios passing. Full coverage.
+Scenarios from the catalog not yet implemented. See sections B3-B5, C1-C3, D3/D6-D7, E4-E7, F2-F3, G4-G7, H1-H6, J3-J5, K1-K7, L2-L6, M1-M5, N5, O1-O8/O10, R4-R6, T2-T4, U2-U3, V2-V3, W1-W4.
 
 ### Phase 4: E2E Smoke Tests (Future)
 

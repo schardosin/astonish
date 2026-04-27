@@ -594,6 +594,178 @@ func TestIntegration_ApprovalFlow_DenyStateDelta(t *testing.T) {
 }
 
 // =============================================================================
+// P1 Gap Tests: Report Preview Detection (Item 5)
+//
+// Tests that detectAndEmitReportPreviews correctly finds ```astonish-report
+// code fences in the LLM response text and emits report_preview events.
+// =============================================================================
+
+// TestIntegration_ReportPreview_DetectedFromFence verifies that when the LLM
+// returns text containing an ```astonish-report code fence, a report_preview
+// event is emitted with the correct content and title.
+func TestIntegration_ReportPreview_DetectedFromFence(t *testing.T) {
+	fenceText := "Here's my analysis:\n\n" +
+		"```astonish-report\n" +
+		"# Market Analysis Report\n" +
+		"\n" +
+		"## Executive Summary\n" +
+		"The market shows strong growth...\n" +
+		"\n" +
+		"## Key Findings\n" +
+		"1. Cloud adoption up 22%\n" +
+		"2. AI integration priority for 78% of orgs\n" +
+		"```\n" +
+		"\nI've presented the report above."
+
+	mockLLM := NewMockLLM(TextTurn(fenceText))
+	env := setupIntegrationTest(t, mockLLM, nil)
+	events := runAndCollect(t, env, "Analyze the market")
+
+	assertFirstAndLast(t, events)
+
+	// A report_preview event should have been emitted
+	rpEv := assertHasEvent(t, events, "report_preview")
+
+	content, _ := rpEv.Data["content"].(string)
+	if !strings.Contains(content, "Market Analysis Report") {
+		t.Errorf("report_preview content should contain 'Market Analysis Report', got: %q", content)
+	}
+	if !strings.Contains(content, "Executive Summary") {
+		t.Errorf("report_preview content should contain 'Executive Summary', got: %q", content)
+	}
+
+	title, _ := rpEv.Data["title"].(string)
+	if title != "Market Analysis Report" {
+		t.Errorf("report_preview title = %q, want %q", title, "Market Analysis Report")
+	}
+}
+
+// TestIntegration_ReportPreview_NoFence_NoEvent verifies that when the LLM
+// returns long text WITHOUT an ```astonish-report fence, no report_preview
+// event is emitted. This confirms the backend uses fence-based detection only.
+func TestIntegration_ReportPreview_NoFence_NoEvent(t *testing.T) {
+	// Build a long text (>500 chars) without any astonish-report fence
+	longText := "Here is a very detailed analysis of the current market conditions. " +
+		"The technology sector has seen significant growth over the past quarter, " +
+		"driven primarily by advances in artificial intelligence and cloud computing. " +
+		"Companies across all industries are investing heavily in digital transformation " +
+		"initiatives, with cloud adoption rates climbing by approximately 22% year over year. " +
+		"Furthermore, a recent survey indicates that 78% of organizations now consider " +
+		"AI integration a top priority for their strategic roadmaps. " +
+		"This report provides a comprehensive overview of these trends and their " +
+		"implications for investors and industry stakeholders alike. " +
+		"We expect continued momentum through the next fiscal year."
+
+	mockLLM := NewMockLLM(TextTurn(longText))
+	env := setupIntegrationTest(t, mockLLM, nil)
+	events := runAndCollect(t, env, "Give me a market report")
+
+	assertFirstAndLast(t, events)
+
+	// No report_preview event should be emitted
+	assertNoEvent(t, events, "report_preview")
+}
+
+// =============================================================================
+// P1 Gap Tests: Sources Detection (Item 6)
+//
+// Tests that detectAndEmitSources correctly extracts URLs from web search
+// tool results and emits sources events with deduplicated URL lists.
+// =============================================================================
+
+// TestIntegration_Sources_ExtractedFromWebSearchResults verifies that when a
+// web_search tool returns results containing URLs, a sources event is emitted
+// with those URLs extracted and deduplicated.
+func TestIntegration_Sources_ExtractedFromWebSearchResults(t *testing.T) {
+	mockLLM := NewMockLLM(
+		// Turn 1: LLM calls web_search (empty args to pass mockToolArgs schema validation)
+		ToolCallTurn("web_search", map[string]any{}),
+		// Turn 2: After tool result, LLM summarizes
+		TextTurn("Based on my research, here are the best practices for Go testing."),
+	)
+
+	searchTool := newMockTool("web_search", "Search the web", map[string]any{
+		"result": "Found results at https://example.com/article and https://docs.go.dev/ref",
+	})
+
+	env := setupIntegrationTest(t, mockLLM, []tool.Tool{searchTool})
+	events := runAndCollect(t, env, "Search for Go testing best practices")
+
+	assertFirstAndLast(t, events)
+
+	// A sources event should have been emitted
+	srcEv := assertHasEvent(t, events, "sources")
+
+	urlsRaw, ok := srcEv.Data["urls"]
+	if !ok {
+		t.Fatal("sources event missing 'urls' key")
+	}
+
+	// The urls value may be []string or []any depending on the emission path.
+	var urlStrs []string
+	switch v := urlsRaw.(type) {
+	case []string:
+		urlStrs = v
+	case []any:
+		for _, u := range v {
+			if s, ok := u.(string); ok {
+				urlStrs = append(urlStrs, s)
+			}
+		}
+	default:
+		t.Fatalf("sources urls unexpected type %T", urlsRaw)
+	}
+
+	// Assert both URLs are present
+	foundExample := false
+	foundGoDev := false
+	for _, u := range urlStrs {
+		if strings.Contains(u, "example.com/article") {
+			foundExample = true
+		}
+		if strings.Contains(u, "docs.go.dev/ref") {
+			foundGoDev = true
+		}
+	}
+	if !foundExample {
+		t.Errorf("expected https://example.com/article in sources urls, got: %v", urlStrs)
+	}
+	if !foundGoDev {
+		t.Errorf("expected https://docs.go.dev/ref in sources urls, got: %v", urlStrs)
+	}
+
+	// Assert no localhost URLs are included
+	for _, u := range urlStrs {
+		if strings.Contains(u, "localhost") || strings.Contains(u, "127.0.0.1") {
+			t.Errorf("sources should not include localhost URLs, found: %q", u)
+		}
+	}
+}
+
+// TestIntegration_Sources_NoWebTools_NoEvent verifies that when only non-web
+// tools are used (e.g. read_file), no sources event is emitted.
+func TestIntegration_Sources_NoWebTools_NoEvent(t *testing.T) {
+	mockLLM := NewMockLLM(
+		// Turn 1: LLM calls read_file (not a web search tool; empty args for schema)
+		ToolCallTurn("read_file", map[string]any{}),
+		// Turn 2: LLM responds with file content
+		TextTurn("The file contains configuration data."),
+	)
+
+	readTool := newMockTool("read_file", "Read a file from disk", map[string]any{
+		"content": "key=value\nhttps://should-not-appear.com/ignored",
+	})
+
+	env := setupIntegrationTest(t, mockLLM, []tool.Tool{readTool})
+	events := runAndCollect(t, env, "Read the config file")
+
+	assertFirstAndLast(t, events)
+
+	// No sources event should be emitted for non-web tools
+	assertNoEvent(t, events, "sources")
+}
+
+// =============================================================================
 // Helpers
 // =============================================================================
 

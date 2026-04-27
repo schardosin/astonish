@@ -200,6 +200,17 @@ export interface AppSavedMessage {
   path: string
 }
 
+export interface ReportPreviewMessage {
+  type: 'report_preview'
+  content: string
+  title: string
+}
+
+export interface SourcesMessage {
+  type: 'sources'
+  urls: string[]
+}
+
 export type ChatMsg =
   | FleetMessageItem
   | UserMessage
@@ -223,6 +234,8 @@ export type ChatMsg =
   | DistillPreviewMessage
   | DistillSavedMessage
   | AppSavedMessage
+  | ReportPreviewMessage
+  | SourcesMessage
 
 // ---- Fleet info / state ----
 

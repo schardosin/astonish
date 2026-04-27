@@ -259,7 +259,7 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString("- Do NOT set background on the outermost container — it must be transparent.\n")
 	sb.WriteString("- Style: dark palette with gray-950 page, gray-900 cards with border-gray-800 rounded-xl, gray-800 inputs with border-gray-700 rounded-lg. Use semantic accent colors (emerald=positive, blue=info, purple=totals, amber=warnings, red=errors). Use gradient KPI cards like from-emerald-900/40 to-emerald-950/40 with matching border.\n")
 	sb.WriteString("Search memory for \"generative-ui\" for full documentation and examples.\n")
-	sb.WriteString("**Reports vs apps:** For reports/analyses with diagrams, use `write_file` + mermaid blocks, not `astonish-app`.\n")
+	sb.WriteString("**Reports vs apps:** For reports/analyses with diagrams, use `astonish-report` code fence with mermaid blocks, not `astonish-app`.\n")
 
 	// ── Tier 3: Per-Turn Dynamic ─────────────────────────────────
 	// Execution plans and auto-retrieved knowledge are appended here at

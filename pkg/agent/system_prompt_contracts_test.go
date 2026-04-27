@@ -191,10 +191,10 @@ func TestSystemPromptContracts_GenerativeUI(t *testing.T) {
 	assertContains(t, prompt, "@credential-name", "credential @-syntax — useAppData('url@credential-name') resolves credentials server-side")
 
 	// Contract 3: Mermaid diagrams for reports
-	assertContains(t, prompt, "mermaid", "mermaid blocks — MermaidBlock.tsx renders ```mermaid fences, reports use write_file + mermaid")
+	assertContains(t, prompt, "mermaid", "mermaid blocks — MermaidBlock.tsx renders ```mermaid fences, reports use astonish-report + mermaid")
 
-	// Contract 20: write_file for reports (not astonish-app)
-	assertContains(t, prompt, "write_file", "write_file for reports — reports/analyses should use write_file + mermaid, not astonish-app")
+	// Contract 20: astonish-report fence for structured output
+	assertContains(t, prompt, "astonish-report", "astonish-report fence — backend reportPreviewFenceRe detects this fence and emits report_preview event")
 
 	// useAppData sourceId format
 	assertContains(t, prompt, `"http:GET:`, "useAppData HTTP sourceId format — frontend parses this prefix to route data requests")

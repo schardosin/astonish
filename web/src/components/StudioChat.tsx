@@ -248,7 +248,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     let hasFinalResult = false
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i]
-      if (m.type === 'agent' && !(m as AgentMessage)._streaming && m.content.length > 500) {
+      if (m.type === 'agent' && !(m as AgentMessage)._streaming && (m.content.length > 500 || sessionArtifacts.length > 0)) {
         const hasLaterAgent = messages.slice(i + 1).some(x => x.type === 'agent')
         const hasToolBefore = messages.slice(0, i).some(x =>
           x.type === 'tool_call' || x.type === 'tool_result' ||
@@ -2126,7 +2126,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 // Detect if this is a "final result" — long final agent message after tool activity
                 const isFinalResult = !isStreaming &&
                   !(msg as AgentMessage)._streaming &&
-                  msg.content.length > 500 &&
+                  (msg.content.length > 500 || sessionArtifacts.length > 0) &&
                   // App code fences must always go through the fence-splitting path
                   !msg.content.includes('```astonish-app') &&
                   // Must be the last agent message in the list

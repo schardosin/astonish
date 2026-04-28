@@ -1,0 +1,12 @@
+{
+  "name": "thinking-message",
+  "description": "Agent emits a thinking event before responding",
+  "category": "misc",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-thinking", "isNew": true } },
+    { "type": "thinking", "data": { "text": "Let me analyze this step by step. First, I need to consider the requirements, then evaluate the options." } },
+    { "type": "text", "data": { "text": "After careful analysis, the best approach is to use a microservices architecture." } },
+    { "type": "usage", "data": { "input_tokens": 100, "output_tokens": 50, "total_tokens": 150 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

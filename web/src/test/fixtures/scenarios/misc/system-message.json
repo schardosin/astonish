@@ -1,0 +1,10 @@
+{
+  "name": "system-message",
+  "description": "System event with markdown content (e.g., from /help command)",
+  "category": "misc",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-system", "isNew": true } },
+    { "type": "system", "data": { "content": "**Available commands:**\n- `/help` - Show this help\n- `/status` - Show current status\n- `/compact` - Show context window usage" } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

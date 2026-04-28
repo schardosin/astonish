@@ -1,0 +1,10 @@
+{
+  "name": "new-session-command",
+  "description": "New session event triggered mid-stream, replacing the current session",
+  "category": "core",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-old", "isNew": true } },
+    { "type": "new_session", "data": { "sessionId": "fresh-789" } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

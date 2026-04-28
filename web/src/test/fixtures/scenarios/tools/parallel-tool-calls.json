@@ -1,0 +1,16 @@
+{
+  "name": "parallel-tool-calls",
+  "description": "Agent calls two tools in sequence before providing an answer",
+  "category": "tools",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-tool-parallel", "isNew": true } },
+    { "type": "text", "data": { "text": "I'll search multiple sources." } },
+    { "type": "tool_call", "data": { "name": "web_search", "args": { "query": "React testing" } } },
+    { "type": "tool_call", "data": { "name": "read_file", "args": { "path": "/src/utils.ts" } } },
+    { "type": "tool_result", "data": { "name": "web_search", "result": "React Testing Library docs..." } },
+    { "type": "tool_result", "data": { "name": "read_file", "result": "export function formatDate..." } },
+    { "type": "text", "data": { "text": "I found the information from both sources." } },
+    { "type": "usage", "data": { "input_tokens": 200, "output_tokens": 100, "total_tokens": 300 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

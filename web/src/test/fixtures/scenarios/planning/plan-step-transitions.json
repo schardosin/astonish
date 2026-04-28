@@ -1,0 +1,21 @@
+{
+  "name": "plan-step-transitions",
+  "description": "Plan with steps transitioning through pending -> running -> complete/failed",
+  "category": "planning",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-plan-steps", "isNew": true } },
+    { "type": "subtask_progress", "data": { "event_type": "plan_announced", "plan_goal": "Build feature X", "plan_steps": [
+      { "name": "Design", "description": "Design the architecture" },
+      { "name": "Implement", "description": "Write the code" },
+      { "name": "Test", "description": "Run tests" }
+    ] } },
+    { "type": "subtask_progress", "data": { "event_type": "plan_step_update", "step_name": "Design", "step_status": "running" } },
+    { "type": "subtask_progress", "data": { "event_type": "plan_step_update", "step_name": "Design", "step_status": "complete" } },
+    { "type": "subtask_progress", "data": { "event_type": "plan_step_update", "step_name": "Implement", "step_status": "running" } },
+    { "type": "subtask_progress", "data": { "event_type": "plan_step_update", "step_name": "Implement", "step_status": "failed" } },
+    { "type": "subtask_progress", "data": { "event_type": "plan_step_update", "step_name": "Test", "step_status": "complete" } },
+    { "type": "text", "data": { "text": "The plan had a partial failure." } },
+    { "type": "usage", "data": { "input_tokens": 500, "output_tokens": 200, "total_tokens": 700 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

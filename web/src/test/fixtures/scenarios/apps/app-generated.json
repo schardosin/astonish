@@ -1,0 +1,11 @@
+{
+  "name": "app-generated",
+  "description": "Agent generates an app preview with HTML code, title, and description",
+  "category": "apps",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-app-gen", "isNew": true } },
+    { "type": "text", "data": { "text": "Here's the app:" } },
+    { "type": "app_preview", "data": { "code": "<div id='app'><h1>Dashboard</h1><p>Revenue: $42,000</p></div>", "title": "Revenue Dashboard", "description": "A simple revenue dashboard", "version": 1, "appId": "app-dash-001" } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "name": "fleet-redirect",
+  "description": "Fleet redirect event triggered by /fleet command",
+  "category": "fleet",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-fleet-redirect", "isNew": true } },
+    { "type": "fleet_redirect", "data": { "task": "Build a web scraper for news articles" } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

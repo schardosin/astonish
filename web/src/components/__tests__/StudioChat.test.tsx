@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, act } from '@testing-library/react'
 import StudioChat from '../StudioChat'
 
 // Mock all API modules
@@ -43,40 +43,58 @@ describe('StudioChat', () => {
     theme: 'dark',
   }
 
-  it('renders the sidebar with Conversations title', () => {
+  it('renders the sidebar with Conversations title', async () => {
     render(<StudioChat {...defaultProps} />)
     expect(screen.getByText('Conversations')).toBeInTheDocument()
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
   })
 
-  it('renders the new conversation button', () => {
+  it('renders the new conversation button', async () => {
     render(<StudioChat {...defaultProps} />)
     // The "+" button for new conversation
     const buttons = screen.getAllByRole('button')
     // At minimum there should be new chat button, fleet button, and collapse toggle
     expect(buttons.length).toBeGreaterThanOrEqual(2)
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
   })
 
-  it('renders the message input area', () => {
+  it('renders the message input area', async () => {
     render(<StudioChat {...defaultProps} />)
     const textarea = screen.getByPlaceholderText(/type.*message|ask.*anything/i)
     expect(textarea).toBeInTheDocument()
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
   })
 
-  it('shows the HomePage when there are no messages', () => {
+  it('shows the HomePage when there are no messages', async () => {
     render(<StudioChat {...defaultProps} />)
     expect(screen.getByTestId('home-page')).toBeInTheDocument()
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
   })
 
-  it('renders the send button', () => {
+  it('renders the send button', async () => {
     render(<StudioChat {...defaultProps} />)
     // The send button is present in the input area
     const buttons = screen.getAllByRole('button')
     expect(buttons.length).toBeGreaterThan(0)
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
   })
 
-  it('renders the search input in sidebar', () => {
+  it('renders the search input in sidebar', async () => {
     render(<StudioChat {...defaultProps} />)
     const searchInput = screen.getByPlaceholderText(/search/i)
     expect(searchInput).toBeInTheDocument()
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
   })
 })

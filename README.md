@@ -400,6 +400,7 @@ Astonish owes a significant debt to [OpenClaw](https://github.com/openclaw/openc
 Built with care by an engineer who studied what worked, took the best ideas, and built something new on top.
 
 - [Full Documentation](https://schardosin.github.io/astonish/)
+- [Testing Guide](docs/TESTING.md) — How to run and write tests (1,650+ tests across 4 layers)
 - [Submit a Pull Request](https://github.com/schardosin/astonish/pulls)
 - **License**: AGPL-3.0
 

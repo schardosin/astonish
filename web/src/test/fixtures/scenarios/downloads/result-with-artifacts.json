@@ -1,0 +1,14 @@
+{
+  "name": "result-with-artifacts",
+  "description": "Long result text with embedded artifact, triggering ResultCard scenario for 600+ char content",
+  "category": "downloads",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-result-artifacts", "isNew": true } },
+    { "type": "tool_call", "data": { "name": "write_file", "args": { "path": "/workspace/analysis.md" } } },
+    { "type": "tool_result", "data": { "name": "write_file", "result": "File written" } },
+    { "type": "artifact", "data": { "path": "/workspace/analysis.md", "tool_name": "write_file" } },
+    { "type": "text", "data": { "text": "Here is the comprehensive analysis of the market research data. The findings indicate several key trends across the technology sector that are worth examining in detail. First, cloud computing adoption continues to accelerate with enterprise spending projected to increase by 22% year over year. Second, artificial intelligence integration into existing workflows has become a top priority for 78% of surveyed organizations. Third, cybersecurity investments are reaching record levels as threat landscapes evolve and regulatory requirements tighten. The data also reveals significant regional variations, with North American markets leading adoption while Asia-Pacific regions show the fastest growth rates. Supply chain digitization emerged as a critical theme, with 65% of respondents planning major technology investments in logistics and procurement systems. Remote work infrastructure spending remains elevated despite return-to-office trends, suggesting a permanent shift in workplace technology requirements. In conclusion, the market shows strong growth potential across all segments examined in this research." } },
+    { "type": "usage", "data": { "input_tokens": 200, "output_tokens": 180, "total_tokens": 380 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

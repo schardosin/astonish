@@ -1,0 +1,15 @@
+{
+  "name": "structured-error-info",
+  "description": "Backend sends a structured error with title, reason, suggestion",
+  "category": "errors",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-error-info", "isNew": true } },
+    { "type": "error_info", "data": {
+      "title": "Provider Error",
+      "reason": "API key is invalid or expired",
+      "suggestion": "Check your API key in Settings > Providers and ensure it has sufficient quota.",
+      "originalError": "HTTP 401 Unauthorized: {\"error\":{\"message\":\"Invalid API key\",\"type\":\"invalid_request_error\"}}"
+    } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

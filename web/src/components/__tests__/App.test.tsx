@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor, act } from '@testing-library/react'
 import App from '../../App'
 
 // Mock all heavyweight child components to isolate App rendering
@@ -115,13 +115,18 @@ beforeEach(() => {
 })
 
 describe('App', () => {
-  it('renders without crashing', () => {
+  it('renders without crashing', async () => {
     render(<App />)
     // App should render something
     expect(document.body.querySelector('div')).toBeTruthy()
+
+    // Wait for async effects to settle
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
   })
 
-  it('shows loading state initially while checking setup', () => {
+  it('shows loading state initially while checking setup', async () => {
     render(<App />)
     // During setup check, a loading spinner may appear
     // The loading state contains an animated element
@@ -129,6 +134,12 @@ describe('App', () => {
       document.querySelector('[class*="animate"]')
     // App should either show loading or have rendered the main UI
     expect(document.body.innerHTML.length).toBeGreaterThan(0)
+
+    // Wait for the async setup check to complete so React doesn't warn
+    // about state updates outside of act()
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
   })
 
   it('renders StudioChat when in chat view', async () => {

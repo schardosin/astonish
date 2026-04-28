@@ -1,0 +1,14 @@
+{
+  "name": "image-message",
+  "description": "Agent produces an image (e.g., screenshot from browser tool)",
+  "category": "misc",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-image", "isNew": true } },
+    { "type": "tool_call", "data": { "name": "browser_screenshot", "args": { "url": "https://example.com" } } },
+    { "type": "tool_result", "data": { "name": "browser_screenshot", "result": "Screenshot captured" } },
+    { "type": "image", "data": { "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "mimeType": "image/png" } },
+    { "type": "text", "data": { "text": "Here is the screenshot of the page." } },
+    { "type": "usage", "data": { "input_tokens": 150, "output_tokens": 30, "total_tokens": 180 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

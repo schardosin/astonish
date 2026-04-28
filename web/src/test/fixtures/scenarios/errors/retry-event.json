@@ -1,0 +1,13 @@
+{
+  "name": "retry-event",
+  "description": "Stream is truncated, agent retries and succeeds",
+  "category": "errors",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-retry", "isNew": true } },
+    { "type": "text", "data": { "text": "Let me analyze" } },
+    { "type": "retry", "data": { "attempt": 1, "maxRetries": 3, "reason": "LLM stream was truncated, retrying with continuation prompt" } },
+    { "type": "text", "data": { "text": " this data carefully. The results show a 15% increase in performance." } },
+    { "type": "usage", "data": { "input_tokens": 200, "output_tokens": 100, "total_tokens": 300 } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

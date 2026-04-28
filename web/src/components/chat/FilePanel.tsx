@@ -113,14 +113,22 @@ export default function FilePanel({ artifacts, initialPath, sessionId, onClose }
     setDownloadOpen(false)
   }, [overlayPath, overlayArtifact, sessionId])
 
-  const handleExportPDF = useCallback(() => {
+  const handleExportPDF = useCallback(async () => {
     if (!overlayPath) return
     setDownloadOpen(false)
-    const url = getArtifactPDFUrl(overlayPath, sessionId || undefined)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = (overlayArtifact?.fileName || 'file').replace(/\.[^.]+$/, '.pdf')
-    a.click()
+    setExporting('pdf')
+    try {
+      const url = getArtifactPDFUrl(overlayPath, sessionId || undefined)
+      const res = await fetch(url)
+      if (!res.ok) throw new Error(`PDF generation failed: ${res.statusText}`)
+      const blob = await res.blob()
+      const { saveAs } = await import('file-saver')
+      saveAs(blob, (overlayArtifact?.fileName || 'file').replace(/\.[^.]+$/, '.pdf'))
+    } catch (err) {
+      console.error('PDF export failed:', err)
+    } finally {
+      setExporting(null)
+    }
   }, [overlayPath, overlayArtifact, sessionId])
 
   const handleExportDOCX = useCallback(async () => {

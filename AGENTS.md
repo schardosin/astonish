@@ -138,6 +138,14 @@ astonish/
 - Mock external dependencies (API calls, file system)
 - Test file names: `*_test.go`
 - Run tests before committing (pre-commit hook only lints, doesn't run tests)
+- See `docs/architecture/testing-chat-scenarios.md` for the Studio Chat test infrastructure (SSE scenario tests, backend integration tests, prompt contract tests)
+
+## Architecture Documentation
+
+- `docs/architecture/chat-rendering-pipeline.md` — **Authoritative reference** for the Studio Chat rendering pipeline: SSE transport, event types, message-to-component mapping, report/app/artifact pipelines, export pipeline, rules and invariants. **Read this before modifying StudioChat.tsx or adding new SSE event types.**
+- `docs/architecture/testing-chat-scenarios.md` — Test infrastructure, scenario catalog, fixture authoring guidelines
+- `docs/architecture/generative-ui.md` — App preview (Generative UI) pipeline
+- `docs/architecture/api-studio.md` — REST API and SSE streaming documentation
 
 ## Before Committing
 

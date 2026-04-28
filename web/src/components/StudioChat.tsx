@@ -248,7 +248,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     let hasFinalResult = false
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i]
-      if (m.type === 'agent' && !(m as AgentMessage)._streaming && m.content.length > 500) {
+      if (m.type === 'agent' && !(m as AgentMessage)._streaming && (m.content.length > 500 || sessionArtifacts.length > 0)) {
         const hasLaterAgent = messages.slice(i + 1).some(x => x.type === 'agent')
         const hasToolBefore = messages.slice(0, i).some(x =>
           x.type === 'tool_call' || x.type === 'tool_result' ||
@@ -1938,13 +1938,16 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                         </span>
                       </div>
                     </div>
-                    <button
+                    <div
+                      role="button"
+                      tabIndex={0}
                       onClick={(e) => handleDeleteSession(e, session.id)}
-                      className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/20 transition-all"
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleDeleteSession(e as unknown as React.MouseEvent, session.id) } }}
+                      className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/20 transition-all cursor-pointer"
                       title="Delete conversation"
                     >
                       <Trash2 size={12} className="text-red-400" />
-                    </button>
+                    </div>
                   </div>
                 </button>
               ))
@@ -2097,7 +2100,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
         )}
         {/* Messages Area (with scroll-to-bottom button) */}
         <div className="flex-1 relative overflow-hidden">
-        <div ref={scrollRef} className="absolute inset-0 overflow-y-auto p-4 space-y-4">
+        <div ref={scrollRef} data-testid="message-area" className="absolute inset-0 overflow-y-auto p-4 space-y-4">
           {isLoadingHistory ? (
             <div className="flex items-center justify-center py-16">
               <Loader size={24} className="animate-spin text-purple-400" />
@@ -2123,7 +2126,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 // Detect if this is a "final result" — long final agent message after tool activity
                 const isFinalResult = !isStreaming &&
                   !(msg as AgentMessage)._streaming &&
-                  msg.content.length > 500 &&
+                  (msg.content.length > 500 || sessionArtifacts.length > 0) &&
                   // App code fences must always go through the fence-splitting path
                   !msg.content.includes('```astonish-app') &&
                   // Must be the last agent message in the list
@@ -2645,6 +2648,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             )}
             <div className="relative flex-1">
               <textarea
+                data-testid="chat-input"
                 ref={inputRef}
                 value={input}
                 onChange={handleInputChange}
@@ -2690,6 +2694,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               />
             </div>
             <button
+              data-testid="send-button"
               type="submit"
               disabled={(isStreaming && !isFleetMode) || !input.trim()}
               className="px-4 py-2.5 bg-[#805AD5] hover:bg-[#6B46C1] text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"

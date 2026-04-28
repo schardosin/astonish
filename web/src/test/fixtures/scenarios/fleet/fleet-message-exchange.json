@@ -1,0 +1,12 @@
+{
+  "name": "fleet-message-exchange",
+  "description": "Fleet mode message exchange with multiple agents communicating and mentioning each other",
+  "category": "fleet",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-fleet-msg", "isNew": true } },
+    { "type": "fleet_message", "data": { "id": "fm-1", "sender": "customer", "text": "Build a web scraper", "timestamp": 1700000000000 } },
+    { "type": "fleet_message", "data": { "id": "fm-2", "sender": "architect", "text": "I'll design the system architecture for the web scraper.", "timestamp": 1700000001000, "mentions": ["developer"] } },
+    { "type": "fleet_message", "data": { "id": "fm-3", "sender": "developer", "text": "I'll implement the scraping logic.", "timestamp": 1700000002000 } },
+    { "type": "fleet_done", "data": { "done": true } }
+  ]
+}

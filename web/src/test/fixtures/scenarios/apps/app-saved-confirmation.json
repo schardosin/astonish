@@ -1,0 +1,11 @@
+{
+  "name": "app-saved-confirmation",
+  "description": "App preview followed by app_done event confirming save to disk",
+  "category": "apps",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-app-save", "isNew": true } },
+    { "type": "app_preview", "data": { "code": "<div>App</div>", "title": "My App", "description": "Test", "version": 1, "appId": "app-save-001" } },
+    { "type": "app_done", "data": { "name": "My Dashboard", "path": "apps/my_dashboard" } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "artifact-created",
+  "description": "Artifact event emitted after write_file tool creates a file",
+  "category": "downloads",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-artifact-created", "isNew": true } },
+    { "type": "text", "data": { "text": "Creating the report..." } },
+    { "type": "tool_call", "data": { "name": "write_file", "args": { "path": "/workspace/report.md", "content": "# Report\nFindings..." } } },
+    { "type": "tool_result", "data": { "name": "write_file", "result": "File written successfully" } },
+    { "type": "artifact", "data": { "path": "/workspace/report.md", "tool_name": "write_file" } },
+    { "type": "text", "data": { "text": "I've created the report." } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

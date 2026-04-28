@@ -1,0 +1,11 @@
+{
+  "name": "distill-preview",
+  "description": "Distill preview event with YAML flow definition, metadata, and explanation",
+  "category": "distill",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-distill-preview", "isNew": true } },
+    { "type": "text", "data": { "text": "Analyzing your conversation..." } },
+    { "type": "distill_preview", "data": { "yaml": "name: research_flow\nnodes:\n  - name: search\n    type: agent\n    system_prompt: Search the web", "flowName": "research_flow", "description": "Automated research pipeline", "tags": ["research", "web"], "explanation": "## Summary\nThis flow automates research.\n\n## Nodes\n- **search** (agent): Searches the internet" } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

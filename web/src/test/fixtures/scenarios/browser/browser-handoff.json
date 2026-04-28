@@ -1,0 +1,13 @@
+{
+  "name": "browser-handoff",
+  "description": "Browser handoff triggered by browser_request_human tool result with VNC proxy URL",
+  "category": "browser",
+  "events": [
+    { "type": "session", "data": { "sessionId": "sess-browser-handoff", "isNew": true } },
+    { "type": "text", "data": { "text": "Let me check that page." } },
+    { "type": "tool_call", "data": { "name": "browser_request_human", "args": { "url": "https://example.com/login" } } },
+    { "type": "tool_result", "data": { "name": "browser_request_human", "result": { "vnc_proxy_url": "http://localhost:6901/vnc.html", "page_url": "https://example.com/login", "page_title": "Login Page", "message": "CAPTCHA detected, please solve it" } } },
+    { "type": "text", "data": { "text": "I've opened the browser for you." } },
+    { "type": "done", "data": { "done": true } }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "connection-error",
+  "description": "Stream that triggers an HTTP error",
+  "category": "errors",
+  "events": []
+}

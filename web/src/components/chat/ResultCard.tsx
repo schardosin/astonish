@@ -83,13 +83,21 @@ function EmbeddedFileViewer({ artifact, sessionId, onOpenInPanel }: {
     setDownloadOpen(false)
   }, [artifact.path, artifact.fileName, sessionId])
 
-  const handleExportPDF = useCallback(() => {
+  const handleExportPDF = useCallback(async () => {
     setDownloadOpen(false)
-    const url = getArtifactPDFUrl(artifact.path, sessionId || undefined)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = artifact.fileName.replace(/\.[^.]+$/, '.pdf')
-    a.click()
+    setExporting('pdf')
+    try {
+      const url = getArtifactPDFUrl(artifact.path, sessionId || undefined)
+      const res = await fetch(url)
+      if (!res.ok) throw new Error(`PDF generation failed: ${res.statusText}`)
+      const blob = await res.blob()
+      const { saveAs } = await import('file-saver')
+      saveAs(blob, artifact.fileName.replace(/\.[^.]+$/, '.pdf'))
+    } catch (err) {
+      console.error('PDF export failed:', err)
+    } finally {
+      setExporting(null)
+    }
   }, [artifact.path, artifact.fileName, sessionId])
 
   const handleExportDOCX = useCallback(async () => {

@@ -46,7 +46,21 @@ func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, 
 			// the node process to crash with EOF on startup.
 			templateSnapshotMu.RLock()
 
-			// Re-mount overlay if needed (might have been lost on reboot).
+			// Unmount stale overlay first. When a container stops, the kernel
+			// dentry cache for the overlay mount can become stale — `ls rootfs/`
+			// returns empty even though the mount appears in /proc/mounts. A
+			// fresh unmount + remount clears the stale cache. If the overlay
+			// wasn't mounted, umount fails silently — ensureOverlayMounted will
+			// create the mount from scratch.
+			poolName, poolErr := GetPoolForProfile(client)
+			if poolErr == nil {
+				if poolPath, pathErr := GetPoolSourcePath(client, poolName); pathErr == nil {
+					containerRootfs := ContainerRootfsPath(poolPath, containerName)
+					_ = umountOnSandboxHost(containerRootfs)
+				}
+			}
+
+			// Re-mount overlay (now guaranteed to be fresh).
 			// This MUST succeed — without it the container starts with empty rootfs.
 			if err := ensureOverlayMounted(client, containerName, entry.TemplateName, tplRegistry); err != nil {
 				templateSnapshotMu.RUnlock()

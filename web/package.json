@@ -53,7 +53,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
-    "@typescript-eslint/eslint-plugin": "^8.58.2",
+    "@typescript-eslint/eslint-plugin": "^8.59.1",
     "@typescript-eslint/parser": "^8.59.0",
     "@vitejs/plugin-react": "^6.0.1",
     "eslint": "^10.2.1",

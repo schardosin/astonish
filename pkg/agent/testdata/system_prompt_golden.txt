@@ -72,6 +72,8 @@ Detailed step-by-step guidance for complex capabilities (browser automation, cre
 **Web search tool:** `tavily-search` — use this tool for web searches. Do NOT use `web_fetch` for search queries.
 **Web extract tool:** `tavily-extract` — use this tool to extract content from URLs when `web_fetch` fails.
 
+**Credentials:** Encrypted vault (no files on disk). `resolve_credential` returns `{{CREDENTIAL:name:field}}` placeholders — auto-substituted in `shell_command`/`process_write`/`browser_type`. For HTTP APIs use `http_request(credential="name")`.
+
 ## Task Delegation
 
 `delegate_tasks` runs tasks in isolated sub-agents with their own sessions. Use it for: parallel execution of independent tasks, long-running operations, or tasks requiring isolation. Do NOT use it just to access tools — relevant tools are injected automatically and can be called directly.

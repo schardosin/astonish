@@ -794,21 +794,30 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// shell_command, grep_search, find_files, memory_save, memory_search,
 	// delegate_tasks, opencode.
 	mainThreadToolNames := map[string]bool{
-		"read_file":      true,
-		"write_file":     true,
-		"edit_file":      true,
-		"shell_command":  true,
-		"grep_search":    true,
-		"find_files":     true,
-		"memory_save":    true,
-		"memory_search":  true,
-		"delegate_tasks": true,
-		"announce_plan":  true,
-		"opencode":       true,
+		"read_file":          true,
+		"write_file":         true,
+		"edit_file":          true,
+		"shell_command":      true,
+		"grep_search":        true,
+		"find_files":         true,
+		"memory_save":        true,
+		"memory_search":      true,
+		"delegate_tasks":     true,
+		"announce_plan":      true,
+		"opencode":           true,
+		"resolve_credential": true,
 	}
 
 	var mainThreadTools []tool.Tool
 	for _, t := range coreTools {
+		if mainThreadToolNames[t.Name()] {
+			mainThreadTools = append(mainThreadTools, t)
+		}
+	}
+	// Also pull resolve_credential from credToolsSlice into the main thread.
+	// It stays in the credentials group too (for sub-agents); the ToolIndex
+	// deduplicates and gives main-thread precedence.
+	for _, t := range credToolsSlice {
 		if mainThreadToolNames[t.Name()] {
 			mainThreadTools = append(mainThreadTools, t)
 		}

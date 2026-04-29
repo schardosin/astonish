@@ -199,6 +199,11 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString(fmt.Sprintf("**Web extract tool:** `%s` — use this tool to extract content from URLs when `web_fetch` fails.\n", b.WebExtractToolName))
 	}
 
+	// 6a3. Credential system — always present when credential tools are configured.
+	if b.hasCredentialTools() {
+		sb.WriteString("\n**Credentials:** Encrypted vault (no files on disk). `resolve_credential` returns `{{CREDENTIAL:name:field}}` placeholders — auto-substituted in `shell_command`/`process_write`/`browser_type`. For HTTP APIs use `http_request(credential=\"name\")`.\n")
+	}
+
 	// 6b. Task delegation — list available tool groups for delegate_tasks
 	if len(b.Catalog) > 0 {
 		sb.WriteString("\n## Task Delegation\n\n")

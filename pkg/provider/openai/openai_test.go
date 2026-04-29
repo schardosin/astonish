@@ -942,3 +942,148 @@ func TestNonStreamingReasoningRoundTrip(t *testing.T) {
 		t.Error("assistant message not found in second request")
 	}
 }
+
+func TestStripCorruptedThinkingToolCalls(t *testing.T) {
+	tests := []struct {
+		name            string
+		messages        []openailib.ChatCompletionMessage
+		expectLen       int
+		expectToolCalls int // total tool_calls remaining across all messages
+		expectStripped  bool
+	}{
+		{
+			name: "no thinking mode — messages unchanged",
+			messages: []openailib.ChatCompletionMessage{
+				{Role: openailib.ChatMessageRoleUser, Content: "hello"},
+				{
+					Role:    openailib.ChatMessageRoleAssistant,
+					Content: "Let me check",
+					ToolCalls: []openailib.ToolCall{
+						{ID: "call_1", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "shell_command", Arguments: "{}"}},
+					},
+				},
+				{Role: openailib.ChatMessageRoleTool, ToolCallID: "call_1", Content: "ok"},
+				{Role: openailib.ChatMessageRoleAssistant, Content: "Done"},
+			},
+			expectLen:       4,
+			expectToolCalls: 1,
+			expectStripped:  false,
+		},
+		{
+			name: "thinking mode with valid reasoning — unchanged",
+			messages: []openailib.ChatCompletionMessage{
+				{Role: openailib.ChatMessageRoleUser, Content: "check stocks"},
+				{
+					Role:             openailib.ChatMessageRoleAssistant,
+					ReasoningContent: "I need to use the shell to check stock prices...",
+					Content:          "Let me check",
+					ToolCalls: []openailib.ToolCall{
+						{ID: "call_1", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "shell_command", Arguments: "{}"}},
+					},
+				},
+				{Role: openailib.ChatMessageRoleTool, ToolCallID: "call_1", Content: "AAPL: 185"},
+				{Role: openailib.ChatMessageRoleAssistant, ReasoningContent: "Got the data", Content: "AAPL is at 185"},
+			},
+			expectLen:       4,
+			expectToolCalls: 1,
+			expectStripped:  false,
+		},
+		{
+			name: "corrupted: tool_calls without reasoning in thinking-mode session",
+			messages: []openailib.ChatCompletionMessage{
+				{Role: openailib.ChatMessageRoleUser, Content: "check stocks"},
+				// Old corrupted message: has tool_calls but no reasoning_content
+				{
+					Role:    openailib.ChatMessageRoleAssistant,
+					Content: "Let me check",
+					ToolCalls: []openailib.ToolCall{
+						{ID: "call_1", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "shell_command", Arguments: "{}"}},
+					},
+				},
+				{Role: openailib.ChatMessageRoleTool, ToolCallID: "call_1", Content: "AAPL: 185"},
+				{Role: openailib.ChatMessageRoleAssistant, Content: "AAPL is at 185"},
+				// New turn with proper reasoning (proves thinking mode)
+				{Role: openailib.ChatMessageRoleUser, Content: "what about GOOG?"},
+				{
+					Role:             openailib.ChatMessageRoleAssistant,
+					ReasoningContent: "Now checking GOOG...",
+					Content:          "Let me check GOOG",
+					ToolCalls: []openailib.ToolCall{
+						{ID: "call_2", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "shell_command", Arguments: "{}"}},
+					},
+				},
+				{Role: openailib.ChatMessageRoleTool, ToolCallID: "call_2", Content: "GOOG: 175"},
+				{Role: openailib.ChatMessageRoleAssistant, ReasoningContent: "Got it", Content: "GOOG is at 175"},
+			},
+			// call_1 tool_calls stripped + its tool response removed = 1 fewer message
+			expectLen:       7,
+			expectToolCalls: 1, // only call_2 remains
+			expectStripped:  true,
+		},
+		{
+			name: "multiple corrupted turns",
+			messages: []openailib.ChatCompletionMessage{
+				{Role: openailib.ChatMessageRoleUser, Content: "turn 1"},
+				{
+					Role:    openailib.ChatMessageRoleAssistant,
+					Content: "checking...",
+					ToolCalls: []openailib.ToolCall{
+						{ID: "call_1", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "t1", Arguments: "{}"}},
+					},
+				},
+				{Role: openailib.ChatMessageRoleTool, ToolCallID: "call_1", Content: "r1"},
+				{Role: openailib.ChatMessageRoleAssistant, Content: "done 1"},
+				{Role: openailib.ChatMessageRoleUser, Content: "turn 2"},
+				{
+					Role:    openailib.ChatMessageRoleAssistant,
+					Content: "checking again...",
+					ToolCalls: []openailib.ToolCall{
+						{ID: "call_2", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "t2", Arguments: "{}"}},
+					},
+				},
+				{Role: openailib.ChatMessageRoleTool, ToolCallID: "call_2", Content: "r2"},
+				// Final message with reasoning proves thinking mode
+				{Role: openailib.ChatMessageRoleAssistant, ReasoningContent: "analyzing...", Content: "all done"},
+			},
+			// Both call_1 and call_2 stripped + 2 tool responses removed
+			expectLen:       6,
+			expectToolCalls: 0,
+			expectStripped:  true,
+		},
+		{
+			name: "assistant without tool_calls and no reasoning — not corrupted",
+			messages: []openailib.ChatCompletionMessage{
+				{Role: openailib.ChatMessageRoleUser, Content: "hi"},
+				{Role: openailib.ChatMessageRoleAssistant, Content: "hello"}, // no tool_calls, no reasoning — fine
+				{Role: openailib.ChatMessageRoleUser, Content: "check something"},
+				{
+					Role:             openailib.ChatMessageRoleAssistant,
+					ReasoningContent: "thinking...",
+					Content:          "result",
+				},
+			},
+			expectLen:       4,
+			expectToolCalls: 0,
+			expectStripped:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := stripCorruptedThinkingToolCalls(tt.messages)
+			if len(result) != tt.expectLen {
+				t.Errorf("expected %d messages, got %d", tt.expectLen, len(result))
+				for i, m := range result {
+					t.Logf("  [%d] role=%s toolCalls=%d reasoning=%q", i, m.Role, len(m.ToolCalls), m.ReasoningContent)
+				}
+			}
+			totalToolCalls := 0
+			for _, m := range result {
+				totalToolCalls += len(m.ToolCalls)
+			}
+			if totalToolCalls != tt.expectToolCalls {
+				t.Errorf("expected %d total tool_calls, got %d", tt.expectToolCalls, totalToolCalls)
+			}
+		})
+	}
+}

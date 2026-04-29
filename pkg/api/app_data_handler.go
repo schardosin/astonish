@@ -370,6 +370,59 @@ func validateHTTPURL(rawURL string) error {
 	return nil
 }
 
+// extractHTTPBodyAndHeaders separates the HTTP body payload from custom headers
+// in the args map. LLM-generated apps use two conventions:
+//
+// Structured: { headers: { "X-Custom": "v" }, body: { messages: [...] } }
+//
+//	→ body = args["body"], headers from args["headers"]
+//
+// Flat: { query: "SELECT ..." } or { query: "...", headers: { "X-Key": "v" } }
+//
+//	→ body = args (minus "headers"), headers from args["headers"]
+//
+// For non-body methods (GET, DELETE, etc.) bodyData is always nil.
+func extractHTTPBodyAndHeaders(method string, args map[string]any) (bodyData any, headers map[string]string) {
+	headers = make(map[string]string)
+
+	// Extract custom headers regardless of method
+	if args != nil {
+		if h, ok := args["headers"].(map[string]any); ok {
+			for k, v := range h {
+				if s, ok := v.(string); ok {
+					headers[k] = s
+				}
+			}
+		}
+	}
+
+	// Only POST/PUT/PATCH carry a body
+	if method != "POST" && method != "PUT" && method != "PATCH" {
+		return nil, headers
+	}
+	if args == nil {
+		return nil, headers
+	}
+
+	if b, ok := args["body"]; ok {
+		// Structured convention: { headers: {...}, body: {...} }
+		return b, headers
+	}
+
+	// Flat convention: the entire args map is the body,
+	// but strip "headers" so it doesn't leak into the payload.
+	if _, hasHeaders := args["headers"]; hasHeaders {
+		clean := make(map[string]any, len(args)-1)
+		for k, v := range args {
+			if k != "headers" {
+				clean[k] = v
+			}
+		}
+		return clean, headers
+	}
+	return args, headers
+}
+
 // resolveHTTPSource makes a server-side HTTP request.
 // spec format: "<METHOD>:<url>" or "<METHOD>:<url>@<credential-name>"
 // When a @credential-name suffix is present, the named credential is resolved
@@ -389,16 +442,16 @@ func resolveHTTPSource(spec string, args map[string]any) (any, error) {
 		url = url[:m[0]]
 	}
 
-	// Build the request
+	// Build the request body and extract custom headers.
+	bodyData, customHeaders := extractHTTPBodyAndHeaders(method, args)
+
 	var body io.Reader
-	if method == "POST" || method == "PUT" || method == "PATCH" {
-		if args != nil {
-			jsonBytes, err := json.Marshal(args)
-			if err != nil {
-				return nil, fmt.Errorf("failed to marshal request body: %w", err)
-			}
-			body = strings.NewReader(string(jsonBytes))
+	if bodyData != nil {
+		jsonBytes, err := json.Marshal(bodyData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal request body: %w", err)
 		}
+		body = strings.NewReader(string(jsonBytes))
 	}
 
 	httpReq, err := http.NewRequest(method, url, body)
@@ -412,12 +465,8 @@ func resolveHTTPSource(spec string, args map[string]any) (any, error) {
 	httpReq.Header.Set("Accept", "application/json")
 
 	// Apply any custom headers from args
-	if headers, ok := args["headers"].(map[string]any); ok {
-		for k, v := range headers {
-			if s, ok := v.(string); ok {
-				httpReq.Header.Set(k, s)
-			}
-		}
+	for k, v := range customHeaders {
+		httpReq.Header.Set(k, v)
 	}
 
 	// Resolve and inject credential (after custom headers — credential takes precedence for auth)

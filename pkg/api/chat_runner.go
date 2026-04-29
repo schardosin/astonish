@@ -563,13 +563,23 @@ func (cr *ChatRunner) detectAndEmitAppPreviews(chatAgent *agent.ChatAgent, sessi
 			continue
 		}
 
+		// Strip optional YAML-style frontmatter (title: ...\n---\n) that LLMs
+		// sometimes emit before the JSX. The frontmatter title is used below;
+		// the clean code (without frontmatter) is what gets persisted, sent to
+		// the sandbox, and compared for dedup.
+		cleanCode, fmTitle := stripAppFrontmatter(code)
+
 		// Skip if the LLM re-emitted the exact same code that was already seeded
 		// (e.g., on the first turn of an "Improve with AI" session).
-		if existingApp != nil && existingApp.Code == code {
+		if existingApp != nil && existingApp.Code == cleanCode {
 			continue
 		}
 
-		title := extractComponentTitle(code)
+		// Prefer the frontmatter title; fall back to extracting from JSX.
+		title := fmTitle
+		if title == "" {
+			title = extractComponentTitle(cleanCode)
+		}
 
 		var appID string
 		var version int
@@ -579,7 +589,7 @@ func (cr *ChatRunner) detectAndEmitAppPreviews(chatAgent *agent.ChatAgent, sessi
 			appID = existingApp.AppID
 			version = existingApp.Version + 1
 			existingApp.Versions = append(existingApp.Versions, existingApp.Code)
-			existingApp.Code = code
+			existingApp.Code = cleanCode
 			existingApp.Version = version
 			existingApp.Title = title
 		} else {
@@ -589,14 +599,14 @@ func (cr *ChatRunner) detectAndEmitAppPreviews(chatAgent *agent.ChatAgent, sessi
 			existingApp = &agent.ActiveApp{
 				AppID:    appID,
 				Title:    title,
-				Code:     code,
+				Code:     cleanCode,
 				Versions: []string{},
 				Version:  version,
 			}
 		}
 
 		cr.emitEvent("app_preview", map[string]any{
-			"code":        code,
+			"code":        cleanCode,
 			"title":       title,
 			"description": "",
 			"version":     version,
@@ -604,7 +614,7 @@ func (cr *ChatRunner) detectAndEmitAppPreviews(chatAgent *agent.ChatAgent, sessi
 		})
 
 		// Persist to session transcript
-		persistAppPreview(cr.ctx, sessionService, cr.SessionID, code, title, version, appID)
+		persistAppPreview(cr.ctx, sessionService, cr.SessionID, cleanCode, title, version, appID)
 
 		// Update active app state for cross-turn refinement
 		chatAgent.SetActiveApp(cr.SessionID, existingApp)
@@ -644,6 +654,40 @@ func extractComponentTitle(code string) string {
 	}
 
 	return "App Preview"
+}
+
+// stripAppFrontmatter removes optional YAML-style frontmatter from app code.
+// LLMs sometimes emit code fences with a "title: ...\n---\n" header before the
+// actual JSX. This function strips it, returning the clean JSX code and the
+// extracted title (if any). If no frontmatter is found, the original code is
+// returned unchanged with an empty title.
+//
+// Recognised format:
+//
+//	title: My App Title
+//	description: optional description
+//	---
+//	function App() { ... }
+func stripAppFrontmatter(code string) (cleanCode string, fmTitle string) {
+	sepIdx := strings.Index(code, "\n---\n")
+	if sepIdx < 0 {
+		return code, ""
+	}
+	header := code[:sepIdx]
+	// Sanity-check: the header must look like YAML key-value lines, not JSX.
+	// We require at least a "title:" line to treat it as frontmatter.
+	if !strings.Contains(header, "title:") {
+		return code, ""
+	}
+	// Extract title value
+	for _, line := range strings.Split(header, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "title:") {
+			fmTitle = strings.TrimSpace(strings.TrimPrefix(line, "title:"))
+		}
+	}
+	cleanCode = strings.TrimSpace(code[sepIdx+len("\n---\n"):])
+	return cleanCode, fmTitle
 }
 
 // splitCamelCase converts "SalesDashboard" to "Sales Dashboard".

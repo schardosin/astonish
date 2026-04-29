@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net"
 	"strings"
 	"testing"
@@ -208,6 +209,145 @@ func TestResolveHTTPSource_SSRFBlocked(t *testing.T) {
 				t.Error("expected SSRF error, got nil")
 			} else if !strings.Contains(err.Error(), "private/internal") {
 				t.Errorf("expected private/internal error, got: %v", err)
+			}
+		})
+	}
+}
+
+// ── HTTP body unwrapping tests ───────────────────────────────────────
+
+func TestExtractHTTPBodyAndHeaders(t *testing.T) {
+	tests := []struct {
+		name        string
+		method      string
+		args        map[string]any
+		wantBody    string            // JSON-encoded expected body, or "" for nil
+		wantHeaders map[string]string // expected extracted headers
+	}{
+		{
+			name:   "structured body+headers convention (POST)",
+			method: "POST",
+			args: map[string]any{
+				"headers": map[string]any{
+					"AI-Resource-Group": "default",
+					"Content-Type":      "application/json",
+				},
+				"body": map[string]any{
+					"messages":   []any{map[string]any{"role": "user", "content": "hello"}},
+					"max_tokens": float64(4096),
+				},
+			},
+			wantBody: `{"max_tokens":4096,"messages":[{"content":"hello","role":"user"}]}`,
+			wantHeaders: map[string]string{
+				"AI-Resource-Group": "default",
+				"Content-Type":      "application/json",
+			},
+		},
+		{
+			name:   "flat args convention — no body key (POST)",
+			method: "POST",
+			args: map[string]any{
+				"query": "SELECT * FROM tasks",
+			},
+			wantBody:    `{"query":"SELECT * FROM tasks"}`,
+			wantHeaders: map[string]string{},
+		},
+		{
+			name:   "flat args with headers — headers stripped from body (POST)",
+			method: "POST",
+			args: map[string]any{
+				"headers": map[string]any{
+					"Authorization": "Bearer token",
+				},
+				"query": "INSERT INTO tasks VALUES (1, 'test')",
+			},
+			wantBody: `{"query":"INSERT INTO tasks VALUES (1, 'test')"}`,
+			wantHeaders: map[string]string{
+				"Authorization": "Bearer token",
+			},
+		},
+		{
+			name:        "nil args — no body (POST)",
+			method:      "POST",
+			args:        nil,
+			wantBody:    "",
+			wantHeaders: map[string]string{},
+		},
+		{
+			name:   "GET method — no body even with args",
+			method: "GET",
+			args: map[string]any{
+				"query": "test",
+			},
+			wantBody:    "",
+			wantHeaders: map[string]string{},
+		},
+		{
+			name:   "GET method with headers — headers extracted, no body",
+			method: "GET",
+			args: map[string]any{
+				"headers": map[string]any{"X-API-Key": "secret"},
+				"query":   "test",
+			},
+			wantBody:    "",
+			wantHeaders: map[string]string{"X-API-Key": "secret"},
+		},
+		{
+			name:   "PUT method with structured body",
+			method: "PUT",
+			args: map[string]any{
+				"headers": map[string]any{"X-Custom": "val"},
+				"body":    map[string]any{"name": "updated"},
+			},
+			wantBody:    `{"name":"updated"}`,
+			wantHeaders: map[string]string{"X-Custom": "val"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bodyData, headers := extractHTTPBodyAndHeaders(tt.method, tt.args)
+
+			// Check body
+			if tt.wantBody == "" {
+				if bodyData != nil {
+					t.Errorf("expected nil body, got %v", bodyData)
+				}
+			} else {
+				if bodyData == nil {
+					t.Fatal("expected non-nil body, got nil")
+				}
+				gotJSON, err := json.Marshal(bodyData)
+				if err != nil {
+					t.Fatalf("failed to marshal body: %v", err)
+				}
+				if string(gotJSON) != tt.wantBody {
+					t.Errorf("body mismatch:\n  want: %s\n  got:  %s", tt.wantBody, string(gotJSON))
+				}
+				// Verify "headers" key never leaks into body
+				if m, ok := bodyData.(map[string]any); ok {
+					if _, leaked := m["headers"]; leaked {
+						t.Error("headers key leaked into the HTTP body")
+					}
+				}
+			}
+
+			// Check headers
+			if len(tt.wantHeaders) == 0 {
+				if len(headers) != 0 {
+					t.Errorf("expected no headers, got %v", headers)
+				}
+			} else {
+				for k, v := range tt.wantHeaders {
+					if got, ok := headers[k]; !ok {
+						t.Errorf("missing header %q", k)
+					} else if got != v {
+						t.Errorf("header %q = %q, want %q", k, got, v)
+					}
+				}
+				if len(headers) != len(tt.wantHeaders) {
+					t.Errorf("header count = %d, want %d: %v", len(headers), len(tt.wantHeaders), headers)
+				}
 			}
 		})
 	}

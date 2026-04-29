@@ -483,6 +483,15 @@ const sandboxHTMLBody = `
       try {
         var userCode = msg.code;
 
+        // Defense-in-depth: strip optional YAML-style frontmatter that LLMs
+        // sometimes emit (e.g. "title: My App\n---\n<JSX>"). The backend
+        // normally strips this before sending, but handle it here too so
+        // existing sessions with frontmatter-contaminated code still render.
+        var fmSep = userCode.indexOf('\n---\n');
+        if (fmSep !== -1 && userCode.substring(0, fmSep).indexOf('title:') !== -1) {
+          userCode = userCode.substring(fmSep + 5).trim();
+        }
+
         if (!/export\s+default\b/.test(userCode)) {
           var fnMatch = userCode.match(/(?:function|const|let|var)\s+([A-Z][A-Za-z0-9]*)/g);
           if (fnMatch && fnMatch.length > 0) {

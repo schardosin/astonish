@@ -313,3 +313,61 @@ func TestExtractAppFromSystemContext(t *testing.T) {
 		})
 	}
 }
+
+func TestStripAppFrontmatter(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantCode  string
+		wantTitle string
+	}{
+		{
+			name:      "no frontmatter",
+			input:     "function App() { return <div>hello</div> }",
+			wantCode:  "function App() { return <div>hello</div> }",
+			wantTitle: "",
+		},
+		{
+			name:      "title only frontmatter",
+			input:     "title: My Dashboard\n---\nfunction App() { return <div>hello</div> }",
+			wantCode:  "function App() { return <div>hello</div> }",
+			wantTitle: "My Dashboard",
+		},
+		{
+			name:      "title and description frontmatter",
+			input:     "title: Sales Report\ndescription: A sales report dashboard\n---\nfunction SalesReport() { return <div /> }",
+			wantCode:  "function SalesReport() { return <div /> }",
+			wantTitle: "Sales Report",
+		},
+		{
+			name:      "separator in code but no title",
+			input:     "const x = 'a'\n---\nconst y = 'b'",
+			wantCode:  "const x = 'a'\n---\nconst y = 'b'",
+			wantTitle: "",
+		},
+		{
+			name:      "empty code after frontmatter",
+			input:     "title: Empty\n---\n",
+			wantCode:  "",
+			wantTitle: "Empty",
+		},
+		{
+			name:      "no separator at all",
+			input:     "title: Not Frontmatter Because No Separator",
+			wantCode:  "title: Not Frontmatter Because No Separator",
+			wantTitle: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code, title := stripAppFrontmatter(tt.input)
+			if code != tt.wantCode {
+				t.Errorf("code = %q, want %q", code, tt.wantCode)
+			}
+			if title != tt.wantTitle {
+				t.Errorf("title = %q, want %q", title, tt.wantTitle)
+			}
+		})
+	}
+}

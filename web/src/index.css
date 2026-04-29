@@ -464,3 +464,9 @@ button, input, select, textarea {
 .timeline-line {
   z-index: 1;
 }
+
+/* ResultCard fade-in when transitioning from inline streaming text */
+@keyframes resultCardFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}

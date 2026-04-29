@@ -6,6 +6,7 @@ import (
 	"iter"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/schardosin/astonish/pkg/credentials"
@@ -206,27 +207,20 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		sessionAppName := ctx.Session().AppName()
 		sessionUserID := ctx.Session().UserID()
 
-		// Shared variable between Before and After tool callbacks for
-		// credential placeholder restore. Safe because ADK processes tool
-		// calls sequentially within a single invocation.
-		var credentialRestore func()
-		var pendingSecretRestore func()
+		// Per-call restore functions for credential and pending-secret
+		// placeholder substitution. Keyed by FunctionCallID so parallel
+		// tool calls (dispatched concurrently by ADK) don't clobber each
+		// other's restore closures.
+		var restoreFuncs sync.Map // map[string]func() — one entry per in-flight call
 
 		// Create the AfterToolCallback for trace recording
 		afterToolCallback := func(ctx tool.Context, t tool.Tool, input, output map[string]any, err error) (map[string]any, error) {
-			// Restore credential placeholders in the args map. This undoes the
-			// in-place substitution from BeforeToolCallback, ensuring the session
-			// event (which shares the same args map by reference) retains
-			// {{CREDENTIAL:...}} placeholders instead of real secret values.
-			if credentialRestore != nil {
-				credentialRestore()
-				credentialRestore = nil
-			}
-			// Restore <<<SECRET_N>>> tokens in the args map (same pattern as
-			// credential placeholders, for user-provided pending secrets).
-			if pendingSecretRestore != nil {
-				pendingSecretRestore()
-				pendingSecretRestore = nil
+			// Restore credential + pending-secret placeholders for this
+			// specific tool call, ensuring the session event retains
+			// {{CREDENTIAL:...}} / <<<SECRET_N>>> tokens instead of real values.
+			callID := ctx.FunctionCallID()
+			if fn, ok := restoreFuncs.LoadAndDelete(callID); ok {
+				fn.(func())()
 			}
 
 			// Redact credential values from all tool outputs before the LLM sees them.
@@ -317,7 +311,15 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		if c.CredentialStore != nil {
 			store := c.CredentialStore
 			beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
-				credentialRestore = credentials.SubstituteAndRestore(args, store)
+				credRestore := credentials.SubstituteAndRestore(args, store)
+				callID := ctx.FunctionCallID()
+				// Chain with any existing restore (e.g. pending secrets added later).
+				if prev, loaded := restoreFuncs.Load(callID); loaded {
+					prevFn := prev.(func())
+					restoreFuncs.Store(callID, func() { credRestore(); prevFn() })
+				} else {
+					restoreFuncs.Store(callID, credRestore)
+				}
 				return nil, nil // proceed with (possibly mutated) args
 			})
 		}
@@ -327,7 +329,14 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		if c.PendingSecrets != nil {
 			vault := c.PendingSecrets
 			beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
-				pendingSecretRestore = vault.SubstituteAndRestore(args)
+				secRestore := vault.SubstituteAndRestore(args)
+				callID := ctx.FunctionCallID()
+				if prev, loaded := restoreFuncs.Load(callID); loaded {
+					prevFn := prev.(func())
+					restoreFuncs.Store(callID, func() { secRestore(); prevFn() })
+				} else {
+					restoreFuncs.Store(callID, secRestore)
+				}
 				return nil, nil
 			})
 		}
@@ -571,12 +580,20 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		}
 
 		// Post-task memory reflection: give the LLM one last chance to save
-		// durable knowledge discovered during the turn. Runs silently — no
-		// events are yielded to the user. Session events provide conversation
-		// context so the reflection LLM can see collected information (domains,
-		// project names, auth URLs, etc.) even when few tool calls were made.
+		// durable knowledge discovered during the turn. Runs asynchronously
+		// so it does not block the runner's "done" SSE event. The reflection
+		// is purely a background knowledge-save operation with no user-visible
+		// output. Snapshot session events before launching the goroutine since
+		// the invocation context (and its session) may become invalid after
+		// the agent Run function returns.
 		if c.MemoryReflector != nil {
-			c.MemoryReflector.Reflect(ctx, trace, ctx.Session().Events())
+			events := ctx.Session().Events()
+			reflector := c.MemoryReflector
+			go func() {
+				reflectCtx, reflectCancel := context.WithTimeout(context.Background(), 60*time.Second)
+				defer reflectCancel()
+				reflector.Reflect(reflectCtx, trace, events)
+			}()
 		}
 
 		// Store the trace keyed by session ID for on-demand /distill

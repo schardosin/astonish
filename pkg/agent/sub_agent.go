@@ -642,10 +642,9 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		beforeModelCallbacks = append(beforeModelCallbacks, m.Compactor.BeforeModelCallback())
 	}
 
-	// Shared variable for credential placeholder restore between Before and
-	// After tool callbacks. Safe because ADK processes calls sequentially.
-	var credentialRestore func()
-	var pendingSecretRestore func()
+	// Per-call restore functions keyed by FunctionCallID so parallel
+	// tool calls don't clobber each other's restore closures.
+	var restoreFuncs sync.Map // map[string]func()
 
 	// Wire credential redaction so sub-agent tool outputs don't leak secrets
 	// into the session transcript. resolve_credential now returns placeholders,
@@ -655,13 +654,8 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	if m.Redactor != nil {
 		redactor := m.Redactor
 		afterToolCallbacks = append(afterToolCallbacks, func(ctx tool.Context, t tool.Tool, input, output map[string]any, err error) (map[string]any, error) {
-			if credentialRestore != nil {
-				credentialRestore()
-				credentialRestore = nil
-			}
-			if pendingSecretRestore != nil {
-				pendingSecretRestore()
-				pendingSecretRestore = nil
+			if fn, ok := restoreFuncs.LoadAndDelete(ctx.FunctionCallID()); ok {
+				fn.(func())()
 			}
 			if output != nil {
 				return redactor.RedactMap(output), err
@@ -671,13 +665,8 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	} else {
 		// Even without a redactor, we need to restore credential placeholders.
 		afterToolCallbacks = append(afterToolCallbacks, func(ctx tool.Context, t tool.Tool, input, output map[string]any, err error) (map[string]any, error) {
-			if credentialRestore != nil {
-				credentialRestore()
-				credentialRestore = nil
-			}
-			if pendingSecretRestore != nil {
-				pendingSecretRestore()
-				pendingSecretRestore = nil
+			if fn, ok := restoreFuncs.LoadAndDelete(ctx.FunctionCallID()); ok {
+				fn.(func())()
 			}
 			return output, err
 		})
@@ -709,7 +698,14 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	if m.CredentialStore != nil {
 		store := m.CredentialStore
 		beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
-			credentialRestore = credentials.SubstituteAndRestore(args, store)
+			credRestore := credentials.SubstituteAndRestore(args, store)
+			callID := ctx.FunctionCallID()
+			if prev, loaded := restoreFuncs.Load(callID); loaded {
+				prevFn := prev.(func())
+				restoreFuncs.Store(callID, func() { credRestore(); prevFn() })
+			} else {
+				restoreFuncs.Store(callID, credRestore)
+			}
 			return nil, nil
 		})
 	}
@@ -718,7 +714,14 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	if m.PendingSecrets != nil {
 		vault := m.PendingSecrets
 		beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
-			pendingSecretRestore = vault.SubstituteAndRestore(args)
+			secRestore := vault.SubstituteAndRestore(args)
+			callID := ctx.FunctionCallID()
+			if prev, loaded := restoreFuncs.Load(callID); loaded {
+				prevFn := prev.(func())
+				restoreFuncs.Store(callID, func() { secRestore(); prevFn() })
+			} else {
+				restoreFuncs.Store(callID, secRestore)
+			}
 			return nil, nil
 		})
 	}

@@ -377,11 +377,12 @@ export default function ResultCard({
 
   return (
     <div
-      className="result-card rounded-lg overflow-hidden"
+      className="result-card rounded-lg overflow-hidden animate-fade-in"
       style={{
         border: '1px solid var(--border-color)',
         background: 'var(--bg-secondary)',
         boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+        animation: 'resultCardFadeIn 0.3s ease-out',
       }}
     >
       {/* Header */}

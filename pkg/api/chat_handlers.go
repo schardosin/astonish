@@ -599,6 +599,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Launch background runner — the agent runs independently of this HTTP request.
 	runner := newChatRunner(sessionID, isNew)
+	runner.closeGracePeriod = 5 * time.Second // allow title goroutine to emit before SSE close
 
 	// If we seeded an app preview, emit it through the runner so the frontend
 	// shows the AppPreviewCard immediately (before the LLM responds).

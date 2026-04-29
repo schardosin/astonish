@@ -87,6 +87,17 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 			openAIReq.MaxCompletionTokens = p.maxCompletionTokens
 		}
 
+		// Per-request overrides from Config (e.g., title generation with
+		// MaxOutputTokens: 100). These take precedence over provider-level defaults.
+		if req.Config != nil {
+			if req.Config.MaxOutputTokens > 0 {
+				openAIReq.MaxCompletionTokens = int(req.Config.MaxOutputTokens)
+			}
+			if req.Config.Temperature != nil {
+				openAIReq.Temperature = *req.Config.Temperature
+			}
+		}
+
 		if req.Config != nil && len(req.Config.StopSequences) > 0 {
 			openAIReq.Stop = req.Config.StopSequences
 		}
@@ -116,6 +127,12 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 			// aggregated non-partial response for session persistence.
 			var textAccum strings.Builder
 
+			// Accumulate reasoning_content (DeepSeek thinking mode) for streaming.
+			// Partial reasoning chunks are yielded with Thought=true for live
+			// thinking indicator display. The aggregated reasoning is included
+			// in the final response for session persistence.
+			var reasoningAccum strings.Builder
+
 			// Track whether the LLM sent a proper finish_reason. If the stream
 			// ends (io.EOF) without any finish_reason, the response was truncated
 			// — typically by a gateway timeout or connection drop.
@@ -128,26 +145,34 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 			for {
 				resp, err := stream.Recv()
 				if errors.Is(err, io.EOF) {
-					// Stream ended — check if we got a proper completion signal.
+					// Stream ended — build final aggregated parts.
+					var finalParts []*genai.Part
+					if reasoningAccum.Len() > 0 {
+						finalParts = append(finalParts, &genai.Part{Text: reasoningAccum.String(), Thought: true})
+					}
+					if textAccum.Len() > 0 {
+						finalParts = append(finalParts, &genai.Part{Text: textAccum.String()})
+					}
+
 					if !finishReasonSeen && textAccum.Len() > 0 {
-						// Emit whatever text we accumulated (so it gets persisted)
+						// Emit whatever we accumulated (so it gets persisted)
 						// then return an error so the caller knows the response is incomplete.
 						yield(&model.LLMResponse{
 							Content: &genai.Content{
 								Role:  "model",
-								Parts: []*genai.Part{{Text: textAccum.String()}},
+								Parts: finalParts,
 							},
 							UsageMetadata: streamUsage,
 						}, nil)
 						yield(nil, fmt.Errorf("LLM stream ended without a finish_reason — the response was likely truncated by a gateway timeout or connection drop"))
 						return
 					}
-					// Normal completion: emit aggregated text response at stream end
-					if textAccum.Len() > 0 {
+					// Normal completion: emit aggregated response at stream end
+					if len(finalParts) > 0 {
 						yield(&model.LLMResponse{
 							Content: &genai.Content{
 								Role:  "model",
-								Parts: []*genai.Part{{Text: textAccum.String()}},
+								Parts: finalParts,
 							},
 							UsageMetadata: streamUsage,
 						}, nil)
@@ -177,6 +202,21 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 					// completed its response normally (not a premature disconnect).
 					if choice.FinishReason != "" {
 						finishReasonSeen = true
+					}
+
+					// Accumulate reasoning_content (DeepSeek thinking mode).
+					// Yield each chunk as a partial Thought part for live display.
+					if choice.Delta.ReasoningContent != "" {
+						reasoningAccum.WriteString(choice.Delta.ReasoningContent)
+						if !yield(&model.LLMResponse{
+							Content: &genai.Content{
+								Role:  "model",
+								Parts: []*genai.Part{{Text: choice.Delta.ReasoningContent, Thought: true}},
+							},
+							Partial: true,
+						}, nil) {
+							return
+						}
 					}
 
 					// Accumulate tool calls
@@ -214,17 +254,25 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 
 						// Emit aggregated text before tool calls (model may
 						// produce a preamble like "Let me check that for you"
-						// before invoking tools).
-						if textAccum.Len() > 0 {
+						// before invoking tools). Include reasoning if present.
+						if textAccum.Len() > 0 || reasoningAccum.Len() > 0 {
+							var preambleParts []*genai.Part
+							if reasoningAccum.Len() > 0 {
+								preambleParts = append(preambleParts, &genai.Part{Text: reasoningAccum.String(), Thought: true})
+							}
+							if textAccum.Len() > 0 {
+								preambleParts = append(preambleParts, &genai.Part{Text: textAccum.String()})
+							}
 							if !yield(&model.LLMResponse{
 								Content: &genai.Content{
 									Role:  "model",
-									Parts: []*genai.Part{{Text: textAccum.String()}},
+									Parts: preambleParts,
 								},
 							}, nil) {
 								return
 							}
 							textAccum.Reset()
+							reasoningAccum.Reset()
 						}
 
 						// Emit all accumulated tool calls
@@ -381,11 +429,19 @@ func (p *Provider) toOpenAIMessages(req *model.LLMRequest) []openai.ChatCompleti
 		} else {
 			// User or Assistant
 			var sb strings.Builder
+			var reasoningSB strings.Builder
 			var toolCalls []openai.ToolCall
 
 			for _, part := range c.Parts {
 				if part.Text != "" {
-					sb.WriteString(part.Text)
+					// Separate reasoning/thought content from regular content.
+					// DeepSeek requires reasoning_content to be passed back as a
+					// separate field on assistant messages.
+					if part.Thought && role == openai.ChatMessageRoleAssistant {
+						reasoningSB.WriteString(part.Text)
+					} else {
+						sb.WriteString(part.Text)
+					}
 				}
 				if part.FunctionCall != nil {
 					// Marshal args to JSON string; use "{}" for nil/empty args
@@ -421,6 +477,9 @@ func (p *Provider) toOpenAIMessages(req *model.LLMRequest) []openai.ChatCompleti
 			msg := openai.ChatCompletionMessage{
 				Role:    role,
 				Content: sb.String(),
+			}
+			if reasoningSB.Len() > 0 {
+				msg.ReasoningContent = reasoningSB.String()
 			}
 			if len(toolCalls) > 0 {
 				msg.ToolCalls = toolCalls
@@ -493,6 +552,7 @@ func mergeConsecutiveSameRole(messages []openai.ChatCompletionMessage) []openai.
 			} else if cur.Content != "" {
 				prev.Content = cur.Content
 			}
+			mergeReasoningContent(prev, cur)
 			continue
 		}
 
@@ -508,6 +568,7 @@ func mergeConsecutiveSameRole(messages []openai.ChatCompletionMessage) []openai.
 					prev.Content = cur.Content
 				}
 			}
+			mergeReasoningContent(prev, cur)
 			prev.ToolCalls = cur.ToolCalls
 			continue
 		}
@@ -522,6 +583,7 @@ func mergeConsecutiveSameRole(messages []openai.ChatCompletionMessage) []openai.
 					prev.Content = cur.Content
 				}
 			}
+			mergeReasoningContent(prev, cur)
 			continue
 		}
 
@@ -529,6 +591,20 @@ func mergeConsecutiveSameRole(messages []openai.ChatCompletionMessage) []openai.
 	}
 
 	return merged
+}
+
+// mergeReasoningContent absorbs cur's ReasoningContent into prev.
+// Used when merging consecutive assistant messages to preserve DeepSeek
+// reasoning_content across message boundaries.
+func mergeReasoningContent(prev *openai.ChatCompletionMessage, cur openai.ChatCompletionMessage) {
+	if cur.ReasoningContent == "" {
+		return
+	}
+	if prev.ReasoningContent != "" {
+		prev.ReasoningContent = prev.ReasoningContent + "\n" + cur.ReasoningContent
+	} else {
+		prev.ReasoningContent = cur.ReasoningContent
+	}
 }
 
 // patchOrphanedToolCalls scans the message history for assistant messages
@@ -611,6 +687,13 @@ func (p *Provider) toLLMResponse(resp openai.ChatCompletionResponse) *model.LLMR
 	choice := resp.Choices[0]
 
 	var parts []*genai.Part
+
+	// Capture reasoning_content (DeepSeek thinking mode) as a Thought part.
+	// Must appear before regular content so session history preserves ordering.
+	if choice.Message.ReasoningContent != "" {
+		parts = append(parts, &genai.Part{Text: choice.Message.ReasoningContent, Thought: true})
+	}
+
 	if choice.Message.Content != "" {
 		parts = append(parts, &genai.Part{Text: choice.Message.Content})
 	}

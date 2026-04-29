@@ -641,8 +641,10 @@ func TestThinkTagFilter_AngleBracketInNormalText(t *testing.T) {
 	}
 }
 
-func TestFilterEventThinkContent_DropsThoughtParts(t *testing.T) {
-	// Parts with Thought=true should be dropped entirely.
+func TestFilterEventThinkContent_PreservesThoughtParts(t *testing.T) {
+	// Parts with Thought=true should be preserved (not dropped) so they
+	// remain in session history for providers like DeepSeek that require
+	// reasoning_content to be sent back in subsequent requests.
 	f := &thinkTagFilter{}
 	event := &session.Event{}
 	event.LLMResponse.Content = &genai.Content{
@@ -653,11 +655,17 @@ func TestFilterEventThinkContent_DropsThoughtParts(t *testing.T) {
 		},
 	}
 	filterEventThinkContent(f, event)
-	if len(event.LLMResponse.Content.Parts) != 1 {
-		t.Fatalf("expected 1 part, got %d", len(event.LLMResponse.Content.Parts))
+	if len(event.LLMResponse.Content.Parts) != 2 {
+		t.Fatalf("expected 2 parts (thought preserved), got %d", len(event.LLMResponse.Content.Parts))
 	}
-	if event.LLMResponse.Content.Parts[0].Text != "visible answer" {
-		t.Errorf("got %q, want %q", event.LLMResponse.Content.Parts[0].Text, "visible answer")
+	if !event.LLMResponse.Content.Parts[0].Thought {
+		t.Error("first part should still be Thought=true")
+	}
+	if event.LLMResponse.Content.Parts[0].Text != "thinking internally" {
+		t.Errorf("thought text: got %q, want %q", event.LLMResponse.Content.Parts[0].Text, "thinking internally")
+	}
+	if event.LLMResponse.Content.Parts[1].Text != "visible answer" {
+		t.Errorf("content text: got %q, want %q", event.LLMResponse.Content.Parts[1].Text, "visible answer")
 	}
 }
 

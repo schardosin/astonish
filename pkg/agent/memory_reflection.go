@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/schardosin/astonish/pkg/memory"
 	"google.golang.org/adk/model"
@@ -175,9 +176,13 @@ func (r *MemoryReflector) Reflect(ctx context.Context, trace *ExecutionTrace, ev
 		},
 	}
 
-	// Make the LLM call (non-streaming)
+	// Make the LLM call (non-streaming). Use a sub-context with timeout so
+	// a slow provider cannot block the caller indefinitely.
+	reflectCtx, reflectCancel := context.WithTimeout(ctx, 45*time.Second)
+	defer reflectCancel()
+
 	var lastResp *model.LLMResponse
-	for resp, err := range r.LLM.GenerateContent(ctx, req, false) {
+	for resp, err := range r.LLM.GenerateContent(reflectCtx, req, false) {
 		if err != nil {
 			slog.Debug("memory reflection LLM error", "component", "memory-reflection", "error", err)
 			return
@@ -331,8 +336,11 @@ func (r *MemoryReflector) validateContent(ctx context.Context, category, existin
 		},
 	}
 
+	valCtx, valCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer valCancel()
+
 	var lastResp *model.LLMResponse
-	for resp, err := range r.LLM.GenerateContent(ctx, req, false) {
+	for resp, err := range r.LLM.GenerateContent(valCtx, req, false) {
 		if err != nil {
 			slog.Debug("memory validation LLM error", "component", "memory-reflection", "error", err)
 			// On error, allow the original content through as a fallback
@@ -345,10 +353,12 @@ func (r *MemoryReflector) validateContent(ctx context.Context, category, existin
 		return proposedContent
 	}
 
-	// Extract text response
+	// Extract text response — skip Thought parts so reasoning-model
+	// chain-of-thought (e.g. DeepSeek reasoning_content) is not mistaken
+	// for the actual validated content.
 	var responseText string
 	for _, part := range lastResp.Content.Parts {
-		if part.Text != "" {
+		if part.Text != "" && !part.Thought {
 			responseText = strings.TrimSpace(part.Text)
 			break
 		}

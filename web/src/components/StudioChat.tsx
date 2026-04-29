@@ -737,6 +737,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 return prev
               })
             }
+            setIsStreaming(false)
             break
 
           case 'subtask_progress': {
@@ -1542,7 +1543,10 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             break
 
           case 'done':
-            // Finalize streaming text
+            // Finalize streaming text and stop the processing indicator.
+            // The SSE stream may stay open briefly (grace period for async
+            // events like session_title), but the user-facing response is
+            // complete — hide the spinner immediately.
             if (streamingTextRef.current) {
               const finalText = streamingTextRef.current
               streamingTextRef.current = ''
@@ -1554,6 +1558,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 return prev
               })
             }
+            setIsStreaming(false)
             break
 
           case 'usage': {

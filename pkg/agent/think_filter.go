@@ -162,7 +162,10 @@ func (f *thinkTagFilter) longestClosingPrefix(s string) int {
 }
 
 // filterEventThinkContent uses the streaming filter to strip think-tag content
-// and also drops parts flagged with the structured Thought field.
+// from event text parts. Parts flagged with the structured Thought field are
+// preserved (not dropped) because providers like DeepSeek require them in
+// session history for subsequent API calls. User-facing display code should
+// check !part.Thought to skip rendering them.
 func filterEventThinkContent(f *thinkTagFilter, event *session.Event) {
 	if event == nil {
 		return
@@ -173,8 +176,12 @@ func filterEventThinkContent(f *thinkTagFilter, event *session.Event) {
 	}
 	cleaned := make([]*genai.Part, 0, len(content.Parts))
 	for _, part := range content.Parts {
-		// Drop parts flagged as chain-of-thought by the provider.
+		// Preserve parts flagged as chain-of-thought by the provider.
+		// These must remain in the event so they are persisted in session
+		// history — DeepSeek V4 requires reasoning_content to be sent
+		// back in subsequent requests.
 		if part.Thought {
+			cleaned = append(cleaned, part)
 			continue
 		}
 		if part.Text != "" {

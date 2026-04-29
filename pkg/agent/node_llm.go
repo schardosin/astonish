@@ -704,12 +704,20 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		// Add credential placeholder substitution callback.
 		// Uses SubstituteAndRestore so the AfterToolCallback can undo the
 		// in-place mutation, keeping placeholders in the session event.
-		var credentialRestore func()
-		var pendingSecretRestore func()
+		// Per-call restore functions keyed by FunctionCallID so parallel
+		// tool calls don't clobber each other's restore closures.
+		var restoreFuncs sync.Map // map[string]func()
 		if a.CredentialStore != nil {
 			store := a.CredentialStore
 			beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
-				credentialRestore = credentials.SubstituteAndRestore(args, store)
+				credRestore := credentials.SubstituteAndRestore(args, store)
+				callID := ctx.FunctionCallID()
+				if prev, loaded := restoreFuncs.Load(callID); loaded {
+					prevFn := prev.(func())
+					restoreFuncs.Store(callID, func() { credRestore(); prevFn() })
+				} else {
+					restoreFuncs.Store(callID, credRestore)
+				}
 				return nil, nil
 			})
 		}
@@ -718,7 +726,14 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		if a.PendingSecrets != nil {
 			vault := a.PendingSecrets
 			beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
-				pendingSecretRestore = vault.SubstituteAndRestore(args)
+				secRestore := vault.SubstituteAndRestore(args)
+				callID := ctx.FunctionCallID()
+				if prev, loaded := restoreFuncs.Load(callID); loaded {
+					prevFn := prev.(func())
+					restoreFuncs.Store(callID, func() { secRestore(); prevFn() })
+				} else {
+					restoreFuncs.Store(callID, secRestore)
+				}
 				return nil, nil
 			})
 		}
@@ -728,13 +743,8 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		innerAfterTool := a.buildAfterToolCallback(node, state, cbBuf)
 		afterToolCallbacks = []llmagent.AfterToolCallback{
 			func(ctx tool.Context, t tool.Tool, args map[string]any, result map[string]any, err error) (map[string]any, error) {
-				if credentialRestore != nil {
-					credentialRestore()
-					credentialRestore = nil
-				}
-				if pendingSecretRestore != nil {
-					pendingSecretRestore()
-					pendingSecretRestore = nil
+				if fn, ok := restoreFuncs.LoadAndDelete(ctx.FunctionCallID()); ok {
+					fn.(func())()
 				}
 				return innerAfterTool(ctx, t, args, result, err)
 			},

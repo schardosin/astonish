@@ -1,9 +1,16 @@
 package openai
 
 import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	openailib "github.com/sashabaranov/go-openai"
+	"google.golang.org/adk/model"
+	"google.golang.org/genai"
 )
 
 func TestMergeConsecutiveSameRole(t *testing.T) {
@@ -477,5 +484,461 @@ func TestPatchOrphanedToolCalls(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestConfigMaxOutputTokensAndTemperatureOverride(t *testing.T) {
+	tests := []struct {
+		name                   string
+		providerMaxTokens      int
+		configMaxOutputTokens  int32
+		configTemperature      *float32
+		expectMaxTokens        int
+		expectTemperatureSet   bool
+		expectTemperatureValue float32
+	}{
+		{
+			name:                  "per-request MaxOutputTokens overrides provider default",
+			providerMaxTokens:     64000,
+			configMaxOutputTokens: 100,
+			expectMaxTokens:       100,
+		},
+		{
+			name:                   "per-request Temperature is applied",
+			providerMaxTokens:      64000,
+			configTemperature:      genai.Ptr(float32(0.3)),
+			expectMaxTokens:        64000, // unchanged
+			expectTemperatureSet:   true,
+			expectTemperatureValue: 0.3,
+		},
+		{
+			name:                   "both overrides applied together",
+			providerMaxTokens:      64000,
+			configMaxOutputTokens:  100,
+			configTemperature:      genai.Ptr(float32(0.3)),
+			expectMaxTokens:        100,
+			expectTemperatureSet:   true,
+			expectTemperatureValue: 0.3,
+		},
+		{
+			name:              "zero MaxOutputTokens does not override",
+			providerMaxTokens: 64000,
+			expectMaxTokens:   64000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capturedBody map[string]any
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				_ = json.Unmarshal(body, &capturedBody)
+
+				w.Header().Set("Content-Type", "application/json")
+				// Minimal valid non-streaming response
+				_, _ = w.Write([]byte(`{
+					"id": "test",
+					"object": "chat.completion",
+					"choices": [{
+						"index": 0,
+						"message": {"role": "assistant", "content": "hello"},
+						"finish_reason": "stop"
+					}],
+					"usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+				}`))
+			}))
+			defer srv.Close()
+
+			config := openailib.DefaultConfig("test-key")
+			config.BaseURL = srv.URL + "/v1"
+			client := openailib.NewClientWithConfig(config)
+
+			p := NewProviderWithMaxTokens(client, "test-model", true, tt.providerMaxTokens)
+
+			req := &model.LLMRequest{
+				Contents: []*genai.Content{
+					genai.NewContentFromText("test", genai.RoleUser),
+				},
+				Config: &genai.GenerateContentConfig{},
+			}
+			if tt.configMaxOutputTokens > 0 {
+				req.Config.MaxOutputTokens = tt.configMaxOutputTokens
+			}
+			if tt.configTemperature != nil {
+				req.Config.Temperature = tt.configTemperature
+			}
+
+			for _, err := range p.GenerateContent(context.Background(), req, false) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			}
+
+			// Verify max_completion_tokens
+			if maxTokens, ok := capturedBody["max_completion_tokens"].(float64); ok {
+				if int(maxTokens) != tt.expectMaxTokens {
+					t.Errorf("max_completion_tokens: got %d, want %d", int(maxTokens), tt.expectMaxTokens)
+				}
+			} else if tt.expectMaxTokens > 0 {
+				t.Errorf("max_completion_tokens not found in request body")
+			}
+
+			// Verify temperature
+			if tt.expectTemperatureSet {
+				if temp, ok := capturedBody["temperature"].(float64); ok {
+					if float32(temp) != tt.expectTemperatureValue {
+						t.Errorf("temperature: got %f, want %f", temp, tt.expectTemperatureValue)
+					}
+				} else {
+					t.Errorf("temperature not found in request body")
+				}
+			}
+		})
+	}
+}
+
+func TestToOpenAIMessages_ReasoningContent(t *testing.T) {
+	p := &Provider{model: "test"}
+
+	// Build a request with an assistant message containing Thought parts
+	// followed by tool calls and their responses. This simulates the
+	// conversation history that DeepSeek V4 produces.
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			// User message
+			{
+				Role:  "user",
+				Parts: []*genai.Part{{Text: "Check my memory usage"}},
+			},
+			// Assistant response with reasoning + tool calls
+			{
+				Role: "model",
+				Parts: []*genai.Part{
+					{Text: "Let me think about this...", Thought: true},
+					{Text: "I'll check that for you."},
+					{FunctionCall: &genai.FunctionCall{
+						Name: "shell_command",
+						Args: map[string]any{"command": "free -m"},
+						ID:   "call_1",
+					}},
+				},
+			},
+			// Tool response
+			{
+				Role: "user",
+				Parts: []*genai.Part{
+					{FunctionResponse: &genai.FunctionResponse{
+						Name:     "shell_command",
+						Response: map[string]any{"result": "Mem: 16384 8192 8192"},
+						ID:       "call_1",
+					}},
+				},
+			},
+		},
+		Config: &genai.GenerateContentConfig{},
+	}
+
+	messages := p.toOpenAIMessages(req)
+
+	// Find the assistant message
+	var assistantMsg *openailib.ChatCompletionMessage
+	for i := range messages {
+		if messages[i].Role == openailib.ChatMessageRoleAssistant {
+			assistantMsg = &messages[i]
+			break
+		}
+	}
+
+	if assistantMsg == nil {
+		t.Fatal("expected an assistant message")
+	}
+
+	// ReasoningContent should contain the thought text
+	if assistantMsg.ReasoningContent != "Let me think about this..." {
+		t.Errorf("ReasoningContent: got %q, want %q", assistantMsg.ReasoningContent, "Let me think about this...")
+	}
+
+	// Content should contain only the non-thought text
+	if assistantMsg.Content != "I'll check that for you." {
+		t.Errorf("Content: got %q, want %q", assistantMsg.Content, "I'll check that for you.")
+	}
+
+	// Should have the tool call
+	if len(assistantMsg.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(assistantMsg.ToolCalls))
+	}
+	if assistantMsg.ToolCalls[0].Function.Name != "shell_command" {
+		t.Errorf("tool call name: got %q, want %q", assistantMsg.ToolCalls[0].Function.Name, "shell_command")
+	}
+}
+
+func TestToOpenAIMessages_ThoughtPartsOnlyForAssistant(t *testing.T) {
+	p := &Provider{model: "test"}
+
+	// User messages with Thought=true should NOT be split into ReasoningContent
+	// (only assistant messages use reasoning_content in the DeepSeek API)
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{
+				Role: "user",
+				Parts: []*genai.Part{
+					{Text: "Some thought", Thought: true},
+					{Text: "Regular text"},
+				},
+			},
+		},
+		Config: &genai.GenerateContentConfig{},
+	}
+
+	messages := p.toOpenAIMessages(req)
+
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+
+	// For user messages, all text should go into Content (Thought flag ignored)
+	if messages[0].Content != "Some thoughtRegular text" {
+		t.Errorf("Content: got %q, want %q", messages[0].Content, "Some thoughtRegular text")
+	}
+	if messages[0].ReasoningContent != "" {
+		t.Errorf("ReasoningContent should be empty for user messages, got %q", messages[0].ReasoningContent)
+	}
+}
+
+func TestToLLMResponse_ReasoningContent(t *testing.T) {
+	p := &Provider{model: "test"}
+
+	resp := openailib.ChatCompletionResponse{
+		Choices: []openailib.ChatCompletionChoice{
+			{
+				Message: openailib.ChatCompletionMessage{
+					Role:             openailib.ChatMessageRoleAssistant,
+					ReasoningContent: "I need to check memory usage first.",
+					Content:          "Let me check your memory usage.",
+				},
+			},
+		},
+		Usage: openailib.Usage{
+			PromptTokens:     10,
+			CompletionTokens: 20,
+			TotalTokens:      30,
+		},
+	}
+
+	llmResp := p.toLLMResponse(resp)
+
+	if llmResp.Content == nil {
+		t.Fatal("expected non-nil content")
+	}
+
+	// Should have 2 parts: thought + regular text
+	if len(llmResp.Content.Parts) != 2 {
+		t.Fatalf("expected 2 parts, got %d", len(llmResp.Content.Parts))
+	}
+
+	// First part: reasoning as Thought
+	if !llmResp.Content.Parts[0].Thought {
+		t.Error("first part should be Thought=true")
+	}
+	if llmResp.Content.Parts[0].Text != "I need to check memory usage first." {
+		t.Errorf("reasoning text: got %q, want %q", llmResp.Content.Parts[0].Text, "I need to check memory usage first.")
+	}
+
+	// Second part: regular content
+	if llmResp.Content.Parts[1].Thought {
+		t.Error("second part should be Thought=false")
+	}
+	if llmResp.Content.Parts[1].Text != "Let me check your memory usage." {
+		t.Errorf("content text: got %q, want %q", llmResp.Content.Parts[1].Text, "Let me check your memory usage.")
+	}
+}
+
+func TestMergeConsecutiveSameRole_ReasoningContent(t *testing.T) {
+	tests := []struct {
+		name            string
+		input           []openailib.ChatCompletionMessage
+		expectLen       int
+		expectReasoning string // expected ReasoningContent on first assistant message
+		expectContent   string // expected Content on first assistant message
+	}{
+		{
+			name: "merge consecutive assistant messages preserves reasoning",
+			input: []openailib.ChatCompletionMessage{
+				{
+					Role:             openailib.ChatMessageRoleAssistant,
+					ReasoningContent: "thinking part 1",
+					Content:          "text part 1",
+				},
+				{
+					Role:             openailib.ChatMessageRoleAssistant,
+					ReasoningContent: "thinking part 2",
+					Content:          "text part 2",
+				},
+			},
+			expectLen:       1,
+			expectReasoning: "thinking part 1\nthinking part 2",
+			expectContent:   "text part 1\ntext part 2",
+		},
+		{
+			name: "merge with tool_calls preserves reasoning (case 2)",
+			input: []openailib.ChatCompletionMessage{
+				{
+					Role:             openailib.ChatMessageRoleAssistant,
+					ReasoningContent: "I should use a tool",
+					Content:          "Let me check",
+				},
+				{
+					Role: openailib.ChatMessageRoleAssistant,
+					ToolCalls: []openailib.ToolCall{
+						{ID: "call_1", Type: openailib.ToolTypeFunction, Function: openailib.FunctionCall{Name: "test", Arguments: "{}"}},
+					},
+				},
+			},
+			expectLen:       1,
+			expectReasoning: "I should use a tool",
+			expectContent:   "Let me check",
+		},
+		{
+			name: "reasoning only on second message",
+			input: []openailib.ChatCompletionMessage{
+				{
+					Role:    openailib.ChatMessageRoleAssistant,
+					Content: "first",
+				},
+				{
+					Role:             openailib.ChatMessageRoleAssistant,
+					ReasoningContent: "added reasoning",
+					Content:          "second",
+				},
+			},
+			expectLen:       1,
+			expectReasoning: "added reasoning",
+			expectContent:   "first\nsecond",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := mergeConsecutiveSameRole(tt.input)
+			if len(result) != tt.expectLen {
+				t.Fatalf("expected %d messages, got %d", tt.expectLen, len(result))
+			}
+			if result[0].ReasoningContent != tt.expectReasoning {
+				t.Errorf("ReasoningContent: got %q, want %q", result[0].ReasoningContent, tt.expectReasoning)
+			}
+			if result[0].Content != tt.expectContent {
+				t.Errorf("Content: got %q, want %q", result[0].Content, tt.expectContent)
+			}
+		})
+	}
+}
+
+func TestNonStreamingReasoningRoundTrip(t *testing.T) {
+	// End-to-end test: verify that reasoning_content from a non-streaming
+	// response is captured and sent back in subsequent requests.
+	var capturedBodies []map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var reqBody map[string]any
+		_ = json.Unmarshal(body, &reqBody)
+		capturedBodies = append(capturedBodies, reqBody)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "test",
+			"object": "chat.completion",
+			"choices": [{
+				"index": 0,
+				"message": {
+					"role": "assistant",
+					"reasoning_content": "Let me think about the title",
+					"content": "Memory Usage Check"
+				},
+				"finish_reason": "stop"
+			}],
+			"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+		}`))
+	}))
+	defer srv.Close()
+
+	config := openailib.DefaultConfig("test-key")
+	config.BaseURL = srv.URL + "/v1"
+	client := openailib.NewClientWithConfig(config)
+	p := NewProvider(client, "test-model", true)
+
+	// First request: get a response with reasoning_content
+	req1 := &model.LLMRequest{
+		Contents: []*genai.Content{
+			genai.NewContentFromText("test", genai.RoleUser),
+		},
+		Config: &genai.GenerateContentConfig{},
+	}
+
+	var firstResp *model.LLMResponse
+	for resp, err := range p.GenerateContent(context.Background(), req1, false) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		firstResp = resp
+	}
+
+	// Verify the response has a Thought part
+	if firstResp == nil || firstResp.Content == nil {
+		t.Fatal("expected non-nil response with content")
+	}
+	if len(firstResp.Content.Parts) != 2 {
+		t.Fatalf("expected 2 parts (thought + text), got %d", len(firstResp.Content.Parts))
+	}
+	if !firstResp.Content.Parts[0].Thought {
+		t.Error("first part should be Thought=true")
+	}
+
+	// Second request: send the response back as conversation history
+	req2 := &model.LLMRequest{
+		Contents: []*genai.Content{
+			genai.NewContentFromText("test", genai.RoleUser),
+			firstResp.Content, // assistant response with Thought part
+			genai.NewContentFromText("follow up", genai.RoleUser),
+		},
+		Config: &genai.GenerateContentConfig{},
+	}
+
+	for _, err := range p.GenerateContent(context.Background(), req2, false) {
+		if err != nil {
+			t.Fatalf("unexpected error on second request: %v", err)
+		}
+	}
+
+	// Verify the second request includes reasoning_content
+	if len(capturedBodies) < 2 {
+		t.Fatalf("expected 2 requests, got %d", len(capturedBodies))
+	}
+
+	messages, ok := capturedBodies[1]["messages"].([]any)
+	if !ok {
+		t.Fatal("expected messages array in second request")
+	}
+
+	// Find the assistant message in the second request
+	var assistantFound bool
+	for _, msg := range messages {
+		m, ok := msg.(map[string]any)
+		if !ok {
+			continue
+		}
+		if m["role"] == "assistant" {
+			assistantFound = true
+			if m["reasoning_content"] != "Let me think about the title" {
+				t.Errorf("reasoning_content: got %q, want %q", m["reasoning_content"], "Let me think about the title")
+			}
+			if m["content"] != "Memory Usage Check" {
+				t.Errorf("content: got %q, want %q", m["content"], "Memory Usage Check")
+			}
+		}
+	}
+	if !assistantFound {
+		t.Error("assistant message not found in second request")
 	}
 }

@@ -50,9 +50,16 @@ type ChatRunner struct {
 	// Completion state
 	done   bool
 	doneMu sync.RWMutex
+
+	// Grace period before closing subscriber channels after "done".
+	// Allows late-arriving async events (e.g., session_title) to
+	// reach the frontend. Zero means close immediately.
+	closeGracePeriod time.Duration
 }
 
 // newChatRunner creates a new ChatRunner with a background context.
+// closeGracePeriod defaults to 0 (immediate close). Production callers
+// should set it to allow late-arriving async events (e.g., session_title).
 func newChatRunner(sessionID string, isNew bool) *ChatRunner {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &ChatRunner{
@@ -82,9 +89,17 @@ func (cr *ChatRunner) Run(
 		cr.done = true
 		cr.doneMu.Unlock()
 
-		// Send done event and close all subscriber channels
+		// Send the done event immediately so the frontend can finalize the
+		// response and hide the processing spinner. Subscriber channels stay
+		// open for a short grace period so that late-arriving async events
+		// (e.g., session_title from the title-generation goroutine) can still
+		// reach the browser before the SSE stream closes.
 		cr.emitEvent("done", map[string]any{"done": true})
-		cr.closeSubscribers()
+		if cr.closeGracePeriod > 0 {
+			time.AfterFunc(cr.closeGracePeriod, func() { cr.closeSubscribers() })
+		} else {
+			cr.closeSubscribers()
+		}
 	}()
 
 	// Send session info first
@@ -281,7 +296,9 @@ func (cr *ChatRunner) Run(
 		// Process content parts
 		if event.LLMResponse.Content != nil {
 			for _, part := range event.LLMResponse.Content.Parts {
-				if part.Text != "" {
+				// Skip reasoning/thought parts — they are preserved in session
+				// history for providers like DeepSeek but should not be displayed.
+				if part.Text != "" && !part.Thought {
 					if event.LLMResponse.Partial {
 						seenPartialText = true
 						cr.emitEvent("text", map[string]any{"text": part.Text})
@@ -380,7 +397,7 @@ func (cr *ChatRunner) Run(
 			}
 			if event.LLMResponse.Content != nil {
 				for _, part := range event.LLMResponse.Content.Parts {
-					if part.Text != "" {
+					if part.Text != "" && !part.Thought {
 						if event.LLMResponse.Partial {
 							seenPartialText = true
 							cr.emitEvent("text", map[string]any{"text": part.Text})
@@ -439,11 +456,14 @@ func (cr *ChatRunner) Run(
 	}
 
 	// Generate title for new sessions after first exchange.
-	// This runs synchronously (before the deferred done/closeSubscribers) so the
-	// session_title SSE event reaches the browser while the connection is still open.
+	// Runs asynchronously so the deferred done/closeSubscribers fires immediately
+	// and the UI is not blocked waiting for a second LLM call. If the goroutine
+	// completes before closeSubscribers, the session_title SSE event reaches the
+	// browser in real time. If it completes after, the title is still persisted
+	// to disk and the UI picks it up via loadSessions() polling (1s after stream close).
 	if cr.IsNew && msg != "" {
 		if fileStore != nil {
-			generateStudioSessionTitle(llm, fileStore, cr.SessionID, msg, func(title string) {
+			go generateStudioSessionTitle(llm, fileStore, cr.SessionID, msg, func(title string) {
 				cr.emitEvent("session_title", map[string]any{"title": title})
 			})
 		}

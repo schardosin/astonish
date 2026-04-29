@@ -488,3 +488,143 @@ func (m *mockReflectionLLM) GenerateContent(_ context.Context, _ *model.LLMReque
 		}, nil)
 	}
 }
+
+// --- validateContent Thought-filtering tests ---
+
+// responseLLM returns a fixed set of parts from GenerateContent.
+type responseLLM struct {
+	parts []*genai.Part
+}
+
+func (r *responseLLM) Name() string { return "response-llm" }
+func (r *responseLLM) GenerateContent(_ context.Context, _ *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		yield(&model.LLMResponse{
+			Content: &genai.Content{
+				Parts: r.parts,
+				Role:  "model",
+			},
+		}, nil)
+	}
+}
+
+func TestValidateContent_SkipsThoughtParts(t *testing.T) {
+	// Simulate DeepSeek returning reasoning_content (Thought) before actual content.
+	reflector := &MemoryReflector{
+		LLM: &responseLLM{
+			parts: []*genai.Part{
+				{Text: "Let me analyze each line carefully...\nLine 1 is new because...", Thought: true},
+				{Text: "- New fact: server resolves to 192.168.1.134"},
+			},
+		},
+	}
+
+	result := reflector.validateContent(context.Background(), "Test Section",
+		"- Existing fact", "- New fact: server resolves to 192.168.1.134")
+
+	if result != "- New fact: server resolves to 192.168.1.134" {
+		t.Errorf("validateContent should skip Thought part and return actual content, got %q", result)
+	}
+}
+
+func TestValidateContent_ThoughtOnly_ReturnsEmpty(t *testing.T) {
+	// When the model returns ONLY a Thought part (no actual content), we should
+	// get empty string (meaning "all content was duplicate" per the NONE path).
+	reflector := &MemoryReflector{
+		LLM: &responseLLM{
+			parts: []*genai.Part{
+				{Text: "After analysis, everything is already present.", Thought: true},
+			},
+		},
+	}
+
+	result := reflector.validateContent(context.Background(), "Test Section",
+		"- Existing fact", "- Same fact rephrased")
+
+	if result != "" {
+		t.Errorf("expected empty string when only Thought parts present, got %q", result)
+	}
+}
+
+func TestValidateContent_NONE_Response(t *testing.T) {
+	reflector := &MemoryReflector{
+		LLM: &responseLLM{
+			parts: []*genai.Part{{Text: "NONE"}},
+		},
+	}
+
+	result := reflector.validateContent(context.Background(), "Test Section",
+		"- Existing fact", "- Existing fact rephrased")
+
+	if result != "" {
+		t.Errorf("expected empty string for NONE response, got %q", result)
+	}
+}
+
+// --- Reflection timeout tests ---
+
+// hangingLLM blocks until the context is cancelled.
+type hangingLLM struct{}
+
+func (h *hangingLLM) Name() string { return "hanging-llm" }
+func (h *hangingLLM) GenerateContent(ctx context.Context, _ *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		<-ctx.Done()
+		yield(nil, ctx.Err())
+	}
+}
+
+func TestReflect_RespectsTimeout(t *testing.T) {
+	reflector := &MemoryReflector{
+		LLM:           &hangingLLM{},
+		MemoryManager: testMemoryManager(t),
+	}
+
+	trace := NewExecutionTrace("test")
+	trace.RecordStep("shell_command", nil, nil, nil)
+	trace.Finalize()
+
+	// The Reflect method now uses a 45s internal timeout. We use a short
+	// parent context to verify it returns promptly on cancellation.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		reflector.Reflect(ctx, trace, nil)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Good — Reflect returned within the timeout
+	case <-time.After(5 * time.Second):
+		t.Fatal("Reflect did not return within 5s — timeout mechanism is broken")
+	}
+}
+
+func TestValidateContent_RespectsTimeout(t *testing.T) {
+	reflector := &MemoryReflector{
+		LLM: &hangingLLM{},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	done := make(chan struct{})
+	var result string
+	go func() {
+		result = reflector.validateContent(ctx, "Test Section", "existing", "proposed")
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// On error/timeout, validateContent returns the proposed content as fallback
+		if result != "proposed" {
+			t.Errorf("expected proposed content as fallback on timeout, got %q", result)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("validateContent did not return within 5s — timeout mechanism is broken")
+	}
+}

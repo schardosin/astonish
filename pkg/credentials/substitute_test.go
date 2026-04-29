@@ -1,6 +1,9 @@
 package credentials
 
 import (
+	"runtime"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -247,5 +250,90 @@ func TestSubstituteAndRestore_RestoreIdempotent(t *testing.T) {
 
 	if args["input"] != "{{CREDENTIAL:x:password}}" {
 		t.Errorf("double restore should still have placeholder, got %q", args["input"])
+	}
+}
+
+// TestSubstituteAndRestore_ParallelCalls verifies that using per-call restores
+// (as opposed to a shared variable) correctly handles concurrent tool calls.
+// This test reproduces the race condition that occurred when ADK dispatched
+// parallel tool calls — a shared credentialRestore variable could be overwritten
+// by a concurrent goroutine, causing placeholders to leak into tool execution.
+func TestSubstituteAndRestore_ParallelCalls(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	store.Set("proxmox", &Credential{Type: CredAPIKey, Header: "Authorization", Value: "PVEAPIToken=root@pam!astonish=secret123"})
+
+	// Simulate two parallel tool calls — one with a credential placeholder,
+	// one without. This is the exact pattern from session 1b919508 where
+	// search_flows + shell_command ran in parallel.
+	const iterations = 100
+	for i := 0; i < iterations; i++ {
+		var restoreFuncs sync.Map
+
+		argsWithCred := map[string]any{
+			"command": `curl -sk -H "Authorization: {{CREDENTIAL:proxmox:value}}" "https://proxmox.local/api2/json/status"`,
+		}
+		argsNoCred := map[string]any{
+			"query": "proxmox memory",
+		}
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		// Goroutine 1: tool with credential placeholder (like shell_command)
+		go func() {
+			defer wg.Done()
+			callID := "call-with-cred"
+			restore := SubstituteAndRestore(argsWithCred, store)
+			restoreFuncs.Store(callID, restore)
+
+			// Verify substitution happened (real secret visible)
+			cmd := argsWithCred["command"].(string)
+			if ContainsPlaceholder(cmd) {
+				t.Errorf("iteration %d: credential not substituted in goroutine 1, got %q", i, cmd)
+			}
+			if !strings.Contains(cmd, "PVEAPIToken=root@pam!astonish=secret123") {
+				t.Errorf("iteration %d: expected real token in command, got %q", i, cmd)
+			}
+
+			// Simulate tool execution delay
+			runtime.Gosched()
+
+			// Restore
+			if fn, ok := restoreFuncs.LoadAndDelete(callID); ok {
+				fn.(func())()
+			}
+		}()
+
+		// Goroutine 2: tool without credential placeholder (like search_flows)
+		go func() {
+			defer wg.Done()
+			callID := "call-no-cred"
+			restore := SubstituteAndRestore(argsNoCred, store)
+			restoreFuncs.Store(callID, restore)
+
+			// This should be a no-op restore
+			runtime.Gosched()
+
+			if fn, ok := restoreFuncs.LoadAndDelete(callID); ok {
+				fn.(func())()
+			}
+		}()
+
+		wg.Wait()
+
+		// After both goroutines complete and restore, the credential args should have
+		// the placeholder back, not the real secret.
+		cmd := argsWithCred["command"].(string)
+		if !ContainsPlaceholder(cmd) {
+			t.Fatalf("iteration %d: placeholder not restored after parallel calls, got %q", i, cmd)
+		}
+		if strings.Contains(cmd, "secret123") {
+			t.Fatalf("iteration %d: real secret leaked into restored args", i)
+		}
 	}
 }

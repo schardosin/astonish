@@ -719,14 +719,16 @@ func generateStudioSessionTitle(llm model.LLM, store *persistentsession.FileStor
 	}
 
 	var title string
-	for resp, err := range llm.GenerateContent(ctx, req, false) {
+	for resp, err := range llm.GenerateContent(ctx, req, true) {
 		if err != nil {
 			slog.Warn("session title LLM error", "session_id", sessionID, "error", err)
 			return
 		}
 		if resp.Content != nil {
 			for _, part := range resp.Content.Parts {
-				title += part.Text
+				if part.Text != "" && !part.Thought {
+					title += part.Text
+				}
 			}
 		}
 	}

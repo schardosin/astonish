@@ -51,8 +51,8 @@ sequenceDiagram
     Backend-->>connectChat: SSE: event:text (summary chunks)
     Backend-->>connectChat: SSE: event:done
 
-    StudioChat->>StudioChat: isFinalResult heuristic → ResultCard
-    StudioChat->>User: Rendered: ResultCard + EmbeddedFileViewer + Files button
+    StudioChat->>StudioChat: Last agent message has artifacts →<br/>EmbeddedFileViewer inline + Files button
+    StudioChat->>User: Rendered: Agent bubble + EmbeddedFileViewer + Files button
 ```
 
 ## SSE Transport Layer
@@ -160,7 +160,7 @@ graph TD
     end
 
     subgraph "Message Types (React State)"
-        M1 --> C1["ResultCard (isFinalResult)<br/>or ReactMarkdown bubble"]
+        M1 --> C1["ReactMarkdown bubble<br/>(+ EmbeddedFileViewer if artifacts)"]
         M2 --> C2[renderToolCard]
         M3 --> C2
         M4 --> C3[ArtifactCard]
@@ -176,7 +176,7 @@ graph TD
 | Message Type | Component | Notes |
 |-------------|-----------|-------|
 | `user` | Inline chat bubble | "You" label, plain text |
-| `agent` | `ReactMarkdown` bubble **or** `ResultCard` | `isFinalResult` heuristic selects ResultCard |
+| `agent` | `ReactMarkdown` bubble + `EmbeddedFileViewer` | Last agent message renders embedded file viewers when artifacts exist |
 | `tool_call` | `renderToolCard()` | Collapsible tool invocation card |
 | `tool_result` | `renderToolCard()` | Collapsible tool response card |
 | `browser_handoff` | `BrowserView` | VNC proxy + page info |
@@ -192,7 +192,7 @@ graph TD
 | `fleet_message` | Fleet chat bubble | Agent-colored markdown bubble |
 | `system` | System info card | Info icon + markdown |
 | `retry` | Orange retry badge | Attempt counter |
-| `artifact` | `ArtifactCard` | File notification (suppressed when embedded in ResultCard) |
+| `artifact` | `ArtifactCard` | File notification (suppressed when embedded in last agent bubble) |
 | `app_preview` | `AppPreviewCard` | Sandboxed iframe with live React preview |
 | `distill_preview` | `DistillPreviewCard` | Flow YAML preview with save button |
 | `distill_saved` | Saved confirmation card | File path + copy button |
@@ -200,7 +200,7 @@ graph TD
 
 ## The Report Pipeline
 
-Reports are the most complex rendering path because they involve multiple events, a heuristic, and three export formats. This pipeline was carefully designed -- **do not change it without understanding all the moving parts**.
+Reports are rendered inline inside the last agent message bubble using `EmbeddedFileViewer`. There is no separate "ResultCard" wrapper -- artifacts appear directly below the agent's summary text.
 
 ### How it works
 
@@ -222,37 +222,14 @@ sequenceDiagram
     Backend->>Frontend: SSE: text (summary chunks)
     Backend->>Frontend: SSE: done
 
-    Frontend->>Frontend: isFinalResult heuristic evaluates:<br/>✓ sessionArtifacts.length > 0<br/>✓ last agent message<br/>✓ tool activity before it<br/>✓ not streaming
-
-    Frontend->>Frontend: Render ResultCard<br/>→ Summary text (ReactMarkdown)<br/>→ EmbeddedFileViewer (fetches full report)<br/>→ Download: Markdown / DOCX / PDF<br/>→ SourceCitations (if web search was used)
+    Frontend->>Frontend: Last agent message + artifacts exist →<br/>Render EmbeddedFileViewer(s) below summary text
 ```
-
-### The `isFinalResult` heuristic
-
-This heuristic determines whether an `agent` message should render as a plain markdown bubble or as a `ResultCard` with embedded file viewers:
-
-```typescript
-const isFinalResult = !isStreaming &&
-  !(msg as AgentMessage)._streaming &&
-  (msg.content.length > 500 || sessionArtifacts.length > 0) &&
-  !msg.content.includes('```astonish-app') &&
-  !messages.slice(index + 1).some(m => m.type === 'agent') &&
-  messages.slice(0, index).some(m =>
-    m.type === 'tool_call' || m.type === 'tool_result' ||
-    m.type === 'subtask_execution' || m.type === 'fleet_execution'
-  )
-```
-
-Conditions:
-1. **Not streaming** -- both the session and the message must be finalized
-2. **Content length > 500 OR artifacts exist** -- short summaries trigger ResultCard when files were created
-3. **No `astonish-app` fence** -- app fences go through the AppCodeIndicator path
-4. **Last agent message** -- no later agent messages in the list
-5. **Tool activity before it** -- must have tool_call, tool_result, subtask, or fleet activity preceding
 
 ### The `embeddedArtifactPaths` memo
 
-When `isFinalResult` is true, the `embeddedArtifactPaths` set is populated with all session artifact paths. This suppresses the inline `ArtifactCard` for those files, since they're already shown inside the ResultCard's `EmbeddedFileViewer`. **This memo must mirror the `isFinalResult` logic exactly** -- if they diverge, artifacts either render twice or not at all.
+When the session is done streaming and has artifacts, the `embeddedArtifactPaths` set is populated with all session artifact paths. This suppresses the inline `ArtifactCard` for those files, since they're already shown as `EmbeddedFileViewer`s inside the last agent message bubble.
+
+The logic is simple: if `!isStreaming` and `sessionArtifacts.length > 0`, find the last non-streaming agent message and embed all artifact paths.
 
 ### Export pipeline
 
@@ -271,7 +248,7 @@ This was tested and the inline fence approach (`astonish-report` code fence, sim
 1. **No file on disk** -- the Files panel requires real files served by the artifact API. Without `write_file`, there's no file to serve, no artifact event, no Files button.
 2. **No `EmbeddedFileViewer`** -- the `EmbeddedFileViewer` fetches file content from `/api/studio/artifacts`. Without a persisted file, it has nothing to fetch.
 3. **No PDF/DOCX export** -- the PDF endpoint reads the markdown file from disk (or sandbox/JSONL). Without `write_file`, there's no file to convert.
-4. **Dual rendering** -- the agent message still contains the raw fence text, rendering as a code-like collapsible block alongside the intended ResultCard. Stripping the fence from the agent message is fragile.
+4. **Dual rendering** -- the agent message still contains the raw fence text, rendering as a code-like collapsible block. Stripping the fence from the agent message is fragile.
 
 **Rule: Reports always use `write_file`. The LLM saves the full report to disk, then writes a concise summary in the chat.**
 
@@ -315,7 +292,7 @@ graph LR
 
 This is a **frontend heuristic** (not a backend event). The function `collectSourceUrls(messages, agentIndex)` walks backward from the agent message, finds `tool_result` messages from web search tools (matched by `WEB_SEARCH_PATTERNS`), and extracts URLs using a regex. URLs are deduplicated and filtered (no localhost, no API endpoints).
 
-`SourceCitations` renders below the `ResultCard` when `isFinalResult` is true, and below the regular agent bubble when the agent message has source URLs.
+`SourceCitations` renders below every agent message bubble that has source URLs.
 
 ## Adding a New SSE Event Type
 
@@ -416,8 +393,8 @@ These rules were established through bugs and fixes. Violating them will break t
 ### Report rendering
 
 1. **Reports must use `write_file`** -- The system prompt instructs the LLM to save reports to disk via `write_file`, then present a concise summary inline. Never use inline fences for reports.
-2. **`isFinalResult` triggers `ResultCard`** when `sessionArtifacts.length > 0` OR `content.length > 500`, plus the last-agent and tool-activity-before conditions.
-3. **`embeddedArtifactPaths` must mirror `isFinalResult`** -- They share the same detection logic to prevent duplicate artifact cards.
+2. **Artifacts render as `EmbeddedFileViewer`** inside the last agent message bubble when `sessionArtifacts.length > 0` and the session is done streaming.
+3. **`embeddedArtifactPaths` suppresses inline `ArtifactCard`s** for files already shown as embedded viewers in the agent bubble.
 
 ### Event handling
 
@@ -426,7 +403,7 @@ These rules were established through bugs and fixes. Violating them will break t
 
 ### Frontend heuristics vs backend events
 
-6. **Prefer backend events for new features** -- Frontend heuristics (like `isFinalResult`, `collectSourceUrls`) exist for legacy reasons where the backend doesn't emit a dedicated event. For new features, emit a backend event rather than adding a frontend heuristic.
+6. **Prefer backend events for new features** -- Frontend heuristics (like `collectSourceUrls`) exist for legacy reasons where the backend doesn't emit a dedicated event. For new features, emit a backend event rather than adding a frontend heuristic.
 7. **The `astonish-app` streaming interceptor is app-only** -- Do not generalize the fence regex to match other `astonish-*` patterns without implementing the complete pipeline (backend detection → SSE event → frontend handler → component rendering).
 
 ### Export
@@ -458,7 +435,7 @@ These rules were established through bugs and fixes. Violating them will break t
 | `web/src/components/StudioChat.tsx` | Main component -- SSE handlers, state, render loop |
 | `web/src/components/chat/chatTypes.ts` | Message type interfaces and ChatMsg union type |
 | `web/src/api/studioChat.ts` | `connectChat()`, `connectChatStream()`, artifact APIs |
-| `web/src/components/chat/ResultCard.tsx` | Report rendering with EmbeddedFileViewer, export |
+| `web/src/components/chat/EmbeddedFileViewer.tsx` | Inline file viewer with markdown rendering, download/export |
 | `web/src/components/chat/AppPreviewCard.tsx` | Sandboxed React preview in iframe |
 | `web/src/components/chat/AppCodeIndicator.tsx` | Streaming progress for app generation |
 | `web/src/components/chat/FilePanel.tsx` | Full-screen file viewer overlay |

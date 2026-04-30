@@ -701,7 +701,7 @@ func fleetEventsToMessages(events []*session.Event) []FleetMessageSummary {
 // The optional onTitle callback is invoked with the generated title so callers
 // can push a real-time SSE event to connected browsers.
 func generateStudioSessionTitle(llm model.LLM, store *persistentsession.FileStore, sessionID, userMessage string, onTitle func(string)) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	prompt := fmt.Sprintf(
@@ -719,16 +719,17 @@ func generateStudioSessionTitle(llm model.LLM, store *persistentsession.FileStor
 	}
 
 	var title string
-	for resp, err := range llm.GenerateContent(ctx, req, true) {
+	for resp, err := range llm.GenerateContent(ctx, req, false) {
 		if err != nil {
 			slog.Warn("session title LLM error", "session_id", sessionID, "error", err)
 			return
 		}
-		if resp.Content != nil {
-			for _, part := range resp.Content.Parts {
-				if part.Text != "" && !part.Thought {
-					title += part.Text
-				}
+		if resp.Content == nil {
+			continue
+		}
+		for _, part := range resp.Content.Parts {
+			if part.Text != "" && !part.Thought {
+				title += part.Text
 			}
 		}
 	}

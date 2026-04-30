@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/sashabaranov/go-openai"
 	"github.com/schardosin/astonish/pkg/provider/llmerror"
@@ -23,6 +24,13 @@ type Provider struct {
 	model               string
 	supportsJSONMode    bool
 	maxCompletionTokens int // If > 0, sets max_completion_tokens in the request
+
+	// thinkingMode is set to 1 (atomically) the first time we observe
+	// reasoning_content in a model response. Once set it never resets.
+	// Used by patchMissingReasoningContent to know whether the model
+	// requires reasoning_content on assistant messages with tool_calls,
+	// even when the conversation history has no reasoning yet (first-turn).
+	thinkingMode atomic.Bool
 }
 
 // NewProvider creates a new OpenAI provider.
@@ -208,6 +216,7 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 					// Accumulate reasoning_content (DeepSeek thinking mode).
 					// Yield each chunk as a partial Thought part for live display.
 					if choice.Delta.ReasoningContent != "" {
+						p.thinkingMode.Store(true)
 						reasoningAccum.WriteString(choice.Delta.ReasoningContent)
 						if !yield(&model.LLMResponse{
 							Content: &genai.Content{
@@ -503,13 +512,12 @@ func (p *Provider) toOpenAIMessages(req *model.LLMRequest) []openai.ChatCompleti
 	// persisting a result to the session history.
 	messages = patchOrphanedToolCalls(messages)
 
-	// Post-process: fix corrupted thinking-mode history. If the conversation
-	// contains any reasoning_content (indicating a thinking model like DeepSeek),
-	// check for assistant messages that have tool_calls but missing reasoning_content.
-	// This happens when session history was built before the Thought-preservation
-	// fix. DeepSeek rejects these with a 400 error. We strip the tool_calls and
-	// their corresponding tool responses to degrade gracefully.
-	messages = stripCorruptedThinkingToolCalls(messages)
+	// Post-process: fix thinking-mode history. DeepSeek requires
+	// reasoning_content on every assistant message that contains tool_calls.
+	// If the reasoning was lost (stream interruption, pre-fix sessions,
+	// model skipped thinking, etc.) inject a minimal placeholder so the
+	// API doesn't reject the request with a 400 error.
+	messages = patchMissingReasoningContent(messages, p.thinkingMode.Load())
 	// Post-process: ensure conversation doesn't end with a tool message.
 	// Some OpenAI-compatible providers (e.g. kimi-k2.5) reject requests
 	// where the final message has role "tool". The standard OpenAI flow
@@ -688,71 +696,56 @@ func ensureNotEndingWithTool(messages []openai.ChatCompletionMessage) []openai.C
 	return messages
 }
 
-// stripCorruptedThinkingToolCalls handles corrupted session history from thinking
-// models (e.g. DeepSeek v4). When thinking mode is active, assistant messages
-// that contain tool_calls MUST include reasoning_content. Session history built
-// before the Thought-preservation fix has assistant messages with tool_calls but
-// no reasoning_content — DeepSeek rejects these with HTTP 400.
+// patchMissingReasoningContent ensures every assistant message with tool_calls
+// in a thinking-mode conversation has reasoning_content. DeepSeek requires
+// reasoning_content on assistant messages that contain tool_calls. If reasoning
+// was lost (stream interruption, pre-fix sessions, model skipped thinking,
+// preamble event not persisted, filter bug, etc.) inject a minimal placeholder.
 //
-// Strategy: if the conversation contains any reasoning_content (indicating a
-// thinking model), find assistant messages with tool_calls but missing
-// reasoning_content. Strip the tool_calls from those messages and remove the
-// corresponding tool responses. The agent loses historical tool context but
-// avoids a fatal API error.
-func stripCorruptedThinkingToolCalls(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
-	// Quick check: is this a thinking-mode conversation?
-	hasThinking := false
-	for _, msg := range messages {
-		if msg.ReasoningContent != "" {
-			hasThinking = true
-			break
+// providerThinkingMode is true when the provider has already observed
+// reasoning_content in any response during this session — this handles the
+// first-turn edge case where the conversation history has no reasoning yet
+// but the model is known to be a thinking model.
+//
+// As a fallback, the function also scans conversation history for any
+// existing reasoning_content (covers cases where the provider instance
+// was recreated, e.g. after a daemon restart mid-session).
+func patchMissingReasoningContent(messages []openai.ChatCompletionMessage, providerThinkingMode bool) []openai.ChatCompletionMessage {
+	isThinking := providerThinkingMode
+	if !isThinking {
+		// Fallback: scan conversation history.
+		for _, msg := range messages {
+			if msg.ReasoningContent != "" {
+				isThinking = true
+				break
+			}
 		}
 	}
-	if !hasThinking {
-		return messages // not a thinking model, nothing to fix
+	if !isThinking {
+		return messages
 	}
 
-	// Collect tool_call IDs from corrupted assistant messages (those with
-	// tool_calls but no reasoning_content).
-	corruptedIDs := make(map[string]bool)
+	patched := 0
 	for i := range messages {
 		msg := &messages[i]
 		if msg.Role != openai.ChatMessageRoleAssistant || len(msg.ToolCalls) == 0 {
 			continue
 		}
 		if msg.ReasoningContent != "" {
-			continue // has reasoning, not corrupted
+			continue // already has reasoning
 		}
-		// This assistant message has tool_calls but no reasoning_content.
-		// Mark its tool_call IDs for removal.
-		for _, tc := range msg.ToolCalls {
-			corruptedIDs[tc.ID] = true
-		}
-		// Strip the tool_calls from this message.
-		msg.ToolCalls = nil
-		slog.Debug("stripped corrupted tool_calls from thinking-mode assistant message",
+		// Inject a minimal placeholder so DeepSeek doesn't reject the request.
+		msg.ReasoningContent = "."
+		patched++
+		slog.Debug("patched missing reasoning_content on assistant tool_calls message",
 			"component", "openai-provider", "content_preview", truncateForLog(msg.Content, 80))
 	}
 
-	if len(corruptedIDs) == 0 {
-		return messages
+	if patched > 0 {
+		slog.Debug("patched thinking-mode history",
+			"component", "openai-provider", "patched_messages", patched)
 	}
-
-	// Remove tool responses that matched the stripped tool_calls.
-	result := make([]openai.ChatCompletionMessage, 0, len(messages))
-	for _, msg := range messages {
-		if msg.Role == openai.ChatMessageRoleTool && corruptedIDs[msg.ToolCallID] {
-			continue // drop orphaned tool response
-		}
-		result = append(result, msg)
-	}
-
-	slog.Debug("cleaned corrupted thinking-mode history",
-		"component", "openai-provider",
-		"stripped_tool_calls", len(corruptedIDs),
-		"messages_before", len(messages),
-		"messages_after", len(result))
-	return result
+	return messages
 }
 
 // truncateForLog shortens a string for debug log output.
@@ -774,6 +767,7 @@ func (p *Provider) toLLMResponse(resp openai.ChatCompletionResponse) *model.LLMR
 	// Capture reasoning_content (DeepSeek thinking mode) as a Thought part.
 	// Must appear before regular content so session history preserves ordering.
 	if choice.Message.ReasoningContent != "" {
+		p.thinkingMode.Store(true)
 		parts = append(parts, &genai.Part{Text: choice.Message.ReasoningContent, Thought: true})
 	}
 

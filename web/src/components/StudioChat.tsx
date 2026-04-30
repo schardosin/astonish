@@ -25,7 +25,7 @@ import ArtifactCard from './chat/ArtifactCard'
 import DistillPreviewCard from './chat/DistillPreviewCard'
 import AppPreviewCard from './chat/AppPreviewCard'
 import AppCodeIndicator from './chat/AppCodeIndicator'
-import ResultCard from './chat/ResultCard'
+import EmbeddedFileViewer from './chat/EmbeddedFileViewer'
 
 // Extended ChatSession with optional fleet fields coming from the sidebar
 interface SidebarSession extends ChatSession {
@@ -237,30 +237,21 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     { cmd: '/drill-add', desc: 'Add new drills to an existing suite' },
   ], [])
 
-  // Pre-compute which artifact paths should be embedded inside the ResultCard
-  // (the final "Response" card) instead of rendered as inline ArtifactCards.
-  // When the session has a final-result message AND artifacts, all turn artifacts
-  // are shown embedded in the ResultCard, and their inline cards are suppressed.
+  // Pre-compute which artifact paths should be rendered as embedded file viewers
+  // inside the last agent message bubble instead of as standalone inline ArtifactCards.
+  // When the session is done streaming and has artifacts, the last agent message shows
+  // EmbeddedFileViewers and the corresponding inline ArtifactCards are suppressed.
   const embeddedArtifactPaths = useMemo(() => {
     const paths = new Set<string>()
     if (isStreaming || sessionArtifacts.length === 0) return paths
-    // Check if there's a final result message (same logic as in the render)
-    let hasFinalResult = false
+    // Find the last agent message
     for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i]
-      if (m.type === 'agent' && !(m as AgentMessage)._streaming && (m.content.length > 500 || sessionArtifacts.length > 0)) {
-        const hasLaterAgent = messages.slice(i + 1).some(x => x.type === 'agent')
-        const hasToolBefore = messages.slice(0, i).some(x =>
-          x.type === 'tool_call' || x.type === 'tool_result' ||
-          x.type === 'subtask_execution' || x.type === 'fleet_execution'
-        )
-        if (!hasLaterAgent && hasToolBefore) hasFinalResult = true
+      if (messages[i].type === 'agent' && !(messages[i] as AgentMessage)._streaming) {
+        // Collect all artifact paths — they'll be rendered inside this bubble
+        for (const a of sessionArtifacts) paths.add(a.path)
         break
       }
     }
-    if (!hasFinalResult) return paths
-    // Collect all artifact paths from this session
-    for (const a of sessionArtifacts) paths.add(a.path)
     return paths
   }, [messages, isStreaming, sessionArtifacts])
 
@@ -2128,42 +2119,14 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               }
 
               if (msg.type === 'agent') {
-                // Detect if this is a "final result" — long final agent message after tool activity
-                const isFinalResult = !isStreaming &&
-                  !(msg as AgentMessage)._streaming &&
-                  (msg.content.length > 500 || sessionArtifacts.length > 0) &&
-                  // App code fences must always go through the fence-splitting path
-                  !msg.content.includes('```astonish-app') &&
-                  // Must be the last agent message in the list
-                  !messages.slice(index + 1).some(m => m.type === 'agent') &&
-                  // Must have tool activity somewhere before it
-                  messages.slice(0, index).some(m =>
-                    m.type === 'tool_call' || m.type === 'tool_result' ||
-                    m.type === 'subtask_execution' || m.type === 'fleet_execution'
-                  )
-
                 // Collect web source URLs for citation pill
                 const sourceUrls = !(msg as AgentMessage)._streaming ? collectSourceUrls(messages, index) : []
 
-                if (isFinalResult) {
-                  return (
-                    <div key={index} className="space-y-1">
-                      <div className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Agent</div>
-                      <ResultCard
-                        content={msg.content}
-                        showRaw={rawViewIndices.has(index)}
-                        onToggleRaw={() => toggleRawView(index)}
-                        artifacts={sessionArtifacts.length > 0 ? sessionArtifacts : undefined}
-                        sessionId={activeSessionId}
-                        onOpenFileInPanel={(path) => {
-                          setFilePanelInitialPath(path)
-                          setFilePanelOpen(true)
-                        }}
-                      />
-                      <SourceCitations urls={sourceUrls} />
-                    </div>
-                  )
-                }
+                // Check if this is the last agent message and should show embedded file viewers
+                const isLastAgent = !isStreaming &&
+                  !(msg as AgentMessage)._streaming &&
+                  !messages.slice(index + 1).some(m => m.type === 'agent') &&
+                  embeddedArtifactPaths.size > 0
 
                 return (
                   <div key={index} className="space-y-1">
@@ -2247,6 +2210,22 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                         )
                       })()}
                     </div>
+                    {/* Embedded file viewers for artifacts (last agent message only) */}
+                    {isLastAgent && (
+                      <div className="mt-3 space-y-3">
+                        {sessionArtifacts.map(a => (
+                          <EmbeddedFileViewer
+                            key={a.path}
+                            artifact={a}
+                            sessionId={activeSessionId}
+                            onOpenInPanel={(path) => {
+                              setFilePanelInitialPath(path)
+                              setFilePanelOpen(true)
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
                     {sourceUrls.length > 0 && <SourceCitations urls={sourceUrls} />}
                   </div>
                 )

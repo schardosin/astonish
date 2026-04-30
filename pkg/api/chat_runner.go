@@ -51,15 +51,21 @@ type ChatRunner struct {
 	done   bool
 	doneMu sync.RWMutex
 
-	// Grace period before closing subscriber channels after "done".
-	// Allows late-arriving async events (e.g., session_title) to
-	// reach the frontend. Zero means close immediately.
-	closeGracePeriod time.Duration
+	// titleDone is closed when the title-generation goroutine completes
+	// (or immediately if no title generation is needed). The defer block
+	// in Run() waits on this channel before closing subscriber channels,
+	// ensuring the session_title SSE event reaches the browser.
+	titleDone chan struct{}
+
+	// Maximum time to wait for the title goroutine after the "done"
+	// event before closing subscribers regardless.
+	titleWaitTimeout time.Duration
 }
 
 // newChatRunner creates a new ChatRunner with a background context.
-// closeGracePeriod defaults to 0 (immediate close). Production callers
-// should set it to allow late-arriving async events (e.g., session_title).
+// titleWaitTimeout controls how long to wait for the title goroutine
+// after the "done" event before closing subscribers. Zero means close
+// immediately (used in tests).
 func newChatRunner(sessionID string, isNew bool) *ChatRunner {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &ChatRunner{
@@ -68,6 +74,7 @@ func newChatRunner(sessionID string, isNew bool) *ChatRunner {
 		ctx:         ctx,
 		cancel:      cancel,
 		subscribers: make(map[string]chan ChatEvent),
+		titleDone:   make(chan struct{}),
 	}
 }
 
@@ -90,15 +97,28 @@ func (cr *ChatRunner) Run(
 		cr.doneMu.Unlock()
 
 		// Send the done event immediately so the frontend can finalize the
-		// response and hide the processing spinner. Subscriber channels stay
-		// open for a short grace period so that late-arriving async events
-		// (e.g., session_title from the title-generation goroutine) can still
-		// reach the browser before the SSE stream closes.
+		// response and hide the processing spinner. Then wait for the
+		// title-generation goroutine (if any) before closing subscriber
+		// channels — this ensures the session_title SSE event reaches the
+		// browser before the stream ends.
 		cr.emitEvent("done", map[string]any{"done": true})
-		if cr.closeGracePeriod > 0 {
-			time.AfterFunc(cr.closeGracePeriod, func() { cr.closeSubscribers() })
-		} else {
+
+		timeout := cr.titleWaitTimeout
+		if timeout <= 0 {
+			// No wait configured — close immediately (test default).
 			cr.closeSubscribers()
+		} else {
+			go func() {
+				select {
+				case <-cr.titleDone:
+					// Title goroutine finished — give a brief moment for
+					// the SSE flush, then close.
+				case <-time.After(timeout):
+					// Title took too long — close anyway; the title is
+					// still persisted to disk for future loadSessions().
+				}
+				cr.closeSubscribers()
+			}()
 		}
 	}()
 
@@ -456,17 +476,20 @@ func (cr *ChatRunner) Run(
 	}
 
 	// Generate title for new sessions after first exchange.
-	// Runs asynchronously so the deferred done/closeSubscribers fires immediately
-	// and the UI is not blocked waiting for a second LLM call. If the goroutine
-	// completes before closeSubscribers, the session_title SSE event reaches the
-	// browser in real time. If it completes after, the title is still persisted
-	// to disk and the UI picks it up via loadSessions() polling (1s after stream close).
-	if cr.IsNew && msg != "" {
-		if fileStore != nil {
-			go generateStudioSessionTitle(llm, fileStore, cr.SessionID, msg, func(title string) {
+	// Runs asynchronously — the deferred done event fires immediately so the
+	// UI isn't blocked. The defer block waits on cr.titleDone (up to
+	// titleWaitTimeout) before closing subscribers, so the session_title
+	// SSE event reaches the browser if the LLM responds in time.
+	if cr.IsNew && msg != "" && fileStore != nil {
+		go func() {
+			defer close(cr.titleDone)
+			generateStudioSessionTitle(llm, fileStore, cr.SessionID, msg, func(title string) {
 				cr.emitEvent("session_title", map[string]any{"title": title})
 			})
-		}
+		}()
+	} else {
+		// No title generation needed — unblock the defer immediately.
+		close(cr.titleDone)
 	}
 
 	// Post-processing: detect astonish-app code fences in the accumulated response

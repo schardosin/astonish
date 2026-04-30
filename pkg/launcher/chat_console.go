@@ -820,8 +820,12 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 }
 
 // generateSessionTitle calls the LLM to produce a short, meaningful session title
-// from the user's first message. Runs in a background goroutine.
-func generateSessionTitle(ctx context.Context, llm model.LLM, store *persistentsession.FileStore, sessionID, userMessage string) {
+// from the user's first message. Runs in a background goroutine with its own
+// 120s timeout so it is not tied to the caller's context lifecycle.
+func generateSessionTitle(_ context.Context, llm model.LLM, store *persistentsession.FileStore, sessionID, userMessage string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
 	prompt := fmt.Sprintf(
 		"Generate a concise title (5-7 words max) for a conversation that starts with this message. "+
 			"Return ONLY the title, no quotes, no punctuation at the end.\n\nUser message: %s", userMessage)

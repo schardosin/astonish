@@ -792,7 +792,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// Split coreTools into main-thread essentials and the full "core" group
 	// for sub-agents. Main thread tools: read_file, write_file, edit_file,
 	// shell_command, grep_search, find_files, memory_save, memory_search,
-	// delegate_tasks, opencode.
+	// delegate_tasks, opencode, resolve_credential, skill_lookup.
 	mainThreadToolNames := map[string]bool{
 		"read_file":          true,
 		"write_file":         true,
@@ -806,6 +806,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		"announce_plan":      true,
 		"opencode":           true,
 		"resolve_credential": true,
+		"skill_lookup":       true,
 	}
 
 	var mainThreadTools []tool.Tool
@@ -818,6 +819,13 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// It stays in the credentials group too (for sub-agents); the ToolIndex
 	// deduplicates and gives main-thread precedence.
 	for _, t := range credToolsSlice {
+		if mainThreadToolNames[t.Name()] {
+			mainThreadTools = append(mainThreadTools, t)
+		}
+	}
+	// Same for skill_lookup — the system prompt instructs the agent to call
+	// it directly, so it must be on the main thread.
+	for _, t := range skillToolSlice {
 		if mainThreadToolNames[t.Name()] {
 			mainThreadTools = append(mainThreadTools, t)
 		}

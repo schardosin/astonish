@@ -92,7 +92,7 @@ jobs:
           go build -ldflags="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=${{ github.ref_name }}" -o astonish-${{ matrix.suffix }} .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: astonish-${{ matrix.suffix }}
           path: astonish-${{ matrix.suffix }}

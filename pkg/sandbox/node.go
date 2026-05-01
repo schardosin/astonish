@@ -101,7 +101,10 @@ func (nc *NodeClient) startLocked() error {
 	}
 
 	cmd := []string{BinaryDestPath, "node"}
-	proc, err := ExecNonInteractive(nc.client, nc.containerName, cmd, ExecOpts{Env: nc.Env})
+	proc, err := ExecNonInteractive(nc.client, nc.containerName, cmd, ExecOpts{
+		Env:            nc.Env,
+		SeparateStderr: io.Discard, // Keep stderr separate from stdout to avoid corrupting the NDJSON protocol
+	})
 	if err != nil {
 		return fmt.Errorf("failed to start astonish node in %q: %w", nc.containerName, err)
 	}
@@ -218,11 +221,17 @@ func (nc *NodeClient) Call(toolName string, args map[string]interface{}) (json.R
 	line := nc.scanner.Bytes()
 	var resp nodeResponse
 	if err := json.Unmarshal(line, &resp); err != nil {
+		// Corrupt data on the pipe — likely stderr leakage from a crashed
+		// subprocess (Go stack traces, library warnings, etc.). Mark the node
+		// for restart so the next Call() gets a clean pipe.
+		nc.stopLocked()
 		return nil, fmt.Errorf("invalid response from node: %w (line: %s)", err, string(line))
 	}
 
 	// Verify correlation ID
 	if resp.ID != id {
+		// Out-of-sync pipe — stale response or interleaved output.
+		nc.stopLocked()
 		return nil, fmt.Errorf("response ID mismatch: expected %s, got %s", id, resp.ID)
 	}
 

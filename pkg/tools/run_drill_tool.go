@@ -184,13 +184,14 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 
 	// Discover the container IP for browser URL substitution.
 	// In sandbox mode, browser tools run on the host and need the container's
-	// bridge IP to reach services. We discover it by running hostname -I
-	// through the sandbox executor (which routes into the container).
+	// bridge IP to reach services. We use the Incus API to get the correct
+	// global-scope IPv4 address (not the Docker bridge IP which is unreachable
+	// from the host).
 	vars := map[string]string{
 		"CONTAINER_IP": "localhost", // default for local mode
 	}
 	if executor.hasSandbox() {
-		if ip, err := discoverContainerIP(executor); err == nil && ip != "" {
+		if ip, err := executor.containerIP(); err == nil && ip != "" {
 			vars["CONTAINER_IP"] = ip
 		}
 	}
@@ -290,6 +291,9 @@ type closableExecutor interface {
 	adrill.ToolExecutor
 	Close()
 	hasSandbox() bool
+	// containerIP returns the container's bridge IPv4 address via the Incus API.
+	// Returns empty string and error when sandbox is not active.
+	containerIP() (string, error)
 }
 
 // buildTestExecutor creates the appropriate executor for the run_drill tool.
@@ -358,23 +362,11 @@ func (c *testCompositeExecutor) hasSandbox() bool {
 	return c.sandbox != nil
 }
 
-// discoverContainerIP runs "hostname -I" through the sandbox executor to get
-// the container's bridge IP. Returns the first IPv4 address or empty string.
-func discoverContainerIP(executor closableExecutor) (string, error) {
-	result, err := executor.Execute(context.Background(), "shell_command", map[string]interface{}{
-		"command": "hostname -I | awk '{print $1}'",
-		"timeout": 10,
-	})
-	if err != nil {
-		return "", fmt.Errorf("discover container IP: %w", err)
+func (c *testCompositeExecutor) containerIP() (string, error) {
+	if c.sandbox == nil {
+		return "", fmt.Errorf("no sandbox active")
 	}
-
-	output := adrill.ExtractOutput(result)
-	ip := strings.TrimSpace(output)
-	if ip == "" {
-		return "", fmt.Errorf("hostname -I returned empty output")
-	}
-	return ip, nil
+	return c.sandbox.lazyClient.GetContainerIP(c.sandbox.sessionID)
 }
 
 // testLocalExecutor dispatches to tools.ExecuteTool for local execution.

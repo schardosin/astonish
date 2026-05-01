@@ -448,9 +448,15 @@ func (c *IncusClient) InstanceExists(name string) bool {
 	return err == nil
 }
 
-// GetContainerIPv4 returns the first global-scope IPv4 address assigned to the
-// container. This is the bridge IP that the host can use to reach services
-// running inside the container (e.g., for browser_navigate in sandbox mode).
+// GetContainerIPv4 returns the global-scope IPv4 address on the container's
+// primary NIC (eth0). This is the bridge IP that the host can use to reach
+// services running inside the container (e.g., for browser_navigate in sandbox
+// mode).
+//
+// Containers with Docker installed also have a docker0 bridge with a
+// global-scope IPv4 (172.17.0.1) that is NOT reachable from the host.
+// We prefer eth0 explicitly, then fall back to any non-bridge interface,
+// to avoid returning the wrong IP due to random Go map iteration order.
 //
 // The function retries for up to 10 seconds because the network interface may
 // not have a DHCP-assigned IP immediately after the container starts.
@@ -465,7 +471,20 @@ func (c *IncusClient) GetContainerIPv4(name string) (string, error) {
 			return "", err
 		}
 
-		for _, net := range state.Network {
+		// Prefer eth0 — the Incus-managed primary NIC.
+		if eth0, ok := state.Network["eth0"]; ok {
+			for _, addr := range eth0.Addresses {
+				if addr.Family == "inet" && addr.Scope == "global" {
+					return addr.Address, nil
+				}
+			}
+		}
+
+		// Fallback: any global IPv4 except known internal bridges.
+		for ifName, net := range state.Network {
+			if ifName == "docker0" || ifName == "lo" || strings.HasPrefix(ifName, "br-") {
+				continue
+			}
 			for _, addr := range net.Addresses {
 				if addr.Family == "inet" && addr.Scope == "global" {
 					return addr.Address, nil

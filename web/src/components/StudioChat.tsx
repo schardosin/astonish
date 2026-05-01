@@ -239,16 +239,32 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
   // Pre-compute which artifact paths should be rendered as embedded file viewers
   // inside the last agent message bubble instead of as standalone inline ArtifactCards.
-  // When the session is done streaming and has artifacts, the last agent message shows
-  // EmbeddedFileViewers and the corresponding inline ArtifactCards are suppressed.
+  // Only artifacts from the *last turn* (after the last user message) are included,
+  // so incidental file edits from earlier turns (e.g. fixing main.py during container
+  // provisioning in a Fleet Plan wizard) don't pollute the final summary.
   const embeddedArtifactPaths = useMemo(() => {
     const paths = new Set<string>()
     if (isStreaming || sessionArtifacts.length === 0) return paths
-    // Find the last agent message
+    // Find the last user message index — artifacts before it belong to earlier turns
+    let lastUserIdx = -1
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].type === 'user') { lastUserIdx = i; break }
+    }
+    // Collect artifact paths that appear after the last user message (current turn)
+    const lastTurnArtifactPaths = new Set<string>()
+    for (let i = Math.max(lastUserIdx + 1, 0); i < messages.length; i++) {
+      if (messages[i].type === 'artifact') {
+        lastTurnArtifactPaths.add((messages[i] as ArtifactMessage).path)
+      }
+    }
+    // Only embed artifacts that belong to the last turn
+    if (lastTurnArtifactPaths.size === 0) return paths
+    // Find the last agent message and collect matching artifacts
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].type === 'agent' && !(messages[i] as AgentMessage)._streaming) {
-        // Collect all artifact paths — they'll be rendered inside this bubble
-        for (const a of sessionArtifacts) paths.add(a.path)
+        for (const a of sessionArtifacts) {
+          if (lastTurnArtifactPaths.has(a.path)) paths.add(a.path)
+        }
         break
       }
     }
@@ -2210,10 +2226,10 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                         )
                       })()}
                     </div>
-                    {/* Embedded file viewers for artifacts (last agent message only) */}
+                    {/* Embedded file viewers for last-turn artifacts (last agent message only) */}
                     {isLastAgent && (
                       <div className="mt-3 space-y-3">
-                        {sessionArtifacts.map(a => (
+                        {sessionArtifacts.filter(a => embeddedArtifactPaths.has(a.path)).map(a => (
                           <EmbeddedFileViewer
                             key={a.path}
                             artifact={a}

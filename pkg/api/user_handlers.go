@@ -299,11 +299,36 @@ func (pa *PlatformAuth) handleSetUserOrgRole(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Verify the target user is a member of this org.
-	_, err = pa.pgStore.Organizations().GetMemberRole(ctx, targetID, org.ID)
+	// Get the target's current role.
+	currentRole, err := pa.pgStore.Organizations().GetMemberRole(ctx, targetID, org.ID)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "user is not a member of this organization")
 		return
+	}
+
+	// Only owners can change another owner's role.
+	if currentRole == "owner" && user.Role != "owner" {
+		respondError(w, http.StatusForbidden, "only owners can change an owner's role")
+		return
+	}
+
+	// Prevent demoting the last owner — org must always have at least one.
+	if currentRole == "owner" && req.Role != "owner" {
+		members, err := pa.pgStore.Organizations().ListMembers(ctx, org.ID)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to check owner count")
+			return
+		}
+		ownerCount := 0
+		for _, m := range members {
+			if m.Role == "owner" {
+				ownerCount++
+			}
+		}
+		if ownerCount <= 1 {
+			respondError(w, http.StatusBadRequest, "cannot demote the last owner; promote another user to owner first")
+			return
+		}
 	}
 
 	if err := pa.pgStore.Organizations().AddMember(ctx, targetID, org.ID, req.Role); err != nil {

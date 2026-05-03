@@ -245,34 +245,36 @@ export default function UserManagement({ user, org }: UserManagementProps) {
                       {new Date(u.joined_at).toLocaleDateString()}
                     </td>
                     <td className="py-3 px-3">
-                      {!isSelf && (
-                        <div className="flex items-center justify-end gap-1">
-                          <button
-                            onClick={() => setResetTarget(u)}
-                            className="p-1.5 rounded-lg transition-opacity hover:opacity-80"
-                            style={{ color: 'var(--accent)' }}
-                            title="Reset password"
-                          >
-                            <KeyRound size={14} />
-                          </button>
-                          <button
-                            onClick={() => handleToggleStatus(u)}
-                            className="p-1.5 rounded-lg transition-opacity hover:opacity-80"
-                            style={{ color: u.status === 'active' ? '#f59e0b' : '#22c55e' }}
-                            title={u.status === 'active' ? 'Disable user' : 'Enable user'}
-                          >
-                            {u.status === 'active' ? <Ban size={14} /> : <CheckCircle2 size={14} />}
-                          </button>
-                          <button
-                            onClick={() => setDeleteTarget(u)}
-                            className="p-1.5 rounded-lg transition-opacity hover:opacity-80"
-                            style={{ color: 'var(--danger)' }}
-                            title="Delete user"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      )}
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => setResetTarget(u)}
+                          className="p-1.5 rounded-lg transition-opacity hover:opacity-80"
+                          style={{ color: 'var(--accent)' }}
+                          title="Reset password"
+                        >
+                          <KeyRound size={14} />
+                        </button>
+                        {!isSelf && (
+                          <>
+                            <button
+                              onClick={() => handleToggleStatus(u)}
+                              className="p-1.5 rounded-lg transition-opacity hover:opacity-80"
+                              style={{ color: u.status === 'active' ? '#f59e0b' : '#22c55e' }}
+                              title={u.status === 'active' ? 'Disable user' : 'Enable user'}
+                            >
+                              {u.status === 'active' ? <Ban size={14} /> : <CheckCircle2 size={14} />}
+                            </button>
+                            <button
+                              onClick={() => setDeleteTarget(u)}
+                              className="p-1.5 rounded-lg transition-opacity hover:opacity-80"
+                              style={{ color: 'var(--danger)' }}
+                              title="Delete user"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 )

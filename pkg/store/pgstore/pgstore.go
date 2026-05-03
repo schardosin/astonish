@@ -3,6 +3,8 @@ package pgstore
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -70,6 +72,116 @@ func (s *PGStore) LoginSessions() store.LoginSessionStore {
 
 func (s *PGStore) Close() error {
 	s.poolMgr.Close()
+	return nil
+}
+
+// MigrateAllSchemas runs pending migrations on all existing team and personal
+// schemas across all organizations. This should be called at startup to ensure
+// that schema changes introduced in new migrations (e.g., adding columns) are
+// applied to schemas that were created before those migrations existed.
+//
+// The function is idempotent — already-applied migrations are skipped via the
+// schema_migrations version tracking table.
+func (s *PGStore) MigrateAllSchemas(ctx context.Context) error {
+	// 1. Get all active org slugs from the platform database
+	platformPool, err := s.poolMgr.PlatformPool(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get platform pool: %w", err)
+	}
+
+	rows, err := platformPool.Query(ctx, `SELECT slug FROM organizations WHERE status = 'active'`)
+	if err != nil {
+		return fmt.Errorf("failed to list organizations: %w", err)
+	}
+	defer rows.Close()
+
+	var orgSlugs []string
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
+			return fmt.Errorf("failed to scan org slug: %w", err)
+		}
+		orgSlugs = append(orgSlugs, slug)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error iterating org slugs: %w", err)
+	}
+
+	// 2. For each org, run pending migrations on team and personal schemas
+	for _, orgSlug := range orgSlugs {
+		if err := s.migrateOrgSchemas(ctx, orgSlug); err != nil {
+			slog.Error("failed to migrate schemas for org", "org", orgSlug, "error", err)
+			// Continue with other orgs — don't let one broken org block the rest
+		}
+	}
+
+	return nil
+}
+
+// migrateOrgSchemas runs pending migrations on all team and personal schemas
+// within a single organization's database.
+func (s *PGStore) migrateOrgSchemas(ctx context.Context, orgSlug string) error {
+	pool, err := s.poolMgr.OrgPool(ctx, orgSlug)
+	if err != nil {
+		return fmt.Errorf("failed to get pool for org %s: %w", orgSlug, err)
+	}
+
+	// Run org-level migrations first (public schema)
+	orgConn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to acquire connection for org %s: %w", orgSlug, err)
+	}
+	if err := Migrate(ctx, orgConn.Conn(), MigrationOrg, ""); err != nil {
+		orgConn.Release()
+		return fmt.Errorf("org migrations failed for %s: %w", orgSlug, err)
+	}
+	orgConn.Release()
+
+	// Query all schemas in this org database
+	schemaRows, err := pool.Query(ctx,
+		`SELECT schema_name FROM information_schema.schemata
+		 WHERE schema_name LIKE 'team_%' OR schema_name LIKE 'personal_%'
+		 ORDER BY schema_name`)
+	if err != nil {
+		return fmt.Errorf("failed to list schemas for org %s: %w", orgSlug, err)
+	}
+	defer schemaRows.Close()
+
+	var schemas []string
+	for schemaRows.Next() {
+		var name string
+		if err := schemaRows.Scan(&name); err != nil {
+			return fmt.Errorf("failed to scan schema name: %w", err)
+		}
+		schemas = append(schemas, name)
+	}
+	if err := schemaRows.Err(); err != nil {
+		return fmt.Errorf("error iterating schemas: %w", err)
+	}
+
+	// Run migrations on each schema
+	for _, schema := range schemas {
+		conn, err := pool.Acquire(ctx)
+		if err != nil {
+			slog.Error("failed to acquire connection for schema migration",
+				"org", orgSlug, "schema", schema, "error", err)
+			continue
+		}
+
+		var level MigrationLevel
+		if strings.HasPrefix(schema, "team_") {
+			level = MigrationTeam
+		} else {
+			level = MigrationPersonal
+		}
+
+		if err := Migrate(ctx, conn.Conn(), level, schema); err != nil {
+			slog.Error("schema migration failed",
+				"org", orgSlug, "schema", schema, "level", level, "error", err)
+		}
+		conn.Release()
+	}
+
 	return nil
 }
 
@@ -233,6 +345,10 @@ func (t *pgTeamDataStore) FleetPlans() store.FleetPlanStore {
 
 func (t *pgTeamDataStore) Audit() store.AuditStore {
 	return &pgAuditStore{pool: t.pool, schema: t.schema(), table: "team_audit_log"}
+}
+
+func (t *pgTeamDataStore) DrillReports() store.DrillReportStore {
+	return &pgDrillReportStore{pool: t.pool, schema: t.schema()}
 }
 
 // --- store.PersonalDataStore implementation ---

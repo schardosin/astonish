@@ -200,21 +200,20 @@ func (s *Store) FetchFlow(tap *Tap, flowName string) ([]byte, error) {
 	return content, nil
 }
 
+// FetchFlowContent fetches the raw YAML content of a flow from a tap's remote
+// repository without installing it locally. Returns the YAML bytes.
+func (s *Store) FetchFlowContent(tapName, flowName string) ([]byte, error) {
+	tap := s.findTap(tapName)
+	if tap == nil {
+		return nil, fmt.Errorf("tap '%s' not found", tapName)
+	}
+	return s.FetchFlow(tap, flowName)
+}
+
 // InstallFlow downloads and caches a flow locally
 func (s *Store) InstallFlow(tapName, flowName string) error {
 	// Find the tap
-	var tap *Tap
-	if tapName == OfficialStoreName {
-		tap = s.official
-	} else {
-		for i := range s.config.Taps {
-			if s.config.Taps[i].Name == tapName {
-				tap = &s.config.Taps[i]
-				break
-			}
-		}
-	}
-
+	tap := s.findTap(tapName)
 	if tap == nil {
 		return fmt.Errorf("tap '%s' not found", tapName)
 	}
@@ -460,4 +459,17 @@ func (s *Store) cacheManifest(tap *Tap, manifest *Manifest) error {
 	}
 
 	return os.WriteFile(manifestPath, data, 0644)
+}
+
+// findTap returns the Tap struct for the given name, or nil if not found.
+func (s *Store) findTap(tapName string) *Tap {
+	if tapName == OfficialStoreName {
+		return s.official
+	}
+	for i := range s.config.Taps {
+		if s.config.Taps[i].Name == tapName {
+			return &s.config.Taps[i]
+		}
+	}
+	return nil
 }

@@ -638,6 +638,13 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		runner.InjectMemoryStores(svc.Memory, svc.MemorySearcher)
 	}
 
+	// Inject tenant-scoped flow store into the runner context so that
+	// drill tools (save_drill, list_drills, read_drill, edit_drill, delete_drill)
+	// and run_drill can read/write flows from the database in platform mode.
+	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
+		runner.InjectFlowStore(svc.Flows)
+	}
+
 	// If we seeded an app preview, emit it through the runner so the frontend
 	// shows the AppPreviewCard immediately (before the LLM responds).
 	if seededAppPreview != nil {

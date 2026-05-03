@@ -14,8 +14,10 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	adrill "github.com/schardosin/astonish/pkg/drill"
 	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
+	"gopkg.in/yaml.v3"
 )
 
 // RunDrillArgs are the arguments for the run_drill tool.
@@ -96,16 +98,29 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 	suiteName = strings.TrimSuffix(suiteName, ".yaml")
 	suiteName = strings.TrimSuffix(suiteName, ".yml")
 
-	// Discover suites from standard directories
-	dirs := adrill.DefaultDrillDirs()
-
-	// Find the suite
-	suite, err := adrill.FindSuite(dirs, suiteName)
-	if err != nil {
-		return RunDrillResult{
-			Status:  "error",
-			Summary: fmt.Sprintf("Suite %q not found: %v", suiteName, err),
-		}, nil
+	// Discover the suite — platform mode (DB) or personal mode (filesystem)
+	var suite *adrill.LoadedSuite
+	if fs := getEffectiveFlowStore(ctx); fs != nil {
+		// Platform mode: load from team-scoped flow store
+		var loadErr error
+		suite, loadErr = loadSuiteFromStore(fs, suiteName)
+		if loadErr != nil {
+			return RunDrillResult{
+				Status:  "error",
+				Summary: fmt.Sprintf("Suite %q not found: %v", suiteName, loadErr),
+			}, nil
+		}
+	} else {
+		// Personal mode: discover from filesystem
+		dirs := adrill.DefaultDrillDirs()
+		var findErr error
+		suite, findErr = adrill.FindSuite(dirs, suiteName)
+		if findErr != nil {
+			return RunDrillResult{
+				Status:  "error",
+				Summary: fmt.Sprintf("Suite %q not found: %v", suiteName, findErr),
+			}, nil
+		}
 	}
 
 	// Validate the suite
@@ -241,6 +256,52 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 		Summary: report.Summary,
 		Report:  buf.String(),
 	}, nil
+}
+
+// loadSuiteFromStore constructs a LoadedSuite from the team-scoped FlowStore.
+// It fetches the suite YAML and all child drills, parsing them into the same
+// data structures used by the filesystem-based discovery path.
+func loadSuiteFromStore(fs store.FlowStore, suiteName string) (*adrill.LoadedSuite, error) {
+	suiteYAML, err := fs.GetFlow(suiteName)
+	if err != nil {
+		return nil, fmt.Errorf("suite %q not found in store: %w", suiteName, err)
+	}
+
+	var suiteCfg config.AgentConfig
+	if err := yaml.Unmarshal([]byte(suiteYAML), &suiteCfg); err != nil {
+		return nil, fmt.Errorf("failed to parse suite %q: %w", suiteName, err)
+	}
+
+	if suiteCfg.Type != "drill_suite" && suiteCfg.Type != "test_suite" {
+		return nil, fmt.Errorf("%q has type %q, expected drill_suite", suiteName, suiteCfg.Type)
+	}
+
+	suite := &adrill.LoadedSuite{
+		Name:   suiteName,
+		Config: &suiteCfg,
+	}
+
+	// Find child drills that reference this suite
+	drillFlows := fs.ListFlowsByType([]string{"drill", "test"})
+	for _, d := range drillFlows {
+		if d.Suite != suiteName {
+			continue
+		}
+		drillYAML, dErr := fs.GetFlow(d.Name)
+		if dErr != nil {
+			continue
+		}
+		var drillCfg config.AgentConfig
+		if yaml.Unmarshal([]byte(drillYAML), &drillCfg) != nil {
+			continue
+		}
+		suite.Tests = append(suite.Tests, adrill.LoadedTest{
+			Name:   d.Name,
+			Config: &drillCfg,
+		})
+	}
+
+	return suite, nil
 }
 
 // ---------------------------------------------------------------------------

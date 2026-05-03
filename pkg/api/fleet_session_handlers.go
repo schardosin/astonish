@@ -108,7 +108,8 @@ type FleetSessionResult struct {
 // transcript callbacks (rather than replacing them), allowing callers (e.g., Telegram)
 // to add forwarding logic on top.
 // If initialMessage is non-empty, it is posted as the first customer message.
-func StartFleetSessionFromPlan(planKey, initialMessage, userID string) (*FleetSessionResult, error) {
+// teamSlug scopes the session to a team (empty for personal mode).
+func StartFleetSessionFromPlan(planKey, initialMessage, userID, teamSlug string) (*FleetSessionResult, error) {
 	if fleetPlanRegistryVar == nil {
 		return nil, fmt.Errorf("fleet plan system not initialized")
 	}
@@ -126,6 +127,7 @@ func StartFleetSessionFromPlan(planKey, initialMessage, userID string) (*FleetSe
 	channel := fleet.NewChatChannel(planKey)
 	fleetSession := fleet.NewFleetSession(planKey, fleetCfg, channel, subAgentMgr)
 	fleetSession.Plan = plan
+	fleetSession.TeamSlug = teamSlug
 
 	// Pre-initialize the session context so that the session appears as
 	// "running" immediately (PostHumanMessage checks fs.ctx != nil).
@@ -287,7 +289,7 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 
 	// If starting from a plan, use the shared helper
 	if req.PlanKey != "" {
-		result, err := StartFleetSessionFromPlan(req.PlanKey, req.Message, effectiveUserID(r))
+		result, err := StartFleetSessionFromPlan(req.PlanKey, req.Message, effectiveUserID(r), effectiveTeamSlug(r))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -323,6 +325,7 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 
 	channel := fleet.NewChatChannel(req.FleetKey)
 	fleetSession := fleet.NewFleetSession(req.FleetKey, cfg, channel, subAgentMgr)
+	fleetSession.TeamSlug = effectiveTeamSlug(r)
 
 	registry := getFleetSessionRegistry()
 	registry.Register(fleetSession)
@@ -551,10 +554,11 @@ func FleetSessionStatusHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // FleetSessionsListHandler handles GET /api/studio/fleet/sessions.
-// Lists all active fleet sessions.
+// Lists all active fleet sessions. In platform mode, filters by team.
 func FleetSessionsListHandler(w http.ResponseWriter, r *http.Request) {
 	registry := getFleetSessionRegistry()
-	sessions := registry.List()
+	teamSlug := effectiveTeamSlug(r)
+	sessions := registry.ListForTeam(teamSlug)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

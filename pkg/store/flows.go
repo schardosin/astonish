@@ -6,6 +6,8 @@ import "time"
 type FlowSummary struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
+	Type        string   `json:"type,omitempty"` // e.g., "drill_suite", "drill", "" for regular flows
+	Suite       string   `json:"suite,omitempty"` // parent suite name (for drills)
 	Tags        []string `json:"tags"`
 	TapName     string   `json:"tap_name"`
 	Installed   bool     `json:"installed"`
@@ -19,6 +21,21 @@ type FlowSummary struct {
 type FlowStore interface {
 	// ListAllFlows returns all flows from all taps.
 	ListAllFlows() []FlowSummary
+
+	// ListFlowsByType returns flows matching any of the given types.
+	// Used by drill handlers to efficiently query drill_suite/drill flows
+	// without scanning all flows.
+	ListFlowsByType(types []string) []FlowSummary
+
+	// GetFlow returns a flow's raw YAML by name.
+	// Returns the YAML string and nil error, or empty string and error if not found.
+	GetFlow(name string) (string, error)
+
+	// SaveFlow persists a flow by name with the given raw YAML content.
+	SaveFlow(name string, yamlContent string) error
+
+	// DeleteFlow removes a flow by name.
+	DeleteFlow(name string) error
 
 	// GetTaps returns the list of configured taps.
 	GetTaps() []FlowTap

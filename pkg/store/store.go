@@ -75,6 +75,7 @@ type TeamDataStore interface {
 	ScheduledJobs() SchedulerStore
 	FleetTemplates() FleetTemplateStore
 	FleetPlans() FleetPlanStore
+	DrillReports() DrillReportStore
 	Audit() AuditStore
 }
 
@@ -222,6 +223,7 @@ type TeamManagementStore interface {
 	ListMembers(ctx context.Context, teamID string) ([]*TeamMembership, error)
 	GetUserTeams(ctx context.Context, userID string) ([]*TeamMembership, error)
 	IsTeamMember(ctx context.Context, userID, teamSlug string) (bool, error)
+	GetMemberRole(ctx context.Context, userID, teamID string) (string, error)
 }
 
 // --------------------------------------------------------------------------

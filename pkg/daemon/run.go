@@ -150,6 +150,13 @@ func Run(cfg RunConfig) error {
 		defer pgStore.Close()
 		logger.Printf("Storage backend: PostgreSQL (platform mode)")
 
+		// Run pending migrations on all existing team/personal schemas.
+		// This ensures that schema changes from new migrations (e.g., new columns)
+		// are applied to schemas created before those migrations existed.
+		if err := pgStore.MigrateAllSchemas(context.Background()); err != nil {
+			logger.Printf("Warning: schema migration encountered errors: %v", err)
+		}
+
 		// Initialize embedding model for PG memory stores (hybrid vector+keyword search).
 		// Uses the same HugotEmbedder (all-MiniLM-L6-v2, 384-dim) as personal mode.
 		// Non-fatal: if embedding fails, PG stores fall back to keyword-only search.
@@ -725,7 +732,7 @@ func Run(cfg RunConfig) error {
 				return &fleetTemplateRegistryAdapter{reg: reg}
 			},
 			StartSessionFromPlan: func(planKey, initialMessage string) (*channels.FleetSessionStartResult, error) {
-				result, err := api.StartFleetSessionFromPlan(planKey, initialMessage, api.DefaultUserID())
+				result, err := api.StartFleetSessionFromPlan(planKey, initialMessage, api.DefaultUserID(), "")
 				if err != nil {
 					return nil, err
 				}
@@ -778,6 +785,9 @@ func Run(cfg RunConfig) error {
 	}
 	if migrationMgr != nil {
 		studioOpts = append(studioOpts, launcher.WithMigrationManager(migrationMgr))
+	}
+	if configDir != "" {
+		studioOpts = append(studioOpts, launcher.WithConfigDir(configDir))
 	}
 	if sharedFileStore != nil {
 		studioOpts = append(studioOpts, launcher.WithSessionStore(sharedFileStore))

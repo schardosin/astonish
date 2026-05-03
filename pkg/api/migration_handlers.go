@@ -58,6 +58,13 @@ func RegisterMigrationRoutes(router *mux.Router, mm *MigrationManager) {
 	router.HandleFunc("/api/migration/progress", mm.handleProgress).Methods("GET")
 }
 
+// RegisterReimportRoutes registers the admin re-import endpoint.
+// This is separate from migration routes because it must always be available
+// in platform mode, even after migration is complete. Requires admin auth.
+func RegisterReimportRoutes(router *mux.Router, pgStore *pgstore.PGStore, configDir string) {
+	router.HandleFunc("/api/admin/reimport-flows", handleReimportFlows(pgStore, configDir)).Methods("POST")
+}
+
 // IsMigrationAvailable checks if file data exists and migration hasn't been done yet.
 func (mm *MigrationManager) IsMigrationAvailable() bool {
 	if migration.IsMigrationComplete(mm.configDir) {
@@ -340,5 +347,80 @@ func (mm *MigrationManager) broadcastProgress(p migration.Progress) {
 		default:
 			// Drop if subscriber is slow
 		}
+	}
+}
+
+// --- Handler: POST /api/admin/reimport-flows ---
+// Re-imports flows from the personal-mode filesystem into a team's database.
+// Requires admin/owner authentication. Idempotent — safe to run multiple times.
+//
+// Request body:
+//
+//	{ "org": "optional-org-slug", "team": "general" }
+//
+// If org is omitted, uses the caller's org. If team is omitted, defaults to "general".
+func handleReimportFlows(pgStore *pgstore.PGStore, configDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := requireAdmin(w, r)
+		if user == nil {
+			return
+		}
+
+		var req struct {
+			Org  string `json:"org"`
+			Team string `json:"team"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			// Accept empty body — use defaults
+			req.Org = ""
+			req.Team = ""
+		}
+
+		orgSlug := req.Org
+		if orgSlug == "" {
+			orgSlug = user.OrgSlug
+		}
+		teamSlug := req.Team
+		if teamSlug == "" {
+			teamSlug = "general"
+		}
+
+		// Get the team data store
+		orgDS, err := pgStore.ForOrg(orgSlug)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to connect to organization database: "+err.Error())
+			return
+		}
+
+		teamDS := orgDS.ForTeam(teamSlug)
+
+		// Run the import
+		result, err := migration.ImportFlows(r.Context(), configDir, teamDS, nil)
+		if err != nil {
+			slog.Error("reimport-flows failed", "org", orgSlug, "team", teamSlug, "error", err)
+			resp := map[string]any{
+				"status":   "error",
+				"error":    err.Error(),
+				"total":    0,
+				"imported": 0,
+			}
+			if result != nil {
+				resp["total"] = result.Total
+				resp["imported"] = result.Imported
+			}
+			respondJSON(w, http.StatusInternalServerError, resp)
+			return
+		}
+
+		slog.Info("reimport-flows completed", "org", orgSlug, "team", teamSlug,
+			"total", result.Total, "imported", result.Imported)
+
+		respondJSON(w, http.StatusOK, map[string]any{
+			"status":   "ok",
+			"total":    result.Total,
+			"imported": result.Imported,
+			"org":      orgSlug,
+			"team":     teamSlug,
+		})
 	}
 }

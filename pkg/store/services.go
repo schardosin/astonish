@@ -52,6 +52,9 @@ type Services struct {
 	// Skills provides access to operational knowledge skills.
 	Skills SkillStore
 
+	// DrillReports provides access to drill test report persistence.
+	DrillReports DrillReportStore
+
 	// Audit provides audit logging.
 	Audit AuditStore
 

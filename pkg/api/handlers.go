@@ -203,6 +203,24 @@ func splitFirst(s, sep string) []string {
 
 // ListAgentsHandler handles GET /api/agents
 func ListAgentsHandler(w http.ResponseWriter, r *http.Request) {
+	// Platform mode: database only — no filesystem mixing.
+	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
+		flows := svc.Flows.ListAllFlows()
+		result := make([]AgentListItem, 0, len(flows))
+		for _, f := range flows {
+			result = append(result, AgentListItem{
+				ID:          f.Name,
+				Name:        f.Name,
+				Description: f.Description,
+				Source:      "system",
+			})
+		}
+		sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+		respondJSON(w, http.StatusOK, AgentListResponse{Agents: result})
+		return
+	}
+
+	// Personal mode: scan filesystem directories.
 	agents := make(map[string]AgentListItem)
 
 	// Scan system directory first (has priority)
@@ -219,10 +237,9 @@ func ListAgentsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add installed store flows
-	if store, err := flowstore.NewStore(); err == nil {
-		for _, tap := range store.GetAllTaps() {
-			// Scan the tap's store directory for installed flows
-			storeDir := store.GetStoreDir()
+	if fs, err := flowstore.NewStore(); err == nil {
+		for _, tap := range fs.GetAllTaps() {
+			storeDir := fs.GetStoreDir()
 			tapDir := filepath.Join(storeDir, tap.Name)
 			entries, err := os.ReadDir(tapDir)
 			if err != nil {
@@ -233,17 +250,15 @@ func ListAgentsHandler(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				if entry.Name() == "manifest.yaml" {
-					continue // Skip manifest
+					continue
 				}
 				name := entry.Name()[:len(entry.Name())-5]
 
-				// Build display name: tap/flow for community, just flow for official
 				displayName := name
 				if tap.Name != flowstore.OfficialStoreName {
 					displayName = tap.Name + "/" + name
 				}
 
-				// Use source-prefixed ID to avoid conflicts with local copies
 				storeID := "store:" + tap.Name + ":" + name
 
 				path := filepath.Join(tapDir, entry.Name())
@@ -285,6 +300,31 @@ func GetAgentHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := vars["name"]
 
+	// Platform mode: use the team-scoped flow store.
+	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
+		yamlContent, err := svc.Flows.GetFlow(name)
+		if err != nil {
+			respondError(w, http.StatusNotFound, "Agent not found")
+			return
+		}
+
+		// Parse config from YAML content
+		var cfg *config.AgentConfig
+		tmpCfg, parseErr := config.LoadAgentFromBytes([]byte(yamlContent))
+		if parseErr == nil {
+			cfg = tmpCfg
+		}
+
+		respondJSON(w, http.StatusOK, AgentDetailResponse{
+			Name:   name,
+			Source: "system",
+			YAML:   yamlContent,
+			Config: cfg,
+		})
+		return
+	}
+
+	// Personal mode fallback: filesystem.
 	path, source, err := findAgentPath(name)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "Agent not found")
@@ -333,117 +373,20 @@ func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 	finalYAML := request.YAML
 	var agentConfig config.AgentConfig
 	if err := yaml.Unmarshal([]byte(request.YAML), &agentConfig); err == nil {
-		// Collect all tools used in the flow
-		tools := CollectToolsFromNodes(agentConfig.Nodes)
-
-		if len(tools) > 0 {
-			// Get cached tools and store servers for resolution
-			cachedTools := GetCachedTools()
-
-			// Get MCP store servers (from all taps)
-			storeServers, storeErr := loadAllServersFromTaps()
-			if storeErr != nil {
-				slog.Warn("failed to load MCP store servers", "error", storeErr)
-			}
-
-			// Resolve dependencies
-			deps := ResolveMCPDependencies(tools, cachedTools, storeServers, agentConfig.MCPDependencies)
-
-			// Check if mcp_dependencies section already exists
-			hasMcpDeps := len(agentConfig.MCPDependencies) > 0
-
-			// Only add deps if we have them AND section doesn't exist yet
-			// (Avoids re-encoding when deps already exist, preserving formatting)
-			if len(deps) > 0 && !hasMcpDeps {
-				// Parse as yaml.Node to preserve ordering
-				var rootNode yaml.Node
-				if err := yaml.Unmarshal([]byte(request.YAML), &rootNode); err == nil && rootNode.Kind == yaml.DocumentNode && len(rootNode.Content) > 0 {
-					mapNode := rootNode.Content[0]
-					if mapNode.Kind == yaml.MappingNode {
-						// Find and remove existing mcp_dependencies, and find layout index
-						var layoutIndex = -1
-						var mcpDepsIndex = -1
-						for i := 0; i < len(mapNode.Content); i += 2 {
-							if mapNode.Content[i].Value == "mcp_dependencies" {
-								mcpDepsIndex = i
-							}
-							if mapNode.Content[i].Value == "layout" {
-								layoutIndex = i
-							}
-						}
-
-						// Remove existing mcp_dependencies if present
-						if mcpDepsIndex >= 0 {
-							mapNode.Content = append(mapNode.Content[:mcpDepsIndex], mapNode.Content[mcpDepsIndex+2:]...)
-							// Adjust layout index if it was after mcp_dependencies
-							if layoutIndex > mcpDepsIndex {
-								layoutIndex -= 2
-							}
-						}
-
-						// Marshal deps to yaml.Node
-						depsBytes, _ := yaml.Marshal(deps)
-						var depsNode yaml.Node
-						yaml.Unmarshal(depsBytes, &depsNode)
-
-						// Create key node
-						keyNode := &yaml.Node{
-							Kind:  yaml.ScalarNode,
-							Tag:   "!!str",
-							Value: "mcp_dependencies",
-						}
-
-						// Insert before layout if layout exists, otherwise append
-						if layoutIndex >= 0 {
-							// Insert before layout
-							newContent := make([]*yaml.Node, 0, len(mapNode.Content)+2)
-							newContent = append(newContent, mapNode.Content[:layoutIndex]...)
-							newContent = append(newContent, keyNode, depsNode.Content[0])
-							newContent = append(newContent, mapNode.Content[layoutIndex:]...)
-							mapNode.Content = newContent
-						} else {
-							// Append at end
-							mapNode.Content = append(mapNode.Content, keyNode, depsNode.Content[0])
-						}
-
-						// Re-marshal with 2-space indentation to match frontend
-						var buf bytes.Buffer
-						encoder := yaml.NewEncoder(&buf)
-						encoder.SetIndent(2)
-						if err := encoder.Encode(&rootNode); err == nil {
-							finalYAML = buf.String()
-						}
-						encoder.Close()
-					}
-				}
-			}
-		} else {
-			// No tools - remove mcp_dependencies if it exists
-			var rootNode yaml.Node
-			if err := yaml.Unmarshal([]byte(request.YAML), &rootNode); err == nil && rootNode.Kind == yaml.DocumentNode && len(rootNode.Content) > 0 {
-				mapNode := rootNode.Content[0]
-				if mapNode.Kind == yaml.MappingNode {
-					// Find mcp_dependencies
-					for i := 0; i < len(mapNode.Content); i += 2 {
-						if mapNode.Content[i].Value == "mcp_dependencies" {
-							// Remove it
-							mapNode.Content = append(mapNode.Content[:i], mapNode.Content[i+2:]...)
-							// Re-marshal
-							var buf bytes.Buffer
-							encoder := yaml.NewEncoder(&buf)
-							encoder.SetIndent(2)
-							if err := encoder.Encode(&rootNode); err == nil {
-								finalYAML = buf.String()
-							}
-							encoder.Close()
-							break
-						}
-					}
-				}
-			}
-		}
+		finalYAML = resolveAgentYAMLDependencies(request.YAML, agentConfig)
 	}
 
+	// Platform mode: use the team-scoped flow store.
+	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
+		if err := svc.Flows.SaveFlow(name, finalYAML); err != nil {
+			respondError(w, http.StatusInternalServerError, "Failed to save agent: "+err.Error())
+			return
+		}
+		respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "yaml": finalYAML})
+		return
+	}
+
+	// Personal mode fallback: filesystem.
 	// Determine save path: check if flow already exists somewhere
 	var path string
 	existingPath, _, findErr := findAgentPath(name)
@@ -475,11 +418,138 @@ func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "path": path, "yaml": finalYAML})
 }
 
+// resolveAgentYAMLDependencies analyzes tools used in an agent config and
+// resolves MCP dependencies, returning the final YAML with injected deps.
+func resolveAgentYAMLDependencies(rawYAML string, agentConfig config.AgentConfig) string {
+	// Collect all tools used in the flow
+	tools := CollectToolsFromNodes(agentConfig.Nodes)
+
+	if len(tools) > 0 {
+		// Get cached tools and store servers for resolution
+		cachedTools := GetCachedTools()
+
+		// Get MCP store servers (from all taps)
+		storeServers, storeErr := loadAllServersFromTaps()
+		if storeErr != nil {
+			slog.Warn("failed to load MCP store servers", "error", storeErr)
+		}
+
+		// Resolve dependencies
+		deps := ResolveMCPDependencies(tools, cachedTools, storeServers, agentConfig.MCPDependencies)
+
+		// Check if mcp_dependencies section already exists
+		hasMcpDeps := len(agentConfig.MCPDependencies) > 0
+
+		// Only add deps if we have them AND section doesn't exist yet
+		// (Avoids re-encoding when deps already exist, preserving formatting)
+		if len(deps) > 0 && !hasMcpDeps {
+			// Parse as yaml.Node to preserve ordering
+			var rootNode yaml.Node
+			if err := yaml.Unmarshal([]byte(rawYAML), &rootNode); err == nil && rootNode.Kind == yaml.DocumentNode && len(rootNode.Content) > 0 {
+				mapNode := rootNode.Content[0]
+				if mapNode.Kind == yaml.MappingNode {
+					// Find and remove existing mcp_dependencies, and find layout index
+					var layoutIndex = -1
+					var mcpDepsIndex = -1
+					for i := 0; i < len(mapNode.Content); i += 2 {
+						if mapNode.Content[i].Value == "mcp_dependencies" {
+							mcpDepsIndex = i
+						}
+						if mapNode.Content[i].Value == "layout" {
+							layoutIndex = i
+						}
+					}
+
+					// Remove existing mcp_dependencies if present
+					if mcpDepsIndex >= 0 {
+						mapNode.Content = append(mapNode.Content[:mcpDepsIndex], mapNode.Content[mcpDepsIndex+2:]...)
+						// Adjust layout index if it was after mcp_dependencies
+						if layoutIndex > mcpDepsIndex {
+							layoutIndex -= 2
+						}
+					}
+
+					// Marshal deps to yaml.Node
+					depsBytes, _ := yaml.Marshal(deps)
+					var depsNode yaml.Node
+					yaml.Unmarshal(depsBytes, &depsNode)
+
+					// Create key node
+					keyNode := &yaml.Node{
+						Kind:  yaml.ScalarNode,
+						Tag:   "!!str",
+						Value: "mcp_dependencies",
+					}
+
+					// Insert before layout if layout exists, otherwise append
+					if layoutIndex >= 0 {
+						// Insert before layout
+						newContent := make([]*yaml.Node, 0, len(mapNode.Content)+2)
+						newContent = append(newContent, mapNode.Content[:layoutIndex]...)
+						newContent = append(newContent, keyNode, depsNode.Content[0])
+						newContent = append(newContent, mapNode.Content[layoutIndex:]...)
+						mapNode.Content = newContent
+					} else {
+						// Append at end
+						mapNode.Content = append(mapNode.Content, keyNode, depsNode.Content[0])
+					}
+
+					// Re-marshal with 2-space indentation to match frontend
+					var buf bytes.Buffer
+					encoder := yaml.NewEncoder(&buf)
+					encoder.SetIndent(2)
+					if err := encoder.Encode(&rootNode); err == nil {
+						return buf.String()
+					}
+					encoder.Close()
+				}
+			}
+		}
+	} else {
+		// No tools - remove mcp_dependencies if it exists
+		var rootNode yaml.Node
+		if err := yaml.Unmarshal([]byte(rawYAML), &rootNode); err == nil && rootNode.Kind == yaml.DocumentNode && len(rootNode.Content) > 0 {
+			mapNode := rootNode.Content[0]
+			if mapNode.Kind == yaml.MappingNode {
+				// Find mcp_dependencies
+				for i := 0; i < len(mapNode.Content); i += 2 {
+					if mapNode.Content[i].Value == "mcp_dependencies" {
+						// Remove it
+						mapNode.Content = append(mapNode.Content[:i], mapNode.Content[i+2:]...)
+						// Re-marshal
+						var buf bytes.Buffer
+						encoder := yaml.NewEncoder(&buf)
+						encoder.SetIndent(2)
+						if err := encoder.Encode(&rootNode); err == nil {
+							return buf.String()
+						}
+						encoder.Close()
+						break
+					}
+				}
+			}
+		}
+	}
+
+	return rawYAML
+}
+
 // DeleteAgentHandler handles DELETE /api/agents/{name}
 func DeleteAgentHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := vars["name"]
 
+	// Platform mode: use the team-scoped flow store.
+	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
+		if err := svc.Flows.DeleteFlow(name); err != nil {
+			respondError(w, http.StatusNotFound, "Agent not found")
+			return
+		}
+		respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "deleted": name})
+		return
+	}
+
+	// Personal mode fallback: filesystem.
 	path, _, err := findAgentPath(name)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "Agent not found")
@@ -503,12 +573,38 @@ func DeleteAgentHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // CopyAgentToLocalHandler handles POST /api/agents/{name}/copy-to-local
-// Copies a store flow to the user's local agents directory for editing
+// In personal mode: copies a store flow to the user's local directory for editing.
+// In platform mode: flows in the database are already editable — this is a no-op.
 func CopyAgentToLocalHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := vars["name"]
 
-	// Find the source file
+	// Platform mode: flows in the DB are already editable.
+	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
+		// Extract the flow name from store:tap:name format
+		flowName := name
+		if strings.HasPrefix(name, "store:") {
+			parts := strings.SplitN(name, ":", 3)
+			if len(parts) == 3 {
+				flowName = parts[2]
+			}
+		}
+
+		// Verify the flow exists in the team's DB
+		if _, err := svc.Flows.GetFlow(flowName); err != nil {
+			respondError(w, http.StatusNotFound, "Flow not found in team database. Install it first.")
+			return
+		}
+
+		respondJSON(w, http.StatusOK, map[string]string{
+			"status":  "ok",
+			"newName": flowName,
+			"message": "Flow is already editable in platform mode.",
+		})
+		return
+	}
+
+	// Personal mode: copy store flow to local filesystem for editing.
 	sourcePath, source, err := findAgentPath(name)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "Agent not found")
@@ -520,31 +616,26 @@ func CopyAgentToLocalHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read source content
 	content, err := os.ReadFile(sourcePath)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to read agent file")
 		return
 	}
 
-	// Determine destination: extract just the flow name
-	// Handle store:tap:name format (e.g., "store:official:my_flow" -> "my_flow")
+	// Determine destination name
 	destName := name
 	if strings.HasPrefix(name, "store:") {
-		// Parse store:tap:flowName format
 		parts := strings.SplitN(name, ":", 3)
 		if len(parts) == 3 {
-			destName = parts[2] // Just the flow name
+			destName = parts[2]
 		}
 	} else if containsSlash(name) {
-		// Handle legacy tap/flow format
 		parts := splitFirst(name, "/")
 		if len(parts) == 2 {
 			destName = parts[1]
 		}
 	}
 
-	// Save to flows directory (~/.config/astonish/flows/)
 	flowsDir, err := flowstore.GetFlowsDir()
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to get flows directory")
@@ -553,19 +644,16 @@ func CopyAgentToLocalHandler(w http.ResponseWriter, r *http.Request) {
 
 	destPath := filepath.Join(flowsDir, destName+".yaml")
 
-	// Check if already exists
 	if _, err := os.Stat(destPath); err == nil {
 		respondError(w, http.StatusConflict, "Agent already exists locally: "+destName)
 		return
 	}
 
-	// Ensure directory exists
 	if err := os.MkdirAll(flowsDir, 0755); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to create flows directory")
 		return
 	}
 
-	// Write file
 	if err := os.WriteFile(destPath, content, 0644); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to copy agent file")
 		return

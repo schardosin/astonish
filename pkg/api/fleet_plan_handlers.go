@@ -10,6 +10,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/fleet"
+	"github.com/schardosin/astonish/pkg/store"
 	"gopkg.in/yaml.v3"
 )
 
@@ -27,6 +28,29 @@ type FleetPlanListItem struct {
 
 // ListFleetPlansHandler handles GET /api/fleet-plans.
 func ListFleetPlansHandler(w http.ResponseWriter, r *http.Request) {
+	// Platform mode: use the team-scoped fleet plan store.
+	if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
+		summaries := svc.FleetPlans.ListPlans()
+		items := make([]FleetPlanListItem, len(summaries))
+		for i, s := range summaries {
+			items[i] = FleetPlanListItem{
+				Key:         s.Key,
+				Name:        s.Name,
+				Description: s.Description,
+				CreatedFrom: s.CreatedFrom,
+				ChannelType: s.ChannelType,
+				AgentCount:  s.AgentCount,
+				AgentNames:  s.AgentNames,
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"plans": items,
+		})
+		return
+	}
+
+	// Personal mode fallback.
 	if fleetPlanRegistryVar == nil {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -62,12 +86,29 @@ func ListFleetPlansHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetFleetPlanHandler handles GET /api/fleet-plans/{key}.
 func GetFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
+	key := mux.Vars(r)["key"]
+
+	// Platform mode: use the team-scoped fleet plan store.
+	if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
+		plan, ok := svc.FleetPlans.GetPlan(key)
+		if !ok {
+			http.Error(w, "Fleet plan not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"key":  key,
+			"plan": plan,
+		})
+		return
+	}
+
+	// Personal mode fallback.
 	if fleetPlanRegistryVar == nil {
 		http.Error(w, "Fleet plan system not initialized", http.StatusServiceUnavailable)
 		return
 	}
 
-	key := mux.Vars(r)["key"]
 	plan, ok := fleetPlanRegistryVar.GetPlan(key)
 	if !ok {
 		http.Error(w, "Fleet plan not found", http.StatusNotFound)
@@ -83,12 +124,33 @@ func GetFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 
 // SaveFleetPlanHandler handles PUT /api/fleet-plans/{key}.
 func SaveFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
+	key := mux.Vars(r)["key"]
+
+	// Platform mode: use the team-scoped fleet plan store.
+	if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
+		var planData map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&planData); err != nil {
+			http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		planData["key"] = key
+		if err := svc.FleetPlans.Save(planData); err != nil {
+			http.Error(w, "Failed to save fleet plan: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "saved",
+			"key":    key,
+		})
+		return
+	}
+
+	// Personal mode fallback.
 	if fleetPlanRegistryVar == nil {
 		http.Error(w, "Fleet plan system not initialized", http.StatusServiceUnavailable)
 		return
 	}
-
-	key := mux.Vars(r)["key"]
 
 	var plan fleet.FleetPlan
 	if err := json.NewDecoder(r.Body).Decode(&plan); err != nil {
@@ -111,16 +173,34 @@ func SaveFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 
 // DeleteFleetPlanHandler handles DELETE /api/fleet-plans/{key}.
 func DeleteFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
+	key := mux.Vars(r)["key"]
+
+	// Platform mode: use the team-scoped fleet plan store.
+	if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
+		// Clean up associated resources (scheduler, monitor) before removing.
+		if planActivatorVar != nil {
+			planActivatorVar.ForceCleanup(key)
+		}
+		if err := svc.FleetPlans.Delete(key); err != nil {
+			http.Error(w, "Failed to delete fleet plan: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "deleted",
+			"key":    key,
+		})
+		return
+	}
+
+	// Personal mode fallback.
 	if fleetPlanRegistryVar == nil {
 		http.Error(w, "Fleet plan system not initialized", http.StatusServiceUnavailable)
 		return
 	}
 
-	key := mux.Vars(r)["key"]
-
 	// Clean up associated resources (scheduler job, monitor, state file)
-	// before removing the plan from the registry. This prevents orphaned
-	// scheduler jobs that poll forever for a deleted plan.
+	// before removing the plan from the registry.
 	if planActivatorVar != nil {
 		planActivatorVar.ForceCleanup(key)
 	}
@@ -140,12 +220,60 @@ func DeleteFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 // DuplicateFleetPlanHandler handles POST /api/fleet-plans/{key}/duplicate.
 // Creates a deep copy of an existing fleet plan with a new unique key.
 func DuplicateFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
+	key := mux.Vars(r)["key"]
+
+	// Platform mode: use the team-scoped fleet plan store.
+	if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
+		// Get the original plan as raw YAML, modify the key/name, re-save.
+		yamlContent, err := svc.FleetPlans.GetPlanYAML(key)
+		if err != nil {
+			http.Error(w, "Fleet plan not found", http.StatusNotFound)
+			return
+		}
+
+		// Generate a unique key for the copy
+		newKey := key + "-copy"
+		for i := 2; ; i++ {
+			if _, exists := svc.FleetPlans.GetPlan(newKey); !exists {
+				break
+			}
+			newKey = fmt.Sprintf("%s-copy-%d", key, i)
+		}
+
+		// Parse and modify
+		var planMap map[string]any
+		if err := yaml.Unmarshal([]byte(yamlContent), &planMap); err != nil {
+			http.Error(w, "Failed to parse plan: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		planMap["key"] = newKey
+		if name, ok := planMap["name"].(string); ok {
+			planMap["name"] = name + " (copy)"
+		}
+		// Reset activation/validation state
+		delete(planMap, "validation")
+		delete(planMap, "activation")
+
+		modifiedYAML, _ := yaml.Marshal(planMap)
+		if err := svc.FleetPlans.SavePlanYAML(newKey, string(modifiedYAML)); err != nil {
+			http.Error(w, "Failed to save duplicate: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "duplicated",
+			"key":    newKey,
+		})
+		return
+	}
+
+	// Personal mode fallback.
 	if fleetPlanRegistryVar == nil {
 		http.Error(w, "Fleet plan system not initialized", http.StatusServiceUnavailable)
 		return
 	}
 
-	key := mux.Vars(r)["key"]
 	original, ok := fleetPlanRegistryVar.GetPlan(key)
 	if !ok {
 		http.Error(w, "Fleet plan not found", http.StatusNotFound)
@@ -283,12 +411,26 @@ func deepCopyFleetPlan(src *fleet.FleetPlan) *fleet.FleetPlan {
 // GetFleetPlanYAMLHandler handles GET /api/fleet-plans/{key}/yaml.
 // Returns the raw YAML content of a fleet plan for the YAML editor.
 func GetFleetPlanYAMLHandler(w http.ResponseWriter, r *http.Request) {
+	key := mux.Vars(r)["key"]
+
+	// Platform mode: use the team-scoped fleet plan store.
+	if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
+		yamlContent, err := svc.FleetPlans.GetPlanYAML(key)
+		if err != nil {
+			http.Error(w, "Fleet plan not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+		w.Write([]byte(yamlContent))
+		return
+	}
+
+	// Personal mode fallback.
 	if fleetPlanRegistryVar == nil {
 		http.Error(w, "Fleet plan system not initialized", http.StatusServiceUnavailable)
 		return
 	}
 
-	key := mux.Vars(r)["key"]
 	yamlPath := filepath.Join(fleetPlanRegistryVar.Dir(), key+".yaml")
 	data, err := os.ReadFile(yamlPath)
 	if err != nil {
@@ -307,16 +449,31 @@ func GetFleetPlanYAMLHandler(w http.ResponseWriter, r *http.Request) {
 // SaveFleetPlanYAMLHandler handles PUT /api/fleet-plans/{key}/yaml.
 // Accepts raw YAML content, parses it, validates, and saves via the registry.
 func SaveFleetPlanYAMLHandler(w http.ResponseWriter, r *http.Request) {
-	if fleetPlanRegistryVar == nil {
-		http.Error(w, "Fleet plan system not initialized", http.StatusServiceUnavailable)
-		return
-	}
-
 	key := mux.Vars(r)["key"]
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Platform mode: use the team-scoped fleet plan store.
+	if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
+		if err := svc.FleetPlans.SavePlanYAML(key, string(body)); err != nil {
+			http.Error(w, "Failed to save fleet plan: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "saved",
+			"key":    key,
+		})
+		return
+	}
+
+	// Personal mode fallback.
+	if fleetPlanRegistryVar == nil {
+		http.Error(w, "Fleet plan system not initialized", http.StatusServiceUnavailable)
 		return
 	}
 

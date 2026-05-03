@@ -62,11 +62,16 @@ export async function deleteTeam(slug: string): Promise<void> {
   }
 }
 
-export async function fetchTeamMembers(slug: string): Promise<TeamMember[]> {
+export interface TeamMembersResponse {
+  members: TeamMember[]
+  callerRole: string // 'org_admin' | 'admin' | 'member' | 'viewer'
+}
+
+export async function fetchTeamMembers(slug: string): Promise<TeamMembersResponse> {
   const res = await teamFetch(`/api/teams/${slug}/members`)
   if (!res.ok) throw new Error('Failed to fetch team members')
   const data = await res.json()
-  return data.members || []
+  return { members: data.members || [], callerRole: data.callerRole || '' }
 }
 
 export async function addTeamMember(slug: string, email: string, role?: string): Promise<void> {
@@ -352,4 +357,70 @@ export async function getPlatformInitStatus(): Promise<{ configured: boolean; in
     return { configured: false, initialized: false }
   }
   return res.json()
+}
+
+// --------------------------------------------------------------------------
+// User Management (Org Admin)
+// --------------------------------------------------------------------------
+
+export interface OrgUser {
+  id: string
+  email: string
+  display_name: string
+  status: string   // 'active' | 'disabled'
+  role: string     // 'owner' | 'admin' | 'member'
+  joined_at: string
+  created_at: string
+  has_oidc: boolean
+}
+
+export async function fetchOrgUsers(): Promise<OrgUser[]> {
+  const res = await teamFetch('/api/admin/users')
+  if (!res.ok) throw new Error('Failed to fetch users')
+  const data = await res.json()
+  return data.users || []
+}
+
+export async function setUserOrgRole(userId: string, role: string): Promise<void> {
+  const res = await teamFetch(`/api/admin/users/${userId}/role`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }))
+    throw new Error(err.error || err.message || 'Failed to update role')
+  }
+}
+
+export async function setUserStatus(userId: string, status: string): Promise<void> {
+  const res = await teamFetch(`/api/admin/users/${userId}/status`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }))
+    throw new Error(err.error || err.message || 'Failed to update status')
+  }
+}
+
+export async function deleteOrgUser(userId: string): Promise<void> {
+  const res = await teamFetch(`/api/admin/users/${userId}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }))
+    throw new Error(err.error || err.message || 'Failed to delete user')
+  }
+}
+
+export async function resetUserPassword(userId: string, password: string): Promise<void> {
+  const res = await teamFetch(`/api/admin/users/${userId}/password`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }))
+    throw new Error(err.error || err.message || 'Failed to reset password')
+  }
 }

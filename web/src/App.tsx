@@ -55,6 +55,7 @@ const FleetView = lazy(() => import('./components/FleetView'))
 const DrillView = lazy(() => import('./components/DrillView'))
 const AppsView = lazy(() => import('./components/AppsView'))
 const TeamManagement = lazy(() => import('./components/TeamManagement'))
+const UserManagement = lazy(() => import('./components/UserManagement'))
 const KnowledgeBrowser = lazy(() => import('./components/KnowledgeBrowser'))
 const AppCatalog = lazy(() => import('./components/AppCatalog'))
 const AuditViewer = lazy(() => import('./components/AuditViewer'))
@@ -110,7 +111,16 @@ function App() {
   const handleTeamChange = useCallback((teamSlug: string) => {
     setActiveTeam(teamSlug)
     setActiveTeamContext(teamSlug)
-  }, [])
+
+    // Clear the selected flow — it belongs to the previous team.
+    setSelectedAgent(null)
+    setYamlContent(defaultYaml)
+
+    // If viewing a specific agent, navigate back to the flows home.
+    if (path.view === 'agent') {
+      navigate(buildPath('canvas'))
+    }
+  }, [path.view, navigate])
 
   // Handle middleware team rejection (user removed from a team while active).
   useEffect(() => {
@@ -335,14 +345,14 @@ function App() {
     }
   }
 
-  // Load agents, tools, and settings from API on mount
+  // Load agents, tools, and settings from API on mount and when team changes
   useEffect(() => {
     if (!showSetupWizard && !isCheckingSetup) {
       loadAgents()
       loadTools()
       loadSettings()
     }
-  }, [showSetupWizard, isCheckingSetup])
+  }, [showSetupWizard, isCheckingSetup, activeTeam])
 
   // Check for updates on mount
   useEffect(() => {
@@ -580,6 +590,8 @@ function App() {
       setView('apps')
     } else if (path.view === 'team-mgmt') {
       setView('team-mgmt')
+    } else if (path.view === 'users') {
+      setView('users')
     } else if (path.view === 'knowledge') {
       setView('knowledge')
     } else if (path.view === 'audit') {
@@ -1552,6 +1564,15 @@ layout:
               activeTeam={activeTeam}
             />
             </Suspense>
+          ) : view === 'users' && isPlatformMode && auth.user && auth.org && (auth.user.role === 'admin' || auth.user.role === 'owner') ? (
+            <Suspense fallback={null}>
+            <UserManagement
+              key="user-mgmt"
+              theme={theme}
+              user={auth.user}
+              org={auth.org}
+            />
+            </Suspense>
           ) : view === 'knowledge' && isPlatformMode && auth.user ? (
             <Suspense fallback={null}>
             <KnowledgeBrowser
@@ -1570,7 +1591,7 @@ layout:
               activeTeam={activeTeam}
             />
             </Suspense>
-          ) : view === 'audit' && isPlatformMode && auth.user?.role === 'admin' ? (
+          ) : view === 'audit' && isPlatformMode && (auth.user?.role === 'admin' || auth.user?.role === 'owner') ? (
             <Suspense fallback={null}>
             <AuditViewer
               key={activeTeam || 'personal'}

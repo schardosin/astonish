@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { Save, Search, Loader2 } from 'lucide-react'
+import { Save, Search, Loader2, RefreshCw, Check, AlertCircle } from 'lucide-react'
 import ProviderModelSelector from '../ProviderModelSelector'
 import { fetchProviderModels } from './settingsApi'
 import type { SettingsData, WebCapableTools, StandardServer } from './settingsApi'
+import { teamFetch } from '../../api/teamContext'
 
 interface GeneralSettingsProps {
   settings: SettingsData | null
@@ -276,6 +277,113 @@ export default function GeneralSettings({
         currentModel={generalForm.default_model}
         provider={generalForm.default_provider}
       />
+
+      {/* Data Management — Re-import flows (platform mode only) */}
+      <ReimportFlowsSection />
+    </div>
+  )
+}
+
+/**
+ * ReimportFlowsSection — a self-contained section that lets admins
+ * re-import flows/drills from the personal-mode filesystem into the
+ * team's database. Only renders in platform mode (the API call returns
+ * 401 in personal mode, and we hide the section on error).
+ */
+function ReimportFlowsSection() {
+  const [state, setState] = useState<'idle' | 'loading' | 'success' | 'error' | 'hidden'>('idle')
+  const [result, setResult] = useState<{ total: number; imported: number } | null>(null)
+  const [errorMsg, setErrorMsg] = useState('')
+
+  const handleReimport = async () => {
+    setState('loading')
+    setResult(null)
+    setErrorMsg('')
+
+    try {
+      const res = await teamFetch('/api/admin/reimport-flows', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+
+      if (res.status === 401 || res.status === 403 || res.status === 404) {
+        // Not in platform mode, not admin, or endpoint not available — hide the section
+        setState('hidden')
+        return
+      }
+
+      let data: any
+      try {
+        data = await res.json()
+      } catch {
+        // Response isn't valid JSON (e.g., proxy error)
+        setState('error')
+        setErrorMsg(`Server returned ${res.status} with non-JSON response`)
+        return
+      }
+
+      if (!res.ok) {
+        setState('error')
+        setErrorMsg(data.error || 'Re-import failed')
+        setResult(data.total != null ? { total: data.total, imported: data.imported } : null)
+        return
+      }
+
+      setState('success')
+      setResult({ total: data.total, imported: data.imported })
+    } catch (err: any) {
+      setState('error')
+      setErrorMsg(err.message || 'Network error')
+    }
+  }
+
+  if (state === 'hidden') return null
+
+  return (
+    <div className="rounded-lg border p-4" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-primary)' }}>
+      <h3 className="text-sm font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Data Management</h3>
+      <p className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>
+        Re-import flows and drills from the local filesystem into the team database.
+        This is useful after migrating to platform mode or if flows were created before migration.
+        Safe to run multiple times (existing flows are updated).
+      </p>
+
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleReimport}
+          disabled={state === 'loading'}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all border"
+          style={{
+            borderColor: 'var(--border-color)',
+            background: 'var(--bg-secondary)',
+            color: 'var(--text-primary)',
+            opacity: state === 'loading' ? 0.6 : 1,
+          }}
+        >
+          {state === 'loading' ? (
+            <Loader2 size={14} className="animate-spin" />
+          ) : (
+            <RefreshCw size={14} />
+          )}
+          {state === 'loading' ? 'Importing...' : 'Re-import Flows'}
+        </button>
+
+        {state === 'success' && result && (
+          <span className="flex items-center gap-1 text-xs text-green-400">
+            <Check size={14} />
+            {result.imported} of {result.total} flow(s) imported
+          </span>
+        )}
+
+        {state === 'error' && (
+          <span className="flex items-center gap-1 text-xs" style={{ color: 'var(--danger)' }}>
+            <AlertCircle size={14} />
+            {errorMsg}
+            {result && ` (${result.imported}/${result.total} imported before error)`}
+          </span>
+        )}
+      </div>
     </div>
   )
 }

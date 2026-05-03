@@ -277,6 +277,18 @@ func (t *pgTeamManagementStore) IsTeamMember(ctx context.Context, userID, teamSl
 	return exists, err
 }
 
+func (t *pgTeamManagementStore) GetMemberRole(ctx context.Context, userID, teamID string) (string, error) {
+	var role string
+	err := t.pool.QueryRow(ctx,
+		`SELECT role FROM team_memberships WHERE user_id = $1 AND team_id = $2`,
+		userID, teamID,
+	).Scan(&role)
+	if err != nil {
+		return "", fmt.Errorf("user is not a member of this team")
+	}
+	return role, nil
+}
+
 func scanTeam(row scannable) (*store.Team, error) {
 	team := &store.Team{}
 	err := row.Scan(&team.ID, &team.Name, &team.Slug, &team.SchemaName, &team.CreatedAt)

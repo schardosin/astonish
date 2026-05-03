@@ -11,6 +11,7 @@ const servicesKey contextKey = "astonish_services"
 const credStoreKey contextKey = "astonish_credential_store"
 const memoryStoreKey contextKey = "astonish_memory_store"
 const memorySearcherKey contextKey = "astonish_memory_searcher"
+const flowStoreKey contextKey = "astonish_flow_store"
 
 // WithServices returns a new context containing the Services instance.
 func WithServices(ctx context.Context, svc *Services) context.Context {
@@ -83,4 +84,19 @@ func WithThreeTierSearcher(ctx context.Context, ts ThreeTierSearcher) context.Co
 func ThreeTierSearcherFromContext(ctx context.Context) ThreeTierSearcher {
 	ts, _ := ctx.Value(memorySearcherKey).(ThreeTierSearcher)
 	return ts
+}
+
+// WithFlowStore returns a new context containing a tenant-scoped FlowStore.
+// Used to propagate the PG flow store into the ADK runner context so that
+// drill tools (save_drill, list_drills, etc.) can read/write flows from the
+// database rather than the local filesystem in platform mode.
+func WithFlowStore(ctx context.Context, fs FlowStore) context.Context {
+	return context.WithValue(ctx, flowStoreKey, fs)
+}
+
+// FlowStoreFromContext retrieves the FlowStore from a context.
+// Returns nil if no FlowStore is present (personal mode or tests).
+func FlowStoreFromContext(ctx context.Context) FlowStore {
+	fs, _ := ctx.Value(flowStoreKey).(FlowStore)
+	return fs
 }

@@ -136,6 +136,8 @@ export function buildPath(view: string, params: BuildPathParams = {}): string {
       return '/apps'
     case 'team-mgmt':
       return '/team-mgmt'
+    case 'users':
+      return '/users'
     case 'knowledge':
       return '/knowledge'
     case 'audit':

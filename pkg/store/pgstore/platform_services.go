@@ -103,6 +103,7 @@ func TenantMiddleware(pgStore *PGStore) func(http.Handler) http.Handler {
 				reqSvc.Scheduler = teamStore.ScheduledJobs()
 				reqSvc.FleetTemplates = teamStore.FleetTemplates()
 				reqSvc.FleetPlans = teamStore.FleetPlans()
+				reqSvc.DrillReports = teamStore.DrillReports()
 
 				// Per-user app state: scope to the authenticated user
 				// so each user gets their own state for shared team apps.

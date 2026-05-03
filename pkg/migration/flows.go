@@ -11,24 +11,29 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func (m *Migrator) migrateFlows(ctx context.Context, teamDS store.TeamDataStore) (int, error) {
-	storeDir := filepath.Join(m.configDir, "store")
-	storeJSON := filepath.Join(m.configDir, "store.json")
+// ImportFlowsResult holds the result of a flow import operation.
+type ImportFlowsResult struct {
+	Total    int `json:"total"`    // Total YAML files found
+	Imported int `json:"imported"` // Successfully imported/updated
+}
 
-	// Check if flow store exists
-	if _, err := os.Stat(storeJSON); os.IsNotExist(err) {
-		if _, err := os.Stat(storeDir); os.IsNotExist(err) {
-			m.emitProgress(CatFlows, 0, 0, "skipped", "")
-			return 0, nil
-		}
+// ImportFlows scans the personal-mode config directories for flow YAML files
+// and imports (upserts) them into the given team's PostgreSQL flow store.
+// This is idempotent — existing flows are updated, new ones are inserted.
+//
+// configDir is the personal-mode config directory (e.g. ~/.config/astonish).
+// teamDS is the target team's data store.
+// progressFn is an optional callback for progress updates (may be nil).
+func ImportFlows(ctx context.Context, configDir string, teamDS store.TeamDataStore, progressFn func(imported, total int)) (*ImportFlowsResult, error) {
+	// Scan all directories where flows/drills may live
+	storeDir := filepath.Join(configDir, "store")
+	walkPaths := []string{
+		storeDir,
+		filepath.Join(configDir, "flows"),
+		filepath.Join(configDir, "agents"),
 	}
 
-	m.emitProgress(CatFlows, 0, 0, "counting", "")
-
-	// Find all installed flow YAML files
 	var flowFiles []string
-	walkPaths := []string{storeDir, filepath.Join(m.configDir, "flows")}
-
 	for _, base := range walkPaths {
 		if _, err := os.Stat(base); os.IsNotExist(err) {
 			continue
@@ -49,28 +54,22 @@ func (m *Migrator) migrateFlows(ctx context.Context, teamDS store.TeamDataStore)
 
 	total := len(flowFiles)
 	if total == 0 {
-		m.emitProgress(CatFlows, 0, 0, "skipped", "")
-		return 0, nil
+		return &ImportFlowsResult{Total: 0, Imported: 0}, nil
 	}
 
-	m.emitProgress(CatFlows, 0, total, "migrating", "")
-
-	// Get the pgFlowStore to use its SaveFlow method
+	// Get the pgFlowStore to use its SaveFlowDefinition method
 	flowStore := teamDS.Flows()
 	pgFS, hasSave := flowStore.(interface {
-		SaveFlow(ctx context.Context, name string, definition any) error
+		SaveFlowDefinition(ctx context.Context, name string, definition any, yamlContent string) error
 	})
 	if !hasSave {
-		// If the flow store doesn't support SaveFlow, we need to use the pgstore directly
-		// This happens when the team data store wraps a non-PG flow store
-		m.emitProgress(CatFlows, 0, total, "error", "flow store does not support SaveFlow")
-		return 0, fmt.Errorf("flow store does not support SaveFlow; expected pgstore implementation")
+		return nil, fmt.Errorf("flow store does not support SaveFlowDefinition; expected pgstore implementation")
 	}
-	count := 0
 
+	count := 0
 	for _, path := range flowFiles {
 		if ctx.Err() != nil {
-			return count, ctx.Err()
+			return &ImportFlowsResult{Total: total, Imported: count}, ctx.Err()
 		}
 
 		data, err := os.ReadFile(path)
@@ -78,7 +77,7 @@ func (m *Migrator) migrateFlows(ctx context.Context, teamDS store.TeamDataStore)
 			continue
 		}
 
-		// Parse YAML to get the flow name and definition
+		// Parse YAML to get the flow definition
 		var flowDef map[string]interface{}
 		if err := yaml.Unmarshal(data, &flowDef); err != nil {
 			continue
@@ -87,15 +86,42 @@ func (m *Migrator) migrateFlows(ctx context.Context, teamDS store.TeamDataStore)
 		// Derive flow name from filename
 		name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 
-		// Store the full YAML content as the definition
-		if err := pgFS.SaveFlow(ctx, name, flowDef); err != nil {
-			return count, fmt.Errorf("failed to save flow %q: %w", name, err)
+		// Upsert into PG (stores type column from YAML + full YAML content)
+		if err := pgFS.SaveFlowDefinition(ctx, name, flowDef, string(data)); err != nil {
+			return &ImportFlowsResult{Total: total, Imported: count}, fmt.Errorf("failed to save flow %q: %w", name, err)
 		}
 
 		count++
-		m.emitProgress(CatFlows, count, total, "migrating", "")
+		if progressFn != nil {
+			progressFn(count, total)
+		}
 	}
 
-	m.emitProgress(CatFlows, count, total, "done", "")
-	return count, nil
+	return &ImportFlowsResult{Total: total, Imported: count}, nil
+}
+
+// migrateFlows is the migration-time wrapper around ImportFlows.
+// It emits progress events via the Migrator's progress system.
+func (m *Migrator) migrateFlows(ctx context.Context, teamDS store.TeamDataStore) (int, error) {
+	m.emitProgress(CatFlows, 0, 0, "counting", "")
+
+	progressFn := func(imported, total int) {
+		m.emitProgress(CatFlows, imported, total, "migrating", "")
+	}
+
+	result, err := ImportFlows(ctx, m.configDir, teamDS, progressFn)
+	if err != nil {
+		if result != nil {
+			m.emitProgress(CatFlows, result.Imported, result.Total, "error", err.Error())
+		}
+		return 0, err
+	}
+
+	if result.Total == 0 {
+		m.emitProgress(CatFlows, 0, 0, "skipped", "")
+		return 0, nil
+	}
+
+	m.emitProgress(CatFlows, result.Imported, result.Total, "done", "")
+	return result.Imported, nil
 }

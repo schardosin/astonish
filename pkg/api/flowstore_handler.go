@@ -9,6 +9,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/flowstore"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // validTapURL matches GitHub repository URL formats accepted by AddTap:
@@ -51,22 +52,24 @@ type AddTapRequest struct {
 }
 
 // ListFlowStoreHandler handles GET /api/flow-store
-// Returns all taps and flows
+// Returns all taps and flows from the catalog.
+// In platform mode, the "installed" flag reflects the team's database.
+// In personal mode, it reflects the local filesystem cache.
 func ListFlowStoreHandler(w http.ResponseWriter, r *http.Request) {
-	store, err := flowstore.NewStore()
+	fs, err := flowstore.NewStore()
 	if err != nil {
-		http.Error(w, "Failed to initialize flow store: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to initialize flow store: "+err.Error())
 		return
 	}
 
 	// Update manifests
-	if err := store.UpdateAllManifests(); err != nil {
+	if err := fs.UpdateAllManifests(); err != nil {
 		slog.Warn("failed to update flow store manifests", "error", err)
 	}
 
 	// Get taps
 	var taps []TapInfo
-	for _, tap := range store.GetAllTaps() {
+	for _, tap := range fs.GetAllTaps() {
 		taps = append(taps, TapInfo{
 			Name:       tap.Name,
 			URL:        tap.URL,
@@ -74,30 +77,44 @@ func ListFlowStoreHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Get flows
+	// In platform mode, build a set of installed flow names from the team's DB.
+	var dbFlowNames map[string]bool
+	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
+		dbFlows := svc.Flows.ListAllFlows()
+		dbFlowNames = make(map[string]bool, len(dbFlows))
+		for _, f := range dbFlows {
+			dbFlowNames[f.Name] = true
+		}
+	}
+
+	// Get flows from catalog
 	var flows []FlowInfo
-	for _, f := range store.ListAllFlows() {
+	for _, f := range fs.ListAllFlows() {
 		fullName := f.Name
 		if f.TapName != flowstore.OfficialStoreName {
 			fullName = f.TapName + "/" + f.Name
 		}
+
+		installed := f.Installed // personal mode: filesystem-based
+		if dbFlowNames != nil {
+			// Platform mode: check the team's database
+			installed = dbFlowNames[f.Name]
+		}
+
 		flows = append(flows, FlowInfo{
 			Name:        f.Name,
 			Description: f.Description,
 			Tags:        f.Tags,
 			TapName:     f.TapName,
-			Installed:   f.Installed,
+			Installed:   installed,
 			FullName:    fullName,
 		})
 	}
 
-	response := FlowStoreListResponse{
+	respondJSON(w, http.StatusOK, FlowStoreListResponse{
 		Taps:  taps,
 		Flows: flows,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	})
 }
 
 // ListTapsHandler handles GET /api/flow-store/taps
@@ -197,19 +214,40 @@ func InstallFlowHandler(w http.ResponseWriter, r *http.Request) {
 	tapName = strings.ReplaceAll(tapName, "%2F", "/")
 	flowName = strings.ReplaceAll(flowName, "%2F", "/")
 
-	store, err := flowstore.NewStore()
+	fs, err := flowstore.NewStore()
 	if err != nil {
-		http.Error(w, "Failed to initialize flow store: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to initialize flow store: "+err.Error())
 		return
 	}
 
-	if err := store.InstallFlow(tapName, flowName); err != nil {
-		http.Error(w, "Failed to install flow: "+err.Error(), http.StatusBadRequest)
+	// Platform mode: fetch from tap remote and save to team's database.
+	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
+		content, err := fs.FetchFlowContent(tapName, flowName)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "Failed to fetch flow: "+err.Error())
+			return
+		}
+
+		if err := svc.Flows.SaveFlow(flowName, string(content)); err != nil {
+			respondError(w, http.StatusInternalServerError, "Failed to save flow to database: "+err.Error())
+			return
+		}
+
+		respondJSON(w, http.StatusOK, map[string]interface{}{
+			"status":   "ok",
+			"flowName": flowName,
+			"message":  "Flow installed successfully",
+		})
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	// Personal mode: install to filesystem cache.
+	if err := fs.InstallFlow(tapName, flowName); err != nil {
+		respondError(w, http.StatusBadRequest, "Failed to install flow: "+err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"status":   "ok",
 		"flowName": flowName,
 		"message":  "Flow installed successfully",
@@ -222,19 +260,33 @@ func UninstallFlowHandler(w http.ResponseWriter, r *http.Request) {
 	tapName := vars["tap"]
 	flowName := vars["flow"]
 
-	store, err := flowstore.NewStore()
+	// Platform mode: remove from team's database.
+	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
+		if err := svc.Flows.DeleteFlow(flowName); err != nil {
+			respondError(w, http.StatusBadRequest, "Failed to uninstall flow: "+err.Error())
+			return
+		}
+
+		respondJSON(w, http.StatusOK, map[string]interface{}{
+			"status":  "ok",
+			"message": "Flow uninstalled successfully",
+		})
+		return
+	}
+
+	// Personal mode: remove from filesystem cache.
+	fs, err := flowstore.NewStore()
 	if err != nil {
-		http.Error(w, "Failed to initialize flow store: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to initialize flow store: "+err.Error())
 		return
 	}
 
-	if err := store.UninstallFlow(tapName, flowName); err != nil {
-		http.Error(w, "Failed to uninstall flow: "+err.Error(), http.StatusBadRequest)
+	if err := fs.UninstallFlow(tapName, flowName); err != nil {
+		respondError(w, http.StatusBadRequest, "Failed to uninstall flow: "+err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"status":  "ok",
 		"message": "Flow uninstalled successfully",
 	})

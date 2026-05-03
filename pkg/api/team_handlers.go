@@ -257,7 +257,19 @@ func (pa *PlatformAuth) handleListTeamMembers(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	respondJSON(w, http.StatusOK, map[string]any{"members": members})
+	// Include the caller's role in this team so the frontend can enable
+	// team-admin management actions without an extra API call.
+	callerTeamRole := ""
+	if isOrgAdmin(user) {
+		callerTeamRole = "org_admin"
+	} else {
+		callerTeamRole, _ = orgDataStore.Teams().GetMemberRole(ctx, user.ID, team.ID)
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"members":    members,
+		"callerRole": callerTeamRole,
+	})
 }
 
 // --- Handler: POST /api/teams/{slug}/members ---
@@ -274,15 +286,30 @@ func (pa *PlatformAuth) handleAddTeamMember(w http.ResponseWriter, r *http.Reque
 		respondError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	if user.Role != "owner" && user.Role != "admin" {
-		respondError(w, http.StatusForbidden, "only org admins can add team members")
-		return
-	}
 
 	slug := mux.Vars(r)["slug"]
 	var req addMemberRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	ctx := r.Context()
+	orgDataStore, err := pa.pgStore.ForOrg(user.OrgSlug)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to access organization")
+		return
+	}
+
+	team, err := orgDataStore.Teams().GetTeamBySlug(ctx, slug)
+	if err != nil || team == nil {
+		respondError(w, http.StatusNotFound, "team not found")
+		return
+	}
+
+	// Org admins or team admins can add members.
+	if !pa.isTeamOrOrgAdmin(r, user, orgDataStore, team.ID) {
+		respondError(w, http.StatusForbidden, "only org admins or team admins can add team members")
 		return
 	}
 
@@ -298,19 +325,6 @@ func (pa *PlatformAuth) handleAddTeamMember(w http.ResponseWriter, r *http.Reque
 	}
 	if req.Role != "admin" && req.Role != "member" && req.Role != "viewer" {
 		respondError(w, http.StatusBadRequest, "role must be admin, member, or viewer")
-		return
-	}
-
-	ctx := r.Context()
-	orgDataStore, err := pa.pgStore.ForOrg(user.OrgSlug)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to access organization")
-		return
-	}
-
-	team, err := orgDataStore.Teams().GetTeamBySlug(ctx, slug)
-	if err != nil || team == nil {
-		respondError(w, http.StatusNotFound, "team not found")
 		return
 	}
 
@@ -335,10 +349,6 @@ func (pa *PlatformAuth) handleRemoveTeamMember(w http.ResponseWriter, r *http.Re
 		respondError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	if user.Role != "owner" && user.Role != "admin" {
-		respondError(w, http.StatusForbidden, "only org admins can remove team members")
-		return
-	}
 
 	vars := mux.Vars(r)
 	slug := vars["slug"]
@@ -354,6 +364,12 @@ func (pa *PlatformAuth) handleRemoveTeamMember(w http.ResponseWriter, r *http.Re
 	team, err := orgDataStore.Teams().GetTeamBySlug(ctx, slug)
 	if err != nil || team == nil {
 		respondError(w, http.StatusNotFound, "team not found")
+		return
+	}
+
+	// Org admins or team admins can remove members.
+	if !pa.isTeamOrOrgAdmin(r, user, orgDataStore, team.ID) {
+		respondError(w, http.StatusForbidden, "only org admins or team admins can remove team members")
 		return
 	}
 
@@ -375,10 +391,6 @@ func (pa *PlatformAuth) handleSetTeamRole(w http.ResponseWriter, r *http.Request
 	user := GetPlatformUser(r)
 	if user == nil {
 		respondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-	if user.Role != "owner" && user.Role != "admin" {
-		respondError(w, http.StatusForbidden, "only org admins can change roles")
 		return
 	}
 
@@ -409,6 +421,12 @@ func (pa *PlatformAuth) handleSetTeamRole(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Org admins or team admins can change roles.
+	if !pa.isTeamOrOrgAdmin(r, user, orgDataStore, team.ID) {
+		respondError(w, http.StatusForbidden, "only org admins or team admins can change roles")
+		return
+	}
+
 	if err := orgDataStore.Teams().SetRole(ctx, targetUserID, team.ID, req.Role); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to update role")
 		return
@@ -436,6 +454,25 @@ func (pa *PlatformAuth) handleGetOrg(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Helpers ---
+
+// isOrgAdmin returns true if the user has org-level owner or admin role.
+func isOrgAdmin(user *PlatformUser) bool {
+	return user.Role == "owner" || user.Role == "admin"
+}
+
+// isTeamOrOrgAdmin returns true if the user is an org-level admin/owner OR
+// a team-level admin for the given team. This allows team admins to manage
+// their own team's membership without requiring org-level privileges.
+func (pa *PlatformAuth) isTeamOrOrgAdmin(r *http.Request, user *PlatformUser, orgDataStore store.OrgDataStore, teamID string) bool {
+	if isOrgAdmin(user) {
+		return true
+	}
+	role, err := orgDataStore.Teams().GetMemberRole(r.Context(), user.ID, teamID)
+	if err != nil {
+		return false
+	}
+	return role == "admin"
+}
 
 func slugify(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))

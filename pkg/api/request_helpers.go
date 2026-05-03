@@ -6,6 +6,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/store/filestore"
+	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
 // effectiveUserID returns the user ID for the current request.
@@ -47,6 +48,16 @@ func effectiveCredentialStore(r *http.Request) store.CredentialStore {
 func isPlatformMode(r *http.Request) bool {
 	svc := store.FromRequest(r)
 	return svc != nil && svc.Mode == store.ModePlatform
+}
+
+// effectiveTeamSlug returns the team slug for the current request.
+// In platform mode, this is read from the TenantContext (set by auth middleware).
+// In personal mode, this returns an empty string.
+func effectiveTeamSlug(r *http.Request) string {
+	if tc := pgstore.TenantContextFrom(r.Context()); tc != nil {
+		return tc.TeamSlug
+	}
+	return ""
 }
 
 // DefaultUserID returns the default user ID used in personal mode and for

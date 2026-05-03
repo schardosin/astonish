@@ -101,6 +101,14 @@ func (cr *ChatRunner) InjectMemoryStores(memStore store.MemoryStore, searcher st
 	}
 }
 
+// InjectFlowStore adds a tenant-scoped flow store to the runner's context
+// so that drill tools (save_drill, delete_drill, list_drills, read_drill,
+// edit_drill) and the run_drill tool can read/write flows from the database
+// rather than the local filesystem in platform mode. Must be called before Run().
+func (cr *ChatRunner) InjectFlowStore(fs store.FlowStore) {
+	cr.ctx = store.WithFlowStore(cr.ctx, fs)
+}
+
 // Run executes the agent in the background. It creates the ADK runner,
 // processes events, buffers them for subscribers, and handles completion.
 // This method blocks until the agent finishes or the context is cancelled.

@@ -131,6 +131,7 @@ func (m *mockTeamDataStore) ScheduledJobs() store.SchedulerStore {
 }
 func (m *mockTeamDataStore) FleetTemplates() store.FleetTemplateStore { return nil }
 func (m *mockTeamDataStore) FleetPlans() store.FleetPlanStore         { return nil }
+func (m *mockTeamDataStore) DrillReports() store.DrillReportStore     { return nil }
 func (m *mockTeamDataStore) Audit() store.AuditStore                  { return nil }
 
 // mockPersonalDataStore implements store.PersonalDataStore

@@ -32,6 +32,7 @@ type StudioServer struct {
 	Auth          *api.AuthManager    // nil means no auth (direct CLI mode)
 	platformAuth  *api.PlatformAuth   // non-nil in platform mode
 	pgStore       *pgstore.PGStore    // non-nil in platform mode
+	configDir     string              // personal-mode config dir (for re-import)
 	services      *store.Services
 	sessionStore  *persistentsession.FileStore
 	daemonIndexer *memory.DaemonIndexerResult
@@ -83,6 +84,14 @@ func WithPlatformAuth(pa *api.PlatformAuth, pg *pgstore.PGStore) StudioOption {
 func WithMigrationManager(mm *api.MigrationManager) StudioOption {
 	return func(s *StudioServer) {
 		s.migrationMgr = mm
+	}
+}
+
+// WithConfigDir sets the personal-mode config directory path.
+// Used by the re-import endpoint to find flows on the local filesystem.
+func WithConfigDir(dir string) StudioOption {
+	return func(s *StudioServer) {
+		s.configDir = dir
 	}
 }
 
@@ -155,6 +164,12 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 	// Register migration routes if migration is available
 	if s.migrationMgr != nil {
 		api.RegisterMigrationRoutes(router, s.migrationMgr)
+	}
+
+	// Register admin re-import route — always available in platform mode,
+	// even after migration is complete. Requires pgStore + configDir.
+	if s.pgStore != nil && s.configDir != "" {
+		api.RegisterReimportRoutes(router, s.pgStore, s.configDir)
 	}
 
 	// Register API routes (passes pgStore for platform-mode TenantMiddleware)

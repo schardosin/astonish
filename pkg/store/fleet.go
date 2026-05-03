@@ -68,4 +68,12 @@ type FleetPlanStore interface {
 
 	// Reload re-reads fleet plans from the backing store.
 	Reload() error
+
+	// GetPlanYAML returns the raw YAML content for a fleet plan.
+	// Returns the YAML string and nil error, or empty string and error if not found.
+	GetPlanYAML(key string) (string, error)
+
+	// SavePlanYAML persists a fleet plan from raw YAML content.
+	// The YAML is parsed, validated, and stored.
+	SavePlanYAML(key string, yamlContent string) error
 }

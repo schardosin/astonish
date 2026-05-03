@@ -2,9 +2,12 @@ package filestore
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/store"
+	"gopkg.in/yaml.v3"
 )
 
 // FleetTemplateStoreWrapper wraps the existing fleet.Registry behind the
@@ -121,6 +124,29 @@ func (w *FleetPlanStoreWrapper) Count() int {
 
 func (w *FleetPlanStoreWrapper) Reload() error {
 	return w.inner.Reload()
+}
+
+func (w *FleetPlanStoreWrapper) GetPlanYAML(key string) (string, error) {
+	dir := w.inner.Dir()
+	if dir == "" {
+		return "", fmt.Errorf("fleet plan directory not configured")
+	}
+	yamlPath := filepath.Join(dir, key+".yaml")
+	data, err := os.ReadFile(yamlPath)
+	if err != nil {
+		return "", fmt.Errorf("fleet plan %q not found: %w", key, err)
+	}
+	return string(data), nil
+}
+
+func (w *FleetPlanStoreWrapper) SavePlanYAML(key string, yamlContent string) error {
+	// Parse the YAML to validate and create a proper FleetPlan
+	var plan fleet.FleetPlan
+	if err := yaml.Unmarshal([]byte(yamlContent), &plan); err != nil {
+		return fmt.Errorf("invalid YAML: %w", err)
+	}
+	plan.Key = key
+	return w.inner.Save(&plan)
 }
 
 // Compile-time checks.

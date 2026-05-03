@@ -32,6 +32,7 @@ export default function TeamManagement({ user, activeTeam }: TeamManagementProps
   const [teams, setTeams] = useState<Team[]>([])
   const [selectedSlug, setSelectedSlug] = useState<string | null>(activeTeam)
   const [members, setMembers] = useState<TeamMember[]>([])
+  const [callerRole, setCallerRole] = useState<string>('')
   const [teamsLoading, setTeamsLoading] = useState(true)
   const [membersLoading, setMembersLoading] = useState(false)
   const [teamsError, setTeamsError] = useState('')
@@ -48,7 +49,10 @@ export default function TeamManagement({ user, activeTeam }: TeamManagementProps
   const [adding, setAdding] = useState(false)
   const [addError, setAddError] = useState('')
 
-  const isAdmin = user.role === 'admin' || user.role === 'owner'
+  // Org-level admin: can create/delete teams across the org
+  const isOrgAdmin = user.role === 'admin' || user.role === 'owner'
+  // Team-level admin: can manage members within the selected team (includes org admins)
+  const canManageTeam = isOrgAdmin || callerRole === 'admin' || callerRole === 'org_admin'
   const selectedTeam = teams.find(t => t.slug === selectedSlug) || null
 
   const loadTeams = useCallback(async () => {
@@ -63,7 +67,11 @@ export default function TeamManagement({ user, activeTeam }: TeamManagementProps
 
   const loadMembers = useCallback(async (slug: string) => {
     setMembersLoading(true); setMembersError('')
-    try { setMembers(await fetchTeamMembers(slug)) }
+    try {
+      const resp = await fetchTeamMembers(slug)
+      setMembers(resp.members)
+      setCallerRole(resp.callerRole)
+    }
     catch (err) { setMembersError(errMsg(err, 'Failed to load members')) }
     finally { setMembersLoading(false) }
   }, [])
@@ -121,7 +129,7 @@ export default function TeamManagement({ user, activeTeam }: TeamManagementProps
             <Users size={18} style={{ color: 'var(--accent)' }} />
             <span className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>Teams</span>
           </div>
-          {isAdmin && (
+          {isOrgAdmin && (
             <button onClick={() => setShowCreateModal(true)} className="p-1.5 rounded-lg transition-colors hover:opacity-80" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}>
               <Plus size={16} />
             </button>
@@ -160,7 +168,7 @@ export default function TeamManagement({ user, activeTeam }: TeamManagementProps
                 <h2 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>{selectedTeam.name}</h2>
                 {selectedTeam.description && <p className="text-sm mt-0.5" style={{ color: 'var(--text-muted)' }}>{selectedTeam.description}</p>}
               </div>
-              {isAdmin && (
+              {canManageTeam && (
                 <button onClick={() => setShowAddMember(true)} className="flex items-center gap-2 px-4 py-2 rounded-xl text-white text-sm font-medium hover:opacity-90" style={gradientPurple}>
                   <UserPlus size={16} />Add Member
                 </button>
@@ -199,7 +207,7 @@ export default function TeamManagement({ user, activeTeam }: TeamManagementProps
                       <th className="text-left py-2 px-3 font-medium">Name</th>
                       <th className="text-left py-2 px-3 font-medium">Role</th>
                       <th className="text-left py-2 px-3 font-medium">Joined</th>
-                      {isAdmin && <th className="w-10" />}
+                      {canManageTeam && <th className="w-10" />}
                     </tr>
                   </thead>
                   <tbody>
@@ -208,8 +216,9 @@ export default function TeamManagement({ user, activeTeam }: TeamManagementProps
                         <td className="py-2.5 px-3" style={{ color: 'var(--text-primary)' }}>{m.email}</td>
                         <td className="py-2.5 px-3" style={{ color: 'var(--text-secondary)' }}>{m.display_name}</td>
                         <td className="py-2.5 px-3">
-                          {isAdmin ? (
+                          {canManageTeam ? (
                             <select value={m.role} onChange={e => handleRoleChange(m.user_id, e.target.value)} className="px-2 py-1 rounded text-xs outline-none" style={inputStyle}>
+                              <option value="viewer">viewer</option>
                               <option value="member">member</option>
                               <option value="admin">admin</option>
                             </select>
@@ -218,7 +227,7 @@ export default function TeamManagement({ user, activeTeam }: TeamManagementProps
                           )}
                         </td>
                         <td className="py-2.5 px-3" style={{ color: 'var(--text-muted)' }}>{new Date(m.joined_at).toLocaleDateString()}</td>
-                        {isAdmin && (
+                        {canManageTeam && (
                           <td className="py-2.5 px-3">
                             {m.user_id !== user.id && (
                               <button onClick={() => handleRemoveMember(m.user_id)} className="p-1 rounded hover:opacity-80 transition-opacity" style={{ color: 'var(--danger)' }} title="Remove member">
@@ -234,7 +243,7 @@ export default function TeamManagement({ user, activeTeam }: TeamManagementProps
               )}
             </div>
 
-            {isAdmin && (
+            {isOrgAdmin && (
               <div className="px-6 py-4 border-t" style={{ borderColor: 'var(--border-color)' }}>
                 <button onClick={handleDeleteTeam} disabled={selectedSlug === 'general'} className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed" style={{ background: 'var(--danger)', color: '#fff' }}>
                   <Trash2 size={14} />Delete Team

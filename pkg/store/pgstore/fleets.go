@@ -258,3 +258,55 @@ func (f *pgFleetPlanStore) Reload() error {
 	// No-op for PG store — data is always read fresh from the database
 	return nil
 }
+
+func (f *pgFleetPlanStore) GetPlanYAML(key string) (string, error) {
+	ctx := context.Background()
+	var yamlContent *string
+	var defJSON []byte
+	err := f.pool.QueryRow(ctx, fmt.Sprintf(
+		`SELECT yaml_content, definition FROM %s WHERE key = $1`, f.tableName()),
+		key,
+	).Scan(&yamlContent, &defJSON)
+	if err != nil {
+		return "", fmt.Errorf("fleet plan %q not found: %w", key, err)
+	}
+
+	// Prefer raw YAML if available; fall back to pretty-printing the JSON definition.
+	if yamlContent != nil && *yamlContent != "" {
+		return *yamlContent, nil
+	}
+
+	// Fallback: re-serialize the JSONB definition as indented JSON.
+	var pretty json.RawMessage
+	if err := json.Unmarshal(defJSON, &pretty); err == nil {
+		indented, _ := json.MarshalIndent(pretty, "", "  ")
+		return string(indented), nil
+	}
+	return string(defJSON), nil
+}
+
+func (f *pgFleetPlanStore) SavePlanYAML(key string, yamlContent string) error {
+	ctx := context.Background()
+
+	// Parse YAML to extract a JSON definition for the JSONB column.
+	defJSON := []byte(`{}`)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(yamlContent), &parsed); err == nil {
+		defJSON, _ = json.Marshal(parsed)
+	}
+
+	// Extract name from parsed definition
+	name := key
+	if n, ok := parsed["name"].(string); ok && n != "" {
+		name = n
+	}
+
+	_, err := f.pool.Exec(ctx, fmt.Sprintf(
+		`INSERT INTO %s (key, name, definition, yaml_content, updated_at)
+		 VALUES ($1, $2, $3, $4, now())
+		 ON CONFLICT (key) DO UPDATE SET name = $2, definition = $3, yaml_content = $4, updated_at = now()`,
+		f.tableName()),
+		key, name, defJSON, yamlContent,
+	)
+	return err
+}

@@ -45,6 +45,7 @@ const idleWatchdogTimeout = 5 * time.Minute
 type FleetSession struct {
 	ID              string
 	FleetKey        string
+	TeamSlug        string // Team that owns this session (empty in personal mode)
 	FleetConfig     *FleetConfig
 	Plan            *FleetPlan // Non-nil when started from a fleet plan (for prompt injection)
 	Channel         Channel

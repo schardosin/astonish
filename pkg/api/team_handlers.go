@@ -54,7 +54,7 @@ func (pa *PlatformAuth) handleListTeams(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	respondJSON(w, http.StatusOK, teams)
+	respondJSON(w, http.StatusOK, map[string]any{"teams": teams})
 }
 
 // --- Handler: POST /api/teams ---
@@ -238,7 +238,19 @@ func (pa *PlatformAuth) handleListTeamMembers(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	respondJSON(w, http.StatusOK, members)
+	// Enrich members with user details (email, display_name) from the platform users store.
+	// The users table lives in the platform DB while team_memberships is in the org DB,
+	// so we look up each user individually.
+	userStore := pa.pgStore.Users()
+	for _, m := range members {
+		u, err := userStore.GetByID(ctx, m.UserID)
+		if err == nil && u != nil {
+			m.Email = u.Email
+			m.DisplayName = u.DisplayName
+		}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{"members": members})
 }
 
 // --- Handler: POST /api/teams/{slug}/members ---

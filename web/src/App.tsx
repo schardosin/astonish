@@ -560,6 +560,12 @@ function App() {
       setView('drill')
     } else if (path.view === 'apps') {
       setView('apps')
+    } else if (path.view === 'team-mgmt') {
+      setView('team-mgmt')
+    } else if (path.view === 'knowledge') {
+      setView('knowledge')
+    } else if (path.view === 'audit') {
+      setView('audit')
     }
   }, [path, agents]) // Re-run when path or agents list changes
 

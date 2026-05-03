@@ -183,10 +183,12 @@ type Team struct {
 
 // TeamMembership represents a user's membership in a team.
 type TeamMembership struct {
-	UserID   string    `json:"user_id"`
-	TeamID   string    `json:"team_id"`
-	Role     string    `json:"role"` // admin, member, viewer
-	JoinedAt time.Time `json:"joined_at"`
+	UserID      string    `json:"user_id"`
+	TeamID      string    `json:"team_id"`
+	Role        string    `json:"role"` // admin, member, viewer
+	JoinedAt    time.Time `json:"joined_at"`
+	Email       string    `json:"email,omitempty"`
+	DisplayName string    `json:"display_name,omitempty"`
 }
 
 // TeamManagementStore manages teams and memberships within an org.

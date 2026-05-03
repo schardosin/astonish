@@ -38,11 +38,11 @@ type ValidationCheck struct {
 	Message string `json:"message"`
 }
 
-func validateFleetPlan(_ tool.Context, args ValidateFleetPlanArgs) (ValidateFleetPlanResult, error) {
+func validateFleetPlan(ctx tool.Context, args ValidateFleetPlanArgs) (ValidateFleetPlanResult, error) {
 	channelType := strings.TrimSpace(args.ChannelType)
 
 	// Validate credentials first (independent of channel type)
-	credChecks, ghToken := validateCredentials(args.Credentials)
+	credChecks, ghToken := validateCredentials(ctx, args.Credentials)
 
 	if channelType == "" || channelType == "chat" {
 		checks := []ValidationCheck{{Name: "channel_type", Status: "passed", Message: "Chat channel requires no external validation."}}
@@ -306,13 +306,13 @@ func validateGitHubIssues(config map[string]any, ghToken string) []ValidationChe
 // validateCredentials validates that all credential references in the plan
 // can be resolved from the encrypted credential store. Returns validation
 // checks and the resolved GitHub token (if a "github" credential is present).
-func validateCredentials(creds map[string]string) ([]ValidationCheck, string) {
+func validateCredentials(ctx tool.Context, creds map[string]string) ([]ValidationCheck, string) {
 	if len(creds) == 0 {
 		return nil, ""
 	}
 
-	store := credentialStoreVar
-	if store == nil {
+	cs := getEffectiveCredStore(ctx)
+	if cs == nil {
 		checks := []ValidationCheck{{
 			Name:    "credential_store",
 			Status:  "failed",
@@ -328,7 +328,7 @@ func validateCredentials(creds map[string]string) ([]ValidationCheck, string) {
 		checkName := fmt.Sprintf("credential_%s", logicalName)
 
 		// Try named credential first
-		cred := store.Get(storeName)
+		cred := cs.Get(storeName)
 		if cred != nil {
 			credType := string(cred.Type)
 			checks = append(checks, ValidationCheck{
@@ -352,7 +352,7 @@ func validateCredentials(creds map[string]string) ([]ValidationCheck, string) {
 		}
 
 		// Try flat secret
-		secret := store.GetSecret(storeName)
+		secret := cs.GetSecret(storeName)
 		if secret != "" {
 			checks = append(checks, ValidationCheck{
 				Name:    checkName,

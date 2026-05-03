@@ -1,16 +1,20 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/schardosin/astonish/pkg/store"
+	"github.com/schardosin/astonish/pkg/store/filestore"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )
 
-// credentialStoreVar holds the credential store reference.
+// credentialStoreVar holds the file-based credential store reference.
 // Set by the daemon or console launcher via SetCredentialStore.
+// Used as fallback when no platform credential store is available in the context.
 var credentialStoreVar *credentials.Store
 
 // SetCredentialStore registers the credential store for LLM tool access.
@@ -21,6 +25,23 @@ func SetCredentialStore(store *credentials.Store) {
 // GetCredentialStore returns the current credential store (for redaction wiring).
 func GetCredentialStore() *credentials.Store {
 	return credentialStoreVar
+}
+
+// getEffectiveCredStore returns the tenant-scoped credential store from the
+// context (platform mode) or wraps the file-based global (personal mode).
+// Returns nil if neither is available.
+func getEffectiveCredStore(ctx context.Context) store.CredentialStore {
+	// Platform mode: credential store injected into context by ChatRunner
+	if ctx != nil {
+		if cs := store.CredentialStoreFromContext(ctx); cs != nil {
+			return cs
+		}
+	}
+	// Personal mode: wrap the global file-based store
+	if credentialStoreVar != nil {
+		return filestore.NewCredentialStore(credentialStoreVar)
+	}
+	return nil
 }
 
 // --- save_credential tool ---
@@ -47,8 +68,9 @@ type SaveCredentialResult struct {
 	Message string `json:"message"`
 }
 
-func saveCredential(_ tool.Context, args SaveCredentialArgs) (SaveCredentialResult, error) {
-	if credentialStoreVar == nil {
+func saveCredential(ctx tool.Context, args SaveCredentialArgs) (SaveCredentialResult, error) {
+	cs := getEffectiveCredStore(ctx)
+	if cs == nil {
 		return SaveCredentialResult{Status: "error", Message: "Credential store is not available"}, nil
 	}
 
@@ -56,43 +78,43 @@ func saveCredential(_ tool.Context, args SaveCredentialArgs) (SaveCredentialResu
 		return SaveCredentialResult{Status: "error", Message: "Name is required"}, nil
 	}
 
-	credType := credentials.CredentialType(args.Type)
-	var cred *credentials.Credential
+	var storeCred *store.Credential
 
+	credType := store.CredentialType(args.Type)
 	switch credType {
-	case credentials.CredAPIKey:
+	case store.CredAPIKey:
 		if args.Header == "" {
 			return SaveCredentialResult{Status: "error", Message: "Header is required for api_key type"}, nil
 		}
 		if args.Value == "" {
 			return SaveCredentialResult{Status: "error", Message: "Value is required for api_key type"}, nil
 		}
-		cred = &credentials.Credential{
-			Type:   credentials.CredAPIKey,
+		storeCred = &store.Credential{
+			Type:   store.CredAPIKey,
 			Header: args.Header,
 			Value:  args.Value,
 		}
 
-	case credentials.CredBearer:
+	case store.CredBearer:
 		if args.Token == "" {
 			return SaveCredentialResult{Status: "error", Message: "Token is required for bearer type"}, nil
 		}
-		cred = &credentials.Credential{
-			Type:  credentials.CredBearer,
+		storeCred = &store.Credential{
+			Type:  store.CredBearer,
 			Token: args.Token,
 		}
 
-	case credentials.CredBasic:
+	case store.CredBasic:
 		if args.Username == "" {
 			return SaveCredentialResult{Status: "error", Message: "Username is required for basic type"}, nil
 		}
-		cred = &credentials.Credential{
-			Type:     credentials.CredBasic,
+		storeCred = &store.Credential{
+			Type:     store.CredBasic,
 			Username: args.Username,
 			Password: args.Password,
 		}
 
-	case credentials.CredOAuthClientCreds:
+	case store.CredOAuthClientCreds:
 		if args.AuthURL == "" {
 			return SaveCredentialResult{Status: "error", Message: "auth_url is required for oauth_client_credentials type"}, nil
 		}
@@ -102,25 +124,25 @@ func saveCredential(_ tool.Context, args SaveCredentialArgs) (SaveCredentialResu
 		if args.ClientSecret == "" {
 			return SaveCredentialResult{Status: "error", Message: "client_secret is required for oauth_client_credentials type"}, nil
 		}
-		cred = &credentials.Credential{
-			Type:         credentials.CredOAuthClientCreds,
+		storeCred = &store.Credential{
+			Type:         store.CredOAuthClientCreds,
 			AuthURL:      args.AuthURL,
 			ClientID:     args.ClientID,
 			ClientSecret: args.ClientSecret,
 			Scope:        args.Scope,
 		}
 
-	case credentials.CredPassword:
+	case store.CredPassword:
 		if args.Username == "" {
 			return SaveCredentialResult{Status: "error", Message: "Username is required for password type"}, nil
 		}
-		cred = &credentials.Credential{
-			Type:     credentials.CredPassword,
+		storeCred = &store.Credential{
+			Type:     store.CredPassword,
 			Username: args.Username,
 			Password: args.Password,
 		}
 
-	case credentials.CredOAuthAuthCode:
+	case store.CredOAuthAuthCode:
 		if args.TokenURL == "" {
 			return SaveCredentialResult{Status: "error", Message: "token_url is required for oauth_authorization_code type (e.g., https://oauth2.googleapis.com/token)"}, nil
 		}
@@ -136,8 +158,8 @@ func saveCredential(_ tool.Context, args SaveCredentialArgs) (SaveCredentialResu
 		if args.RefreshToken == "" {
 			return SaveCredentialResult{Status: "error", Message: "refresh_token is required for oauth_authorization_code type — ensure access_type=offline was used in the authorization URL"}, nil
 		}
-		cred = &credentials.Credential{
-			Type:         credentials.CredOAuthAuthCode,
+		storeCred = &store.Credential{
+			Type:         store.CredOAuthAuthCode,
 			TokenURL:     args.TokenURL,
 			ClientID:     args.ClientID,
 			ClientSecret: args.ClientSecret,
@@ -153,7 +175,7 @@ func saveCredential(_ tool.Context, args SaveCredentialArgs) (SaveCredentialResu
 		}, nil
 	}
 
-	if err := credentialStoreVar.Set(args.Name, cred); err != nil {
+	if err := cs.Set(args.Name, storeCred); err != nil {
 		return SaveCredentialResult{
 			Status:  "error",
 			Message: fmt.Sprintf("Failed to save: %v", err),
@@ -188,16 +210,17 @@ type ListCredentialsResult struct {
 	Message     string              `json:"message,omitempty"`
 }
 
-func listCredentials(_ tool.Context, args ListCredentialsArgs) (ListCredentialsResult, error) {
-	if credentialStoreVar == nil {
+func listCredentials(ctx tool.Context, args ListCredentialsArgs) (ListCredentialsResult, error) {
+	cs := getEffectiveCredStore(ctx)
+	if cs == nil {
 		return ListCredentialsResult{Message: "Credential store is not available"}, nil
 	}
 
-	// Reload from disk to pick up changes made by CLI (astonish credential add/remove)
-	credentialStoreVar.Reload()
+	// Reload to pick up changes made outside this process
+	cs.Reload() //nolint:errcheck
 
 	// HTTP credentials
-	creds := credentialStoreVar.List()
+	creds := cs.List()
 	credSummaries := make([]CredentialSummary, 0, len(creds))
 	for name, credType := range creds {
 		if args.Filter != "" && !strings.Contains(name, args.Filter) {
@@ -210,7 +233,7 @@ func listCredentials(_ tool.Context, args ListCredentialsArgs) (ListCredentialsR
 	}
 
 	// Flat secrets (provider keys, channel tokens, MCP server keys)
-	secretKeys := credentialStoreVar.ListSecrets()
+	secretKeys := cs.ListSecrets()
 	secretSummaries := make([]SecretSummary, 0, len(secretKeys))
 	for _, key := range secretKeys {
 		if args.Filter != "" && !strings.Contains(key, args.Filter) {
@@ -257,8 +280,9 @@ type RemoveCredentialResult struct {
 	Message string `json:"message"`
 }
 
-func removeCredential(_ tool.Context, args RemoveCredentialArgs) (RemoveCredentialResult, error) {
-	if credentialStoreVar == nil {
+func removeCredential(ctx tool.Context, args RemoveCredentialArgs) (RemoveCredentialResult, error) {
+	cs := getEffectiveCredStore(ctx)
+	if cs == nil {
 		return RemoveCredentialResult{Status: "error", Message: "Credential store is not available"}, nil
 	}
 
@@ -266,7 +290,7 @@ func removeCredential(_ tool.Context, args RemoveCredentialArgs) (RemoveCredenti
 		return RemoveCredentialResult{Status: "error", Message: "Name is required"}, nil
 	}
 
-	if err := credentialStoreVar.Remove(args.Name); err != nil {
+	if err := cs.Remove(args.Name); err != nil {
 		return RemoveCredentialResult{
 			Status:  "error",
 			Message: fmt.Sprintf("Failed to remove: %v", err),
@@ -290,8 +314,9 @@ type TestCredentialResult struct {
 	Message string `json:"message"`
 }
 
-func testCredential(_ tool.Context, args TestCredentialArgs) (TestCredentialResult, error) {
-	if credentialStoreVar == nil {
+func testCredential(ctx tool.Context, args TestCredentialArgs) (TestCredentialResult, error) {
+	cs := getEffectiveCredStore(ctx)
+	if cs == nil {
 		return TestCredentialResult{Status: "error", Message: "Credential store is not available"}, nil
 	}
 
@@ -299,7 +324,7 @@ func testCredential(_ tool.Context, args TestCredentialArgs) (TestCredentialResu
 		return TestCredentialResult{Status: "error", Message: "Name is required"}, nil
 	}
 
-	cred := credentialStoreVar.Get(args.Name)
+	cred := cs.Get(args.Name)
 	if cred == nil {
 		return TestCredentialResult{
 			Status:  "error",
@@ -308,9 +333,9 @@ func testCredential(_ tool.Context, args TestCredentialArgs) (TestCredentialResu
 	}
 
 	switch cred.Type {
-	case credentials.CredOAuthClientCreds:
+	case store.CredOAuthClientCreds:
 		// Actually test the OAuth flow
-		_, _, err := credentialStoreVar.Resolve(args.Name)
+		_, _, err := cs.Resolve(args.Name)
 		if err != nil {
 			return TestCredentialResult{
 				Status:  "failed",
@@ -322,9 +347,9 @@ func testCredential(_ tool.Context, args TestCredentialArgs) (TestCredentialResu
 			Message: fmt.Sprintf("OAuth credential %q: token acquired successfully", args.Name),
 		}, nil
 
-	case credentials.CredOAuthAuthCode:
+	case store.CredOAuthAuthCode:
 		// Test by resolving (which triggers refresh if expired)
-		_, _, err := credentialStoreVar.Resolve(args.Name)
+		_, _, err := cs.Resolve(args.Name)
 		if err != nil {
 			return TestCredentialResult{
 				Status:  "failed",
@@ -336,7 +361,7 @@ func testCredential(_ tool.Context, args TestCredentialArgs) (TestCredentialResu
 			Message: fmt.Sprintf("OAuth credential %q: access token is valid (auto-refreshes when expired)", args.Name),
 		}, nil
 
-	case credentials.CredPassword:
+	case store.CredPassword:
 		return TestCredentialResult{
 			Status:  "ok",
 			Message: fmt.Sprintf("Credential %q configured (%s, user: %s). Use resolve_credential to retrieve the username and password for SSH/FTP/database connections.", args.Name, cred.Type, cred.Username),
@@ -369,8 +394,9 @@ type ResolveCredentialResult struct {
 	ClientID string `json:"client_id,omitempty"`
 }
 
-func resolveCredential(_ tool.Context, args ResolveCredentialArgs) (ResolveCredentialResult, error) {
-	if credentialStoreVar == nil {
+func resolveCredential(ctx tool.Context, args ResolveCredentialArgs) (ResolveCredentialResult, error) {
+	cs := getEffectiveCredStore(ctx)
+	if cs == nil {
 		return ResolveCredentialResult{Status: "error", Message: "Credential store is not available"}, nil
 	}
 
@@ -378,10 +404,10 @@ func resolveCredential(_ tool.Context, args ResolveCredentialArgs) (ResolveCrede
 		return ResolveCredentialResult{Status: "error", Message: "Name is required"}, nil
 	}
 
-	// Reload from disk to pick up changes made by CLI (astonish credential add/remove)
-	credentialStoreVar.Reload()
+	// Reload to pick up changes made outside this process
+	cs.Reload() //nolint:errcheck
 
-	cred := credentialStoreVar.Get(args.Name)
+	cred := cs.Get(args.Name)
 	if cred == nil {
 		return ResolveCredentialResult{
 			Status:  "error",
@@ -395,25 +421,22 @@ func resolveCredential(_ tool.Context, args ResolveCredentialArgs) (ResolveCrede
 	}
 
 	switch cred.Type {
-	case credentials.CredPassword:
+	case store.CredPassword:
 		result.Username = cred.Username
 		result.Password = credentials.FormatPlaceholder(args.Name, "password")
-	case credentials.CredBasic:
+	case store.CredBasic:
 		result.Username = cred.Username
 		result.Password = credentials.FormatPlaceholder(args.Name, "password")
-	case credentials.CredBearer:
+	case store.CredBearer:
 		result.Token = credentials.FormatPlaceholder(args.Name, "token")
-	case credentials.CredAPIKey:
+	case store.CredAPIKey:
 		result.Header = cred.Header
 		result.Value = credentials.FormatPlaceholder(args.Name, "value")
-	case credentials.CredOAuthClientCreds:
-		// Don't expose client secret — use http_request with credential param instead
+	case store.CredOAuthClientCreds:
 		result.AuthURL = cred.AuthURL
 		result.ClientID = cred.ClientID
 		result.Message = "Use http_request with credential parameter for OAuth — the token is managed automatically."
-	case credentials.CredOAuthAuthCode:
-		// Return a placeholder — the real token is resolved at execution time
-		// when the placeholder is substituted in process_write, shell_command, etc.
+	case store.CredOAuthAuthCode:
 		result.Token = credentials.FormatPlaceholder(args.Name, "token")
 		result.ClientID = cred.ClientID
 		result.Message = "Access token placeholder returned (auto-refreshed when used). Prefer using http_request with credential parameter — it handles the Bearer header automatically."

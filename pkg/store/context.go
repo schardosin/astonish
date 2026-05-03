@@ -8,6 +8,7 @@ import (
 type contextKey string
 
 const servicesKey contextKey = "astonish_services"
+const credStoreKey contextKey = "astonish_credential_store"
 
 // WithServices returns a new context containing the Services instance.
 func WithServices(ctx context.Context, svc *Services) context.Context {
@@ -38,4 +39,20 @@ func Middleware(svc *Services) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// WithCredentialStore returns a new context containing a CredentialStore.
+// This is used to propagate the tenant-scoped credential store into the
+// ADK runner context so that tool functions can access it without globals.
+func WithCredentialStore(ctx context.Context, cs CredentialStore) context.Context {
+	return context.WithValue(ctx, credStoreKey, cs)
+}
+
+// CredentialStoreFromContext retrieves the CredentialStore from a context.
+// Returns nil if no CredentialStore is present (personal mode or tests).
+// Tool functions should call this and fall back to the package-level global
+// credential store when nil.
+func CredentialStoreFromContext(ctx context.Context) CredentialStore {
+	cs, _ := ctx.Value(credStoreKey).(CredentialStore)
+	return cs
 }

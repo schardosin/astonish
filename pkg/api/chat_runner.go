@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/store"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/runner"
@@ -77,6 +78,13 @@ func newChatRunner(sessionID, userID string, isNew bool) *ChatRunner {
 		subscribers: make(map[string]chan ChatEvent),
 		titleDone:   make(chan struct{}),
 	}
+}
+
+// InjectCredentialStore adds a tenant-scoped credential store to the runner's
+// context so that tool functions can retrieve it via store.CredentialStoreFromContext.
+// Must be called before Run().
+func (cr *ChatRunner) InjectCredentialStore(cs store.CredentialStore) {
+	cr.ctx = store.WithCredentialStore(cr.ctx, cs)
 }
 
 // Run executes the agent in the background. It creates the ADK runner,

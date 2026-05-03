@@ -621,6 +621,13 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	runner := newChatRunner(sessionID, userID, isNew)
 	runner.titleWaitTimeout = 30 * time.Second // wait for title goroutine before closing SSE
 
+	// Inject tenant-scoped credential store into the runner context so that
+	// credential tools (list_credentials, resolve_credential, etc.) can access
+	// the correct store for this team/org in platform mode.
+	if svc := store.FromRequest(r); svc != nil && svc.Credentials != nil {
+		runner.InjectCredentialStore(svc.Credentials)
+	}
+
 	// If we seeded an app preview, emit it through the runner so the frontend
 	// shows the AppPreviewCard immediately (before the LLM responds).
 	if seededAppPreview != nil {

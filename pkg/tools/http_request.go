@@ -53,7 +53,7 @@ type HttpRequestResult struct {
 }
 
 // HttpRequest makes an HTTP request with optional credential injection.
-func HttpRequest(_ tool.Context, args HttpRequestArgs) (HttpRequestResult, error) {
+func HttpRequest(ctx tool.Context, args HttpRequestArgs) (HttpRequestResult, error) {
 	// Validate URL
 	if args.URL == "" {
 		return HttpRequestResult{}, fmt.Errorf("url is required")
@@ -128,10 +128,11 @@ func HttpRequest(_ tool.Context, args HttpRequestArgs) (HttpRequestResult, error
 
 	// Resolve and inject credential (after user headers — credential takes precedence for auth)
 	if args.Credential != "" {
-		if credentialStoreVar == nil {
+		cs := getEffectiveCredStore(ctx)
+		if cs == nil {
 			return HttpRequestResult{}, fmt.Errorf("credential store is not available — cannot resolve credential %q", args.Credential)
 		}
-		headerKey, headerValue, err := credentialStoreVar.Resolve(args.Credential)
+		headerKey, headerValue, err := cs.Resolve(args.Credential)
 		if err != nil {
 			return HttpRequestResult{}, fmt.Errorf("failed to resolve credential %q: %w", args.Credential, err)
 		}

@@ -72,7 +72,7 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, onOpenSan
 
   return (
     <div
-      className="h-14 flex items-center justify-between px-4"
+      className="h-14 flex items-center justify-between px-4 relative z-50"
       style={{ background: navBackground, backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', borderBottom: `1px solid ${navBorder}` }}
     >
       <div className="flex items-center gap-2">

@@ -135,7 +135,7 @@ func UpdateSkillContentHandler(w http.ResponseWriter, r *http.Request) {
 
 	if svc := store.FromRequest(r); svc != nil && svc.Skills != nil {
 		// Platform mode: update in PG
-		updateSkillContentPlatform(w, svc.Skills, name, parsed, req.RawFile)
+		updateSkillContentPlatform(w, r, svc.Skills, name, parsed, req.RawFile)
 		return
 	}
 
@@ -199,7 +199,7 @@ func CreateSkillHandler(w http.ResponseWriter, r *http.Request) {
 
 	if svc := store.FromRequest(r); svc != nil && svc.Skills != nil {
 		// Platform mode: create in PG
-		createSkillPlatform(w, svc.Skills, name)
+		createSkillPlatform(w, r, svc.Skills, name)
 		return
 	}
 
@@ -367,7 +367,7 @@ func getSkillContentPlatform(w http.ResponseWriter, skillStore store.SkillStore,
 }
 
 // updateSkillContentPlatform updates a skill in PG. Cannot edit bundled skills.
-func updateSkillContentPlatform(w http.ResponseWriter, skillStore store.SkillStore, name string, parsed *skills.Skill, rawFile string) {
+func updateSkillContentPlatform(w http.ResponseWriter, r *http.Request, skillStore store.SkillStore, name string, parsed *skills.Skill, rawFile string) {
 	// Check if this is a bundled skill
 	bundled, _ := skills.LoadBundledSkills()
 	for _, s := range bundled {
@@ -382,9 +382,15 @@ func updateSkillContentPlatform(w http.ResponseWriter, skillStore store.SkillSto
 		}
 	}
 
+	userID := ""
+	if pu := GetPlatformUser(r); pu != nil {
+		userID = pu.ID
+	}
+
 	skill := &store.Skill{
-		Name:    parsed.Name,
-		Content: rawFile,
+		Name:      parsed.Name,
+		Content:   rawFile,
+		CreatedBy: userID,
 	}
 	if err := skillStore.Save(skill); err != nil {
 		http.Error(w, "Failed to save skill: "+err.Error(), http.StatusInternalServerError)
@@ -396,7 +402,7 @@ func updateSkillContentPlatform(w http.ResponseWriter, skillStore store.SkillSto
 }
 
 // createSkillPlatform creates a new skill in PG from a template.
-func createSkillPlatform(w http.ResponseWriter, skillStore store.SkillStore, name string) {
+func createSkillPlatform(w http.ResponseWriter, r *http.Request, skillStore store.SkillStore, name string) {
 	// Check if already exists in PG
 	existing, _ := skillStore.Get(name)
 	if existing != nil {
@@ -404,10 +410,16 @@ func createSkillPlatform(w http.ResponseWriter, skillStore store.SkillStore, nam
 		return
 	}
 
+	userID := ""
+	if pu := GetPlatformUser(r); pu != nil {
+		userID = pu.ID
+	}
+
 	template := skills.NewSkillTemplate(name)
 	skill := &store.Skill{
-		Name:    name,
-		Content: template,
+		Name:      name,
+		Content:   template,
+		CreatedBy: userID,
 	}
 
 	if err := skillStore.Save(skill); err != nil {

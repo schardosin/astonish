@@ -79,6 +79,7 @@ func (m *Migrator) migrateSkills(ctx context.Context, orgDS store.OrgDataStore) 
 			Source:    "migrated",
 			Directory: filepath.Dir(path),
 			FilePath:  path,
+			CreatedBy: "00000000-0000-0000-0000-000000000000", // system migration
 		}
 
 		if err := skillStore.Save(skill); err != nil {

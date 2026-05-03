@@ -12,6 +12,7 @@ type Skill struct {
 	FilePath    string      `json:"-" yaml:"-"`
 	Source      string      `json:"-" yaml:"-"`
 	Directory   string      `json:"-" yaml:"-"`
+	CreatedBy   string      `json:"-" yaml:"-"` // User ID (UUID) — required for PG inserts
 }
 
 // SkillStore manages skill definitions.

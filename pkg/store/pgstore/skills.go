@@ -52,11 +52,11 @@ func (s *pgSkillStore) Save(skill *store.Skill) error {
 
 	// content holds the full raw SKILL.md (frontmatter + body).
 	_, err := s.pool.Exec(ctx, fmt.Sprintf(
-		`INSERT INTO %s (name, content, frontmatter, updated_at)
-		 VALUES ($1, $2, '{}'::jsonb, now())
+		`INSERT INTO %s (name, content, frontmatter, created_by, updated_at)
+		 VALUES ($1, $2, '{}'::jsonb, $3, now())
 		 ON CONFLICT (name) DO UPDATE SET content = $2, updated_at = now()`,
 		s.tableName()),
-		skill.Name, skill.Content,
+		skill.Name, skill.Content, skill.CreatedBy,
 	)
 	return err
 }

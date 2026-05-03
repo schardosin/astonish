@@ -27,6 +27,7 @@ import (
 	"github.com/schardosin/astonish/pkg/provider/sap"
 	"github.com/schardosin/astonish/pkg/provider/xai"
 	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
 func handleSetupCommand() error {
@@ -52,6 +53,19 @@ func handleSetupCommand() error {
 		cfg = &config.AppConfig{
 			Providers: make(map[string]config.ProviderConfig),
 			General:   config.GeneralConfig{},
+		}
+	}
+
+	// --- DEPLOYMENT MODE STEP ---
+	// Ask whether the user wants personal (file-based) or platform (PostgreSQL) mode.
+	// Only show this if the backend isn't already configured.
+	if cfg.Storage.Backend == "" {
+		if err := handleDeploymentModeSetup(cfg); err != nil {
+			if isUserAborted(err) {
+				fmt.Println("Setup aborted by user; no changes were saved.")
+				return nil
+			}
+			return err
 		}
 	}
 
@@ -1426,4 +1440,177 @@ func handleSandboxSetup() error {
 		printSuccess("Sandbox initialized! AI tools will run inside isolated containers.")
 		return nil
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Deployment Mode Setup
+// ---------------------------------------------------------------------------
+
+// handleDeploymentModeSetup asks the user to choose between personal and
+// platform mode. If platform is selected, it collects PostgreSQL connection
+// details, bootstraps the database, and configures the storage section.
+func handleDeploymentModeSetup(cfg *config.AppConfig) error {
+	clearScreen()
+
+	var mode string
+	err := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("How would you like to run Astonish?").
+				Description("Choose a deployment mode. You can change this later.").
+				Options(
+					huh.NewOption("Personal — Single user, local file storage, zero infrastructure", "personal"),
+					huh.NewOption("Platform — Multi-user with PostgreSQL, teams, and authentication", "platform"),
+				).
+				Value(&mode),
+		),
+	).Run()
+	if err != nil {
+		return err
+	}
+
+	if mode == "personal" {
+		// Nothing to configure — file-based storage is the default.
+		clearScreen()
+		fmt.Println()
+		fmt.Println("  Personal mode selected. Data will be stored locally on this machine.")
+		fmt.Println()
+		return nil
+	}
+
+	// Platform mode: collect PostgreSQL connection details.
+	return handlePlatformModeSetup(cfg)
+}
+
+// handlePlatformModeSetup collects PostgreSQL connection parameters and
+// bootstraps the platform database.
+func handlePlatformModeSetup(cfg *config.AppConfig) error {
+	clearScreen()
+
+	pgHost := "localhost"
+	pgPort := "5432"
+	pgUser := "postgres"
+	pgPassword := ""
+	pgSSLMode := "prefer"
+	orgName := "My Organization"
+	orgSlug := "my-org"
+
+	err := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("PostgreSQL Host").
+				Description("Hostname or IP address of the PostgreSQL server").
+				Value(&pgHost),
+			huh.NewInput().
+				Title("PostgreSQL Port").
+				Value(&pgPort),
+			huh.NewInput().
+				Title("PostgreSQL Username").
+				Description("Must have CREATEDB privilege to provision organization databases").
+				Value(&pgUser),
+			huh.NewInput().
+				Title("PostgreSQL Password").
+				EchoMode(huh.EchoModePassword).
+				Value(&pgPassword),
+			huh.NewSelect[string]().
+				Title("SSL Mode").
+				Options(
+					huh.NewOption("disable", "disable"),
+					huh.NewOption("prefer (recommended)", "prefer"),
+					huh.NewOption("require", "require"),
+				).
+				Value(&pgSSLMode),
+		),
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Organization Name").
+				Description("Display name for the auto-created organization").
+				Value(&orgName),
+			huh.NewInput().
+				Title("Organization Slug").
+				Description("URL-safe identifier (lowercase, hyphens allowed)").
+				Value(&orgSlug).
+				Validate(func(s string) error {
+					if s == "" {
+						return fmt.Errorf("slug cannot be empty")
+					}
+					for _, ch := range s {
+						if !((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_') {
+							return fmt.Errorf("must be lowercase alphanumeric with hyphens/underscores")
+						}
+					}
+					return nil
+				}),
+		),
+	).Run()
+	if err != nil {
+		return err
+	}
+
+	// Validate
+	if pgPassword == "" {
+		return fmt.Errorf("PostgreSQL password is required")
+	}
+
+	// Parse port
+	port := 5432
+	if pgPort != "" {
+		if _, scanErr := fmt.Sscanf(pgPort, "%d", &port); scanErr != nil {
+			return fmt.Errorf("invalid port: %s", pgPort)
+		}
+	}
+
+	// Build DSN
+	platformDSN := pgstore.BuildDSN(pgHost, port, pgUser, pgPassword, "astonish_platform", pgSSLMode)
+
+	clearScreen()
+	fmt.Println()
+	fmt.Printf("  Connecting to PostgreSQL at %s:%d...\n", pgHost, port)
+
+	// Bootstrap the platform database.
+	ctx := context.Background()
+	if err := pgstore.BootstrapPlatform(ctx, platformDSN); err != nil {
+		fmt.Println()
+		fmt.Printf("  ✗ Failed: %v\n", err)
+		fmt.Println()
+
+		// Offer to retry or abort.
+		var retry bool
+		retryErr := huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Would you like to try again with different settings?").
+					Affirmative("Yes, try again").
+					Negative("No, skip platform setup").
+					Value(&retry),
+			),
+		).Run()
+		if retryErr != nil {
+			return retryErr
+		}
+		if retry {
+			return handlePlatformModeSetup(cfg)
+		}
+		// User chose to skip — stay in personal mode.
+		return nil
+	}
+
+	fmt.Println("  ✓ Platform database initialized")
+	fmt.Println()
+
+	// Generate JWT secret and save to config.
+	jwtSecret := config.GenerateJWTSecret()
+
+	cfg.Storage.Backend = "postgres"
+	cfg.Storage.Postgres.PlatformDSN = platformDSN
+	cfg.Storage.Auth.Mode = "builtin"
+	cfg.Storage.Auth.JWTSecret = jwtSecret
+	cfg.Storage.Auth.DefaultOrgName = orgName
+	cfg.Storage.Auth.DefaultOrgSlug = orgSlug
+
+	fmt.Println("  Platform mode configured. The first user to register via Studio")
+	fmt.Println("  will become the organization owner with full admin access.")
+	fmt.Println()
+
+	return nil
 }

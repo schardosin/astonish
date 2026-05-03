@@ -101,10 +101,10 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 	registry.Register(fleetSession)
 
 	// Persist to the session index
-	persistFleetSessionMeta(fleetSession, fleetCfg, cfg.IssueNumber, cfg.Repo)
+	persistFleetSessionMeta(fleetSession, fleetCfg, studioChatUserID, cfg.IssueNumber, cfg.Repo)
 
 	// Create JSONL transcript
-	wireFleetTranscript(fleetSession)
+	wireFleetTranscript(fleetSession, studioChatUserID)
 
 	// Wire completion callback for issue lifecycle tracking
 	if cfg.CompletionFunc != nil {

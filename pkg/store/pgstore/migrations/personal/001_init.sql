@@ -1,0 +1,61 @@
+-- Personal schema initialization
+-- Applied to: astonish_org_{slug} database, personal_{user_id} schema
+-- Contains: user-private data tables (no user_id columns — schema IS the user)
+-- Note: {{schema}} is replaced with the actual schema name at migration time
+
+CREATE TABLE IF NOT EXISTS {{schema}}.memories (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    chunk_text      TEXT NOT NULL,
+    embedding       vector(384),
+    category        TEXT,
+    source_path     TEXT,
+    metadata        JSONB,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_personal_memories_embedding
+    ON {{schema}}.memories USING ivfflat (embedding vector_cosine_ops)
+    WITH (lists = 100);
+
+CREATE TABLE IF NOT EXISTS {{schema}}.apps (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    slug            TEXT NOT NULL UNIQUE,
+    name            TEXT NOT NULL,
+    description     TEXT DEFAULT '',
+    code            TEXT NOT NULL DEFAULT '',
+    version         INTEGER DEFAULT 1,
+    session_id      TEXT DEFAULT '',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS {{schema}}.app_state (
+    app_id          UUID NOT NULL,
+    key             TEXT NOT NULL,
+    value           JSONB,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (app_id, key)
+);
+
+CREATE TABLE IF NOT EXISTS {{schema}}.sessions (
+    id              TEXT PRIMARY KEY,
+    title           TEXT DEFAULT '',
+    message_count   INTEGER DEFAULT 0,
+    parent_id       TEXT,
+    metadata        JSONB DEFAULT '{}',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS {{schema}}.session_events (
+    id              BIGSERIAL PRIMARY KEY,
+    session_id      TEXT NOT NULL REFERENCES {{schema}}.sessions(id) ON DELETE CASCADE,
+    event_data      JSONB NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_personal_session_events_session
+    ON {{schema}}.session_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_personal_sessions_updated
+    ON {{schema}}.sessions(updated_at);

@@ -75,6 +75,10 @@ func Execute() error {
 		return handleNodeCommand(os.Args[2:])
 	case "demo":
 		return handleDemoCommand(os.Args[2:])
+	case "migrate":
+		return handleMigrateCommand(os.Args[2:])
+	case "platform":
+		return handlePlatformCommand(os.Args[2:])
 	default:
 		printUsage()
 		return fmt.Errorf("unknown command: %s", command)
@@ -82,10 +86,10 @@ func Execute() error {
 }
 
 func printUsage() {
-	fmt.Println("usage: astonish [-h] [-v] {chat,sessions,flows,tap,studio,daemon,channels,scheduler,fleet,credential,skills,sandbox,drill,config,setup,tools,memory} ...")
+	fmt.Println("usage: astonish [-h] [-v] {chat,sessions,flows,tap,studio,daemon,channels,scheduler,fleet,credential,skills,sandbox,drill,config,setup,tools,memory,migrate,platform} ...")
 	fmt.Println("")
 	fmt.Println("positional arguments:")
-	fmt.Println("  {chat,sessions,flows,tap,studio,daemon,channels,scheduler,fleet,credential,skills,sandbox,drill,config,setup,tools,memory}")
+	fmt.Println("  {chat,sessions,flows,tap,studio,daemon,channels,scheduler,fleet,credential,skills,sandbox,drill,config,setup,tools,memory,migrate,platform}")
 	fmt.Println("                        Astonish CLI commands")
 	fmt.Println("    chat                Start an interactive chat session")
 	fmt.Println("    sessions            Manage persistent sessions")
@@ -104,6 +108,8 @@ func printUsage() {
 	fmt.Println("    setup               Run interactive setup")
 	fmt.Println("    tools               Manage MCP tools")
 	fmt.Println("    memory              Manage semantic memory and knowledge")
+	fmt.Println("    migrate             Migrate file data to PostgreSQL (platform mode)")
+	fmt.Println("    platform            Manage the multi-tenant platform")
 	fmt.Println("")
 	fmt.Println("options:")
 	fmt.Println("  -h, --help            show this help message and exit")

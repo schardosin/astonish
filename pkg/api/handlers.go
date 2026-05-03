@@ -15,6 +15,8 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/flowstore"
+	"github.com/schardosin/astonish/pkg/store"
+	"github.com/schardosin/astonish/pkg/store/pgstore"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
 	"gopkg.in/yaml.v3"
@@ -621,8 +623,6 @@ func (m *minimalReadonlyContext) UserID() string                       { return 
 func (m *minimalReadonlyContext) SessionID() string                    { return "" }
 func (m *minimalReadonlyContext) Branch() string                       { return "" }
 
-// RegisterRoutes registers the API routes on a router
-
 // MCPServerInfo represents an MCP server in the list response
 type MCPServerInfo struct {
 	Name      string `json:"name"`
@@ -744,7 +744,38 @@ func UpdateMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, response)
 }
 
-func RegisterRoutes(router *mux.Router) {
+// RegisterRoutes registers the API routes on a router.
+//
+// When svc is non-nil, every request flowing through these routes will have
+// the Services instance injected into its context (via store.Middleware).
+// Handlers can then retrieve it with store.FromRequest(r).
+// Passing nil is safe — no middleware is applied and existing package-level
+// globals continue to work unchanged. This keeps backward compatibility
+// during the transition from global state to dependency injection.
+//
+// When pg is non-nil (platform mode), TenantMiddleware is also applied after
+// store.Middleware, resolving per-request tenant stores based on the
+// TenantContext set by PlatformAuthMiddleware.
+func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore) {
+	// Apply store middleware so every API handler can access Services via context.
+	if svc != nil {
+		router.Use(store.Middleware(svc))
+	}
+
+	// In platform mode, apply TenantMiddleware to resolve per-tenant stores.
+	// This must run AFTER store.Middleware (which injects the base Services)
+	// and AFTER PlatformAuthMiddleware (which sets TenantContext in the context).
+	// PlatformAuthMiddleware is applied outside the router (wraps the entire handler),
+	// so it always runs before router.Use() middleware.
+	if pg != nil {
+		router.Use(pgstore.TenantMiddleware(pg))
+	}
+
+	// Audit middleware logs API requests in platform mode.
+	// Runs after auth and store middleware so it has access to the
+	// authenticated user and tenant context.
+	router.Use(AuditMiddleware)
+
 	router.HandleFunc("/api/agents", ListAgentsHandler).Methods("GET")
 	router.HandleFunc("/api/agents/{name}", GetAgentHandler).Methods("GET")
 	router.HandleFunc("/api/agents/{name}", SaveAgentHandler).Methods("PUT")
@@ -776,6 +807,11 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/mcp/{name}/refresh", RefreshMCPServerHandler).Methods("POST")
 	router.HandleFunc("/api/settings/status", GetSetupStatusHandler).Methods("GET")
 	router.HandleFunc("/api/version", GetVersionHandler).Methods("GET")
+
+	// Platform setup endpoints (for deployment mode configuration)
+	router.HandleFunc("/api/platform/init", PlatformInitHandler).Methods("POST")
+	router.HandleFunc("/api/platform/init/status", PlatformInitStatusHandler).Methods("GET")
+	router.HandleFunc("/api/platform/mode", DeploymentModeHandler).Methods("GET")
 
 	// Sandbox endpoints
 	router.HandleFunc("/api/sandbox/status", SandboxStatusHandler).Methods("GET")
@@ -878,6 +914,13 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/apps/state/query", AppStateQueryHandler).Methods("POST")
 	router.HandleFunc("/api/apps/state/exec", AppStateExecHandler).Methods("POST")
 
+	// App sharing endpoints (must be before /api/apps/{name} to avoid capture)
+	router.HandleFunc("/api/apps/publish", AppPublishToTeamHandler).Methods("POST")
+	router.HandleFunc("/api/apps/fork", AppForkToPersonalHandler).Methods("POST")
+	router.HandleFunc("/api/apps/promote", AppPromoteToOrgHandler).Methods("POST")
+	router.HandleFunc("/api/apps/org", ListOrgAppsHandler).Methods("GET")
+	router.HandleFunc("/api/apps/org/{name}", DeleteOrgAppHandler).Methods("DELETE")
+
 	router.HandleFunc("/api/apps", ListAppsHandler).Methods("GET")
 	router.HandleFunc("/api/apps/{name}", GetAppHandler).Methods("GET")
 	router.HandleFunc("/api/apps/{name}", SaveAppHandler).Methods("PUT")
@@ -938,4 +981,17 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/drills/{suite}/drills/{name}/yaml", SaveDrillYAMLHandler).Methods("PUT")
 	router.HandleFunc("/api/drill-reports", ListDrillReportsHandler).Methods("GET")
 	router.HandleFunc("/api/drill-reports/{suite}", GetDrillReportHandler).Methods("GET")
+
+	// Memory sharing endpoints (platform mode)
+	router.HandleFunc("/api/memories/search", MemorySearchCrossTierHandler).Methods("POST")
+	router.HandleFunc("/api/memories/team", MemoryShareToTeamHandler).Methods("POST")
+	router.HandleFunc("/api/memories/team", MemoryListTeamHandler).Methods("GET")
+	router.HandleFunc("/api/memories/team/{id}", MemoryDeleteTeamHandler).Methods("DELETE")
+	router.HandleFunc("/api/memories/personal", MemorySavePersonalHandler).Methods("POST")
+	router.HandleFunc("/api/memories/org", MemoryListOrgHandler).Methods("GET")
+	router.HandleFunc("/api/memories/org/{id}", MemoryDeleteOrgHandler).Methods("DELETE")
+	router.HandleFunc("/api/memories/promote", MemoryPromoteToOrgHandler).Methods("POST")
+
+	// Audit log query (admin-only, platform mode)
+	router.HandleFunc("/api/audit", AuditQueryHandler).Methods("GET")
 }

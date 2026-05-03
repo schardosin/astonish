@@ -18,6 +18,7 @@ import (
 	"github.com/schardosin/astonish/pkg/apps"
 	adrill "github.com/schardosin/astonish/pkg/drill"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
+	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
@@ -300,6 +301,8 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userID := effectiveUserID(r)
+
 	cm := GetChatManager()
 	if err := cm.ensureReady(r.Context()); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -320,7 +323,19 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	comp := cm.components
 	chatAgent := comp.ChatAgent
-	sessionService := comp.SessionService
+
+	// Resolve session service per-request:
+	// Platform mode uses the tenant-scoped PG session store from middleware.
+	// Personal mode falls back to the singleton file-based session service.
+	var sessionService session.Service
+	var titleSetter SessionTitleSetter
+	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
+		sessionService = svc.Sessions
+		titleSetter = svc.Sessions
+	} else {
+		sessionService = comp.SessionService
+		titleSetter = cm.fileStore() // may be nil in edge cases
+	}
 
 	// Handle slash commands server-side (these are lightweight, no background runner needed)
 	msg := strings.TrimSpace(req.Message)
@@ -394,7 +409,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	if strings.HasPrefix(msg, "/") {
 		// Use r.Context() for slash commands since they're lightweight
-		handleSlashCommand(r.Context(), w, flusher, cm, msg, req.SessionID)
+		handleSlashCommand(r.Context(), w, flusher, cm, sessionService, msg, userID, req.SessionID)
 		return
 	}
 
@@ -409,39 +424,39 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			if msg == "__distill_save__" {
 				userText = "Save Flow"
 			}
-			persistSessionMessage(r.Context(), sessionService, req.SessionID, "user", userText)
+			persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "user", userText)
 			filePath, runCmd, err := chatAgent.SaveDistillReview(r.Context(), req.SessionID)
 			if err != nil {
 				errText := fmt.Sprintf("Failed to save flow: %v", err)
 				SendSSE(w, flusher, "text", map[string]interface{}{"text": errText})
-				persistSessionMessage(r.Context(), sessionService, req.SessionID, "model", errText)
+				persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "model", errText)
 			} else {
 				SendSSE(w, flusher, "distill_saved", map[string]interface{}{
 					"filePath":   filePath,
 					"runCommand": runCmd,
 				})
-				persistDistillSaved(r.Context(), sessionService, req.SessionID, filePath, runCmd)
+				persistDistillSaved(r.Context(), sessionService, userID, req.SessionID, filePath, runCmd)
 			}
 			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
 			return
 
 		case agent.DistillIntentCancel:
-			persistSessionMessage(r.Context(), sessionService, req.SessionID, "user", msg)
+			persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "user", msg)
 			chatAgent.CancelDistillReview(req.SessionID)
 			responseText := "Distill review cancelled."
 			SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})
-			persistSessionMessage(r.Context(), sessionService, req.SessionID, "model", responseText)
+			persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "model", responseText)
 			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
 			return
 
 		default: // DistillIntentModify
-			persistSessionMessage(r.Context(), sessionService, req.SessionID, "user", msg)
+			persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "user", msg)
 			SendSSE(w, flusher, "text", map[string]interface{}{"text": "Modifying flow...\n"})
 			review, err := chatAgent.ModifyDistillReview(r.Context(), req.SessionID, msg)
 			if err != nil {
 				errText := fmt.Sprintf("Failed to modify flow: %v\nYou can try another change, type `save` to save as-is, or `cancel` to abort.", err)
 				SendSSE(w, flusher, "text", map[string]interface{}{"text": errText})
-				persistSessionMessage(r.Context(), sessionService, req.SessionID, "model", errText)
+				persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "model", errText)
 			} else {
 				SendSSE(w, flusher, "distill_preview", map[string]interface{}{
 					"yaml":        review.YAML,
@@ -450,7 +465,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 					"tags":        review.Tags,
 					"explanation": review.Explanation,
 				})
-				persistDistillPreview(r.Context(), sessionService, req.SessionID, review)
+				persistDistillPreview(r.Context(), sessionService, userID, req.SessionID, review)
 			}
 			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
 			return
@@ -462,7 +477,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	if req.SessionID != "" && !chatAgent.HasActiveApp(req.SessionID) {
 		getResp, err := sessionService.Get(r.Context(), &session.GetRequest{
 			AppName:   studioChatAppName,
-			UserID:    studioChatUserID,
+			UserID:    userID,
 			SessionID: req.SessionID,
 		})
 		if err == nil && getResp != nil && getResp.Session != nil {
@@ -487,7 +502,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			if msg == "__app_save__" || msg == "__app_done__" || strings.HasPrefix(msg, "__app_save__:") {
 				userText = "Save"
 			}
-			persistSessionMessage(r.Context(), sessionService, req.SessionID, "user", userText)
+			persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "user", userText)
 
 			// Save the app to disk
 			var savedPath, savedName string
@@ -505,7 +520,12 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 					SessionID:   req.SessionID,
 				}
 				var saveErr error
-				savedPath, saveErr = apps.SaveApp(savedApp)
+				// Platform mode: use store abstraction; personal mode: write to disk
+				if svc := store.FromRequest(r); svc != nil && svc.Apps != nil {
+					savedPath, saveErr = svc.Apps.Save(savedApp)
+				} else {
+					savedPath, saveErr = apps.SaveApp(savedApp)
+				}
 				if saveErr != nil {
 					slog.Error("failed to save app", "error", saveErr)
 				}
@@ -523,7 +543,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 				"name": savedName,
 				"path": savedPath,
 			})
-			persistSessionMessage(r.Context(), sessionService, req.SessionID, "model", responseText)
+			persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "model", responseText)
 			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
 			return
 
@@ -557,7 +577,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	if sessionID == "" {
 		resp, err := sessionService.Create(r.Context(), &session.CreateRequest{
 			AppName: studioChatAppName,
-			UserID:  studioChatUserID,
+			UserID:  userID,
 		})
 		if err != nil {
 			SendErrorSSE(w, flusher, fmt.Sprintf("Failed to create session: %v", err))
@@ -587,7 +607,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 				Version:  1,
 			}
 			chatAgent.SetActiveApp(sessionID, activeApp)
-			persistAppPreview(r.Context(), sessionService, sessionID, code, title, 1, appID)
+			persistAppPreview(r.Context(), sessionService, userID, sessionID, code, title, 1, appID)
 			seededAppPreview = map[string]any{
 				"code":    code,
 				"title":   title,
@@ -598,7 +618,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Launch background runner — the agent runs independently of this HTTP request.
-	runner := newChatRunner(sessionID, isNew)
+	runner := newChatRunner(sessionID, userID, isNew)
 	runner.titleWaitTimeout = 30 * time.Second // wait for title goroutine before closing SSE
 
 	// If we seeded an app preview, emit it through the runner so the frontend
@@ -617,7 +637,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer registry.Unregister(sessionID)
 		defer cm.unregisterStream(sessionID)
-		runner.Run(chatAgent, sessionService, comp.LLM, cm.fileStore(), userMsg, msg, req.AutoApprove, req.SystemContext)
+		runner.Run(chatAgent, sessionService, comp.LLM, titleSetter, userMsg, msg, req.AutoApprove, req.SystemContext)
 	}()
 
 	// Become an SSE viewer: subscribe to the runner and forward events to the browser.
@@ -725,10 +745,9 @@ func streamRunnerEvents(w http.ResponseWriter, flusher http.Flusher, httpCtx con
 }
 
 // handleSlashCommand processes slash commands and sends results as SSE events.
-func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, cm *ChatManager, cmd, sessionID string) {
+func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, cm *ChatManager, sessionService session.Service, cmd, userID, sessionID string) {
 	comp := cm.components
 	chatAgent := comp.ChatAgent
-	sessionService := comp.SessionService
 
 	switch {
 	case cmd == "/help":
@@ -793,7 +812,7 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 	case cmd == "/new":
 		resp, err := sessionService.Create(ctx, &session.CreateRequest{
 			AppName: studioChatAppName,
-			UserID:  studioChatUserID,
+			UserID:  userID,
 		})
 		if err != nil {
 			SendErrorSSE(w, flusher, fmt.Sprintf("Failed to create session: %v", err))
@@ -805,24 +824,24 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 
 	case cmd == "/distill":
 		// Persist the user's /distill command to the session
-		persistSessionMessage(ctx, sessionService, sessionID, "user", "/distill")
+		persistSessionMessage(ctx, sessionService, userID, sessionID, "user", "/distill")
 
 		if sessionID == "" {
 			responseText := "No active session to distill."
 			SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})
-			persistSessionMessage(ctx, sessionService, sessionID, "model", responseText)
+			persistSessionMessage(ctx, sessionService, userID, sessionID, "model", responseText)
 		} else {
 			ds := agent.DistillSession{
 				SessionID: sessionID,
 				AppName:   studioChatAppName,
-				UserID:    studioChatUserID,
+				UserID:    userID,
 			}
 			// Identify traces and immediately run distillation (no confirmation step)
 			_, err := chatAgent.PreviewDistill(ctx, ds)
 			if err != nil {
 				responseText := fmt.Sprintf("Cannot distill: %v", err)
 				SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})
-				persistSessionMessage(ctx, sessionService, sessionID, "model", responseText)
+				persistSessionMessage(ctx, sessionService, userID, sessionID, "model", responseText)
 			} else {
 				// Run distillation and send preview directly
 				review, distillErr := chatAgent.DistillToReview(ctx, ds, func(text string) {
@@ -831,7 +850,7 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 				if distillErr != nil {
 					errText := fmt.Sprintf("Distillation failed: %v", distillErr)
 					SendSSE(w, flusher, "text", map[string]interface{}{"text": errText})
-					persistSessionMessage(ctx, sessionService, sessionID, "model", errText)
+					persistSessionMessage(ctx, sessionService, userID, sessionID, "model", errText)
 				} else {
 					SendSSE(w, flusher, "distill_preview", map[string]interface{}{
 						"yaml":        review.YAML,
@@ -840,7 +859,7 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 						"tags":        review.Tags,
 						"explanation": review.Explanation,
 					})
-					persistDistillPreview(ctx, sessionService, sessionID, review)
+					persistDistillPreview(ctx, sessionService, userID, sessionID, review)
 				}
 			}
 		}

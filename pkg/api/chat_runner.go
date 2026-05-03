@@ -12,7 +12,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/schardosin/astonish/pkg/agent"
-	persistentsession "github.com/schardosin/astonish/pkg/session"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/runner"
@@ -36,7 +35,8 @@ type ChatEvent struct {
 // independently and results are delivered asynchronously.
 type ChatRunner struct {
 	SessionID string
-	IsNew     bool // whether this is a newly created session
+	UserID    string // effective user ID (platform user ID or "studio_user")
+	IsNew     bool   // whether this is a newly created session
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -66,10 +66,11 @@ type ChatRunner struct {
 // titleWaitTimeout controls how long to wait for the title goroutine
 // after the "done" event before closing subscribers. Zero means close
 // immediately (used in tests).
-func newChatRunner(sessionID string, isNew bool) *ChatRunner {
+func newChatRunner(sessionID, userID string, isNew bool) *ChatRunner {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &ChatRunner{
 		SessionID:   sessionID,
+		UserID:      userID,
 		IsNew:       isNew,
 		ctx:         ctx,
 		cancel:      cancel,
@@ -85,7 +86,7 @@ func (cr *ChatRunner) Run(
 	chatAgent *agent.ChatAgent,
 	sessionService session.Service,
 	llm model.LLM,
-	fileStore *persistentsession.FileStore,
+	titleSetter SessionTitleSetter,
 	userMsg *genai.Content,
 	msg string,
 	autoApprove bool,
@@ -294,7 +295,7 @@ func (cr *ChatRunner) Run(
 	var lastRunErr error
 	hasContent := false // true if any non-partial text or tool call was emitted
 
-	for event, runErr := range rnr.Run(cr.ctx, studioChatUserID, cr.SessionID, userMsg, adkagent.RunConfig{
+	for event, runErr := range rnr.Run(cr.ctx, cr.UserID, cr.SessionID, userMsg, adkagent.RunConfig{
 		StreamingMode: adkagent.StreamingModeSSE,
 	}) {
 		if cr.ctx.Err() != nil {
@@ -304,7 +305,7 @@ func (cr *ChatRunner) Run(
 		if runErr != nil {
 			lastRunErr = runErr
 			cr.emitEvent("error", map[string]any{"error": runErr.Error()})
-			persistRunError(cr.ctx, sessionService, cr.SessionID, runErr)
+			persistRunError(cr.ctx, sessionService, cr.UserID, cr.SessionID, runErr)
 			break
 		}
 
@@ -401,7 +402,7 @@ func (cr *ChatRunner) Run(
 		}
 
 		seenPartialText = false
-		for event, runErr := range rnr.Run(cr.ctx, studioChatUserID, cr.SessionID, nudgeMsg, adkagent.RunConfig{
+		for event, runErr := range rnr.Run(cr.ctx, cr.UserID, cr.SessionID, nudgeMsg, adkagent.RunConfig{
 			StreamingMode: adkagent.StreamingModeSSE,
 		}) {
 			if cr.ctx.Err() != nil {
@@ -409,7 +410,7 @@ func (cr *ChatRunner) Run(
 			}
 			if runErr != nil {
 				cr.emitEvent("error", map[string]any{"error": fmt.Sprintf("Retry also failed: %v", runErr)})
-				persistRunError(cr.ctx, sessionService, cr.SessionID, runErr)
+				persistRunError(cr.ctx, sessionService, cr.UserID, cr.SessionID, runErr)
 				break
 			}
 			if event.Actions.StateDelta != nil {
@@ -480,10 +481,10 @@ func (cr *ChatRunner) Run(
 	// UI isn't blocked. The defer block waits on cr.titleDone (up to
 	// titleWaitTimeout) before closing subscribers, so the session_title
 	// SSE event reaches the browser if the LLM responds in time.
-	if cr.IsNew && msg != "" && fileStore != nil {
+	if cr.IsNew && msg != "" && titleSetter != nil {
 		go func() {
 			defer close(cr.titleDone)
-			generateStudioSessionTitle(llm, fileStore, cr.SessionID, msg, func(title string) {
+			generateStudioSessionTitle(llm, titleSetter, cr.SessionID, msg, func(title string) {
 				cr.emitEvent("session_title", map[string]any{"title": title})
 			})
 		}()
@@ -657,7 +658,7 @@ func (cr *ChatRunner) detectAndEmitAppPreviews(chatAgent *agent.ChatAgent, sessi
 		})
 
 		// Persist to session transcript
-		persistAppPreview(cr.ctx, sessionService, cr.SessionID, cleanCode, title, version, appID)
+		persistAppPreview(cr.ctx, sessionService, cr.UserID, cr.SessionID, cleanCode, title, version, appID)
 
 		// Update active app state for cross-turn refinement
 		chatAgent.SetActiveApp(cr.SessionID, existingApp)

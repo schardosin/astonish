@@ -108,7 +108,7 @@ type FleetSessionResult struct {
 // transcript callbacks (rather than replacing them), allowing callers (e.g., Telegram)
 // to add forwarding logic on top.
 // If initialMessage is non-empty, it is posted as the first customer message.
-func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionResult, error) {
+func StartFleetSessionFromPlan(planKey, initialMessage, userID string) (*FleetSessionResult, error) {
 	if fleetPlanRegistryVar == nil {
 		return nil, fmt.Errorf("fleet plan system not initialized")
 	}
@@ -182,8 +182,8 @@ func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionRes
 	// Register in session registry and persist metadata
 	registry := getFleetSessionRegistry()
 	registry.Register(fleetSession)
-	persistFleetSessionMeta(fleetSession, fleetCfg, 0, "")
-	wireFleetTranscript(fleetSession)
+	persistFleetSessionMeta(fleetSession, fleetCfg, userID, 0, "")
+	wireFleetTranscript(fleetSession, userID)
 
 	// Capture the transcript callback so we can compose additional callbacks on top.
 	transcriptCallback := fleetSession.OnMessagePosted
@@ -287,7 +287,7 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 
 	// If starting from a plan, use the shared helper
 	if req.PlanKey != "" {
-		result, err := StartFleetSessionFromPlan(req.PlanKey, req.Message)
+		result, err := StartFleetSessionFromPlan(req.PlanKey, req.Message, effectiveUserID(r))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -326,8 +326,8 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 
 	registry := getFleetSessionRegistry()
 	registry.Register(fleetSession)
-	persistFleetSessionMeta(fleetSession, cfg, 0, "")
-	wireFleetTranscript(fleetSession)
+	persistFleetSessionMeta(fleetSession, cfg, effectiveUserID(r), 0, "")
+	wireFleetTranscript(fleetSession, effectiveUserID(r))
 
 	go func() {
 		defer func() {
@@ -362,7 +362,7 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 
 // persistFleetSessionMeta adds the fleet session to the persistent session index
 // so it appears in the sidebar alongside regular chat sessions.
-func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig, issueNumber int, repo string) {
+func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig, userID string, issueNumber int, repo string) {
 	fileStore := getFleetFileStore()
 	if fileStore == nil {
 		slog.Warn("no file store available, cannot persist fleet session meta", "component", "fleet", "session_id", fs.ID)
@@ -383,7 +383,7 @@ func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig
 	meta := session.SessionMeta{
 		ID:           fs.ID,
 		AppName:      studioChatAppName,
-		UserID:       studioChatUserID,
+		UserID:       userID,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 		Title:        fmt.Sprintf("Fleet: %s", fleetCfg.Name),
@@ -417,7 +417,7 @@ func updateFleetSessionMeta(sessionID string, messageCount int) {
 // wireFleetTranscript creates a JSONL transcript file for a fleet session
 // and wires up the OnMessagePosted callback to persist messages to it.
 // This makes fleet sessions visible via `astonish sessions show <id>`.
-func wireFleetTranscript(fs *fleet.FleetSession) {
+func wireFleetTranscript(fs *fleet.FleetSession, userID string) {
 	fileStore := getFleetFileStore()
 	if fileStore == nil {
 		slog.Warn("no file store available, cannot create transcript", "component", "fleet", "session_id", fs.ID)
@@ -425,7 +425,7 @@ func wireFleetTranscript(fs *fleet.FleetSession) {
 	}
 
 	// Create the transcript file in the same location as regular session transcripts
-	transcriptPath := filepath.Join(fileStore.BaseDir(), studioChatAppName, studioChatUserID, fs.ID+".jsonl")
+	transcriptPath := filepath.Join(fileStore.BaseDir(), studioChatAppName, userID, fs.ID+".jsonl")
 	transcript := session.NewTranscript(transcriptPath)
 
 	if err := transcript.WriteHeader(fs.ID); err != nil {
@@ -736,7 +736,7 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 func FleetSessionThreadsHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
 
-	messages, err := getFleetMessages(sessionID, r.Context())
+	messages, err := getFleetMessages(sessionID, effectiveUserID(r), r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -821,7 +821,7 @@ func FleetSessionThreadsHandler(w http.ResponseWriter, r *http.Request) {
 func FleetSessionMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
 
-	messages, err := getFleetMessages(sessionID, r.Context())
+	messages, err := getFleetMessages(sessionID, effectiveUserID(r), r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -848,7 +848,7 @@ func FleetSessionMessagesHandler(w http.ResponseWriter, r *http.Request) {
 // getFleetMessages returns all fleet messages for a session. It first checks
 // the active session registry (in-memory), then falls back to reading the
 // JSONL transcript (completed sessions).
-func getFleetMessages(sessionID string, ctx context.Context) ([]fleet.Message, error) {
+func getFleetMessages(sessionID, userID string, ctx context.Context) ([]fleet.Message, error) {
 	// Try active session first
 	registry := getFleetSessionRegistry()
 	if fs := registry.Get(sessionID); fs != nil {
@@ -865,7 +865,7 @@ func getFleetMessages(sessionID string, ctx context.Context) ([]fleet.Message, e
 		return nil, fmt.Errorf("session %s not found (no active session, no file store)", sessionID)
 	}
 
-	events, err := fileStore.ReadTranscriptEvents(studioChatAppName, studioChatUserID, sessionID)
+	events, err := fileStore.ReadTranscriptEvents(studioChatAppName, userID, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("session %s not found: %w", sessionID, err)
 	}

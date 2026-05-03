@@ -172,6 +172,133 @@ func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, 
 	return containerName, nil
 }
 
+// EnsureOrgSessionContainer creates or retrieves a session container scoped to
+// an organization. It differs from EnsureSessionContainer in three ways:
+//   - Container name includes org/team slugs (OrgSessionContainerName)
+//   - Container is attached to the org-specific bridge network (OrgProfileName)
+//   - The org bridge network + profile are lazily created if missing
+//
+// When orgSlug is empty, this falls back to EnsureSessionContainer (personal mode).
+func EnsureOrgSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, tplRegistry *TemplateRegistry, sessionID, templateName string, limits *config.SandboxLimits, orgSlug, teamSlug string) (string, error) {
+	if orgSlug == "" {
+		return EnsureSessionContainer(client, sessRegistry, tplRegistry, sessionID, templateName, limits)
+	}
+
+	// Check registry — already exists?
+	if entry := sessRegistry.Get(sessionID); entry != nil {
+		containerName := entry.ContainerName
+
+		if client.IsRunning(containerName) {
+			return containerName, nil
+		}
+
+		// Exists but not running — try to re-mount overlay and start it
+		if client.InstanceExists(containerName) {
+			templateSnapshotMu.RLock()
+
+			poolName, poolErr := GetPoolForProfile(client)
+			if poolErr == nil {
+				if poolPath, pathErr := GetPoolSourcePath(client, poolName); pathErr == nil {
+					containerRootfs := ContainerRootfsPath(poolPath, containerName)
+					_ = umountOnSandboxHost(containerRootfs)
+				}
+			}
+
+			if err := ensureOverlayMounted(client, containerName, entry.TemplateName, tplRegistry); err != nil {
+				templateSnapshotMu.RUnlock()
+				return "", fmt.Errorf("failed to re-mount overlay for %q: %w (try 'astonish sandbox prune' and retry)", containerName, err)
+			}
+
+			err := client.StartInstance(containerName)
+			templateSnapshotMu.RUnlock()
+			if err != nil {
+				return "", fmt.Errorf("failed to start existing session container %q: %w", containerName, err)
+			}
+			return containerName, nil
+		}
+
+		// Container was registered but no longer exists — clean up and recreate
+		sessRegistry.Remove(sessionID)
+	}
+
+	// Resolve template
+	if templateName == "" {
+		templateName = BaseTemplate
+	}
+
+	tplContainerName := TemplateName(templateName)
+	if !client.InstanceExists(tplContainerName) {
+		return "", fmt.Errorf("template %q does not exist; run 'astonish sandbox init' first", templateName)
+	}
+	if templateName == BaseTemplate && !client.HasSnapshot(tplContainerName, SnapshotName) {
+		return "", fmt.Errorf("template %q has no snapshot; run 'astonish sandbox init' first", templateName)
+	}
+
+	// Ensure org network + profile exist (idempotent)
+	if err := EnsureOrgNetwork(client, orgSlug); err != nil {
+		return "", fmt.Errorf("failed to ensure org network for %q: %w", orgSlug, err)
+	}
+
+	// Org-scoped container name
+	containerName := OrgSessionContainerName(orgSlug, teamSlug, sessionID)
+
+	if client.InstanceExists(containerName) {
+		for _, entry := range sessRegistry.List() {
+			if entry.ContainerName == containerName && entry.SessionID != sessionID {
+				if err := sessRegistry.Remove(entry.SessionID); err != nil {
+					slog.Warn("failed to remove stale registry entry", "component", "sandbox", "session", entry.SessionID, "error", err)
+				}
+				break
+			}
+		}
+		if err := destroyOverlayContainer(client, containerName); err != nil {
+			return "", fmt.Errorf("failed to clean up existing container %q: %w", containerName, err)
+		}
+	}
+
+	templateSnapshotMu.RLock()
+	defer templateSnapshotMu.RUnlock()
+
+	// Create container with org profile (isolated bridge network)
+	orgProfile := OrgProfileName(orgSlug)
+	if err := CreateOverlayContainerWithProfiles(client, containerName, templateName, tplRegistry, limits, []string{orgProfile}); err != nil {
+		return "", fmt.Errorf("failed to create org session container: %w", err)
+	}
+
+	if err := client.StartInstance(containerName); err != nil {
+		lxcLog := readLXCLog(containerName)
+		if destroyErr := destroyOverlayContainer(client, containerName); destroyErr != nil {
+			if delErr := client.DeleteInstance(containerName); delErr != nil {
+				slog.Warn("fallback delete also failed after start failure", "component", "sandbox", "container", containerName, "error", delErr)
+			}
+		}
+		if lxcLog != "" {
+			return "", fmt.Errorf("failed to start org session container: %w\n\nLXC log:\n%s", err, lxcLog)
+		}
+		return "", fmt.Errorf("failed to start org session container: %w", err)
+	}
+
+	if err := verifyContainerHealth(client, containerName); err != nil {
+		if destroyErr := destroyOverlayContainer(client, containerName); destroyErr != nil {
+			if delErr := client.DeleteInstance(containerName); delErr != nil {
+				slog.Warn("fallback delete also failed after health check failure", "component", "sandbox", "container", containerName, "error", delErr)
+			}
+		}
+		return "", fmt.Errorf("org session container health check failed: %w", err)
+	}
+
+	if err := sessRegistry.Put(sessionID, containerName, templateName); err != nil {
+		if destroyErr := destroyOverlayContainer(client, containerName); destroyErr != nil {
+			if delErr := client.DeleteInstance(containerName); delErr != nil {
+				slog.Warn("fallback delete also failed after registry write failure", "component", "sandbox", "container", containerName, "error", delErr)
+			}
+		}
+		return "", fmt.Errorf("failed to register org session container: %w", err)
+	}
+
+	return containerName, nil
+}
+
 // DestroyForSession stops and deletes the container for a session,
 // including unmounting any overlayfs.
 func DestroyForSession(client *IncusClient, registry *SessionRegistry, sessionID string) error {

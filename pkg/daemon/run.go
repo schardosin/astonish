@@ -25,9 +25,13 @@ import (
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/launcher"
 	"github.com/schardosin/astonish/pkg/memory"
+	"github.com/schardosin/astonish/pkg/migration"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/scheduler"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
+	"github.com/schardosin/astonish/pkg/store"
+	"github.com/schardosin/astonish/pkg/store/filestore"
+	"github.com/schardosin/astonish/pkg/store/pgstore"
 	"github.com/schardosin/astonish/pkg/tools"
 )
 
@@ -119,6 +123,43 @@ func Run(cfg RunConfig) error {
 		config.SetupAllProviderEnv(appCfg)
 	}
 
+	// --- Initialize store.Services for dependency injection ---
+	// Backend selection: "postgres" → platform mode, everything else → personal mode.
+	var svc *store.Services
+	var pgStore *pgstore.PGStore // non-nil only in platform mode
+
+	if appCfg.Storage.Backend == "postgres" {
+		// Platform mode: multi-tenant PostgreSQL storage.
+		var pgErr error
+		svc, pgStore, pgErr = pgstore.NewPlatformServices(context.Background(), appCfg.Storage.Postgres)
+		if pgErr != nil {
+			// Auto-init: if the platform DB is not yet initialized, attempt
+			// BootstrapPlatform() and retry. This handles the case where
+			// config was saved (e.g. by the setup wizard) but the user didn't
+			// run `astonish platform init` separately.
+			logger.Printf("Platform store init failed, attempting auto-bootstrap: %v", pgErr)
+			if bootstrapErr := pgstore.BootstrapPlatform(context.Background(), appCfg.Storage.Postgres.PlatformDSN); bootstrapErr != nil {
+				return fmt.Errorf("failed to initialize platform storage: %w (auto-bootstrap also failed: %v)", pgErr, bootstrapErr)
+			}
+			logger.Printf("Auto-bootstrap succeeded, retrying platform store init")
+			svc, pgStore, pgErr = pgstore.NewPlatformServices(context.Background(), appCfg.Storage.Postgres)
+			if pgErr != nil {
+				return fmt.Errorf("failed to initialize platform storage after auto-bootstrap: %w", pgErr)
+			}
+		}
+		defer pgStore.Close()
+		logger.Printf("Storage backend: PostgreSQL (platform mode)")
+	} else {
+		// Personal mode: all stores backed by local filesystem.
+		// The Services struct is populated incrementally as subsystems come online.
+		svc = filestore.NewPersonalServices()
+		logger.Printf("Storage backend: filesystem (personal mode)")
+	}
+
+	if credStore != nil && svc.Mode == store.ModePersonal {
+		filestore.SetCredentialStore(svc, credStore)
+	}
+
 	// Set up MCP environment variables
 	if mcpCfg, err := config.LoadMCPConfig(); err == nil {
 		config.SetupMCPEnv(mcpCfg)
@@ -158,6 +199,7 @@ func Run(cfg RunConfig) error {
 		if store, fsErr := persistentsession.NewFileStore(sessDir); fsErr == nil {
 			sharedFileStore = store
 			api.SetFleetSessionStore(store)
+			filestore.SetSessionStore(svc, store)
 			logger.Printf("Session store initialized (%s)", sessDir)
 		} else {
 			logger.Printf("Warning: Failed to initialize session store: %v", fsErr)
@@ -168,7 +210,26 @@ func Run(cfg RunConfig) error {
 
 	// --- Initialize device authorization for Studio ---
 	var authManager *api.AuthManager
-	if appCfg.Daemon.Auth.IsAuthEnabled() && configDir != "" {
+	var platformAuth *api.PlatformAuth
+	var migrationMgr *api.MigrationManager
+
+	if svc.Mode == store.ModePlatform && pgStore != nil {
+		// Platform mode: JWT-based authentication
+		platformAuth = api.NewPlatformAuth(appCfg.Storage.Auth, pgStore, appCfg.Storage)
+		if appCfg.Storage.Auth.GetJWTSecret() == "" {
+			logger.Printf("WARNING: No JWT secret configured (ASTONISH_JWT_SECRET env or storage.auth.jwt_secret config)")
+			logger.Printf("A random key has been generated — tokens will not survive daemon restarts")
+		}
+		logger.Printf("Platform authentication enabled (mode: %s)", appCfg.Storage.Auth.Mode)
+
+		// Check if file→database migration is available
+		if configDir != "" && !migration.IsMigrationComplete(configDir) && migration.HasFileData(configDir) {
+			migrationMgr = api.NewMigrationManager(pgStore, appCfg.Storage.Auth, appCfg.Storage, configDir, appCfg)
+			platformAuth.SetMigrationManager(migrationMgr)
+			logger.Printf("File data detected — migration available for first-time platform setup")
+		}
+	} else if appCfg.Daemon.Auth.IsAuthEnabled() && configDir != "" {
+		// Personal mode: device authorization flow
 		authStore, authErr := api.NewAuthStore(configDir, appCfg.Daemon.Auth.GetSessionTTL())
 		if authErr != nil {
 			logger.Printf("Warning: Failed to initialize auth store: %v", authErr)
@@ -200,6 +261,8 @@ func Run(cfg RunConfig) error {
 		} else if di != nil {
 			daemonIndexer = di
 			defer di.Cleanup()
+			// Wire memory store into Services (Store for vector search)
+			filestore.SetMemoryStores(svc, di.Store, nil)
 		}
 	}
 
@@ -524,6 +587,8 @@ func Run(cfg RunConfig) error {
 			if storeErr != nil {
 				logger.Printf("Warning: Failed to initialize scheduler store: %v", storeErr)
 			} else {
+				filestore.SetSchedulerStore(svc, store)
+
 				// Create executor with injected headless runner
 				schedExec = &scheduler.Executor{
 					AppConfig:    appCfg,
@@ -638,7 +703,7 @@ func Run(cfg RunConfig) error {
 				return &fleetTemplateRegistryAdapter{reg: reg}
 			},
 			StartSessionFromPlan: func(planKey, initialMessage string) (*channels.FleetSessionStartResult, error) {
-				result, err := api.StartFleetSessionFromPlan(planKey, initialMessage)
+				result, err := api.StartFleetSessionFromPlan(planKey, initialMessage, api.DefaultUserID())
 				if err != nil {
 					return nil, err
 				}
@@ -683,8 +748,14 @@ func Run(cfg RunConfig) error {
 
 	// Create and start the Studio server
 	var studioOpts []launcher.StudioOption
-	if authManager != nil {
+	studioOpts = append(studioOpts, launcher.WithServices(svc))
+	if platformAuth != nil && pgStore != nil {
+		studioOpts = append(studioOpts, launcher.WithPlatformAuth(platformAuth, pgStore))
+	} else if authManager != nil {
 		studioOpts = append(studioOpts, launcher.WithAuth(authManager))
+	}
+	if migrationMgr != nil {
+		studioOpts = append(studioOpts, launcher.WithMigrationManager(migrationMgr))
 	}
 	if sharedFileStore != nil {
 		studioOpts = append(studioOpts, launcher.WithSessionStore(sharedFileStore))

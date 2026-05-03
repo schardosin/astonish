@@ -313,6 +313,12 @@ type LazyNodeClient struct {
 	containerReady chan struct{}
 	containerErr   error
 
+	// OrgSlug and TeamSlug scope the container to an org's isolated network.
+	// Set by NodeClientPool.GetOrCreate when the pool has org context.
+	// When empty, personal-mode naming and default network are used.
+	OrgSlug  string
+	TeamSlug string
+
 	// initDone is created by BindSession and closed when background init completes
 	// (both container creation AND node startup). Call() waits on this channel
 	// before forwarding to the NodeClient.
@@ -376,8 +382,15 @@ func (lnc *LazyNodeClient) BindSession(sessionID string) {
 func (lnc *LazyNodeClient) initBackground(sessionID string) {
 	defer close(lnc.initDone)
 
-	// Phase 1: Create or get the session container
-	containerName, err := EnsureSessionContainer(lnc.incusClient, lnc.sessRegistry, lnc.tplRegistry, sessionID, lnc.template, lnc.limits)
+	// Phase 1: Create or get the session container.
+	// Use org-scoped lifecycle if org context is set (platform mode).
+	var containerName string
+	var err error
+	if lnc.OrgSlug != "" {
+		containerName, err = EnsureOrgSessionContainer(lnc.incusClient, lnc.sessRegistry, lnc.tplRegistry, sessionID, lnc.template, lnc.limits, lnc.OrgSlug, lnc.TeamSlug)
+	} else {
+		containerName, err = EnsureSessionContainer(lnc.incusClient, lnc.sessRegistry, lnc.tplRegistry, sessionID, lnc.template, lnc.limits)
+	}
 	if err != nil {
 		lnc.mu.Lock()
 		lnc.containerErr = fmt.Errorf("failed to create session container: %w", err)
@@ -865,10 +878,12 @@ type NodeClientPool struct {
 	template     string
 	limits       *config.SandboxLimits
 
-	mu      sync.Mutex
-	clients map[string]*LazyNodeClient
-	env     map[string]string
-	closed  bool
+	mu       sync.Mutex
+	clients  map[string]*LazyNodeClient
+	env      map[string]string
+	closed   bool
+	orgSlug  string // org slug for container naming/networking (platform mode)
+	teamSlug string // team slug for container naming (platform mode)
 }
 
 // NewNodeClientPool creates a pool that will create per-session LazyNodeClients
@@ -892,6 +907,24 @@ func (p *NodeClientPool) SetEnv(env map[string]string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.env = env
+}
+
+// SetOrgContext sets the org and team slugs for platform mode.
+// When set, container names include the org/team slugs and containers
+// are attached to the org-specific bridge network for isolation.
+// Must be called before any GetOrCreate calls.
+func (p *NodeClientPool) SetOrgContext(orgSlug, teamSlug string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.orgSlug = orgSlug
+	p.teamSlug = teamSlug
+}
+
+// OrgSlug returns the org slug set via SetOrgContext.
+func (p *NodeClientPool) OrgSlug() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.orgSlug
 }
 
 // GetOrCreate returns the LazyNodeClient for the given session ID, creating
@@ -937,6 +970,8 @@ func (p *NodeClientPool) GetOrCreate(sessionID string) *LazyNodeClient {
 	// Create a new LazyNodeClient for this session
 	client := NewLazyNodeClient(p.incusClient, p.sessRegistry, p.tplRegistry, p.template, p.limits)
 	client.Env = p.env
+	client.OrgSlug = p.orgSlug
+	client.TeamSlug = p.teamSlug
 	p.clients[sessionID] = client
 	return client
 }

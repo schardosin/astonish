@@ -18,6 +18,13 @@ import (
 	"google.golang.org/genai"
 )
 
+// SessionTitleSetter is a minimal interface for setting a session's title.
+// Both *persistentsession.FileStore and store.SessionStore (pgSessionStore)
+// satisfy this interface.
+type SessionTitleSetter interface {
+	SetSessionTitle(sessionID, title string) error
+}
+
 // titleThinkTagRe strips <think>/<thinking> blocks that some models emit in
 // title-generation responses.
 var titleThinkTagRe = regexp.MustCompile(`(?s)<(?:think|thinking)>.*?</(?:think|thinking)>`)
@@ -700,7 +707,7 @@ func fleetEventsToMessages(events []*session.Event) []FleetMessageSummary {
 // generateStudioSessionTitle calls the LLM to produce a short session title.
 // The optional onTitle callback is invoked with the generated title so callers
 // can push a real-time SSE event to connected browsers.
-func generateStudioSessionTitle(llm model.LLM, store *persistentsession.FileStore, sessionID, userMessage string, onTitle func(string)) {
+func generateStudioSessionTitle(llm model.LLM, store SessionTitleSetter, sessionID, userMessage string, onTitle func(string)) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
@@ -776,10 +783,10 @@ func toInt(v interface{}) int {
 // returns an error. Without this, errors are only sent as transient SSE events
 // and disappear on page reload — the user sees their message but no indication
 // that the model failed.
-func persistRunError(ctx context.Context, svc session.Service, sessionID string, runErr error) {
+func persistRunError(ctx context.Context, svc session.Service, userID, sessionID string, runErr error) {
 	resp, err := svc.Get(ctx, &session.GetRequest{
 		AppName:   studioChatAppName,
-		UserID:    studioChatUserID,
+		UserID:    userID,
 		SessionID: sessionID,
 	})
 	if err != nil {
@@ -807,13 +814,13 @@ func persistRunError(ctx context.Context, svc session.Service, sessionID string,
 // persistSessionMessage appends a user or model text message to the session.
 // This is used for interactions that bypass runner.Run() (like slash commands)
 // so they appear in the persisted session history.
-func persistSessionMessage(ctx context.Context, svc session.Service, sessionID, role, text string) {
+func persistSessionMessage(ctx context.Context, svc session.Service, userID, sessionID, role, text string) {
 	if svc == nil || sessionID == "" || text == "" {
 		return
 	}
 	resp, err := svc.Get(ctx, &session.GetRequest{
 		AppName:   studioChatAppName,
-		UserID:    studioChatUserID,
+		UserID:    userID,
 		SessionID: sessionID,
 	})
 	if err != nil {
@@ -848,14 +855,14 @@ func persistSessionMessage(ctx context.Context, svc session.Service, sessionID, 
 // returns the content argument. This is used as a fallback when the actual
 // file no longer exists on disk (e.g., written to /tmp, or inside a sandbox
 // container that is stopped).
-func readArtifactContentFromSession(fs *persistentsession.FileStore, sessionID, filePath string) (string, bool) {
+func readArtifactContentFromSession(fs *persistentsession.FileStore, userID, sessionID, filePath string) (string, bool) {
 	if fs == nil {
 		return "", false
 	}
 
 	getResp, err := fs.Get(context.Background(), &session.GetRequest{
 		AppName:   studioChatAppName,
-		UserID:    studioChatUserID,
+		UserID:    userID,
 		SessionID: sessionID,
 	})
 	if err != nil {
@@ -922,7 +929,7 @@ type distillSavedPayload struct {
 }
 
 // persistDistillPreview serializes a DistillReview as a structured text event.
-func persistDistillPreview(ctx context.Context, svc session.Service, sessionID string, review *agent.DistillReview) {
+func persistDistillPreview(ctx context.Context, svc session.Service, userID, sessionID string, review *agent.DistillReview) {
 	if svc == nil || sessionID == "" || review == nil {
 		return
 	}
@@ -938,11 +945,11 @@ func persistDistillPreview(ctx context.Context, svc session.Service, sessionID s
 		slog.Error("failed to marshal distill preview", "error", err)
 		return
 	}
-	persistSessionMessage(ctx, svc, sessionID, "model", distillPreviewPrefix+string(data))
+	persistSessionMessage(ctx, svc, userID, sessionID, "model", distillPreviewPrefix+string(data))
 }
 
 // persistDistillSaved serializes a distill-saved result as a structured text event.
-func persistDistillSaved(ctx context.Context, svc session.Service, sessionID, filePath, runCmd string) {
+func persistDistillSaved(ctx context.Context, svc session.Service, userID, sessionID, filePath, runCmd string) {
 	if svc == nil || sessionID == "" {
 		return
 	}
@@ -955,7 +962,7 @@ func persistDistillSaved(ctx context.Context, svc session.Service, sessionID, fi
 		slog.Error("failed to marshal distill saved", "error", err)
 		return
 	}
-	persistSessionMessage(ctx, svc, sessionID, "model", distillSavedPrefix+string(data))
+	persistSessionMessage(ctx, svc, userID, sessionID, "model", distillSavedPrefix+string(data))
 }
 
 // tryParseDistillMessage checks if a text starts with a distill marker prefix
@@ -1008,7 +1015,7 @@ type appPreviewPayload struct {
 }
 
 // persistAppPreview serializes an app preview as a structured text event.
-func persistAppPreview(ctx context.Context, svc session.Service, sessionID, code, title string, version int, appID string) {
+func persistAppPreview(ctx context.Context, svc session.Service, userID, sessionID, code, title string, version int, appID string) {
 	if svc == nil || sessionID == "" || code == "" {
 		return
 	}
@@ -1023,7 +1030,7 @@ func persistAppPreview(ctx context.Context, svc session.Service, sessionID, code
 		slog.Error("failed to marshal app preview", "error", err)
 		return
 	}
-	persistSessionMessage(ctx, svc, sessionID, "model", appPreviewPrefix+string(data))
+	persistSessionMessage(ctx, svc, userID, sessionID, "model", appPreviewPrefix+string(data))
 }
 
 // tryParseAppPreviewMessage checks if a text starts with the app_preview marker prefix

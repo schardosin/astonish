@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/memory"
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )
@@ -35,7 +36,7 @@ type MemorySaveStore interface {
 // MemorySave saves facts to persistent memory. This function is used
 // as the handler for the memory_save tool.
 // If store is provided, it triggers reindexing after writing knowledge tier files.
-func MemorySave(mgr *memory.Manager, store MemorySaveStore) func(ctx tool.Context, args MemorySaveArgs) (MemorySaveResult, error) {
+func MemorySave(mgr *memory.Manager, saveStore MemorySaveStore) func(ctx tool.Context, args MemorySaveArgs) (MemorySaveResult, error) {
 	return func(ctx tool.Context, args MemorySaveArgs) (MemorySaveResult, error) {
 		if args.Category == "" {
 			return MemorySaveResult{}, fmt.Errorf("category is required")
@@ -53,8 +54,8 @@ func MemorySave(mgr *memory.Manager, store MemorySaveStore) func(ctx tool.Contex
 			}
 
 			// Trigger reindex of MEMORY.md if store is available
-			if store != nil {
-				if err := store.ReindexFile(context.Background(), "MEMORY.md"); err != nil {
+			if saveStore != nil {
+				if err := saveStore.ReindexFile(context.Background(), "MEMORY.md"); err != nil {
 					slog.Warn("failed to reindex memory file after save", "file", "MEMORY.md", "error", err)
 				}
 			}
@@ -73,8 +74,8 @@ func MemorySave(mgr *memory.Manager, store MemorySaveStore) func(ctx tool.Contex
 
 		// Resolve the absolute path using the memory directory
 		var memDir string
-		if store != nil {
-			memDir = store.Config().MemoryDir
+		if saveStore != nil {
+			memDir = saveStore.Config().MemoryDir
 		}
 		if memDir == "" {
 			memDir = filepath.Dir(mgr.Path)
@@ -95,8 +96,8 @@ func MemorySave(mgr *memory.Manager, store MemorySaveStore) func(ctx tool.Contex
 		}
 
 		// Trigger reindex
-		if store != nil {
-			if err := store.ReindexFile(context.Background(), resolvedRel); err != nil {
+		if saveStore != nil {
+			if err := saveStore.ReindexFile(context.Background(), resolvedRel); err != nil {
 				slog.Warn("failed to reindex memory file after save", "file", resolvedRel, "error", err)
 			}
 		}
@@ -108,14 +109,76 @@ func MemorySave(mgr *memory.Manager, store MemorySaveStore) func(ctx tool.Contex
 	}
 }
 
+// PlatformMemorySave saves facts to memory using the store.MemoryStore interface.
+// Used in platform mode where memories are stored in PostgreSQL instead of files.
+// The memMgr is used for MEMORY.md core tier (file-based), while the memStore
+// handles team-scoped knowledge tier saves.
+func PlatformMemorySave(memMgr store.MemoryManager, memStore store.MemoryStore) func(ctx tool.Context, args MemorySaveArgs) (MemorySaveResult, error) {
+	return func(ctx tool.Context, args MemorySaveArgs) (MemorySaveResult, error) {
+		if args.Category == "" {
+			return MemorySaveResult{}, fmt.Errorf("category is required")
+		}
+		if args.Content == "" {
+			return MemorySaveResult{}, fmt.Errorf("content is required")
+		}
+
+		kind := strings.TrimSpace(strings.ToLower(args.Kind))
+
+		// Determine the category for the database entry.
+		// In platform mode, "kind" maps to the PG category column.
+		dbCategory := args.Category
+		if kind != "" {
+			dbCategory = kind + "/" + args.Category
+		}
+
+		// If memMgr is available and no kind specified, also append to MEMORY.md
+		// for backward compatibility with personal-mode tools that read it.
+		if kind == "" && memMgr != nil {
+			if err := memMgr.Append(args.Category, args.Content, args.Overwrite); err != nil {
+				slog.Warn("failed to append to MEMORY.md in platform mode", "error", err)
+				// Don't fail — the PG store write below is the primary target
+			}
+		}
+
+		// Save to the team memory store (PG)
+		if memStore != nil {
+			entry := store.MemoryEntry{
+				Content:  args.Content,
+				Category: dbCategory,
+			}
+			if err := memStore.Add(context.Background(), entry); err != nil {
+				return MemorySaveResult{}, fmt.Errorf("failed to save memory: %w", err)
+			}
+		}
+
+		scope := "team"
+		return MemorySaveResult{
+			Saved:   true,
+			Message: fmt.Sprintf("Saved to %s memory under '%s'", scope, dbCategory),
+		}, nil
+	}
+}
+
 // NewMemorySaveTool creates the memory_save tool using the given memory manager.
 // If store is provided, knowledge tier writes are supported and reindexing is triggered.
-func NewMemorySaveTool(mgr *memory.Manager, store MemorySaveStore) (tool.Tool, error) {
+func NewMemorySaveTool(mgr *memory.Manager, saveStore MemorySaveStore) (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name: "memory_save",
 		Description: "Save durable facts to persistent memory. Omit 'kind' for core MEMORY.md (identity/preferences/connections). " +
 			"Use kind='tools' for tool quirks/CLI syntax/API patterns, kind='workarounds' for problems+solutions, " +
 			"kind='infrastructure' for servers/networking/services, kind='projects' for project-specific knowledge, " +
 			"kind='others' for anything else. Set overwrite=true to replace outdated sections. NEVER save ephemeral data.",
-	}, MemorySave(mgr, store))
+	}, MemorySave(mgr, saveStore))
+}
+
+// NewPlatformMemorySaveTool creates the memory_save tool for platform mode.
+// Saves to the team-scoped PostgreSQL memory store.
+func NewPlatformMemorySaveTool(memMgr store.MemoryManager, memStore store.MemoryStore) (tool.Tool, error) {
+	return functiontool.New(functiontool.Config{
+		Name: "memory_save",
+		Description: "Save durable facts to persistent memory. Omit 'kind' for core MEMORY.md (identity/preferences/connections). " +
+			"Use kind='tools' for tool quirks/CLI syntax/API patterns, kind='workarounds' for problems+solutions, " +
+			"kind='infrastructure' for servers/networking/services, kind='projects' for project-specific knowledge, " +
+			"kind='others' for anything else. Set overwrite=true to replace outdated sections. NEVER save ephemeral data.",
+	}, PlatformMemorySave(memMgr, memStore))
 }

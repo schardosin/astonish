@@ -134,6 +134,12 @@ export function buildPath(view: string, params: BuildPathParams = {}): string {
         return `/apps/${encodeURIComponent(params.subKey)}`
       }
       return '/apps'
+    case 'team-mgmt':
+      return '/team-mgmt'
+    case 'knowledge':
+      return '/knowledge'
+    case 'audit':
+      return '/audit'
     default:
       return '/chat'
   }

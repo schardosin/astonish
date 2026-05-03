@@ -1,0 +1,401 @@
+package pgstore
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"math"
+	"sort"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/schardosin/astonish/pkg/store"
+)
+
+// pgMemoryStore implements store.MemoryStore for PostgreSQL.
+// It supports hybrid search: pgvector cosine similarity + tsvector keyword search.
+type pgMemoryStore struct {
+	pool        *pgxpool.Pool
+	schema      string
+	tablePrefix string // "org_" for org-level, "" for team/personal
+	scope       string // "personal", "team", "org" — set on results
+}
+
+func (m *pgMemoryStore) tableName() string {
+	return pgx.Identifier{m.schema, m.tablePrefix + "memories"}.Sanitize()
+}
+
+// Search performs a hybrid vector + tsvector keyword search.
+// When no embedding is available, falls back to tsvector-only search.
+func (m *pgMemoryStore) Search(ctx context.Context, query string, maxResults int, minScore float64) ([]store.MemorySearchResult, error) {
+	return m.hybridSearch(ctx, query, maxResults, minScore, "")
+}
+
+// SearchByCategory performs a hybrid search filtered by category.
+func (m *pgMemoryStore) SearchByCategory(ctx context.Context, query string, maxResults int, minScore float64, category string) ([]store.MemorySearchResult, error) {
+	return m.hybridSearch(ctx, query, maxResults, minScore, category)
+}
+
+// hybridSearch performs a tsvector full-text search with scoring via ts_rank.
+// Vector search is handled separately via HybridSearch (with embedding).
+func (m *pgMemoryStore) hybridSearch(ctx context.Context, query string, maxResults int, minScore float64, category string) ([]store.MemorySearchResult, error) {
+	// Build the query using tsvector for keyword ranking
+	var sql string
+	var args []any
+
+	if category == "" {
+		sql = fmt.Sprintf(
+			`SELECT id::text, chunk_text, category, source_path,
+			        ts_rank(tsv, plainto_tsquery('english', $1)) AS score
+			 FROM %s
+			 WHERE tsv @@ plainto_tsquery('english', $1)
+			 ORDER BY score DESC
+			 LIMIT $2`, m.tableName())
+		args = []any{query, maxResults}
+	} else {
+		sql = fmt.Sprintf(
+			`SELECT id::text, chunk_text, category, source_path,
+			        ts_rank(tsv, plainto_tsquery('english', $1)) AS score
+			 FROM %s
+			 WHERE tsv @@ plainto_tsquery('english', $1)
+			   AND category = $3
+			 ORDER BY score DESC
+			 LIMIT $2`, m.tableName())
+		args = []any{query, maxResults, category}
+	}
+
+	rows, err := m.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("memory tsvector search failed: %w", err)
+	}
+	defer rows.Close()
+
+	var results []store.MemorySearchResult
+	for rows.Next() {
+		var id, content string
+		var cat, sourcePath *string
+		var score float64
+		if err := rows.Scan(&id, &content, &cat, &sourcePath, &score); err != nil {
+			return nil, err
+		}
+		if score < minScore {
+			continue
+		}
+		r := store.MemorySearchResult{
+			ID:      id,
+			Snippet: content,
+			Score:   score,
+			Scope:   m.scope,
+		}
+		if cat != nil {
+			r.Category = *cat
+		}
+		if sourcePath != nil {
+			r.Path = *sourcePath
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
+// HybridSearch performs a combined vector similarity + tsvector keyword search.
+// Results from both are merged using reciprocal rank fusion (RRF).
+//
+// vectorWeight and keywordWeight control the balance (e.g., 0.7 / 0.3).
+func (m *pgMemoryStore) HybridSearch(ctx context.Context, embedding []float32, query string, maxResults int, minScore float64, category string, vectorWeight, keywordWeight float64) ([]store.MemorySearchResult, error) {
+	// Run vector + keyword searches in parallel, then merge.
+	type searchResult struct {
+		results []store.MemorySearchResult
+		err     error
+	}
+
+	vecCh := make(chan searchResult, 1)
+	kwCh := make(chan searchResult, 1)
+
+	// Vector search
+	go func() {
+		r, err := m.VectorSearch(ctx, embedding, maxResults*2, 0, category)
+		vecCh <- searchResult{r, err}
+	}()
+
+	// Keyword search (tsvector)
+	go func() {
+		r, err := m.hybridSearch(ctx, query, maxResults*2, 0, category)
+		kwCh <- searchResult{r, err}
+	}()
+
+	vecRes := <-vecCh
+	kwRes := <-kwCh
+
+	if vecRes.err != nil {
+		return nil, vecRes.err
+	}
+	if kwRes.err != nil {
+		return nil, kwRes.err
+	}
+
+	// Reciprocal Rank Fusion
+	merged := rrfMerge(vecRes.results, kwRes.results, vectorWeight, keywordWeight)
+
+	// Filter by minScore and limit
+	var filtered []store.MemorySearchResult
+	for _, r := range merged {
+		if r.Score >= minScore {
+			filtered = append(filtered, r)
+		}
+		if len(filtered) >= maxResults {
+			break
+		}
+	}
+	return filtered, nil
+}
+
+// VectorSearch performs a pgvector cosine similarity search.
+func (m *pgMemoryStore) VectorSearch(ctx context.Context, embedding []float32, maxResults int, minScore float64, category string) ([]store.MemorySearchResult, error) {
+	embStr := float32SliceToString(embedding)
+	var sql string
+	var args []any
+
+	if category == "" {
+		sql = fmt.Sprintf(
+			`SELECT id::text, chunk_text, category, source_path, 1 - (embedding <=> $1::vector) AS score
+			 FROM %s
+			 WHERE embedding IS NOT NULL
+			 ORDER BY embedding <=> $1::vector
+			 LIMIT $2`, m.tableName())
+		args = []any{fmt.Sprintf("[%s]", embStr), maxResults}
+	} else {
+		sql = fmt.Sprintf(
+			`SELECT id::text, chunk_text, category, source_path, 1 - (embedding <=> $1::vector) AS score
+			 FROM %s
+			 WHERE embedding IS NOT NULL
+			   AND category = $3
+			 ORDER BY embedding <=> $1::vector
+			 LIMIT $2`, m.tableName())
+		args = []any{fmt.Sprintf("[%s]", embStr), maxResults, category}
+	}
+
+	rows, err := m.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("vector search failed: %w", err)
+	}
+	defer rows.Close()
+
+	var results []store.MemorySearchResult
+	for rows.Next() {
+		var id, content string
+		var cat, sourcePath *string
+		var score float64
+		if err := rows.Scan(&id, &content, &cat, &sourcePath, &score); err != nil {
+			return nil, err
+		}
+		if score < minScore {
+			continue
+		}
+		r := store.MemorySearchResult{
+			ID:      id,
+			Snippet: content,
+			Score:   score,
+			Scope:   m.scope,
+		}
+		if cat != nil {
+			r.Category = *cat
+		}
+		if sourcePath != nil {
+			r.Path = *sourcePath
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
+// Add inserts a memory chunk into the store.
+// The tsvector column is auto-populated by the DB trigger.
+func (m *pgMemoryStore) Add(ctx context.Context, entry store.MemoryEntry) error {
+	var embStr *string
+	if len(entry.Embedding) > 0 {
+		s := fmt.Sprintf("[%s]", float32SliceToString(entry.Embedding))
+		embStr = &s
+	}
+
+	metaJSON, _ := json.Marshal(entry.Metadata)
+
+	_, err := m.pool.Exec(ctx, fmt.Sprintf(
+		`INSERT INTO %s (chunk_text, embedding, category, source_path, metadata)
+		 VALUES ($1, $2::vector, $3, $4, $5)`, m.tableName()),
+		entry.Content, embStr, nilIfEmpty(entry.Category), nilIfEmpty(entry.SourcePath), metaJSON,
+	)
+	return err
+}
+
+// Delete removes a memory chunk by ID.
+func (m *pgMemoryStore) Delete(ctx context.Context, id string) error {
+	result, err := m.pool.Exec(ctx, fmt.Sprintf(
+		`DELETE FROM %s WHERE id = $1`, m.tableName()), id)
+	if err != nil {
+		return fmt.Errorf("memory delete failed: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("memory not found: %s", id)
+	}
+	return nil
+}
+
+// List returns memory chunks, optionally filtered by category.
+func (m *pgMemoryStore) List(ctx context.Context, category string, limit, offset int) ([]store.MemorySearchResult, error) {
+	var sql string
+	var args []any
+
+	if category == "" {
+		sql = fmt.Sprintf(
+			`SELECT id::text, chunk_text, category, source_path
+			 FROM %s
+			 ORDER BY created_at DESC
+			 LIMIT $1 OFFSET $2`, m.tableName())
+		args = []any{limit, offset}
+	} else {
+		sql = fmt.Sprintf(
+			`SELECT id::text, chunk_text, category, source_path
+			 FROM %s
+			 WHERE category = $3
+			 ORDER BY created_at DESC
+			 LIMIT $1 OFFSET $2`, m.tableName())
+		args = []any{limit, offset, category}
+	}
+
+	rows, err := m.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("memory list failed: %w", err)
+	}
+	defer rows.Close()
+
+	var results []store.MemorySearchResult
+	for rows.Next() {
+		var id, content string
+		var cat, sourcePath *string
+		if err := rows.Scan(&id, &content, &cat, &sourcePath); err != nil {
+			return nil, err
+		}
+		r := store.MemorySearchResult{
+			ID:      id,
+			Snippet: content,
+			Score:   1.0,
+			Scope:   m.scope,
+		}
+		if cat != nil {
+			r.Category = *cat
+		}
+		if sourcePath != nil {
+			r.Path = *sourcePath
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
+// AddMemory inserts a memory chunk into the store (legacy method).
+// Prefer Add() for new code.
+func (m *pgMemoryStore) AddMemory(ctx context.Context, content, category, sourcePath string, embedding []float32, metadata map[string]any) error {
+	return m.Add(ctx, store.MemoryEntry{
+		Content:    content,
+		Category:   category,
+		SourcePath: sourcePath,
+		Embedding:  embedding,
+		Metadata:   metadata,
+	})
+}
+
+func (m *pgMemoryStore) Count() int {
+	var count int
+	err := m.pool.QueryRow(context.Background(), fmt.Sprintf(
+		`SELECT count(*) FROM %s`, m.tableName()),
+	).Scan(&count)
+	if err != nil {
+		return 0
+	}
+	return count
+}
+
+func (m *pgMemoryStore) Close() error {
+	// Pool is managed by PoolManager, not closed here
+	return nil
+}
+
+// rrfMerge merges two result sets using Reciprocal Rank Fusion.
+// Each result set is ranked independently, and scores are combined as:
+//
+//	score = weight1 * 1/(k+rank1) + weight2 * 1/(k+rank2)
+//
+// where k=60 is the standard RRF constant.
+func rrfMerge(vecResults, kwResults []store.MemorySearchResult, vecWeight, kwWeight float64) []store.MemorySearchResult {
+	const k = 60.0
+
+	type mergedItem struct {
+		result store.MemorySearchResult
+		score  float64
+	}
+
+	// Index by snippet (dedup key)
+	bySnippet := make(map[string]*mergedItem)
+
+	for rank, r := range vecResults {
+		key := r.Snippet
+		if item, ok := bySnippet[key]; ok {
+			item.score += vecWeight * (1.0 / (k + float64(rank+1)))
+		} else {
+			bySnippet[key] = &mergedItem{
+				result: r,
+				score:  vecWeight * (1.0 / (k + float64(rank+1))),
+			}
+		}
+	}
+
+	for rank, r := range kwResults {
+		key := r.Snippet
+		if item, ok := bySnippet[key]; ok {
+			item.score += kwWeight * (1.0 / (k + float64(rank+1)))
+		} else {
+			bySnippet[key] = &mergedItem{
+				result: r,
+				score:  kwWeight * (1.0 / (k + float64(rank+1))),
+			}
+		}
+	}
+
+	// Collect and sort by merged score
+	items := make([]mergedItem, 0, len(bySnippet))
+	for _, item := range bySnippet {
+		items = append(items, *item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].score > items[j].score
+	})
+
+	results := make([]store.MemorySearchResult, len(items))
+	for i, item := range items {
+		item.result.Score = roundScore(item.score)
+		results[i] = item.result
+	}
+	return results
+}
+
+// roundScore rounds to 6 decimal places for clean output.
+func roundScore(f float64) float64 {
+	return math.Round(f*1e6) / 1e6
+}
+
+// float32SliceToString converts a float32 slice to a comma-separated string.
+func float32SliceToString(v []float32) string {
+	if len(v) == 0 {
+		return ""
+	}
+	result := ""
+	for i, f := range v {
+		if i > 0 {
+			result += ","
+		}
+		result += fmt.Sprintf("%f", f)
+	}
+	return result
+}

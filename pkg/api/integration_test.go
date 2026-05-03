@@ -47,7 +47,7 @@ func setupIntegrationTest(t *testing.T, mockLLM *MockLLM, tools []tool.Tool) *in
 	}
 	sessionID := createResp.Session.ID()
 
-	runner := newChatRunner(sessionID, true)
+	runner := newChatRunner(sessionID, studioChatUserID, true)
 	ch := runner.Subscribe("test")
 
 	t.Cleanup(func() {
@@ -88,7 +88,7 @@ func runAndCollect(t *testing.T, env *integrationTestEnv, msg string, timeout ..
 		env.ChatAgent,
 		env.SessionService,
 		env.MockLLM,
-		nil, // fileStore — not needed for integration tests
+		nil, // titleSetter — not needed for integration tests
 		userMsg,
 		msg,
 		true, // autoApprove
@@ -339,7 +339,7 @@ func runAndCollectWithApprove(t *testing.T, env *integrationTestEnv, msg string,
 		env.ChatAgent,
 		env.SessionService,
 		env.MockLLM,
-		nil, // fileStore
+		nil, // titleSetter
 		userMsg,
 		msg,
 		autoApprove,

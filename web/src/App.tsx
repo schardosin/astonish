@@ -11,9 +11,12 @@ import CreateAgentModal from './components/CreateAgentModal'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import AIChatPanel from './components/AIChatPanel'
 import SetupWizard from './components/SetupWizard'
+import LoginPage from './components/LoginPage'
+import MigrationPage from './components/MigrationPage'
 import MCPDependenciesPanel from './components/MCPDependenciesPanel'
 import InstallMcpModal from './components/InstallMcpModal'
 import { useTheme } from './hooks/useTheme'
+import { useAuth } from './hooks/useAuth'
 import { useHashRouter, buildPath } from './hooks/useHashRouter'
 import { yamlToFlowAsync, extractLayout } from './utils/yamlToFlow'
 import { addStandaloneNode, addConnection, removeConnection, updateNode, orderYamlKeys } from './utils/flowToYaml'
@@ -50,10 +53,65 @@ const StudioChat = lazy(() => import('./components/StudioChat'))
 const FleetView = lazy(() => import('./components/FleetView'))
 const DrillView = lazy(() => import('./components/DrillView'))
 const AppsView = lazy(() => import('./components/AppsView'))
+const TeamManagement = lazy(() => import('./components/TeamManagement'))
+const KnowledgeBrowser = lazy(() => import('./components/KnowledgeBrowser'))
+const AppCatalog = lazy(() => import('./components/AppCatalog'))
+const AuditViewer = lazy(() => import('./components/AuditViewer'))
 
 function App() {
   const { theme, toggleTheme } = useTheme()
   const { path, navigate, replaceHash } = useHashRouter()
+
+  // Platform mode detection: check if the platform auth endpoint exists.
+  // In personal mode (file backend), this endpoint doesn't exist (404).
+  // In platform mode (postgres backend), it returns setup status.
+  const [isPlatformMode, setIsPlatformMode] = useState(false)
+  const [isPlatformChecked, setIsPlatformChecked] = useState(false)
+  const [migrationAvailable, setMigrationAvailable] = useState(false)
+  const [showMigration, setShowMigration] = useState(false)
+  useEffect(() => {
+    fetch('/api/auth/setup-status')
+      .then(async res => {
+        if (res.ok) {
+          setIsPlatformMode(true)
+          const data = await res.json()
+          if (data.migration_available && !data.initialized) {
+            setMigrationAvailable(true)
+            setShowMigration(true)
+          }
+        }
+      })
+      .catch(() => {})
+      .finally(() => setIsPlatformChecked(true))
+  }, [])
+
+  // Auth hook (only active in platform mode)
+  const auth = useAuth(isPlatformMode && isPlatformChecked ? true : false)
+
+  // Platform team list — loaded once after authentication
+  const [platformTeams, setPlatformTeams] = useState<{ slug: string; name: string }[] | null>(null)
+  const [activeTeam, setActiveTeam] = useState<string | null>(null)
+  useEffect(() => {
+    if (!isPlatformMode || !auth.isAuthenticated) return
+    // Set initial active team from auth state
+    if (auth.team && !activeTeam) {
+      setActiveTeam(auth.team)
+    }
+    // Fetch team list
+    import('./api/platform').then(mod => {
+      mod.fetchTeams().then(teams => {
+        setPlatformTeams(teams.map(t => ({ slug: t.slug, name: t.name })))
+      }).catch(() => {})
+    })
+  }, [isPlatformMode, auth.isAuthenticated, auth.team])
+
+  const handleTeamChange = useCallback((teamSlug: string) => {
+    setActiveTeam(teamSlug)
+    // The backend picks up the active team from the JWT/cookie and
+    // X-Astonish-Team header. For now we just update local state;
+    // a full implementation would call a backend endpoint to switch context.
+  }, [])
+
   const [agents, setAgents] = useState<Agent[]>([])
   const [isLoadingAgents, setIsLoadingAgents] = useState(true)
   const [selectedAgent, setSelectedAgent] = useState<AppAgent | null>(null)
@@ -1301,8 +1359,42 @@ layout:
 
   return (
     <>
-      {/* Setup Wizard */}
-      {showSetupWizard && !isCheckingSetup && (
+      {/* Migration Gate — shown when file data exists and platform is fresh */}
+      {isPlatformMode && isPlatformChecked && showMigration && (
+        <MigrationPage
+          onComplete={() => {
+            setShowMigration(false)
+            setMigrationAvailable(false)
+            // After migration, auth hook will pick up the new session
+            auth.refresh()
+          }}
+          onSkip={() => {
+            setShowMigration(false)
+            setMigrationAvailable(false)
+          }}
+        />
+      )}
+
+      {/* Platform Auth Gate — only in platform mode, after migration is dismissed */}
+      {isPlatformMode && !showMigration && !auth.isAuthenticated && !auth.isLoading && isPlatformChecked && (
+        <LoginPage
+          onLogin={async (email, password) => { await auth.login(email, password) }}
+          onRegister={async (email, password, displayName) => { await auth.register(email, password, displayName) }}
+        />
+      )}
+
+      {/* Loading state while checking platform mode or auth */}
+      {!showMigration && (!isPlatformChecked || (isPlatformMode && auth.isLoading)) && (
+        <div
+          className="flex flex-col h-screen items-center justify-center"
+          style={{ background: 'var(--bg-primary)' }}
+        >
+          <div className="animate-pulse text-purple-400 text-lg">Loading...</div>
+        </div>
+      )}
+
+      {/* Setup Wizard (personal mode only, or after platform auth) */}
+      {showSetupWizard && !isCheckingSetup && !showMigration && (!isPlatformMode || auth.isAuthenticated) && (
         <SetupWizard
           onComplete={() => {
             setShowSetupWizard(false)
@@ -1313,8 +1405,8 @@ layout:
         />
       )}
 
-      {/* Loading state while checking setup */}
-      {isCheckingSetup && (
+      {/* Loading state while checking setup (personal mode) */}
+      {isCheckingSetup && isPlatformChecked && (!isPlatformMode || auth.isAuthenticated) && (
         <div 
           className="flex flex-col h-screen items-center justify-center"
           style={{ background: 'var(--bg-primary)' }}
@@ -1323,8 +1415,8 @@ layout:
         </div>
       )}
 
-      {/* Main App (only show when not in setup wizard and not checking) */}
-      {!showSetupWizard && !isCheckingSetup && (
+      {/* Main App (only show when not in setup wizard and not checking, and authenticated if platform) */}
+      {!showSetupWizard && !isCheckingSetup && !showMigration && (!isPlatformMode || auth.isAuthenticated) && (
       <div className="flex flex-col h-screen" style={{ background: 'var(--bg-primary)' }}>
         {/* Top Bar */}
         <TopBar 
@@ -1337,6 +1429,13 @@ layout:
           currentView={view}
           onNavigate={(v: string) => navigate(buildPath(v))}
           sandboxStatus={sandboxStatus as any}
+          isPlatformMode={isPlatformMode}
+          user={auth.user}
+          org={auth.org}
+          activeTeam={activeTeam}
+          teams={platformTeams}
+          onTeamChange={handleTeamChange}
+          onLogout={async () => { await auth.logout(); navigate(buildPath('chat')) }}
         />
 
         {/* Main Content Area */}
@@ -1413,6 +1512,36 @@ layout:
                 setPendingChatMessage({ message, systemContext })
                 navigate(buildPath('chat'))
               }}
+            />
+            </Suspense>
+          ) : view === 'team-mgmt' && isPlatformMode && auth.user && auth.org ? (
+            <Suspense fallback={null}>
+            <TeamManagement
+              theme={theme}
+              user={auth.user}
+              org={auth.org}
+              activeTeam={activeTeam}
+            />
+            </Suspense>
+          ) : view === 'knowledge' && isPlatformMode && auth.user ? (
+            <Suspense fallback={null}>
+            <KnowledgeBrowser
+              theme={theme}
+              user={auth.user}
+            />
+            </Suspense>
+          ) : view === 'app-catalog' && isPlatformMode && auth.user ? (
+            <Suspense fallback={null}>
+            <AppCatalog
+              theme={theme}
+              user={auth.user}
+              activeTeam={activeTeam}
+            />
+            </Suspense>
+          ) : view === 'audit' && isPlatformMode && auth.user?.role === 'admin' ? (
+            <Suspense fallback={null}>
+            <AuditViewer
+              theme={theme}
             />
             </Suspense>
           ) : !selectedAgent ? (

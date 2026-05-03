@@ -6,6 +6,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/fleet"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // Package-level registries, set by the launcher during initialization.
@@ -47,6 +48,25 @@ type FleetListItem struct {
 
 // ListFleetsHandler handles GET /api/fleets
 func ListFleetsHandler(w http.ResponseWriter, r *http.Request) {
+	// Use store abstraction if available (platform mode).
+	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
+		summaries := svc.FleetTemplates.ListFleets()
+		items := make([]FleetListItem, len(summaries))
+		for i, s := range summaries {
+			items[i] = FleetListItem{
+				Key:         s.Key,
+				Name:        s.Name,
+				Description: s.Description,
+				AgentCount:  s.AgentCount,
+				AgentNames:  s.AgentNames,
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"fleets": items})
+		return
+	}
+
+	// Fallback: direct registry access (personal mode).
 	if fleetRegistryVar == nil {
 		http.Error(w, "Fleet system not initialized", http.StatusServiceUnavailable)
 		return
@@ -65,19 +85,29 @@ func ListFleetsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"fleets": items,
-	})
+	json.NewEncoder(w).Encode(map[string]interface{}{"fleets": items})
 }
 
 // GetFleetHandler handles GET /api/fleets/{key}
 func GetFleetHandler(w http.ResponseWriter, r *http.Request) {
+	key := mux.Vars(r)["key"]
+
+	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
+		f, ok := svc.FleetTemplates.GetFleet(key)
+		if !ok {
+			http.Error(w, "Fleet not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"key": key, "fleet": f})
+		return
+	}
+
 	if fleetRegistryVar == nil {
 		http.Error(w, "Fleet system not initialized", http.StatusServiceUnavailable)
 		return
 	}
 
-	key := mux.Vars(r)["key"]
 	f, ok := fleetRegistryVar.GetFleet(key)
 	if !ok {
 		http.Error(w, "Fleet not found", http.StatusNotFound)
@@ -85,19 +115,11 @@ func GetFleetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"key":   key,
-		"fleet": f,
-	})
+	json.NewEncoder(w).Encode(map[string]interface{}{"key": key, "fleet": f})
 }
 
 // SaveFleetHandler handles PUT /api/fleets/{key}
 func SaveFleetHandler(w http.ResponseWriter, r *http.Request) {
-	if fleetRegistryVar == nil {
-		http.Error(w, "Fleet system not initialized", http.StatusServiceUnavailable)
-		return
-	}
-
 	key := mux.Vars(r)["key"]
 
 	var f fleet.FleetConfig
@@ -111,26 +133,48 @@ func SaveFleetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
+		if err := svc.FleetTemplates.Save(key, &f); err != nil {
+			http.Error(w, "Failed to save fleet: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "key": key})
+		return
+	}
+
+	if fleetRegistryVar == nil {
+		http.Error(w, "Fleet system not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
 	if err := fleetRegistryVar.Save(key, &f); err != nil {
 		http.Error(w, "Failed to save fleet: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status": "ok",
-		"key":    key,
-	})
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "key": key})
 }
 
 // DeleteFleetHandler handles DELETE /api/fleets/{key}
 func DeleteFleetHandler(w http.ResponseWriter, r *http.Request) {
+	key := mux.Vars(r)["key"]
+
+	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
+		if err := svc.FleetTemplates.Delete(key); err != nil {
+			http.Error(w, "Failed to delete fleet: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
+		return
+	}
+
 	if fleetRegistryVar == nil {
 		http.Error(w, "Fleet system not initialized", http.StatusServiceUnavailable)
 		return
 	}
-
-	key := mux.Vars(r)["key"]
 
 	if err := fleetRegistryVar.Delete(key); err != nil {
 		http.Error(w, "Failed to delete fleet: "+err.Error(), http.StatusInternalServerError)
@@ -138,7 +182,5 @@ func DeleteFleetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status": "ok",
-	})
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
 }

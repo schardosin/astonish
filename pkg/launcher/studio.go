@@ -17,6 +17,9 @@ import (
 	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
+	"github.com/schardosin/astonish/pkg/store"
+	"github.com/schardosin/astonish/pkg/store/filestore"
+	"github.com/schardosin/astonish/pkg/store/pgstore"
 	"github.com/schardosin/astonish/pkg/tools"
 	"github.com/schardosin/astonish/web"
 )
@@ -26,9 +29,13 @@ type StudioServer struct {
 	server        *http.Server
 	listener      net.Listener
 	port          int
-	Auth          *api.AuthManager // nil means no auth (direct CLI mode)
+	Auth          *api.AuthManager    // nil means no auth (direct CLI mode)
+	platformAuth  *api.PlatformAuth   // non-nil in platform mode
+	pgStore       *pgstore.PGStore    // non-nil in platform mode
+	services      *store.Services
 	sessionStore  *persistentsession.FileStore
 	daemonIndexer *memory.DaemonIndexerResult
+	migrationMgr  *api.MigrationManager // non-nil when migration is available
 }
 
 // StudioOption configures optional StudioServer behavior.
@@ -52,6 +59,31 @@ func WithSessionStore(store *persistentsession.FileStore) StudioOption {
 // updates from the daemon are immediately visible to Studio search queries.
 func WithDaemonIndexer(di *memory.DaemonIndexerResult) StudioOption {
 	return func(s *StudioServer) { s.daemonIndexer = di }
+}
+
+// WithServices injects the store.Services dependency container into the Studio server.
+// When set, every HTTP request will have Services available via store.FromRequest(r),
+// enabling handlers to access stores through the context rather than package-level globals.
+func WithServices(svc *store.Services) StudioOption {
+	return func(s *StudioServer) { s.services = svc }
+}
+
+// WithPlatformAuth enables JWT-based authentication for platform (multi-tenant) mode.
+// When set, the platform auth middleware replaces the device auth middleware,
+// and platform-specific routes (register, login, teams) are registered.
+func WithPlatformAuth(pa *api.PlatformAuth, pg *pgstore.PGStore) StudioOption {
+	return func(s *StudioServer) {
+		s.platformAuth = pa
+		s.pgStore = pg
+	}
+}
+
+// WithMigrationManager enables the file→database migration endpoints.
+// When set, migration routes are registered on the Studio server.
+func WithMigrationManager(mm *api.MigrationManager) StudioOption {
+	return func(s *StudioServer) {
+		s.migrationMgr = mm
+	}
 }
 
 // NewStudioServer creates a configured Studio server without starting it.
@@ -110,12 +142,22 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 	router := mux.NewRouter()
 
 	// Register auth endpoints first (they are always accessible)
-	if s.Auth != nil {
+	if s.platformAuth != nil {
+		// Platform mode: JWT-based auth with register/login/refresh
+		api.RegisterPlatformAuthRoutes(router, s.platformAuth)
+		api.RegisterTeamRoutes(router, s.platformAuth)
+	} else if s.Auth != nil {
+		// Personal mode: device authorization flow
 		api.RegisterAuthRoutes(router, s.Auth)
 	}
 
-	// Register API routes
-	api.RegisterRoutes(router)
+	// Register migration routes if migration is available
+	if s.migrationMgr != nil {
+		api.RegisterMigrationRoutes(router, s.migrationMgr)
+	}
+
+	// Register API routes (passes pgStore for platform-mode TenantMiddleware)
+	api.RegisterRoutes(router, s.services, s.pgStore)
 
 	// Try to get web assets (embedded or filesystem)
 	webFS := getWebAssets()
@@ -147,7 +189,11 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 	}
 
 	// Apply auth middleware if enabled (wraps both API and SPA)
-	if s.Auth != nil {
+	if s.platformAuth != nil {
+		// Platform mode: JWT auth (TenantMiddleware is inside the router via RegisterRoutes)
+		handler = api.PlatformAuthMiddleware(s.platformAuth, handler)
+	} else if s.Auth != nil {
+		// Personal mode: device authorization
 		handler = api.AuthMiddleware(s.Auth, handler)
 	}
 
@@ -209,7 +255,10 @@ func (s *StudioServer) Shutdown(ctx context.Context) error {
 
 // RunStudio starts the Studio web server (blocking, for CLI use).
 func RunStudio(port int) error {
-	studio, err := NewStudioServer(port)
+	// Create minimal Services for standalone mode.
+	// Stores are populated incrementally by the lazy chat init.
+	svc := filestore.NewPersonalServices()
+	studio, err := NewStudioServer(port, WithServices(svc))
 	if err != nil {
 		fmt.Printf("\n")
 		fmt.Printf("  Failed to start Astonish Studio\n")

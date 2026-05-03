@@ -15,12 +15,14 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/schardosin/astonish/pkg/apps"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/pdfgen"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/session"
 )
 
@@ -30,6 +32,28 @@ var validSessionID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
 
 // StudioSessionsHandler handles GET /api/studio/sessions.
 func StudioSessionsHandler(w http.ResponseWriter, r *http.Request) {
+	userID := effectiveUserID(r)
+
+	// Platform mode: use tenant-scoped session store from context.
+	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
+		metas, err := svc.Sessions.ListSessionMetas(studioChatAppName, userID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		sort.Slice(metas, func(i, j int) bool {
+			return metas[i].UpdatedAt.After(metas[j].UpdatedAt)
+		})
+		sessions := make([]StudioSessionResponse, 0, len(metas))
+		for _, m := range metas {
+			sessions = append(sessions, storeMetaToResponse(m))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(sessions)
+		return
+	}
+
+	// Personal mode: use ChatManager's file store.
 	cm := GetChatManager()
 	if err := cm.ensureReady(r.Context()); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -43,7 +67,7 @@ func StudioSessionsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	metas, err := fs.ListSessionMetas(studioChatAppName, studioChatUserID)
+	metas, err := fs.ListSessionMetas(studioChatAppName, userID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -75,13 +99,67 @@ func StudioSessionsHandler(w http.ResponseWriter, r *http.Request) {
 
 // StudioSessionHandler handles GET /api/studio/sessions/{id}.
 func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
+	sessionID := mux.Vars(r)["id"]
+	userID := effectiveUserID(r)
+
+	// Platform mode: use tenant-scoped session store.
+	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
+		meta, err := svc.Sessions.GetSessionMeta(sessionID)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Session not found: %v", err), http.StatusNotFound)
+			return
+		}
+
+		// Fleet sessions: read transcript events from store
+		if meta.FleetKey != "" {
+			events, readErr := svc.Sessions.ReadTranscriptEvents(studioChatAppName, userID, sessionID)
+			var fleetMessages []FleetMessageSummary
+			if readErr == nil && len(events) > 0 {
+				fleetMessages = fleetEventsToMessages(events)
+			}
+			resp := StudioSessionDetailResponse{
+				StudioSessionResponse: storeMetaToResponse(*meta),
+				Messages:              []StudioMessage{},
+				FleetMessages:         fleetMessages,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		// Regular session: get full session with events
+		getResp, err := svc.Sessions.Get(r.Context(), &session.GetRequest{
+			AppName:   studioChatAppName,
+			UserID:    userID,
+			SessionID: sessionID,
+		})
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to load session: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		messages := eventsToMessages(getResp.Session.Events(), nil)
+		artifacts := collectArtifacts(getResp.Session.Events())
+		totalUsage := collectUsage(getResp.Session.Events())
+
+		resp := StudioSessionDetailResponse{
+			StudioSessionResponse: storeMetaToResponse(*meta),
+			Messages:              messages,
+			Artifacts:             artifacts,
+			TotalUsage:            totalUsage,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	// Personal mode: use ChatManager's file store.
 	cm := GetChatManager()
 	if err := cm.ensureReady(r.Context()); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	sessionID := mux.Vars(r)["id"]
 	fs := cm.fileStore()
 	if fs == nil {
 		http.Error(w, "File store not available", http.StatusInternalServerError)
@@ -97,7 +175,7 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Fleet sessions: read transcript and return fleet-style messages
 	if meta.FleetKey != "" {
-		transcriptPath := filepath.Join(fs.BaseDir(), studioChatAppName, studioChatUserID, sessionID+".jsonl")
+		transcriptPath := filepath.Join(fs.BaseDir(), studioChatAppName, userID, sessionID+".jsonl")
 		transcript := persistentsession.NewTranscript(transcriptPath)
 		events, readErr := transcript.ReadEvents()
 
@@ -129,7 +207,7 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 	// Get session transcript
 	getResp, err := fs.Get(r.Context(), &session.GetRequest{
 		AppName:   studioChatAppName,
-		UserID:    studioChatUserID,
+		UserID:    userID,
 		SessionID: sessionID,
 	})
 	if err != nil {
@@ -169,17 +247,12 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 
 // StudioDeleteSessionHandler handles DELETE /api/studio/sessions/{id}.
 func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
-	cm := GetChatManager()
-	if err := cm.ensureReady(r.Context()); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
 	sessionID := mux.Vars(r)["id"]
 	if !validSessionID.MatchString(sessionID) {
 		http.Error(w, "invalid session ID", http.StatusBadRequest)
 		return
 	}
+	userID := effectiveUserID(r)
 
 	// If this is an active fleet session, stop it and clean up sandbox
 	registry := getFleetSessionRegistry()
@@ -189,8 +262,47 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 		registry.Unregister(sessionID)
 	}
 
+	// Platform mode: use tenant-scoped session store.
+	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
+		// Clean up per-session workspace directory if one was recorded.
+		if meta, metaErr := svc.Sessions.GetSessionMeta(sessionID); metaErr == nil && meta.WorkspaceDir != "" {
+			if cleanErr := fleet.CleanupSessionWorkspace(meta.WorkspaceDir); cleanErr != nil {
+				slog.Warn("could not clean up workspace", "component", "fleet", "workspace", meta.WorkspaceDir, "error", cleanErr)
+			}
+		}
+
+		err := svc.Sessions.Delete(r.Context(), &session.DeleteRequest{
+			AppName:   studioChatAppName,
+			UserID:    userID,
+			SessionID: sessionID,
+		})
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to delete session: %v", err), http.StatusInternalServerError)
+			return
+		}
+		sandbox.TryDestroySessionContainer(sessionID)
+		// Clean up session-scoped app databases
+		if svc.AppStateSQL != nil {
+			// Platform mode: drop all PG schemas matching the session prefix
+			prefix := "session_" + apps.Slugify(sessionID) + "_"
+			if err := svc.AppStateSQL.DropSchemasWithPrefix(r.Context(), prefix); err != nil {
+				slog.Debug("failed to drop session app PG schemas", "sessionId", sessionID, "error", err)
+			}
+		} else if cleaned := CleanupSessionAppDBs(sessionID); cleaned > 0 {
+			slog.Debug("cleaned up session app databases", "sessionId", sessionID, "count", cleaned)
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// Personal mode: use ChatManager's file store.
+	cm := GetChatManager()
+	if err := cm.ensureReady(r.Context()); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	// Clean up per-session workspace directory if one was recorded.
-	// Read metadata before deleting the session (deletion removes metadata).
 	if fileStore := getFleetFileStore(); fileStore != nil {
 		if meta, metaErr := fileStore.GetSessionMeta(sessionID); metaErr == nil && meta.WorkspaceDir != "" {
 			if cleanErr := fleet.CleanupSessionWorkspace(meta.WorkspaceDir); cleanErr != nil {
@@ -200,10 +312,9 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionService := cm.components.SessionService
-
 	err := sessionService.Delete(r.Context(), &session.DeleteRequest{
 		AppName:   studioChatAppName,
-		UserID:    studioChatUserID,
+		UserID:    userID,
 		SessionID: sessionID,
 	})
 	if err != nil {
@@ -289,7 +400,7 @@ func StudioArtifactDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	if sessionID != "" {
 		cm := GetChatManager()
 		if fs := cm.fileStore(); fs != nil {
-			if content, ok := readArtifactContentFromSession(fs, sessionID, cleanPath); ok {
+			if content, ok := readArtifactContentFromSession(fs, effectiveUserID(r), sessionID, cleanPath); ok {
 				serveArtifactDownload(w, fileName, []byte(content))
 				return
 			}
@@ -354,7 +465,7 @@ func StudioArtifactContentHandler(w http.ResponseWriter, r *http.Request) {
 	if sessionID != "" {
 		cm := GetChatManager()
 		if fs := cm.fileStore(); fs != nil {
-			if content, ok := readArtifactContentFromSession(fs, sessionID, cleanPath); ok {
+			if content, ok := readArtifactContentFromSession(fs, effectiveUserID(r), sessionID, cleanPath); ok {
 				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 				fmt.Fprint(w, content)
 				return
@@ -447,7 +558,7 @@ func StudioArtifactPDFHandler(w http.ResponseWriter, r *http.Request) {
 	if mdContent == nil && sessionID != "" {
 		cm := GetChatManager()
 		if fs := cm.fileStore(); fs != nil {
-			if content, ok := readArtifactContentFromSession(fs, sessionID, cleanPath); ok {
+			if content, ok := readArtifactContentFromSession(fs, effectiveUserID(r), sessionID, cleanPath); ok {
 				mdContent = []byte(content)
 			}
 		}

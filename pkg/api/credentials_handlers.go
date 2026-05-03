@@ -7,15 +7,15 @@ import (
 	"sort"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // --- Credential API types ---
 
 // credentialListItem represents a single credential in the list response.
 type credentialListItem struct {
-	Name string                     `json:"name"`
-	Type credentials.CredentialType `json:"type"`
+	Name string             `json:"name"`
+	Type store.CredentialType `json:"type"`
 }
 
 // credentialListResponse is the response for GET /api/credentials.
@@ -27,27 +27,27 @@ type credentialListResponse struct {
 
 // credentialDetailResponse returns full credential fields (for reveal).
 type credentialDetailResponse struct {
-	Name         string                     `json:"name"`
-	Type         credentials.CredentialType `json:"type"`
-	Header       string                     `json:"header,omitempty"`
-	Value        string                     `json:"value,omitempty"`
-	Token        string                     `json:"token,omitempty"`
-	Username     string                     `json:"username,omitempty"`
-	Password     string                     `json:"password,omitempty"`
-	AuthURL      string                     `json:"auth_url,omitempty"`
-	ClientID     string                     `json:"client_id,omitempty"`
-	ClientSecret string                     `json:"client_secret,omitempty"`
-	Scope        string                     `json:"scope,omitempty"`
-	TokenURL     string                     `json:"token_url,omitempty"`
-	AccessToken  string                     `json:"access_token,omitempty"`
-	RefreshToken string                     `json:"refresh_token,omitempty"`
-	TokenExpiry  string                     `json:"token_expiry,omitempty"`
+	Name         string             `json:"name"`
+	Type         store.CredentialType `json:"type"`
+	Header       string             `json:"header,omitempty"`
+	Value        string             `json:"value,omitempty"`
+	Token        string             `json:"token,omitempty"`
+	Username     string             `json:"username,omitempty"`
+	Password     string             `json:"password,omitempty"`
+	AuthURL      string             `json:"auth_url,omitempty"`
+	ClientID     string             `json:"client_id,omitempty"`
+	ClientSecret string             `json:"client_secret,omitempty"`
+	Scope        string             `json:"scope,omitempty"`
+	TokenURL     string             `json:"token_url,omitempty"`
+	AccessToken  string             `json:"access_token,omitempty"`
+	RefreshToken string             `json:"refresh_token,omitempty"`
+	TokenExpiry  string             `json:"token_expiry,omitempty"`
 }
 
 // credentialSaveRequest is the body for POST /api/credentials.
 type credentialSaveRequest struct {
-	Name       string                 `json:"name"`
-	Credential credentials.Credential `json:"credential"`
+	Name       string          `json:"name"`
+	Credential store.Credential `json:"credential"`
 }
 
 // secretSaveRequest is the body for PUT /api/secrets/{key}.
@@ -68,11 +68,17 @@ type verifyMasterKeyRequest struct {
 
 // --- Helpers ---
 
-// requireMasterKey checks the X-Master-Key header against the store.
-// Returns true if access is granted (no master key set, or valid key provided).
+// requireMasterKey checks the X-Master-Key header against the personal-mode
+// credential store. Returns true if access is granted (no master key set, or
+// valid key provided, or platform mode where master keys don't apply).
 // Returns false and writes an HTTP error if access is denied.
-func requireMasterKey(w http.ResponseWriter, r *http.Request, store *credentials.Store) bool {
-	if !store.HasMasterKey() {
+func requireMasterKey(w http.ResponseWriter, r *http.Request) bool {
+	// In platform mode, authentication is handled by JWT — no master key needed.
+	if isPlatformMode(r) {
+		return true
+	}
+	cs := getAPICredentialStore()
+	if cs == nil || !cs.HasMasterKey() {
 		return true
 	}
 	masterKey := r.Header.Get("X-Master-Key")
@@ -80,11 +86,17 @@ func requireMasterKey(w http.ResponseWriter, r *http.Request, store *credentials
 		respondError(w, http.StatusForbidden, `{"error":"master_key_required"}`)
 		return false
 	}
-	if !store.VerifyMasterKey(masterKey) {
+	if !cs.VerifyMasterKey(masterKey) {
 		respondError(w, http.StatusForbidden, `{"error":"invalid_master_key"}`)
 		return false
 	}
 	return true
+}
+
+// hasMasterKey returns whether a master key is set. Only applies to personal mode.
+func hasMasterKey() bool {
+	cs := getAPICredentialStore()
+	return cs != nil && cs.HasMasterKey()
 }
 
 // --- Handlers ---
@@ -92,19 +104,19 @@ func requireMasterKey(w http.ResponseWriter, r *http.Request, store *credentials
 // ListCredentialsHandler returns all credential names/types and secret keys.
 // GET /api/credentials
 func ListCredentialsHandler(w http.ResponseWriter, r *http.Request) {
-	store := getAPICredentialStore()
-	if store == nil {
+	cs := effectiveCredentialStore(r)
+	if cs == nil {
 		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
 	}
 
 	// Reload to pick up cross-process changes
-	if err := store.Reload(); err != nil {
+	if err := cs.Reload(); err != nil {
 		slog.Warn("failed to reload credential store", "error", err)
 	}
 
-	creds := store.List()
-	secrets := store.ListSecrets()
+	creds := cs.List()
+	secrets := cs.ListSecrets()
 	sort.Strings(secrets)
 
 	items := make([]credentialListItem, 0, len(creds))
@@ -116,7 +128,7 @@ func ListCredentialsHandler(w http.ResponseWriter, r *http.Request) {
 	resp := credentialListResponse{
 		Credentials:  items,
 		Secrets:      secrets,
-		HasMasterKey: store.HasMasterKey(),
+		HasMasterKey: hasMasterKey(),
 	}
 
 	respondJSON(w, http.StatusOK, resp)
@@ -125,22 +137,22 @@ func ListCredentialsHandler(w http.ResponseWriter, r *http.Request) {
 // GetCredentialHandler reveals a credential's full values.
 // GET /api/credentials/{name}
 func GetCredentialHandler(w http.ResponseWriter, r *http.Request) {
-	store := getAPICredentialStore()
-	if store == nil {
+	cs := effectiveCredentialStore(r)
+	if cs == nil {
 		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
 	}
 
-	if !requireMasterKey(w, r, store) {
+	if !requireMasterKey(w, r) {
 		return
 	}
 
 	name := mux.Vars(r)["name"]
-	if err := store.Reload(); err != nil {
+	if err := cs.Reload(); err != nil {
 		slog.Warn("failed to reload credential store", "error", err)
 	}
 
-	cred := store.Get(name)
+	cred := cs.Get(name)
 	if cred == nil {
 		respondError(w, http.StatusNotFound, "Credential not found")
 		return
@@ -170,8 +182,8 @@ func GetCredentialHandler(w http.ResponseWriter, r *http.Request) {
 // SaveCredentialHandler creates or updates a named credential.
 // POST /api/credentials
 func SaveCredentialHandler(w http.ResponseWriter, r *http.Request) {
-	store := getAPICredentialStore()
-	if store == nil {
+	cs := effectiveCredentialStore(r)
+	if cs == nil {
 		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
 	}
@@ -186,7 +198,7 @@ func SaveCredentialHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := store.Set(req.Name, &req.Credential); err != nil {
+	if err := cs.Set(req.Name, &req.Credential); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to save credential: "+err.Error())
 		return
 	}
@@ -197,8 +209,8 @@ func SaveCredentialHandler(w http.ResponseWriter, r *http.Request) {
 // DeleteCredentialHandler removes a credential or flat secret.
 // DELETE /api/credentials/{name}
 func DeleteCredentialHandler(w http.ResponseWriter, r *http.Request) {
-	store := getAPICredentialStore()
-	if store == nil {
+	cs := effectiveCredentialStore(r)
+	if cs == nil {
 		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
 	}
@@ -206,8 +218,8 @@ func DeleteCredentialHandler(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
 
 	// Try HTTP credential first
-	if store.Get(name) != nil {
-		if err := store.Remove(name); err != nil {
+	if cs.Get(name) != nil {
+		if err := cs.Remove(name); err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to remove credential: "+err.Error())
 			return
 		}
@@ -216,8 +228,8 @@ func DeleteCredentialHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Try flat secret
-	if store.GetSecret(name) != "" {
-		if err := store.RemoveSecret(name); err != nil {
+	if cs.GetSecret(name) != "" {
+		if err := cs.RemoveSecret(name); err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to remove secret: "+err.Error())
 			return
 		}
@@ -231,22 +243,22 @@ func DeleteCredentialHandler(w http.ResponseWriter, r *http.Request) {
 // GetSecretHandler reveals a flat secret value.
 // GET /api/secrets/{key}
 func GetSecretHandler(w http.ResponseWriter, r *http.Request) {
-	store := getAPICredentialStore()
-	if store == nil {
+	cs := effectiveCredentialStore(r)
+	if cs == nil {
 		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
 	}
 
-	if !requireMasterKey(w, r, store) {
+	if !requireMasterKey(w, r) {
 		return
 	}
 
 	key := mux.Vars(r)["key"]
-	if err := store.Reload(); err != nil {
+	if err := cs.Reload(); err != nil {
 		slog.Warn("failed to reload credential store", "error", err)
 	}
 
-	value := store.GetSecret(key)
+	value := cs.GetSecret(key)
 	if value == "" {
 		respondError(w, http.StatusNotFound, "Secret not found")
 		return
@@ -258,8 +270,8 @@ func GetSecretHandler(w http.ResponseWriter, r *http.Request) {
 // SaveSecretHandler creates or updates a flat secret.
 // PUT /api/secrets/{key}
 func SaveSecretHandler(w http.ResponseWriter, r *http.Request) {
-	store := getAPICredentialStore()
-	if store == nil {
+	cs := effectiveCredentialStore(r)
+	if cs == nil {
 		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
 	}
@@ -276,7 +288,7 @@ func SaveSecretHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := store.SetSecret(key, req.Value); err != nil {
+	if err := cs.SetSecret(key, req.Value); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to save secret: "+err.Error())
 		return
 	}
@@ -286,9 +298,17 @@ func SaveSecretHandler(w http.ResponseWriter, r *http.Request) {
 
 // SetMasterKeyHandler sets, changes, or removes the master key.
 // POST /api/credentials/master-key
+//
+// Master keys are a personal-mode concept. In platform mode, authentication
+// is handled by JWT tokens and this endpoint returns 404.
 func SetMasterKeyHandler(w http.ResponseWriter, r *http.Request) {
-	store := getAPICredentialStore()
-	if store == nil {
+	if isPlatformMode(r) {
+		respondError(w, http.StatusNotFound, "Master keys are not used in platform mode")
+		return
+	}
+
+	cs := getAPICredentialStore()
+	if cs == nil {
 		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
 	}
@@ -300,14 +320,14 @@ func SetMasterKeyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// If a master key already exists, verify the current password
-	if store.HasMasterKey() {
-		if !store.VerifyMasterKey(req.Current) {
+	if cs.HasMasterKey() {
+		if !cs.VerifyMasterKey(req.Current) {
 			respondError(w, http.StatusForbidden, `{"error":"invalid_current_key"}`)
 			return
 		}
 	}
 
-	if err := store.SetMasterKey(req.New); err != nil {
+	if err := cs.SetMasterKey(req.New); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to set master key: "+err.Error())
 		return
 	}
@@ -322,9 +342,17 @@ func SetMasterKeyHandler(w http.ResponseWriter, r *http.Request) {
 
 // VerifyMasterKeyHandler checks if a password matches the master key.
 // POST /api/credentials/verify-master-key
+//
+// Master keys are a personal-mode concept. In platform mode, this endpoint
+// returns 404.
 func VerifyMasterKeyHandler(w http.ResponseWriter, r *http.Request) {
-	store := getAPICredentialStore()
-	if store == nil {
+	if isPlatformMode(r) {
+		respondError(w, http.StatusNotFound, "Master keys are not used in platform mode")
+		return
+	}
+
+	cs := getAPICredentialStore()
+	if cs == nil {
 		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
 	}
@@ -335,7 +363,7 @@ func VerifyMasterKeyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	valid := store.VerifyMasterKey(req.Password)
+	valid := cs.VerifyMasterKey(req.Password)
 
 	respondJSON(w, http.StatusOK, map[string]bool{"valid": valid})
 }

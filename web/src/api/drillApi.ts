@@ -2,6 +2,8 @@
  * API client for Drill Management (drill suites, individual drills, reports)
  */
 
+import { teamFetch } from './teamContext'
+
 const DRILLS_API = '/api/drills'
 const REPORTS_API = '/api/drill-reports'
 
@@ -73,7 +75,7 @@ export interface DrillResult {
 // --- API Functions ---
 
 export async function fetchDrillSuites(): Promise<DrillSuiteSummary[]> {
-  const response = await fetch(DRILLS_API)
+  const response = await teamFetch(DRILLS_API)
   if (!response.ok) {
     throw new Error(`Failed to fetch drill suites: ${response.statusText}`)
   }
@@ -81,7 +83,7 @@ export async function fetchDrillSuites(): Promise<DrillSuiteSummary[]> {
 }
 
 export async function fetchDrillSuite(name: string): Promise<DrillSuiteDetail> {
-  const response = await fetch(`${DRILLS_API}/${encodeURIComponent(name)}`)
+  const response = await teamFetch(`${DRILLS_API}/${encodeURIComponent(name)}`)
   if (!response.ok) {
     throw new Error(`Failed to fetch drill suite: ${response.statusText}`)
   }
@@ -89,7 +91,7 @@ export async function fetchDrillSuite(name: string): Promise<DrillSuiteDetail> {
 }
 
 export async function fetchDrill(suite: string, name: string): Promise<DrillDetail> {
-  const response = await fetch(`${DRILLS_API}/${encodeURIComponent(suite)}/drills/${encodeURIComponent(name)}`)
+  const response = await teamFetch(`${DRILLS_API}/${encodeURIComponent(suite)}/drills/${encodeURIComponent(name)}`)
   if (!response.ok) {
     throw new Error(`Failed to fetch drill: ${response.statusText}`)
   }
@@ -97,7 +99,7 @@ export async function fetchDrill(suite: string, name: string): Promise<DrillDeta
 }
 
 export async function deleteDrillSuite(name: string): Promise<{ status: string; deleted: string[] }> {
-  const response = await fetch(`${DRILLS_API}/${encodeURIComponent(name)}`, {
+  const response = await teamFetch(`${DRILLS_API}/${encodeURIComponent(name)}`, {
     method: 'DELETE',
   })
   if (!response.ok) {
@@ -107,7 +109,7 @@ export async function deleteDrillSuite(name: string): Promise<{ status: string; 
 }
 
 export async function deleteDrill(suite: string, name: string): Promise<{ status: string; deleted: string[]; suite: string }> {
-  const response = await fetch(`${DRILLS_API}/${encodeURIComponent(suite)}/drills/${encodeURIComponent(name)}`, {
+  const response = await teamFetch(`${DRILLS_API}/${encodeURIComponent(suite)}/drills/${encodeURIComponent(name)}`, {
     method: 'DELETE',
   })
   if (!response.ok) {
@@ -117,7 +119,7 @@ export async function deleteDrill(suite: string, name: string): Promise<{ status
 }
 
 export async function fetchDrillReports(): Promise<DrillReportSummary[]> {
-  const response = await fetch(REPORTS_API)
+  const response = await teamFetch(REPORTS_API)
   if (!response.ok) {
     throw new Error(`Failed to fetch drill reports: ${response.statusText}`)
   }
@@ -125,7 +127,7 @@ export async function fetchDrillReports(): Promise<DrillReportSummary[]> {
 }
 
 export async function fetchDrillReport(suite: string): Promise<DrillReport> {
-  const response = await fetch(`${REPORTS_API}/${encodeURIComponent(suite)}`)
+  const response = await teamFetch(`${REPORTS_API}/${encodeURIComponent(suite)}`)
   if (!response.ok) {
     throw new Error(`Failed to fetch drill report: ${response.statusText}`)
   }
@@ -133,7 +135,7 @@ export async function fetchDrillReport(suite: string): Promise<DrillReport> {
 }
 
 export async function fetchDrillYaml(suite: string, name: string): Promise<string> {
-  const response = await fetch(`${DRILLS_API}/${encodeURIComponent(suite)}/drills/${encodeURIComponent(name)}/yaml`)
+  const response = await teamFetch(`${DRILLS_API}/${encodeURIComponent(suite)}/drills/${encodeURIComponent(name)}/yaml`)
   if (!response.ok) {
     throw new Error(`Failed to fetch drill YAML: ${response.statusText}`)
   }
@@ -141,7 +143,7 @@ export async function fetchDrillYaml(suite: string, name: string): Promise<strin
 }
 
 export async function saveDrillYaml(suite: string, name: string, content: string): Promise<{ status: string; suite: string; drill: string }> {
-  const response = await fetch(`${DRILLS_API}/${encodeURIComponent(suite)}/drills/${encodeURIComponent(name)}/yaml`, {
+  const response = await teamFetch(`${DRILLS_API}/${encodeURIComponent(suite)}/drills/${encodeURIComponent(name)}/yaml`, {
     method: 'PUT',
     headers: { 'Content-Type': 'text/yaml' },
     body: content,
@@ -154,7 +156,7 @@ export async function saveDrillYaml(suite: string, name: string, content: string
 }
 
 export async function fetchSuiteYaml(suite: string): Promise<string> {
-  const response = await fetch(`${DRILLS_API}/${encodeURIComponent(suite)}/yaml`)
+  const response = await teamFetch(`${DRILLS_API}/${encodeURIComponent(suite)}/yaml`)
   if (!response.ok) {
     throw new Error(`Failed to fetch suite YAML: ${response.statusText}`)
   }
@@ -162,7 +164,7 @@ export async function fetchSuiteYaml(suite: string): Promise<string> {
 }
 
 export async function saveSuiteYaml(suite: string, content: string): Promise<{ status: string; suite: string }> {
-  const response = await fetch(`${DRILLS_API}/${encodeURIComponent(suite)}/yaml`, {
+  const response = await teamFetch(`${DRILLS_API}/${encodeURIComponent(suite)}/yaml`, {
     method: 'PUT',
     headers: { 'Content-Type': 'text/yaml' },
     body: content,

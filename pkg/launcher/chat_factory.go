@@ -1567,7 +1567,13 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		chatAgent.KnowledgeSearch = func(ctx context.Context, query string, bm25Query string, maxResults int, minScore float64) ([]agent.KnowledgeSearchResult, error) {
 			// Platform mode: prefer PG three-tier searcher from context.
 			if searcher := store.ThreeTierSearcherFromContext(ctx); searcher != nil {
-				pgResults, err := searcher.SearchAllTiers(ctx, query, maxResults, minScore)
+				// Use bm25Query (conversation-context-enriched) for keyword matching
+				// when available; the tsvector OR search benefits from extra terms.
+				searchQuery := query
+				if bm25Query != "" {
+					searchQuery = bm25Query
+				}
+				pgResults, err := searcher.SearchAllTiers(ctx, searchQuery, maxResults, minScore)
 				if err != nil {
 					return nil, err
 				}
@@ -1603,7 +1609,11 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		chatAgent.KnowledgeSearchByCategory = func(ctx context.Context, query string, bm25Query string, maxResults int, minScore float64, category string) ([]agent.KnowledgeSearchResult, error) {
 			// Platform mode: prefer PG three-tier searcher from context.
 			if searcher := store.ThreeTierSearcherFromContext(ctx); searcher != nil {
-				pgResults, err := searcher.SearchAllTiersByCategory(ctx, query, maxResults, minScore, category)
+				searchQuery := query
+				if bm25Query != "" {
+					searchQuery = bm25Query
+				}
+				pgResults, err := searcher.SearchAllTiersByCategory(ctx, searchQuery, maxResults, minScore, category)
 				if err != nil {
 					return nil, err
 				}

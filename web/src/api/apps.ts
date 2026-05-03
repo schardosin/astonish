@@ -2,6 +2,8 @@
  * API client for Visual Apps (generative UI persistence)
  */
 
+import { teamFetch } from './teamContext'
+
 const API_BASE = '/api'
 
 // --- Types ---
@@ -34,13 +36,13 @@ export interface DataSource {
 // --- API functions ---
 
 export async function fetchApps(): Promise<{ apps: AppListItem[] }> {
-  const res = await fetch(`${API_BASE}/apps`)
+  const res = await teamFetch(`${API_BASE}/apps`)
   if (!res.ok) throw new Error(`Failed to list apps: ${res.statusText}`)
   return res.json()
 }
 
 export async function fetchApp(name: string): Promise<VisualApp> {
-  const res = await fetch(`${API_BASE}/apps/${encodeURIComponent(name)}`)
+  const res = await teamFetch(`${API_BASE}/apps/${encodeURIComponent(name)}`)
   if (!res.ok) throw new Error(`Failed to load app: ${res.statusText}`)
   return res.json()
 }
@@ -49,7 +51,7 @@ export async function saveApp(
   name: string,
   data: { description: string; code: string; version: number; sessionId?: string }
 ): Promise<{ status: string; path: string; name: string }> {
-  const res = await fetch(`${API_BASE}/apps/${encodeURIComponent(name)}`, {
+  const res = await teamFetch(`${API_BASE}/apps/${encodeURIComponent(name)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
@@ -59,7 +61,7 @@ export async function saveApp(
 }
 
 export async function deleteApp(name: string): Promise<{ status: string }> {
-  const res = await fetch(`${API_BASE}/apps/${encodeURIComponent(name)}`, {
+  const res = await teamFetch(`${API_BASE}/apps/${encodeURIComponent(name)}`, {
     method: 'DELETE',
   })
   if (!res.ok) throw new Error(`Failed to delete app: ${res.statusText}`)
@@ -81,7 +83,7 @@ export async function fetchAppData(
   requestId: string = '',
   appName: string = '',
 ): Promise<AppDataResponse> {
-  const res = await fetch(`${API_BASE}/apps/data`, {
+  const res = await teamFetch(`${API_BASE}/apps/data`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sourceId, args, requestId, appName }),
@@ -98,7 +100,7 @@ export async function fetchAppAction(
   payload: Record<string, unknown> = {},
   requestId: string = '',
 ): Promise<AppDataResponse> {
-  const res = await fetch(`${API_BASE}/apps/action`, {
+  const res = await teamFetch(`${API_BASE}/apps/action`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ actionId, payload, requestId }),
@@ -124,7 +126,7 @@ export async function fetchAppAI(
   context: unknown = null,
   requestId: string = '',
 ): Promise<AppAIResponse> {
-  const res = await fetch(`${API_BASE}/apps/ai`, {
+  const res = await teamFetch(`${API_BASE}/apps/ai`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt, system, context, requestId }),
@@ -150,7 +152,7 @@ export async function fetchAppStateQuery(
   params: unknown[] = [],
   requestId: string = '',
 ): Promise<AppStateResponse> {
-  const res = await fetch(`${API_BASE}/apps/state/query`, {
+  const res = await teamFetch(`${API_BASE}/apps/state/query`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ appName, sql, params, requestId }),
@@ -168,7 +170,7 @@ export async function fetchAppStateExec(
   params: unknown[] = [],
   requestId: string = '',
 ): Promise<AppStateResponse> {
-  const res = await fetch(`${API_BASE}/apps/state/exec`, {
+  const res = await teamFetch(`${API_BASE}/apps/state/exec`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ appName, sql, params, requestId }),

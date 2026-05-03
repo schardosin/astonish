@@ -20,6 +20,7 @@ type pgMemoryStore struct {
 	schema      string
 	tablePrefix string // "org_" for org-level, "" for team/personal
 	scope       string // "personal", "team", "org" — set on results
+	embedFunc   store.EmbedFunc // optional; when set, Search() uses vector+keyword hybrid
 }
 
 func (m *pgMemoryStore) tableName() string {
@@ -27,41 +28,66 @@ func (m *pgMemoryStore) tableName() string {
 }
 
 // Search performs a hybrid vector + tsvector keyword search.
-// When no embedding is available, falls back to tsvector-only search.
+// When an embedder is available, generates a query embedding and runs
+// full RRF fusion (vector + keyword). Otherwise falls back to tsvector-only.
 func (m *pgMemoryStore) Search(ctx context.Context, query string, maxResults int, minScore float64) ([]store.MemorySearchResult, error) {
+	if m.embedFunc != nil {
+		emb, err := m.embedFunc(ctx, query)
+		if err == nil && len(emb) > 0 {
+			return m.HybridSearch(ctx, emb, query, maxResults, minScore, "", 0.7, 0.3)
+		}
+		// Embedding failed — fall back to keyword-only
+	}
 	return m.hybridSearch(ctx, query, maxResults, minScore, "")
 }
 
 // SearchByCategory performs a hybrid search filtered by category.
 func (m *pgMemoryStore) SearchByCategory(ctx context.Context, query string, maxResults int, minScore float64, category string) ([]store.MemorySearchResult, error) {
+	if m.embedFunc != nil {
+		emb, err := m.embedFunc(ctx, query)
+		if err == nil && len(emb) > 0 {
+			return m.HybridSearch(ctx, emb, query, maxResults, minScore, category, 0.7, 0.3)
+		}
+		// Embedding failed — fall back to keyword-only
+	}
 	return m.hybridSearch(ctx, query, maxResults, minScore, category)
 }
 
 // hybridSearch performs a tsvector full-text search with scoring via ts_rank.
+// Uses OR semantics so multi-word queries return partial matches, ranked by
+// how many terms match (via ts_rank). This approximates BM25-like behavior.
 // Vector search is handled separately via HybridSearch (with embedding).
 func (m *pgMemoryStore) hybridSearch(ctx context.Context, query string, maxResults int, minScore float64, category string) ([]store.MemorySearchResult, error) {
-	// Build the query using tsvector for keyword ranking
+	// Build the tsquery with OR semantics:
+	// plainto_tsquery produces 'a' & 'b' & 'c' (AND).
+	// We convert to 'a' | 'b' | 'c' (OR) so partial matches are returned,
+	// ranked by ts_rank (which scores higher when more terms match).
+	const orTsquery = `(
+		SELECT string_agg(token, ' | ')::tsquery
+		FROM unnest(string_to_array(plainto_tsquery('english', $1)::text, ' & ')) AS token
+	)`
+
 	var sql string
 	var args []any
 
 	if category == "" {
 		sql = fmt.Sprintf(
 			`SELECT id::text, chunk_text, category, source_path,
-			        ts_rank(tsv, plainto_tsquery('english', $1)) AS score
+			        ts_rank(tsv, %s) AS score
 			 FROM %s
-			 WHERE tsv @@ plainto_tsquery('english', $1)
+			 WHERE tsv @@ %s
 			 ORDER BY score DESC
-			 LIMIT $2`, m.tableName())
+			 LIMIT $2`, orTsquery, m.tableName(), orTsquery)
 		args = []any{query, maxResults}
 	} else {
 		sql = fmt.Sprintf(
 			`SELECT id::text, chunk_text, category, source_path,
-			        ts_rank(tsv, plainto_tsquery('english', $1)) AS score
+			        ts_rank(tsv, %s) AS score
 			 FROM %s
-			 WHERE tsv @@ plainto_tsquery('english', $1)
+			 WHERE tsv @@ %s
 			   AND category = $3
 			 ORDER BY score DESC
-			 LIMIT $2`, m.tableName())
+			 LIMIT $2`, orTsquery, m.tableName(), orTsquery)
 		args = []any{query, maxResults, category}
 	}
 
@@ -212,7 +238,17 @@ func (m *pgMemoryStore) VectorSearch(ctx context.Context, embedding []float32, m
 
 // Add inserts a memory chunk into the store.
 // The tsvector column is auto-populated by the DB trigger.
+// When an embedder is available and no embedding is provided, one is generated automatically.
 func (m *pgMemoryStore) Add(ctx context.Context, entry store.MemoryEntry) error {
+	// Auto-generate embedding if embedder is available and none was provided
+	if len(entry.Embedding) == 0 && m.embedFunc != nil {
+		if emb, err := m.embedFunc(ctx, entry.Content); err == nil && len(emb) > 0 {
+			entry.Embedding = emb
+		}
+		// Embedding failure is non-fatal — the memory is still stored
+		// with tsvector indexing for keyword search.
+	}
+
 	var embStr *string
 	if len(entry.Embedding) > 0 {
 		s := fmt.Sprintf("[%s]", float32SliceToString(entry.Embedding))

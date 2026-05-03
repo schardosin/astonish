@@ -18,6 +18,7 @@ import InstallMcpModal from './components/InstallMcpModal'
 import { useTheme } from './hooks/useTheme'
 import { useAuth } from './hooks/useAuth'
 import { useHashRouter, buildPath } from './hooks/useHashRouter'
+import { setActiveTeam as setActiveTeamContext, getActiveTeam as getStoredTeam } from './api/teamContext'
 import { yamlToFlowAsync, extractLayout } from './utils/yamlToFlow'
 import { addStandaloneNode, addConnection, removeConnection, updateNode, orderYamlKeys } from './utils/flowToYaml'
 import { fetchAgents, fetchAgent, saveAgent, deleteAgent, fetchTools, checkMcpDependencies, installMcpServer, getMcpStoreServer, installInlineMcpServer } from './api/agents'
@@ -90,12 +91,13 @@ function App() {
 
   // Platform team list — loaded once after authentication
   const [platformTeams, setPlatformTeams] = useState<{ slug: string; name: string }[] | null>(null)
-  const [activeTeam, setActiveTeam] = useState<string | null>(null)
+  const [activeTeam, setActiveTeam] = useState<string | null>(getStoredTeam)
   useEffect(() => {
     if (!isPlatformMode || !auth.isAuthenticated) return
-    // Set initial active team from auth state
-    if (auth.team && !activeTeam) {
+    // Set initial active team: prefer localStorage, fall back to JWT default
+    if (!activeTeam && auth.team) {
       setActiveTeam(auth.team)
+      setActiveTeamContext(auth.team)
     }
     // Fetch team list
     import('./api/platform').then(mod => {
@@ -107,9 +109,7 @@ function App() {
 
   const handleTeamChange = useCallback((teamSlug: string) => {
     setActiveTeam(teamSlug)
-    // The backend picks up the active team from the JWT/cookie and
-    // X-Astonish-Team header. For now we just update local state;
-    // a full implementation would call a backend endpoint to switch context.
+    setActiveTeamContext(teamSlug)
   }, [])
 
   const [agents, setAgents] = useState<Agent[]>([])
@@ -229,12 +229,16 @@ function App() {
     }
   }
 
-  // Fetch sandbox status on mount (for security badge in top bar)
+  // Fetch sandbox status (for security badge in top bar).
+  // In platform mode, this endpoint requires auth — wait until authenticated.
+  // In personal mode, fetch immediately (no auth required).
+  const sandboxAuthReady = !isPlatformMode || auth.isAuthenticated
   useEffect(() => {
+    if (!sandboxAuthReady) return
     fetchSandboxStatus()
       .then((status) => setSandboxStatus(status))
       .catch(() => setSandboxStatus(null))
-  }, [])
+  }, [sandboxAuthReady])
 
   // Load app version from backend (always runs)
   const loadAppVersion = async () => {
@@ -1463,6 +1467,7 @@ layout:
           {view === 'chat' ? (
             <Suspense fallback={null}>
             <StudioChat
+              key={activeTeam || 'personal'}
               theme={theme}
               initialSessionId={path.view === 'chat' ? path.params.sessionId : ''}
               pendingChatMessage={pendingChatMessage}
@@ -1479,6 +1484,7 @@ layout:
           ) : view === 'fleet' ? (
             <Suspense fallback={null}>
             <FleetView
+              key={activeTeam || 'personal'}
               theme={theme}
               path={path}
               onNavigate={(hashPath: string) => navigate(hashPath)}
@@ -1491,6 +1497,7 @@ layout:
           ) : view === 'drill' ? (
             <Suspense fallback={null}>
             <DrillView
+              key={activeTeam || 'personal'}
               theme={theme}
               path={path}
               onNavigate={(hashPath: string) => navigate(hashPath)}
@@ -1511,6 +1518,7 @@ layout:
           ) : view === 'apps' ? (
             <Suspense fallback={null}>
             <AppsView
+              key={activeTeam || 'personal'}
               theme={theme}
               appName={path.view === 'apps' ? path.params.appName : ''}
               onNavigate={(hashPath: string) => navigate(hashPath)}
@@ -1523,6 +1531,7 @@ layout:
           ) : view === 'team-mgmt' && isPlatformMode && auth.user && auth.org ? (
             <Suspense fallback={null}>
             <TeamManagement
+              key={activeTeam || 'personal'}
               theme={theme}
               user={auth.user}
               org={auth.org}
@@ -1532,13 +1541,16 @@ layout:
           ) : view === 'knowledge' && isPlatformMode && auth.user ? (
             <Suspense fallback={null}>
             <KnowledgeBrowser
+              key={activeTeam || 'personal'}
               theme={theme}
               user={auth.user}
+              activeTeam={activeTeam}
             />
             </Suspense>
           ) : view === 'app-catalog' && isPlatformMode && auth.user ? (
             <Suspense fallback={null}>
             <AppCatalog
+              key={activeTeam || 'personal'}
               theme={theme}
               user={auth.user}
               activeTeam={activeTeam}
@@ -1547,6 +1559,7 @@ layout:
           ) : view === 'audit' && isPlatformMode && auth.user?.role === 'admin' ? (
             <Suspense fallback={null}>
             <AuditViewer
+              key={activeTeam || 'personal'}
               theme={theme}
             />
             </Suspense>

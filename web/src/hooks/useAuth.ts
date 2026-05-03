@@ -22,6 +22,11 @@ export function useAuth(isPlatformMode: boolean) {
   useEffect(() => {
     if (!isPlatformMode) return
 
+    // Reset stale personal-mode state before checking auth.
+    // useState's initializer only runs once, so if isPlatformMode transitions
+    // from false→true, we'd have stale isAuthenticated=true with no user data.
+    setState({ isAuthenticated: false, isLoading: true, user: null, org: null, team: null })
+
     let cancelled = false
     checkAuth().then(result => {
       if (cancelled) return
@@ -34,7 +39,7 @@ export function useAuth(isPlatformMode: boolean) {
           team: result.team,
         })
       } else {
-        setState(prev => ({ ...prev, isLoading: false, isAuthenticated: false }))
+        setState({ isAuthenticated: false, isLoading: false, user: null, org: null, team: null })
       }
     })
     return () => { cancelled = true }

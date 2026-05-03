@@ -16,6 +16,7 @@ type PGStore struct {
 	poolMgr     *PoolManager
 	platformDSN string
 	pgCfg       config.PostgresConfig
+	embedFunc   store.EmbedFunc // optional; propagated to memory stores for hybrid search
 }
 
 // New creates a new PGStore connected to the platform database.
@@ -39,6 +40,18 @@ func New(ctx context.Context, platformDSN string, pgCfg config.PostgresConfig) (
 // PoolManager returns the underlying pool manager for direct access.
 func (s *PGStore) PoolManager() *PoolManager {
 	return s.poolMgr
+}
+
+// SetEmbedFunc configures the embedding function used by memory stores for
+// vector search. When set, Search() uses hybrid vector+keyword RRF fusion
+// and Add() auto-generates embeddings for new memories. When nil (default),
+// memory stores fall back to tsvector-only keyword search.
+//
+// This is called by the launcher after initializing the embedding model
+// (HugotEmbedder or cloud provider). It's safe to call at any time;
+// subsequent Memories() calls will pick up the new function.
+func (s *PGStore) SetEmbedFunc(fn store.EmbedFunc) {
+	s.embedFunc = fn
 }
 
 // --- store.PlatformStore implementation ---
@@ -68,9 +81,10 @@ func (s *PGStore) ForOrg(orgSlug string) (store.OrgDataStore, error) {
 		return nil, fmt.Errorf("failed to get pool for org %s: %w", orgSlug, err)
 	}
 	return &pgOrgDataStore{
-		pool:    pool,
-		orgSlug: orgSlug,
-		poolMgr: s.poolMgr,
+		pool:      pool,
+		orgSlug:   orgSlug,
+		poolMgr:   s.poolMgr,
+		embedFunc: s.embedFunc,
 	}, nil
 }
 
@@ -111,21 +125,22 @@ func (s *PGStore) DecommissionOrg(ctx context.Context, orgSlug string) error {
 // --- store.OrgDataStore implementation ---
 
 type pgOrgDataStore struct {
-	pool    *pgxpool.Pool
-	orgSlug string
-	poolMgr *PoolManager
+	pool      *pgxpool.Pool
+	orgSlug   string
+	poolMgr   *PoolManager
+	embedFunc store.EmbedFunc
 }
 
 func (o *pgOrgDataStore) ForTeam(teamSlug string) store.TeamDataStore {
-	return &pgTeamDataStore{pool: o.pool, teamSlug: teamSlug}
+	return &pgTeamDataStore{pool: o.pool, teamSlug: teamSlug, embedFunc: o.embedFunc}
 }
 
 func (o *pgOrgDataStore) ForUser(userID string) store.PersonalDataStore {
-	return &pgPersonalDataStore{pool: o.pool, userID: userID}
+	return &pgPersonalDataStore{pool: o.pool, userID: userID, embedFunc: o.embedFunc}
 }
 
 func (o *pgOrgDataStore) OrgMemories() store.MemoryStore {
-	return &pgMemoryStore{pool: o.pool, schema: "public", tablePrefix: "org_", scope: string(store.MemoryScopeOrg)}
+	return &pgMemoryStore{pool: o.pool, schema: "public", tablePrefix: "org_", scope: string(store.MemoryScopeOrg), embedFunc: o.embedFunc}
 }
 
 func (o *pgOrgDataStore) OrgSkills() store.SkillStore {
@@ -170,9 +185,10 @@ func (o *pgOrgDataStore) Close() error {
 // --- store.TeamDataStore implementation ---
 
 type pgTeamDataStore struct {
-	pool     *pgxpool.Pool
-	teamSlug string
-	userID   string // optional: used for per-user app state scoping
+	pool      *pgxpool.Pool
+	teamSlug  string
+	userID    string         // optional: used for per-user app state scoping
+	embedFunc store.EmbedFunc // optional: for memory store hybrid search
 }
 
 func (t *pgTeamDataStore) schema() string {
@@ -184,7 +200,7 @@ func (t *pgTeamDataStore) Sessions() store.SessionStore {
 }
 
 func (t *pgTeamDataStore) Memories() store.MemoryStore {
-	return &pgMemoryStore{pool: t.pool, schema: t.schema(), tablePrefix: "", scope: string(store.MemoryScopeTeam)}
+	return &pgMemoryStore{pool: t.pool, schema: t.schema(), tablePrefix: "", scope: string(store.MemoryScopeTeam), embedFunc: t.embedFunc}
 }
 
 func (t *pgTeamDataStore) Credentials() store.CredentialStore {
@@ -222,8 +238,9 @@ func (t *pgTeamDataStore) Audit() store.AuditStore {
 // --- store.PersonalDataStore implementation ---
 
 type pgPersonalDataStore struct {
-	pool   *pgxpool.Pool
-	userID string
+	pool      *pgxpool.Pool
+	userID    string
+	embedFunc store.EmbedFunc
 }
 
 func (p *pgPersonalDataStore) schema() string {
@@ -231,7 +248,7 @@ func (p *pgPersonalDataStore) schema() string {
 }
 
 func (p *pgPersonalDataStore) Memories() store.MemoryStore {
-	return &pgMemoryStore{pool: p.pool, schema: p.schema(), tablePrefix: "", scope: string(store.MemoryScopePersonal)}
+	return &pgMemoryStore{pool: p.pool, schema: p.schema(), tablePrefix: "", scope: string(store.MemoryScopePersonal), embedFunc: p.embedFunc}
 }
 
 func (p *pgPersonalDataStore) Apps() store.AppStore {

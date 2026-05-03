@@ -149,6 +149,28 @@ func Run(cfg RunConfig) error {
 		}
 		defer pgStore.Close()
 		logger.Printf("Storage backend: PostgreSQL (platform mode)")
+
+		// Initialize embedding model for PG memory stores (hybrid vector+keyword search).
+		// Uses the same HugotEmbedder (all-MiniLM-L6-v2, 384-dim) as personal mode.
+		// Non-fatal: if embedding fails, PG stores fall back to keyword-only search.
+		{
+			var embGetSecret config.SecretGetter
+			if credStore != nil {
+				embGetSecret = credStore.GetSecret
+			}
+			embResult, embErr := memory.ResolveEmbeddingFunc(appCfg, &appCfg.Memory, cfg.Debug, embGetSecret)
+			if embErr != nil {
+				logger.Printf("Warning: PG memory embedding unavailable (keyword-only search): %v", embErr)
+			} else {
+				pgStore.SetEmbedFunc(func(ctx context.Context, text string) ([]float32, error) {
+					return embResult.EmbeddingFunc(ctx, text)
+				})
+				if embResult.Cleanup != nil {
+					defer embResult.Cleanup()
+				}
+				logger.Printf("PG memory stores: hybrid vector+keyword search enabled")
+			}
+		}
 	} else {
 		// Personal mode: all stores backed by local filesystem.
 		// The Services struct is populated incrementally as subsystems come online.

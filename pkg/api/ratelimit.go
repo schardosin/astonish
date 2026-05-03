@@ -178,8 +178,23 @@ func RateLimitMiddleware(cfg *RateLimitConfig, next http.Handler) http.Handler {
 
 		ip := extractIP(r.RemoteAddr)
 
-		// Auth endpoints get stricter limits (brute-force protection)
+		// Auth endpoints get stricter limits (brute-force protection).
+		// Exempt read-only session-check endpoints (/me, /setup-status) —
+		// these are cookie-validated, not brute-force vectors. The SPA calls
+		// them on every page load; under rapid refresh they'd exhaust the
+		// strict 10/min auth budget and lock the user out.
 		if len(path) >= 9 && path[:9] == "/api/auth" {
+			// Let /me and /setup-status use the general API budget instead
+			if path == "/api/auth/me" || path == "/api/auth/setup-status" {
+				if !cfg.API.Allow(ip) {
+					slog.Warn("rate limit exceeded on API endpoint", "ip", ip, "path", path)
+					w.Header().Set("Retry-After", "60")
+					http.Error(w, "Too many requests", http.StatusTooManyRequests)
+					return
+				}
+				next.ServeHTTP(w, r)
+				return
+			}
 			if !cfg.Auth.Allow(ip) {
 				slog.Warn("rate limit exceeded on auth endpoint", "ip", ip, "path", path)
 				w.Header().Set("Retry-After", "60")

@@ -2,7 +2,12 @@
  * API client for platform-mode endpoints.
  * Covers teams, app sharing, memories, and audit queries.
  * All endpoints require authentication (cookie-based JWT).
+ *
+ * Team-scoped requests use teamFetch() which injects the X-Astonish-Team
+ * header so the backend resolves the correct team context.
  */
+
+import { teamFetch } from './teamContext'
 
 // --------------------------------------------------------------------------
 // Teams
@@ -30,14 +35,14 @@ export interface OrgInfo {
 }
 
 export async function fetchTeams(): Promise<Team[]> {
-  const res = await fetch('/api/teams')
+  const res = await teamFetch('/api/teams')
   if (!res.ok) throw new Error('Failed to fetch teams')
   const data = await res.json()
   return data.teams || []
 }
 
 export async function createTeam(name: string, slug: string, description?: string): Promise<Team> {
-  const res = await fetch('/api/teams', {
+  const res = await teamFetch('/api/teams', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, slug, description: description || '' }),
@@ -50,7 +55,7 @@ export async function createTeam(name: string, slug: string, description?: strin
 }
 
 export async function deleteTeam(slug: string): Promise<void> {
-  const res = await fetch(`/api/teams/${slug}`, { method: 'DELETE' })
+  const res = await teamFetch(`/api/teams/${slug}`, { method: 'DELETE' })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: res.statusText }))
     throw new Error(err.message || err.error || 'Failed to delete team')
@@ -58,14 +63,14 @@ export async function deleteTeam(slug: string): Promise<void> {
 }
 
 export async function fetchTeamMembers(slug: string): Promise<TeamMember[]> {
-  const res = await fetch(`/api/teams/${slug}/members`)
+  const res = await teamFetch(`/api/teams/${slug}/members`)
   if (!res.ok) throw new Error('Failed to fetch team members')
   const data = await res.json()
   return data.members || []
 }
 
 export async function addTeamMember(slug: string, email: string, role?: string): Promise<void> {
-  const res = await fetch(`/api/teams/${slug}/members`, {
+  const res = await teamFetch(`/api/teams/${slug}/members`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, role: role || 'member' }),
@@ -77,7 +82,7 @@ export async function addTeamMember(slug: string, email: string, role?: string):
 }
 
 export async function removeTeamMember(slug: string, userID: string): Promise<void> {
-  const res = await fetch(`/api/teams/${slug}/members/${userID}`, { method: 'DELETE' })
+  const res = await teamFetch(`/api/teams/${slug}/members/${userID}`, { method: 'DELETE' })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: res.statusText }))
     throw new Error(err.message || err.error || 'Failed to remove team member')
@@ -85,7 +90,7 @@ export async function removeTeamMember(slug: string, userID: string): Promise<vo
 }
 
 export async function setTeamMemberRole(slug: string, userID: string, role: string): Promise<void> {
-  const res = await fetch(`/api/teams/${slug}/members/${userID}/role`, {
+  const res = await teamFetch(`/api/teams/${slug}/members/${userID}/role`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ role }),
@@ -97,7 +102,7 @@ export async function setTeamMemberRole(slug: string, userID: string, role: stri
 }
 
 export async function fetchOrg(): Promise<OrgInfo> {
-  const res = await fetch('/api/org')
+  const res = await teamFetch('/api/org')
   if (!res.ok) throw new Error('Failed to fetch org info')
   return res.json()
 }
@@ -114,7 +119,7 @@ export interface AppItem {
 }
 
 export async function publishAppToTeam(slug: string): Promise<{ slug: string }> {
-  const res = await fetch('/api/apps/publish', {
+  const res = await teamFetch('/api/apps/publish', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ slug }),
@@ -127,7 +132,7 @@ export async function publishAppToTeam(slug: string): Promise<{ slug: string }> 
 }
 
 export async function forkApp(slug: string, source: 'team' | 'org'): Promise<{ slug: string }> {
-  const res = await fetch('/api/apps/fork', {
+  const res = await teamFetch('/api/apps/fork', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ slug, source }),
@@ -140,7 +145,7 @@ export async function forkApp(slug: string, source: 'team' | 'org'): Promise<{ s
 }
 
 export async function promoteAppToOrg(slug: string, teamSlug: string): Promise<{ slug: string }> {
-  const res = await fetch('/api/apps/promote', {
+  const res = await teamFetch('/api/apps/promote', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ slug, team_slug: teamSlug }),
@@ -153,14 +158,14 @@ export async function promoteAppToOrg(slug: string, teamSlug: string): Promise<{
 }
 
 export async function fetchOrgApps(): Promise<AppItem[]> {
-  const res = await fetch('/api/apps/org')
+  const res = await teamFetch('/api/apps/org')
   if (!res.ok) throw new Error('Failed to fetch org apps')
   const data = await res.json()
   return data.apps || []
 }
 
 export async function deleteOrgApp(name: string): Promise<void> {
-  const res = await fetch(`/api/apps/org/${name}`, { method: 'DELETE' })
+  const res = await teamFetch(`/api/apps/org/${name}`, { method: 'DELETE' })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: res.statusText }))
     throw new Error(err.message || err.error || 'Failed to delete org app')
@@ -181,7 +186,7 @@ export interface MemoryEntry {
 }
 
 export async function searchMemories(query: string, limit?: number): Promise<MemoryEntry[]> {
-  const res = await fetch('/api/memories/search', {
+  const res = await teamFetch('/api/memories/search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query, max_results: limit || 20 }),
@@ -192,7 +197,7 @@ export async function searchMemories(query: string, limit?: number): Promise<Mem
 }
 
 export async function saveTeamMemory(snippet: string, category?: string): Promise<{ id: string }> {
-  const res = await fetch('/api/memories/team', {
+  const res = await teamFetch('/api/memories/team', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ snippet, category: category || 'general' }),
@@ -205,7 +210,7 @@ export async function saveTeamMemory(snippet: string, category?: string): Promis
 }
 
 export async function savePersonalMemory(snippet: string, category?: string): Promise<{ id: string }> {
-  const res = await fetch('/api/memories/personal', {
+  const res = await teamFetch('/api/memories/personal', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ snippet, category: category || 'general' }),
@@ -218,31 +223,31 @@ export async function savePersonalMemory(snippet: string, category?: string): Pr
 }
 
 export async function listTeamMemories(): Promise<MemoryEntry[]> {
-  const res = await fetch('/api/memories/team')
+  const res = await teamFetch('/api/memories/team')
   if (!res.ok) throw new Error('Failed to list team memories')
   const data = await res.json()
   return data.results || []
 }
 
 export async function listOrgMemories(): Promise<MemoryEntry[]> {
-  const res = await fetch('/api/memories/org')
+  const res = await teamFetch('/api/memories/org')
   if (!res.ok) throw new Error('Failed to list org memories')
   const data = await res.json()
   return data.results || []
 }
 
 export async function deleteTeamMemory(id: string): Promise<void> {
-  const res = await fetch(`/api/memories/team/${id}`, { method: 'DELETE' })
+  const res = await teamFetch(`/api/memories/team/${id}`, { method: 'DELETE' })
   if (!res.ok) throw new Error('Failed to delete team memory')
 }
 
 export async function deleteOrgMemory(id: string): Promise<void> {
-  const res = await fetch(`/api/memories/org/${id}`, { method: 'DELETE' })
+  const res = await teamFetch(`/api/memories/org/${id}`, { method: 'DELETE' })
   if (!res.ok) throw new Error('Failed to delete org memory')
 }
 
 export async function promoteMemoryToOrg(id: string): Promise<void> {
-  const res = await fetch('/api/memories/promote', {
+  const res = await teamFetch('/api/memories/promote', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id }),
@@ -289,7 +294,7 @@ export async function queryAuditLogs(filter: AuditFilter = {}): Promise<{ entrie
   if (filter.limit) params.set('limit', String(filter.limit))
   if (filter.offset) params.set('offset', String(filter.offset))
 
-  const res = await fetch(`/api/audit?${params.toString()}`)
+  const res = await teamFetch(`/api/audit?${params.toString()}`)
   if (!res.ok) throw new Error('Failed to query audit logs')
   return res.json()
 }

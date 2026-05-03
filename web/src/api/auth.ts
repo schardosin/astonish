@@ -100,8 +100,20 @@ export async function getMe(): Promise<MeResponse> {
  * Tries /me first (fast, uses access token cookie).
  * If that fails with 401, tries refresh.
  * Returns the user info if authenticated, null otherwise.
+ *
+ * Deduplicates concurrent calls: rapid page refreshes or React Strict Mode
+ * double-effects share a single in-flight request instead of each firing
+ * their own /me + /refresh sequence (which can exhaust the auth rate limit).
  */
-export async function checkAuth(): Promise<MeResponse | null> {
+let _checkAuthInflight: Promise<MeResponse | null> | null = null
+
+export function checkAuth(): Promise<MeResponse | null> {
+  if (_checkAuthInflight) return _checkAuthInflight
+  _checkAuthInflight = _doCheckAuth().finally(() => { _checkAuthInflight = null })
+  return _checkAuthInflight
+}
+
+async function _doCheckAuth(): Promise<MeResponse | null> {
   try {
     return await getMe()
   } catch {

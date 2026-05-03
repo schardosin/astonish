@@ -2,6 +2,12 @@ package store
 
 import "context"
 
+// EmbedFunc generates a vector embedding for a text string.
+// Returns a float32 slice (e.g., 384-dim for all-MiniLM-L6-v2).
+// This is the store-level abstraction; callers can wrap HugotEmbedder,
+// chromem.EmbeddingFunc, or any other embedding provider into this type.
+type EmbedFunc func(ctx context.Context, text string) ([]float32, error)
+
 // MemoryScope identifies the knowledge tier for a memory entry.
 type MemoryScope string
 

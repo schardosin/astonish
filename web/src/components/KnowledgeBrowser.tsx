@@ -10,6 +10,7 @@ import type { MemoryEntry } from '../api/platform'
 interface KnowledgeBrowserProps {
   theme: 'dark' | 'light'
   user: { id: string; email: string; display_name: string; role: string }
+  activeTeam?: string | null
 }
 type Tab = 'team' | 'org' | 'add'
 const SCOPE_COLORS: Record<string, string> = { personal: '#3b82f6', team: '#a855f7', org: '#10b981' }
@@ -77,7 +78,7 @@ function MemoryCard({ entry, isAdmin, showPromote, onDelete, onPromote }: Memory
 }
 
 // ─── Main Component ───
-export default function KnowledgeBrowser({ theme, user }: KnowledgeBrowserProps) {
+export default function KnowledgeBrowser({ theme, user, activeTeam }: KnowledgeBrowserProps) {
   const isAdmin = user.role === 'admin'
   const [tab, setTab] = useState<Tab>('team')
   const [query, setQuery] = useState('')

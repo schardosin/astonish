@@ -28,6 +28,7 @@ import (
 	"github.com/schardosin/astonish/pkg/sandbox"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/skills"
+	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
@@ -1557,8 +1558,32 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	tools.SetFlowRunnerAccess(flowRunner)
 
 	// --- 6b2. Wire knowledge search callbacks ---
+	// These callbacks are context-aware: in platform mode, they check the
+	// invocation context for a PG-backed ThreeTierSearcher (injected by
+	// ChatRunner.InjectMemoryStores) and use it for cross-tier search.
+	// In personal mode (or when no PG searcher is available), they fall
+	// back to the file-based chromem-go store.
 	if memorySearchAvailable && memStore != nil {
 		chatAgent.KnowledgeSearch = func(ctx context.Context, query string, bm25Query string, maxResults int, minScore float64) ([]agent.KnowledgeSearchResult, error) {
+			// Platform mode: prefer PG three-tier searcher from context.
+			if searcher := store.ThreeTierSearcherFromContext(ctx); searcher != nil {
+				pgResults, err := searcher.SearchAllTiers(ctx, query, maxResults, minScore)
+				if err != nil {
+					return nil, err
+				}
+				var knowledgeResults []agent.KnowledgeSearchResult
+				for _, r := range pgResults {
+					knowledgeResults = append(knowledgeResults, agent.KnowledgeSearchResult{
+						Path:     r.Path,
+						Score:    r.Score,
+						Snippet:  r.Snippet,
+						Category: r.Category,
+					})
+				}
+				return knowledgeResults, nil
+			}
+
+			// Personal mode fallback: file-based chromem-go.
 			results, err := memStore.SearchHybridWithContext(ctx, query, bm25Query, maxResults, minScore)
 			if err != nil {
 				return nil, err
@@ -1576,6 +1601,25 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 
 		chatAgent.KnowledgeSearchByCategory = func(ctx context.Context, query string, bm25Query string, maxResults int, minScore float64, category string) ([]agent.KnowledgeSearchResult, error) {
+			// Platform mode: prefer PG three-tier searcher from context.
+			if searcher := store.ThreeTierSearcherFromContext(ctx); searcher != nil {
+				pgResults, err := searcher.SearchAllTiersByCategory(ctx, query, maxResults, minScore, category)
+				if err != nil {
+					return nil, err
+				}
+				var knowledgeResults []agent.KnowledgeSearchResult
+				for _, r := range pgResults {
+					knowledgeResults = append(knowledgeResults, agent.KnowledgeSearchResult{
+						Path:     r.Path,
+						Score:    r.Score,
+						Snippet:  r.Snippet,
+						Category: r.Category,
+					})
+				}
+				return knowledgeResults, nil
+			}
+
+			// Personal mode fallback: file-based chromem-go.
 			results, err := memStore.SearchHybridByCategoryWithContext(ctx, query, bm25Query, maxResults, minScore, category)
 			if err != nil {
 				return nil, err

@@ -184,7 +184,7 @@ export async function searchMemories(query: string, limit?: number): Promise<Mem
   const res = await fetch('/api/memories/search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, limit: limit || 20 }),
+    body: JSON.stringify({ query, max_results: limit || 20 }),
   })
   if (!res.ok) throw new Error('Failed to search memories')
   const data = await res.json()
@@ -221,14 +221,14 @@ export async function listTeamMemories(): Promise<MemoryEntry[]> {
   const res = await fetch('/api/memories/team')
   if (!res.ok) throw new Error('Failed to list team memories')
   const data = await res.json()
-  return data.entries || []
+  return data.results || []
 }
 
 export async function listOrgMemories(): Promise<MemoryEntry[]> {
   const res = await fetch('/api/memories/org')
   if (!res.ok) throw new Error('Failed to list org memories')
   const data = await res.json()
-  return data.entries || []
+  return data.results || []
 }
 
 export async function deleteTeamMemory(id: string): Promise<void> {

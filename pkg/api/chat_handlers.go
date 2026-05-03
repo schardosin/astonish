@@ -631,6 +631,13 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		runner.InjectCredentialStore(svc.Credentials)
 	}
 
+	// Inject tenant-scoped memory stores into the runner context so that
+	// memory_search, memory_save tools, and the KnowledgeSearch callback can
+	// use the PG-backed stores (team + three-tier) in platform mode.
+	if svc := store.FromRequest(r); svc != nil {
+		runner.InjectMemoryStores(svc.Memory, svc.MemorySearcher)
+	}
+
 	// If we seeded an app preview, emit it through the runner so the frontend
 	// shows the AppPreviewCard immediately (before the LLM responds).
 	if seededAppPreview != nil {

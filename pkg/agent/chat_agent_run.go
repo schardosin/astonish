@@ -97,7 +97,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 				// Partition 1: Guidance docs (how-to instructions for capabilities)
 				if c.KnowledgeSearchByCategory != nil {
-					guidanceResults, err := c.KnowledgeSearchByCategory(context.Background(), searchQuery, bm25Query, 3, 0.3, "guidance")
+					guidanceResults, err := c.KnowledgeSearchByCategory(ctx, searchQuery, bm25Query, 3, 0.3, "guidance")
 					if err != nil {
 						if c.DebugMode {
 							slog.Debug("guidance search failed", "component", "chat", "error", err)
@@ -109,7 +109,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 				// Partition 2: Everything else (memory, skills, flows, knowledge)
 				if c.KnowledgeSearch != nil {
-					knowledgeResults, err := c.KnowledgeSearch(context.Background(), searchQuery, bm25Query, 5, 0.3)
+					knowledgeResults, err := c.KnowledgeSearch(ctx, searchQuery, bm25Query, 5, 0.3)
 					if err != nil {
 						if c.DebugMode {
 							slog.Debug("knowledge search failed", "component", "chat", "error", err)

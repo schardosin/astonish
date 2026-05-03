@@ -9,6 +9,8 @@ type contextKey string
 
 const servicesKey contextKey = "astonish_services"
 const credStoreKey contextKey = "astonish_credential_store"
+const memoryStoreKey contextKey = "astonish_memory_store"
+const memorySearcherKey contextKey = "astonish_memory_searcher"
 
 // WithServices returns a new context containing the Services instance.
 func WithServices(ctx context.Context, svc *Services) context.Context {
@@ -55,4 +57,30 @@ func WithCredentialStore(ctx context.Context, cs CredentialStore) context.Contex
 func CredentialStoreFromContext(ctx context.Context) CredentialStore {
 	cs, _ := ctx.Value(credStoreKey).(CredentialStore)
 	return cs
+}
+
+// WithMemoryStore returns a new context containing a tenant-scoped MemoryStore.
+// Used to propagate the PG team memory store into the ADK runner context.
+func WithMemoryStore(ctx context.Context, ms MemoryStore) context.Context {
+	return context.WithValue(ctx, memoryStoreKey, ms)
+}
+
+// MemoryStoreFromContext retrieves the MemoryStore from a context.
+// Returns nil if no MemoryStore is present (personal mode or tests).
+func MemoryStoreFromContext(ctx context.Context) MemoryStore {
+	ms, _ := ctx.Value(memoryStoreKey).(MemoryStore)
+	return ms
+}
+
+// WithThreeTierSearcher returns a new context containing a ThreeTierSearcher.
+// Used to propagate the cross-tier memory searcher into the ADK runner context.
+func WithThreeTierSearcher(ctx context.Context, ts ThreeTierSearcher) context.Context {
+	return context.WithValue(ctx, memorySearcherKey, ts)
+}
+
+// ThreeTierSearcherFromContext retrieves the ThreeTierSearcher from a context.
+// Returns nil if no ThreeTierSearcher is present (personal mode or tests).
+func ThreeTierSearcherFromContext(ctx context.Context) ThreeTierSearcher {
+	ts, _ := ctx.Value(memorySearcherKey).(ThreeTierSearcher)
+	return ts
 }

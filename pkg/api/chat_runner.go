@@ -87,6 +87,20 @@ func (cr *ChatRunner) InjectCredentialStore(cs store.CredentialStore) {
 	cr.ctx = store.WithCredentialStore(cr.ctx, cs)
 }
 
+// InjectMemoryStores adds tenant-scoped memory stores to the runner's context.
+// memStore is the team-scoped PG memory store (for saves and single-tier search).
+// searcher is the three-tier searcher (personal + team + org) for cross-tier search.
+// Tool functions and knowledge callbacks retrieve these via store.*FromContext.
+// Must be called before Run().
+func (cr *ChatRunner) InjectMemoryStores(memStore store.MemoryStore, searcher store.ThreeTierSearcher) {
+	if memStore != nil {
+		cr.ctx = store.WithMemoryStore(cr.ctx, memStore)
+	}
+	if searcher != nil {
+		cr.ctx = store.WithThreeTierSearcher(cr.ctx, searcher)
+	}
+}
+
 // Run executes the agent in the background. It creates the ADK runner,
 // processes events, buffers them for subscribers, and handles completion.
 // This method blocks until the agent finishes or the context is cancelled.

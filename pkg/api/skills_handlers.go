@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/skills"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // SkillListItem represents a skill in the listing response.
@@ -46,40 +47,43 @@ type SkillContentUpdateRequest struct {
 
 // ListSkillsHandler handles GET /api/skills
 func ListSkillsHandler(w http.ResponseWriter, r *http.Request) {
-	allSkills, err := loadAPISkills()
-	if err != nil {
-		http.Error(w, "Failed to load skills: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
+	var allItems []SkillListItem
 
-	items := make([]SkillListItem, 0, len(allSkills))
-	for _, s := range allSkills {
-		item := SkillListItem{
-			Name:         s.Name,
-			Description:  s.Description,
-			Source:       s.Source,
-			Eligible:     s.IsEligible(),
-			RequireBins:  s.RequireBins,
-			RequireEnv:   s.RequireEnv,
-			OS:           s.OS,
-			FilePath:     s.FilePath,
-			HasDirectory: s.Directory != "",
+	if svc := store.FromRequest(r); svc != nil && svc.Skills != nil {
+		// Platform mode: custom skills from PG + bundled overlay
+		items, err := listSkillsPlatform(svc.Skills)
+		if err != nil {
+			http.Error(w, "Failed to load skills: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
-		if !item.Eligible {
-			item.Missing = s.MissingRequirements()
+		allItems = items
+	} else {
+		// Personal mode: load from filesystem (bundled + user dir + extra dirs)
+		loaded, err := loadAPISkills()
+		if err != nil {
+			http.Error(w, "Failed to load skills: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
-		items = append(items, item)
+		allItems = skillsToListItems(loaded)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"skills": items,
+		"skills": allItems,
 	})
 }
 
 // GetSkillContentHandler handles GET /api/skills/{name}/content
 func GetSkillContentHandler(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
+
+	if svc := store.FromRequest(r); svc != nil && svc.Skills != nil {
+		// Platform mode: try PG first, then bundled
+		getSkillContentPlatform(w, svc.Skills, name)
+		return
+	}
+
+	// Personal mode: load from filesystem
 	allSkills, err := loadAPISkills()
 	if err != nil {
 		http.Error(w, "Failed to load skills: "+err.Error(), http.StatusInternalServerError)
@@ -88,7 +92,6 @@ func GetSkillContentHandler(w http.ResponseWriter, r *http.Request) {
 
 	for _, s := range allSkills {
 		if strings.EqualFold(s.Name, name) {
-			// Reconstruct the raw file (frontmatter + content)
 			rawFile := reconstructRawFile(&s)
 			resp := SkillContentResponse{
 				Name:        s.Name,
@@ -124,12 +127,19 @@ func UpdateSkillContentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate the content parses correctly
-	_, err := skills.ParseSkillFile("validation", []byte(req.RawFile))
+	parsed, err := skills.ParseSkillFile("validation", []byte(req.RawFile))
 	if err != nil {
 		http.Error(w, "Invalid skill file: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	if svc := store.FromRequest(r); svc != nil && svc.Skills != nil {
+		// Platform mode: update in PG
+		updateSkillContentPlatform(w, svc.Skills, name, parsed, req.RawFile)
+		return
+	}
+
+	// Personal mode: update on filesystem
 	allSkills, err := loadAPISkills()
 	if err != nil {
 		http.Error(w, "Failed to load skills: "+err.Error(), http.StatusInternalServerError)
@@ -147,16 +157,13 @@ func UpdateSkillContentHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			// Write updated content to the file
 			if err := os.WriteFile(s.FilePath, []byte(req.RawFile), 0644); err != nil {
 				http.Error(w, "Failed to write skill file: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
 
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{
-				"status": "ok",
-			})
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 			return
 		}
 	}
@@ -190,6 +197,13 @@ func CreateSkillHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if svc := store.FromRequest(r); svc != nil && svc.Skills != nil {
+		// Platform mode: create in PG
+		createSkillPlatform(w, svc.Skills, name)
+		return
+	}
+
+	// Personal mode: create on filesystem
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
 		slog.Warn("failed to load app config", "error", err)
@@ -234,6 +248,13 @@ func CreateSkillHandler(w http.ResponseWriter, r *http.Request) {
 func DeleteSkillHandler(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
 
+	if svc := store.FromRequest(r); svc != nil && svc.Skills != nil {
+		// Platform mode: delete from PG
+		deleteSkillPlatform(w, svc.Skills, name)
+		return
+	}
+
+	// Personal mode: delete from filesystem
 	allSkills, err := loadAPISkills()
 	if err != nil {
 		http.Error(w, "Failed to load skills: "+err.Error(), http.StatusInternalServerError)
@@ -257,9 +278,7 @@ func DeleteSkillHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{
-				"status": "ok",
-			})
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 			return
 		}
 	}
@@ -267,7 +286,166 @@ func DeleteSkillHandler(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, fmt.Sprintf("Skill %q not found", name), http.StatusNotFound)
 }
 
-// --- Helpers ---
+// --- Platform mode helpers ---
+
+// listSkillsPlatform loads custom skills from PG and overlays bundled skills.
+// Custom skills take precedence over bundled ones with the same name.
+func listSkillsPlatform(skillStore store.SkillStore) ([]SkillListItem, error) {
+	// Load bundled skills first
+	bundled, err := skills.LoadBundledSkills()
+	if err != nil {
+		return nil, fmt.Errorf("load bundled skills: %w", err)
+	}
+
+	byName := make(map[string]SkillListItem, len(bundled))
+	for _, s := range bundled {
+		byName[s.Name] = skillToListItem(s.Name, s.Description, "bundled",
+			s.IsEligible(), s.MissingRequirements(), s.RequireBins, s.RequireEnv, s.OS, "", false)
+	}
+
+	// Load custom skills from PG — these override bundled ones by name
+	pgSkills, err := skillStore.List()
+	if err != nil {
+		return nil, fmt.Errorf("load skills from store: %w", err)
+	}
+	for _, s := range pgSkills {
+		byName[s.Name] = storeSkillToListItem(&s)
+	}
+
+	items := make([]SkillListItem, 0, len(byName))
+	for _, item := range byName {
+		items = append(items, item)
+	}
+
+	// Sort by name for deterministic output
+	sortListItems(items)
+	return items, nil
+}
+
+// getSkillContentPlatform retrieves a skill's content from PG or bundled.
+func getSkillContentPlatform(w http.ResponseWriter, skillStore store.SkillStore, name string) {
+	// Try PG first
+	pgSkill, err := skillStore.Get(name)
+	if err == nil && pgSkill != nil {
+		resp := SkillContentResponse{
+			Name:        pgSkill.Name,
+			Description: pgSkill.Description,
+			Source:      "custom",
+			Content:     extractBody(pgSkill.Content),
+			RawFile:     pgSkill.Content,
+			Editable:    true,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	// Fall back to bundled
+	bundled, loadErr := skills.LoadBundledSkills()
+	if loadErr != nil {
+		http.Error(w, "Failed to load bundled skills: "+loadErr.Error(), http.StatusInternalServerError)
+		return
+	}
+	for _, s := range bundled {
+		if strings.EqualFold(s.Name, name) {
+			rawFile := reconstructRawFileFromSkillPkg(&s)
+			resp := SkillContentResponse{
+				Name:        s.Name,
+				Description: s.Description,
+				Source:      "bundled",
+				Content:     s.Content,
+				RawFile:     rawFile,
+				Editable:    false,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}
+
+	http.Error(w, fmt.Sprintf("Skill %q not found", name), http.StatusNotFound)
+}
+
+// updateSkillContentPlatform updates a skill in PG. Cannot edit bundled skills.
+func updateSkillContentPlatform(w http.ResponseWriter, skillStore store.SkillStore, name string, parsed *skills.Skill, rawFile string) {
+	// Check if this is a bundled skill
+	bundled, _ := skills.LoadBundledSkills()
+	for _, s := range bundled {
+		if strings.EqualFold(s.Name, name) {
+			// Only block if there's no custom override in PG
+			_, err := skillStore.Get(name)
+			if err != nil {
+				http.Error(w, "Cannot edit bundled skills. Create a custom skill with the same name to override it.", http.StatusForbidden)
+				return
+			}
+			break
+		}
+	}
+
+	skill := &store.Skill{
+		Name:    parsed.Name,
+		Content: rawFile,
+	}
+	if err := skillStore.Save(skill); err != nil {
+		http.Error(w, "Failed to save skill: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// createSkillPlatform creates a new skill in PG from a template.
+func createSkillPlatform(w http.ResponseWriter, skillStore store.SkillStore, name string) {
+	// Check if already exists in PG
+	existing, _ := skillStore.Get(name)
+	if existing != nil {
+		http.Error(w, fmt.Sprintf("Skill %q already exists", name), http.StatusConflict)
+		return
+	}
+
+	template := skills.NewSkillTemplate(name)
+	skill := &store.Skill{
+		Name:    name,
+		Content: template,
+	}
+
+	if err := skillStore.Save(skill); err != nil {
+		http.Error(w, "Failed to create skill: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// deleteSkillPlatform deletes a custom skill from PG. Cannot delete bundled skills.
+func deleteSkillPlatform(w http.ResponseWriter, skillStore store.SkillStore, name string) {
+	// Verify it exists in PG (can't delete bundled)
+	_, err := skillStore.Get(name)
+	if err != nil {
+		// Check if it's a bundled skill
+		bundled, _ := skills.LoadBundledSkills()
+		for _, s := range bundled {
+			if strings.EqualFold(s.Name, name) {
+				http.Error(w, "Cannot delete bundled skills", http.StatusForbidden)
+				return
+			}
+		}
+		http.Error(w, fmt.Sprintf("Skill %q not found", name), http.StatusNotFound)
+		return
+	}
+
+	if err := skillStore.Delete(name); err != nil {
+		http.Error(w, "Failed to delete skill: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// --- Personal mode helper ---
 
 func loadAPISkills() ([]skills.Skill, error) {
 	appCfg, err := config.LoadAppConfig()
@@ -291,6 +469,71 @@ func loadAPISkills() ([]skills.Skill, error) {
 	)
 }
 
+// --- Shared helpers ---
+
+func skillsToListItems(loaded []skills.Skill) []SkillListItem {
+	items := make([]SkillListItem, 0, len(loaded))
+	for _, s := range loaded {
+		item := SkillListItem{
+			Name:         s.Name,
+			Description:  s.Description,
+			Source:       s.Source,
+			Eligible:     s.IsEligible(),
+			RequireBins:  s.RequireBins,
+			RequireEnv:   s.RequireEnv,
+			OS:           s.OS,
+			FilePath:     s.FilePath,
+			HasDirectory: s.Directory != "",
+		}
+		if !item.Eligible {
+			item.Missing = s.MissingRequirements()
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func skillToListItem(name, description, source string, eligible bool, missing, requireBins, requireEnv, os []string, filePath string, hasDirectory bool) SkillListItem {
+	item := SkillListItem{
+		Name:         name,
+		Description:  description,
+		Source:       source,
+		Eligible:     eligible,
+		RequireBins:  requireBins,
+		RequireEnv:   requireEnv,
+		OS:           os,
+		FilePath:     filePath,
+		HasDirectory: hasDirectory,
+	}
+	if !eligible {
+		item.Missing = missing
+	}
+	return item
+}
+
+func storeSkillToListItem(s *store.Skill) SkillListItem {
+	// Re-parse the raw content to check eligibility
+	parsed, err := skills.ParseSkillFile("store:"+s.Name, []byte(s.Content))
+	if err != nil {
+		return SkillListItem{
+			Name:        s.Name,
+			Description: s.Description,
+			Source:      "custom",
+			Eligible:    true,
+		}
+	}
+	return SkillListItem{
+		Name:        parsed.Name,
+		Description: parsed.Description,
+		Source:      "custom",
+		Eligible:    parsed.IsEligible(),
+		Missing:     parsed.MissingRequirements(),
+		RequireBins: parsed.RequireBins,
+		RequireEnv:  parsed.RequireEnv,
+		OS:          parsed.OS,
+	}
+}
+
 func reconstructRawFile(s *skills.Skill) string {
 	// If we have the file path, read the raw file from disk
 	if s.FilePath != "" {
@@ -299,6 +542,10 @@ func reconstructRawFile(s *skills.Skill) string {
 			return string(data)
 		}
 	}
+	return reconstructRawFileFromSkillPkg(s)
+}
+
+func reconstructRawFileFromSkillPkg(s *skills.Skill) string {
 	// Fallback: reconstruct from parsed data
 	var sb strings.Builder
 	sb.WriteString("---\n")
@@ -318,10 +565,30 @@ func reconstructRawFile(s *skills.Skill) string {
 	return sb.String()
 }
 
+// extractBody returns the markdown body after frontmatter from a raw SKILL.md.
+// Used to populate the Content field for the API response (which expects body only).
+func extractBody(rawFile string) string {
+	parsed, err := skills.ParseSkillFile("extract", []byte(rawFile))
+	if err != nil {
+		return rawFile
+	}
+	return parsed.Content
+}
+
 func quoteStrings(ss []string) []string {
 	result := make([]string, len(ss))
 	for i, s := range ss {
 		result[i] = fmt.Sprintf("%q", s)
 	}
 	return result
+}
+
+func sortListItems(items []SkillListItem) {
+	for i := 0; i < len(items); i++ {
+		for j := i + 1; j < len(items); j++ {
+			if items[i].Name > items[j].Name {
+				items[i], items[j] = items[j], items[i]
+			}
+		}
+	}
 }

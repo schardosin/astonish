@@ -22,7 +22,8 @@ type skillFrontmatter struct {
 }
 
 func (m *Migrator) migrateSkills(ctx context.Context, orgDS store.OrgDataStore) (int, error) {
-	skillsDir := filepath.Join(m.configDir, "memory", "skills")
+	// Skills live in ~/.config/astonish/skills/ (not memory/skills/).
+	skillsDir := filepath.Join(m.configDir, "skills")
 
 	if _, err := os.Stat(skillsDir); os.IsNotExist(err) {
 		m.emitProgress(CatSkills, 0, 0, "skipped", "")
@@ -65,22 +66,19 @@ func (m *Migrator) migrateSkills(ctx context.Context, orgDS store.OrgDataStore) 
 		}
 
 		// Parse frontmatter and content
-		fm, content, err := parseSkillFrontmatter(string(data))
+		fm, _, err := parseSkillFrontmatter(string(data))
 		if err != nil || fm.Name == "" {
 			continue
 		}
 
+		// Store the full raw SKILL.md file in content so the PG store
+		// can re-parse frontmatter fields on load (description, os, etc.).
 		skill := &store.Skill{
-			Name:        fm.Name,
-			Description: fm.Description,
-			OS:          fm.OS,
-			RequireBins: fm.RequireBins,
-			RequireEnv:  fm.RequireEnv,
-			Metadata:    fm.Metadata,
-			Content:     content,
-			FilePath:    path,
-			Source:      "migrated",
-			Directory:   filepath.Dir(path),
+			Name:      fm.Name,
+			Content:   string(data),
+			Source:    "migrated",
+			Directory: filepath.Dir(path),
+			FilePath:  path,
 		}
 
 		if err := skillStore.Save(skill); err != nil {

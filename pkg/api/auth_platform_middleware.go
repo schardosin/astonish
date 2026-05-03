@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -81,6 +82,27 @@ func PlatformAuthMiddleware(pa *PlatformAuth, next http.Handler) http.Handler {
 		// Allow per-request team override via header
 		if headerTeam := r.Header.Get("X-Astonish-Team"); headerTeam != "" {
 			teamSlug = headerTeam
+		}
+
+		// Validate that non-admin users are members of the requested team.
+		// Admins/owners can access any team in the org for management.
+		if teamSlug != "" && claims.Role != "owner" && claims.Role != "admin" {
+			orgDS, dsErr := pa.pgStore.ForOrg(claims.OrgSlug)
+			if dsErr != nil {
+				slog.Warn("team membership check: failed to access org", "org", claims.OrgSlug, "err", dsErr)
+				respondError(w, http.StatusInternalServerError, "failed to verify team membership")
+				return
+			}
+			isMember, memberErr := orgDS.Teams().IsTeamMember(r.Context(), claims.UserID, teamSlug)
+			if memberErr != nil {
+				slog.Warn("team membership check failed", "user", claims.UserID, "team", teamSlug, "err", memberErr)
+				respondError(w, http.StatusInternalServerError, "failed to verify team membership")
+				return
+			}
+			if !isMember {
+				respondError(w, http.StatusForbidden, "you are not a member of this team")
+				return
+			}
 		}
 
 		tc := &pgstore.TenantContext{

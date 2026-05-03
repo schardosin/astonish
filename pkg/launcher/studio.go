@@ -146,6 +146,7 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 		// Platform mode: JWT-based auth with register/login/refresh
 		api.RegisterPlatformAuthRoutes(router, s.platformAuth)
 		api.RegisterTeamRoutes(router, s.platformAuth)
+		api.RegisterUserRoutes(router, s.platformAuth)
 	} else if s.Auth != nil {
 		// Personal mode: device authorization flow
 		api.RegisterAuthRoutes(router, s.Auth)

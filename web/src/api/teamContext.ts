@@ -20,6 +20,15 @@ let _activeTeam: string | null = null
 
 const STORAGE_KEY = 'astonish_active_team'
 
+// Callback invoked when the middleware rejects a team (403).
+// App.tsx sets this to trigger a team reset + UI notification.
+let _onTeamRejected: ((teamSlug: string) => void) | null = null
+
+/** Register a callback for when the middleware rejects a team selection. */
+export function onTeamRejected(cb: (teamSlug: string) => void) {
+  _onTeamRejected = cb
+}
+
 // Restore from localStorage on module load
 try {
   _activeTeam = localStorage.getItem(STORAGE_KEY)
@@ -47,8 +56,11 @@ export function getActiveTeam(): string | null {
  * is set. Signature matches the standard fetch() API so it's a drop-in
  * replacement. Falls through to plain fetch() when no team is active
  * (personal mode).
+ *
+ * If the backend returns 403 due to team membership rejection, the active
+ * team is cleared and the rejection callback is fired so the UI can react.
  */
-export function teamFetch(input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> {
+export async function teamFetch(input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> {
   if (!_activeTeam) {
     return fetch(input, init)
   }
@@ -59,5 +71,22 @@ export function teamFetch(input: Parameters<typeof fetch>[0], init?: Parameters<
     headers.set('X-Astonish-Team', _activeTeam)
   }
 
-  return fetch(input, { ...init, headers })
+  const res = await fetch(input, { ...init, headers })
+
+  // If the middleware rejected this team (not a member), clear it.
+  if (res.status === 403) {
+    try {
+      const cloned = res.clone()
+      const body = await cloned.json()
+      if (body?.error?.includes('not a member of this team') || body?.message?.includes('not a member of this team')) {
+        const rejectedTeam = _activeTeam
+        setActiveTeam(null)
+        if (_onTeamRejected && rejectedTeam) {
+          _onTeamRejected(rejectedTeam)
+        }
+      }
+    } catch { /* not JSON or other parse error — ignore */ }
+  }
+
+  return res
 }

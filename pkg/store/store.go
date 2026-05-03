@@ -132,6 +132,12 @@ type UserStore interface {
 	GetByOIDC(ctx context.Context, issuer, subject string) (*User, error)
 	Update(ctx context.Context, user *User) error
 	Delete(ctx context.Context, id string) error
+
+	// List returns all users, ordered by email.
+	List(ctx context.Context) ([]*User, error)
+
+	// ListByOrg returns all users who are members of the given org, with their role.
+	ListByOrg(ctx context.Context, orgID string) ([]*UserWithRole, error)
 }
 
 // OrganizationStore manages organization records.
@@ -148,6 +154,9 @@ type OrganizationStore interface {
 	RemoveMember(ctx context.Context, userID, orgID string) error
 	GetUserOrgs(ctx context.Context, userID string) ([]*OrgMembership, error)
 	GetMemberRole(ctx context.Context, userID, orgID string) (string, error)
+
+	// ListMembers returns all users who are members of the given org, with their role.
+	ListMembers(ctx context.Context, orgID string) ([]*UserWithRole, error)
 }
 
 // OrgMembership represents a user's membership in an organization.
@@ -157,6 +166,13 @@ type OrgMembership struct {
 	OrgSlug  string    `json:"org_slug"`
 	OrgName  string    `json:"org_name"`
 	Role     string    `json:"role"` // owner, admin, member
+	JoinedAt time.Time `json:"joined_at"`
+}
+
+// UserWithRole is a User with their role within an organization.
+type UserWithRole struct {
+	User
+	Role     string    `json:"role"`
 	JoinedAt time.Time `json:"joined_at"`
 }
 
@@ -197,6 +213,7 @@ type TeamManagementStore interface {
 	GetTeam(ctx context.Context, id string) (*Team, error)
 	GetTeamBySlug(ctx context.Context, slug string) (*Team, error)
 	ListTeams(ctx context.Context) ([]*Team, error)
+	ListTeamsForUser(ctx context.Context, userID string) ([]*Team, error)
 	DeleteTeam(ctx context.Context, id string) error
 
 	AddMember(ctx context.Context, membership *TeamMembership) error
@@ -204,6 +221,7 @@ type TeamManagementStore interface {
 	SetRole(ctx context.Context, userID, teamID, role string) error
 	ListMembers(ctx context.Context, teamID string) ([]*TeamMembership, error)
 	GetUserTeams(ctx context.Context, userID string) ([]*TeamMembership, error)
+	IsTeamMember(ctx context.Context, userID, teamSlug string) (bool, error)
 }
 
 // --------------------------------------------------------------------------

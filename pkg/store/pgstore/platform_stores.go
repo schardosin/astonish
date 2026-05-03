@@ -85,6 +85,75 @@ func (s *pgUserStore) Delete(ctx context.Context, id string) error {
 	return err
 }
 
+func (s *pgUserStore) List(ctx context.Context) ([]*store.User, error) {
+	pool, err := s.poolMgr.PlatformPool(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := pool.Query(ctx,
+		`SELECT id, email, display_name, password_hash, oidc_subject, oidc_issuer, status, created_at, last_login_at
+		 FROM users ORDER BY email`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []*store.User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
+func (s *pgUserStore) ListByOrg(ctx context.Context, orgID string) ([]*store.UserWithRole, error) {
+	pool, err := s.poolMgr.PlatformPool(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := pool.Query(ctx,
+		`SELECT u.id, u.email, u.display_name, u.password_hash, u.oidc_subject, u.oidc_issuer,
+		        u.status, u.created_at, u.last_login_at, om.role, om.joined_at
+		 FROM users u
+		 JOIN org_memberships om ON om.user_id = u.id
+		 WHERE om.org_id = $1
+		 ORDER BY u.email`, orgID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []*store.UserWithRole
+	for rows.Next() {
+		uw := &store.UserWithRole{}
+		var pwHash, oidcSub, oidcIss *string
+		var lastLogin *interface{}
+		err := rows.Scan(
+			&uw.ID, &uw.Email, &uw.DisplayName, &pwHash, &oidcSub, &oidcIss,
+			&uw.Status, &uw.CreatedAt, &lastLogin, &uw.Role, &uw.JoinedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan user with role: %w", err)
+		}
+		if pwHash != nil {
+			uw.PasswordHash = *pwHash
+		}
+		if oidcSub != nil {
+			uw.OIDCSubject = *oidcSub
+		}
+		if oidcIss != nil {
+			uw.OIDCIssuer = *oidcIss
+		}
+		users = append(users, uw)
+	}
+	return users, rows.Err()
+}
+
 // --- pgOrgStore implements store.OrganizationStore ---
 
 type pgOrgStore struct {
@@ -242,6 +311,50 @@ func (s *pgOrgStore) GetMemberRole(ctx context.Context, userID, orgID string) (s
 		return "", fmt.Errorf("user %s is not a member of org %s", userID, orgID)
 	}
 	return role, nil
+}
+
+func (s *pgOrgStore) ListMembers(ctx context.Context, orgID string) ([]*store.UserWithRole, error) {
+	pool, err := s.poolMgr.PlatformPool(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := pool.Query(ctx,
+		`SELECT u.id, u.email, u.display_name, u.password_hash, u.oidc_subject, u.oidc_issuer,
+		        u.status, u.created_at, u.last_login_at, om.role, om.joined_at
+		 FROM users u
+		 JOIN org_memberships om ON om.user_id = u.id
+		 WHERE om.org_id = $1
+		 ORDER BY u.email`, orgID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []*store.UserWithRole
+	for rows.Next() {
+		uw := &store.UserWithRole{}
+		var pwHash, oidcSub, oidcIss *string
+		var lastLogin *interface{}
+		err := rows.Scan(
+			&uw.ID, &uw.Email, &uw.DisplayName, &pwHash, &oidcSub, &oidcIss,
+			&uw.Status, &uw.CreatedAt, &lastLogin, &uw.Role, &uw.JoinedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan org member: %w", err)
+		}
+		if pwHash != nil {
+			uw.PasswordHash = *pwHash
+		}
+		if oidcSub != nil {
+			uw.OIDCSubject = *oidcSub
+		}
+		if oidcIss != nil {
+			uw.OIDCIssuer = *oidcIss
+		}
+		users = append(users, uw)
+	}
+	return users, rows.Err()
 }
 
 // --- pgLoginSessionStore implements store.LoginSessionStore ---

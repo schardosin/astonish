@@ -48,7 +48,14 @@ func (pa *PlatformAuth) handleListTeams(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	teams, err := orgDataStore.Teams().ListTeams(r.Context())
+	var teams []*store.Team
+	if user.Role == "owner" || user.Role == "admin" {
+		// Admins/owners see all teams for management purposes.
+		teams, err = orgDataStore.Teams().ListTeams(r.Context())
+	} else {
+		// Regular members only see teams they belong to.
+		teams, err = orgDataStore.Teams().ListTeamsForUser(r.Context(), user.ID)
+	}
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to list teams")
 		return
@@ -257,6 +264,7 @@ func (pa *PlatformAuth) handleListTeamMembers(w http.ResponseWriter, r *http.Req
 
 type addMemberRequest struct {
 	UserID string `json:"user_id"`
+	Email  string `json:"email"`
 	Role   string `json:"role"`
 }
 
@@ -278,10 +286,13 @@ func (pa *PlatformAuth) handleAddTeamMember(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if req.UserID == "" {
-		respondError(w, http.StatusBadRequest, "user_id is required")
+	// Resolve user: accept either user_id or email.
+	resolvedID, err := pa.resolveUserByEmailOrID(r, req.Email, req.UserID)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
 	if req.Role == "" {
 		req.Role = "member"
 	}
@@ -304,7 +315,7 @@ func (pa *PlatformAuth) handleAddTeamMember(w http.ResponseWriter, r *http.Reque
 	}
 
 	if err := orgDataStore.Teams().AddMember(ctx, &store.TeamMembership{
-		UserID:   req.UserID,
+		UserID:   resolvedID,
 		TeamID:   team.ID,
 		Role:     req.Role,
 		JoinedAt: time.Now(),

@@ -168,6 +168,30 @@ func (t *pgTeamManagementStore) ListTeams(ctx context.Context) ([]*store.Team, e
 	return teams, rows.Err()
 }
 
+func (t *pgTeamManagementStore) ListTeamsForUser(ctx context.Context, userID string) ([]*store.Team, error) {
+	rows, err := t.pool.Query(ctx,
+		`SELECT t.id, t.name, t.slug, t.schema_name, t.created_at
+		 FROM teams t
+		 JOIN team_memberships tm ON tm.team_id = t.id
+		 WHERE tm.user_id = $1
+		 ORDER BY t.name`, userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var teams []*store.Team
+	for rows.Next() {
+		team, err := scanTeam(rows)
+		if err != nil {
+			return nil, err
+		}
+		teams = append(teams, team)
+	}
+	return teams, rows.Err()
+}
+
 func (t *pgTeamManagementStore) DeleteTeam(ctx context.Context, id string) error {
 	_, err := t.pool.Exec(ctx, `DELETE FROM teams WHERE id = $1`, id)
 	return err
@@ -239,6 +263,18 @@ func (t *pgTeamManagementStore) GetUserTeams(ctx context.Context, userID string)
 		memberships = append(memberships, m)
 	}
 	return memberships, rows.Err()
+}
+
+func (t *pgTeamManagementStore) IsTeamMember(ctx context.Context, userID, teamSlug string) (bool, error) {
+	var exists bool
+	err := t.pool.QueryRow(ctx,
+		`SELECT EXISTS(
+			SELECT 1 FROM team_memberships tm
+			JOIN teams t ON t.id = tm.team_id
+			WHERE tm.user_id = $1 AND t.slug = $2
+		)`, userID, teamSlug,
+	).Scan(&exists)
+	return exists, err
 }
 
 func scanTeam(row scannable) (*store.Team, error) {

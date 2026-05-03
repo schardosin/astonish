@@ -18,7 +18,7 @@ import InstallMcpModal from './components/InstallMcpModal'
 import { useTheme } from './hooks/useTheme'
 import { useAuth } from './hooks/useAuth'
 import { useHashRouter, buildPath } from './hooks/useHashRouter'
-import { setActiveTeam as setActiveTeamContext, getActiveTeam as getStoredTeam } from './api/teamContext'
+import { setActiveTeam as setActiveTeamContext, getActiveTeam as getStoredTeam, onTeamRejected } from './api/teamContext'
 import { yamlToFlowAsync, extractLayout } from './utils/yamlToFlow'
 import { addStandaloneNode, addConnection, removeConnection, updateNode, orderYamlKeys } from './utils/flowToYaml'
 import { fetchAgents, fetchAgent, saveAgent, deleteAgent, fetchTools, checkMcpDependencies, installMcpServer, getMcpStoreServer, installInlineMcpServer } from './api/agents'
@@ -110,6 +110,20 @@ function App() {
   const handleTeamChange = useCallback((teamSlug: string) => {
     setActiveTeam(teamSlug)
     setActiveTeamContext(teamSlug)
+  }, [])
+
+  // Handle middleware team rejection (user removed from a team while active).
+  useEffect(() => {
+    onTeamRejected((rejectedSlug) => {
+      setActiveTeam(null)
+      setToast({ message: `You are no longer a member of team "${rejectedSlug}". Switched to personal scope.`, type: 'error' })
+      // Re-fetch teams to update the dropdown.
+      import('./api/platform').then(mod => {
+        mod.fetchTeams().then(teams => {
+          setPlatformTeams(teams.map(t => ({ slug: t.slug, name: t.name })))
+        }).catch(() => {})
+      })
+    })
   }, [])
 
   const [agents, setAgents] = useState<Agent[]>([])

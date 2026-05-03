@@ -29,6 +29,8 @@ func handlePlatformCommand(args []string) error {
 		return handlePlatformStatus(args[1:])
 	case "org":
 		return handlePlatformOrgCommand(args[1:])
+	case "user":
+		return handlePlatformUserCommand(args[1:])
 	default:
 		printPlatformUsage()
 		return fmt.Errorf("unknown platform subcommand: %s", args[0])
@@ -628,6 +630,341 @@ func handlePlatformOrgInvite(args []string) error {
 }
 
 // ---------------------------------------------------------------------------
+// platform user <subcommand>
+// ---------------------------------------------------------------------------
+
+func handlePlatformUserCommand(args []string) error {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
+		printPlatformUserUsage()
+		return nil
+	}
+
+	switch args[0] {
+	case "list", "ls":
+		return handlePlatformUserList(args[1:])
+	case "show":
+		return handlePlatformUserShow(args[1:])
+	case "delete":
+		return handlePlatformUserDelete(args[1:])
+	case "set-password":
+		return handlePlatformUserSetPassword(args[1:])
+	case "disable":
+		return handlePlatformUserSetStatus(args[1:], "disabled")
+	case "enable":
+		return handlePlatformUserSetStatus(args[1:], "active")
+	default:
+		printPlatformUserUsage()
+		return fmt.Errorf("unknown platform user subcommand: %s", args[0])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// platform user list
+// ---------------------------------------------------------------------------
+
+func handlePlatformUserList(args []string) error {
+	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
+		fmt.Println("usage: astonish platform user list [--org <slug>]")
+		fmt.Println("")
+		fmt.Println("List all users, optionally filtered by organization.")
+		fmt.Println("")
+		fmt.Println("options:")
+		fmt.Println("  --org <slug>   Filter by organization slug")
+		return nil
+	}
+
+	var orgSlug string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--org" && i+1 < len(args) {
+			i++
+			orgSlug = args[i]
+		}
+	}
+
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	if !appCfg.Storage.IsPostgres() {
+		return fmt.Errorf("platform user commands require storage.backend: postgres")
+	}
+
+	ctx := context.Background()
+
+	_, pgStore, err := pgstore.NewPlatformServices(ctx, appCfg.Storage.Postgres)
+	if err != nil {
+		return fmt.Errorf("failed to connect to platform DB: %w", err)
+	}
+	defer pgStore.Close()
+
+	if orgSlug != "" {
+		// List users for a specific org.
+		org, orgErr := pgStore.Organizations().GetBySlug(ctx, orgSlug)
+		if orgErr != nil {
+			return fmt.Errorf("organization '%s' not found: %w", orgSlug, orgErr)
+		}
+
+		members, listErr := pgStore.Organizations().ListMembers(ctx, org.ID)
+		if listErr != nil {
+			return fmt.Errorf("failed to list org members: %w", listErr)
+		}
+
+		if len(members) == 0 {
+			fmt.Printf("No users found in organization '%s'.\n", orgSlug)
+			return nil
+		}
+
+		fmt.Printf("Users in organization '%s':\n\n", org.Name)
+		fmt.Printf("%-36s  %-30s  %-25s  %-10s  %-10s  %s\n", "ID", "EMAIL", "NAME", "ROLE", "STATUS", "CREATED")
+		fmt.Println(strings.Repeat("-", 150))
+		for _, m := range members {
+			fmt.Printf("%-36s  %-30s  %-25s  %-10s  %-10s  %s\n",
+				m.ID, truncateStr(m.Email, 30), truncateStr(m.DisplayName, 25),
+				m.Role, m.Status, m.CreatedAt.Format("2006-01-02"))
+		}
+		return nil
+	}
+
+	// List all users.
+	users, err := pgStore.Users().List(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list users: %w", err)
+	}
+
+	if len(users) == 0 {
+		fmt.Println("No users found.")
+		fmt.Println("Invite users with: astonish platform org invite --org <slug> --email <email>")
+		return nil
+	}
+
+	fmt.Printf("%-36s  %-30s  %-25s  %-10s  %s\n", "ID", "EMAIL", "NAME", "STATUS", "CREATED")
+	fmt.Println(strings.Repeat("-", 130))
+	for _, u := range users {
+		fmt.Printf("%-36s  %-30s  %-25s  %-10s  %s\n",
+			u.ID, truncateStr(u.Email, 30), truncateStr(u.DisplayName, 25),
+			u.Status, u.CreatedAt.Format("2006-01-02"))
+	}
+
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// platform user show
+// ---------------------------------------------------------------------------
+
+func handlePlatformUserShow(args []string) error {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
+		fmt.Println("usage: astonish platform user show <email>")
+		fmt.Println("")
+		fmt.Println("Show details for a user by email address.")
+		return nil
+	}
+
+	email := strings.ToLower(strings.TrimSpace(args[0]))
+
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	if !appCfg.Storage.IsPostgres() {
+		return fmt.Errorf("platform user commands require storage.backend: postgres")
+	}
+
+	ctx := context.Background()
+
+	_, pgStore, err := pgstore.NewPlatformServices(ctx, appCfg.Storage.Postgres)
+	if err != nil {
+		return fmt.Errorf("failed to connect to platform DB: %w", err)
+	}
+	defer pgStore.Close()
+
+	user, err := pgStore.Users().GetByEmail(ctx, email)
+	if err != nil {
+		return fmt.Errorf("user '%s' not found: %w", email, err)
+	}
+
+	fmt.Printf("User Details:\n\n")
+	fmt.Printf("  ID:           %s\n", user.ID)
+	fmt.Printf("  Email:        %s\n", user.Email)
+	fmt.Printf("  Display Name: %s\n", user.DisplayName)
+	fmt.Printf("  Status:       %s\n", user.Status)
+	fmt.Printf("  Created:      %s\n", user.CreatedAt.Format("2006-01-02 15:04:05"))
+	if !user.LastLoginAt.IsZero() {
+		fmt.Printf("  Last Login:   %s\n", user.LastLoginAt.Format("2006-01-02 15:04:05"))
+	}
+	if user.OIDCIssuer != "" {
+		fmt.Printf("  OIDC Issuer:  %s\n", user.OIDCIssuer)
+		fmt.Printf("  OIDC Subject: %s\n", user.OIDCSubject)
+	}
+
+	// Show org memberships.
+	orgs, err := pgStore.Organizations().GetUserOrgs(ctx, user.ID)
+	if err != nil {
+		fmt.Printf("\n  (failed to load org memberships: %v)\n", err)
+		return nil
+	}
+
+	if len(orgs) > 0 {
+		fmt.Printf("\n  Organizations:\n")
+		for _, om := range orgs {
+			fmt.Printf("    - %s (%s) — role: %s, joined: %s\n",
+				om.OrgName, om.OrgSlug, om.Role, om.JoinedAt.Format("2006-01-02"))
+		}
+	} else {
+		fmt.Printf("\n  Not a member of any organization.\n")
+	}
+
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// platform user delete
+// ---------------------------------------------------------------------------
+
+func handlePlatformUserDelete(args []string) error {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
+		fmt.Println("usage: astonish platform user delete <email>")
+		fmt.Println("")
+		fmt.Println("Delete a user by email address.")
+		fmt.Println("This removes the user from all organizations and teams.")
+		return nil
+	}
+
+	email := strings.ToLower(strings.TrimSpace(args[0]))
+
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	if !appCfg.Storage.IsPostgres() {
+		return fmt.Errorf("platform user commands require storage.backend: postgres")
+	}
+
+	ctx := context.Background()
+
+	_, pgStore, err := pgstore.NewPlatformServices(ctx, appCfg.Storage.Postgres)
+	if err != nil {
+		return fmt.Errorf("failed to connect to platform DB: %w", err)
+	}
+	defer pgStore.Close()
+
+	user, err := pgStore.Users().GetByEmail(ctx, email)
+	if err != nil {
+		return fmt.Errorf("user '%s' not found: %w", email, err)
+	}
+
+	if err := pgStore.Users().Delete(ctx, user.ID); err != nil {
+		return fmt.Errorf("failed to delete user: %w", err)
+	}
+
+	fmt.Printf("Deleted user: %s (%s)\n", user.Email, user.DisplayName)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// platform user set-password
+// ---------------------------------------------------------------------------
+
+func handlePlatformUserSetPassword(args []string) error {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
+		fmt.Println("usage: astonish platform user set-password <email>")
+		fmt.Println("")
+		fmt.Println("Interactively set a new password for a user.")
+		return nil
+	}
+
+	email := strings.ToLower(strings.TrimSpace(args[0]))
+
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	if !appCfg.Storage.IsPostgres() {
+		return fmt.Errorf("platform user commands require storage.backend: postgres")
+	}
+
+	ctx := context.Background()
+
+	_, pgStore, err := pgstore.NewPlatformServices(ctx, appCfg.Storage.Postgres)
+	if err != nil {
+		return fmt.Errorf("failed to connect to platform DB: %w", err)
+	}
+	defer pgStore.Close()
+
+	user, err := pgStore.Users().GetByEmail(ctx, email)
+	if err != nil {
+		return fmt.Errorf("user '%s' not found: %w", email, err)
+	}
+
+	password, err := promptNewPassword()
+	if err != nil {
+		return err
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	user.PasswordHash = string(hash)
+	if err := pgStore.Users().Update(ctx, user); err != nil {
+		return fmt.Errorf("failed to update password: %w", err)
+	}
+
+	fmt.Printf("Password updated for user: %s\n", user.Email)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// platform user disable / enable
+// ---------------------------------------------------------------------------
+
+func handlePlatformUserSetStatus(args []string, status string) error {
+	verb := "disable"
+	if status == "active" {
+		verb = "enable"
+	}
+
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
+		fmt.Printf("usage: astonish platform user %s <email>\n", verb)
+		fmt.Println("")
+		fmt.Printf("%s a user account.\n", strings.ToUpper(verb[:1])+verb[1:])
+		return nil
+	}
+
+	email := strings.ToLower(strings.TrimSpace(args[0]))
+
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	if !appCfg.Storage.IsPostgres() {
+		return fmt.Errorf("platform user commands require storage.backend: postgres")
+	}
+
+	ctx := context.Background()
+
+	_, pgStore, err := pgstore.NewPlatformServices(ctx, appCfg.Storage.Postgres)
+	if err != nil {
+		return fmt.Errorf("failed to connect to platform DB: %w", err)
+	}
+	defer pgStore.Close()
+
+	user, err := pgStore.Users().GetByEmail(ctx, email)
+	if err != nil {
+		return fmt.Errorf("user '%s' not found: %w", email, err)
+	}
+
+	user.Status = status
+	if err := pgStore.Users().Update(ctx, user); err != nil {
+		return fmt.Errorf("failed to %s user: %w", verb, err)
+	}
+
+	fmt.Printf("User %sd: %s (%s)\n", verb, user.Email, user.DisplayName)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -688,6 +1025,7 @@ func printPlatformUsage() {
 	fmt.Println("  init              Initialize the platform database")
 	fmt.Println("  status            Show platform status and counts")
 	fmt.Println("  org               Manage organizations")
+	fmt.Println("  user              Manage users")
 	fmt.Println("")
 	fmt.Println("examples:")
 	fmt.Println("  astonish platform init")
@@ -695,6 +1033,8 @@ func printPlatformUsage() {
 	fmt.Println("  astonish platform org create --name 'Acme' --slug acme")
 	fmt.Println("  astonish platform org invite --org acme --email alice@acme.com")
 	fmt.Println("  astonish platform org list")
+	fmt.Println("  astonish platform user list")
+	fmt.Println("  astonish platform user show alice@acme.com")
 }
 
 func printPlatformOrgUsage() {
@@ -711,4 +1051,27 @@ func printPlatformOrgUsage() {
 	fmt.Println("  astonish platform org create --name 'Acme Corp' --slug acme")
 	fmt.Println("  astonish platform org list")
 	fmt.Println("  astonish platform org invite --org acme --email alice@acme.com --role admin")
+}
+
+func printPlatformUserUsage() {
+	fmt.Println("usage: astonish platform user <command> [options]")
+	fmt.Println("")
+	fmt.Println("Manage platform users.")
+	fmt.Println("")
+	fmt.Println("commands:")
+	fmt.Println("  list              List all users (optionally by org)")
+	fmt.Println("  show              Show user details")
+	fmt.Println("  delete            Delete a user")
+	fmt.Println("  set-password      Set a user's password")
+	fmt.Println("  disable           Disable a user account")
+	fmt.Println("  enable            Enable a disabled user account")
+	fmt.Println("")
+	fmt.Println("examples:")
+	fmt.Println("  astonish platform user list")
+	fmt.Println("  astonish platform user list --org acme")
+	fmt.Println("  astonish platform user show alice@acme.com")
+	fmt.Println("  astonish platform user set-password alice@acme.com")
+	fmt.Println("  astonish platform user disable alice@acme.com")
+	fmt.Println("  astonish platform user enable alice@acme.com")
+	fmt.Println("  astonish platform user delete alice@acme.com")
 }

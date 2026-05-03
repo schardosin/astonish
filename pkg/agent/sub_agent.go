@@ -20,6 +20,7 @@ import (
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/memory"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // SubAgentConfig holds configuration for the sub-agent system.
@@ -147,9 +148,9 @@ type SubAgentManager struct {
 	SessionService  adksession.Service           // Session persistence
 	MemoryManager   *memory.Manager              // Memory manager for context injection (nil = disabled)
 	Compactor       *persistentsession.Compactor // Context window compactor for sub-agents (nil = disabled)
-	Redactor        *credentials.Redactor        // Redacts credential values from tool outputs (nil = disabled)
-	CredentialStore *credentials.Store           // Credential store for placeholder substitution (nil = disabled)
-	PendingSecrets  *credentials.PendingVault    // Per-session vault for <<<SECRET_N>>> token resolution (nil = disabled)
+	Redactor        *credentials.Redactor          // Redacts credential values from tool outputs (nil = disabled)
+	CredentialStore credentials.CredentialResolver // Credential store for placeholder substitution (nil = disabled)
+	PendingSecrets  *credentials.PendingVault      // Per-session vault for <<<SECRET_N>>> token resolution (nil = disabled)
 	AppName         string                       // Application name for sessions
 	UserID          string                       // User ID for sessions
 
@@ -696,9 +697,17 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	// {{CREDENTIAL:...}} tokens in tool args.
 	var beforeToolCallbacks []llmagent.BeforeToolCallback
 	if m.CredentialStore != nil {
-		store := m.CredentialStore
+		agentResolver := m.CredentialStore
 		beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
-			credRestore := credentials.SubstituteAndRestore(args, store)
+			// In platform mode, prefer the tenant-scoped PG credential store
+			// injected into the context. Fall back to agent-level store.
+			var resolver credentials.CredentialResolver
+			if cs := store.CredentialStoreFromContext(ctx); cs != nil {
+				resolver = credentials.NewStoreAdapter(cs)
+			} else {
+				resolver = agentResolver
+			}
+			credRestore := credentials.SubstituteAndRestore(args, resolver)
 			callID := ctx.FunctionCallID()
 			if prev, loaded := restoreFuncs.Load(callID); loaded {
 				prevFn := prev.(func())

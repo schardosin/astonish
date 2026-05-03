@@ -624,6 +624,9 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	// Inject tenant-scoped credential store into the runner context so that
 	// credential tools (list_credentials, resolve_credential, etc.) can access
 	// the correct store for this team/org in platform mode.
+	// The BeforeToolCallback in chat_agent_run.go also checks this context value
+	// for credential placeholder substitution ({{CREDENTIAL:...}} tokens),
+	// falling back to the agent's file-based CredentialStore field.
 	if svc := store.FromRequest(r); svc != nil && svc.Credentials != nil {
 		runner.InjectCredentialStore(svc.Credentials)
 	}

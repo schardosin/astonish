@@ -12,6 +12,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/model"
@@ -708,9 +709,17 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		// tool calls don't clobber each other's restore closures.
 		var restoreFuncs sync.Map // map[string]func()
 		if a.CredentialStore != nil {
-			store := a.CredentialStore
+			agentResolver := a.CredentialStore
 			beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
-				credRestore := credentials.SubstituteAndRestore(args, store)
+				// In platform mode, prefer the tenant-scoped PG credential store
+				// injected into the context. Fall back to agent-level store.
+				var resolver credentials.CredentialResolver
+				if cs := store.CredentialStoreFromContext(ctx); cs != nil {
+					resolver = credentials.NewStoreAdapter(cs)
+				} else {
+					resolver = agentResolver
+				}
+				credRestore := credentials.SubstituteAndRestore(args, resolver)
 				callID := ctx.FunctionCallID()
 				if prev, loaded := restoreFuncs.Load(callID); loaded {
 					prevFn := prev.(func())

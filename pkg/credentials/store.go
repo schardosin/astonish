@@ -674,3 +674,6 @@ func (s *Store) resolveAuthCode(name string, cred *Credential) (string, error) {
 
 	return accessToken, nil
 }
+
+// Compile-time check: *Store satisfies CredentialResolver.
+var _ CredentialResolver = (*Store)(nil)

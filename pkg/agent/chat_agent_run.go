@@ -11,6 +11,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/provider/llmerror"
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/model"
@@ -309,9 +310,18 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		var beforeToolCallbacks []llmagent.BeforeToolCallback
 
 		if c.CredentialStore != nil {
-			store := c.CredentialStore
+			agentResolver := c.CredentialStore
 			beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
-				credRestore := credentials.SubstituteAndRestore(args, store)
+				// In platform mode, prefer the tenant-scoped PG credential store
+				// injected into the context by chat_handlers.go. Fall back to the
+				// agent-level file-based store for personal mode.
+				var resolver credentials.CredentialResolver
+				if cs := store.CredentialStoreFromContext(ctx); cs != nil {
+					resolver = credentials.NewStoreAdapter(cs)
+				} else {
+					resolver = agentResolver
+				}
+				credRestore := credentials.SubstituteAndRestore(args, resolver)
 				callID := ctx.FunctionCallID()
 				// Chain with any existing restore (e.g. pending secrets added later).
 				if prev, loaded := restoreFuncs.Load(callID); loaded {

@@ -41,6 +41,7 @@ interface CredentialsData {
   credentials: CredentialSummary[]
   secrets: SecretListItem[] | string[]
   has_master_key: boolean
+  is_team_admin: boolean
 }
 
 interface CredForm {
@@ -624,6 +625,7 @@ export default function CredentialsSettings() {
     const isTeam = credScope === 'team'
     const isPublishing = publishing === cred.name
     const isForking = forking === cred.name
+    const isAdmin = data?.is_team_admin ?? false
 
     return (
       <div key={key} className="rounded-lg border p-3" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
@@ -636,8 +638,8 @@ export default function CredentialsSettings() {
             )}
           </div>
           <div className="flex items-center gap-1">
-            {/* Publish to team (personal only) */}
-            {isPlatform && credScope === 'personal' && (
+            {/* Publish to team (personal only, admin only) */}
+            {isPlatform && credScope === 'personal' && isAdmin && (
               <button
                 onClick={() => handlePublish(cred.name)}
                 className="p-1.5 rounded hover:bg-white/10 transition-colors"
@@ -648,8 +650,8 @@ export default function CredentialsSettings() {
                   <Upload size={14} style={{ color: 'var(--text-muted)' }} />}
               </button>
             )}
-            {/* Fork to personal (team only) */}
-            {isPlatform && isTeam && (
+            {/* Fork to personal (team only, admin only) */}
+            {isPlatform && isTeam && isAdmin && (
               <button
                 onClick={() => handleFork(cred.name)}
                 className="p-1.5 rounded hover:bg-white/10 transition-colors"
@@ -660,15 +662,18 @@ export default function CredentialsSettings() {
                   <Download size={14} style={{ color: 'var(--text-muted)' }} />}
               </button>
             )}
-            <button
-              onClick={() => handleRevealCred(cred.name, credScope)}
-              className="p-1.5 rounded hover:bg-white/10 transition-colors"
-              title={revealed ? 'Hide' : 'Reveal'}
-              disabled={isRevealing}
-            >
-              {isRevealing ? <Loader2 size={14} className="animate-spin" style={{ color: 'var(--text-muted)' }} /> :
-                revealed ? <EyeOff size={14} style={{ color: 'var(--accent)' }} /> : <Eye size={14} style={{ color: 'var(--text-muted)' }} />}
-            </button>
+            {/* Reveal/Hide (admin only for team credentials) */}
+            {(!isTeam || isAdmin) && (
+              <button
+                onClick={() => handleRevealCred(cred.name, credScope)}
+                className="p-1.5 rounded hover:bg-white/10 transition-colors"
+                title={revealed ? 'Hide' : 'Reveal'}
+                disabled={isRevealing}
+              >
+                {isRevealing ? <Loader2 size={14} className="animate-spin" style={{ color: 'var(--text-muted)' }} /> :
+                  revealed ? <EyeOff size={14} style={{ color: 'var(--accent)' }} /> : <Eye size={14} style={{ color: 'var(--text-muted)' }} />}
+              </button>
+            )}
             {revealed && (
               <button
                 onClick={() => openEditCred(cred.name, credScope)}
@@ -678,13 +683,16 @@ export default function CredentialsSettings() {
                 <Edit2 size={14} style={{ color: 'var(--text-muted)' }} />
               </button>
             )}
-            <button
-              onClick={() => setDeleteTarget({ name: cred.name, scope: credScope })}
-              className="p-1.5 rounded hover:bg-white/10 transition-colors"
-              title="Delete"
-            >
-              <Trash2 size={14} style={{ color: 'var(--text-muted)' }} />
-            </button>
+            {/* Delete (admin only for team credentials) */}
+            {(!isTeam || isAdmin) && (
+              <button
+                onClick={() => setDeleteTarget({ name: cred.name, scope: credScope })}
+                className="p-1.5 rounded hover:bg-white/10 transition-colors"
+                title="Delete"
+              >
+                <Trash2 size={14} style={{ color: 'var(--text-muted)' }} />
+              </button>
+            )}
           </div>
         </div>
         {/* Revealed fields */}
@@ -733,6 +741,8 @@ export default function CredentialsSettings() {
     const sKey = sScope ? `${sScope}:${item.key}` : item.key
     const revealed = revealedSecrets[sKey]
     const isRevealing = revealingSecret === sKey
+    const isTeamSecret = sScope === 'team'
+    const isAdmin = data?.is_team_admin ?? false
     return (
       <div key={sKey} className="flex items-center justify-between px-3 py-2 rounded-lg" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
         <div className="flex-1 min-w-0 mr-3">
@@ -745,28 +755,37 @@ export default function CredentialsSettings() {
           )}
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
-          <button
-            onClick={() => handleRevealSecret(item.key, sScope)}
-            className="p-1.5 rounded hover:bg-white/10 transition-colors"
-            title={revealed !== undefined ? 'Hide' : 'Reveal'}
-            disabled={isRevealing}
-          >
-            {isRevealing ? <Loader2 size={14} className="animate-spin" style={{ color: 'var(--text-muted)' }} /> :
-              revealed !== undefined ? <EyeOff size={14} style={{ color: 'var(--accent)' }} /> : <Eye size={14} style={{ color: 'var(--text-muted)' }} />}
-          </button>
-          <button
-            onClick={() => setDeleteTarget({ name: item.key, scope: sScope })}
-            className="p-1.5 rounded hover:bg-white/10 transition-colors"
-            title="Delete"
-          >
-            <Trash2 size={14} style={{ color: 'var(--text-muted)' }} />
-          </button>
+          {/* Reveal/Hide (admin only for team secrets) */}
+          {(!isTeamSecret || isAdmin) && (
+            <button
+              onClick={() => handleRevealSecret(item.key, sScope)}
+              className="p-1.5 rounded hover:bg-white/10 transition-colors"
+              title={revealed !== undefined ? 'Hide' : 'Reveal'}
+              disabled={isRevealing}
+            >
+              {isRevealing ? <Loader2 size={14} className="animate-spin" style={{ color: 'var(--text-muted)' }} /> :
+                revealed !== undefined ? <EyeOff size={14} style={{ color: 'var(--accent)' }} /> : <Eye size={14} style={{ color: 'var(--text-muted)' }} />}
+            </button>
+          )}
+          {/* Delete (admin only for team secrets) */}
+          {(!isTeamSecret || isAdmin) && (
+            <button
+              onClick={() => setDeleteTarget({ name: item.key, scope: sScope })}
+              className="p-1.5 rounded hover:bg-white/10 transition-colors"
+              title="Delete"
+            >
+              <Trash2 size={14} style={{ color: 'var(--text-muted)' }} />
+            </button>
+          )}
         </div>
       </div>
     )
   }
 
   const renderCredentialSection = (title: string, creds: CredentialSummary[], secrets: SecretListItem[], scope?: string) => {
+    const isTeamScope = scope === 'team'
+    const isAdmin = data?.is_team_admin ?? false
+    const canManage = !isTeamScope || isAdmin
     return (
       <div>
         {/* HTTP Credentials */}
@@ -776,13 +795,15 @@ export default function CredentialsSettings() {
               {scope && <ScopeBadge scope={scope} />}
               {title} ({creds.length})
             </h3>
-            <button
-              onClick={() => openAddCred(scope)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white transition-all hover:scale-[1.02]"
-              style={saveButtonStyle}
-            >
-              <Plus size={14} /> Add
-            </button>
+            {canManage && (
+              <button
+                onClick={() => openAddCred(scope)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white transition-all hover:scale-[1.02]"
+                style={saveButtonStyle}
+              >
+                <Plus size={14} /> Add
+              </button>
+            )}
           </div>
 
           {creds.length === 0 ? (
@@ -804,13 +825,15 @@ export default function CredentialsSettings() {
             <h3 className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
               Secrets ({secrets.length})
             </h3>
-            <button
-              onClick={() => openAddSecret(scope)}
-              className="flex items-center gap-1 px-2 py-1 rounded text-xs transition-all hover:scale-[1.02]"
-              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}
-            >
-              <Plus size={12} /> Add
-            </button>
+            {canManage && (
+              <button
+                onClick={() => openAddSecret(scope)}
+                className="flex items-center gap-1 px-2 py-1 rounded text-xs transition-all hover:scale-[1.02]"
+                style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}
+              >
+                <Plus size={12} /> Add
+              </button>
+            )}
           </div>
 
           {secrets.length === 0 ? (
@@ -828,7 +851,7 @@ export default function CredentialsSettings() {
   }
 
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="w-full space-y-6">
       {error && (
         <div className="flex items-center gap-2 p-3 rounded-lg text-sm" style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
           <AlertCircle size={16} style={{ color: '#ef4444' }} />

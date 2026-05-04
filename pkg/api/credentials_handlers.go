@@ -26,6 +26,7 @@ type credentialListResponse struct {
 	Credentials  []credentialListItem `json:"credentials"`
 	Secrets      []secretListItem     `json:"secrets"`
 	HasMasterKey bool                 `json:"has_master_key"`
+	IsTeamAdmin  bool                 `json:"is_team_admin"` // true if user can manage team credentials (reveal, fork, edit)
 }
 
 // secretListItem represents a secret in the list response.
@@ -158,6 +159,42 @@ func requireTeamAdmin(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+// isTeamAdminCheck returns true if the current user is an org-level or team-level admin.
+// Unlike requireTeamAdmin, this does not write any HTTP response — it is a pure read-only check.
+func isTeamAdminCheck(r *http.Request) bool {
+	if !isPlatformMode(r) {
+		return true // personal mode — always admin
+	}
+	user := GetPlatformUser(r)
+	if user == nil {
+		return false
+	}
+	if user.Role == "owner" || user.Role == "admin" {
+		return true
+	}
+	tc := pgstore.TenantContextFrom(r.Context())
+	if tc == nil || tc.OrgSlug == "" {
+		return false
+	}
+	svc := store.FromRequest(r)
+	if svc == nil || svc.TenantRouter == nil {
+		return false
+	}
+	orgStore, err := svc.TenantRouter.ForOrg(tc.OrgSlug)
+	if err != nil {
+		return false
+	}
+	teamBySlug, err := orgStore.Teams().GetTeamBySlug(r.Context(), tc.TeamSlug)
+	if err != nil || teamBySlug == nil {
+		return false
+	}
+	role, err := orgStore.Teams().GetMemberRole(r.Context(), user.ID, teamBySlug.ID)
+	if err != nil || role != "admin" {
+		return false
+	}
+	return true
+}
+
 // --- Handlers ---
 
 // ListCredentialsHandler returns all credential names/types and secret keys.
@@ -204,6 +241,7 @@ func ListCredentialsHandler(w http.ResponseWriter, r *http.Request) {
 		Credentials:  items,
 		Secrets:      secretItems,
 		HasMasterKey: hasMasterKey(),
+		IsTeamAdmin:  isTeamAdminCheck(r),
 	}
 
 	respondJSON(w, http.StatusOK, resp)
@@ -264,6 +302,7 @@ func listCredentialsMerged(w http.ResponseWriter, r *http.Request) {
 		Credentials:  items,
 		Secrets:      secretItems,
 		HasMasterKey: hasMasterKey(),
+		IsTeamAdmin:  isTeamAdminCheck(r),
 	}
 	respondJSON(w, http.StatusOK, resp)
 }
@@ -455,9 +494,15 @@ func PublishCredentialHandler(w http.ResponseWriter, r *http.Request) {
 
 // ForkCredentialHandler copies a team credential to the user's personal store.
 // POST /api/credentials/fork
+//
+// Requires team admin access. Forking copies secret values, so non-admins must not be able to use
+// this as a bypass to reveal team credentials.
 func ForkCredentialHandler(w http.ResponseWriter, r *http.Request) {
 	if !isPlatformMode(r) {
 		respondError(w, http.StatusNotFound, "Fork is only available in platform mode")
+		return
+	}
+	if !requireTeamAdmin(w, r) {
 		return
 	}
 

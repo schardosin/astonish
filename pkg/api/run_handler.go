@@ -19,6 +19,7 @@ import (
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
@@ -485,16 +486,51 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	sm.TouchSession(req.SessionID)
 
 	// 1. Load Agent Config
-	agentPath, _, err := findAgentPath(req.AgentID)
-	if err != nil {
-		SendErrorSSE(w, flusher, fmt.Sprintf("Agent not found: %s", req.AgentID))
-		return
+	// Strip "team:" prefix used by frontend for React key uniqueness.
+	if strings.HasPrefix(req.AgentID, "team:") {
+		req.AgentID = strings.TrimPrefix(req.AgentID, "team:")
 	}
 
-	cfg, err := config.LoadAgent(agentPath)
-	if err != nil {
-		SendErrorSSE(w, flusher, fmt.Sprintf("Failed to load configuration: %v", err))
-		return
+	var cfg *config.AgentConfig
+	var cfgErr error
+
+	// Platform mode: load from flow store (personal-first, team fallback).
+	if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
+		var yamlContent string
+		var found bool
+		if svc.PersonalFlows != nil {
+			if y, err := svc.PersonalFlows.GetFlow(req.AgentID); err == nil {
+				yamlContent = y
+				found = true
+			}
+		}
+		if !found && svc.Flows != nil {
+			if y, err := svc.Flows.GetFlow(req.AgentID); err == nil {
+				yamlContent = y
+				found = true
+			}
+		}
+		if !found {
+			SendErrorSSE(w, flusher, fmt.Sprintf("Agent not found: %s", req.AgentID))
+			return
+		}
+		cfg, cfgErr = config.LoadAgentFromBytes([]byte(yamlContent))
+		if cfgErr != nil {
+			SendErrorSSE(w, flusher, fmt.Sprintf("Failed to parse agent config: %v", cfgErr))
+			return
+		}
+	} else {
+		// Personal mode: load from filesystem.
+		agentPath, _, findErr := findAgentPath(req.AgentID)
+		if findErr != nil {
+			SendErrorSSE(w, flusher, fmt.Sprintf("Agent not found: %s", req.AgentID))
+			return
+		}
+		cfg, cfgErr = config.LoadAgent(agentPath)
+		if cfgErr != nil {
+			SendErrorSSE(w, flusher, fmt.Sprintf("Failed to load configuration: %v", cfgErr))
+			return
+		}
 	}
 
 	// 2. Determine Provider/Model

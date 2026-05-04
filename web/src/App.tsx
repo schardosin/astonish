@@ -493,7 +493,7 @@ function App() {
       try {
         // Save the user's YAML as-is (no reformatting)
         // Layout is saved separately via handleLayoutSave when canvas changes
-        const result = await saveAgent(selectedAgent.id, newYaml) as any
+        const result = await saveAgent(selectedAgent.name, newYaml, selectedAgent.scope) as any
         
         // If server returned YAML with NEW content (like mcp_dependencies), update local state
         // Compare parsed content to avoid triggering on format-only differences
@@ -654,7 +654,7 @@ function App() {
     
     // Load agent YAML from API
     try {
-      const data = await fetchAgent(agent.id)
+      const data = await fetchAgent(agent.name, agent.scope)
       const loadedYaml = data.yaml || defaultYaml
       setYamlContent(loadedYaml)
       // Initialize history with loaded state
@@ -724,7 +724,7 @@ layout:
     
     // Save immediately so it appears in the left menu
     try {
-      await saveAgent(id, newYaml)
+      await saveAgent(id, newYaml, 'personal')
       await loadAgents()
     } catch (err: any) {
       console.error('Failed to save new agent:', err)
@@ -746,7 +746,7 @@ layout:
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
         body: JSON.stringify({
-          agentId: selectedAgent!.id,
+          agentId: selectedAgent!.name,
           message: message,
           sessionId: currentSessionId,
           provider: defaultProvider,
@@ -1277,7 +1277,7 @@ layout:
         noRefs: true, 
         sortKeys: false 
       })
-      await saveAgent(selectedAgent.id, updatedYaml)
+      await saveAgent(selectedAgent.name, updatedYaml, selectedAgent.scope)
       setYamlContent(updatedYaml)
     } catch (err: any) {
       console.error('Layout save failed:', err)
@@ -1305,7 +1305,7 @@ layout:
       
       // Also save to disk
       if (selectedAgent && selectedAgent.source !== 'store') {
-        saveAgent(selectedAgent.id, newYaml).catch(err => {
+        saveAgent(selectedAgent.name, newYaml, selectedAgent.scope).catch(err => {
           console.error('Failed to save after auto layout:', err)
         })
       }
@@ -1381,7 +1381,7 @@ layout:
   // Copy store agent to local
   const handleCopyToLocal = useCallback(async (agent: AppAgent) => {
     try {
-      const res = await fetch(`/api/agents/${encodeURIComponent(agent.id)}/copy-to-local`, {
+      const res = await fetch(`/api/agents/${encodeURIComponent(agent.name)}/copy-to-local`, {
         method: 'POST'
       })
       if (!res.ok) {
@@ -1419,7 +1419,7 @@ layout:
         }
       } else {
         // Delete local agent
-        await deleteAgent(deleteTarget.id)
+        await deleteAgent(deleteTarget.name, deleteTarget.scope)
       }
       // Refresh agent list
       loadAgents()
@@ -1943,7 +1943,7 @@ layout:
           pushToHistory(newYaml)
           // Auto-save after applying (skip for store flows)
           if (selectedAgent && selectedAgent.source !== 'store') {
-            saveAgent(selectedAgent.id, newYaml).then(() => {
+            saveAgent(selectedAgent.name, newYaml, selectedAgent.scope).then(() => {
             }).catch(err => {
               console.error('Failed to auto-save:', err)
             })

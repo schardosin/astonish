@@ -69,16 +69,18 @@ export async function fetchAgents(): Promise<{ agents: Agent[] }> {
   return response.json()
 }
 
-export async function fetchAgent(name: string): Promise<AgentDetail> {
-  const response = await teamFetch(`${API_BASE}/agents/${encodeURIComponent(name)}`)
+export async function fetchAgent(name: string, scope?: string): Promise<AgentDetail> {
+  const params = scope ? `?scope=${encodeURIComponent(scope)}` : ''
+  const response = await teamFetch(`${API_BASE}/agents/${encodeURIComponent(name)}${params}`)
   if (!response.ok) {
     throw new Error(`Failed to fetch agent: ${response.statusText}`)
   }
   return response.json()
 }
 
-export async function saveAgent(name: string, yaml: string): Promise<{ status: string; path: string }> {
-  const response = await teamFetch(`${API_BASE}/agents/${encodeURIComponent(name)}`, {
+export async function saveAgent(name: string, yaml: string, scope?: string): Promise<{ status: string; path: string }> {
+  const params = scope ? `?scope=${encodeURIComponent(scope)}` : ''
+  const response = await teamFetch(`${API_BASE}/agents/${encodeURIComponent(name)}${params}`, {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
@@ -91,8 +93,9 @@ export async function saveAgent(name: string, yaml: string): Promise<{ status: s
   return response.json()
 }
 
-export async function deleteAgent(name: string): Promise<{ status: string; deleted: string }> {
-  const response = await teamFetch(`${API_BASE}/agents/${encodeURIComponent(name)}`, {
+export async function deleteAgent(name: string, scope?: string): Promise<{ status: string; deleted: string }> {
+  const params = scope ? `?scope=${encodeURIComponent(scope)}` : ''
+  const response = await teamFetch(`${API_BASE}/agents/${encodeURIComponent(name)}${params}`, {
     method: 'DELETE',
   })
   if (!response.ok) {

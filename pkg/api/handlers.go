@@ -331,6 +331,15 @@ func GetAgentHandler(w http.ResponseWriter, r *http.Request) {
 	name := vars["name"]
 	scope := r.URL.Query().Get("scope") // optional: "personal" or "team"
 
+	// Strip "team:" prefix used by the frontend for React key uniqueness.
+	// If the name had a "team:" prefix, force scope to "team" unless explicitly overridden.
+	if strings.HasPrefix(name, "team:") {
+		name = strings.TrimPrefix(name, "team:")
+		if scope == "" {
+			scope = "team"
+		}
+	}
+
 	// Platform mode: use scope-aware flow resolution.
 	if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
 		var yamlContent string
@@ -413,6 +422,11 @@ func GetAgentHandler(w http.ResponseWriter, r *http.Request) {
 func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := vars["name"]
+
+	// Strip "team:" prefix used by the frontend for React key uniqueness.
+	if strings.HasPrefix(name, "team:") {
+		name = strings.TrimPrefix(name, "team:")
+	}
 
 	var request struct {
 		YAML string `json:"yaml"`
@@ -609,6 +623,11 @@ func resolveAgentYAMLDependencies(rawYAML string, agentConfig config.AgentConfig
 func DeleteAgentHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := vars["name"]
+
+	// Strip "team:" prefix used by the frontend for React key uniqueness.
+	if strings.HasPrefix(name, "team:") {
+		name = strings.TrimPrefix(name, "team:")
+	}
 
 	// Platform mode: scope-aware delete (try personal first, then team).
 	if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
